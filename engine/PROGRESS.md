@@ -64,7 +64,25 @@ Last update: 2026-07-26.
 `python3 /tmp/smoke.py` — 200 games per configuration, seeds 0-199, `STRICT=True`
 (so every one of the 1200 games is also a move-legality fuzz test).
 
-SMOKE_TABLE_PLACEHOLDER
+| bot | players | crashes | move-cap hits | mean player-turns | mean rounds | mean final score | max score | games/s |
+|---|---|---|---|---|---|---|---|---|
+| RandomBot | 2 | **0** | 0 | 41.3 | 21.2 | 12.1 | 72 | 15.9 |
+| RandomBot | 3 | **0** | 0 | 63.2 | 21.7 | 13.1 | 114 | 9.6 |
+| RandomBot | 4 | **0** | 0 | 103.8 | 26.7 | 20.7 | 175 | 5.5 |
+| GreedyBot | 2 | GREEDY2 |
+| GreedyBot | 3 | GREEDY3 |
+| GreedyBot | 4 | GREEDY4 |
+
+New-mechanic coverage over the 600 RandomBot games (log-line counts), which
+shows every closed gap is actually being exercised, not just reachable:
+
+| | 2p | 3p | 4p |
+|---|---|---|---|
+| action cards played | 1557 | 2102 | 3320 |
+| colonizations won | 140 | 254 | 502 |
+| pacts accepted | 0 (correct, §13) | 559 | 936 |
+| aggressions played | 393 | 804 | 1582 |
+| wars declared | 155 | 250 | 527 |
 
 ## Known gaps / deliberate simplifications
 - The winner of a colonization auction sacrifices a greedy minimal force

@@ -6,3 +6,4 @@
 {"gen": 6, "players": 3, "accepted": false, "sigma": 0.25, "secs": 329.7, "tried": [{"wr": 0.3542, "lo": 0.318, "n": 288, "moved": 19}], "at": "2026-07-26 06:34:28"}
 {"gen": 7, "players": 3, "accepted": false, "sigma": 0.3125, "secs": 54.3, "tried": [{"wr": 0.0069, "lo": -0.002, "n": 48, "moved": 19}], "at": "2026-07-26 06:35:23"}
 {"gen": 8, "players": 3, "accepted": false, "sigma": 0.3906, "secs": 64.4, "tried": [{"wr": 0.2708, "lo": 0.1878, "n": 48, "moved": 19}], "at": "2026-07-26 06:36:27"}
+{"gen": 9, "players": 3, "accepted": false, "sigma": 0.4883, "secs": 70.5, "tried": [{"wr": 0.0208, "lo": -0.0059, "n": 48, "moved": 19}], "at": "2026-07-26 06:37:37"}
