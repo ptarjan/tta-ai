@@ -73,6 +73,39 @@ Plus four questions:
 
 ## All five units are complete.
 
+## Later: two coordinator messages, both landed
+
+- **A hand-written book bot beats our trained AI** (62.9% +/- 4.7%, n=400, 2p;
+  mean culture 155 vs 124). HEURISTICS.md is restructured around this. It now
+  opens with "Read this first: our AI is not a strong player", followed by a new
+  section "What the measurements actually confirm" holding the five measured
+  corrections and the book bot's 13-step priority list. Everything else is
+  explicitly demoted to "this describes what our AI does". Rules 5 and 7 carry
+  warnings because they point the same way as the AI's biggest measured failing
+  (stops investing, gets overtaken around round 15). Frozen-AI-predates-7d40f53
+  caveat is stated. Source: docs/STRENGTH_CHECK.md, engine/bots/book.py.
+- **"The training moved this weight, therefore it matters" is not valid.**
+  Evidence grades are now numbered 1-3 in "How to read this document", with
+  grade 3 (learned weights) marked as not evidence at all, and the
+  wonder_remaining result (27.6% +/- 6.3% vs a 25% null, n=192) given as the
+  caught-red-handed example. New [confirmed] tag for head-to-head results.
+- **The 4p colony layer was dead in all our data.** New caveat 4, plus warnings
+  on the 4p build order, the 4p per-count section, the wonder priority list and
+  the "what this document does not know" colonies entry. NOTE: docs/
+  AGGRESSION_FIX.md and the later 12-game check disagree on the mechanism
+  (auctions opening with no eligible bidders vs no territory ever revealed); the
+  doc states the agreed consequence and flags the disagreement rather than
+  picking a side. Someone should reconcile those two measurements.
+- **The 4p wonder-first opening** is now presented as a mis-set number worth
+  nothing, not strategy. The sweep-speed / competition explanation was deleted,
+  not softened - the Age A deck is count-invariant and the first sweep is in
+  round 2, so those mechanisms are inert on round 1.
+- Also corrected: the old "probably at 4 players" hedge on training strength (4p
+  is actually the strongest relative to its null) and the understated seed noise.
+
+Still open: re-run the book-bot benchmark against an AI trained after the
+7d40f53 card-DB fix; reconcile the two colony measurements.
+
 Remaining nice-to-haves, none blocking:
 - Re-run the 4-player build order with 60 games instead of 20 (it was starved by
   the live training load): `python3 analysis/opening_order.py --players 4

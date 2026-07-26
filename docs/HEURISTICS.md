@@ -2,30 +2,183 @@
 
 **Through the Ages: A New Story of Civilization — base game, 2015 edition, no expansion.**
 
-Written for someone sitting at a table with the physical game. Everything here
-comes from a rules-complete engine plus a self-play AI that is still training.
+Written for someone sitting at a table with the physical game.
 
-**If you are about to play and have five minutes**, read *If you remember
-nothing else* (seven rules), then trap #2 (starvation — the biggest single
-culture leak we measured), then the opening cheat sheet for your player count.
+---
 
-1. [How to read this document](#how-to-read-this-document) — where the numbers
-   come from, how strong the AI is, what the confidence tags mean
-2. [If you remember nothing else](#if-you-remember-nothing-else) — seven
+## Read this first: our AI is not a strong player
+
+Most of this document describes what a self-play AI learned to do. **That AI has
+now been measured against an outside opponent and it lost.**
+
+`engine/bots/book.py` — "the book bot" — is a hand-written list of about a dozen
+priorities, the kind of thing you could hold in your head at the table. It has no
+training, no learned numbers and no lookahead. Over **400 games at 2 players**,
+played on identical deals with the seats rotated so neither side gets the good
+side of the shuffle:
+
+| | wins | mean culture |
+|---|---|---|
+| **The hand-written book bot** | **62.9% ± 4.7%** | **155** |
+| Our trained AI | 37.1% | 124 |
+
+That is not a close result (the odds of it happening by chance are less than 1 in
+10,000). And our AI is not broken — it still beats the simple bot it was trained
+against about 88% of the time. **The problem is that the thing it was measured
+against was too weak.** Beating a weak opponent by a lot told us much less than
+we assumed.
+
+So this document now comes in two grades, and you should treat them very
+differently:
+
+- **Confirmed by one player actually beating another.** The book bot's
+  priorities, and the five specific things our AI does wrong, below. This is the
+  part to act on.
+- **Everything else** — the medians, the build orders, the priority lists, "the
+  AI taught itself to value X". These describe *what our AI does*. They are
+  honest descriptions and they are often interesting, but they are **not** proof
+  that any of it is good play. Where the two grades conflict, believe the first
+  one.
+
+One caveat, stated plainly: the AI in that benchmark was trained before a fix to
+the military card counts landed (commit `7d40f53`), so it is being graded on a
+deck slightly different from the one it practised against. That is a real
+handicap. It does not rescue the verdict — the gaps that decided the games were
+science, workers, civil actions and food, none of which that fix touches, and the
+control bot played the same corrected deck and was still crushed. Full working in
+`docs/STRENGTH_CHECK.md`.
+
+**If you are about to play and have five minutes**, read [the five
+corrections](#the-five-things-our-ai-gets-wrong) and [the book bot's priority
+list](#the-priority-list-that-beat-our-ai), then trap #2 (starvation).
+
+1. [Read this first: our AI is not a strong player](#read-this-first-our-ai-is-not-a-strong-player)
+2. [**What the measurements actually confirm**](#what-the-measurements-actually-confirm)
+   — the five corrections and the book bot's priority list. **Start here.**
+3. [How to read this document](#how-to-read-this-document) — where the numbers
+   come from, which claims are evidence and which are not
+4. [If you remember nothing else](#if-you-remember-nothing-else) — seven
    rules, plus one warning label
-3. [Opening: Age A and the first four rounds](#opening-age-a-and-the-first-four-rounds)
+5. [Opening: Age A and the first four rounds](#opening-age-a-and-the-first-four-rounds)
    — including [**the build order, turn by turn**](#the-build-order-turn-by-turn)
    and [mine or farm?](#mine-or-farm)
-4. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
-5. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
-6. [Four questions a reader asked](#four-questions-a-reader-asked) — wasted
+6. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
+7. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
+8. [Four questions a reader asked](#four-questions-a-reader-asked) — wasted
    actions, round numbering, mine-or-farm, and when the first temple goes up
-7. [Priority lists: which card do I take?](#priority-lists-which-card-do-i-take)
+9. [Priority lists: which card do I take?](#priority-lists-which-card-do-i-take)
    — leaders, wonders, civil buildings and technologies, ranked per age
-8. [What changes with the player count](#what-changes-with-the-player-count)
-9. [Common traps](#common-traps) — six ways the game quietly takes points off you
-10. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
-11. [What this document does not know](#what-this-document-does-not-know)
+10. [What changes with the player count](#what-changes-with-the-player-count)
+11. [Common traps](#common-traps) — six ways the game quietly takes points off you
+12. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
+13. [What this document does not know](#what-this-document-does-not-know)
+
+---
+
+## What the measurements actually confirm
+
+This is the only section of the document backed by one player beating another
+rather than by watching our AI play itself. Read it first and trust it most.
+
+### The five things our AI gets wrong
+
+Both bots' civilizations were photographed once a round through 2-player games,
+and each row below is the gap between them (every row is labelled with which way
+round it goes). The shape is unmistakable: **our AI is ahead on score for the
+first two thirds of the game and loses anyway**, because it banks points early
+while the book bot builds the machine that makes points later. The book bot's
+culture *rate* overtakes it around round 15 and the score follows about four
+rounds after that.
+
+| by round → | 5 | 10 | 15 | 19 | 21 |
+|---|---|---|---|---|---|
+| **workers** our AI is behind by | 0.5 | 1.6 | 3.8 | 4.2 | **4.5** |
+| **food per turn** it is behind by | 0.0 | 2.5 | 2.4 | 2.2 | **2.6** |
+| **civil actions per turn** it is behind by | 0.3 | 1.4 | 1.8 | 1.7 | 1.6 |
+| **completed wonders** it is behind by | 0.6 | 0.8 | 0.9 | 0.9 | 0.8 |
+| **unspent science it is sitting on** *(more is worse)* | 0.4 | 3.7 | 8.0 | **14.6** | 12.3 |
+| **culture** it is ahead by *(and still loses)* | **+1.8** | **+10.2** | **+4.1** | −9.0 | −16.9 |
+
+Read the last two rows together with the first four. Our AI is **ahead on the
+scoreboard until round 15** and sitting on a pile of science it never spends,
+while the bot beating it quietly owns more workers, more food, more actions and
+more wonders. Then the engine it never built stops mattering and the game ends.
+
+**1. Spend your science. Do not bank it.** By the end our AI is sitting on about
+**15 more unspent science points** than the bot that beat it. Science in the bank
+scores exactly nothing — the only thing it is for is turning into technologies. A
+rule as blunt as *"if you can afford a technology and you have somewhere to put
+the worker, develop it"* recovers most of this. This is the single largest and
+clearest defect.
+
+**2. Buy civil actions.** Our AI runs **1.3–1.8 civil actions per turn behind**
+for essentially the whole game. That is a standing ~30% discount on everything it
+is able to do, every single turn. The cards that fix this are the ones it
+neglects: **governments, Code of Laws, and the Pyramids.** Actions compound;
+almost nothing else in the game does.
+
+**3. Build more wonders.** Behind by **0.8 wonders at 2 players and 1.5 at 3**.
+A wonder is not a one-off — most of them are permanent culture rate, so being a
+wonder behind compounds for the rest of the game.
+
+**4. Keep growing.** By the endgame our AI is **4.5 workers** and **2.5 food per
+turn** behind. Population is the compounding asset in this game and our AI
+consistently stops buying it. Note this sits *underneath* the starvation leak in
+trap #2 — it is not producing enough food, so it cannot afford the workers, so it
+falls further behind.
+
+**5. Strength you never spend is wasted.** At 3 players our AI carries **+6.6
+strength over the book bot and still loses.** An army is a means, not a score.
+If you are not converting it into aggressions, defence or colonies, you paid for
+nothing. (Our AI *cannot* convert it — see [rule 8](#if-you-remember-nothing-else)
+— which is exactly why it ends up with a pile of it.)
+
+The one thing our AI does *better*: **happiness discipline**. The book bot runs
+1–2 happy faces closer to the edge than it should for most of the game. Our AI
+almost never suffers an uprising. Take that from our AI and the five items above
+from the book bot.
+
+### The priority list that beat our AI
+
+This is the whole of the book bot's decision-making, in order. It checks these
+top to bottom every turn and does the first one that applies. It is written from
+published human strategy advice, not learned from anything — and it beat hundreds
+of rounds of training.
+
+1. **Round 1:** take a leader, then a wonder, then tempo cards.
+2. **Revolution** to a better government (only ever as the turn's first action).
+3. **Play a leader from your hand** — a leader left in hand is a leader wasted.
+4. **Emergency happiness** — never let discontent cost you a worker or an uprising.
+5. **Military floor** — never be the weakest civilization at the table.
+6. **Continue a wonder** you have already started, while the resources are there.
+7. **Grow the population** when you have food and a job for the worker.
+8. **Put idle workers to work** — farm and mine shortfalls first, then buildings.
+9. **Upgrade in place** when it beats a new build (one action, no new worker).
+10. **Spend science** on your technology priorities.
+11. **Play action cards** whose free action is one you wanted anyway.
+12. **Take cards from the row** — cheap slots, and only cards you will actually play.
+13. End the turn.
+
+Four of its concrete targets, which are more specific than anything our AI
+learned:
+
+- **Food:** aim for consumption **+2** — and no more. Surplus food beyond that
+  just feeds corruption.
+- **Resources:** about **3 per turn in Age A**, rising by roughly 1 per age.
+  Start with your two bronze mines and add a third immediately.
+- **Army:** match the **second-strongest** player, and never fall more than **3
+  behind the strongest.** You do not need the lead; you need to not be the softest
+  target.
+- **Culture:** from Age II onward, culture production is what decides the game.
+
+Note how sharply item 5 and the army target conflict with what our AI does
+(near-zero strength through Age I at 2 and 4 players). Believe the book bot.
+
+Its card preferences, where they differ from our AI's, are folded into the
+[priority lists](#priority-lists-which-card-do-i-take) further down and flagged
+there.
+
+---
 
 ---
 
@@ -40,45 +193,72 @@ set to 1 at setup — `engine/state.py:110`, `engine/game.py:75`.) Whenever this
 document says "median round 5", it means half the games did it on or before the
 fifth time that player took a turn.
 
-**Where the numbers come from.** Two different kinds of evidence, and it is
-worth knowing which is which:
+**Where the numbers come from.** Three different grades of evidence, and almost
+every mistake a reader could make with this document comes from confusing them:
 
-1. **What the AI actually did.** We ran the AI against copies of itself and
-   watched: **120 games at each of 2, 3 and 4 players**, ~2,600 AI turns each,
-   no engine errors. Every "median round 5", "3.65 temples per game", "88% of
-   its cards from the cheap end" number below is counted off those games.
-2. **What the AI taught itself to want.** The AI decides its move by putting a
-   price on about 78 things it can see on the board — a point of science, a
-   happy face, a worker, being behind on strength — and picking the move that
-   leaves it holding the most value. Those prices started as our hand guesses
-   and were then tuned by playing games and keeping the changes that won more.
-   When this document says *"the AI taught itself to fear starvation twice as
-   much as we told it to"*, that is what it means: the tuning moved a price,
-   and it moved it in a direction that won games.
+1. **One player beat another player.** The only grade that actually demonstrates
+   that something is *good*. In this document that is exactly one section: [What
+   the measurements actually confirm](#what-the-measurements-actually-confirm).
+   Trust it.
+2. **What the AI actually did.** We ran the AI against copies of itself and
+   watched: **120 games at each of 2, 3 and 4 players**, ~2,600 AI turns each, no
+   engine errors. Every "median round 5", "3.65 temples per game", "88% of its
+   cards from the cheap end" number below is counted off those games. These are
+   accurate descriptions of *what our AI does*. Since the book bot beats our AI,
+   they are **not** evidence that doing it is right.
+3. **What the AI "taught itself to want".** ⚠️ **This is not evidence at all,
+   and this document used to treat it as though it were.**
 
-When both kinds of evidence point the same way, the advice is solid. When they
-disagree, this document says so instead of picking a winner.
+**Why grade 3 does not count.** The AI picks its move by putting a price on about
+78 things it can see on the board — a point of science, a happy face, being
+behind on strength — and choosing the move that leaves it holding the most value.
+Those prices started as our hand guesses and were then tuned by playing games and
+keeping the changes that won more. That sounds like evidence, and it is not,
+for one specific reason: **the tuning never changes one price at a time. It
+changes 19 of them at once, and keeps or discards the whole bundle on a single
+48-game test.** So all we ever learn is that *the bundle* beat what came before.
+We learn nothing whatsoever about any individual price inside it.
 
-**How strong is the thing giving you advice?** Periodically the AI is re-played
-against three fixed opponents, 96 games each: the hand-guessed prices it started
-from, a bot that just grabs the best-looking card, and a bot that moves at
-random. Win rate against its own starting point, averaged over the last four
-such checks:
+This is not a theoretical worry; it has been caught red-handed. The price the AI
+puts on unfinished wonder stages was flipped from negative to positive by one
+such bundle, early on, and never revisited. It is the single reason our 4-player
+AI opens by taking a wonder. Tested on its own — the same AI against itself with
+only that one number put back — it wins **27.6% ± 6.3% of 192 games, where pure
+chance is 25%.** It is worth nothing. It is the only individual price anyone has
+ever tested this way, and it failed.
 
-| | vs. its own starting point | a coin flip would be | vs. the grab-the-best-card bot |
+With ~78 prices, only a handful of accepted bundles, and no other individual
+price ever tested, **most of what our AI "learned" has never been checked and is
+as likely as not to be a passenger.** So wherever this document says *"the AI
+taught itself to value X"*, read it as *"here is a hypothesis somebody could
+test"*, never as *"therefore you should do X"*. Where grade 1 or grade 2 backs it
+up as well, say so; where a claim rests on grade 3 alone, discount it.
+(Full working: `docs/OPENING_AUDIT.md`.)
+
+**How strong is the thing giving you advice?** Weaker than a hand-written list —
+see [Read this first](#read-this-first-our-ai-is-not-a-strong-player). Within the
+self-play world, the AI does clearly improve on where it started. Measured freshly
+against its untrained starting point:
+
+| | vs. its own untrained starting point | pure chance would be | how many times better than chance |
 |---|---|---|---|
-| 2 players | **78%** — individual checks 71.9 / 74.5 / 82.3 / 82.3 | 50% | 89.6–95.8% |
-| 3 players | **65%** — 59.9 / 60.4 / 68.2 / 70.3 | 33.3% | 74.0–80.2% |
-| 4 players | **72%** — 66.1 / 71.9 / 72.9 / 76.0 | 25% | 90.6–99.0% |
+| 2 players | 68.2% | 50% | 1.4× |
+| 3 players | 77.1% | 33.3% | 2.3× |
+| 4 players | **79.2%** | 25% | **3.2×** |
 
-All three are clearly better than where they began — but note the spread. Each
-96-game check is worth ±8–10 points either way, so the bouncing above is noise,
-not the AI getting better and worse from week to week. **Do not read a 5-point
-difference between two of these rows as meaning anything.** A separate check run
-earlier the same morning with different random seeds scored the same match-ups
-much lower (2p 44.8%, 3p 60.4%, 4p 34.9%). The honest summary is "clearly above
-its starting point at 2 and 3 players, probably at 4, and nobody should quote a
-precise number".
+Two corrections to things earlier drafts of this document said:
+
+- **4 players is the *strongest* of the three, not the doubtful one.** An earlier
+  draft hedged "clearly above its starting point at 2 and 3 players, probably at
+  4". That was wrong, and it came from an out-of-date results file that recorded
+  neither which random seeds were used nor how much training the AI had had.
+- **Random seeds move these numbers more than we said.** Re-running the same
+  2-player match-up on four different shuffles gave 68.2%, 84.4%, 70.8% and
+  77.1% — a 16-point swing from the shuffle alone, larger than the ±8–10 points
+  an earlier draft claimed. **Do not quote any of these to one decimal place.**
+
+And remember what the whole table is worth: it says our AI improved on its own
+starting point. The book bot then beat it anyway.
 
 Source files, if you want to check the work: `experiments/behaviour_{2,3,4}p.json`
 (the 120-game observations), `experiments/logs/leak_check.log` (60 instrumented
@@ -91,8 +271,12 @@ is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
 **Confidence tags.** Each claim is tagged:
 
 - **[rules]** — a fact from the rulebook. Not an opinion.
-- **[strong]** — what the AI did and what it taught itself to want agree, and it
-  holds at more than one player count.
+- **[confirmed]** — one player actually beat another player with this. The only
+  tag that means "this is good play". Used only in [What the measurements
+  actually confirm](#what-the-measurements-actually-confirm).
+- **[strong]** — our AI did this consistently, at more than one player count.
+  A reliable description of our AI. **Not** proof it is correct — the book bot
+  beats our AI.
 - **[mixed]** — the player counts disagree, or two sources point different ways.
   Read the caveat before acting on it.
 - **[provisional]** — one player count, small sample, or something that looks
@@ -104,7 +288,7 @@ is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
   game, and must not be read as advice in either direction. See caveat 3 below
   and `docs/PACTS_DIAGNOSIS.md`.
 
-**Three honest caveats you should carry through the whole document.**
+**Four honest caveats you should carry through the whole document.**
 
 1. *The three AIs have had very different amounts of practice.* Tuning only
    accepts a change if it wins more games, and the counts have banked very
@@ -138,6 +322,22 @@ is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
    Everywhere below where this document says the AI never does these things,
    that is a statement about **the software**, not about *Through the Ages*.
    **[not evidence]** — and see rule 8, which is entirely about this.
+4. *At 4 players, the colony half of the game never happened at all.* Colonies
+   reach the board only by being turned up as events, and turning up events is
+   something our AI has to choose to do. At 4 players it barely does — a handful
+   of times in a whole game, against a starting event deck of six — so the deck
+   never cycles round to the territories, and the auctions that do start find
+   nobody able to bid, because our 4-player AI owns no military units and the
+   rules require sacrificing one to colonise [rules, §11.3]. The measurements
+   disagree about which of those two chokepoints dominates
+   (`docs/AGGRESSION_FIX.md` finds auctions starting and dying for lack of
+   bidders; a later 12-game check found no territory ever reaching auction at
+   all) — but they agree completely on the consequence, and it is the consequence
+   that matters to you: **every 4-player number in this document comes from games
+   in which colonies effectively did not exist.** The 4-player build order, the
+   4-player priority lists and every 4-player comparison are describing a
+   different, smaller game than the one you will sit down to play.
+   **[not evidence]** for anything colony-shaped at 4 players.
 
 ---
 
@@ -146,7 +346,18 @@ is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
 Seven rules, in rough order of how much they are worth — and then an eighth
 entry that is **not** a rule but a warning about something the AI gets wrong.
 
-1. **Spend all your civil actions in Ages A–II.** Actions do not carry over
+**These rules are drawn from our AI's play, and our AI loses to a hand-written
+list.** They are not worthless — several of them are exactly what the book bot
+does too, and those are flagged — but where they conflict with [the five
+corrections](#the-five-things-our-ai-gets-wrong), the corrections win. In
+particular, rules 5 and 7 tell you to ease off buying capacity in the second half
+of the game, and **that is the losing side of the matchup we measured**: our AI
+banks culture early, stops investing, and gets overtaken around round 15.
+
+1. **Spend all your civil actions in Ages A–II — and buy more of them.**
+   *(Backed by the head-to-head result: our AI runs 1.3–1.8 civil actions per
+   turn behind the bot that beats it. Governments, Code of Laws and the Pyramids
+   are the cards that fix it.)* Actions do not carry over
    [rules] — an unspent action is simply destroyed at end of turn. Share of
    *available* civil actions the AIs threw away, by age:
 
@@ -221,7 +432,9 @@ entry that is **not** a rule but a warning about something the AI gets wrong.
    It is *not* a smooth decline — it is one step down at the I → II boundary and
    then flat (2p and 4p even drift back up in Age III). So the practical version
    is: **out-science the table in Age I, then stop shifting and let the culture
-   engine you built run.** All three AIs independently taught themselves to care
+   engine you built run.** ⚠️ But note "let it run" is *not* "stop building it":
+   the bot that beats our AI keeps adding workers, food and wonders right through
+   Age III, and that is where it wins the game. All three AIs independently taught themselves to care
    *less* about science rate late in the game, and the two that moved on the
    question taught themselves to care considerably more about culture rate early.
    Note 2p's Age I ratio is already below 1 —
@@ -229,8 +442,12 @@ entry that is **not** a rule but a warning about something the AI gets wrong.
    direction; [mixed] on the exact crossover round — 3p and 4p cross inside Age
    II, 2p never has a science-heavy phase at all.]**
 
-6. **Do not hoard. Not science points, not cards.** This is one of only four
-   things all three AIs independently agree on. We told them a banked science
+6. **Do not hoard. Not science points, not cards.** *(The strongest
+   independently confirmed item in this list: our AI finishes about 15 science
+   points behind the bot that beats it — behind because that science is sitting
+   in its bank instead of having become technologies.)* This is also one of only
+   four things all three AIs agree on, though [that kind of agreement is weak
+   evidence](#how-to-read-this-document). We told them a banked science
    point was mildly good; **two of the three now treat a science pile as actively
    bad**, and the third barely values it. Same with cards: all three decided that
    a card sitting in your hand late is worse than we thought, while a card in
@@ -239,8 +456,14 @@ entry that is **not** a rule but a warning about something the AI gets wrong.
    the game is 25.7 / 12.9 / 6.2, and the one that hoards least finishes with the
    most technologies (16.4 at 4 players against 12.9 at 2). **[strong]**
 
-7. **Stop buying *science* rate in Age III. Be more careful about food.** All
-   three AIs taught themselves to want late science rate less: a lab bought in
+7. **Stop buying *science* rate in Age III. Be more careful about food.**
+   ⚠️ **Treat this one with real suspicion.** It rests entirely on [what our AI
+   learned to value](#how-to-read-this-document), which is the weakest grade of
+   evidence in this document, and it points the same way as our AI's biggest
+   measured failing — stopping investing too early and being overtaken around
+   round 15. The bot that beats it keeps growing to the end. The food half stands
+   (see trap #2); the "stop buying capacity" half may simply be wrong.
+   With that said, what our AI learned was: a lab bought in
    Age III does not pay for itself before the game ends, so buy culture instead.
    Late *resource* rate is the same story at 2 and 3 players — but the 4-player
    AI went the other way and decided late resource rate was *good*, and the
@@ -433,7 +656,20 @@ copy the priority, which is **economy first, army from round 3**.
 
 #### 4 players
 
-Fewer games behind this one — **20**, not 60, because the machine was busy
+Two warnings before the table, both serious.
+
+**This opening's round 1 is a known bug, not a plan.** The wonder-first opening
+below comes from one mis-set number and is [worth nothing when tested
+directly](#round-1-take-a-card-that-is-the-whole-turn). It is printed here
+because it is what the AI does, not because you should copy it. The book bot —
+the one that wins — takes a **leader** first.
+
+**Colonies did not exist in any of these games.** At 4 players our AI almost
+never turns up an event, so territories never reach the table, and it owns no
+military units to bid with even when they do (caveat 4). Everything below
+describes a 4-player game with an entire subsystem missing.
+
+Fewer games behind this one too — **20**, not 60, because the machine was busy
 training — so treat the small numbers as directional.
 
 > **R1** wonder + action card + leader (you have up to 4 actions) →
@@ -510,25 +746,48 @@ resources on, and an Age A action card is a resource or food rebate you can cash
 on round 2 when you suddenly have four actions and nothing banked. The seat-1
 player, with a single civil action, gets exactly one shot at it.
 
-**4p takes a wonder.** In **120 games out of 120**, the 4-player AI takes a
-wonder, and the median round it does so is **1** — p10 and p25 are both round 1,
-p75 is round 2. It then starts building it around round 5. **[provisional — one
-player count, and see the completion problem below]**
+**4p takes a wonder — and this turned out to be a bug, not a plan.** In **120
+games out of 120** the 4-player AI takes a wonder on round 1. An earlier draft of
+this document presented that as a 4-player strategy and explained it by the
+slower card sweep at 4 players. **Both halves of that were wrong, and the
+explanation has been deleted rather than softened.**
 
-There is a clean rules argument for this. A wonder goes **directly into play
-sideways and never enters your hand**, so the civil hand limit does not apply
-[rules, §2.4] — and on round 1, taking cards is the *only* legal action anyway,
-so a wonder costs you nothing you could otherwise have used. A wonder taken on
-round 1 also costs its printed price with **zero** completed-wonder surcharge
-[rules, §2.4], and at 4p the row sweeps only 1 card per turn so the cheap Age A
-wonders survive longest.
+- **Player count cannot affect the round-1 decision.** The Age A deck is the same
+  at every player count, and the first sweep of the row happens in round *2*
+  [rules, §2.1]. For a given shuffle, the first player faces a bit-for-bit
+  identical 13-card row at 2, 3 and 4 players. Any explanation of a round-1
+  choice that appeals to sweep speed or to more rivals competing for cards is
+  talking about mechanisms that have not happened yet.
+- **The behaviour follows the AI, not the table.** Take the 4-player AI's price
+  list and sit it down at a **two**-player game and it still opens wonder-first
+  74% of the time. Sit the 2-player AI at a four-player game and it never does.
+- **It is one number, changed by accident, and it is worth nothing.** The price
+  the AI puts on unfinished wonder stages got flipped from negative to positive
+  in a bundle of 19 simultaneous changes very early in training, and nothing has
+  revisited it since. Put that one number back and the wonder opening disappears
+  completely, 74% → 0%. Played head-to-head against exactly itself with only that
+  number reverted, over **192 games**, the wonder-first version wins **27.6% ±
+  6.3% against a 25% coin-flip** — indistinguishable from nothing, even though
+  the test lets it take every wonder uncontested.
 
-The problem: across a game the 4-player AI **starts 1.96 wonders and finishes
-0.79**. Wonders it never finishes — Transcontinental Railroad, Ocean Liners,
-Kremlin, Pyramids, Colossus are each started in 9–18% of games and completed in
-**0%** — get removed from play at the next age change, taking the actions and
-resources with them [rules, §12.2]. Take the round-1 wonder idea; do not take the
-"start a second one you cannot pay for" idea.
+So: **do not open with a wonder because "that is what the 4-player AI does".**
+There is no player-count effect and no measured benefit. The honest statement is
+that our 4-player AI happens to like wonders, everywhere, because of one sign
+flip nobody tested. (Full working: `docs/OPENING_AUDIT.md`.) **[not evidence]**
+
+What *does* survive is the rules argument, which stands on its own and has
+nothing to do with the AI: a wonder goes **directly into play sideways and never
+enters your hand**, so the civil hand limit does not apply [rules, §2.4]; on
+round 1 taking cards is your only legal action anyway; and a wonder taken on
+round 1 costs its printed price with **zero** completed-wonder surcharge
+[rules, §2.4]. Note also that the book bot — the one that actually wins — takes a
+**leader first and a wonder second** on round 1.
+
+And whatever you take, finish it. Across a game the 4-player AI **starts 1.96
+wonders and finishes 0.79**. Wonders it never finishes — Transcontinental
+Railroad, Ocean Liners, Kremlin, Pyramids, Colossus are each started in 9–18% of
+games and completed in **0%** — get removed from play at the next age change,
+taking the actions and resources with them [rules, §12.2].
 
 ### Round 2 is the highest-leverage turn in the game
 
@@ -1351,10 +1610,26 @@ know which you are reading.
   Wall, Transcontinental Railroad — is being judged by a player who cannot use
   half the card. **A low number below is not evidence against those cards.**
 
-We do not have a sourced community ranking checked into this repo, so where this
-document says "human tables generally rate X higher", that is the author's
-recollection of common opinion and is **not** evidence. It is flagged so you can
-weigh it yourself.
+- **At 4 players, colonies never happened** (caveat 4). Christopher Columbus and
+  James Cook are colony leaders; territories essentially never reached the table
+  in our games, so their rankings here are close to meaningless.
+
+**Where we do have an outside opinion, use it instead.** The book bot's card
+ranks are taken from published human strategy writing, and it beats our AI. Its
+top picks, where they differ from the order below: **Hammurabi and Aristotle**
+top of Age A (our AI mildly prefers Caesar); **Michelangelo** top of Age I (our
+AI has it third); **Isaac Newton** top of Age II (our AI agrees); and among
+wonders **Pyramids first** — the +1 civil action forever, for six resources —
+where our AI started it 13 times and finished it **zero**. The book bot also
+rates **Code of Laws** and **Masonry** at the very top of the special
+technologies, for the extra civil action and the build discount. Given that our
+AI's biggest measured weakness is being 1.3–1.8 civil actions behind all game,
+the action-granting cards are the ones to believe the book bot about.
+
+We do not have a sourced community ranking checked into this repo beyond the
+sources listed in `docs/STRENGTH_CHECK.md`, so where this document says "human
+tables generally rate X higher", that is the author's recollection of common
+opinion and is **not** evidence. It is flagged so you can weigh it yourself.
 
 ### Leaders, by age
 
@@ -1418,6 +1693,14 @@ production phases only. Judge them on how much they score in four turns.
 Almost all of this comes from the 4-player AI, which is the only one that builds
 wonders in volume (235 builds across 120 games). "Started/completed" is out of
 120 games at 4 players. **The rule that matters is finishing, not starting.**
+
+Three caveats, since this whole table rests on one AI: it builds wonders at all
+only because of [one mis-set number](#round-1-take-a-card-that-is-the-whole-turn)
+that measures as worthless; **colonies never existed in those games** (caveat 4),
+so any wonder whose value is colonial or military is being judged by a player who
+could not use it; and our AI finishes **0.8 fewer wonders than the book bot that
+beats it**, so if anything this table understates how much wonders are worth.
+Where the book bot's own ranking differs it is noted in the verdict column.
 
 | Age | Wonder | Started / completed (4p) | Verdict |
 |---|---|---|---|
@@ -1605,6 +1888,14 @@ the style works; there is no evidence it is the best available style.
 
 The 4-player AI is the most *interesting* and the most *broken*.
 
+**Read this whole subsection with two caveats attached.** First, **colonies never
+happened in any 4-player game we ran** — territories essentially never reached
+the table and our AI owned no units to bid with anyway (caveat 4), so this is a
+description of 4-player *Through the Ages* with a whole subsystem switched off.
+Second, the round-1 wonder is [a mis-set number, not a
+strategy](#round-1-take-a-card-that-is-the-whole-turn), and it is worth nothing
+when tested on its own.
+
 The good half. It is far and away the best at spending actions — 0.38 CA wasted
 per turn against 1.74 and 1.93, and it leaves nothing unspent on **89.2%** of
 turns. It takes the most cards (31.9), builds the most labs (4.71), mines (5.38)
@@ -1612,8 +1903,8 @@ and temples (3.71), and finishes with **16.35 technologies** and a culture *rate
 of 8.88 in Age IV, the highest of any count in any age. It takes a wonder on
 **round 1 in 120/120 games** and completes 0.79 per game — four times the 2p rate
 and twenty times the 3p rate. **[strong]** on the action discipline;
-**[provisional]** on the round-1 wonder, because it starts 1.96 wonders and only
-finishes 0.79.
+**[not evidence]** on the round-1 wonder, which is the mis-set number above and
+which also leaves it starting 1.96 wonders to finish 0.79.
 
 The broken half. Its final culture is **56.4**, less than half of 2p's, despite
 having three more technologies and a much higher culture rate. The reason is not
@@ -2106,6 +2397,20 @@ from the one these AIs played.
   using that never-tuned colony price. This document has no
   colony advice and you should not read the silence as "colonies are bad" — read
   it as "untested". **[not evidence]**
+
+  **At 4 players it is worse than untested — the subsystem never ran at all.**
+  Colonies only reach the board by being turned up as events, and our 4-player AI
+  turns up events a handful of times in a whole game against a starting deck of
+  six, so the deck never cycles round to the territories. On the rare occasions
+  an auction does open, nobody can bid: the rules require sacrificing at least
+  one military unit to colonise [rules, §11.3] and our 4-player AI has none in
+  play **92.5%** of the time. Our two measurements disagree on which chokepoint
+  dominates (`docs/AGGRESSION_FIX.md` sees auctions opening and dying for lack of
+  bidders; a later 12-game check saw no territory reach auction at all) but agree
+  on the outcome. **So every 4-player figure in this document — the build order,
+  the priority lists, the final culture, the technology counts — was produced in a
+  game missing an entire subsystem.** Treat 4-player numbers as describing a
+  variant, not the game.
 - **Fighting.** Zero wars in 360 games, aggressions 0.01 / 0.03 / 0.11 per game —
   guaranteed in advance by the blind spot, not learned. Everything above about
   military is about *deterrence levels*, inferred from a world where nobody
