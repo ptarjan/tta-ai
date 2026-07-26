@@ -630,7 +630,35 @@ antiquated out from under you at the next age change.
 
 Note also 4p's completion rate: **1.96 started, 0.79 completed.** Over a game the
 4p champion loses more than one wonder per game to age-end removal. Do not copy
-that part.
+that part. (Health warning on that table: "started" counts a wonder the first
+turn a stage is paid for, so a wonder taken, started and finished inside one
+turn can register as a completion with no start — which is why 2p shows 0.18
+completed against 0.17 started, and why 4p's St. Peter's shows 13 completions
+from 8 starts. The gap at 4p, 1.96 vs 0.79, is far too large to be that
+artefact.)
+
+**The one wonder number worth memorising.** The 4p champion started wonders 235
+times across 120 games, so we can ask which ones actually finish. Split by the
+median round the build *starts*:
+
+| 4p, 120 games | wonders started | completed | completion rate |
+|---|---|---|---|
+| Builds starting round ≤ 12 | 140 | 82 | **59%** |
+| Builds starting round ≥ 13 | 95 | 13 | **14%** |
+
+And within that late group, the three 12-resource Age II wonders — **Ocean
+Liners, Kremlin and Transcontinental Railroad — went 0 for 58**. Not one was
+ever finished, in 120 games, at any point. Meanwhile the cheap Age A/I ones
+started early finish reliably: Taj Mahal 14/15, Universitas Carolina 14/14,
+Hanging Gardens 12/14, Eiffel Tower 17/22 (started round 12). Wonder cost is
+6 resources for the Age A ones, 8–9 for Age I and 12–13 for Age II
+[`data/cards_wonders_leaders.json`].
+
+**Practical rule: start a wonder by round 12 or do not start it.** After that
+you are paying 12 resources across three or four civil actions for a card that
+will be removed, unfinished and unrefunded, at the next age change
+[rules, §12.2]. **[strong at 4p, [thin] elsewhere — 2p and 3p barely touch
+wonders, so this is one champion's data.]**
 
 ### Where your actions start going to waste
 
@@ -991,7 +1019,7 @@ consideration. **Leave** the food curve: hold production at **consumption + 1**
 | Median round: first urban upgrade | 3 | 5 | 3 |
 | Median round: government taken | 8.5 (70%) | 7 (51%) | 9 (85%) |
 | Median round: first wonder taken | 6.5 (25%) | 6 (19%) | **1 (100%)** |
-| Median round: first aggression | 19 (0.8%) | 4 (3%) | 18.5 (8%) |
+| Median round: first aggression | 19 (0.8%) | 4 (3.3%) | 18.5 (8.3%) |
 
 Percentages are the share of games in which it happens at all. Where the share
 is under ~25%, the median is a median over a handful of games — treat it as

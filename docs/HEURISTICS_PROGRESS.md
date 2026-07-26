@@ -194,3 +194,19 @@
   * refreshed the stale gen 169/130/111 in the per-count section.
 - NEXT: quick reference read-through, then the "remember nothing else" / opening
   consistency sweep, then declare structural completeness.
+
+### 12:15
+- Added the single most actionable new fact of the read-through, to the midgame
+  Wonders subsection: at 4p (235 wonder builds over 120 games) builds STARTED by
+  round 12 complete 59% of the time (82/140); builds started round 13+ complete
+  14% (13/95); and the three 12-resource Age II wonders (Ocean Liners, Kremlin,
+  Transcontinental Railroad) went 0 for 58. Rule: start a wonder by round 12 or
+  do not start it. Cost figures from data/cards_wonders_leaders.json (Age A = 6
+  resources, Age I = 8-9, Age II = 12-13).
+- Footnoted the started/completed metric quirk (2p shows 0.18 completed vs 0.17
+  started; a wonder finished on the turn it is started can register no start).
+- Cheat-sheet first-aggression row corrected to 18.5 (8.3%) / 4 (3.3%).
+- Quick reference re-checked line by line against RULES_SPEC 1.5/2.1/6.1/6.2/6.3/
+  6.6/12.x/13 -- all tables correct, no changes needed.
+- NEXT: final top-to-bottom consistency pass (numbers that appear twice), then
+  declare structural completeness.
