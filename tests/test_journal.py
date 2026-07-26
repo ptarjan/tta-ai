@@ -352,6 +352,107 @@ class ParanoidModeCatchesMisses(JournalTestCase):
             journal.rollback(j)
 
 
+class RareSitesRollBackExactly(JournalTestCase):
+    """The seven converted sites 60 games of self-play never reach.
+
+    `tools/mutation_coverage.py` runs the site census against real journalled
+    play and reports which of the converted sites actually executed.  After 60
+    greedy games (20 seeds x 2p/3p/4p) seven had still never run -- the
+    aggression-defense exchange, Annex, a refused pact offer, and a multi-step
+    `lose_pop`.  `JOURNAL_PARANOID=1` therefore proves nothing about them: the
+    paranoid differ can only check a line that executes.
+
+    That is step 6's residual risk in its concrete form, and the honest answer
+    is not "they look like the other hundred sites" -- it is to drive each path
+    directly and check the rollback against a `copy_state` oracle, which is
+    what these do.  Each test fails if its `journal.touch` is removed.
+    """
+
+    def _restores(self, st, fn):
+        """Run `fn(st)` inside a journal; assert rollback restores exactly."""
+        before = copy_state(st, keep_log=True)
+        j = journal.begin(st)
+        try:
+            fn(st)
+        finally:
+            journal.rollback(j)
+        statediff.assert_same(before, st, what="rollback", include_log=True)
+
+    def _mid(self, n=3):
+        """A state with the fields these rare paths need already populated."""
+        from engine import interact
+        st = game.new_game(n, seed=11)
+        db = interact._DB
+        mil = [c for c in db.by_name
+               if db.type_of(c) in ("bonus", "pact", "aggression")]
+        for p in st.players:
+            p.hand_military = sorted(mil)[:4]
+            p.military_actions = 3
+        return st
+
+    def test_annex_moves_a_colony_between_players(self):
+        from engine import interact
+        st = self._mid()
+        colony = next(n for n, c in interact._DB.by_name.items()
+                      if c.get("type") == "territory")
+        st.players[1].colonies.append(colony)
+        self._restores(st, lambda s: interact._c_annex(
+            s, s.players[0], colony, {"victim": 1}, None))
+        # and the site is real: without the journal the colony has moved
+        self.assertIn(colony, st.players[1].colonies)
+        self.assertNotIn(colony, st.players[0].colonies)
+
+    def test_refused_pact_offer_returns_the_card_to_hand(self):
+        from engine import interact
+        st = self._mid()
+        owner = st.players[0]
+        name = owner.hand_military[0]
+        owner.hand_military = list(owner.hand_military[1:])
+        n_before = len(owner.hand_military)
+        self._restores(st, lambda s: interact._c_pact_offer(
+            s, s.players[1], "refuse", {"owner": 0, "name": name}, None))
+        self.assertEqual(len(st.players[0].hand_military), n_before)
+
+    def test_multi_step_lose_pop_requeues_behind_the_decision(self):
+        from engine import interact
+        st = self._mid()
+        p = st.players[0]
+        p.workers_free = 0
+        self._restores(st, lambda s: interact._q_lose_pop(
+            s, s.players[0], {"player": 0, "tag": "lose_pop", "n": 3}, None))
+        # the re-queue and the pushed decision are both gone again
+        self.assertEqual(st.queue, [])
+        self.assertEqual(st.pending, [])
+
+    def test_defense_exchange_restores_pend_hand_and_pending(self):
+        from engine import interact
+        st = self._mid()
+        attacker, defender = st.players[0], st.players[1]
+        card = defender.hand_military[0]
+
+        def exchange(s):
+            interact.start_defense(s, attacker, defender, "raid", 1, None)
+            if s.pending:            # budget>0 and a non-empty hand
+                interact._defense_move(s, s.pending[-1], ("defend", card), None)
+
+        self._restores(st, exchange)
+        self.assertIn(card, st.players[1].hand_military)
+        self.assertEqual(st.pending, [])
+
+    def test_removing_a_touch_makes_these_tests_fail(self):
+        """The tests above are only worth having if they can fail.
+
+        Simulate exactly the bug they guard against -- a container mutation
+        with no undo record -- on the same paths, and assert it is caught.
+        """
+        st = self._mid()
+        j = journal.begin(st)
+        st.players[0].colonies.append("Unjournalled Colony")
+        with self.assertRaises(AssertionError) as cm:
+            journal.rollback(j)
+        self.assertIn("colonies", str(cm.exception))
+
+
 class SetattrCoverageIsComplete(unittest.TestCase):
     """The `__setattr__` hook covers 300 of the 470 sites -- IF the class list
     is complete.

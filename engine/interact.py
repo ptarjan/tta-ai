@@ -365,8 +365,8 @@ def _q_lose_pop(state, p, item, rng):
             # remaining losses are re-queued behind the decision
             left = int(item.get("n", 1)) - 1
             if left > 0:
-                journal.touch(state.queue).insert(0, {"player": p.idx, "tag": "lose_pop",
-                                       "n": left})
+                journal.touch(state.queue).insert(
+                    0, {"player": p.idx, "tag": "lose_pop", "n": left})
             return
     effects.invalidate(state, p)
 
@@ -391,8 +391,9 @@ def _q_discard_military(state, p, item, rng):
         if push_choice(state, p.idx, "discard_military", opts):
             left = int(item.get("n", 1)) - 1
             if left > 0:
-                journal.touch(state.queue).insert(0, {"player": p.idx,
-                                       "tag": "discard_military", "n": left})
+                journal.touch(state.queue).insert(
+                    0, {"player": p.idx, "tag": "discard_military",
+                        "n": left})
             return
 
 
