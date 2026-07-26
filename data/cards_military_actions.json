@@ -2,9 +2,15 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": false,
- "progress": "tactics written; aggressions/wars, pacts/defense/colonies, events, civil actions pending",
+ "progress": "tactics written; deck totals confirmed; aggressions/wars, pacts/defense/territories, events, civil actions RESEARCHED but not yet written -- see data/cards_military_actions.PROGRESS.md",
  "metadata": {
-  "militaryDeckTotalsPerAge": "PENDING",
+  "militaryDeckTotalsPerAge": {
+   "A": 10,
+   "I": 45,
+   "II": 50,
+   "III": 45,
+   "source": "BGG thread 1454794 (box states 150 military + 179 civil cards; per-age counts 10/45/50/45 confirmed by physical count)"
+  },
   "trimmingRules": {
    "2p": "Remove all pact cards from the military decks before play (Age I has 2 pacts, Ages II and III have 4 each). Pacts are used only in 3- and 4-player games. (Civil decks: remove the 6 cards marked 3+ and the 3 cards marked 4 from each of the Age I/II/III civil decks.)",
    "3p": "No military-deck cards are removed. (Civil decks: remove the 3 cards marked 4 from each of the Age I/II/III civil decks.)",
@@ -20,12 +26,23 @@
    "age": "I",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 1,
-   "composition": ["infantry", "infantry"],
+   "composition": [
+    "infantry",
+    "infantry"
+   ],
    "obsoleteStrength": null,
-   "effects": {"tacticBonus": 1},
+   "effects": {
+    "tacticBonus": 1
+   },
    "text": "Tactic: 2 infantry. +1 strength per army."
   },
   {
@@ -33,12 +50,24 @@
    "age": "I",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 2,
-   "composition": ["infantry", "infantry", "infantry"],
+   "composition": [
+    "infantry",
+    "infantry",
+    "infantry"
+   ],
    "obsoleteStrength": null,
-   "effects": {"tacticBonus": 2},
+   "effects": {
+    "tacticBonus": 2
+   },
    "text": "Tactic: 3 infantry. +2 strength per army."
   },
   {
@@ -46,12 +75,23 @@
    "age": "I",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 2,
-   "composition": ["infantry", "cavalry"],
+   "composition": [
+    "infantry",
+    "cavalry"
+   ],
    "obsoleteStrength": null,
-   "effects": {"tacticBonus": 2},
+   "effects": {
+    "tacticBonus": 2
+   },
    "text": "Tactic: 1 infantry + 1 cavalry. +2 strength per army."
   },
   {
@@ -59,12 +99,24 @@
    "age": "I",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 3,
-   "composition": ["infantry", "infantry", "cavalry"],
+   "composition": [
+    "infantry",
+    "infantry",
+    "cavalry"
+   ],
    "obsoleteStrength": null,
-   "effects": {"tacticBonus": 3},
+   "effects": {
+    "tacticBonus": 3
+   },
    "text": "Tactic: 2 infantry + 1 cavalry. +3 strength per army."
   },
   {
@@ -72,12 +124,24 @@
    "age": "I",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 4,
-   "composition": ["cavalry", "cavalry", "cavalry"],
+   "composition": [
+    "cavalry",
+    "cavalry",
+    "cavalry"
+   ],
    "obsoleteStrength": null,
-   "effects": {"tacticBonus": 4},
+   "effects": {
+    "tacticBonus": 4
+   },
    "text": "Tactic: 3 cavalry. +4 strength per army."
   },
   {
@@ -85,12 +149,24 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 5,
-   "composition": ["cavalry", "artillery"],
+   "composition": [
+    "cavalry",
+    "artillery"
+   ],
    "obsoleteStrength": 3,
-   "effects": {"tacticBonus": 5, "tacticBonusObsolete": 3},
+   "effects": {
+    "tacticBonus": 5,
+    "tacticBonusObsolete": 3
+   },
    "text": "Tactic: 1 cavalry + 1 artillery. +5 strength per army (+3 if outdated). Obsolete value added in the 2015 edition."
   },
   {
@@ -98,12 +174,24 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 4,
-   "composition": ["artillery", "artillery"],
+   "composition": [
+    "artillery",
+    "artillery"
+   ],
    "obsoleteStrength": 2,
-   "effects": {"tacticBonus": 4, "tacticBonusObsolete": 2},
+   "effects": {
+    "tacticBonus": 4,
+    "tacticBonusObsolete": 2
+   },
    "text": "Tactic: 2 artillery. +4 strength per army (+2 if outdated)."
   },
   {
@@ -111,12 +199,25 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 5,
-   "composition": ["infantry", "cavalry", "cavalry"],
+   "composition": [
+    "infantry",
+    "cavalry",
+    "cavalry"
+   ],
    "obsoleteStrength": 3,
-   "effects": {"tacticBonus": 5, "tacticBonusObsolete": 3},
+   "effects": {
+    "tacticBonus": 5,
+    "tacticBonusObsolete": 3
+   },
    "text": "Tactic: 1 infantry + 2 cavalry. +5 strength per army (+3 if outdated)."
   },
   {
@@ -124,12 +225,25 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 6,
-   "composition": ["infantry", "infantry", "artillery"],
+   "composition": [
+    "infantry",
+    "infantry",
+    "artillery"
+   ],
    "obsoleteStrength": 3,
-   "effects": {"tacticBonus": 6, "tacticBonusObsolete": 3},
+   "effects": {
+    "tacticBonus": 6,
+    "tacticBonusObsolete": 3
+   },
    "text": "Tactic: 2 infantry + 1 artillery. +6 strength per army (+3 if outdated)."
   },
   {
@@ -137,12 +251,25 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 7,
-   "composition": ["infantry", "cavalry", "artillery"],
+   "composition": [
+    "infantry",
+    "cavalry",
+    "artillery"
+   ],
    "obsoleteStrength": 4,
-   "effects": {"tacticBonus": 7, "tacticBonusObsolete": 4},
+   "effects": {
+    "tacticBonus": 7,
+    "tacticBonusObsolete": 4
+   },
    "text": "Tactic: 1 infantry + 1 cavalry + 1 artillery. +7 strength per army (+4 if outdated). 2015 change: was 8(4) in 2006."
   },
   {
@@ -150,12 +277,26 @@
    "age": "II",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 8,
-   "composition": ["infantry", "infantry", "cavalry", "cavalry"],
+   "composition": [
+    "infantry",
+    "infantry",
+    "cavalry",
+    "cavalry"
+   ],
    "obsoleteStrength": 4,
-   "effects": {"tacticBonus": 8, "tacticBonusObsolete": 4},
+   "effects": {
+    "tacticBonus": 8,
+    "tacticBonusObsolete": 4
+   },
    "text": "Tactic: 2 infantry + 2 cavalry. +8 strength per army (+4 if outdated). 2015 change: was 9(5) in 2006."
   },
   {
@@ -163,12 +304,25 @@
    "age": "III",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 9,
-   "composition": ["infantry", "artillery", "artillery"],
+   "composition": [
+    "infantry",
+    "artillery",
+    "artillery"
+   ],
    "obsoleteStrength": 5,
-   "effects": {"tacticBonus": 9, "tacticBonusObsolete": 5},
+   "effects": {
+    "tacticBonus": 9,
+    "tacticBonusObsolete": 5
+   },
    "text": "Tactic: 1 infantry + 2 artillery. +9 strength per army (+5 if outdated)."
   },
   {
@@ -176,12 +330,25 @@
    "age": "III",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 10,
-   "composition": ["cavalry", "artillery", "artillery"],
+   "composition": [
+    "cavalry",
+    "artillery",
+    "artillery"
+   ],
    "obsoleteStrength": 5,
-   "effects": {"tacticBonus": 10, "tacticBonusObsolete": 5},
+   "effects": {
+    "tacticBonus": 10,
+    "tacticBonusObsolete": 5
+   },
    "text": "Tactic: 1 cavalry + 2 artillery. +10 strength per army (+5 if outdated)."
   },
   {
@@ -189,12 +356,26 @@
    "age": "III",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 11,
-   "composition": ["infantry", "cavalry", "cavalry", "cavalry"],
+   "composition": [
+    "infantry",
+    "cavalry",
+    "cavalry",
+    "cavalry"
+   ],
    "obsoleteStrength": 6,
-   "effects": {"tacticBonus": 11, "tacticBonusObsolete": 6},
+   "effects": {
+    "tacticBonus": 11,
+    "tacticBonusObsolete": 6
+   },
    "text": "Tactic: 1 infantry + 3 cavalry. +11 strength per army (+6 if outdated)."
   },
   {
@@ -202,12 +383,26 @@
    "age": "III",
    "deck": "military",
    "type": "tactic",
-   "count": {"2p": 1, "3p": 1, "4p": 1},
-   "cost": {"militaryActions": 1},
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 1
+   },
    "strength": 13,
-   "composition": ["infantry", "infantry", "cavalry", "artillery"],
+   "composition": [
+    "infantry",
+    "infantry",
+    "cavalry",
+    "artillery"
+   ],
    "obsoleteStrength": 7,
-   "effects": {"tacticBonus": 13, "tacticBonusObsolete": 7},
+   "effects": {
+    "tacticBonus": 13,
+    "tacticBonusObsolete": 7
+   },
    "text": "Tactic: 2 infantry + 1 cavalry + 1 artillery. +13 strength per army (+7 if outdated)."
   }
  ]
