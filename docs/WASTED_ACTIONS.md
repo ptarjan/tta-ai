@@ -167,7 +167,7 @@ gen 220) so the live hill climb could not move the target:
 |---|---|---|
 | `passfix`, eps 0.0 | **38.4% ± 4.8%** | 400 |
 | `passfix`, eps −0.05 | **39.8% ± 4.8%** | 400 |
-| `horizon`, eps −0.01 | **38.3% ± 12.4%** | 60 |
+| `horizon`, eps −0.01 | **29.8% ± 4.4%** | 400 |
 | (null) | 50.0% | |
 
 **Every fix that removes the artifact makes the bot significantly weaker.**
@@ -249,3 +249,58 @@ python3 analysis/passfix_duel.py --players 2 --games 400 \
 
 `python3 -m unittest discover -s tests -q` → 58 tests, OK (there is no pytest
 in this environment). No file under `engine/` was modified by this work.
+
+---
+
+## 9. Verdict
+
+**Is the "declines its own improvement" finding still real? Yes.** 60.1% of
+2p wasted-action turns (44.9% at 3p) are turns where the bot's *own*
+evaluation scored an available move above doing nothing, and it threw the
+action away instead. That number is a direct comparison of the bot's stated
+preference against its actual choice, so no later result can explain it away.
+Only 1.6% of 2p wasted actions had genuinely nothing legal to spend on. The
+player's instinct — *taking or playing a card is almost always worth it* —
+is correct about Through the Ages, and the bot is wrong.
+
+**But the cause is not the thing that looks like the cause.** The visible
+defect is that `end_turn` is scored on a child state that has already banked
+a production phase (+12.6 eval points on average at 2p, +26.3 in Age IV),
+against which real moves worth fractions of a point cannot compete. Removing
+that asymmetry — by either of the two principled methods, at four different
+thresholds — makes the bot **significantly weaker** (29.8%–39.8% win rate vs
+a 50% null, ~15 culture per game). Measured, not assumed.
+
+**The actual root cause is card-identity blindness.** `features()` compresses
+the civil hand to a count and a sum of age levels. Two different cards are
+literally the same feature vector, so taking any card scores ≈ 0 and the
+search has no basis to prefer a good one. The production flattery was
+accidentally functioning as a *move-quality filter*: it admitted only moves
+the evaluation could confidently price (`develop` +10.7, `wonder_step` +8.9,
+`build` +2.9) and screened out the ones it could not (`take` −0.16, `pop`
+−0.06). Delete the filter without fixing the blindness and the bot spends its
+newly freed actions on noise. Two bugs were partially cancelling; removing
+one alone is a regression.
+
+**What would fix it properly**, in order — full detail in §7:
+
+1. Value a card in hand by *what it does* (its production, its effects, its
+   gains), priced through the existing weight vector. `analysis/cardvalue_duel.py`
+   prototypes this; the estimates discriminate sensibly (Theology +6.45,
+   Pyramids +6.11, Bronze +0.92, Warriors −0.57) where `hand_value` gives
+   every Age I card the same number.
+2. *Then* remove the horizon artifact via same-horizon scoring, and **re-run
+   the hill climb** — `end_turn_bias` (−8.28) and `hand_value_late` (−0.78)
+   are fitted to the bug and must not be carried over.
+3. Re-seed the 4p champion; `science` = −6.09, `workers` = −1.94 and
+   `civil_actions` = −2.86 are a degenerate basin, not a search artifact (§5).
+
+**Do not** ship step 2 alone. It is a measured ~15-culture-per-game
+regression, and this document exists because that is not obvious from the
+symptom.
+
+**What is NOT yet established:** that step 1 actually recovers the loss. The
+prototype in `analysis/cardvalue_duel.py` is written and its card estimates
+are sane, but its A/B against the champion had not finished when this was
+written, and in any case the honest test of steps 1+2 is a *re-trained*
+champion, not the current weights with a new scorer bolted on.
