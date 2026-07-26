@@ -146,24 +146,66 @@ seeds).  Every optimisation below kept it at
 `3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7`, and the 57
 tests stayed green.
 
-### Current determinism digests (re-baselined 2026-07-26 at 15b9764)
+### Current determinism digests (re-baselined 2026-07-26 at 7d40f53)
 
 `3229c4a0…` above is **stale**. It was invalidated by the *rules* change in
 f4bcac0 (yellow action cards resolve their ordered action first, gains after),
-not by any performance work. Measured at HEAD, `nice -n 10`, 58 tests green:
+not by any performance work. It was re-baselined once at 15b9764 to
+`c2befef1…` / `47e06a41…`, and **those are now stale too**, for the same kind of
+reason: two rules/data corrections on 2026-07-26. Measured at 7d40f53,
+`nice -n 10`, 58 tests green:
 
 | fingerprint | cases | digest |
 |---|---|---|
-| narrow (`perf_check check tools/fingerprint.json`) | 33 | `c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a` |
-| wide (`perf_check check --wide tools/fingerprint_wide.json`) | 102 | `47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d` |
+| narrow (`perf_check check tools/fingerprint.json`) | 33 | `6f5c72ef7c011cf747d9a8870391fb4c8f4503de42860316bb6c1b59ce379bcf` |
+| wide (`perf_check check --wide tools/fingerprint_wide.json`) | 102 | `7814c5c9c276b0a2229b6b58143351c2ad1a1058f283db70d1d9a50d5448e8ce` |
 
-Both agree with the cross-interpreter baseline recorded in docs/PYPY.md, so
-CPython and PyPy still play all 135 fixed games byte-identically.
+Both moves are accounted for, in order (narrow digest, measured by reverting
+just the data file and re-running):
+
+| state | narrow digest |
+|---|---|
+| 15b9764 baseline | `c2befef1…` |
+| \+ 5898006 rating clamp, old deck | `7e1999fc…` |
+| \+ 7d40f53 card counts (= HEAD) | `6f5c72ef…` |
+
+So **both** changes moved it, and neither is a performance regression:
+
+- **5898006** clamps every rating at zero, not just happiness (rulebook,
+  "Limits on Ratings"). Age III Fundamentalism produces science -2, and with no
+  floor that flowed into the science *stock* via `p.science += s.science`; a
+  RandomBot ended a 4p game on -9 science. Ratings now floor at 0.
+- **7d40f53** corrects 13 military card counts (Age I tactics were 1 copy where
+  all four sources say 2, Age I/III aggressions correspondingly long). Deck
+  totals are unchanged at 140/150/150 but the composition is not, so every
+  fixed game deals different cards from Age I onward. Evidence: docs/SOURCES.md.
+
+**⚠ The card-count fix invalidates comparability of the hill climbs.** Any
+generation trained before 7d40f53 was fitted against a deck holding half the
+Age I tactics it should (5/45 of the Age I military deck instead of 10/45) and
+an aggression-heavy remainder. Champions and league results from before and
+after that commit **are not comparable**, and a champion carried across the
+boundary is carrying weights tuned to a deck that no longer exists. The running
+climbs were **deliberately left running** — restarting them is the user's call.
+Whoever picks this up should either restart the climbs from the default weights
+or, at minimum, mark the generation number at which 7d40f53 landed in
+`experiments/generations_*.jsonl` so the discontinuity is visible.
+
+The cross-interpreter baseline in docs/PYPY.md still records `c2befef1…` /
+`47e06a41…` and is therefore **stale as well**; the CPython/PyPy byte-identity
+claim has not been re-verified against these two changes. Nothing suggests it
+broke — neither change is interpreter-sensitive — but it needs a PyPy re-run
+before it can be cited again.
 
 Note for whoever owns `tools/`: **`tools/fingerprint.json` (3229c4a0…) and
-`tools/fingerprint_wide.json` (c7e73ede…) are the pre-f4bcac0 files and will
-report MISMATCH on every run** until they are re-saved. The digests above are
-what a re-save should produce.
+`tools/fingerprint_wide.json` (c7e73ede…) are still the pre-f4bcac0 files and
+will report MISMATCH on every run** until they are re-saved. They were left
+alone again here on purpose: this repo has several agents working in one shared
+checkout, and `perf_check save` fingerprints the *working tree*, so a re-save
+would silently bake in whatever uncommitted engine edits happen to be sitting
+there. Re-save them from a clean tree
+(`python3 -m engine.perf_check save tools/fingerprint.json`, and the same with
+`--wide`); the digests in the table above are what that should produce.
 
 The four bot fixes of 2026-07-26 (6376981 `state.decider()`, 0808b64 deferred
 payoff credit, 166867d yield-based pact/colony pricing, 15b9764 weight reset)

@@ -304,7 +304,17 @@ unchanged (Age I: tactics 5→10 and aggressions 11→6; Age III: tactics 4→6 
 10→8), so the deck is still 140 / 150 / 150 and `python3 data/validate_cards.py` still
 passes. The composition change is real, though: Age I tactics go from 5/45 to 10/45 of the
 Age I military deck. **This invalidates comparability of hill-climb generations run before
-this commit** — see `engine/PROGRESS.md`.
+this commit** — everything learned earlier about military tempo was fitted to a deck with
+half its Age I tactics, so champions and league tables either side of `7d40f53` cannot be
+compared and a champion carried across the boundary carries weights tuned to a deck that
+no longer exists. The climbs were left running rather than killed; restarting them is the
+user's call. See `engine/PROGRESS.md` for the digest re-baseline and the same warning.
+
+Applying the fix also surfaced a latent engine bug (fixed in `5898006`, the commit before
+it): `effects.compute()` clamped only the happiness rating at zero, so Age III
+Fundamentalism's `science: -2` production drove a player's science *stock* negative. The
+rulebook's "Limits on Ratings" puts the floor on the rating, not the stock. Nothing to do
+with the card data — the new draw order just walked a RandomBot into it.
 
 **Two naming notes, deliberately NOT changed** (cosmetic, and renaming would churn the
 determinism digests for nothing):
