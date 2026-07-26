@@ -168,6 +168,49 @@ The supervisor restarts the climber every hour on purpose: each restart picks
 up the latest engine code (another agent is editing the engine concurrently)
 and a crash costs at most one generation.
 
+## What the search is favoring
+
+Refresh this section with `python3 -m experiments.summarize`; it prints the
+weights that have drifted furthest from `DEFAULT_WEIGHTS`, tagged by feature
+group. Snapshot at 2026-07-26 06:30 (2p gen 9, 3p gen 5, 4p gen 6 — **early,
+treat as direction not magnitude**):
+
+| lever | default | 3p champion | 4p champion | reading |
+|---|---|---|---|---|
+| `strength_rel` | 0.35 | **1.14** | −0.04 | at 3p, being stronger *than the strongest rival* is worth ~3x what the hand-set weight assumed; at 4p the raw relative term is being replaced by the asymmetric `strength_deficit`/`strength_lead` pair |
+| `culture_rate` | 5.0 | **8.66** | — | production rate beats stock even harder than assumed |
+| `science` (stock) | 0.5 | **−0.19** | — | *hoarding* science is a negative; banked science is dead weight until spent |
+| `leader` | 1.5 | **3.44** | — | having any leader out is undervalued by hand-set weights |
+| `military_actions` | 0.7 | **−0.09** | — | military action capacity is nearly worthless once relative strength is priced correctly |
+| `workers` / `prod_workers` | 1.4 / 0.3 | — | **3.63 / 0.90** | at 4p the search pushes hard on population and on farms+mines specifically |
+| `wonder_remaining` | −0.30 | — | **+0.32** | sign flip: at 4p a big *unfinished* wonder is an asset, not a liability |
+| `rival_mean_culture` | −0.10 | — | **−0.44** | at 4p you must suppress the *field*, not just the leader; at 3p this weight went slightly positive instead |
+| `rival_culture` | −0.35 | −0.60 | −0.60 | both counts agree: denying the leader is worth roughly twice the hand-set weight |
+| `uprising` | −12.0 | **−19.9** | — | uprisings are even more catastrophic than assumed |
+| `discontent` | −3.0 | — | +0.57 | 4p only, and almost certainly noise — flag to re-check once the anchor series is longer |
+
+Mean relative drift by group, which is the coarse "where is the signal?"
+answer:
+
+* **3p** rivals 0.77x > military 0.73x > wonders 0.58x > economy 0.51x >
+  actions 0.49x > cards 0.45x > tech 0.37x > happiness 0.30x
+* **4p** rivals 0.91x > happiness 0.64x > economy 0.57x > cards 0.52x >
+  military 0.40x > tech 0.36x > actions 0.22x
+
+Both player counts agree on the headline: **the rival-relative terms are the
+most mis-set part of the hand-written evaluation.** The hand-set weights score
+your own board too much in absolute terms; the search keeps buying more
+"relative to the field" and less "absolute output". The second theme is
+player-count-dependent — 3p rewards military pressure (`strength_rel`,
+`leader`), 4p rewards raw economic scale (`workers`, `prod_workers`) — which
+is the main argument for keeping three separate champions rather than one.
+
+2p has accepted nothing in 9 generations and its sigma has already annealed
+0.25 → 0.21, which is the expected signature of a starting point that is
+already near a local optimum for that player count (consistent with the
+89.6% default-weights win rate against greedy at 2p, the highest of the
+three).
+
 ## Known limitations
 
 * The sequential accept test (screen, then extend, then accept on a one-sided
