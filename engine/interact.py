@@ -22,6 +22,13 @@ Decision kinds:
 from __future__ import annotations
 
 from . import cards as C
+
+# Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
+# per 60 4p games.  cards.py has no engine imports, so this is safe at import.
+_DB = C.db()
+_TYPE_BY_NAME = _DB.type_by_name
+_BY_NAME = _DB.by_name
+_LEVEL_BY_NAME = _DB.level_by_name
 from . import economy
 from . import effects
 
@@ -168,7 +175,7 @@ def _c_discard_military(state, p, opt, ctx, rng):
 
 def _c_raid(state, p, opt, ctx, rng):
     """Attacker picks the urban building to destroy (namu_military 36)."""
-    db = C.db()
+    db = _DB
     victim = state.players[ctx["victim"]]
     t = victim.techs.get(opt)
     if not t or t.workers <= 0:
@@ -186,7 +193,7 @@ def _c_annex(state, p, opt, ctx, rng):
     victim = state.players[ctx["victim"]]
     lose_colony(state, victim, opt)
     p.colonies.append(opt)
-    perm = C.db().get(opt).get("permanentEffects") or {}
+    perm = _DB.get(opt).get("permanentEffects") or {}
     effects.grant_yellow(p, perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total + perm.get("blueTokens", 0))
     effects.invalidate(state, victim)
@@ -194,7 +201,7 @@ def _c_annex(state, p, opt, ctx, rng):
 
 def _c_infiltrate(state, p, opt, ctx, rng):
     """Remove the rival's leader or unfinished wonder; 3 culture per level."""
-    db = C.db()
+    db = _DB
     victim = state.players[ctx["victim"]]
     per = ctx.get("per", 3)
     if opt == "leader" and victim.leader:
@@ -306,7 +313,7 @@ def _q_choose(state, p, item, rng):
 
 def _q_free_build(state, p, item, rng):
     """Event free build: pick a card of the allowed kind, or decline."""
-    db = C.db()
+    db = _DB
     spec = item["spec"]
     if p.workers_free <= 0:
         return
@@ -337,7 +344,7 @@ def _q_free_build(state, p, item, rng):
 
 
 def _q_destroy_own(state, p, item, rng):
-    db = C.db()
+    db = _DB
     opts = sorted(n for n, t in p.techs.items()
                   if t.workers > 0 and db.type_of(n) in
                   C.URBAN_OR_PRODUCTION)
@@ -350,7 +357,7 @@ def _q_lose_pop(state, p, item, rng):
             p.workers_free -= 1
             p.yellow_bank += 1
             continue
-        db = C.db()
+        db = _DB
         opts = sorted(n for n, t in p.techs.items()
                       if t.workers > 0 and db.type_of(n) in C.WORKER_TYPES)
         if push_choice(state, p.idx, "lose_pop", opts):
@@ -368,7 +375,7 @@ def _q_lose_colony(state, p, item, rng):
 
 
 def _q_flip_wonder(state, p, item, rng):
-    db = C.db()
+    db = _DB
     ages = item.get("ages") or ["A", "I"]
     opts = sorted(w for w in p.completed_wonders
                   if w not in p.flipped_wonders and db.age_of(w) in ages)
@@ -389,7 +396,7 @@ def _q_discard_military(state, p, item, rng):
 
 
 def _q_raid(state, p, item, rng):
-    db = C.db()
+    db = _DB
     victim = state.players[item["victim"]]
     max_lv = C.level(item.get("max_age", "A"))
     opts = sorted(n for n, t in victim.techs.items()
@@ -451,7 +458,7 @@ _QUEUE_ITEMS = {
 
 def unit_pool(p):
     """Every military unit in play, one entry per worker (§11.3)."""
-    db = C.db()
+    db = _DB
     out = []
     for n, t in p.techs.items():
         if db.type_of(n) in C.UNIT_TYPES and t.workers > 0:
@@ -461,7 +468,7 @@ def unit_pool(p):
 
 
 def bonus_pool(p):
-    db = C.db()
+    db = _DB
     out = [n for n in p.hand_military
            if n in db.by_name and db.type_of(n) == "bonus"]
     out.sort(key=lambda n: (db.get(n).get("effects") or {}).get(
@@ -471,7 +478,7 @@ def bonus_pool(p):
 
 def force_value(state, p, units, bonuses):
     """Colonization force of a concrete sacrifice (§11.3)."""
-    db = C.db()
+    db = _DB
     if not units:
         return 0
     total = sum(db.get(n).get("strength") or 0 for n in units)
@@ -561,7 +568,7 @@ def _build_force(state, p, bid):
 def gain_colony(state, p, name, rng=None):
     """Permanent effects first, then the one-time effect (§11.5)."""
     from . import events
-    db = C.db()
+    db = _DB
     p.colonies.append(name)
     perm = db.get(name).get("permanentEffects") or {}
     effects.grant_yellow(p, perm.get("yellowTokens", 0))
@@ -576,7 +583,7 @@ def lose_colony(state, p, name):
     if name not in p.colonies:
         return
     p.colonies.remove(name)
-    perm = C.db().get(name).get("permanentEffects") or {}
+    perm = _DB.get(name).get("permanentEffects") or {}
     p.yellow_bank = max(0, p.yellow_bank - perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total - perm.get("blueTokens", 0))
     effects.invalidate(state, p)
@@ -598,7 +605,7 @@ def start_defense(state, attacker, defender, name, atk_strength, rng=None):
 
 
 def _defense_move(state, pend, move, rng):
-    db = C.db()
+    db = _DB
     d = state.players[pend["player"]]
     if move[0] == "defend":
         name = move[1]

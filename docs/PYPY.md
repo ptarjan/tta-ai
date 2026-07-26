@@ -89,3 +89,44 @@ PyPy,    every seed: [112, 94, 113, 226]
 So it is a structural container-ordering dependency (a `set` iterated without
 sorting, or similar) that happens to be stable within one interpreter but
 differs between the two. Hunt below.
+
+### Root cause: `sum()` of floats — CPython 3.12+ uses compensated summation, PyPy does not
+
+Bisected with `tools/trace_game.py`. The 365 applied moves are identical up to
+move 215; move 216 differs:
+
+```
+   A 216: ('pol_pass',)                                  <- CPython
+   B 216: ('prepare_event', 'Strategic Territory (II)')  <- PyPy
+```
+
+`tools/trace_game.py --probe 4 greedy 2 216` replays to that decision and dumps
+GreedyBot's 1-ply evaluation of all 11 legal moves:
+
+```
+move                                              CPython      PyPy
+('pol_pass',)                                     56.25        56.25
+('offer_pact', 'Acceptance of Supremacy', 0, 'A') 56.25        56.25
+... (8 more, all 56.25 / 56.25)
+('prepare_event', 'Strategic Territory (II)')     56.25        56.250000000000014   <<<
+```
+
+Every move evaluates to the *same* position value. `GreedyBot.pick` keeps the
+best strictly (`val > best_val`), so on CPython the whole list ties and the
+first move (`pol_pass`) wins; on PyPy the last move is larger by 1.4e-14 and
+wins instead. One ULP flips the move, and the game diverges from there.
+
+The 1-ULP difference comes from `engine/bots/__init__.py::evaluate`:
+
+```python
+own = sum(w.get(k, 0.0) * v for k, v in f.items())
+```
+
+**CPython 3.12 added Neumaier compensated summation to builtin `sum()` for
+floats; PyPy 3.11's `sum()` is a naive left-to-right accumulation.** This box
+runs CPython 3.14.6, so it gets the compensated result and PyPy gets the naive
+one. Nothing to do with hash order, set order, or `float` repr.
+
+Corollary worth knowing independently of PyPy: **this engine is already not
+reproducible across CPython versions** — CPython 3.11 would produce PyPy's
+answer here, not 3.14's.

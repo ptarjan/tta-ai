@@ -8,6 +8,13 @@ partial or prose-y data can never crash a game.
 from __future__ import annotations
 
 from . import cards as C
+
+# Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
+# per 60 4p games.  cards.py has no engine imports, so this is safe at import.
+_DB = C.db()
+_TYPE_BY_NAME = _DB.type_by_name
+_BY_NAME = _DB.by_name
+_LEVEL_BY_NAME = _DB.level_by_name
 from . import economy
 from . import effects
 
@@ -126,7 +133,7 @@ def reveal_current_event(state, rng):
         if not state.current_events:
             return None
     name = state.current_events.pop()
-    db = C.db()
+    db = _DB
     if name in db.by_name and db.type_of(name) == "territory":
         # §11.1: a territory starts a colonization auction instead
         interact.start_auction(state, name, state.current, rng)
@@ -146,13 +153,13 @@ def _recycle_future_events(state, rng):
     state.future_events = []
     rng.shuffle(deck)
     # pop() takes from the end, so earlier ages must sit last
-    deck.sort(key=lambda n: -C.db().level_of(n))
+    deck.sort(key=lambda n: -_DB.level_of(n))
     state.current_events = deck
 
 
 def resolve_event(state, name, rng, revealer_idx):
     """Resolve one revealed event card (§5.3)."""
-    db = C.db()
+    db = _DB
     if name not in db.by_name:
         return
     card = db.get(name)
@@ -233,7 +240,7 @@ def _conditional_target(state, eff, order, rng):
 
 def _apply_extras(state, p, block, rng):
     """Event effects with no decision that apply_gains does not cover."""
-    db = C.db()
+    db = _DB
     s = effects.state_stats(state, p)
     if block.get("produceFood"):
         effects.gain_food(p, s.food)
@@ -377,7 +384,7 @@ def _rank(state, order, stat, best_first):
 
 def scoring_culture(state, p, block, order):
     """Culture awarded by the 'Impact of ...' Age III events (§12.5.2)."""
-    db = C.db()
+    db = _DB
     s = effects.state_stats(state, p)
     total = 0
     for key, raw in block.items():
@@ -442,7 +449,7 @@ def scoring_culture(state, p, block, order):
 def evaluate_final_events(state):
     """Age III events left in the current/future decks score at game end
     (§12.5.2); the starting player counts as the current player."""
-    db = C.db()
+    db = _DB
     order = _order_from(state, state.start_player)
     for name in list(state.current_events) + list(state.future_events):
         if name not in db.by_name or db.age_of(name) != "III":
@@ -472,7 +479,7 @@ def evaluate_final_events(state):
 def start_aggression(state, attacker, name, defender, rng):
     """§5.4.1-5.4.3, then hand the defense decision to the rival."""
     from . import interact
-    db = C.db()
+    db = _DB
     card = db.get(name)
     cost = (card.get("cost") or {}).get("militaryActions", 0)
     if defender.leader == "Mahatma Gandhi":
@@ -488,7 +495,7 @@ def start_aggression(state, attacker, name, defender, rng):
 def finish_aggression(state, ctx, rng):
     """§5.4.5-5.4.6: compare totals and resolve the card."""
     from . import interact
-    db = C.db()
+    db = _DB
     attacker = state.players[ctx["attacker"]]
     defender = state.players[ctx["player"]]
     name = ctx["card"]
@@ -565,7 +572,7 @@ def resolve_war(state, attacker, rng):
         return
     victor, loser, adv = ((attacker, defender, a - d) if a > d
                           else (defender, attacker, d - a))
-    base = C.db().get(name).get("baseName", name) if name in C.db().by_name \
+    base = _DB.get(name).get("baseName", name) if name in _DB.by_name \
         else name
     kind = WAR_SPOILS.get(base)
     if kind == "territory":

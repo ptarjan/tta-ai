@@ -17,6 +17,15 @@ from dataclasses import dataclass, field
 
 from . import cards as C
 
+# Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
+# per 60 4p games.  cards.py has no engine imports, so this is safe at import.
+_DB = C.db()
+_TYPE_BY_NAME = _DB.type_by_name
+_BY_NAME = _DB.by_name
+_LEVEL_BY_NAME = _DB.level_by_name
+_DENOM_BY_NAME = _DB.denom_by_name
+_IS_UNIT_NAME = _DB.is_unit_name
+
 # TTA_PARANOID=1 makes `state_stats` recompute on every call and assert the
 # cached answer is identical -- the guard rail for the stats-cache key below.
 _PARANOID = os.environ.get("TTA_PARANOID", "") not in ("", "0", "false", "no")
@@ -85,18 +94,18 @@ MODIFIER_KEYS = {
 
 
 def _cards_of(p, types):
-    db = C.db()
+    db = _DB
     return [n for n in p.techs if db.type_of(n) in types]
 
 
 def workers_on_types(p, types):
-    db = C.db()
+    db = _DB
     return sum(t.workers for n, t in p.techs.items() if db.type_of(n) in types)
 
 
 def best_card(p, types, require_workers=False):
     """Highest-level technology card of the given types (None if none)."""
-    db = C.db()
+    db = _DB
     best, best_lv = None, -1
     for n, t in p.techs.items():
         if db.type_of(n) not in types:
@@ -228,7 +237,7 @@ _TECH_PROG = {}
 
 
 def _tech_prog(name):
-    db = C.db()
+    db = _DB
     card = db.by_name[name]
     typ = card["type"]
     eff = None
@@ -252,7 +261,7 @@ def _tech_prog(name):
 
 def compute(state, p):
     """Full statistics for a player (ratings, action totals, production)."""
-    db = C.db()
+    db = _DB
     s = Stats(build_discount={})
     mods = []
 
@@ -314,7 +323,7 @@ def compute(state, p):
 
 
 def _apply_modifier(s, p, key, val):
-    db = C.db()
+    db = _DB
     if key == "strengthPerMilitaryUnit":
         s.strength += val * workers_on_types(p, C.UNIT_TYPES)
     elif key == "strengthPerInfantry":
@@ -415,7 +424,7 @@ def pact_partner(pact, idx):
 
 
 def _pact_blocks(pact, idx):
-    eff = C.db().get(pact["name"]).get("effects") or {}
+    eff = _DB.get(pact["name"]).get("effects") or {}
     blocks = []
     if isinstance(eff.get("bothPlayers"), dict):
         blocks.append(eff["bothPlayers"])
@@ -440,7 +449,7 @@ def _apply_pacts(state, s, p, mods):
 
 
 def _pact_effects(pact):
-    return C.db().get(pact["name"]).get("effects") or {}
+    return _DB.get(pact["name"]).get("effects") or {}
 
 
 def pact_forbids_attack(state, attacker, defender):
@@ -547,7 +556,7 @@ def spend_food(state, p, n):
 
 
 def _happy_from(p, types):
-    db = C.db()
+    db = _DB
     tot = 0
     for n, t in p.techs.items():
         if db.type_of(n) in types:
@@ -557,7 +566,7 @@ def _happy_from(p, types):
 
 def _happy_source_count(p):
     """Number of cards/buildings providing happy faces (St. Peter's)."""
-    db = C.db()
+    db = _DB
     n = 0
     for name, t in p.techs.items():
         if (db.get(name).get("production") or {}).get("happy", 0) > 0:
@@ -586,7 +595,7 @@ def army_strength(state, p):
     tactic = p.tactic
     if not tactic:
         return 0
-    db = C.db()
+    db = _DB
     if tactic not in db.by_name:
         return 0
     card = db.by_name[tactic]
@@ -619,7 +628,7 @@ def army_strength_units(state, p, units):
     Also used for colonization forces, where only the sacrificed units
     form armies (§10.7).
     """
-    db = C.db()
+    db = _DB
     if not p.tactic or p.tactic not in db.by_name:
         return 0
     card = db.get(p.tactic)
@@ -717,7 +726,7 @@ def _denoms(p, typ, key):
     `key` is kept for the call sites' readability; the (type, value) pair is
     precomputed per card in the DB, so this is one dict probe per tech.
     """
-    denom = C.db().denom_by_name
+    denom = _DENOM_BY_NAME
     ds = {1}
     for n in p.techs:
         d = denom.get(n)
@@ -788,8 +797,7 @@ def pay_resources(p, n):
 
 def build_cost(state, p, name):
     """Resource cost to build a worker onto technology `name`."""
-    db = C.db()
-    card = db.by_name[name]
+    card = _BY_NAME[name]
     cost = card.get("buildCost")
     if cost is None:
         return None
@@ -804,7 +812,7 @@ def build_cost(state, p, name):
         if bd:
             cost -= bd.get(card["age"], 0)
         if p.leader == "William Shakespeare":
-            type_of = db.type_by_name
+            type_of = _TYPE_BY_NAME
             if typ == "theater" and any(type_of[n] == "library"
                                         for n in p.techs):
                 cost -= 1
@@ -816,8 +824,7 @@ def build_cost(state, p, name):
 
 def tech_cost(state, p, name):
     """Science cost to develop technology `name`."""
-    db = C.db()
-    card = db.by_name[name]
+    card = _BY_NAME[name]
     typ = card["type"]
     if typ == "government":
         cost = card.get("peacefulCost")
@@ -833,10 +840,10 @@ def tech_cost(state, p, name):
         if p.leader == "J. S. Bach":
             cost -= 2
         if p.leader == "William Shakespeare" and \
-                any(db.type_of(n) == "library" for n in p.techs):
+                any(_TYPE_BY_NAME[n] == "library" for n in p.techs):
             cost -= 1
     if typ == "library" and p.leader == "William Shakespeare" and \
-            any(db.type_of(n) == "theater" for n in p.techs):
+            any(_TYPE_BY_NAME[n] == "theater" for n in p.techs):
         cost -= 1
     return max(0, cost)
 
@@ -948,7 +955,7 @@ def grant_yellow(p, n):
 
 def on_enter_play(state, p, name):
     """Immediate one-time effects when a card enters play."""
-    db = C.db()
+    db = _DB
     eff = db.get(name).get("effects") or {}
     if "blueTokens" in eff:
         p.blue_total += eff["blueTokens"]
@@ -958,7 +965,7 @@ def on_enter_play(state, p, name):
 
 
 def on_leave_play(state, p, name):
-    db = C.db()
+    db = _DB
     eff = db.get(name).get("effects") or {}
     if "blueTokens" in eff:
         p.blue_total = max(0, p.blue_total - eff["blueTokens"])
@@ -972,7 +979,7 @@ def on_leave_play(state, p, name):
 
 def on_take_card(state, p, name):
     """Aristotle: 1 science per technology card taken from the row."""
-    db = C.db()
+    db = _DB
     if p.leader == "Aristotle" and _is_technology(db.get(name)):
         p.science += 1
 
@@ -999,7 +1006,7 @@ def on_build_unit(state, p, name):
 
 def on_wonder_complete(state, p, name):
     """Age III wonders score a one-time culture bonus (§9.2)."""
-    db = C.db()
+    db = _DB
     card = db.get(name)
     eff = card.get("effects") or {}
     gained = 0
@@ -1014,7 +1021,7 @@ def on_wonder_complete(state, p, name):
 
 
 def _one_time_culture(state, p, name):
-    db = C.db()
+    db = _DB
     if name == "Fast Food Chains":
         return (2 * workers_on_types(p, C.PRODUCTION_TYPES)
                 + workers_on_types(p, C.URBAN_OR_UNIT))
@@ -1041,7 +1048,7 @@ def _one_time_culture(state, p, name):
 
 def end_of_game_bonus(state, p):
     """Bill Gates and friends (§12.5.3)."""
-    db = C.db()
+    db = _DB
     bonus = 0
     if p.leader == "Bill Gates":
         for n, t in p.techs.items():

@@ -11,10 +11,18 @@ for a self-play smoke run.
 """
 from __future__ import annotations
 
+import copy as _copy
 import os
 from functools import lru_cache as _lru_cache
 
 from . import cards as C
+
+# Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
+# per 60 4p games.  cards.py has no engine imports, so this is safe at import.
+_DB = C.db()
+_TYPE_BY_NAME = _DB.type_by_name
+_BY_NAME = _DB.by_name
+_LEVEL_BY_NAME = _DB.level_by_name
 from . import economy
 from . import effects
 from .state import TechCard, WonderInProgress
@@ -68,7 +76,7 @@ def pay_ca(state, p, n):
 
 
 def take_cost(state, p, idx):
-    db = C.db()
+    db = _DB
     name = state.card_row[idx]
     cost = row_cost(idx)
     card = db.get(name)
@@ -95,7 +103,7 @@ def special_icon(card):
 
 
 def urban_count(p, urban_type):
-    type_of = C.db().type_by_name
+    type_of = _TYPE_BY_NAME
     return sum(t.workers for n, t in p.techs.items()
                if type_of[n] == urban_type)
 
@@ -120,7 +128,7 @@ def _can_take_gated(state, p, idx, gate, name=None):
         name = state.card_row[idx]
         if name is None:
             return False
-    typ = C.db().type_by_name[name]
+    typ = _TYPE_BY_NAME[name]
     cost = ROW_COST[idx] if idx < 13 else row_cost(idx)
     if typ == "wonder":
         cost += surcharge
@@ -135,7 +143,7 @@ def _can_take_gated(state, p, idx, gate, name=None):
     if hand_full:
         return False
     if typ == "leader":
-        return C.db().by_name[name]["age"] not in p.taken_leader_ages
+        return _BY_NAME[name]["age"] not in p.taken_leader_ages
     if name in p.hand_civil or name in p.techs or name == p.government:
         return False
     return True
@@ -157,7 +165,7 @@ def upgrade_cost(state, p, lo, hi):
 
 
 def wonder_stage_cost(state, p, k):
-    db = C.db()
+    db = _DB
     stages = db.get(p.wonder.name)["stages"]
     done = p.wonder.steps_built
     return sum(stages[done:done + k])
@@ -190,7 +198,29 @@ def _spend_mil_discount(p, name, raw):
 
 
 def is_unit(name):
-    return C.db().type_of(name) in C.UNIT_TYPES
+    return _TYPE_BY_NAME[name] in C.UNIT_TYPES
+
+
+# `engine.interact` and `engine.game` import `engine.actions` back, so the
+# import cycle used to be broken by a `from . import interact` INSIDE the hot
+# functions -- ~60 k `_handle_fromlist` calls per 60 4p games.  A lazy
+# module-global costs one global load plus an `is None` test instead.
+_interact = None
+_game = None
+
+
+def _load_interact():
+    global _interact
+    from . import interact as _m
+    _interact = _m
+    return _m
+
+
+def _load_game():
+    global _game
+    from . import game as _m
+    _game = _m
+    return _m
 
 
 # ------------------------------------------------------- move generation
@@ -199,7 +229,7 @@ def legal_moves(state):
     if state.game_over:
         return []
     if state.pending:
-        from . import interact
+        interact = _interact or _load_interact()
         return interact.pending_moves(state)
     p = state.me()
     if state.phase == "politics":
@@ -208,7 +238,7 @@ def legal_moves(state):
 
 
 def _politics_moves(state, p):
-    db = C.db()
+    db = _DB
     moves = [("pol_pass",)]
     if not state.has_military:
         return moves
@@ -281,7 +311,7 @@ def _tableau(names):
       higher       name -> the same-type names of strictly higher level,
                    in sorted order (the legal upgrade targets)
     """
-    db = C.db()
+    db = _DB
     type_of = db.type_by_name
     level_of = db.level_by_name
     worker_types = C.WORKER_TYPES
@@ -313,7 +343,7 @@ def _sorted_unique(items):
 
 
 def _action_moves(state, p):
-    db = C.db()
+    db = _DB
     moves = [("end_turn",)]
     ca = spare_ca(state, p)
 
@@ -339,7 +369,7 @@ def _action_moves(state, p):
     # change inside move generation, so the sorted name list, each card's type
     # and level, the per-type urban worker counts and every build cost are
     # derived exactly once.
-    type_of = db.type_by_name
+    type_of = _TYPE_BY_NAME
     techs = p.techs
     names, worker_names, by_type, urban_names, higher = _tableau(tuple(techs))
     urban_workers = {}
@@ -456,7 +486,7 @@ def _action_moves(state, p):
 
 
 def _can_revolt(state, p, name):
-    db = C.db()
+    db = _DB
     card = db.get(name)
     cost = card.get("revolutionCost")
     if cost is None or p.science < cost:
@@ -474,7 +504,7 @@ def _action_card_playable(state, p, name):
     the gains are what make it affordable (Breakthrough's +science pays for
     the technology it develops, Frugality's +food for the population).
     """
-    eff = C.db().get(name).get("effects") or {}
+    eff = _DB.get(name).get("effects") or {}
     if not eff:
         return False
     kind = eff.get("freeCivilAction")
@@ -500,7 +530,6 @@ def _with_card_gains(state, p, eff):
     Only the scalar pools that gate the ordered action are moved, so this
     stays cheap enough to call from `legal_moves`.
     """
-    import copy as _copy
     probe = _copy.copy(p)
     probe.techs = p.techs                   # read-only in the probe
     probe.food = p.food + eff.get("gainFood", 0)
@@ -520,7 +549,7 @@ def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
     The action is performed under normal rules but pays no civil/military
     action, and `discount` resources come off its cost (floor 0).
     """
-    db = C.db()
+    db = _DB
     out = []
     if kind == "increase_population":
         cost = economy.pop_cost(state, p)          # at full price
@@ -635,7 +664,7 @@ def _h_take(state, p, move, rng):
 
 def take_card(state, p, idx):
     """Move row card `idx` into `p`'s hand/play area (actions already paid)."""
-    db = C.db()
+    db = _DB
     name = state.card_row[idx]
     state.card_row[idx] = None
     card = db.get(name)
@@ -716,7 +745,7 @@ def _h_wonder_step(state, p, move, rng):
 
 
 def do_wonder_step(state, p, k, discount=0, free=False):
-    db = C.db()
+    db = _DB
     cost = max(0, wonder_stage_cost(state, p, k) - discount)
     if not free:
         pay_ca(state, p, 1)
@@ -748,7 +777,7 @@ def _h_play_leader(state, p, move, rng):
 
 
 def _h_develop(state, p, move, rng, free=False):
-    db = C.db()
+    db = _DB
     name = move[1]
     card = db.get(name)
     cost = effects.tech_cost(state, p, name) or 0
@@ -768,7 +797,7 @@ def _h_develop(state, p, move, rng, free=False):
 
 
 def _develop_special(state, p, name):
-    db = C.db()
+    db = _DB
     icon = special_icon(db.get(name))
     existing = [n for n in p.techs
                 if db.type_of(n) == "special-tech"
@@ -794,7 +823,7 @@ def _set_government(state, p, name):
 
 
 def _h_revolution(state, p, move, rng):
-    db = C.db()
+    db = _DB
     name = move[1]
     card = db.get(name)
     p.science -= card["revolutionCost"]
@@ -854,7 +883,7 @@ def _h_play_action(state, p, move, rng):
     revolt_ok = (p.civil_actions == ca_total(state, p))
     pay_ca(state, p, 1)
     p.hand_civil.remove(name)
-    eff = C.db().get(name).get("effects") or {}
+    eff = _DB.get(name).get("effects") or {}
     if "gainScience" in eff:
         p.science += eff["gainScience"]
     if "gainCulture" in eff:
@@ -925,7 +954,7 @@ def _h_prepare_event(state, p, move, rng):
     from . import events
     name = move[1]
     p.hand_military.remove(name)
-    p.culture += C.db().level_of(name)
+    p.culture += _DB.level_of(name)
     state.future_events.append(name)
     state.seeded_by[name] = p.idx
     events.reveal_current_event(state, rng)
@@ -998,7 +1027,7 @@ def _h_resign(state, p, move, rng):
 
 
 def _h_war(state, p, move, rng):
-    db = C.db()
+    db = _DB
     name, target = move[1], move[2]
     cost = (db.get(name).get("cost") or {}).get("militaryActions", 0)
     if state.players[target].leader == "Mahatma Gandhi":

@@ -21,6 +21,7 @@ from engine.bots import GreedyBot, RandomBot    # noqa: E402
 TRACE = []
 REAL = []
 _orig_apply = actions.apply
+_orig_new = game.new_game
 
 
 def _traced(state, mv, rng=None, *a, **kw):
@@ -29,7 +30,52 @@ def _traced(state, mv, rng=None, *a, **kw):
     return _orig_apply(state, mv, rng, *a, **kw)
 
 
+def probe(n, kind, seed, upto, out):
+    """Replay the real game `upto` moves, then dump the decision detail:
+    the legal-move list in order and GreedyBot's evaluation of each."""
+    from engine.bots import evaluate
+    from engine.bots.fastcopy import copy_state
+    st = _orig_new(n, seed)
+    rng = random.Random(seed ^ 0x5EED)
+    bots = []
+    for i in range(n):
+        r = random.Random(seed * 131 + i)
+        bots.append(RandomBot(r) if kind == "random" else GreedyBot(r))
+    for _ in range(upto):
+        mv = bots[st.decider()](st)
+        _orig_apply(st, mv, rng)
+    idx = st.decider()
+    bot = bots[idx]
+    moves = actions.legal_moves(st)
+    moves = [m for m in moves if m[0] != "resign"] or moves
+    rows = []
+    for mv in moves:
+        trial = copy_state(st)
+        try:
+            _orig_apply(trial, mv, random.Random(0))
+        except Exception as e:
+            rows.append([repr(mv), None, f"{type(e).__name__}: {e}"])
+            continue
+        val = evaluate(trial, idx, bot.weights)
+        if mv[0] == "end_turn":
+            val -= 0.01
+        rows.append([repr(mv), repr(val), None])
+    json.dump({"decider": idx, "rows": rows}, open(out, "w"), indent=1)
+    print("probe wrote", out, "decider", idx, "moves", len(rows))
+
+
 def main(argv):
+    if argv[1] == "--probe":
+        # --probe N kind seed upto out
+        probe(int(argv[2]), argv[3], int(argv[4]), int(argv[5]), argv[6])
+        return 0
+    if argv[1] == "--pdiff":
+        a=json.load(open(argv[2]))["rows"]; b=json.load(open(argv[3]))["rows"]
+        print(f"{'move':52s} {'A(cpython)':24s} {'B(pypy)':24s}")
+        for x,y in zip(a,b):
+            flag = "" if x[1]==y[1] else "   <<< DIFFERS"
+            print(f"{x[0]:52s} {str(x[1]):24s} {str(y[1]):24s}{flag}")
+        return 0
     if argv[1] == "--diff":
         a = json.load(open(argv[2]))["trace"]
         b = json.load(open(argv[3]))["trace"]
@@ -77,3 +123,5 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
+
+

@@ -5,6 +5,13 @@ All numbers follow docs/RULES_SPEC.md §6 exactly.
 from __future__ import annotations
 
 from . import cards as C
+
+# Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
+# per 60 4p games.  cards.py has no engine imports, so this is safe at import.
+_DB = C.db()
+_TYPE_BY_NAME = _DB.type_by_name
+_BY_NAME = _DB.by_name
+_LEVEL_BY_NAME = _DB.level_by_name
 from . import effects
 
 
@@ -172,7 +179,7 @@ def _end_of_turn_leader_bonus(state, p):
 # ---------------------------------------------------- military deck I/O
 
 def discard_military(state, name):
-    age = C.db().age_of(name) if name in C.db().by_name else state.age_military
+    age = _DB.age_of(name) if name in _DB.by_name else state.age_military
     state.discarded_military.setdefault(age, []).append(name)
 
 
@@ -215,7 +222,7 @@ def lose_population(state, p):
         p.yellow_bank += 1
         effects.invalidate(state, p)
         return True
-    db = C.db()
+    db = _DB
     for name, t in p.techs.items():
         if t.workers and db.type_of(name) in C.WORKER_TYPES:
             t.workers -= 1

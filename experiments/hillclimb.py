@@ -281,7 +281,7 @@ def challenge(mutant, champion, field, players, screen, max_games, seed0,
 
 def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
         min_games=0, mode="league", log=print, stall_kick=15,
-        accept_z=1.2816):
+        accept_z=1.2816, sigma_floor=0.08):
     # `since_accept` is restored from the checkpoint on purpose.  The
     # supervisor restarts this process every hour; a counter that reset on
     # every restart could never reach `stall_kick` on a player count whose
@@ -308,12 +308,20 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
         tried = []
         broken = 0
         field = build_field(champion, league, rng, mode)
+        # A long rejection streak means the current sigma cannot reach
+        # anything better from here.  Force a large restart-style jump
+        # instead of grinding the same neighbourhood -- and re-open sigma in
+        # the SAME generation, so the big jump is actually taken at a big step
+        # size.  (These used to be an off-by-one apart: the kick fired on the
+        # generation where `since_accept % stall_kick == 0` before the
+        # increment, the sigma re-open on the one after it, so the kick was
+        # always drawn at the annealed step size it was meant to escape.)
+        forced = None
+        if stall_kick and since_accept and since_accept % stall_kick == 0:
+            forced = "kick"
+            sigma = min(0.8, max(sigma, 0.25) * 2.0)
+            hold_sigma = stall_kick // 3        # let the re-opened step breathe
         for j in range(lam):
-            # A long rejection streak means the current sigma cannot reach
-            # anything better from here.  Force a large restart-style jump
-            # instead of grinding the same neighbourhood.
-            forced = ("kick" if stall_kick and since_accept
-                      and since_accept % stall_kick == 0 else None)
             mutant, moved, op = mutate(champion, rng, sigma, op=forced)
             m, se, lo, n, res, wr = challenge(
                 mutant, champion, field, players, screen, max_games,
@@ -338,15 +346,18 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             since_accept += 1
         recent.append(accepted)
         recent = recent[-12:]
-        # 1/5th success rule
-        if len(recent) >= 6:
+        # 1/5th success rule.  Held for a few generations after a stall kick:
+        # the shrink is x0.85 per rejected generation, so an un-held sigma
+        # decays from a 0.5 kick back to the floor inside one stall cycle and
+        # the kick buys nothing.
+        if hold_sigma > 0:
+            hold_sigma -= 1
+        elif len(recent) >= 6:
             rate = sum(recent) / len(recent)
             if rate > 0.25:
                 sigma = min(0.8, sigma * 1.25)
             elif rate < 0.12:
-                sigma = max(0.05, sigma * 0.85)
-        if stall_kick and since_accept and since_accept % stall_kick == 0:
-            sigma = min(0.8, max(sigma, 0.25) * 2.0)   # re-open the search
+                sigma = max(sigma_floor, sigma * 0.85)
 
         rec = {
             "gen": gen, "players": players, "accepted": accepted,
