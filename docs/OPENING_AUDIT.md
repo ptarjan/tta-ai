@@ -371,3 +371,46 @@ The 4p run is *not* obviously undertrained relative to the others — it has had
 the same wall-clock time and its absolute strength versus the baseline is the
 best of the three. What is thin at 4p is the **number of accepted steps**: 8
 accepted mutations, of which the wonder decision was #2.
+
+---
+
+## 6. Follow-ups this audit did not do
+
+Ordered by how much they would change what the documents say.
+
+1. **Re-test `wonder_remaining` deliberately.** It is the only weight known to be
+   worth nothing, and it drives a heuristic currently printed as advice. A
+   focused hill-climb step that mutates it alone would settle it in one
+   generation. More generally, the gen-5 scatter moved 19 weights on a 48-game
+   acceptance test — cheap acceptance thresholds let neutral weights ride in on
+   the coat-tails of useful ones and then freeze.
+2. **Give `experiments/baselines.jsonl` a timestamp and a champion generation.**
+   Every row is currently unattributable, which is what let a stale number become
+   a published claim. The seed should be recorded too, since seeds move the
+   result by up to 16 points.
+3. **Fix `analysis/opening_order.py`** (owned elsewhere): the `__call__ = None`
+   bug means it has never produced a number, and its `getattr`-on-a-dict card
+   typing would report `"?"` for every card even once it runs.
+4. **Re-check the 4p "starts 1.96 wonders, finishes 0.79" problem.** Behaviour
+   data shows the 4p champion abandons ~1.2 wonders per game; since the weight
+   causing it is worth nothing, that is likely pure waste rather than a trade-off.
+
+## How to reproduce
+
+```bash
+# snapshot first -- the live hill climbs rewrite experiments/champion_*.json
+cp experiments/champion_4p.json /tmp/ch4.json
+cp experiments/champion_2p.json /tmp/ch2.json
+
+# by-seat opening (stops after round 1; add --full for whole games)
+python3 analysis/opening_by_seat.py --players 4 --games 400 --champion /tmp/ch4.json
+
+# the decisive control: the 4p vector played at 2 players
+python3 analysis/opening_by_seat.py --players 2 --games 400 --champion /tmp/ch4.json
+
+# untrained control -- identical at every player count
+python3 analysis/opening_by_seat.py --players 4 --games 400 --champion default
+
+# strength vs the untrained starting point (vary --seed; it moves the answer)
+python3 -m experiments.evaluate --a /tmp/ch4.json --b default --games 96 --players 4 --json
+```
