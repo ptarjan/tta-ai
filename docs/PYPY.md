@@ -1409,3 +1409,70 @@ by a human, not a side effect. Remaining work for whoever picks this up:
 - [ ] Re-run `tools/mutation_coverage.py` after any engine change that adds a
       container mutation. It is cheap and it is the only thing standing
       between a new site and a silently corrupted training run.
+
+### 9.14 The gap 9.13 left: the league does not run GreedyBot
+
+9.12 measured 1.65x/1.75x **on GreedyBot**, and 9.13's remaining-work list
+treated `WeightedBot` as a bot that would *pay* for the journal rather than one
+that would be *paid by* it ("defaulting on makes `WeightedBot` and
+`QuiescentBot` pay the `__setattr__` hook for nothing"). That reads the
+situation backwards. `WeightedBot.pick` had exactly the same
+copy-per-candidate-move shape as `GreedyBot.pick` — `trial = copy_state(state)`
+inside the candidate loop, weighted.py:669 — and the branch had not touched
+`engine/bots/weighted.py` at all. Merged as it stood, this branch would have
+delivered close to nothing to the actual training workload.
+
+#### Which bot the league actually instantiates — measured, not assumed
+
+Seats are built in one place, `experiments/arena.py:111`, via a `make_bot` that
+`experiments/hillclimb_pool.py:128` monkey-patches over `arena.make_bot`.
+Replaying `Pool.acceptance_subset(gen, 4)` for 200 generations against the real
+pool gives the opponent-seat census; adding the candidate seat (every 2p game is
+one candidate + one opponent) gives:
+
+| seat class | share of all seats | searches by copying? |
+|---|---|---|
+| `WeightedBot` (candidate, mirror/champion, past:*, floor default) | **~69%** | **yes, 1-ply, one copy per candidate** |
+| `BookBot` / `VariantBot` (book, book2, var:*6) | ~27% | **no** — rule-based, no `copy_state` anywhere |
+| `GreedyBot` | ~2% | yes |
+| `RandomBot` | ~2% | no |
+| `QuiescentBot` | **0%** | (yes, but not present) |
+
+So WeightedBot is ~69% of seats and a considerably larger share of league *CPU*
+than that, because the 27% BookBot-family seats do no search at all. GreedyBot,
+the bot 9.12 measured, is a ~2% floor opponent.
+
+**`QuiescentBot` is 0% of league seats.** `quiesce:` specs are parsed only in
+`arena.py:44-53` (`load_spec`), and neither `hillclimb_league.py` nor
+`hillclimb_pool.py` ever calls `load_spec`. The only way into the pool is
+`hillclimb_pool.py:483-485`, guarded by `with_quiescent`, which defaults `False`
+at `hillclimb_league.py:563` and is a `store_true` flag at `:895`;
+`experiments/run_league.sh` does not pass it. Every `quiesce:` string in the
+repo comes from a human CLI (`tools/quiesce_bench.py`, `experiments/evaluate.py`,
+`analysis/*`). This matters for the payoff both ways: converting WeightedBot
+targets ~69% of seats, and leaving QuiescentBot on the copy path costs the
+league exactly nothing today.
+
+#### The digests could not have caught any of this
+
+9.0/9.6 lean on the fingerprint playing **GreedyBot only** — that blindness is
+the whole reason four master rebases left `6f5c72ef…`/`7814c5c9…` untouched.
+The corollary nobody wrote down: **no digest in this project can catch a change
+to `WeightedBot`.** Gating a WeightedBot change on the greedy fingerprint is the
+9.0 trap wearing a different hat — a green gate that proves nothing about the
+line that changed.
+
+So `engine/perf_check.py` grows a `weighted` bot kind and `weighted_cases()`,
+sized 11 seeds x 3 player counts = 33 games narrow and 34 x 3 = 102 wide, the
+same 33/102 split as the greedy sets so "the 135-game suite" means the same
+amount of play whichever bot searches. Baselines were derived per 9.0's rule —
+from scratch on a clean detached worktree of master `6d0247c` **and** on this
+branch, requiring agreement:
+
+```
+weighted narrow (33 games)  dff85378482c9fbd8f04319dbe1fdd2975cb49870e71efd3f29bd77af536fb91
+```
+
+That agreement is also the first evidence that step 5's 100 converted container
+sites are inert under a *different move distribution* — everything before this
+point was checked with GreedyBot's moves only.

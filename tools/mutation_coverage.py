@@ -30,6 +30,11 @@ each location after its first hit, so the run costs little more than an
 uninstrumented one.
 
     python3 tools/mutation_coverage.py [--games N] [--players 2,3,4]
+                                       [--bot greedy|weighted]
+
+`--bot` is not cosmetic.  Coverage is a claim about the sites the *search*
+drives, and GreedyBot and WeightedBot pick different moves; a site covered
+under one may be unreached under the other.  9.14 runs both.
 
 Exit status is 1 if any CONVERTED site went unexecuted -- that is the
 condition step 6 gates on.
@@ -64,8 +69,13 @@ def collect_sites():
     return out
 
 
-def run(games, players, run_tests=True):
-    """Play journalled greedy games with LINE monitoring on, return hit lines."""
+def run(games, players, run_tests=True, bot="greedy"):
+    """Play journalled games with LINE monitoring on, return hit lines.
+
+    `bot` is the *searching* bot.  It matters: coverage is a claim about which
+    mutation sites the search actually drives, and GreedyBot and WeightedBot
+    pick different moves, so they reach different sites.  docs/PYPY.md 9.14.
+    """
     os.environ["TTA_JOURNAL"] = "1"
     from engine import game
     from engine.bots import make_bots
@@ -92,7 +102,7 @@ def run(games, players, run_tests=True):
     try:
         for n in players:
             for seed in range(games):
-                game.play_game(make_bots("greedy", n, seed=seed), n, seed=seed)
+                game.play_game(make_bots(bot, n, seed=seed), n, seed=seed)
         if run_tests:
             # A site the games never reach can still be verified -- by a test
             # that drives it directly against a copy_state oracle (see
@@ -122,8 +132,9 @@ def main(argv):
         games = int(argv[argv.index("--games") + 1])
     if "--players" in argv:
         players = tuple(int(x) for x in argv[argv.index("--players") + 1].split(","))
+    bot = argv[argv.index("--bot") + 1] if "--bot" in argv else "greedy"
 
-    sites, hit = run(games, players, run_tests="--no-tests" not in argv)
+    sites, hit = run(games, players, run_tests="--no-tests" not in argv, bot=bot)
 
     miss_conv, miss_unconv, n_conv, n_unconv = [], [], 0, 0
     for path in sorted(sites):
@@ -138,7 +149,7 @@ def main(argv):
             rec = f"{rel}:{line:<5} {kind:<14} {root:<12} | {src[line-1].strip()[:64]}"
             (miss_conv if conv else miss_unconv).append(rec)
 
-    print(f"games: {games} per player count {players}")
+    print(f"games: {games} per player count {players}, searching bot: {bot}")
     print(f"sites: {n_conv} converted, {n_unconv} unconverted (local)\n")
 
     print(f"CONVERTED sites never executed ({len(miss_conv)}/{n_conv}) "
