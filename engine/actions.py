@@ -12,6 +12,7 @@ for a self-play smoke run.
 from __future__ import annotations
 
 import os
+from functools import lru_cache as _lru_cache
 
 from . import cards as C
 from . import economy
@@ -217,7 +218,7 @@ def _politics_moves(state, p):
         moves.append(("resign",))
     for pact in effects.pacts_for(state, p.idx):        # §5.10
         moves.append(("cancel_pact", pact["owner"]))
-    for name in sorted(set(p.hand_military)):
+    for name in _sorted_unique(tuple(p.hand_military)):
         card = db.get(name)
         typ = card["type"]
         cost = (card.get("cost") or {}).get("militaryActions", 0)
@@ -265,6 +266,52 @@ def _politics_moves(state, p):
     return moves
 
 
+@_lru_cache(maxsize=4096)
+def _tableau(names):
+    """Everything move generation derives from the SET of tableau card names.
+
+    Keyed by `tuple(p.techs)` (dict key order, cheap to build and to hash --
+    interned strings cache their hash), so it needs no invalidation: a
+    different tableau is a different key.  Nothing returned here may be
+    mutated by callers.
+
+    Returns (names_sorted, worker_names, by_type, urban_names, higher):
+      by_type      type -> worker names of that type, in sorted order
+      urban_names  worker names whose type is urban, in sorted order
+      higher       name -> the same-type names of strictly higher level,
+                   in sorted order (the legal upgrade targets)
+    """
+    db = C.db()
+    type_of = db.type_by_name
+    level_of = db.level_by_name
+    worker_types = C.WORKER_TYPES
+    urban_types = C.URBAN_TYPES
+    names_sorted = sorted(names)
+    worker_names = [n for n in names_sorted if type_of[n] in worker_types]
+    by_type = {}
+    urban_names = []
+    for n in worker_names:
+        typ = type_of[n]
+        lst = by_type.get(typ)
+        if lst is None:
+            lst = by_type[typ] = []
+        lst.append(n)
+        if typ in urban_types:
+            urban_names.append(n)
+    higher = {}
+    for n in worker_names:
+        lv = level_of[n]
+        higher[n] = tuple(h for h in by_type[type_of[n]]
+                          if h != n and level_of[h] > lv)
+    return names_sorted, worker_names, by_type, urban_names, higher
+
+
+@_lru_cache(maxsize=2048)
+def _sorted_unique(items):
+    """Cached `sorted(set(seq))` for hands / the tactic pool (read-only)."""
+    return tuple(sorted(set(items)))
+
+
 def _action_moves(state, p):
     db = C.db()
     moves = [("end_turn",)]
@@ -293,17 +340,12 @@ def _action_moves(state, p):
     # and level, the per-type urban worker counts and every build cost are
     # derived exactly once.
     type_of = db.type_by_name
-    level_of = db.level_by_name
     techs = p.techs
-    names = sorted(techs)
-    worker_names = [n for n in names if type_of[n] in C.WORKER_TYPES]
-    by_type = {}
+    names, worker_names, by_type, urban_names, higher = _tableau(tuple(techs))
     urban_workers = {}
-    for n in worker_names:
+    for n in urban_names:
         typ = type_of[n]
-        by_type.setdefault(typ, []).append(n)
-        if typ in C.URBAN_TYPES:
-            urban_workers[typ] = urban_workers.get(typ, 0) + techs[n].workers
+        urban_workers[typ] = urban_workers.get(typ, 0) + techs[n].workers
     costs = {}                          # name -> build cost, memoized lazily
     build_cost = effects.build_cost
 
@@ -348,10 +390,7 @@ def _action_moves(state, p):
         elif not have_ca:
             continue
         lo_cost = cost_of(lo) or 0
-        lo_level = level_of[lo]
-        for hi in by_type[typ]:
-            if hi == lo or level_of[hi] <= lo_level:
-                continue
+        for hi in higher[lo]:
             cost = max(0, (cost_of(hi) or 0) - lo_cost)
             if unit:
                 cost = max(0, cost - disc)
@@ -378,7 +417,7 @@ def _action_moves(state, p):
                     moves.append(("wonder_step", k))
 
     # hand: leaders, technologies, governments, action cards
-    for name in sorted(set(p.hand_civil)):
+    for name in _sorted_unique(tuple(p.hand_civil)):
         card = db.get(name)
         typ = card["type"]
         if typ == "leader":
@@ -400,11 +439,11 @@ def _action_moves(state, p):
     # tactics
     if state.has_military and not p.tactic_action_used:
         if p.military_actions >= 1:
-            for name in sorted(set(p.hand_military)):
+            for name in _sorted_unique(tuple(p.hand_military)):
                 if db.type_of(name) == "tactic":
                     moves.append(("play_tactic", name))
         if p.military_actions >= 2:
-            for name in sorted(set(state.available_tactics)):
+            for name in _sorted_unique(tuple(state.available_tactics)):
                 if name != p.tactic:
                     moves.append(("copy_tactic", name))
 
@@ -496,7 +535,7 @@ def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
                     out.append(("wonder_step", 1))
         return out
     if kind == "develop_technology":
-        for name in sorted(set(p.hand_civil)):
+        for name in _sorted_unique(tuple(p.hand_civil)):
             card = db.get(name)
             if card["type"] not in C.DEVELOPABLE_TYPES:
                 continue

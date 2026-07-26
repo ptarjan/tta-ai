@@ -33,3 +33,4 @@
 {"gen": 32, "players": 2, "accepted": false, "sigma": 0.0681, "secs": 128.8, "tried": [{"wr": 0.5208, "lo": 0.4747, "n": 192, "moved": 19}], "at": "2026-07-26 07:10:11"}
 {"gen": 33, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 26.4, "tried": [{"wr": 0.4792, "lo": 0.3858, "n": 48, "moved": 19}], "at": "2026-07-26 07:10:37"}
 {"event": "search_update", "note": "switched to LEAGUE mode (paired edge vs mixed field of past champions + default/greedy); grouped/rescale/kick mutation operators; stall kick. 'edge' replaces 'wr' as the accept statistic", "players": 2, "accepted": false, "sigma": null, "at": "2026-07-26 07:10:46"}
+{"gen": 34, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 99.6, "tried": [{"edge": 0.0208, "lo": -0.0215, "n": 96, "wr": 0.5938, "moved": 4, "op": "group:actions"}], "at": "2026-07-26 07:12:37", "mode": "league", "field": 7}

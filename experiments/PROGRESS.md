@@ -14,8 +14,10 @@ rules engine itself is tracked in `engine/PROGRESS.md`.
 | `engine/bots/weighted.py` | DONE | `WeightedBot`: 1-ply search under a **fully JSON-parameterized** linear evaluation. 58 base features + 20 phase weights = **78 weights**. |
 | `experiments/arena.py` | DONE | Seat-rotated, process-parallel duel machinery + normal-approx CIs and p-values. Per-game exceptions are counted, never fatal. |
 | `experiments/evaluate.py` | DONE | `python3 -m experiments.evaluate --a X --b Y --games N --players K`. |
-| `experiments/hillclimb.py` | DONE | (1+lambda) ES with a two-stage sequential accept test, 1/5th-success step adaptation, per-generation checkpointing. |
+| `experiments/hillclimb.py` | DONE | (1+lambda) ES with a **league** field, a **paired** sequential accept test, four mutation operators, 1/5th-success step adaptation + stall kicks, per-generation checkpointing. |
 | `experiments/run_hillclimb.sh` | DONE | Supervisor: restarts the climber hourly, backs off 60s on an instant exit. |
+| `experiments/measure_champions.sh` | DONE | Snapshots all three champions vs `random` / `greedy` / `default` into `baselines.jsonl`; run it detached with 1 worker alongside the climbs. |
+| `experiments/league_{K}p/` | DONE | Archive of past champions (founder + newest 8) that forms the field a mutant must beat. |
 | `experiments/harness.py` | DONE | Round-robin tournament (older, still useful for >2 distinct bots). |
 | `experiments/baselines.jsonl` | DONE | Appended by `evaluate --out`. |
 
@@ -128,6 +130,51 @@ win rate above `1/K` is real signal, not a artifact of being the odd one out.
    bound of a one-sided 90% CI is still above `1/players`;
 4. checkpoint.
 
+### League mode (landed 2026-07-26 07:10)
+
+The ladder above is a pure mirror: a mutant only ever had to beat *its own
+parent*, so the search finds the best response to one policy rather than a
+strong policy. The failure mode showed up in the data (3p gen 10 beat
+`default` 52.1% while sliding to 60.4% against `greedy`, *below* what
+`default` itself scores). Four changes, all now live:
+
+1. **League field.** Every accepted champion is archived to
+   `experiments/league_{K}p/gen000NN.json`; the founder plus the newest 8 are
+   kept. A generation's field is `[champion]*4 + 3 sampled ancestors +
+   ["default", "greedy"]`, and each defender seat is drawn from that pool.
+   The draw is keyed on the game seed only, never on the challenger, so two
+   duels on the same seeds face byte-identical opposition.
+2. **Paired accept test.** Against a mixed field `1/K` is no longer the right
+   null, so the statistic is now the mutant's *edge over the champion on
+   identical games*: for every (seed, seat) the champion replays the same
+   game and we accumulate the difference in win share. The null is exactly 0
+   whatever the field looks like, and pairing removes seed variance, which is
+   the dominant term — so a decision needs far fewer games than the unpaired
+   test did. Cost is 2 games per paired sample; a losing mutant is abandoned
+   after one screening block, a winner runs to `--max-games`.
+3. **Coherent group mutations.** Four operators, sampled per mutant:
+   `scatter` (45%, the old 25%-of-weights move), `group` (33%, perturb one or
+   two whole feature groups *including* their `_early`/`_late` phase copies —
+   "care more about this strategic axis at every age"), `rescale` (12%,
+   multiply a whole group by `exp(N(0, sigma))` — changes the axis's weight
+   relative to everything else without disturbing its internal shape), and
+   `kick` (10%, 60% of the weights at 3x sigma — a deliberate restart from a
+   perturbed champion). The accepted operator is recorded per generation as
+   `op`, so which move types actually pay is measurable.
+4. **Adaptive sigma with stall kicks.** The 1/5th rule still shrinks sigma
+   (x0.85) below a 12% accept rate and grows it (x1.25) above 25%, bounded to
+   [0.05, 0.8]; on top of that, after 15 consecutive rejections the next
+   mutant is *forced* to be a `kick` and sigma is re-opened to at least 0.5.
+   Without this, 2p annealed to the 0.05 floor and ground on the same
+   neighbourhood for 15+ generations (gens 20-33 of the pre-league run).
+
+`--mode mirror` still reproduces the old behaviour for comparison. The switch
+is recorded as a `{"event": "search_update", ...}` line in each
+`generations_{K}p.jsonl`; **`wr` before that line and `edge` after it are
+different statistics** — `edge` is centred on 0 by construction, so an accept
+at `edge=+0.04` means "four points of win share better than the parent
+against the same field", not a 4% win rate.
+
 **Restart safety.** After every generation the champion is written atomically
 to `experiments/champion_{K}p.json` and one line is appended (with `fsync`) to
 `experiments/generations_{K}p.jsonl`. Re-running the same command resumes from
@@ -140,18 +187,29 @@ test's inflated false-positive rate is visible.
 
 ### Running climbs
 
-Relaunched 2026-07-26 06:57 against engine `fce7db8`, 10-hour budget each:
+Relaunched **2026-07-26 07:11** in league mode against engine `a29e625`,
+10-hour budget each:
 
 ```
+cd ~/tta-ai
 nohup experiments/run_hillclimb.sh 2 10 1 1 48 192 > experiments/logs/sup_2p.out 2>&1 &
-nohup experiments/run_hillclimb.sh 3 10 2 1 48 192 > experiments/logs/sup_3p.out 2>&1 &
+nohup experiments/run_hillclimb.sh 3 10 1 1 48 192 > experiments/logs/sup_3p.out 2>&1 &
 nohup experiments/run_hillclimb.sh 4 10 2 1 48 192 > experiments/logs/sup_4p.out 2>&1 &
 ```
 
-Arguments are `PLAYERS HOURS WORKERS LAMBDA SCREEN MAXGAMES`. Worker counts
-sum to 5 of the 6 cores. A mutant is screened on 48 games, needs >=96 before
-it can be accepted, and is abandoned after 192; on the current engine that is
-roughly 1-4 minutes per generation.
+Arguments are `PLAYERS HOURS WORKERS LAMBDA SCREEN MAXGAMES`.
+
+**Machine budget.** The Mac mini has 6 cores. Worker counts now sum to **4**,
+leaving 2 free (one for the concurrent engine/advisor agents, one for
+`measure_champions.sh`, which is deliberately run at `--workers 1`). 4p gets
+two workers because its games are the slowest; 2p and 3p get one each. Do not
+raise these past 4 total — oversubscription makes every climb slower without
+raising throughput, and the parallelism is inside `arena.duel`, so a climb
+with `--workers 1` still uses a full core in the parent process.
+
+A mutant is screened on 48 games, needs >=96 paired games before it can be
+accepted, and is abandoned after 192. In league mode each paired sample costs
+2 games, so a generation is 96-192 games and runs roughly 1-4 minutes.
 
 ### The engine-update cut (2026-07-26 06:56)
 
@@ -201,9 +259,24 @@ python3 -m experiments.summarize --players 4 --top 25
 cd ~/tta-ai && nohup experiments/run_hillclimb.sh 4 10 2 1 48 192 \
     > experiments/logs/sup_4p.out 2>&1 &
 
+# absolute strength of all three champions (detached, 1 core, ~15 min)
+cd ~/tta-ai && nohup experiments/measure_champions.sh 96 1 >/dev/null 2>&1 &
+tail -f experiments/logs/measure.log
+
 # stop everything
 pkill -f run_hillclimb.sh; pkill -f experiments.hillclimb
 ```
+
+A climb is **healthy** when new `gen` lines keep appearing in
+`experiments/logs/hc_{K}p.log` every few minutes *and* an accept lands every
+10-20 generations. Two failure signatures to watch for:
+
+* `no playable games this generation -- engine likely mid-edit` repeated: the
+  engine is broken or mid-edit; the climber sleeps 60s and retries by design,
+  but if it persists for >10 minutes check `python3 -c "import engine.game"`.
+* a long rejection streak with `sigma` pinned at 0.05: the stall kick should
+  now break this within 15 generations. If it does not, the accept test is
+  the bottleneck -- raise `--max-games`, not `--lambda`.
 
 The supervisor restarts the climber every hour on purpose: each restart picks
 up the latest engine code (another agent is editing the engine concurrently)
