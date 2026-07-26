@@ -425,3 +425,53 @@ it is a 10–20 culture regression.
 **Still open:** whether (1) and (2) together beat (1) alone, and whether a
 re-trained champion recovers more than the +22 culture measured here. Both
 need a hill-climb run, which is out of scope for this investigation.
+
+
+---
+
+## 11. What to do before the retraining run
+
+The fix is landed (`hand_potential` in `engine/bots/weighted.py`). The
+question is whether to re-measure first or retrain immediately. **Re-measure
+first.** Three reasons, in order of how much compute they save:
+
+**1. Several current weights are compensations for the blindness, and will
+mislead a climb that starts from them.** `hand_value_late` = −0.78 is the
+hill climb correctly learning "cards this bot holds never become anything" —
+a true statement about the *old* code and a false one about the new. Same for
+`end_turn_bias` = −8.28. Seeding a fresh climb from the current champions
+carries those compensations forward and spends the run un-learning them.
+Seed 2p/3p from the champions if you like, but **4p must be re-seeded from
+defaults** (§5, §7): its vector is degenerate on its own terms and the new
+term amplifies it.
+
+**2. The mechanism of the +24 culture is not yet known, and it changes what
+you should expect.** It is tempting to assume the bot now takes *more* cards.
+The arithmetic says otherwise: at 0.125, `Theology` adds only ≈ +0.81 to a
+take, which still does not clear the ~+4.3 net head start `end_turn` enjoys
+(§1). So the gain plausibly comes from choosing *better among* the cards it
+already takes and develops, not from taking more of them. If that is right,
+**the wasted-action rate may barely move even though the bot got much
+stronger** — and anyone who re-runs the §2 measurement expecting it to drop
+will misread the result. This is cheap to settle (one probe run) and
+expensive to guess wrong about.
+
+**3. The book-bot gap is the cleanest test of the hypothesis.** A "book"
+opponent plays sound *card priorities*, which is precisely the thing the old
+evaluation could not represent at all. If card-identity blindness is the main
+story, the 62.9% book-bot advantage should shrink materially against the
+fixed bot. If it does not, there is a second large defect still outstanding
+and it is much better to know that *before* committing to a long run rather
+than attributing the residual to under-training.
+
+There is also a fourth, weaker reason: if card-related weights previously
+could not learn anything real, then several of the weights that measured as
+noise were not noise-because-unimportant but noise-because-unlearnable. The
+fitness landscape has genuinely changed shape, so prior conclusions about
+which weights matter should be treated as provisional.
+
+**Recommended order:** (a) re-run the §2 wasted-action probe against the
+fixed bot; (b) re-run the book-bot benchmark; (c) re-seed 4p from defaults
+and tune `hand_potential` per player count; (d) then start the long run
+against the diverse pool. Steps (a) and (b) are minutes of compute against a
+run measured in hours.
