@@ -128,4 +128,162 @@ war is untrained noise, and the derived human-facing advice in
 
 ## Colonies
 
-(section below, written next)
+### Verdict: **SAME ROOT CAUSE (1-ply invisibility + tie-break), plus a
+second, 4p-only cause upstream. Still not an engine bug.**
+
+The colonization auction is implemented and reachable
+(`engine/interact.py:508-572`). Probe of 5 mirror 3p games with the 3p
+champion:
+
+| quantity | value |
+|---|---|
+| auction decisions | 16 |
+| ...with 3 bidders still active | 3 |
+| ...with 2 bidders still active | 5 |
+| ...with 1 bidder still active | 8 |
+| `bid` chosen | **1** |
+| `bid_pass` chosen | 15 |
+
+#### Cause A — a bid is *literally invisible* while anyone else is still in
+
+`pending_moves` for an auction returns `[("bid_pass",), ("bid", 1), ...]`
+(`engine/interact.py:47-53`) — **`bid_pass` is index 0**. Applying `("bid",
+n)` when other bidders remain only mutates the `pend` dict
+(`_auction_move`, `interact.py:522-542`); no player state changes. The
+feature vector is built purely from player state, so **every bid evaluates
+to exactly the same number as passing**, and `pick()` breaks ties with
+strict `>` (`engine/bots/__init__.py:160`, `weighted.py` likewise), so the
+first move — `bid_pass` — always wins. Directly observed:
+
+```
+round 12  Inhabited Territory (I)  3 bidders active
+  ('bid_pass',) 102.474   ('bid',1) 102.474   ('bid',2) 102.474  ...  ALL EQUAL
+round 15  Historic Territory (II)  3 bidders active
+  ('bid_pass',) 95.997    ('bid',1) 95.997    ('bid',2) 95.997   ...  ALL EQUAL
+```
+
+Because the *first* bidder can never see value in bidding, everyone passes
+and the territory goes to the past-events pile unclaimed. This is the same
+class of bug as the pact one: a multi-step move whose payoff lands outside
+the 1-ply horizon.
+
+#### Cause B — even the visible case is rejected
+
+When only one bidder is left active, a bid resolves the auction immediately
+(`interact.py:537-541` → `colonize()`), so the colony *is* inside the trial
+state and the evaluation is real. It still loses:
+
+```
+round 12  Inhabited Territory (I)   1 bidder active
+  ('bid_pass',) 36.474   ('bid',1) 34.586   ('bid',2) 28.984   ('bid',3) 23.382
+round 15  Developed Territory (II)  1 bidder active
+  ('bid_pass',) 97.374   ('bid',1) 94.685   ('bid',2) 82.282
+```
+
+The sacrifice costs real weighted features — `workers` (1.76 at 3p) and
+`unit_workers` per unit returned to the yellow bank, plus `yellow_bank`
+(-0.28) and the knock-on `pop_cost`/`consumption` — while the gain is a
+single `colonies` count feature. That trade is *modelled*, but with an
+**untrained coefficient** (see below), and it ignores the colony's
+permanent yield entirely except through the count.
+
+#### Cause C (4 players only) — auctions never even start
+
+3 full 4p games with the 4p champion: **zero auction decisions**, and only
+16 `prepare_event` moves total. Territory cards only reach the board by
+being seeded into the events deck with `prepare_event`
+(`engine/actions.py:255-256, 960-969`) and then revealed. The 4p champion
+has `hand_military = 0.908` (vs 0.504 at 3p), i.e. it values *holding*
+military cards more than the culture `prepare_event` pays, so it passes
+politics ~94% of the time and almost never seeds an event. No seeded
+events → no revealed territories → no auctions. This is why 4p colony bids
+(0.02/game) are even rarer than 3p (0.08/game).
+
+### The smoking gun: these weights were never under selection
+
+```
+              colonies   pacts     (BASE_WEIGHTS default: colonies 2.0, pacts 0.5)
+champion 2p    3.311     0.625
+champion 3p    2.000     0.644     <- colonies is EXACTLY the untouched default
+champion 4p   -0.962     0.469     <- drifted NEGATIVE
+```
+
+The 3p champion's `colonies` weight is bit-for-bit the hand-written
+default: thousands of hill-climb generations never once moved it, because
+no game outcome ever depended on it. The 4p champion's went *negative*,
+which is pure random drift on a feature that fires ~0.02 times per game.
+Any advice in `docs/HEURISTICS.md` derived from these two coefficients is
+noise, and should be marked as such.
+
+## Recommended fixes for colonies, ranked by risk
+
+**1. (lowest risk) Break auction ties toward action, or make bids visible.**
+Two cheap options, in preference order:
+   a. In `features()`, add an `auction_committed` term: if the top pending
+      decision is an `auction` whose `high` is this player, credit the
+      expected colony (e.g. `colonies + 1` discounted by the number of
+      still-active rivals). ~8 lines in `engine/bots/weighted.py`, no
+      engine change. This makes the *first* bid visible and therefore
+      possible.
+   b. Cheaper still but cruder: in `interact.pending_moves`, put
+      `("bid_pass",)` **last** rather than first, so the tie-break falls to
+      the smallest legal bid instead of passing. One-line change, but it
+      changes the move ordering the fingerprint depends on
+      (`tools/fingerprint.json`, `engine/perf_check.py`) — coordinate with
+      whoever owns the engine.
+
+**2. Replace the bare `colonies` count with yield-aware features.**
+Territories differ hugely (`Historic Territory II` = +2 happy and 11
+culture now; `Vast Territory II` = +4 yellow, -1 blue, 4 food). Derive
+`colony_yellow`, `colony_blue`, `colony_happy`, `colony_strength` from
+`permanentEffects` so the evaluator sees what it actually bought. The
+immediate effects already land in the trial state, so those need nothing.
+
+**3. Re-run the hill climb after 1 and 2, and reset `colonies`/`pacts` to
+their defaults first** — the current 4p value of -0.96 is drift, and
+carrying it into a run where the feature suddenly matters would start the
+search in the wrong basin.
+
+**4. Separately, check the 4p `hand_military` weight (0.908).** It is
+plausibly a genuine optimum (military cards defend attacks), but combined
+with cause C it means the 4p champion opts out of events, territories,
+aggressions and pacts all at once. Worth an ablation: does forcing a lower
+`hand_military` at 4p change the win rate?
+
+## Rules check (no engine defects found)
+
+Read `engine/actions.py:240-296`, `engine/actions.py:979-1003`,
+`engine/interact.py:217-228` and `engine/interact.py:464-586` against
+`docs/RULES_SPEC.md` §5.9, §5.10, §11.1-11.5. Everything matched:
+
+* pacts are gated to 3+ players (`actions.py:258`), and 2p decks drop them
+  at build time via the `2p` copy counts in
+  `data/cards_military_actions.json` — the 2p zero is expected, correct,
+  and not evidence of anything;
+* offering costs a political action but no MA (§5.9 / FAQ p.16) — matches;
+* refuse returns the card to hand (`interact.py:227`) — matches;
+* accepting replaces any previous pact in the owner's own area
+  (`interact.py:222`, single-element list) — matches;
+* auction order starts from the politics-phase player and goes clockwise
+  (`interact.py:511`), passing is permanent, the last bidder must colonize
+  (`interact.py:537-541`) — matches §11.2.
+
+**One cosmetic deviation worth a follow-up (not the cause of anything
+here):** `actions.py:258` gates on `len(state.active_players()) < 3`, which
+is *dynamic*. In a 3-player game where someone resigns (§5.11), pacts
+silently become illegal mid-game for the two survivors. The real rule is a
+**setup** rule (remove pacts from the deck in a 2-player game), so the
+gate should be on the number of seats, not the number of survivors. Low
+impact (resign is 0.07/game) but it is a genuine rules mismatch.
+
+## Bottom line
+
+Neither zero-pacts nor near-zero-colonies is an engine bug. Both are the
+same architectural limitation: **a 1-ply evaluator cannot see any move
+whose effect is deferred to another player's decision**, and the tie-break
+sends every such move to the do-nothing option. The consequence is
+serious anyway — the champions were tuned in a game with no diplomacy, no
+colonization and effectively no aggression, so the political half of
+Through the Ages is untrained, and the `colonies`/`pacts`/aggression
+weights in `experiments/champion_*.json` are unselected noise that should
+not be read as advice.
