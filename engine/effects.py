@@ -498,8 +498,10 @@ def army_strength_units(state, p, units):
     if old_val is None:
         old_val = val
     total = fresh_armies * val + outdated_armies * old_val
-    # an air force doubles the tactical bonus of one army (§10.5)
-    air = workers_on_types(p, {"air"})
+    # an air force doubles the tactical bonus of one army (§10.5).
+    # Counted from `units`, so a colonization force only benefits from the
+    # air units actually sacrificed into it (§11.3).
+    air = sum(1 for typ, _lv in units if typ == "air")
     if air and total_armies:
         total += min(air, total_armies) * (val if fresh_armies else old_val)
     return total

@@ -476,6 +476,215 @@ class TestActionCards(unittest.TestCase):
                 actions.apply(st, actions.legal_moves(st)[0])
 
 
+# --------------------------------------------- §11 colonies, §5.9-5.11 pacts
+
+from engine import interact                                      # noqa: E402
+
+
+def _military_state(seed=21, players=3):
+    st = game.new_game(players, seed=seed)
+    st.round = 3
+    st.phase = "politics"
+    st.has_military = True
+    return st
+
+
+class TestColonization(unittest.TestCase):
+    def test_auction_runs_clockwise_and_only_bidders_take_part(self):
+        st = _military_state()
+        p0 = st.players[0]
+        p0.techs["Warriors"].workers = 2         # only P0 can send a force
+        for q in st.players[1:]:
+            for t in q.techs.values():
+                if C.db().type_of(t.name) in C.UNIT_TYPES:
+                    t.workers = 0
+        interact.start_auction(st, "Wealthy Territory (I)", 0)
+        self.assertTrue(st.pending)
+        self.assertEqual(st.pending[-1]["kind"], "auction")
+        self.assertEqual(st.pending[-1]["active"], [0])
+        self.assertEqual(st.decider(), 0)
+
+    def test_bids_are_capped_by_the_sendable_force(self):
+        st = _military_state()
+        p0 = st.players[0]
+        p0.techs["Warriors"].workers = 2
+        cap = interact.max_force(st, p0)
+        self.assertGreater(cap, 0)
+        interact.start_auction(st, "Wealthy Territory (I)", 0)
+        bids = [m[1] for m in actions.legal_moves(st) if m[0] == "bid"]
+        self.assertEqual(bids, list(range(1, cap + 1)))
+
+    def test_winner_sacrifices_units_to_the_yellow_bank(self):
+        # §11.4: sent tokens go to the yellow bank, not the worker pool
+        st = _military_state()
+        p0 = st.players[0]
+        p0.techs["Warriors"].workers = 2
+        for q in st.players[1:]:
+            for n, t in q.techs.items():
+                if C.db().type_of(n) in C.UNIT_TYPES:
+                    t.workers = 0
+        bank, free = p0.yellow_bank, p0.workers_free
+        res = p0.resources
+        interact.start_auction(st, "Wealthy Territory (I)", 0)
+        actions.apply(st, ("bid", 1))
+        self.assertFalse(st.pending)
+        self.assertIn("Wealthy Territory (I)", p0.colonies)
+        self.assertEqual(p0.workers_free, free)          # NOT to the pool
+        self.assertEqual(p0.yellow_bank, bank + 1)
+        self.assertEqual(p0.resources, res + 5)          # immediate effect
+        self.assertEqual(p0.blue_total, 16 + 3)          # permanent effect
+
+    def test_no_bidders_sends_the_territory_to_past_events(self):
+        st = _military_state()
+        for q in st.players:
+            for n, t in q.techs.items():
+                if C.db().type_of(n) in C.UNIT_TYPES:
+                    t.workers = 0
+        interact.start_auction(st, "Vast Territory (I)", 0)
+        self.assertFalse(st.pending)
+        self.assertIn("Vast Territory (I)", st.past_events)
+
+    def test_colonization_force_ignores_strength_rating_bonuses(self):
+        # §11.3: leaders/wonders/special techs never help a colonization
+        st = _military_state()
+        p0 = st.players[0]
+        p0.techs["Warriors"].workers = 1
+        base = interact.max_force(st, p0)
+        p0.strength_extra += 10
+        effects.invalidate(st, p0)
+        self.assertEqual(interact.max_force(st, p0), base)
+
+    def test_losing_a_colony_gives_back_only_the_permanent_effects(self):
+        st = _military_state()
+        p0 = st.players[0]
+        interact.gain_colony(st, p0, "Wealthy Territory (I)")
+        res = p0.resources
+        interact.lose_colony(st, p0, "Wealthy Territory (I)")
+        self.assertEqual(p0.blue_total, 16)
+        self.assertEqual(p0.resources, res)      # one-time effect is kept
+
+
+class TestPactsAndResigning(unittest.TestCase):
+    def test_no_pacts_in_two_player_games(self):
+        st = _military_state(players=2)
+        st.me().hand_military = ["Military Alliance"]
+        self.assertFalse([m for m in actions.legal_moves(st)
+                          if m[0] == "offer_pact"])
+
+    def test_pact_offer_is_the_partners_decision(self):
+        st = _military_state()
+        p0 = st.me()
+        p0.hand_military = ["Military Alliance"]
+        actions.apply(st, ("offer_pact", "Military Alliance", 1, ""))
+        self.assertEqual(st.decider(), 1)         # the partner answers
+        opts = st.pending[-1]["options"]
+        actions.apply(st, ("choose", opts.index("accept")))
+        self.assertEqual(len(p0.pacts), 1)
+        self.assertEqual(p0.pacts[0]["partner"], 1)
+        # both parties get +3 strength
+        self.assertEqual(effects.state_stats(st, p0).strength,
+                         effects.state_stats(st, st.players[1]).strength)
+
+    def test_refused_pact_returns_to_hand(self):
+        st = _military_state()
+        p0 = st.me()
+        p0.hand_military = ["Peace Treaty"]
+        actions.apply(st, ("offer_pact", "Peace Treaty", 2, ""))
+        opts = st.pending[-1]["options"]
+        actions.apply(st, ("choose", opts.index("refuse")))
+        self.assertEqual(p0.pacts, [])
+        self.assertIn("Peace Treaty", p0.hand_civil + p0.hand_military)
+
+    def test_a_pact_forbidding_attacks_blocks_aggressions(self):
+        st = _military_state()
+        p0 = st.me()
+        p0.pacts = [{"name": "Peace Treaty", "owner": 0, "partner": 1,
+                     "a": 0, "b": 1}]
+        effects.invalidate(st)
+        self.assertTrue(effects.pact_forbids_attack(st, p0, st.players[1]))
+        self.assertFalse(effects.pact_forbids_attack(st, p0, st.players[2]))
+
+    def test_either_party_may_cancel(self):
+        st = _military_state()
+        st.players[1].pacts = [{"name": "Peace Treaty", "owner": 1,
+                                "partner": 0, "a": 1, "b": 0}]
+        effects.invalidate(st)
+        self.assertIn(("cancel_pact", 1), actions.legal_moves(st))
+        actions.apply(st, ("cancel_pact", 1))
+        self.assertEqual(st.players[1].pacts, [])
+
+    def test_resign_is_illegal_in_age_iv(self):
+        st = _military_state()
+        st.age_civil = "IV"
+        self.assertNotIn(("resign",), actions.legal_moves(st))
+
+    def test_resigning_pays_seven_culture_to_each_war_declarer(self):
+        st = _military_state()
+        p0, p1 = st.players[0], st.players[1]
+        p1.war_declared_by_me = ("War over Culture", 1, 0)
+        p0.wars_declared_on_me = [("War over Culture", 1, 0)]
+        before = p1.culture
+        actions.apply(st, ("resign",))
+        self.assertTrue(p0.resigned)
+        self.assertEqual(p1.culture, before + 7)
+        self.assertIsNone(p1.war_declared_by_me)
+
+    def test_last_player_standing_wins(self):
+        st = _military_state(players=2)
+        st.phase = "politics"
+        actions.apply(st, ("resign",))
+        self.assertTrue(game.is_over(st))
+        self.assertEqual(game.winners(st), [1])
+
+
+class TestAggressionDefense(unittest.TestCase):
+    def _setup(self):
+        st = _military_state()
+        atk, dfn = st.players[0], st.players[1]
+        atk.techs["Warriors"].workers = 3
+        atk.military_actions = 3
+        effects.invalidate(st)
+        return st, atk, dfn
+
+    def test_defender_chooses_and_the_budget_is_the_action_total(self):
+        st, atk, dfn = self._setup()
+        atk.hand_military = ["Aggression: Plunder (I)"]
+        dfn.hand_military = ["Military Bonus (defense 6 / colonization 3)",
+                             "Military Alliance"]
+        mv = next(m for m in actions.legal_moves(st) if m[0] == "aggression")
+        actions.apply(st, mv)
+        self.assertEqual(st.decider(), dfn.idx)      # the DEFENDER decides
+        pend = st.pending[-1]
+        self.assertEqual(pend["kind"], "defense")
+        self.assertEqual(pend["budget"],
+                         effects.state_stats(st, dfn).military_actions)
+        self.assertIn(("defend_done",), actions.legal_moves(st))
+
+    def test_a_big_bonus_card_repels_the_aggression(self):
+        st, atk, dfn = self._setup()
+        atk.hand_military = ["Aggression: Plunder (I)"]
+        dfn.hand_military = ["Military Bonus (defense 6 / colonization 3)"]
+        food = dfn.food = 9
+        mv = next(m for m in actions.legal_moves(st) if m[0] == "aggression")
+        actions.apply(st, mv)
+        actions.apply(st, ("defend",
+                           "Military Bonus (defense 6 / colonization 3)"))
+        self.assertFalse(st.pending)
+        self.assertEqual(dfn.food, food)             # nothing was taken
+        self.assertTrue(any("failed" in L for L in st.log))
+
+    def test_undefended_plunder_takes_the_goods(self):
+        st, atk, dfn = self._setup()
+        atk.hand_military = ["Aggression: Plunder (I)"]
+        dfn.hand_military = []
+        dfn.food = 9
+        mv = next(m for m in actions.legal_moves(st) if m[0] == "aggression")
+        actions.apply(st, mv)
+        while st.pending:
+            actions.apply(st, actions.legal_moves(st)[0])
+        self.assertLess(dfn.food, 9)
+
+
 def _rng():
     import random
     return random.Random(0)
