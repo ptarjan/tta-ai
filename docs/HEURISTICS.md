@@ -427,7 +427,7 @@ a whole turn of your life.
 
 This is the most under-appreciated thing in the data. Military actions are spent
 on tactics, on aggressions — and, if unspent at end of turn, on **drawing 1
-military card per unused MA, up to 3** [rules, §6.7]. Those cards are what let
+military card per unused MA, up to 3** [rules, §6.6 step 4]. Those cards are what let
 you **prepare an event, which scores culture equal to the card's age level
 (I = 1, II = 2, III = 3) as a political action, costing no civil action at all**
 [rules, §5.2].
@@ -502,6 +502,178 @@ about *whether it is fine to waste half your actions in Age II*, the count that
 says "no" is the one with three more technologies, and that is the direction we
 would bet on. If you are ending Age II turns with 2 civil actions spare, you have
 run out of *plan*, not out of *game*.
+
+---
+
+## Endgame: Age III and Age IV (roughly rounds 15–23)
+
+### Age IV is one turn. Plan for that, not for an "Age IV".
+
+Across 360 games the champions took **143 / 155 / 163 Age IV turns in 120 games
+each** — that is **1.19 (2p), 1.29 (3p), 1.36 (4p) turns per game**. Age IV is
+not a phase of the game. It is a single final turn, occasionally two. **[strong]**
+
+That follows from the rules: when the Age III civil deck runs out, Age IV begins,
+and **if that happens during the starting player's turn the current round is the
+last; otherwise the next round is** [rules, §12.3]. Everyone gets the same number
+of turns.
+
+Age III, by contrast, is long. It starts around round **15 / 14 / 15** and the
+game ends around round **22.9 / 22.9 / 22.2**. So:
+
+- A card bought at the **start of Age III** produces about **7 more times**.
+- A card bought at **round 20** produces **two or three** times.
+- A card bought in **Age IV** produces **once**, and a food or resource card
+  bought in Age IV produces nothing you can score.
+
+That is the honest version of "stop buying rate late": the deadline is not the
+age boundary, it is **roughly four turns from the end, which is round 19–20**.
+
+### The last two rounds are worth 10–20 culture on their own
+
+Culture at the moment Age IV begins, versus final culture:
+
+| | culture when Age IV starts | final culture | difference |
+|---|---|---|---|
+| 2p | 104.1 | 123.7 | **+19.6** |
+| 3p | 94.9 | 113.2 | **+18.3** |
+| 4p | 45.2 | 56.4 | **+11.2** |
+
+Part of that is one more production phase, but a large part is **final scoring:
+after the last turn, every Age III event still sitting in the current *or* future
+events decks is evaluated** [rules, §12.5]. Age I and Age II leftovers are simply
+ignored. Two consequences you can act on:
+
+- **Preparing an Age III event guarantees it will be evaluated**, even if the
+  deck never reaches it. [rules, §12.5] If you know an Age III event favours you,
+  putting it in the future deck is a guaranteed score, not a gamble.
+- Ranked events ("14/7/0") are tie-broken **as if it were the starting player's
+  turn** at final scoring, not your turn. [rules, §12.5] If you are relying on a
+  tie in a ranked event, check the seat order first.
+
+### Stop banking science
+
+Unspent science points at the end of the game:
+
+| | science banked at end | final technologies |
+|---|---|---|
+| 2p | **25.7** | 12.85 |
+| 3p | 12.9 | 9.98 |
+| 4p | **6.2** | **16.35** |
+
+The count that ends with the *least* banked science ends with the *most*
+technologies, by three and a half techs. That is not a coincidence — banked
+science is a technology you did not develop. And the `science` stock weight is
+one of only four levers all three climbs agree on, all downward: **+0.5 default →
++0.185 (2p) / −0.194 (3p) / −6.089 (4p)**. **[strong]**
+
+The 2p champion banking 25.7 science at the end is a genuine flaw in that
+champion, not a strategy. Do not copy it.
+
+The same applies to your hand. Age IV hand size: **2.50 (2p), 1.57 (3p), 4.77
+(4p)**. `hand_value_late` is negative at all three counts (−0.35 / −0.40 / −0.33
+against a −0.2 default) — another full-consensus lever. The 4p champion ending
+with nearly five dead cards is the same mistake in a different currency.
+**[strong on the principle, and the 4p champion violates it]**
+
+### Workers stop being placed, and that is partly on purpose
+
+Unused workers, from the start of Age III to the last full round:
+
+| | round 15 | round 21 |
+|---|---|---|
+| 2p | 0.81 | 1.53 |
+| 3p | 1.11 | 1.38 |
+| 4p | 2.81 | **4.38** |
+
+Meanwhile production workers **fall**: 2p 4.82 → 4.30, 4p **3.16 → 2.09**. The 4p
+champion finishes with more than a third of its workers idle.
+
+Two things are going on and only one of them is good:
+
+- **Good:** unused workers absorb discontent. An uprising happens when discontent
+  workers **exceed your unused workers**, and unused workers do not reduce
+  discontent, they only soak it. [rules, §6.3] You lose 2 yellow tokens at the
+  end of Age III [rules, §12.2], which pushes your happiness requirement up right
+  when you can least afford an uprising. Carrying spare workers into the last
+  rounds is cheap insurance.
+- **Probably bad:** at 4p the happiness margin in Age IV is already **+4.34**, so
+  those four idle workers are not paying for insurance — they look like
+  population the champion bought and then could not afford to place. **[mixed]**
+
+### Military in the endgame
+
+| | strength (Age IV) | ratio to strongest rival | aggressions/game | wars/game |
+|---|---|---|---|---|
+| 2p | 4.27 | 1.07 | 0.008 | **0** |
+| 3p | 7.39 | 1.03 | 0.033 | **0** |
+| 4p | 3.48 | 1.13 | 0.108 | **0** |
+
+**Zero wars in 360 games at every player count.** Aggressions are rare everywhere,
+and where they happen at all they happen *late*: at 4p the median first
+aggression is **round 18.5** (p25 17, p75 20), i.e. in Age III. **[strong on the
+behaviour; see the caveat]**
+
+The caveat matters. These are mirror self-play games between civilizations that
+have all learned nobody attacks. A table of humans is not that. What survives the
+caveat is the *shape*: all three champions hold strength at **1.03–1.13× the
+strongest rival** in Age IV, and the `strength_deficit` penalty is one of the four
+full-consensus levers (−0.6 default → −1.02 / −0.95 / −1.30). **Parity is the
+target; being the biggest army is not.**
+
+Two rules to remember for the last turns:
+
+- **No military cards are drawn in Age IV** [rules, §6.6 step 4, §12.4].
+  Whatever is in your military hand at the end of Age III is all the defence you
+  will ever have. Count it before you let your strength slip. In Age IV the card
+  row is also **swept but never refilled** [rules, §12.4] — the row only shrinks.
+- **You may not declare a war during the last round** [rules, §5.1], but you may
+  play an aggression. If someone at your table is one Plunder away from the lead,
+  Age III is the last moment you can build against it.
+
+### Leaders in the endgame
+
+Share of turns with a leader in play:
+
+| | Age II | Age III | Age IV |
+|---|---|---|---|
+| 2p | 0.83 | 0.60 | 0.43 |
+| 3p | 0.60 | 0.22 | 0.20 |
+| 4p | 0.82 | **0.83** | **0.81** |
+
+The 4p champion keeps a leader out through the whole endgame; 2p and 3p let
+theirs lapse. [rules, §12.2] **a leader in play survives through the age after its
+own** — an Age II leader dies when Age III ends — so keeping one out in Age IV
+requires having taken an Age III leader.
+
+Worth knowing: **replacing a leader costs 1 CA and gives you 1 spent civil action
+back** [rules, §3.7], so a swap is effectively free in actions. If your Age II
+leader is about to be antiquated anyway, there is no action cost to putting a new
+one over it. **[rules]** — the behaviour is **[mixed]**, since only 4p does it.
+
+### What Age III culture actually looks like
+
+Culture rate by age:
+
+| | Age II | Age III | Age IV |
+|---|---|---|---|
+| 2p | 4.42 | 4.82 | 5.83 |
+| 3p | 2.64 | 3.27 | 3.65 |
+| 4p | 4.90 | 6.63 | **8.88** |
+
+Every count is still *increasing* its culture rate right to the end — nobody
+coasts. But look at 4p: its science rate in Age IV is **7.68**, still rising, and
+it has the highest culture rate too. It is buying both to the last turn. That is
+in direct tension with the headline "stop buying rate in Age III" rule, and the
+tension is real: the weight evidence for that rule is strong (`science_rate_late`
+−3% / −40% / −66%, `resource_rate_late` −25% / −54% / +222%) but the **behaviour**
+evidence is weak — no champion actually stops. **[mixed — the weights say stop,
+the play says keep going]**
+
+Our reading, and it is a reading rather than a measurement: keep buying things
+that score (labs feed technologies, technologies feed culture buildings) and stop
+buying things that only feed *other* purchases (farms, mines) once you are inside
+four turns of the end. Food and resources are not victory points.
 
 ---
 

@@ -52,3 +52,19 @@
   * sci/culture crossover is Age I -> II at all 3; the old "monotone fall" claim is DEAD
   * MA economy: unused MA -> military cards -> event preps -> free culture
 - NEXT: Endgame (Age III-IV), Per-player-count, then re-verify rules 1-8.
+
+### 11:20
+- WRITTEN: "Endgame: Age III and Age IV". Key findings:
+  * Age IV is ONE turn: 143/155/163 Age-IV turns over 120 games = 1.19/1.29/1.36
+    per game. The real "stop buying rate" deadline is ~4 turns out, round 19-20.
+  * Last two rounds are worth +19.6 / +18.3 / +11.2 culture (final Age III event
+    scoring). Preparing an Age III event guarantees it is evaluated.
+  * Banked science at end 25.7 / 12.9 / 6.2 vs final techs 12.85 / 9.98 / 16.35 --
+    least banked science = most techs. 2p's 25.7 is a flaw, called out as one.
+  * Zero wars in 360 games at all 3 counts; aggression only at 4p and only late
+    (median round 18.5).
+  * Rule 7 ("stop buying rate in Age III") is weight-supported but NOT
+    behaviour-supported: no champion actually stops. Downgraded to [mixed] in situ.
+- TODO carried forward: the Opening section was written before 4p landed and says
+  "at both counts" in a few places -- needs 4p numbers folded in.
+- NEXT: fold 4p into Opening, then Per-player-count, then re-verify rules 1-8.
