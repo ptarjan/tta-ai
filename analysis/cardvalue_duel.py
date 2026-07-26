@@ -65,11 +65,18 @@ _EFF_TO_FEATURE = {
 }
 
 _CACHE = {}
+# Pin every weight dict we have cached under, so CPython cannot recycle its
+# id() for a different dict and serve us that dict's cached values.  Bots are
+# created and dropped once per game, so id reuse is a real hazard here.
+_PINNED = {}
 
 
 def card_potential(name, w):
     """Eval-points a card would be worth if it were played, before its cost."""
-    key = (name, id(w))
+    wid = id(w)
+    if wid not in _PINNED:
+        _PINNED[wid] = w
+    key = (name, wid)
     hit = _CACHE.get(key)
     if hit is not None:
         return hit
