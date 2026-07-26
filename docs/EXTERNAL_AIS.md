@@ -412,9 +412,88 @@ material:
 - BGG [thread 1933554 "Data-Driven strategy tips"](https://boardgamegeek.com/thread/1933554/data-driven-strategy-tips)
   (win rates from ~10k BGO games), [thread 2801950](https://boardgamegeek.com/thread/2801950/a-strategy-guide-for-the-game-with-the-expansion)
   (guide based on ~100 games, 3–4p), [thread 934016](https://boardgamegeek.com/thread/934016/general-strategy-tips-for-a-newbie).
-  **Note: BGG blocks plain `curl` and `WebFetch` with 403, and the XML API returns 401
-  for `thread?id=`** — scraping BGG forums needs a browser-like session or an API key,
-  budget for that.
+  **See §5c: the 403 was only a User-Agent block and is now solved. BGG forum and file
+  *metadata* fetch fine unauthenticated; only the file *bodies* still need a login.**
+
+### 5c. BGG file section — RESOLVED (mostly), and the login verdict
+
+**One-line verdict: the BGG login FAILED, and not because of a wrong password — BGG has
+put the `ptarjan` account into a "dormant, must reset" state, so no password will work
+until the user clicks "forgot password" on boardgamegeek.com and sets a new one.**
+
+Evidence, because "login failed" on its own is not actionable:
+
+```
+POST https://boardgamegeek.com/login/api/v1
+  {"credentials":{"username":"ptarjan","password":<supplied>}}
+-> 400 {"errors":{"message":"It's been a while since we've seen you.
+        Please use the \"forgot password\" link to reset your password to sign in."}}
+```
+
+That message is **password-independent**. Re-probing the same endpoint with a
+deliberately garbage password for `ptarjan` returns the *identical* message, whereas a
+username that does not exist returns a *different* one (`"Invalid username or
+password"`). So: the account exists, the endpoint and our request format are correct,
+and BGG is refusing at the account-state level before it ever checks the password. The
+supplied password was never proven right or wrong.
+
+**What the user can do to fix it (nothing else will work):** log in to
+boardgamegeek.com in a normal browser, use "forgot password", set a new password, then
+drop that new password in the same scratch file. Driving the same login through Chrome
+or Playwright would *not* have helped and was not attempted for that reason — BGG's web
+login form is a React client that posts to this exact same `/login/api/v1` endpoint, so
+it would render the same refusal in a nicer font. Creating a second account was out of
+scope by instruction.
+
+**The good news, which is worth more than the login was.** The previously recorded "BGG
+403s everything" finding was wrong in an important way: **it was a User-Agent block, not
+an auth wall.** Sending a normal Chrome `User-Agent` from plain `urllib` gets HTTP 200
+from BGG and from `api.geekdo.com` with no cookies at all. That immediately unblocks:
+
+- The **file listing** for the game:
+  `https://api.geekdo.com/api/files?ajax=1&objectid=182028&objecttype=thing&pageid=1&showcount=100&sort=recent`
+  returns all **66** files as JSON (`fileid`, `filename`, `title`, `size`, uploader,
+  post date, language).
+- Per-file metadata: `https://api.geekdo.com/api/files/<fileid>` and
+  `https://api.geekdo.com/api/filepages/<filepageid>` — both 200 anonymously.
+- BGG forum threads should be re-tried with the same header before anyone budgets for
+  an API key (§5b's "budget for that" is probably obsolete).
+
+**Both requested targets were located, and they are the right files:**
+
+| fileid | filename | size | downloads |
+|---|---|---|---|
+| 154670 | `Through the Ages - A New Story of Civilization - Card Reference v1.09.pdf` | 800,909 | **27,322** |
+| 409053 | `_PLAYER CARD COUNTS.xls` (title "Through the Ages Card Counts", v1.1, 2025-01) | 144,896 | 143 |
+
+154670 is unambiguously the **2015 edition** ("A New Story of Civilization" is in the
+filename) and its 27k downloads make it the de-facto community card reference — exactly
+the third opinion we wanted. 409053's own description warns it "assumes you own the
+Leaders and Wonders expansion", so any count taken from it must be filtered to base-game
+cards before it is compared with `data/cards_civil.json`.
+
+**What is still blocked: the file bodies.** Downloading a file from BGG requires an
+authenticated session; the download URL is not exposed anywhere anonymously. Confirmed
+by exhausting the plausible routes:
+
+- `boardgamegeek.com/file/download/<fileid>` -> 200 but the body is a 10 KB HTML error
+  page reading `Error: Forbidden: Admins only`.
+- `boardgamegeek.com/file/download_redirect/<fileid>` -> 410 Gone.
+- `boardgamegeek.com/geekfile.php?action=download&fileid=<id>` -> the generic SPA shell.
+- The `filepage` HTML is a pure client-rendered shell containing **no** download link in
+  the markup; `api/files/<id>` exposes `links` for self / uploader / downloadcount and
+  **no** download URI.
+
+So the metadata is free and the bytes are not. **Net status of the BGG cross-check:
+blocked on one password reset, and on nothing else.** Once that reset happens the two
+files are two `urllib` calls away with the cookie jar from `/login/api/v1`.
+
+**Nothing was silently changed on the strength of this.** No BGG-derived value has been
+written into `data/cards_civil.json` or `data/cards_military_actions.json`; our card
+data remains resolved from the two independent 2015-edition sources recorded in
+`docs/SOURCES.md`. When the files do arrive, the rule stands: BGG is a *third opinion*,
+and any disagreement gets **both** values written into `docs/SOURCES.md` and flagged,
+not quietly applied.
 - Steam guide ["TTA strategy game and some basic knowledge"](https://steamcommunity.com/sharedfiles/filedetails/?id=1367549747)
   (translated Chinese guide) — Steam pages fetch fine.
 - [Stately Play "Strategy 101: Through the Ages, Resource Edition"](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/).

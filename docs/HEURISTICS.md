@@ -912,18 +912,99 @@ Practical drill: before you spend a civil action on population, look at where
 the *next* token comes from and whether that empties a subsection. If it does,
 buy the happy face first.
 
-### 2. Starving for one food
+### 2. Starving for one food — this is the biggest leak in the game
 
-Missing food at consumption costs **4 culture per missing food**, every turn it
-happens. [rules, §6.6] Four culture is roughly a full turn of Age I culture
-production — you can bleed a whole age's worth of points through a one-food
-gap and barely notice.
+**This is the single largest culture sink we measured, at every player count,
+and it is larger than everything else combined.** If you take one thing from
+this document, take this one.
 
-Consumption steps at 16, 12, 8 and 4 tokens left in the yellow bank; the pop
-*cost* steps at different squares (16, 12, 8, 4 for cost 3/4/5/7), which is why
-the two feel out of sync. [rules, §6.1] The search raised `food_rate` at all
-three counts (+5% / +48% / +12%) — 3p most of all. **[mixed]** — 3p moved it
-hard, the other two barely.
+The rule. In the production phase you pay food equal to your consumption; if you
+are short, **you pay what you can and lose 4 culture per missing food**.
+[rules, §6.6 step d, CoL p.6] There is no cap, it fires every single turn you are
+short, and nothing on the board announces it.
+
+How much it actually costs. `analysis/leak_check.py` replays champion mirror
+games with the end-of-turn economy wrapped, comparing the culture your rating
+says you should score against what you actually banked. The gap is starvation.
+Over **60 games per player count** (`experiments/logs/leak_check.log`):
+
+| | culture burned to starvation, per player-game | share of turns short | final culture |
+|---|---|---|---|
+| 2p | **21.4** | 16.5% | 129.9 |
+| 3p | 6.0 | 6.3% | 107.5 |
+| 4p | **56.1** | **46.1%** | 60.1 |
+
+At 4 players the champion burns **roughly as much culture to starvation as it
+finishes the game with**. Compare that to the trap everyone worries about —
+uprisings cost 0.27 / 0.03 / 0.64 culture per player-game, essentially nothing.
+You are guarding the wrong door. **[strong]** — three player counts, 60 games
+each, one mechanism, and the effect size is not close.
+
+It gets worse as the game goes on, because consumption steps up as the yellow
+bank empties while your farms do not automatically keep pace. Culture burned per
+turn, by age:
+
+| | Age I | Age II | Age III | Age IV |
+|---|---|---|---|---|
+| 2p | 0.03 | 0.82 | 1.75 | 2.83 |
+| 3p | 0.00 | 0.12 | 0.53 | 1.20 |
+| 4p | 0.33 | 2.51 | **4.71** | **6.25** |
+
+The 4p Age III figure is the one to stare at: **4.71 culture burned per turn
+against a culture *rate* of 6.63**. It is netting about 1.9 culture a turn out of
+an engine that looks, on the rate track, like it is producing 6.6. That single
+mechanism explains why 4p finishes on 56 culture while 2p finishes on 124 despite
+4p having three more technologies and a higher culture rate in every age.
+
+Why it sneaks up on you. Consumption steps at 16, 12, 8 and 4 tokens left in the
+yellow bank; the population *cost* steps at the same squares but to different
+numbers (3 / 4 / 5 / 7), and the *happiness* requirement steps at yet another set
+of squares (16, 12, 10, 8, 6, 4, 2, 0). [rules, §6.1] Three different staircases
+on one strip of board. The one that costs you culture is the quietest of the
+three, because unlike an uprising nothing stops — you just score less, forever.
+
+What to do about it, concretely:
+
+- **Compare production against consumption, not against zero.** The behaviour
+  figures below are food **produced** per turn, gross. Consumption is 2 while
+  you have 12–9 yellow tokens left and **3 once you are down to 8–5**
+  [rules, §6.1] — and every champion is at 9.2–9.8 tokens at the end of Age III
+  and 7.2–7.8 by Age IV, so **consumption steps from 2 to 3 during the last age
+  at every player count.**
+
+  | food produced per turn | Age I | Age II | Age III | Age IV |
+  |---|---|---|---|---|
+  | 2p | 2.13 | 2.34 | 2.33 | 2.18 |
+  | 3p | 2.05 | 2.22 | 2.28 | 2.39 |
+  | 4p | 1.40 | 1.12 | 1.05 | 1.04 |
+
+  Line those up against consumption and the whole table falls out. 2p produces
+  ~2.3 against a consumption of 2 — fine — and then the bank crosses 8, the bill
+  becomes 3, and it starts burning 2.83 culture a turn. 4p produces **1.0
+  against a consumption of 2 for the entire midgame**: about one food short every
+  turn, times 4 culture, which is exactly the 2.5–4.7 per turn measured. This is
+  not bad luck; it is arithmetic that was visible ten rounds earlier.
+
+  Practical target: **produce consumption + 1**, and add a farm the moment you
+  can see the bank crossing 8.
+- **Before you take a population, check whether it steps consumption.** Adding a
+  worker when the bank is about to cross 16, 12, 8 or 4 raises your bill
+  permanently.
+- **Every age end takes 2 yellow tokens off you for free** [rules, §12.2] —
+  three times a game, unavoidable, and each one can step consumption. Budget food
+  for it before the age turns, not after.
+- **A farm bought in Age III still pays.** This is the honest exception to
+  "stop buying rate in Age III" (trap #4): a farm does not score, but starving
+  costs 4 culture a turn, so a farm that closes a 1-food gap on round 17 is worth
+  about 24 culture by the end. Rate that *prevents a penalty* is not the same as
+  rate that feeds a future purchase.
+
+Weight evidence, for what it is worth: the search raised `food_rate` at all three
+counts (+5% / +48% / +12%). That is a real signal and it points the right way,
+but it is far weaker than the behaviour warrants — the champions have not
+learned this lesson yet, which is exactly why they are all still bleeding.
+**[strong on the leak, thin on the fix]** — we can measure the cost precisely;
+we are inferring the remedy from the rules, not from a champion that solved it.
 
 ### 3. Corruption from a half-built wonder
 

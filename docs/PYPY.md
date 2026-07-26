@@ -343,3 +343,83 @@ state with the real game.
 **Verification gate: PASSED** — 58/58 tests OK, narrow `c2befef1…` and wide
 `47e06a41…` both unchanged (135/135 games byte-identical).
 
+### 4b. How much of the copy does GreedyBot actually MUTATE? **1.6% / 5.7%**
+
+Tool: `tools/measure_mutation.py`. At every branching GreedyBot decision it
+copies the state, applies each candidate move to the copy, then structurally
+diffs copy vs original (`log` and `_`-prefixed attrs excluded, exactly as
+`copy_state` excludes them). Two ratios:
+
+* **slots** — scalar leaves (dataclass fields, dict values, list items) that
+  differ, over all scalar leaves copied. "How much data changed."
+* **nodes** — container objects (dataclass / dict / list / set) that lie on a
+  path to some change, over all containers copied. This is exactly what a
+  copy-on-write state would have to clone: COW clones the spine from the root
+  down to each mutation and shares everything else.
+
+4p GreedyBot, 2 full games, 771 branching decisions, **9235 candidate moves**:
+
+| | per candidate move | fraction |
+|---|---|---|
+| scalar slots copied | 395.4 | — |
+| scalar slots **mutated** | **6.43** | **1.63%** |
+| container nodes copied | 93.7 | — |
+| container nodes **on a mutated path** | **5.37** | **5.74%** |
+
+Per move kind (nodes on a mutated path), all 9235 candidates:
+
+| move kind | slots changed | nodes on mutated path |
+|---|---|---|
+| `pol_pass` | 0.51% | 3.25% |
+| `copy_tactic` | 0.67% | 2.76% |
+| `destroy` | 0.76% | 5.32% |
+| `take` | 0.88% | 5.83% |
+| `pop` | 1.04% | 3.25% |
+| `develop` | 1.17% | 5.33% |
+| `play_action` | 1.36% | 4.11% |
+| `offer_pact` | 1.46% | 5.37% |
+| `play_tactic` | 1.67% | 4.27% |
+| `choose` | 1.86% | 8.77% |
+| `war` | 1.90% | 6.16% |
+| `prepare_event` | 3.93% | 10.46% |
+| `resign` | 7.91% | 9.23% |
+| `end_turn` | 8.24% | 9.04% |
+
+Even the worst move kind (`end_turn`, which runs the whole §6.6 end-of-turn
+sequence) touches under 10% of the nodes. The common cases are 3–6%.
+
+### RECOMMENDATION (do not implement yet — this is the finding, not the work)
+
+**The copy is ~17x more work than the mutation, so structural sharing beats
+any constant-factor copy win by an order of magnitude.** The leaf fast path
+above bought 1.55x; the ceiling for "copy faster" is maybe another 1.3x.
+Copy-on-write or an undo stack has a theoretical ceiling near **17x** on the
+copy component, i.e. roughly 64% -> ~5% of GreedyBot runtime, or about a
+**2.5x whole-bot speed-up**, and it would help PyPy more than CPython because
+it removes the short-lived-object churn that PyPy's GC handles worst (see
+section 3).
+
+Two designs, in order of preference:
+
+1. **Undo stack (journalling `apply`).** `GreedyBot` needs the trial state only
+   long enough to call `evaluate`, and it discards it immediately — so no
+   persistence is needed at all, just `apply(state, mv)` / `undo(state)`.
+   Record `(container, key, old_value)` for every write plus
+   append/pop records for lists; 6.4 slots per move means a journal of ~7
+   entries versus 395 slot copies. This is the cheapest possible scheme and
+   needs no change to the state representation, only to the mutation sites.
+   Risk: `engine/actions.py` + `effects.py` + `events.py` mutate state in many
+   places; every one of them must go through the journal or the undo is wrong.
+   Mitigation: a paranoid mode that `copy_state`s anyway and asserts the undone
+   state is identical — the existing 135-game fingerprint then proves it.
+2. **Copy-on-write with a version stamp.** Clone only the ~5.4 nodes on the
+   mutated path, share the rest. Needs every mutation site to go through a
+   `mutable(obj)` accessor, which is a larger and more invasive change than the
+   journal, and it makes aliasing bugs possible (two logical states sharing one
+   dict). Only worth it if a future bot needs to hold many trial states alive
+   at once (i.e. real multi-ply search), which the journal cannot do.
+
+Prerequisite for either: the mutation sites must be enumerated. `STRICT` legality
+asserts and the 135-game fingerprint are the safety net that makes this
+tractable; do it as its own branch, not inside a perf pass.
+

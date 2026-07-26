@@ -124,3 +124,21 @@
     starving engine (food rate 1.20/1.18/1.03/0.89, culture 56.4).
 - NEXT: rewrite trap #2 (starvation) with the 60-game numbers, then rewrite
   headline rule 8 (ratio_to_strongest), then re-verify rules 1-8 + header.
+
+### 12:00
+- REWROTE trap #2 (starvation) with the 60-game numbers. It is now the longest
+  trap and framed as "the biggest leak in the game".
+- IMPORTANT correctness note discovered while writing: `s.food` / behaviour
+  `food_rate` is GROSS food production per turn (engine/effects.py:45,
+  experiments/behaviour.py:157), NOT net of consumption. So the right comparison
+  is production vs the consumption number (2 at 12-9 tokens left, 3 at 8-5,
+  RULES_SPEC 6.1). All champions sit at 9.2-9.8 pop_bank at end of Age III and
+  7.2-7.8 in Age IV -> consumption steps 2->3 in the last age at EVERY count.
+  That arithmetic reproduces the measured burn exactly (4p produces ~1.0 vs
+  consumption 2 = 1 food short = 4 culture/turn; measured 2.5-4.7).
+  Any future edit that treats food_rate as net is WRONG.
+- Also added the honest exception to trap #4: a farm bought in Age III that
+  closes a 1-food gap is worth ~24 culture, so "stop buying rate" does not apply
+  to rate that PREVENTS A PENALTY.
+- NEXT: rewrite headline rule 8 (military ratio_to_strongest), then re-verify
+  rules 1-7 + header snapshot against the fresh 120-game data.
