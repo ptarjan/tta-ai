@@ -122,6 +122,110 @@ Eight rules. In rough order of how much they are worth.
 
 ---
 
+## Common traps
+
+Six ways this game quietly takes points off you. All six are things the search
+priced *more harshly* than the hand-set weights did — which is the AI's way of
+saying "you are underestimating this".
+
+### 1. The uprising you did not see coming
+
+An uprising skips your **entire production phase**: no science scored, no
+culture scored, no food, no resources. Only the military draw survives.
+[rules, §6.6]
+
+The trap is that you can walk into one without taking an action. Two triggers
+fire on their own:
+
+- **Increasing population** can empty a yellow-bank subsection and step the
+  happy-faces requirement up by one — the nastiest is at **10 tokens left,
+  where the requirement jumps from 2 to 3** while consumption does not move, so
+  the cost is invisible on the food side. [rules, §6.1]
+- **Every age end takes 2 yellow tokens off you automatically** (ends of Ages
+  I, II and III). That is a free, unavoidable push toward the next happiness
+  step, three times a game. [rules, §12.2]
+
+All three climbs made the uprising penalty worse than the hand-set −12:
+**−14.0 (2p), −15.5 (3p), −21.2 (4p)**. It is the largest single term in the
+78-weight evaluation at every player count. **[strong]**
+
+Practical drill: before you spend a civil action on population, look at where
+the *next* token comes from and whether that empties a subsection. If it does,
+buy the happy face first.
+
+### 2. Starving for one food
+
+Missing food at consumption costs **4 culture per missing food**, every turn it
+happens. [rules, §6.6] Four culture is roughly a full turn of Age I culture
+production — you can bleed a whole age's worth of points through a one-food
+gap and barely notice.
+
+Consumption steps at 16, 12, 8 and 4 tokens left in the yellow bank; the pop
+*cost* steps at different squares (16, 12, 8, 4 for cost 3/4/5/7), which is why
+the two feel out of sync. [rules, §6.1] The search raised `food_rate` at all
+three counts (+5% / +48% / +12%) — 3p most of all. **[mixed]** — 3p moved it
+hard, the other two barely.
+
+### 3. Corruption from a half-built wonder
+
+Corruption is charged **before** your mines produce, and a shortfall is taken
+out of your food. [rules, §6.6] Blue tokens sitting on the stages of an
+unfinished wonder are *out of your blue bank*, so a wonder you started and did
+not finish is charging you 2 or 4 resources a turn for the privilege.
+[rules, §6.2, §9.2]
+
+The 3p search tripled the corruption penalty (−0.9 → **−2.55**, −183%) and both
+3p and 4p raised the value of *free* blue tokens (+89% / +134%) — buy the
+corruption headroom **before** you need it, not when the bill arrives.
+**[mixed]** — 2p left both weights untouched, so this is a 3p/4p finding.
+
+And if the age turns while your wonder is unfinished and now antiquated, the
+wonder is removed from play entirely. You get the blue tokens back; you do not
+get the actions or the resources back. [rules, §12.2]
+
+### 4. Buying rate in Age III
+
+A lab bought on round 19 of a 23-round game scores four times. A farm bought
+then scores nothing at all, because food is not victory points. The search
+found this independently: `science_rate_late` fell at all three counts
+(−3% / −40% / −66%), `resource_rate_late` fell at 2p and 3p (−25% / −54%),
+and `hand_value_late` fell at **all three** (−59% / −78% / −50%) — one of only
+four full-consensus levers in the whole table. **[strong]**
+
+The exception is 4p, where `resource_rate_late` went the other way (+222%,
+sign flip). Given that the 4p climb has accepted only 5 mutants, treat that as
+**[provisional]** and follow the 2p/3p reading.
+
+### 5. Hoarding science points
+
+Unspent science points score nothing. Ever. The `science` *stock* weight is one
+of the four levers all three counts agree on, and all three cut it:
+**+0.185 (2p, −63%), −0.194 (3p, sign flip), −6.089 (4p, sign flip)**.
+Banked science is not a war chest, it is a civil action you failed to take.
+**[strong]**
+
+The same goes for cards: `hand_value_late` is negative at all three counts.
+Hold cards in Ages A and I when you cannot yet afford them; from Age II
+onwards, a card in hand on the last turn is worth exactly zero.
+
+Note the contrast with **resources**, which the 3p climb valued *up* (+210%).
+Stockpiled resources are spendable on the last turn; stockpiled science mostly
+is not, because the thing you would buy with it has to then produce.
+
+### 6. Taking a wonder late, or taking your fourth one
+
+A wonder costs its printed row price **+1 civil action per wonder you have
+already completed**. [rules, §2.4] Your fourth wonder from space 6 costs
+2 + 3 = 5 civil actions to *take*, before you have paid a single resource for a
+stage. There is no way to abandon an unfinished wonder voluntarily, and you
+cannot take another while one is unfinished. [rules, §9.2]
+
+The engine's own behaviour splits sharply on wonders by player count — see the
+per-player-count section. This is the single biggest strategic disagreement
+between the three champions.
+
+---
+
 ## Quick reference
 
 Everything in this section is **[rules]** — straight from `docs/RULES_SPEC.md`,
