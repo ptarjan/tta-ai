@@ -122,7 +122,7 @@ the aggregate, it only sharpens that opponent's own estimate.
 
 For every `(opponent, seed, seat)` the candidate plays, the **champion plays
 the byte-identical game** — same seed, same seat, same opponent — and we
-accumulate the difference in win share. So:
+accumulate the difference in the per-game score. So:
 
 * the null is exactly **0**, whatever the pool contains and however strong or
   weird any single opponent is;
@@ -137,6 +137,77 @@ accumulate the difference in win share. So:
 Acceptance keeps the existing machinery: accept when the lower bound of a
 one-sided CI on the aggregate edge (`--accept-z`, default 1.2816 = 90%) is
 above 0, with the 1/5th-success-rule σ adaptation and the stall kick unchanged.
+
+#### Two metrics, one decision: win share and culture margin
+
+The per-game score is **not** win share for every opponent. Against an
+opponent the champion never beats, win share is 0.0 on every game for both
+sides, so the paired edge is exactly `+0.0000` with `se` exactly `0.0000` —
+a row that can neither reward nor veto. That is not a hypothetical; it was
+[the whole gate tier at the clean start](#the-pool-is-too-hard-at-the-bottom).
+
+So the **gate tiers are scored on culture margin** (`--gate-metric margin`,
+the default) and everything else stays on win share:
+
+| tier | metric | why |
+|---|---|---|
+| `book`, `variant`, `quiescent` | **culture margin** | the champion loses ~100% of these; win share carries no information |
+| `mirror`, `past`, `floor` | win share | roughly even or winning matchups, where win share is meaningful *and is the thing we actually care about* |
+
+A margin cannot be averaged into the same aggregate as a win share as-is — it
+is measured in tens of culture points and would swamp every other tier and
+make the tier weights meaningless. It is normalised first:
+
+```
+margin_share(m) = 0.5 × (1 + tanh(m / MARGIN_SCALE))        MARGIN_SCALE = 120
+```
+
+Four properties make the two metrics safe to mix in one accept decision:
+
+* **range** — `(0, 1)`, the interval win share already lives in, so a *paired*
+  edge lands in `(−1, +1)` for both metrics and `weighted_stats` averages them
+  untouched. A tier weight still buys the same share of the decision it bought
+  before, so `--pool-weights` means what it meant.
+* **null** — equal play scores margin 0 → 0.5, so the paired difference of two
+  equal policies is 0. The "null is exactly 0 whatever the pool contains"
+  guarantee above is preserved for both metrics.
+* **monotone** — strictly increasing in `m`: **more culture always scores
+  better**, with no region where the gradient inverts.
+* **bounded** — saturating rather than linear. Margins have fat tails
+  (blowouts past 200 culture are measured below); an unbounded linear score
+  would let one lucky game dominate both the weighted mean and its SE, and a
+  candidate could be accepted on a single outlier. `tanh` bounds each game's
+  influence exactly as win share does.
+
+**`MARGIN_SCALE` is measured, not guessed**, and getting it wrong re-creates
+the bug in a quieter form. `experiments/margin_calib.py` dumps the per-game
+margin distribution of `DEFAULT_WEIGHTS` against every gate opponent:
+
+| | 3p | 4p |
+|---|---|---|
+| gate pooled mean | −60.3 | −109.0 |
+| gate pooled sd | 49.6 | 50.6 |
+| p10 … p90 | −129.5 … −1.5 | −176.3 … −45.7 |
+| per-game extreme | −216 | −224 |
+
+The champion **does not sit near margin 0** — it sits 60 (3p) to 109 (4p)
+culture points behind. A small scale would put the entire operating region in
+`tanh`'s flat tail: at scale 45 a 4p margin of −120 maps to −0.996, where a
+15-point improvement moves the score by 0.0004 and the gradient is dead again.
+120 is ≈2.5× the measured per-game sd, which keeps the whole measured band
+inside `|m/scale| ≲ 1.8`. Measured slope, in score per culture point:
+
+| margin | 0 | −60 | −120 |
+|---|---|---|---|
+| slope | 0.00417 | 0.00328 | 0.00175 |
+
+The slope falls only 2.4× across the entire operating range, so even the
+deepest 4p opponent still produces a usable gradient. As the bot improves its
+margins move *toward* zero, i.e. toward the most linear part of the curve, so
+the constant does not need re-tuning as a run progresses.
+
+`--gate-metric winshare` restores the old behaviour, and `--margin-scale`
+overrides the constant.
 
 ### The gate veto — the aggregate is not allowed to hide a loss
 
