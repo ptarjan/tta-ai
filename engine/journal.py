@@ -177,6 +177,15 @@ def begin(state=None):
         # unchanged and the oracle has to be able to prove it.
         j.oracle = copy_state(state, keep_log=True)
     _state.SUPPRESS_LOG = True     # see GameState.emit
+    if state is not None:
+        # Start the trial with a COLD stats cache, which is exactly what the
+        # copy path hands the search today (`_stats_cache` is `_`-prefixed and
+        # so is never copied).  The cache is content-keyed via `stats_key`, so
+        # a warm cache is *usually* fine -- but only usually: a mutation site
+        # that forgets `effects.invalidate` is invisible on the copy path
+        # (which always recomputes) and would silently change evaluation here.
+        # Clearing costs nothing the copy path was not already paying.
+        state.__dict__.pop("_stats_cache", None)
     _J = j
     return j
 

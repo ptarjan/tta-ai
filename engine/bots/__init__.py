@@ -10,10 +10,16 @@ A bot is any callable ``bot(state) -> move`` choosing among
 from __future__ import annotations
 
 import math
+import os
 import random
 
-from .. import actions, effects
+from .. import actions, effects, journal
 from .fastcopy import copy_state
+
+#: Search with the undo stack (docs/PYPY.md section 6) instead of `copy_state`.
+#: OPT-IN and off by default: `experiments/`, `analysis/`, `WeightedBot` and
+#: `QuiescentBot` keep the copy path untouched until this has earned its way in.
+USE_JOURNAL = os.environ.get("TTA_JOURNAL") == "1"
 from .weighted import DEFAULT_WEIGHTS, WeightedBot, load_weights, save_weights
 
 __all__ = ["RandomBot", "GreedyBot", "WeightedBot", "DEFAULT_WEIGHTS",
@@ -179,6 +185,8 @@ class GreedyBot:
         if len(moves) == 1:
             return moves[0]
         idx = state.decider()
+        if USE_JOURNAL:
+            return self._pick_journalled(state, moves, idx)
         best, best_val = None, None
         # a fresh deterministic rng per candidate keeps the search from
         # consuming the game's rng stream
@@ -195,6 +203,36 @@ class GreedyBot:
             if mv[0] == "end_turn":
                 # ending the turn is never rewarded for its own sake: it only
                 # wins when nothing else improves the position
+                val -= 0.01
+            if best_val is None or val > best_val:
+                best, best_val = mv, val
+        return best if best is not None else moves[0]
+
+    def _pick_journalled(self, state, moves, idx):
+        """`pick` with the undo stack instead of `copy_state` (docs/PYPY.md 6).
+
+        Line-for-line the same search as above; the only difference is that
+        the candidate is applied to the REAL state and undone, rather than to
+        a copy that is thrown away.  Kept as a separate method rather than a
+        branch inside the loop so the copy path stays exactly as it was and
+        can go on being the paranoid oracle.
+        """
+        begin, rollback = journal.begin, journal.rollback
+        best, best_val = None, None
+        for mv in moves:
+            if _TRIAL_RNG.used:
+                _TRIAL_RNG.setstate(_TRIAL_RNG_STATE)
+                _TRIAL_RNG.used = False
+            j = begin(state)
+            try:
+                try:
+                    actions.apply(state, mv, _TRIAL_RNG)
+                except Exception:
+                    continue            # the `finally` still rolls back
+                val = evaluate(state, idx, self.weights)
+            finally:
+                rollback(j)
+            if mv[0] == "end_turn":
                 val -= 0.01
             if best_val is None or val > best_val:
                 best, best_val = mv, val
