@@ -407,19 +407,28 @@ def parse_move(state, text, board=None):
 
 # ------------------------------------------------------------- the session
 
-PATCH_VERBS = ("take", "deal", "row", "event", "age", "last", "turn", "set")
+PATCH_VERBS = ("deal", "row", "event", "age", "last", "last_round", "set")
 
 
 def _looks_like_patch(line):
-    """Is this an update line rather than a list of card names?
+    """Is this a board update rather than a move or a list of card names?
 
-    Lets the human keep typing 'take p1 3' / 'p1 c=34' at the "which cards
-    were dealt" prompt instead of having to know which prompt they are at.
+    Lets the human type 'take p1 3' / 'p1 c=34' at ANY prompt instead of
+    having to track which prompt they are at.  ``take 4`` (a move) and
+    ``take p1 4`` (a rival took a card) are told apart by the p<N>.
     """
-    first = line.split()[0].lower() if line.split() else ""
     import re as _re
-    return (first in PATCH_VERBS or bool(_re.fullmatch(r"p\d+", first))
-            or "=" in line.split()[0])
+    toks = line.split()
+    if not toks:
+        return False
+    first = toks[0].lower()
+    if _re.fullmatch(r"p\d+", first) or "=" in first:
+        return True
+    if first in PATCH_VERBS:
+        return True
+    if first == "take":
+        return len(toks) >= 2 and bool(_re.fullmatch(r"p\d+", toks[1].lower()))
+    return False
 
 
 def _new_slots(before, after):
@@ -543,7 +552,8 @@ Through the Ages advisor.  Commands at the 'your move' prompt:
   more         show more candidate moves
   board        print the full board
   state        print the raw snapshot (paste-able)
-  set <line>   correct the board, e.g. 'set p1 c=34'
+  p1 c=34      correct the board at any prompt (see the update syntax
+               below); 'set <line>' works too
   undo         undo back to the start of your turn
   help         this text
   quit         leave
@@ -644,8 +654,9 @@ class Console:
                 adv.board.unknown = board.unknown
                 self.say("rolled back to the start of your turn")
             return True
-        if low.startswith("set "):
-            self.report(line[4:])
+        if _looks_like_patch(line):
+            # a board correction typed at the move prompt
+            self.report(line)
             return True
         move = None
         if line == "":

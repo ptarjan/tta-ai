@@ -220,6 +220,24 @@ class TestScriptedSession(unittest.TestCase):
         adv.skip_opponent_turn()
         self.assertLessEqual(len(adv.dealt_slots), 4)
 
+    def test_update_lines_work_at_the_move_prompt(self):
+        board = S.new_board(3, me=0, seed=5)
+        adv = AD.Advisor(board, AD.load_bot(3, seed=5), seed=5)
+        con = AD.Console(adv, inp=Script([]), out=lambda *a: None)
+        con.handle_move_input("p1 c=44", adv.recommend(1))
+        self.assertEqual(adv.state.players[1].culture, 44)
+        # ... while 'take 4' at the same prompt is still a move
+        con._snapshot = S.dumps(adv.board)
+        con.handle_move_input("take 4", adv.recommend(1))
+        self.assertEqual(len(adv.state.players[0].hand_civil), 1)
+
+    def test_take_p1_vs_take_4_are_told_apart(self):
+        self.assertTrue(AD._looks_like_patch("take p1 3"))
+        self.assertFalse(AD._looks_like_patch("take 3"))
+        self.assertTrue(AD._looks_like_patch("p2 c=9"))
+        self.assertFalse(AD._looks_like_patch("build bronze"))
+        self.assertFalse(AD._looks_like_patch("pop"))
+
     def test_quit_stops_cleanly(self):
         adv, out = run_console(["quit"], players=2, seed=1)
         self.assertFalse(adv.state.game_over)
