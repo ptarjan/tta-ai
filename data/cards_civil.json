@@ -98,7 +98,7 @@
     "resources": 2
    },
    "text": "Age I mine technology.",
-   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Coal",
@@ -165,7 +165,7 @@
    },
    "urbanLimitCategory": "lab",
    "text": "Age I lab.",
-   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Scientific Method",
@@ -191,7 +191,7 @@
    "count": {
     "2p": 2,
     "3p": 2,
-    "4p": 3
+    "4p": 2
    },
    "techCost": 8,
    "buildCost": 11,
@@ -199,7 +199,8 @@
     "science": 5
    },
    "urbanLimitCategory": "lab",
-   "text": "Age III lab. (Build cost 10 in 2006 edition; 11 in base 2015.)"
+   "text": "Age III lab. (Build cost 10 in 2006 edition; 11 in base 2015.)",
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Religion",
@@ -438,13 +439,13 @@
    "count": {
     "2p": 2,
     "3p": 2,
-    "4p": 3
+    "4p": 2
    },
    "techCost": 4,
    "buildCost": 3,
    "strength": 2,
    "text": "Age I infantry. (Tech cost 3 in 2006; 4 in base 2015.)",
-   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Riflemen",
@@ -487,7 +488,7 @@
    "buildCost": 3,
    "strength": 2,
    "text": "Age I cavalry. (Tech cost 4 in 2006; 5 in base 2015.)",
-   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Cavalrymen",
@@ -876,7 +877,7 @@
    "count": {
     "2p": 1,
     "3p": 1,
-    "4p": 1
+    "4p": 2
    },
    "techCost": 11,
    "buildCost": null,
@@ -884,7 +885,8 @@
     "militaryActions": 3,
     "strength": 5
    },
-   "text": "Military tech. +3 military actions, +5 strength."
+   "text": "Military tech. +3 military actions, +5 strength.",
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Cartography",

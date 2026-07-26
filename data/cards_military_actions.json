@@ -2656,7 +2656,7 @@
    },
    "text": "Build or upgrade a farm or mine; pay 1 less resource.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Urban Growth",
@@ -2674,8 +2674,8 @@
    },
    "text": "Build or upgrade an urban building; pay 1 less resource.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)",
-   "aka": "displayed as 'Urban Development' in some digital-edition builds; FAQ v1.5 p.12 prints it as 'Urban Grown' (typo)"
+   "aka": "displayed as 'Urban Development' in some digital-edition builds; FAQ v1.5 p.12 prints it as 'Urban Grown' (typo)",
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Frugality",
@@ -2693,7 +2693,7 @@
    },
    "text": "Increase your population at full price; gain 1 food.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Engineering Genius",
@@ -2711,7 +2711,7 @@
    },
    "text": "Build one stage of a wonder; pay 2 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Patriotism",
@@ -2729,7 +2729,7 @@
    },
    "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 1 less resource.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Cultural Heritage",
@@ -2747,7 +2747,7 @@
    },
    "text": "Gain 1 science and 4 culture.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Stock Pile",
@@ -2765,7 +2765,7 @@
    },
    "text": "Gain 1 food and 1 resource.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Rich Land",
@@ -2783,7 +2783,7 @@
    },
    "text": "Build or upgrade a farm or mine; pay 2 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Urban Growth",
@@ -2801,7 +2801,7 @@
    },
    "text": "Build or upgrade an urban building; pay 2 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Frugality",
@@ -2819,7 +2819,7 @@
    },
    "text": "Increase your population at full price; gain 2 food.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Engineering Genius",
@@ -2837,7 +2837,7 @@
    },
    "text": "Build one stage of a wonder; pay 3 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Patriotism",
@@ -2855,7 +2855,7 @@
    },
    "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 2 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Breakthrough",
@@ -2863,9 +2863,9 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 1,
-    "3p": 1,
-    "4p": 1
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
    },
    "effects": {
     "freeCivilAction": "develop_technology",
@@ -2873,7 +2873,7 @@
    },
    "text": "Develop a technology at full price; gain 2 science.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Cultural Heritage",
@@ -2891,7 +2891,7 @@
    },
    "text": "Gain 2 science and 2 culture.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Reserves",
@@ -2899,17 +2899,17 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 3,
-    "3p": 3,
-    "4p": 3
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
    },
    "effects": {
     "gainFoodOrResources": 2
    },
    "text": "Gain 2 food or 2 resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not",
-   "note": "replaces the 2006 pair Mineral Deposits / Bountiful Harvest"
+   "note": "replaces the 2006 pair Mineral Deposits / Bountiful Harvest",
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Rich Land",
@@ -2927,7 +2927,7 @@
    },
    "text": "Build or upgrade a farm or mine; pay 3 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Urban Growth",
@@ -2935,9 +2935,9 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 2,
-    "3p": 2,
-    "4p": 2
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
    },
    "effects": {
     "freeCivilAction": "build_or_upgrade_urban_building",
@@ -2945,7 +2945,7 @@
    },
    "text": "Build or upgrade an urban building; pay 3 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Frugality",
@@ -2963,7 +2963,7 @@
    },
    "text": "Increase your population at full price; gain 3 food.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Engineering Genius",
@@ -2981,7 +2981,7 @@
    },
    "text": "Build one stage of a wonder; pay 4 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Patriotism",
@@ -2999,7 +2999,7 @@
    },
    "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 3 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Breakthrough",
@@ -3007,9 +3007,9 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 1,
-    "3p": 1,
-    "4p": 1
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
    },
    "effects": {
     "freeCivilAction": "develop_technology",
@@ -3017,8 +3017,8 @@
    },
    "text": "Develop a technology at full price; gain 3 science.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not",
-   "note": "2006 printed 4 science on the Age II Breakthrough; the 2015/digital value is 3"
+   "note": "2006 printed 4 science on the Age II Breakthrough; the 2015/digital value is 3",
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Revolutionary Idea",
@@ -3035,7 +3035,7 @@
    },
    "text": "Gain 4 science.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Efficient Upgrade",
@@ -3053,7 +3053,7 @@
    },
    "text": "Upgrade a farm, mine or urban building; pay 3 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Wave of Nationalism",
@@ -3074,7 +3074,7 @@
    },
    "text": "For each civilization stronger than yours, build or upgrade military units paying 2 fewer resources (3 fewer in a 3-player game, 6 fewer in a 2-player game).",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Reserves",
@@ -3091,7 +3091,7 @@
    },
    "text": "Gain 3 food or 3 resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Urban Growth",
@@ -3109,7 +3109,7 @@
    },
    "text": "Build or upgrade an urban building; pay 4 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Engineering Genius",
@@ -3127,7 +3127,7 @@
    },
    "text": "Build one stage of a wonder; pay 5 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Patriotism",
@@ -3145,7 +3145,7 @@
    },
    "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 4 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Revolutionary Idea",
@@ -3162,7 +3162,7 @@
    },
    "text": "Gain 6 science.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Efficient Upgrade",
@@ -3180,7 +3180,7 @@
    },
    "text": "Upgrade a farm, mine or urban building; pay 4 fewer resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Endowment for the Arts",
@@ -3188,9 +3188,9 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 2,
-    "3p": 2,
-    "4p": 2
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
    },
    "effects": {
     "culturePerCivilizationWithMoreCulture": {
@@ -3201,7 +3201,7 @@
    },
    "text": "Gain 2 culture for each civilization with more culture points than you (3 in a 3-player game, 6 in a 2-player game).",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Military Build-Up",
@@ -3222,7 +3222,7 @@
    },
    "text": "For each civilization stronger than yours, build or upgrade military units paying 3 fewer resources (5 fewer in a 3-player game, 8 fewer in a 2-player game).",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {
    "name": "Reserves",
@@ -3230,16 +3230,16 @@
    "deck": "civil",
    "type": "action",
    "count": {
-    "2p": 2,
-    "3p": 2,
-    "4p": 2
+    "2p": 3,
+    "3p": 3,
+    "4p": 3
    },
    "effects": {
     "gainFoodOrResources": 4
    },
    "text": "Gain 4 food or 4 resources.",
    "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
-   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+   "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   }
  ]
 }

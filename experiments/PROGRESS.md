@@ -59,7 +59,43 @@ candidate is skipped rather than crashing.
 
 ## Measured strength
 
-See "Baselines" below (refreshed after the engine gained colonization/pacts).
+`WeightedBot` at `DEFAULT_WEIGHTS` (`--a default`), one challenger against a
+table of the named bot, seat-rotated, 96 games each, 95% CIs. Measured
+2026-07-26 06:16 against the engine at commit `c25f34b`.
+
+| table of | 2p (null 50%) | 3p (null 33.3%) | 4p (null 25%) |
+|---|---|---|---|
+| `RandomBot` | **96.9%** ± 3.5 | **96.9%** ± 3.5 | **93.8%** ± 4.9 |
+| `GreedyBot` | **89.6%** ± 6.1 | **75.5%** ± 8.6 | **54.7%** ± 10.0 |
+
+Mean final culture, challenger vs table mean: 107 vs 63 (2p), 119 vs 75 (3p),
+148 vs 100 (4p) against greedy; 95/13, 93/18, 130/26 against random. Every
+result is far outside its CI, so **requirement 1 is met: WeightedBot beats
+GreedyBot at default weights at every player count.**
+
+Two things to read out of that table:
+
+* The margin shrinks as the table grows. That is mostly arithmetic — with
+  three greedy opponents somebody else gets a good draw more often — but it
+  also means 4p is where the hill climb has the most room, which is why it
+  gets the largest game budget per mutant.
+* These numbers are *lower* than the ones in the first two lines of
+  `baselines.jsonl` (93-95% at every count), which were taken before the
+  engine gained colonization auctions and pacts. The new subsystems gave
+  `GreedyBot` moves whose one-ply value it can see, so the gap narrowed.
+  Re-measure after any large engine change; the old rows are kept in the
+  JSONL for exactly this comparison.
+
+Reproduce:
+
+```bash
+for K in 2 3 4; do for B in random greedy; do
+  python3 -m experiments.evaluate --a default --b $B --games 96 --players $K \
+      --out experiments/baselines.jsonl
+done; done
+```
+
+Swap `--a default` for `--a experiments/champion_4p.json` to score a champion.
 
 ## Hill climbing
 
