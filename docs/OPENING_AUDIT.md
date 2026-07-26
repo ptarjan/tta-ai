@@ -41,13 +41,39 @@ advice. There is no evidence for the player-count claim. The honest statement is
 *"our 4p weight vector happens to like wonders, at every player count, because of
 one sign flip nobody tested."*
 
-**Separately: the hill climb itself is NOT broken.** Measured fresh today, the
-champions beat their untrained starting point at every count — 2p 0.682 (null
-0.50), 3p 0.771 (null 0.333), **4p 0.792 (null 0.25)**, and 4p beats the greedy
-bot 0.958. 4p is the *strongest* of the three relative to its null, not the
-weakest. The numbers sitting in `experiments/baselines.jsonl` that suggest
-otherwise are stale — see §5, including which claim in HEURISTICS.md they have
-already contaminated.
+### What this implies about every other weight we quote
+
+This is the part with consequences beyond the opening. `wonder_remaining` is a
+**trained** weight — it moved from its hand-guessed default, in an accepted
+generation, and HEURISTICS' framing ("the tuning moved a price, and it moved it
+in a direction that won games") would license quoting it as something the AI
+taught itself. Tested directly, it is indistinguishable from null.
+
+The reason is structural, not bad luck: mutations move **19 weights at once** and
+are accepted on a single 48-game win-rate test. Acceptance says *the bundle*
+beat the incumbent; it says **nothing** about any individual weight in it. With
+~78 weights, 8 accepted bundles at 4p, and no per-weight ablation ever run, most
+individual weight moves in our champions have never been tested at all.
+
+So: **"the AI moved this weight, therefore it matters" is not a valid inference
+anywhere in HEURISTICS.md.** Any weight-derived claim in that document is at the
+same evidential level as this one — plausible, untested, and roughly as likely to
+be a hitchhiker — unless someone has ablated it the way §4 ablates
+`wonder_remaining`. That single-weight revert test is cheap (one variant file,
+one duel) and should be the standard before any weight is written up as advice.
+
+**Separately — the answer to "is hill climbing working?": YES, at all three
+counts, and best at 4p.** Measured fresh today against the untrained starting
+point: 2p **0.682** (null 0.50), 3p **0.771** (null 0.333), 4p **0.792** (null
+0.25); 4p also beats the greedy bot 0.958. Relative to its null, 4p is the
+*strongest* of the three (3.2x), not the weakest. The 4p climb has had the same
+wall-clock time as the others and is still accepting mutations. The lower numbers
+in `experiments/baselines.jsonl` (4p 0.349) that suggest a broken climb are stale
+— see §5, including which HEURISTICS.md claims they have already contaminated.
+
+What *is* thin at 4p is the number of accepted steps — 8 in 138 generations — and
+each one moves 19 weights on a 48-game test. The climb is working; it is the
+*attribution* of what it learned that does not hold up.
 
 ---
 
@@ -254,18 +280,37 @@ Direct A/B: `champion_4p` as challenger against a table of *itself with only
 only behavioural difference is the opening (74% wonder-first vs 0%). 192 games,
 challenger rotated through every seat, null = 0.25:
 
-| challenger | defenders | win rate | null | verdict |
-|---|---|---|---|---|
-| `champion_4p` (wonder-first) | `champion_4p` with the weight reverted | **0.276 ± 0.063** | 0.25 | **indistinguishable** |
+| challenger | defenders | games | win rate | null | verdict |
+|---|---|---|---|---|---|
+| `champion_4p` (wonder-first) | `champion_4p`, weight reverted | 192 | **0.276 ± 0.063** | 0.25 | **indistinguishable** |
 
-The confidence interval (0.213–0.339) straddles the null. The weight that
-produces the entire "at 4 players, open with a wonder" heuristic buys **no
-measurable win rate at all**. It is neutral drift that hitchhiked into the
-champion on generation 5 and was never worth anything.
+The confidence interval (0.213–0.339) straddles the null. And note this is the
+*most favourable possible* test for the wonder strategy: the challenger is the
+only wonder-lover at a table of three bots that do not want wonders, so it takes
+them completely uncontested — and still gains nothing measurable.
 
-That is the difference between "the champion does X" and "X is good". The
-behaviour is 100% reproducible; its *value* is zero as far as 192 games can
-tell.
+**One caveat, against my own conclusion.** Measured indirectly against the
+untrained `default` bot instead, the two are not obviously equal:
+
+| variant | vs `default` @4p (96 games) | mean culture |
+|---|---|---|
+| `champion_4p` | 0.792 ± 0.082 | 262.7 |
+| `champion_4p`, weight reverted | 0.641 ± 0.096 | 202.4 |
+
+That is a 15-point gap on the same seeds and the same opponent — roughly 2.5
+standard errors, so the wonder version *may* genuinely be stronger against a weak
+opponent. The two tests disagree, and I am not going to pretend they don't. The
+head-to-head is the more direct evidence (the two bots actually play each other,
+with twice the games), so the honest summary is: **the wonder opening earns
+nothing detectable where it matters most, and any advantage it has is small,
+unconfirmed, and was never what the search was selecting for.** It certainly does
+not support a player-count heuristic, since the same weight produces the same
+opening at 2p and 3p too.
+
+(Oddity worth a follow-up: in the mirror head-to-head both bots score ~55 mean
+culture, against 200–260 when either plays the default bot. Two strong, nearly
+identical bots at the same table appear to strangle each other's scoring. That is
+not investigated here.)
 
 ---
 
@@ -316,8 +361,9 @@ vs default on different `--seed` values (96 games each):
 | 0 | 0.682 ± 0.093 | 134.6 |
 | 9000 | **0.844 ± 0.073** | 149.1 |
 | 31337 | 0.708 ± 0.091 | 136.5 |
+| 777 | 0.771 ± 0.085 | 146.7 |
 
-A 16-point swing from the seed alone — larger than the "±8–10 points" HEURISTICS
+A 16-point swing from the seed alone (0.682 → 0.844) — larger than the "±8–10 points" HEURISTICS
 estimates. So at **2p**, the 23-point gap (0.448 → 0.682) is only ~1.5x the
 observed seed spread and **could** be mostly seeds. My initial claim that it was
 purely a stale champion was too strong at that count.
