@@ -89,6 +89,9 @@ DEFAULT_TIER_WEIGHTS = {
 # is not something a good aggregate is allowed to excuse.
 DEFAULT_GATE_TIERS = ("book", "variant", "quiescent")
 
+# Tiers scored on CULTURE MARGIN instead of win share.  See `margin_share`.
+DEFAULT_MARGIN_TIERS = ("book", "variant", "quiescent")
+
 # Tier order used for display.
 TIER_ORDER = ("book", "variant", "quiescent", "mirror", "past", "floor")
 
@@ -147,13 +150,16 @@ def _make_variant(module, cls_name, seed):
 class PoolEntry:
     """One opponent: ``(spec, weight, label)`` plus its tier."""
 
-    __slots__ = ("label", "spec", "tier", "weight")
+    __slots__ = ("label", "spec", "tier", "weight", "metric")
 
-    def __init__(self, label, spec, tier, weight=0.0):
+    def __init__(self, label, spec, tier, weight=0.0, metric="winshare"):
         self.label = label
         self.spec = spec
         self.tier = tier
         self.weight = weight
+        # "winshare" or "margin" -- which per-game series this opponent is
+        # scored on.  Set by the owning Pool from its `margin_tiers`.
+        self.metric = metric
 
     @property
     def is_mirror(self):
@@ -180,10 +186,18 @@ class PoolEntry:
 class Pool:
     """A weighted, tiered collection of opponents."""
 
-    def __init__(self, entries, tier_weights=None, gate_tiers=DEFAULT_GATE_TIERS):
+    def __init__(self, entries, tier_weights=None, gate_tiers=DEFAULT_GATE_TIERS,
+                 margin_tiers=DEFAULT_MARGIN_TIERS):
         self.entries = list(entries)
         self.tier_weights = dict(tier_weights or DEFAULT_TIER_WEIGHTS)
         self.gate_tiers = tuple(gate_tiers)
+        # Which tiers score on culture margin rather than win share.  Only the
+        # tiers where win share is DEGENERATE need it: the champion beats
+        # `floor`, plays `past` and `mirror` roughly evenly, and win share is
+        # both meaningful and the thing we actually care about there.  The
+        # gate tiers are the ones it loses to ~100% of the time, where win
+        # share carries no information at all.
+        self.margin_tiers = tuple(margin_tiers)
         self.renormalise()
 
     def renormalise(self):
@@ -194,6 +208,7 @@ class Pool:
         for e in self.entries:
             total = self.tier_weights.get(e.tier, 0.0)
             e.weight = total / counts[e.tier] if counts[e.tier] else 0.0
+            e.metric = "margin" if e.tier in self.margin_tiers else "winshare"
 
     def __len__(self):
         return len(self.entries)
@@ -442,9 +457,10 @@ def parse_tier_weights(s, base=None):
     return out
 
 
-def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=3,
+def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
                with_quiescent=False, quiesce_opts=None, exclude=(),
-               gate_tiers=DEFAULT_GATE_TIERS, log=None):
+               gate_tiers=DEFAULT_GATE_TIERS,
+               margin_tiers=DEFAULT_MARGIN_TIERS, log=None):
     """Assemble the full pool for one player count.
 
     Tiers whose weight is 0 are dropped entirely -- that is how you turn a
@@ -474,10 +490,105 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=3,
     add("greedy", "greedy", "floor")
     add("random", "random", "floor")
     add("default", "default", "floor")
-    pool = Pool(entries, tier_weights=tw, gate_tiers=gate_tiers)
-    log("[pool] " + ", ".join(f"{e.label}(w={e.weight:.2f})"
-                              for e in pool.sorted_entries()))
+    pool = Pool(entries, tier_weights=tw, gate_tiers=gate_tiers,
+                margin_tiers=margin_tiers)
+    log("[pool] " + ", ".join(
+        f"{e.label}(w={e.weight:.2f}{',margin' if e.metric == 'margin' else ''})"
+        for e in pool.sorted_entries()))
     return pool
+
+
+# ------------------------------------------------------- margin scoring
+#
+# WHY.  Win share is a step function.  Against an opponent the champion never
+# beats it is 0.0 on every game, so the paired edge (candidate - champion) is
+# exactly 0.0 with se exactly 0.0, and that row can neither reward nor veto.
+# Measured on the clean DEFAULT_WEIGHTS start (docs/LEAGUE_TRAINING.md, "The
+# pool is too hard at the bottom"): 0-11% at 3p and 0-2.8% at 4p against the
+# whole gate tier, seven of eight gate rows a flat 0.0% at 4p.  The strongest
+# and highest-weighted half of the pool was invisible to the gradient
+# PRECISELY BECAUSE IT IS STRONG, and the accept decision fell back on
+# mirror/past/floor -- the weak-baseline problem the league exists to replace.
+#
+# Culture margin is dense: it exists on every game, and "lost by 8" is real
+# information that "lost by 40" is not.
+#
+# THE NORMALISATION.  A margin cannot be averaged into the same aggregate as
+# a win share as-is -- it is measured in culture points, tens of them, and
+# would swamp every win-share tier and make the tier weights meaningless.  So
+# a margin is mapped onto a win-share-LIKE number in (0, 1):
+#
+#     margin_share(m) = 0.5 * (1 + tanh(m / MARGIN_SCALE))
+#
+# The properties that make this safe to mix with win share in one aggregate:
+#
+#   range      (0, 1), the same interval win share lives in, so a PAIRED edge
+#              (candidate - champion) lands in (-1, +1) for both metrics and
+#              `weighted_stats` can average them together untouched.  A tier
+#              weight therefore still buys the same share of the decision it
+#              bought before.
+#   null       equal play scores margin 0 -> 0.5, and the paired difference of
+#              two equal policies is 0 -- the same null the win-share pairing
+#              has.  `_aggregate`'s "the null is exactly 0 whatever the pool
+#              contains" guarantee is preserved.
+#   monotone   strictly increasing in m, so MORE CULTURE IS ALWAYS A BETTER
+#              SCORE.  There is no region where the gradient inverts; a
+#              deliberately-worse vector must score worse.
+#   bounded    saturating, not linear.  Margin has fat tails (blowouts past
+#              200 culture are measured below), and an unbounded linear score
+#              would let one lucky blowout dominate a weighted mean AND its
+#              SE, so a candidate could be accepted on a single outlier game.
+#              tanh bounds each game's influence exactly as win share does.
+#
+# MARGIN_SCALE sets how many culture points count as "one decisive game", and
+# it is MEASURED, not guessed -- `experiments/margin_calib.py` dumps the
+# per-game margin distribution of DEFAULT_WEIGHTS against every gate opponent:
+#
+#     3p   gate pooled n=192  mean -60.3  sd 49.6  p10 -129.5  p90 -1.5
+#     4p   gate per-opponent means -56 (var:military) .. -144 (var:culture),
+#          per-game extremes to -224
+#
+# Getting this constant wrong re-creates the bug it fixes.  The champion does
+# not sit near margin 0 -- it sits 60 (3p) to 120 (4p) culture points BEHIND.
+# A small scale would put the entire operating region deep in tanh's flat
+# tail: at scale 45 a 4p margin of -120 maps to -0.996, where a 15-point
+# improvement moves the score by 0.0004 and the gradient is dead again, just
+# more quietly than before.
+#
+# So the rule is: the scale must be large enough that the MEASURED operating
+# band sits in tanh's near-linear core.  120 is ~2.5x the measured per-game sd
+# (~50 at 3p, ~45 at 4p) and keeps the whole band inside |m/scale| <~ 1.8,
+# where tanh keeps a usable slope, while still bounding the -224 extreme at
+# -0.94 instead of letting it dominate.  As the bot improves its margins move
+# TOWARD zero, i.e. toward the most linear part of the curve, so the constant
+# does not need re-tuning as the run progresses.
+#
+# Larger = gentler and more linear, more outlier influence; smaller = closer
+# to a win/lose step function (as scale -> 0 it degenerates to the sign of the
+# margin, which is roughly the win-share behaviour we are replacing).
+# Overridable per run with --margin-scale.
+MARGIN_SCALE = 120.0
+
+
+def margin_share(margin, scale=MARGIN_SCALE):
+    """Culture margin -> a win-share-like score in (0, 1).  See above."""
+    if margin is None:
+        return None
+    return 0.5 * (1.0 + math.tanh(float(margin) / float(scale)))
+
+
+def score_series(res, metric, scale=MARGIN_SCALE):
+    """Per-game scoring series from an `arena.duel` result.
+
+    `metric` is ``"winshare"`` (the task-ordered per-game share list) or
+    ``"margin"`` (the same games' culture margins, squashed by
+    `margin_share`).  Both are task-ordered and None-preserving, so a
+    candidate series and a champion series played on the same seeds pair
+    element by element either way.
+    """
+    if metric == "margin":
+        return [margin_share(m, scale) for m in res.get("per_game_margin") or []]
+    return res["per_game"]
 
 
 # ------------------------------------------------------------------ stats
