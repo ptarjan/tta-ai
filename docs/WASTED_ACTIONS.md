@@ -311,6 +311,23 @@ python3 analysis/cardvalue_duel.py --players 2 --games 400 \
 `python3 -m unittest discover -s tests -q` → 58 tests, OK (there is no pytest
 in this environment). No file under `engine/` was modified by this work.
 
+**Measurement environment.** This ran against a shared checkout that other
+agents were changing underneath it, so two things are worth recording:
+
+* `7d40f53` corrected the Age I/III military card counts partway through.
+  The 2p diagnostic was re-run afterwards and reproduced almost exactly
+  (3553 wasted-action turns / 14183 CA against 3557 / 14229), so none of
+  §1–§5 depends on which side of that fix it was measured on.
+* another agent added a `has_unit` feature and weight to
+  `engine/bots/weighted.py` during the duels. Every duel here is a mirror
+  match in which **both** sides load the same weights and run the same
+  `evaluate`, so the term applies symmetrically and the A/B comparisons are
+  unaffected; only the absolute culture totals shift between runs, which is
+  why the champion's mean culture varies (107–152) across tables.
+
+All duels use `analysis/frozen/`, a snapshot of the champions taken before
+the experiments, so the live hill climb could not move the target mid-run.
+
 ---
 
 ## 10. Verdict
