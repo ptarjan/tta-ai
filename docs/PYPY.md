@@ -388,6 +388,22 @@ Per move kind (nodes on a mutated path), all 9235 candidates:
 Even the worst move kind (`end_turn`, which runs the whole §6.6 end-of-turn
 sequence) touches under 10% of the nodes. The common cases are 3–6%.
 
+**The mutation is a constant, the copy is not.** Same tool at 2 players
+(1 game, 123 branching decisions, 1392 candidates):
+
+| | 2p | 4p |
+|---|---|---|
+| scalar slots copied | 245.6 | 395.4 |
+| scalar slots mutated | **6.14** | **6.43** |
+| container nodes copied | 50.1 | 93.7 |
+| nodes on a mutated path | **5.38** | **5.37** |
+| mutated fraction (nodes) | 10.7% | 5.7% |
+
+The absolute mutation size is flat (~6 slots, ~5.4 nodes) while the copy grows
+with the player count and with game length. So the waste ratio gets *worse* as
+states get bigger — 4p late-game, the exact cell the hill climbs spend their
+time in, is where a share-don't-copy scheme pays most.
+
 ### RECOMMENDATION (do not implement yet — this is the finding, not the work)
 
 **The copy is ~17x more work than the mutation, so structural sharing beats
