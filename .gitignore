@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 sources/*.pdf
 docs/rulebook.pdf
+experiments/results.jsonl
+experiments/champion.json

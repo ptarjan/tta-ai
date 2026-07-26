@@ -26,6 +26,10 @@ class RandomBot:
         moves = actions.legal_moves(state)
         return self.rng.choice(moves)
 
+    def choose(self, state, moves, rng=None):
+        """Adapter for experiments/harness.py."""
+        return (rng or self.rng).choice(moves)
+
 
 # ------------------------------------------------------------ evaluation
 
@@ -114,8 +118,14 @@ class GreedyBot:
         self.rng = rng or random.Random(seed)
         self.weights = weights or WEIGHTS
 
+    def choose(self, state, moves, rng=None):
+        """Adapter for experiments/harness.py."""
+        return self.pick(state, moves)
+
     def __call__(self, state):
-        moves = actions.legal_moves(state)
+        return self.pick(state, actions.legal_moves(state))
+
+    def pick(self, state, moves):
         if len(moves) == 1:
             return moves[0]
         idx = state.current

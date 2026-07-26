@@ -41,9 +41,11 @@ def play_game(engine, bots, seed):
     return engine.scores(state), moves_played
 
 
-def round_robin(engine, bot_factories, num_players, games, seed0, log_path):
+def round_robin(engine, bot_factories, num_players, games, seed0, log_path,
+                names=None):
     """Each game: sample bots (with rotation for seat fairness). Appends JSONL."""
     results = []
+    names = names or [str(i) for i in range(len(bot_factories))]
     with open(log_path, "a") as f:
         for g in range(games):
             rng = random.Random(seed0 + g)
@@ -56,13 +58,17 @@ def round_robin(engine, bot_factories, num_players, games, seed0, log_path):
             try:
                 scores, nmoves = play_game(engine, bots, seed0 + g)
             except Exception as e:  # log engine bugs, keep tournament running
-                rec = {"game": g, "bots": idxs, "error": repr(e)}
+                rec = {"game": g, "players": num_players,
+                       "bots": [names[i] for i in idxs], "error": repr(e)}
                 f.write(json.dumps(rec) + "\n"); f.flush()
                 results.append(rec)
                 continue
+            best = max(range(num_players), key=lambda i: scores[i])
             rec = {
-                "game": g, "bots": idxs, "scores": scores, "moves": nmoves,
-                "winner": idxs[max(range(num_players), key=lambda i: scores[i])],
+                "game": g, "players": num_players,
+                "bots": [names[i] for i in idxs], "scores": scores,
+                "moves": nmoves, "winner": names[idxs[best]],
+                "winner_seat": best,
                 "secs": round(time.time() - t0, 2),
             }
             f.write(json.dumps(rec) + "\n"); f.flush()
@@ -146,3 +152,65 @@ class HillClimb:
                 log(f"gen {gen}: reject wr={wr:.2f} (n={n})")
             self.save(gen, wr)
         return self.base_weights
+
+
+# --------------------------------------------------------------- CLI
+
+def summarize(results, names):
+    """Win rate and mean score per bot kind."""
+    stats = {n: {"games": 0, "wins": 0, "score": 0.0} for n in names}
+    errors = 0
+    for r in results:
+        if "error" in r:
+            errors += 1
+            continue
+        for seat, bot in enumerate(r["bots"]):
+            stats[bot]["games"] += 1
+            stats[bot]["score"] += r["scores"][seat]
+            stats[bot]["wins"] += (seat == r["winner_seat"])
+    out = []
+    for n, s in stats.items():
+        g = max(1, s["games"])
+        out.append(f"{n}: {s['games']} seats, win rate {s['wins'] / g:.1%}, "
+                   f"mean culture {s['score'] / g:.1f}")
+    if errors:
+        out.append(f"errors: {errors}")
+    return "\n".join(out)
+
+
+def main(argv=None):
+    import argparse
+
+    from engine import bots as bots_mod
+    from engine import game as engine
+
+    ap = argparse.ArgumentParser(description="TtA bot round robin")
+    ap.add_argument("--games", type=int, default=40)
+    ap.add_argument("--players", type=int, default=2, choices=(2, 3, 4))
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out", default="experiments/results.jsonl")
+    ap.add_argument("--bots", default="random,greedy")
+    args = ap.parse_args(argv)
+
+    names = [b.strip() for b in args.bots.split(",")]
+    kinds = {"random": bots_mod.RandomBot, "greedy": bots_mod.GreedyBot}
+    counter = [0]
+
+    def factory(name):
+        def make():
+            counter[0] += 1
+            return kinds[name](seed=args.seed * 7919 + counter[0])
+        return make
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    t0 = time.time()
+    results = round_robin(engine, [factory(n) for n in names], args.players,
+                          args.games, args.seed, args.out, names=names)
+    print(f"{args.games} games, {args.players}p, "
+          f"{time.time() - t0:.1f}s -> {args.out}")
+    print(summarize(results, names))
+    return results
+
+
+if __name__ == "__main__":
+    main()
