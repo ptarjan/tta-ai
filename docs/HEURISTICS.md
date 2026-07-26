@@ -722,6 +722,165 @@ four turns of the end. Food and resources are not victory points.
 
 ---
 
+## What changes with the player count
+
+This is the section to read if you learned the game at one count and are now
+sitting down at another. The three champions are not three strengths of the same
+player — they play **different games**, and the differences are much larger than
+anything else in this document.
+
+### The rules differences are small. The consequences are not.
+
+The rulebook changes only a handful of things [rules, §13 — full table in the
+Quick reference]. The two that dominate play are:
+
+| | 2 players | 3 players | 4 players |
+|---|---|---|---|
+| Cards swept off the left of the row per turn | **3** | 2 | **1** |
+| Civil decks I–III trimmed | remove 9 per deck | remove 3 per deck | none |
+
+(Plus: no pacts at 2p, 4/5/6 Age-A events seeded, and first-round civil actions
+1,2 / 1,2,3 / 1,2,3,4 by seat.) The row is always 13 spaces with the same
+1/2/3-action cost bands, and costs, scoring and the yellow bank are identical.
+
+Two consequences fall straight out of the sweep number. At **2p** a card you
+leave behind is gone in a turn or two, and the row is refilled aggressively, so
+cheap cards keep arriving. At **4p** cards linger for many turns, so the row
+fills up with things nobody wanted and the *good* card in space 1 was taken by
+one of your three opponents long before your turn came round.
+
+The champions' final numbers diverge enormously:
+
+| Measured over 120 mirror games each | 2p | 3p | 4p |
+|---|---|---|---|
+| Final culture | 123.7 | 113.2 | **56.4** |
+| Final technologies | 12.88 | 9.81 | **16.35** |
+| Cards taken per game | 22.0 | **12.8** | 31.9 |
+| CA spent per card taken | 1.15 | **2.33** | 1.22 |
+| Wonders completed per game | 0.18 | 0.04 | **0.79** |
+| Military strength, end of Age III | 3.79 | **7.28** | 2.99 |
+| Civil actions wasted per turn | 1.74 | 1.93 | **0.38** |
+
+Source: `experiments/behaviour_{2,3,4}p.json`. **[strong]** on the shape of the
+divergence, because 120 games is enough to make gaps this large real; **[mixed]**
+on which count is *right*, because the three climbs are at very different ages
+(gen 169 / 130 / 111, with 15 / 10 / 6 accepted mutants).
+
+### 2 players: the row is a conveyor belt, so cheap cards are everywhere
+
+Two cards leave the left of the row every turn and eight come in. Cards die fast,
+but they also *arrive* fast, and the row is short of buyers — there is only one
+other player. The 2p champion takes **88.4% of its cards from spaces 1–5** (1 CA
+each) and averages **1.15 civil actions per card**. It takes 22 cards a game and
+pays only 25.2 actions for them. [`cost_bands`]
+
+What that buys, in practice:
+
+- The most balanced economy of the three: resource rate 4.85 and science rate
+  4.45 in Age III, food rate a comfortable 2.3 all game.
+- The **highest final culture (123.7)** on the second-fewest techs.
+- The worst action discipline. It leaves 1.74 CA unused per turn and something
+  unspent on 42.8% of turns; in Age III it wastes **57.6%** of its civil actions.
+  It ends with **25.7 banked science** it never spends.
+
+So the 2p lesson is not "be efficient" — this champion is not efficient. It is
+that at 2p the row keeps handing you cheap, good cards, and the binding
+constraint is *what you can build and feed*, not what you can reach.
+**[strong]** on the card economics (rules + behaviour agree); the waste is a
+flaw, not advice — see "Where your actions start going to waste".
+
+### 3 players: expensive cards, a big army, and a local optimum
+
+The 3p champion is the odd one out at almost every measurement, and you should
+treat its style with suspicion rather than copying it.
+
+- It reaches **deep** into the row: **56.9% of its cards come from spaces 10–13**
+  (3 CA each), only 23.5% from the cheap band. It pays **2.33 CA per card** —
+  double the other counts — and so takes only 12.8 cards a game while spending
+  *more* actions (29.8) doing it. [`cost_bands`]
+- It is the only military build. **7.14 infantry per game** against 2.41 at both
+  other counts, 3.12 army units in play in Age III against 0.42 and 0.08, and
+  military strength 7.28 at the end of Age III against 3.79 and 2.99.
+- It pays for that army with its economy: resource rate **1.52** in Age III
+  (2p: 4.85, 4p: 4.18) and science rate **1.96** (2p: 4.45, 4p: 6.26). It ends
+  with the fewest technologies of any count, 9.81.
+- It delays production upgrades: first farm/mine upgrade at median round 8, and
+  in **39% of games it never upgrades production at all**.
+
+The army does not get used — **zero wars in 120 games** and 0.03 aggressions per
+game. It is pure deterrence, and it is being paid for with roughly two-thirds of
+the economy the other counts run.
+
+Our reading: this is a **local optimum**, not a player-count effect. The decisive
+evidence is 4p — it faces *three* opponents rather than two, has strictly more
+reason to fear aggression, and instead opens economically, keeps almost no army,
+and ends with the most technologies in the study. **[mixed, leaning against the
+3p style]** — the 3p champion does beat its own start point (70.3% ± 9.1), so
+the style works; there is no evidence it is the best available style.
+
+### 4 players: a wonder on round one, and a starving engine
+
+The 4p champion is the most *interesting* and the most *broken*.
+
+The good half. It is far and away the best at spending actions — 0.38 CA wasted
+per turn against 1.74 and 1.93, and it leaves nothing unspent on **89.2%** of
+turns. It takes the most cards (31.9), builds the most labs (4.71), mines (5.38)
+and temples (3.71), and finishes with **16.35 technologies** and a culture *rate*
+of 8.88 in Age IV, the highest of any count in any age. It takes a wonder on
+**round 1 in 120/120 games** and completes 0.79 per game — four times the 2p rate
+and twenty times the 3p rate. **[strong]** on the action discipline;
+**[provisional]** on the round-1 wonder, because it starts 1.96 wonders and only
+finishes 0.79.
+
+The broken half. Its final culture is **56.4**, less than half of 2p's, despite
+having three more technologies and a much higher culture rate. The reason is not
+subtle once you measure it: **it starves.** Its food rate sits at 1.20 / 1.18 /
+1.03 / 0.89 across Ages I–IV — barely break-even and *falling* — and it burns
+**56.1 culture per game to the starvation penalty** against roughly 60 actually
+banked, going short on food on **46.1% of all turns**
+(`analysis/leak_check.py`, 60 games, 240 player-games). Details in trap #2. It
+also passes in the Politics Phase on 87% of turns and prepares only 1.4 events a
+game against 11.3 at 2p, so the military-card economy is dead too.
+
+What to take from 4p and what to leave: **take** the action discipline, the
+urban-heavy worker split (65% urban by Age III), and the round-1 wonder
+consideration. **Leave** the food curve — at 4p in particular, keep a real food
+surplus. **[mixed]**
+
+### Per-count opening cheat sheet
+
+| | 2p | 3p | 4p |
+|---|---|---|---|
+| Median round: first leader played | 3 | 5 | 4 |
+| Median round: first production upgrade | **2** | 8 | **2** |
+| Games that ever upgrade production | 100% | 61% | 99% |
+| Median round: first urban upgrade | 3 | 5 | 3 |
+| Median round: government taken | 8.5 (70%) | 7 (51%) | 9 (85%) |
+| Median round: first wonder taken | 6.5 (25%) | 6 (19%) | **1 (100%)** |
+| Median round: first aggression | 19 (0.8%) | 4 (3%) | 18.5 (8%) |
+
+Percentages are the share of games in which it happens at all. Where the share
+is under ~25%, the median is a median over a handful of games — treat it as
+**[thin]**.
+
+### Where the counts actually agree
+
+Four things hold at 2p, 3p and 4p, and those are the ones to trust:
+
+1. **Take a leader early and play it.** 97% / 83% / 98% of games take one; median
+   play round 3 / 5 / 4. **[strong]**
+2. **Temples are the most-built card at every count** — 3.65 / 2.84 / 3.71 per
+   game — and they are built before theaters and arenas everywhere. **[strong]**
+3. **Stop growing around round 9** and park the yellow bank just above 11 tokens,
+   avoiding the 10-token happiness step. **[strong]**
+4. **Nobody fights.** Zero wars in 360 games. Aggressions per game 0.01 / 0.03 /
+   0.11. In a game where every champion is a builder, the player who spends on an
+   army spends on nothing. **[strong]** as a description of the champions;
+   **[mixed]** as advice, because mirror self-play cannot discover that fighting
+   is good if no ancestor ever tried it.
+
+---
+
 ## Common traps
 
 Six ways this game quietly takes points off you. All six are things the search

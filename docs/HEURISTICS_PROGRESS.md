@@ -101,3 +101,26 @@
   champion spends ~50% of turns BELOW HALF the strongest rival's strength.
   Rule 8's "parity with the table" claim is only true at 2p.
 - NEXT: Per-player-count section, then rewrite traps #2, then re-verify rules 1-8.
+
+### 11:52
+- 60-game leak_check CONFIRMATION RUN LANDED (`experiments/logs/leak_check.log`).
+  Confirms the 20-game finding with slightly softer 4p numbers:
+    2p: 21.36 culture burned to starvation / player-game, 16.5% of turns
+    3p:  6.02, 6.3% of turns
+    4p: 56.05 against ~60 banked, 46.1% of turns
+  By age at 4p: I=2.2, II=17.8, III=27.6 (4.71/turn), IV=8.5 (6.25/turn).
+  Uprisings: 0.27 / 0.03 / 0.64 culture per player-game -- near-free. USE THESE
+  60-game numbers, not the 20-game ones.
+- Champion generations now 169 / 130 / 111 (15 / 10 / 6 accepted mutants).
+- WRITTEN: "What changes with the player count" (per-count section). Contents:
+  rules-diff table (corrected against RULES_SPEC §13: sweep 3/2/1, deck trimming,
+  NOT a refill-size difference), divergence table, one subsection per count,
+  opening cheat sheet, "where the counts agree".
+  * 2p = cheap-card conveyor (88.4% band-1 cards, 1.15 CA/card) but worst action
+    discipline (57.6% of Age III CAs wasted, 25.7 banked science).
+  * 3p = expensive cards (56.9% band-3, 2.33 CA/card) + military build; called a
+    LOCAL OPTIMUM, with 4p as the counter-evidence.
+  * 4p = best action discipline (0.38 CA/turn wasted) + most techs (16.35) but
+    starving engine (food rate 1.20/1.18/1.03/0.89, culture 56.4).
+- NEXT: rewrite trap #2 (starvation) with the 60-game numbers, then rewrite
+  headline rule 8 (ratio_to_strongest), then re-verify rules 1-8 + header.
