@@ -296,9 +296,9 @@ different (older, weaker) champion:
   nearly **doubled** at 4p (139.8 → 262.7) while the default bot's barely moved
   (128.9 → 130.7). A 44-point win-rate swing with the opponent's score held still
   is a stronger bot, not a luckier one.
-* Measured directly: re-running the same match-up across three different
-  `--seed` values moves the win rate by only a few points, nowhere near the
-  gap being explained away. *(seed sweep results in the table below.)*
+* Even taking the seed explanation at face value, it does not reach: HEURISTICS'
+  own four repeat checks span ~10 points (2p 71.9–82.3, 4p 66.1–76.0), and the
+  gaps being explained away are 23 points at 2p and **44 points at 4p**.
 
 **Concretely, these HEURISTICS.md claims are wrong and should be corrected**
 (that file is owned by another agent, so it is flagged here, not edited):
