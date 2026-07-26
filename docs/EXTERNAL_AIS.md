@@ -275,7 +275,181 @@ lead on an eval bug or a genuine discovery. Effort: hours, not weeks.
 
 ## 6. The human-in-the-loop option (play the app, log the AI)
 
-TODO — under investigation.
+§1 concluded that the app's AI is reachable **only** through a human at the keyboard.
+The good news is that we already built 90% of the harness for a different reason: the
+advisor (`advisor/advisor.py`, `advisor/state_io.py`) exists to sit next to a *physical*
+table, mirror the board, recommend the human's move, and absorb "here is what the
+opponents did" as terse patch lines. Pointing it at a screen instead of a table is a
+configuration change, not a new program. What is missing is (a) structured logging and (b) an
+honest accounting of what a human hour buys.
+
+### 6a. The design
+
+**Setup.** One game of the official app, base game only — the New Leaders & Wonders DLC
+must be off, since our engine does not implement it (§1). Human takes seat 0, opponents
+are app AIs at a **recorded, fixed difficulty** (Hard for the headline number; the
+"world leader" personalities are a *different* experiment and must be labelled as such).
+The advisor runs in a terminal beside the app: `python3 -m advisor.advisor --players 3
+--seat 0 --log games/2026-07-26-a.jsonl`.
+
+**Two modes, and the distinction is the whole point of the exercise:**
+
+- **Strict mode** — the human presses Enter every single turn and plays whatever the
+  advisor starred, with no judgement of their own, ever. The human is an I/O device: a
+  pair of eyes for the app and a pair of hands for the mouse. This is the only mode in
+  which the final score is a *measurement of our bot*. Any turn where the human "fixes"
+  a recommendation silently destroys that property.
+- **Free mode** — the human plays their own game and the advisor just records what it
+  *would* have done. The score measures the human, not the bot, but the **override rate**
+  (how often a competent human rejects the bot's top pick, and at which decision types)
+  is a genuinely useful, nearly-free quality signal that needs no opponent transcription
+  at all.
+
+Run strict mode for evaluation. Run free mode when you want a cheap bug-hunt.
+
+**Fidelity tiers.** These differ by an order of magnitude in human cost, so pick
+deliberately:
+
+| Tier | What is logged | Overhead vs just playing | What it buys |
+|---|---|---|---|
+| **0 — outcome only** | player count, AI difficulty, final scores, round count. No advisor. | ~1 min/game | Score-distribution calibration (same product as §5a metadata, but on the *right edition*, which BGO may not be). Nothing about moves. |
+| **1 — advised seat, coarse opponents** | full state snapshot + ranked candidate list + move played at every one of *our* decisions; opponents reported only as the cheap visible fields (card taken, culture, science, strength, new techs/wonders) | ~1.5–2× | Win rate and score margin of *our bot* vs the app AI; our bot's decisions in real (non-self-play) positions; override rate. **This is the tier to actually run.** |
+| **2 — full transcription** | every opponent action replayed through the engine as a real move, so the app AI's *policy* is captured | ~3×, and needs new code | Move-level agreement/disagreement with the app AI: the disagreement catalogue. Worth doing for a handful of games only. |
+
+Tier 2 needs a change the advisor deliberately does not have today: `advisor/README.md`
+is explicit that "**Opponents' turns are *not* replayed as moves; you report the
+result**". Someone would have to add an opponent-move entry path that pushes rival
+actions through `engine.actions` — which also means resolving the hidden information the
+mirror does not have (their hand). Non-trivial. Do not assume Tier 2 is one flag away.
+
+### 6b. Logging format
+
+Append-only **JSONL**, one record per decision point, plus a header and a footer record
+per game. The key design decision: **embed the existing `state_io.dumps()` snapshot
+verbatim** rather than inventing a serializer. `loads(dumps(b))` round-trips exactly
+(that is `state_io`'s stated contract, and the round trip is covered in
+`advisor/tests/`), so every logged position can be reconstructed into a real
+`GameState` offline. That is what makes the human's time *reusable*: one logged game can
+be re-scored by every future bot we ever train, not just the one that was in the room.
+
+```jsonl
+{"v":1,"type":"game","id":"2026-07-26-a","src":"cge-app","app_version":"...","edition":"2015-base","dlc":false,"players":3,"seat":0,"opponents":[{"kind":"ai","level":"hard"},{"kind":"ai","level":"hard"}],"mode":"strict","weights":"experiments/champion_3p.json","started":"2026-07-26T19:04:00Z"}
+{"v":1,"type":"decision","game":"2026-07-26-a","ply":37,"round":6,"age":"I","actor":"p0",
+ "state":"tta 1\ngame 3p seed=0 turn=6 round=6 age=I/I cur=0 start=0 phase=actions me=0\n...",
+ "ranked":[{"move":["take",4],"score":12.31},{"move":["play_action","Rich Land (A)"],"score":11.29}],
+ "played":["take",4],"source":"bot","latency_s":4}
+{"v":1,"type":"observed","game":"2026-07-26-a","ply":38,"actor":"p1",
+ "patches":["take p1 4","p1 c=41 s=12 str=9","p1 tech+ irrigation:2","p1 hc=3"],
+ "state_after":"tta 1\n..."}
+{"v":1,"type":"result","game":"2026-07-26-a","scores":{"p0":183,"p1":201,"p2":166},"winner":"p1","rounds":18,"human_minutes":95,"notes":"mirror desynced at round 14, resynced with 'row'"}
+```
+
+Notes on the fields, and why each is there:
+
+* `state` is the snapshot **string**, not a nested object. It is ~1 KB at setup and a
+  few KB late game; at ~200 decisions/game that is well under 1 MB per game. There is
+  no reason to store deltas and every reason not to — a delta stream only replays
+  correctly against the engine version that produced it, and the engine is under active
+  development.
+* `ranked` holds the advisor's candidate list with its scores. Store the **full** list,
+  not the top 3 shown in the UI — top-k agreement, rank-of-chosen-move and regret all
+  need the tail. `rank_moves()` in `advisor/advisor.py` already produces exactly this
+  structure (move, score, text, reason).
+* `played` is the engine's own tagged move tuple, so it replays directly.
+* `source` ∈ `bot` (strict-mode Enter) / `human` (an override, and then `note` should say
+  why) / `observed` (a rival's action). Without this field a free-mode log is
+  uninterpretable later.
+* `patches` on `observed` records preserve the literal lines the human typed. When the
+  mirror later turns out to have drifted, these are the only forensic trail.
+* The `result` record's `human_minutes` and `notes` are not bureaucracy — they are how
+  we find out, after five games, whether this whole idea is affordable.
+
+Implementation is small: `Advisor` already accumulates a narrative `self.log` list
+(`advisor/advisor.py:481`); this is a structured sibling written through a `--log` flag,
+appended and `flush()`ed at every decision so a crashed or abandoned game still leaves
+usable data.
+
+**One extra command worth adding: `verify`.** The mirror can drift silently (a misread
+opponent culture, a missed event). The app displays every player's score and civil-card
+count; a command that prints our mirror's version of the same handful of public numbers
+side by side, prompted once per round, converts a silent corruption into a caught one.
+Without it, a 90-minute game can be entirely worthless and nobody notices.
+
+### 6c. How many games do we actually need?
+
+**(a) For evaluation — the answer is "tens, and only for a coarse verdict".**
+
+The naive statistic is win rate in 3-player games (baseline 1/3). Two-sided at 5%, 80%
+power: distinguishing "our bot wins 33%" from "our bot wins 50%" — a *huge* effect —
+needs ≈ 65 games. Distinguishing 33% from 42% needs ≈ 220. At Tier 1 cost (below) that
+is 100 and 350 human-hours respectively. **Win rate is unaffordable at human speed.**
+
+Score margin (our final score minus the best opponent's) is continuous and much cheaper.
+Taking a between-game SD of roughly 40–50 points for that margin, detecting a 20-point
+shift needs ≈ 40 games; detecting the difference between "competitive" and "hopeless"
+(a 40-point shift) needs ≈ 10–12. So:
+
+- **5 games**: tells you whether the mirror + advisor + app loop *works at all*, and
+  catches gross engine/eval bugs. Do these first and expect the first two to be thrown
+  away.
+- **10–15 games**: supports a coarse, honest verdict — "our bot is clearly behind the
+  Hard AI" / "roughly level" / "clearly ahead". That is genuinely the resolution we need
+  right now, and it is the recommended stopping point.
+- **40+ games**: needed for anything finer, e.g. "champion_3p is 15 points better than
+  the previous champion". Do not use humans for that. Use self-play arenas
+  (`experiments/arena.py`), which give thousands of games for free; the app AI's role is
+  to be an *anchor* that self-play cannot provide, and an anchor only has to be located
+  once, roughly.
+
+A much better return per hour comes from statistics over **decisions** rather than
+games. One game is ~150–250 of our own decisions, so **5–10 games is already thousands
+of scored positions** — enough to say "our bot's top pick was one of the top 3 human
+picks 71% of the time", to find decision *types* where it is systematically weird (never
+starts a wonder before round 5; always keeps 2 military actions unspent), and to
+re-score every one of those positions against a future bot. The disagreement catalogue,
+not the p-value, is the product.
+
+**(b) For training — the honest answer is "this will never be a training corpus".**
+
+Imitation learning of a policy of TTA's complexity wants order 10⁴–10⁵ labelled
+decisions at minimum; the strongest comparable result in the genre (Keldon's Race for
+the Galaxy net, §4c) used ~30,000 games of *self-play*, not human games. 10⁴ decisions
+of app-AI play is ~50 fully-transcribed Tier-2 games ≈ 150+ human hours, to clone an
+agent that §1 argues is *the same architectural class as our own `WeightedBot`*. The
+effort/reward is indefensible. If we want a policy target, the literature's answer
+(§4d) is TD-learning over self-play, which needs no humans at all.
+
+There is one narrow training-shaped use that *is* affordable: using ~10 games of logged
+positions as a **fixed evaluation set for weight vectors** — a held-out board of real,
+non-self-play positions on which any candidate weight vector can be scored offline in
+seconds. That is a regularizer against hill climbing overfitting to its own population,
+and it costs 10 games once.
+
+### 6d. Effort per game — the honest number
+
+Playing a 3-player app game against Hard AIs: **30–45 min** on its own. The advisor adds:
+
+- Our own turns: mostly a single Enter in strict mode, but reading the recommendation
+  and mirroring it in the app UI is real time. ~5–10 min/game.
+- Opponent turns: this is where the cost lives. The app *does* animate every AI move
+  before your turn, so the information is on screen — but transcribing it is roughly
+  4–8 patch fields × 2 opponents × ~18 rounds. At a fluent 20–30 s per opponent turn
+  that is **12–18 min/game**, and it is dull, error-prone work at exactly the moment the
+  human wants to be thinking about their own move.
+- Setup, verification passes, resyncs when the mirror drifts, writing the result record:
+  ~10 min.
+
+**Tier 1 realistic total: 75–110 minutes per game, i.e. 2–2.5× the cost of just
+playing.** Tier 2 is ~3×+ and adds cognitive load that will itself cause errors. Ten
+Tier-1 games is therefore a **12–18 hour** commitment for one person, spread over
+whatever calendar time they can stand. That is affordable exactly once, for one coarse
+verdict — which is why the recommendation is 10–15 games and then stop, not an ongoing
+programme.
+
+Failure modes to price in honestly: the first games will desync and be discarded; the
+app's DLC/difficulty settings must be checked every single game or the log is
+mislabelled; and any human who starts "helping" the bot in strict mode has silently
+invalidated the measurement without producing an error message.
 
 ## 7. Ranking and recommendation
 
