@@ -412,12 +412,19 @@ Age I ends around round 6–8. Champion state at that moment:
 | Round | 7 | 6 | 8 |
 | Workers | 11.0 | 10.1 | 10.3 |
 | Techs (incl. the 5 starting cards) | 7.3 | 6.4 | 7.8 |
-| Science rate | 2.5 | 1.3 | — (2.1 avg over Age I) |
-| Culture rate | 3.4 | 1.5 | — (1.4 avg over Age I) |
-| Resource rate | 3.8 | 2.0 | 2.8 avg |
+| Science rate | 2.5 | 1.3 | 3.0 |
+| Culture rate | 3.4 | 1.5 | 2.9 |
+| Resource rate | 3.8 | 2.0 | 3.1 |
+| Food rate (gross, see trap #2) | 2.2 | 2.1 | **1.2** |
+| Culture banked | 12.8 | 3.4 | 6.5 |
 | Strength | 1.5 | 2.6 | 0.8 |
 | Yellow bank left | 14.0 | 14.9 | 14.7 |
-| Wonders completed | 0.06 | 0.00 | 0.12 |
+| Wonders completed | 0.06 | 0.00 | 0.23 |
+
+The one row to look at twice is **food rate**. All three champions have 11 or so
+workers eating 2 food a turn by this point, and the 4p champion is already
+producing only 1.2. That gap is what eventually eats its entire score — see
+trap #2.
 
 The number to steal from that table is **yellow bank ~14–15**: all three
 champions have taken three or four population by the end of Age I, which keeps
