@@ -54,14 +54,19 @@ class Recorder:
             "first": {},           # event -> round first seen
             "takes": {},           # "band1"/"band2"/"band3" -> count
             "take_types": {},      # card type -> count
+            "take_rows": [],       # [round, band, name, type] per taken card
             "moves": {},           # move kind -> count
             "builds": [],          # [round, kind] for build/upgrade/develop
             "snaps": [],           # one dict per completed turn
             "attacks_made": [],    # [round, kind, target]
             "attacked_by": [],     # filled in by the driver (from others)
+            "wonders_started": [],   # [round, name]
+            "wonders_done": [],      # [round, name]
+            "wonders_abandoned": [],  # names started but never completed
             "rounds": 0,
             "culture": 0,
         }
+        self._done_seen = set()
 
     # -- helpers ----------------------------------------------------
     def _first(self, key, state):
