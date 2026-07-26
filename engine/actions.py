@@ -561,12 +561,17 @@ def _h_pop_free(state, p, move, rng):
 
 
 def _h_build(state, p, move, rng):
-    name = move[1]
-    cost = build_cost_for(state, p, name)
-    if is_unit(name):
-        p.military_actions -= 1
-    else:
-        pay_ca(state, p, 1)
+    do_build(state, p, move[1])
+
+
+def do_build(state, p, name, discount=0, free=False):
+    cost = max(0, (build_cost_for(state, p, name) or 0) - discount)
+    if not free:
+        cost = _spend_mil_discount(p, name, cost)
+        if is_unit(name):
+            p.military_actions -= 1
+        else:
+            pay_ca(state, p, 1)
     p.resources -= cost
     p.techs[name].workers += 1
     p.workers_free -= 1
@@ -576,13 +581,19 @@ def _h_build(state, p, move, rng):
 
 
 def _h_upgrade(state, p, move, rng):
-    lo, hi = move[1], move[2]
-    cost = upgrade_cost(state, p, lo, hi)
+    do_upgrade(state, p, move[1], move[2])
+
+
+def do_upgrade(state, p, lo, hi, discount=0, free=False):
+    cost = max(0, upgrade_cost(state, p, lo, hi) - discount)
+    if not free:
+        cost = _spend_mil_discount(p, lo, cost)
+        if is_unit(lo):
+            p.military_actions -= 1
+        else:
+            pay_ca(state, p, 1)
     if is_unit(lo):
-        p.military_actions -= 1
         effects.on_build_unit(state, p, hi)
-    else:
-        pay_ca(state, p, 1)
     p.resources -= cost
     p.techs[lo].workers -= 1
     p.techs[hi].workers += 1
@@ -599,10 +610,14 @@ def _h_destroy(state, p, move, rng):
 
 
 def _h_wonder_step(state, p, move, rng):
+    do_wonder_step(state, p, move[1])
+
+
+def do_wonder_step(state, p, k, discount=0, free=False):
     db = C.db()
-    k = move[1]
-    cost = wonder_stage_cost(state, p, k)
-    pay_ca(state, p, 1)
+    cost = max(0, wonder_stage_cost(state, p, k) - discount)
+    if not free:
+        pay_ca(state, p, 1)
     p.resources -= cost
     p.wonder.steps_built += k
     name = p.wonder.name
@@ -630,12 +645,13 @@ def _h_play_leader(state, p, move, rng):
     state.emit(f"played leader {name}")
 
 
-def _h_develop(state, p, move, rng):
+def _h_develop(state, p, move, rng, free=False):
     db = C.db()
     name = move[1]
     card = db.get(name)
     cost = effects.tech_cost(state, p, name) or 0
-    pay_ca(state, p, 1)
+    if not free:
+        pay_ca(state, p, 1)
     p.science -= cost
     p.hand_civil.remove(name)
     if card["type"] == "government":
@@ -726,7 +742,14 @@ def _h_copy_tactic(state, p, move, rng):
 
 
 def _h_play_action(state, p, move, rng):
+    """§3.11 play a yellow action card: 1 CA, resolve, discard (leaves game).
+
+    Gains resolve first, then the ordered action (which pays no action and
+    takes the card's resource discount).
+    """
+    from . import game, interact
     name = move[1]
+    revolt_ok = (p.civil_actions == ca_total(state, p))
     pay_ca(state, p, 1)
     p.hand_civil.remove(name)
     eff = C.db().get(name).get("effects") or {}
@@ -745,8 +768,43 @@ def _h_play_action(state, p, move, rng):
                 p.workers_free += 1
     if "extraCivilActions" in eff:
         p.civil_actions += eff["extraCivilActions"]
-    if "extraMilitaryActions" in eff:
-        p.military_actions += eff["extraMilitaryActions"]
+    for key in ("extraMilitaryActions", "militaryActions"):
+        if key in eff:                      # virtual MAs, not carried over
+            p.military_actions += eff[key]
+    if "culturePerCivilizationWithMoreCulture" in eff:
+        per = _per_player(state, eff["culturePerCivilizationWithMoreCulture"])
+        n = sum(1 for q in state.active_players()
+                if q.idx != p.idx and q.culture > p.culture)
+        p.culture += per * n
+    if "resourcesForMilitaryUnits" in eff:
+        p.mil_discount += eff["resourcesForMilitaryUnits"]
+    if "resourcesForMilitaryUnitsPerStrongerCivilization" in eff:
+        per = _per_player(
+            state, eff["resourcesForMilitaryUnitsPerStrongerCivilization"])
+        mine = effects.state_stats(state, p).strength
+        n = sum(1 for q in state.active_players()
+                if q.idx != p.idx
+                and effects.state_stats(state, q).strength > mine)
+        p.mil_discount += per * n
+    effects.invalidate(state, p)
+    if "gainFoodOrResources" in eff:
+        n = eff["gainFoodOrResources"]
+        interact.push_choice(state, p.idx, "food_or_res", ["food", "resources"],
+                             {"n": n}, auto=False)
+    if eff.get("freeCivilAction"):
+        interact.enqueue(state, {"player": p.idx, "tag": "free_civil",
+                                 "kind": eff["freeCivilAction"],
+                                 "discount": eff.get("resourceDiscount", 0),
+                                 "revolt_ok": revolt_ok})
+    state.emit(f"played action card {name}")
+
+
+def _per_player(state, value):
+    """Action-card values printed per player count, e.g. {2p:6,3p:3,4p:2}."""
+    from . import game
+    if isinstance(value, dict):
+        return value.get(f"{game.live_count(state)}p", 0)
+    return value or 0
 
 
 def _h_end_turn(state, p, move, rng):

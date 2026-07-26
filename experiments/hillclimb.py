@@ -104,19 +104,28 @@ def combine(shares, null, z=1.2816):
     return m, se, m - z * se
 
 
-def challenge(mutant, champion, players, screen, max_games, seed0, workers):
-    """Two-stage sequential test of `mutant` against a table of `champion`."""
+def challenge(mutant, champion, players, screen, max_games, seed0, workers,
+              min_games=0):
+    """Two-stage sequential test of `mutant` against a table of `champion`.
+
+    `min_games` is the floor on the sample before an accept is allowed.  The
+    screening batch is cheap but its 90% lower bound clears the null by luck
+    often enough that, over hundreds of generations, the champion would drift
+    on noise; requiring a second disjoint block of games before accepting is
+    the cheapest available fix.
+    """
     shares = []
     games = 0
     null = 1.0 / players
     batch = max(players, screen)
+    min_games = min(min_games or 2 * screen, max_games)
     while games < max_games:
         res = arena.duel(mutant, champion, players, batch,
                          seed0=seed0 + games * 131, workers=workers)
         shares.extend(res["shares"])
         games += batch
         m, se, lo = combine(shares, null)
-        if lo > null:                      # already a clear win
+        if lo > null and games >= min_games:   # a clear win on enough games
             return m, se, lo, len(shares), res
         if m < null and games >= screen:   # not promising, stop paying for it
             return m, se, lo, len(shares), res
@@ -130,7 +139,7 @@ def challenge(mutant, champion, players, screen, max_games, seed0, workers):
 # --------------------------------------------------------------------- run
 
 def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
-        log=print):
+        min_games=0, log=print):
     champion, gen, sigma = load_champion(players)
     rng = random.Random(seed * 7919 + players * 101 + gen)
     t_end = time.time() + hours * 3600
@@ -150,7 +159,7 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             m, se, lo, n, res = challenge(
                 mutant, champion, players, screen, max_games,
                 seed0=(gen * 1_000_003 + j * 7717 + seed) % 10_000_019,
-                workers=workers)
+                workers=workers, min_games=min_games)
             tried.append({"wr": round(m, 4), "lo": round(lo, 4), "n": n,
                           "moved": len(moved)})
             if n == 0 or (res and res.get("errors", 0) > res.get("games", 0)):
@@ -226,11 +235,13 @@ def main(argv=None):
     ap.add_argument("--max-games", type=int, default=240,
                     help="cap on games spent on one mutant")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--min-games", type=int, default=0,
+                    help="games required before an accept (default 2*screen)")
     ap.add_argument("--anchor-every", type=int, default=10,
                     help="every N generations, measure vs default and greedy")
     args = ap.parse_args(argv)
     run(args.players, args.hours, args.workers, args.lam, args.screen,
-        args.max_games, args.seed, args.anchor_every)
+        args.max_games, args.seed, args.anchor_every, args.min_games)
 
 
 if __name__ == "__main__":

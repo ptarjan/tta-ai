@@ -259,8 +259,24 @@ def _finish_take_row(state, rng):
     game.deal_row(state, rng)
 
 
+def _c_free_civil(state, p, opt, ctx, rng):
+    """Perform an action card's ordered action (§3.11)."""
+    from . import actions
+    actions.apply_free_action(state, p, tuple(opt), ctx.get("discount", 0))
+
+
+def _c_food_or_res(state, p, opt, ctx, rng):
+    n = int(ctx.get("n", 0))
+    if opt == "food":
+        effects.gain_food(p, n)
+    else:
+        effects.gain_resources(p, n)
+
+
 _CHOICE = {
     "gain_block": _c_gain_block,
+    "free_civil": _c_free_civil,
+    "food_or_res": _c_food_or_res,
     "free_build": _c_free_build,
     "destroy_own": _c_destroy_own,
     "lose_pop": _c_lose_pop,
