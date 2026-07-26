@@ -122,6 +122,180 @@ Eight rules. In rough order of how much they are worth.
 
 ---
 
+## Opening: Age A and the first four rounds
+
+Age A is one round long. It ends the moment the card row is first replenished —
+on the starting player's *second* turn — so you get exactly one turn in it, with
+**1 / 2 / 3 / 4 civil actions by seat order, zero military actions, and taking
+cards from the row as your only legal action**. [rules, §1.9]
+
+Everything else in this section is Age I, rounds 2 through about 5.
+
+### Round 1: take a card. That is the whole turn.
+
+You cannot build, upgrade, play a leader or increase population on round 1 — the
+rules do not allow it. [rules, §1.9] So the only question is *which* card.
+
+Both champions take an **action card** on round 1 in essentially every game
+(median round 1 at both counts; 100% of games take one eventually). The two Age A
+action cards are the most-taken round-1 cards at both counts: at 2p
+`Frugality (A)` 0.37 per game and `Urban Growth (A)` 0.33 per game, both with a
+median round of 1. **[strong]**
+
+That is not a deep insight so much as an arithmetic one: on round 1 you have
+nothing to spend resources on, and an Age A action card is a resource or food
+rebate you can cash on round 2 when you suddenly have four actions and nothing
+banked. The seat-1 player, with a single civil action, gets exactly one shot at
+this.
+
+### Round 2 is the highest-leverage turn in the game
+
+You go from 1–4 civil actions and no military actions to a full **4 CA + 2 MA**,
+and the board is still symmetric. Three things the 2p champion does on round 2,
+in **100% of 120 games** — not a median, the whole distribution sits on round 2:
+
+1. **Add production.** First farm-or-mine build/upgrade lands on round 2 in every
+   single game (p10 = p25 = p75 = p90 = 2). Production workers go 4.00 → 4.98
+   between rounds 1 and 2. **[strong at 2p]**
+2. **Take a leader, or be about to.** Median round to *take* a leader is 2 at both
+   counts, and the 25th percentile is round 1 — a quarter of games spend the Age A
+   turn on a leader instead of an action card. **[strong]**
+3. **Disband the starting Warriors.** This one is real and it is startling: at 2p
+   military workers go **1.00 → 0.00** on round 2 and strength goes **1.00 →
+   0.06**. Disbanding a unit costs 1 military action and returns the worker to
+   your pool [rules, §4.3] — and your 2 military actions are otherwise dead in
+   Age I. The champion converts its warrior into a farm worker on turn 2 and
+   stays at essentially zero strength for all of Age I (mean military workers in
+   Age I: **0.16**). **[provisional — and see the warning below]**
+
+**Warning on #3.** This is mirror self-play with **all pacts removed at 2p**
+[rules, §13] against an opponent that has never once attacked in 120 games. A
+champion at 0.06 strength across Age I is defensible only because nobody in its
+world has ever punished it. Against a human who will Plunder you for 1 military
+action, disbanding your only unit is throwing three food and three resources at
+them. Read #3 as *"the starting warrior is worth less than you think and your
+early military actions are worth more"*, not as an instruction.
+
+The 3p champion does the exact opposite — see below.
+
+### Round 3: the first urban building
+
+At 2p, the first lab/temple/library/theater/arena build lands on **round 3 in
+100% of games** (again the entire distribution, p10 through p90, sits on 3), and
+the leader is in play by round 3 (median 3, 61.7% of games have one out by the
+end of round 3, 74.2% by round 4). Urban workers go 1.0 → 1.93 → 2.59 across
+rounds 2–4. **[strong at 2p]**
+
+So the 2p opening skeleton is: **R1 action card → R2 production + leader taken →
+R3 urban building + leader played → R4-5 second urban building.** Techs go 5.0
+(the board) → 5.21 → 5.75 → 6.18 over rounds 3–5; science rate does not leave 1
+until round 5 (1.58) and culture rate reaches 2.37 by round 5.
+
+### 3p opens completely differently, and you should know why
+
+The 3p champion is a **military opening**, and it is the single largest
+disagreement in this document:
+
+| Round 2 | 2p champion | 3p champion |
+|---|---|---|
+| Military workers | 0.00 | 1.68 |
+| Strength | 0.06 | 1.82 |
+| Production workers | 4.98 | 4.00 |
+| Urban workers | 1.00 | 1.00 |
+
+The 3p champion **never upgrades production in 39% of its games**, and when it
+does the median round is 8. It puts its round-2 actions into a second infantry
+unit instead. Across the whole game it builds **7.14 infantry** (median round 6)
+against the 2p champion's 2.41, and it ends Age III at **strength 7.28** against
+2p's 3.79. Its weight vector agrees: `strength_rel` is its single most-moved
+weight (+0.35 → **+1.88**, +436%) and `workers_early` was cut 74%.
+
+Is that right, or is it a local optimum? Honestly: **unclear**. The 3p champion
+scores less culture (113.2 mean vs 2p's 123.7) and finishes with fewer techs
+(9.81 vs 12.88), and it still never actually attacks (4 aggressions in 120
+games). It may have learned "be scary" rather than "be strong". But two things
+make it worth taking seriously: 3p and 4p are the counts where **pacts exist**
+and where **two opponents can both come at you**, and the strength-deficit
+penalty is one of only four levers all three player counts agree on
+(−0.6 → −1.02 / −0.95 / −1.30). **[mixed]**
+
+Practical read: **at 2p your opening is economic; at 3p and 4p you cannot open
+economic without a plan for how you survive Age I at strength 1.**
+
+### How deep into the row to reach, early
+
+The row sweeps **3 cards per turn at 2p, 2 at 3p, 1 at 4p** — six a round at both
+2p and 3p, four at 4p. [rules, §1.5] A card in space 7 at 2p has about one round
+to live.
+
+The champions handle this very differently:
+
+| | cards taken per game | CA spent taking | share from spaces 1–5 | share from 10–13 |
+|---|---|---|---|---|
+| 2p | 22.0 | 25.2 | **88.4%** | 3.0% |
+| 3p | 12.8 | 29.8 | 23.5% | **56.9%** |
+
+The 2p champion is a **volume buyer** — it takes almost everything from the cheap
+end of the row, 22 cards for 25 actions, barely ever paying 2 or 3 CA. The 3p
+champion takes **half as many cards for more actions**, mostly from the expensive
+end. With three players competing for one row, the card you want rarely survives
+to drift left. **[mixed]** — this is a genuine structural difference between the
+counts, but the 3p figure is also consistent with a champion that simply does not
+need many cards because it spends its actions building infantry off techs it
+already has.
+
+If you are at 2p: be patient, let cards slide, take the cheap end. If you are at
+3p or 4p: budget for the fact that you will sometimes have to pay 3 actions for
+the card you actually need.
+
+### Government: later than you think
+
+Neither champion rushes a government.
+
+| | ever take a govt card | median round taken | ever change govt | median round changed |
+|---|---|---|---|---|
+| 2p | 72.5% | 7 | 70.0% | 8.5 |
+| 3p | 55.8% | 5 | 50.8% | 7 |
+
+Most-taken first governments: 2p **Theocracy** (25.8% of games, median round 5)
+then Republic (16.7%, round 12) and Monarchy (15.0%, round 6); 3p **Monarchy**
+(23.3%, round 5.5) then Theocracy (16.7%, round 6). Nearly a third of 2p games
+and half of 3p games **never leave Despotism at all**. **[strong]**
+
+Despotism's 4 CA / 2 CA-worth-of-limits is not so bad that you should burn a
+whole turn's civil actions on a revolution in Age I. Note the rules asymmetry: a
+**revolution costs all your civil actions** and burns any actions the new
+government grants that turn, while a **peaceful change costs 1 CA plus a higher
+science price** and lets you keep playing. [rules, §8] If you are changing
+government early, you almost certainly want the peaceful version.
+
+### What "on pace" looks like at the end of Age I
+
+Age I ends around round 6–7. Champion state at that moment:
+
+| At end of Age I | 2p | 3p |
+|---|---|---|
+| Round | 7 | 6 |
+| Workers | 11.0 | 10.1 |
+| Techs (incl. the 5 starting cards) | 7.3 | 6.4 |
+| Science rate | 2.5 | 1.3 |
+| Culture rate | 3.4 | 1.5 |
+| Resource rate | 3.8 | 2.0 |
+| Strength | 1.5 | 2.6 |
+| Yellow bank left | 14.0 | 14.9 |
+| Wonders completed | 0.06 | 0.00 |
+
+The number to steal from that table is **yellow bank ~14**: both champions have
+taken about four population by the end of Age I, which keeps them in the
+"cost 3, consume 1, 1 happy face required" band and one step clear of the nasty
+jump at 10 tokens. [rules, §6.1]
+
+And note the last row. **Neither champion completes a wonder in Age I**, at
+either count. Wonders are covered in the midgame and per-count sections; the
+opening verdict is that they are not an opening.
+
+---
+
 ## Common traps
 
 Six ways this game quietly takes points off you. All six are things the search

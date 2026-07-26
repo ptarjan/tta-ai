@@ -20,3 +20,19 @@
 - Behaviour harvest re-launched via that wrapper, 120 games/count -> *.new.json.
 - NEXT: Opening, Midgame, Endgame, Per-player-count (all need the fresh JSON);
   then re-verify the numbers in "If you remember nothing else" against it.
+
+### 11:05
+- Fresh 2p + 3p behaviour (120 games, gen 149 / 116) landed and MOVED over
+  `experiments/behaviour_{2,3}p.json`. 4p harvest still running (pid 33784,
+  ~6 min in) -> `experiments/behaviour_4p.new.json`; `behaviour_4p.json` is
+  still the OLD 60-game gen-101 file. Do not cite 4p numbers until it lands.
+- Fresh data moved a lot vs the old file. Known stale numbers in rules 1-8:
+  2p ca_left_per_turn is now 1.735 (doc says 2.75), turns_with_unspent_ca 0.428
+  (doc says 0.68); 3p is now 1.925 / 0.486 so the "3p wastes fewest" claim is
+  DEAD. 2p temples 3.65/game (doc says 2.83). 2p sci_per_culture is no longer
+  monotone (0.79 / 0.78 / 0.92 / 0.87). All to be fixed in the re-verify pass.
+- The 3p champion has become a MILITARY build: 7.14 infantry/game, strength 7.28
+  at end of Age III vs 2p's 3.79, never upgrades production in 39% of games.
+  The 2p champion DISBANDS its starting Warriors on round 2 in ~all games.
+- WRITTEN: "Opening: Age A and the first four rounds" (2p/3p only, flagged).
+- NEXT: Midgame (Age I-II), then Endgame, then per-count, then re-verify rules 1-8.
