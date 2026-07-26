@@ -44,7 +44,7 @@ from .. import cards as C
 from .. import economy
 from .. import effects
 
-__all__ = ["BookBot"]
+__all__ = ["BookBot", "BookImprovedBot"]
 
 AGE_IDX = {"A": 0, "I": 1, "II": 2, "III": 3, "IV": 4}
 
@@ -793,3 +793,49 @@ class BookBot:
             if v > best_v:
                 best, best_v = mv, v
         return best if best is not None else ("defend_done",)
+
+
+# --------------------------------------------------------------- the hybrid
+
+#: Move kinds where the measurements in docs/STRENGTH_CHECK.md say the book
+#: beats the trained evaluator.  Everything else is left to the champion.
+#:
+#: * ``develop``     -- the champion hoards science it never converts
+#: * ``pop``         -- it stops growing the population far too early
+#: * ``wonder_step`` -- it starts wonders and leaves them unfinished
+#: * ``revolution``  -- it will not pay a turn of actions for a permanent one
+BOOK_OVERRIDE_KINDS = frozenset(("develop", "pop", "pop_free", "wonder_step",
+                                 "revolution"))
+
+
+class BookImprovedBot:
+    """The trained champion, overruled by the book in its known blind spots.
+
+    This is the ablation that separates "the book bot is better" from "the
+    book bot is better *because of these specific rules*".  It plays the
+    champion's evaluator everywhere except the move kinds in
+    :data:`BOOK_OVERRIDE_KINDS`; there, if the book wants to make such a move
+    and the champion does not, the book gets its way.
+    """
+
+    name = "book-improved"
+
+    def __init__(self, weights=None, rng=None, seed=None):
+        from .weighted import WeightedBot
+        self.inner = WeightedBot(weights=weights, seed=seed)
+        self.book = BookBot(seed=seed)
+        self.rng = rng or random.Random(seed)
+
+    def __call__(self, state):
+        return self.choose(state, A.legal_moves(state))
+
+    def choose(self, state, moves, rng=None):
+        champ = self.inner.choose(state, moves, rng)
+        if state.pending or state.phase == "politics":
+            return champ
+        if champ is not None and champ[0] in BOOK_OVERRIDE_KINDS:
+            return champ            # champion already making the right kind of move
+        book = self.book.choose(state, moves, rng)
+        if book is not None and book[0] in BOOK_OVERRIDE_KINDS and book in moves:
+            return book
+        return champ
