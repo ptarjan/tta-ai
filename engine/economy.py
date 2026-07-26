@@ -4,7 +4,10 @@ All numbers follow docs/RULES_SPEC.md §6 exactly.
 """
 from __future__ import annotations
 
+import random as _random
+
 from . import cards as C
+from . import effects
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -12,7 +15,6 @@ _DB = C.db()
 _TYPE_BY_NAME = _DB.type_by_name
 _BY_NAME = _DB.by_name
 _LEVEL_BY_NAME = _DB.level_by_name
-from . import effects
 
 
 # --------------------------------------------------------------- tables
@@ -195,8 +197,7 @@ def draw_military(state):
 
 
 def _rng(state):
-    import random
-    return random.Random(state.seed * 7919 + state.turn)
+    return _random.Random(state.seed * 7919 + state.turn)
 
 
 # ---------------------------------------------------- population helpers

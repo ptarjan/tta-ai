@@ -82,9 +82,92 @@ TODO — under investigation.
 
 TODO — under investigation.
 
-## 5. Human strategy corpora
+## 5. Human game corpora and strategy corpora
 
-TODO — under investigation.
+### 5a. Boardgaming-Online (BGO) — the only large TTA game database that exists
+
+`https://www.boardgaming-online.com` — a fan-run play-by-web TTA server, live since 2010
+and **still up and still busy** (probed 2026-07-26: HTTP 200, "# games in progress: 636,
+# active players: 839"). It is semi-official: the Jan 2016 news post says BGO shipped
+*A New Story of Civilization* "after months of teamwork with Vlaada Chvátil and CGE
+Team", so it implements **both** the 2006 edition and our 2015 edition. It has an
+in-game "journal"/log of every action (referenced repeatedly in its own news posts).
+
+**Public front page counter: 601,532 finished games since Aug 2010.** This is by far the
+largest TTA corpus anywhere, and the BGG thread
+["Data-Driven strategy tips"](https://boardgamegeek.com/thread/1933554/data-driven-strategy-tips)
+is somebody who already mined ~10k BGO games for win-rate statistics — proof the data is
+minable in principle.
+
+What I verified myself, unauthenticated:
+- `index.php?cnt=14` (Finished games) is **public**. It needs a POST `filtre=<string>`
+  (game id / game name / player name) to render results; with a filter it returns a
+  paginated table (12,031 pages) with, per game: **game id, game name, edition string,
+  player count, level (Prince/King/…), start date, end date, final age, round count, and
+  every player's name and final score.** No login. That metadata alone is a real dataset.
+- `index.php?cnt=11` (Games in progress) is the same, public.
+- The per-game link is `index.php?cnt=202&pl=<gameid>`. Fetched unauthenticated it
+  returns **"The game does not exist"** → the actual board/journal view is behind a
+  session. Registration is free (`index.php?cnt=9`), so this is *probably* one free
+  account away, but I did not create one and therefore **have not verified that the log
+  is readable, machine-parseable, or complete**. Treat "we can get move-level BGO logs"
+  as UNPROVEN.
+- **Edition caveat, and it is a serious one:** every result I could surface through the
+  public filter showed edition `Through the Ages 2.4` (the 2006 edition) with dates
+  clustered in 2015 and game ids ~7.27M. I could not surface a single post-2016
+  new-edition game through the public list. Either the public finished-games index is
+  stale/capped, or new-edition games are listed under a different name I did not hit.
+  Unresolved. If the mineable corpus is 2006-edition-only it is worth much less to us —
+  the 2015 edition changed governments, wonders, tactics, unit techs and end-of-turn
+  order (see `docs/SOURCES.md` for the diff list), so 2006 game outcomes do not transfer
+  cleanly.
+
+**Is it reachable?** Metadata: yes, today, with `curl` + a POST filter. Move logs:
+unknown, likely yes with a free account, definitely a scraping project (rate limiting,
+ISO-8859-1 HTML, no API, ToS unexamined).
+
+**What it would actually buy us.** Be realistic about the two very different products:
+1. *Outcome metadata only* (cheap, ~a day of scraping): lets you compute nothing about
+   moves. You get score distributions by player count and by level, typical game length
+   in rounds, and score-vs-rank curves. Genuinely useful for **calibrating our engine's
+   score distribution** — if our self-play 3p games end at a mean 140 and BGO humans end
+   at 190, something in our engine or our bots is badly off. That's a cheap, high-value
+   sanity check and it needs maybe 5–20k games' metadata.
+2. *Move-level logs* (expensive, uncertain, wrong edition): the thing you'd want for
+   imitation learning. Requires an account, a parser for a hand-rolled PHP journal
+   format, and the 2006/2015 edition question resolved. Only worth starting if (a) an
+   account confirms new-edition logs exist and are parseable and (b) we actually want
+   supervised bootstrapping, which we may not.
+
+### 5b. Written human strategy corpus
+
+We already have a chunk of this in `sources/` (`hypercheat.txt`, `ubg_*`, the GameFAQs
+in-depth guide — though `sources/gamefaqs_75690.txt` is currently just a Cloudflare
+challenge page, i.e. **that scrape failed and needs redoing**). Additional identified
+material:
+- BGG [thread 1933554 "Data-Driven strategy tips"](https://boardgamegeek.com/thread/1933554/data-driven-strategy-tips)
+  (win rates from ~10k BGO games), [thread 2801950](https://boardgamegeek.com/thread/2801950/a-strategy-guide-for-the-game-with-the-expansion)
+  (guide based on ~100 games, 3–4p), [thread 934016](https://boardgamegeek.com/thread/934016/general-strategy-tips-for-a-newbie).
+  **Note: BGG blocks plain `curl` and `WebFetch` with 403, and the XML API returns 401
+  for `thread?id=`** — scraping BGG forums needs a browser-like session or an API key,
+  budget for that.
+- Steam guide ["TTA strategy game and some basic knowledge"](https://steamcommunity.com/sharedfiles/filedetails/?id=1367549747)
+  (translated Chinese guide) — Steam pages fetch fine.
+- [Stately Play "Strategy 101: Through the Ages, Resource Edition"](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/).
+- **TTA World Championship** exists and is active (2023 winner interviewed on BGG;
+  a [2025 World Championship YouTube playlist](https://www.youtube.com/playlist?list=PLN735uyn0raXB1jnNK8YksQ6Koxz35_0s)
+  with participants replaying and analysing every game). Expert games with commentary,
+  but the medium is **video** — extracting positions is manual transcription. Useful as
+  a handful of gold-standard annotated games, not as a corpus.
+
+**Value:** this is the cheapest external input we have and it is *already partly in the
+repo*. It cannot train a bot, but it is exactly the right raw material for two things:
+(a) seeding sane initial weight vectors and feature definitions for `WeightedBot` so hill
+climbing starts in a good basin instead of at random, and (b) writing **falsifiable
+assertions** to test the trained bot against ("a strong player almost never stays in
+Despotism past Age I"; "2 irrigated farms carry you through Age II"). Turn each into a
+statistic over self-play logs; where our bot disagrees with expert consensus, that is a
+lead on an eval bug or a genuine discovery. Effort: hours, not weeks.
 
 ## 6. The human-in-the-loop option (play the app, log the AI)
 

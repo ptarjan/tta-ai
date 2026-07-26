@@ -288,6 +288,9 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
     # generations are slow, so the anti-stagnation kick would silently never
     # fire on exactly the runs that need it most.
     champion, gen, sigma, since_accept = load_champion(players)
+    since_accept = since_accept or 0
+    sigma = max(sigma, sigma_floor)
+    hold_sigma = 0
     rng = random.Random(seed * 7919 + players * 101 + gen)
     t_end = time.time() + hours * 3600
     recent = []
@@ -364,7 +367,10 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             "sigma": round(sigma, 4), "secs": round(time.time() - t0, 1),
             "tried": tried, "at": time.strftime("%F %T"),
             "mode": mode, "field": len(field) if isinstance(field, list) else 1,
+            "since_accept": since_accept,
         }
+        if forced:
+            rec["forced"] = forced
         if broken:
             rec["broken"] = broken
         if accepted:
@@ -435,11 +441,14 @@ def main(argv=None):
     ap.add_argument("--accept-z", type=float, default=1.2816,
                     help="z for the one-sided accept CI (1.2816=90%%, "
                          "0.8416=80%%); lower accepts more, faster, noisier")
+    ap.add_argument("--sigma-floor", type=float, default=0.08,
+                    help="smallest step the 1/5th rule may anneal to; below "
+                         "~0.08 a mutant is a rounding error on the champion")
     args = ap.parse_args(argv)
     run(args.players, args.hours, args.workers, args.lam, args.screen,
         args.max_games, args.seed, args.anchor_every, args.min_games,
         mode=args.mode, stall_kick=args.stall_kick,
-        accept_z=args.accept_z)
+        accept_z=args.accept_z, sigma_floor=args.sigma_floor)
 
 
 if __name__ == "__main__":

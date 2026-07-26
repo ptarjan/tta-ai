@@ -8,6 +8,8 @@ partial or prose-y data can never crash a game.
 from __future__ import annotations
 
 from . import cards as C
+from . import economy
+from . import effects
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -15,8 +17,6 @@ _DB = C.db()
 _TYPE_BY_NAME = _DB.type_by_name
 _BY_NAME = _DB.by_name
 _LEVEL_BY_NAME = _DB.level_by_name
-from . import economy
-from . import effects
 
 
 def _num(v):

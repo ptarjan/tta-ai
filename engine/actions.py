@@ -16,6 +16,9 @@ import os
 from functools import lru_cache as _lru_cache
 
 from . import cards as C
+from . import economy
+from . import effects
+from .state import TechCard, WonderInProgress
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -23,9 +26,6 @@ _DB = C.db()
 _TYPE_BY_NAME = _DB.type_by_name
 _BY_NAME = _DB.by_name
 _LEVEL_BY_NAME = _DB.level_by_name
-from . import economy
-from . import effects
-from .state import TechCard, WonderInProgress
 
 STRICT = os.environ.get("TTA_STRICT", "") not in ("", "0", "false", "no")
 
@@ -635,7 +635,7 @@ def apply_free_action(state, p, move, discount=0):
 # ------------------------------------------------------------- apply
 
 def apply(state, move, rng=None):
-    from . import interact
+    interact = _interact or _load_interact()
     if STRICT:
         legal = legal_moves(state)
         assert move in legal or list(move) in [list(m) for m in legal], (
@@ -878,7 +878,8 @@ def _h_play_action(state, p, move, rng):
     Gains resolve first, then the ordered action (which pays no action and
     takes the card's resource discount).
     """
-    from . import game, interact
+    game = _game or _load_game()
+    interact = _interact or _load_interact()
     name = move[1]
     revolt_ok = (p.civil_actions == ca_total(state, p))
     pay_ca(state, p, 1)
