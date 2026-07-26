@@ -1,7 +1,15 @@
 # Why the champions never play pacts (and almost never colonize)
 
-Status: IN PROGRESS (written incrementally; see git history of this file)
+Status: COMPLETE
 Date: 2026-07-26
+
+**Summary: it is (2) a bot blind spot, not an engine bug.** Pact moves are
+generated and legal in 16% of politics decisions; the champions never take
+them because a 1-ply evaluator cannot see any move whose payoff is deferred
+to another player's decision, and ties break to the do-nothing option.
+Colonies are the same failure plus two aggravating causes. A third,
+independent bot bug was found on the way (wrong evaluation perspective on
+other players' decisions).
 
 ## Verdict (pacts): **BOT BLIND SPOT, not an engine bug.**
 
@@ -24,7 +32,7 @@ reachable. The engine is fine. The bot simply never scores a pact above
 ## Why the bot can never choose a pact (mechanical, not a tuning accident)
 
 Both bots are **1-ply**: `pick()` copies the state, applies the candidate
-move, and evaluates the resulting state (`engine/bots/__init__.py:141-165`,
+move, and evaluates the resulting state (`engine/bots/__init__.py:171-195`,
 `engine/bots/weighted.py` `WeightedBot.pick`).
 
 `offer_pact` does *not* put a pact into play. `engine/actions.py:979-992`
@@ -59,13 +67,28 @@ round 20, chosen ('prepare_event', 'Impact of Happiness')  160.878
           ('offer_pact','Loss of Sovereignty',1,'A')       156.809   <- identical
 ```
 
+Direct proof — diffing the feature vectors of the two successor states of
+the *same* position, from the mover's own seat, with the 3p champion
+weights:
+
+```
+move ('offer_pact', 'International Tourism', 0, '')
+feature diff  pol_pass -> offer_pact:
+    hand_military   6 -> 5
+    hand_mil_value 21 -> 17
+weighted delta: -1.10445        # every other feature identical
+```
+
+Two features move, both downward. There is no path by which any pact can
+ever be chosen.
+
 The champion's `pacts` weight is dead code: no reachable 1-ply successor
 state ever has a nonzero `pacts` count for the *mover*, so the hill climb
 has never been able to select on it. (It can be nonzero for a player who
 *accepted* a pact — but accepting is a `choose` move, and the same 1-ply
 horizon applies to whether accepting looks good.)
 
-`GreedyBot`'s 19-feature vector (`engine/bots/__init__.py:75-105`) has no
+`GreedyBot`'s 19-feature vector (`engine/bots/__init__.py:80-110`) has no
 `pacts` feature at all, so for greedy it is doubly hopeless.
 
 ### The same horizon problem, but worse: aggressions
@@ -152,7 +175,7 @@ n)` when other bidders remain only mutates the `pend` dict
 (`_auction_move`, `interact.py:522-542`); no player state changes. The
 feature vector is built purely from player state, so **every bid evaluates
 to exactly the same number as passing**, and `pick()` breaks ties with
-strict `>` (`engine/bots/__init__.py:160`, `weighted.py` likewise), so the
+strict `>` (`engine/bots/__init__.py:191`, `weighted.py` likewise), so the
 first move — `bid_pass` — always wins. Directly observed:
 
 ```
@@ -275,6 +298,35 @@ silently become illegal mid-game for the two survivors. The real rule is a
 **setup** rule (remove pacts from the deck in a 2-player game), so the
 gate should be on the number of seats, not the number of survivors. Low
 impact (resign is 0.07/game) but it is a genuine rules mismatch.
+
+## Third finding (found while verifying): WeightedBot scores other
+## players' decisions from the WRONG player's point of view
+
+`WeightedBot.pick` uses **`idx = state.current`**
+(`engine/bots/weighted.py:357`). `GreedyBot.pick` correctly uses
+**`state.decider()`** (`engine/bots/__init__.py:181`). They differ whenever
+`state.pending` is non-empty and the pending decision belongs to somebody
+other than the player whose turn it is (`engine/state.py:140-144`).
+
+Measured over 5 mirror 3p games with the 3p champion:
+
+| pending decision | total | evaluated from the wrong seat |
+|---|---|---|
+| `choice` (accept/refuse a pact, defend, lose_colony, annex, …) | 47 | **15 (32%)** |
+| `auction` (colony bidding) | 16 | **10 (63%)** |
+
+So the champion resolves most colony bids and a third of all interactive
+choices by maximising **a rival's** position. The pact accept/refuse
+decision (`_c_pact_offer`) is *always* one of these — the partner is by
+definition not the current player — so even if fix #1 makes bots start
+offering pacts, the accept side is scored backwards until this is fixed.
+
+**Fix (trivial, do this first):** change `engine/bots/weighted.py:357` to
+`idx = state.decider()`. One line. It will change self-play results, so it
+invalidates the current champions and any fingerprint that covers
+`WeightedBot` — but it is unambiguously a bug, and it is cheap to re-run
+the climb. Note `rival_context(state, idx)` on the next line must use the
+same `idx`.
 
 ## Bottom line
 
