@@ -173,3 +173,24 @@
   with the actual arithmetic (4 culture/turn/missing food, ~16 culture for a
   round-19 farm), so it no longer contradicts trap #2.
 - NEXT: per-count section, traps, quick reference.
+
+### 12:02
+- READ-THROUGH, per-count + traps. Fixes:
+  * 2p section claimed "two cards leave the row every turn and eight come in" --
+    wrong, the 2p sweep is THREE per turn (RULES_SPEC 1.5 / 2.1, six a round),
+    which is also what the rules-diff table two paragraphs above says. Fixed.
+  * 2p "food rate a comfortable 2.3 all game" contradicted trap #2 (2p burns
+    21.4 culture to starvation). Now says 2.3 is only comfortable while
+    consumption is 2, and points at the Age III-IV bank crossing.
+  * trap #2 food table had 4p Age I = 1.40; behaviour_4p by_age says 1.60. Fixed.
+  * per-count 4p food numbers (1.20/1.18/1.03/0.89) are END-OF-AGE snapshots, not
+    the per-turn means in trap #2 (1.60/1.12/1.05/1.04). Both are now labelled.
+  * "keep a real food surplus" was exactly the kind of numberless advice the
+    brief calls out -- replaced with "consumption + 1 = 3/turn at 12-9 tokens,
+    4/turn at 8-5".
+  * trap #4 said the 4p climb accepted 5 mutants; it is 6.
+  * added the `food_rate_late` sign flip at 4p (-0.6 -> +0.17) to trap #2's
+    weight evidence.
+  * refreshed the stale gen 169/130/111 in the per-count section.
+- NEXT: quick reference read-through, then the "remember nothing else" / opening
+  consistency sweep, then declare structural completeness.

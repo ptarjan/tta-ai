@@ -891,20 +891,24 @@ The champions' final numbers diverge enormously:
 Source: `experiments/behaviour_{2,3,4}p.json`. **[strong]** on the shape of the
 divergence, because 120 games is enough to make gaps this large real; **[mixed]**
 on which count is *right*, because the three climbs are at very different ages
-(gen 169 / 130 / 111, with 15 / 10 / 6 accepted mutants).
+(gen 176 / 132 / 113, with 15 / 10 / 6 accepted mutants).
 
 ### 2 players: the row is a conveyor belt, so cheap cards are everywhere
 
-Two cards leave the left of the row every turn and eight come in. Cards die fast,
-but they also *arrive* fast, and the row is short of buyers — there is only one
-other player. The 2p champion takes **88.4% of its cards from spaces 1–5** (1 CA
+**Three** cards are discarded off the left of the row at the start of every turn
+and the row is refilled to 13 immediately [rules, §2.1] — so six cards a round
+churn through, and there is only one other player bidding on them. Cards die
+fast, but they arrive just as fast. The 2p champion takes **88.4% of its cards from spaces 1–5** (1 CA
 each) and averages **1.15 civil actions per card**. It takes 22 cards a game and
 pays only 25.2 actions for them. [`cost_bands`]
 
 What that buys, in practice:
 
 - The most balanced economy of the three: resource rate 4.85 and science rate
-  4.45 in Age III, food rate a comfortable 2.3 all game.
+  4.45 in Age III, and food production of 2.3 a turn all game. Note that "2.3"
+  is only comfortable while consumption is 2 — it still burns 21.4 culture a
+  game to starvation, almost all of it in Age III–IV once the bank drops past 8
+  tokens and the bill becomes 3 (trap #2).
 - The **highest final culture (123.7)** on the second-fewest techs.
 - The worst action discipline. It leaves 1.74 CA unused per turn and something
   unspent on 42.8% of turns; in Age III it wastes **57.6%** of its civil actions.
@@ -961,8 +965,9 @@ finishes 0.79.
 
 The broken half. Its final culture is **56.4**, less than half of 2p's, despite
 having three more technologies and a much higher culture rate. The reason is not
-subtle once you measure it: **it starves.** Its food rate sits at 1.20 / 1.18 /
-1.03 / 0.89 across Ages I–IV — barely break-even and *falling* — and it burns
+subtle once you measure it: **it starves.** Its food production measured at the
+end of each age is 1.20 / 1.18 / 1.03 / 0.89 (Ages I–IV), against a consumption
+of 2 rising to 3 — roughly *half* its bill, and *falling* — and it burns
 **56.1 culture per game to the starvation penalty** against roughly 60 actually
 banked, going short on food on **46.1% of all turns**
 (`analysis/leak_check.py`, 60 games, 240 player-games). Details in trap #2. It
@@ -971,8 +976,10 @@ game against 11.3 at 2p, so the military-card economy is dead too.
 
 What to take from 4p and what to leave: **take** the action discipline, the
 urban-heavy worker split (65% urban by Age III), and the round-1 wonder
-consideration. **Leave** the food curve — at 4p in particular, keep a real food
-surplus. **[mixed]**
+consideration. **Leave** the food curve: hold production at **consumption + 1**
+— that is 3/turn while the yellow bank is at 12–9 and 4/turn once it drops to
+8–5 — which is two to three farm-levels more than this champion ever builds.
+**[mixed]**
 
 ### Per-count opening cheat sheet
 
@@ -1103,7 +1110,7 @@ What to do about it, concretely:
   |---|---|---|---|---|
   | 2p | 2.13 | 2.34 | 2.33 | 2.18 |
   | 3p | 2.05 | 2.22 | 2.28 | 2.39 |
-  | 4p | 1.40 | 1.12 | 1.05 | 1.04 |
+  | 4p | 1.60 | 1.12 | 1.05 | 1.04 |
 
   Line those up against consumption and the whole table falls out. 2p produces
   ~2.3 against a consumption of 2 — fine — and then the bank crosses 8, the bill
@@ -1127,7 +1134,10 @@ What to do about it, concretely:
   rate that feeds a future purchase.
 
 Weight evidence, for what it is worth: the search raised `food_rate` at all three
-counts (+5% / +48% / +12%). That is a real signal and it points the right way,
+counts (+5% / +48% / +12%), and the 4p climb — the one that starves worst — is
+the only one that flipped `food_rate_late` positive (−0.6 → **+0.17**), i.e. it
+has half-noticed that late food is worth buying. That is a real signal and it
+points the right way,
 but it is far weaker than the behaviour warrants — the champions have not
 learned this lesson yet, which is exactly why they are all still bleeding.
 **[strong on the leak, thin on the fix]** — we can measure the cost precisely;
@@ -1160,8 +1170,9 @@ and `hand_value_late` fell at **all three** (−59% / −78% / −50%) — one o
 four full-consensus levers in the whole table. **[strong]**
 
 The exception is 4p, where `resource_rate_late` went the other way (+222%,
-sign flip). Given that the 4p climb has accepted only 5 mutants, treat that as
-**[provisional]** and follow the 2p/3p reading.
+sign flip). Given that the 4p climb has accepted only 6 mutants, treat that as
+**[provisional]** and follow the 2p/3p reading — except for food, where trap #2
+overrides this whole trap.
 
 ### 5. Hoarding science points
 
