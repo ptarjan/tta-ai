@@ -36,3 +36,19 @@
   The 2p champion DISBANDS its starting Warriors on round 2 in ~all games.
 - WRITTEN: "Opening: Age A and the first four rounds" (2p/3p only, flagged).
 - NEXT: Midgame (Age I-II), then Endgame, then per-count, then re-verify rules 1-8.
+
+### 11:12
+- 4p harvest LANDED (120 games, 0 errors) and moved over `experiments/behaviour_4p.json`.
+  All three files are now fresh 120-game harvests at gen 149 / 116 / 101.
+- The fresh 4p champion is a completely different animal from the old 60-game one:
+  takes a wonder on ROUND 1 in 100% of games, 1.96 wonders started / 0.79 completed,
+  16.35 final techs, wastes only 0.38 CA/turn, but scores only 56.4 culture and
+  passes in the Politics Phase on 87% of turns (1.4 event preps/game vs 11.3 at 2p).
+- WRITTEN: "Midgame: late Age I through Age II". Findings worth keeping:
+  * all three counts park the yellow bank just above 11 from round 9 (avoiding the
+    10-token happiness step) -- cleanest 3-count consensus in the data
+  * midgame is worker reallocation via `destroy` (5.9/5.5/10.9 per game), not growth
+  * temples first and most-built at all 3 counts; theaters/arenas last
+  * sci/culture crossover is Age I -> II at all 3; the old "monotone fall" claim is DEAD
+  * MA economy: unused MA -> military cards -> event preps -> free culture
+- NEXT: Endgame (Age III-IV), Per-player-count, then re-verify rules 1-8.
