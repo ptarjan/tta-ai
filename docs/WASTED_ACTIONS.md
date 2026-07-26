@@ -17,16 +17,21 @@ a variant tuned to pass more often scores 67 culture against 152 (§6).
 **blind to card identity**: it compresses the entire hand to a count and a sum
 of age levels, so it cannot prefer a good card to a bad one and taking any
 card scores ≈ 0. Adding one term that values a card by what it *does* — with
-the `end_turn` bug deliberately left in place — wins **69.6% ± 4.5%** of games
-and gains **+21 culture** at 2p (§7). At 3p the same term is not significant,
-so the fix is demonstrated at 2p and untested elsewhere.
+the `end_turn` bug deliberately left in place — wins **72.5% ± 4.4%** of games
+(p < 1e-5) and gains **+24 culture** at 2p (§7).
+
+**Status: landed.** `hand_potential` is in `engine/bots/weighted.py` and on
+`master`. It is validated at 2p only: at 3p the term is not significant, and
+at 4p it regresses badly until that champion's degenerate weight vector is
+re-seeded (§7 caveat, §5). **§11 says what to measure before the retraining
+run** — in particular, do not assume the wasted-action rate itself has
+dropped just because the bot got stronger.
 
 Read §10 for the actionable summary; §8 for the ranked fix.
 
 Evidence: `analysis/wasted_actions.py` (probe), `analysis/wasted_summary.py`
 (aggregation), `analysis/passfix_duel.py` and `analysis/cardvalue_duel.py`
-(A/B), 200 self-play games per player count plus ~3200 duel games. Nothing
-under `engine/` was modified.
+(A/B), 200 self-play games per player count plus ~4000 duel games.
 
 ---
 
@@ -356,7 +361,23 @@ python3 analysis/cardvalue_duel.py --players 2 --games 400 \
 ```
 
 `python3 -m unittest discover -s tests -q` → 58 tests, OK (there is no pytest
-in this environment). No file under `engine/` was modified by this work.
+in this environment). The investigation itself touched no engine file; the
+one engine change is the landed `hand_potential` term in
+`engine/bots/weighted.py`, which can be switched off by setting that weight
+to 0.0 (the control run confirms 0.0 is byte-identical to the old bot).
+
+To A/B the landed term at any player count:
+
+```bash
+python3 - <<'EOF'
+from experiments.arena import duel
+from engine.bots.weighted import load_weights
+champ = load_weights("analysis/frozen/champion_2p.json")
+a = dict(champ, hand_potential=0.125)
+b = dict(champ, hand_potential=0.0)
+print(duel(a, b, 2, 400)["win_rate"])
+EOF
+```
 
 **Measurement environment.** This ran against a shared checkout that other
 agents were changing underneath it, so two things are worth recording:
