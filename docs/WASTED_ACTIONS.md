@@ -244,14 +244,36 @@ only difference is that the bot can now tell a good card from a bad one:
 |---|---|---|---|
 | `cardvalue`, disc 1.0 | **63.2% ± 4.7%** | 120.5 vs 107.7 | 400 |
 | `cardvalue`, disc 0.5 | **63.2% ± 4.7%** | 123.8 vs 110.4 | 400 |
-| `cardvalue`, disc 0.25 | **67.2% ± 4.6%** | **133.2 vs 110.8** | 400 |
+| `cardvalue`, disc 0.25 | **67.2% ± 4.6%** | 133.2 vs 110.8 | 400 |
+| `cardvalue`, disc 0.125 | **69.6% ± 4.5%** | **137.8 vs 117.0** | 400 |
 | (null) | 50.0% | | |
 
-**+17 points of win rate and +22 culture, from one term, with the `end_turn`
+**+20 points of win rate and +21 culture, from one term, with the `end_turn`
 bug untouched.** That is the confirmation that card-identity blindness — not
 the horizon artifact — is the disease. It also explains why the hill climb
 drove `hand_value_late` to −0.78: given a bot that could never turn a card
 into anything, "cards in hand are bad" was a *correct* thing to learn.
+
+The best discount is small (0.125–0.25) and the curve falls off above it,
+which fits the mechanism: the term does not need to price a card accurately,
+it only needs to **break the tie** between cards that `hand_value` scores
+identically. A small nudge is enough; a large one starts overriding the rest
+of the evaluation.
+
+### Caveat: this is a 2-player result
+
+| | win rate | null | n |
+|---|---|---|---|
+| `cardvalue` disc 0.25 @2p | **67.2% ± 4.6%** | 50.0% | 400 |
+| `cardvalue` disc 0.25 @3p | 35.8% ± 4.7% | 33.3% | 399 |
+
+At 3 players the same term is **not significant** — the interval covers the
+null and mean culture is slightly *down* (74.5 vs 81.8). So the fix is
+demonstrated at 2p, not universally. That is consistent with the rest of this
+document: the 3p champion wastes less to begin with (2722 wasted-action turns
+vs 3557) and its `hand_value_late` is −0.395 rather than −0.78, so it had
+less of this particular disease to cure. It does **not** license shipping the
+term untuned at every player count — see §8 step 1.
 
 ## 8. Ranked fix
 
