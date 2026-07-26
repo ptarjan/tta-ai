@@ -1,0 +1,936 @@
+{
+ "scope": "base-2015",
+ "category": "civil-tech",
+ "complete": true,
+ "cards": [
+  {
+   "name": "Agriculture",
+   "age": "A",
+   "type": "farm",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": 2,
+   "production": {
+    "food": 1
+   },
+   "text": "Age A farm. Starting technology printed on the player board; not a deck card."
+  },
+  {
+   "name": "Irrigation",
+   "age": "I",
+   "type": "farm",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 3,
+   "buildCost": 4,
+   "production": {
+    "food": 2
+   },
+   "text": "Age I farm technology."
+  },
+  {
+   "name": "Selective Breeding",
+   "age": "II",
+   "type": "farm",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 5,
+   "buildCost": 6,
+   "production": {
+    "food": 3
+   },
+   "text": "Age II farm technology."
+  },
+  {
+   "name": "Mechanized Agriculture",
+   "age": "III",
+   "type": "farm",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 7,
+   "buildCost": 8,
+   "production": {
+    "food": 5
+   },
+   "text": "Age III farm technology."
+  },
+  {
+   "name": "Bronze",
+   "age": "A",
+   "type": "mine",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": 2,
+   "production": {
+    "resources": 1
+   },
+   "text": "Age A mine. Starting technology printed on the player board; not a deck card."
+  },
+  {
+   "name": "Iron",
+   "age": "I",
+   "type": "mine",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 5,
+   "buildCost": 5,
+   "production": {
+    "resources": 2
+   },
+   "text": "Age I mine technology."
+  },
+  {
+   "name": "Coal",
+   "age": "II",
+   "type": "mine",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 7,
+   "buildCost": 8,
+   "production": {
+    "resources": 3
+   },
+   "text": "Age II mine technology."
+  },
+  {
+   "name": "Oil",
+   "age": "III",
+   "type": "mine",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 9,
+   "buildCost": 11,
+   "production": {
+    "resources": 5
+   },
+   "text": "Age III mine technology."
+  },
+  {
+   "name": "Philosophy",
+   "age": "A",
+   "type": "lab",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": 3,
+   "production": {
+    "science": 1
+   },
+   "urbanLimitCategory": "lab",
+   "text": "Age A lab. Starting technology printed on the player board; not a deck card."
+  },
+  {
+   "name": "Alchemy",
+   "age": "I",
+   "type": "lab",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 4,
+   "buildCost": 6,
+   "production": {
+    "science": 2
+   },
+   "urbanLimitCategory": "lab",
+   "text": "Age I lab."
+  },
+  {
+   "name": "Scientific Method",
+   "age": "II",
+   "type": "lab",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": 8,
+   "production": {
+    "science": 3
+   },
+   "urbanLimitCategory": "lab",
+   "text": "Age II lab."
+  },
+  {
+   "name": "Computers",
+   "age": "III",
+   "type": "lab",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 8,
+   "buildCost": 11,
+   "production": {
+    "science": 5
+   },
+   "urbanLimitCategory": "lab",
+   "text": "Age III lab. (Build cost 10 in 2006 edition; 11 in base 2015.)"
+  },
+  {
+   "name": "Religion",
+   "age": "A",
+   "type": "temple",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": 3,
+   "production": {
+    "culture": 1,
+    "happy": 1
+   },
+   "urbanLimitCategory": "temple",
+   "text": "Age A temple. Starting technology printed on the player board; not a deck card."
+  },
+  {
+   "name": "Theology",
+   "age": "I",
+   "type": "temple",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 2,
+   "buildCost": 5,
+   "production": {
+    "culture": 1,
+    "happy": 2
+   },
+   "urbanLimitCategory": "temple",
+   "text": "Age I temple."
+  },
+  {
+   "name": "Organized Religion",
+   "age": "II",
+   "type": "temple",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 4,
+   "buildCost": 7,
+   "production": {
+    "culture": 1,
+    "happy": 3
+   },
+   "urbanLimitCategory": "temple",
+   "text": "Age II temple. There is no Age III temple."
+  },
+  {
+   "name": "Printing Press",
+   "age": "I",
+   "type": "library",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 3,
+   "buildCost": 3,
+   "production": {
+    "science": 1,
+    "culture": 1
+   },
+   "urbanLimitCategory": "library",
+   "text": "Age I library. (Build cost 4 in 2006; 3 in base 2015.)"
+  },
+  {
+   "name": "Journalism",
+   "age": "II",
+   "type": "library",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": 8,
+   "production": {
+    "science": 2,
+    "culture": 2
+   },
+   "urbanLimitCategory": "library",
+   "text": "Age II library."
+  },
+  {
+   "name": "Multimedia",
+   "age": "III",
+   "type": "library",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 9,
+   "buildCost": 11,
+   "production": {
+    "science": 3,
+    "culture": 3
+   },
+   "urbanLimitCategory": "library",
+   "text": "Age III library."
+  },
+  {
+   "name": "Bread and Circuses",
+   "age": "I",
+   "type": "arena",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 3,
+   "buildCost": 3,
+   "production": {
+    "happy": 2,
+    "strength": 1
+   },
+   "urbanLimitCategory": "arena",
+   "text": "Age I arena. (Build cost 4 in 2006; 3 in base 2015.)"
+  },
+  {
+   "name": "Team Sports",
+   "age": "II",
+   "type": "arena",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 5,
+   "buildCost": 5,
+   "production": {
+    "happy": 3,
+    "strength": 2
+   },
+   "urbanLimitCategory": "arena",
+   "text": "Age II arena. (Build cost 6 in 2006; 5 in base 2015.)"
+  },
+  {
+   "name": "Professional Sports",
+   "age": "III",
+   "type": "arena",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 2
+   },
+   "techCost": 7,
+   "buildCost": 8,
+   "production": {
+    "happy": 4,
+    "strength": 3
+   },
+   "urbanLimitCategory": "arena",
+   "text": "Age III arena. (Expansion version has strength 4; base 2015 is 3.)"
+  },
+  {
+   "name": "Drama",
+   "age": "I",
+   "type": "theater",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 3,
+   "buildCost": 4,
+   "production": {
+    "culture": 2,
+    "happy": 1
+   },
+   "urbanLimitCategory": "theater",
+   "text": "Age I theater. (2006: tech 4, build 5; base 2015: tech 3, build 4.)"
+  },
+  {
+   "name": "Opera",
+   "age": "II",
+   "type": "theater",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 7,
+   "buildCost": 8,
+   "production": {
+    "culture": 3,
+    "happy": 1
+   },
+   "urbanLimitCategory": "theater",
+   "text": "Age II theater. (Build cost 9 in 2006; 8 in base 2015.)"
+  },
+  {
+   "name": "Movies",
+   "age": "III",
+   "type": "theater",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 10,
+   "buildCost": 11,
+   "production": {
+    "culture": 4,
+    "happy": 1
+   },
+   "urbanLimitCategory": "theater",
+   "text": "Age III theater. (Build cost 12 in 2006; 11 in base 2015.)"
+  },
+  {
+   "name": "Warriors",
+   "age": "A",
+   "type": "infantry",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": 2,
+   "strength": 1,
+   "text": "Age A infantry. Starting technology printed on the player board; not a deck card. You start with 1 warrior unit."
+  },
+  {
+   "name": "Swordsmen",
+   "age": "I",
+   "type": "infantry",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 4,
+   "buildCost": 3,
+   "strength": 2,
+   "text": "Age I infantry. (Tech cost 3 in 2006; 4 in base 2015.)"
+  },
+  {
+   "name": "Riflemen",
+   "age": "II",
+   "type": "infantry",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": 5,
+   "strength": 3,
+   "text": "Age II infantry. (Tech cost 5 in 2006; 6 in base 2015.)"
+  },
+  {
+   "name": "Modern Infantry",
+   "age": "III",
+   "type": "infantry",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 10,
+   "buildCost": 7,
+   "strength": 5,
+   "text": "Age III infantry. (Tech cost 8 in 2006; 10 in base 2015.)"
+  },
+  {
+   "name": "Knights",
+   "age": "I",
+   "type": "cavalry",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 5,
+   "buildCost": 3,
+   "strength": 2,
+   "text": "Age I cavalry. (Tech cost 4 in 2006; 5 in base 2015.)"
+  },
+  {
+   "name": "Cavalrymen",
+   "age": "II",
+   "type": "cavalry",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": 5,
+   "strength": 3,
+   "text": "Age II cavalry."
+  },
+  {
+   "name": "Tanks",
+   "age": "III",
+   "type": "cavalry",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 9,
+   "buildCost": 7,
+   "strength": 5,
+   "text": "Age III cavalry."
+  },
+  {
+   "name": "Cannon",
+   "age": "II",
+   "type": "artillery",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 6,
+   "buildCost": 5,
+   "strength": 3,
+   "text": "Age II artillery. (Tech cost 7 in 2006; 6 in base 2015.)"
+  },
+  {
+   "name": "Rockets",
+   "age": "III",
+   "type": "artillery",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 8,
+   "buildCost": 7,
+   "strength": 5,
+   "text": "Age III artillery. (Tech cost 10 in 2006; 8 in base 2015.)"
+  },
+  {
+   "name": "Air Forces",
+   "age": "III",
+   "type": "air",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 3
+   },
+   "techCost": 12,
+   "buildCost": 7,
+   "strength": 5,
+   "text": "Age III air force. No tactic requires air forces; an air force unit can join an army to double the army's tactics bonus (each air force unit may be assigned to at most one army). (Tech cost 11 in 2006; 12 in base 2015.)",
+   "effects": {
+    "doublesTacticBonusOfOneArmy": true
+   }
+  },
+  {
+   "name": "Despotism",
+   "age": "A",
+   "type": "government",
+   "count": {
+    "2p": 0,
+    "3p": 0,
+    "4p": 0
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 4,
+   "militaryActions": 2,
+   "urbanBuildingLimit": 2,
+   "revolutionCost": null,
+   "peacefulCost": null,
+   "text": "Starting government. Starting technology printed on the player board; not a deck card."
+  },
+  {
+   "name": "Monarchy",
+   "age": "I",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 5,
+   "militaryActions": 3,
+   "urbanBuildingLimit": 3,
+   "revolutionCost": 2,
+   "peacefulCost": 8,
+   "text": "Age I government. (2006: revolution 3, peaceful 9.)"
+  },
+  {
+   "name": "Theocracy",
+   "age": "I",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 4,
+   "militaryActions": 3,
+   "urbanBuildingLimit": 3,
+   "revolutionCost": 1,
+   "peacefulCost": 6,
+   "production": {
+    "culture": 1,
+    "happy": 1,
+    "strength": 1
+   },
+   "text": "Age I government. (2006: revolution 2, peaceful 7, +2 happy, no strength.)"
+  },
+  {
+   "name": "Constitutional Monarchy",
+   "age": "II",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 6,
+   "militaryActions": 4,
+   "urbanBuildingLimit": 3,
+   "revolutionCost": 6,
+   "peacefulCost": 12,
+   "text": "Age II government. (2006: revolution 5.)"
+  },
+  {
+   "name": "Republic",
+   "age": "II",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 2
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 7,
+   "militaryActions": 2,
+   "urbanBuildingLimit": 3,
+   "revolutionCost": 3,
+   "peacefulCost": 13,
+   "text": "Age II government. (2006: revolution 4, peaceful 14.)"
+  },
+  {
+   "name": "Communism",
+   "age": "III",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 7,
+   "militaryActions": 5,
+   "urbanBuildingLimit": 4,
+   "revolutionCost": 5,
+   "peacefulCost": 19,
+   "production": {
+    "happy": -1
+   },
+   "text": "Age III government. (2006: revolution 6, peaceful 17.)"
+  },
+  {
+   "name": "Fundamentalism",
+   "age": "III",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 6,
+   "militaryActions": 5,
+   "urbanBuildingLimit": 4,
+   "revolutionCost": 7,
+   "peacefulCost": 18,
+   "production": {
+    "strength": 5,
+    "science": -2
+   },
+   "text": "Age III government. (2006: peaceful 19, no science penalty.)"
+  },
+  {
+   "name": "Democracy",
+   "age": "III",
+   "type": "government",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 2
+   },
+   "techCost": null,
+   "buildCost": null,
+   "civilActions": 7,
+   "militaryActions": 3,
+   "urbanBuildingLimit": 4,
+   "revolutionCost": 9,
+   "peacefulCost": 17,
+   "production": {
+    "culture": 3
+   },
+   "text": "Age III government. (2006: revolution 8, peaceful 21, +2 culture.)"
+  },
+  {
+   "name": "Masonry",
+   "age": "I",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 3,
+   "buildCost": null,
+   "effects": {
+    "buildDiscount": {
+     "I": 1,
+     "II": 1,
+     "III": 1
+    },
+    "wonderStagesPerAction": 2
+   },
+   "text": "Construction tech. Urban buildings of Age I+ cost 1 less resource (Age A unchanged); build up to 2 wonder stages with one civil action."
+  },
+  {
+   "name": "Architecture",
+   "age": "II",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": null,
+   "effects": {
+    "buildDiscount": {
+     "I": 1,
+     "II": 2,
+     "III": 2
+    },
+    "wonderStagesPerAction": 3
+   },
+   "text": "Construction tech. Urban buildings: Age I -1 resource, Age II/III -2; build up to 3 wonder stages with one civil action."
+  },
+  {
+   "name": "Engineering",
+   "age": "III",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 9,
+   "buildCost": null,
+   "effects": {
+    "buildDiscount": {
+     "I": 1,
+     "II": 2,
+     "III": 3
+    },
+    "wonderStagesPerAction": 4
+   },
+   "text": "Construction tech. Urban buildings: Age I -1, Age II -2, Age III -3 resources; build up to 4 wonder stages with one civil action."
+  },
+  {
+   "name": "Code of Laws",
+   "age": "I",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 6,
+   "buildCost": null,
+   "effects": {
+    "civilActions": 1
+   },
+   "text": "Civil tech. +1 civil action."
+  },
+  {
+   "name": "Justice System",
+   "age": "II",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 7,
+   "buildCost": null,
+   "effects": {
+    "civilActions": 1,
+    "blueTokens": 3
+   },
+   "text": "Civil tech. +1 civil action, +3 blue tokens in your blue bank."
+  },
+  {
+   "name": "Civil Service",
+   "age": "III",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 10,
+   "buildCost": null,
+   "effects": {
+    "civilActions": 2,
+    "blueTokens": 3
+   },
+   "text": "Civil tech. +2 civil actions, +3 blue tokens in your blue bank."
+  },
+  {
+   "name": "Warfare",
+   "age": "I",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 2,
+    "4p": 2
+   },
+   "techCost": 5,
+   "buildCost": null,
+   "effects": {
+    "militaryActions": 1,
+    "strength": 1
+   },
+   "text": "Military tech. +1 military action, +1 strength."
+  },
+  {
+   "name": "Strategy",
+   "age": "II",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 8,
+   "buildCost": null,
+   "effects": {
+    "militaryActions": 2,
+    "strength": 3
+   },
+   "text": "Military tech. +2 military actions, +3 strength."
+  },
+  {
+   "name": "Military Theory",
+   "age": "III",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 11,
+   "buildCost": null,
+   "effects": {
+    "militaryActions": 3,
+    "strength": 5
+   },
+   "text": "Military tech. +3 military actions, +5 strength."
+  },
+  {
+   "name": "Cartography",
+   "age": "I",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 4,
+   "buildCost": null,
+   "effects": {
+    "strength": 1,
+    "colonizeBonus": 2
+   },
+   "text": "Exploration tech. +1 strength, +2 to colonization value."
+  },
+  {
+   "name": "Navigation",
+   "age": "II",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 6,
+   "buildCost": null,
+   "effects": {
+    "strength": 2,
+    "colonizeBonus": 3
+   },
+   "text": "Exploration tech. +2 strength, +3 to colonization value."
+  },
+  {
+   "name": "Satellites",
+   "age": "III",
+   "type": "special-tech",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "techCost": 8,
+   "buildCost": null,
+   "effects": {
+    "strength": 3,
+    "colonizeBonus": 4
+   },
+   "text": "Exploration tech. +3 strength, +4 to colonization value."
+  }
+ ]
+}
