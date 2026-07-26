@@ -107,6 +107,14 @@ done; done
 
 Swap `--a default` for `--a experiments/champion_4p.json` to score a champion.
 
+**Self-play control.** `--a default --b default` returns *exactly* 50.0% at 2p
+and *exactly* 33.3% at 3p over 96 games. That is the expected result and it is
+the load-bearing check on the whole accept test: `arena.duel` plays each seed
+once per seat with the challenger rotated through all K seats, so when both
+sides run the same deterministic policy the challenger wins exactly one of the
+K rotations of every seed. There is **no seat or asymmetry bias** — a mutant's
+win rate above `1/K` is real signal, not a artifact of being the odd one out.
+
 ## Hill climbing
 
 `(1+lambda)` evolution strategy over the weight dict:
