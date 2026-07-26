@@ -418,8 +418,19 @@ def _q_take_row(state, p, item, rng):
     _offer_take_row(state, p, int(item.get("budget", 0)), rng)
 
 
+def _q_free_civil(state, p, item, rng):
+    """Offer the concrete moves that satisfy an action card's order."""
+    from . import actions
+    opts = actions.free_action_moves(state, p, item["kind"],
+                                     item.get("discount", 0),
+                                     item.get("revolt_ok", False))
+    push_choice(state, p.idx, "free_civil", [list(m) for m in opts],
+                {"discount": item.get("discount", 0)})
+
+
 _QUEUE_ITEMS = {
     "gains": _q_gains,
+    "free_civil": _q_free_civil,
     "choose": _q_choose,
     "free_build": _q_free_build,
     "destroy_own": _q_destroy_own,

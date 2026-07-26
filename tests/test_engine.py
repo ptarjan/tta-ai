@@ -338,5 +338,148 @@ class TestAges(unittest.TestCase):
                          [b - 2 for b in banks])
 
 
+# ------------------------------------------------------- §3.11 action cards
+
+def _mid_game(seed=11, players=2):
+    """A state past round 1 with one player able to act freely."""
+    st = game.new_game(players, seed=seed)
+    st.round = 3
+    st.phase = "actions"
+    p = st.me()
+    p.civil_actions = 4
+    p.military_actions = 3
+    p.food = 20
+    p.resources = 20
+    p.science = 20
+    return st, p
+
+
+class TestActionCards(unittest.TestCase):
+    def test_all_action_cards_are_in_the_data(self):
+        acts = [c for c in C.db().by_name.values() if c["type"] == "action"]
+        self.assertEqual(len(acts), 33)
+
+    def test_playing_costs_one_civil_action_and_discards(self):
+        st, p = _mid_game()
+        p.hand_civil = ["Stock Pile"]
+        before = p.civil_actions
+        actions.apply(st, ("play_action", "Stock Pile"))
+        self.assertEqual(p.civil_actions, before - 1)
+        self.assertNotIn("Stock Pile", p.hand_civil)
+
+    def test_cannot_play_the_turn_it_was_taken(self):
+        st, p = _mid_game()
+        p.hand_civil = ["Stock Pile"]
+        p.taken_this_turn = ["Stock Pile"]
+        self.assertNotIn(("play_action", "Stock Pile"),
+                         actions.legal_moves(st))
+
+    def test_ordered_action_is_free_and_discounted(self):
+        # Rich Land (A): build or upgrade a farm/mine paying 1 less resource
+        st, p = _mid_game()
+        p.hand_civil = ["Rich Land (A)"]
+        p.resources = 10
+        p.workers_free = 2
+        ca, ma = p.civil_actions, p.military_actions
+        actions.apply(st, ("play_action", "Rich Land (A)"))
+        # the free build is now a pending decision owned by this player
+        self.assertTrue(st.pending)
+        self.assertEqual(st.decider(), p.idx)
+        opts = st.pending[-1]["options"]
+        self.assertTrue(all(o[0] in ("build", "upgrade") for o in opts))
+        pick = next(i for i, o in enumerate(opts)
+                    if o == ["build", "Agriculture"])
+        cost = actions.build_cost_for(st, p, "Agriculture")
+        actions.apply(st, ("choose", pick))
+        self.assertEqual(p.resources, 10 - max(0, cost - 1))
+        self.assertEqual(p.civil_actions, ca - 1)      # only the card's CA
+        self.assertEqual(p.military_actions, ma)
+
+    def test_unplayable_when_the_ordered_action_is_impossible(self):
+        # Engineering Genius with no wonder in progress (§3.11)
+        st, p = _mid_game()
+        p.hand_civil = ["Engineering Genius (A)"]
+        p.wonder = None
+        self.assertNotIn(("play_action", "Engineering Genius (A)"),
+                         actions.legal_moves(st))
+
+    def test_gains_apply_before_the_ordered_action(self):
+        # Breakthrough (I): gain 2 science, then develop at full price --
+        # the +2 must be spendable on that same technology.
+        st, p = _mid_game()
+        p.hand_civil = ["Breakthrough (I)", "Alchemy"]
+        cost = effects.tech_cost(st, p, "Alchemy")
+        p.science = cost - 2
+        self.assertIn(("play_action", "Breakthrough (I)"),
+                      actions.legal_moves(st))
+        actions.apply(st, ("play_action", "Breakthrough (I)"))
+        # only one technology in hand, so the ordered action auto-resolves
+        self.assertIn("Alchemy", p.techs)
+        self.assertEqual(p.science, 0)
+
+    def test_patriotism_gives_a_military_action_and_a_unit_discount(self):
+        st, p = _mid_game()
+        p.hand_civil = ["Patriotism (I)"]      # +1 MA, units cost 2 less
+        p.workers_free = 2
+        p.resources = 10
+        ma = p.military_actions
+        actions.apply(st, ("play_action", "Patriotism (I)"))
+        self.assertEqual(p.military_actions, ma + 1)
+        self.assertEqual(p.mil_discount, 2)
+        raw = actions.build_cost_for(st, p, "Warriors")
+        self.assertEqual(actions.build_cost_net(st, p, "Warriors"),
+                         max(0, raw - 2))
+        actions.apply(st, ("build", "Warriors"))
+        self.assertEqual(p.resources, 10 - max(0, raw - 2))
+        self.assertEqual(p.mil_discount, max(0, 2 - raw))
+        self.assertEqual(p.military_actions, ma)       # the build cost 1 MA
+
+    def test_military_discount_expires_at_end_of_turn(self):
+        st, p = _mid_game()
+        p.mil_discount = 5
+        economy.end_of_turn(st, p, _rng())
+        self.assertEqual(p.mil_discount, 0)
+
+    def test_reserves_offers_food_or_resources(self):
+        st, p = _mid_game()
+        p.hand_civil = ["Reserves (II)"]        # 3 food OR 3 resources
+        p.food = p.resources = 0
+        actions.apply(st, ("play_action", "Reserves (II)"))
+        self.assertEqual(st.pending[-1]["options"], ["food", "resources"])
+        actions.apply(st, ("choose", 1))
+        self.assertEqual(p.resources, 3)
+        self.assertEqual(p.food, 0)
+
+    def test_endowment_scales_with_richer_rivals(self):
+        st, p = _mid_game(players=3)
+        p.hand_civil = ["Endowment for the Arts"]   # 3 culture each in 3p
+        p.culture = 0
+        for q in st.players:
+            if q.idx != p.idx:
+                q.culture = 50
+        actions.apply(st, ("play_action", "Endowment for the Arts"))
+        self.assertEqual(p.culture, 6)
+
+    def test_every_action_card_is_playable_from_a_rich_position(self):
+        db = C.db()
+        for name, card in sorted(db.by_name.items()):
+            if card["type"] != "action":
+                continue
+            st, p = _mid_game()
+            p.hand_civil = [name]
+            p.workers_free = 3
+            p.resources = p.food = p.science = 40
+            if not any(m[0] == "play_action" for m in actions.legal_moves(st)):
+                continue        # needs a wonder / a tech in hand; fine
+            actions.apply(st, ("play_action", name))
+            while st.pending:
+                actions.apply(st, actions.legal_moves(st)[0])
+
+
+def _rng():
+    import random
+    return random.Random(0)
+
+
 if __name__ == "__main__":
     unittest.main()
