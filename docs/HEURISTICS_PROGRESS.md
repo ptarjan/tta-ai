@@ -142,3 +142,18 @@
   to rate that PREVENTS A PENALTY.
 - NEXT: rewrite headline rule 8 (military ratio_to_strongest), then re-verify
   rules 1-7 + header snapshot against the fresh 120-game data.
+
+### 11:40 (session resumed after bridge restart)
+- Checked state: Midgame, Endgame, Per-count, rule 8 honest rewrite, and the
+  60-game leak_check fold-in are ALL DONE (commits 2ab8188 back to df1e479).
+  The only remaining item is the human-facing FINAL READ-THROUGH.
+- Header snapshot refreshed to the live generations 176 / 132 / 113, and made
+  the plateau explicit: last accepted mutant was gen 147 / 120 / 103, i.e. the
+  climbs have gone 30 / 12 / 10 generations without an improvement.
+- Fixed a real contradiction found in the read-through: rule 8 said "mean
+  strength at the END of Age III 3.1/6.8/2.3" while the opening and per-count
+  sections say 3.79/7.28/2.99. Both are right — military_by_age is a mean over
+  every Age III turn, end_of_age is the last turn only. Rule 8 now says which
+  is which and cross-references the other.
+- NEXT: read-through of Midgame -> Endgame -> Per-count -> Traps -> Quick ref,
+  hunting vague advice, missing numbers and cross-section contradictions.

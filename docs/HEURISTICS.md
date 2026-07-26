@@ -13,10 +13,13 @@ comes from a rules-complete engine plus a self-play AI that is still training.
 this was written. Every behaviour number below was harvested on **2026-07-26**
 from frozen copies of the champions at generation **149 (2 players), 116
 (3 players) and 101 (4 players)** — **120 games per player count**, mirror
-self-play, 0 engine errors (`experiments/behaviour_{2,3,4}p.json`). By the end
-of the writing session the live climbs had reached **gen 169 / 129 / 111**
-(15 / 10 / 6 accepted mutants respectively), so the *weights* quoted in this
-document are slightly newer than the *behaviour*. Numbers will move.
+self-play, 0 engine errors (`experiments/behaviour_{2,3,4}p.json`). The climbs
+kept running while this was written and were at **gen 176 / 132 / 113** when the
+last edit was made, so the *weights* quoted here are slightly newer than the
+*behaviour*. Those generations bought very little: each climb has accepted only
+**15 / 10 / 6** mutants in total, and the most recent acceptance was at gen
+147 / 120 / 103 — all three have been on a plateau for 30 / 12 / 10 generations.
+Numbers will move, but slowly.
 Structural advice ("spend your actions", "science early, culture late") is much
 more stable than any single figure.
 
@@ -197,10 +200,13 @@ Eight rules. In rough order of how much they are worth.
    the leader's strength and spends **48–52% of its turns below half the
    strongest rival's strength** [`military_by_age`, 120 games each].
 
-   In absolute terms, so you know what these ratios are ratios *of*: mean
-   strength at the end of Age III is **3.1 (2p) / 6.8 (3p) / 2.3 (4p)**, against
-   a strongest rival of 3.0 / 8.8 / 3.8. A 3p table is running roughly twice the
-   army of a 2p table at the same point in the game.
+   In absolute terms, so you know what these ratios are ratios *of*: champion
+   strength averaged over **every Age III turn** is **3.1 (2p) / 6.8 (3p) / 2.3
+   (4p)**, against a strongest rival of 3.0 / 8.8 / 3.8. (The snapshot taken on
+   the single last turn *of* Age III is a little higher — 3.8 / 7.3 / 3.0 — which
+   is the number quoted in the opening and per-count sections. Same data, one is
+   an average over the age and one is its final turn.) A 3p table is running
+   roughly twice the army of a 2p table at the same point in the game.
 
    **Read this as a possible weakness in the AI, not as advice.** In mirror
    self-play nobody attacks, so being weak is never punished and the search has
@@ -512,8 +518,10 @@ Median round of the first build of each type, per game:
 | Arena | round 11 (0.78) | round 9 (0.75) | round 13 (0.94) |
 | Theater | round 12 (1.14) | round 11 (0.68) | round 15 (1.98) |
 
-**Temples are first and most-built at every player count** — 3.65 / 2.84 / 3.71
-per game, ahead of every other urban type at 2p and 4p. Theaters and arenas are
+**Temples are the first urban building at every player count**, and the
+most-worked one at 2p and 3p — 3.65 / 2.84 / 3.71 card-actions per game. The one
+exception is 4p, where labs narrowly beat them (4.71 vs 3.71) because the 4p
+champion is a technology engine. Theaters and arenas are
 consistently the *last* urban buildings anyone puts a worker on, at all three
 counts. **[strong]**
 
