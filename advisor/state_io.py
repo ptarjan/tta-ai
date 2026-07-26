@@ -204,13 +204,30 @@ def _int(tok, key):
         raise PatchError(f"{key}: {tok!r} is not a number")
 
 
-def _split_cards(text):
-    """Split a card list.  Commas if present, else whitespace."""
+def _split_cards(text, kind=None):
+    """Split a card list.
+
+    Commas are the real separator.  Without a comma we allow whitespace --
+    ``deal bro irr alc`` -- but only after checking that the whole string is
+    not itself one card name, so ``deal Hanging Gardens`` still works.
+    """
     text = text.strip()
     if not text:
         return []
-    parts = text.split(",") if "," in text else text.split()
-    return [p.strip() for p in parts if p.strip()]
+    if "," in text:
+        return [p.strip() for p in text.split(",") if p.strip()]
+    if kind and " " in text:
+        try:
+            resolve_card(text, kind)
+            return [text]
+        except PatchError:
+            pass
+    return text.split()
+
+
+def _split_strict(text):
+    """Comma-separated card list, as written by :func:`dumps`."""
+    return [p.strip() for p in text.split(",") if p.strip()]
 
 
 # scalar keys the human may set on a player line: key -> state field
@@ -345,12 +362,13 @@ def dumps(board):
         flags = "".join(f" {k}" for k, attr in FLAGS.items()
                         if getattr(p, attr))
         out.append(
-            f"p{p.idx}{tag} gov={p.government} ca={p.civil_actions} "
+            f"p{p.idx}{tag} ca={p.civil_actions} "
             f"ma={p.military_actions} f={p.food} r={p.resources} "
             f"s={p.science} c={p.culture} blue={p.blue_total} "
             f"yel={p.yellow_bank} fw={p.workers_free} "
             f"strx={p.strength_extra} hapx={p.happy_extra} "
             f"crx={p.culture_rate_extra} srx={p.science_rate_extra}{flags}")
+        out.append(f"p{p.idx} gov {p.government}")
         if p.techs:
             techs = ", ".join(f"{n}:{t.workers}"
                               for n, t in sorted(p.techs.items()))
@@ -399,8 +417,16 @@ def loads(text):
     from engine.state import PlayerState
     st.players = [PlayerState(idx=i) for i in range(n)]
     st.card_row = [None] * ROW_SIZE
+    # the deck line is applied LAST: it only carries counts, and loading the
+    # row adjusts deck composition, which would otherwise change the count
+    deck_line = None
     for ln in lines[1:]:
+        if ln.split(None, 1)[0] == "deck":
+            deck_line = ln
+            continue
         _load_line(board, ln)
+    if deck_line:
+        _load_line(board, deck_line)
     for p in st.players:
         effects.invalidate(st, p)
     return board
@@ -503,6 +529,10 @@ def _load_player_line(board, idx, rest):
     words = rest.split(None, 1)
     head = words[0] if words else ""
     tail = words[1] if len(words) > 1 else ""
+    if head == "gov":
+        p.government = resolve_card(tail, "gov")
+        effects.invalidate(st, p)
+        return
     if head == "tech":
         p.techs = {}
         for tok in _split_cards(tail):
@@ -620,8 +650,10 @@ def _patch(board, line):
         advance_row(board, names)
         return f"row advanced, dealt {len(names)} card(s)"
     if word == "row":
-        names = [None if t == EMPTY else resolve_card(t, "row")
-                 for t in _split_cards(rest)]
+        toks = _split_cards(rest)
+        if not toks:
+            raise PatchError("usage: row <up to 13 cards, '.' for empty>")
+        names = [None if t == EMPTY else resolve_card(t, "row") for t in toks]
         sync_row(board, names)
         return "row set"
     if word == "take":
@@ -673,7 +705,7 @@ def _patch_player(board, idx, rest):
     head = words[0].lower() if words else ""
     tail = words[1].strip() if len(words) > 1 else ""
 
-    if head in ("tech+", "+tech", "tech"):
+    if head in ("tech+", "+tech"):
         out = []
         for tok in _split_cards(tail):
             name, _, w = tok.rpartition(":")
@@ -705,7 +737,7 @@ def _patch_player(board, idx, rest):
             return f"p{idx} has no wonder in progress"
         _load_player_line(board, idx, f"wonder {tail}")
         return f"p{idx} wonder {p.wonder.name} {p.wonder.steps_built} step(s)"
-    if head in ("leader", "tactic", "hand", "hidden"):
+    if head in ("leader", "tactic", "hand", "hidden", "gov", "tech"):
         _load_player_line(board, idx, rest)
         return f"p{idx} {head} updated"
     msgs = _apply_player_tokens(board, p, rest)

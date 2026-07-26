@@ -1,10 +1,12 @@
 """Decision points that do not belong to the player whose turn it is.
 
 The rest of the engine is a single-player-at-a-time move generator: the
-player to move is ``state.current``.  Four rules break that assumption --
-colonization auctions (§11), aggression defense (§5.4.4), pact offers
+player to move is ``state.current``.  Several rules break that assumption
+-- colonization auctions (§11), aggression defense (§5.4.4), pact offers
 (§5.9) and "each player chooses" event effects (§5.3) -- so the state
-carries a stack of PENDING decisions.
+carries a stack of PENDING decisions.  The same machinery also carries
+decisions that ARE the current player's but arrive mid-effect: an action
+card's ordered free action (§3.11), raid/annex/infiltrate targeting.
 
 * ``state.pending``  -- stack of decision dicts; the top one owns the move.
 * ``state.decider()`` -- index of the player who must move next.

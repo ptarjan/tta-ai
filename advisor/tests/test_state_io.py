@@ -154,7 +154,7 @@ class TestPatch(unittest.TestCase):
     def test_government_and_leader(self):
         S.patch(self.b, "p1 gov=monarchy")
         self.assertEqual(self.b.state.players[1].government, "Monarchy")
-        S.patch(self.b, "p1 leader jc")
+        S.patch(self.b, "p1 leader caesar")
         self.assertEqual(self.b.state.players[1].leader, "Julius Caesar")
         S.patch(self.b, "p1 leader -")
         self.assertIsNone(self.b.state.players[1].leader)
