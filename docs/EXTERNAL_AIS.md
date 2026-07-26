@@ -348,60 +348,140 @@ TAG), or the Civilization board game either.
 
 ## 5. Human game corpora and strategy corpora
 
-### 5a. Boardgaming-Online (BGO) — the only large TTA game database that exists
+### 5a. Boardgaming-Online (BGO) — RESOLVED: it is the 2015 edition, logs are complete, and we can read them
 
-`https://www.boardgaming-online.com` — a fan-run play-by-web TTA server, live since 2010
-and **still up and still busy** (probed 2026-07-26: HTTP 200, "# games in progress: 636,
-# active players: 839"). It is semi-official: the Jan 2016 news post says BGO shipped
-*A New Story of Civilization* "after months of teamwork with Vlaada Chvátil and CGE
-Team", so it implements **both** the 2006 edition and our 2015 edition. It has an
-in-game "journal"/log of every action (referenced repeatedly in its own news posts).
+**Verdict line (2026-07-26): the BGO login WORKS, full move-by-move journals ARE
+readable and machine-parseable, and the archive we care about IS the 2015 edition.**
+The previous version of this section's "everything I could surface is the 2006 edition"
+worry was a **UI artefact, not a fact about the corpus** — see below. Every UNPROVEN
+mark in the old text is now settled.
 
-**Public front page counter: 601,532 finished games since Aug 2010.** This is by far the
-largest TTA corpus anywhere, and the BGG thread
-["Data-Driven strategy tips"](https://boardgamegeek.com/thread/1933554/data-driven-strategy-tips)
-is somebody who already mined ~10k BGO games for win-rate statistics — proof the data is
-minable in principle.
+`https://www.boardgaming-online.com` — fan-run play-by-web TTA server, live since 2010,
+still busy (2026-07-26: "# games in progress: 636, # active players: 839"), semi-official
+(shipped *A New Story of Civilization* in Jan 2016 "after months of teamwork with Vlaada
+Chvátil and CGE Team"). Public front page counter: **601,532 finished games since Aug
+2010** across both editions.
 
-What I verified myself, unauthenticated:
-- `index.php?cnt=14` (Finished games) is **public**. It needs a POST `filtre=<string>`
-  (game id / game name / player name) to render results; with a filter it returns a
-  paginated table (12,031 pages) with, per game: **game id, game name, edition string,
-  player count, level (Prince/King/…), start date, end date, final age, round count, and
-  every player's name and final score.** No login. That metadata alone is a real dataset.
-- `index.php?cnt=11` (Games in progress) is the same, public.
-- The per-game link is `index.php?cnt=202&pl=<gameid>`. Fetched unauthenticated it
-  returns **"The game does not exist"** → the actual board/journal view is behind a
-  session. Registration is free (`index.php?cnt=9`), so this is *probably* one free
-  account away, but I did not create one and therefore **have not verified that the log
-  is readable, machine-parseable, or complete**. Treat "we can get move-level BGO logs"
-  as UNPROVEN.
-- **Edition caveat, and it is a serious one:** every result I could surface through the
-  public filter showed edition `Through the Ages 2.4` (the 2006 edition) with dates
-  clustered in 2015 and game ids ~7.27M. I could not surface a single post-2016
-  new-edition game through the public list. Either the public finished-games index is
-  stale/capped, or new-edition games are listed under a different name I did not hit.
-  Unresolved. If the mineable corpus is 2006-edition-only it is worth much less to us —
-  the 2015 edition changed governments, wonders, tactics, unit techs and end-of-turn
-  order (see `docs/SOURCES.md` for the diff list), so 2006 game outcomes do not transfer
-  cleanly.
+#### The edition question — settled, with evidence
 
-**Is it reachable?** Metadata: yes, today, with `curl` + a POST filter. Move logs:
-unknown, likely yes with a free account, definitely a scraping project (rate limiting,
-ISO-8859-1 HTML, no API, ToS unexamined).
+**BGO models the two editions as two separate boardgames, and the finished-games filter
+defaults to the 2006 one.** The filter form on `index.php?cnt=14` carries a radio group:
 
-**What it would actually buy us.** Be realistic about the two very different products:
-1. *Outcome metadata only* (cheap, ~a day of scraping): lets you compute nothing about
-   moves. You get score distributions by player count and by level, typical game length
-   in rounds, and score-vs-rank curves. Genuinely useful for **calibrating our engine's
-   score distribution** — if our self-play 3p games end at a mean 140 and BGO humans end
-   at 190, something in our engine or our bots is badly off. That's a cheap, high-value
-   sanity check and it needs maybe 5–20k games' metadata.
-2. *Move-level logs* (expensive, uncertain, wrong edition): the thing you'd want for
-   imitation learning. Requires an account, a parser for a hand-rolled PHP journal
-   format, and the 2006/2015 edition question resolved. Only worth starting if (a) an
-   account confirms new-edition logs exist and are parseable and (b) we actually want
-   supervised bootstrapping, which we may not.
+```html
+<input type="radio" name="idJeu" value="4"  checked>  Through the Ages
+<input type="radio" name="idJeu" value="10">          Through the Ages: A New Story of Civilization
+```
+
+`idJeu=4` is the 2006 original; `idJeu=10` is our 2015 edition. Because `4` is
+`checked` by default, anyone who submits the form without touching it gets a
+2006-only list — which is exactly what the earlier probe saw and mis-read as "the
+archive is 2006". POST `idJeu=10` and the list is entirely 2015 games.
+
+Three independent confirmations that `idJeu=10` really is our edition:
+
+1. **The list's own edition column** reads `Through the Ages: A New Story of
+   Civilization` on every row.
+2. **The archive is current, not historical.** The newest finished `idJeu=10` game
+   (#7523809) *ended 2026-07-26*, i.e. today. People are still playing the 2015 edition
+   on BGO right now. 2015-edition games are therefore not a legacy tail — they are the
+   live corpus.
+3. **The card values in a rendered 2015 game are the 2015 values.** Reading game
+   #7523809's board view: `Monarchy 2(8)` (2006 was 3(9)), `Napoleonic Army 7(4)`
+   (2006 was 8(4)), `Mechanized Army 10(5)`. These are precisely the numbers
+   `docs/SOURCES.md` records as changed in 2015. This is the decisive test and it
+   passes.
+
+So **§7 does not have to write the corpus off.** The mineable-at-scale data is the
+edition we are building.
+
+#### The log format — one full game pulled and characterised
+
+Stable URL patterns (all `GET`, all under `index.php`, all permitted by
+`robots.txt` — the disallow list is only `/classes/ /conf/ /images/ /modules/
+/scripts/ /themes/` plus a few includes; `index.php` is **not** disallowed):
+
+| What | URL |
+|---|---|
+| Finished-games index | `index.php?cnt=14` + `POST idJeu=10&filtre=<optional>`; pages via `index.php?cnt=14&pg=<n>&flt=` (50 games/page) |
+| Games in progress | `index.php?cnt=11` |
+| Final board / position | `index.php?cnt=202&pl=<gameid>&nat=-1` |
+| **Move-by-move journal** | `index.php?cnt=52&pl=<gameid>&nat=-1&pg=<n>&flt=` |
+| Discard pile | `index.php?cnt=53&pl=<gameid>&nat=-1` |
+| Rules-version notes | `index.php?cnt=205&pl=<gameid>&nat=-1` |
+
+Login is a plain form POST to `index.php` with `identifiant` / `mot_de_passe`
+(+ optional `souvenir`); it sets `PHPSESSID` and two persistent cookies. Nothing
+exotic, no CSRF token, no Cloudflare.
+
+**Journal structure.** A plain HTML `<table>`, newest-first, five columns:
+`Date | Player (colour) | Age | Round | Text`. `pg=1` is a short "current turn" page;
+`pg>=2` hold **100 entries each**. Game #7523809 (2 players, Emperor level, ran
+2026-07-25 10:28 → 2026-07-26 13:21, ended Age IV round 20) has **392 entries over 5
+pages, ~207 KB total** — so a whole game is **5 GETs**. Entry text is generated from
+templates and parses cleanly with regexes. A representative census of that game:
+
+```
+37  End turn <P> scores: N culture (now N) N science (now N) N food - consumption: N ...
+28  <P> increases population   <P> spends N food
+19  No Discard Phase
+12  <P> discards N card(s)
+12  <P> bids N
+11  Discard Phase  N military cards must be discarded
+ 8  <P> passes Political Phase
+ 5  <P> takes Urban Growth in hand    <P> uses N civil action
+ 5  <P> builds Knights                <P> spends N resources
+ 4  <P> plays Reserves                <P> produces N resources
+ 3  <P> upgrades Bronze to Iron       <P> spends N resources
+ 3  <P> declares War over Culture on <P> ...
+ 3  <P> wins War over Culture   Attacker's strength: N  Defender's strength: N
+ 2  <P> upgrades Philosophy to Scientific Method using Efficient Upgrade
+ 2  <P> wins Inhabited Territory   Winning bid is N
+ 1  <P> puts Alexander the Great back in the row   <P> gets 1 civil action
+ 2  GAME DATA UPDATED  <P> culture: N -> N        (admin score corrections — filter these)
+```
+
+**Card identities: named wherever the rules make them public.** Civil-row takes
+(`takes <card> in hand`), builds, upgrades, wonder stages, leader elections, tactics
+adoption, action-card plays, event resolution, war/aggression declarations and outcomes
+all carry the **exact card name** plus the resource/action cost paid. Player identity is
+by seat colour, and the header row maps colour → account name → final score.
+
+**Hidden-information redaction is exactly what you'd expect, and it is the main
+limitation.** Two things are counts-only, never identities:
+- military card draws — `Purple draws 2 military cards`;
+- discards — `<P> discards 2 cards`.
+
+**And one thing is missing entirely: the civil card row is never logged.** There is no
+"new cards enter the row" / refill / reshuffle event. You can see *which* card a player
+took and — from `uses N civil action` — *what row position it was in* (cost 1/2/3, a
+genuinely useful signal), but you cannot reconstruct **what else was on offer**. For
+imitation learning that is serious: you can observe the chosen action but not the full
+choice set, so a policy trained on it learns "what humans take" and not "what humans
+take *given the alternatives*". Reconstructing the row would mean simulating the whole
+deck from the journal plus the discard-pile page, and the per-player-count deck
+composition — possible with our card data, but it is a real project, not a parse.
+
+#### Volume
+
+Kept deliberately low: ~20 page fetches total to characterise all of this, with delays.
+No bulk download was performed. `robots.txt` permits `index.php`; the site has no
+published API and no explicit anti-automation clause found on the pages visited, but it
+is a small donation-funded fan server, so any future scrape must be slow, cached, and
+ideally cleared with the webmaster (`boardgamingonline@gmail.com`) first. That is a
+different posture from Board Game Arena, whose terms explicitly forbid automated access
+(§2d) — BGO does not.
+
+#### What it would actually buy us
+
+1. *Outcome metadata only* (cheap): `idJeu=10` finished-games pages give game id, name,
+   player count, level, start/end dates, final age, round count, and every player's
+   final score, 50 per page. Enough to **calibrate our engine's score distribution** by
+   player count and skill level — if our self-play 3p games end at a mean 140 and BGO
+   humans end at 190, something is off. 5–20k games is a few hundred polite fetches.
+2. *Move-level logs* (5 GETs/game, parseable, right edition): now genuinely on the table
+   for imitation bootstrapping — with the card-row caveat above, and with the caveat
+   that BGO's player pool spans every skill level (the `level` column, Prince…Emperor,
+   is the filter for that).
 
 ### 5b. Written human strategy corpus
 
