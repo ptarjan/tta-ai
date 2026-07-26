@@ -125,10 +125,15 @@ class _Ctx:
 
     __slots__ = ("p", "s", "age", "rnd", "last", "ca", "ma", "food_need",
                  "res_need", "happy_gap", "mil_target", "strength",
-                 "rival_best_culture", "workers_free", "late", "db")
+                 "rival_best_culture", "workers_free", "late", "db",
+                 "version", "tun", "nplayers", "age_row")
 
-    def __init__(self, state, p):
+    def __init__(self, state, p, version=1, tun=None):
         db = self.db = _db()
+        self.version = version
+        self.tun = tun or V2_TUNABLES
+        self.nplayers = len(state.players)
+        self.age_row = state.age_civil
         self.p = p
         s = self.s = effects.state_stats(state, p)
         self.age = AGE_IDX.get(state.age_civil, 0)
@@ -185,12 +190,52 @@ def _prod_value(prod, ctx):
     return v
 
 
+def _leader_rank(name, ctx, p=None):
+    """Book rank of a leader.
+
+    v1 uses the opinion-derived table; v2 uses the empirical tournament
+    CA-spend ordering, with the two conditional leaders the sources insist on
+    (Leonardo needs a lab/library, Columbus needs a colony) and the one value
+    the sources split by player count (Homer).
+    """
+    if ctx.version < 2:
+        return LEADER_RANK.get(name, 5)
+    if name == "Homer":
+        return V2_HOMER.get(ctx.nplayers, 6.0)
+    rank = V2_LEADER_RANK.get(name, 5.0)
+    if p is not None:
+        if name == "Leonardo da Vinci":
+            # "Don't take him without either Alchemy or Printing Press."
+            have = any(n in p.techs or n in p.hand_civil
+                       for n in ("Alchemy", "Printing Press"))
+            rank = 8.5 if have else 2.0
+        elif name == "Christopher Columbus":
+            # "Only take with a colony already in hand.  Do not take
+            # speculatively."
+            has_colony = any(ctx.db.type_of(n) == "territory"
+                             for n in p.hand_military)
+            rank = 8.0 if has_colony else 1.5
+    return rank
+
+
 def _wonder_value(name, ctx):
     """Rank, discounted by how many resources the wonder still costs."""
     card = ctx.db.get(name)
     stages = card.get("stages") or []
     total = sum(stages)
-    rank = WONDER_RANK.get(name, 5)
+    if ctx.version >= 2:
+        rank = V2_WONDER_RANK.get(name, 5.0)
+        t = ctx.tun
+        if name == "Pyramids":
+            rank *= t["pyramids_vs_loa"]
+        elif name == "Great Wall":
+            rank *= t["great_wall"]
+        elif name == "Taj Mahal":
+            rank *= t["taj_mahal"]
+        elif name == "Hanging Gardens":
+            rank *= t["hanging_gardens"]
+    else:
+        rank = WONDER_RANK.get(name, 5)
     # Age III wonders are one-shot culture bombs; they are only worth starting
     # if there is time left to finish them.
     if ctx.last and len(stages) > 1:
@@ -207,7 +252,7 @@ def _card_value(state, p, ctx, name):
     if typ == "leader":
         # Only one leader per age can be taken, and an unplayed leader is
         # dead weight; a leader already in hand or in play blocks this.
-        return LEADER_RANK.get(name, 5) * 1.6
+        return _leader_rank(name, ctx, p) * 1.6
 
     if typ == "wonder":
         return _wonder_value(name, ctx)
@@ -227,6 +272,10 @@ def _card_value(state, p, ctx, name):
     if typ in C.WORKER_TYPES or typ == "special-tech":
         prod = card.get("production") or {}
         v = _prod_value(prod, ctx)
+        if ctx.version >= 2 and name == "Theology":
+            # Selected exactly 0 times in 39 tournament games: happiness cards
+            # and Bread and Circuses cover the same problem more cheaply.
+            v *= ctx.tun["theology"]
         # A technology is only worth what the buildings on it produce, so a
         # tech we cannot afford to staff is worth much less.
         lvl = db.level_of(name)
@@ -296,8 +345,14 @@ class BookBot:
     name = "book"
     ALLOW_RESIGN = False
 
-    def __init__(self, rng=None, seed=None):
+    def __init__(self, rng=None, seed=None, version=1, tunables=None):
         self.rng = rng or random.Random(seed)
+        #: 1 = the opinion-derived rules; 2 = the empirical tournament tier
+        #: list (see V2_LEADER_RANK / V2_WONDER_RANK / V2_PRICE_LADDER).
+        self.version = version
+        self.tunables = dict(V2_TUNABLES, **(tunables or {}))
+        if version >= 2:
+            self.name = "book2"
 
     def __call__(self, state):
         return self.choose(state, A.legal_moves(state))
@@ -312,7 +367,7 @@ class BookBot:
         if state.pending:
             return self._pending(state, moves)
         p = state.actor()
-        ctx = _Ctx(state, p)
+        ctx = _Ctx(state, p, self.version, self.tunables)
         if state.phase == "politics":
             return self._politics(state, p, ctx, moves)
         return self._action_phase(state, p, ctx, moves)
@@ -598,9 +653,25 @@ class BookBot:
             typ = db.type_of(name)
             if typ == "wonder" and p.wonder is not None:
                 continue
-            # a card costs an action now and an action to play: the deeper
-            # slots have to clear a much higher bar
-            v -= cost * 3.0
+            if ctx.version >= 2:
+                # Cards strong players simply never pay for: every one of
+                # these costs a SECOND civil action to realise.
+                if name in V2_NEVER_TAKE:
+                    continue
+                # "No leader warrants spending 3 white points (except Age 3)."
+                if typ == "leader" and cost >= 3 and ctx.age < 3:
+                    continue
+                # The two wonders the sources say are only ever worth a
+                # bargain price.
+                if name in ("Taj Mahal", "Great Wall") and cost > 1:
+                    continue
+                # 76% of tournament Age I picks are made at 1 CA and only
+                # 2.5% at 3 CA, so the price of depth is convex, not linear.
+                v -= V2_PRICE_LADDER.get(cost, 12.0) * 3.0
+            else:
+                # a card costs an action now and an action to play: the deeper
+                # slots have to clear a much higher bar
+                v -= cost * 3.0
             # cards rot in hand; a full hand is wasted civil actions
             v -= hand * 1.0
             if first_turn:
@@ -653,6 +724,7 @@ class BookBot:
         kind = pend["kind"]
         p = state.actor()
         ctx = _Ctx(state, p)
+        ctx.version, ctx.tun = self.version, self.tunables
         if kind == "choice":
             return self._choice(state, p, ctx, pend, moves)
         if kind == "auction":
@@ -839,3 +911,102 @@ class BookImprovedBot:
         if book is not None and book[0] in BOOK_OVERRIDE_KINDS and book in moves:
             return book
         return champ
+
+
+# ======================================================================
+# v2: the empirical tournament tier list
+# ======================================================================
+#
+# docs/EXPERT_STRATEGY.md summarises a BGG study of 39 games across 3
+# International Championships and 3 Intermezzo seasons, scoring every card by
+# the average number of civil actions strong players spent on it per game
+# (https://boardgamegeek.com/thread/2494200).  That is *revealed preference*
+# from strong humans -- the closest thing to ground truth available.
+#
+# Two things stop it from being used raw:
+#
+#   * CA-spend measures what players PAY, not what WINS.  The study annotates
+#     some cards as over- or under-performing their price (Colossus is
+#     "anti-correlated with winning" at 0.13; Taj Mahal is "undervalued" at
+#     0.00).  The ranks below blend spend with those annotations.
+#   * The competitive lobby the tier list is drawn from is almost exclusively
+#     2-player, so a 2p-derived value must not be applied blindly at 3p/4p.
+#     Where the source explicitly splits (Homer: Tier 1 in 3p/4p data but
+#     D-tier in 2p), the rank is player-count aware.
+#
+# Where the experts genuinely disagree, the value is a TUNABLE rather than a
+# hard-coded side -- see V2_TUNABLES.
+
+#: Contested calls, exposed as parameters instead of being decided by fiat.
+#: docs/EXPERT_STRATEGY.md keeps a deliberately unresolved disagreements
+#: table; these are its entries.
+V2_TUNABLES = {
+    # "Library of Alexandria wins more than Pyramids" vs "Pyramids taken 20%
+    # more often".  >1 favours the Pyramids' extra civil action.
+    "pyramids_vs_loa": 0.95,
+    # Highest Age I tournament spend (0.59) but "arguably the weakest Age I
+    # wonder" on culture-opportunity math.  Scales its rank.
+    "great_wall": 0.6,
+    # Tournament 0.00 and "utterly useless" vs "+20 culture over Great Wall"
+    # and the 30k dataset saying strong players undervalue it.
+    "taj_mahal": 0.7,
+    # Tier 3 at 0.03, but happiness genuinely solves an early problem.
+    "hanging_gardens": 0.6,
+    # "upgrade to Iron only if it lands early in Age I"; otherwise stay on
+    # 3-4 Bronze and buy the 5th civil action instead.
+    "iron_over_bronze": 1.0,
+    # Theology was selected 0 times in 39 tournament games; happiness cards
+    # let you skip it.  Multiplies its value.
+    "theology": 0.15,
+}
+
+#: Rank on the same ~0-10 scale v1 uses, derived from tournament CA-spend and
+#: the win-correlation annotations.  Ages A/I/II of the base game.
+V2_LEADER_RANK = {
+    # Age A -- "a bridge, not a win condition"
+    "Hammurabi": 9.0,           # highest of the age at 0.36 CA-spend
+    "Aristotle": 8.0,           # "wins if 2 or more are available at the same cost"
+    "Alexander the Great": 5.5,  # 0.23
+    "Julius Caesar": 3.0,       # 0.03; "in the new TTA he is terrible"
+    "Moses": 3.0,               # 0.03; weakest by consensus, food is a trap
+    # Age I
+    "Joan of Arc": 9.0,         # 0.33, top of the age
+    "Frederick Barbarossa": 6.5,  # 0.15
+    "Genghis Khan": 5.5,        # 0.08, tempo not strength
+    "Leonardo da Vinci": 5.0,   # 0.05 bare; conditional bonus applied below
+    "Christopher Columbus": 3.0,  # 0.03; conditional on a colony
+    "Michelangelo": 2.0,        # 0.00, "last in every list found"
+    # Age II
+    "Napoleon Bonaparte": 10.0,  # "most important card in the game"
+    "Isaac Newton": 9.0,
+    "James Cook": 6.0,
+    "William Shakespeare": 6.0,
+    "Maximilien Robespierre": 4.0,
+    "J. S. Bach": 4.5,          # "consensus weakest Age II", a noob trap
+}
+
+#: Homer is the clearest 2p-vs-multiplayer split in the source.
+V2_HOMER = {2: 5.0, 3: 7.5, 4: 7.5}
+
+V2_WONDER_RANK = {
+    "Library of Alexandria": 9.0,   # 0.31 and wins more than Pyramids
+    "Pyramids": 8.5,                # 0.23, taken more often, wins slightly less
+    "Colossus": 3.0,                # 0.13 but ANTI-correlated with winning
+    "Hanging Gardens": 6.5,         # Tier 3 (0.03); scaled by tunable
+    "St. Peter's Basilica": 10.0,   # "the best wonder in the game"
+    "Great Wall": 10.0,             # 0.59 highest spend; scaled by tunable
+    "Universitas Carolina": 7.0,    # 0.28, "undervalued"
+    "Taj Mahal": 7.0,               # 0.00 but "undervalued (!)"; scaled
+}
+
+#: Cards strong players essentially never pay for.  The action cards here all
+#: cost a second civil action to realise, which is the stated reason.
+V2_NEVER_TAKE = frozenset((
+    "Stock Pile", "Patriotism (A)", "Cultural Heritage (A)",
+    "Frugality (A)", "Frugality (I)",
+))
+
+#: The card row charges 1 CA for slots 1-5, 2 for 6-9, 3 for 10-13.  Across 39
+#: tournament games 76% of Age I picks were made at 1 CA and only 2.5% at 3 CA,
+#: so the price ladder is convex, not linear.
+V2_PRICE_LADDER = {0: 0.0, 1: 1.0, 2: 3.5, 3: 9.0}
