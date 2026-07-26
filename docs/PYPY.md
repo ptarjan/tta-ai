@@ -429,38 +429,93 @@ Why 1.33x end-to-end and not 1.55x: Amdahl. If copy were 64% of runtime, a
 1.55x copy would give 1.29x overall — the measurement is right in line, which
 independently confirms the 64% figure.
 
-### RECOMMENDATION (do not implement yet — this is the finding, not the work)
+### RECOMMENDATION (short form; the full design writeup is section 6)
 
 **The copy is ~17x more work than the mutation, so structural sharing beats
 any constant-factor copy win by an order of magnitude.** The leaf fast path
 above bought 1.55x; the ceiling for "copy faster" is maybe another 1.3x.
 Copy-on-write or an undo stack has a theoretical ceiling near **17x** on the
-copy component, i.e. roughly 64% -> ~5% of GreedyBot runtime, or about a
-**2.5x whole-bot speed-up**, and it would help PyPy more than CPython because
-it removes the short-lived-object churn that PyPy's GC handles worst (see
-section 3).
+copy component. Section 6 works the design, the arithmetic, the risk and the
+go/no-go out in full.
 
-Two designs, in order of preference:
+## 5. Re-profile after the 1.55x fastcopy win (2026-07-26)
 
-1. **Undo stack (journalling `apply`).** `GreedyBot` needs the trial state only
-   long enough to call `evaluate`, and it discards it immediately — so no
-   persistence is needed at all, just `apply(state, mv)` / `undo(state)`.
-   Record `(container, key, old_value)` for every write plus
-   append/pop records for lists; 6.4 slots per move means a journal of ~7
-   entries versus 395 slot copies. This is the cheapest possible scheme and
-   needs no change to the state representation, only to the mutation sites.
-   Risk: `engine/actions.py` + `effects.py` + `events.py` mutate state in many
-   places; every one of them must go through the journal or the undo is wrong.
-   Mitigation: a paranoid mode that `copy_state`s anyway and asserts the undone
-   state is identical — the existing 135-game fingerprint then proves it.
-2. **Copy-on-write with a version stamp.** Clone only the ~5.4 nodes on the
-   mutated path, share the rest. Needs every mutation site to go through a
-   `mutable(obj)` accessor, which is a larger and more invasive change than the
-   journal, and it makes aliasing bugs possible (two logical states sharing one
-   dict). Only worth it if a future bot needs to hold many trial states alive
-   at once (i.e. real multi-ply search), which the journal cannot do.
+`nice -n 10 python3 tools/profile_bot.py --players 4 --games 10`, sampling
+mode (2 ms, 806 samples over 7.7 cpu-s, GreedyBot 4p, climbs running).
+Sampling — not cProfile — because cProfile's ~1 us per call would inflate
+exactly the tiny hot functions (`_cv`) this is measuring. SELF % is the leaf
+frame, INCL % is anywhere-on-the-stack.
 
-Prerequisite for either: the mutation sites must be enumerated. `STRICT` legality
-asserts and the 135-game fingerprint are the safety net that makes this
-tractable; do it as its own branch, not inside a perf pass.
+| SELF % | INCL % | function | what it is |
+|---|---|---|---|
+| 30.0 | 47.0 | `bots/fastcopy.py:_cv` | recursive value copy |
+| 17.0 | 35.4 | `bots/fastcopy.py:_cdc` | generic dataclass copy |
+| 5.8 | 12.0 | `engine/effects.py:compute` | per-player stats |
+| **5.7** | **10.8** | **`random.py:__init__`** | **`random.Random(0)` per candidate move** |
+| 5.1 | 5.1 | `random.py:seed` | (called by the above) |
+| 4.6 | 18.9 | `bots/__init__.py:evaluate` | linear eval |
+| 3.6 | 50.6 | `bots/fastcopy.py:copy_state` | the copy, total |
+| 2.4 | 2.4 | `engine/cards.py:level_of` | |
+| 2.1 | 13.7 | `bots/__init__.py:features` | feature extraction |
+| 1.7 | 1.7 | `<string>:__init__` | dataclass-generated `__init__` |
+| 1.6 | 1.6 | `importlib._bootstrap:_handle_fromlist` | a function-level `import` in a hot path |
+| 1.4 | 1.4 | `engine/effects.py:invalidate` | stats-cache clear |
+
+Rolled up by area:
+
+| area | share of GreedyBot 4p runtime |
+|---|---|
+| **`copy_state` (the whole copy)** | **50.6%** (was ~64% pre-fastcopy) |
+| `actions.apply` of the trial move | 16.1% |
+| `evaluate` (features + weights) | 18.9% |
+| of which `effects.compute` + `state_stats` | 12.0% / 7.0% |
+| **`random.Random(0)` construction** | **10.8%** |
+
+Two readings:
+
+1. **The copy is still the single biggest line item at 50.6%**, even after the
+   1.55x leaf fast path. Amdahl now says a further 1.3x on the copy is worth
+   only ~1.2x overall, while eliminating the copy (section 6) is worth ~2.0x.
+   This is the same conclusion as 4b, now measured on the post-fastcopy code.
+2. **A new #2 appeared that was hidden before: 10.8% of GreedyBot's runtime is
+   spent constructing `random.Random` objects.** See 5a.
+
+### 5a. `random.Random(0)` per candidate move — 10.8%, one-line fix, NOT MINE TO MAKE
+
+`engine/bots/__init__.py:157`:
+
+```python
+actions.apply(trial, mv, random.Random(0))
+```
+
+That constructs a fresh Mersenne Twister **for every candidate move** — and
+seeding an MT is not cheap (it initialises a 624-word state array), which is
+why `random.__init__` + `random.seed` together are 10.8% inclusive / 10.8%
+self of the whole bot. GreedyBot evaluates ~12 candidates per decision, so
+this is ~12 MT seedings per decision that all produce the identical stream.
+
+The fresh-object-per-candidate behaviour is **load-bearing**: each candidate
+must see the same random stream from the same starting point, so a single
+shared `Random` instance advanced across candidates would change the digests.
+The safe fix keeps the stream exactly and only skips the seeding work:
+
+```python
+_TRIAL_RNG = random.Random(0)
+_TRIAL_RNG_STATE = _TRIAL_RNG.getstate()     # module level, computed once
+...
+_TRIAL_RNG.setstate(_TRIAL_RNG_STATE)        # per candidate, replaces Random(0)
+actions.apply(trial, mv, _TRIAL_RNG)
+```
+
+`setstate` restores byte-identically the state a freshly-constructed
+`Random(0)` has, so the stream every candidate sees is unchanged — this is a
+provably digest-preserving rewrite, not an approximation. `setstate` is a
+C-level copy of the state tuple; `seed()` is `init_by_array`. Expect to
+recover most of the 10.8%.
+
+**Not applied here**: `engine/bots/__init__.py` is off limits to this pass
+(the `math.fsum` in `evaluate` is load-bearing for determinism and the file is
+another agent's). This is written up as a one-line change for its owner, with
+the measurement above as justification. It is the best
+effort-to-payoff ratio left on the table.
 

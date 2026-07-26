@@ -157,3 +157,19 @@
   is which and cross-references the other.
 - NEXT: read-through of Midgame -> Endgame -> Per-count -> Traps -> Quick ref,
   hunting vague advice, missing numbers and cross-section contradictions.
+
+### 11:50
+- READ-THROUGH, Endgame section. Found and fixed a REAL ERROR: the "Military in
+  the endgame" table labelled `by_age.strength_vs_opponents` as "ratio to
+  strongest rival" (2p 1.07 / 3p 1.03 / 4p 1.13). It is not — behaviour.py:377
+  divides by `opp_strength`, the MEAN over opponents (behaviour.py:175), while
+  `military_by_age.ratio_to_strongest` uses `opp_strength_max` (:176, :505).
+  So the endgame section was asserting Age IV parity at all three counts while
+  headline rule 8 asserted 0.75 / 0.60. Table now carries BOTH columns, says the
+  mean-rival column is meaningless in a mirror, and the "parity is the target"
+  conclusion is re-derived from the strength_deficit weight instead of from the
+  fake parity. (4p Age IV vs mean is 1.06, not 1.13 -- also corrected.)
+- Added the starvation exception to the endgame "stop buying rate" paragraph
+  with the actual arithmetic (4 culture/turn/missing food, ~16 culture for a
+  round-19 farm), so it no longer contradicts trap #2.
+- NEXT: per-count section, traps, quick reference.

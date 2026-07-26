@@ -754,11 +754,19 @@ Two things are going on and only one of them is good:
 
 ### Military in the endgame
 
-| | strength (Age IV) | ratio to strongest rival | aggressions/game | wars/game |
-|---|---|---|---|---|
-| 2p | 4.27 | 1.07 | 0.008 | **0** |
-| 3p | 7.39 | 1.03 | 0.033 | **0** |
-| 4p | 3.48 | 1.13 | 0.108 | **0** |
+| Age IV | my strength | vs. the *average* rival | vs. the *strongest* rival | aggressions/game | wars/game |
+|---|---|---|---|---|---|
+| 2p | 4.27 | 1.07 | **1.07** | 0.008 | **0** |
+| 3p | 7.39 | 1.03 | **0.75** | 0.033 | **0** |
+| 4p | 3.48 | 1.06 | **0.60** | 0.108 | **0** |
+
+Those two ratio columns are the whole story, so read them side by side. Against
+the *average* rival every champion looks like it is at parity — but that column
+is meaningless in mirror self-play, where you are the average rival by
+construction (caveat 2 at the top). Against the *strongest* rival, only 2p is at
+parity: at 3p the champion is 25% short of the table leader in Age IV and at 4p
+it is at 60% of it, having spent about half of every age below *half* the
+leader's strength [`military_by_age`, 120 games each].
 
 **Zero wars in 360 games at every player count.** Aggressions are rare everywhere,
 and where they happen at all they happen *late*: at 4p the median first
@@ -767,10 +775,14 @@ behaviour; see the caveat]**
 
 The caveat matters. These are mirror self-play games between civilizations that
 have all learned nobody attacks. A table of humans is not that. What survives the
-caveat is the *shape*: all three champions hold strength at **1.03–1.13× the
-strongest rival** in Age IV, and the `strength_deficit` penalty is one of the four
-full-consensus levers (−0.6 default → −1.02 / −0.95 / −1.30). **Parity is the
-target; being the biggest army is not.**
+caveat is one weight fact and one target. The weight fact: `strength_deficit`
+(the penalty for being *behind*) is one of the four full-consensus levers, and
+all three climbs pushed it further down (−0.6 default → −1.02 / −0.95 / −1.30) —
+being weakest is punished everywhere, while being ahead is only rewarded at 3p.
+The target: **match the strongest player at the table, and do not pay for more
+than that.** The champions only actually manage this at 2p; at 3p and 4p they
+fall short and have never been punished for it, so take the target from the
+weights, not from the play. See headline rule 8.
 
 Two rules to remember for the last turns:
 
@@ -825,6 +837,15 @@ Our reading, and it is a reading rather than a measurement: keep buying things
 that score (labs feed technologies, technologies feed culture buildings) and stop
 buying things that only feed *other* purchases (farms, mines) once you are inside
 four turns of the end. Food and resources are not victory points.
+
+**One large exception, and it is the most valuable sentence in this section:**
+that only applies to rate you are buying for *growth*. If you are producing less
+food than you consume, you are losing **4 culture per missing food, every single
+turn** [rules, §6.6], and a farm that closes a 1-food gap on round 19 pays back
+about 4 × 4 = **16 culture** by the end — more than any Age III culture building
+will earn you in the same four turns. Before you apply "stop buying rate", do the
+subtraction in trap #2: gross food production minus 2 (or 3 if you are down to
+8 or fewer yellow tokens). If that number is negative, buy the farm.
 
 ---
 
