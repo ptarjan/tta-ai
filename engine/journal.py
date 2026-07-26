@@ -173,7 +173,10 @@ def begin(state=None):
     j.state = state
     if PARANOID and state is not None:
         from .bots.fastcopy import copy_state
-        j.oracle = copy_state(state)
+        # keep_log=True: `emit` is suppressed below, so the log must come back
+        # unchanged and the oracle has to be able to prove it.
+        j.oracle = copy_state(state, keep_log=True)
+    _state.SUPPRESS_LOG = True     # see GameState.emit
     _J = j
     return j
 
@@ -190,6 +193,7 @@ def rollback(j):
     if _J is not j:
         raise JournalError("rollback of a journal that is not the open one")
     _J = None                                  # restores are NOT journalled
+    _state.SUPPRESS_LOG = False
     for rec in reversed(j):
         kind = rec[0]
         if kind == _ATTR:
@@ -218,7 +222,12 @@ def rollback(j):
         # runtime; restoring it exactly is not worth the risk (6.5 hazard 4).
         st.__dict__.pop("_stats_cache", None)
     if j.oracle is not None:
-        statediff.assert_same(j.oracle, st, what="journal rollback")
+        # include_log=True is affordable here (paranoid mode only) and is the
+        # only mechanical proof that `emit` suppression really holds -- a
+        # single un-suppressed `emit` inside a trial `apply` shows up as an
+        # extra log line rather than as a fingerprint mismatch 30 minutes later.
+        statediff.assert_same(j.oracle, st, what="journal rollback",
+                              include_log=True)
         j.oracle = None
 
 

@@ -16,6 +16,14 @@ from dataclasses import dataclass, field, asdict, fields
 
 AGES = ["A", "I", "II", "III", "IV"]
 
+#: Set to True by `engine.journal` for the duration of a trial (journalled)
+#: `apply`, and back to False by `rollback`.  See `GameState.emit`.
+#:
+#: It lives here rather than being read out of `engine.journal` only to avoid
+#: an import cycle (`journal` imports `state`); `journal.begin`/`rollback` are
+#: the only writers.
+SUPPRESS_LOG = False
+
 
 @dataclass
 class TechCard:
@@ -176,6 +184,19 @@ class GameState:
         return gs
 
     def emit(self, msg):
+        # A trial move must not write to the real log.  Today it cannot:
+        # `copy_state` hands the search a state whose `log` is a fresh `[]`,
+        # so the trial's log entries are created and thrown away.  The undo
+        # stack has no copy to absorb them, and appending to the real log is
+        # not merely wasteful, it is *destructive*: past 400 entries this
+        # method does `del self.log[:100]`, and the log is in the fingerprint
+        # digest.  Journalling the log instead would mean snapshotting a
+        # 400-element list per candidate move -- as much copying as the undo
+        # stack exists to remove.  So: suppress, which reproduces the copy
+        # path's observable behaviour exactly (nothing reads `state.log`
+        # during play; see docs/PYPY.md 9.5).
+        if SUPPRESS_LOG:
+            return
         self.log.append(f"T{self.turn} P{self.current}: {msg}")
         if len(self.log) > 400:
             del self.log[:100]

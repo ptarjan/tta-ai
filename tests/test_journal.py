@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from engine import game, journal, statediff                    # noqa: E402
+from engine import game, journal, state as state_mod, statediff  # noqa: E402
 from engine.state import TechCard, PlayerState                 # noqa: E402
 from engine.bots.fastcopy import copy_state                    # noqa: E402
 
@@ -30,9 +30,11 @@ class JournalTestCase(unittest.TestCase):
         journal.install()
 
     def tearDown(self):
-        # never leave a journal open for the next test
+        # never leave a journal open -- or the log suppressed -- for the
+        # next test
         if journal.active():
             journal._J = None
+        state_mod.SUPPRESS_LOG = False
 
 
 class AttributeUndo(JournalTestCase):
@@ -234,6 +236,68 @@ class Lifecycle(JournalTestCase):
                 copy_state(st)
         finally:
             journal.rollback(j)
+
+
+class LogSuppression(JournalTestCase):
+    """Hazard 2 of section 6.5.  `copy_state` drops the log, so today a trial
+    move physically cannot reach the real one.  The undo stack has no copy to
+    absorb the writes, and `emit` is *destructive* past 400 entries
+    (`del self.log[:100]`) -- and the log is inside the fingerprint digest."""
+
+    def test_emit_is_suppressed_inside_a_journal(self):
+        st = _st()
+        before = list(st.log)
+        j = journal.begin(st)
+        st.emit("a trial move must not say anything")
+        journal.rollback(j)
+        self.assertEqual(st.log, before)
+
+    def test_emit_works_again_after_rollback(self):
+        st = _st()
+        journal.rollback(journal.begin(st))
+        n = len(st.log)
+        st.emit("real play still logs")
+        self.assertEqual(len(st.log), n + 1)
+
+    def test_suppression_is_lifted_even_when_apply_raises(self):
+        st = _st()
+        with self.assertRaises(ValueError):
+            with journal.scope(st):
+                st.emit("swallowed")
+                raise ValueError("boom")
+        self.assertFalse(state_mod.SUPPRESS_LOG)
+        n = len(st.log)
+        st.emit("back to normal")
+        self.assertEqual(len(st.log), n + 1)
+
+    def test_the_destructive_truncation_cannot_fire_during_a_trial(self):
+        """The specific reason suppression is not merely an optimisation: at
+        >400 entries `emit` deletes the oldest 100, which no undo record
+        would have captured."""
+        st = _st()
+        st.log = [f"line {i}" for i in range(400)]
+        before = list(st.log)
+        j = journal.begin(st)
+        for i in range(50):
+            st.emit(f"trial {i}")
+        journal.rollback(j)
+        self.assertEqual(st.log, before)
+
+    def test_paranoid_mode_would_catch_a_log_leak(self):
+        """If suppression regresses, the oracle must say so -- that is why the
+        paranoid oracle keeps the log and the diff includes it."""
+        st = _st()
+        old = journal.PARANOID
+        journal.PARANOID = True
+        try:
+            j = journal.begin(st)
+            state_mod.SUPPRESS_LOG = False          # simulate the regression
+            st.emit("leaked into the real log")
+            with self.assertRaises(AssertionError) as cm:
+                journal.rollback(j)
+            self.assertIn("log", str(cm.exception))
+        finally:
+            journal.PARANOID = old
 
 
 class ParanoidModeCatchesMisses(JournalTestCase):

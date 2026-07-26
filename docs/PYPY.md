@@ -1055,19 +1055,51 @@ wholesale rather than field by field, so a journalling `__setattr__` fires
 **once per copied object, not once per field** — ~35 calls per `copy_state`,
 not ~400. And while the journal is on, `copy_state` is not running at all.
 
-### 9.4 Next steps — resume here
+### 9.4 Steps 3 and 4 — `emit()` and `_stats_cache` (DONE)
 
-- [x] Step 1: `engine/statediff.py` + 31 detection tests + `tools/gate.sh`
-      (commit 5f168fb). Gate green.
-- [ ] Step 2: `engine/journal.py` — `begin`/`rollback`, journalling
-      `__setattr__` for the 4 state dataclasses, container helpers for the
-      170 hand sites, and `JOURNAL_PARANOID=1` (copy_state oracle + statediff
-      on every rollback). Land with tests, **still converting no call site.**
-- [ ] Step 3: `emit()`. `copy_state` drops the log, so a trial apply must not
-      touch `state.log` — suppress `emit` while journalling, which is what the
-      copy path already does in effect. The log is in the digest.
-- [ ] Step 4: `_stats_cache` — clear on rollback (`invalidate` is 1.4%; much
-      safer than trying to restore it).
+**Step 3, `emit()` (hazard 2).** `engine/state.py` grows a module-global
+`SUPPRESS_LOG`, set by `journal.begin` and cleared by `journal.rollback`;
+`GameState.emit` returns immediately while it is set. This *reproduces the
+copy path's behaviour exactly* rather than inventing new behaviour: today
+`copy_state` hands the search a state whose `log` is a fresh `[]`, so a trial
+move's log lines are created and thrown away. Two facts make suppression the
+right answer rather than journalling the log:
+
+* `emit` is **destructive**, not just append-only — past 400 entries it does
+  `del self.log[:100]`. Under the undo stack that deletion would hit the real
+  game's log, and the log is inside the fingerprint digest.
+* Journalling the log would mean snapshotting a 400-element list per candidate
+  move, which is as much copying as the whole undo stack exists to remove.
+
+Nothing reads `state.log` during play — `grep -rn '\.log\b' engine/ analysis/
+experiments/ tools/` finds only `perf_check.py` (the digest) and
+`tools/dump_game.py` — so suppression cannot change control flow.
+
+The paranoid oracle was tightened at the same time: it now copies with
+`keep_log=True` and diffs with `include_log=True` (verified that
+`copy_state(st, keep_log=True)` really does build a *new* list, so the check
+is not vacuous). A regression in suppression therefore surfaces as an
+immediate `AssertionError` naming `log`, rather than as a fingerprint
+mismatch half an hour later. There is a test that injects exactly that
+regression and asserts it is caught.
+
+**Step 4, `_stats_cache` (hazard 4).** Already landed with step 2: `rollback`
+does `st.__dict__.pop("_stats_cache", None)`. `_`-prefixed fields are not
+copied today, so each trial currently gets a clean cache; under the undo stack
+the *real* state's cache would be polluted by trial computes. `invalidate` is
+1.4% of runtime, so dropping is far cheaper than the risk of restoring it.
+
+Tests: 5 new (`LogSuppression`), 120 total, gate green on all four arms.
+
+### 9.5 Next steps — resume here
+
+- [x] Step 1: `engine/statediff.py` + 31 detection tests + `tools/gate.sh`.
+- [x] Step 2: `engine/journal.py` — `begin`/`rollback`, journalling
+      `__setattr__` for the 4 state dataclasses, `touch()` for containers,
+      `JOURNAL_PARANOID=1` (copy_state oracle + statediff on every rollback).
+      Landed with 26 tests, **no call site converted.**
+- [x] Step 3: `emit()` suppression (above).
+- [x] Step 4: `_stats_cache` cleared on rollback (above).
 - [ ] Step 5: convert containers module by module — `actions.py`, then
       `effects.py`, `interact.py`, `game.py`, `events.py`, `economy.py` — with
       `bash tools/gate.sh` after **each** module, plus a run under
