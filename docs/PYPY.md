@@ -890,3 +890,134 @@ The sampling profiler's attribution for *small, frequently-entered C frames* is
 inflated. Before spending effort on a profile line item, bound it with a probe
 that deletes the work entirely, or with `timeit` x call-count arithmetic. Had
 5a been shipped as written it would have been a 0% change sold as 13.6%.
+
+## 9. The undo stack — branch `journal-undo` (IN PROGRESS)
+
+Section 6's design A, implemented on its own branch per the 6.6 conditions.
+**Nothing here is on master and nothing here should be merged until the whole
+sequence is green.** Work in the worktree `/Users/pt/tta-ai-journal`.
+
+### 9.0 A trap found before any code was written: the fingerprint files are STALE
+
+`python3 -m engine.perf_check check tools/fingerprint.json` reports
+**MISMATCH on a completely untouched HEAD**. This is not a regression:
+
+* `tools/fingerprint.json` / `tools/fingerprint_wide.json` were last saved at
+  commit `7c2eef1`, with digests `3229c4a0…` / `c7e73ede…`;
+* legitimate behaviour changes landed afterwards without a re-save;
+* `check` prints `MISMATCH <computed> != <wanted>`, and the **computed** value
+  is exactly the documented `c2befef1…` / `47e06a41…`.
+
+So the files are the stale side, not the code. Anyone gating on them reads a
+false failure and is one step away from "fixing" a non-bug, or from re-saving
+the files and thereby blessing whatever regression they were carrying.
+
+**Use `bash tools/gate.sh`** (added on this branch). It gates on the digests
+written down here, and runs all four arms — 58 tests, narrow, wide, and both
+fingerprints again under `FASTCOPY_PARANOID=1` — in one command.
+
+Verified baseline of this branch (= master `6376981`, so commit `6376981`'s
+WeightedBot `state.decider()` fix does **not** move the greedy fingerprints,
+as predicted):
+
+```
+unittest                  OK   Ran 58 tests
+narrow fingerprint        OK   c2befef1bb640a05
+narrow FASTCOPY_PARANOID  OK   c2befef1bb640a05
+wide fingerprint          OK   47e06a41c8a88889
+wide FASTCOPY_PARANOID    OK   47e06a41c8a88889
+```
+
+Full wide digest, previously only recorded to 8 chars: `47e06a41c8a88889…`.
+
+### 9.1 Step 1 — the paranoid structural differ (commit 5f168fb, DONE)
+
+6.6 condition 2: differ first, no call site converted. `engine/statediff.py`
+returns the **path** to every structural difference between two states.
+
+It is deliberately stronger than `==` in exactly one place: **it compares dict
+key order.** `{'a':1,'b':2} == {'b':2,'a':1}` is `True`, but the engine
+*iterates* `p.techs`, `state.seeded_by` and `p.one_time_discount`. A non-LIFO
+rollback that restores the right values in the wrong insertion order changes
+real play while comparing equal — hazard 3 of 6.5, invisible to `==`, and the
+single most likely way this project ships a silent corruption. There is a test
+for the concrete form (pop a key, put it back, it lands at the end).
+
+`tests/test_statediff.py`: 31 tests, one per row of the 6.2 undo-record table,
+all asserting **detection** rather than agreement. Plus a test that
+`copy_state` is a faithful oracle at every decision of a 120-move game — if
+that ever fails, the paranoid check is comparing against a broken oracle and
+proves nothing. Test count is now 89; the original 58 are untouched.
+
+### 9.2 Correction to 6.5's site count: 470, not ~385
+
+AST count of writes that could touch state, over the eight engine modules:
+
+| module | attr writes | subscript writes | mutator calls | `del` | total |
+|---|---|---|---|---|---|
+| actions.py | 81 | 12 | 47 | 1 | 141 |
+| effects.py | 54 | 18 | 13 | – | 85 |
+| interact.py | 22 | 7 | 35 | 1 | 65 |
+| game.py | 56 | 2 | 5 | – | 63 |
+| events.py | 45 | – | 5 | – | 50 |
+| economy.py | 26 | 1 | 5 | – | 32 |
+| cards.py | 13 | 6 | 6 | – | 25 |
+| state.py | 3 | – | 5 | 1 | 9 |
+| **total** | **300** | **46** | **121** | **3** | **470** |
+
+(Upper bound — some targets are locals, e.g. the `Stats` accumulator in
+`effects.py`, not reachable state.) The shape that matters: **attribute writes
+are 300 of 470, 64% of the risk.**
+
+### 9.3 The measurement that changes the design: journal attrs via `__setattr__`
+
+6.2 assumed every one of those 470 sites gets hand-converted to
+`journal.setattr_(obj, 'attr', v)`. That is 470 chances to miss one, and 470
+lines of the engine made unreadable. There is a much better option for the
+300 attribute writes — a journalling `__setattr__` on the four state
+dataclasses — **if** it is affordable. Two probes say it is:
+
+| probe | result |
+|---|---|
+| cost of a Python-level `__setattr__` on a dataclass | 93.3 ns → 600.3 ns, **6.4x per write** |
+| attribute writes performed by one *trial* `apply` (4p greedy, 3179 candidates) | **3.8** |
+
+6.4x sounds fatal and is not: 3.8 writes × ~0.5 us = **~2 us per candidate
+against a ~107 us candidate, i.e. ~2%**, versus the ~44% the copy costs. The
+per-write cost is irrelevant because `apply` barely writes; it *reads* and
+*computes*. (Consistent with 4b's 6.43 mutated slots per candidate — the rest
+of the 6.43 are container slots.)
+
+So **300 of 470 sites (64%) need no call-site change at all and carry zero
+miss risk** — a `__setattr__` cannot be forgotten. The hand-converted surface
+drops to the 170 container mutations (subscripts, `append`/`pop`/…, `del`),
+which are also the ones that `grep` finds reliably.
+
+One wrinkle, already checked: the generated copiers assign `n.__dict__ = {…}`
+wholesale rather than field by field, so a journalling `__setattr__` fires
+**once per copied object, not once per field** — ~35 calls per `copy_state`,
+not ~400. And while the journal is on, `copy_state` is not running at all.
+
+### 9.4 Next steps — resume here
+
+- [x] Step 1: `engine/statediff.py` + 31 detection tests + `tools/gate.sh`
+      (commit 5f168fb). Gate green.
+- [ ] Step 2: `engine/journal.py` — `begin`/`rollback`, journalling
+      `__setattr__` for the 4 state dataclasses, container helpers for the
+      170 hand sites, and `JOURNAL_PARANOID=1` (copy_state oracle + statediff
+      on every rollback). Land with tests, **still converting no call site.**
+- [ ] Step 3: `emit()`. `copy_state` drops the log, so a trial apply must not
+      touch `state.log` — suppress `emit` while journalling, which is what the
+      copy path already does in effect. The log is in the digest.
+- [ ] Step 4: `_stats_cache` — clear on rollback (`invalidate` is 1.4%; much
+      safer than trying to restore it).
+- [ ] Step 5: convert containers module by module — `actions.py`, then
+      `effects.py`, `interact.py`, `game.py`, `events.py`, `economy.py` — with
+      `bash tools/gate.sh` after **each** module, plus a run under
+      `JOURNAL_PARANOID=1`.
+- [ ] Step 6: coverage check. The paranoid diff only proves the sites that the
+      135 games actually *execute*. Run the paranoid suite under `coverage.py`
+      and confirm every mutating line in the engine was reached; any unreached
+      mutating line is an unverified site and must be audited by hand. **This
+      is the residual risk 6.5 did not name** and it must not be skipped.
+- [ ] Step 7: flip GreedyBot from `copy_state` to journal, measure, gate.
