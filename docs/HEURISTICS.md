@@ -121,3 +121,162 @@ Eight rules. In rough order of how much they are worth.
    different by count — see the per-count section. **[mixed]**
 
 ---
+
+## Quick reference
+
+Everything in this section is **[rules]** — straight from `docs/RULES_SPEC.md`,
+which was built from the Code of Laws, the Handbook and FAQ v15. None of it is
+learned, none of it is opinion. Base game 2015, no expansion.
+
+### Card row: what a card costs in actions
+
+| Space (1 = leftmost) | Civil actions |
+|---|---|
+| 1–5 | 1 |
+| 6–9 | 2 |
+| 10–13 | 3 |
+
+A **wonder** costs the printed row cost **+1 CA per wonder you have already
+completed** (destroyed wonders still count), and goes straight into play
+sideways — it never enters your hand, so the hand limit does not apply. You may
+not take a wonder while another is unfinished. [RULES_SPEC §2.3–2.4]
+
+Other take limits: you may not take a card if your civil cards in hand ≥ your
+civil action *total*; you may not take a technology whose name you already have
+in hand or in play; you may never take a second leader of the same age, even if
+the first one has left play. [§2.5]
+
+### Sweep: how long a card survives
+
+At the start of every turn from round 2 on, the leftmost N cards are discarded
+and gone for good, then the row slides left and refills from the right.
+
+| Players | Cards swept per turn | Cards swept per full round |
+|---|---|---|
+| 2 | 3 | 6 |
+| 3 | 2 | 6 |
+| 4 | 1 | 4 |
+
+Six cards a round at 2p and 3p, four at 4p. A card sitting in space 7 at 2p has
+about one round to live. [§1.5, §2.1]
+
+### Population: cost, consumption, happiness
+
+Read the row by **how many yellow tokens are still in your bank**.
+
+| Yellow tokens left | Food to add a worker | Food consumed each turn | Happy faces required |
+|---|---|---|---|
+| 18–17 | 2 | 0 | 0 |
+| 16–15 | 3 | 1 | 1 |
+| 14–13 | 3 | 1 | 1 |
+| 12–11 | 4 | 2 | 2 |
+| 10–9 | 4 | 2 | 3 |
+| 8–7 | 5 | 3 | 4 |
+| 6–5 | 5 | 3 | 5 |
+| 4–3 | 7 | 4 | 6 |
+| 2–1 | 7 | 4 | 7 |
+| 0 | can't | 6 | 8 |
+
+The three numbers move on *different* squares, which is why they look
+misaligned: cost is the white number under the rightmost occupied section,
+consumption is the leftmost uncovered negative number, and the happiness
+requirement steps only when a whole subsection empties. Note the two nasty
+steps: **at 10 tokens left the happiness requirement jumps to 3** while
+consumption does not move, and **at 4 tokens left the pop cost jumps 5 → 7**.
+[§6.1, §6.3]
+
+You also **lose 2 yellow tokens from the bank at the end of Age I, II and
+III** — not at the end of Age A. That is 6 free-consumption-and-happiness
+penalties you get whether you like it or not. [§12.2]
+
+### Corruption
+
+Read by **how many blue tokens are still in your blue bank** (16 total).
+
+| Blue tokens in bank | Resources paid each turn |
+|---|---|
+| 16–11 | 0 |
+| 10–6 | 2 |
+| 5–1 | 4 |
+| 0 | 6 |
+
+Blue tokens sitting on your unfinished wonder are *out of the bank*, so a
+half-built wonder actively costs you corruption. Corruption is paid **before**
+production in the 2015 sequence, and a shortfall is taken out of your food.
+[§6.2, §6.6]
+
+### End-of-turn sequence (2015 order — memorise this one)
+
+1. Discard military cards down to your military action total.
+2. **Uprising check**: if discontent workers > unused workers, **skip step 3
+   entirely**.
+3. Production: (a) score science and culture, (b) pay corruption in resources,
+   shortfall in food, (c) produce food, (d) pay consumption — **4 culture lost
+   per missing food**, (e) produce resources.
+4. Draw 1 military card per unused military action, max 3. None in Age IV.
+5. Reset all actions.
+
+Note what this ordering means: an uprising costs you your culture and science
+score *for the turn* as well as your production, but it does **not** stop your
+military draw. And corruption is charged before your mines produce, so a bad
+blue bank hits you a full turn earlier than it feels like it should. [§6.6]
+
+### Happiness and uprisings
+
+Happiness rating = happy faces from cards and workers, minus unhappy faces,
+clamped 0–8. **Discontent workers = happy faces required − your happiness
+rating** (min 0). An uprising happens when discontent workers exceed your
+**unused** workers. Unused workers do not reduce discontent — they only
+absorb it. [§6.3]
+
+### Actions
+
+- Civil and military actions are spent in any order and any mix during the
+  Action Phase, and **do not carry over** to the next turn.
+- Your **civil hand limit is your civil action total** (checked only when
+  taking a card). Your **military hand limit is your military action total**
+  (checked only at end of turn).
+- A **revolution** costs *all* your civil actions plus the lower science cost,
+  and any civil actions the new government grants are burned immediately. A
+  **peaceful change** costs 1 CA plus the higher science cost and lets you keep
+  playing. [§3, §8]
+- At most **one** play-or-copy tactic action per Action Phase; at most **one**
+  political action per turn. [§4, §5.1]
+
+### Ages and the end of the game
+
+- Age A ends at the **first card-row replenish** (i.e. immediately, on the
+  starting player's second turn).
+- Ages I, II, III end the moment the **last card of the current civil deck is
+  dealt into the row** — mid-replenish, on anybody's turn.
+- When an age ends, cards **older** than the age that just ended are
+  antiquated: discarded from hands, leaders removed from play, unfinished
+  wonders removed, pacts removed. Technologies, completed wonders, colonies,
+  exclusive tactics and declared wars all survive. Everyone loses 2 yellow
+  tokens.
+- **A leader in play survives through the age after its own.** An Age I leader
+  dies when Age II ends.
+- When the Age III civil deck runs out, Age IV begins. **If that happens during
+  the starting player's turn, this round is the last; otherwise the next round
+  is.** Everyone gets the same number of turns. [§12.1–12.3]
+
+### Final scoring
+
+After the last turn, **every Age III event still sitting in the current or
+future events decks is evaluated**. Age I and Age II events left over are
+simply ignored. Ranked events ("14/7/0") are tie-broken as if it were the
+starting player's turn. Most culture wins; ties share the win. [§12.5]
+
+### 2p / 3p / 4p rules differences
+
+| Rule | 2p | 3p | 4p |
+|---|---|---|---|
+| Civil decks I–III trimmed | remove 9 per deck | remove 3 per deck | none |
+| Military decks | **all pacts removed** | full | full |
+| Sweep per turn | 3 | 2 | 1 |
+| Age A current events | 4 | 5 | 6 |
+| First-round civil actions | 1, 2 | 1, 2, 3 | 1, 2, 3, 4 |
+| Pacts playable | **no** | yes | yes |
+| "Two strongest/weakest" | read as "the stronger/weaker" | normal | normal |
+
+Everything else is identical. [§13]
