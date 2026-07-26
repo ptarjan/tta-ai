@@ -308,3 +308,38 @@ change.** (The digests moved — `3229c4a0` -> `c2befef1`, `c7e73ede` ->
 **Current cross-interpreter baseline digests: narrow `c2befef1…`, wide
 `47e06a41…`.**
 
+## 4. Task 5 — copy_state optimisation
+
+`copy_state` is ~64% of GreedyBot runtime: the bot copies the entire
+`GameState` once per candidate move. Microbenchmark: `tools/bench_copy.py`
+(12 mid-game 4p states, `time.process_time`, `nice -n 10`, climbs running).
+
+Absolute copies/cpu-s drift with machine load (the same code measured 5054,
+5817 and 6846 on three different days/loads), so every number below is an
+**A/B pair measured back-to-back in the same minute**, and the ratio is the
+result — not the absolute.
+
+### 4a. Leaf-class fast path for `TechCard` / `WonderInProgress` — **1.55x**
+
+A mid-game 4p state holds ~31 `TechCard`s out of ~35 dataclasses copied, so
+almost all of the dataclass work is these two tiny all-scalar classes.
+`_cdc`'s generic path built an intermediate dict, tested every field's type
+and then `.update()`d it onto the `__dict__` that `__new__` had already
+allocated. The new `_LEAF` path is `cls.__new__(cls)` plus one C-level
+`dict(v.__dict__)` — no Python-level loop, no per-field type test, no
+intermediate dict. The generic `_cdc` also lost its intermediate dict (dict
+comprehension assigned straight onto `__dict__`), and empty list/dict get a
+literal instead of a comprehension.
+
+An import-time guard (`_check_leaf`) raises if either class ever grows a
+non-scalar field, so the fast path cannot silently start sharing mutable
+state with the real game.
+
+| A/B pair (back to back) | before | after | ratio |
+|---|---|---|---|
+| 3 s warm / 8 s measure | 6846 copies/cpu-s (146.1 us) | **10498** (95.3 us) | **1.53x** |
+| 2 s warm / 6 s measure | 5817 copies/cpu-s (171.9 us) | **9330** (107.2 us) | **1.60x** |
+
+**Verification gate: PASSED** — 58/58 tests OK, narrow `c2befef1…` and wide
+`47e06a41…` both unchanged (135/135 games byte-identical).
+
