@@ -13,6 +13,18 @@ Status: DRAFT — being refined incrementally.
 8. `sources/tts_tta_workshop_2120085710.json` — Tabletop Simulator workshop mod for the 2015 edition. Its civil decks are pre-split into `Civil_N`, `Civil_N (3+)` and `Civil_N (4)` piles, i.e. it states the corner marks directly. Independent confirmation of #7 (they agree card-for-card). Ignore its `(NWL)` decks — those are the New Leaders and Wonders expansion.
 9. `sources/vassal_NewTTA_2.49.vmod` (+ extracted `..._buildFile.xml`, `..._card_counts.tsv`) — Vassal module. NOTE: despite the "NewTTA" filename this is the **2006** edition (Ideal Building Site / Mineral Deposits / Bountiful Harvest / Work of Art); no Vassal module exists for the 2015 edition. Historical cross-check only.
 
+## Pending third opinion — BGG file section (NOT YET OBTAINED, do not cite as evidence)
+Two BGG files were identified as an intended independent cross-check for the card data. **Neither has been downloaded**, so **no value in `data/cards_civil.json` or `data/cards_military_actions.json` derives from either of them**, and nothing in this document has been changed on their account.
+
+| BGG fileid | filepage | file | status |
+|---|---|---|---|
+| 154670 | 123302 | `Through the Ages - A New Story of Civilization - Card Reference v1.09.pdf` (800,909 B, 27,322 downloads) | metadata read; body blocked |
+| 409053 | 293343 | `_PLAYER CARD COUNTS.xls` ("Through the Ages Card Counts" v1.1, 2025-01; 144,896 B) | metadata read; body blocked |
+
+Blocker (2026-07-26): the BGG login for `ptarjan` now **works**, but every authenticated file download redirects to `https://boardgamegeek.com/read_terms`, BGG's GDPR Terms-of-Service re-affirmation form. That form is a binding legal agreement (it names the jury-trial waiver, the arbitration requirement and the class-action prohibition) and was deliberately **not** accepted on the user's behalf. One human click on boardgamegeek.com clears it; see `docs/EXTERNAL_AIS.md` §5c for the full recipe afterwards.
+
+**Independence caveat, recorded now so it is not forgotten later:** 154670's own uploader description states *"Card data retrieved from BGO v 2.5, which I believe to be the final (printed) revision."* So it is a transcription of **Boardgaming-Online's** 2015 implementation, not of the physical cards. It is independent of sources #7 (BGA Studio) and #8 (Tabletop Simulator) and therefore still a valid third opinion — but it is **not** independent of any data we might later pull from BGO itself. When it lands, the standing rule applies: BGG is a *third opinion*; any disagreement with our resolved values gets **both** numbers written into this file and flagged, never silently applied. Re-run `python3 data/validate_cards.py` after any change.
+
 ## Edition filtering performed
 NamuWiki lists include content that is NOT in the base 2015 game. Excluded:
 
