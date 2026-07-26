@@ -144,14 +144,19 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
         t0 = time.time()
         best = None
         tried = []
+        broken = 0
         for j in range(lam):
             mutant, moved = mutate(champion, rng, sigma)
-            m, se, lo, n, _ = challenge(
+            m, se, lo, n, res = challenge(
                 mutant, champion, players, screen, max_games,
                 seed0=(gen * 1_000_003 + j * 7717 + seed) % 10_000_019,
                 workers=workers)
             tried.append({"wr": round(m, 4), "lo": round(lo, 4), "n": n,
                           "moved": len(moved)})
+            if n == 0 or (res and res.get("errors", 0) > res.get("games", 0)):
+                broken += 1
+                tried[-1]["engine_errors"] = (res or {}).get("errors", 0)
+                tried[-1]["error_sample"] = (res or {}).get("error_sample", [])
             if lo > 1.0 / players and (best is None or lo > best[2]):
                 best = (mutant, m, lo, n, moved, se)
 
@@ -173,6 +178,8 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             "sigma": round(sigma, 4), "secs": round(time.time() - t0, 1),
             "tried": tried, "at": time.strftime("%F %T"),
         }
+        if broken:
+            rec["broken"] = broken
         if accepted:
             rec.update({"win_rate": round(best[1], 4),
                         "ci_low": round(best[2], 4),
@@ -197,6 +204,14 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             + (f" | vs_default={rec.get('vs_default')} "
                f"vs_greedy={rec.get('vs_greedy')}" if "vs_default" in rec else ""))
         sys.stdout.flush()
+        # The engine is edited under us by another process.  If a generation
+        # produced no playable games at all, back off instead of burning the
+        # budget (and the log) at hundreds of empty generations per minute.
+        if broken == lam:
+            log(f"[{players}p] no playable games this generation "
+                f"-- engine likely mid-edit, sleeping 60s")
+            sys.stdout.flush()
+            time.sleep(60)
     return champion
 
 

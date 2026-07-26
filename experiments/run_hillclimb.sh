@@ -15,9 +15,15 @@ LOG=experiments/logs/hc_${K}p.log
 END=$(python3 -c "import time,sys; print(time.time()+float(sys.argv[1])*3600)" "$H")
 echo "=== hillclimb ${K}p started $(date) budget ${H}h workers=$W lambda=$L ===" >> "$LOG"
 while python3 -c "import time,sys; sys.exit(0 if time.time() < float(sys.argv[1]) else 1)" "$END"; do
+    T0=$SECONDS
     python3 -m experiments.hillclimb --players "$K" --hours 1 --workers "$W" \
         --lambda "$L" --screen "$S" --max-games "$M" >> "$LOG" 2>&1
-    echo "--- climber exited ($?), restarting $(date) ---" >> "$LOG"
-    sleep 3
+    RC=$?
+    DT=$(( SECONDS - T0 ))
+    echo "--- climber exited ($RC) after ${DT}s, restarting $(date) ---" >> "$LOG"
+    # A near-instant exit means the engine does not import (another agent is
+    # mid-edit).  Back off hard so we do not spin, but keep retrying: the
+    # next restart picks up the repaired engine automatically.
+    if [ "$DT" -lt 60 ]; then sleep 60; else sleep 3; fi
 done
 echo "=== hillclimb ${K}p finished $(date) ===" >> "$LOG"

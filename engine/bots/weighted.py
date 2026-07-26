@@ -178,8 +178,8 @@ def features(state, idx, ctx=None):
         "strength_deficit": max(0, -rel),
         "strength_lead": min(6, max(0, rel)),
         "tactic_level": meta.get(p.tactic, ("?", 0))[1] if p.tactic else 0,
-        "colonies": len(p.colonies),
-        "pacts": len(p.pacts),
+        "colonies": len(getattr(p, "colonies", ()) or ()),
+        "pacts": len(getattr(p, "pacts", ()) or ()),
         # --- technology
         "tech_levels": tech_levels,
         "gov_level": meta.get(p.government, ("?", 0))[1],
@@ -194,7 +194,7 @@ def features(state, idx, ctx=None):
         "num_techs": len(p.techs),
         "special_techs": special_techs,
         # --- wonders / leader
-        "wonders": len(p.completed_wonders),
+        "wonders": len(getattr(p, "completed_wonders", ()) or ()),
         "wonder_progress": progress,
         "wonder_remaining": remaining,
         "leader": 1.0 if p.leader else 0.0,
@@ -355,7 +355,11 @@ class WeightedBot:
         if len(moves) == 1:
             return moves[0]
         idx = state.current
-        ctx = rival_context(state, idx)
+        try:
+            ctx = rival_context(state, idx)
+        except Exception:
+            ctx = {"rival_culture_rate": 0, "rival_science_rate": 0,
+                   "rival_strength": 0}
         w = self.weights
         end_bias = w.get("end_turn_bias", 0.0)
         best, best_val = None, None
@@ -363,14 +367,19 @@ class WeightedBot:
             trial = copy_state(state)
             try:
                 actions.apply(trial, mv, random.Random(0))
+                val = evaluate(trial, idx, w, ctx)
             except Exception:
+                # The engine grows new move types and new state fields under
+                # us; an unscorable candidate is skipped, never fatal.  If
+                # every candidate is unscorable we still return a legal move.
                 continue
-            val = evaluate(trial, idx, w, ctx)
             if mv[0] == "end_turn":
                 val += end_bias
             if best_val is None or val > best_val:
                 best, best_val = mv, val
-        return best if best is not None else moves[0]
+        if best is None:
+            return self.rng.choice(moves)
+        return best
 
 
 # ------------------------------------------------------------------- io
