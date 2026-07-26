@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import cards as C
 from . import economy
 from . import effects
+from . import journal
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -120,7 +121,7 @@ def _draw_military(state, p, n):
         card = economy.draw_military(state)
         if card is None:
             return
-        p.hand_military.append(card)
+        journal.touch(p.hand_military).append(card)
 
 
 # ------------------------------------------------------------ event decks
@@ -132,13 +133,13 @@ def reveal_current_event(state, rng):
         _recycle_future_events(state, rng)
         if not state.current_events:
             return None
-    name = state.current_events.pop()
+    name = journal.touch(state.current_events).pop()
     db = _DB
     if name in db.by_name and db.type_of(name) == "territory":
         # §11.1: a territory starts a colonization auction instead
         interact.start_auction(state, name, state.current, rng)
     else:
-        state.past_events.append(name)
+        journal.touch(state.past_events).append(name)
         resolve_event(state, name, rng, state.current)
     if not state.current_events:
         _recycle_future_events(state, rng)
@@ -485,7 +486,7 @@ def start_aggression(state, attacker, name, defender, rng):
     if defender.leader == "Mahatma Gandhi":
         cost *= 2
     attacker.military_actions -= cost
-    attacker.hand_military.remove(name)
+    journal.touch(attacker.hand_military).remove(name)
     economy.discard_military(state, name)
     atk = effects.attack_strength(state, attacker, defender)  # §5.4.2
     effects.cancel_attack_pacts(state, attacker, defender)    # §5.4.3
