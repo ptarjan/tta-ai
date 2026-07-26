@@ -31,15 +31,41 @@ def load_spec(spec):
     ``random`` / ``greedy`` / ``default`` are the built-in bots; anything
     else is a path to a JSON weight file (either a bare dict or a
     ``{"weights": {...}}`` checkpoint).
+
+    A ``quiesce:`` prefix runs the SAME weights under
+    :class:`engine.bots.quiescent.QuiescentBot` instead of the 1-ply
+    ``WeightedBot``, so ``--a quiesce:experiments/champion_4p.json --b
+    experiments/champion_4p.json`` is an exact search-only A/B.  Optional
+    tuning follows the path, comma-separated: ``quiesce:FILE,depth=8,nodes=300,
+    war=0``.  The returned spec is a plain tuple/dict, still picklable.
     """
     if spec in BUILTINS:
         return spec
+    if spec.startswith("quiesce:"):
+        rest = spec[len("quiesce:"):].split(",")
+        path, opts = rest[0], {}
+        for kv in rest[1:]:
+            if not kv:
+                continue
+            k, _, v = kv.partition("=")
+            opts[k.strip()] = int(v)
+        inner = "default" if path in ("", "default") else load_spec(path)
+        return ("quiescent", inner, opts)
     from engine.bots.weighted import load_weights
     return load_weights(spec)
 
 
 def make_bot(spec, seed):
     from engine import bots as B
+    if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
+        from engine.bots.quiescent import QuiescentBot
+        _, inner, opts = spec
+        w = None if inner == "default" else inner
+        return QuiescentBot(weights=w, seed=seed,
+                            max_depth=opts.get("depth"),
+                            max_nodes=opts.get("nodes"),
+                            war_lookahead=(None if "war" not in opts
+                                           else bool(opts["war"])))
     if spec == "random":
         return B.RandomBot(seed=seed)
     if spec == "greedy":
@@ -50,6 +76,8 @@ def make_bot(spec, seed):
 
 
 def spec_name(spec, fallback):
+    if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
+        return "quiescent"
     return spec if isinstance(spec, str) else fallback
 
 
