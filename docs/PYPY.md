@@ -966,6 +966,27 @@ should first be re-derived **on the merge-base of master**, not debugged. If
 master's digest and the branch's digest agree, the branch is clean whatever
 the number is.
 
+#### Re-derived AGAIN after rebasing onto master `15b9764` (2026-07-26)
+
+Master moved twice more while the branch was parked: `af114aa` (docs only) and
+`15b9764` (resets the `colonies`/`pacts` weights in the three
+`experiments/champion_*.json`). Per the rule above the digests were re-derived
+from scratch **on the master worktree at `15b9764`** before the branch was
+trusted:
+
+```
+narrow c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a
+wide   47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d
+```
+
+**Still unchanged**, and again for a structural reason rather than luck:
+`grep champion engine/perf_check.py engine/bots/*.py` is empty — the
+fingerprint constructs its bots directly and never loads a champion file, so
+no amount of hill-climb weight movement can touch it. Combined with 9.0's
+finding (GreedyBot-only, so `WeightedBot`/feature-vector commits are inert),
+the fingerprint is insensitive to *every* kind of change master has made so
+far during this branch's life. `tools/gate.sh` still needs no edit.
+
 ### 9.1 Step 1 — the paranoid structural differ (commit 5f168fb, DONE)
 
 6.6 condition 2: differ first, no call site converted. `engine/statediff.py`
