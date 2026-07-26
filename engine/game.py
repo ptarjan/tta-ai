@@ -28,6 +28,7 @@ from . import effects
 from . import events
 from .actions import ROW_SIZE, apply, legal_moves  # noqa: F401 (re-export)
 from .state import GameState, PlayerState, TechCard
+from . import journal
 
 START_TECHS = {
     "Warriors": 1,
@@ -67,7 +68,7 @@ def new_game(num_players, seed=0):
         # §1.9: first round civil actions are 1, 2, 3, 4 by seating order
         p.civil_actions = i + 1
         p.military_actions = 0
-        state.players.append(p)
+        journal.touch(state.players).append(p)
 
     state.start_player = 0
     state.current = 0
@@ -114,7 +115,7 @@ def _replenish(state, rng):
     n = _sweep_count(state)
     row = state.card_row
     for i in range(min(n, len(row))):
-        row[i] = None
+        journal.touch(row)[i] = None
     kept = [c for c in row if c is not None]
     state.card_row = kept + [None] * (ROW_SIZE - len(kept))
     _deal(state, rng)
@@ -131,7 +132,7 @@ def _deal(state, rng):
             continue
         if not state.civil_deck:
             break
-        state.card_row[i] = state.civil_deck.pop()
+        journal.touch(state.card_row)[i] = journal.touch(state.civil_deck).pop()
         if not state.civil_deck:
             # §2.2: the age ends the moment its last card is dealt
             _advance_age(state, rng)
@@ -220,7 +221,7 @@ def start_turn(state, rng=None):
         events.resolve_war(state, p, rng)        # §5.7
         if p.tactic_exclusive:                   # §10.2 tactic goes public
             if p.tactic and p.tactic not in state.available_tactics:
-                state.available_tactics.append(p.tactic)
+                journal.touch(state.available_tactics).append(p.tactic)
             p.tactic_exclusive = False
     state.last_round = (state.final_round_end is not None
                         and state.round >= state.final_round_end)
