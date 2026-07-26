@@ -147,7 +147,7 @@ actions genuinely have nowhere to go. The waste is real but it is a
 
 ---
 
-## 6. Trying to fix it — and why the obvious fix makes the bot WORSE
+## 6. The obvious fix makes the bot WORSE
 
 This is the part that changes the recommendation, so it is reported in full.
 
@@ -168,13 +168,21 @@ gen 220) so the live hill climb could not move the target:
 | `passfix`, eps 0.0 | **38.4% ± 4.8%** | 400 |
 | `passfix`, eps −0.05 | **39.8% ± 4.8%** | 400 |
 | `horizon`, eps −0.01 | **29.8% ± 4.4%** | 400 |
+| `horizon`, eps +4.0 (pass *more*) | **11.0% ± 4.3%** | 200 |
 | (null) | 50.0% | |
 
-**Every fix that removes the artifact makes the bot significantly weaker.**
-Mean culture drops from 127.5 to 113.2. That is not noise; it is 10+ points
-outside the interval.
+**Every attempt to fix the waste by adjusting *when to pass* makes the bot
+significantly weaker.** Mean culture drops from 127.5 to 113.2. That is not
+noise; it is 10+ points outside the interval.
 
-### Why: the bug is load-bearing
+Note the last row, which is the control: pushing the threshold the *other*
+way, so the bot passes even more often, is catastrophic — 11.0% win rate,
+67.3 culture against 152.1. **Wasting actions is enormously expensive.** The
+player's intuition is not merely correct, it is correct by a huge margin;
+the champion is leaving a great deal on the table. The problem is that you
+cannot capture it by simply lowering the bar for acting.
+
+### Why: it is not the passing rule that is broken
 
 The behavioural measurement explains it. Waste rate at 2p, 60 games:
 
@@ -189,13 +197,15 @@ it, because the bot now spends its early actions on marginal moves, reaches
 different (worse) positions, and still refuses Age III takes since
 `hand_value_late` is −0.78 regardless.
 
-The deeper reason is that **the flattery was accidentally doing a useful job:
-it is a move-quality filter.** With a +12 phantom in front of it, only moves
-the evaluation is *confident* about get played — `develop` (+10.7),
-`wonder_step` (+8.9), `build` (+2.9). Everything the evaluation cannot
-actually rank — `take` (−0.16, and identical for every card in the row),
-`pop` (−0.06), `destroy` (−4.95) — is filtered out. Drop the threshold to
-zero and the bot starts acting on evaluation *noise*.
+The +12 phantom was incidentally acting as a **move-quality filter**: only
+moves the evaluation is *confident* about cleared it — `develop` (+10.7),
+`wonder_step` (+8.9), `build` (+2.9) — while everything it cannot actually
+rank — `take` (−0.16, and identical for every card in the row), `pop`
+(−0.06), `destroy` (−4.95) — was screened out. Lower the bar and the bot
+starts acting on evaluation *noise*; raise it and the bot does nothing at
+all (11%). Neither direction is the answer, because **the threshold was
+never the real variable.** What is broken is the bot's ability to tell one
+action from another.
 
 So this is a **compensating-errors** situation, and the second error is the
 one that matters:
@@ -209,24 +219,52 @@ one that matters:
 That is why taking a card scores ≈ 0. The bot is not undervaluing yellow
 cards specifically — it cannot value *any* card. Refusing to act is its
 least-bad policy given an evaluation that cannot tell it what acting is
-worth. **The user's instinct is correct about the game and the bot is wrong;
-but the wasted action is a symptom, and deleting the symptom without curing
-the cause loses 10 culture a game.**
+worth.
 
-## 7. Ranked fix
+## 7. Fixing the root cause instead — and this one works
 
-1. **Make the evaluation see what a card does (root cause).** Score a card in
-   hand by the features it would add if played — its tech's production, its
-   wonder's culture, its action card's gains — discounted for the actions and
-   science it still needs. Until this exists, no `end_turn` change can help,
-   because there is nothing accurate to spend the freed actions on. This
-   subsumes the `hand_value_late = −0.78` pathology, which is the hill climb
-   correctly learning "cards this bot holds never become anything".
-2. **Then remove the horizon artifact**, preferably as `HorizonBot`'s
-   same-horizon scoring rather than a constant, and **re-run the hill climb**.
-   `end_turn_bias` must be retrained, not carried over: its current −8.28 is
-   fitted to cancel a +12 phantom that would no longer exist. Doing step 2
-   without step 1 is a measured 10-culture regression.
+`analysis/cardvalue_duel.py` adds exactly one term to the evaluation: for
+every card still in hand, a discounted estimate of what it would be worth if
+played, priced through the **same weight vector** (a lab's science production
+via `science_rate`, an action card's `gainScience` via `science`, a wonder's
+`civilActions` via `civil_actions`). No new hand-tuned constants, and it
+gives cards distinguishable values where `hand_value` gave every Age I card
+the same number:
+
+```
+Theology +6.45   Pyramids +6.11   Philosophy +3.33
+Bronze   +0.92   Ocean Liners +3.03   Warriors −0.57
+```
+
+Crucially this changes **nothing** about the search or the passing rule. The
+`end_turn` flattery and `end_turn_bias = −8.28` are left fully in place. The
+only difference is that the bot can now tell a good card from a bad one:
+
+| bot (champion search, bug left in) | win rate vs champion @2p | mean culture | n |
+|---|---|---|---|
+| `cardvalue`, disc 1.0 | **63.2% ± 4.7%** | 120.5 vs 107.7 | 400 |
+| `cardvalue`, disc 0.5 | **63.2% ± 4.7%** | 123.8 vs 110.4 | 400 |
+| `cardvalue`, disc 0.25 | **67.2% ± 4.6%** | **133.2 vs 110.8** | 400 |
+| (null) | 50.0% | | |
+
+**+17 points of win rate and +22 culture, from one term, with the `end_turn`
+bug untouched.** That is the confirmation that card-identity blindness — not
+the horizon artifact — is the disease. It also explains why the hill climb
+drove `hand_value_late` to −0.78: given a bot that could never turn a card
+into anything, "cards in hand are bad" was a *correct* thing to learn.
+
+## 8. Ranked fix
+
+1. **Make the evaluation see what a card does (root cause). VALIDATED above:
+   +17 points of win rate at 2p, on its own.** Score a card in hand by the
+   features it would add if played, discounted (0.25 measured best of the
+   three tried). `analysis/cardvalue_duel.py` is a working reference
+   implementation; folding it into `weighted.features()` is the real fix.
+2. **Only then remove the horizon artifact**, as `HorizonBot`'s same-horizon
+   scoring rather than a constant, and **re-run the hill climb**.
+   `end_turn_bias` (−8.28) and `hand_value_late` (−0.78) are fitted to the
+   present bug and must be retrained, not carried over. Doing this step
+   *without* step 1 is a measured 10–20 culture regression (§6).
 3. **Investigate the 4p champion's weight vector separately** (§5). `science`
    = −6.09 makes gaining 4 science score −24, which is why playing
    `Revolutionary Idea` is valued at −36.85. `workers` = −1.94 and
@@ -235,16 +273,17 @@ the cause loses 10 culture a game.**
    re-seeded from defaults.
 4. **Do not** simply retune `end_turn_bias`. It is a constant fighting a term
    that scales with the economy (+7.05 in Age I, +26.28 in Age IV); no value
-   of it is right for more than one age.
+   of it is right for more than one age, and both directions were measured
+   worse (§6).
 
-## 8. Reproducing
+## 9. Reproducing
 
 ```bash
 python3 analysis/wasted_actions.py --players 2 --games 200 \
     --champion analysis/frozen/champion_2p.json --out /tmp/wasted_2p.json
 python3 analysis/wasted_summary.py /tmp/wasted_2p.json
-python3 analysis/passfix_duel.py --players 2 --games 400 \
-    --champion analysis/frozen/champion_2p.json --mode horizon --eps -0.01
+python3 analysis/cardvalue_duel.py --players 2 --games 400 \
+    --champion analysis/frozen/champion_2p.json --mode plain --disc 0.25
 ```
 
 `python3 -m unittest discover -s tests -q` → 58 tests, OK (there is no pytest
@@ -252,55 +291,49 @@ in this environment). No file under `engine/` was modified by this work.
 
 ---
 
-## 9. Verdict
+## 10. Verdict
 
-**Is the "declines its own improvement" finding still real? Yes.** 60.1% of
-2p wasted-action turns (44.9% at 3p) are turns where the bot's *own*
-evaluation scored an available move above doing nothing, and it threw the
-action away instead. That number is a direct comparison of the bot's stated
-preference against its actual choice, so no later result can explain it away.
-Only 1.6% of 2p wasted actions had genuinely nothing legal to spend on. The
-player's instinct — *taking or playing a card is almost always worth it* —
-is correct about Through the Ages, and the bot is wrong.
+**Is the "declines its own improvement" finding real? Yes, and it reproduces.**
+At 2p, **98.4%** of the turns where the champion destroys a civil action had
+an affordable legal move available, and in **60.1%** of them (44.9% at 3p) the
+bot declined a move its *own* evaluation scored above doing nothing. Only
+**1.6%** had genuinely nothing legal to spend on. Re-measured on the current
+deck after the `7d40f53` military-count fix: 3553 wasted-action turns and
+14183 civil actions destroyed over 200 games, against 3557 / 14229 before —
+unchanged.
 
-**But the cause is not the thing that looks like the cause.** The visible
-defect is that `end_turn` is scored on a child state that has already banked
-a production phase (+12.6 eval points on average at 2p, +26.3 in Age IV),
-against which real moves worth fractions of a point cannot compete. Removing
-that asymmetry — by either of the two principled methods, at four different
-thresholds — makes the bot **significantly weaker** (29.8%–39.8% win rate vs
-a 50% null, ~15 culture per game). Measured, not assumed.
+**The player's instinct is right, and by a larger margin than expected.** The
+control experiment settles it: a bot tuned to pass *more* often scores 67.3
+culture against the champion's 152.1 and wins 11% of games. Actions are worth
+an enormous amount, and the champion is leaving a great deal on the table.
 
-**The actual root cause is card-identity blindness.** `features()` compresses
-the civil hand to a count and a sum of age levels. Two different cards are
-literally the same feature vector, so taking any card scores ≈ 0 and the
-search has no basis to prefer a good one. The production flattery was
-accidentally functioning as a *move-quality filter*: it admitted only moves
-the evaluation could confidently price (`develop` +10.7, `wonder_step` +8.9,
-`build` +2.9) and screened out the ones it could not (`take` −0.16, `pop`
-−0.06). Delete the filter without fixing the blindness and the bot spends its
-newly freed actions on noise. Two bugs were partially cancelling; removing
-one alone is a regression.
+**But the visible defect is not the root cause.** `end_turn` is scored on a
+child state that has already banked a production phase — worth +12.6
+evaluation points on average at 2p and +26.3 in Age IV — while real moves are
+worth fractions of a point. That is a genuine search artifact, and
+`end_turn_bias` is a constant that cannot cancel a term which scales with the
+economy. Yet removing it, by two different principled methods at five
+thresholds, made the bot **significantly weaker every time** (11.0%–39.8% win
+rate against a 50% null). Measured, not assumed.
 
-**What would fix it properly**, in order — full detail in §7:
+**The root cause is card-identity blindness, and fixing it works.**
+`features()` compresses the whole civil hand to a count and a sum of age
+levels, so two different cards are literally the same feature vector: taking
+any card scores ≈ 0 and the search has no basis to prefer a good one. Adding
+a single term that values a card by *what it does* — with the search, the
+`end_turn` flattery and `end_turn_bias` all left exactly as they are — wins
+**67.2% ± 4.6%** of games and gains **+22 culture** (§7). The waste was a
+symptom of an evaluation that could not tell the bot what acting was worth;
+the passing rule was never the real variable.
 
-1. Value a card in hand by *what it does* (its production, its effects, its
-   gains), priced through the existing weight vector. `analysis/cardvalue_duel.py`
-   prototypes this; the estimates discriminate sensibly (Theology +6.45,
-   Pyramids +6.11, Bronze +0.92, Warriors −0.57) where `hand_value` gives
-   every Age I card the same number.
-2. *Then* remove the horizon artifact via same-horizon scoring, and **re-run
-   the hill climb** — `end_turn_bias` (−8.28) and `hand_value_late` (−0.78)
-   are fitted to the bug and must not be carried over.
-3. Re-seed the 4p champion; `science` = −6.09, `workers` = −1.94 and
-   `civil_actions` = −2.86 are a degenerate basin, not a search artifact (§5).
+**Actionable order** (detail in §8): (1) fold card-identity valuation into
+`weighted.features()` — validated, +17 points of win rate on its own;
+(2) *then* remove the horizon artifact via same-horizon scoring and re-run the
+hill climb, since `end_turn_bias` (−8.28) and `hand_value_late` (−0.78) are
+fitted to the present bug; (3) re-seed the 4p weight vector, which is
+degenerate for unrelated reasons (§5). **Do not ship (2) without (1)** — alone
+it is a 10–20 culture regression.
 
-**Do not** ship step 2 alone. It is a measured ~15-culture-per-game
-regression, and this document exists because that is not obvious from the
-symptom.
-
-**What is NOT yet established:** that step 1 actually recovers the loss. The
-prototype in `analysis/cardvalue_duel.py` is written and its card estimates
-are sane, but its A/B against the champion had not finished when this was
-written, and in any case the honest test of steps 1+2 is a *re-trained*
-champion, not the current weights with a new scorer bolted on.
+**Still open:** whether (1) and (2) together beat (1) alone, and whether a
+re-trained champion recovers more than the +22 culture measured here. Both
+need a hill-climb run, which is out of scope for this investigation.
