@@ -874,12 +874,11 @@ could change the recommendation, so do it first.
 ### Ordered follow-ups
 
 1. **§3** — pure research, no code. Cheapest remaining unknown and it gates §7.
-2. **The BGG ToS click** (user, 30 seconds) — then download fileids 154670 and 409053
-   into `sources/` and cross-check against `data/cards_civil.json` /
-   `data/cards_military_actions.json`. Rule: BGG is a *third opinion*; disagreements get
-   **both** values written into `docs/SOURCES.md` and flagged, never silently applied.
-   Re-run `python3 data/validate_cards.py` after any change. See the "Pending third
-   opinion" block in `docs/SOURCES.md`.
+2. ~~**The BGG ToS click**~~ **DONE** — both files downloaded and cross-checked; see the
+   BGG section of `docs/SOURCES.md`. Civil side: **confirmation**, no change. Military
+   side: the `.xls`'s second sheet found a **real bug in our own data** (Age I tactics are
+   1 copy where BGA, TTS and BGG all say 2). **Not applied — awaiting the user**, because
+   it changes deck composition and the hill climb is live. That is now the top open item.
 3. **BGO outcome metadata** (§5a option 1) — POST `idJeu=10` to `index.php?cnt=14`, walk
    `pg=1..3566` at 50 games/page, keep game id / players / level / dates / final age /
    rounds / scores. ≈3.6k polite GETs. Purpose: calibrate our score distribution. Be
