@@ -238,6 +238,49 @@ and grow population at the right moments does not help when the rest of its
 play is still optimising for near-term culture. Whatever is wrong is in the
 shape of the evaluator, not in a handful of decisions.
 
+## BookBot v2: rebuilt on the tournament tier list
+
+`BookBot(version=2)` replaces v1's opinion-derived card ranks with the
+empirical tournament ordering from `docs/EXPERT_STRATEGY.md`, adds a convex
+card-row price ladder (76% of Age I picks at 1 CA), a never-take list
+(Theology, Stock Pile, Patriotism, Cultural Heritage, Frugality), and the
+conditional leader rules the sources insist on (Leonardo needs Alchemy or
+Printing Press; Columbus needs a colony in hand).
+
+The tier list moved several ranks a long way. v1 had Michelangelo at 9 and
+Julius Caesar at 8; the tournament data has them at 0.00 and 0.03 CA-spend
+respectively — near the bottom. v1 had Colossus mid-table; the study finds it
+*anti-correlated with winning*.
+
+Where the experts genuinely split, `V2_TUNABLES` exposes the call as a
+parameter rather than hard-coding a side: Pyramids vs Library of Alexandria,
+Great Wall, Taj Mahal, Hanging Gardens, Iron vs 3-Bronze, and Theology.
+
+| matchup | players | n | win rate | 95% CI | null | p |
+|---|---|---|---|---|---|---|
+| **v2 vs champion** | 2 | 800 | **66.5%** | ±3.3% | 50.0% | <0.0001 |
+| **v2 vs champion** | 3 | 600 | **46.2%** | ±4.0% | 33.3% | <0.0001 |
+| v2 vs v1 | 2 | 1600 | 52.1% | ±2.4% | 50.0% | 0.098 |
+| v2 vs v1 | 3 | 600 | 31.4% | ±3.7% | 33.3% | 0.31 |
+
+**Against the champion, v2 is clearly the better yardstick**: it lifts the
+margin from 62.9% to 66.5% at 2p and from 42.2% to 46.2% at 3p. As a training
+opponent it raises the bar.
+
+**Against v1, the honest answer is that the tier list barely helped.** v2 is
++2.1% at 2p (p=0.098 — suggestive, not significant even at n=1600) and
+*slightly negative* at 3p (p=0.31). That is a genuine and slightly deflating
+result: swapping opinion-derived card ranks for 39 games of championship
+revealed preference moved the needle by about two points against a bot that
+already had the big structural rules right. It says the strength of BookBot
+lives in its priority list — grow, buy actions, spend science, finish wonders,
+hold the military floor — and not in fine card valuation.
+
+The 3p non-result is exactly what the research warned about: the competitive
+lobby that tier list is drawn from is almost exclusively 2-player, so its
+values should not be expected to transfer to 3p/4p. v2 keeps the one value the
+sources split explicitly (Homer) player-count aware for that reason.
+
 ## What BookBot actually plays, and where each rule came from
 
 BookBot is `engine/bots/book.py`. The priority list is in its docstring; these
