@@ -2,7 +2,7 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": false,
- "progress": "tactics written; deck totals confirmed; aggressions/wars, pacts/defense/territories, events, civil actions RESEARCHED but not yet written -- see data/cards_military_actions.PROGRESS.md",
+ "progress": "tactics + aggressions + wars written; pacts/defense/territories, events, civil actions still to write. Per-card copy counts are derived, not sourced -- see 'uncertain' fields.",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -18,7 +18,10 @@
    "source": "1j1ju_rulebook.pdf (Full Game setup, p.22) + cge_code_of_laws.pdf (setup): military cards carry no 3+/4 corner marks; the only player-count trimming of military decks is the removal of all pacts in 2-player games."
   },
   "ageAEventSeeding": "Shuffle the Age A military deck (10 event cards); place the top (players+2) cards face down as the current events deck (2p:4, 3p:5, 4p:6). Return the rest to the box unseen. No one ever draws Age A military cards.",
-  "tacticsRules2015": "Playing a tactic from hand costs 1 military action (Action Phase). After you replenish the card row at the start of your next turn (before your Politics Phase) the card moves to the common tactics area, where any player may copy it for 2 military actions. Age II/III tactics show a second, lesser strength used for outdated armies (any unit in the set 2+ levels lower than the tactic's age)."
+  "tacticsRules2015": "Playing a tactic from hand costs 1 military action (Action Phase). After you replenish the card row at the start of your next turn (before your Politics Phase) the card moves to the common tactics area, where any player may copy it for 2 military actions. Age II/III tactics show a second, lesser strength used for outdated armies (any unit in the set 2+ levels lower than the tactic's age).",
+  "cardTextSource": "Exact 2015 card texts reconstructed from the official digital-edition localization strings (MilitaryCards_card_texts / MilitaryCards_card_names, Russian localization repo yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1), cross-checked against namu_military.txt, faq_v15.pdf and throughtheages.fandom.com. The digital edition implements the 2015 base rules exactly; expansion-only keys were excluded.",
+  "aggressionRules": "Played as a political action against one opponent. Attacker pays the card's military action cost and reveals the card. The defender may add defense: military bonus cards (defense value in the upper half) plus any number of military cards discarded face down for +1 each; the total number of bonus cards played + cards discarded may not exceed the defender's military action total (2015 change: no unit sacrifice). Attacker strength > defender strength + defense bonus => the card's effect applies; otherwise the aggression fails and the card is discarded with no effect.",
+  "warRules": "Declared as a political action; resolved at the start of the declarer's next turn, before the Politics Phase. No defense bonuses and no sacrifices at resolution (2015 change). Either side can be the victor: the victor is whoever has the strictly higher strength rating at resolution; the difference is the strength advantage fed into the card's formula. Equal strength = no effect, card discarded. Spoils are capped by what the loser actually has. If the target resigns, the declarer scores 7 culture."
  },
  "cards": [
   {
@@ -404,6 +407,346 @@
     "tacticBonusObsolete": 7
    },
    "text": "Tactic: 2 infantry + 1 cavalry + 1 artillery. +13 strength per army (+7 if outdated)."
+  },
+  {
+   "name": "Aggression: Plunder",
+   "age": "I",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 4,
+    "3p": 4,
+    "4p": 4
+   },
+   "cost": {
+    "militaryActions": 1
+   },
+   "target": "one opponent",
+   "effects": {
+    "takeFromOpponent": {
+     "foodAndOrResources": 3
+    }
+   },
+   "text": "Take up to 3 food and/or resources.",
+   "source": "digital-edition card text (PLUNDER_1); MA cost namu_military.txt 3.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Raid",
+   "age": "I",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 4,
+    "3p": 4,
+    "4p": 4
+   },
+   "cost": {
+    "militaryActions": 1
+   },
+   "target": "one opponent",
+   "effects": {
+    "destroyUrbanBuildings": [
+     {
+      "maxAge": "I"
+     }
+    ],
+    "gainResources": "half of each destroyed building's printed build cost, rounded up"
+   },
+   "text": "Destroy 1 Age A or I urban building. Gain half the resources needed to build it (rounded up).",
+   "source": "digital-edition card text (RAID_1); FAQ p.8 (use the ORIGINAL printed cost, ignore construction special technologies)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Enslave",
+   "age": "I",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 3,
+    "3p": 3,
+    "4p": 3
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent",
+   "effects": {
+    "gainFood": 2,
+    "gainResources": 2,
+    "opponentDecreasesPopulation": 1
+   },
+   "text": "Gain 2 food and 2 resources. Your opponent decreases population.",
+   "source": "digital-edition card text (ENSLAVE_1); MA cost namu_military.txt 3.2",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Plunder",
+   "age": "II",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 1
+   },
+   "target": "one opponent",
+   "effects": {
+    "takeFromOpponent": {
+     "foodAndOrResources": 5
+    }
+   },
+   "text": "Take up to 5 food and/or resources.",
+   "source": "digital-edition card text (PLUNDER_2); MA cost namu_military.txt 3.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Raid",
+   "age": "II",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent",
+   "effects": {
+    "destroyUrbanBuildings": [
+     {
+      "maxAge": "II"
+     },
+     {
+      "maxAge": "I"
+     }
+    ],
+    "gainResources": "half of each destroyed building's printed build cost, rounded up"
+   },
+   "text": "Destroy 2 urban buildings: one of Age II or older and one of Age I or older. Gain half the resources needed to build them (rounded up).",
+   "source": "digital-edition card text (RAID_2); MA cost namu_military.txt 3.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Spy",
+   "age": "II",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 1
+   },
+   "target": "one opponent",
+   "effects": {
+    "takeFromOpponent": {
+     "science": 5
+    }
+   },
+   "text": "Take up to 5 science.",
+   "source": "digital-edition card text (SPY); MA cost namu_military.txt 3.3",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Annex",
+   "age": "II",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent who owns at least one colony",
+   "effects": {
+    "stealColony": 1,
+    "colonyPermanentBonusTransfers": true,
+    "colonyImmediateBonusApplies": false
+   },
+   "text": "Take 1 colony. Its permanent bonus passes to you; the immediate bonus no longer applies.",
+   "source": "digital-edition card text (ANNEX); MA cost namu_military.txt 3.3",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Infiltrate",
+   "age": "II",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent with a leader in play or a wonder under construction",
+   "effects": {
+    "removeFromGame": [
+     "leader",
+     "unfinishedWonder"
+    ],
+    "gainCulturePerLevelOfRemovedCard": 3
+   },
+   "text": "Remove a leader or an unfinished wonder from the game. Gain 3 culture per level of the removed card.",
+   "source": "digital-edition card text (INFILTRATE); confirmed by faq_v15.pdf p.11 ('an incomplete Wonder is lost ... due to the Infiltrate Aggression'); MA cost namu_military.txt 3.3",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Plunder",
+   "age": "III",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 4,
+    "3p": 4,
+    "4p": 4
+   },
+   "cost": {
+    "militaryActions": 1
+   },
+   "target": "one opponent",
+   "effects": {
+    "takeFromOpponent": {
+     "foodAndOrResources": 7
+    }
+   },
+   "text": "Take up to 7 food and/or resources.",
+   "source": "digital-edition card text (PLUNDER_3); MA cost namu_military.txt 3.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Raid",
+   "age": "III",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 3,
+    "3p": 3,
+    "4p": 3
+   },
+   "cost": {
+    "militaryActions": 3
+   },
+   "target": "one opponent",
+   "effects": {
+    "destroyUrbanBuildings": [
+     {
+      "maxAge": "III"
+     },
+     {
+      "maxAge": "II"
+     }
+    ],
+    "gainResources": "half of each destroyed building's printed build cost, rounded up"
+   },
+   "text": "Destroy 2 urban buildings: one of Age III or older and one of Age II or older. Gain half the resources needed to build them (rounded up).",
+   "source": "digital-edition card text (RAID_3); MA cost namu_military.txt 3.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Aggression: Armed Intervention",
+   "age": "III",
+   "deck": "military",
+   "type": "aggression",
+   "count": {
+    "2p": 3,
+    "3p": 3,
+    "4p": 3
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent",
+   "effects": {
+    "takeFromOpponent": {
+     "culture": 7
+    }
+   },
+   "text": "Take up to 7 culture.",
+   "source": "digital-edition card text (ARMED_INTERVENTION); MA cost namu_military.txt 3.4",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "War over Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "war",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent (declared; resolved at the start of your next turn)",
+   "effects": {
+    "victorTakesYellowTokens": {
+     "base": 1,
+     "perStrengthAdvantage": 5
+    }
+   },
+   "text": "The victor takes a yellow token from the loser's yellow bank, plus one more for every 5 points of strength advantage.",
+   "source": "digital-edition card text (WAR_OVER_TERRITORY); throughtheages.fandom.com War over Territory ('New Story': 2 military actions, 1 token + 1 per 5 strength advantage; was 3 MA / per 3 in 2006)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "War over Technology",
+   "age": "II",
+   "deck": "military",
+   "type": "war",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "cost": {
+    "militaryActions": 2
+   },
+   "target": "one opponent (declared; resolved at the start of your next turn)",
+   "effects": {
+    "victorTakesScienceUpTo": "strengthAdvantage",
+    "orTakesSpecialTechnologiesOfSameTotalScienceCost": true
+   },
+   "text": "The victor takes science equal to the strength advantage, or takes special (blue) technologies of the same total cost.",
+   "source": "digital-edition card text (WAR_OVER_TECHNOLOGY); MA cost namu_military.txt 4.1",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "War over Culture",
+   "age": "III",
+   "deck": "military",
+   "type": "war",
+   "count": {
+    "2p": 6,
+    "3p": 6,
+    "4p": 6
+   },
+   "cost": {
+    "militaryActions": 3
+   },
+   "target": "one opponent (declared; resolved at the start of your next turn)",
+   "effects": {
+    "victorTakesCulture": {
+     "base": 5,
+     "plus": "strengthAdvantage"
+    }
+   },
+   "text": "The victor takes 5 culture plus culture equal to the strength advantage.",
+   "source": "digital-edition card text (WAR_OVER_CULTURE); throughtheages.fandom.com War over Culture ('New Story': 3 MA, 5 + strength advantage); count 6 asserted by namu_military.txt 4.2 ('there are six of these')",
+   "uncertain": "count 6 comes from NamuWiki prose, not a printed list"
   }
  ]
 }
