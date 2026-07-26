@@ -50,7 +50,18 @@ Plus four questions:
   one-line reason each. Flags loudly that (a) the AI is nearly card-blind when
   *taking* a card so per-card take counts are weak, and (b) every military and
   political card is systematically underrated because the AI cannot use it.
-- **Units 4–5: TODO.**
+- **Unit 4 (the four reader questions): DONE.** New section "Four questions a
+  reader asked", plus the 4p build order upgraded from coarse to a real
+  move-by-move table (20 games).
+  1. *Wasted actions* — answered from `docs/WASTED_ACTIONS.md`, which another
+     agent measured while this was being written. **The reader is right and the
+     bot is wrong**; the doc says so plainly rather than defending it.
+  2. *Round 0* — no. Stated at the top of the doc and again here.
+  3. *Mine or farm* — mine at 2p and 4p, farm at 3p, all on round 2.
+  4. *First temple* — three milestones separated: nothing to research (Religion
+     is printed on the board), first temple BUILT round 3 / 7 / 4, happy-face
+     deadline set by the population track around round 9.
+- **Unit 5: TODO** — restate rule 8 as a known defect of the AI, not as advice.
 
 ## Notes for the next person
 

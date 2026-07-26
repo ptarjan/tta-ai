@@ -17,12 +17,14 @@ culture leak we measured), then the opening cheat sheet for your player count.
    and [mine or farm?](#mine-or-farm)
 4. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
 5. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
-6. [Priority lists: which card do I take?](#priority-lists-which-card-do-i-take)
+6. [Four questions a reader asked](#four-questions-a-reader-asked) — wasted
+   actions, round numbering, mine-or-farm, and when the first temple goes up
+7. [Priority lists: which card do I take?](#priority-lists-which-card-do-i-take)
    — leaders, wonders, civil buildings and technologies, ranked per age
-7. [What changes with the player count](#what-changes-with-the-player-count)
-8. [Common traps](#common-traps) — six ways the game quietly takes points off you
-9. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
-10. [What this document does not know](#what-this-document-does-not-know)
+8. [What changes with the player count](#what-changes-with-the-player-count)
+9. [Common traps](#common-traps) — six ways the game quietly takes points off you
+10. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
+11. [What this document does not know](#what-this-document-does-not-know)
 
 ---
 
@@ -394,17 +396,35 @@ copy the priority, which is **economy first, army from round 3**.
 
 #### 4 players
 
-The fine-grained run for 4 players had not finished when this was written (the
-machine was busy training), so this is the coarser version, taken from the
-120-game observation set rather than from a move-by-move log:
+Fewer games behind this one — **20**, not 60, because the machine was busy
+training — so treat the small numbers as directional.
 
-> **R1** take a wonder → **R2** production + population + disband →
-> **R3** first urban building → **R4** play a leader → **R5** start the wonder
+> **R1** wonder + action card + leader (you have up to 4 actions) →
+> **R2** disband Warriors + population + second mine →
+> **R3** first lab → **R4** first temple + wonder stage
 
-Median rounds, with the share of games in which it happens at all: take a wonder
-**round 1 (100% of games)**, first production upgrade **round 2 (99%)**, first
-urban upgrade **round 3 (100%)**, take a leader **round 3 (98%)**, leader in play
-**round 4 (98%)**, first wonder stage paid **round 5 (96%)**.
+| Round | What it does | How often |
+|---|---|---|
+| **1** | **Take a wonder** — most often `Pyramids` (30% of games) or `Colossus` (15%) | 0.60 |
+| | Take an action card | 0.60 |
+| | Take a leader | 0.55 |
+| **2** | **Disband the starting Warriors** | **1.00** |
+| | **Increase population** | **0.95** |
+| | **Put a worker on Bronze — a second mine** | 0.70 |
+| | Play your leader | 0.35 |
+| **3** | **Put a worker on Philosophy — your first lab** | 0.75 |
+| | Take an action card | 0.80 |
+| **4** | **Put a worker on Religion — your first temple** | 0.50 |
+| | **Raze your own farm** (`Agriculture`) to reclaim the worker | 0.45 |
+| | Pay a wonder stage | 0.30 |
+
+The most common complete round-2 turn, in 35% of games: **increase population →
+build the mine → take a card → disband the Warriors.**
+
+**Do not copy round 4.** Razing `Agriculture` in nearly half of games, on round
+4, is the first visible move in the chain that ends with the 4-player AI
+producing about one food a turn against a bill of two or three, and burning
+**56 culture a game to starvation** — more than it finishes with. See trap #2.
 
 #### Mine or farm?
 
@@ -415,15 +435,21 @@ and one of the most reliable numbers in this document:
 |---|---|---|
 | **2 players** | **a mine** — a second worker on Bronze | **100% of 60 games** |
 | **3 players** | **a farm** — a second worker on Agriculture | **97% of 60 games** |
-| 4 players | production goes up on round 2 in 99% of games, but the fine-grained farm/mine split was not measured in time | — |
+| **4 players** | **a mine** — a second worker on Bronze | **100% of 20 games** |
 
-So: **at two players, mine. At three players, farm.** The reasoning that fits
-the rest of the data (this is our reading, not a measurement): the 2-player AI
-disbands its Warriors and goes straight for resources, because resources are what
-buy buildings and it has a cheap, fast-churning card row to buy from. The
-3-player AI grows population on round 2 in *every* game, and population eats
-food, so it has to farm first. If you are unsure at 4 players, note that the
-4-player AI is the one starving to death (trap #2) — err towards the farm.
+So: **mine at 2 and 4 players, farm at 3.** The reasoning that fits the rest of
+the data (this is our reading, not a measurement): the 2- and 4-player AIs disband
+their Warriors and go straight for resources, because resources are what buy
+buildings. The 3-player AI increases population on round 2 in *every* game, and
+population eats food, so it has to farm first.
+
+**But note which of those three is starving.** The 4-player AI takes the mine,
+then razes its own farm on round 4 in nearly half of games, then spends the rest
+of the game producing about half the food it eats and burning 56 culture a game
+to the starvation penalty — more than it finishes with (trap #2). The 3-player
+AI, the one that farms, has the lowest starvation loss of the three. If you are
+unsure, **take the mine but do not skip the farm** — and do the food subtraction
+in trap #2 before round 8, not after.
 
 Over the whole game the emphasis flips back: the 2-player AI ends up doing the
 most work on **mines** (4.28 build-or-upgrade actions per game) and the 4-player
@@ -1109,6 +1135,127 @@ about 4 × 4 = **16 culture** by the end — more than any Age III culture build
 will earn you in the same four turns. Before you apply "stop buying rate", do the
 subtraction in trap #2: gross food production minus 2 (or 3 if you are down to
 8 or fewer yellow tokens). If that number is negative, buy the farm.
+
+---
+
+## Four questions a reader asked
+
+### Is wasting a civil action ever right?
+
+> *"I'm really surprised they ever waste an action. Isn't taking or playing a
+> yellow card almost always worth it?"*
+
+**You are right and the AI is wrong.** This was measured properly after the
+question was asked, over 200 self-play games per player count and 8,531 turns
+that ended with a civil action unspent (`docs/WASTED_ACTIONS.md`). The results
+are not kind to the AI:
+
+| At 2 players, of all turns ending with a civil action thrown away | |
+|---|---|
+| had **no** legal, affordable thing to spend it on — genuinely stuck | **1.6%** |
+| had something legal and affordable, and declined it | **98.4%** |
+| declined a move **its own scoring rated as an improvement** | **60.1%** |
+| would have made a real move if one specific bug were fixed | **98.0%** |
+
+At 3 players it is nearly as bad (97.1% avoidable, 44.9% declining a move it
+scored as positive). Only Age I is genuinely blameless — there the AI's hand is
+full 96% of the time, which is a real constraint, and that is exactly the age
+where it wastes almost nothing.
+
+**The bug.** When the AI considers the "end my turn" move it applies it and looks
+at the resulting board — but ending your turn *runs your whole production phase*,
+so the board it is admiring already has a turn's income on it. Every other move
+is judged mid-turn, before income. So the AI is comparing "my board after taking a
+card" against "my board after collecting everything", and income wins every time.
+Measured, that phantom is worth **+12.6 points** on an average wasted-action turn
+at 2 players, rising to **+26.3** in Age IV, while the moves it is turning down
+are worth a fraction of a point. There is a hand-set correction for this in the
+code and it is a fixed number, which cannot possibly cancel a distortion that
+grows with your economy.
+
+**Specifically on yellow cards.** Your instinct is right twice over. Not only is
+taking a card nearly always worth it, the AI cannot even *see* which card it is:
+when judging a take, its scoring reduces your whole hand to two numbers — how
+many cards you hold and roughly what age they are. Taking `Ocean Liners` and
+taking `Revolutionary Idea` produce literally identical inputs. So it scores
+every take at approximately zero and then loses the comparison to that
+twelve-point phantom. At 2 players, **31.9% of wasted-action turns had a yellow
+card sitting in hand that was legal to play right then**, and it was declined.
+
+**So: ignore rule 1's waste table as a model and follow rule 1's advice.** Spend
+your actions. The one honest caveat is that at 4 players the story is different
+and worse — there the AI refuses to *play* cards, so its hand fills up, so taking
+becomes illegal, and 14.3% of its wasted actions genuinely have nowhere to go.
+That is still a defect, just a different one.
+
+### Is the draft round counted as round 0?
+
+> *"Round 3 leader seems later. Is the draft round counted as round 0?"*
+
+**No.** There is no round 0 anywhere in this study. The first time you sit down
+is **round 1**, and that is the Age A turn where taking cards is your only legal
+action. The engine's counter starts at 1 and is set to 1 at setup
+(`engine/state.py:110`, `engine/game.py:75`).
+
+So "median round 3 to play a leader" means: Age A turn, then your first Age I
+turn, then on your *second* Age I turn the leader is on the table. It is the
+third time you have taken a turn, not the fourth. The convention is now stated at
+the top of the document under [How to read this
+document](#how-to-read-this-document).
+
+If it still feels late, note two things. First, the leader is *taken* earlier
+than it is played — median round 2 at 2 and 3 players — and a quarter of games
+take one on round 1, spending the Age A turn on a leader instead of an action
+card. Second, at 2 players the leader is out by the end of round 3 in 61.7% of
+games and by the end of round 4 in 74.2%, so the median is not hiding a long
+tail.
+
+### Do you do mine or farm?
+
+Answered in full in [Mine or farm?](#mine-or-farm) above, with the build order.
+The short version: **a mine (a second worker on Bronze) at 2 and 4 players, on
+round 2, in 100% of games. A farm (a second worker on Agriculture) at 3 players,
+on round 2, in 97%.** The 3-player AI farms because it increases population on
+round 2 in every single game and has to feed it.
+
+### When exactly do you build the first temple?
+
+> *"when do you build the first one?"*
+
+The old draft blurred three completely different milestones together. They are
+different rounds and they cost different things:
+
+| | **Research** a temple technology | **Build** your first temple | Need a 2nd / 3rd happy face |
+|---|---|---|---|
+| 2 players | round 9 — and only 50% of games ever bother | **round 3** (100% of games) | ~round 9 / before round 12 |
+| 3 players | round 9 (38% of games) | **round 7** (82% of games) | ~round 9 / before round 12 |
+| 4 players | round 11 (45% of games) | **round 4** (95% of games) | ~round 9 / before round 12 |
+
+Three things to take from that table.
+
+1. **There is nothing to research.** `Religion` is one of the five technologies
+   printed on your player board at setup [rules], so you can build a temple on
+   your very first full turn without spending a single science point. The
+   "research" column above is about upgrading to a *better* temple — `Theology`
+   and later `Organized Religion` — and half the games never do it at all.
+2. **The first temple is early: round 3 at 2 players, in every single game.**
+   Not round 5, which is what an earlier draft of this document said; that number
+   was the *middle* of all the temple work across a whole game, not the first
+   one.
+3. **The happy-face deadline is set by the population track, not by the temple.**
+   You need 1 happy face from 16 yellow tokens left, **2 from 12**, and **3 from
+   10** [rules, §6.1]. Every AI sprints from 18 tokens down to about 12 by round
+   9 and then stops dead — which means the second happy face is due around round
+   9, and the third is due whenever you next cross into the 10-token band. That
+   is the moment the game quietly starts trying to cause an uprising, and it is
+   why the practical rule is *get to 12 tokens fast, then stop until you have
+   bought the third happy face.*
+
+Put together: **build a temple on round 3–4, a second one on round 4–5, and have
+your third happy face before you spend the population that takes you past 10
+yellow tokens.** The AIs spend 2.8–3.7 civil actions per game on temples in
+total, and it buys them near-total immunity from uprisings — 0.03 to 0.64 culture
+lost per game, which is nothing.
 
 ---
 
