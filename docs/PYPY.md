@@ -404,6 +404,31 @@ with the player count and with game length. So the waste ratio gets *worse* as
 states get bigger — 4p late-game, the exact cell the hill climbs spend their
 time in, is where a share-don't-copy scheme pays most.
 
+### 4c. END-TO-END training throughput from the fastcopy work — **1.23x / 1.32x / 1.33x**
+
+The 1.55x microbenchmark is the copy in isolation; what the climbs actually
+gain is the *whole-game* rate. Measured with `tools/bench_interp.py`
+(`time.process_time`, 2 s warm-up, 6 s measure, `nice -n 10`, climbs running),
+old vs new **interleaved in the same run** — a `git worktree` at HEAD with only
+`engine/bots/fastcopy.py` reverted to the pre-fastcopy version, so the A/B
+isolates exactly that one file — and repeated twice:
+
+| GreedyBot | pre-fastcopy (games/cpu-s) | leaf fast path | speed-up |
+|---|---|---|---|
+| 2p | 4.621 / 4.645 | 5.709 / 5.683 | **1.23x** |
+| 3p | 2.091 / 2.118 | 2.797 / 2.776 | **1.32x** |
+| 4p | 0.992 / 0.991 | 1.305 / 1.327 | **1.33x** |
+
+Rep-to-rep spread is under 2%, so these are real. The 4p number is the one
+that matters: the hill climbs are 4p-heavy, and **greedy 4p went 0.99 ->
+1.32 games/cpu-s, a 33% throughput gain — one third more games per CPU-second
+for free.** In `engine/PROGRESS.md` terms the greedy 4p cell moved 1.01
+(c8a70a4) -> 1.32.
+
+Why 1.33x end-to-end and not 1.55x: Amdahl. If copy were 64% of runtime, a
+1.55x copy would give 1.29x overall — the measurement is right in line, which
+independently confirms the 64% figure.
+
 ### RECOMMENDATION (do not implement yet — this is the finding, not the work)
 
 **The copy is ~17x more work than the mutation, so structural sharing beats
