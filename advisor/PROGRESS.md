@@ -26,7 +26,7 @@ turns with minimal typing.
 
 ## Possible follow-ups
 
-- Deeper search than the bot\'s 1 ply (e.g. full-turn rollout) for the
+- Deeper search than the bot's 1 ply (e.g. full-turn rollout) for the
   recommendation, which matters most in the last round.
 - Track rival hand *contents* when a take is public, to warn about
   aggressions they can afford.

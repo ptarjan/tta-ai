@@ -15,7 +15,7 @@ Last update: 2026-07-26.
 | `engine/events.py` | DONE | Resolves the real card vocabulary: `allPlayers` / `strongestPlayer(s)` / `weakestPlayer(s)` / ranked blocks, all 15 Age III "Impact of …" scoring events, aggression spoils, war spoils. **Every effect key in the event/territory data is now handled** (checked by a coverage script; only prose `note` and qualifier keys like `order`/`statistics`/`ignoreCorruption` are deliberately inert). |
 | `engine/game.py` | DONE | `new_game / legal_moves / apply / current_player / is_over / scores / winners / play_game`; `decider()` drives the turn loop so pending decisions are handled uniformly. Age progression with antiquation + 2 yellow tokens, Age IV last-round trigger, final scoring, resignation handling. |
 | `engine/bots/__init__.py` | DONE (other agent) | `RandomBot`, `GreedyBot`, `WeightedBot`, `make_bots`. |
-| `tests/test_engine.py` | DONE | 56 tests, green under `python3 -m unittest discover -s tests` (and pytest). |
+| `tests/test_engine.py` | DONE | 57 tests, green under `python3 -m unittest discover -s tests` (and pytest). |
 | `experiments/` | DONE (other agent) | harness / arena / hillclimb. |
 
 ## Gaps closed in this pass
@@ -70,19 +70,24 @@ Last update: 2026-07-26.
 | RandomBot | 3 | **0** | 0 | 63.2 | 21.7 | 13.1 | 114 | 9.6 |
 | RandomBot | 4 | **0** | 0 | 103.8 | 26.7 | 20.7 | 175 | 5.5 |
 | GreedyBot | 2 | **0** | 0 | 47.4 | 24.2 | 67.0 | 141 | 1.6 |
-| GreedyBot | 3 | GREEDY3 |
-| GreedyBot | 4 | GREEDY4 |
+| GreedyBot | 3 | **0** | 0 | 77.1 | 26.4 | 86.3 | 173 | 0.8 |
+| GreedyBot | 4 | **0** | 0 | 148.1 | 37.8 | 106.9 | 228 | 0.5 |
 
-New-mechanic coverage over the 600 RandomBot games (log-line counts), which
-shows every closed gap is actually being exercised, not just reachable:
+**1200 games, 0 crashes and 0 move-cap hits.**
 
-| | 2p | 3p | 4p |
-|---|---|---|---|
-| action cards played | 1557 | 2102 | 3320 |
-| colonizations won | 140 | 254 | 502 |
-| pacts accepted | 0 (correct, §13) | 559 | 936 |
-| aggressions played | 393 | 804 | 1582 |
-| wars declared | 155 | 250 | 527 |
+New-mechanic coverage (log-line counts) showing every closed gap is actually
+being exercised in self-play, not merely reachable:
+
+| | RandomBot 2p | 3p | 4p | GreedyBot 2p | 3p | 4p |
+|---|---|---|---|---|---|---|
+| action cards played | 1557 | 2102 | 3320 | 337 | 522 | 583 |
+| colonizations won | 140 | 254 | 502 | 152 | 209 | 244 |
+| pacts accepted | 0 (correct, §13) | 559 | 936 | 0 (correct, §13) | 0 | 0 |
+| aggressions played | 393 | 804 | 1582 | 2 | 21 | 36 |
+| wars declared | 155 | 250 | 527 | 0 | 0 | 0 |
+
+GreedyBot barely uses the political actions (its eval has no military feature
+worth spending on), so the RandomBot columns are what stress the new code.
 
 Speed note: RandomBot 4p fell from ~23 games/s to ~5.5 in this pass. About half
 of that is games genuinely being longer (mean player-turns 79 → 104, because
