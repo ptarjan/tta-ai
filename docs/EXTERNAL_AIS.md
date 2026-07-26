@@ -362,6 +362,12 @@ still busy (2026-07-26: "# games in progress: 636, # active players: 839"), semi
 Chvátil and CGE Team"). Public front page counter: **601,532 finished games since Aug
 2010** across both editions.
 
+**How many are the 2015 edition: ≈178,000.** Measured, not guessed — a binary search on
+the `idJeu=10` finished-games pager (50 games/page) puts the last populated page at
+**3,566** with 20 games on it, i.e. **≈178,270 finished 2015-edition games**, leaving
+roughly 420k for the 2006 original. That is smaller than BGA's 1.19M (§2) but it is the
+one we can actually read.
+
 #### The edition question — settled, with evidence
 
 **BGO models the two editions as two separate boardgames, and the finished-games filter
@@ -795,7 +801,7 @@ which promotes it from near-bottom to near-top.
 |---|---|---|---|---|
 | 1 | **Diverse-opponent league inside our own engine** (§ intro) | ~0 external, already running | Directly attacks the blind-spot problem hill climbing has | **Do it — it is already the default and nothing here beats it** |
 | 2 | **Hand-written heuristic priors from the strategy corpus** (§5b) | hours | Seeds `WeightedBot` in a good basin; gives falsifiable assertions to test the bot against | **Do it — cheapest real win on the list** |
-| 3 | **BGO outcome metadata** (§5a, `idJeu=10`) | ~1 day of polite scraping, no login needed for the index | Calibrates our score distribution against ~170k real 2015 games by player count and skill level | **Do it — high value, low effort, no ethical friction** |
+| 3 | **BGO outcome metadata** (§5a, `idJeu=10`) | ~1 day of polite scraping, no login needed for the index | Calibrates our score distribution against ~178k real 2015 games by player count and skill level | **Do it — high value, low effort, no ethical friction** |
 | 4 | **BGG card reference + card counts** (§5c) | one human click, then 2 fetches | Third opinion on card data; costs almost nothing | **Do it once the ToS is accepted** |
 | 5 | **Human-in-the-loop vs the app's Hard AI** (§6) | **12–18 h** for 10–15 games | The *only* external anchor that exists; answers "are we near strong-human level?" and yields thousands of scored positions + a held-out eval set | **Do it, once, at 10–15 games — then stop** |
 | 6 | **BGO move-level logs for imitation learning** (§5a) | weeks: scraper + journal parser + card-row reconstruction | Large, right-edition, but the choice set is unrecoverable and the player pool is mixed-skill | **Defer.** Revisit only if 1–5 stall |
@@ -843,21 +849,37 @@ recommendation, and it is cheap to check — do §3 before committing 15 hours t
 
 ## Next steps for whoever picks this up
 
-State as of the last commit: §1, §4, §5, §6 written; §2 and §3 under active
-investigation; §7 waits on them.
+State as of this commit: **§1, §2, §4, §5, §6, §7 written. §3 (open-source TTA AI
+projects) is the only section still TODO** — and §7 flags it as the one finding that
+could change the recommendation, so do it first.
 
-1. **§2 / §3** — if these are still marked TODO, the open questions are listed inside
-   each section stub. Both are pure research, no code.
-2. **Blocked on a human login** (do not create accounts): the pages that defeated
-   unauthenticated fetching are listed inline where they occur — BGO's per-game journal
-   view `boardgaming-online.com/index.php?cnt=202&pl=<gameid>` (§5a), BGG forum threads
-   and the BGG file section (403 to `curl`/WebFetch), and any Board Game Arena
-   replay/archive page noted in §2. If the user logs in to any of these in their normal
-   Chrome, a Playwright-over-CDP scrape becomes possible; until then those claims stay
-   marked UNPROVEN.
-3. **Cheapest unblocked follow-ups**, in order: re-scrape `sources/gamefaqs_75690.txt`
-   (currently a Cloudflare challenge page, §5b); pull 5–20k rows of BGO *metadata* (§5a,
-   public, no login) purely to calibrate our score distribution; resolve the BGO
-   2006-vs-2015 edition question, which decides whether that corpus is worth anything.
-4. **Do not** start a network-sniffing or save-file reverse-engineering project against
-   the CGE app (§1) without re-reading why it was ruled out.
+### Login verdicts, one line each (2026-07-26)
+
+| Site | Verdict |
+|---|---|
+| **BoardGameGeek** | **LOGIN WORKS** after the user's password reset. Sole remaining blocker: BGG's GDPR **Terms-of-Service re-affirmation** at `/read_terms`, which every file download redirects to. Not accepted on the user's behalf (jury-trial waiver / arbitration / class-action clauses). **Action for the user: log in to boardgamegeek.com in a browser, accept the "Why am I seeing this (again)?" terms page.** Then §5c's recipe fetches both files in minutes. |
+| **Boardgaming-Online** | **LOGIN WORKS.** Plain form POST, no CSRF, no Cloudflare. Full move-by-move journals are readable and parseable, and the archive **is the 2015 edition** (`idJeu=10`, ≈178k finished games, still growing today). §5a is fully resolved; nothing is UNPROVEN there any more. |
+| **Board Game Arena** | Not attempted and must not be. Their ToS explicitly forbids automated extraction (§2d). Source code only. |
+
+### Ordered follow-ups
+
+1. **§3** — pure research, no code. Cheapest remaining unknown and it gates §7.
+2. **The BGG ToS click** (user, 30 seconds) — then download fileids 154670 and 409053
+   into `sources/` and cross-check against `data/cards_civil.json` /
+   `data/cards_military_actions.json`. Rule: BGG is a *third opinion*; disagreements get
+   **both** values written into `docs/SOURCES.md` and flagged, never silently applied.
+   Re-run `python3 data/validate_cards.py` after any change. See the "Pending third
+   opinion" block in `docs/SOURCES.md`.
+3. **BGO outcome metadata** (§5a option 1) — POST `idJeu=10` to `index.php?cnt=14`, walk
+   `pg=1..3566` at 50 games/page, keep game id / players / level / dates / final age /
+   rounds / scores. ≈3.6k polite GETs. Purpose: calibrate our score distribution. Be
+   slow and cached; BGO is a small donation-funded fan server. `robots.txt` permits
+   `index.php`, but consider mailing `boardgamingonline@gmail.com` first.
+4. **The §7 recommendation itself**: 10–15 logged 3-player games against the app's Hard
+   AI via the advisor (12–18 human hours, one-off). Read §6c/§6d before starting.
+5. **Still worth 20 minutes**: re-scrape `sources/gamefaqs_75690.txt` (currently a
+   Cloudflare challenge page, §5b) — the Cloudflare lesson from §5c is that only a real
+   browser gets through, so use Playwright, not `curl`.
+6. **Do not** start a network-sniffing or save-file reverse-engineering project against
+   the CGE app (§1), and **do not** start BGO move-log mining (§7 option 6), without
+   re-reading why each was ruled out.
