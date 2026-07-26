@@ -80,7 +80,111 @@ TODO — under investigation.
 
 ## 4. Published research
 
-TODO — under investigation.
+### 4a. On Through the Ages: there is none. We would be first.
+
+Checked and came up empty: arXiv (`all:"Through the Ages"` ∩ cs.AI), Semantic Scholar,
+Google Scholar, Czech university repositories (Charles/dspace.cuni.cz, CTU/dspace.cvut.cz,
+Masaryk/is.muni.cz — searched in Czech for *diplomová/bakalářská práce* + *umělá
+inteligence* + *Vlaada*), and
+[captn3m0/boardgame-research](https://github.com/captn3m0/boardgame-research), the
+community index of essentially all modern-boardgame AI research — it has sections for
+Carcassonne, Dominion, Puerto Rico, Race for the Galaxy, Catan, Terra Mystica, Hanabi and
+more, and **no Through the Ages section at all**. Czech CS theses on game AI do exist
+(curling, Carcassonne, Quoridor, Scotland Yard) but none on TTA.
+
+One coverage gap to note honestly: dspace.cuni.cz returned HTTP 429 under automated
+querying, so its internal search was not exhaustively swept. A manual check is cheap if
+anyone cares.
+
+**So there is no published algorithm-and-strength result to copy or benchmark against.**
+That cuts both ways: no free head start, but also a genuinely open problem.
+
+### 4b. TAG (Tabletop Games framework, QMUL) — the most useful adjacent asset
+
+[github.com/GAIGResearch/TabletopGames](https://github.com/GAIGResearch/TabletopGames),
+Java, Apache-licensed, actively maintained. Its `games/` directory was enumerated
+directly: **42 games**, and **Through the Ages is not one of them**. The closest
+structural analogues it *does* implement are **Terraforming Mars, Puerto Rico, 7 Wonders
+(`wonders7`), Dominion, Power Grid, Root, Catan**.
+
+Why it matters even though it lacks TTA: TAG ships MCTS / RHEA / OSLA agents, a PyTAG
+Gym wrapper for RL, and — importantly — an evaluation methodology for exactly our
+problem (high-variance multiplayer games where you cannot tell skill from luck).
+
+Key papers, with the ones worth actually reading marked:
+- **★ Goodman PhD thesis, "Dice, Cards, Action! The Analysis, Play and Design of
+  Multiplayer Tabletop Board Games with MCTS"**, QMUL 2025 —
+  [qmro.qmul.ac.uk/xmlui/handle/123456789/108265](https://qmro.qmul.ac.uk/xmlui/handle/123456789/108265).
+  The single most concentrated body of knowledge on our exact problem class.
+- **★ MultiTree MCTS in Tabletop Games**, Goodman/Perez-Liebana/Lucas, CoG 2022 —
+  [pdf](https://ieee-cog.org/2022/assets/papers/paper_91.pdf). One search tree per
+  player; tested on 11 TAG games; helps at low simulation budgets. Directly relevant to
+  3–4p TTA.
+- **★ Following the Leader in Multiplayer Tabletop Games**, FDG 2023 —
+  [pdf](http://www.diego-perez.net/papers/FollowingLeader-FDG23.pdf). Opponent modelling,
+  max-n vs paranoid in >2 players. TTA has real kingmaking/leader-bashing via aggression,
+  so this is not academic.
+- **★ Skill Depth in Tabletop Board Games** (CoG 2024) and **Seeding for Success: Skill
+  and Stochasticity in Tabletop Games** (ToG 2025), Goodman et al. — how to tell whether
+  a bot is actually stronger or just luckier. Our hill climb needs this; TTA variance is
+  high enough to fool a naive round-robin.
+- Design and Implementation of TAG — [arXiv:2009.12065](https://arxiv.org/abs/2009.12065);
+  PyTAG (multi-agent RL over TAG) — [arXiv:2405.18123](https://arxiv.org/abs/2405.18123),
+  whose honest finding is that **RL struggles on the complex games while MCTS stays
+  competitive**; TAG: Terraforming Mars, AIIDE 2021 —
+  [pdf](https://tabletopgames.ai/assets/pdf/gaina2021terraforming.pdf) (the best reference
+  implementation if we ever port TTA into TAG).
+- Evaluation of Perfect-Information MCTS in Imperfect-Information Games, CoG 2026 —
+  argues cheap determinized/PIMC search is often enough vs full ISMCTS. Relevant because
+  **TTA's hidden information is thin**: the card row is public, only hands and the future
+  events deck are hidden.
+
+Other frameworks were checked and are not a fit: **OpenSpiel** (~70 envs) and **Ludii**
+have nothing in the heavy-euro class; **RLCard** is trick-taking/poker only.
+
+### 4c. Comparable games — what algorithms actually worked, and how strong
+
+| Work | Game | Algorithm | Strength reached | Code |
+|---|---|---|---|---|
+| **Keldon Jones' RFTG AI** ([bnordli/rftg](https://github.com/bnordli/rftg), [writeup](https://medium.com/@tduringer/race-for-the-galaxy-ai-4cc933249814)) — not a paper, but the strongest result in this genre | Race for the Galaxy | **TD-learning MLP** predicting win probability at turn granularity, ~30k self-play games, hand-designed features | Widely regarded near-world-class; shipped in the commercial Temple Gates app | Yes, C, runnable |
+| [Mastering Terra Mystica](https://arxiv.org/abs/2102.10540), Perez 2021 | Terra Mystica | AlphaZero-style self-play w/ hand-designed state repr | Beats baselines; compared to typical human scores; **not** shown to beat strong humans. Unrefereed preprint | Yes (`terrazero`) |
+| [Playing Various Strategies in Dominion with Deep RL](https://ojs.aaai.org/index.php/AIIDE/article/view/27518), AIIDE 2023 | Dominion | Geometric DL over a multiset state repr; Soft Actor-Critic adapted to **variable-size action sets** | Best learning-based Dominion agent; still loses to search-based agents in some kingdoms | Partial |
+| [AIs for Dominion Using MCTS](https://link.springer.com/content/pdf/10.1007/978-3-319-19066-2_5.pdf), Winder 2014 | Dominion | UCB / UCT | 67% vs a good finite-state agent | — |
+| MCTS for the Game of 7 Wonders, Robilliard et al. 2014 | 7 Wonders | plain UCT | Beat their heuristic bots; key result is that **MCTS tuning lore transfers from abstract games to modern euros** | — |
+| [AI Techniques for Puerto Rico](https://link.springer.com/10.1007/978-3-319-59394-4_8), 2018 | Puerto Rico | RL that **switches between high-level scripted strategies** | Modest, but the portfolio/script idea is the takeaway | — |
+| [SCOUT](https://doi.org/10.1007/978-3-319-61030-6_27), ICCBR 2017 | Race for the Galaxy | case-based reasoning | Below Keldon's net | — |
+| [Splendor-Zero](https://github.com/inhabae/Splendor-Zero) (hobby, unrefereed) | Splendor | C++ engine + PyTorch policy/value net + **IS-MCTS** | Claims 2068 Elo / top of the Spendee server | Yes |
+| Catan line: Szita/Chaslot/Spronck 2010 (MCTS), POMCP+human preferences AIIDE 2018, [cross-dimensional NN](https://arxiv.org/abs/2008.07079) | Catan | MCTS / POMCP / CNN | Beat the JSettlers heuristic bot; no strong-human claims | Some |
+
+No published AI research exists for Twilight Struggle, Scythe, Agricola, Root (beyond
+TAG), or the Civilization board game either.
+
+### 4d. What the literature says we should do
+
+- **Action-space size is the central problem, not hidden information.** TTA's hidden info
+  is thin; its per-turn combinatorics are not. Two proven levers: a **portfolio of
+  scripted high-level strategies** with the learner choosing among them (Puerto Rico
+  paper), and a **variable-size action-set policy head** (the Dominion SAC paper is the
+  best template — it solves literally "the legal action set changes every turn and is
+  huge", which is our `legal_moves()` situation).
+- **Decompose the turn into per-action-point decision nodes** rather than enumerating
+  whole-turn sequences. This is what makes branching tractable and is how TAG's
+  `extendedSequence` machinery works. Worth checking our `engine/actions.py` already does
+  this (it appears to — moves are single tagged tuples).
+- **Try determinized/PIMC search before ISMCTS.** Cheaper to build, and the CoG 2026
+  result says it is often adequate for thin hidden info.
+- **Multiplayer: use max-n or MultiTree MCTS, not paranoid/minimax.**
+- **TD-learning a value function over self-play** (Keldon's RFTG recipe: hand-designed
+  features → small net → predict win probability, ~30k games) is the highest
+  strength-per-effort result anyone has achieved in this genre, and it is a *strict
+  upgrade path from our current linear `WeightedBot`* — same features, nonlinear head,
+  trained by TD instead of by hill climbing. This is arguably the single most actionable
+  finding in this whole document, and it needs **no external AI at all**.
+- Background: [ISMCTS](https://ieeexplore.ieee.org/document/6203567) (Cowling et al.
+  2012), [MCTS survey](https://arxiv.org/abs/2103.04931),
+  [AlphaZe∗∗](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2023.1014561/full)
+  (AlphaZero-style baselines are surprisingly strong on imperfect-info games — supports
+  skipping CFR machinery), [RHEA against Pandemic](https://arxiv.org/abs/2103.15090).
 
 ## 5. Human game corpora and strategy corpora
 

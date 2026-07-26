@@ -9,6 +9,7 @@ A bot is any callable ``bot(state) -> move`` choosing among
 """
 from __future__ import annotations
 
+import math
 import random
 
 from .. import actions, effects
@@ -110,7 +111,13 @@ def evaluate(state, idx, weights=None):
     """Static evaluation of `state` from player `idx`'s point of view."""
     w = weights or WEIGHTS
     f = features(state, state.players[idx])
-    own = sum(w.get(k, 0.0) * v for k, v in f.items())
+    # math.fsum, not sum(): CPython >=3.12 sums floats with Neumaier
+    # compensation while PyPy 3.11 accumulates naively, and the resulting
+    # ~1 ULP gap flips exact ties in GreedyBot.pick, diverging whole games
+    # between interpreters. fsum is exactly rounded everywhere, so this is
+    # one answer on every interpreter -- and it is bit-identical to what
+    # CPython 3.14 already produced (perf_check fingerprint unchanged).
+    own = math.fsum([w.get(k, 0.0) * v for k, v in f.items()])
     # relative: being ahead of the best rival is what wins the game
     rivals = [q for q in state.players if q.idx != idx and not q.resigned]
     best_rival = max((q.culture for q in rivals), default=0)

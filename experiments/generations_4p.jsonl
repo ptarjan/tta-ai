@@ -24,3 +24,4 @@
 {"gen": 22, "players": 4, "accepted": false, "sigma": 0.1806, "secs": 209.3, "tried": [{"edge": 0.0208, "lo": -0.0302, "n": 96, "wr": 0.3125, "moved": 1, "op": "group:search"}], "at": "2026-07-26 07:22:08", "mode": "league", "field": 7}
 {"gen": 23, "players": 4, "accepted": false, "sigma": 0.1806, "secs": 135.2, "tried": [{"edge": -0.1458, "lo": -0.2602, "n": 48, "wr": 0.2083, "moved": 19, "op": "scatter"}], "at": "2026-07-26 07:24:23", "mode": "league", "field": 7}
 {"gen": 24, "players": 4, "accepted": false, "sigma": 0.1806, "secs": 116.6, "tried": [{"edge": -0.0625, "lo": -0.1731, "n": 48, "wr": 0.2708, "moved": 19, "op": "scatter"}], "at": "2026-07-26 07:26:19", "mode": "league", "field": 7}
+{"gen": 25, "players": 4, "accepted": false, "sigma": 0.1535, "secs": 125.3, "tried": [{"edge": -0.0312, "lo": -0.1174, "n": 48, "wr": 0.3021, "moved": 19, "op": "scatter"}], "at": "2026-07-26 07:28:25", "mode": "league", "field": 7}
