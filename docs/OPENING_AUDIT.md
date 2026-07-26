@@ -4,11 +4,56 @@
 an action card while the 4p champion takes a wonder. Is that real strategy, a
 reporting artefact of how we aggregate seats, or undertrained noise?
 
-**Status: IN PROGRESS** — findings are written here as they land. Verdict at the
-bottom.
+---
+
+# VERDICT: UNDERTRAINED NOISE — a single weight, flipped by accident at generation 5 of 138, and never revisited
+
+The behaviour is **real and reproducible** — it is not a seat-mixing artefact,
+and comparing seat-for-seat only makes it sharper (2p seat 0 takes a wonder first
+in **0%** of 400 games, 4p seat 0 in **74%**). But it has **nothing to do with
+playing four players.**
+
+Three findings, in order of how much they should change your mind:
+
+1. **Player count cannot affect the round-1 decision, and does not.** The Age A
+   deck is identical at all counts and the row's first sweep happens *after*
+   round 1, so for a given seed seat 0 faces a bit-identical 13-card row at 2p,
+   3p and 4p. Untrained `default` weights open identically (64% action / 36%
+   leader, seat 0) at all three counts. The sweep-speed and competition
+   arguments printed in HEURISTICS.md are inert on round 1.
+2. **Cross-play proves it follows the weights, not the table.** Played *at two
+   players*, the 4p weight vector still opens wonder-first 74% of the time.
+   Played *at four players*, the 2p vector never does (0%). Player count changes
+   nothing; the weight vector changes everything.
+3. **It is one weight, and it was a hitchhiker.** `wonder_remaining` was flipped
+   from −0.3 (penalise unbuilt wonder stages) to +0.32 by the gen-5 mutation,
+   which moved **19 weights at once**. Revert that one number in today's
+   champion and the wonder opening vanishes entirely (74% → 0%). The opening
+   rate has been frozen at 77% for all 125 generations since, unchanged by six
+   further accepted mutations — stable because nothing has searched it, not
+   because anything converged on it.
+
+**What to do with it:** do not write "at 4 players, open with a wonder" as
+advice. There is no evidence for the player-count claim. The honest statement is
+*"our 4p weight vector happens to like wonders, at every player count, because of
+one sign flip nobody tested."*
+
+**Separately: the hill climb itself is NOT broken.** Measured fresh today, the
+champions beat their untrained starting point at every count — 2p 0.682 (null
+0.50), 3p 0.771 (null 0.333), **4p 0.792 (null 0.25)**, and 4p beats the greedy
+bot 0.958. 4p is the *strongest* of the three relative to its null, not the
+weakest. The numbers sitting in `experiments/baselines.jsonl` that suggest
+otherwise are stale — see §5, including which claim in HEURISTICS.md they have
+already contaminated.
+
+---
 
 Owned by this audit: `analysis/opening_by_seat.py`, this file. Everything under
-`experiments/` and `engine/` was read-only for this work.
+`experiments/` and `engine/` was read-only for this work. Champion snapshots were
+copied to `/tmp` first because the live hill climbs rewrite them in place;
+`champion_4p.json` was gen 138 and is bit-identical at gen 139, and the 2p
+champion advanced 218 → 220 during the audit without changing its opening (still
+0% wonder-first).
 
 ---
 
