@@ -2,7 +2,7 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": false,
- "progress": "tactics, aggressions, wars, pacts, military bonus cards and territories written; events and yellow civil action cards still to write. Per-card copy counts are derived, not sourced -- see 'uncertain' fields.",
+ "progress": "tactics, aggressions, wars, pacts, military bonus cards, territories and all 55 events written; yellow civil action cards still to write. Per-card copy counts outside Age A are derived, not sourced.",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -24,7 +24,9 @@
   "warRules": "Declared as a political action; resolved at the start of the declarer's next turn, before the Politics Phase. No defense bonuses and no sacrifices at resolution (2015 change). Either side can be the victor: the victor is whoever has the strictly higher strength rating at resolution; the difference is the strength advantage fed into the card's formula. Equal strength = no effect, card discarded. Spoils are capped by what the loser actually has. If the target resigns, the declarer scores 7 culture.",
   "pactRules": "Offered as a political action to a specific player, naming which side (A/B) each takes if the pact is asymmetric. The other player may accept (it takes effect immediately, placed between the two play areas) or refuse (it returns to the offerer's hand). A player may be a party to several pacts but may have only ONE pact of his or her own in play: offering a new one automatically cancels the previous one. You may also spend a political action to cancel any pact you are party to. Unless a pact says otherwise it does not prevent attacks and survives them. Pacts become obsolete (discarded) at the end of their age. REMOVED FROM THE MILITARY DECKS ENTIRELY IN 2-PLAYER GAMES.",
   "colonizationRules": "A territory card revealed as the current event is auctioned. Bids are whole numbers, each higher than the last; you may not bid more than the maximum colonization force you can send. The winner must send a force of at least the winning bid: sacrifice one or more military units (their yellow tokens return to the yellow bank) and sum their strength, add any armies' tactical strength, add colonization modifiers from cards in play, and add the colonization value of any military bonus cards played. Effects that modify the strength RATING (Alexander the Great, Great Wall, Warfare, ...) do not apply to a colonization force, and arenas cannot be sent. If nobody bids, the territory goes to the past events pile. The winner takes the card as a colony: apply the permanent effect first, then the immediate benefit. Losing a colony later (Independence Declaration, Aggression: Annex) removes the permanent effect only.",
-  "militaryBonusCardRules": "A military bonus card is never 'played' for an action. Its upper half gives a defense bonus when you defend against an aggression; its lower half gives a colonization bonus when you send a colonization force. Both halves are on every card; you use whichever applies. 6 per age in the base game."
+  "militaryBonusCardRules": "A military bonus card is never 'played' for an action. Its upper half gives a defense bonus when you defend against an aggression; its lower half gives a colonization bonus when you send a colonization force. Both halves are on every card; you use whichever applies. 6 per age in the base game.",
+  "eventRules": "Events are prepared, not played: as a political action you put one event or territory card from your hand face down on the FUTURE events deck and score culture equal to its age (Age A 0 / I 1 / II 2 / III 3). Doing so immediately reveals the top card of the CURRENT events deck, which is resolved and then goes to the past events pile. When the current events deck runs out, the future events deck is shuffled to become the new current events deck, with older-age cards always placed on top so they come up first. Ties in 'strongest/weakest/most' are broken in favour of the player whose turn it is (or the player closest to that player in turn order); in 2-player games 'the two strongest/weakest' is read as 'the stronger/weaker'.",
+  "ageIIIScoringEvents": "In the 2015 edition ALL 15 Age III events are scoring events: each describes a way to score culture, they may be revealed during play, and every Age III event still in the current or future events decks is evaluated at the end of the game (order irrelevant; events from older ages have no effect at final scoring). There is no set of exactly four designated scoring events in the base 2015 full game -- the 2006 edition set aside 4 random Age III events at setup, and the 2015 'Shorter Game' variant deals 2 face-down + 3 face-up Age III events. Only Impact of Science and Impact of Strength are RANKING events (10/0, 14/7/0, 15/10/5/0)."
  },
  "cards": [
   {
@@ -1352,6 +1354,1275 @@
    },
    "text": "Gain 5 science. Permanently: +2 yellow tokens, +2 blue tokens.",
    "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Development of Settlement",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "increasePopulation": 1
+    }
+   },
+   "text": "Players increase population.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_SETTLEMENT); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Science",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "science": 2
+    }
+   },
+   "text": "Players gain 2 science.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_SCIENCE); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Crafts",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "resources": 2
+    }
+   },
+   "text": "Players gain 2 resources.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_CRAFTS); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Agriculture",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "food": 2
+    }
+   },
+   "text": "Players gain 2 food.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_AGRICULTURE); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Warfare",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "freeBuild": {
+      "card": "Warriors",
+      "cost": 0,
+      "requiresAvailableWorker": true
+     }
+    }
+   },
+   "text": "Players who have an available worker may build a Warriors unit for free.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_WARFARE); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Religion",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "freeBuild": {
+      "card": "Temple",
+      "age": "A",
+      "cost": 0,
+      "requiresAvailableWorker": true
+     }
+    }
+   },
+   "text": "Players who have an available worker may build an Age A temple for free.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_RELIGION); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Politics",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "drawMilitaryCards": 3
+    },
+    "note": "2015 change: players still discard down to their military card limit at the end of their turn"
+   },
+   "text": "Players draw 3 military cards.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_POLITICS); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Markets",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "choose": [
+      {
+       "food": 2
+      },
+      {
+       "resources": 2
+      }
+     ]
+    }
+   },
+   "text": "Players gain 2 food or 2 resources.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_MARKETS); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Trade Routes",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "food": 1,
+     "resources": 1,
+     "science": 1
+    }
+   },
+   "text": "Players gain 1 food, 1 resource and 1 science.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_TRADE_ROUTES); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Development of Civil Life",
+   "age": "A",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "oneTimeDiscount": {
+      "increasePopulation": {
+       "food": 1
+      },
+      "build": {
+       "resources": 1
+      },
+      "developTechnology": {
+       "science": 1
+      },
+      "note": "replaces the 2006 'No Event' card; a revolution may be declared for 1 science less but uses up all civil actions"
+     }
+    }
+   },
+   "text": "Players may increase population, build a farm, mine or urban building, or develop a technology, paying 1 food, 1 resource or 1 science less.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_CIVIL_LIFE); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+  },
+  {
+   "name": "Rats",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "loseAllStoredFood": true
+    }
+   },
+   "text": "Players lose all stored food.",
+   "source": "digital-edition card text (RATS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Pestilence",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "decreasePopulation": 1
+    }
+   },
+   "text": "Players decrease population.",
+   "source": "digital-edition card text (PESTILENCE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Raiders",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "weakestPlayers": {
+     "2p": 1,
+     "3p": 2,
+     "4p": 2
+    },
+    "lose": {
+     "foodAndOrResources": 2
+    }
+   },
+   "text": "The weakest player (2p) / the two weakest players (3-4p) lose up to 2 food and/or resources.",
+   "source": "digital-edition card text (RAIDERS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Barbarians",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "target": "player with most culture",
+    "condition": {
+     "amongWeakest": {
+      "2p": 1,
+      "3p": 2,
+      "4p": 2
+     }
+    },
+    "decreasePopulation": 1
+   },
+   "text": "The player with the most culture decreases population if he or she is the weakest (2p) / one of the two weakest (3-4p).",
+   "source": "digital-edition card text (BARBARIANS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Foray",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayers": {
+     "2p": 1,
+     "3p": 2,
+     "4p": 2
+    },
+    "gain": {
+     "foodAndOrResources": 3
+    }
+   },
+   "text": "The strongest player (2p) / the two strongest players (3-4p) gain up to 3 food and/or resources.",
+   "source": "digital-edition card text (FORAY); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Reign of Terror",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "weakestPlayer": {
+     "decreasePopulation": 1
+    }
+   },
+   "text": "The weakest player decreases population.",
+   "source": "digital-edition card text (REIGN_OF_TERROR); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Immigration",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "playersWithMostHappyFaces": {
+     "increasePopulation": 1
+    }
+   },
+   "text": "The players with the most happy faces increase population.",
+   "source": "digital-edition card text (IMMIGRATION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Uncertain Borders",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayer": {
+     "takeYellowTokensFromWeakest": 1
+    }
+   },
+   "text": "The strongest player takes a yellow token from the weakest player's yellow bank.",
+   "source": "digital-edition card text (UNCERTAIN_BORDERS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Border Conflict",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "weakestPlayer": {
+     "destroyOwnBuilding": 1
+    },
+    "strongestPlayer": {
+     "resources": 3
+    }
+   },
+   "text": "The weakest player destroys a farm, mine or urban building. The strongest player gains 3 resources.",
+   "source": "digital-edition card text (BORDER_CONFLICT); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Crusades",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayer": {
+     "culture": 4
+    },
+    "weakestPlayer": {
+     "culture": -4
+    }
+   },
+   "text": "The strongest player gains 4 culture. The weakest player loses 4 culture.",
+   "source": "digital-edition card text (CRUSADES); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Rebellion",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "civilActionsPerDiscontentWorker": -2
+    },
+    "duration": "one turn"
+   },
+   "text": "Players lose 2 civil actions for each discontent worker.",
+   "source": "digital-edition card text (REBELLION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Scientific Breakthrough",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "scienceEqualToScienceProduction": true
+    }
+   },
+   "text": "Players gain science equal to their science production.",
+   "source": "digital-edition card text (SCIENTIFIC_BREAKTHROUGH); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Good Harvest",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "produceFood": true,
+     "ignoreConsumption": true,
+     "ignoreCorruption": true
+    }
+   },
+   "text": "Players produce food, ignoring corruption and consumption.",
+   "source": "digital-edition card text (GOOD_HARVEST); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "New Deposits",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "produceResources": true,
+     "ignoreCorruption": true
+    }
+   },
+   "text": "Players produce resources, ignoring corruption.",
+   "source": "digital-edition card text (NEW_DEPOSITS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Cultural Influence",
+   "age": "I",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "cultureEqualToCultureProduction": true
+    }
+   },
+   "text": "Players gain culture equal to their culture production.",
+   "source": "digital-edition card text (CULTURAL_INFLUENCE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Iconoclasm",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "discardLeaderUnlessCurrentAge": true
+    }
+   },
+   "text": "Players lose leaders from past ages.",
+   "source": "digital-edition card text (ICONOCLASM); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Ravages of Time",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "flipCompletedWonder": {
+      "ages": [
+       "A",
+       "I"
+      ]
+     },
+     "ruinsCultureProduction": 2,
+     "note": "the flipped wonder still counts as a completed wonder of its age for all purposes (Code of Laws p.12)"
+    }
+   },
+   "text": "Players turn over one of their completed Age A or I wonders. Its effects no longer apply, but it produces +2 culture.",
+   "source": "digital-edition card text (RAVAGES_OF_TIME); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Terrorism",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "playerWithLeastCulture": {
+     "destroyOneUrbanBuildingOfEachOpponent": true
+    }
+   },
+   "text": "The player with the least culture destroys 1 urban building of each opponent.",
+   "source": "digital-edition card text (TERRORISM); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Civil Unrest",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerDiscontentWorker": -4
+    },
+    "playersWithMostDiscontentWorkers": {
+     "blueTokens": -1
+    },
+    "note": "2015 addition: the blue-token loss; if nobody has discontent workers the event does nothing"
+   },
+   "text": "Players lose 4 culture for each discontent worker. The players with the most discontent workers also lose 1 blue token.",
+   "source": "digital-edition card text (CIVIL_UNREST); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "National Pride",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "playerWithMostCulture": {
+     "culture": 5
+    }
+   },
+   "text": "The player with the most culture gains 5 culture.",
+   "source": "digital-edition card text (NATIONAL_PRIDE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Crime Wave",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "weakestPlayers": {
+     "2p": 1,
+     "3p": 2,
+     "4p": 2
+    },
+    "lose": {
+     "culture": 3,
+     "blueTokens": 1
+    }
+   },
+   "text": "The weakest player (2p) / the two weakest players (3-4p) lose 3 culture and 1 blue token.",
+   "source": "digital-edition card text (CRIME_WAVE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Independence Declaration",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "weakestPlayer": {
+     "loseColony": 1,
+     "chosenBy": "that player"
+    }
+   },
+   "text": "The weakest player loses 1 colony (his or her choice).",
+   "source": "digital-edition card text (INDEPENDENCE_DECLARATION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Emigration",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "decreasePopulationByHalfDiscontentWorkersRoundedUp": true
+    }
+   },
+   "text": "Players decrease population by half their number of discontent workers (rounded up).",
+   "source": "digital-edition card text (EMIGRATION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Cold War",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayers": {
+     "2p": 1,
+     "3p": 2,
+     "4p": 2
+    },
+    "gain": {
+     "science": 6
+    },
+    "note": "2015 change: 6 science (was 7 in 2006)"
+   },
+   "text": "The strongest player (2p) / the two strongest players (3-4p) gain 6 science.",
+   "source": "digital-edition card text (COLD_WAR); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Refugees",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayer": {
+     "culture": 3,
+     "increasePopulation": 1
+    },
+    "weakestPlayer": {
+     "culture": -3,
+     "decreasePopulation": 1
+    }
+   },
+   "text": "The strongest player gains 3 culture and increases population. The weakest player loses 3 culture and decreases population.",
+   "source": "digital-edition card text (REFUGEES); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "International Agreement",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayer": {
+     "optionalTakeCardsWithCivilActions": 5,
+     "cost": "forgo next Politics Phase"
+    },
+    "note": "Code of Laws p.12: usual rules for taking cards; if the current player takes cards, action cards taken may be used the same turn; replenish the row afterwards WITHOUT discarding from the first slots; if this exhausts the Age III civil deck it triggers end of game; usable even in the last round"
+   },
+   "text": "The strongest player may spend up to 5 civil actions taking cards, giving up his or her next Politics Phase.",
+   "source": "digital-edition card text (INTERNATIONAL_AGREEMENT); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Economic Progress",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "extraProduction": {
+      "order": [
+       "corruption",
+       "foodProduction",
+       "foodConsumption",
+       "resourceProduction"
+      ]
+     }
+    },
+    "note": "2015 change: corruption is applied before production, matching the new End-of-Turn Sequence"
+   },
+   "text": "Players produce food and resources: apply corruption, produce food, apply food consumption, produce resources.",
+   "source": "digital-edition card text (ECONOMIC_PROGRESS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Popularization of Science",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "cultureEqualToScienceProduction": true
+    }
+   },
+   "text": "Players gain culture equal to their science production.",
+   "source": "digital-edition card text (POPULARIZATION_OF_SCIENCE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Politics of Strength",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "strongestPlayer": {
+     "drawMilitaryCards": 5
+    },
+    "weakestPlayer": {
+     "discardMilitaryCards": 3
+    },
+    "lastRoundSubstitute": {
+     "strongestPlayer": {
+      "culture": 5
+     },
+     "weakestPlayer": {
+      "culture": -3
+     }
+    }
+   },
+   "text": "The strongest player draws 5 military cards. The weakest player discards 3 military cards. In the last round they gain / lose culture instead.",
+   "source": "digital-edition card text (POLITICS_OF_STRENGTH); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card; the exact last-round culture substitution (5 gained / 3 lost) is taken from the digital edition wording, the printed card says only 'culture points instead'"
+  },
+  {
+   "name": "Prosperity",
+   "age": "II",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "foodEqualToHappyFaces": true,
+     "max": 8
+    }
+   },
+   "text": "Players gain food equal to their number of happy faces (maximum 8).",
+   "source": "digital-edition card text (PROSPERITY); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Industry",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerResourceProducedByMines": 1
+    }
+   },
+   "text": "Players gain culture equal to the resources produced by their mines (ignoring other bonuses).",
+   "source": "digital-edition card text (IMPACT_OF_INDUSTRY); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Agriculture",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerFoodProducedByFarms": 1,
+     "bonusIfProductionExceedsConsumption": 4
+    },
+    "note": "2015 change: the +4 bonus is new"
+   },
+   "text": "Players gain culture equal to the food produced by their farms. If production exceeds consumption, they gain 4 more culture.",
+   "source": "digital-edition card text (IMPACT_OF_AGRICULTURE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Competition",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerLevelOfMilitaryUnitsAndArenas": 1
+    }
+   },
+   "text": "Players gain 1 culture for each level of their military units and arenas.",
+   "source": "digital-edition card text (IMPACT_OF_COMPETITION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Progress",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerLevelOfSpecialTechsAndGovernment": 2
+    }
+   },
+   "text": "Players gain 2 culture for each level of their special (blue) technologies and government.",
+   "source": "digital-edition card text (IMPACT_OF_PROGRESS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Wonders",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerCompletedWonderByAge": {
+      "A": 5,
+      "I": 4,
+      "II": 3,
+      "III": 2
+     }
+    }
+   },
+   "text": "Players gain culture for each completed wonder: 5 for Age A, 4 for Age I, 3 for Age II, 2 for Age III.",
+   "source": "digital-edition card text (IMPACT_OF_WONDERS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Population",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerContentWorkerAbove10": 2
+    }
+   },
+   "text": "Players gain 2 culture for each content worker beyond the first ten.",
+   "source": "digital-edition card text (IMPACT_OF_POPULATION); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Colonies",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerColony": 3
+    },
+    "note": "2015 change: 3 culture (was 4 in 2006)"
+   },
+   "text": "Players gain 3 culture for each colony.",
+   "source": "digital-edition card text (IMPACT_OF_COLONIES); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Government",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerCivilAction": 2,
+     "culturePerMilitaryAction": 1
+    }
+   },
+   "text": "Players gain 2 culture for each civil action and 1 culture for each military action.",
+   "source": "digital-edition card text (IMPACT_OF_GOVERNMENT); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Architecture",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerLevelOfUrbanBuildings": 1
+    }
+   },
+   "text": "Players gain 1 culture for each level of their urban buildings.",
+   "source": "digital-edition card text (IMPACT_OF_ARCHITECTURE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Strength",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "rankingCulture": {
+      "2p": [
+       10,
+       0
+      ],
+      "3p": [
+       14,
+       7,
+       0
+      ],
+      "4p": [
+       15,
+       10,
+       5,
+       0
+      ]
+     },
+     "statistic": "strengthRating"
+    }
+   },
+   "text": "Players gain 10/0 (2p), 14/7/0 (3p) or 15/10/5/0 (4p) culture for their strength rating. (Ties are broken as though it were the starting player's turn.)",
+   "source": "digital-edition card text (IMPACT_OF_STRENGTH); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Happiness",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerHappyFace": 2,
+     "maxCultureFromHappyFaces": 16,
+     "culturePerDiscontentWorker": -2
+    }
+   },
+   "text": "Players gain 2 culture for each happy face (maximum 16 culture) and lose 2 culture for each discontent worker.",
+   "source": "digital-edition card text (IMPACT_OF_HAPPINESS); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Science",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "rankingCulture": {
+      "2p": [
+       10,
+       0
+      ],
+      "3p": [
+       14,
+       7,
+       0
+      ],
+      "4p": [
+       15,
+       10,
+       5,
+       0
+      ]
+     },
+     "statistic": "scienceProduction"
+    }
+   },
+   "text": "Players gain 10/0 (2p), 14/7/0 (3p) or 15/10/5/0 (4p) culture for their science production. (Ties are broken as though it were the starting player's turn.)",
+   "source": "digital-edition card text (IMPACT_OF_SCIENCE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Technology",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerAgeIIITechnology": 4
+    }
+   },
+   "text": "Players gain 4 culture for each Age III technology.",
+   "source": "digital-edition card text (IMPACT_OF_TECHNOLOGY); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Balance",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "cultureTimesLowestProduction": 2,
+     "statistics": [
+      "foodProduction",
+      "resourceProduction",
+      "scienceProduction",
+      "cultureProduction"
+     ],
+     "ignore": [
+      "corruption",
+      "consumption"
+     ]
+    },
+    "note": "new card in the 2015 edition"
+   },
+   "text": "Players gain 2 culture times their lowest production of food, resources, science or culture (ignoring corruption and consumption).",
+   "source": "digital-edition card text (IMPACT_OF_BALANCE); cross-checked namu_events.txt (2015 '(new)' values)",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Impact of Variety",
+   "age": "III",
+   "deck": "military",
+   "type": "event",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "scoringEvent": true,
+   "target": "all players / ranked players as stated",
+   "effects": {
+    "allPlayers": {
+     "culturePerDistinctTypeOfUnitUrbanBuildingAndSpecialTech": 2
+    },
+    "note": "new card in the 2015 edition"
+   },
+   "text": "Players gain 2 culture for each different type of military unit, urban building and special (blue) technology.",
+   "source": "digital-edition card text (IMPACT_OF_VARIETY); cross-checked namu_events.txt (2015 '(new)' values)",
    "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
   }
  ]
