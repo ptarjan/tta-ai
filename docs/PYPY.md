@@ -284,6 +284,27 @@ resolve their ordered action FIRST at full price with the gains landing after.
 That changes play in any game involving Breakthrough / Frugality, so **the
 fingerprint digests quoted above are stale from f4bcac0 onward**. The
 throughput numbers are unaffected in any meaningful way (the change moves work
-around inside a move, it does not add or remove any). Determinism is
-re-verified against f4bcac0 below.
+around inside a move, it does not add or remove any).
+
+Determinism re-verified at f4bcac0, both interpreters, `nice -n 10`:
+
+```
+$ python3 -m unittest discover -s tests            ->  Ran 58 tests  OK
+$ python3 -m engine.perf_check save /tmp/fp2_cpy.json
+saved c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a (33 cases)
+$ pypy3   -m engine.perf_check check /tmp/fp2_cpy.json
+OK  identical behaviour: c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a
+
+$ python3 -m engine.perf_check save /tmp/fp2_wide_cpy.json --wide
+saved 47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d (102 cases)
+$ pypy3   -m engine.perf_check check /tmp/fp2_wide_cpy.json
+OK  identical behaviour: 47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d
+```
+
+**135/135 games still byte-identical across interpreters after the rules
+change.** (The digests moved — `3229c4a0` -> `c2befef1`, `c7e73ede` ->
+`47e06a41` — exactly as expected for a real rules change.)
+
+**Current cross-interpreter baseline digests: narrow `c2befef1…`, wide
+`47e06a41…`.**
 
