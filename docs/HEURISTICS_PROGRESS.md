@@ -79,3 +79,25 @@
   (wonders bypass the hand, round 1 is take-only, no completed-wonder surcharge
   yet) but it starts 1.96 and finishes 0.79, so the doc takes the first half only.
 - NEXT: Per-player-count section, then re-verify rules 1-8.
+
+### 11:40
+- NEW TOOL `analysis/leak_check.py`: wraps `economy.end_of_turn` at runtime and
+  compares the culture the rating said you should score against what you actually
+  scored. The gap is the 4-culture-per-missing-food starvation penalty (§6.6).
+  (Careful: the bot's 1-ply search also calls end_of_turn on CLONED states, so the
+  tally is keyed on id(state) and only the id play_game returned is counted.
+  Without that the numbers come out ~5x too big.)
+- BIGGEST FINDING OF THE SESSION (20 games/count, mirror, frozen champions):
+    2p: 19.7 culture burned to starvation per player-game (14.1% of turns short)
+    3p:  4.8 (4.9% of turns)
+    4p: 59.6 culture burned vs 52.7 actually scored (47.3% of turns short!)
+  In Age III the 4p champion burns 5.25 culture/turn to starvation against a
+  culture RATE of 6.63 -- it nets about 1.4. This entirely explains why 4p final
+  culture is 56.4 against 2p's 123.7 despite 4p having more techs.
+  Uprisings by contrast cost almost nothing (0.38 / 0.03 / 1.80 per game).
+- 60-game confirmation run launched -> experiments/logs/leak_check.log
+- Also found: `military_by_age.ratio_to_strongest` (vs the STRONGEST rival, not the
+  mean) is 1.02-1.07 at 2p but 0.75-0.84 at 3p and 0.46-0.60 at 4p, and the 4p
+  champion spends ~50% of turns BELOW HALF the strongest rival's strength.
+  Rule 8's "parity with the table" claim is only true at 2p.
+- NEXT: Per-player-count section, then rewrite traps #2, then re-verify rules 1-8.

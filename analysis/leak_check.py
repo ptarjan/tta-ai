@@ -27,13 +27,17 @@ from experiments.arena import load_spec, make_bot  # noqa: E402
 _ORIG_END = economy.end_of_turn
 
 
-def install(stats):
+def install(tally):
+    """The bot's 1-ply search also calls end_of_turn on *cloned* states, so we
+    key every tally on id(state) and afterwards keep only the id of the state
+    `play_game` actually returned.  The real state is alive for the whole game,
+    so no clone can reuse its id."""
     def end_of_turn(state, p, rng):
         try:
             idx = state.players.index(p)
         except ValueError:
             return _ORIG_END(state, p, rng)
-        rec = stats[idx]
+        rec = tally.setdefault((id(state), idx), blank())
         s = effects.state_stats(state, p)
         rebels = economy.uprising(state, p)
         cul_before = p.culture
@@ -81,12 +85,13 @@ def main():
         agg = blank()
         finals = []
         for seed in range(a.games):
-            stats = [blank() for _ in range(n)]
-            install(stats)
+            tally = {}
+            install(tally)
             bots = [make_bot(spec, seed * 97 + i * 13 + 1) for i in range(n)]
             st = game.play_game(bots, n, seed=seed)
             finals.extend(game.scores(st))
-            for r in stats:
+            real = [tally.get((id(st), i), blank()) for i in range(n)]
+            for r in real:
                 for k, v in r.items():
                     if isinstance(v, dict):
                         for kk, vv in v.items():
