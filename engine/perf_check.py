@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import random
 import sys
 import time
@@ -26,6 +27,17 @@ from .bots import GreedyBot, RandomBot
 # (num_players, bot-kind, seed) tuples covered by the fingerprint.
 CASES = ([(n, "random", s) for n in (2, 3, 4) for s in range(8)]
          + [(n, "greedy", s) for n in (2, 3, 4) for s in range(3)])
+
+
+def wide_cases(nrandom=24, ngreedy=10):
+    """A bigger fingerprint set, for cross-interpreter verification.
+
+    The default `CASES` is sized to stay a few seconds on CPython so it can be
+    run after every optimisation.  `wide_cases()` is the belt-and-braces sweep
+    used when signing off a whole interpreter (see docs/PYPY.md).
+    """
+    return ([(n, "random", s) for n in (2, 3, 4) for s in range(nrandom)]
+            + [(n, "greedy", s) for n in (2, 3, 4) for s in range(ngreedy)])
 
 
 def _bots(kind, n, seed):
@@ -62,18 +74,28 @@ def fingerprint(cases=CASES, verbose=False):
     return h.hexdigest(), per_case
 
 
-def bench(kinds=("random", "greedy"), counts=(2, 3, 4), games=None):
+def bench(kinds=("random", "greedy"), counts=(2, 3, 4), games=None,
+          warmup=None, json_out=None):
     """Throughput in CPU-seconds of THIS process.
 
     Wall clock is useless here: the hill-climbing agents keep every core of
     this box busy, so `time.process_time` (our own CPU time) is the only
     stable measure.  Games per CPU-second is also the number that matters for
     self-play, which is CPU-bound and parallel.
+
+    `warmup` games are played (and discarded) before the clock starts.  This
+    matters enormously on PyPy, whose JIT needs to see the hot loops a few
+    hundred thousand times before it compiles them; without it PyPy measures
+    as *slower* than CPython.  Warm-up games use seeds 10_000+ so they never
+    overlap the measured seeds, and both interpreters see identical work.
     """
     rows = []
     for kind in kinds:
         for n in counts:
             g = games if games else (30 if kind == "random" else 4)
+            w = warmup if warmup is not None else max(2, g // 2)
+            for s in range(w):
+                _play(n, kind, 10_000 + s)
             t0 = time.process_time()
             w0 = time.perf_counter()
             moves = 0
@@ -82,28 +104,50 @@ def bench(kinds=("random", "greedy"), counts=(2, 3, 4), games=None):
                 moves += getattr(st, "moves_played", 0)
             dt = time.process_time() - t0
             wall = time.perf_counter() - w0
-            rows.append((kind, n, g / dt, moves / dt))
+            rows.append({"kind": kind, "players": n, "games": g,
+                         "warmup": w, "cpu_s": dt, "wall_s": wall,
+                         "games_per_cpu_s": g / dt, "moves_per_cpu_s": moves / dt,
+                         "games_per_wall_s": g / wall})
             print(f"{kind:7s} {n}p  {g/dt:8.2f} games/cpu-s  "
                   f"{moves/dt:10.0f} moves/cpu-s   (wall {g/wall:6.2f} g/s)")
+    if json_out:
+        with open(json_out, "w") as fh:
+            json.dump({"impl": platform.python_implementation(),
+                       "version": platform.python_version(),
+                       "rows": rows}, fh, indent=1)
     return rows
+
+
+def _opt(argv, name, default=None, cast=int):
+    if name in argv:
+        return cast(argv[argv.index(name) + 1])
+    return default
 
 
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "bench"
+    wide = "--wide" in argv
+    cases = wide_cases() if wide else CASES
+    pos = [a for a in argv[2:] if not a.startswith("--")]
     if cmd == "bench":
-        bench(games=int(argv[2]) if len(argv) > 2 else None)
+        bench(games=_opt(argv, "--games", int(pos[0]) if pos else None),
+              warmup=_opt(argv, "--warmup"),
+              json_out=_opt(argv, "--json", None, str),
+              kinds=tuple(_opt(argv, "--kinds", "random,greedy", str).split(",")),
+              counts=tuple(int(x) for x in
+                           _opt(argv, "--players", "2,3,4", str).split(",")))
     elif cmd == "hash":
-        digest, _ = fingerprint(verbose=True)
+        digest, _ = fingerprint(cases, verbose=True)
         print("FINGERPRINT", digest)
     elif cmd == "save":
-        digest, per = fingerprint()
-        with open(argv[2], "w") as fh:
+        digest, per = fingerprint(cases)
+        with open(pos[0], "w") as fh:
             json.dump({"digest": digest, "cases": per}, fh, indent=1)
-        print("saved", digest)
+        print("saved", digest, f"({len(cases)} cases)")
     elif cmd == "check":
-        with open(argv[2]) as fh:
+        with open(pos[0]) as fh:
             want = json.load(fh)
-        digest, per = fingerprint()
+        digest, per = fingerprint([tuple(c["case"]) for c in want["cases"]])
         if digest == want["digest"]:
             print("OK  identical behaviour:", digest)
             return 0

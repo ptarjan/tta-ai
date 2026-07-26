@@ -95,20 +95,26 @@ class Recorder:
                 self.rec["takes"].get(f"band{band}", 0) + 1
             t = _card_type(db, name)
             self.rec["take_types"][t] = self.rec["take_types"].get(t, 0) + 1
+            self.rec["take_rows"].append([state.round, band, name, t])
             self._first(f"take_{t}", state)
         elif kind == "play_leader":
             self._first("leader", state)
+            self._first(f"leader:{mv[1] if len(mv) > 1 else '?'}", state)
         elif kind == "wonder_step":
             if p.wonder is not None and p.wonder.steps_built == 0:
                 self._first("wonder_start", state)
+                self.rec["wonders_started"].append([state.round, p.wonder.name])
             self._first("wonder_step", state)
         elif kind == "revolution":
             self._first("government", state)
+            self._first(f"gov:{mv[1] if len(mv) > 1 else '?'}", state)
         elif kind in ("build", "upgrade", "develop"):
             name = mv[-1]
             t = _card_type(db, name)
             self.rec["builds"].append([state.round, kind, t])
             self._first(f"{kind}_{t}", state)
+            if t == "government":
+                self._first(f"gov:{name}", state)
             if t in ("farm", "mine"):
                 self._first("upgrade_production", state)
             if t in ("lab", "temple", "library", "theater", "arena"):
@@ -130,12 +136,18 @@ class Recorder:
         p = state.players[self.idx]
         s = effects.state_stats(state, p)
         others = [q for q in state.players if q.idx != self.idx]
-        o_str, o_units = [], []
+        o_str, o_units, o_cul, o_sci = [], [], [], []
         for q in others:
             sq = effects.state_stats(state, q)
             o_str.append(sq.strength)
+            o_cul.append(sq.culture)
+            o_sci.append(sq.science)
             o_units.append(effects.workers_on_types(q, C.UNIT_TYPES))
         units = effects.workers_on_types(p, C.UNIT_TYPES)
+        for name in p.completed_wonders:
+            if name not in self._done_seen:
+                self._done_seen.add(name)
+                self.rec["wonders_done"].append([state.round, name])
         self.rec["snaps"].append({
             "round": state.round,
             "age": C.AGE_LEVEL[state.age_civil],
@@ -161,7 +173,18 @@ class Recorder:
             "techs": len(p.techs),
             "hand": len(p.hand_civil),
             "opp_strength": (sum(o_str) / len(o_str)) if o_str else 0,
+            "opp_strength_max": max(o_str) if o_str else 0,
             "opp_units": (sum(o_units) / len(o_units)) if o_units else 0,
+            "opp_culture_rate_max": max(o_cul) if o_cul else 0,
+            "opp_science_rate_max": max(o_sci) if o_sci else 0,
+            "opp_culture_max": max((q.culture for q in others), default=0),
+            "science": p.science,
+            "food_stock": p.food,
+            "resource_stock": p.resources,
+            "pop_bank": p.yellow_bank,
+            "workers_total": (effects.workers_on_types(p, C.PRODUCTION_TYPES)
+                              + effects.workers_on_types(p, C.URBAN_TYPES)
+                              + units + p.workers_free),
             "wars_on_me": len(p.wars_declared_on_me),
         })
 
@@ -377,6 +400,266 @@ def _summarize_group(recs, label):
             "hand_size": m("hand"),
         }
     out["by_age"] = ages
+
+    # --- full distribution of the "when do you first do X" milestones -----
+    #     medians hide bimodality; a human wants to know "by round 5 in 80%
+    #     of games", so publish the round histogram and the cumulative curve.
+    dist_keys = ["wonder_start", "leader", "government", "take_wonder",
+                 "take_leader", "take_government", "upgrade_production",
+                 "upgrade_urban", "war", "aggression", "pact"]
+    dists = {}
+    for k in dist_keys:
+        got = sorted(r["first"][k] for r in recs if k in r["first"])
+        hist = {}
+        for v in got:
+            hist[v] = hist.get(v, 0) + 1
+        cum, run = {}, 0
+        for rnd in sorted(hist):
+            run += hist[rnd]
+            cum[rnd] = round(run / n, 3)
+        dists[k] = {
+            "games": n,
+            "n_did_it": len(got),
+            "never_share": round(1 - len(got) / n, 3),
+            "min_round": got[0] if got else None,
+            "p10_round": _q(got, 0.10), "p25_round": _q(got, 0.25),
+            "median_round": _med(got),
+            "p75_round": _q(got, 0.75), "p90_round": _q(got, 0.90),
+            "max_round": got[-1] if got else None,
+            "stdev_round": (round(statistics.pstdev(got), 2)
+                            if len(got) > 1 else 0.0),
+            "round_hist": {str(r_): c for r_, c in sorted(hist.items())},
+            "cum_share_by_round": {str(r_): v for r_, v in cum.items()},
+        }
+    out["milestone_distribution"] = dists
+
+    # --- which leader / government it actually picks ----------------------
+    def _named(prefix):
+        got = {}
+        for r in recs:
+            for k, rnd in r["first"].items():
+                if k.startswith(prefix):
+                    d = got.setdefault(k[len(prefix):], {"n": 0, "rounds": []})
+                    d["n"] += 1
+                    d["rounds"].append(rnd)
+        return {name: {"share_of_games": round(d["n"] / n, 3),
+                       "n_games": d["n"],
+                       "median_round": _med(d["rounds"])}
+                for name, d in sorted(got.items(), key=lambda kv: -kv[1]["n"])}
+    out["leaders_played"] = _named("leader:")
+    out["governments_taken"] = _named("gov:")
+
+    # --- end-of-age board state (the last turn played inside each age) ----
+    #     `by_age` averages over every turn in the age, which mixes the
+    #     ramp-up with the finished position.  This is the finished position.
+    eoa = {}
+    per_game_age = {}
+    for r in recs:
+        last = {}
+        for s in r["snaps"]:
+            last[s["age"]] = s
+        for a, s in last.items():
+            per_game_age.setdefault(a, []).append(s)
+    for a in sorted(per_game_age):
+        ss = per_game_age[a]
+        def em(k):
+            v = _mean([x[k] for x in ss])
+            return round(v, 2) if v is not None else None
+        eoa[AGE_NAMES[a]] = {
+            "games_reaching_age": len(ss),
+            "share_of_games": round(len(ss) / n, 3),
+            "median_round": _med([x["round"] for x in ss]),
+            "culture_rate": em("culture_rate"),
+            "culture_rate_p25": _q([x["culture_rate"] for x in ss], 0.25),
+            "culture_rate_p75": _q([x["culture_rate"] for x in ss], 0.75),
+            "science_rate": em("science_rate"),
+            "science_rate_p25": _q([x["science_rate"] for x in ss], 0.25),
+            "science_rate_p75": _q([x["science_rate"] for x in ss], 0.75),
+            "sci_per_culture": (round(em("science_rate") / em("culture_rate"), 2)
+                                if em("culture_rate") else None),
+            "culture_total": em("culture"),
+            "science_unspent": em("science"),
+            "food_rate": em("food_rate"),
+            "resource_rate": em("resource_rate"),
+            "strength": em("strength"),
+            "techs": em("techs"),
+            "wonders_done": em("wonders"),
+            "workers_total": em("workers_total"),
+            "pop_bank_left": em("pop_bank"),
+            "culture_rate_vs_best_rival": (
+                round(em("culture_rate") / em("opp_culture_rate_max"), 2)
+                if em("opp_culture_rate_max") else None),
+            "science_rate_vs_best_rival": (
+                round(em("science_rate") / em("opp_science_rate_max"), 2)
+                if em("opp_science_rate_max") else None),
+            "culture_lead_over_best_rival": (
+                round(em("culture") - em("opp_culture_max"), 2)),
+        }
+    out["end_of_age"] = eoa
+
+    # --- military: me vs the STRONGEST opponent, not the average ----------
+    mil = {}
+    for a in sorted(by_age):
+        ss = by_age[a]
+        mine = [x["strength"] for x in ss]
+        best = [x["opp_strength_max"] for x in ss]
+        ahead = sum(1 for x in ss if x["strength"] > x["opp_strength_max"])
+        tied = sum(1 for x in ss if x["strength"] == x["opp_strength_max"])
+        half = sum(1 for x in ss
+                   if x["strength"] * 2 < x["opp_strength_max"])
+        mil[AGE_NAMES[a]] = {
+            "turns_sampled": len(ss),
+            "strength": round(_mean(mine) or 0, 2),
+            "strongest_opponent": round(_mean(best) or 0, 2),
+            "ratio_to_strongest": (round((_mean(mine) or 0) / (_mean(best) or 1), 2)
+                                   if _mean(best) else None),
+            "mean_deficit_to_strongest": round(
+                _mean([x["opp_strength_max"] - x["strength"] for x in ss]) or 0, 2),
+            "turns_ahead_of_strongest_share": round(ahead / len(ss), 3),
+            "turns_tied_share": round(tied / len(ss), 3),
+            "turns_below_half_strongest_share": round(half / len(ss), 3),
+        }
+    out["military_by_age"] = mil
+
+    # --- conflict, normalised ---------------------------------------------
+    n_opp = max(1, recs[0].get("num_players", 2) - 1) if recs else 1
+    made = sum(len(r["attacks_made"]) for r in recs)
+    taken = sum(len(r["attacked_by"]) for r in recs)
+    out["conflict"].update({
+        "games": n,
+        "attacks_made_per_game": round(made / n, 3),
+        "attacks_suffered_per_game": round(taken / n, 3),
+        "attack_to_suffer_ratio": (round(made / taken, 2) if taken else None),
+        "opponents_per_game": n_opp,
+        "suffered_per_opponent_per_game": round(taken / n / n_opp, 3),
+        "note": ("suffered_per_opponent > attacks_made_per_game means the "
+                 "champion is a target more often than it is an aggressor"),
+    })
+
+    # --- civil actions left on the table ----------------------------------
+    ca_hist, ma_hist = {}, {}
+    for s in all_snaps_iter(recs):
+        ca_hist[s["ca_left"]] = ca_hist.get(s["ca_left"], 0) + 1
+        ma_hist[s["ma_left"]] = ma_hist.get(s["ma_left"], 0) + 1
+    turns = sum(ca_hist.values()) or 1
+    wasted_by_game = [sum(s["ca_left"] for s in r["snaps"]) for r in recs]
+    out["unspent_actions"] = {
+        "turns_sampled": turns,
+        "games": n,
+        "ca_left_hist": {str(k): {"turns": v, "share": round(v / turns, 3)}
+                         for k, v in sorted(ca_hist.items())},
+        "ma_left_hist": {str(k): {"turns": v, "share": round(v / turns, 3)}
+                         for k, v in sorted(ma_hist.items())},
+        "ca_wasted_per_game": round(_mean(wasted_by_game) or 0, 2),
+        "ca_wasted_per_turn": round(_mean(
+            [s["ca_left"] for s in all_snaps_iter(recs)]) or 0, 3),
+        "turns_with_2plus_ca_left": round(
+            sum(v for k, v in ca_hist.items() if k >= 2) / turns, 3),
+    }
+
+    # --- worker / population curve, by round ------------------------------
+    by_round = {}
+    for r in recs:
+        for s in r["snaps"]:
+            by_round.setdefault(s["round"], []).append(s)
+    curve = {}
+    for rnd in sorted(by_round):
+        ss = by_round[rnd]
+        if len(ss) < max(3, n // 10):     # thin tail rounds: not reportable
+            continue
+        def rm(k):
+            v = _mean([x[k] for x in ss])
+            return round(v, 2) if v is not None else None
+        curve[str(rnd)] = {
+            "turns_sampled": len(ss),
+            "age": AGE_NAMES[int(round(_mean([x["age"] for x in ss])))],
+            "workers_total": rm("workers_total"),
+            "pop_bank_left": rm("pop_bank"),
+            "w_prod": rm("w_prod"), "w_urban": rm("w_urban"),
+            "w_units": rm("w_units"), "w_free": rm("w_free"),
+            "culture": rm("culture"), "culture_rate": rm("culture_rate"),
+            "science_rate": rm("science_rate"),
+            "strength": rm("strength"),
+            "techs": rm("techs"),
+        }
+    out["worker_curve_by_round"] = curve
+
+    # --- which specific cards, per cost band ------------------------------
+    band_cards = {}
+    for r in recs:
+        for rnd, band, name, t in r["take_rows"]:
+            d = band_cards.setdefault(f"band{band}", {})
+            e = d.setdefault(name, {"n": 0, "rounds": [], "type": t})
+            e["n"] += 1
+            e["rounds"].append(rnd)
+    bands_out = {}
+    for b in sorted(band_cards):
+        items = sorted(band_cards[b].items(), key=lambda kv: -kv[1]["n"])
+        tot_b = sum(e["n"] for _, e in items) or 1
+        bands_out[b] = {
+            "cards_taken": tot_b,
+            "per_game": round(tot_b / n, 2),
+            "top_cards": [
+                {"card": name, "type": e["type"], "taken": e["n"],
+                 "per_game": round(e["n"] / n, 3),
+                 "share_of_band": round(e["n"] / tot_b, 3),
+                 "median_round": _med(e["rounds"])}
+                for name, e in items[:15]],
+        }
+    out["cards_by_band"] = bands_out
+    # flat top-cards list across all bands
+    flat = {}
+    for r in recs:
+        for rnd, band, name, t in r["take_rows"]:
+            e = flat.setdefault(name, {"n": 0, "type": t, "bands": {},
+                                       "rounds": []})
+            e["n"] += 1
+            e["rounds"].append(rnd)
+            e["bands"][band] = e["bands"].get(band, 0) + 1
+    out["top_cards_taken"] = [
+        {"card": name, "type": e["type"], "taken": e["n"],
+         "per_game": round(e["n"] / n, 3),
+         "median_round": _med(e["rounds"]),
+         "band_mix": {f"band{b}": c for b, c in sorted(e["bands"].items())}}
+        for name, e in sorted(flat.items(), key=lambda kv: -kv[1]["n"])[:30]]
+
+    # --- wonders: started vs finished, by name ----------------------------
+    wst, wdn = {}, {}
+    for r in recs:
+        for rnd, name in r["wonders_started"]:
+            d = wst.setdefault(name, {"n": 0, "rounds": []})
+            d["n"] += 1
+            d["rounds"].append(rnd)
+        for rnd, name in r["wonders_done"]:
+            d = wdn.setdefault(name, {"n": 0, "rounds": []})
+            d["n"] += 1
+            d["rounds"].append(rnd)
+    names = sorted(set(wst) | set(wdn),
+                   key=lambda k: -(wst.get(k, {}).get("n", 0)
+                                   + wdn.get(k, {}).get("n", 0)))
+    out["wonders"] = {
+        "games": n,
+        "started_per_game": round(
+            sum(len(r["wonders_started"]) for r in recs) / n, 2),
+        "completed_per_game": round(
+            sum(len(r["wonders_done"]) for r in recs) / n, 2),
+        "abandoned_per_game": round(
+            sum(len(r["wonders_abandoned"]) for r in recs) / n, 2),
+        "by_wonder": {
+            name: {
+                "started_in_games": wst.get(name, {}).get("n", 0),
+                "start_share_of_games": round(
+                    wst.get(name, {}).get("n", 0) / n, 3),
+                "completed_in_games": wdn.get(name, {}).get("n", 0),
+                "completion_share_of_games": round(
+                    wdn.get(name, {}).get("n", 0) / n, 3),
+                "completion_rate_once_started": (
+                    round(wdn.get(name, {}).get("n", 0)
+                          / wst[name]["n"], 3) if wst.get(name) else None),
+                "median_start_round": _med(wst.get(name, {}).get("rounds", [])),
+                "median_finish_round": _med(wdn.get(name, {}).get("rounds", [])),
+            } for name in names},
+    }
 
     all_snaps = [s for r in recs for s in r["snaps"]]
     out["overall"] = {
