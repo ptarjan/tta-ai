@@ -42,26 +42,47 @@ from experiments import hillclimb_pool as P  # noqa: E402
 from experiments.hillclimb import mutate  # noqa: E402
 
 
-def candidates(champion, seed=99):
-    """The candidate set: ordinary mutants plus deliberate sabotage."""
+def candidates(champion, seed=99, which="all"):
+    """The candidate set: ordinary mutants plus deliberate sabotage.
+
+    On the sabotage vectors -- MEASURED, not assumed.  The obvious choice,
+    negating `science`, turned out NOT to be sabotage at 3p: it scores
+    +0.0599 on win share and +0.0875 on margin, taking BookBot from 0.0% to
+    12.5%.  Both metrics agree it is better, so it validates nothing about
+    direction.  (It is a real finding about the weight vector, not about the
+    metric, and it is why the direction check needs a vector that is worse
+    beyond argument.)
+
+    `culture_negative` is that vector.  Culture points ARE the score -- the
+    game is won by having the most of them -- so a bot that values them
+    negatively is playing to lose by construction, and no correct metric may
+    call it an improvement.  `all_zero` is the second: a bot indifferent to
+    every feature, i.e. effectively random play.
+    """
     rng = random.Random(seed)
     out = []
-    for i in range(2):
-        m, moved, op = mutate(champion, rng, 0.25)
-        out.append((f"mut:{i}({op})", m))
+    if which in ("all", "mutants"):
+        for i in range(2):
+            m, moved, op = mutate(champion, rng, 0.25)
+            out.append((f"mut:{i}({op})", m))
 
-    # Sign inversion of a value term.  This is not a hypothetical: the 4p
-    # champion the old loop produced has science = -6.089, which inverts a
-    # cost term and makes expensive cards look like bargains.  It measured at
-    # 9.7% +/- 2.7% at 4p.  Whatever else the new metric does, it must call
-    # this WORSE.
-    bad = dict(champion)
-    bad["science"] = -abs(champion.get("science", 0.5)) * 4.0
-    out.append(("worse:science_negative", bad))
+    if which in ("all", "sabotage"):
+        bad = dict(champion)
+        bad["science"] = -abs(champion.get("science", 0.5)) * 4.0
+        out.append(("probe:science_negative", bad))
 
-    off = dict(champion)
-    off["science"] = 0.0
-    out.append(("worse:science_zero", off))
+        # Playing to lose: culture is the win condition itself.
+        cn = dict(champion)
+        cn["culture"] = -abs(champion.get("culture", 1.0))
+        out.append(("worse:culture_negative", cn))
+
+        # Indifferent to everything -> effectively random play.
+        az = {k: 0.0 for k in champion}
+        out.append(("worse:all_zero", az))
+
+        # Every preference reversed.
+        neg = {k: -v for k, v in champion.items()}
+        out.append(("worse:negate_all", neg))
     return out
 
 
@@ -74,13 +95,15 @@ def main(argv=None):
     ap.add_argument("--scale", type=float, default=P.MARGIN_SCALE)
     ap.add_argument("--veto-z", type=float, default=1.0)
     ap.add_argument("--out", default="")
+    ap.add_argument("--which", choices=("all", "mutants", "sabotage"),
+                    default="all")
     args = ap.parse_args(argv)
 
     champion = dict(DEFAULT_WEIGHTS)
     pool = P.build_pool(args.players, log=lambda *_a: None)
     gate = [e for e in pool.sorted_entries()
             if e.tier in pool.gate_tiers and not e.is_mirror]
-    cands = candidates(champion)
+    cands = candidates(champion, which=args.which)
     print(f"=== {args.players}p  gate={len(gate)} opponents  "
           f"block={args.block}  scale={args.scale:g}  "
           f"candidates={[c[0] for c in cands]}", flush=True)
@@ -165,8 +188,10 @@ def main(argv=None):
     ws_edges = [c["gate_edge_winshare"] for c in out["candidates"].values()]
     worse = [(k, v) for k, v in out["candidates"].items() if k.startswith("worse:")]
     muts = [(k, v) for k, v in out["candidates"].items() if k.startswith("mut:")]
-    direction_ok = all(
-        v["gate_edge_margin"] < 0 for _k, v in worse)
+    # A worse vector must not merely be negative, it must be negative with
+    # confidence -- the whole point is that the sign is not a coin flip.
+    direction_ok = bool(worse) and all(
+        v["gate_edge_margin"] + 2.0 * v["gate_se_margin"] < 0 for _k, v in worse)
     out["verdict"] = {
         "rows_total": total,
         "rows_dead_on_winshare": dead,
