@@ -6,12 +6,13 @@ Written for someone sitting at a table with the physical game. Everything here
 comes from a rules-complete engine plus a self-play AI that is still training.
 
 **If you are about to play and have five minutes**, read *If you remember
-nothing else* (eight rules), then trap #2 (starvation — the biggest single
+nothing else* (seven rules), then trap #2 (starvation — the biggest single
 culture leak we measured), then the opening cheat sheet for your player count.
 
 1. [How to read this document](#how-to-read-this-document) — where the numbers
    come from, how strong the AI is, what the confidence tags mean
-2. [If you remember nothing else](#if-you-remember-nothing-else) — eight rules
+2. [If you remember nothing else](#if-you-remember-nothing-else) — seven
+   rules, plus one warning label
 3. [Opening: Age A and the first four rounds](#opening-age-a-and-the-first-four-rounds)
    — including [**the build order, turn by turn**](#the-build-order-turn-by-turn)
    and [mine or farm?](#mine-or-farm)
@@ -142,7 +143,8 @@ is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
 
 ## If you remember nothing else
 
-Eight rules. In rough order of how much they are worth.
+Seven rules, in rough order of how much they are worth — and then an eighth
+entry that is **not** a rule but a warning about something the AI gets wrong.
 
 1. **Spend all your civil actions in Ages A–II.** Actions do not carry over
    [rules] — an unspent action is simply destroyed at end of turn. Share of
@@ -250,20 +252,50 @@ Eight rules. In rough order of how much they are worth.
    actually plays this way: they keep buying rate in Age III at every count. This
    rule is what they *learned to value*, not what they *did*.
 
-8. **Military: the AI never fights — and that is a limitation of the AI, not a
-   fact about the game.** **Zero wars in 360 games** at all three counts, and
-   aggressions are near-zero (0.01 / 0.03 / 0.11 per game). Do **not** read that
-   as "fighting is weak". An aggression or a war pushes a defence choice onto
-   your victim and only pays off once they answer it — and the AI only ever looks
-   at its own board *before* anyone answers, so it sees the cost and none of the
-   gain. Attacking therefore scores below simply passing in every position it
-   will ever face: these AIs could not attack even if attacking were the
-   strongest move on the board (caveat 3 above; `docs/PACTS_DIAGNOSIS.md`).
-   Because no game ever hinged on it, the AI never learned anything about
-   fighting either. **[not evidence]** for "nobody fights". What the numbers
-   below *do* describe is a table of pure builders with the threat side of the
-   game switched off. The AI's strength relative to the *strongest* rival, by
-   age:
+8. **NOT ADVICE — a known defect. The AI cannot fight, so ignore everything it
+   does about fighting.**
+
+   This entry is not a rule. It is a warning label, and it is here at number 8
+   because you would otherwise read the military numbers in this document and
+   draw exactly the wrong conclusion.
+
+   **What is broken.** The AI chooses a move by making it and then looking at its
+   own board *immediately*, before any other player responds. But offering a
+   pact, declaring a war, playing an aggression and bidding on a colony all pay
+   off **inside somebody else's decision** — the partner accepts, the defender
+   picks what to lose, the rival bidders answer. None of that has happened yet
+   when the AI looks. It sees the cost and none of the gain, so every one of
+   those moves scores **worse than simply passing, by a fixed amount, in every
+   position it will ever face.**
+
+   That is not a preference that training could overcome. It is arithmetic. The
+   evidence is in `docs/PACTS_DIAGNOSIS.md`: offering a pact was **legal in 16%
+   of political decisions across 240 games and chosen exactly zero times**, and
+   the one worked example scores offering a pact at **−1.10445** against passing,
+   with every other number on the board identical. Because no game the AI ever
+   played turned on these moves, nothing ever tuned what it thinks they are
+   worth, either.
+
+   **What this means for you, at a table, with humans:**
+
+   - **Use aggressions and wars normally.** "Zero wars in 360 games" has the same
+     evidential value as "zero wars in a game played with the war cards left in
+     the box". It is not a finding. It is not evidence that fighting is weak,
+     that armies are a waste, or that a builder strategy beats a military one.
+   - **Do not copy the AI's army size**, especially the near-zero strength it
+     runs through Age I at 2 and 4 players. It gets away with that only because
+     nothing in its world was capable of punishing it. A human who plunders you
+     for one military action will take three food and three resources off a
+     civilization that disbanded its only unit.
+   - **Do not read the pact and colony sections as "these are bad".** Read them
+     as "untested". Same for every leader and wonder whose value is military or
+     political — see the warning in the [priority
+     lists](#how-much-to-trust-these-lists).
+
+   Everything that follows in this entry is a **description of what a table of
+   pure builders looks like with the threat half of the game switched off**. It
+   is true about these games and it is not advice. The AI's strength relative to
+   the *strongest* rival, by age:
 
    | ratio to strongest rival | Age I | Age II | Age III | Age IV |
    |---|---|---|---|---|
@@ -285,14 +317,19 @@ Eight rules. In rough order of how much they are worth.
    an average over the age and one is its final turn.) A 3p table is running
    roughly twice the army of a 2p table at the same point in the game.
 
-   **Read this as a known weakness in the AI, not as advice.** Nothing at that
-   table can attack, so being weak is never punished, so nothing ever told the AI
-   to build an army. A human table will punish it. What the data honestly
-   supports is only the narrow claim: *at 2 players, matching your single
-   opponent is enough and more is waste.* At 3 and 4 players we do not know what
-   the right army size is — only that the AI is below it and could never have
-   been made to pay for that. **[mixed — 2 players only; the 3p/4p figures are a
-   side-effect of an AI that cannot attack]**
+   **Again: this is a symptom, not a strategy.** Nothing at that table can
+   attack, so being weak is never punished, so nothing ever told the AI to build
+   an army. A human table will punish it immediately.
+
+   The only thing in this entry that survives as guidance is one number the AI
+   *did* learn honestly, because it comes from being behind rather than from
+   attacking: **fear of being the weakest player at the table** is one of only
+   four judgements all three AIs independently revised in the same direction, and
+   all three made it about twice as harsh as we had guessed. So: **do not be the
+   weakest player.** How much more than that is worth buying, this study cannot
+   tell you — at 3 and 4 players the AI is plainly below the right number and
+   could never have been made to pay for it.
+   **[not evidence]** for everything in this entry except that last paragraph.
 
 ---
 

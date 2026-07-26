@@ -61,7 +61,27 @@ Plus four questions:
   4. *First temple* — three milestones separated: nothing to research (Religion
      is printed on the board), first temple BUILT round 3 / 7 / 4, happy-face
      deadline set by the population track around round 9.
-- **Unit 5: TODO** — restate rule 8 as a known defect of the AI, not as advice.
+- **Unit 5 (rule 8): DONE.** Rule 8 is no longer presented as a rule at all. It
+  is now headed "NOT ADVICE - a known defect. The AI cannot fight, so ignore
+  everything it does about fighting", explains the mechanism (payoff lands inside
+  another player's pending decision, so the move is strictly dominated by passing
+  regardless of tuning), cites the evidence (pact legal in 16% of political
+  decisions across 240 games, chosen zero times; scored at -1.10445 against
+  passing) and tells the reader explicitly to **use aggression normally** and not
+  to copy the AI's army size. The intro now says "seven rules, plus one warning
+  label".
+
+## All five units are complete.
+
+Remaining nice-to-haves, none blocking:
+- Re-run the 4-player build order with 60 games instead of 20 (it was starved by
+  the live training load): `python3 analysis/opening_order.py --players 4
+  --games 60 --champion /tmp/ch4.json`.
+- The per-card priority lists for buildings/technologies rest on take counts,
+  which are weak evidence because the bot is nearly card-blind when taking. If
+  the end_turn scoring bug in docs/WASTED_ACTIONS.md gets fixed, re-harvest and
+  rebuild those lists - they should get much sharper.
+- Nothing in this document is tested against a human opponent.
 
 ## Notes for the next person
 
