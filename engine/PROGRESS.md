@@ -69,7 +69,7 @@ Last update: 2026-07-26.
 | RandomBot | 2 | **0** | 0 | 41.3 | 21.2 | 12.1 | 72 | 15.9 |
 | RandomBot | 3 | **0** | 0 | 63.2 | 21.7 | 13.1 | 114 | 9.6 |
 | RandomBot | 4 | **0** | 0 | 103.8 | 26.7 | 20.7 | 175 | 5.5 |
-| GreedyBot | 2 | GREEDY2 |
+| GreedyBot | 2 | **0** | 0 | 47.4 | 24.2 | 67.0 | 141 | 1.6 |
 | GreedyBot | 3 | GREEDY3 |
 | GreedyBot | 4 | GREEDY4 |
 
