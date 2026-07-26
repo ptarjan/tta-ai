@@ -786,7 +786,58 @@ invalidated the measurement without producing an error message.
 
 ## 7. Ranking and recommendation
 
-TODO — under investigation.
+Everything above, priced. "Effort" is one person's working time, honestly estimated;
+"value" is what it changes about the bot we ship. The ranking moved this round: §5a went
+from *unproven and probably the wrong edition* to *proven, right edition, and readable*,
+which promotes it from near-bottom to near-top.
+
+| # | Option | Effort | Value | Verdict |
+|---|---|---|---|---|
+| 1 | **Diverse-opponent league inside our own engine** (§ intro) | ~0 external, already running | Directly attacks the blind-spot problem hill climbing has | **Do it — it is already the default and nothing here beats it** |
+| 2 | **Hand-written heuristic priors from the strategy corpus** (§5b) | hours | Seeds `WeightedBot` in a good basin; gives falsifiable assertions to test the bot against | **Do it — cheapest real win on the list** |
+| 3 | **BGO outcome metadata** (§5a, `idJeu=10`) | ~1 day of polite scraping, no login needed for the index | Calibrates our score distribution against ~170k real 2015 games by player count and skill level | **Do it — high value, low effort, no ethical friction** |
+| 4 | **BGG card reference + card counts** (§5c) | one human click, then 2 fetches | Third opinion on card data; costs almost nothing | **Do it once the ToS is accepted** |
+| 5 | **Human-in-the-loop vs the app's Hard AI** (§6) | **12–18 h** for 10–15 games | The *only* external anchor that exists; answers "are we near strong-human level?" and yields thousands of scored positions + a held-out eval set | **Do it, once, at 10–15 games — then stop** |
+| 6 | **BGO move-level logs for imitation learning** (§5a) | weeks: scraper + journal parser + card-row reconstruction | Large, right-edition, but the choice set is unrecoverable and the player pool is mixed-skill | **Defer.** Revisit only if 1–5 stall |
+| 7 | **BGA** (§2) | n/a | Largest corpus (1.19M) but no bot, all login-gated, ToS explicitly forbids automated extraction | **Dead as data.** Their published source stays useful as a *rules oracle* only |
+| 8 | **Reverse-engineering the CGE app** (§1: saves, protocol, screen-scraping) | weeks, ToS-violating, brittle | Would only yield saves or human games, not AI decisions | **Do not start** |
+
+### The one recommendation
+
+**Spend the next block of effort on §6: play 10–15 logged 3-player games against the
+app's Hard AI, using the existing advisor as the mirror.**
+
+Why that and not the newly-unblocked BGO corpus, which is bigger and cheaper per unit:
+
+- **We have no anchor at all right now.** Every number in `docs/HEURISTICS.md` and every
+  champion in `experiments/` is measured against *ourselves*. A population that shares a
+  blind spot cannot detect it, and no amount of extra self-play fixes that. §6 is the
+  only option on this list that produces an *externally calibrated* verdict. BGO
+  metadata (option 3) calibrates the **score scale**; it cannot tell us whether our
+  *policy* is good, because a score distribution is not an opponent.
+- **The cost is bounded and one-off.** §6c shows 10–15 games buys the coarse verdict we
+  actually need ("clearly behind / roughly level / clearly ahead"), and §6d prices that
+  at 12–18 hours. Beyond that the marginal value collapses and self-play arenas are
+  strictly better. This is a one-time purchase, not a programme.
+- **The by-product is worth as much as the verdict.** 10 games is ~1,500–2,500 of our
+  own scored decisions plus a held-out set of real, non-self-play positions that any
+  future weight vector can be re-scored against offline in seconds. That is a standing
+  regularizer against hill climbing overfitting to its own population, and we get it
+  once and keep it forever.
+- **BGO's move logs, the obvious rival, have a specific flaw that §6 does not.** The
+  journal never records the civil card row (§5a), so we can see the chosen card but not
+  the alternatives. Imitation learning on chosen-action-without-choice-set is weak, and
+  reconstructing the row from the deck composition is its own multi-week project. BGO's
+  *metadata* has no such flaw, which is why option 3 is ranked above option 6 and why
+  they are listed as two different projects.
+
+Do options 2, 3 and 4 alongside it — they are hours, not days, and none of them competes
+for the same attention. Explicitly **do not** start option 6 or 8.
+
+**Caveat on this ranking:** §3 (open-source TTA AI projects) is still TODO. If a usable
+open-source TTA agent exists it would be a *second* external anchor at a fraction of §6's
+human cost, and would outrank it. That is the one finding that could change this
+recommendation, and it is cheap to check — do §3 before committing 15 hours to §6.
 
 ---
 
