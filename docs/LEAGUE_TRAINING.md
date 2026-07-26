@@ -1,8 +1,13 @@
 # League training: scoring a candidate against a pool, not against itself
 
-**Status: built, smoke-tested end to end, NOT yet launched.** The full run is
-a deliberate single clean restart and is launched by hand — see
-[Launching](#launching).
+**Status: built, smoke-tested end to end at 2p, 3p and 4p, NOT yet launched.**
+The full run is a deliberate single clean restart and is launched by hand — see
+[Launching](#launching). Read
+[Go / no-go for a multi-hour run](#go--no-go-for-a-multi-hour-run) first: the
+smoke run found one bug that would have wasted the whole run (the variant tier
+was collapsed to a single opponent, now fixed) and one open calibration
+problem (the gate tier is currently unbeatable from the untrained vector, so it
+returns no gradient).
 
 ## Why the old loop had to be replaced
 
@@ -482,6 +487,59 @@ generation counter; the weight vectors are byte-identical and both equal
 So a crash costs exactly the generation in flight and nothing else, and any
 two runs of this loop are comparable.
 
+## Confirmed at 4p
+
+**The loop produces valid generations at 4p, against every opponent in the
+pool**, and it starts from `DEFAULT_WEIGHTS` rather than the degenerate
+champion. Same command with `--players 4 --state-dir /tmp/smoke4`. The
+override announces itself on the first line of the log:
+
+```
+[4p] init override hand_potential: 0.125 -> 0.0 (known 4p regression;
+     the pool decides its value from here)
+[4p] league trainer: 15 opponents, gen=0 sigma=0.250 state=/tmp/smoke4
+```
+
+Both generations rejected, 189.0 s and 180.7 s, 180 candidate games each,
+zero arena errors. Champion vs every pool opponent, gen 1, 36 games each, 4p:
+
+| opponent | tier | champion score | ±95% | n | wall clock | vs 25% null |
+|---|---|---|---|---|---|---|
+| `book` | book | **0.0%** | ±0.0% | 36 | 4.9 s | −25.0 pp |
+| `book2` | book | **0.0%** | ±0.0% | 36 | 4.4 s | −25.0 pp |
+| `var:culture` | variant | **0.0%** | ±0.0% | 36 | 4.5 s | −25.0 pp |
+| `var:infra` | variant | **0.0%** | ±0.0% | 36 | 4.7 s | −25.0 pp |
+| `var:military` | variant | **2.8%** | ±5.4% | 36 | 4.6 s | −22.2 pp |
+| `var:science` | variant | **0.0%** | ±0.0% | 36 | 4.6 s | −25.0 pp |
+| `var:tempo` | variant | **0.0%** | ±0.0% | 36 | 4.4 s | −25.0 pp |
+| `var:wonder` | variant | **0.0%** | ±0.0% | 36 | 4.3 s | −25.0 pp |
+| `past:ladder_4p/gen00000` | past | 25.0% | ±14.3% | 36 | 15.6 s | +0.0 pp |
+| `past:league_4p/gen00051` | past | 16.7% | ±12.3% | 36 | 13.4 s | −8.3 pp |
+| `past:league_4p/gen00103` | past | **0.0%** | ±0.0% | 36 | 21.9 s | −25.0 pp |
+| `default` | floor | 38.9% | ±16.2% | 36 | 17.7 s | +13.9 pp |
+| `greedy` | floor | 44.4% | ±16.5% | 36 | 13.5 s | +19.4 pp |
+| `random` | floor | **83.3%** | ±12.3% | 36 | 4.8 s | +58.3 pp |
+
+Total 126 s for the check — 1.4× the 3p check, as expected from the extra seat.
+
+### The clean 4p start, verified
+
+The starting champion written to `/tmp/smoke4/champion_4p.json` was compared
+term by term against both candidate origins:
+
+| claim | result |
+|---|---|
+| `== DEFAULT_WEIGHTS` with `hand_potential = 0.0` | **True** |
+| `== experiments/champion_4p.json` (the degenerate one) | **False** |
+| `science` | **+0.5**, against −6.089 in the degenerate file |
+| any positive-default term left negative | **none** |
+| `guard_4p.jsonl` written | **no** — nothing to report, which is the point |
+
+An incidental corroboration of `INIT_OVERRIDES`: this vector is exactly the
+`default` floor opponent except for `hand_potential`, and it scores **38.9%
+± 16.2% against that opponent at 4p** on a 25% null. Weak evidence at n=36,
+but it points the same way as the regression that motivated the override.
+
 ## Go / no-go for a multi-hour run
 
 ### The variant tier was one opponent, not seven (fixed)
@@ -521,9 +579,10 @@ tier is the reason the pool exists, and it was contributing one opponent.
 ### The pool is too hard at the bottom
 
 The champion starts at `DEFAULT_WEIGHTS`, and against the entire gate tier
-(`book` + the six variants) that vector scores **0–11%** at 3p against a 33.3%
-null. In per-generation scoring at `--block 12` that shows up as this, on both
-candidates of both generations:
+(`book` + the six variants) that vector scores **0–11% at 3p** on a 33.3% null
+and **0–2.8% at 4p** on a 25% null — seven of the eight gate opponents are at a
+flat 0.0% ± 0.0% at 4p. In per-generation scoring at `--block 12` that shows up
+as this, on every candidate of every generation at both player counts:
 
 ```
 book         12 games   cand 0.0%   champ 0.0%   edge +0.0000 GATE
@@ -560,15 +619,16 @@ Option 2 is the real fix and the only one that does not trade away information.
 
 ### Where the wall clock goes
 
-Per 36-game duel at 3p, on a contended box:
+Per 36-game duel, on a contended box. The pattern is the same at both counts,
+and it is a property of the *opponent's* evaluator, not of the player count:
 
-| opponent kind | seconds | relative |
-|---|---|---|
-| `random` | 3.3 s | 1.0× |
-| `book`, `book2`, `var:*` | 3.9–4.8 s | ~1.3× |
-| `greedy` | 7.2 s | 2.2× |
-| `default` | 8.2 s | 2.5× |
-| `past:*` (trained `WeightedBot`s) | 10.2–12.5 s | **3.1–3.8×** |
+| opponent kind | 3p | 4p | relative |
+|---|---|---|---|
+| `random` | 3.3 s | 4.8 s | 1.0× |
+| `book`, `book2`, `var:*` | 3.9–4.8 s | 4.3–4.9 s | ~1.1× |
+| `greedy` | 7.2 s | 13.5 s | 2.5× |
+| `default` | 8.2 s | 17.7 s | 3.2× |
+| `past:*` (trained `WeightedBot`s) | 10.2–12.5 s | 13.4–**21.9 s** | **3.5–4.4×** |
 
 **The `past` tier is the wall-clock hog, and it is also the cheapest tier to
 cut.** Three archived champions at ~3.5× the cost of a BookBot duel is ~30% of
@@ -585,16 +645,68 @@ magnitude, so the run is not going to be held hostage by one duel.
 
 ### Nothing is beaten 100% of the time
 
-The closest is `random` at 94.4% ± 7.6% (3p). `greedy` at 55.6% is the only
-other opponent above its null. Both are `floor` tier and already weighted at
-0.167, the lowest in the pool, so neither can drag an acceptance. **No pool
-member needs removing for being trivially beaten** — the problem is at the
-other end of the table.
+The closest is `random`, at 94.4% ± 7.6% (3p) and 83.3% ± 12.3% (4p) — high,
+but not saturated, and it never returned a 100% row in any check. `greedy` and
+`default` are the only other opponents above their null. All three are `floor`
+tier and already carry the pool's lowest weight (0.167), so none of them can
+drag an acceptance on its own. **No pool member needs removing for being
+trivially beaten** — the problem is entirely at the other end of the table.
+
+### The weight guard, exercised live
+
+Both modes were driven through the real loop rather than inspected.
+
+**`reject` discards a sign-inverted mutant before it plays a game.** With
+`--weight-guard reject --sigma-floor 0.9 --lambda 3` at 3p, generation 1
+proposed three mutants and threw two of them away:
+
+```
+[3p] gen 1 cand 0 op=group:cards+happiness edge=+0.1000 lo=+0.0189 games=24
+[3p] gen 1 cand 1 weight guard (reject): best_arena=-0.6097, best_library=-0.9721,
+     best_mine=-1.237, civil_actions=-3.1595, culture_rate_early=-2.0423,
+     leader=-1.549, workers=-3.0217, ... (13 inversions)
+[3p] gen 1 cand 2 weight guard (reject): num_techs=-0.3846
+[3p] gen 1 ACCEPT ... op=group:cards+happiness
+```
+
+Candidates 1 and 2 have no per-opponent table because they never reached the
+arena, both were written to `guard_3p.jsonl`, and the clean candidate was
+accepted normally. The guard is not merely logging.
+
+**Two things to know before turning `reject` on for a long run:**
+
+* It is *per-violation*, not per-severity. Candidate 2 above was discarded for
+  a single `num_techs = −0.385`, a term whose default is +0.3. At σ = 0.9 that
+  cost two thirds of the generation's candidates; the budget goes into
+  proposing mutations instead of playing games. **`clamp`, the default, is the
+  right mode for the long run** — it keeps the candidate and neutralises the
+  term, and every occurrence is still logged.
+* At the σ = 0.25 the loop actually runs at, no mutant proposed an inversion
+  in any of the four smoke generations at 3p or 4p — `guard_{K}p.jsonl` was
+  never created. The guard is cheap insurance, not a constant intervention.
+
+**Gap: `flag` and `reject` do not neutralise a warm-started champion.** The
+guard runs at champion load, but `guard_weights` only rewrites the vector in
+`clamp` mode, so:
+
+| `--weight-guard` | `--init experiments/champion_4p.json` | `science` after load |
+|---|---|---|
+| `clamp` | 8 violations logged, vector fixed | **+0.000** |
+| `flag` | 8 violations logged, vector untouched | −6.089 |
+| `reject` | 8 violations logged, vector untouched | −6.089 |
+
+`--weight-guard reject` reads as "refuse to start from a degenerate vector",
+and it does not do that — it trains from `science = −6.089` after telling you
+about it. The clean-start path makes this moot (that is the intended launch),
+but if a warm start ever happens under `reject`, the name will have lied.
+Either make `reject` fatal at champion load or rename the champion-load
+behaviour.
 
 ### Crashes and nondeterminism
 
-Zero crashes. `arena.duel` reported `errors=0` on every duel of every run, at
-both player counts. The loop is bit-for-bit reproducible (see
+Zero crashes across six smoke runs and ten generations. `arena.duel` reported
+`errors=0` on every duel at both player counts — no game hit the move cap, no
+worker died. The loop is bit-for-bit reproducible (see
 [Determinism](#determinism)). The full-pool check re-seeds per generation, so
 the *same* champion re-measured at gen 1 and gen 2 moved `greedy` from 55.6% to
 72.2% — that is ordinary n=36 noise, not nondeterminism, but it does mean
