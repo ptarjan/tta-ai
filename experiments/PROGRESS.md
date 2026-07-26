@@ -140,16 +140,49 @@ test's inflated false-positive rate is visible.
 
 ### Running climbs
 
-Launched 2026-07-26 06:14, 10-hour budget each:
+Relaunched 2026-07-26 06:57 against engine `fce7db8`, 10-hour budget each:
 
 ```
-nohup experiments/run_hillclimb.sh 2 10 1 1 48 288 > experiments/logs/sup_2p.out 2>&1 &
-nohup experiments/run_hillclimb.sh 3 10 2 1 48 288 > experiments/logs/sup_3p.out 2>&1 &
-nohup experiments/run_hillclimb.sh 4 10 2 1 48 288 > experiments/logs/sup_4p.out 2>&1 &
+nohup experiments/run_hillclimb.sh 2 10 1 1 48 192 > experiments/logs/sup_2p.out 2>&1 &
+nohup experiments/run_hillclimb.sh 3 10 2 1 48 192 > experiments/logs/sup_3p.out 2>&1 &
+nohup experiments/run_hillclimb.sh 4 10 2 1 48 192 > experiments/logs/sup_4p.out 2>&1 &
 ```
 
 Arguments are `PLAYERS HOURS WORKERS LAMBDA SCREEN MAXGAMES`. Worker counts
-sum to 5 of the 6 cores.
+sum to 5 of the 6 cores. A mutant is screened on 48 games, needs >=96 before
+it can be accepted, and is abandoned after 192; on the current engine that is
+roughly 1-4 minutes per generation.
+
+### The engine-update cut (2026-07-26 06:56)
+
+The engine agent landed all 33 civil action cards plus colonization/pact/
+defence fixes and several strength and legality bug fixes (tests 28 -> 57).
+**Generations before the cut were measured on the pre-action-card engine and
+their win rates are not comparable to later ones.** The cut is recorded as an
+`{"event": "engine_update", ...}` line in each `generations_{K}p.jsonl` (after
+gen 19 / 18 / 12 for 2p / 3p / 4p) and `summarize.py` prints it.
+
+The learned weights were **kept as a warm start** — they still transfer.
+Re-measured on the new engine, champion vs a table of `default`, 96 games:
+
+| | 2p (null 50%) | 3p (null 33.3%) | 4p (null 25%) |
+|---|---|---|---|
+| champion vs `default` | 44.8% ± 9.9 (n.s.) | **45.8% ± 10.0** (p=0.015) | **34.9% ± 9.5** (p=0.042) |
+
+3p and 4p are real gains that survived the rules change; 2p is a wash, which
+is consistent with it having accepted only one mutant in 19 generations.
+
+`sigma` was reset to 0.25 for all three at the cut. The annealed step sizes
+(2p had reached the 0.05 floor) described the *old* fitness landscape; with 33
+new playable cards the search needs to explore again rather than fine-tune a
+converged point.
+
+Speed reference at the cut (RandomBot): 15.9 / 9.6 / 5.5 games per second at
+2p / 3p / 4p. `WeightedBot` is far slower — it applies every legal move to a
+copy of the state — so budget from measured generation times in the logs, not
+from these. Another agent is optimizing engine speed; if generations get
+noticeably faster, raise `--max-games` rather than `--lambda`, since the
+accept test's power is what limits the climb.
 
 ### Check / restart commands
 
@@ -165,7 +198,7 @@ python3 -m experiments.summarize            # all three player counts
 python3 -m experiments.summarize --players 4 --top 25
 
 # restart one (safe at any time -- it resumes from champion_Kp.json)
-cd ~/tta-ai && nohup experiments/run_hillclimb.sh 4 10 2 1 48 288 \
+cd ~/tta-ai && nohup experiments/run_hillclimb.sh 4 10 2 1 48 192 \
     > experiments/logs/sup_4p.out 2>&1 &
 
 # stop everything

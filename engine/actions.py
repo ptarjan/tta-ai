@@ -267,8 +267,10 @@ def _action_moves(state, p):
     ca = spare_ca(state, p)
 
     # take a card from the row
-    for idx, name in enumerate(state.card_row):
-        if name is not None and can_take(state, p, idx):
+    gate = _take_gate(state, p)
+    row = state.card_row
+    for idx in range(len(row)):
+        if row[idx] is not None and _can_take_gated(state, p, idx, gate):
             moves.append(("take", idx))
 
     if state.round == 1:
@@ -283,52 +285,84 @@ def _action_moves(state, p):
     if s.free_pop_per_turn and not p.ocean_liners_used and p.yellow_bank > 0:
         moves.append(("pop_free",))
 
+    # --- loop invariants for build / upgrade / destroy.  The tableau does not
+    # change inside move generation, so the sorted name list, each card's type
+    # and level, the per-type urban worker counts and every build cost are
+    # derived exactly once.
+    type_of = db.type_by_name
+    level_of = db.level_by_name
+    techs = p.techs
+    names = sorted(techs)
+    worker_names = [n for n in names if type_of[n] in C.WORKER_TYPES]
+    by_type = {}
+    urban_workers = {}
+    for n in worker_names:
+        typ = type_of[n]
+        by_type.setdefault(typ, []).append(n)
+        if typ in C.URBAN_TYPES:
+            urban_workers[typ] = urban_workers.get(typ, 0) + techs[n].workers
+    costs = {}                          # name -> build cost, memoized lazily
+    build_cost = effects.build_cost
+
+    def cost_of(n):
+        try:
+            return costs[n]
+        except KeyError:
+            c = costs[n] = build_cost(state, p, n)
+            return c
+
+    have_ma = p.military_actions >= 1
+    have_ca = ca >= 1
+    res = p.resources
+    disc = p.mil_discount
+
     # build / upgrade / destroy
     if p.workers_free > 0:
-        for name in sorted(p.techs):
-            typ = db.type_of(name)
-            if typ not in C.WORKER_TYPES:
-                continue
-            cost = build_cost_net(state, p, name)
-            if cost is None or p.resources < cost:
+        for name in worker_names:
+            typ = type_of[name]
+            cost = costs[name]
+            if cost is None:
                 continue
             if typ in C.UNIT_TYPES:
-                if p.military_actions < 1:
+                if res < max(0, cost - disc) or not have_ma:
                     continue
             else:
-                if ca < 1:
+                if res < cost or not have_ca:
                     continue
-                if typ in C.URBAN_TYPES and urban_count(p, typ) >= s.urban_limit:
+                if typ in C.URBAN_TYPES and \
+                        urban_workers.get(typ, 0) >= s.urban_limit:
                     continue
             moves.append(("build", name))
 
-    for lo in sorted(p.techs):
-        if p.techs[lo].workers <= 0:
+    for lo in worker_names:
+        if techs[lo].workers <= 0:
             continue
-        typ = db.type_of(lo)
-        if typ not in C.WORKER_TYPES:
+        typ = type_of[lo]
+        unit = typ in C.UNIT_TYPES
+        if unit:
+            if not have_ma:
+                continue
+        elif not have_ca:
             continue
-        if typ in C.UNIT_TYPES:
-            if p.military_actions < 1:
+        lo_cost = costs[lo] or 0
+        lo_level = level_of[lo]
+        for hi in by_type[typ]:
+            if hi == lo or level_of[hi] <= lo_level:
                 continue
-        elif ca < 1:
-            continue
-        for hi in sorted(p.techs):
-            if hi == lo or db.type_of(hi) != typ:
-                continue
-            if db.level_of(hi) <= db.level_of(lo):
-                continue
-            if p.resources >= upgrade_cost_net(state, p, lo, hi):
+            cost = max(0, (costs[hi] or 0) - lo_cost)
+            if unit:
+                cost = max(0, cost - disc)
+            if res >= cost:
                 moves.append(("upgrade", lo, hi))
 
     # destroy / disband (§3.6, §4.3)
-    for name in sorted(p.techs):
-        if p.techs[name].workers <= 0:
+    for name in names:
+        if techs[name].workers <= 0:
             continue
-        if is_unit(name):
-            if p.military_actions >= 1:
+        if db.is_unit_name[name]:
+            if have_ma:
                 moves.append(("destroy", name))
-        elif ca >= 1 and db.type_of(name) in C.WORKER_TYPES:
+        elif have_ca and type_of[name] in C.WORKER_TYPES:
             moves.append(("destroy", name))
 
     # wonder stages
