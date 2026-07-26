@@ -161,6 +161,17 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     cultures and the number of games actually completed.  `per_game` is the
     task-ordered share list (None for a game the engine could not finish),
     which is what makes two duels on the same seeds pairable.
+
+    `per_game_margin` is the same list in the same order for the CULTURE
+    MARGIN, ``A's final culture - the mean of the defenders'``.  Win share is
+    a step function -- against an opponent nobody beats it is 0.0 on every
+    game and two policies that lose by 8 and by 90 are indistinguishable --
+    whereas the margin is a dense signal that exists on every single game.
+    `experiments/hillclimb_league.py` scores its gate tier on it for exactly
+    that reason (docs/LEAGUE_TRAINING.md, "The pool is too hard at the
+    bottom").  The mean of this list is `culture_a - culture_b`; it is
+    returned per game because pairing against a reference duel has to happen
+    game by game.
     """
     tasks = []
     for g in range(games):
@@ -184,8 +195,10 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
 
     shares, ca, cb, moves, errors = [], [], [], [], []
     per_game = []                      # task-ordered, None where the game died
+    per_game_margin = []               # ditto, culture_a - culture_b
     for share, x, y, m in out:
         per_game.append(share)
+        per_game_margin.append(None if share is None else float(x - y))
         if share is None:
             errors.append(x)
             continue
@@ -208,8 +221,10 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "moves": (sum(moves) / len(moves)) if moves else 0.0,
         "errors": len(errors),
         "error_sample": errors[:3],
+        "margin": ((sum(ca) / len(ca)) - (sum(cb) / len(cb))) if ca else 0.0,
         "shares": shares,
         "per_game": per_game,
+        "per_game_margin": per_game_margin,
     }
 
 
