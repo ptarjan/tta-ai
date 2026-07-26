@@ -24,103 +24,113 @@ culture leak we measured), then the opening cheat sheet for your player count.
 
 ## How to read this document
 
-**Snapshot warning.** The AI is mid-training, and it was still training while
-this was written. Every behaviour number below was harvested on **2026-07-26**
-from frozen copies of the champions at generation **149 (2 players), 116
-(3 players) and 101 (4 players)** — **120 games per player count**, mirror
-self-play, 0 engine errors (`experiments/behaviour_{2,3,4}p.json`). The climbs
-kept running while this was written and were at **gen 176 / 132 / 113** when the
-last edit was made, so the *weights* quoted here are slightly newer than the
-*behaviour*. Those generations bought very little: each climb has accepted only
-**15 / 10 / 6** mutants in total, and the most recent acceptance was at gen
-147 / 120 / 103 — all three have been on a plateau for 30 / 12 / 10 generations.
-Numbers will move, but slowly.
-Structural advice ("spend your actions", "science early, culture late") is much
-more stable than any single figure.
+**How rounds are numbered here.** A round is one full circuit of the table:
+every player takes one turn. **The first round of the game is round 1.** There
+is no round 0, and the Age A turn — where you can only take cards — *is* round
+1. So "play a leader on round 3" means the third time you sit down, i.e. your
+second Age I turn. (For the pedantic: the engine's counter starts at 1 and is
+set to 1 at setup — `engine/state.py:110`, `engine/game.py:75`.) Whenever this
+document says "median round 5", it means half the games did it on or before the
+fifth time that player took a turn.
 
-**How strong is the thing giving you advice?** The climb periodically re-plays
-its champion against the hand-set weights it started from (`default`), a greedy
-bot and a random bot, 96 games each. The last four such measurements
-(`experiments/generations_*.jsonl`, rows containing `vs_default`):
+**Where the numbers come from.** Two different kinds of evidence, and it is
+worth knowing which is which:
 
-| | vs. its own start point (last 4 anchors) | null | vs. a greedy bot |
+1. **What the AI actually did.** We ran the AI against copies of itself and
+   watched: **120 games at each of 2, 3 and 4 players**, ~2,600 AI turns each,
+   no engine errors. Every "median round 5", "3.65 temples per game", "88% of
+   its cards from the cheap end" number below is counted off those games.
+2. **What the AI taught itself to want.** The AI decides its move by putting a
+   price on about 78 things it can see on the board — a point of science, a
+   happy face, a worker, being behind on strength — and picking the move that
+   leaves it holding the most value. Those prices started as our hand guesses
+   and were then tuned by playing games and keeping the changes that won more.
+   When this document says *"the AI taught itself to fear starvation twice as
+   much as we told it to"*, that is what it means: the tuning moved a price,
+   and it moved it in a direction that won games.
+
+When both kinds of evidence point the same way, the advice is solid. When they
+disagree, this document says so instead of picking a winner.
+
+**How strong is the thing giving you advice?** Periodically the AI is re-played
+against three fixed opponents, 96 games each: the hand-guessed prices it started
+from, a bot that just grabs the best-looking card, and a bot that moves at
+random. Win rate against its own starting point, averaged over the last four
+such checks:
+
+| | vs. its own starting point | a coin flip would be | vs. the grab-the-best-card bot |
 |---|---|---|---|
-| 2p (gen 130–160) | **78%** — individual runs 71.9 / 74.5 / 82.3 / 82.3 | 50% | 89.6–95.8% |
-| 3p (gen 90–120) | **65%** — 59.9 / 60.4 / 68.2 / 70.3 | 33.3% | 74.0–80.2% |
-| 4p (gen 80–110) | **72%** — 66.1 / 71.9 / 72.9 / 76.0 | 25% | 90.6–99.0% |
+| 2 players | **78%** — individual checks 71.9 / 74.5 / 82.3 / 82.3 | 50% | 89.6–95.8% |
+| 3 players | **65%** — 59.9 / 60.4 / 68.2 / 70.3 | 33.3% | 74.0–80.2% |
+| 4 players | **72%** — 66.1 / 71.9 / 72.9 / 76.0 | 25% | 90.6–99.0% |
 
 All three are clearly better than where they began — but note the spread. Each
-individual 96-game anchor carries a ±8–10 point confidence interval, so the
-bouncing above is mostly noise, not a champion getting better and worse from
-week to week. **Do not read a 5-point difference between two of these rows as
-meaning anything.** An independent measurement run earlier the same morning
-(`experiments/logs/measure.log`, older champion files, different seeds) scored
-the same match-ups much lower (2p 44.8%, 3p 60.4%, 4p 34.9% vs `default`); the
-honest summary is "clearly above its starting point at 2p and 3p, probably at
-4p, and nobody should quote a precise number".
+96-game check is worth ±8–10 points either way, so the bouncing above is noise,
+not the AI getting better and worse from week to week. **Do not read a 5-point
+difference between two of these rows as meaning anything.** A separate check run
+earlier the same morning with different random seeds scored the same match-ups
+much lower (2p 44.8%, 3p 60.4%, 4p 34.9%). The honest summary is "clearly above
+its starting point at 2 and 3 players, probably at 4, and nobody should quote a
+precise number".
 
-**Where the numbers come from.**
-
-| Source | What it is |
-|---|---|
-| `experiments/behaviour_{2,3,4}p.json` | **120** self-play games per player count (2,627 / 2,549 / 2,544 champion turns). What the champion actually *did*: milestone rounds, worker splits, rates by age, cards bought. Board snapshots taken at the end of each of its turns. |
-| `experiments/logs/leak_check.log` | 60 games per count, instrumented: how much culture was actually destroyed by starvation and by uprisings, by age. The source for trap #2. |
-| `experiments/analyze_weights.py` | Which of the 78 evaluation weights the search moved away from the hand-set defaults, and in which direction. |
-| `experiments/PROGRESS.md` | Strength measurements against fixed baselines, and the search's history. |
-| `docs/RULES_SPEC.md` | The rules themselves — every table in the Quick reference section is rulebook-accurate, not learned. |
-| `docs/PACTS_DIAGNOSIS.md` | Why the champions never offer a pact, never declare war and almost never colonise: instrumented move generation plus feature-vector diffs showing these moves are unreachable for a 1-ply evaluator. The reason several claims below are tagged **[not evidence]**. |
+Source files, if you want to check the work: `experiments/behaviour_{2,3,4}p.json`
+(the 120-game observations), `experiments/logs/leak_check.log` (60 instrumented
+games per count measuring culture lost to starvation and uprisings — the source
+for trap #2), `experiments/analyze_weights.py` (which prices the tuning moved
+and how far), `docs/RULES_SPEC.md` (the rules; every table in *Quick reference*
+is straight from the rulebook, nothing learned) and `docs/PACTS_DIAGNOSIS.md`
+(why the AI never offers a pact, declares war or colonises — see caveat 3).
 
 **Confidence tags.** Each claim is tagged:
 
 - **[rules]** — a fact from the rulebook. Not an opinion.
-- **[strong]** — the behaviour data and the weight drift agree, and it holds at
-  more than one player count.
+- **[strong]** — what the AI did and what it taught itself to want agree, and it
+  holds at more than one player count.
 - **[mixed]** — the player counts disagree, or two sources point different ways.
   Read the caveat before acting on it.
-- **[provisional]** — one player count, one climb, small sample, or a plausible
-  artefact of how the AI searches. Interesting, not proven.
+- **[provisional]** — one player count, small sample, or something that looks
+  like a quirk of how the AI thinks. Interesting, not proven.
 - **[thin]** — a median or a rate computed over a handful of games. Directional
   at best.
-- **[not evidence]** — the champions' behaviour here is *forced* by a structural
-  limitation of the AI's search, not learned from playing. It is a fact about
-  the bot, not about the game, and must not be read as advice in either
-  direction. See caveat 3 below and `docs/PACTS_DIAGNOSIS.md`.
+- **[not evidence]** — the AI's behaviour here is *forced* by a limitation of the
+  AI, not learned from playing. It is a fact about the software, not about the
+  game, and must not be read as advice in either direction. See caveat 3 below
+  and `docs/PACTS_DIAGNOSIS.md`.
 
 **Three honest caveats you should carry through the whole document.**
 
-1. *The three climbs have run for very different lengths.* 2p has accepted 15
-   mutants in 169 generations, 3p 10 in 129, 4p only **6 in 111**. So when the
-   counts disagree, the 4p number is the one most likely to be young rather
-   than right — and the 4p weight vector contains some wild values (a
-   `science` stock weight of **−6.09** against a hand-set +0.5, a `science_rate`
-   of **+22.5** against +4.0) that look like one or two accepted mutants that
-   have not been trimmed back. Treat extreme 4p figures as **[provisional]**
-   unless the behaviour data backs them.
-2. *All behaviour numbers come from mirror self-play.* The champion plays copies
-   of itself, so any "relative to opponents" figure is close to 1.0 by
-   construction and tells you very little. Absolute figures (my strength, my
-   science rate, my worker split) are the useful ones.
-3. *The search is 1-ply, and that puts a hard blind spot in the middle of the
-   game.* It never plans a combo two turns ahead, so anything in this document
-   about *sequencing* is inferred from when things happened, not from the AI
-   reasoning about them. Worse: the bot scores a move by applying it and
-   looking at **its own board immediately afterwards** — so any move whose
-   payoff arrives inside *another player's* decision is literally invisible to
-   it. That is precisely the shape of **offering a pact, declaring a war,
-   playing an aggression, and bidding on a colony while rivals are still
-   bidding**: each one spends a card or a worker now and pays off only after
-   somebody else answers. In the trial state the bot sees the cost and none of
-   the gain, so every one of these moves scores **strictly below passing, by a
-   fixed amount, in every position** — the champions cannot choose them at any
-   weight. Measured: `offer_pact` was legal in **16% of politics decisions
-   across 240 games and chosen zero times**
-   (`docs/PACTS_DIAGNOSIS.md`). Consequence: the `pacts`, `colonies`,
-   aggression and war weights were **never under selection**. The 3p
-   `colonies` weight is bit-for-bit the hand-written default after thousands of
-   generations, and the 4p one drifted to **−0.96** — that is random walk on a
-   dead feature, not a finding. Everywhere below that this document says the
-   champions never do these things, that is a statement about the *bot*, not
-   about *Through the Ages*. **[not evidence]**
+1. *The three AIs have had very different amounts of practice.* Tuning only
+   accepts a change if it wins more games, and the counts have banked very
+   different numbers of accepted changes: **15 at 2 players, 10 at 3, only 6 at
+   4**. So when the counts disagree, the 4-player number is the one most likely
+   to be undercooked rather than right — and its price list has some wild
+   entries (it prices a banked science point at **−6.09** where we had guessed
+   +0.5) that look like one lucky change nobody has trimmed back. Treat extreme
+   4-player figures as **[provisional]** unless the 120 games back them up.
+2. *Every game here is the AI against copies of itself.* So any "compared to my
+   opponents" figure is close to 1.0 by definition and tells you nothing.
+   Absolute figures (my strength, my science rate, my worker split) are the
+   useful ones.
+3. *The AI only looks one move ahead, and that puts a hole in the middle of the
+   game.* It never plans a two-turn combo, so anything in this document about
+   *sequencing* is read off when things happened, not off the AI reasoning about
+   them. Worse: it judges a move by making it and then looking at **its own
+   board, immediately, before anyone else responds**. So any move whose payoff
+   arrives inside *somebody else's* decision is invisible to it. That is exactly
+   the shape of **offering a pact, declaring a war, playing an aggression, and
+   bidding on a colony while rivals are still bidding**: you spend the card or
+   the worker now, and the result only exists after another player answers. The
+   AI sees the cost and none of the gain, so all of these score **worse than
+   simply passing, by a fixed amount, in every position it will ever face**. It
+   cannot pick them, at any price. Measured: it was legal to offer a pact in
+   **16% of political decisions across 240 games, and it was chosen zero times**
+   (`docs/PACTS_DIAGNOSIS.md`). Knock-on effect: because no game outcome ever
+   depended on the prices for pacts, colonies, aggressions and war, those prices
+   were never tuned at all — the 3-player colony price is still, bit for bit, our
+   original hand guess, and the 4-player one has wandered to −0.96 at random.
+   Everywhere below where this document says the AI never does these things,
+   that is a statement about **the software**, not about *Through the Ages*.
+   **[not evidence]** — and see rule 8, which is entirely about this.
 
 ---
 
@@ -130,7 +140,7 @@ Eight rules. In rough order of how much they are worth.
 
 1. **Spend all your civil actions in Ages A–II.** Actions do not carry over
    [rules] — an unspent action is simply destroyed at end of turn. Share of
-   *available* civil actions the champions threw away, by age:
+   *available* civil actions the AIs threw away, by age:
 
    | actions wasted | Age I | Age II | Age III | Age IV |
    |---|---|---|---|---|
@@ -140,26 +150,31 @@ Eight rules. In rough order of how much they are worth.
 
    In Age I **nobody wastes anything** — if you are leaving actions on the table
    in Age I you are already badly behind. Waste is an endgame phenomenon: by Age
-   III there is often nothing left worth buying. The 4p champion is the outlier
+   III there is often nothing left worth buying. The 4-player AI is the outlier
    that keeps spending all game (0.38 wasted per turn against 1.74 at 2p and
    1.93 at 3p) and it finishes with by far the most technologies, **16.4 against
-   12.9 and 9.8**. Weight evidence is thinner than it looks: only the 3p climb
-   actually pushed the "leftover actions are nice" weights negative
-   (`ca_left` +0.05 → −0.10, `ma_left` → −0.07); 2p and 4p left `ca_left`
-   alone. **[rules] for the carry-over fact; [mixed] for how much the waste
-   costs — the 2p champion wastes 58% of its Age III actions and still scores
+   12.9 and 9.8**. Be careful, though: this is the one headline rule the AI
+   itself only half believes. Only the 3-player AI ever learned to dislike
+   leftover actions; the other two are still mildly happy to bank them. **A
+   reader asked whether the AI is simply wrong to waste actions — it is a fair
+   question and it has its own section: [Is wasting a civil action ever
+   right?](#is-wasting-a-civil-action-ever-right)**
+   **[rules] for the carry-over fact; [mixed] for how much the waste
+   costs — the 2-player AI wastes 58% of its Age III actions and still scores
    the most culture of any count.**
 
-2. **Take a leader early and put it in play by round 3–4.** Median round to
-   *take* one: 2 / 2 / 3. Median round to *play* one: 3 (2p), 5 (3p), 4 (4p).
-   The champions play a leader at all in 96.7% / 82.5% / 98.3% of games, and
-   have one in play on 70% / 42% / 54% of Age I turns. The "any leader in play"
-   weight rose at both counts that have a large army of accepted mutants
-   (+1.5 → +2.80 at 2p, +2.31 at 3p) but *fell* at 4p (+0.85), which is the
-   count with only six accepted mutants — treat the 4p direction as noise.
-   **[strong]**
+2. **Take a leader early and put it in play by round 3–4.** Half of all games
+   *take* a leader by round 2 (2p and 3p) or round 3 (4p), and *play* one by
+   round 3 (2p), 5 (3p) or 4 (4p) — see the [round numbering
+   note](#how-to-read-this-document): round 1 is the Age A turn, there is no
+   round 0. Across 120 games per count the AI plays a leader at all in 96.7% /
+   82.5% / 98.3% of games, and has one on the table for 70% / 42% / 54% of its
+   Age I turns. Both of the AIs with the most practice roughly doubled the value
+   they put on having a leader out; the least-practised one (4 players) nudged it
+   down, which is more likely noise than a finding. Practical version: **take the
+   leader in round 2–3, before the good ones are gone.** **[strong]**
 
-3. **Upgrade your production on round 2.** At 2p the champion's first farm/mine
+3. **Upgrade your production on round 2.** At 2p the AI's first farm/mine
    upgrade lands on round 2 in **100% of games** (median and both quartiles are
    round 2). At 4p the median is also round 2 (99.2% of games do it eventually,
    mean round 3.5, upper quartile round 5). The first *urban* building upgrade
@@ -168,21 +183,26 @@ Eight rules. In rough order of how much they are worth.
    in 39% of games it never upgrades production at all. See the per-count
    section for why that is probably a flaw, not a plan. **[strong at 2p/4p]**
 
-4. **Build about three temples, and never let an uprising happen.** Temple
-   cards absorb **3.65 / 2.84 / 3.71** actions per game (researching, building
-   and upgrading combined), first one at median round 5 / 8 / 8. Temples are the
-   most-worked urban building at 2p and 3p; at 4p labs just edge them out
-   (4.71). An uprising cancels your entire production phase [rules] and carries
-   the largest penalty in the whole 78-weight evaluation: −12 by hand, and all
-   three climbs pushed it further down, to **−14.0 / −15.5 / −21.2**.
-   The reason you have probably never seen the champions suffer one is that
-   they pay for happiness in advance — measured cost of uprisings is only
-   **0.27 / 0.03 / 0.64 culture per player-game** (`leak_check.log`, 60 games
-   each). That is the number you get *after* buying the temples, not instead of
-   them. **[strong]**
+4. **Build about three temples, and never let an uprising happen.** "Temples" is
+   really three separate milestones and this document used to blur them; they get
+   pulled apart properly in [When exactly do you build the first
+   temple?](#when-exactly-do-you-build-the-first-temple). The short version:
+   **you already have the technology** — Religion is one of the five cards
+   printed on your player board [rules] — so there is nothing to research, and
+   the first temple is a *build*, not a research. Across 120 games per count,
+   temples soak up **3.65 / 2.84 / 3.71** civil actions per game once you add up
+   building and upgrading. They are the most-worked urban building at 2 and 3
+   players; at 4 players labs just edge them out (4.71). An uprising cancels your entire
+   production phase [rules], and it is the single most feared thing on the AI's
+   whole list of 78 board features — we hand-guessed it at −12 and all three AIs
+   independently made it *worse*, ending at −14, −15 and −21. The reason you
+   never see the AI suffer one is that it buys the happiness in advance: across
+   60 instrumented games per count, uprisings cost it only **0.27 / 0.03 / 0.64
+   culture per game**. That is the number you get *after* buying the temples,
+   not instead of them. **[strong]**
 
 5. **Science first, culture later — and the switch happens once, at the Age I /
-   Age II boundary.** Champion science-rate-to-culture-rate ratio by age:
+   Age II boundary.** Science rate divided by culture rate, by age:
 
    | science ÷ culture | Age I | Age II | Age III | Age IV |
    |---|---|---|---|---|
@@ -193,48 +213,51 @@ Eight rules. In rough order of how much they are worth.
    It is *not* a smooth decline — it is one step down at the I → II boundary and
    then flat (2p and 4p even drift back up in Age III). So the practical version
    is: **out-science the table in Age I, then stop shifting and let the culture
-   engine you built run.** All three climbs cut the "late science rate" weight
-   (−3% / −40% / −66%), and the two counts that moved raised "early culture
-   rate" (+54% at 3p, +178% at 4p). Note 2p's Age I ratio is already below 1 —
-   at two players the champion is on culture from the start. **[strong for the
+   engine you built run.** All three AIs independently taught themselves to care
+   *less* about science rate late in the game, and the two that moved on the
+   question taught themselves to care considerably more about culture rate early.
+   Note 2p's Age I ratio is already below 1 —
+   at two players the AI is on culture from the start. **[strong for the
    direction; [mixed] on the exact crossover round — 3p and 4p cross inside Age
    II, 2p never has a science-heavy phase at all.]**
 
 6. **Do not hoard. Not science points, not cards.** This is one of only four
-   levers where **all three counts agree** (`analyze_weights.py` consensus
-   table). Banked science: hand-set +0.5, champions **+0.19 / −0.19 / −6.09** —
-   two of the three now consider a science pile actively *bad*. Cards in hand
-   late: hand-set −0.2, champions **−0.35 / −0.40 / −0.33**, all further
-   negative, while `hand_value_early` went *up*. Hold cards in Ages A–I; cash
-   them out from Age II on. The behaviour agrees: banked science at the end of
-   the game is 25.7 / 12.9 / 6.2, and the champion that banks least finishes
-   with the most technologies (16.4 at 4p against 12.9 at 2p). **[strong]**
+   things all three AIs independently agree on. We told them a banked science
+   point was mildly good; **two of the three now treat a science pile as actively
+   bad**, and the third barely values it. Same with cards: all three decided that
+   a card sitting in your hand late is worse than we thought, while a card in
+   hand *early* went up in value. So: hold cards in Ages A–I, cash them out from
+   Age II on. What they actually did agrees — science left unspent at the end of
+   the game is 25.7 / 12.9 / 6.2, and the one that hoards least finishes with the
+   most technologies (16.4 at 4 players against 12.9 at 2). **[strong]**
 
 7. **Stop buying *science* rate in Age III. Be more careful about food.** All
-   three climbs cut the late-game science-rate weight (−2.5 → **−2.58 / −3.49 /
-   −4.14**): a lab bought in Age III does not pay for itself before scoring, so
-   buy culture instead. Late *resource* rate is the same story at 2p and 3p
-   (−0.4 → −0.50 / −0.62) but the 4p champion **flipped it positive (+0.49)** —
-   and 4p is precisely the champion that is starving to death (trap #2). A farm
-   bought in Age III that closes a food gap is not "rate", it is a penalty you
-   stop paying, and it is worth roughly 24 culture over the rest of the game.
-   Buy that farm. **[mixed — the science half is a 3-count consensus; the
-   resource half depends on whether you are food-negative.]** Note also that no
-   champion actually behaves this way: they keep buying in Age III at every
-   count, so this rule rests on the weights, not on the behaviour.
+   three AIs taught themselves to want late science rate less: a lab bought in
+   Age III does not pay for itself before the game ends, so buy culture instead.
+   Late *resource* rate is the same story at 2 and 3 players — but the 4-player
+   AI went the other way and decided late resource rate was *good*, and the
+   4-player AI is precisely the one starving to death (trap #2). A farm bought in
+   Age III that closes a food gap is not "rate", it is a penalty you stop paying,
+   and it is worth roughly 24 culture over the rest of the game. Buy that farm.
+   **[mixed — the science half is agreed by all three counts; the resource half
+   depends on whether you are short of food.]** Note also that none of the AIs
+   actually plays this way: they keep buying rate in Age III at every count. This
+   rule is what they *learned to value*, not what they *did*.
 
 8. **Military: the AI never fights — and that is a limitation of the AI, not a
    fact about the game.** **Zero wars in 360 games** at all three counts, and
    aggressions are near-zero (0.01 / 0.03 / 0.11 per game). Do **not** read that
    as "fighting is weak". An aggression or a war pushes a defence choice onto
-   your victim and pays off only when they answer it, so it lands outside a
-   1-ply evaluator's horizon and scores below passing in every position: these
-   champions could not attack even if attacking were the strongest move on the
-   board (caveat 3 above; `docs/PACTS_DIAGNOSIS.md`). The aggression and war
-   weights were never under selection either. **[not evidence]** for
-   "nobody fights". What the numbers below *do* describe is a table of pure
-   builders with the threat side of the game switched off. The champions'
-   strength relative to the *strongest* rival, by age:
+   your victim and only pays off once they answer it — and the AI only ever looks
+   at its own board *before* anyone answers, so it sees the cost and none of the
+   gain. Attacking therefore scores below simply passing in every position it
+   will ever face: these AIs could not attack even if attacking were the
+   strongest move on the board (caveat 3 above; `docs/PACTS_DIAGNOSIS.md`).
+   Because no game ever hinged on it, the AI never learned anything about
+   fighting either. **[not evidence]** for "nobody fights". What the numbers
+   below *do* describe is a table of pure builders with the threat side of the
+   game switched off. The AI's strength relative to the *strongest* rival, by
+   age:
 
    | ratio to strongest rival | Age I | Age II | Age III | Age IV |
    |---|---|---|---|---|
@@ -244,11 +267,11 @@ Eight rules. In rough order of how much they are worth.
 
    Parity holds **at 2 players only** — where there is exactly one rival, so
    "the strongest rival" and "the average rival" are the same thing. At 3p the
-   champion runs about 20% behind the table leader, and at 4p it runs at *half*
+   AI runs about 20% behind the table leader, and at 4p it runs at *half*
    the leader's strength and spends **48–52% of its turns below half the
    strongest rival's strength** [`military_by_age`, 120 games each].
 
-   In absolute terms, so you know what these ratios are ratios *of*: champion
+   In absolute terms, so you know what these ratios are ratios *of*: AI
    strength averaged over **every Age III turn** is **3.1 (2p) / 6.8 (3p) / 2.3
    (4p)**, against a strongest rival of 3.0 / 8.8 / 3.8. (The snapshot taken on
    the single last turn *of* Age III is a little higher — 3.8 / 7.3 / 3.0 — which
@@ -256,14 +279,14 @@ Eight rules. In rough order of how much they are worth.
    an average over the age and one is its final turn.) A 3p table is running
    roughly twice the army of a 2p table at the same point in the game.
 
-   **Read this as a known weakness in the AI, not as advice.** No champion is
-   able to attack, so being weak is never punished and the search has
-   no gradient at all telling it to build an army. A human table will punish it. What
-   the data honestly supports is only the narrow claim: *at 2 players, matching
-   your single opponent is sufficient and more is waste.* At 3p and 4p we do not
-   know what the right number is — we only know the champions are below it and
-   could never have been made to pay. **[mixed — 2p only; 3p/4p is an artefact
-   of an AI that cannot attack]**
+   **Read this as a known weakness in the AI, not as advice.** Nothing at that
+   table can attack, so being weak is never punished, so nothing ever told the AI
+   to build an army. A human table will punish it. What the data honestly
+   supports is only the narrow claim: *at 2 players, matching your single
+   opponent is enough and more is waste.* At 3 and 4 players we do not know what
+   the right army size is — only that the AI is below it and could never have
+   been made to pay for that. **[mixed — 2 players only; the 3p/4p figures are a
+   side-effect of an AI that cannot attack]**
 
 ---
 
@@ -281,7 +304,7 @@ Everything else in this section is Age I, rounds 2 through about 5.
 You cannot build, upgrade, play a leader or increase population on round 1 — the
 rules do not allow it. [rules, §1.9] So the only question is *which* card.
 
-The champions split into two answers, and both are defensible.
+The AIs split into two answers, and both are defensible.
 
 **2p and 3p take an action card.** Median round of the first action-card take is
 1 at both counts, in 100% of games. The two Age A action cards are the most-taken
@@ -293,7 +316,7 @@ resources on, and an Age A action card is a resource or food rebate you can cash
 on round 2 when you suddenly have four actions and nothing banked. The seat-1
 player, with a single civil action, gets exactly one shot at it.
 
-**4p takes a wonder.** In **120 games out of 120**, the 4p champion takes a
+**4p takes a wonder.** In **120 games out of 120**, the 4-player AI takes a
 wonder, and the median round it does so is **1** — p10 and p25 are both round 1,
 p75 is round 2. It then starts building it around round 5. **[provisional — one
 player count, and see the completion problem below]**
@@ -306,7 +329,7 @@ round 1 also costs its printed price with **zero** completed-wonder surcharge
 [rules, §2.4], and at 4p the row sweeps only 1 card per turn so the cheap Age A
 wonders survive longest.
 
-The problem: across a game the 4p champion **starts 1.96 wonders and finishes
+The problem: across a game the 4-player AI **starts 1.96 wonders and finishes
 0.79**. Wonders it never finishes — Transcontinental Railroad, Ocean Liners,
 Kremlin, Pyramids, Colossus are each started in 9–18% of games and completed in
 **0%** — get removed from play at the next age change, taking the actions and
@@ -316,7 +339,7 @@ resources with them [rules, §12.2]. Take the round-1 wonder idea; do not take t
 ### Round 2 is the highest-leverage turn in the game
 
 You go from 1–4 civil actions and no military actions to a full **4 CA + 2 MA**,
-and the board is still symmetric. Three things the 2p champion does on round 2,
+and the board is still symmetric. Three things the 2-player AI does on round 2,
 in **100% of 120 games** — not a median, the whole distribution sits on round 2:
 
 1. **Add production.** First farm-or-mine build/upgrade lands on round 2 in every
@@ -332,7 +355,7 @@ in **100% of 120 games** — not a median, the whole distribution sits on round 
    military workers go **1.00 → 0.00** on round 2 and strength goes **1.00 →
    0.06**; at 4p, **1.00 → 0.05** and strength **1.00 → 0.12**. Disbanding a unit
    costs 1 military action and returns the worker to your pool [rules, §4.3] —
-   and your 2 military actions are otherwise dead in Age I. The champion converts
+   and your 2 military actions are otherwise dead in Age I. The AI converts
    its warrior into a farm worker on turn 2 and stays at essentially zero strength
    for all of Age I (mean military workers in Age I: **0.16 at 2p, 0.03 at 4p**).
    **[provisional — and see the warning below]**
@@ -340,15 +363,15 @@ in **100% of 120 games** — not a median, the whole distribution sits on round 
 **Warning on #3.** This is mirror self-play with **all pacts removed at 2p**
 [rules, §13] against opponents that have never once attacked in 240 games at
 those two counts — and, more to the point, *cannot*: an aggression is
-unreachable for a 1-ply bot (caveat 3; `docs/PACTS_DIAGNOSIS.md`). A champion at
-0.06 strength across Age I is defensible only because nobody in its world was
-ever able to punish it. Against a human who will
+a move the AI cannot see the point of (caveat 3;
+`docs/PACTS_DIAGNOSIS.md`). Sitting at 0.06 strength through Age I is defensible
+only because nobody in its world was able to punish it. Against a human who will
 Plunder you for 1 military action, disbanding your only unit is throwing three
 food and three resources at them. Read #3 as *"the starting warrior is worth less
 than you think and your early military actions are worth more"*, not as an
 instruction.
 
-The 3p champion does the exact opposite — see below.
+The 3-player AI does the exact opposite — see below.
 
 ### Round 3: the first urban building
 
@@ -374,10 +397,10 @@ culture rate behind (1.43 vs 2.37).
 
 ### 3p opens completely differently, and you should know why
 
-The 3p champion is a **military opening**, and it is the single largest
+The 3-player AI is a **military opening**, and it is the single largest
 disagreement in this document:
 
-| Round 2 | 2p champion | 3p champion | 4p champion |
+| Round 2 | 2-player AI | 3-player AI | 4-player AI |
 |---|---|---|---|
 | Military workers | 0.00 | **1.68** | 0.05 |
 | Strength | 0.06 | **1.82** | 0.12 |
@@ -385,29 +408,32 @@ disagreement in this document:
 | Urban workers | 1.00 | 1.00 | 1.00 |
 | Unused workers | 1.04 | 1.00 | 2.38 |
 
-The 3p champion **never upgrades production in 39% of its games**, and when it
+The 3-player AI **never upgrades production in 39% of its games**, and when it
 does the median round is 8. It puts its round-2 actions into a second infantry
 unit instead. Across the whole game it builds **7.14 infantry** (median round 6)
 against 2.41 at both 2p and 4p, and it ends Age III at **strength 7.28** against
-3.79 (2p) and 2.99 (4p). Its weight vector agrees: `strength_rel` is its single
-most-moved weight (+0.35 → **+1.88**, +436%) and `workers_early` was cut 74%.
+3.79 (2p) and 2.99 (4p). What it learned to want matches what it does: being
+*ahead* on strength is the single value it moved furthest from our starting
+guess — it now rates it more than five times as highly as we did — and it cut the
+value of early workers by three quarters.
 
-Is that right, or is it a local optimum? Honestly: **unclear**, and the fresh 4p
-data now argues against it. The 3p champion scores less culture (113.2 mean vs
+Is that right, or has it just got stuck in a rut it cannot climb out of?
+Honestly: **unclear**, and the 4-player data argues against it. The 3-player AI scores less culture (113.2 mean vs
 2p's 123.7) and finishes with fewer techs (9.81 vs 12.88 and 16.35), and it still
-never actually attacks (4 aggressions in 120 games — but no champion *can*
+never actually attacks (4 aggressions in 120 games — but no AI *can*
 attack, so that figure is not an argument against the army; caveat 3). Note what
 the 3p army can and cannot be paying for: in this world strength earns through
 military events and colonisation requirements only, never through defence or
-threat. The 4p champion, which faces
+threat. The 4-player AI, which faces
 *three* opponents rather than two, opens as economically as 2p does and ends with
-the most technologies of any of them. So 3p looks like a local optimum rather
-than a player-count effect. **[mixed, leaning against]**
+the most technologies of any of them. So the 3-player style looks like a rut
+that particular AI fell into rather than something the 3-player rules demand. **[mixed, leaning against]**
 
-What survives: the `strength_deficit` penalty is one of only four levers all
-three player counts agree on (−0.6 default → −1.02 / −0.95 / −1.30). Being
-*behind* on strength is punished everywhere; being *ahead* is only rewarded at
-3p. Read that as "do not be the weakest player", not "build seven infantry".
+What survives is this: **fear of being the weakest player at the table** is one
+of only four things all three AIs independently agree on, and all three roughly
+doubled the penalty we had guessed for it. Being *behind* on strength is punished
+everywhere; being *ahead* only pays at 3 players. Read that as "do not be the
+weakest player", not "build seven infantry".
 
 ### How deep into the row to reach, early
 
@@ -415,7 +441,7 @@ The row sweeps **3 cards per turn at 2p, 2 at 3p, 1 at 4p** — six a round at b
 2p and 3p, four at 4p. [rules, §1.5] A card in space 7 at 2p has about one round
 to live.
 
-The champions handle this very differently:
+The AIs handle this very differently:
 
 | | cards taken per game | CA spent taking | share from spaces 1–5 | share from 10–13 |
 |---|---|---|---|---|
@@ -425,22 +451,22 @@ The champions handle this very differently:
 
 2p and 4p are **volume buyers** — they take almost everything from the cheap end
 of the row (22 cards for 25 actions, 32 cards for 39 actions) and barely ever pay
-3 CA. Only the 3p champion pays up, taking **half as many cards for more
+3 CA. Only the 3-player AI pays up, taking **half as many cards for more
 actions**, mostly from the expensive end. **[mixed]**
 
 Since 2p and 4p — the two counts with the most and least sweeping — agree with
 each other and 3p is the outlier, we read the 3p behaviour as a quirk of that
-champion rather than a 3-player effect. The default advice is the 2p/4p one:
+AI rather than a 3-player effect. The default advice is the 2p/4p one:
 **be patient, let cards slide left, and buy from spaces 1–5.** Paying 3 civil
 actions for a card is something you should have to justify, not a habit.
 
 The count that most rewards patience is **4p**, where only 1 card is swept per
 turn (4 per round against 6 at both 2p and 3p) [rules, §1.5] — cards live half
-again as long there, which is exactly where the champion takes the most of them.
+again as long there, which is exactly where the AI takes the most of them.
 
 ### Government: later than you think
 
-No champion rushes a government.
+No AI rushes a government.
 
 | | ever take a govt card | median round taken | ever change govt | median round changed |
 |---|---|---|---|---|
@@ -481,18 +507,18 @@ Age I ends around round 6–8. Champion state at that moment:
 | Yellow bank left | 14.0 | 14.9 | 14.7 |
 | Wonders completed | 0.06 | 0.00 | 0.23 |
 
-The one row to look at twice is **food rate**. All three champions have 11 or so
-workers eating 2 food a turn by this point, and the 4p champion is already
+The one row to look at twice is **food rate**. All three AIs have 11 or so
+workers eating 2 food a turn by this point, and the 4-player AI is already
 producing only 1.2. That gap is what eventually eats its entire score — see
 trap #2.
 
 The number to steal from that table is **yellow bank ~14–15**: all three
-champions have taken three or four population by the end of Age I, which keeps
+AIs have taken three or four population by the end of Age I, which keeps
 them in the "cost 3, consume 1, 1 happy face required" band and two steps clear
 of the nasty jump at 10 tokens. [rules, §6.1] The agreement across counts here is
 as tight as anything in this document.
 
-And note the last row. **No champion completes a wonder in Age I at any count**,
+And note the last row. **No AI completes a wonder in Age I at any count**,
 including the 4p one that takes a wonder on round 1. Wonders are covered in the
 midgame and per-count sections; the opening verdict is that taking one is cheap
 and finishing one is not.
@@ -501,10 +527,9 @@ and finishing one is not.
 
 ## Midgame: late Age I through Age II (roughly rounds 6–14)
 
-The fresh 4-player harvest is in for this section, so everything below is three
-counts at 120 games each.
+Everything below is 120 self-play games at each of 2, 3 and 4 players.
 
-### Stop growing around round 9. All three champions do.
+### Stop growing around round 9. All three AIs do.
 
 This is the cleanest three-count consensus in the whole dataset. Watch the yellow
 bank (population tokens left):
@@ -525,7 +550,7 @@ That is not laziness, it is the population table. At **12–11 tokens left** a
 worker costs 4 food, you consume 2, and you need 2 happy faces. Cross into
 **10–9** and the happiness requirement jumps to **3** while consumption does not
 move — the cost of that worker is hidden, and it is the step that causes
-uprisings. [rules, §6.1] The champions buy the 12–11 band and sit in it.
+uprisings. [rules, §6.1] The AIs buy the 12–11 band and sit in it.
 
 **Practical rule: get to 12 tokens fast, then stop until you have bought the
 third happy face.** Remember you also lose 2 tokens free at the end of each of
@@ -546,13 +571,13 @@ moving. They are:
 | 4p production | 4.01 | 3.20 |
 | 4p urban | 4.28 | 5.43 |
 
-The 4p champion takes this furthest: by round 20 it is down to **2.39 production
+The 4-player AI takes this furthest: by round 20 it is down to **2.39 production
 workers and 5.41 urban**, with 3.96 workers sitting unused. Every count moves the
 same direction. **[strong]**
 
 The mechanism is the `destroy` action: **destroying a farm, mine or urban
 building costs 1 civil action, returns the worker to your pool, and refunds
-nothing** [rules, §3.6]. The champions use it constantly — **5.9 (2p), 5.5 (3p),
+nothing** [rules, §3.6]. The AIs use it constantly — **5.9 (2p), 5.5 (3p),
 10.9 (4p) destroys per game**. A level-1 farm you built in Age I is not a
 building you keep, it is a worker you parked there.
 
@@ -575,7 +600,7 @@ Median round of the first build of each type, per game:
 **Temples are the first urban building at every player count**, and the
 most-worked one at 2p and 3p — 3.65 / 2.84 / 3.71 card-actions per game. The one
 exception is 4p, where labs narrowly beat them (4.71 vs 3.71) because the 4p
-champion is a technology engine. Theaters and arenas are
+AI is a technology engine. Theaters and arenas are
 consistently the *last* urban buildings anyone puts a worker on, at all three
 counts. **[strong]**
 
@@ -602,7 +627,7 @@ where culture overtakes science. After that the ratio is *flat*, not falling: at
 monotonically through the game does not survive the fresh data. **[strong on the
 Age I → II crossover, retracted on the monotone claim]**
 
-At 2p the champion's culture rate is above its science rate from **round 3
+At 2p the AI's culture rate is above its science rate from **round 3
 onward** (round 5: science 1.58, culture 2.37). So at 2p there is barely a
 "science first" phase at all.
 
@@ -617,7 +642,7 @@ That is round 7–9 at all three counts.
 | 3p | 50.8% | 7 | Monarchy (23.3%, round 5.5) |
 | 4p | **85.0%** | 9 | Monarchy (35.8%, round 8) |
 
-The 4p champion changes government **1.12 times per game** and has Republic
+The 4-player AI changes government **1.12 times per game** and has Republic
 (32.5%), Democracy (30.8%) and Constitutional Monarchy (30.0%) in nearly a third
 of games each — it is often changing twice. 2p and 3p change once or not at all.
 **[mixed]** — the direction (midgame, not endgame) agrees at all three counts;
@@ -646,21 +671,21 @@ you **prepare an event, which scores culture equal to the card's age level
 | Unused MA per turn | 1.93 | 1.82 | 1.22 |
 | Final culture | 123.7 | 113.2 | **56.4** |
 
-The 4p champion spends roughly 28 military actions a game copying tactics
+The 4-player AI spends roughly 28 military actions a game copying tactics
 [rules: copying costs **2 MA**, §4.4-4.5, one play-or-copy per Action Phase], has
 the fewest unused MAs, therefore draws the fewest military cards, therefore has
 almost nothing to prepare — and passes in the Politics Phase on **87% of its
-turns**. It also scores less than half the culture of the 2p champion. Over 11.3
-preparations of mixed ages, the 2p champion is collecting on the order of 20
+turns**. It also scores less than half the culture of the 2-player AI. Over 11.3
+preparations of mixed ages, the 2-player AI is collecting on the order of 20
 culture from the Politics Phase alone — a sixth of its final score, for zero
 civil actions. **[mixed, and partly inference]**
 
 **Read the "pass" row as a symptom, not a decision.** The politics phase offers
 five things — prepare an event, offer a pact, play an aggression, declare a war,
-or pass — and the champions have only ever done two of them. Preparing an event
-is the *only* politics move whose reward (culture, immediately) lands inside the
-mover's own 1-ply trial state; pacts, aggressions and wars all pay off through
-another player's response and are unreachable (caveat 3;
+or pass — and the AIs have only ever done two of them. Preparing an event
+is the *only* political move that pays you immediately, on your own board, with
+nobody else's answer required; pacts, aggressions and wars all pay off through
+another player's response, and the AI cannot see that far (caveat 3;
 `docs/PACTS_DIAGNOSIS.md`). So "passes on 87% of its turns" means *"had no event
 worth preparing"*, not *"looked at the political options and declined them"* —
 the political options were never really on the table. A human sitting in that
@@ -670,9 +695,9 @@ prepare-an-event arithmetic above is [rules] and stands on its own.
 
 Two further honest caveats. First, final culture is not comparable across player
 counts in a mirror — a 4p game divides the same card row four ways. Second, the
-4p champion's weight vector is the youngest and the strangest, so the *residual*
-politics behaviour (how much it bothers to prepare) may be a hole in its
-evaluation rather than a strategy.
+4-player AI is the least practised and has the strangest set of values, so how
+little it bothers to prepare events may be a hole in its judgement rather than a
+strategy.
 
 But the *rules* logic stands on its own and you should act on it: **an unused
 military action at end of turn is a free card, and a green card with a harp on it
@@ -697,7 +722,7 @@ completed** [rules, §2.4], and you cannot take one while another is unfinished
 antiquated out from under you at the next age change.
 
 Note also 4p's completion rate: **1.96 started, 0.79 completed.** Over a game the
-4p champion loses more than one wonder per game to age-end removal. Do not copy
+4-player AI loses more than one wonder per game to age-end removal. Do not copy
 that part. (Health warning on that table: "started" counts a wonder the first
 turn a stage is paid for, so a wonder taken, started and finished inside one
 turn can register as a completion with no start — which is why 2p shows 0.18
@@ -705,7 +730,7 @@ completed against 0.17 started, and why 4p's St. Peter's shows 13 completions
 from 8 starts. The gap at 4p, 1.96 vs 0.79, is far too large to be that
 artefact.)
 
-**The one wonder number worth memorising.** The 4p champion started wonders 235
+**The one wonder number worth memorising.** The 4-player AI started wonders 235
 times across 120 games, so we can ask which ones actually finish. Split by the
 median round the build *starts*:
 
@@ -726,7 +751,7 @@ Hanging Gardens 12/14, Eiffel Tower 17/22 (started round 12). Wonder cost is
 you are paying 12 resources across three or four civil actions for a card that
 will be removed, unfinished and unrefunded, at the next age change
 [rules, §12.2]. **[strong at 4p, [thin] elsewhere — 2p and 3p barely touch
-wonders, so this is one champion's data.]**
+wonders, so this is one AI's data.]**
 
 ### Where your actions start going to waste
 
@@ -739,11 +764,11 @@ Share of civil actions left unspent at end of turn, by age:
 | 4p | 0.5% | **6.5%** | 13% | 16% |
 
 Age I is fully spent at every count. Age II is where 2p and 3p fall off a cliff
-and 4p does not. The 4p champion — the one that keeps spending — is also the one
+and 4p does not. The 4-player AI — the one that keeps spending — is also the one
 that ends with **16.35 technologies against 12.88 and 9.81**, and the only one
 that finishes wonders. **[mixed]**
 
-We are not claiming the 4p champion is the strongest of the three; the strength
+We are not claiming the 4-player AI is the strongest of the three; the strength
 table at the top says it is the least-improved. But when the counts disagree
 about *whether it is fine to waste half your actions in Age II*, the count that
 says "no" is the one with three more technologies, and that is the direction we
@@ -756,7 +781,7 @@ run out of *plan*, not out of *game*.
 
 ### Age IV is one turn. Plan for that, not for an "Age IV".
 
-Across 360 games the champions took **143 / 155 / 163 Age IV turns in 120 games
+Across 360 games the AIs took **143 / 155 / 163 Age IV turns in 120 games
 each** — that is **1.19 (2p), 1.29 (3p), 1.36 (4p) turns per game**. Age IV is
 not a phase of the game. It is a single final turn, occasionally two. **[strong]**
 
@@ -810,18 +835,19 @@ Unspent science points at the end of the game:
 
 The count that ends with the *least* banked science ends with the *most*
 technologies, by three and a half techs. That is not a coincidence — banked
-science is a technology you did not develop. And the `science` stock weight is
-one of only four levers all three climbs agree on, all downward: **+0.5 default →
-+0.185 (2p) / −0.194 (3p) / −6.089 (4p)**. **[strong]**
+science is a technology you did not develop. And "a banked science point is
+worth something" is one of only four judgements all three AIs revised in the same
+direction — all three revised it **down**, and two of them all the way to
+*negative*. **[strong]**
 
-The 2p champion banking 25.7 science at the end is a genuine flaw in that
-champion, not a strategy. Do not copy it.
+The 2-player AI banking 25.7 science at the end is a genuine flaw in that
+AI, not a strategy. Do not copy it.
 
 The same applies to your hand. Age IV hand size: **2.50 (2p), 1.57 (3p), 4.77
 (4p)**. `hand_value_late` is negative at all three counts (−0.35 / −0.40 / −0.33
-against a −0.2 default) — another full-consensus lever. The 4p champion ending
+against a −0.2 default) — another full-consensus lever. The 4-player AI ending
 with nearly five dead cards is the same mistake in a different currency.
-**[strong on the principle, and the 4p champion violates it]**
+**[strong on the principle, and the 4-player AI violates it]**
 
 ### Workers stop being placed, and that is partly on purpose
 
@@ -834,7 +860,7 @@ Unused workers, from the start of Age III to the last full round:
 | 4p | 2.81 | **4.38** |
 
 Meanwhile production workers **fall**: 2p 4.82 → 4.30, 4p **3.16 → 2.09**. The 4p
-champion finishes with more than a third of its workers idle.
+AI finishes with more than a third of its workers idle.
 
 Two things are going on and only one of them is good:
 
@@ -846,7 +872,7 @@ Two things are going on and only one of them is good:
   rounds is cheap insurance.
 - **Probably bad:** at 4p the happiness margin in Age IV is already **+4.34**, so
   those four idle workers are not paying for insurance — they look like
-  population the champion bought and then could not afford to place. **[mixed]**
+  population the AI bought and then could not afford to place. **[mixed]**
 
 ### Military in the endgame
 
@@ -857,17 +883,18 @@ Two things are going on and only one of them is good:
 | 4p | 3.48 | 1.06 | **0.60** | 0.108 | **0** |
 
 Those two ratio columns are the whole story, so read them side by side. Against
-the *average* rival every champion looks like it is at parity — but that column
+the *average* rival every AI looks like it is at parity — but that column
 is meaningless in mirror self-play, where you are the average rival by
 construction (caveat 2 at the top). Against the *strongest* rival, only 2p is at
-parity: at 3p the champion is 25% short of the table leader in Age IV and at 4p
+parity: at 3p the AI is 25% short of the table leader in Age IV and at 4p
 it is at 60% of it, having spent about half of every age below *half* the
 leader's strength [`military_by_age`, 120 games each].
 
 **Zero wars in 360 games at every player count**, and the two rightmost columns
 above are there for completeness, not as findings: declaring a war and playing an
-aggression are both unreachable for a 1-ply evaluator, so those cells were
-guaranteed to be ~0 before a single game was played (caveat 3;
+aggression are both invisible to an AI that only looks at its own board before
+anyone answers, so those cells were guaranteed to be ~0 before a single game was
+played (caveat 3;
 `docs/PACTS_DIAGNOSIS.md`). The handful of aggressions that do occur happen
 *late* — at 4p the median first aggression is **round 18.5** (p25 17, p75 20),
 i.e. in Age III — but that is a median over ten games of a move the AI never
@@ -877,14 +904,14 @@ columns themselves are real measurements.
 The caveat matters. These are mirror self-play games between civilizations that
 *cannot* attack — they did not learn that nobody attacks, it was never an option
 they could take. A table of humans is not remotely that. What survives is one
-weight fact and one target. The weight fact: `strength_deficit`
-(the penalty for being *behind*) is one of the four full-consensus levers, and
-all three climbs pushed it further down (−0.6 default → −1.02 / −0.95 / −1.30) —
-being weakest is punished everywhere, while being ahead is only rewarded at 3p.
+judgement and one target. The judgement: the penalty for being *behind* on
+strength is one of the four things all three AIs agree on, and all three made it
+about twice as harsh as we had guessed — being weakest is punished everywhere,
+while being ahead only pays at 3 players.
 The target: **match the strongest player at the table, and do not pay for more
-than that.** The champions only actually manage this at 2p; at 3p and 4p they
+than that.** The AIs only actually manage this at 2p; at 3p and 4p they
 fall short and could never have been punished for it, so take the target from the
-weights, not from the play. See headline rule 8.
+what they value, not from what they did. See headline rule 8.
 
 Two rules to remember for the last turns:
 
@@ -906,7 +933,7 @@ Share of turns with a leader in play:
 | 3p | 0.60 | 0.22 | 0.20 |
 | 4p | 0.82 | **0.83** | **0.81** |
 
-The 4p champion keeps a leader out through the whole endgame; 2p and 3p let
+The 4-player AI keeps a leader out through the whole endgame; 2p and 3p let
 theirs lapse. [rules, §12.2] **a leader in play survives through the age after its
 own** — an Age II leader dies when Age III ends — so keeping one out in Age IV
 requires having taken an Age III leader.
@@ -930,10 +957,9 @@ Every count is still *increasing* its culture rate right to the end — nobody
 coasts. But look at 4p: its science rate in Age IV is **7.68**, still rising, and
 it has the highest culture rate too. It is buying both to the last turn. That is
 in direct tension with the headline "stop buying rate in Age III" rule, and the
-tension is real: the weight evidence for that rule is strong (`science_rate_late`
-−3% / −40% / −66%, `resource_rate_late` −25% / −54% / +222%) but the **behaviour**
-evidence is weak — no champion actually stops. **[mixed — the weights say stop,
-the play says keep going]**
+tension is real: all three AIs *learned* to want less late science rate (and two
+of the three less late resource rate), but not one of them actually stops buying.
+**[mixed — what they value says stop, what they do says keep going]**
 
 Our reading, and it is a reading rather than a measurement: keep buying things
 that score (labs feed technologies, technologies feed culture buildings) and stop
@@ -954,7 +980,7 @@ subtraction in trap #2: gross food production minus 2 (or 3 if you are down to
 ## What changes with the player count
 
 This is the section to read if you learned the game at one count and are now
-sitting down at another. The three champions are not three strengths of the same
+sitting down at another. The three AIs are not three strengths of the same
 player — they play **different games**, and the differences are much larger than
 anything else in this document.
 
@@ -978,7 +1004,7 @@ cheap cards keep arriving. At **4p** cards linger for many turns, so the row
 fills up with things nobody wanted and the *good* card in space 1 was taken by
 one of your three opponents long before your turn came round.
 
-The champions' final numbers diverge enormously:
+The AIs' final numbers diverge enormously:
 
 | Measured over 120 mirror games each | 2p | 3p | 4p |
 |---|---|---|---|
@@ -992,15 +1018,15 @@ The champions' final numbers diverge enormously:
 
 Source: `experiments/behaviour_{2,3,4}p.json`. **[strong]** on the shape of the
 divergence, because 120 games is enough to make gaps this large real; **[mixed]**
-on which count is *right*, because the three climbs are at very different ages
-(gen 176 / 132 / 113, with 15 / 10 / 6 accepted mutants).
+on which count is *right*, because the three AIs have had very different amounts
+of practice (15 / 10 / 6 accepted improvements).
 
 ### 2 players: the row is a conveyor belt, so cheap cards are everywhere
 
 **Three** cards are discarded off the left of the row at the start of every turn
 and the row is refilled to 13 immediately [rules, §2.1] — so six cards a round
 churn through, and there is only one other player bidding on them. Cards die
-fast, but they arrive just as fast. The 2p champion takes **88.4% of its cards from spaces 1–5** (1 CA
+fast, but they arrive just as fast. The 2-player AI takes **88.4% of its cards from spaces 1–5** (1 CA
 each) and averages **1.15 civil actions per card**. It takes 22 cards a game and
 pays only 25.2 actions for them. [`cost_bands`]
 
@@ -1016,15 +1042,15 @@ What that buys, in practice:
   unspent on 42.8% of turns; in Age III it wastes **57.6%** of its civil actions.
   It ends with **25.7 banked science** it never spends.
 
-So the 2p lesson is not "be efficient" — this champion is not efficient. It is
+So the 2p lesson is not "be efficient" — this AI is not efficient. It is
 that at 2p the row keeps handing you cheap, good cards, and the binding
 constraint is *what you can build and feed*, not what you can reach.
 **[strong]** on the card economics (rules + behaviour agree); the waste is a
 flaw, not advice — see "Where your actions start going to waste".
 
-### 3 players: expensive cards, a big army, and a local optimum
+### 3 players: expensive cards, a big army, and a rut
 
-The 3p champion is the odd one out at almost every measurement, and you should
+The 3-player AI is the odd one out at almost every measurement, and you should
 treat its style with suspicion rather than copying it.
 
 - It reaches **deep** into the row: **56.9% of its cards come from spaces 10–13**
@@ -1041,7 +1067,7 @@ treat its style with suspicion rather than copying it.
   in **39% of games it never upgrades production at all**.
 
 The army does not get used — **zero wars in 120 games** and 0.03 aggressions per
-game — but be careful what you conclude from that. *No* champion at *any* count
+game — but be careful what you conclude from that. *No* AI at *any* count
 can choose an aggression or a war (caveat 3; `docs/PACTS_DIAGNOSIS.md`), so those
 zeroes were fixed before the games were played and are **[not evidence]** that
 the army was wasted. Nor could it ever pay off defensively in a world where
@@ -1049,16 +1075,16 @@ nobody attacks. What *is* measurable is the price: roughly two-thirds of the
 economy the other counts run, bought with strength that can only cash out through
 military events.
 
-Our reading: this is a **local optimum**, not a player-count effect. The decisive
-evidence is 4p — it faces *three* opponents rather than two (though in this AI's
+Our reading: this is **a rut that AI fell into**, not something the 3-player rules
+demand. The decisive evidence is 4p — it faces *three* opponents rather than two (though in this AI's
 world none of them can attack it) and instead opens economically, keeps almost no army,
 and ends with the most technologies in the study. **[mixed, leaning against the
-3p style]** — the 3p champion does beat its own start point (70.3% ± 9.1), so
+3p style]** — the 3-player AI does beat its own start point (70.3% ± 9.1), so
 the style works; there is no evidence it is the best available style.
 
 ### 4 players: a wonder on round one, and a starving engine
 
-The 4p champion is the most *interesting* and the most *broken*.
+The 4-player AI is the most *interesting* and the most *broken*.
 
 The good half. It is far and away the best at spending actions — 0.38 CA wasted
 per turn against 1.74 and 1.93, and it leaves nothing unspent on **89.2%** of
@@ -1083,7 +1109,7 @@ game against 11.3 at 2p, so the military-card economy is dead too. (The pass rat
 itself is not a choice — see "Read the 'pass' row as a symptom" in the midgame
 section — but the ~10 missing preparations are real culture left on the table.
 They also have a knock-on: territories only reach the board by being seeded with
-`prepare_event`, so a 4p champion that never prepares never even sees a colony
+`prepare_event`, so a 4-player AI that never prepares never even sees a colony
 auction, which is why 4p colony bids are rarer still
 [`docs/PACTS_DIAGNOSIS.md`].)
 
@@ -1091,7 +1117,7 @@ What to take from 4p and what to leave: **take** the action discipline, the
 urban-heavy worker split (65% urban by Age III), and the round-1 wonder
 consideration. **Leave** the food curve: hold production at **consumption + 1**
 — that is 3/turn while the yellow bank is at 12–9 and 4/turn once it drops to
-8–5 — which is two to three farm-levels more than this champion ever builds.
+8–5 — which is two to three farm-levels more than this AI ever builds.
 **[mixed]**
 
 ### Per-count opening cheat sheet
@@ -1131,20 +1157,20 @@ finding, and it is not one:
    avoiding the 10-token happiness step. **[strong]**
 4. **Nobody fights — because nobody *can*.** Zero wars in 360 games, aggressions
    0.01 / 0.03 / 0.11 per game. This is the one item on this list that is not a
-   discovery. Attacking is structurally unreachable for a 1-ply bot: the payoff
-   sits inside the victim's defence choice, outside the mover's trial state, so
-   the move is dominated by passing in every position and no ancestor ever tried
-   it, no descendant ever could, and the aggression/war weights were never under
-   selection (caveat 3; `docs/PACTS_DIAGNOSIS.md`). A true description of these
-   games and **worthless as advice** — it is not evidence that an army is a
+   discovery. The AI simply cannot see the point of attacking: the payoff sits
+   inside the victim's defence choice, which happens after the AI has already
+   finished judging the move, so attacking always scores worse than passing. No
+   version of it ever tried, none ever could, and nothing ever taught it whether
+   an army is worth having (caveat 3; `docs/PACTS_DIAGNOSIS.md`). A true
+   description of these games and **worthless as advice** — it is not evidence that an army is a
    wasted investment at a human table. **[not evidence]**
 
 ---
 
 ## Common traps
 
-Six ways this game quietly takes points off you. All six are things the search
-priced *more harshly* than the hand-set weights did — which is the AI's way of
+Six ways this game quietly takes points off you. All six are things the AI, left
+to tune itself, decided were *worse* than we had guessed — which is its way of
 saying "you are underestimating this".
 
 ### 1. The uprising you did not see coming
@@ -1164,9 +1190,9 @@ fire on their own:
   I, II and III). That is a free, unavoidable push toward the next happiness
   step, three times a game. [rules, §12.2]
 
-All three climbs made the uprising penalty worse than the hand-set −12:
+All three tuning runs made the uprising penalty worse than the hand-set −12:
 **−14.0 (2p), −15.5 (3p), −21.2 (4p)**. It is the largest single term in the
-78-weight evaluation at every player count. **[strong]**
+thing on its list at every player count. **[strong]**
 
 Practical drill: before you spend a civil action on population, look at where
 the *next* token comes from and whether that empties a subsection. If it does,
@@ -1183,7 +1209,7 @@ are short, **you pay what you can and lose 4 culture per missing food**.
 [rules, §6.6 step d, CoL p.6] There is no cap, it fires every single turn you are
 short, and nothing on the board announces it.
 
-How much it actually costs. `analysis/leak_check.py` replays champion mirror
+How much it actually costs. `analysis/leak_check.py` replays AI mirror
 games with the end-of-turn economy wrapped, comparing the culture your rating
 says you should score against what you actually banked. The gap is starvation.
 Over **60 games per player count** (`experiments/logs/leak_check.log`):
@@ -1196,10 +1222,9 @@ Over **60 games per player count** (`experiments/logs/leak_check.log`):
 
 (Those final-culture figures are from the leak_check run's own 60 games, which
 is why they differ by a few points from the 123.7 / 113.2 / 56.4 quoted
-elsewhere from the 120-game harvest. Different games, same champions, same
-story.)
+elsewhere from the 120-game set. Different games, same AIs, same story.)
 
-At 4 players the champion burns **roughly as much culture to starvation as it
+At 4 players the AI burns **roughly as much culture to starvation as it
 finishes the game with**. Compare that to the trap everyone worries about —
 uprisings cost 0.27 / 0.03 / 0.64 culture per player-game, essentially nothing.
 You are guarding the wrong door. **[strong]** — three player counts, 60 games
@@ -1233,7 +1258,7 @@ What to do about it, concretely:
 - **Compare production against consumption, not against zero.** The behaviour
   figures below are food **produced** per turn, gross. Consumption is 2 while
   you have 12–9 yellow tokens left and **3 once you are down to 8–5**
-  [rules, §6.1] — and every champion is at 9.2–9.8 tokens at the end of Age III
+  [rules, §6.1] — and every AI is at 9.2–9.8 tokens at the end of Age III
   and 7.2–7.8 by Age IV, so **consumption steps from 2 to 3 during the last age
   at every player count.**
 
@@ -1264,15 +1289,14 @@ What to do about it, concretely:
   about 24 culture by the end. Rate that *prevents a penalty* is not the same as
   rate that feeds a future purchase.
 
-Weight evidence, for what it is worth: the search raised `food_rate` at all three
-counts (+5% / +48% / +12%), and the 4p climb — the one that starves worst — is
-the only one that flipped `food_rate_late` positive (−0.6 → **+0.17**), i.e. it
-has half-noticed that late food is worth buying. That is a real signal and it
-points the right way,
-but it is far weaker than the behaviour warrants — the champions have not
+What the AIs learned, for what it is worth: all three raised the value they put
+on food production, and the 4-player one — the one that starves worst — is the
+only one that flipped *late* food from bad to good, i.e. it has half-noticed that
+a farm in Age III is worth buying. That is a real signal pointing the right way,
+but it is far weaker than the behaviour warrants — the AIs have not
 learned this lesson yet, which is exactly why they are all still bleeding.
 **[strong on the leak, thin on the fix]** — we can measure the cost precisely;
-we are inferring the remedy from the rules, not from a champion that solved it.
+we are inferring the remedy from the rules, not from a AI that solved it.
 
 ### 3. Corruption from a half-built wonder
 
@@ -1282,10 +1306,10 @@ unfinished wonder are *out of your blue bank*, so a wonder you started and did
 not finish is charging you 2 or 4 resources a turn for the privilege.
 [rules, §6.2, §9.2]
 
-The 3p search tripled the corruption penalty (−0.9 → **−2.55**, −183%) and both
-3p and 4p raised the value of *free* blue tokens (+89% / +134%) — buy the
+The 3-player AI tripled the penalty it puts on corruption, and both the 3- and
+4-player AIs roughly doubled the value of having spare blue tokens — buy the
 corruption headroom **before** you need it, not when the bill arrives.
-**[mixed]** — 2p left both weights untouched, so this is a 3p/4p finding.
+**[mixed]** — the 2-player AI never moved on either, so this is a 3p/4p finding.
 
 And if the age turns while your wonder is unfinished and now antiquated, the
 wonder is removed from play entirely. You get the blue tokens back; you do not
@@ -1294,30 +1318,30 @@ get the actions or the resources back. [rules, §12.2]
 ### 4. Buying rate in Age III
 
 A lab bought on round 19 of a 23-round game scores four times. A farm bought
-then scores nothing at all, because food is not victory points. The search
-found this independently: `science_rate_late` fell at all three counts
-(−3% / −40% / −66%), `resource_rate_late` fell at 2p and 3p (−25% / −54%),
-and `hand_value_late` fell at **all three** (−59% / −78% / −50%) — one of only
-four full-consensus levers in the whole table. **[strong]**
+then scores nothing at all, because food is not victory points. All three AIs
+worked this out for themselves: every one of them lowered the value of late
+science rate, two of the three lowered late resource rate, and **all three**
+lowered the value of a card still in hand late — one of only four judgements they
+all agree on. **[strong]**
 
-The exception is 4p, where `resource_rate_late` went the other way (+222%,
-sign flip). Given that the 4p climb has accepted only 6 mutants, treat that as
+The exception is 4 players, where late resource rate went the *other* way. Given
+that the 4-player AI has banked only six accepted improvements, treat that as
 **[provisional]** and follow the 2p/3p reading — except for food, where trap #2
 overrides this whole trap.
 
 ### 5. Hoarding science points
 
-Unspent science points score nothing. Ever. The `science` *stock* weight is one
-of the four levers all three counts agree on, and all three cut it:
-**+0.185 (2p, −63%), −0.194 (3p, sign flip), −6.089 (4p, sign flip)**.
-Banked science is not a war chest, it is a civil action you failed to take.
-**[strong]**
+Unspent science points score nothing. Ever. "A banked science point is worth
+something" is one of the four judgements all three AIs revised in the same
+direction: all three cut it, and two cut it past zero into *negative*. Banked
+science is not a war chest, it is a civil action you failed to take. **[strong]**
 
-The same goes for cards: `hand_value_late` is negative at all three counts.
+The same goes for cards: all three AIs price a card still in hand late as a
+liability.
 Hold cards in Ages A and I when you cannot yet afford them; from Age II
 onwards, a card in hand on the last turn is worth exactly zero.
 
-Note the contrast with **resources**, which the 3p climb valued *up* (+210%).
+Note the contrast with **resources**, which the 3-player AI tripled in value.
 Stockpiled resources are spendable on the last turn; stockpiled science mostly
 is not, because the thing you would buy with it has to then produce.
 
@@ -1331,7 +1355,7 @@ cannot take another while one is unfinished. [rules, §9.2]
 
 The engine's own behaviour splits sharply on wonders by player count — see the
 per-player-count section. This is the single biggest strategic disagreement
-between the three champions.
+between the three AIs.
 
 ---
 
@@ -1500,7 +1524,7 @@ Everything else is identical. [§13]
 
 Read this before you treat anything above as complete. These are not hedges;
 they are parts of the game the study has **no data on at all**, because the
-champions never went there.
+AIs never went there.
 
 ### The one misreading this document must not cause
 
@@ -1509,27 +1533,26 @@ almost never colonises. This is not because those things are weak. It is because
 the AI is incapable of choosing them.** Full working in
 `docs/PACTS_DIAGNOSIS.md`; the short version:
 
-The bot is **1-ply**. It scores a candidate move by applying it and evaluating
-*its own board immediately afterwards*. But offering a pact, declaring a war,
-playing an aggression and opening a colony auction all work the same way in the
-rules: you spend the card or the worker now, and the result is a **pending
-decision on somebody else** — the partner accepts or refuses, the defender
-chooses what to lose, the rival bidders answer. None of that is in the mover's
-trial state. So all the bot sees is the cost:
+The AI picks its move by trying each one and looking at **its own board
+immediately afterwards, before anybody else responds**. But offering a pact,
+declaring a war, playing an aggression and opening a colony auction all work the
+same way in the rules: you spend the card or the worker now, and the result is a
+**decision that lands on somebody else** — the partner accepts or refuses, the
+defender chooses what to lose, the rival bidders answer. None of that has
+happened yet when the AI looks. So all it sees is the cost.
 
-```
-move ('offer_pact', 'International Tourism', 0, '')
-feature diff  pol_pass -> offer_pact:
-    hand_military   6 -> 5
-    hand_mil_value 21 -> 17
-weighted delta: -1.10445        # every other feature identical
-```
+Here is one such comparison, taken straight from the instrumented run. The AI is
+deciding between passing and offering the pact *International Tourism*. Only two
+things on its board change, and both change for the worse — it has one fewer
+military card in hand, worth 4 points less. Everything else on its board is
+identical. Score for offering the pact versus passing: **−1.10445**. Not "worse
+in this position": worse by that same fixed amount in *every* position, because
+nothing else ever moves.
 
-Two features move and both move *down*. The move is therefore **strictly worse
-than passing by a constant, in every position, at every weight** — no amount of
-training could ever make it get picked, and the ties in a colony auction break to
-`bid_pass` for the same reason. Measured directly: `offer_pact` was legal in
-**16% of politics decisions across 240 games and chosen zero times**.
+That is why no amount of practice could ever make it offer a pact, and why ties
+in a colony auction always break towards passing. Measured directly: **it was
+legal to offer a pact in 16% of political decisions across 240 games, and it was
+chosen zero times.**
 
 Two consequences you must carry:
 
@@ -1537,31 +1560,31 @@ Two consequences you must carry:
    evidential value as "zero wars in a game where the war cards were left in the
    box". It is not a discovery that war is bad; the experiment could not have
    come out any other way. Same for pacts, aggressions and colony bids.
-2. **The corresponding weights are noise, not advice.** The `pacts`, `colonies`,
-   aggression and war coefficients in `experiments/champion_*.json` were never
-   under selection, because no game outcome ever depended on them. The tell is
-   stark: the 3p `colonies` weight is **2.000 — bit-for-bit the hand-written
-   default** after thousands of hill-climb generations, while the 4p one drifted
-   to **−0.962**, a random walk on a dead feature. Do not quote either number,
-   in either direction. **[not evidence]**
+2. **Whatever the AI "thinks" pacts and colonies are worth is noise, not
+   advice.** Those values were never tuned, because no game it ever played
+   depended on them. The tell is stark: after thousands of rounds of tuning, the
+   3-player AI's price for a colony is still **2.000 — bit for bit the number we
+   typed in by hand on day one**, while the 4-player one has wandered to
+   **−0.962** at random. Do not quote either, in either direction.
+   **[not evidence]**
 
 The honest position on the whole political half of *Through the Ages* is
 therefore **"untested"**, not "unimportant". A human table plays a different game
-from the one these champions played.
+from the one these AIs played.
 
 - **Pacts.** Zero pacts were played in 240 games at 3p and 4p — the move type
   never appears in the log (`moves_per_game`, which lists every move the
-  champions made). Pacts are legal at 3p and 4p [rules, §13]. We can tell you
+  AIs made). Pacts are legal at 3p and 4p [rules, §13]. We can tell you
   nothing about them, and the zero tells you nothing either: it is the structural
   blind spot above, not a verdict. **[not evidence]**
-- **Colonies.** The champions bid on a colony **0.18 (2p) / 0.08 (3p) / 0.02
+- **Colonies.** The AIs bid on a colony **0.18 (2p) / 0.08 (3p) / 0.02
   (4p) times per game** and pass instead 0.79 / 3.81 / 0.08 times
   (`moves_per_game`: `bid`, `bid_pass`). Effectively they never colonise — and
-  again, they *cannot*: while any rival is still bidding, a bid changes no player
-  state at all, so every bid evaluates to exactly the same number as passing and
-  the tie-break takes `bid_pass`. On the rare occasions a bid *is* visible (last
-  bidder standing, so the colony resolves immediately) it is priced with that
-  untouched-default / drifted-negative `colonies` weight. This document has no
+  again, they *cannot*: while any rival is still bidding, a bid changes nothing on
+  your own board at all, so a bid and a pass score exactly the same and the tie
+  breaks towards passing. On the rare occasions a bid *does* show up on its board
+  (it is the last bidder standing, so the colony resolves at once) it is judged
+  using that never-tuned colony price. This document has no
   colony advice and you should not read the silence as "colonies are bad" — read
   it as "untested". **[not evidence]**
 - **Fighting.** Zero wars in 360 games, aggressions 0.01 / 0.03 / 0.11 per game —
@@ -1572,12 +1595,12 @@ from the one these champions played.
   attack, whom to attack, or what a threat is worth. See headline rule 8.
   **[not evidence]** for the fighting rates.
 - **Wonders at 2p and 3p.** Only 25% / 19% of games touch a wonder at all, so
-  the round-12 rule above rests on the 4p champion's 235 builds. At 2p and 3p we
+  the round-12 rule above rests on the 4-player AI's 235 builds. At 2p and 3p we
   have too few builds to say whether wonders are good.
 - **Which culture buildings are best.** We report *when* things get built and
   *how many actions* they absorb, not what any individual card is worth. There
   is no card-strength ranking in this document.
 - **Anything about a human opponent.** Every number here comes from mirror
-  self-play against copies of the same evaluation function. The champions have
+  self-play against copies of the same AI. They have
   never seen a bluff, a rush, a targeted aggression or a player who is behind
   and playing for variance.
