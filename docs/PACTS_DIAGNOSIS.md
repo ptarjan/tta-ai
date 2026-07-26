@@ -1,7 +1,14 @@
 # Why the champions never play pacts (and almost never colonize)
 
-Status: COMPLETE
+Status: COMPLETE — diagnosis confirmed, fixes landed, **measured** (see
+"Did the fix work?" at the bottom).
 Date: 2026-07-26
+
+**One-line result: pacts and colonies are fixed; aggression and war are
+not.** Pacts went from 0.00 to 1.61 (3p) / 3.21 (4p) offers per player-game
+and colony bids from 0.08 to 2.28 per player-game at 3p, but wars are still
+*exactly* zero and aggressions did not move at all. Numbers, sample sizes
+and the control arm are at the end of this file.
 
 **Summary: it is (2) a bot blind spot, not an engine bug.** Pact moves are
 generated and legal in 16% of politics decisions; the champions never take
