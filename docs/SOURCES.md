@@ -13,17 +13,93 @@ Status: DRAFT — being refined incrementally.
 8. `sources/tts_tta_workshop_2120085710.json` — Tabletop Simulator workshop mod for the 2015 edition. Its civil decks are pre-split into `Civil_N`, `Civil_N (3+)` and `Civil_N (4)` piles, i.e. it states the corner marks directly. Independent confirmation of #7 (they agree card-for-card). Ignore its `(NWL)` decks — those are the New Leaders and Wonders expansion.
 9. `sources/vassal_NewTTA_2.49.vmod` (+ extracted `..._buildFile.xml`, `..._card_counts.tsv`) — Vassal module. NOTE: despite the "NewTTA" filename this is the **2006** edition (Ideal Building Site / Mineral Deposits / Bountiful Harvest / Work of Art); no Vassal module exists for the 2015 edition. Historical cross-check only.
 
-## Pending third opinion — BGG file section (NOT YET OBTAINED, do not cite as evidence)
-Two BGG files were identified as an intended independent cross-check for the card data. **Neither has been downloaded**, so **no value in `data/cards_civil.json` or `data/cards_military_actions.json` derives from either of them**, and nothing in this document has been changed on their account.
+## Third opinion — BGG file section (OBTAINED 2026-07-26; NOT applied to the data)
 
-| BGG fileid | filepage | file | status |
+The user accepted BGG's GDPR Terms-of-Service re-affirmation, which was the only remaining
+blocker, and both files are now downloaded and **format-verified by magic bytes, not by
+filename** (an earlier attempt produced a 131 KB HTML page named `.xls`):
+
+| BGG fileid | saved as | verified | bytes |
 |---|---|---|---|
-| 154670 | 123302 | `Through the Ages - A New Story of Civilization - Card Reference v1.09.pdf` (800,909 B, 27,322 downloads) | metadata read; body blocked |
-| 409053 | 293343 | `_PLAYER CARD COUNTS.xls` ("Through the Ages Card Counts" v1.1, 2025-01; 144,896 B) | metadata read; body blocked |
+| 154670 | `sources/bgg_154670_card_reference_v109.pdf` *(gitignored: `sources/*.pdf`)* | `25 50 44 46` = **%PDF-1.5**, 4 pages | 800,909 (exactly BGG's advertised size) |
+| 409053 | `sources/bgg_409053_player_card_counts.xls` | `d0 cf 11 e0` = **OLE2 / Excel 97-2003** | 144,896 (exactly BGG's advertised size) |
 
-Blocker (2026-07-26): the BGG login for `ptarjan` now **works**, but every authenticated file download redirects to `https://boardgamegeek.com/read_terms`, BGG's GDPR Terms-of-Service re-affirmation form. That form is a binding legal agreement (it names the jury-trial waiver, the arbitration requirement and the class-action prohibition) and was deliberately **not** accepted on the user's behalf. One human click on boardgamegeek.com clears it; see `docs/EXTERNAL_AIS.md` §5c for the full recipe afterwards.
+Retrieval recipe (Cloudflare + a signed one-shot S3 URL): `tools/scrape_bgg_files.mjs`,
+explained in `docs/EXTERNAL_AIS.md` §5c.
 
-**Independence caveat, recorded now so it is not forgotten later:** 154670's own uploader description states *"Card data retrieved from BGO v 2.5, which I believe to be the final (printed) revision."* So it is a transcription of **Boardgaming-Online's** 2015 implementation, not of the physical cards. It is independent of sources #7 (BGA Studio) and #8 (Tabletop Simulator) and therefore still a valid third opinion — but it is **not** independent of any data we might later pull from BGO itself. When it lands, the standing rule applies: BGG is a *third opinion*; any disagreement with our resolved values gets **both** numbers written into this file and flagged, never silently applied. Re-run `python3 data/validate_cards.py` after any change.
+**The Card Reference PDF has no text layer.** All 4 pages are single RGB images
+(1141×904 etc. at 118–144 ppi) with one embedded font used for nothing extractable —
+`pdftotext` yields **zero bytes**. It is a screenshot of a spreadsheet, so it is only
+readable by eye/OCR, and it carries no information the `.xls` does not already carry in
+machine-readable form. It was therefore **not** used for the numeric cross-check below.
+
+### Independence caveat (unchanged, and it matters for the verdict)
+154670's uploader states *"Card data retrieved from **BGO v 2.5**, which I believe to be
+the final (printed) revision."* It is a transcription of **Boardgaming-Online's** 2015
+implementation, not of physical cards. Independent of sources #7 (BGA Studio) and #8
+(TTS); **not** independent of any future BGO pull. 409053 (`_PLAYER CARD COUNTS.xls`,
+by "Larry Schneider") carries no provenance statement at all.
+
+### Result: the card *rosters* agree perfectly; **9 copy-counts disagree**
+
+Keyed by (name, age) over civil technologies + governments + wonders + leaders + yellow
+action cards, **both sides have exactly 121 entries and the sets are identical** — no card
+in one that is missing from the other. Only two naming variants (BGG "Ocean Liner Service"
+= our "Ocean Liners"; BGG "Stockpile" = our "Stock Pile"; BGG also misspells
+"Consitutional Monarchy"). Every tech cost and build cost that both sides state agrees.
+**Nothing was changed in `data/`.** Both values are recorded here per the standing rule:
+
+| Card | Age | Group | **Ours** (2p/3p/4p) | **BGG 409053** (2p/3p/4p) |
+|---|---|---|---|---|
+| Rich Land | I | action | 2 / 2 / 2 | 2 / **3** / **3** |
+| Frugality | II | action | 1 / 1 / 1 | 1 / **2** / **2** |
+| Urban Growth | II | action | 1 / 1 / 1 | 1 / **2** / **2** |
+| Patriotism | III | action | 1 / 1 / 1 | 1 / **2** / **2** |
+| Reserves | III | action | 3 / 3 / 3 | 3 / **4** / **4** |
+| Revolutionary Idea | III | action | 2 / 2 / 2 | 2 / **3** / **3** |
+| Republic | II | government | 1 / 1 / 2 | 1 / **2** / 2 |
+| Professional Sports | III | urban (arena) | 1 / 1 / 2 | 1 / **2** / 2 |
+| Air Forces | III | military (air) | 2 / 2 / 3 | 2 / **3** / 3 |
+
+These are two different disagreements, and they deserve different verdicts.
+
+**Conflict A — six action cards, +1 copy each at BOTH 3p and 4p. BGG is almost certainly
+wrong; keep ours.** It changes the size of the physical deck, and it breaks the published
+component count:
+
+| civil deck totals | Age A | Age I | Age II | Age III | total |
+|---|---|---|---|---|---|
+| ours (4p = every card) | 20 | 53 | 53 | 53 | **179** |
+| BGG 409053 (4p) | 20 | 54 | 55 | 56 | **185** |
+
+czechgames.com's own component list says **179 civil cards** (and 150 military), which our
+numbers hit exactly and BGG's miss by exactly those 6 action cards. BGG's own sheet even
+prints "Total Cards: 353" beside these tables, which is not 185 + 150 either.
+
+**Conflict B — three cards marked "3+" by BGG where we mark them "4".** This does not
+change the 4-player deck at all; it only changes what a 3-player game removes. Here the
+decisive evidence is that the marks come in a fixed pattern. The rulebook's setup says to
+remove *the 6 cards marked "3+" and the 3 cards marked "4"* from each of the Age I/II/III
+civil decks. Our data reproduces that pattern **exactly and uniformly — 6 and 3 in every
+one of the three ages**. BGG's does not, and cannot:
+
+| per age | ours "3+" / "4" | BGG "3+" / "4" |
+|---|---|---|
+| Age I | 6 / 3 | 7 / 3 |
+| Age II | 6 / 3 | 9 / 2 |
+| Age III | 6 / 3 | 11 / 1 |
+
+A 7/9/11 split contradicts the printed setup instruction, so BGG's 3-player column is
+unreliable. (Both sides agree on the same three "4"-marked cards in Age I — Knights,
+Alchemy, Iron — which is a good sign the underlying card set is the same and only the
+mark transcription drifted.)
+
+**Verdict: no change to `data/`.** Our BGA-Studio + TTS values survive the cross-check
+on every one of the 121 cards where a physical-count anchor exists, and the 9 exceptions
+are all cases where BGG contradicts either the 179-card component list or the rulebook's
+own 6-and-3 removal rule. `python3 data/validate_cards.py` still passes. This is a
+**confirmation**, not a correction — which is itself the useful result, since the four
+earlier corrections all came from this kind of conflict.
 
 ## Edition filtering performed
 NamuWiki lists include content that is NOT in the base 2015 game. Excluded:
