@@ -1046,8 +1046,12 @@ Four things hold at 2p, 3p and 4p, and those are the ones to trust:
 
 1. **Take a leader early and play it.** 97% / 83% / 98% of games take one; median
    play round 3 / 5 / 4. **[strong]**
-2. **Temples are the most-built card at every count** — 3.65 / 2.84 / 3.71 per
-   game — and they are built before theaters and arenas everywhere. **[strong]**
+2. **Temples are the first urban building at every count** (median round 5 / 8 /
+   8) and the most-built *urban* one at 2p and 3p — 3.65 / 2.84 / 3.71 builds
+   per game — with theaters and arenas last everywhere. (Only at 4p does another
+   urban building beat them: labs, 4.71. And across *all* card types the biggest
+   spender is mines at 2p and 4p, 4.28 and 5.38, and infantry at 3p, 7.14
+   [`builds_by_type`].) **[strong]**
 3. **Stop growing around round 9** and park the yellow bank just above 11 tokens,
    avoiding the 10-token happiness step. **[strong]**
 4. **Nobody fights.** Zero wars in 360 games. Aggressions per game 0.01 / 0.03 /

@@ -234,3 +234,14 @@
 - Remaining work is refresh, not structure: re-harvest behaviour when the climbs
   accept new mutants (last acceptances were gen 147 / 120 / 103) and re-run the
   header strength table.
+
+### 12:36
+- Last contradiction found and fixed: "Where the counts actually agree" claimed
+  "temples are the most-built card at every count". False -- `builds_by_type`
+  says the biggest spender is mines at 2p (4.28) and 4p (5.38) and infantry at 3p
+  (7.14); temples are the most-built URBAN building at 2p/3p only (labs 4.71 beat
+  them at 4p). Reworded, with the all-card numbers included so the claim can be
+  checked at a glance. The two other places that make this claim (rule 4 and the
+  midgame build-order subsection) were already correctly scoped.
+- Added a table of contents and a "five minutes before you play" reading path
+  (rules -> trap #2 -> your count's opening cheat sheet).
