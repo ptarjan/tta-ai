@@ -352,6 +352,41 @@ class ParanoidModeCatchesMisses(JournalTestCase):
             journal.rollback(j)
 
 
+class OptInCostsNonSearchCallersNothing(unittest.TestCase):
+    """Hazard 6 of section 6.5: `experiments/`, `analysis/` and `WeightedBot`
+    also call `copy_state`, so the journal must be opt-in.
+
+    "Opt-in" is stronger here than a branch that is not taken.  The
+    journalling `__setattr__` is installed on the *class*, so if anything
+    installed it eagerly then every attribute write in every non-search caller
+    would pay the hook -- 6.4x per write (9.3) -- for a feature it never uses.
+    This asserts the stricter property: after a full game with `TTA_JOURNAL`
+    unset, the state classes still carry the interpreter's own `__setattr__`,
+    so the cost is not small, it is zero.
+    """
+
+    def test_a_normal_game_never_installs_the_hook(self):
+        import subprocess
+        src = (
+            "from engine import game, journal, state\n"
+            "from engine.bots import make_bots, USE_JOURNAL\n"
+            "assert not USE_JOURNAL\n"
+            "game.play_game(make_bots('greedy,weighted', 2, seed=0), 2, seed=0)\n"
+            "assert not journal._installed, 'journal installed itself'\n"
+            "for c in journal.JOURNALLED_CLASSES:\n"
+            "    assert c.__setattr__ is object.__setattr__, c.__name__\n"
+            "print('clean')\n")
+        env = {k: v for k, v in os.environ.items() if k != "TTA_JOURNAL"}
+        # a subprocess because the rest of this file installs the hook on
+        # purpose, and `install()` is deliberately global and idempotent
+        r = subprocess.run([sys.executable, "-c", src], env=env,
+                           capture_output=True, text=True,
+                           cwd=os.path.dirname(os.path.dirname(
+                               os.path.abspath(__file__))))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("clean", r.stdout)
+
+
 class RareSitesRollBackExactly(JournalTestCase):
     """The seven converted sites 60 games of self-play never reach.
 
