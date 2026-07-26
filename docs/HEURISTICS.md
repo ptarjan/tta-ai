@@ -85,48 +85,100 @@ honest summary is "clearly above its starting point at 2p and 3p, probably at
 
 Eight rules. In rough order of how much they are worth.
 
-1. **Spend all your civil actions, every single turn.** Actions do not carry
-   over [rules]. The strongest-improving climb (3p) is also the one that wastes
-   the fewest — it ends its turns with 1.77 unused civil actions against 2.75
-   and 2.98 for the other two, and it leaves *something* unspent on 46% of turns
-   against 68% and 71%. The search independently drove the "leftover actions are
-   nice" weights to zero or below at every count that moved. **[strong]**
+1. **Spend all your civil actions in Ages A–II.** Actions do not carry over
+   [rules] — an unspent action is simply destroyed at end of turn. Share of
+   *available* civil actions the champions threw away, by age:
 
-2. **Take a leader on round 1 or 2 and put it in play by round 3.** Median round
-   to take one: 2 at all three player counts. Median round to play one: 3 (2p),
-   4 (3p), 3 (4p). The champion has a leader out in 75% of Age I turns at 2p and
-   70% at 4p. The "having any leader in play" weight more than doubled at 3p
-   (+1.5 → +3.4). **[strong]**
+   | actions wasted | Age I | Age II | Age III | Age IV |
+   |---|---|---|---|---|
+   | 2p | 1% | 41% | 58% | 64% |
+   | 3p | 2% | 48% | 70% | 60% |
+   | 4p | 0.5% | 7% | 13% | 16% |
 
-3. **Upgrade your production on round 2.** At 2p and 4p the champion's first
-   farm/mine upgrade lands on round 2 in **100% of games** (median and both
-   quartiles are round 2). First urban building upgrade follows on round 3-4.
-   3p is the exception and delays it — see the per-count section. **[strong]**
+   In Age I **nobody wastes anything** — if you are leaving actions on the table
+   in Age I you are already badly behind. Waste is an endgame phenomenon: by Age
+   III there is often nothing left worth buying. The 4p champion is the outlier
+   that keeps spending all game (0.38 wasted per turn against 1.74 at 2p and
+   1.93 at 3p) and it finishes with by far the most technologies, **16.4 against
+   12.9 and 9.8**. Weight evidence is thinner than it looks: only the 3p climb
+   actually pushed the "leftover actions are nice" weights negative
+   (`ca_left` +0.05 → −0.10, `ma_left` → −0.07); 2p and 4p left `ca_left`
+   alone. **[rules] for the carry-over fact; [mixed] for how much the waste
+   costs — the 2p champion wastes 58% of its Age III actions and still scores
+   the most culture of any count.**
 
-4. **Build about three temples, and never let an uprising happen.** Temples are
-   the single most-built card type at every player count: 2.83 / 2.95 / 2.67
-   builds per game, first one around round 5-8. An uprising cancels your entire
-   production phase [rules] and carries the largest penalty in the whole
-   78-weight evaluation (−12 by hand; the search pushed it to −13.2 / −17.6 /
-   −13.1). **[strong]**
-
-5. **Science first, culture later — the crossover is in Age II.** Champion
-   science-to-culture ratio by age (2p / 3p / 4p): Age I **0.96 / 1.94 / 0.85**,
-   Age II 0.79 / 0.63 / 0.46, Age III 0.82 / 0.56 / 0.32, Age IV 0.88 / 0.49 /
-   0.28. It falls monotonically at all three counts. Both learning climbs raised
-   "early culture rate" (+54% / +42%) and cut "late science rate" (−40% / −30%).
+2. **Take a leader early and put it in play by round 3–4.** Median round to
+   *take* one: 2 / 2 / 3. Median round to *play* one: 3 (2p), 5 (3p), 4 (4p).
+   The champions play a leader at all in 96.7% / 82.5% / 98.3% of games, and
+   have one in play on 70% / 42% / 54% of Age I turns. The "any leader in play"
+   weight rose at both counts that have a large army of accepted mutants
+   (+1.5 → +2.80 at 2p, +2.31 at 3p) but *fell* at 4p (+0.85), which is the
+   count with only six accepted mutants — treat the 4p direction as noise.
    **[strong]**
 
-6. **Do not hoard. Not science points, not cards.** The 3p search flipped the
-   sign on banked science points (+0.5 → −0.19): unspent science is dead weight.
-   Both learning climbs raised the value of cards in hand *early* and cut it
-   *late* (−78% / −50%). Hold cards in Ages A-I; cash them out from Age II on.
-   **[strong]**
+3. **Upgrade your production on round 2.** At 2p the champion's first farm/mine
+   upgrade lands on round 2 in **100% of games** (median and both quartiles are
+   round 2). At 4p the median is also round 2 (99.2% of games do it eventually,
+   mean round 3.5, upper quartile round 5). The first *urban* building upgrade
+   follows on round 3 at 2p and 4p (both quartiles round 3), round 5 at 3p.
+   3p is the exception on production and delays it badly — median round 8, and
+   in 39% of games it never upgrades production at all. See the per-count
+   section for why that is probably a flaw, not a plan. **[strong at 2p/4p]**
 
-7. **Stop buying rate in Age III.** Both climbs that moved cut the value of
-   late-game resource rate (−54% / −31%) and late-game science rate (−40% /
-   −30%). A farm or lab bought in Age III does not pay for itself before
-   scoring. Buy culture instead. **[strong]**
+4. **Build about three temples, and never let an uprising happen.** Temple
+   cards absorb **3.65 / 2.84 / 3.71** actions per game (researching, building
+   and upgrading combined), first one at median round 5 / 8 / 8. Temples are the
+   most-worked urban building at 2p and 3p; at 4p labs just edge them out
+   (4.71). An uprising cancels your entire production phase [rules] and carries
+   the largest penalty in the whole 78-weight evaluation: −12 by hand, and all
+   three climbs pushed it further down, to **−14.0 / −15.5 / −21.2**.
+   The reason you have probably never seen the champions suffer one is that
+   they pay for happiness in advance — measured cost of uprisings is only
+   **0.27 / 0.03 / 0.64 culture per player-game** (`leak_check.log`, 60 games
+   each). That is the number you get *after* buying the temples, not instead of
+   them. **[strong]**
+
+5. **Science first, culture later — and the switch happens once, at the Age I /
+   Age II boundary.** Champion science-rate-to-culture-rate ratio by age:
+
+   | science ÷ culture | Age I | Age II | Age III | Age IV |
+   |---|---|---|---|---|
+   | 2p | 0.79 | 0.78 | 0.92 | 0.87 |
+   | 3p | **1.67** | 0.63 | 0.60 | 0.58 |
+   | 4p | **1.53** | 0.90 | 0.94 | 0.86 |
+
+   It is *not* a smooth decline — it is one step down at the I → II boundary and
+   then flat (2p and 4p even drift back up in Age III). So the practical version
+   is: **out-science the table in Age I, then stop shifting and let the culture
+   engine you built run.** All three climbs cut the "late science rate" weight
+   (−3% / −40% / −66%), and the two counts that moved raised "early culture
+   rate" (+54% at 3p, +178% at 4p). Note 2p's Age I ratio is already below 1 —
+   at two players the champion is on culture from the start. **[strong for the
+   direction; [mixed] on the exact crossover round — 3p and 4p cross inside Age
+   II, 2p never has a science-heavy phase at all.]**
+
+6. **Do not hoard. Not science points, not cards.** This is one of only four
+   levers where **all three counts agree** (`analyze_weights.py` consensus
+   table). Banked science: hand-set +0.5, champions **+0.19 / −0.19 / −6.09** —
+   two of the three now consider a science pile actively *bad*. Cards in hand
+   late: hand-set −0.2, champions **−0.35 / −0.40 / −0.33**, all further
+   negative, while `hand_value_early` went *up*. Hold cards in Ages A–I; cash
+   them out from Age II on. The behaviour agrees: banked science at the end of
+   the game is 25.7 / 12.9 / 6.2, and the champion that banks least finishes
+   with the most technologies (16.4 at 4p against 12.9 at 2p). **[strong]**
+
+7. **Stop buying *science* rate in Age III. Be more careful about food.** All
+   three climbs cut the late-game science-rate weight (−2.5 → **−2.58 / −3.49 /
+   −4.14**): a lab bought in Age III does not pay for itself before scoring, so
+   buy culture instead. Late *resource* rate is the same story at 2p and 3p
+   (−0.4 → −0.50 / −0.62) but the 4p champion **flipped it positive (+0.49)** —
+   and 4p is precisely the champion that is starving to death (trap #2). A farm
+   bought in Age III that closes a food gap is not "rate", it is a penalty you
+   stop paying, and it is worth roughly 24 culture over the rest of the game.
+   Buy that farm. **[mixed — the science half is a 3-count consensus; the
+   resource half depends on whether you are food-negative.]** Note also that no
+   champion actually behaves this way: they keep buying in Age III at every
+   count, so this rule rests on the weights, not on the behaviour.
 
 8. **Military: nobody fights, but only the 2p champion is actually safe.**
    **Zero wars in 360 games** at all three counts, and aggressions are rare

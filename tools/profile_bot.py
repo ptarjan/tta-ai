@@ -77,6 +77,10 @@ def _short(key):
 
 
 def run_sample(kind, n, games, interval, top):
+    # Default 5 ms GIL switch interval starves the sampler: it can only take a
+    # sample when the main thread drops the GIL, so without this the effective
+    # rate is ~30/s no matter what --interval says.
+    sys.setswitchinterval(interval / 4)
     s = Sampler(threading.get_ident(), interval)
     t0 = time.process_time()
     s.start()
