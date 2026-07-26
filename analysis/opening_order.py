@@ -63,6 +63,8 @@ class Logger:
         self.first_develop = {}  # type -> round of first research (science paid)
         self.first_build = {}    # type -> round the first worker goes on one
         self.first_take = {}     # type -> round the card is first taken
+        self.took = {}           # card name -> round first taken (whole game)
+        self.played = {}         # card name -> round first built/developed
 
     def __call__(self, state):
         """engine.game.play_game calls bots as ``bot(state) -> move``."""
@@ -86,9 +88,13 @@ class Logger:
                 name = "?"
             typ = card_type(db, name)
             self.first_take.setdefault(typ, state.round)
+            if name and name != "?":
+                self.took.setdefault(name, state.round)
         elif kind in ("build", "upgrade", "develop"):
             name = mv[-1]
             typ = card_type(db, name)
+            if name:
+                self.played.setdefault(name, state.round)
             if kind == "develop":
                 self.first_develop.setdefault(typ, state.round)
             elif kind == "build":
@@ -97,6 +103,11 @@ class Logger:
                 self.first_prod = (typ, state.round, name, kind)
         if state.round > self.max_round:
             return
+        elif kind == "destroy":
+            name = mv[1] if len(mv) > 1 else ""
+            typ = card_type(db, name)
+            # a unit disband is a military action; a building razing is civil
+            kind = "disband" if db.is_unit_name.get(name) else "raze"
         elif kind in ("play_leader", "play_action", "revolution"):
             name = mv[1] if len(mv) > 1 else ""
             typ = card_type(db, name) if name else ""
@@ -161,6 +172,25 @@ def summarize(loggers, players):
                          else "    --   ")
         print(f"  {t:14s} {cells[0]:>18s} {cells[1]:>18s} {cells[2]:>18s}")
 
+    # per-card pickup rate, grouped by age and type: the raw material for a
+    # priority list. "took" = the card entered the player's hand/board at all.
+    from engine import cards as C
+    db = C.db()
+    by_group = collections.defaultdict(list)
+    for lg in loggers:
+        for nm in lg.took:
+            by_group[(card_age(db, nm), card_type(db, nm))].append(nm)
+    print("\nPICKUP RATE BY AGE AND TYPE "
+          "(share of games the card was taken at all; median round taken):")
+    for age in ("A", "I", "II", "III"):
+        for typ in sorted({t for (a, t) in by_group if a == age}):
+            names = collections.Counter(by_group[(age, typ)])
+            row = []
+            for nm, k in names.most_common():
+                rs = sorted(lg.took[nm] for lg in loggers if nm in lg.took)
+                row.append(f"{nm} {k/n:.0%}@r{rs[len(rs)//2]}")
+            print(f"  [{age}] {typ:14s} " + ", ".join(row))
+
     # what happens each round
     for rnd in range(1, 7):
         kinds = collections.Counter()
@@ -171,7 +201,8 @@ def summarize(loggers, players):
             for r, k, nm, t in ms:
                 if k in ("end_turn", "pol_pass", "choose"):
                     continue
-                kinds[k if k not in ("build", "upgrade", "develop", "take")
+                kinds[k if k not in ("build", "upgrade", "develop", "take",
+                                     "disband", "raze")
                       else f"{k}:{t}"] += 1
                 if nm:
                     names[f"{k}:{nm}"] += 1

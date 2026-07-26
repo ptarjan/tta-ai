@@ -13,6 +13,8 @@ culture leak we measured), then the opening cheat sheet for your player count.
    come from, how strong the AI is, what the confidence tags mean
 2. [If you remember nothing else](#if-you-remember-nothing-else) — eight rules
 3. [Opening: Age A and the first four rounds](#opening-age-a-and-the-first-four-rounds)
+   — including [**the build order, turn by turn**](#the-build-order-turn-by-turn)
+   and [mine or farm?](#mine-or-farm)
 4. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
 5. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
 6. [What changes with the player count](#what-changes-with-the-player-count)
@@ -298,6 +300,133 @@ on the starting player's *second* turn — so you get exactly one turn in it, wi
 cards from the row as your only legal action**. [rules, §1.9]
 
 Everything else in this section is Age I, rounds 2 through about 5.
+
+### The build order, turn by turn
+
+This is the concrete opening: what the AI takes and what it plays, in order,
+round by round. It comes from a fresh run that logs **every move the AI makes in
+rounds 1–6**, 60 self-play games each at 2 and 3 players
+(`analysis/opening_order.py`; raw output in `analysis/out_opening_2p.txt` and
+`out_opening_3p.txt`). Numbers in brackets are **how many times per game** the AI
+did that thing on that round, so "1.00" means every single game and "0.50" means
+half of them.
+
+Two health warnings before you copy it. First, **the two player counts genuinely
+open differently** — this is the largest split in the whole document, and it is
+not a rounding difference. Second, the AI is blind to the political and military
+half of the game (caveat 3), so nothing below tells you when to attack, and the
+"disband your Warriors" line in particular is a move you should think twice about
+at a human table.
+
+#### 2 players
+
+> **R1** action card → **R2** second mine + leader + disband Warriors →
+> **R3** first temple → **R4** second temple + population →
+> **R5** first lab + population → **R6** population + wonder stage
+
+| Round | What it does | How often |
+|---|---|---|
+| **1** | Take an **action card** — most often `Urban Growth (A)` (27% of games), `Frugality (A)` (20%) or `Rich Land (A)` (17%) | 0.92 |
+| | Take a **leader** if you have a second action | 0.52 |
+| **2** | **Put a worker on Bronze — a second mine** | **1.00** |
+| | **Disband the starting Warriors** (1 military action, worker goes back to your pool) | **1.00** |
+| | **Play your leader** | 0.78 |
+| | Take another action card | 0.83 |
+| **3** | **Put a worker on Religion — your first temple** | **1.00** |
+| | Increase population | 0.57 |
+| | Prepare an event (political action, costs no civil action) | 0.50 |
+| | Take a card | 0.48 |
+| **4** | Population | 0.63 |
+| | Prepare an event | 0.58 |
+| | **Second temple** | 0.55 |
+| | Revolution — usually to Theocracy | 0.17 |
+| **5** | Population | 0.62 |
+| | **Put a worker on Philosophy — your first lab** | 0.28 |
+| | Third temple | 0.25 |
+| | Prepare an event / play or copy a tactic | 0.55 / 0.75 |
+| **6** | Population | 0.60 |
+| | Copy a tactic | 0.52 |
+| | **First wonder stage** | 0.28 |
+
+The single most common complete round-2 turn, played move for move in 23% of
+games, is: **build the mine → play the leader → take a card → disband the
+Warriors.**
+
+#### 3 players
+
+> **R1** one card only → **R2** population + second **farm** + disband Warriors →
+> **R3** another farm + rebuild Warriors → **R4** farm / first temple / infantry →
+> **R5–6** population + tactics + more infantry
+
+| Round | What it does | How often |
+|---|---|---|
+| **1** | Take **exactly one card** — an action card (0.60) or a leader (0.40). 100% of games take one card and stop | 1.00 |
+| **2** | **Increase population** | **1.00** |
+| | **Put a worker on Agriculture — a second farm** | **0.97** |
+| | **Disband the starting Warriors** | 0.83 |
+| | Take an action card | 0.48 |
+| **3** | **Another farm worker** | 0.47 |
+| | **Build Warriors again** (yes, really — see below) | 0.37 |
+| | Take an action card | 0.52 |
+| | First temple | 0.17 |
+| **4** | Farm | 0.42 |
+| | **First temple** | 0.28 |
+| | Infantry | 0.27 |
+| | Take a government card, usually Monarchy | 0.15 |
+| **5** | Population | 0.58 |
+| | Copy a tactic | 0.50 |
+| | Infantry | 0.25 |
+| | Revolution to Monarchy | 0.13 |
+| **6** | Population | 0.80 |
+| | Copy a tactic | 0.62 |
+| | Infantry | 0.28 |
+
+The most common complete round-2 turn at 3 players — **63% of games, move for
+move** — is: **build the farm → increase population → take a card → disband the
+Warriors.** That is a much more uniform opening than 2 players manages.
+
+The round-3 "disband the Warriors then build Warriors again" looks mad and
+partly is: it is the AI reclaiming a worker on round 2 to get its economy going
+and then paying to put a unit back once it has the food. Do not copy the churn;
+copy the priority, which is **economy first, army from round 3**.
+
+#### 4 players
+
+The fine-grained run for 4 players had not finished when this was written (the
+machine was busy training), so this is the coarser version, taken from the
+120-game observation set rather than from a move-by-move log:
+
+> **R1** take a wonder → **R2** production + population + disband →
+> **R3** first urban building → **R4** play a leader → **R5** start the wonder
+
+Median rounds, with the share of games in which it happens at all: take a wonder
+**round 1 (100% of games)**, first production upgrade **round 2 (99%)**, first
+urban upgrade **round 3 (100%)**, take a leader **round 3 (98%)**, leader in play
+**round 4 (98%)**, first wonder stage paid **round 5 (96%)**.
+
+#### Mine or farm?
+
+The reader asked this directly, and the answer is clean, different at each count,
+and one of the most reliable numbers in this document:
+
+| | round-2 production build | how often |
+|---|---|---|
+| **2 players** | **a mine** — a second worker on Bronze | **100% of 60 games** |
+| **3 players** | **a farm** — a second worker on Agriculture | **97% of 60 games** |
+| 4 players | production goes up on round 2 in 99% of games, but the fine-grained farm/mine split was not measured in time | — |
+
+So: **at two players, mine. At three players, farm.** The reasoning that fits
+the rest of the data (this is our reading, not a measurement): the 2-player AI
+disbands its Warriors and goes straight for resources, because resources are what
+buy buildings and it has a cheap, fast-churning card row to buy from. The
+3-player AI grows population on round 2 in *every* game, and population eats
+food, so it has to farm first. If you are unsure at 4 players, note that the
+4-player AI is the one starving to death (trap #2) — err towards the farm.
+
+Over the whole game the emphasis flips back: the 2-player AI ends up doing the
+most work on **mines** (4.28 build-or-upgrade actions per game) and the 4-player
+AI likewise (5.38), while the 3-player AI does almost none (0.41) because it
+spends everything on infantry.
 
 ### Round 1: take a card. That is the whole turn.
 
@@ -587,7 +716,11 @@ wrong place".
 
 ### Build order inside the urban buildings
 
-Median round of the first build of each type, per game:
+The **middle** round of all the building work you do on each type — half your
+temple work happens before this round, half after — with the number of civil
+actions each type absorbs over a whole game in brackets. (This is *not* the round
+you build your first one; that is much earlier and is covered in the [build
+order](#the-build-order-turn-by-turn).)
 
 | | 2p | 3p | 4p |
 |---|---|---|---|

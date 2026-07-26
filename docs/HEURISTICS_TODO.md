@@ -33,7 +33,16 @@ Plus four questions:
   self-play is "across N self-play games". Also added an explicit **round
   numbering** note at the top (round 1 = the Age A turn; there is no round 0 —
   `engine/state.py:110`, `engine/game.py:75`), which answers reader question 2.
-- **Units 2–5: TODO.**
+- **Unit 2 (build order): DONE.** New section "The build order, turn by turn" in
+  the Opening chapter, with move-by-move tables for 2p and 3p (60 self-play games
+  each, from the now-working `analysis/opening_order.py`; raw output committed as
+  `analysis/out_opening_{2,3}p.txt`). 4p is the coarse version only — the
+  fine-grained run was still starved by the live training load. **If you pick
+  this up: re-run `python3 analysis/opening_order.py --players 4 --games 60
+  --champion /tmp/ch4.json` and replace the 4p subsection with a real table.**
+  Answers reader question 3 (mine or farm): **2p mines on round 2 in 100% of
+  games, 3p farms on round 2 in 97%.**
+- **Units 3–5: TODO.**
 
 ## Notes for the next person
 
