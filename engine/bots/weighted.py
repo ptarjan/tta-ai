@@ -61,6 +61,40 @@ PHASE_KEYS = (
 # --------------------------------------------------------------- features
 
 
+# A pact you have OFFERED is not a pact: the partner may refuse.  Credit it
+# at this fraction of a live pact (docs/PACTS_DIAGNOSIS.md fix #2) -- without
+# it a 1-ply search sees only the card leaving your hand, so `offer_pact` is
+# strictly dominated by `pol_pass` in every position and can never be picked.
+PACT_OFFER_CREDIT = 0.5
+
+
+def pending_credit(state, idx):
+    """Deferred payoffs the 1-ply trial state cannot show yet.
+
+    Returns ``(pact_offers, auction_committed)``:
+
+    * ``pact_offers`` -- pacts `idx` has offered whose accept/refuse is still
+      pending, already discounted by :data:`PACT_OFFER_CREDIT`.
+    * ``auction_committed`` -- 1/(1+rivals still bidding) when `idx` holds the
+      high bid of a live colonization auction, i.e. the share of a colony the
+      bid has bought.  Bidding while others are active mutates only the
+      auction dict, so without this every bid scores EXACTLY equal to
+      ``bid_pass`` and the strict-`>` tie-break always takes the pass.
+    """
+    offers = 0.0
+    auction = 0.0
+    for pend in state.pending:
+        kind = pend.get("kind")
+        if kind == "choice":
+            if (pend.get("tag") == "pact_offer"
+                    and (pend.get("ctx") or {}).get("owner") == idx):
+                offers += PACT_OFFER_CREDIT
+        elif kind == "auction" and pend.get("high") == idx:
+            rivals = sum(1 for i in pend.get("active", ()) if i != idx)
+            auction = 1.0 / (1.0 + rivals)
+    return offers, auction
+
+
 def rival_context(state, idx):
     """Rival aggregates that only change when *they* move.
 
@@ -143,6 +177,17 @@ def features(state, idx, ctx=None):
         ctx = rival_context(state, idx)
     rel = s.strength - ctx["rival_strength"]
 
+    # pacts live in the OWNER's area but bind both parties (§5.9), so count
+    # every pact idx is a party to, not just the ones sitting in front of it
+    pacts = 0
+    for q in state.players:
+        for pact in q.pacts:
+            if idx in (pact["owner"], pact["partner"]):
+                pacts += 1
+    pact_offers = auction_committed = 0.0
+    if state.pending:
+        pact_offers, auction_committed = pending_credit(state, idx)
+
     return {
         # --- economy
         "culture": p.culture,
@@ -179,7 +224,8 @@ def features(state, idx, ctx=None):
         "strength_lead": min(6, max(0, rel)),
         "tactic_level": meta.get(p.tactic, ("?", 0))[1] if p.tactic else 0,
         "colonies": len(getattr(p, "colonies", ()) or ()),
-        "pacts": len(getattr(p, "pacts", ()) or ()),
+        "pacts": pacts + pact_offers,
+        "auction_committed": auction_committed,
         # --- technology
         "tech_levels": tech_levels,
         "gov_level": meta.get(p.government, ("?", 0))[1],
@@ -251,6 +297,9 @@ BASE_WEIGHTS = {
     "tactic_level": 0.5,
     "colonies": 2.0,
     "pacts": 0.5,
+    # holding the high bid of a live auction: the expected colony, discounted
+    # by the rivals who can still outbid you
+    "auction_committed": 2.0,
     # technology
     "tech_levels": 1.0,
     "gov_level": 2.0,
