@@ -36,13 +36,20 @@ so the comparisons are paired on identical deals. Null hypothesis is 1/N.
 |---|---|---|---|---|---|---|---|
 | **BookBot vs champion_2p** | 2 | 400 | **62.9%** | ±4.7% | 50.0% | <0.0001 | 155 vs 124 |
 | **BookBot vs champion_3p** | 3 | 300 | **42.2%** | ±5.6% | 33.3% | 0.0019 | 124 vs 112 |
+| **BookBot vs champion_4p** | 4 | 300 | **64.3%** | ±5.4% | 25.0% | <0.0001 | 196 vs 112 |
 | GreedyBot vs champion_2p | 2 | 400 | 8.2% | ±2.7% | 50.0% | <0.0001 | 61 vs 156 |
 | BookBot vs GreedyBot | 2 | 400 | 96.4% | ±1.8% | 50.0% | <0.0001 | 176 vs 51 |
 
-BookBot beats the champion at both player counts measured so far, and the
-margin is well outside the confidence interval in each case. At 2p it wins
-nearly two games in three; at 3p it takes 42.2% of a table where 33.3% is par,
-which is a 27% relative edge over its two opponents.
+BookBot beats the champion at **every** player count, and the margin is well
+outside the confidence interval in each case. At 2p it wins nearly two games
+in three. At 3p it takes 42.2% of a table where 33.3% is par. At 4p it takes
+64.3% where par is 25% — **two and a half times its share**, with a mean
+culture of 196 against 112. The champion is at its worst with a full table.
+
+*4p caveat:* in our champion's 4p games no territory is ever auctioned, so the
+colony layer is effectively absent at 4p. The 4p number therefore measures a
+game with one of its subsystems missing, and BookBot's colony rules are
+untested there.
 
 The GreedyBot rows are the control, and they matter as much as the headline.
 GreedyBot is the baseline our champion was trained against, and the champion
@@ -156,6 +163,80 @@ that the champion loses to a plain rule list, that document should be read as
 any advice in it that amounts to taking culture early at the expense of growth,
 actions or spent science is advice to play the losing side of the matchup
 measured here.
+
+## Measured against two hard tournament numbers
+
+`docs/EXPERT_STRATEGY.md` summarises a study of 39 games across 3 International
+Championships and 3 Intermezzo seasons, scoring cards by the civil actions
+strong humans actually spent on them
+([BGG 2494200](https://boardgamegeek.com/thread/2494200)). Two of its numbers
+are cheap to check against our bot. `experiments/pickstats.py` does it
+(champion, 2p, 30 games, 1176 picks).
+
+### 1. What we pay for cards — mostly fine, mildly overpriced at the deep end
+
+The row charges 1 CA for slots 1–5, 2 CA for slots 6–9 and 3 CA for 10–13.
+
+| age in the row | picks | 1 CA | 2 CA | 3 CA |
+|---|---|---|---|---|
+| A | 89 | 100.0% | 0.0% | 0.0% |
+| **I** | 459 | **82.4%** | 11.8% | **5.2%** |
+| II | 325 | 97.8% | 1.8% | 0.3% |
+| III | 303 | 96.7% | 3.0% | 0.3% |
+| *tournament, Age I* | *39 games* | *76.0%* | — | *2.5%* |
+
+**This one largely exonerates the bot, and that is worth saying plainly.** The
+champion is if anything *more* 1-CA-disciplined than tournament players in Age
+I (82.4% vs 76%). Its only real deviation is the deep end: it pays 3 CA on
+5.2% of Age I picks, about **2.1× the tournament rate**. So habitual
+overpaying is *not* the explanation for the civil-action deficit found above.
+It is a small leak, not the hole.
+
+The number that does look off is volume: the champion makes **20.2 picks per
+player per game**, i.e. it spends 20+ civil actions a game on drafting alone.
+The tournament source gives no directly comparable figure, so this is flagged
+as suspicious rather than proven.
+
+### 2. Theology — a card strong players never touch, and we take it half the time
+
+Theology was **selected exactly 0 times in 39 tournament games**: happiness
+cards and Bread and Circuses solve the same problem more cheaply, and the Age
+I temple frees only a single worker where its Age II equivalent frees two.
+
+| bot | Theology picks per game |
+|---|---|
+| tournament humans | **0.00** (0 in 39 games) |
+| our champion | **0.47** (14 in 30 games) |
+| BookBot v1 | 0.67 |
+| BookBot v2 | **0.00** |
+
+Our champion takes it in roughly half its games. Note that **BookBot v1 was
+worse**, which is a useful check that this measurement is not just
+score-settling — the hand-written bot had the same hole until the tournament
+data was applied in v2.
+
+A third finding fell out of the same run: the champion takes **Frugality (I)
+in 29 of 30 games**, and the expert consensus is that the Frugality/Stock
+Pile/Patriotism/Cultural Heritage family should essentially never be taken,
+because each costs a *second* civil action to realise. That is a direct,
+codable correction.
+
+## Does patching the champion locally fix it? No.
+
+`BookImprovedBot` is the champion's evaluator overruled by the book in exactly
+the move kinds the diff above implicates — `develop`, `pop`, `wonder_step`,
+`revolution`.
+
+| matchup | players | n | win rate | 95% CI | p |
+|---|---|---|---|---|---|
+| BookImprovedBot vs champion_2p | 2 | 300 | 50.8% | ±5.7% | 0.77 |
+
+**No improvement whatsoever** (p=0.77). This is the most informative negative
+result of the exercise. The champion's weakness is not four local bad habits
+that can be patched out; the whole plan is wrong. Forcing it to spend science
+and grow population at the right moments does not help when the rest of its
+play is still optimising for near-term culture. Whatever is wrong is in the
+shape of the evaluator, not in a handful of decisions.
 
 ## What BookBot actually plays, and where each rule came from
 

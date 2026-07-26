@@ -41,6 +41,9 @@ def make_bot(spec, seed):
     if spec == "book":
         from engine.bots.book import BookBot
         return BookBot(seed=seed)
+    if spec == "book2":
+        from engine.bots.book import BookBot
+        return BookBot(seed=seed, version=2)
     if isinstance(spec, tuple) and spec and spec[0] == "book-improved":
         # ("book-improved", weights): the champion, overruled by the book in
         # the specific move kinds the strength check says it gets wrong.
@@ -53,8 +56,8 @@ arena.make_bot = make_bot
 
 
 def load_spec(spec):
-    if spec == "book":
-        return "book"
+    if spec in ("book", "book2"):
+        return spec
     if isinstance(spec, str) and spec.startswith("book-improved:"):
         return ("book-improved", arena.load_spec(spec.split(":", 1)[1]))
     return arena.load_spec(spec)
@@ -114,6 +117,9 @@ def main(argv=None):
             # step 5 ablation: does champion + book overrides beat both?
             "hybrid_vs_champ": ("book-improved:" + champ, champ, f"hybrid@{n}p"),
             "hybrid_vs_book": ("book-improved:" + champ, "book", f"hybrid@{n}p"),
+            # v2 = the empirical tournament tier list
+            "book2_vs_champ": ("book2", champ, f"book2@{n}p"),
+            "book2_vs_book": ("book2", "book", f"book2@{n}p"),
         }
         for key in want:
             a, b, label = table[key]
