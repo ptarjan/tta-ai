@@ -29,9 +29,14 @@ explained in `docs/EXTERNAL_AIS.md` §5c.
 
 **The Card Reference PDF has no text layer.** All 4 pages are single RGB images
 (1141×904 etc. at 118–144 ppi) with one embedded font used for nothing extractable —
-`pdftotext` yields **zero bytes**. It is a screenshot of a spreadsheet, so it is only
-readable by eye/OCR, and it carries no information the `.xls` does not already carry in
-machine-readable form. It was therefore **not** used for the numeric cross-check below.
+`pdftotext` yields 4 bytes (form feeds only). It is a screenshot of a spreadsheet, so it
+is readable only by eye/OCR (`pdftoppm -r 200 -png`, then read the images).
+
+An earlier revision of this file guessed that it therefore "carries no information the
+`.xls` does not already carry" and skipped it. **That guess was wrong and it mattered.**
+Page 1 carries its own `2p 3p 4p` copy-count columns — a *fourth* independent count
+opinion, by a different author from the `.xls` — and where the two BGG files disagree,
+this one sides with us. See Conflict B below.
 
 ### Independence caveat (unchanged, and it matters for the verdict)
 154670's uploader states *"Card data retrieved from **BGO v 2.5**, which I believe to be
@@ -76,7 +81,29 @@ czechgames.com's own component list says **179 civil cards** (and 150 military),
 numbers hit exactly and BGG's miss by exactly those 6 action cards. BGG's own sheet even
 prints "Total Cards: 353" beside these tables, which is not 185 + 150 either.
 
-**Conflict B — three cards marked "3+" by BGG where we mark them "4".** This does not
+**Conflict B — three cards marked "3+" by BGG 409053 where we mark them "4". The OTHER
+BGG file settles it in our favour.** Page 1 of the Card Reference PDF (154670) tabulates
+54 civil technologies, governments and special techs with explicit `2p 3p 4p` columns.
+Transcribed by eye and diffed against `data/cards_civil.json`, **all 54 rows agree with
+us**, including the three cards in dispute:
+
+| Card | ours | BGG **154670** (PDF) | BGG 409053 (xls) |
+|---|---|---|---|
+| Republic (II) | 1 / 1 / 2 | **1 / 1 / 2** ✔ | 1 / 2 / 2 ✘ |
+| Professional Sports (III) | 1 / 1 / 2 | **1 / 1 / 2** ✔ | 1 / 2 / 2 ✘ |
+| Air Forces (III) | 2 / 2 / 3 | **2 / 2 / 3** ✔ | 2 / 3 / 3 ✘ |
+
+(The only rows that "differ" are the six Age A starting cards — Agriculture, Bronze,
+Philosophy, Religion, Warriors, Despotism — where the PDF prints 2/3/4, i.e. one per
+player, and we store 0 because they are dealt at setup and never sit in a deck. That is a
+convention difference, not a data conflict.)
+
+So the "third opinion" was never one opinion: **the two BGG files are two opinions and
+they split, 154670 with us and 409053 against us.** 409053 is also the one with no
+provenance statement at all. Independently of that, the structural argument below already
+condemned 409053's 3-player column:
+
+This does not
 change the 4-player deck at all; it only changes what a 3-player game removes. Here the
 decisive evidence is that the marks come in a fixed pattern. The rulebook's setup says to
 remove *the 6 cards marked "3+" and the 3 cards marked "4"* from each of the Age I/II/III
