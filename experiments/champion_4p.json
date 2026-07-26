@@ -1,8 +1,8 @@
 {
- "gen": 105,
+ "gen": 106,
  "players": 4,
- "sigma": 0.36124999999999996,
- "since_accept": 2,
+ "sigma": 0.30706249999999996,
+ "since_accept": 3,
  "weights": {
   "best_arena": 0.14061,
   "best_farm": -0.43103,

@@ -446,6 +446,16 @@ whatever calendar time they can stand. That is affordable exactly once, for one 
 verdict — which is why the recommendation is 10–15 games and then stop, not an ongoing
 programme.
 
+**One systematic bias worth stating loudly: pacts.** §1 records that CGE's AI players
+never offer a pact and refuse every pact offered. Our engine *does* implement the full
+pact subsystem (`offer_pact` / `cancel_pact` in `engine/actions.py`, §5.9–5.10, disabled
+at 2 players). So in every app-AI game the entire pact branch of our bot's policy is
+dead weight: it can never be exercised, never rewarded, never punished. That means the
+human-in-the-loop number is an evaluation of our bot **on a strictly smaller game than
+the one we are training on**, and any pact-related weight has to be validated by
+self-play only. It is not a reason to skip the exercise, but do not quietly forget it
+when reporting the result.
+
 Failure modes to price in honestly: the first games will desync and be discarded; the
 app's DLC/difficulty settings must be checked every single game or the log is
 mislabelled; and any human who starts "helping" the bot in strict mode has silently
