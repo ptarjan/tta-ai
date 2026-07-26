@@ -102,7 +102,26 @@ class SeatLogger:
         self.log.append([state.round, kind, name, typ, row])
 
 
-def run(players, games, champ_path, seed0=51000, opp_path=None):
+def _play_until_round(bots, players, seed, stop_after=1):
+    """Same loop as engine.game.play_game, but abandoned once round 1 is over.
+
+    Round 1 is all this audit needs and a full game is ~200 moves, so this is
+    roughly a 20x saving. Identical setup and RNG derivation to play_game, so
+    the games are the same games up to the point we stop.
+    """
+    import random
+    from engine import game
+    state = game.new_game(players, seed)
+    rng = random.Random(seed ^ 0x5EED)
+    moves = 0
+    while not state.game_over and state.round <= stop_after and moves < 5000:
+        mv = bots[state.decider()](state)
+        game.apply(state, mv, rng)
+        moves += 1
+    return state
+
+
+def run(players, games, champ_path, seed0=51000, opp_path=None, full=False):
     """Every seat plays `champ_path` unless --opponent is given (mirror by
     default, which is exactly how the hill climb evaluates)."""
     from engine import game
@@ -120,7 +139,10 @@ def run(players, games, champ_path, seed0=51000, opp_path=None):
             logs.append(lg)
             bots.append(lg)
         try:
-            game.play_game(bots, players, seed=seed, move_cap=100000)
+            if full:
+                game.play_game(bots, players, seed=seed, move_cap=100000)
+            else:
+                _play_until_round(bots, players, seed)
         except Exception as e:
             print("game error", seed, repr(e), file=sys.stderr)
             continue
@@ -189,8 +211,10 @@ def main():
     ap.add_argument("--seed0", type=int, default=51000)
     ap.add_argument("--label", default=None)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--full", action="store_true",
+                    help="play whole games instead of stopping after round 1")
     a = ap.parse_args()
-    rows = run(a.players, a.games, a.champion, a.seed0, a.opponent)
+    rows = run(a.players, a.games, a.champion, a.seed0, a.opponent, a.full)
     tbl = by_seat_table(rows, a.players)
     label = a.label or f"{a.players}p  champion={os.path.basename(a.champion)}"
     print_table(tbl, label)

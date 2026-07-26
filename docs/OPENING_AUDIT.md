@@ -82,11 +82,126 @@ in Age A), so the 4p champion is not simply seeing more wonders.
 and reports round 1 per seat: cards taken, the type of the first card, and
 whether a wonder was taken at all. Results below.
 
-_(table pending — runs in flight)_
+Mirror self-play (every seat runs the champion, exactly how the hill climb
+evaluates), 400 games per count, so 400 observations per seat. `wonder1st` is the
+share of games where the **first** card taken in round 1 is a wonder.
+
+| count | seat | CA | cards taken R1 | wonder 1st | action 1st | leader 1st | any wonder in R1 |
+|---|---|---|---|---|---|---|---|
+| **2p** | 0 | 1 | 1.00 | **0%** | 64% | 36% | 0% |
+| | 1 | 2 | 2.00 | **0%** | 62% | 38% | 9% |
+| | *pooled* | – | 1.50 | *0%* | *63%* | *37%* | *4%* |
+| **3p** | 0 | 1 | 1.00 | **0%** | 64% | 36% | 0% |
+| | 1 | 2 | 1.00 | **0%** | 60% | 40% | 0% |
+| | 2 | 3 | 1.00 | **0%** | 64% | 36% | 0% |
+| | *pooled* | – | 1.00 | *0%* | *63%* | *37%* | *0%* |
+| **4p** | 0 | 1 | 1.00 | **74%** | 18% | 8% | 74% |
+| | 1 | 2 | 1.52 | **77%** | 16% | 7% | 77% |
+| | 2 | 3 | 1.56 | **80%** | 12% | 8% | 80% |
+| | 3 | 4 | 2.51 | **26%** | 40% | 34% | 26% |
+| | *pooled* | – | 1.65 | *64%* | *21%* | *14%* | *64%* |
+
+Read seat-for-seat: **2p seat 0 takes a wonder first 0% of the time, 4p seat 0
+takes one 74% of the time.** The difference survives the correct comparison, so
+it is *not* explained by seat mixing. Seat mixing is still a real flaw in how the
+number is reported, but here it works the *other* way — pooling drags the 4p
+figure **down** (64%) from the 74–80% that seats 0–2 actually show, because seat
+3 finds the wonders already gone (its own mirror-image opponents took them).
+
+Also worth noting: nobody spends all their civil actions in round 1. Seat 3 at 4p
+has 4 CA and takes 2.51 cards; the 3p champion takes exactly 1.00 card at every
+seat and simply throws the rest away. (That belongs to the wasted-actions audit,
+not this one, but it is visible here.)
 
 ---
 
-## 5. Is the hill climb working at all? (preliminary)
+## 3. The 4p confounds do not explain it — the round-1 board is identical
+
+The rules argument in HEURISTICS.md is that at 4p the row sweeps only 1 card per
+turn (`engine/game.py:40  SWEEP = {2: 3, 3: 2, 4: 1}`) so cheap Age A wonders
+survive longer, and that more rivals means more competition per card.
+
+**Neither can act on round 1.** The first sweep happens on the start player's
+*second* turn — it is the event that ends Age A (`_replenish`, §1.10). On round 1
+no sweep has occurred yet, and the Age A deck is count-invariant, so for the same
+seed **seat 0 faces a bit-identical 13-card row at 2p, 3p and 4p**.
+
+The control proves it. Untrained `default` weights, same seeds, mirror play:
+
+| count | seat 0: wonder 1st | action 1st | leader 1st |
+|---|---|---|---|
+| 2p | 0% | 64% | 36% |
+| 3p | 0% | 64% | 36% |
+| 4p | 0% | 64% | 36% |
+
+Identical to the decimal at all three counts, exactly as it must be if the board
+is the same. Player count has **no** effect on the round-1 decision of a fixed
+weight vector.
+
+### Cross-play: the opening follows the weights, not the player count
+
+400 games each, mirror, seat 0 (the only seat with no interference from earlier
+takers):
+
+| weight vector | played at 2p | played at 3p | played at 4p |
+|---|---|---|---|
+| `champion_2p` | **0%** | 0% | 0% |
+| `champion_3p` | 0% | **0%** | 0% |
+| `champion_4p` | 74% | 77% | **74%** |
+| `default` | 0% | 0% | 0% |
+
+(share of games where seat 0's first round-1 card is a wonder)
+
+The 4p weight vector opens wonder-first *at two players* just as strongly as it
+does at four. The 2p vector never opens wonder-first *at four players*. So the
+reported difference is a property of **that particular weight vector**, and
+nothing about playing against three opponents caused it or could have caused it.
+The rules rationale printed in HEURISTICS.md — sweep speed, cost bands,
+competition — is post-hoc: those mechanisms are all inert on round 1.
+
+---
+
+## 4. Training maturity: it was decided at generation 5 and frozen
+
+Reconstructing the 4p champion after every accepted mutation (replaying the
+`moved` deltas in `experiments/generations_4p.jsonl` onto `DEFAULT_WEIGHTS`;
+reconstruction matches the live `champion_4p.json` to ~1e-4), then measuring
+seat-0 round 1 over 300 games each:
+
+| 4p champion as of gen | 1 | 5 | 51 | 63 | 79 | 103 | 124 | 130 |
+|---|---|---|---|---|---|---|---|---|
+| wonder-first (seat 0) | **0%** | **77%** | 77% | 77% | 77% | 77% | 77% | 77% |
+
+The opening flips at **generation 5 of 138** and then never moves again — not by
+one game in 300, across 125 further generations and six more accepted mutations.
+
+The cause is a single weight. `wonder_remaining` (default **−0.3**, i.e. unbuilt
+wonder stages are a *penalty*) was flipped to **+0.319** by the gen-5 mutation,
+which moved **19 weights at once** and was accepted on a 48-game win rate of
+0.424 (null 0.25). `wonder_remaining` was a hitchhiker in that scatter — it was
+never independently tested, and the search has never revisited it. The later
+`kick` at gen 79 pushed `wonder_progress` 1.0 → 4.60 and `hand_civil`
+0.3 → −0.68, but the seat-0 opening rate did not budge (77% before and after):
+the decision was already saturated.
+
+Confirmation: taking the current 4p champion and reverting **only**
+`wonder_remaining` to its default −0.3 removes the behaviour completely.
+
+| 4p seat 0 | wonder 1st | action 1st | leader 1st |
+|---|---|---|---|
+| `champion_4p` | 74% | 18% | 8% |
+| `champion_4p` with `wonder_remaining = −0.3` | **0%** | 62% | 38% |
+
+One sign flip on one weight, taken as a passenger in one early mutation, is the
+entire "4p opens with a wonder" finding.
+
+So the opening is **stable** — but stable because it is frozen, not because it
+was converged on. Stability here is evidence of *no further search*, not of
+optimality. Whether it is actually good is a separate question (below).
+
+---
+
+## 5. Is the hill climb working at all?
 
 From `experiments/baselines.jsonl` (champion vs the untrained `default` weight
 vector, challenger rotated through every seat, null = 1/players):
