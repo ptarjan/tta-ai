@@ -203,19 +203,39 @@ optimality. Whether it is actually good is a separate question (below).
 
 ## 5. Is the hill climb working at all?
 
-From `experiments/baselines.jsonl` (champion vs the untrained `default` weight
-vector, challenger rotated through every seat, null = 1/players):
+**Yes — clearly, at all three counts.** Re-measured today against the current
+champions (`experiments/evaluate.py`, 96 games, challenger rotated through every
+seat, null = 1/players, ± is the 95% CI):
 
-| count | champion vs `default` | null | verdict |
-|---|---|---|---|
-| 2p | 0.448 ± 0.099 | 0.50 | **not better than untrained** |
-| 3p | 0.604 ± 0.097 | 0.333 | clearly better |
-| 4p | 0.349 ± 0.095 | 0.25 | marginally better (CI low ≈ 0.254) |
+| count | champion vs `default` | null | champion vs `greedy` | mean culture (champ vs default) |
+|---|---|---|---|---|
+| 2p | **0.682 ± 0.093** | 0.50 | 0.917 ± 0.056 | 134.6 vs 102.1 |
+| 3p | **0.771 ± 0.085** | 0.333 | 0.891 ± 0.062 | 163.1 vs 108.3 |
+| 4p | **0.792 ± 0.082** | 0.25 | 0.958 ± 0.040 | 262.7 vs 130.7 |
 
-Being re-measured fresh here. Acceptance history from the generation logs:
+The 4p champion wins **79%** of games against the untrained weight vector at a
+table where chance is 25% — better than 3x the null, and the largest margin of
+the three counts. On culture it doubles the default bot. **Hill climbing is
+working, and it is working best at 4p.**
 
-| count | gens | accepted | last accept |
-|---|---|---|---|
-| 2p | 218 | 20 (9%) | gen 213 |
-| 3p | 158 | 12 (8%) | gen 149 |
-| 4p | 138 | 8 (6%) | gen 130 |
+⚠️ **`experiments/baselines.jsonl` is stale and badly misleading.** Its most
+recent entries say 2p champ vs default 0.448 (null 0.50 → "worse than
+untrained") and 4p champ vs default 0.349 (null 0.25 → "barely better"). Both
+are wrong *now*: the file records results for champions as they were at the time
+each line was appended, has no timestamp field, and has not been refreshed while
+training continued. Anyone reading that file today would conclude the hill climb
+is broken. It is not. Do not quote `baselines.jsonl` without re-running.
+
+Acceptance history from the generation logs (all three still accepting, none has
+flatlined):
+
+| count | gens | accepted | last accept | wall clock |
+|---|---|---|---|---|
+| 2p | 218 | 20 (9%) | gen 213 of 218 | 5.4 h |
+| 3p | 158 | 12 (8%) | gen 149 of 158 | 5.3 h |
+| 4p | 138 | 8 (6%) | gen 130 of 138 | 5.3 h |
+
+The 4p run is *not* obviously undertrained relative to the others — it has had
+the same wall-clock time and its absolute strength versus the baseline is the
+best of the three. What is thin at 4p is the **number of accepted steps**: 8
+accepted mutations, of which the wonder decision was #2.
