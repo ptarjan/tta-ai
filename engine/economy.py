@@ -8,6 +8,7 @@ import random as _random
 
 from . import cards as C
 from . import effects
+from . import journal
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -111,7 +112,7 @@ def end_of_turn(state, p, rng):
     # 1. discard excess military cards (down to the military action total)
     limit = s.military_actions + s.military_hand_limit
     while len(p.hand_military) > limit:
-        name = p.hand_military.pop(0)
+        name = journal.touch(p.hand_military).pop(0)
         discard_military(state, name)
 
     # 2. uprising check
@@ -150,7 +151,7 @@ def end_of_turn(state, p, rng):
             card = draw_military(state)
             if card is None:
                 break
-            p.hand_military.append(card)
+            journal.touch(p.hand_military).append(card)
 
     # 5. reset actions
     effects.invalidate(state, p)
@@ -182,7 +183,8 @@ def _end_of_turn_leader_bonus(state, p):
 
 def discard_military(state, name):
     age = _DB.age_of(name) if name in _DB.by_name else state.age_military
-    state.discarded_military.setdefault(age, []).append(name)
+    journal.touch(journal.touch(state.discarded_military)
+                  .setdefault(age, [])).append(name)
 
 
 def draw_military(state):
@@ -191,9 +193,9 @@ def draw_military(state):
         if not pile:
             return None
         state.military_deck = list(pile)
-        state.discarded_military[state.age_military] = []
+        journal.touch(state.discarded_military)[state.age_military] = []
         _rng(state).shuffle(state.military_deck)
-    return state.military_deck.pop()
+    return journal.touch(state.military_deck).pop()
 
 
 def _rng(state):
