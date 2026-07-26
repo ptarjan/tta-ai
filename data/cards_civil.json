@@ -97,7 +97,8 @@
    "production": {
     "resources": 2
    },
-   "text": "Age I mine technology."
+   "text": "Age I mine technology.",
+   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
   },
   {
    "name": "Coal",
@@ -163,7 +164,8 @@
     "science": 2
    },
    "urbanLimitCategory": "lab",
-   "text": "Age I lab."
+   "text": "Age I lab.",
+   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
   },
   {
    "name": "Scientific Method",
@@ -441,7 +443,8 @@
    "techCost": 4,
    "buildCost": 3,
    "strength": 2,
-   "text": "Age I infantry. (Tech cost 3 in 2006; 4 in base 2015.)"
+   "text": "Age I infantry. (Tech cost 3 in 2006; 4 in base 2015.)",
+   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
   },
   {
    "name": "Riflemen",
@@ -483,7 +486,8 @@
    "techCost": 5,
    "buildCost": 3,
    "strength": 2,
-   "text": "Age I cavalry. (Tech cost 4 in 2006; 5 in base 2015.)"
+   "text": "Age I cavalry. (Tech cost 4 in 2006; 5 in base 2015.)",
+   "uncertain": "one of Iron / Alchemy / Swordsmen / Knights has only 2 copies at 4 players, not 3: NamuWiki gives all four as 2/2/3, but that makes the Age I civil deck 54 cards at 4 players while the deck is 53 (44 + 6 '3+' + 3 '4') and the box holds 179 civil cards. Which card is wrong is unresolved - see docs/OPEN_QUESTIONS.md."
   },
   {
    "name": "Cavalrymen",
@@ -702,7 +706,7 @@
    "type": "government",
    "count": {
     "2p": 1,
-    "3p": 1,
+    "3p": 2,
     "4p": 2
    },
    "techCost": null,
@@ -715,7 +719,8 @@
    "production": {
     "culture": 3
    },
-   "text": "Age III government. (2006: revolution 8, peaceful 21, +2 culture.)"
+   "text": "Age III government. (2006: revolution 8, peaceful 21, +2 culture.)",
+   "countSource": "corrected 2026-07-26: NamuWiki listed the third copy as 4-player-only, but each of Civil decks I/II/III contains exactly three copies marked '4' and six marked '3+' (RB p.4, CoL p.2). With Computers, Air Forces and Professional Sports carrying the Age III '4' marks, Democracy's extra copy must be a '3+' copy; the 2006 edition also added Democracy at 3 players."
   },
   {
    "name": "Masonry",
@@ -932,5 +937,6 @@
    },
    "text": "Exploration tech. +3 strength, +4 to colonization value."
   }
- ]
+ ],
+ "note": "Civil technologies only; the Age A entries are the six technologies printed on the player boards (count 0, not deck cards). Deck sizes: Age A civil deck = 6 leaders + 4 wonders + 10 action cards = 20; Ages I/II/III = 30 technologies + 6 leaders + 4 wonders + 13 action cards = 53 at 4 players (50 at 3, 44 at 2)."
 }
