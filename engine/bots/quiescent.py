@@ -1,4 +1,4 @@
-"""QuiescentBot: 1-ply search that resolves the pending stack before scoring.
+"""QuiescentBot: search that resolves the pending stack before scoring.
 
 Why this exists
 ---------------
@@ -28,17 +28,29 @@ can never rank first.
 The fix here is the game-tree analogue of quiescence search: do not evaluate a
 position while a decision is still hanging.  After applying a candidate move,
 keep resolving ``state.pending`` -- whoever the decider is, including rivals --
-until the stack is empty, and only then evaluate.  ``interact.run_queue`` drains
-``state.queue`` automatically whenever the stack empties, so "pending is empty"
-is exactly the quiet position.
+until the stack is empty, and only then evaluate.  ``interact.run_queue``
+drains ``state.queue`` automatically whenever the stack empties, so "pending is
+empty" is exactly the quiet position.
 
-Opponent model
---------------
-Pending decisions belonging to rivals are resolved with a plain 1-ply weighted
-pick **maximising that rival's own evaluation** -- i.e. the current champion.
-In self-play that is not an approximation of the opponent, it *is* the
-opponent, so the line the search reads is the line that will actually be
-played.  The inner pick is 1-ply (never recursive), which bounds the cost.
+Levels
+------
+``LEVELS`` says how many nested quiescence resolutions the search performs.
+
+``LEVELS = 1``  the root's candidates are resolved to quiet; the rivals'
+                decisions inside that resolution are answered with a plain
+                1-ply pick, i.e. the current champion.  In self-play that is
+                not an approximation of the opponent, it *is* the opponent.
+
+``LEVELS = 2``  the rivals' decisions inside the resolution are themselves
+                resolved to quiet.  This matters for one question specifically:
+                a rival deciding whether to raise a colony bid is, at 1 ply,
+                blind in exactly the way described above, and today only
+                ``weighted.deferred_credit`` stops it modelling every bid as
+                worthless.  At ``LEVELS = 2`` the modelled rival plays the
+                auction out instead, so the hand-priced credit stops being
+                load-bearing anywhere in the search.
+
+``LEVELS = 0`` is plain ``WeightedBot`` and exists for A/B control.
 
 Cost
 ----
@@ -54,7 +66,10 @@ budgets keep that bounded:
 When a budget is exhausted the stack is left as it is and the position is
 scored as it stands -- which falls back to exactly the hand-priced
 ``deferred_credit`` path of ``WeightedBot``, so a budget miss degrades to
-today's behaviour rather than to nonsense.
+today's behaviour rather than to nonsense.  The converse is the load-bearing
+fact for retiring those patches: ``weighted.features`` only applies the credit
+``if state.pending``, so a candidate that reached quiescence is scored with the
+credit contributing exactly zero.
 
 War
 ---
@@ -76,16 +91,18 @@ from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
 
 __all__ = ["QuiescentBot"]
 
+_NO_CTX = {"rival_culture_rate": 0, "rival_science_rate": 0,
+           "rival_strength": 0}
+
 
 # ------------------------------------------------------------------ rng
 #
 # Same trick as GreedyBot (docs/PYPY.md 5a/8): a Mersenne Twister that has not
 # been drawn from is byte-identical to a fresh Random(0), so the object is
-# reused and re-seeded only when a trial actually consumed it.  Two separate
-# instances: the outer one drives the quiescence line, the inner one drives the
-# opponent-model picks, so an inner pick can never advance the outer line's
-# stream and make a candidate's resolution depend on how many moves the
-# opponent model happened to consider.
+# reused and re-seeded only when a trial actually consumed it.  One instance
+# per search level, so a deeper level's trials can never advance a shallower
+# level's stream -- otherwise a candidate's resolution would depend on how many
+# moves the opponent model happened to consider.
 class _TrialRandom(random.Random):
     used = False
 
@@ -98,34 +115,77 @@ class _TrialRandom(random.Random):
         return super().getrandbits(k)
 
 
-_OUTER = _TrialRandom(0)
-_INNER = _TrialRandom(0)
-_PRISTINE = _OUTER.getstate()
+# Two streams per level: `2*L` drives the line _resolve actually walks, `2*L+1`
+# drives the trial applies of the picks made along it.  If they shared one
+# stream, which move a pick considered first would perturb the line it was
+# choosing for.
+_RNGS = [_TrialRandom(0) for _ in range(8)]
+_PRISTINE = _RNGS[0].getstate()
 
 
-def _fresh(r):
+def _fresh(i):
+    r = _RNGS[i] if i < len(_RNGS) else _RNGS[-1]
     if r.used:
         r.setstate(_PRISTINE)
         r.used = False
     return r
 
 
-# -------------------------------------------------------- opponent model
+# ------------------------------------------------------------- the search
+#
+# `box` is a one-element list holding the quiescence node budget remaining for
+# the whole root decision; every level decrements the same counter, so a single
+# pathological auction cannot make one root decision cost unboundedly more than
+# another.
 
-def _pick_1ply(state, moves, idx, weights, end_bias):
-    """The current champion's choice, for whoever owns this decision."""
+def _resolve(state, weights, end_bias, level, box, max_depth):
+    """Play out ``state.pending`` until the position is quiet.
+
+    Returns True if it reached a quiet position, False if a budget ran out.
+    """
+    n = 0
+    while state.pending:
+        if n >= max_depth or box[0] <= 0 or state.game_over:
+            return False
+        moves = actions.legal_moves(state)
+        if not moves:
+            return False
+        mv = _pick(state, moves, state.decider(), weights, end_bias, level,
+                   box, max_depth)
+        try:
+            actions.apply(state, mv, _fresh(2 * level))
+        except Exception:
+            return False
+        n += 1
+        box[0] -= 1
+    return True
+
+
+def _pick(state, moves, idx, weights, end_bias, level, box, max_depth):
+    """Best move for `idx`.  ``level <= 0`` is a plain 1-ply pick."""
     if len(moves) == 1:
         return moves[0]
     try:
-        ctx = rival_context(state, idx)
+        root_ctx = rival_context(state, idx)
     except Exception:
-        ctx = {"rival_culture_rate": 0, "rival_science_rate": 0,
-               "rival_strength": 0}
+        root_ctx = _NO_CTX
     best, best_val = None, None
     for mv in moves:
         trial = copy_state(state)
         try:
-            actions.apply(trial, mv, _fresh(_INNER))
+            actions.apply(trial, mv, _fresh(2 * level + 1))
+        except Exception:
+            continue
+        ctx = root_ctx
+        if level > 0 and trial.pending:
+            _resolve(trial, weights, end_bias, level - 1, box, max_depth)
+            # rivals moved inside the resolution, so the cached aggregates
+            # computed at this node are stale
+            try:
+                ctx = rival_context(trial, idx)
+            except Exception:
+                ctx = root_ctx
+        try:
             val = evaluate(trial, idx, weights, ctx)
         except Exception:
             continue
@@ -149,9 +209,6 @@ def _war_value(state, idx, weights, ctx):
     scratch = copy_state(state)
     try:
         events.resolve_war(scratch, scratch.players[idx], None)
-    except Exception:
-        return None
-    try:
         return evaluate(scratch, idx, weights, ctx)
     except Exception:
         return None
@@ -160,10 +217,12 @@ def _war_value(state, idx, weights, ctx):
 # -------------------------------------------------------------- the bot
 
 class QuiescentBot:
-    """1-ply search that resolves ``state.pending`` to quiescence first."""
+    """Search that resolves ``state.pending`` to quiescence before scoring."""
 
     name = "quiescent"
 
+    #: nested quiescence resolutions (see the module docstring)
+    LEVELS = 1
     #: pending decisions resolved per candidate move
     MAX_DEPTH = 12
     #: total quiescence ``apply`` calls per root decision
@@ -172,11 +231,14 @@ class QuiescentBot:
     WAR_LOOKAHEAD = True
 
     def __init__(self, weights=None, rng=None, seed=None, name=None,
-                 max_depth=None, max_nodes=None, war_lookahead=None):
+                 levels=None, max_depth=None, max_nodes=None,
+                 war_lookahead=None):
         self.weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
         self.rng = rng or random.Random(seed)
         if name:
             self.name = name
+        if levels is not None:
+            self.LEVELS = levels
         if max_depth is not None:
             self.MAX_DEPTH = max_depth
         if max_nodes is not None:
@@ -194,27 +256,6 @@ class QuiescentBot:
     def __call__(self, state):
         return self.pick(state, actions.legal_moves(state))
 
-    # -- search
-    def _quiesce(self, trial, weights, end_bias, left):
-        """Resolve pending decisions until the position is quiet.
-
-        Returns (nodes spent, True if it reached a quiet position)."""
-        n = 0
-        depth = self.MAX_DEPTH
-        while trial.pending:
-            if n >= depth or n >= left or trial.game_over:
-                return n, False
-            moves = actions.legal_moves(trial)
-            if not moves:
-                return n, False
-            mv = _pick_1ply(trial, moves, trial.decider(), weights, end_bias)
-            try:
-                actions.apply(trial, mv, _fresh(_OUTER))
-            except Exception:
-                return n, False
-            n += 1
-        return n, True
-
     def pick(self, state, moves):
         if len(moves) == 1:
             return moves[0]
@@ -222,31 +263,30 @@ class QuiescentBot:
         try:
             root_ctx = rival_context(state, idx)
         except Exception:
-            root_ctx = {"rival_culture_rate": 0, "rival_science_rate": 0,
-                        "rival_strength": 0}
+            root_ctx = _NO_CTX
         w = self.weights
         end_bias = w.get("end_turn_bias", 0.0)
         st = self.stats
         st["decisions"] += 1
-        budget = self.MAX_NODES
+        box = [self.MAX_NODES]
+        depth = self.MAX_DEPTH
+        levels = self.LEVELS
         best, best_val = None, None
         for mv in moves:
             st["candidates"] += 1
             trial = copy_state(state)
             try:
-                actions.apply(trial, mv, _fresh(_OUTER))
+                actions.apply(trial, mv, _fresh(2 * levels + 1))
             except Exception:
                 continue
             ctx = root_ctx
-            if trial.pending:
+            if levels > 0 and trial.pending:
                 st["quiesced"] += 1
-                spent, quiet = self._quiesce(trial, w, end_bias, budget)
-                budget -= spent
-                st["qnodes"] += spent
+                before = box[0]
+                quiet = _resolve(trial, w, end_bias, levels - 1, box, depth)
+                st["qnodes"] += before - box[0]
                 if not quiet:
                     st["truncated"] += 1
-                # rivals moved inside the resolution, so the root's cached
-                # rival aggregates are stale
                 try:
                     ctx = rival_context(trial, idx)
                 except Exception:
