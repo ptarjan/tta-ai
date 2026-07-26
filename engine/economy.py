@@ -79,6 +79,7 @@ def pop_cost(state, p):
     if base is None:
         return None
     s = effects.state_stats(state, p)
+    base -= (p.one_time_discount.get("increasePopulation") or {}).get("food", 0)
     return max(0, base - s.pop_food_discount)
 
 

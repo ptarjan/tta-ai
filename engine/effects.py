@@ -588,6 +588,8 @@ def build_cost(state, p, name):
         return None
     s = state_stats(state, p)
     typ = card["type"]
+    if typ in (C.URBAN_TYPES | C.PRODUCTION_TYPES):
+        cost -= (p.one_time_discount.get("build") or {}).get("resources", 0)
     if typ in C.URBAN_TYPES:
         cost -= s.build_discount.get(card["age"], 0)
         if typ == "theater" and p.leader == "William Shakespeare" and \
@@ -609,6 +611,9 @@ def tech_cost(state, p, name):
         cost = card.get("techCost")
     if cost is None:
         return None
+    cost -= state_stats(state, p).tech_discount
+    cost -= (p.one_time_discount.get("developTechnology") or {}).get(
+        "science", 0)
     typ = card["type"]
     if typ == "theater":
         if p.leader == "J. S. Bach":
