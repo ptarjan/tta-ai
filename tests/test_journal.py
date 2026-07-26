@@ -44,10 +44,20 @@ class AttributeUndo(JournalTestCase):
         j = journal.begin(st)
         st.turn = 999
         st.players[0].food = 77
-        st.players[1].techs["Bronze"] = TechCard("Bronze", 4, 5)
+        # journalled, not raw: this write used to be a bare
+        # `st.players[1].techs[...] = ...`, which is an unjournalled container
+        # mutation on purpose-ish -- the test only asserted about `turn` and
+        # `food`.  Harmless under the gate, but it made the whole suite fail
+        # under `JOURNAL_PARANOID=1`, where `rollback` checks itself against a
+        # copy_state oracle.  A suite that cannot be run in paranoid mode
+        # cannot be *used* as a check, so it is journalled here and asserted
+        # on below.
+        journal.touch(st.players[1].techs)["Bronze"] = TechCard("Bronze", 4, 5)
         journal.rollback(j)
         self.assertEqual(st.turn, before.turn)
         self.assertEqual(st.players[0].food, before.players[0].food)
+        self.assertEqual(st.players[1].techs["Bronze"].workers,
+                         before.players[1].techs["Bronze"].workers)
 
     def test_repeated_writes_to_one_attr_restore_the_oldest(self):
         st = _st()
@@ -475,16 +485,22 @@ class RareSitesRollBackExactly(JournalTestCase):
         self.assertEqual(st.pending, [])
 
     def test_removing_a_touch_makes_these_tests_fail(self):
-        """The tests above are only worth having if they can fail.
+        """The four tests above are only worth having if they can fail.
 
         Simulate exactly the bug they guard against -- a container mutation
-        with no undo record -- on the same paths, and assert it is caught.
+        with no undo record, on one of the same containers -- and assert
+        `_restores` catches it.
+
+        Deliberately routed through `_restores` rather than through
+        `journal.begin`'s own oracle: that oracle only exists when
+        `JOURNAL_PARANOID=1` is set in the environment, so a version of this
+        test written the obvious way passes when run by hand with the variable
+        set and silently asserts nothing under `tools/gate.sh`, which runs
+        unittest with a clean environment.  It did exactly that once.
         """
         st = self._mid()
-        j = journal.begin(st)
-        st.players[0].colonies.append("Unjournalled Colony")
         with self.assertRaises(AssertionError) as cm:
-            journal.rollback(j)
+            self._restores(st, lambda s: s.players[0].colonies.append("Nope"))
         self.assertIn("colonies", str(cm.exception))
 
 

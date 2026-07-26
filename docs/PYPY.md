@@ -1100,13 +1100,305 @@ Tests: 5 new (`LogSuppression`), 120 total, gate green on all four arms.
       Landed with 26 tests, **no call site converted.**
 - [x] Step 3: `emit()` suppression (above).
 - [x] Step 4: `_stats_cache` cleared on rollback (above).
-- [ ] Step 5: convert containers module by module — `actions.py`, then
+- [x] Step 5: **DONE** (9.9, commits 5a-5f). Convert containers module by
+      module — `actions.py`, then
       `effects.py`, `interact.py`, `game.py`, `events.py`, `economy.py` — with
       `bash tools/gate.sh` after **each** module, plus a run under
       `JOURNAL_PARANOID=1`.
-- [ ] Step 6: coverage check. The paranoid diff only proves the sites that the
-      135 games actually *execute*. Run the paranoid suite under `coverage.py`
-      and confirm every mutating line in the engine was reached; any unreached
+- [x] Step 6: **DONE** (9.10) — 61/61 converted sites proven executed, via
+      `tools/mutation_coverage.py`; the 7 that self-play never reaches got
+      targeted rollback tests. (Original wording: the paranoid diff only
+      proves the sites the 135 games actually *execute*; any unreached
       mutating line is an unverified site and must be audited by hand. **This
       is the residual risk 6.5 did not name** and it must not be skipped.
-- [ ] Step 7: flip GreedyBot from `copy_state` to journal, measure, gate.
+      `coverage.py` turned out not to be installable — PEP 668 — so the tool
+      uses `sys.monitoring` instead.)
+- [x] Step 7: **DONE** (9.12) — 1.75x measured on 4p greedy; gate 9/9 (9.11).
+
+### 9.6 Rebase onto master `6d0247c` — the baseline MOVED, legitimately
+
+The fourth rebase of this branch, and the first one that is **not** inert.
+9.0's rule ("re-derive on the merge-base before debugging anything") earned
+its keep here.
+
+`git diff 15b9764 6d0247c -- engine/` is mostly additive (`bots/book.py`,
+`bots/quiescent.py`, `bots/variants/*`, `weighted.py`) — none of which
+GreedyBot goes through — **plus 11 lines in `effects.py`**:
+
+```python
+s.science   = max(0, s.science)
+s.culture   = max(0, s.culture)
+s.food      = max(0, s.food)
+s.resources = max(0, s.resources)
+s.strength  = max(0, s.strength)
+```
+
+the rulebook's "Limits on Ratings" applied to every rating rather than only
+happiness. `compute` *is* on GreedyBot's evaluation path, so the fingerprint
+had to move. Re-derived from scratch on a clean detached worktree of master
+`6d0247c` and, separately, on the rebased branch:
+
+| | master `6d0247c` | journal-undo (rebased) |
+|---|---|---|
+| narrow (33 games) | `6f5c72ef7c011cf7` | `6f5c72ef7c011cf7` |
+| wide (102 games) | `7814c5c9c276b0a2` | `7814c5c9c276b0a2` |
+
+```
+narrow 6f5c72ef7c011cf747d9a8870391fb4c8f4503de42860316bb6c1b59ce379bcf
+wide   7814c5c9c276b0a2229b6b58143351c2ad1a1058f283db70d1d9a50d5448e8ce
+```
+
+**The two sides agreeing is the entire proof; the value itself proves
+nothing.** `tools/gate.sh` now gates on these. The old pair
+(`c2befef1…` / `47e06a41…`) was correct up to master `15b9764` and is dead —
+anyone still quoting it, including the task description that sent me here, is
+quoting a stale number. That is the 9.0 trap, third occurrence.
+
+### 9.7 GreedyBot's journal path was wired BEFORE step 5, on purpose
+
+6.6 condition 3 says convert module by module; 9.5 step 6 says the residual
+risk is *coverage* — sites the 135 games never execute. But there is a second
+problem with converting first and testing last: with nothing calling the
+journal, a per-module gate only proves the `touch()` calls are inert, which
+they trivially are (`_J is None` returns immediately). It cannot prove a site
+was *found*.
+
+So `GreedyBot._pick_journalled` landed first, behind `TTA_JOURNAL=1`
+(off by default — `experiments/`, `analysis/`, `WeightedBot` and
+`QuiescentBot` are untouched). With it, `JOURNAL_PARANOID=1` copies the state,
+applies the candidate by undo, rolls back, and structurally diffs on **every
+candidate move of every game**. A missed site then announces itself by path:
+
+```
+AssertionError: journal rollback did not restore the state:
+  state.card_row[0]: type str != NoneType
+  state.card_row[1]: type str != NoneType
+  state.card_row[2]: type str != NoneType
+```
+
+That is `game.py:117` — `_replenish` does `row[i] = None` on the *current*
+list before rebinding `state.card_row` to a new one, so the in-place clear is
+invisible to the (journalled) attribute write that follows. It was found on
+the first probe game, in seconds, by path. Hand-auditing 470 sites would not
+reliably have found it, because it is the kind of site that *looks* covered:
+there is a journalled attribute write two lines below it.
+
+Conversion order is therefore: convert a module → `bash tools/gate.sh` (proves
+inertness, journal OFF) → probe with `TTA_JOURNAL=1 JOURNAL_PARANOID=1`
+(proves discovery, journal ON) → next module. `tools/gate.sh --journal` runs
+the four journal arms once every module is in.
+
+`journal.begin` also drops `_stats_cache` on **entry**, not just on exit.
+The cache is content-keyed (`stats_key`) so a warm cache is usually safe — but
+only usually: a mutation site that forgets `effects.invalidate` is invisible on
+the copy path, because a copy never carries a cache and always recomputes.
+Starting cold makes the journal path faithful to the copy path by
+construction, and costs nothing the copy path was not already paying.
+
+### 9.8 The one hole `grep` could not close: is `JOURNALLED_CLASSES` complete?
+
+`tools/find_mutations.py` finds container sites because subscripts and
+`append`/`pop`/… are syntax. The 300 attribute writes are covered by the
+`__setattr__` hook — **but only for the four classes in
+`journal.JOURNALLED_CLASSES`.** An attribute write to a state-reachable object
+of any *fifth* class would be silently unjournalled and would not appear in any
+grep, because `x.y = z` looks identical whatever `x` is. That is the one
+failure mode neither 6.5's list nor the site census names.
+
+Closed mechanically instead of by argument (`tests/test_journal.py`,
+`SetattrCoverageIsComplete`): walk a real 120-move 4p mid-game state and assert
+the set of reachable types is exactly what the journal assumes — the four
+dataclasses, and containers only of type `list`/`dict`/`set`/`tuple`/
+`frozenset` (the three mutable ones being exactly what `touch()` accepts;
+`touch` raises `JournalError` on anything else). Both pass. If anyone later
+adds a fifth state dataclass, the test fails and names it.
+
+### 9.9 Step 5 — all six modules converted (commits 5a–5f)
+
+One commit per module per 6.6 condition 3, `bash tools/gate.sh` after each.
+Final census from `tools/find_mutations.py`: **166 container sites, 100
+converted, 66 locals with a written argument.**
+
+| module | sites | converted | locals | note |
+|---|---|---|---|---|
+| actions.py | 56 | 19 | 37 | locals are all `moves`/`out`/`by_type`/`costs`/… built inside move generation |
+| effects.py | 31 | 0 | 31 | 19 locals, 5 module memo dicts, 4 `_stats_cache` entries, 0 pact writes |
+| interact.py | 43 | 29 | 14 | the nested case: dicts *inside* `state.pending` |
+| game.py | 7 | 5 | 2 | includes the `_replenish` site paranoid mode caught |
+| events.py | 5 | 4 | 1 | |
+| economy.py | 6 | 6 | 0 | the only doubly-nested site |
+
+Three shapes were new relative to 6.2's model and are the ones to remember:
+
+1. **In-place mutation immediately before a journalled rebind** (`game.py`
+   `_replenish`). The attribute write two lines down makes the site *look*
+   covered. Only paranoid mode found it.
+2. **A dict inside a state container** (`interact.py` auctions/defense).
+   `touch(state.pending)` restores *which* dicts are in the list, not their
+   contents; `pend` needs its own record and `pend["active"]` a third.
+3. **Two containers reached in one expression** (`economy.py`
+   `discarded_military.setdefault(age, []).append(name)`). Both records are
+   required and neither implies the other; snapshotting a freshly-created `[]`
+   is harmless, so the same code is correct whichever branch `setdefault`
+   takes.
+
+`touch` is written out at every site rather than hoisted out of loops, even
+where a hoist would be equivalent, because `find_mutations.py` checks the
+mutated expression *textually*. A hoisted touch leaves the site reading as
+unconverted, and a checklist that lies is worse than no checklist. The cost of
+a redundant touch is one `id()` set probe.
+
+### 9.10 Step 6 — coverage, and the seven sites self-play never reaches
+
+`tools/mutation_coverage.py` (new): the site census × `sys.monitoring` LINE
+events, restricted to those exact lines, over real journalled games. Returning
+`DISABLE` from the callback retires each location on first hit, so tracing is
+nearly free. `coverage.py` is not installable on this box (PEP 668) and is the
+wrong shape regardless — the question is a verdict on 166 specific lines, not
+a percentage.
+
+**First pass, 60 games (20 seeds × 2p/3p/4p): 7 converted sites had never
+executed.** The aggression-defense exchange (4), Annex, a refused pact offer,
+and the multi-step `lose_pop` re-queue. The 135-game paranoid suite had
+therefore proven *nothing whatever* about them — which is exactly the failure
+mode 9.5 predicted, and it would have shipped looking green.
+
+They are now driven directly by `RareSitesRollBackExactly`
+(`tests/test_journal.py`): construct the state, run the path inside a journal,
+diff the rollback against a `copy_state` oracle. Same standard as paranoid
+mode, with the state constructed instead of stumbled into. The tool traces the
+test suite as well as the games, because a site verified by a targeted test is
+*better* verified than one that happened to come up in self-play.
+
+**Result: 0 of 61 converted sites unexecuted.** Non-zero is exit status 1.
+
+12 unconverted sites remain unexecuted and all 12 are accounted for: 9 are
+`cards.py` DB construction (import time, static card data, unreachable from a
+trial `apply`), 1 is `actions.py:367`'s `moves.append(("pop_free",))` (the
+same local as the other 36), and 1 is `state.py:202`'s `del self.log[:100]` —
+hazard 2 of 6.5 by name, which cannot run inside a trial because `emit`
+returns early while `SUPPRESS_LOG` is set.
+
+### 9.11 The gate, all nine arms
+
+```
+unittest                         OK   Ran 128 tests
+unittest JOURNAL_PARANOID        OK   Ran 128 tests
+narrow fingerprint               OK   6f5c72ef7c011cf7
+narrow FASTCOPY_PARANOID         OK   6f5c72ef7c011cf7
+wide fingerprint                 OK   7814c5c9c276b0a2
+wide FASTCOPY_PARANOID           OK   7814c5c9c276b0a2
+narrow JOURNAL                   OK   6f5c72ef7c011cf7
+narrow JOURNAL+PARANOID          OK   6f5c72ef7c011cf7
+wide JOURNAL                     OK   7814c5c9c276b0a2
+wide JOURNAL+PARANOID            OK   7814c5c9c276b0a2
+GATE PASS
+```
+
+Two gate bugs surfaced while assembling this table, and both are worth
+recording because both would have produced a *misleading reading* rather than
+an honest failure — the exact category of problem 9.0 exists to warn about.
+
+**A test that asserted nothing.** The `unittest JOURNAL_PARANOID` arm was
+added late and immediately earned itself: `RareSitesRollBackExactly`'s negative control had been written to rely
+on `journal.begin`'s built-in oracle, which only exists when
+`JOURNAL_PARANOID=1` is set. It passed when run by hand (I had the variable
+set) and asserted nothing at all under `tools/gate.sh`, which runs unittest
+with a clean environment. The gate caught it. It also surfaced a pre-existing
+test that made a deliberately unjournalled container write; that is now
+journalled, so the suite is paranoid-clean and can be *used* as a check rather
+than merely run as a test.
+
+**A gate that cried wolf.** `tools/gate.sh` reported `GATE FAIL` with three
+arms missing from its output and a long run of whitespace where they should
+have been — on a tree whose digests were provably correct when the same
+commands were run by hand. Cause: `/bin/bash` on macOS is **3.2**, and the
+helper I had refactored collected environment assignments into an array
+(`envs+=(...)`, `"${envs[@]}"`). Under 3.2 that garbles rather than errors.
+Both helpers now take the environment as one plain string and the script
+contains no arrays. This is the failure mode that gets a good change reverted
+and a real regression blessed, so: **when this gate fails, reproduce the
+failing arm by hand before believing it** — in both directions.
+
+The last four arms are the claim. `JOURNAL` says 135 games played by undo
+instead of by copy produce byte-identical logs and scores.
+`JOURNAL+PARANOID` says that on **every candidate move of those 135 games**
+the state was additionally copied, the candidate applied by undo, rolled back,
+and the two structurally diffed including dict key order — with no difference
+found anywhere.
+
+### 9.12 Step 7 — MEASURED end-to-end throughput: 1.6x at 3p, 1.75x at 4p
+
+`engine.perf_check bench`, `time.process_time` (this process's own CPU, the
+only stable measure while three hill climbs keep the box busy — see the
+docstring). Three independent measurement pairs, `nice -n 15`, one worker at a
+time, baseline and journal alternating so any drift hits both:
+
+| | 3p baseline | 3p journal | 4p baseline | 4p journal |
+|---|---|---|---|---|
+| run 1 (8 games)  | 2.74 | 4.33 | 1.43 | 2.38 |
+| run 2 (10 games) | 2.64 | 4.75 | 1.32 | 2.41 |
+| run 3 (10 games) | 2.60 | 4.10 | 1.34 | 2.35 |
+| **mean games/cpu-s** | **2.66** | **4.39** | **1.36** | **2.38** |
+| **speed-up** | | **1.65x** | | **1.75x** |
+
+In moves/cpu-s, which is insensitive to game-length variation between seeds:
+3p 655 → 1038 (**1.58x**), 4p 528 → 920 (**1.74x**).
+
+So: **1.75x on 4p greedy, the cell the hill climbs actually run**, against
+6.4's projection of ~1.8x. The projection was close and slightly optimistic,
+which is the expected direction — it modelled the copy going to zero, and the
+journal is not free: the `__setattr__` hook taxes every attribute write in the
+process (not just trial ones) at 6.4x, `touch` costs an id-set probe per
+container per candidate, and `begin` drops the stats cache.
+
+Worth noting what the variance says. The three *baselines* are tight
+(4p: 1.43 / 1.32 / 1.34) and so are the three *journal* numbers
+(2.38 / 2.41 / 2.35); the per-run ratios (1.66 / 1.83 / 1.75) move more than
+either column does, which is contention noise on a loaded box rather than
+anything about the change. Anyone re-measuring should take the mean of several
+alternating pairs, not a single ratio — a single pair here would have
+supported any claim between 1.66x and 1.83x.
+
+This is on top of the 1.55x fastcopy win (4a) and the 1.23-1.33x it delivered
+end-to-end (4c); those are not additive, because the journal removes the very
+copy that fastcopy made cheap. 1.75x is measured against current master, which
+already has all of that.
+
+### 9.13 Status — steps 1-7 DONE, branch is green and NOT merged
+
+Every 6.6 condition is met:
+
+1. Design A (undo stack), not B. ✓
+2. `engine/journal.py` + the paranoid differ landed and passed before any call
+   site was converted. ✓
+3. Six modules, one commit each, gate after each. ✓
+4. Hard gate at every step, digests unchanged. ✓ (8/8 arms, 9.11)
+5. Done on a worktree the hill climbs never read. ✓
+
+Plus the two things 6.6 did not ask for and should have: the coverage audit
+(9.10) and the proof that the class list is complete (9.8).
+
+**Still not merged, deliberately.** `TTA_JOURNAL` is off by default, so
+merging this branch changes nothing until someone sets it — but the trainer
+supervisor relaunches `experiments.hillclimb_league` from the master checkout
+every hour, so the merge and the trainer restart should be one deliberate act
+by a human, not a side effect. Remaining work for whoever picks this up:
+
+- [ ] Decide whether `USE_JOURNAL` should default ON, or whether the hill
+      climbs should pass it explicitly. Defaulting on makes `WeightedBot` and
+      `QuiescentBot` pay the `__setattr__` hook for nothing (9.8's test would
+      still pass, but the cost stops being zero), so "explicit in
+      `run_league.sh`" is probably right.
+- [ ] **Do not assume this change extends to `QuiescentBot`.**
+      `bots/quiescent.py` has three more `copy_state` calls and searches
+      multiple ply: `_best_move` recurses, and `_war_value` copies a state
+      that is *itself* already a trial (`scratch = copy_state(state)`, line
+      209). So it holds several live trial states at once, which is precisely
+      the capability 6.6 said design A does not have and design B exists to
+      provide — `journal.begin` raises `JournalError` on nesting by design.
+      Converting it needs either a nested/stacked journal or leaving it on the
+      copy path. This is the trigger 6.6 named for revisiting design B.
+- [ ] Re-run `tools/mutation_coverage.py` after any engine change that adds a
+      container mutation. It is cheap and it is the only thing standing
+      between a new site and a silently corrupted training run.
