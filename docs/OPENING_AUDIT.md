@@ -4,11 +4,85 @@
 an action card while the 4p champion takes a wonder. Is that real strategy, a
 reporting artefact of how we aggregate seats, or undertrained noise?
 
-**Status: IN PROGRESS** — findings are written here as they land. Verdict at the
-bottom.
+---
+
+# VERDICT: UNDERTRAINED NOISE — a single weight, flipped by accident at generation 5 of 138, and never revisited
+
+The behaviour is **real and reproducible** — it is not a seat-mixing artefact,
+and comparing seat-for-seat only makes it sharper (2p seat 0 takes a wonder first
+in **0%** of 400 games, 4p seat 0 in **74%**). But it has **nothing to do with
+playing four players.**
+
+Three findings, in order of how much they should change your mind:
+
+1. **Player count cannot affect the round-1 decision, and does not.** The Age A
+   deck is identical at all counts and the row's first sweep happens *after*
+   round 1, so for a given seed seat 0 faces a bit-identical 13-card row at 2p,
+   3p and 4p. Untrained `default` weights open identically (64% action / 36%
+   leader, seat 0) at all three counts. The sweep-speed and competition
+   arguments printed in HEURISTICS.md are inert on round 1.
+2. **Cross-play proves it follows the weights, not the table.** Played *at two
+   players*, the 4p weight vector still opens wonder-first 74% of the time.
+   Played *at four players*, the 2p vector never does (0%). Player count changes
+   nothing; the weight vector changes everything.
+3. **It is one weight, it was a hitchhiker, and it is worth nothing.**
+   `wonder_remaining` was flipped from −0.3 (penalise unbuilt wonder stages) to
+   +0.32 by the gen-5 mutation, which moved **19 weights at once**. Revert that
+   one number in today's champion and the wonder opening vanishes entirely
+   (74% → 0%). The opening rate has been frozen at 77% for all 125 generations
+   since, unchanged by six further accepted mutations — stable because nothing
+   has searched it, not because anything converged on it. Played head-to-head
+   against itself-with-the-weight-reverted over 192 games, the wonder-first
+   champion wins **0.276 ± 0.063 against a 0.25 null**: the behaviour buys no
+   measurable win rate at all.
+
+**What to do with it:** do not write "at 4 players, open with a wonder" as
+advice. There is no evidence for the player-count claim. The honest statement is
+*"our 4p weight vector happens to like wonders, at every player count, because of
+one sign flip nobody tested."*
+
+### What this implies about every other weight we quote
+
+This is the part with consequences beyond the opening. `wonder_remaining` is a
+**trained** weight — it moved from its hand-guessed default, in an accepted
+generation, and HEURISTICS' framing ("the tuning moved a price, and it moved it
+in a direction that won games") would license quoting it as something the AI
+taught itself. Tested directly, it is indistinguishable from null.
+
+The reason is structural, not bad luck: mutations move **19 weights at once** and
+are accepted on a single 48-game win-rate test. Acceptance says *the bundle*
+beat the incumbent; it says **nothing** about any individual weight in it. With
+~78 weights, 8 accepted bundles at 4p, and no per-weight ablation ever run, most
+individual weight moves in our champions have never been tested at all.
+
+So: **"the AI moved this weight, therefore it matters" is not a valid inference
+anywhere in HEURISTICS.md.** Any weight-derived claim in that document is at the
+same evidential level as this one — plausible, untested, and roughly as likely to
+be a hitchhiker — unless someone has ablated it the way §4 ablates
+`wonder_remaining`. That single-weight revert test is cheap (one variant file,
+one duel) and should be the standard before any weight is written up as advice.
+
+**Separately — the answer to "is hill climbing working?": YES, at all three
+counts, and best at 4p.** Measured fresh today against the untrained starting
+point: 2p **0.682** (null 0.50), 3p **0.771** (null 0.333), 4p **0.792** (null
+0.25); 4p also beats the greedy bot 0.958. Relative to its null, 4p is the
+*strongest* of the three (3.2x), not the weakest. The 4p climb has had the same
+wall-clock time as the others and is still accepting mutations. The lower numbers
+in `experiments/baselines.jsonl` (4p 0.349) that suggest a broken climb are stale
+— see §5, including which HEURISTICS.md claims they have already contaminated.
+
+What *is* thin at 4p is the number of accepted steps — 8 in 138 generations — and
+each one moves 19 weights on a 48-game test. The climb is working; it is the
+*attribution* of what it learned that does not hold up.
+
+---
 
 Owned by this audit: `analysis/opening_by_seat.py`, this file. Everything under
-`experiments/` and `engine/` was read-only for this work.
+`experiments/` and `engine/` was read-only for this work. Champion snapshots were
+copied to `/tmp` first because the live hill climbs rewrite them in place;
+`champion_4p.json` was gen 138 and is bit-identical at gen 139, and the 2p
+champion advanced 218 → 220 during the audit without changing its opening (still
+0% wonder-first).
 
 ---
 
@@ -197,7 +271,46 @@ entire "4p opens with a wonder" finding.
 
 So the opening is **stable** — but stable because it is frozen, not because it
 was converged on. Stability here is evidence of *no further search*, not of
-optimality. Whether it is actually good is a separate question (below).
+optimality. Whether it is actually good is the next question.
+
+### Does the wonder opening earn anything? No.
+
+Direct A/B: `champion_4p` as challenger against a table of *itself with only
+`wonder_remaining` reverted to −0.3* — identical in all 77 other weights, and the
+only behavioural difference is the opening (74% wonder-first vs 0%). 192 games,
+challenger rotated through every seat, null = 0.25:
+
+| challenger | defenders | games | win rate | null | verdict |
+|---|---|---|---|---|---|
+| `champion_4p` (wonder-first) | `champion_4p`, weight reverted | 192 | **0.276 ± 0.063** | 0.25 | **indistinguishable** |
+
+The confidence interval (0.213–0.339) straddles the null. And note this is the
+*most favourable possible* test for the wonder strategy: the challenger is the
+only wonder-lover at a table of three bots that do not want wonders, so it takes
+them completely uncontested — and still gains nothing measurable.
+
+**One caveat, against my own conclusion.** Measured indirectly against the
+untrained `default` bot instead, the two are not obviously equal:
+
+| variant | vs `default` @4p (96 games) | mean culture |
+|---|---|---|
+| `champion_4p` | 0.792 ± 0.082 | 262.7 |
+| `champion_4p`, weight reverted | 0.641 ± 0.096 | 202.4 |
+
+That is a 15-point gap on the same seeds and the same opponent — roughly 2.5
+standard errors, so the wonder version *may* genuinely be stronger against a weak
+opponent. The two tests disagree, and I am not going to pretend they don't. The
+head-to-head is the more direct evidence (the two bots actually play each other,
+with twice the games), so the honest summary is: **the wonder opening earns
+nothing detectable where it matters most, and any advantage it has is small,
+unconfirmed, and was never what the search was selecting for.** It certainly does
+not support a player-count heuristic, since the same weight produces the same
+opening at 2p and 3p too.
+
+(Oddity worth a follow-up: in the mirror head-to-head both bots score ~55 mean
+culture, against 200–260 when either plays the default bot. Two strong, nearly
+identical bots at the same table appear to strangle each other's scoring. That is
+not investigated here.)
 
 ---
 
@@ -218,13 +331,78 @@ table where chance is 25% — better than 3x the null, and the largest margin of
 the three counts. On culture it doubles the default bot. **Hill climbing is
 working, and it is working best at 4p.**
 
-⚠️ **`experiments/baselines.jsonl` is stale and badly misleading.** Its most
-recent entries say 2p champ vs default 0.448 (null 0.50 → "worse than
-untrained") and 4p champ vs default 0.349 (null 0.25 → "barely better"). Both
-are wrong *now*: the file records results for champions as they were at the time
-each line was appended, has no timestamp field, and has not been refreshed while
-training continued. Anyone reading that file today would conclude the hill climb
-is broken. It is not. Do not quote `baselines.jsonl` without re-running.
+### `experiments/baselines.jsonl` is stale, and it has already contaminated HEURISTICS.md
+
+The file contains a block of much lower numbers for the same match-ups:
+
+| match-up | in `baselines.jsonl` | today | champion's mean culture then → now |
+|---|---|---|---|
+| 2p champ vs default | 0.448 | **0.682** | 108.5 → 134.6 |
+| 3p champ vs default | 0.604 | **0.771** | 124.8 → 163.1 |
+| 4p champ vs default | 0.349 | **0.792** | 139.8 → **262.7** |
+
+`docs/HEURISTICS.md` (§"How strong is the thing giving you advice?") explains
+those low numbers as seed noise:
+
+> A separate check run earlier the same morning **with different random seeds**
+> scored the same match-ups much lower (2p 44.8%, 3p 60.4%, 4p 34.9%). The honest
+> summary is "clearly above its starting point at 2 and 3 players, **probably at
+> 4**, and nobody should quote a precise number".
+
+**That explanation is at best incomplete, and at 4p it is wrong.** I first wrote
+that it was simply wrong at all three counts; measuring it properly forced me to
+soften that at 2p. What the evidence actually supports:
+
+**Seed noise is real, and bigger than HEURISTICS claims.** Re-running 2p champion
+vs default on different `--seed` values (96 games each):
+
+| seed | win rate | champion mean culture |
+|---|---|---|
+| 0 | 0.682 ± 0.093 | 134.6 |
+| 9000 | **0.844 ± 0.073** | 149.1 |
+| 31337 | 0.708 ± 0.091 | 136.5 |
+| 777 | 0.771 ± 0.085 | 146.7 |
+
+A 16-point swing from the seed alone (0.682 → 0.844) — larger than the "±8–10 points" HEURISTICS
+estimates. So at **2p**, the 23-point gap (0.448 → 0.682) is only ~1.5x the
+observed seed spread and **could** be mostly seeds. My initial claim that it was
+purely a stale champion was too strong at that count.
+
+**At 4p the seed explanation cannot carry the load:**
+
+* The gap is **44 points** (0.349 → 0.792), nearly 3x the largest seed swing
+  measured (16 points at 2p) and ~7 standard errors.
+* Seed noise moves both bots together and moves culture modestly (2p: 134.6 →
+  149.1, +11%, when the seed changed). At 4p the *champion's* mean culture nearly
+  **doubled** — 139.8 → 262.7, +88% — while the default opponent's barely moved
+  (128.9 → 130.7). Getting luckier seeds does not add 123 points of culture while
+  leaving your opponent where it was; being a better bot does.
+* The champions demonstrably changed between the two measurements. The 4p run
+  accepted mutations at gens 103, 124 and 130, and during this audit alone the 2p
+  champion advanced 218 → 220. `baselines.jsonl` rows carry no generation, so an
+  older, weaker bot is certainly *part* of that block.
+
+**Concretely, these HEURISTICS.md claims need correcting** (that file is owned by
+another agent, so this is flagged here, not edited):
+
+1. The hedge *"clearly above its starting point at 2 and 3 players, **probably at
+   4**"* — **wrong, and it is the one that matters.** 4p is not the doubtful
+   count, it is the **strongest** of the three: 0.792 against a 0.25 null (3.2x
+   the null) versus 1.36x at 2p and 2.3x at 3p. The user's worry that the 4p
+   climb is failing is the opposite of what the data shows.
+2. Attributing the low block *entirely* to *"different random seeds"* — partly
+   defensible at 2p (seeds really do move it 16 points), but it cannot explain
+   4p's 44-point gap and doubled culture. Both effects are present and the
+   document should say it cannot separate them, because the file it is quoting
+   records neither the seed nor the champion generation.
+3. The table's method — *"averaged over the last four such checks"* — averages
+   measurements of **different champions taken at different times** and reports
+   the spread as pure noise. Those four checks are not four samples of one
+   quantity; the bot changed between them. Some of that spread is signal.
+
+The root cause is that `baselines.jsonl` has **no timestamp and no champion
+generation field**, so a reader cannot tell which bot a row describes. Until it
+does, do not quote it — re-run `experiments/evaluate.py`.
 
 Acceptance history from the generation logs (all three still accepting, none has
 flatlined):
@@ -239,3 +417,46 @@ The 4p run is *not* obviously undertrained relative to the others — it has had
 the same wall-clock time and its absolute strength versus the baseline is the
 best of the three. What is thin at 4p is the **number of accepted steps**: 8
 accepted mutations, of which the wonder decision was #2.
+
+---
+
+## 6. Follow-ups this audit did not do
+
+Ordered by how much they would change what the documents say.
+
+1. **Re-test `wonder_remaining` deliberately.** It is the only weight known to be
+   worth nothing, and it drives a heuristic currently printed as advice. A
+   focused hill-climb step that mutates it alone would settle it in one
+   generation. More generally, the gen-5 scatter moved 19 weights on a 48-game
+   acceptance test — cheap acceptance thresholds let neutral weights ride in on
+   the coat-tails of useful ones and then freeze.
+2. **Give `experiments/baselines.jsonl` a timestamp and a champion generation.**
+   Every row is currently unattributable, which is what let a stale number become
+   a published claim. The seed should be recorded too, since seeds move the
+   result by up to 16 points.
+3. **Fix `analysis/opening_order.py`** (owned elsewhere): the `__call__ = None`
+   bug means it has never produced a number, and its `getattr`-on-a-dict card
+   typing would report `"?"` for every card even once it runs.
+4. **Re-check the 4p "starts 1.96 wonders, finishes 0.79" problem.** Behaviour
+   data shows the 4p champion abandons ~1.2 wonders per game; since the weight
+   causing it is worth nothing, that is likely pure waste rather than a trade-off.
+
+## How to reproduce
+
+```bash
+# snapshot first -- the live hill climbs rewrite experiments/champion_*.json
+cp experiments/champion_4p.json /tmp/ch4.json
+cp experiments/champion_2p.json /tmp/ch2.json
+
+# by-seat opening (stops after round 1; add --full for whole games)
+python3 analysis/opening_by_seat.py --players 4 --games 400 --champion /tmp/ch4.json
+
+# the decisive control: the 4p vector played at 2 players
+python3 analysis/opening_by_seat.py --players 2 --games 400 --champion /tmp/ch4.json
+
+# untrained control -- identical at every player count
+python3 analysis/opening_by_seat.py --players 4 --games 400 --champion default
+
+# strength vs the untrained starting point (vary --seed; it moves the answer)
+python3 -m experiments.evaluate --a /tmp/ch4.json --b default --games 96 --players 4 --json
+```
