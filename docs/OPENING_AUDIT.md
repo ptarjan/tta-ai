@@ -281,38 +281,54 @@ those low numbers as seed noise:
 > summary is "clearly above its starting point at 2 and 3 players, **probably at
 > 4**, and nobody should quote a precise number".
 
-**That explanation is wrong.** Those runs were not a different seed, they were a
-different (older, weaker) champion:
+**That explanation is at best incomplete, and at 4p it is wrong.** I first wrote
+that it was simply wrong at all three counts; measuring it properly forced me to
+soften that at 2p. What the evidence actually supports:
 
-* `arena.duel` derives every game seed arithmetically from `seed0`
-  (`seed = seed0 + g // num_players`, `tasks.append((g, seed * 7919 + 17, seat))`)
-  and `evaluate.py` defaults `--seed 0`. Two runs of the same match-up are
-  **bit-identical**. Re-running 2p champ vs default at seed 0 today reproduced
-  `0.6823` to four decimals, and `baselines.jsonl` itself contains duplicate rows
-  with identical win rate *and* identical mean culture, differing only in
-  wall-clock seconds — that is the signature of a deterministic re-run, not of
-  reseeding.
-* Seed noise moves both bots' scores a little. Here the *champion's* mean culture
-  nearly **doubled** at 4p (139.8 → 262.7) while the default bot's barely moved
-  (128.9 → 130.7). A 44-point win-rate swing with the opponent's score held still
-  is a stronger bot, not a luckier one.
-* Even taking the seed explanation at face value, it does not reach: HEURISTICS'
-  own four repeat checks span ~10 points (2p 71.9–82.3, 4p 66.1–76.0), and the
-  gaps being explained away are 23 points at 2p and **44 points at 4p**.
+**Seed noise is real, and bigger than HEURISTICS claims.** Re-running 2p champion
+vs default on different `--seed` values (96 games each):
 
-**Concretely, these HEURISTICS.md claims are wrong and should be corrected**
-(that file is owned by another agent, so it is flagged here, not edited):
+| seed | win rate | champion mean culture |
+|---|---|---|
+| 0 | 0.682 ± 0.093 | 134.6 |
+| 9000 | **0.844 ± 0.073** | 149.1 |
 
-1. The sentence attributing the low block to *"different random seeds"* — it was
-   an older champion. The evaluation harness has no seed-to-seed variation of
-   that size.
-2. The hedge *"clearly above its starting point at 2 and 3 players, **probably at
-   4**"* — 4p is not the doubtful one, it is the **strongest** of the three
-   (0.792 against a 0.25 null, i.e. 3.2x the null, vs 1.36x at 2p and 2.3x at 3p).
+A 16-point swing from the seed alone — larger than the "±8–10 points" HEURISTICS
+estimates. So at **2p**, the 23-point gap (0.448 → 0.682) is only ~1.5x the
+observed seed spread and **could** be mostly seeds. My initial claim that it was
+purely a stale champion was too strong at that count.
+
+**At 4p the seed explanation cannot carry the load:**
+
+* The gap is **44 points** (0.349 → 0.792), nearly 3x the largest seed swing
+  measured (16 points at 2p) and ~7 standard errors.
+* Seed noise moves both bots together and moves culture modestly (2p: 134.6 →
+  149.1, +11%, when the seed changed). At 4p the *champion's* mean culture nearly
+  **doubled** — 139.8 → 262.7, +88% — while the default opponent's barely moved
+  (128.9 → 130.7). Getting luckier seeds does not add 123 points of culture while
+  leaving your opponent where it was; being a better bot does.
+* The champions demonstrably changed between the two measurements. The 4p run
+  accepted mutations at gens 103, 124 and 130, and during this audit alone the 2p
+  champion advanced 218 → 220. `baselines.jsonl` rows carry no generation, so an
+  older, weaker bot is certainly *part* of that block.
+
+**Concretely, these HEURISTICS.md claims need correcting** (that file is owned by
+another agent, so this is flagged here, not edited):
+
+1. The hedge *"clearly above its starting point at 2 and 3 players, **probably at
+   4**"* — **wrong, and it is the one that matters.** 4p is not the doubtful
+   count, it is the **strongest** of the three: 0.792 against a 0.25 null (3.2x
+   the null) versus 1.36x at 2p and 2.3x at 3p. The user's worry that the 4p
+   climb is failing is the opposite of what the data shows.
+2. Attributing the low block *entirely* to *"different random seeds"* — partly
+   defensible at 2p (seeds really do move it 16 points), but it cannot explain
+   4p's 44-point gap and doubled culture. Both effects are present and the
+   document should say it cannot separate them, because the file it is quoting
+   records neither the seed nor the champion generation.
 3. The table's method — *"averaged over the last four such checks"* — averages
    measurements of **different champions taken at different times** and reports
-   the spread as noise. Those four checks are not four samples of one quantity;
-   the bot got better between them. The spread is mostly signal.
+   the spread as pure noise. Those four checks are not four samples of one
+   quantity; the bot changed between them. Some of that spread is signal.
 
 The root cause is that `baselines.jsonl` has **no timestamp and no champion
 generation field**, so a reader cannot tell which bot a row describes. Until it
