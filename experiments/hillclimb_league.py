@@ -349,16 +349,24 @@ def full_check(champion, pool, players, games, workers, seed, log=print):
     for e in pool.sorted_entries():
         if e.is_mirror:
             continue
+        t0 = time.time()
         res = arena.duel(champion, e.spec, players, games,
                          seed0=(seed + label_seed(e.label)) % 10_000_019,
                          workers=workers)
+        # Wall clock per opponent, recorded because it is a budget decision:
+        # opponents differ by more than an order of magnitude in cost, and a
+        # long run spends its hours wherever this number is largest.
+        secs = time.time() - t0
         out[e.label] = {
             "tier": e.tier, "weight": round(e.weight, 4),
             "win_rate": round(res["win_rate"], 4), "ci": round(res["ci"], 4),
             "n": res["games"], "null": round(res["null"], 4),
+            "secs": round(secs, 2),
+            "secs_per_game": round(secs / max(1, res["games"]), 3),
         }
         log(f"    {e.label:<28} {res['win_rate']:6.1%} +/-{res['ci']:5.1%} "
-            f"(null {res['null']:.0%}, n={res['games']}, tier={e.tier})")
+            f"(null {res['null']:.0%}, n={res['games']}, tier={e.tier}, "
+            f"{secs:.1f}s)")
     return out
 
 

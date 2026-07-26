@@ -288,7 +288,49 @@ def discover_variants(log=None):
         log(f"[pool] no engine/bots/variants ({exc.__class__.__name__}: {exc})"
             " -- variant tier empty")
         return out
-    paths = list(getattr(pkg, "__path__", []))
+    seen = set()
+
+    def emit(label, modname, cls_name, full):
+        """Record one variant, with a label that is UNIQUE in the pool.
+
+        Uniqueness is not cosmetic.  Labels are the identity of an opponent
+        everywhere downstream: `acceptance_subset` de-duplicates by label
+        (so a colliding tier collapses to ONE member per generation), the
+        per-opponent stats are keyed by label, and `by_label` returns the
+        first match.  The roster classes all inherit BookBot's ``name``
+        attribute -- it is literally ``"book"`` on every one of them -- so a
+        label taken straight off the class silently turned the seven-member
+        variant tier into one opponent named ``var:book``.
+        """
+        try:                                       # prove it constructs+plays
+            bot = _make_variant(modname, cls_name, 1)
+        except Exception as exc:
+            log(f"[pool] skip {full}.{cls_name}: "
+                f"{exc.__class__.__name__}: {exc}")
+            return
+        if not (callable(bot) or hasattr(bot, "choose")):
+            log(f"[pool] skip {full}.{cls_name}: not callable")
+            return
+        lab = f"var:{label}"
+        if lab in seen:                            # fall back to a name that
+            lab = f"var:{modname}.{cls_name}"      # cannot collide
+            i = 2
+            while lab in seen:
+                lab, i = f"var:{modname}.{cls_name}#{i}", i + 1
+            log(f"[pool] variant label var:{label} already taken -> {lab}")
+        seen.add(lab)
+        out.append((lab, ("variant", modname, cls_name)))
+
+    # The package naming its own roster is the reliable source of labels;
+    # `VARIANTS` keys are distinct by construction and it omits the abstract
+    # base class that a blind module scan would otherwise enrol as a bot.
+    registry = getattr(pkg, "VARIANTS", None)
+    paths = [] if isinstance(registry, dict) and registry else \
+        list(getattr(pkg, "__path__", []))
+    if not paths:
+        for label, cls in registry.items():
+            mod = getattr(cls, "__module__", "")
+            emit(str(label), mod.rsplit(".", 1)[-1], cls.__name__, mod)
     for _finder, modname, _ispkg in pkgutil.iter_modules(paths):
         if modname.startswith("_"):
             continue
@@ -312,19 +354,13 @@ def discover_variants(log=None):
                     continue
                 obj = getattr(mod, nm)
                 if isinstance(obj, type) and getattr(obj, "__module__", "") == full:
-                    classes.append((getattr(obj, "name", nm), obj))
+                    # NAME before name: the roster's own per-class identifier
+                    # before the one every class inherits from BookBot.
+                    classes.append((getattr(obj, "NAME", None)
+                                    or getattr(obj, "name", None) or nm, obj))
         for label, cls in classes:
             cls_name = cls.__name__ if isinstance(cls, type) else str(cls)
-            try:                                   # prove it constructs+plays
-                bot = _make_variant(modname, cls_name, 1)
-            except Exception as exc:
-                log(f"[pool] skip {full}.{cls_name}: "
-                    f"{exc.__class__.__name__}: {exc}")
-                continue
-            if not (callable(bot) or hasattr(bot, "choose")):
-                log(f"[pool] skip {full}.{cls_name}: not callable")
-                continue
-            out.append((f"var:{label}", ("variant", modname, cls_name)))
+            emit(str(label), modname, cls_name, full)
     # weight-vector variants
     vdir = os.path.join(ROOT, "engine", "bots", "variants")
     if os.path.isdir(vdir):
@@ -333,7 +369,11 @@ def discover_variants(log=None):
                 continue
             try:
                 from engine.bots.weighted import load_weights
-                out.append((f"var:{fn[:-5]}", load_weights(os.path.join(vdir, fn))))
+                lab = f"var:{fn[:-5]}"
+                if lab in seen:
+                    continue
+                seen.add(lab)
+                out.append((lab, load_weights(os.path.join(vdir, fn))))
             except Exception as exc:
                 log(f"[pool] skip {fn}: {exc.__class__.__name__}: {exc}")
     return out
