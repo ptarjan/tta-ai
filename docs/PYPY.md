@@ -930,6 +930,42 @@ wide FASTCOPY_PARANOID    OK   47e06a41c8a88889
 
 Full wide digest, previously only recorded to 8 chars: `47e06a41c8a88889…`.
 
+#### Baseline RE-DERIVED after rebasing onto master `afb1b6c` (2026-07-26)
+
+Master moved under this branch while it was parked: `0808b64` and `166867d`
+added deferred-payoff / yield-aware features, and `6376981` changed which
+player `WeightedBot` scores. Those are real behaviour changes, so the
+baseline had to be re-derived rather than assumed — a digest that moved
+because of a *rebase* is not a bug in the undo stack and must not be chased.
+
+Rebased `journal-undo` onto `afb1b6c`, then computed the digests from scratch
+on **both** worktrees (master at `afb1b6c`, and the rebased branch):
+
+| | master `afb1b6c` | journal-undo (rebased) |
+|---|---|---|
+| narrow (33 games) | `c2befef1bb640a05` | `c2befef1bb640a05` |
+| wide (102 games) | `47e06a41c8a88889` | `47e06a41c8a88889` |
+| unittest | OK, 58 tests | OK, 115 tests |
+
+**The baseline is unchanged**, and the reason is worth writing down so nobody
+re-derives it again in a panic: the fingerprint plays **GreedyBot only**.
+`0808b64` / `166867d` / `6376981` all changed the *feature vector* and
+`WeightedBot`, neither of which GreedyBot's evaluation goes through. So
+`c2befef1…` / `47e06a41…` remain the correct gate, and `tools/gate.sh` needs
+no edit.
+
+Full digests for the record:
+
+```
+narrow c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a
+wide   47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d
+```
+
+Corollary for whoever gates next: a fingerprint that moves after a rebase
+should first be re-derived **on the merge-base of master**, not debugged. If
+master's digest and the branch's digest agree, the branch is clean whatever
+the number is.
+
 ### 9.1 Step 1 — the paranoid structural differ (commit 5f168fb, DONE)
 
 6.6 condition 2: differ first, no call site converted. `engine/statediff.py`
