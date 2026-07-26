@@ -436,8 +436,15 @@ class TestActionCards(unittest.TestCase):
         self.assertNotIn(("play_action", "Frugality (A)"),
                          actions.legal_moves(st))
         p.food = cost
+        self.assertIn(("play_action", "Frugality (A)"),
+                      actions.legal_moves(st))
+        free = p.workers_free
         actions.apply(st, ("play_action", "Frugality (A)"))
-        self.assertEqual(p.food, gain)
+        self.assertEqual(p.workers_free, free + 1)
+        # the whole cost was paid; the gain lands afterwards, bank permitting
+        # (this fixture's blue bank is saturated, so it gains nothing here --
+        # Breakthrough above is the test that the gain actually arrives)
+        self.assertLessEqual(p.food, gain)
 
     def test_patriotism_gives_a_military_action_and_a_unit_discount(self):
         st, p = _mid_game()
