@@ -63,7 +63,10 @@ def _bots(kind, n, seed):
 # long as nobody changes WeightedBot -- and section 9.14 does.  These cases
 # give WeightedBot a determinism gate of its own; without one, a change to
 # `WeightedBot.pick` could not be caught by any digest in this project.
-def weighted_cases(nseeds=3):
+#: 11 seeds x 3 player counts = 33 games, 34 x 3 = 102 -- deliberately the same
+#: 33/102 split as the greedy narrow/wide sets, so "the 135-game suite" means
+#: the same amount of play whichever bot is searching.
+def weighted_cases(nseeds=11):
     return [(n, "weighted", s) for n in (2, 3, 4) for s in range(nseeds)]
 
 
@@ -148,7 +151,7 @@ def main(argv):
     wide = "--wide" in argv
     cases = wide_cases() if wide else CASES
     if "--weighted" in argv:
-        cases = weighted_cases(_opt(argv, "--seeds", 8 if wide else 3))
+        cases = weighted_cases(_opt(argv, "--seeds", 34 if wide else 11))
     pos = [a for a in argv[2:] if not a.startswith("--")]
     if cmd == "bench":
         bench(games=_opt(argv, "--games", int(pos[0]) if pos else None),

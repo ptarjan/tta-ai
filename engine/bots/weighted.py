@@ -30,9 +30,9 @@ from __future__ import annotations
 import random
 from functools import lru_cache as _lru_cache
 
-from .. import actions, cards as C, economy, effects
+from .. import actions, cards as C, economy, effects, journal
 from .fastcopy import copy_state
-from .trial import fresh_trial_rng
+from .trial import USE_JOURNAL, fresh_trial_rng
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
            "card_potential", "hand_potential",
@@ -665,6 +665,8 @@ class WeightedBot:
                    "rival_strength": 0}
         w = self.weights
         end_bias = w.get("end_turn_bias", 0.0)
+        if USE_JOURNAL:
+            return self._pick_journalled(state, moves, idx, ctx, w, end_bias)
         best, best_val = None, None
         for mv in moves:
             trial = copy_state(state)
@@ -684,6 +686,55 @@ class WeightedBot:
                 # us; an unscorable candidate is skipped, never fatal.  If
                 # every candidate is unscorable we still return a legal move.
                 continue
+            if mv[0] == "end_turn":
+                val += end_bias
+            if best_val is None or val > best_val:
+                best, best_val = mv, val
+        if best is None:
+            return self.rng.choice(moves)
+        return best
+
+    def _pick_journalled(self, state, moves, idx, ctx, w, end_bias):
+        """`pick` with the undo stack instead of `copy_state` (docs/PYPY.md 6).
+
+        Line-for-line the same search as above; the only difference is that the
+        candidate is applied to the REAL state and undone, rather than to a copy
+        that is thrown away.  Kept as a separate method rather than a branch
+        inside the loop so the copy path stays exactly as it was and can go on
+        being the paranoid oracle.
+
+        Three points of WeightedBot's own semantics that are preserved here and
+        are NOT the same as GreedyBot's:
+
+        * `ctx` is computed once at the root, on the *unmutated* state, and is
+          passed to every candidate.  Under the journal the root state is the
+          same object the candidates mutate, so `ctx` has to be captured before
+          the loop -- which `pick` already does -- and must not be recomputed
+          inside it.  `rival_context` returns a plain dict of numbers, so it is
+          not aliased to anything a rollback restores.
+        * `end_bias` is ADDED (GreedyBot subtracts a fixed 0.01).
+        * `evaluate` sits INSIDE the `except Exception: continue`, because an
+          unscorable candidate must be skipped, never fatal.  GreedyBot's
+          journalled loop evaluates outside its try; copying that here would
+          turn a skip into a crash mid-game.
+
+        Not reachable from `QuiescentBot`, which holds several live trial states
+        at once and must stay on the copy path -- see docs/PYPY.md 9.15.  It has
+        its own `_pick` and never enters this class; the only code it shares
+        with this module is `evaluate`/`rival_context`, which do not mutate.
+        """
+        begin, rollback = journal.begin, journal.rollback
+        best, best_val = None, None
+        for mv in moves:
+            j = begin(state)
+            try:
+                try:
+                    actions.apply(state, mv, fresh_trial_rng())
+                    val = evaluate(state, idx, w, ctx)
+                except Exception:
+                    continue            # the `finally` still rolls back
+            finally:
+                rollback(j)
             if mv[0] == "end_turn":
                 val += end_bias
             if best_val is None or val > best_val:
