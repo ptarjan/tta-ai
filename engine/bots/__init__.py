@@ -10,51 +10,29 @@ A bot is any callable ``bot(state) -> move`` choosing among
 from __future__ import annotations
 
 import math
-import os
 import random
 
 from .. import actions, effects, journal
 from .fastcopy import copy_state
 
 #: Search with the undo stack (docs/PYPY.md section 6) instead of `copy_state`.
-#: OPT-IN and off by default: `experiments/`, `analysis/`, `WeightedBot` and
-#: `QuiescentBot` keep the copy path untouched until this has earned its way in.
-USE_JOURNAL = os.environ.get("TTA_JOURNAL") == "1"
+#: OPT-IN and off by default; honoured by `GreedyBot` and `WeightedBot`, and
+#: deliberately NOT by `QuiescentBot` (docs/PYPY.md 9.15).  Defined in
+#: `bots/trial.py` so `bots.weighted` can see it without importing this
+#: half-initialised package; re-exported here because that is where every
+#: existing caller (tools/mutation_coverage.py, tests) looks for it.
+from .trial import (USE_JOURNAL, TrialRandom as _TrialRandom,
+                    TRIAL_RNG as _TRIAL_RNG,
+                    TRIAL_RNG_STATE as _TRIAL_RNG_STATE)
 from .weighted import DEFAULT_WEIGHTS, WeightedBot, load_weights, save_weights
 
 __all__ = ["RandomBot", "GreedyBot", "WeightedBot", "DEFAULT_WEIGHTS",
            "evaluate", "make_bots", "load_weights", "save_weights"]
 
-# GreedyBot hands every candidate move a *freshly seeded* ``Random(0)`` so each
-# candidate sees the identical random stream from the identical starting point.
-# Constructing one per candidate cost ~6% of GreedyBot's runtime (docs/PYPY.md
-# §5a/§8): seeding a Mersenne Twister runs ``init_by_array`` over a 624-word
-# state array, ~9 us a time, ~4500 times per 4p game.
-#
-# Measured fact that makes the cheap fix possible: a trial ``apply`` consumes
-# the rng in only ~0.4% of candidates (69 of 18003 in a 4-game 4p sample) -- the
-# engine's only rng use anywhere is ``rng.shuffle``.  So the rng object is
-# reused, and re-seeded ONLY when the previous candidate actually drew from it;
-# an untouched Mersenne Twister is already byte-identical to a fresh
-# ``Random(0)``, so every candidate still sees exactly the ``Random(0)`` stream
-# from its start.  ``used`` is set by the two C-level entry points every other
-# method is built on (``random`` and ``getrandbits``), so no draw can escape it.
-class _TrialRandom(random.Random):
-    """``Random`` that records whether it has been drawn from."""
-
-    used = False
-
-    def random(self):
-        self.used = True
-        return super().random()
-
-    def getrandbits(self, k):
-        self.used = True
-        return super().getrandbits(k)
-
-
-_TRIAL_RNG = _TrialRandom(0)
-_TRIAL_RNG_STATE = _TRIAL_RNG.getstate()   # a pristine Random(0), frozen
+# `_TrialRandom` / `_TRIAL_RNG` moved to `bots/trial.py` (same objects, same
+# semantics, aliased above) so `WeightedBot` can share the one instance.  The
+# reasoning for reusing a Mersenne Twister instead of re-seeding one per
+# candidate is written out there; docs/PYPY.md 5a/8 is the measurement.
 
 
 class RandomBot:

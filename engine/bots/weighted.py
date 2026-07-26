@@ -32,6 +32,7 @@ from functools import lru_cache as _lru_cache
 
 from .. import actions, cards as C, economy, effects
 from .fastcopy import copy_state
+from .trial import fresh_trial_rng
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
            "card_potential", "hand_potential",
@@ -668,7 +669,15 @@ class WeightedBot:
         for mv in moves:
             trial = copy_state(state)
             try:
-                actions.apply(trial, mv, random.Random(0))
+                # `fresh_trial_rng()` is a reused Random(0) rather than a new
+                # one per candidate; an undrawn Mersenne Twister is byte-
+                # identical to a fresh Random(0), so every candidate still sees
+                # exactly the Random(0) stream from its start.  docs/PYPY.md
+                # 5a measured the per-candidate construction at ~10.8% of a
+                # profile -- and 8.1 measured the A/B and found the profiler
+                # had overstated it, so this one is measured in 9.16, not
+                # assumed.
+                actions.apply(trial, mv, fresh_trial_rng())
                 val = evaluate(trial, idx, w, ctx)
             except Exception:
                 # The engine grows new move types and new state fields under
