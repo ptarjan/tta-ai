@@ -51,6 +51,23 @@ def level(age):
     return AGE_LEVEL[age]
 
 
+def _disambiguate(cards):
+    """Make card names unique keys.
+
+    A few military cards share a name across ages (Aggression: Plunder I/II/
+    III, the six territories in Ages I and II).  Names are the engine's card
+    identity (decks, hands, the card row all store names), so duplicated
+    names get an age suffix; ``card["baseName"]`` keeps the printed name for
+    rules that key on it (war spoils, one-per-name).
+    """
+    seen = {}
+    for c in cards:
+        seen[c["name"]] = seen.get(c["name"], 0) + 1
+    for c in cards:
+        if seen[c["name"]] > 1:
+            c["name"] = f"{c['baseName']} ({c['age']})"
+
+
 class CardDB:
     def __init__(self, cards, incomplete_parts=()):
         self.cards = cards
@@ -61,11 +78,10 @@ class CardDB:
                 raise ValueError(f"duplicate card name {c['name']}")
             self.by_name[c["name"]] = c
         self.types = {c["type"] for c in cards}
-        # military rules are only playable with the full military deck data
-        self.has_military = (
-            "cards_military_actions.json" not in self.incomplete_parts
-            and REQUIRED_MILITARY_TYPES <= self.types
-        )
+        # Military rules are playable as soon as every required military card
+        # type is present; a part-file still marked "complete": false only
+        # means more cards may arrive later, not that the data is unusable.
+        self.has_military = REQUIRED_MILITARY_TYPES <= self.types
         # civil action (yellow) cards live in the same pending part-file
         self.has_action_cards = "action" in self.types
 
@@ -87,7 +103,9 @@ class CardDB:
                              else "military")
                 c.setdefault("effects", {})
                 c.setdefault("count", {"2p": 1, "3p": 1, "4p": 1})
+                c["baseName"] = c["name"]
                 cards.append(c)
+        _disambiguate(cards)
         return cls(cards, incomplete)
 
     def get(self, name):
