@@ -761,10 +761,10 @@ every atomic container element-checked, no aliasing found.
       **GO on design A (undo stack), as its own branch, paranoid differ first.**
 - [x] Task 5c — exec-generated per-class copiers, 1.24x copy / 1.13x
       end-to-end (section 7, commit c54f36b).
-- [ ] **Owner action, `engine/bots/__init__.py`** — the `random.Random(0)`
-      per candidate move (section 5a). ~10% of GreedyBot for a one-line,
-      provably digest-preserving change. Not applied here: that file is out of
-      scope for this pass.
+- [x] **DONE (section 8)** — the `random.Random(0)` per candidate move.
+      Owner-authorised and applied, but as a *lazy* reseed, not 5a's plain
+      `setstate`: measured 1.07x, and the item was ~6% of runtime, not the
+      13.6% the sampling profiler claimed. See 8.1 for the correction.
 - [ ] **Owner action, same file** — `features()` does `from .. import cards as C`
       / `from .. import economy` *inside the function*, i.e. once per candidate
       move; `importlib._bootstrap._handle_fromlist` is 1.6% of runtime. Hoist to
@@ -823,3 +823,70 @@ under `FASTCOPY_PARANOID=1`.
 **Cumulative for the whole perf pass: greedy 4p 0.99 -> ~1.55 games/cpu-s,
 `copy_state` 6601 -> 15900 copies/cpu-s (2.4x).** The copier is done; the next
 real step is section 6's undo stack.
+
+## 8. The `random.Random(0)` fix — APPLIED, and the profiler was wrong about it
+
+Owner-authorised change to `engine/bots/__init__.py` (5a). Applied, but **not
+in the form 5a proposed**, because an in-process A/B showed the proposed form
+gains essentially nothing. Both the correction and the measurements are here so
+the profile in 5/7a is not trusted uncritically again.
+
+### 8.1 What the A/B actually measured
+
+Method: one process, `GreedyBot.pick` monkeypatched between arms, 4 games of 4p
+greedy (seeds 0-3), `process_time`, arms alternated, 3 reps, `nice -n 10` with
+the climbs running. Reported per *candidate move* because all arms produce the
+identical 18003 candidates — the rng change does not alter the games.
+
+| arm | us/candidate (best of 3 reps) | vs `Random(0)` |
+|---|---|---|
+| `random.Random(0)` per candidate (before) | 114.8 | 1.00x |
+| 5a's `setstate(frozen)` per candidate | 118.1 (rep-best 114.8-150) | **~1.00x** |
+| shared rng, never reset (perf probe, not legal) | 110.6 | 1.04x |
+| **lazy reset — reseed only if actually drawn from (SHIPPED)** | **107.4** | **1.07x** |
+
+Two corrections to the earlier profile fall out of this:
+
+1. **The item was ~6%, not 13.6%.** The upper bound on the whole thing is the
+   "shared rng" probe — remove the per-candidate rng entirely and you get 4-6%,
+   not 13.6%. The 2 ms sampling profiler over-attributed `random.__init__` /
+   `random.seed`: they are short C-heavy frames that the sampler catches
+   disproportionately. Cross-check by arithmetic: `timeit` puts `Random(0)` at
+   **9.37 us** and 18003 candidates over 4 games is 0.169 cpu-s of 2.43, i.e.
+   **6.9%** — consistent with the probe, not with 13.6%.
+2. **`setstate` is not much cheaper than `seed`**: `timeit` says 6.48 us versus
+   9.37 us, only 1.4x, because restoring also walks the 625-element state
+   tuple. 5a assumed it was a cheap C memcpy. Saving 2.9 us of a 115 us
+   candidate is 2.5% in theory and unmeasurable in practice — which is exactly
+   what the A/B found.
+
+### 8.2 What shipped instead
+
+The engine's *only* use of the rng anywhere is `rng.shuffle` (5 sites). Counted
+directly: **a trial `apply` draws from the rng in 69 of 18003 candidates —
+0.4%.** So the reseed is nearly always reseeding a Twister that nothing touched.
+
+`_TrialRandom(random.Random)` sets a `used` flag in `random()` and
+`getrandbits()` — the two C-level entry points every other method
+(`shuffle`, `choice`, `randrange`, `sample`, `randbytes`, the variates) is built
+on, so no draw can escape the flag — and `pick` reseeds from the frozen
+`getstate()` snapshot **only when `used` is set**. An untouched Twister is
+byte-identical to a fresh `Random(0)`, so every candidate still sees the
+`Random(0)` stream from its start: the equivalence is exact, not statistical.
+
+Cost in the common case is one class-attribute load. Thread-safety is not lost
+in practice — the harnesses are `multiprocessing`, never threads.
+
+**Result: ~1.07x end-to-end on greedy 4p (115 -> 107 us/candidate), and the
+remaining rng cost is now ~3%, of which the irreducible part is the 0.4% of
+candidates that genuinely draw.**
+
+Gate: 58/58 tests, narrow `c2befef1…` / wide `47e06a41…` unchanged, unchanged
+under `FASTCOPY_PARANOID=1`.
+
+### 8.3 Standing lesson
+
+The sampling profiler's attribution for *small, frequently-entered C frames* is
+inflated. Before spending effort on a profile line item, bound it with a probe
+that deletes the work entirely, or with `timeit` x call-count arithmetic. Had
+5a been shipped as written it would have been a 0% change sold as 13.6%.
