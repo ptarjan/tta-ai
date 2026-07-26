@@ -63,19 +63,28 @@ def fingerprint(cases=CASES, verbose=False):
 
 
 def bench(kinds=("random", "greedy"), counts=(2, 3, 4), games=None):
+    """Throughput in CPU-seconds of THIS process.
+
+    Wall clock is useless here: the hill-climbing agents keep every core of
+    this box busy, so `time.process_time` (our own CPU time) is the only
+    stable measure.  Games per CPU-second is also the number that matters for
+    self-play, which is CPU-bound and parallel.
+    """
     rows = []
     for kind in kinds:
         for n in counts:
             g = games if games else (30 if kind == "random" else 4)
-            t0 = time.perf_counter()
+            t0 = time.process_time()
+            w0 = time.perf_counter()
             moves = 0
             for s in range(g):
                 st = _play(n, kind, s)
                 moves += getattr(st, "moves_played", 0)
-            dt = time.perf_counter() - t0
+            dt = time.process_time() - t0
+            wall = time.perf_counter() - w0
             rows.append((kind, n, g / dt, moves / dt))
-            print(f"{kind:7s} {n}p  {g/dt:8.2f} games/s  "
-                  f"{moves/dt:10.0f} moves/s")
+            print(f"{kind:7s} {n}p  {g/dt:8.2f} games/cpu-s  "
+                  f"{moves/dt:10.0f} moves/cpu-s   (wall {g/wall:6.2f} g/s)")
     return rows
 
 

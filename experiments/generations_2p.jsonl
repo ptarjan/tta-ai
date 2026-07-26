@@ -18,3 +18,4 @@
 {"gen": 18, "players": 2, "accepted": false, "sigma": 0.05, "secs": 143.0, "tried": [{"wr": 0.4965, "lo": 0.4431, "n": 144, "moved": 19}], "at": "2026-07-26 06:45:15"}
 {"gen": 19, "players": 2, "accepted": false, "sigma": 0.05, "secs": 282.8, "tried": [{"wr": 0.5191, "lo": 0.4815, "n": 288, "moved": 19}], "at": "2026-07-26 06:49:58"}
 {"event":"engine_update","note":"restarted against post-action-card engine fce7db8","gen":19,"accepted":false,"sigma":null,"players":2,"at":"2026-07-26 06:56:35"}
+{"gen": 20, "players": 2, "accepted": false, "sigma": 0.25, "secs": 25.0, "tried": [{"wr": 0.3229, "lo": 0.2366, "n": 48, "moved": 19}], "at": "2026-07-26 06:57:21", "vs_default": 0.526, "vs_default_ci": 0.0999, "vs_greedy": 0.9375, "vs_greedy_ci": 0.0487, "anchor_games": 96}

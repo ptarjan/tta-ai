@@ -1,6 +1,5 @@
 {
- "gen": 18,
- "note": "sigma reset to 0.25 on 2026-07-26 06:56: the engine gained all 33 civil action cards plus colonization/pact/defence fixes, so the fitness landscape changed and the annealed step size from the pre-action-card run no longer applies. Weights kept as a warm start (verified better than default on the new engine at 3p and 4p).",
+ "gen": 19,
  "players": 3,
  "sigma": 0.25,
  "weights": {

@@ -320,7 +320,7 @@ def _action_moves(state, p):
     if p.workers_free > 0:
         for name in worker_names:
             typ = type_of[name]
-            cost = costs[name]
+            cost = cost_of(name)
             if cost is None:
                 continue
             if typ in C.UNIT_TYPES:
@@ -344,12 +344,12 @@ def _action_moves(state, p):
                 continue
         elif not have_ca:
             continue
-        lo_cost = costs[lo] or 0
+        lo_cost = cost_of(lo) or 0
         lo_level = level_of[lo]
         for hi in by_type[typ]:
             if hi == lo or level_of[hi] <= lo_level:
                 continue
-            cost = max(0, (costs[hi] or 0) - lo_cost)
+            cost = max(0, (cost_of(hi) or 0) - lo_cost)
             if unit:
                 cost = max(0, cost - disc)
             if res >= cost:
