@@ -5,6 +5,21 @@
 Written for someone sitting at a table with the physical game. Everything here
 comes from a rules-complete engine plus a self-play AI that is still training.
 
+**If you are about to play and have five minutes**, read *If you remember
+nothing else* (eight rules), then trap #2 (starvation — the biggest single
+culture leak we measured), then the opening cheat sheet for your player count.
+
+1. [How to read this document](#how-to-read-this-document) — where the numbers
+   come from, how strong the AI is, what the confidence tags mean
+2. [If you remember nothing else](#if-you-remember-nothing-else) — eight rules
+3. [Opening: Age A and the first four rounds](#opening-age-a-and-the-first-four-rounds)
+4. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
+5. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
+6. [What changes with the player count](#what-changes-with-the-player-count)
+7. [Common traps](#common-traps) — six ways the game quietly takes points off you
+8. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
+9. [What this document does not know](#what-this-document-does-not-know)
+
 ---
 
 ## How to read this document
