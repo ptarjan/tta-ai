@@ -54,8 +54,20 @@ def load_spec(spec):
 
 
 def champion(players):
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        f"champion_{players}p.json")
+    """The champion weights to benchmark against.
+
+    Prefers `experiments/frozen/champion_Np_strengthcheck.json`, a snapshot
+    taken when this benchmark started.  The live `champion_Np.json` files are
+    rewritten continuously by the running hill climbs, so measuring against
+    them would compare different opponents between runs and make the numbers
+    unreproducible.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    frozen = os.path.join(here, "frozen",
+                          f"champion_{players}p_strengthcheck.json")
+    if os.path.exists(frozen):
+        return frozen
+    return os.path.join(here, f"champion_{players}p.json")
 
 
 def run(a, b, players, games, seed, workers=0, label=""):
