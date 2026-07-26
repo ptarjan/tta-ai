@@ -68,6 +68,7 @@ honest summary is "clearly above its starting point at 2p and 3p, probably at
 | `experiments/analyze_weights.py` | Which of the 78 evaluation weights the search moved away from the hand-set defaults, and in which direction. |
 | `experiments/PROGRESS.md` | Strength measurements against fixed baselines, and the search's history. |
 | `docs/RULES_SPEC.md` | The rules themselves — every table in the Quick reference section is rulebook-accurate, not learned. |
+| `docs/PACTS_DIAGNOSIS.md` | Why the champions never offer a pact, never declare war and almost never colonise: instrumented move generation plus feature-vector diffs showing these moves are unreachable for a 1-ply evaluator. The reason several claims below are tagged **[not evidence]**. |
 
 **Confidence tags.** Each claim is tagged:
 
@@ -78,6 +79,12 @@ honest summary is "clearly above its starting point at 2p and 3p, probably at
   Read the caveat before acting on it.
 - **[provisional]** — one player count, one climb, small sample, or a plausible
   artefact of how the AI searches. Interesting, not proven.
+- **[thin]** — a median or a rate computed over a handful of games. Directional
+  at best.
+- **[not evidence]** — the champions' behaviour here is *forced* by a structural
+  limitation of the AI's search, not learned from playing. It is a fact about
+  the bot, not about the game, and must not be read as advice in either
+  direction. See caveat 3 below and `docs/PACTS_DIAGNOSIS.md`.
 
 **Three honest caveats you should carry through the whole document.**
 
@@ -93,9 +100,27 @@ honest summary is "clearly above its starting point at 2p and 3p, probably at
    of itself, so any "relative to opponents" figure is close to 1.0 by
    construction and tells you very little. Absolute figures (my strength, my
    science rate, my worker split) are the useful ones.
-3. *The search is 1-ply.* It never plans a combo two turns ahead. Anything in
-   this document about *sequencing* is inferred from when things happened, not
-   from the AI reasoning about them.
+3. *The search is 1-ply, and that puts a hard blind spot in the middle of the
+   game.* It never plans a combo two turns ahead, so anything in this document
+   about *sequencing* is inferred from when things happened, not from the AI
+   reasoning about them. Worse: the bot scores a move by applying it and
+   looking at **its own board immediately afterwards** — so any move whose
+   payoff arrives inside *another player's* decision is literally invisible to
+   it. That is precisely the shape of **offering a pact, declaring a war,
+   playing an aggression, and bidding on a colony while rivals are still
+   bidding**: each one spends a card or a worker now and pays off only after
+   somebody else answers. In the trial state the bot sees the cost and none of
+   the gain, so every one of these moves scores **strictly below passing, by a
+   fixed amount, in every position** — the champions cannot choose them at any
+   weight. Measured: `offer_pact` was legal in **16% of politics decisions
+   across 240 games and chosen zero times**
+   (`docs/PACTS_DIAGNOSIS.md`). Consequence: the `pacts`, `colonies`,
+   aggression and war weights were **never under selection**. The 3p
+   `colonies` weight is bit-for-bit the hand-written default after thousands of
+   generations, and the 4p one drifted to **−0.96** — that is random walk on a
+   dead feature, not a finding. Everywhere below that this document says the
+   champions never do these things, that is a statement about the *bot*, not
+   about *Through the Ages*. **[not evidence]**
 
 ---
 
@@ -198,10 +223,18 @@ Eight rules. In rough order of how much they are worth.
    champion actually behaves this way: they keep buying in Age III at every
    count, so this rule rests on the weights, not on the behaviour.
 
-8. **Military: nobody fights, but only the 2p champion is actually safe.**
-   **Zero wars in 360 games** at all three counts, and aggressions are rare
-   (0.01 / 0.03 / 0.11 per game). The champions' strength relative to the
-   *strongest* rival, by age:
+8. **Military: the AI never fights — and that is a limitation of the AI, not a
+   fact about the game.** **Zero wars in 360 games** at all three counts, and
+   aggressions are near-zero (0.01 / 0.03 / 0.11 per game). Do **not** read that
+   as "fighting is weak". An aggression or a war pushes a defence choice onto
+   your victim and pays off only when they answer it, so it lands outside a
+   1-ply evaluator's horizon and scores below passing in every position: these
+   champions could not attack even if attacking were the strongest move on the
+   board (caveat 3 above; `docs/PACTS_DIAGNOSIS.md`). The aggression and war
+   weights were never under selection either. **[not evidence]** for
+   "nobody fights". What the numbers below *do* describe is a table of pure
+   builders with the threat side of the game switched off. The champions'
+   strength relative to the *strongest* rival, by age:
 
    | ratio to strongest rival | Age I | Age II | Age III | Age IV |
    |---|---|---|---|---|
@@ -223,14 +256,14 @@ Eight rules. In rough order of how much they are worth.
    an average over the age and one is its final turn.) A 3p table is running
    roughly twice the army of a 2p table at the same point in the game.
 
-   **Read this as a possible weakness in the AI, not as advice.** In mirror
-   self-play nobody attacks, so being weak is never punished and the search has
-   no gradient telling it to build an army. A human table will punish it. What
+   **Read this as a known weakness in the AI, not as advice.** No champion is
+   able to attack, so being weak is never punished and the search has
+   no gradient at all telling it to build an army. A human table will punish it. What
    the data honestly supports is only the narrow claim: *at 2 players, matching
    your single opponent is sufficient and more is waste.* At 3p and 4p we do not
    know what the right number is — we only know the champions are below it and
-   have never been made to pay. **[mixed — 2p only; 3p/4p is a likely artefact
-   of mirror self-play]**
+   could never have been made to pay. **[mixed — 2p only; 3p/4p is an artefact
+   of an AI that cannot attack]**
 
 ---
 
@@ -306,8 +339,10 @@ in **100% of 120 games** — not a median, the whole distribution sits on round 
 
 **Warning on #3.** This is mirror self-play with **all pacts removed at 2p**
 [rules, §13] against opponents that have never once attacked in 240 games at
-those two counts. A champion at 0.06 strength across Age I is defensible only
-because nobody in its world has ever punished it. Against a human who will
+those two counts — and, more to the point, *cannot*: an aggression is
+unreachable for a 1-ply bot (caveat 3; `docs/PACTS_DIAGNOSIS.md`). A champion at
+0.06 strength across Age I is defensible only because nobody in its world was
+ever able to punish it. Against a human who will
 Plunder you for 1 military action, disbanding your only unit is throwing three
 food and three resources at them. Read #3 as *"the starting warrior is worth less
 than you think and your early military actions are worth more"*, not as an
@@ -360,7 +395,11 @@ most-moved weight (+0.35 → **+1.88**, +436%) and `workers_early` was cut 74%.
 Is that right, or is it a local optimum? Honestly: **unclear**, and the fresh 4p
 data now argues against it. The 3p champion scores less culture (113.2 mean vs
 2p's 123.7) and finishes with fewer techs (9.81 vs 12.88 and 16.35), and it still
-never actually attacks (4 aggressions in 120 games). The 4p champion, which faces
+never actually attacks (4 aggressions in 120 games — but no champion *can*
+attack, so that figure is not an argument against the army; caveat 3). Note what
+the 3p army can and cannot be paying for: in this world strength earns through
+military events and colonisation requirements only, never through defence or
+threat. The 4p champion, which faces
 *three* opponents rather than two, opens as economically as 2p does and ends with
 the most technologies of any of them. So 3p looks like a local optimum rather
 than a player-count effect. **[mixed, leaning against]**
@@ -616,10 +655,24 @@ preparations of mixed ages, the 2p champion is collecting on the order of 20
 culture from the Politics Phase alone — a sixth of its final score, for zero
 civil actions. **[mixed, and partly inference]**
 
-Two honest caveats. First, final culture is not comparable across player counts
-in a mirror — a 4p game divides the same card row four ways. Second, the 4p
-champion's weight vector is the youngest and the strangest, so its politics
-behaviour may simply be a hole in its evaluation rather than a strategy.
+**Read the "pass" row as a symptom, not a decision.** The politics phase offers
+five things — prepare an event, offer a pact, play an aggression, declare a war,
+or pass — and the champions have only ever done two of them. Preparing an event
+is the *only* politics move whose reward (culture, immediately) lands inside the
+mover's own 1-ply trial state; pacts, aggressions and wars all pay off through
+another player's response and are unreachable (caveat 3;
+`docs/PACTS_DIAGNOSIS.md`). So "passes on 87% of its turns" means *"had no event
+worth preparing"*, not *"looked at the political options and declined them"* —
+the political options were never really on the table. A human sitting in that
+seat has three more buyers for a military card than this AI does.
+**[not evidence]** for the pass rate as a strategic choice; the
+prepare-an-event arithmetic above is [rules] and stands on its own.
+
+Two further honest caveats. First, final culture is not comparable across player
+counts in a mirror — a 4p game divides the same card row four ways. Second, the
+4p champion's weight vector is the youngest and the strangest, so the *residual*
+politics behaviour (how much it bothers to prepare) may be a hole in its
+evaluation rather than a strategy.
 
 But the *rules* logic stands on its own and you should act on it: **an unused
 military action at end of turn is a free card, and a green card with a harp on it
@@ -811,20 +864,26 @@ parity: at 3p the champion is 25% short of the table leader in Age IV and at 4p
 it is at 60% of it, having spent about half of every age below *half* the
 leader's strength [`military_by_age`, 120 games each].
 
-**Zero wars in 360 games at every player count.** Aggressions are rare everywhere,
-and where they happen at all they happen *late*: at 4p the median first
-aggression is **round 18.5** (p25 17, p75 20), i.e. in Age III. **[strong on the
-behaviour; see the caveat]**
+**Zero wars in 360 games at every player count**, and the two rightmost columns
+above are there for completeness, not as findings: declaring a war and playing an
+aggression are both unreachable for a 1-ply evaluator, so those cells were
+guaranteed to be ~0 before a single game was played (caveat 3;
+`docs/PACTS_DIAGNOSIS.md`). The handful of aggressions that do occur happen
+*late* — at 4p the median first aggression is **round 18.5** (p25 17, p75 20),
+i.e. in Age III — but that is a median over ten games of a move the AI never
+deliberately selects. **[not evidence]** on the fighting columns; the strength
+columns themselves are real measurements.
 
 The caveat matters. These are mirror self-play games between civilizations that
-have all learned nobody attacks. A table of humans is not that. What survives the
-caveat is one weight fact and one target. The weight fact: `strength_deficit`
+*cannot* attack — they did not learn that nobody attacks, it was never an option
+they could take. A table of humans is not remotely that. What survives is one
+weight fact and one target. The weight fact: `strength_deficit`
 (the penalty for being *behind*) is one of the four full-consensus levers, and
 all three climbs pushed it further down (−0.6 default → −1.02 / −0.95 / −1.30) —
 being weakest is punished everywhere, while being ahead is only rewarded at 3p.
 The target: **match the strongest player at the table, and do not pay for more
 than that.** The champions only actually manage this at 2p; at 3p and 4p they
-fall short and have never been punished for it, so take the target from the
+fall short and could never have been punished for it, so take the target from the
 weights, not from the play. See headline rule 8.
 
 Two rules to remember for the last turns:
@@ -982,12 +1041,17 @@ treat its style with suspicion rather than copying it.
   in **39% of games it never upgrades production at all**.
 
 The army does not get used — **zero wars in 120 games** and 0.03 aggressions per
-game. It is pure deterrence, and it is being paid for with roughly two-thirds of
-the economy the other counts run.
+game — but be careful what you conclude from that. *No* champion at *any* count
+can choose an aggression or a war (caveat 3; `docs/PACTS_DIAGNOSIS.md`), so those
+zeroes were fixed before the games were played and are **[not evidence]** that
+the army was wasted. Nor could it ever pay off defensively in a world where
+nobody attacks. What *is* measurable is the price: roughly two-thirds of the
+economy the other counts run, bought with strength that can only cash out through
+military events.
 
 Our reading: this is a **local optimum**, not a player-count effect. The decisive
-evidence is 4p — it faces *three* opponents rather than two, has strictly more
-reason to fear aggression, and instead opens economically, keeps almost no army,
+evidence is 4p — it faces *three* opponents rather than two (though in this AI's
+world none of them can attack it) and instead opens economically, keeps almost no army,
 and ends with the most technologies in the study. **[mixed, leaning against the
 3p style]** — the 3p champion does beat its own start point (70.3% ± 9.1), so
 the style works; there is no evidence it is the best available style.
@@ -1015,7 +1079,13 @@ of 2 rising to 3 — roughly *half* its bill, and *falling* — and it burns
 banked, going short on food on **46.1% of all turns**
 (`analysis/leak_check.py`, 60 games, 240 player-games). Details in trap #2. It
 also passes in the Politics Phase on 87% of turns and prepares only 1.4 events a
-game against 11.3 at 2p, so the military-card economy is dead too.
+game against 11.3 at 2p, so the military-card economy is dead too. (The pass rate
+itself is not a choice — see "Read the 'pass' row as a symptom" in the midgame
+section — but the ~10 missing preparations are real culture left on the table.
+They also have a knock-on: territories only reach the board by being seeded with
+`prepare_event`, so a 4p champion that never prepares never even sees a colony
+auction, which is why 4p colony bids are rarer still
+[`docs/PACTS_DIAGNOSIS.md`].)
 
 What to take from 4p and what to leave: **take** the action discipline, the
 urban-heavy worker split (65% urban by Age III), and the round-1 wonder
@@ -1038,11 +1108,16 @@ consideration. **Leave** the food curve: hold production at **consumption + 1**
 
 Percentages are the share of games in which it happens at all. Where the share
 is under ~25%, the median is a median over a handful of games — treat it as
-**[thin]**.
+**[thin]**. The aggression row is worse than thin: it is three or four games'
+worth of a move the AI cannot deliberately select at all (caveat 3;
+`docs/PACTS_DIAGNOSIS.md`). Ignore it — it says nothing about when *you* should
+attack. **[not evidence]**
 
 ### Where the counts actually agree
 
-Four things hold at 2p, 3p and 4p, and those are the ones to trust:
+Three things hold at 2p, 3p and 4p, and those are the ones to trust. A fourth is
+listed here only because it is the thing readers most often mistake for a
+finding, and it is not one:
 
 1. **Take a leader early and play it.** 97% / 83% / 98% of games take one; median
    play round 3 / 5 / 4. **[strong]**
@@ -1054,11 +1129,15 @@ Four things hold at 2p, 3p and 4p, and those are the ones to trust:
    [`builds_by_type`].) **[strong]**
 3. **Stop growing around round 9** and park the yellow bank just above 11 tokens,
    avoiding the 10-token happiness step. **[strong]**
-4. **Nobody fights.** Zero wars in 360 games. Aggressions per game 0.01 / 0.03 /
-   0.11. In a game where every champion is a builder, the player who spends on an
-   army spends on nothing. **[strong]** as a description of the champions;
-   **[mixed]** as advice, because mirror self-play cannot discover that fighting
-   is good if no ancestor ever tried it.
+4. **Nobody fights — because nobody *can*.** Zero wars in 360 games, aggressions
+   0.01 / 0.03 / 0.11 per game. This is the one item on this list that is not a
+   discovery. Attacking is structurally unreachable for a 1-ply bot: the payoff
+   sits inside the victim's defence choice, outside the mover's trial state, so
+   the move is dominated by passing in every position and no ancestor ever tried
+   it, no descendant ever could, and the aggression/war weights were never under
+   selection (caveat 3; `docs/PACTS_DIAGNOSIS.md`). A true description of these
+   games and **worthless as advice** — it is not evidence that an army is a
+   wasted investment at a human table. **[not evidence]**
 
 ---
 
@@ -1423,19 +1502,75 @@ Read this before you treat anything above as complete. These are not hedges;
 they are parts of the game the study has **no data on at all**, because the
 champions never went there.
 
+### The one misreading this document must not cause
+
+**The AI never signs a pact, never declares war, never plays an aggression and
+almost never colonises. This is not because those things are weak. It is because
+the AI is incapable of choosing them.** Full working in
+`docs/PACTS_DIAGNOSIS.md`; the short version:
+
+The bot is **1-ply**. It scores a candidate move by applying it and evaluating
+*its own board immediately afterwards*. But offering a pact, declaring a war,
+playing an aggression and opening a colony auction all work the same way in the
+rules: you spend the card or the worker now, and the result is a **pending
+decision on somebody else** — the partner accepts or refuses, the defender
+chooses what to lose, the rival bidders answer. None of that is in the mover's
+trial state. So all the bot sees is the cost:
+
+```
+move ('offer_pact', 'International Tourism', 0, '')
+feature diff  pol_pass -> offer_pact:
+    hand_military   6 -> 5
+    hand_mil_value 21 -> 17
+weighted delta: -1.10445        # every other feature identical
+```
+
+Two features move and both move *down*. The move is therefore **strictly worse
+than passing by a constant, in every position, at every weight** — no amount of
+training could ever make it get picked, and the ties in a colony auction break to
+`bid_pass` for the same reason. Measured directly: `offer_pact` was legal in
+**16% of politics decisions across 240 games and chosen zero times**.
+
+Two consequences you must carry:
+
+1. **The zeroes above are not results.** "Zero wars in 360 games" has the same
+   evidential value as "zero wars in a game where the war cards were left in the
+   box". It is not a discovery that war is bad; the experiment could not have
+   come out any other way. Same for pacts, aggressions and colony bids.
+2. **The corresponding weights are noise, not advice.** The `pacts`, `colonies`,
+   aggression and war coefficients in `experiments/champion_*.json` were never
+   under selection, because no game outcome ever depended on them. The tell is
+   stark: the 3p `colonies` weight is **2.000 — bit-for-bit the hand-written
+   default** after thousands of hill-climb generations, while the 4p one drifted
+   to **−0.962**, a random walk on a dead feature. Do not quote either number,
+   in either direction. **[not evidence]**
+
+The honest position on the whole political half of *Through the Ages* is
+therefore **"untested"**, not "unimportant". A human table plays a different game
+from the one these champions played.
+
 - **Pacts.** Zero pacts were played in 240 games at 3p and 4p — the move type
   never appears in the log (`moves_per_game`, which lists every move the
-  champions made). Pacts are legal at 3p and 4p [rules, §13] and we can tell you
-  nothing about them.
+  champions made). Pacts are legal at 3p and 4p [rules, §13]. We can tell you
+  nothing about them, and the zero tells you nothing either: it is the structural
+  blind spot above, not a verdict. **[not evidence]**
 - **Colonies.** The champions bid on a colony **0.18 (2p) / 0.08 (3p) / 0.02
   (4p) times per game** and pass instead 0.79 / 3.81 / 0.08 times
-  (`moves_per_game`: `bid`, `bid_pass`). Effectively they never colonise. This
-  document has no colony advice and you should not read the silence as "colonies
-  are bad" — read it as "untested".
-- **Fighting.** Zero wars in 360 games, aggressions 0.01 / 0.03 / 0.11 per game.
-  Everything above about military is about *deterrence levels*, inferred from a
-  world where nobody attacks. **We do not know what the correct army size is at
-  3p or 4p against opponents who attack.** See headline rule 8.
+  (`moves_per_game`: `bid`, `bid_pass`). Effectively they never colonise — and
+  again, they *cannot*: while any rival is still bidding, a bid changes no player
+  state at all, so every bid evaluates to exactly the same number as passing and
+  the tie-break takes `bid_pass`. On the rare occasions a bid *is* visible (last
+  bidder standing, so the colony resolves immediately) it is priced with that
+  untouched-default / drifted-negative `colonies` weight. This document has no
+  colony advice and you should not read the silence as "colonies are bad" — read
+  it as "untested". **[not evidence]**
+- **Fighting.** Zero wars in 360 games, aggressions 0.01 / 0.03 / 0.11 per game —
+  guaranteed in advance by the blind spot, not learned. Everything above about
+  military is about *deterrence levels*, inferred from a world where nobody
+  attacks and nobody could. **We do not know what the correct army size is at 3p
+  or 4p against opponents who attack**, and we have no evidence at all on when to
+  attack, whom to attack, or what a threat is worth. See headline rule 8.
+  **[not evidence]** for the fighting rates.
 - **Wonders at 2p and 3p.** Only 25% / 19% of games touch a wonder at all, so
   the round-12 rule above rests on the 4p champion's 235 builds. At 2p and 3p we
   have too few builds to say whether wonders are good.

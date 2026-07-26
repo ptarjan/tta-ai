@@ -261,3 +261,59 @@
   2. re-run analysis/leak_check.py (60 games) for trap #2
   3. re-run experiments/analyze_weights.py for every weight percentage
   4. update the header snapshot (generations, accepted counts, anchor table)
+
+### 2026-07-26 12:09 MDT — CORRECTION PASS: the pacts/colonies/war blind spot
+
+(Appended after the 12:42 SESSION CLOSE entry above; the wall clock on this
+machine reads earlier than that entry's timestamp, so this one is dated in full
+to keep the order unambiguous.)
+
+Trigger: `docs/PACTS_DIAGNOSIS.md` (COMPLETE, 2026-07-26) proved that the
+champions' `pacts`, `colonies`, aggression and war weights were **never under
+selection**. The bot is 1-ply; `offer_pact`, `aggression`, `declare_war` and a
+colony `bid` (while rivals are still active) all push a pending decision onto
+*another* player, so their payoff lands outside the mover's own trial state.
+Each is therefore strictly worse than passing by a constant, in every position,
+at every weight. Measured: `offer_pact` legal in 16% of politics decisions
+across 240 games, chosen 0 times. The 3p `colonies` weight is bit-for-bit the
+hand-written default (2.000) after thousands of generations; the 4p one drifted
+to -0.962.
+
+The doc had been treating "the champions never fight / never sign pacts / never
+colonise" as a *behavioural finding* with mirror-self-play caveats. It is not a
+finding at all — the experiment could not have come out any other way. Fixed in
+14 places, all in HEURISTICS.md, nothing else touched:
+
+- New **[not evidence]** confidence tag defined in the legend (and **[thin]**,
+  which was used once at the cheat sheet but never defined).
+- `docs/PACTS_DIAGNOSIS.md` added to the "Where the numbers come from" table.
+- Caveat 3 ("the search is 1-ply") expanded into the canonical statement of the
+  blind spot; everything downstream now cites "caveat 3" rather than repeating
+  the argument.
+- Headline rule 8 retitled "the AI never fights — and that is a limitation of
+  the AI, not a fact about the game"; the closing tag went from "likely artefact
+  of mirror self-play" to "an artefact of an AI that cannot attack".
+- Fixed: the Age A disband-the-warriors warning, the 3p military-opening
+  section, the politics-phase "pass" table (new "read the pass row as a
+  symptom" paragraph), the endgame military table's aggressions/wars columns,
+  the 3p per-count "the army does not get used" paragraph, the 4p politics
+  paragraph (plus the prepare_event -> no seeded territories -> no auctions
+  knock-on from PACTS_DIAGNOSIS cause C), the cheat-sheet aggression row, and
+  "Where the counts actually agree" item 4 ("nobody fights — because nobody
+  *can*", now explicitly listed as the thing readers mistake for a finding).
+- The closing "What this document does not know" section gained a leading
+  subsection, **"The one misreading this document must not cause"**, with the
+  feature-diff proof quoted verbatim from the diagnosis, plus the two
+  consequences: the zeroes are not results, and the corresponding weights are
+  noise. The pacts/colonies/fighting bullets were rewritten to say "untested,
+  not unimportant".
+
+No numbers were changed and no section was added or removed; every edit either
+reframes an existing figure or marks it **[not evidence]**. Structure is still
+as described in the 12:42 SESSION CLOSE entry.
+
+Note for whoever re-runs the climb: if the recommended fixes in
+`docs/PACTS_DIAGNOSIS.md` land (making pacts/bids 1-ply-visible, and the
+`state.decider()` fix), *every* [not evidence] tag in HEURISTICS.md becomes
+re-measurable and this whole class of claim should be re-harvested rather than
+edited.
