@@ -2,7 +2,7 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": false,
- "progress": "tactics, aggressions, wars, pacts, military bonus cards, territories and all 55 events written; yellow civil action cards still to write. Per-card copy counts outside Age A are derived, not sourced.",
+ "progress": "tactics, aggressions, wars, pacts, military bonus cards, territories, all 55 events and all 33 yellow civil action cards written, each with 2p/3p/4p copy counts. Military per-card copy counts outside Age A and the split of action-card copies between names in Ages I-III are derived from sourced per-age deck totals, not from per-card sources.",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -26,7 +26,20 @@
   "colonizationRules": "A territory card revealed as the current event is auctioned. Bids are whole numbers, each higher than the last; you may not bid more than the maximum colonization force you can send. The winner must send a force of at least the winning bid: sacrifice one or more military units (their yellow tokens return to the yellow bank) and sum their strength, add any armies' tactical strength, add colonization modifiers from cards in play, and add the colonization value of any military bonus cards played. Effects that modify the strength RATING (Alexander the Great, Great Wall, Warfare, ...) do not apply to a colonization force, and arenas cannot be sent. If nobody bids, the territory goes to the past events pile. The winner takes the card as a colony: apply the permanent effect first, then the immediate benefit. Losing a colony later (Independence Declaration, Aggression: Annex) removes the permanent effect only.",
   "militaryBonusCardRules": "A military bonus card is never 'played' for an action. Its upper half gives a defense bonus when you defend against an aggression; its lower half gives a colonization bonus when you send a colonization force. Both halves are on every card; you use whichever applies. 6 per age in the base game.",
   "eventRules": "Events are prepared, not played: as a political action you put one event or territory card from your hand face down on the FUTURE events deck and score culture equal to its age (Age A 0 / I 1 / II 2 / III 3). Doing so immediately reveals the top card of the CURRENT events deck, which is resolved and then goes to the past events pile. When the current events deck runs out, the future events deck is shuffled to become the new current events deck, with older-age cards always placed on top so they come up first. Ties in 'strongest/weakest/most' are broken in favour of the player whose turn it is (or the player closest to that player in turn order); in 2-player games 'the two strongest/weakest' is read as 'the stronger/weaker'.",
-  "ageIIIScoringEvents": "In the 2015 edition ALL 15 Age III events are scoring events: each describes a way to score culture, they may be revealed during play, and every Age III event still in the current or future events decks is evaluated at the end of the game (order irrelevant; events from older ages have no effect at final scoring). There is no set of exactly four designated scoring events in the base 2015 full game -- the 2006 edition set aside 4 random Age III events at setup, and the 2015 'Shorter Game' variant deals 2 face-down + 3 face-up Age III events. Only Impact of Science and Impact of Strength are RANKING events (10/0, 14/7/0, 15/10/5/0)."
+  "ageIIIScoringEvents": "In the 2015 edition ALL 15 Age III events are scoring events: each describes a way to score culture, they may be revealed during play, and every Age III event still in the current or future events decks is evaluated at the end of the game (order irrelevant; events from older ages have no effect at final scoring). There is no set of exactly four designated scoring events in the base 2015 full game -- the 2006 edition set aside 4 random Age III events at setup, and the 2015 'Shorter Game' variant deals 2 face-down + 3 face-up Age III events. Only Impact of Science and Impact of Strength are RANKING events (10/0, 14/7/0, 15/10/5/0).",
+  "civilActionCards": {
+   "roster": "14 distinct yellow action cards, 33 age-variants: Age A 7 names, Age I 8, Age II 10, Age III 8. Confirmed identical in the fandom 'Card List: Digital Edition' page, the digital-edition localization string keys (RICH_LAND_0..3 etc.) and faq_v15.pdf p.12 (which groups all 14 by type).",
+   "perAgeTotals": {
+    "A": 10,
+    "I": 13,
+    "II": 13,
+    "III": 13,
+    "source": "civil deck sizes: Age A 20 cards, Ages I/II/III 53 cards each at 4 players (44 + 6 cards marked '3+' + 3 cards marked '4'), total 179 civil cards (czechgames.com component list). Subtracting 6 leaders + 4 wonders per age and the civil technologies (30 per age at 4 players) leaves 10/13/13/13 action cards."
+   },
+   "playerCountTrimming": "Action cards carry no '3+'/'4' corner marks: all 9 cards removed from each of Civil I/II/III for 2 players (3 of them for 3 players) are technologies, so every action card's count is the same for 2, 3 and 4 players.",
+   "ageACivilDeck": "The Age A civil deck is exactly 20 cards = 6 Age A leaders + 4 Age A wonders + 10 action cards. The six Age A technologies (Warriors, Agriculture, Bronze, Philosophy, Religion, Despotism) are printed on the player boards and are NOT in the deck, which is why data/cards_civil.json gives them count 0. 13 of these 20 cards are dealt to the card row at setup; the rest feed the first replenish, after which the remainder goes back in the box (RB p.4/p.8).",
+   "playerCountScaledEffects": "Wave of Nationalism (II) and Military Build-Up (III) give resources for military units per stronger civilization, and Endowment for the Arts (III) gives culture per civilization with more culture: the printed amount depends on the player count (2p/3p/4p = 6/3/2 for Wave of Nationalism and Endowment, 8/5/3 for Military Build-Up)."
+  }
  },
  "cards": [
   {
@@ -2624,6 +2637,607 @@
    "text": "Players gain 2 culture for each different type of military unit, urban building and special (blue) technology.",
    "source": "digital-edition card text (IMPACT_OF_VARIETY); cross-checked namu_events.txt (2015 '(new)' values)",
    "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Rich Land",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_farm_or_mine",
+    "resourceDiscount": 1
+   },
+   "text": "Build or upgrade a farm or mine; pay 1 less resource.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Urban Growth",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_urban_building",
+    "resourceDiscount": 1
+   },
+   "text": "Build or upgrade an urban building; pay 1 less resource.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)",
+   "aka": "displayed as 'Urban Development' in some digital-edition builds; FAQ v1.5 p.12 prints it as 'Urban Grown' (typo)"
+  },
+  {
+   "name": "Frugality",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "increase_population",
+    "gainFood": 1
+   },
+   "text": "Increase your population at full price; gain 1 food.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Engineering Genius",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "build_one_wonder_stage",
+    "resourceDiscount": 2
+   },
+   "text": "Build one stage of a wonder; pay 2 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Patriotism",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "militaryActions": 1,
+    "resourcesForMilitaryUnits": 1
+   },
+   "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 1 less resource.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Cultural Heritage",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "gainScience": 1,
+    "gainCulture": 4
+   },
+   "text": "Gain 1 science and 4 culture.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Stock Pile",
+   "age": "A",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "gainFood": 1,
+    "gainResources": 1
+   },
+   "text": "Gain 1 food and 1 resource.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived from the 2006-edition Age A distribution (Rich Land / Ideal Building Site->Urban Growth / Frugality x2, others x1); the Age A total of 10 action cards is sourced (20-card Age A civil deck minus 6 leaders and 4 wonders)"
+  },
+  {
+   "name": "Rich Land",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_farm_or_mine",
+    "resourceDiscount": 2
+   },
+   "text": "Build or upgrade a farm or mine; pay 2 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Urban Growth",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_urban_building",
+    "resourceDiscount": 2
+   },
+   "text": "Build or upgrade an urban building; pay 2 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Frugality",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "increase_population",
+    "gainFood": 2
+   },
+   "text": "Increase your population at full price; gain 2 food.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Engineering Genius",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "build_one_wonder_stage",
+    "resourceDiscount": 3
+   },
+   "text": "Build one stage of a wonder; pay 3 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Patriotism",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "militaryActions": 1,
+    "resourcesForMilitaryUnits": 2
+   },
+   "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 2 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Breakthrough",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "develop_technology",
+    "gainScience": 2
+   },
+   "text": "Develop a technology at full price; gain 2 science.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Cultural Heritage",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "gainScience": 2,
+    "gainCulture": 2
+   },
+   "text": "Gain 2 science and 2 culture.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Reserves",
+   "age": "I",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 3,
+    "3p": 3,
+    "4p": 3
+   },
+   "effects": {
+    "gainFoodOrResources": 2
+   },
+   "text": "Gain 2 food or 2 resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not",
+   "note": "replaces the 2006 pair Mineral Deposits / Bountiful Harvest"
+  },
+  {
+   "name": "Rich Land",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_farm_or_mine",
+    "resourceDiscount": 3
+   },
+   "text": "Build or upgrade a farm or mine; pay 3 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Urban Growth",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_urban_building",
+    "resourceDiscount": 3
+   },
+   "text": "Build or upgrade an urban building; pay 3 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Frugality",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "increase_population",
+    "gainFood": 3
+   },
+   "text": "Increase your population at full price; gain 3 food.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Engineering Genius",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "build_one_wonder_stage",
+    "resourceDiscount": 4
+   },
+   "text": "Build one stage of a wonder; pay 4 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Patriotism",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "militaryActions": 1,
+    "resourcesForMilitaryUnits": 3
+   },
+   "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 3 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Breakthrough",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "develop_technology",
+    "gainScience": 3
+   },
+   "text": "Develop a technology at full price; gain 3 science.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not",
+   "note": "2006 printed 4 science on the Age II Breakthrough; the 2015/digital value is 3"
+  },
+  {
+   "name": "Revolutionary Idea",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "gainScience": 4
+   },
+   "text": "Gain 4 science.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Efficient Upgrade",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "upgrade_farm_mine_or_urban_building",
+    "resourceDiscount": 3
+   },
+   "text": "Upgrade a farm, mine or urban building; pay 3 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Wave of Nationalism",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "resourcesForMilitaryUnitsPerStrongerCivilization": {
+     "2p": 6,
+     "3p": 3,
+     "4p": 2
+    }
+   },
+   "text": "For each civilization stronger than yours, build or upgrade military units paying 2 fewer resources (3 fewer in a 3-player game, 6 fewer in a 2-player game).",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Reserves",
+   "age": "II",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "gainFoodOrResources": 3
+   },
+   "text": "Gain 3 food or 3 resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Urban Growth",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "build_or_upgrade_urban_building",
+    "resourceDiscount": 4
+   },
+   "text": "Build or upgrade an urban building; pay 4 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Engineering Genius",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "freeCivilAction": "build_one_wonder_stage",
+    "resourceDiscount": 5
+   },
+   "text": "Build one stage of a wonder; pay 5 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Patriotism",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "militaryActions": 1,
+    "resourcesForMilitaryUnits": 4
+   },
+   "text": "Gain 1 extra military action this turn. Build or upgrade military units; pay 4 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Revolutionary Idea",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "gainScience": 6
+   },
+   "text": "Gain 6 science.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Efficient Upgrade",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "freeCivilAction": "upgrade_farm_mine_or_urban_building",
+    "resourceDiscount": 4
+   },
+   "text": "Upgrade a farm, mine or urban building; pay 4 fewer resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Endowment for the Arts",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "culturePerCivilizationWithMoreCulture": {
+     "2p": 6,
+     "3p": 3,
+     "4p": 2
+    }
+   },
+   "text": "Gain 2 culture for each civilization with more culture points than you (3 in a 3-player game, 6 in a 2-player game).",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Military Build-Up",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "effects": {
+    "resourcesForMilitaryUnitsPerStrongerCivilization": {
+     "2p": 8,
+     "3p": 5,
+     "4p": 3
+    }
+   },
+   "text": "For each civilization stronger than yours, build or upgrade military units paying 3 fewer resources (5 fewer in a 3-player game, 8 fewer in a 2-player game).",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
+  },
+  {
+   "name": "Reserves",
+   "age": "III",
+   "deck": "civil",
+   "type": "action",
+   "count": {
+    "2p": 2,
+    "3p": 2,
+    "4p": 2
+   },
+   "effects": {
+    "gainFoodOrResources": 4
+   },
+   "text": "Gain 4 food or 4 resources.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
+   "uncertain": "per-card copy count derived (2006-edition distribution mapped onto the 2015 roster, constrained by the sourced per-age action-card totals 10/13/13/13); per-age totals and the card roster are sourced, the split between names in Ages I-III is not"
   }
  ]
 }
