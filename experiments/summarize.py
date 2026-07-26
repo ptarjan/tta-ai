@@ -86,14 +86,18 @@ def report(k, top, out=print):
     if champ is None and not rows:
         out(f"== {k}p: no run on disk ==")
         return
+    marks = [r for r in rows if r.get("event")]
+    rows = [r for r in rows if not r.get("event")]
     acc = [r for r in rows if r.get("accepted")]
     anchors = [r for r in rows if "vs_default" in r]
     secs = sum(r.get("secs", 0) for r in rows)
     out(f"== {k}p ==")
     out(f"  generations: {len(rows)}  accepted: {len(acc)} "
         f"({(len(acc) / len(rows) * 100) if rows else 0:.0f}%)  "
-        f"sigma: {rows[-1]['sigma'] if rows else '-'}  "
+        f"sigma: {rows[-1].get('sigma') if rows else '-'}  "
         f"wall: {secs / 3600:.2f}h")
+    for m in marks:
+        out(f"  ! after gen {m.get('gen')}: {m.get('note')} ({m.get('at')})")
     if rows:
         out(f"  first gen {rows[0].get('at')}   last gen {rows[-1].get('at')}")
     broken = sum(r.get("broken", 0) for r in rows)

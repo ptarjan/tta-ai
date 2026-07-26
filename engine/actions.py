@@ -91,32 +91,54 @@ def special_icon(card):
 
 
 def urban_count(p, urban_type):
-    db = C.db()
+    type_of = C.db().type_by_name
     return sum(t.workers for n, t in p.techs.items()
-               if db.type_of(n) == urban_type)
+               if type_of[n] == urban_type)
 
 
-def can_take(state, p, idx, budget=None):
-    """§2.5 taking limits. `budget` overrides the civil-action check."""
-    db = C.db()
+def _take_gate(state, p, budget=None):
+    """Loop invariants of `can_take`, computed once per move-generation pass.
+
+    Returns (have, hand_full, wonder_surcharge, leader_discount) -- everything
+    in §2.5 that does not depend on the row slot being tested.
+    """
+    have = spare_ca(state, p) if budget is None else budget
+    surcharge = (0 if p.leader == "Michelangelo"
+                 else len(p.completed_wonders) + p.destroyed_wonders)
+    leader_discount = 1 if p.leader == "Hammurabi" else 0
+    return (have, len(p.hand_civil) >= civil_hand_limit(state, p),
+            surcharge, leader_discount)
+
+
+def _can_take_gated(state, p, idx, gate):
+    have, hand_full, surcharge, leader_discount = gate
     name = state.card_row[idx]
     if name is None:
         return False
-    card = db.get(name)
+    card = C.db().by_name[name]
     typ = card["type"]
-    have = spare_ca(state, p) if budget is None else budget
-    if take_cost(state, p, idx) > have:
+    cost = row_cost(idx)
+    if typ == "wonder":
+        cost += surcharge
+    elif typ == "leader":
+        cost -= leader_discount
+    if cost > have:                      # cost is floored at 0 == max(0, ...)
         return False
     if typ == "wonder":
         return p.wonder is None
     # hand limit (§2.5) applies to everything that goes to hand
-    if len(p.hand_civil) >= civil_hand_limit(state, p):
+    if hand_full:
         return False
     if typ == "leader":
         return card["age"] not in p.taken_leader_ages
     if name in p.hand_civil or name in p.techs or name == p.government:
         return False
     return True
+
+
+def can_take(state, p, idx, budget=None):
+    """§2.5 taking limits. `budget` overrides the civil-action check."""
+    return _can_take_gated(state, p, idx, _take_gate(state, p, budget))
 
 
 def build_cost_for(state, p, name):

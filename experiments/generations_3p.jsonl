@@ -16,3 +16,4 @@
 {"gen": 16, "players": 3, "accepted": false, "sigma": 0.8, "secs": 38.2, "tried": [{"wr": 0.0, "lo": 0.0, "n": 48, "moved": 19}], "at": "2026-07-26 06:51:56"}
 {"gen": 17, "players": 3, "accepted": false, "sigma": 0.68, "secs": 45.0, "tried": [{"wr": 0.0455, "lo": 0.0047, "n": 44, "moved": 19}], "at": "2026-07-26 06:52:41"}
 {"gen": 18, "players": 3, "accepted": false, "sigma": 0.578, "secs": 47.6, "tried": [{"wr": 0.1562, "lo": 0.0897, "n": 48, "moved": 19}], "at": "2026-07-26 06:53:29"}
+{"event":"engine_update","note":"restarted against post-action-card engine fce7db8","gen":18,"accepted":false,"sigma":null,"players":3,"at":"2026-07-26 06:56:35"}
