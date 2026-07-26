@@ -172,3 +172,48 @@ Read: **move generation is the whole cost.** `legal_moves` is called twice per
 move (once by the bot, once by the STRICT assert in `apply`), and inside it the
 same card-database facts and the same per-player stats are re-derived hundreds
 of times per call.
+
+## Progress log (games/cpu-s, `perf_check bench`)
+
+`time.process_time` of this process, not wall clock: the hill-climb runs keep
+every core busy, so wall clock is noise.  30 games per random cell, 4 per
+greedy cell.
+
+| commit | rand 2p | rand 3p | rand 4p | greedy 2p | greedy 3p | greedy 4p |
+|---|---|---|---|---|---|---|
+| fce7db8 baseline | 20.07 | 13.35 | 7.73 | 1.98 | 1.06 | 0.47 |
+| 76d691e (STRICT off, card-DB, set unions) | 37.22 | 25.92 | 13.96 | 3.24 | 1.63 | 0.79 |
+| 0d71ba0 compiled effect programs | 38.96 | 26.44 | 15.07 | 3.59 | 1.72 | 0.78 |
+| c8a70a4 cached tableau scaffolding | 50.70 | 33.09 | **18.60** | 4.22 | 2.14 | 1.01 |
+
+(The tableau-scaffolding change is `engine/actions.py` inside c8a70a4 -- it got
+swept into another agent's commit; the engine part of that diff is mine.)
+
+### What each step did
+
+1. **0d71ba0 — compiled effect programs.**  Every `effects` / `production`
+   dict in the card DB is classified once into `(flat, modifier, special)`
+   tuples, cached by `id(dict)` with a strong ref so ids cannot be recycled.
+   `_apply_flat` / `_add_production` became straight-line loops writing
+   through `Stats.__dict__` instead of `setattr`/`getattr` plus two dict
+   membership tests per key.  Phase 1 of `compute` got `_TECH_PROG`: each
+   technology name maps to its per-worker `(attr, value)` contributions.
+   `_colony_permanents` is memoized per card (it built a fresh dict per colony
+   per compute, which also defeated the id-cache).  Tactic `composition ->
+   need` is cached and the non-Genghis army count is a straight-line fast path.
+2. **c8a70a4 (engine part) — cached move-generation scaffolding.**
+   `_action_moves` used to rebuild `sorted(p.techs)`, the worker-name list,
+   the `type -> names` map and the upgrade candidate pairs on *every* call.
+   All of it is a pure function of the *set* of tableau names, so it now lives
+   in an `lru_cache` keyed by `tuple(p.techs)`: cheap to build, cheap to hash
+   (interned strings cache their hash) and self-invalidating.  Upgrade targets
+   are precomputed per card, so the inner double loop no longer does a level
+   comparison.  `sorted(set(hand))` scans are cached the same way.
+
+### Next step
+
+`effects.compute` is still ~25% of a 4p RandomBot game (52 k calls for 32 k
+moves) because `actions.apply` invalidates the per-player stats cache
+unconditionally after every move, and `invalidate(state)` full-clears wipe all
+four players.  Next: make invalidation precise, guarded by a paranoid mode
+that recomputes and compares on every `state_stats` call.
