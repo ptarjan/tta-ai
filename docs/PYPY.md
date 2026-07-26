@@ -180,10 +180,23 @@ OK  identical behaviour: 3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532
 move count, turn and round, so this is byte-identical game logs *and* scores,
 not just matching totals.
 
+Belt-and-braces: the 102-case `--wide` sweep (24 random + 10 greedy seeds per
+player count) also agrees exactly:
+
+```
+$ nice -n 10 python3 -m engine.perf_check save /tmp/fp_wide_cpy.json --wide
+saved c7e73ede8a5bfd4567adb7f7660d7e19ae61088d3f1cbf4077c27a45e10a098b (102 cases)
+
+$ nice -n 10 /usr/local/bin/pypy3 -m engine.perf_check check /tmp/fp_wide_cpy.json
+OK  identical behaviour: c7e73ede8a5bfd4567adb7f7660d7e19ae61088d3f1cbf4077c27a45e10a098b
+```
+
+**VERDICT: 135/135 games (33 narrow + 102 wide) byte-identical across
+interpreters. Determinism holds.**
+
 ## Status / next steps (keep current)
 
-- [x] Task 1 — determinism re-verified, 33/33 identical. PASS.
-- [ ] Task 1b — wide sweep (102 cases) for belt-and-braces.
+- [x] Task 1 — determinism re-verified, 33/33 + 102/102 identical. PASS.
 - [ ] Task 2 — steady-state games/s table, CPython vs PyPy, 2p/3p/4p x random/greedy.
 - [ ] Task 3 — core scaling / worker count.
 - [ ] Task 4 — switch climbs to pypy3 (only if PyPy wins on greedy).

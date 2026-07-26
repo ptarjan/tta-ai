@@ -48,7 +48,7 @@ of the earlier draft of this document.
 - **[provisional]** — one player count, one climb, small sample, or a plausible
   artefact of how the AI searches. Interesting, not proven.
 
-**Two honest caveats you should carry through the whole document.**
+**Three honest caveats you should carry through the whole document.**
 
 1. *The three climbs have run for very different lengths.* 2p has accepted 15
    mutants in 151 generations, 3p 9 in 119, 4p only **5 in 103**. So when the
