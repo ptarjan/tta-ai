@@ -12,9 +12,14 @@ Two-phase computation of a player's statistics (`compute`):
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from . import cards as C
+
+# TTA_PARANOID=1 makes `state_stats` recompute on every call and assert the
+# cached answer is identical -- the guard rail for the stats-cache key below.
+_PARANOID = os.environ.get("TTA_PARANOID", "") not in ("", "0", "false", "no")
 
 # ---------------------------------------------------------------- stats
 
@@ -839,31 +844,96 @@ def tech_cost(state, p, name):
 _STATS_CACHE_KEY = "_stats_cache"
 
 
-def state_stats(state, p):
-    """Cached per-mutation stats (invalidated by engine.actions.touch).
+def stats_key(state, p):
+    """Everything `compute(state, p)` reads, as a cheap comparable tuple.
 
-    Hot: ~10 calls per generated move.  Attribute access via try/except and a
-    single dict probe beat getattr()+`in`+index by a wide margin here.
+    `invalidate()` only marks a cached Stats *dirty*; the next read rebuilds
+    this key and, if it is unchanged, keeps the cached object.  ~83% of the
+    invalidations in self-play are spurious (the move touched a pool the
+    ratings do not depend on), and building the key costs about a tenth of a
+    `compute`.
+
+    INVARIANT: every field `compute` (and everything it calls: `_apply_flat`,
+    `_apply_modifier`, `_apply_pacts`, `army_strength`) reads off `p` or
+    `state` must appear here.  Run the suite with TTA_PARANOID=1 to have every
+    cache hit verified against a fresh `compute`.
+    """
+    techs = p.techs
+    pacts = ()
+    idx = p.idx
+    for q in state.players:
+        for pact in q.pacts:
+            owner = pact["owner"]
+            partner = pact["partner"]
+            if owner == idx or partner == idx:
+                other = state.players[partner if owner == idx else owner]
+                if not pacts:
+                    pacts = []
+                pacts.append((pact["name"], owner, partner,
+                              pact.get("a"), pact.get("b"),
+                              len(other.completed_wonders)))
+    return (p.government, p.leader, p.tactic, p.homer_wonder,
+            tuple(techs), tuple([t.workers for t in techs.values()]),
+            tuple(p.completed_wonders), tuple(p.flipped_wonders),
+            tuple(p.colonies),
+            p.culture_rate_extra, p.science_rate_extra,
+            p.strength_extra, p.happy_extra,
+            tuple(pacts))
+
+
+def state_stats(state, p):
+    """Cached per-mutation stats (invalidated by engine.actions.apply).
+
+    Hot: ~10 calls per generated move.  A cache entry is `[stats, key,
+    dirty]`; the common case (clean entry) is one dict probe and two list
+    indexings.
     """
     try:
         cache = state._stats_cache
     except AttributeError:
         cache = state._stats_cache = {}
     idx = p.idx
-    st = cache.get(idx)
-    if st is None:
-        st = cache[idx] = compute(state, p)
+    ent = cache.get(idx)
+    if ent is not None:
+        if not ent[2]:
+            return ent[0]
+        key = stats_key(state, p)
+        if key == ent[1]:
+            ent[2] = False
+            return ent[0]
+    else:
+        key = stats_key(state, p)
+    st = compute(state, p)
+    cache[idx] = [st, key, False]
     return st
+
+
+def _state_stats_paranoid(state, p):
+    """TTA_PARANOID=1: verify every cache hit against a fresh computation."""
+    st = _state_stats_fast(state, p)
+    fresh = compute(state, p)
+    if fresh.__dict__ != st.__dict__:
+        raise AssertionError(
+            f"stale stats for player {p.idx}: cached={st!r} fresh={fresh!r}")
+    return st
+
+
+_state_stats_fast = state_stats
+if _PARANOID:
+    state_stats = _state_stats_paranoid
 
 
 def invalidate(state, p=None):
     cache = getattr(state, _STATS_CACHE_KEY, None)
-    if cache is None:
+    if not cache:
         return
     if p is None:
-        cache.clear()
+        for ent in cache.values():
+            ent[2] = True
     else:
-        cache.pop(p.idx, None)
+        ent = cache.get(p.idx)
+        if ent is not None:
+            ent[2] = True
 
 
 # ------------------------------------------------------ enter/leave play

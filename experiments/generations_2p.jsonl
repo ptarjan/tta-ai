@@ -37,3 +37,5 @@
 {"gen": 35, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 45.8, "tried": [{"edge": -0.0417, "lo": -0.1073, "n": 48, "wr": 0.5, "moved": 29, "op": "group:economy"}], "at": "2026-07-26 07:13:23", "mode": "league", "field": 7}
 {"gen": 36, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 97.8, "tried": [{"edge": 0.0, "lo": -0.038, "n": 96, "wr": 0.6042, "moved": 19, "op": "scatter"}], "at": "2026-07-26 07:15:01", "mode": "league", "field": 7}
 {"gen": 37, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 108.2, "tried": [{"edge": 0.0208, "lo": -0.0293, "n": 96, "wr": 0.5729, "moved": 1, "op": "group:search"}], "at": "2026-07-26 07:16:49", "mode": "league", "field": 7}
+{"gen": 38, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 100.8, "tried": [{"edge": 0.0, "lo": 0.0, "n": 96, "wr": 0.5938, "moved": 3, "op": "group:happiness"}], "at": "2026-07-26 07:18:30", "mode": "league", "field": 7}
+{"gen": 39, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 61.2, "tried": [{"edge": -0.0208, "lo": -0.161, "n": 48, "wr": 0.5625, "moved": 46, "op": "kick"}], "at": "2026-07-26 07:19:54", "mode": "league", "field": 7}
