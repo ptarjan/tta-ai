@@ -9,31 +9,44 @@ comes from a rules-complete engine plus a self-play AI that is still training.
 
 ## How to read this document
 
-**Snapshot warning.** The AI is mid-training. Every number below is a snapshot
-taken on **2026-07-26**, with the champions at generation **149 (2 players),
-116 (3 players) and 101 (4 players)**. Behaviour was harvested from those exact
-champions at **120 games per player count**, mirror self-play. Numbers will
-move. Structural advice ("spend your actions", "science early, culture late")
-is much more stable than any single figure.
+**Snapshot warning.** The AI is mid-training, and it was still training while
+this was written. Every behaviour number below was harvested on **2026-07-26**
+from frozen copies of the champions at generation **149 (2 players), 116
+(3 players) and 101 (4 players)** — **120 games per player count**, mirror
+self-play, 0 engine errors (`experiments/behaviour_{2,3,4}p.json`). By the end
+of the writing session the live climbs had reached **gen 169 / 129 / 111**
+(15 / 10 / 6 accepted mutants respectively), so the *weights* quoted in this
+document are slightly newer than the *behaviour*. Numbers will move.
+Structural advice ("spend your actions", "science early, culture late") is much
+more stable than any single figure.
 
-**How strong is the thing giving you advice?** Measured against the hand-set
-weights it started from, 96 games each (`experiments/generations_*.jsonl`
-anchor series):
+**How strong is the thing giving you advice?** The climb periodically re-plays
+its champion against the hand-set weights it started from (`default`), a greedy
+bot and a random bot, 96 games each. The last four such measurements
+(`experiments/generations_*.jsonl`, rows containing `vs_default`):
 
-| | champion vs. its own start point | null | vs. a greedy bot |
+| | vs. its own start point (last 4 anchors) | null | vs. a greedy bot |
 |---|---|---|---|
-| 2p | **82.3% ± 7.7** (gen 140) | 50% | 90.6% |
-| 3p | **70.3% ± 9.1** (gen 110) | 33.3% | 74.0% |
-| 4p | **66.2% ± 9.5** (gen 100) | 25% | 90.6% |
+| 2p (gen 130–160) | **78%** — individual runs 71.9 / 74.5 / 82.3 / 82.3 | 50% | 89.6–95.8% |
+| 3p (gen 90–120) | **65%** — 59.9 / 60.4 / 68.2 / 70.3 | 33.3% | 74.0–80.2% |
+| 4p (gen 80–110) | **72%** — 66.1 / 71.9 / 72.9 / 76.0 | 25% | 90.6–99.0% |
 
-All three are now decisively better than where they began. That was *not* true
-of the earlier draft of this document.
+All three are clearly better than where they began — but note the spread. Each
+individual 96-game anchor carries a ±8–10 point confidence interval, so the
+bouncing above is mostly noise, not a champion getting better and worse from
+week to week. **Do not read a 5-point difference between two of these rows as
+meaning anything.** An independent measurement run earlier the same morning
+(`experiments/logs/measure.log`, older champion files, different seeds) scored
+the same match-ups much lower (2p 44.8%, 3p 60.4%, 4p 34.9% vs `default`); the
+honest summary is "clearly above its starting point at 2p and 3p, probably at
+4p, and nobody should quote a precise number".
 
 **Where the numbers come from.**
 
 | Source | What it is |
 |---|---|
-| `experiments/behaviour_{2,3,4}p.json` | 60 self-play games per player count. What the champion actually *did*: milestone rounds, worker splits, rates by age, cards bought. Board snapshots taken at the end of each of its turns. |
+| `experiments/behaviour_{2,3,4}p.json` | **120** self-play games per player count (2,627 / 2,549 / 2,544 champion turns). What the champion actually *did*: milestone rounds, worker splits, rates by age, cards bought. Board snapshots taken at the end of each of its turns. |
+| `experiments/logs/leak_check.log` | 60 games per count, instrumented: how much culture was actually destroyed by starvation and by uprisings, by age. The source for trap #2. |
 | `experiments/analyze_weights.py` | Which of the 78 evaluation weights the search moved away from the hand-set defaults, and in which direction. |
 | `experiments/PROGRESS.md` | Strength measurements against fixed baselines, and the search's history. |
 | `docs/RULES_SPEC.md` | The rules themselves — every table in the Quick reference section is rulebook-accurate, not learned. |
@@ -51,12 +64,13 @@ of the earlier draft of this document.
 **Three honest caveats you should carry through the whole document.**
 
 1. *The three climbs have run for very different lengths.* 2p has accepted 15
-   mutants in 151 generations, 3p 9 in 119, 4p only **5 in 103**. So when the
+   mutants in 169 generations, 3p 10 in 129, 4p only **6 in 111**. So when the
    counts disagree, the 4p number is the one most likely to be young rather
    than right — and the 4p weight vector contains some wild values (a
-   `science` stock weight of −6.1, a `science_rate` of +22.5) that look like a
-   single accepted mutant that has not yet been trimmed back. Treat extreme 4p
-   figures as **[provisional]** unless the behaviour data backs them.
+   `science` stock weight of **−6.09** against a hand-set +0.5, a `science_rate`
+   of **+22.5** against +4.0) that look like one or two accepted mutants that
+   have not been trimmed back. Treat extreme 4p figures as **[provisional]**
+   unless the behaviour data backs them.
 2. *All behaviour numbers come from mirror self-play.* The champion plays copies
    of itself, so any "relative to opponents" figure is close to 1.0 by
    construction and tells you very little. Absolute figures (my strength, my
@@ -114,11 +128,31 @@ Eight rules. In rough order of how much they are worth.
    −30%). A farm or lab bought in Age III does not pay for itself before
    scoring. Buy culture instead. **[strong]**
 
-8. **Keep military at parity with the strongest player — that is all you need,
-   until 3 players.** The champions never attack: **zero wars** in 180 games,
-   and 4 aggressions total (all at 3p). They keep strength at 1.02-1.06× the
-   table in every age. But the size of army needed to hold that parity is wildly
-   different by count — see the per-count section. **[mixed]**
+8. **Military: nobody fights, but only the 2p champion is actually safe.**
+   **Zero wars in 360 games** at all three counts, and aggressions are rare
+   (0.01 / 0.03 / 0.11 per game). The champions' strength relative to the
+   *strongest* rival, by age:
+
+   | ratio to strongest rival | Age I | Age II | Age III | Age IV |
+   |---|---|---|---|---|
+   | 2p | 1.04 | 1.05 | 1.02 | 1.07 |
+   | 3p | 0.82 | 0.84 | 0.78 | 0.75 |
+   | 4p | **0.46** | **0.52** | **0.59** | **0.60** |
+
+   Parity holds **at 2 players only** — where there is exactly one rival, so
+   "the strongest rival" and "the average rival" are the same thing. At 3p the
+   champion runs about 20% behind the table leader, and at 4p it runs at *half*
+   the leader's strength and spends **48–52% of its turns below half the
+   strongest rival's strength** [`military_by_age`, 120 games each].
+
+   **Read this as a possible weakness in the AI, not as advice.** In mirror
+   self-play nobody attacks, so being weak is never punished and the search has
+   no gradient telling it to build an army. A human table will punish it. What
+   the data honestly supports is only the narrow claim: *at 2 players, matching
+   your single opponent is sufficient and more is waste.* At 3p and 4p we do not
+   know what the right number is — we only know the champions are below it and
+   have never been made to pay. **[mixed — 2p only; 3p/4p is a likely artefact
+   of mirror self-play]**
 
 ---
 
