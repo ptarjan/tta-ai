@@ -10,11 +10,24 @@ comes from a rules-complete engine plus a self-play AI that is still training.
 ## How to read this document
 
 **Snapshot warning.** The AI is mid-training. Every number below is a snapshot
-taken on **2026-07-26**, with the champions at roughly generation 43 (2 players),
-32 (3 players) and 25 (4 players). The behaviour samples were harvested a few
-generations earlier, at 60 games per player count. Numbers will move. Structural
-advice ("spend your actions", "science early, culture late") is much more stable
-than any single figure.
+taken on **2026-07-26**, with the champions at generation **149 (2 players),
+116 (3 players) and 101 (4 players)**. Behaviour was harvested from those exact
+champions at **120 games per player count**, mirror self-play. Numbers will
+move. Structural advice ("spend your actions", "science early, culture late")
+is much more stable than any single figure.
+
+**How strong is the thing giving you advice?** Measured against the hand-set
+weights it started from, 96 games each (`experiments/generations_*.jsonl`
+anchor series):
+
+| | champion vs. its own start point | null | vs. a greedy bot |
+|---|---|---|---|
+| 2p | **82.3% ± 7.7** (gen 140) | 50% | 90.6% |
+| 3p | **70.3% ± 9.1** (gen 110) | 33.3% | 74.0% |
+| 4p | **66.2% ± 9.5** (gen 100) | 25% | 90.6% |
+
+All three are now decisively better than where they began. That was *not* true
+of the earlier draft of this document.
 
 **Where the numbers come from.**
 
@@ -37,17 +50,20 @@ than any single figure.
 
 **Two honest caveats you should carry through the whole document.**
 
-1. *The 2-player champion has barely learned anything.* It has accepted **one**
-   mutant in its whole run; its weights sit an order of magnitude closer to the
-   hand-set starting point than 3p or 4p (mean drift 0.05 vs 0.81 and 0.50), and
-   it is statistically indistinguishable from its own start point (44.8% ± 9.9
-   against it, null 50%). **2p advice below is mostly hand-set intuition that
-   simply hasn't been refuted**, not something the search discovered. Treat it
-   as a decent default, not as evidence.
+1. *The three climbs have run for very different lengths.* 2p has accepted 15
+   mutants in 151 generations, 3p 9 in 119, 4p only **5 in 103**. So when the
+   counts disagree, the 4p number is the one most likely to be young rather
+   than right — and the 4p weight vector contains some wild values (a
+   `science` stock weight of −6.1, a `science_rate` of +22.5) that look like a
+   single accepted mutant that has not yet been trimmed back. Treat extreme 4p
+   figures as **[provisional]** unless the behaviour data backs them.
 2. *All behaviour numbers come from mirror self-play.* The champion plays copies
    of itself, so any "relative to opponents" figure is close to 1.0 by
    construction and tells you very little. Absolute figures (my strength, my
    science rate, my worker split) are the useful ones.
+3. *The search is 1-ply.* It never plans a combo two turns ahead. Anything in
+   this document about *sequencing* is inferred from when things happened, not
+   from the AI reasoning about them.
 
 ---
 
