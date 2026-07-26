@@ -44,8 +44,27 @@ def _bots(kind, n, seed):
     out = []
     for i in range(n):
         rng = random.Random(seed * 131 + i)
-        out.append(RandomBot(rng) if kind == "random" else GreedyBot(rng))
+        if kind == "random":
+            out.append(RandomBot(rng))
+        elif kind == "weighted":
+            from .bots import WeightedBot
+            out.append(WeightedBot(rng=rng))
+        elif kind == "quiescent":
+            from .bots.quiescent import QuiescentBot
+            out.append(QuiescentBot(rng=rng))
+        else:
+            out.append(GreedyBot(rng))
     return out
+
+
+# The default fingerprint plays GreedyBot only, so it is *structurally blind*
+# to `WeightedBot` (docs/PYPY.md 9.0/9.6 rely on exactly that blindness to
+# explain why four master rebases left the digests untouched).  That is fine as
+# long as nobody changes WeightedBot -- and section 9.14 does.  These cases
+# give WeightedBot a determinism gate of its own; without one, a change to
+# `WeightedBot.pick` could not be caught by any digest in this project.
+def weighted_cases(nseeds=3):
+    return [(n, "weighted", s) for n in (2, 3, 4) for s in range(nseeds)]
 
 
 def _play(n, kind, seed):
@@ -128,6 +147,8 @@ def main(argv):
     cmd = argv[1] if len(argv) > 1 else "bench"
     wide = "--wide" in argv
     cases = wide_cases() if wide else CASES
+    if "--weighted" in argv:
+        cases = weighted_cases(_opt(argv, "--seeds", 8 if wide else 3))
     pos = [a for a in argv[2:] if not a.startswith("--")]
     if cmd == "bench":
         bench(games=_opt(argv, "--games", int(pos[0]) if pos else None),
