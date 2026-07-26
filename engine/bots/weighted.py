@@ -354,7 +354,11 @@ class WeightedBot:
     def pick(self, state, moves):
         if len(moves) == 1:
             return moves[0]
-        idx = state.current
+        # Score for whoever actually owns the move. On a pending decision that
+        # is NOT the turn player -- pact accept/refuse is always one of these,
+        # and 10/16 auction decisions were measured to be -- `state.current`
+        # made us maximise a RIVAL's position (docs/PACTS_DIAGNOSIS.md).
+        idx = state.decider()
         try:
             ctx = rival_context(state, idx)
         except Exception:
