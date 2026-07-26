@@ -352,5 +352,82 @@ class ParanoidModeCatchesMisses(JournalTestCase):
             journal.rollback(j)
 
 
+class SetattrCoverageIsComplete(unittest.TestCase):
+    """The `__setattr__` hook covers 300 of the 470 sites -- IF the class list
+    is complete.
+
+    `journal.JOURNALLED_CLASSES` names four dataclasses.  Every attribute write
+    to an object of some *other* class that is nonetheless reachable from the
+    GameState would be silently unjournalled, and unlike a container site it
+    would not be found by `tools/find_mutations.py` (which only looks at
+    subscripts and mutator calls).  That is the one hole the conversion plan
+    cannot grep its way out of, so it is closed here by walking a real
+    mid-game state and asserting the reachable type set is exactly what the
+    journal assumes: the four dataclasses, plain containers, and scalars.
+
+    If someone later adds a fifth state dataclass, this fails immediately and
+    names it -- rather than the journal quietly failing to restore it.
+    """
+
+    def _walk(self, root):
+        seen, todo, classes, containers = set(), [root], set(), set()
+        while todo:
+            o = todo.pop()
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            t = type(o)
+            if t in (str, int, float, bool, bytes, type(None)):
+                continue
+            if hasattr(o, "__dataclass_fields__"):
+                classes.add(t)
+                todo.extend(v for k, v in o.__dict__.items() if k[0] != "_")
+            elif t in (list, tuple, set, frozenset):
+                containers.add(t)
+                todo.extend(o)
+            elif t is dict:
+                containers.add(t)
+                todo.extend(o.keys())
+                todo.extend(o.values())
+            else:
+                containers.add(t)
+        return classes, containers
+
+    def _midgame(self):
+        from engine.bots import make_bots
+        st = game.new_game(4, seed=3)
+        bots = make_bots("greedy", 4, seed=1)
+        for _ in range(120):
+            if st.game_over:
+                break
+            mv = bots[st.decider()](st)
+            from engine import actions
+            actions.apply(st, mv, __import__("random").Random(7))
+        return st
+
+    def test_only_journalled_dataclasses_are_reachable(self):
+        st = self._midgame()
+        classes, containers = self._walk(st)
+        self.assertTrue(classes, "walk found no dataclasses -- walk is broken")
+        extra = classes - set(journal.JOURNALLED_CLASSES)
+        self.assertFalse(
+            extra,
+            "state-reachable dataclass(es) whose attribute writes are NOT "
+            f"journalled: {sorted(c.__name__ for c in extra)}.  Add them to "
+            "journal.JOURNALLED_CLASSES.")
+
+    def test_only_container_types_the_journal_can_undo_are_reachable(self):
+        st = self._midgame()
+        classes, containers = self._walk(st)
+        # `touch()` raises JournalError on anything that is not one of these
+        # three; tuple/frozenset are immutable so they need no undo record.
+        allowed = {list, dict, set, tuple, frozenset}
+        extra = containers - allowed
+        self.assertFalse(
+            extra,
+            "state-reachable mutable container type(s) `journal.touch` cannot "
+            f"undo: {sorted(c.__name__ for c in extra)}")
+
+
 if __name__ == "__main__":
     unittest.main()
