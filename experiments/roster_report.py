@@ -191,18 +191,23 @@ def summary_table(rows):
     """Per-bot mean share at each player count, plus the Elo summary."""
     els = {n: elo(rows, n) for n in (2, 3, 4) if names_at(rows, n)}
     ns = [e for e in ORDER if any(e in els[n] for n in els)]
-    lines = ["| bot | 2p share | 3p share | 4p share | Elo 2p | Elo 3p | Elo 4p |",
-             "|---|---|---|---|---|---|---|"]
+    # A share is not comparable across player counts -- par is 50%, 33.3%,
+    # 25%.  "x par" divides by the null, so 1.00 is an average bot at every
+    # table size and the numbers can be read down the row.
+    lines = ["| bot | 2p share | x par | 3p share | x par | 4p share | x par "
+             "| Elo 2p | Elo 3p | Elo 4p |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for e in ns:
-        sh, el = [], []
+        cols, el = [], []
         for n in (2, 3, 4):
             if n in els and e in els[n]:
-                sh.append(f"{mean_share(rows, n, e):.1%}")
+                s = mean_share(rows, n, e)
+                cols += [f"{s:.1%}", f"{s * n:.2f}"]
                 el.append(f"{els[n][e]:.0f}")
             else:
-                sh.append("")
+                cols += ["", ""]
                 el.append("")
-        lines.append(f"| **{LABELS[e]}** | " + " | ".join(sh + el) + " |")
+        lines.append(f"| **{LABELS[e]}** | " + " | ".join(cols + el) + " |")
     return "\n".join(lines)
 
 
@@ -235,15 +240,77 @@ def behaviour_table(path):
     return "\n".join(out)
 
 
+def cost_table(path):
+    """Wall clock per bot, and what that implies for a training run."""
+    if not os.path.exists(path):
+        return "_(not measured)_"
+    rows = {}
+    for line in open(path):
+        r = json.loads(line)
+        rows[(r["players"], r["label"])] = r
+    have = [e for e in ORDER if any((n, e) in rows for n in (2, 3, 4))]
+    if not have:
+        return "_(not measured)_"
+    # cheapest bot at each player count is the unit
+    base = {}
+    for n in (2, 3, 4):
+        vals = [rows[(n, e)]["secs_per_game"] for e in have if (n, e) in rows]
+        if vals:
+            base[n] = min(vals)
+    lines = ["| bot | 2p s/game | 3p s/game | 4p s/game | slowdown vs "
+             "cheapest (4p) |", "|---|---|---|---|---|"]
+    for e in have:
+        cols = []
+        for n in (2, 3, 4):
+            r = rows.get((n, e))
+            cols.append(f"{r['secs_per_game']:.2f}" if r else "")
+        r4 = rows.get((4, e))
+        rel = (f"{r4['secs_per_game'] / base[4]:.1f}x"
+               if r4 and base.get(4) else "")
+        lines.append(f"| **{LABELS[e]}** | " + " | ".join(cols)
+                     + f" | {rel} |")
+    return "\n".join(lines)
+
+
+def inject(path, blocks):
+    """Replace the content between <!-- BEGIN x --> / <!-- END x --> markers."""
+    text = open(path).read()
+    for name, body in blocks.items():
+        start = f"<!-- BEGIN {name} -->"
+        end = f"<!-- END {name} -->"
+        i, j = text.find(start), text.find(end)
+        if i < 0 or j < 0:
+            continue
+        text = text[:i + len(start)] + "\n" + body.strip() + "\n" + text[j:]
+    open(path, "w").write(text)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--match", default="experiments/roster_match.jsonl")
     ap.add_argument("--behaviour", default="experiments/roster_behaviour.jsonl")
     ap.add_argument("--section", default="all",
-                    choices=("all", "matrix", "summary", "behaviour"))
+                    choices=("all", "matrix", "summary", "behaviour", "cost"))
+    ap.add_argument("--inject", default="",
+                    help="markdown file with BEGIN/END markers to fill in")
     args = ap.parse_args(argv)
 
     rows = load(args.match)
+    if args.inject:
+        mats = "\n".join(
+            f"\n### {n} players (null = {1.0 / n:.1%})\n\n{matrix(rows, n)}"
+            for n in (2, 3, 4) if names_at(rows, n))
+        inject(args.inject, {
+            "summary": summary_table(rows),
+            "matrix": mats,
+            "behaviour": behaviour_table(args.behaviour),
+            "cost": cost_table(args.behaviour),
+        })
+        print(f"injected into {args.inject}")
+        return 0
+    if args.section == "cost":
+        print(cost_table(args.behaviour))
+        return 0
     if args.section in ("all", "summary"):
         print(summary_table(rows))
     if args.section in ("all", "matrix"):
