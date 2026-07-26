@@ -28,11 +28,13 @@ applies every legal move to a fast copy of the state and keeps the best.
 from __future__ import annotations
 
 import random
+from functools import lru_cache as _lru_cache
 
 from .. import actions, cards as C, economy, effects
 from .fastcopy import copy_state
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
+           "card_potential", "hand_potential",
            "load_weights", "save_weights"]
 
 # ---------------------------------------------------------------- metadata
@@ -347,6 +349,126 @@ def features(state, idx, ctx=None):
     }
 
 
+# --------------------------------------------------- card identity in hand
+#
+# `features()` above reduces the whole civil hand to `hand_civil` (a count)
+# and `hand_value` (sum of age level + 1).  Two DIFFERENT cards therefore
+# produce a byte-identical feature vector, so the 1-ply search has no basis
+# to prefer a good card to a bad one and `("take", i)` scores ~0 for every
+# slot in the row -- measured at -0.155 mean, and a flat -0.67 for every Age
+# III card whatever it is (docs/WASTED_ACTIONS.md §4).  That blindness, not
+# the `end_turn` search artifact, is why the bot leaves civil actions unspent.
+#
+# The fix below prices a card in hand by what it would DO if it were played,
+# through the SAME weight vector, so it introduces no new hand-tuned
+# constants beyond the single `hand_potential` scale.  Measured at 2p against
+# the frozen champion, mirror match, seat-rotated, n=400 per row:
+#
+#     hand_potential   win rate           mean culture
+#     0.0 (control)    50.0% +/- 6.9%     132.1 vs 132.1   <- byte-identical
+#     0.125            69.6% +/- 4.5%     137.8 vs 117.0
+#     0.25             67.2% +/- 4.6%     133.2 vs 110.8
+#     0.5              63.2% +/- 4.7%     123.8 vs 110.4
+#     1.0              63.2% +/- 4.7%     120.5 vs 107.7
+#
+# The term only has to BREAK THE TIE between cards, which is why the small
+# scales win and the curve falls off above ~0.25.
+
+# a card's per-turn yield once developed and staffed
+_PROD_TO_FEATURE = {
+    "culture": "culture_rate",
+    "science": "science_rate",
+    "food": "food_rate",
+    "resources": "resource_rate",
+    "happy": "happy_margin",
+    "strength": "strength",
+}
+
+# one-shot gains and permanent modifiers printed on the card
+_EFF_TO_FEATURE = {
+    "gainScience": "science",
+    "gainCulture": "culture",
+    "gainFood": "food_stock",
+    "gainResources": "resource_stock",
+    "gainPopulation": "free_workers",
+    "civilActions": "civil_actions",
+    "militaryActions": "military_actions",
+    "extraCivilActions": "civil_actions",
+    "extraMilitaryActions": "military_actions",
+    "cultureProduction": "culture_rate",
+    "scienceProduction": "science_rate",
+    "foodProduction": "food_rate",
+    "resourceProduction": "resource_rate",
+    "strength": "strength",
+    "happy": "happy_margin",
+    "yellowTokens": "yellow_bank",
+    "blueTokens": "blue_free",
+}
+
+
+@_lru_cache(maxsize=None)
+def _card_yields(name):
+    """(feature, amount, clamp) triples for a card, independent of weights.
+
+    `clamp` marks a COST: it is priced through max(0, w) because `science`
+    and `resource_stock` are stock weights a hill climb is free to drive
+    negative (the 4p champion reached science = -6.09).  Unclamped, a
+    negative stock weight turns "this card is expensive" into "this card is a
+    bargain" -- Alchemy scored +67.04 under the 4p vector against +5.86 under
+    the 2p one.  Paying a cost must never read as a gain.
+    """
+    db = C.db()
+    card = db.by_name.get(name)
+    if card is None:
+        return ()
+    out = []
+    for k, amt in (card.get("production") or {}).items():
+        fk = _PROD_TO_FEATURE.get(k)
+        if fk and isinstance(amt, (int, float)) and amt is not True:
+            out.append((fk, float(amt), False))
+    for k, amt in (card.get("effects") or {}).items():
+        if amt is True or amt is False or not isinstance(amt, (int, float)):
+            continue
+        fk = _EFF_TO_FEATURE.get(k)
+        if fk:
+            out.append((fk, float(amt), False))
+    tc = card.get("techCost") or 0
+    if tc:
+        out.append(("science", -float(tc), True))
+    bc = card.get("buildCost") or 0
+    if bc:
+        out.append(("resource_stock", -float(bc), True))
+    if card["type"] == "wonder":
+        out.append(("wonders", 1.0, False))
+        stages = card.get("stages") or []
+        if stages:
+            out.append(("resource_stock", -float(sum(stages)), True))
+    return tuple(out)
+
+
+def card_potential(name, w):
+    """Eval-points a single card in hand would be worth if it were played."""
+    total = 0.0
+    for k, amt, clamp in _card_yields(name):
+        wk = w.get(k, 0.0)
+        if clamp and wk < 0.0:
+            wk = 0.0
+        if wk:
+            total += wk * amt
+    return total
+
+
+def hand_potential(state, idx, w):
+    """Summed `card_potential` over the civil hand (0.0 for an empty hand)."""
+    hand = state.players[idx].hand_civil
+    if not hand:
+        return 0.0
+    total = 0.0
+    for n in hand:
+        total += card_potential(n, w)
+    return total
+
+
 # ------------------------------------------------------------ default weights
 
 BASE_WEIGHTS = {
@@ -416,6 +538,12 @@ BASE_WEIGHTS = {
     # cards
     "hand_civil": 0.3,
     "hand_value": 0.25,
+    # scale on the identity-aware hand term (see `hand_potential` above).
+    # 0.125 measured best of {0, 0.125, 0.25, 0.5, 1.0} at 2p: 69.6% +/- 4.5%
+    # against the frozen champion.  NOT yet validated at 3p/4p -- at 3p the
+    # term was not significant and the 4p champion's weight vector is
+    # degenerate in its own right (docs/WASTED_ACTIONS.md §5, §7).
+    "hand_potential": 0.125,
     "hand_military": 0.3,
     "hand_mil_value": 0.15,
     # rivals
@@ -424,8 +552,26 @@ BASE_WEIGHTS = {
     "rival_culture_rate": -1.0,
     "rival_science_rate": -0.6,
     "rival_strength": -0.15,
-    # search bias: value of the "end turn" move itself (its child state has
-    # already collected a production phase, which flatters it)
+    # Search bias: value of the "end turn" move itself.  Its child state has
+    # already collected a production phase, which flatters it by +12.6 eval
+    # points on average at 2p (+26.3 in Age IV) against alternatives worth
+    # fractions of a point.
+    #
+    # DO NOT "FIX" THIS.  It looks like an obvious bug and it is a real
+    # asymmetry, but removing it was measured, twice, two different ways, and
+    # it makes the bot MUCH weaker (docs/WASTED_ACTIONS.md §6, n=400 each):
+    #
+    #     score end_turn on the unmoved board, eps 0.0    38.4% +/- 4.8%
+    #     ... eps -0.05                                   39.8% +/- 4.8%
+    #     roll every candidate to the same horizon        29.8% +/- 4.4%
+    #     ... and pass MORE instead (eps +4.0)            11.0% +/- 4.3%
+    #     the same fix on top of `hand_potential`         39.8% +/- 6.7%
+    #
+    # against a 50% null.  The flattery incidentally acts as a move-quality
+    # filter: it admits only moves the evaluation can confidently price and
+    # screens out the ones it cannot.  The wasted civil actions it causes are
+    # a symptom of card-identity blindness, which `hand_potential` addresses
+    # directly; fix that first and re-measure before touching this.
     "end_turn_bias": -3.0,
 }
 
@@ -472,6 +618,14 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
         wl = get(k + "_late")
         if wl:
             total += wl * late * v
+    # identity-aware hand term: what the cards actually in hand would be worth
+    # if played.  Deliberately NOT folded into `features()` -- it is priced
+    # through `w` itself, so it is not a linear feature and must not pick up
+    # the early/late phase multipliers above (that is the form that was
+    # measured; see the block above `_card_yields`).
+    hp = get("hand_potential")
+    if hp:
+        total += hp * hand_potential(state, idx, w)
     return total
 
 
