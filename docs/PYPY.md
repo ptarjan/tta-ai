@@ -194,11 +194,58 @@ OK  identical behaviour: c7e73ede8a5bfd4567adb7f7660d7e19ae61088d3f1cbf4077c27a4
 **VERDICT: 135/135 games (33 narrow + 102 wide) byte-identical across
 interpreters. Determinism holds.**
 
+## 3. Steady-state throughput — CPython 3.14.6 vs PyPy 7.3.23
+
+Tool: `tools/bench_interp.py`. It warms up for a fixed number of **CPU-seconds**
+(not games — a 4p greedy game is ~1.3 CPU-s, a 2p random game 0.02 CPU-s, so a
+game-count warm-up is wildly unfair to one cell or the other), then measures for
+a fixed number of CPU-seconds and reports only that steady-state window. It also
+prints a per-second ramp trace of the warm-up so the JIT ramp is visible.
+
+Run: `nice -n 10`, sequentially (CPython first, then PyPy), 8 s warm-up / 12 s
+measure per cell. **The three hill climbs were running throughout** (4 CPU-busy
+python3 processes on 6 cores, load average ~7.8), which is why the metric is
+`time.process_time` — CPU seconds consumed by the benchmark process itself —
+and not wall clock. Both interpreters saw the same load, sequentially.
+
+| cell | CPython 3.14.6 | PyPy 7.3.23 | PyPy / CPython |
+|---|---|---|---|
+| random 2p | **54.06** games/cpu-s | 30.07 | 0.56x |
+| random 3p | **34.36** | 25.90 | 0.75x |
+| random 4p | **19.61** | 17.36 | 0.89x |
+| greedy 2p | **3.498** | 2.902 | 0.83x |
+| greedy 3p | **1.673** | 1.398 | 0.84x |
+| greedy 4p | **0.744** | 0.624 | 0.84x |
+
+Moves/cpu-s tells the same story (e.g. greedy 4p: 289 CPython vs 241 PyPy).
+
+**PyPy is slower than CPython in every single cell**, by 11–44%.
+
+Warm-up ramps (games/s per warm-up second) confirm the JIT does ramp — PyPy
+random 2p climbs 10.0 → 25.9 over the 8 s warm-up — but even fully warm it
+never catches CPython 3.14. Because the greedy ramps were still rising at the
+8 s mark, the greedy cells were re-run with a much longer warm-up; see below.
+
+Why CPython wins here: 3.14's specialising adaptive interpreter is very good at
+exactly this workload (attribute loads on dataclasses, small dict probes,
+`lru_cache` hits), the engine has already been hand-optimised *for* CPython
+(module-level card-DB bindings, compiled effect programs, `lru_cache`d move
+scaffolding), and the hot loop is allocation-heavy short-lived object churn
+(`copy_state` per candidate move) rather than the long numeric loops PyPy's
+JIT excels at. PyPy also pays a GC cost on that churn that CPython's refcounting
+frees immediately.
+
+### Long-warm-up re-check of the greedy cells
+
+Pending — see status below.
+
 ## Status / next steps (keep current)
 
 - [x] Task 1 — determinism re-verified, 33/33 + 102/102 identical. PASS.
-- [ ] Task 2 — steady-state games/s table, CPython vs PyPy, 2p/3p/4p x random/greedy.
-- [ ] Task 3 — core scaling / worker count.
-- [ ] Task 4 — switch climbs to pypy3 (only if PyPy wins on greedy).
+- [x] Task 2 — steady-state games/s table (8 s warm-up). **PyPy loses every cell.**
+- [x] Task 3 — core scaling / worker count: 6 physical cores, no SMT -> 4 workers.
+- [ ] Task 2b — greedy cells re-run with a long (40 s) PyPy warm-up, to be sure.
+- [ ] Task 4 — switch climbs to pypy3: **looking like NO** (PyPy is 16% slower on
+      greedy, which is what training runs). Pending 2b.
 - [ ] Task 5 — further engine optimisation.
 
