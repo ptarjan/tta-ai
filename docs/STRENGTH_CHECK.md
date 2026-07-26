@@ -107,6 +107,25 @@ any advice in it that amounts to taking culture early at the expense of growth,
 actions or spent science is advice to play the losing side of the matchup
 measured here.
 
+## What BookBot actually plays, and where each rule came from
+
+BookBot is `engine/bots/book.py`. The priority list is in its docstring; these
+are the rules that carry the most weight, with their sources.
+
+| rule as coded | the advice it encodes | source |
+|---|---|---|
+| Prefer cards that give civil actions (Pyramids rank 9, Code of Laws rank 9, governments valued at 4× per civil action gained) | "prioritis[e] cards that give civil actions, science and yellow cubes"; Pyramids is A-tier | [BGG: strategy tips for newbie](https://boardgamegeek.com/thread/2439618/strategy-tips-newbie) |
+| `mil_target` = match the second-strongest rival, and never fall more than 3 behind the strongest | "You don't have to be in the lead, but you don't want to be in last place, either" — aim to stay in "the top two all the time" | [Stately Play, Strategy 101: Through the Ages](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/) |
+| `res_need` targets ~3 resources/turn in Age A rising with the age; mine upgrades ranked highly | start with 2 bronze mines and add a third immediately; "going from 3 to 6 ore is a godsend early in the game" | [Stately Play](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/) |
+| `food_need` targets consumption + 2, i.e. ~3–4 food/turn, and no more | 2 agriculture workers, upgrade to Irrigation for 4 food/turn, which "should suffice through Age II"; extra food early just feeds corruption | [Stately Play](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/); [BGG](https://boardgamegeek.com/thread/2439618/strategy-tips-newbie) |
+| Labs/science weighted 3.5 per point until the endgame | "Always pursue Alchemy in Age I"; do not rely on the single starting Lab | [Stately Play](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/) |
+| Hanging Gardens ranked 7 and happiness buildings jump the queue only when `happy_gap > 0` | Hanging Gardens' 2 happy lets you "ignore both Religion and Arenas in the early game" | [Stately Play](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/) |
+| Leader ranks: Hammurabi and Aristotle top of Age A | both named A-tier leaders | [BGG](https://boardgamegeek.com/thread/2439618/strategy-tips-newbie) |
+| Culture production weighted 4.5/point from Age II on | culture is the only resource that decides the game; strong play targets 15+/turn | [Stately Play](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/) |
+
+Card costs, stages and production are all read from the engine card DB rather
+than hard-coded, so the rules stay honest if the DB is corrected.
+
 ## Reproducing
 
 ```
