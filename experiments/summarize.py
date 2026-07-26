@@ -114,7 +114,32 @@ def report(k, top, out=print):
                 + (f" +/-{ci_d:.1%}" if ci_d is not None else "")
                 + f"  vs_greedy {r['vs_greedy']:.1%}"
                 + (f" +/-{ci_g:.1%}" if ci_g is not None else "")
+                + (f"  vs_random {r['vs_random']:.1%}"
+                   if "vs_random" in r else "")
                 + (f"  (n={r['anchor_games']})" if "anchor_games" in r else ""))
+
+    # Which mutation operator actually pays.  `op` is only recorded by the
+    # league-mode climber, so this block is silent for older runs.
+    ops = {}
+    for r in rows:
+        for t in r.get("tried", ()):
+            o = (t.get("op") or "").split(":")[0]
+            if not o:
+                continue
+            ops.setdefault(o, [0, 0])[0] += 1
+    for r in acc:
+        o = (r.get("op") or "").split(":")[0]
+        if o in ops:
+            ops[o][1] += 1
+    if ops:
+        out("  mutation operators (tried -> accepted):")
+        for o, (n, a) in sorted(ops.items(), key=lambda kv: -kv[1][1]):
+            out(f"    {o:<10} {n:>4} tried  {a:>3} accepted  "
+                f"{(a / n * 100) if n else 0:.0f}%")
+    ldir = os.path.join(HERE, f"league_{k}p")
+    if os.path.isdir(ldir):
+        out(f"  league: {len([f for f in os.listdir(ldir) if f.endswith('.json')])}"
+            " archived champions in the field")
 
     if champ is None:
         return
