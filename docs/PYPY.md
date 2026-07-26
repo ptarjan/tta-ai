@@ -235,17 +235,55 @@ scaffolding), and the hot loop is allocation-heavy short-lived object churn
 JIT excels at. PyPy also pays a GC cost on that churn that CPython's refcounting
 frees immediately.
 
-### Long-warm-up re-check of the greedy cells
+### Long-warm-up re-check of the greedy cells — PyPy still loses
 
-Pending — see status below.
+The greedy ramps were still rising at 8 s, so the greedy cells were re-run with
+a **45 s CPU warm-up and a 30 s measure window** (PyPy first, then CPython, both
+`nice -n 10`, climbs still running):
+
+| cell | CPython 3.14.6 | PyPy 7.3.23 | PyPy / CPython |
+|---|---|---|---|
+| greedy 2p | **3.528** games/cpu-s | 2.929 | 0.83x |
+| greedy 4p | **0.815** games/cpu-s | 0.628 | 0.77x |
+
+PyPy's 2p ramp shows the JIT plateauing after ~4 s (0.95 → ~2.5 by second 4,
+then flat around 2.4–3.4 for the remaining 33 s). It is fully warm and still
+17–23% behind. Longer warm-up did not change the verdict; if anything the wider
+window made the 4p gap *worse* (0.89x at 8 s -> 0.77x at 45 s on random 4p's
+sibling cell).
+
+### DECISION (task 4): **DO NOT switch the hill climbs to pypy3**
+
+The climbs run GreedyBot self-play, which is the cell where PyPy is 17–23%
+slower. Switching would cost throughput *and* risk a live training run for
+nothing. The three detached climbs stay on `python3` (CPython 3.14.6).
+No interpreter switch point to record — there is no switch.
+
+The determinism work is not wasted: `math.fsum` in `evaluate` (commit 4290459)
+means the engine is now reproducible across interpreters *and across CPython
+versions* (3.11 vs 3.12+ differed on `sum()` of floats before it), which is
+worth keeping on its own merits.
+
+Re-test pypy3 if any of these change: PyPy gains a faster GC for
+short-lived-object churn, the bots stop copying a whole `GameState` per
+candidate move, or the project moves to an older/non-specialising CPython.
 
 ## Status / next steps (keep current)
 
 - [x] Task 1 — determinism re-verified, 33/33 + 102/102 identical. PASS.
 - [x] Task 2 — steady-state games/s table (8 s warm-up). **PyPy loses every cell.**
+- [x] Task 2b — greedy cells re-run with a 45 s warm-up. PyPy still 17–23% behind.
 - [x] Task 3 — core scaling / worker count: 6 physical cores, no SMT -> 4 workers.
-- [ ] Task 2b — greedy cells re-run with a long (40 s) PyPy warm-up, to be sure.
-- [ ] Task 4 — switch climbs to pypy3: **looking like NO** (PyPy is 16% slower on
-      greedy, which is what training runs). Pending 2b.
-- [ ] Task 5 — further engine optimisation.
+- [x] Task 4 — **NO SWITCH.** Climbs stay on CPython 3.14.6, untouched.
+- [ ] Task 5 — further engine optimisation (favouring both runtimes).
+
+### Re-baseline note (commit f4bcac0, 2026-07-26)
+
+The main agent changed a rule after these measurements: yellow action cards now
+resolve their ordered action FIRST at full price with the gains landing after.
+That changes play in any game involving Breakthrough / Frugality, so **the
+fingerprint digests quoted above are stale from f4bcac0 onward**. The
+throughput numbers are unaffected in any meaningful way (the change moves work
+around inside a move, it does not add or remove any). Determinism is
+re-verified against f4bcac0 below.
 
