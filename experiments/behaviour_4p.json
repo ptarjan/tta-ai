@@ -1,0 +1,956 @@
+{
+ "champion": "experiments/champion_4p.json",
+ "champion_behaviour": {
+  "builds_by_type": {
+   "air": {
+    "median_round": 30,
+    "per_game": 0.08
+   },
+   "arena": {
+    "median_round": 9.5,
+    "per_game": 0.27
+   },
+   "artillery": {
+    "median_round": 12.5,
+    "per_game": 0.03
+   },
+   "cavalry": {
+    "median_round": 29,
+    "per_game": 0.02
+   },
+   "farm": {
+    "median_round": 7,
+    "per_game": 0.72
+   },
+   "government": {
+    "median_round": 27,
+    "per_game": 0.05
+   },
+   "infantry": {
+    "median_round": 8.5,
+    "per_game": 0.33
+   },
+   "lab": {
+    "median_round": 8.0,
+    "per_game": 0.8
+   },
+   "library": {
+    "median_round": 10,
+    "per_game": 0.42
+   },
+   "mine": {
+    "median_round": 5,
+    "per_game": 2.45
+   },
+   "special-tech": {
+    "median_round": 7,
+    "per_game": 0.85
+   },
+   "temple": {
+    "median_round": 6.0,
+    "per_game": 2.67
+   },
+   "theater": {
+    "median_round": 8,
+    "per_game": 0.42
+   }
+  },
+  "by_age": {
+   "A": {
+    "ca_left_unspent": 0.15,
+    "ca_total": 4.0,
+    "ca_wasted_share": 0.037,
+    "culture_rate": 0.0,
+    "food_rate": 2.0,
+    "hand_size": 0.92,
+    "happy_margin": 0.0,
+    "has_leader": 0.0,
+    "ma_left_unspent": 0.0,
+    "median_round": 1.0,
+    "military_share_of_workers": 0.167,
+    "prod_share_of_workers": 0.667,
+    "resource_rate": 2.0,
+    "sci_per_culture": null,
+    "science_rate": 1.0,
+    "strength": 1.0,
+    "strength_vs_opponents": 1.0,
+    "turns_sampled": 60,
+    "units": 1.0,
+    "units_vs_opponents": 1.0,
+    "urban_share_of_workers": 0.167,
+    "wonders_done": 0.0,
+    "workers_military": 1.0,
+    "workers_production": 4.0,
+    "workers_unused": 1.0,
+    "workers_urban": 1.0
+   },
+   "I": {
+    "ca_left_unspent": 0.78,
+    "ca_total": 4.21,
+    "ca_wasted_share": 0.185,
+    "culture_rate": 1.56,
+    "food_rate": 2.01,
+    "hand_size": 3.31,
+    "happy_margin": 1.37,
+    "has_leader": 0.7,
+    "ma_left_unspent": 1.69,
+    "median_round": 5,
+    "military_share_of_workers": 0.131,
+    "prod_share_of_workers": 0.631,
+    "resource_rate": 3.24,
+    "sci_per_culture": 0.85,
+    "science_rate": 1.33,
+    "strength": 1.83,
+    "strength_vs_opponents": 1.06,
+    "turns_sampled": 411,
+    "units": 1.06,
+    "units_vs_opponents": 1.0,
+    "urban_share_of_workers": 0.237,
+    "wonders_done": 0.47,
+    "workers_military": 1.06,
+    "workers_production": 5.09,
+    "workers_unused": 0.15,
+    "workers_urban": 1.91
+   },
+   "II": {
+    "ca_left_unspent": 3.89,
+    "ca_total": 4.55,
+    "ca_wasted_share": 0.855,
+    "culture_rate": 4.15,
+    "food_rate": 1.53,
+    "hand_size": 3.37,
+    "happy_margin": 3.19,
+    "has_leader": 0.3,
+    "ma_left_unspent": 2.56,
+    "median_round": 14.0,
+    "military_share_of_workers": 0.102,
+    "prod_share_of_workers": 0.541,
+    "resource_rate": 3.75,
+    "sci_per_culture": 0.46,
+    "science_rate": 1.89,
+    "strength": 2.01,
+    "strength_vs_opponents": 1.01,
+    "turns_sampled": 642,
+    "units": 0.86,
+    "units_vs_opponents": 0.99,
+    "urban_share_of_workers": 0.357,
+    "wonders_done": 1.24,
+    "workers_military": 0.86,
+    "workers_production": 4.57,
+    "workers_unused": 0.03,
+    "workers_urban": 3.02
+   },
+   "III": {
+    "ca_left_unspent": 4.2,
+    "ca_total": 4.92,
+    "ca_wasted_share": 0.854,
+    "culture_rate": 4.96,
+    "food_rate": 1.54,
+    "hand_size": 1.16,
+    "happy_margin": 3.43,
+    "has_leader": 0.12,
+    "ma_left_unspent": 2.69,
+    "median_round": 23,
+    "military_share_of_workers": 0.085,
+    "prod_share_of_workers": 0.548,
+    "resource_rate": 4.56,
+    "sci_per_culture": 0.32,
+    "science_rate": 1.61,
+    "strength": 1.85,
+    "strength_vs_opponents": 0.99,
+    "turns_sampled": 347,
+    "units": 0.7,
+    "units_vs_opponents": 0.89,
+    "urban_share_of_workers": 0.367,
+    "wonders_done": 1.34,
+    "workers_military": 0.7,
+    "workers_production": 4.48,
+    "workers_unused": 0.22,
+    "workers_urban": 3.0
+   },
+   "IV": {
+    "ca_left_unspent": 3.97,
+    "ca_total": 5.34,
+    "ca_wasted_share": 0.743,
+    "culture_rate": 5.75,
+    "food_rate": 1.31,
+    "hand_size": 1.01,
+    "happy_margin": 3.73,
+    "has_leader": 0.22,
+    "ma_left_unspent": 2.82,
+    "median_round": 28,
+    "military_share_of_workers": 0.079,
+    "prod_share_of_workers": 0.546,
+    "resource_rate": 5.25,
+    "sci_per_culture": 0.28,
+    "science_rate": 1.6,
+    "strength": 2.76,
+    "strength_vs_opponents": 1.13,
+    "turns_sampled": 67,
+    "units": 0.64,
+    "units_vs_opponents": 0.82,
+    "urban_share_of_workers": 0.375,
+    "wonders_done": 1.49,
+    "workers_military": 0.64,
+    "workers_production": 4.42,
+    "workers_unused": 0.33,
+    "workers_urban": 3.03
+   }
+  },
+  "cards_taken_by_type": {
+   "action": {
+    "per_game": 3.65,
+    "share": 0.284
+   },
+   "air": {
+    "per_game": 0.1,
+    "share": 0.008
+   },
+   "arena": {
+    "per_game": 0.32,
+    "share": 0.025
+   },
+   "artillery": {
+    "per_game": 0.15,
+    "share": 0.012
+   },
+   "cavalry": {
+    "per_game": 0.38,
+    "share": 0.03
+   },
+   "farm": {
+    "per_game": 0.4,
+    "share": 0.031
+   },
+   "government": {
+    "per_game": 0.55,
+    "share": 0.043
+   },
+   "infantry": {
+    "per_game": 0.43,
+    "share": 0.034
+   },
+   "lab": {
+    "per_game": 0.52,
+    "share": 0.04
+   },
+   "leader": {
+    "per_game": 1.4,
+    "share": 0.109
+   },
+   "library": {
+    "per_game": 0.28,
+    "share": 0.022
+   },
+   "mine": {
+    "per_game": 0.47,
+    "share": 0.036
+   },
+   "special-tech": {
+    "per_game": 1.2,
+    "share": 0.093
+   },
+   "temple": {
+    "per_game": 0.45,
+    "share": 0.035
+   },
+   "theater": {
+    "per_game": 0.32,
+    "share": 0.025
+   },
+   "wonder": {
+    "per_game": 2.25,
+    "share": 0.175
+   }
+  },
+  "conflict": {
+   "aggressions_started_per_game": 0.0,
+   "aggressions_suffered_per_game": 0.0,
+   "games_attacked_at_all": 0.0,
+   "games_starting_any_attack": 0.0,
+   "wars_started_per_game": 0.0,
+   "wars_suffered_per_game": 0.0
+  },
+  "cost_bands": {
+   "cards_taken_per_game": 12.87,
+   "civil_actions_spent_taking_per_game": 16.37,
+   "counts": {
+    "band1": 614,
+    "band2": 106,
+    "band3": 52
+   },
+   "share": {
+    "band1": 0.795,
+    "band2": 0.137,
+    "band3": 0.067
+   }
+  },
+  "culture_mean": 141.18333333333334,
+  "first_time": {
+   "aggression": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "government": {
+    "mean_round": 10.92,
+    "median_round": 7,
+    "p25_round": 4,
+    "p75_round": 17,
+    "share_of_games": 0.417
+   },
+   "leader": {
+    "mean_round": 3.73,
+    "median_round": 3.0,
+    "p25_round": 2,
+    "p75_round": 4,
+    "share_of_games": 0.867
+   },
+   "pact": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "take_action": {
+    "mean_round": 1.82,
+    "median_round": 2,
+    "p25_round": 1,
+    "p75_round": 2,
+    "share_of_games": 0.95
+   },
+   "take_arena": {
+    "mean_round": 6.41,
+    "median_round": 5,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.283
+   },
+   "take_artillery": {
+    "mean_round": 19.33,
+    "median_round": 20,
+    "p25_round": 14,
+    "p75_round": 24,
+    "share_of_games": 0.15
+   },
+   "take_cavalry": {
+    "mean_round": 6.52,
+    "median_round": 5,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.383
+   },
+   "take_farm": {
+    "mean_round": 7.62,
+    "median_round": 6.0,
+    "p25_round": 3,
+    "p75_round": 9,
+    "share_of_games": 0.4
+   },
+   "take_government": {
+    "mean_round": 9.04,
+    "median_round": 5.0,
+    "p25_round": 3,
+    "p75_round": 11,
+    "share_of_games": 0.4
+   },
+   "take_infantry": {
+    "mean_round": 7.38,
+    "median_round": 4.0,
+    "p25_round": 3,
+    "p75_round": 8,
+    "share_of_games": 0.4
+   },
+   "take_lab": {
+    "mean_round": 5.82,
+    "median_round": 5.0,
+    "p25_round": 4,
+    "p75_round": 7,
+    "share_of_games": 0.467
+   },
+   "take_leader": {
+    "mean_round": 2.33,
+    "median_round": 2.0,
+    "p25_round": 1,
+    "p75_round": 3,
+    "share_of_games": 0.867
+   },
+   "take_library": {
+    "mean_round": 8.38,
+    "median_round": 5.5,
+    "p25_round": 3,
+    "p75_round": 12,
+    "share_of_games": 0.267
+   },
+   "take_mine": {
+    "mean_round": 4.83,
+    "median_round": 4.0,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.4
+   },
+   "take_special-tech": {
+    "mean_round": 5.88,
+    "median_round": 4,
+    "p25_round": 3,
+    "p75_round": 6,
+    "share_of_games": 0.717
+   },
+   "take_temple": {
+    "mean_round": 5.78,
+    "median_round": 5,
+    "p25_round": 2,
+    "p75_round": 7,
+    "share_of_games": 0.383
+   },
+   "take_theater": {
+    "mean_round": 8.44,
+    "median_round": 7.0,
+    "p25_round": 3,
+    "p75_round": 12,
+    "share_of_games": 0.3
+   },
+   "take_wonder": {
+    "mean_round": 1.72,
+    "median_round": 1.0,
+    "p25_round": 1,
+    "p75_round": 2,
+    "share_of_games": 1.0
+   },
+   "upgrade_production": {
+    "mean_round": 2.0,
+    "median_round": 2.0,
+    "p25_round": 2,
+    "p75_round": 2,
+    "share_of_games": 1.0
+   },
+   "upgrade_urban": {
+    "mean_round": 4.59,
+    "median_round": 4,
+    "p25_round": 3,
+    "p75_round": 5,
+    "share_of_games": 0.983
+   },
+   "war": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "wonder_start": {
+    "mean_round": 3.73,
+    "median_round": 3,
+    "p25_round": 3,
+    "p75_round": 4,
+    "share_of_games": 0.983
+   }
+  },
+  "games": 60,
+  "label": "champion",
+  "moves_per_game": {
+   "bid": 0.05,
+   "bid_pass": 6.5,
+   "build": 4.53,
+   "choose": 4.27,
+   "churchill": 0.07,
+   "copy_tactic": 2.73,
+   "destroy": 0.52,
+   "develop": 2.7,
+   "end_turn": 25.45,
+   "play_action": 1.53,
+   "play_leader": 1.33,
+   "play_tactic": 0.88,
+   "pol_pass": 11.73,
+   "pop": 2.02,
+   "prepare_event": 12.25,
+   "resign": 0.27,
+   "revolution": 0.4,
+   "take": 12.87,
+   "upgrade": 1.87,
+   "wonder_step": 5.07
+  },
+  "overall": {
+   "ca_left_per_turn": 2.979,
+   "final_techs": 7.92,
+   "final_wonders": 1.53,
+   "ma_left_per_turn": 2.267,
+   "turns_with_unspent_ca": 0.713
+  },
+  "rounds_mean": 29.2,
+  "win_share": 0.25
+ },
+ "error_count": 0,
+ "errors": [],
+ "games": 60,
+ "opponent": "self",
+ "opponent_behaviour": {
+  "builds_by_type": {
+   "air": {
+    "median_round": 30,
+    "per_game": 0.08
+   },
+   "arena": {
+    "median_round": 9.5,
+    "per_game": 0.27
+   },
+   "artillery": {
+    "median_round": 12.5,
+    "per_game": 0.03
+   },
+   "cavalry": {
+    "median_round": 29,
+    "per_game": 0.02
+   },
+   "farm": {
+    "median_round": 7,
+    "per_game": 0.72
+   },
+   "government": {
+    "median_round": 27,
+    "per_game": 0.05
+   },
+   "infantry": {
+    "median_round": 8.5,
+    "per_game": 0.33
+   },
+   "lab": {
+    "median_round": 8.0,
+    "per_game": 0.8
+   },
+   "library": {
+    "median_round": 10,
+    "per_game": 0.42
+   },
+   "mine": {
+    "median_round": 5,
+    "per_game": 2.45
+   },
+   "special-tech": {
+    "median_round": 7,
+    "per_game": 0.85
+   },
+   "temple": {
+    "median_round": 6.0,
+    "per_game": 2.67
+   },
+   "theater": {
+    "median_round": 8,
+    "per_game": 0.42
+   }
+  },
+  "by_age": {
+   "A": {
+    "ca_left_unspent": 0.15,
+    "ca_total": 4.0,
+    "ca_wasted_share": 0.037,
+    "culture_rate": 0.0,
+    "food_rate": 2.0,
+    "hand_size": 0.92,
+    "happy_margin": 0.0,
+    "has_leader": 0.0,
+    "ma_left_unspent": 0.0,
+    "median_round": 1.0,
+    "military_share_of_workers": 0.167,
+    "prod_share_of_workers": 0.667,
+    "resource_rate": 2.0,
+    "sci_per_culture": null,
+    "science_rate": 1.0,
+    "strength": 1.0,
+    "strength_vs_opponents": 1.0,
+    "turns_sampled": 180,
+    "units": 1.0,
+    "units_vs_opponents": 1.0,
+    "urban_share_of_workers": 0.167,
+    "wonders_done": 0.0,
+    "workers_military": 1.0,
+    "workers_production": 4.0,
+    "workers_unused": 1.0,
+    "workers_urban": 1.0
+   },
+   "I": {
+    "ca_left_unspent": 0.78,
+    "ca_total": 4.21,
+    "ca_wasted_share": 0.185,
+    "culture_rate": 1.56,
+    "food_rate": 2.01,
+    "hand_size": 3.31,
+    "happy_margin": 1.37,
+    "has_leader": 0.7,
+    "ma_left_unspent": 1.69,
+    "median_round": 5,
+    "military_share_of_workers": 0.131,
+    "prod_share_of_workers": 0.631,
+    "resource_rate": 3.24,
+    "sci_per_culture": 0.85,
+    "science_rate": 1.33,
+    "strength": 1.83,
+    "strength_vs_opponents": 1.06,
+    "turns_sampled": 1233,
+    "units": 1.06,
+    "units_vs_opponents": 1.0,
+    "urban_share_of_workers": 0.237,
+    "wonders_done": 0.47,
+    "workers_military": 1.06,
+    "workers_production": 5.09,
+    "workers_unused": 0.15,
+    "workers_urban": 1.91
+   },
+   "II": {
+    "ca_left_unspent": 3.89,
+    "ca_total": 4.55,
+    "ca_wasted_share": 0.855,
+    "culture_rate": 4.15,
+    "food_rate": 1.53,
+    "hand_size": 3.37,
+    "happy_margin": 3.19,
+    "has_leader": 0.3,
+    "ma_left_unspent": 2.56,
+    "median_round": 14.0,
+    "military_share_of_workers": 0.102,
+    "prod_share_of_workers": 0.541,
+    "resource_rate": 3.75,
+    "sci_per_culture": 0.46,
+    "science_rate": 1.89,
+    "strength": 2.01,
+    "strength_vs_opponents": 1.01,
+    "turns_sampled": 1926,
+    "units": 0.86,
+    "units_vs_opponents": 0.99,
+    "urban_share_of_workers": 0.357,
+    "wonders_done": 1.24,
+    "workers_military": 0.86,
+    "workers_production": 4.57,
+    "workers_unused": 0.03,
+    "workers_urban": 3.02
+   },
+   "III": {
+    "ca_left_unspent": 4.2,
+    "ca_total": 4.92,
+    "ca_wasted_share": 0.854,
+    "culture_rate": 4.96,
+    "food_rate": 1.54,
+    "hand_size": 1.16,
+    "happy_margin": 3.43,
+    "has_leader": 0.12,
+    "ma_left_unspent": 2.69,
+    "median_round": 23,
+    "military_share_of_workers": 0.085,
+    "prod_share_of_workers": 0.548,
+    "resource_rate": 4.56,
+    "sci_per_culture": 0.32,
+    "science_rate": 1.61,
+    "strength": 1.85,
+    "strength_vs_opponents": 0.99,
+    "turns_sampled": 1041,
+    "units": 0.7,
+    "units_vs_opponents": 0.89,
+    "urban_share_of_workers": 0.367,
+    "wonders_done": 1.34,
+    "workers_military": 0.7,
+    "workers_production": 4.48,
+    "workers_unused": 0.22,
+    "workers_urban": 3.0
+   },
+   "IV": {
+    "ca_left_unspent": 3.97,
+    "ca_total": 5.34,
+    "ca_wasted_share": 0.743,
+    "culture_rate": 5.75,
+    "food_rate": 1.31,
+    "hand_size": 1.01,
+    "happy_margin": 3.73,
+    "has_leader": 0.22,
+    "ma_left_unspent": 2.82,
+    "median_round": 28,
+    "military_share_of_workers": 0.079,
+    "prod_share_of_workers": 0.546,
+    "resource_rate": 5.25,
+    "sci_per_culture": 0.28,
+    "science_rate": 1.6,
+    "strength": 2.76,
+    "strength_vs_opponents": 1.13,
+    "turns_sampled": 201,
+    "units": 0.64,
+    "units_vs_opponents": 0.82,
+    "urban_share_of_workers": 0.375,
+    "wonders_done": 1.49,
+    "workers_military": 0.64,
+    "workers_production": 4.42,
+    "workers_unused": 0.33,
+    "workers_urban": 3.03
+   }
+  },
+  "cards_taken_by_type": {
+   "action": {
+    "per_game": 3.65,
+    "share": 0.284
+   },
+   "air": {
+    "per_game": 0.1,
+    "share": 0.008
+   },
+   "arena": {
+    "per_game": 0.32,
+    "share": 0.025
+   },
+   "artillery": {
+    "per_game": 0.15,
+    "share": 0.012
+   },
+   "cavalry": {
+    "per_game": 0.38,
+    "share": 0.03
+   },
+   "farm": {
+    "per_game": 0.4,
+    "share": 0.031
+   },
+   "government": {
+    "per_game": 0.55,
+    "share": 0.043
+   },
+   "infantry": {
+    "per_game": 0.43,
+    "share": 0.034
+   },
+   "lab": {
+    "per_game": 0.52,
+    "share": 0.04
+   },
+   "leader": {
+    "per_game": 1.4,
+    "share": 0.109
+   },
+   "library": {
+    "per_game": 0.28,
+    "share": 0.022
+   },
+   "mine": {
+    "per_game": 0.47,
+    "share": 0.036
+   },
+   "special-tech": {
+    "per_game": 1.2,
+    "share": 0.093
+   },
+   "temple": {
+    "per_game": 0.45,
+    "share": 0.035
+   },
+   "theater": {
+    "per_game": 0.32,
+    "share": 0.025
+   },
+   "wonder": {
+    "per_game": 2.25,
+    "share": 0.175
+   }
+  },
+  "conflict": {
+   "aggressions_started_per_game": 0.0,
+   "aggressions_suffered_per_game": 0.0,
+   "games_attacked_at_all": 0.0,
+   "games_starting_any_attack": 0.0,
+   "wars_started_per_game": 0.0,
+   "wars_suffered_per_game": 0.0
+  },
+  "cost_bands": {
+   "cards_taken_per_game": 12.87,
+   "civil_actions_spent_taking_per_game": 16.37,
+   "counts": {
+    "band1": 1842,
+    "band2": 318,
+    "band3": 156
+   },
+   "share": {
+    "band1": 0.795,
+    "band2": 0.137,
+    "band3": 0.067
+   }
+  },
+  "culture_mean": 141.18333333333334,
+  "first_time": {
+   "aggression": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "government": {
+    "mean_round": 10.92,
+    "median_round": 7,
+    "p25_round": 4,
+    "p75_round": 17,
+    "share_of_games": 0.417
+   },
+   "leader": {
+    "mean_round": 3.73,
+    "median_round": 3.0,
+    "p25_round": 2,
+    "p75_round": 4,
+    "share_of_games": 0.867
+   },
+   "pact": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "take_action": {
+    "mean_round": 1.82,
+    "median_round": 2,
+    "p25_round": 1,
+    "p75_round": 2,
+    "share_of_games": 0.95
+   },
+   "take_arena": {
+    "mean_round": 6.41,
+    "median_round": 5,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.283
+   },
+   "take_artillery": {
+    "mean_round": 19.33,
+    "median_round": 20,
+    "p25_round": 14,
+    "p75_round": 24,
+    "share_of_games": 0.15
+   },
+   "take_cavalry": {
+    "mean_round": 6.52,
+    "median_round": 5,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.383
+   },
+   "take_farm": {
+    "mean_round": 7.62,
+    "median_round": 6.0,
+    "p25_round": 3,
+    "p75_round": 9,
+    "share_of_games": 0.4
+   },
+   "take_government": {
+    "mean_round": 9.04,
+    "median_round": 5.0,
+    "p25_round": 3,
+    "p75_round": 11,
+    "share_of_games": 0.4
+   },
+   "take_infantry": {
+    "mean_round": 7.38,
+    "median_round": 4.0,
+    "p25_round": 3,
+    "p75_round": 8,
+    "share_of_games": 0.4
+   },
+   "take_lab": {
+    "mean_round": 5.82,
+    "median_round": 5.0,
+    "p25_round": 4,
+    "p75_round": 7,
+    "share_of_games": 0.467
+   },
+   "take_leader": {
+    "mean_round": 2.33,
+    "median_round": 2.0,
+    "p25_round": 1,
+    "p75_round": 3,
+    "share_of_games": 0.867
+   },
+   "take_library": {
+    "mean_round": 8.38,
+    "median_round": 5.5,
+    "p25_round": 3,
+    "p75_round": 12,
+    "share_of_games": 0.267
+   },
+   "take_mine": {
+    "mean_round": 4.83,
+    "median_round": 4.0,
+    "p25_round": 3,
+    "p75_round": 7,
+    "share_of_games": 0.4
+   },
+   "take_special-tech": {
+    "mean_round": 5.88,
+    "median_round": 4,
+    "p25_round": 3,
+    "p75_round": 6,
+    "share_of_games": 0.717
+   },
+   "take_temple": {
+    "mean_round": 5.78,
+    "median_round": 5,
+    "p25_round": 2,
+    "p75_round": 7,
+    "share_of_games": 0.383
+   },
+   "take_theater": {
+    "mean_round": 8.44,
+    "median_round": 7.0,
+    "p25_round": 3,
+    "p75_round": 12,
+    "share_of_games": 0.3
+   },
+   "take_wonder": {
+    "mean_round": 1.72,
+    "median_round": 1.0,
+    "p25_round": 1,
+    "p75_round": 2,
+    "share_of_games": 1.0
+   },
+   "upgrade_production": {
+    "mean_round": 2.0,
+    "median_round": 2.0,
+    "p25_round": 2,
+    "p75_round": 2,
+    "share_of_games": 1.0
+   },
+   "upgrade_urban": {
+    "mean_round": 4.59,
+    "median_round": 4,
+    "p25_round": 3,
+    "p75_round": 5,
+    "share_of_games": 0.983
+   },
+   "war": {
+    "median_round": null,
+    "share_of_games": 0.0
+   },
+   "wonder_start": {
+    "mean_round": 3.73,
+    "median_round": 3,
+    "p25_round": 3,
+    "p75_round": 4,
+    "share_of_games": 0.983
+   }
+  },
+  "games": 180,
+  "label": "self",
+  "moves_per_game": {
+   "bid": 0.05,
+   "bid_pass": 6.5,
+   "build": 4.53,
+   "choose": 4.27,
+   "churchill": 0.07,
+   "copy_tactic": 2.73,
+   "destroy": 0.52,
+   "develop": 2.7,
+   "end_turn": 25.45,
+   "play_action": 1.53,
+   "play_leader": 1.33,
+   "play_tactic": 0.88,
+   "pol_pass": 11.73,
+   "pop": 2.02,
+   "prepare_event": 12.25,
+   "resign": 0.27,
+   "revolution": 0.4,
+   "take": 12.87,
+   "upgrade": 1.87,
+   "wonder_step": 5.07
+  },
+  "overall": {
+   "ca_left_per_turn": 2.979,
+   "final_techs": 7.92,
+   "final_wonders": 1.53,
+   "ma_left_per_turn": 2.267,
+   "turns_with_unspent_ca": 0.713
+  },
+  "rounds_mean": 29.2,
+  "win_share": 0.25
+ },
+ "players": 4
+}
