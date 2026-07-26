@@ -79,6 +79,55 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STATE = os.path.join(HERE, "league_state")
 
 
+# ------------------------------------------------------- degeneracy guard
+#
+# The 4p champion produced by the old loop has `science` = -6.09.  A negative
+# science weight INVERTS a cost term: expensive cards start looking like
+# bargains (Alchemy priced at +67.04 at 4p against +5.86 at 2p), and 4p play
+# collapsed to 9.7% +/- 2.7% until it was clamped by hand.  Nothing in the
+# old loop noticed, because acceptance only ever compared a bundle against a
+# mirror of itself -- a mirror is equally happy to be wrong in the same way.
+#
+# The rule below is derived from the weight vector rather than hand-listed,
+# which is what keeps it correct as the vector grows: a term whose DEFAULT is
+# strictly POSITIVE means "more of this is better", so a trained value below
+# zero is a sign inversion, not a strategy.  Every legitimately negative term
+# already has a negative default and is therefore untouched -- `rival_*`,
+# the `*_late` phase multipliers, `discontent`, `uprising`, `pop_cost`,
+# `wonder_remaining` and `end_turn_bias` included.
+#
+# NB `end_turn_bias` (-3.0) is one of those.  It looks like a bug and is NOT:
+# removing it was measured twice, five ways, and makes the bot much weaker
+# (see the comment on it in engine/bots/weighted.py, and docs/WASTED_ACTIONS.md
+# section 6).  Nothing here should be read as licence to "fix" it.
+NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0)
+
+# Applied ONLY when a run starts from DEFAULT_WEIGHTS (a clean restart).
+# `hand_potential` (the card-identity fix, 72.5% +/- 4.4% at 2p) defaults to
+# 0.125 for every player count and 4p currently regresses with it, so 4p
+# starts the term switched off and lets the pool decide its value.
+INIT_OVERRIDES = {4: {"hand_potential": 0.0}}
+
+
+def guard_weights(w, mode="clamp"):
+    """Flag (and by default clamp) sign-inverted value terms.
+
+    Returns ``(weights, violations)``.  `mode` is ``clamp`` (set to 0 and
+    carry on), ``flag`` (log only, change nothing) or ``reject`` (the caller
+    throws the candidate away).
+    """
+    out = dict(w)
+    viol = []
+    for k in sorted(NONNEG):
+        v = out.get(k, 0.0)
+        if v < 0:
+            viol.append({"weight": k, "value": round(float(v), 4),
+                         "default": DEFAULT_WEIGHTS[k]})
+            if mode == "clamp":
+                out[k] = 0.0
+    return out, viol
+
+
 # ------------------------------------------------------------------- paths
 
 def paths(state_dir, k):
@@ -90,6 +139,7 @@ def paths(state_dir, k):
         "fullcheck": os.path.join(state_dir, f"fullcheck_{k}p.jsonl"),
         "ablation": os.path.join(state_dir, f"ablation_{k}p.jsonl"),
         "credit": os.path.join(state_dir, f"weight_credit_{k}p.json"),
+        "guard": os.path.join(state_dir, f"guard_{k}p.jsonl"),
     }
 
 
@@ -139,13 +189,31 @@ def load_state(pp):
     return rec
 
 
-def load_champion(pp, init):
-    """Champion weights: resume if we have one, else `--init`."""
+def load_champion(pp, init, players, overrides=True, log=print):
+    """Champion weights: resume if we have one, else `--init`.
+
+    A CLEAN RESTART (no state, ``--init default``) is the intended way to run
+    this: the old champions carry the degeneracy this loop exists to catch,
+    and 4p's in particular is known bad.  `INIT_OVERRIDES` is applied only on
+    that path.
+    """
     if os.path.exists(pp["champion"]):
-        return load_weights(pp["champion"])
+        return load_weights(pp["champion"]), "resume"
     if init and init != "default":
-        return load_weights(init)
-    return dict(DEFAULT_WEIGHTS)
+        w = load_weights(init)
+        log(f"[{players}p] WARM START from {init} -- note that champions "
+            f"trained by the old mirror loop can carry sign-inverted weights; "
+            f"a clean start from DEFAULT_WEIGHTS is preferred")
+        return w, f"init:{init}"
+    w = dict(DEFAULT_WEIGHTS)
+    if overrides:
+        for k, v in INIT_OVERRIDES.get(players, {}).items():
+            if k in w and w.get(k) != v:
+                log(f"[{players}p] init override {k}: {w.get(k)} -> {v} "
+                    f"(known {players}p regression; the pool decides its value "
+                    f"from here)")
+                w[k] = v
+    return w, "default"
 
 
 # ------------------------------------------------------------------ duels
@@ -420,11 +488,31 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         tier_weights=None, past_k=3, with_quiescent=False, init="default",
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
-        log=print):
+        weight_guard="clamp", log=print):
+    # A block must be a whole number of seat rotations, or the seats are not
+    # balanced and the "same seeds, same seats" pairing quietly stops being
+    # an apples-to-apples comparison at 3p and 4p.
+    want = max(players, (block // players) * players)
+    if want != block:
+        log(f"[{players}p] --block {block} is not a multiple of {players}; "
+            f"using {want} so seat rotation stays exact")
+        block = want
     pp = paths(state_dir, players)
     os.makedirs(state_dir, exist_ok=True)
     st = load_state(pp)
-    champion = load_champion(pp, init)
+    champion, origin = load_champion(pp, init, players, log=log)
+    # A resumed or warm-started champion is guarded too: the degeneracy may
+    # already be baked into the file we just loaded.
+    champion, viol = guard_weights(champion, weight_guard)
+    if viol:
+        log(f"[{players}p] !! WEIGHT GUARD on the {origin} champion: "
+            + ", ".join(f"{v['weight']}={v['value']} (default "
+                        f"{v['default']})" for v in viol)
+            + (f" -- clamped to 0" if weight_guard == "clamp" else ""))
+        append_jsonl(pp["guard"], {"gen": st["gen"], "players": players,
+                                   "where": f"champion:{origin}",
+                                   "mode": weight_guard, "violations": viol,
+                                   "at": time.strftime("%F %T")})
     gen = int(st["gen"])
     sigma = max(float(st["sigma"]), sigma_floor)
     since_accept = int(st["since_accept"])
@@ -462,6 +550,11 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         t0 = time.time()
         entries = pool.acceptance_subset(gen, subset)
         tested_since_check.update(e.label for e in entries)
+        # snapshot BEFORE any accept rebuilds the pool, so the log records the
+        # field this generation was actually scored against
+        pool_snapshot = [{"label": e.label, "tier": e.tier,
+                          "weight": round(e.weight, 4)}
+                         for e in pool.sorted_entries()]
         seed_base = (gen * 1_000_003 + seed * 7717) % 10_000_019
         ref = RefCache(champion, players, workers, block, seed_base)
 
@@ -472,8 +565,25 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
             hold_sigma = stall_kick // 3
 
         best, tried = None, []
+        guard_hits = []
         for j in range(lam):
             mutant, moved, op = mutate(champion, rng, sigma, op=forced)
+            # Catch the sign inversion at the moment it is proposed, not
+            # hundreds of generations later.
+            mutant, viol = guard_weights(mutant, weight_guard)
+            if viol:
+                rec_v = {"gen": gen, "players": players, "where": f"mutant:{j}",
+                         "op": op, "mode": weight_guard, "violations": viol,
+                         "at": time.strftime("%F %T")}
+                guard_hits.extend(viol)
+                append_jsonl(pp["guard"], rec_v)
+                log(f"[{players}p] gen {gen} cand {j} weight guard "
+                    f"({weight_guard}): "
+                    + ", ".join(f"{v['weight']}={v['value']}" for v in viol))
+                if weight_guard == "reject":
+                    tried.append({"op": op, "moved": len(moved),
+                                  "rejected_by_guard": viol})
+                    continue
             m, se, lo, per, games, veto = score_candidate(
                 mutant, entries, ref, accept_z, min_blocks, max_blocks,
                 veto_z, pool.gate_tiers)
@@ -510,13 +620,13 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                "sigma": round(sigma, 4), "secs": round(time.time() - t0, 1),
                "at": time.strftime("%F %T"), "mode": "league-pool",
                "subset": [e.label for e in entries],
-               "pool": [{"label": e.label, "tier": e.tier,
-                         "weight": round(e.weight, 4)}
-                        for e in pool.sorted_entries()],
+               "pool": pool_snapshot,
                "ref_games": ref.games, "since_accept": since_accept,
                "tried": tried}
         if forced:
             rec["forced"] = forced
+        if guard_hits:
+            rec["weight_guard"] = {"mode": weight_guard, "hits": guard_hits}
         if accepted:
             rec.update({"edge": round(best[1], 4), "ci_low": round(best[2], 4),
                         "games": best[3], "moved": best[4], "op": best[5],
@@ -673,6 +783,13 @@ def main(argv=None):
     ap.add_argument("--ablate-mode", choices=("zero", "default"), default="zero")
     ap.add_argument("--max-gens", type=int, default=0,
                     help="stop after N generations this process (0 = time only)")
+    ap.add_argument("--weight-guard", choices=("clamp", "flag", "reject"),
+                    default="clamp",
+                    help="what to do when a value term whose default is "
+                         "positive goes negative (a sign inversion: the 4p "
+                         "champion's science=-6.09 made expensive cards look "
+                         "like bargains).  Every occurrence is logged to "
+                         "guard_Np.jsonl either way")
     ap.add_argument("--report", action="store_true",
                     help="print the run's standing (last full-pool check and "
                          "weight-credit ledger) and exit")
@@ -690,7 +807,7 @@ def main(argv=None):
         full_check_every=args.full_check_every, check_games=args.check_games,
         ablate_every=args.ablate_every, ablate_k=args.ablate_k,
         ablate_games=args.ablate_games, ablate_mode=args.ablate_mode,
-        max_gens=args.max_gens,
+        max_gens=args.max_gens, weight_guard=args.weight_guard,
         legacy_ladders=not args.no_legacy_ladders)
 
 
