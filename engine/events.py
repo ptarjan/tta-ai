@@ -241,6 +241,17 @@ def _apply_extras(state, p, block, rng):
         effects.gain_resources(p, s.resources)
     if isinstance(block.get("extraProduction"), dict):
         _extra_production(state, p, s)
+    # "gain X equal to your Y production" (corruption/consumption never apply)
+    if block.get("scienceEqualToScienceProduction"):
+        p.science += s.science
+    if block.get("cultureEqualToCultureProduction"):
+        p.culture += s.culture
+    if block.get("cultureEqualToScienceProduction"):
+        p.culture += s.science
+    if block.get("foodEqualToHappyFaces"):
+        cap = _num(block.get("max"))
+        n = s.happy if cap is None else min(s.happy, int(cap))
+        effects.gain_food(p, max(0, n))
     if block.get("discardLeaderUnlessCurrentAge") and p.leader:
         if db.age_of(p.leader) != state.age_civil:
             effects.on_leave_play(state, p, p.leader)
