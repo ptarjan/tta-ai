@@ -410,19 +410,34 @@ class TestActionCards(unittest.TestCase):
         self.assertNotIn(("play_action", "Engineering Genius (A)"),
                          actions.legal_moves(st))
 
-    def test_gains_apply_before_the_ordered_action(self):
-        # Breakthrough (I): gain 2 science, then develop at full price --
-        # the +2 must be spendable on that same technology.
+    def test_gains_land_after_the_ordered_action(self):
+        # Breakthrough (I): develop at FULL price, then gain 2 science. The +2
+        # arrives too late to pay for that technology (OPEN_QUESTIONS 20).
         st, p = _mid_game()
         p.hand_civil = ["Breakthrough (I)", "Alchemy"]
         cost = effects.tech_cost(st, p, "Alchemy")
-        p.science = cost - 2
+        p.science = cost - 2                     # 2 short at full price
+        self.assertNotIn(("play_action", "Breakthrough (I)"),
+                         actions.legal_moves(st))
+        p.science = cost                         # exactly affordable
         self.assertIn(("play_action", "Breakthrough (I)"),
                       actions.legal_moves(st))
         actions.apply(st, ("play_action", "Breakthrough (I)"))
         # only one technology in hand, so the ordered action auto-resolves
         self.assertIn("Alchemy", p.techs)
-        self.assertEqual(p.science, 0)
+        self.assertEqual(p.science, 2)           # the gain, banked afterwards
+
+    def test_frugality_food_lands_after_the_population_increase(self):
+        st, p = _mid_game()
+        p.hand_civil = ["Frugality (A)"]          # increase population, +1 food
+        gain = (C.db().get("Frugality (A)")["effects"] or {})["gainFood"]
+        cost = economy.pop_cost(st, p)
+        p.food = cost - gain                      # short without the gain
+        self.assertNotIn(("play_action", "Frugality (A)"),
+                         actions.legal_moves(st))
+        p.food = cost
+        actions.apply(st, ("play_action", "Frugality (A)"))
+        self.assertEqual(p.food, gain)
 
     def test_patriotism_gives_a_military_action_and_a_unit_discount(self):
         st, p = _mid_game()

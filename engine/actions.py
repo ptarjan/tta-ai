@@ -500,9 +500,10 @@ def _can_revolt(state, p, name):
 def _action_card_playable(state, p, name):
     """§3.11: a yellow card that orders an action needs that action to be legal.
 
-    Note the ordered action is checked AFTER the card's own gains, because
-    the gains are what make it affordable (Breakthrough's +science pays for
-    the technology it develops, Frugality's +food for the population).
+    The ordered action is checked against the player's CURRENT pools, before
+    the card's own gains — Breakthrough's "at full price ... gain 2 science"
+    means the science arrives too late to pay for the technology it just
+    developed, which is the whole point of that wording (OPEN_QUESTIONS 20).
     """
     eff = _DB.get(name).get("effects") or {}
     if not eff:
@@ -510,9 +511,12 @@ def _action_card_playable(state, p, name):
     kind = eff.get("freeCivilAction")
     if not kind:
         return any(k in ACTION_CARD_KEYS for k in eff)
-    probe = _with_card_gains(state, p, eff)
-    return bool(free_action_moves(state, probe, kind,
-                                  eff.get("resourceDiscount", 0)))
+    # RB p.15: Breakthrough may spend its order on a revolution, which is only
+    # available while every civil action is still unspent (playing the card
+    # itself has not been paid for yet at this point).
+    revolt_ok = (p.civil_actions == ca_total(state, p))
+    return bool(free_action_moves(state, p, kind,
+                                  eff.get("resourceDiscount", 0), revolt_ok))
 
 
 ACTION_CARD_KEYS = {
@@ -523,22 +527,6 @@ ACTION_CARD_KEYS = {
     "culturePerCivilizationWithMoreCulture",
 }
 
-
-def _with_card_gains(state, p, eff):
-    """A throwaway clone of `p` with the card's immediate gains applied.
-
-    Only the scalar pools that gate the ordered action are moved, so this
-    stays cheap enough to call from `legal_moves`.
-    """
-    probe = _copy.copy(p)
-    probe.techs = p.techs                   # read-only in the probe
-    probe.food = p.food + eff.get("gainFood", 0)
-    probe.resources = p.resources + eff.get("gainResources", 0)
-    probe.science = p.science + eff.get("gainScience", 0)
-    n = eff.get("gainFoodOrResources", 0)
-    probe.food += n                         # best case for either choice
-    probe.resources += n
-    return probe
 
 
 # ------------------------------------------------- ordered (free) actions
@@ -875,8 +863,10 @@ def _h_copy_tactic(state, p, move, rng):
 def _h_play_action(state, p, move, rng):
     """§3.11 play a yellow action card: 1 CA, resolve, discard (leaves game).
 
-    Gains resolve first, then the ordered action (which pays no action and
-    takes the card's resource discount).
+    The ordered action resolves FIRST and the card's gains after it, in printed
+    order — Breakthrough's science and Frugality's food arrive too late to pay
+    for the very action the card just ordered (OPEN_QUESTIONS 20, ruled by the
+    user 2026-07-26). Cards with no ordered action gain immediately.
     """
     game = _game or _load_game()
     interact = _interact or _load_interact()
@@ -885,19 +875,7 @@ def _h_play_action(state, p, move, rng):
     pay_ca(state, p, 1)
     p.hand_civil.remove(name)
     eff = _DB.get(name).get("effects") or {}
-    if "gainScience" in eff:
-        p.science += eff["gainScience"]
-    if "gainCulture" in eff:
-        p.culture += eff["gainCulture"]
-    if "gainFood" in eff:
-        effects.gain_food(p, eff["gainFood"])
-    if "gainResources" in eff:
-        effects.gain_resources(p, eff["gainResources"])
-    if "gainPopulation" in eff:
-        for _ in range(eff["gainPopulation"]):
-            if p.yellow_bank > 0:
-                p.yellow_bank -= 1
-                p.workers_free += 1
+    ordered = eff.get("freeCivilAction")
     if "extraCivilActions" in eff:
         p.civil_actions += eff["extraCivilActions"]
     for key in ("extraMilitaryActions", "militaryActions"):
@@ -919,16 +897,44 @@ def _h_play_action(state, p, move, rng):
                 and effects.state_stats(state, q).strength > mine)
         p.mil_discount += per * n
     effects.invalidate(state, p)
-    if "gainFoodOrResources" in eff:
-        n = eff["gainFoodOrResources"]
-        interact.push_choice(state, p.idx, "food_or_res", ["food", "resources"],
-                             {"n": n}, auto=False)
-    if eff.get("freeCivilAction"):
+    if ordered:
+        # FIFO: the order resolves, then the gains land behind it.
         interact.enqueue(state, {"player": p.idx, "tag": "free_civil",
-                                 "kind": eff["freeCivilAction"],
+                                 "kind": ordered,
                                  "discount": eff.get("resourceDiscount", 0),
                                  "revolt_ok": revolt_ok})
+        interact.enqueue(state, {"player": p.idx, "tag": "card_gains",
+                                 "gains": {k: eff[k] for k in _GAIN_KEYS
+                                           if k in eff}})
+    else:
+        apply_card_gains(state, p, eff)
     state.emit(f"played action card {name}")
+
+
+_GAIN_KEYS = ("gainScience", "gainCulture", "gainFood", "gainResources",
+              "gainPopulation", "gainFoodOrResources")
+
+
+def apply_card_gains(state, p, eff):
+    """The gain half of a yellow action card (§3.11)."""
+    interact = _interact or _load_interact()
+    if "gainScience" in eff:
+        p.science += eff["gainScience"]
+    if "gainCulture" in eff:
+        p.culture += eff["gainCulture"]
+    if "gainFood" in eff:
+        effects.gain_food(p, eff["gainFood"])
+    if "gainResources" in eff:
+        effects.gain_resources(p, eff["gainResources"])
+    if "gainPopulation" in eff:
+        for _ in range(eff["gainPopulation"]):
+            if p.yellow_bank > 0:
+                p.yellow_bank -= 1
+                p.workers_free += 1
+    effects.invalidate(state, p)
+    if "gainFoodOrResources" in eff:
+        interact.push_choice(state, p.idx, "food_or_res", ["food", "resources"],
+                             {"n": eff["gainFoodOrResources"]}, auto=False)
 
 
 def _per_player(state, value):

@@ -437,9 +437,16 @@ def _q_free_civil(state, p, item, rng):
                 {"discount": item.get("discount", 0)})
 
 
+def _q_card_gains(state, p, item, rng):
+    """The gain half of an action card, landing after its ordered action."""
+    from . import actions
+    actions.apply_card_gains(state, p, item.get("gains") or {})
+
+
 _QUEUE_ITEMS = {
     "gains": _q_gains,
     "free_civil": _q_free_civil,
+    "card_gains": _q_card_gains,
     "choose": _q_choose,
     "free_build": _q_free_build,
     "destroy_own": _q_destroy_own,

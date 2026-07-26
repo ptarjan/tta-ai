@@ -68,3 +68,14 @@
 - TODO carried forward: the Opening section was written before 4p landed and says
   "at both counts" in a few places -- needs 4p numbers folded in.
 - NEXT: fold 4p into Opening, then Per-player-count, then re-verify rules 1-8.
+
+### 11:28
+- Folded the fresh 4p numbers into the Opening section (round-1 wonder, disband,
+  card-row depth, government, end-of-Age-I table, 3-way round-2 comparison).
+- Notable revision: with 4p in, the 3p military opening now looks like a LOCAL
+  OPTIMUM rather than a player-count effect -- 4p faces three opponents and still
+  opens economically, and ends with the most techs. Said so in the doc.
+- 4p takes a wonder on round 1 in 120/120 games; the rules argument is good
+  (wonders bypass the hand, round 1 is take-only, no completed-wonder surcharge
+  yet) but it starts 1.96 and finishes 0.79, so the doc takes the first half only.
+- NEXT: Per-player-count section, then re-verify rules 1-8.
