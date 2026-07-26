@@ -259,7 +259,21 @@ only difference is that the bot can now tell a good card from a bad one:
 | `cardvalue`, disc 0.5 | **63.2% ± 4.7%** | 123.8 vs 110.4 | 400 |
 | `cardvalue`, disc 0.25 | **67.2% ± 4.6%** | 133.2 vs 110.8 | 400 |
 | `cardvalue`, disc 0.125 | **69.6% ± 4.5%** | **137.8 vs 117.0** | 400 |
+| `cardvalue`, disc 0.0 (control) | 50.0% ± 6.9% | 132.1 vs 132.1 | 200 |
+| **landed in `weighted.py`, `hand_potential` 0.125** | **72.5% ± 4.4%** | **138.1 vs 114.2** | 400 |
 | (null) | 50.0% | | |
+
+The disc = 0 row is the control: with the term switched off the challenger is
+byte-identical to the champion and the harness returns *exactly* 50.0% with
+identical mean culture, so the effect above is not a seating or harness bias.
+The last row is the shipped implementation in `engine/bots/weighted.py`
+(p < 1e-5), which also clamps costs — see below.
+
+**Combining the two fixes is worse than the card fix alone:** card valuation
+*plus* same-horizon scoring scores **39.8% ± 6.7%** (n=200), against 69.6% for
+the card fix on its own. The `end_turn` artifact must stay. There is a comment
+on `end_turn_bias` in `weighted.py` recording this, because it is exactly the
+kind of thing a later reader "fixes".
 
 **+20 points of win rate and +21 culture, from one term, with the `end_turn`
 bug untouched.** That is the confirmation that card-identity blindness — not
@@ -273,14 +287,30 @@ it only needs to **break the tie** between cards that `hand_value` scores
 identically. A small nudge is enough; a large one starts overriding the rest
 of the evaluation.
 
-### Caveat: this is a 2-player result
+### Caveat: this is a 2-player result, and 4p actively regresses
 
 | | win rate | null | n |
 |---|---|---|---|
 | `cardvalue` disc 0.25 @2p | **67.2% ± 4.6%** | 50.0% | 400 |
 | `cardvalue` disc 0.25 @3p | 35.8% ± 4.7% | 33.3% | 399 |
+| `cardvalue` disc 0.25 @4p (before the cost clamp) | **9.7% ± 2.7%** | 25.0% | 400 |
 
-At 3 players the same term is **not significant** — the interval covers the
+The 4p collapse is diagnostic rather than damning, and it is worth
+understanding because it is the same disease as §5. Card potential is priced
+*through the weight vector*, so a degenerate vector produces degenerate
+prices. The 4p champion has `science` = −6.09, which flips the sign of the
+`− techCost × w[science]` cost term: expensive cards become bargains.
+`Alchemy` scored **+67.04** under the 4p weights against **+5.86** under the
+2p ones, and the bot chased the most expensive card it could see.
+
+The shipped version therefore prices costs through `max(0, w)` — paying a
+cost can never read as a gain. That leaves 2p bit-identical (its stock
+weights are already positive) while removing the sign inversion. It does
+*not* rescue 4p on its own, because that vector's `science_rate` is +22.5 and
+still wildly distorts the gain side; **the 4p weights need re-seeding (§8
+step 3) before this term can be trusted there.**
+
+At 3 players the term is **not significant** — the interval covers the
 null and mean culture is slightly *down* (74.5 vs 81.8). So the fix is
 demonstrated at 2p, not universally. That is consistent with the rest of this
 document: the 3p champion wastes less to begin with (2722 wasted-action turns
