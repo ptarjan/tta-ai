@@ -77,10 +77,11 @@ def load_champion(k):
                 d = json.load(fh)
             w = dict(DEFAULT_WEIGHTS)
             w.update(d["weights"])
-            return w, d.get("gen", 0), d.get("sigma", 0.25)
+            return (w, d.get("gen", 0), d.get("sigma", 0.25),
+                    d.get("since_accept", 0))
         except Exception:
             pass
-    return dict(DEFAULT_WEIGHTS), 0, 0.25
+    return dict(DEFAULT_WEIGHTS), 0, 0.25, 0
 
 
 def append_gen(k, rec):
@@ -216,7 +217,7 @@ def combine(shares, null, z=1.2816):
 
 
 def challenge(mutant, champion, field, players, screen, max_games, seed0,
-              workers, min_games=0):
+              workers, min_games=0, accept_z=1.2816):
     """Two-stage sequential test of `mutant` against `field`.
 
     The statistic is always the mutant's *edge over the champion on identical
@@ -232,9 +233,13 @@ def challenge(mutant, champion, field, players, screen, max_games, seed0,
     deterministic policy -- so the reference games are skipped and the test
     degenerates to the original one against the 1/players null.
 
-    Accept when the lower bound of a one-sided 90% CI on the mean edge is
-    still above 0 after at least `min_games` games; abandon as soon as the
-    running edge is negative and the screening batch is spent.
+    Accept when the lower bound of a one-sided CI on the mean edge (default
+    90%, `accept_z`) is still above 0 after at least `min_games` games;
+    abandon as soon as the running edge is negative and the screening batch
+    is spent.  `accept_z` is the *whole* strictness knob: at n paired samples
+    the mutant has to beat its parent by `accept_z * se` win share, so a
+    player count whose generations keep rejecting is either short of games or
+    short of a smaller z, and both are now dials rather than edits.
     """
     mirror = not isinstance(field, list)
     cost = 1 if mirror else 2            # games spent per paired sample
@@ -259,7 +264,7 @@ def challenge(mutant, champion, field, players, screen, max_games, seed0,
                 mut.append(x)
         res = a
         played += batch * cost
-        m, se, lo = combine(diffs, 0.0)
+        m, se, lo = combine(diffs, 0.0, accept_z)
         if lo > 0.0 and played >= min_played:      # a clear win, not a lucky one
             break
         if m < 0.0 and played >= cost * screen:    # stop paying for a loser
@@ -267,7 +272,7 @@ def challenge(mutant, champion, field, players, screen, max_games, seed0,
         batch = max(players, min((budget - played) // cost, screen))
         if batch <= 0:
             break
-    m, se, lo = combine(diffs, 0.0)
+    m, se, lo = combine(diffs, 0.0, accept_z)
     wr = (sum(mut) / len(mut)) if mut else 0.0
     return m, se, lo, len(diffs), res, wr
 
@@ -275,15 +280,20 @@ def challenge(mutant, champion, field, players, screen, max_games, seed0,
 # --------------------------------------------------------------------- run
 
 def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
-        min_games=0, mode="league", log=print, stall_kick=15):
-    champion, gen, sigma = load_champion(players)
+        min_games=0, mode="league", log=print, stall_kick=15,
+        accept_z=1.2816):
+    # `since_accept` is restored from the checkpoint on purpose.  The
+    # supervisor restarts this process every hour; a counter that reset on
+    # every restart could never reach `stall_kick` on a player count whose
+    # generations are slow, so the anti-stagnation kick would silently never
+    # fire on exactly the runs that need it most.
+    champion, gen, sigma, since_accept = load_champion(players)
     rng = random.Random(seed * 7919 + players * 101 + gen)
     t_end = time.time() + hours * 3600
     recent = []
-    since_accept = 0
     if not os.path.exists(champ_path(players)):
         save_weights(champ_path(players), champion, gen=gen, sigma=sigma,
-                     players=players)
+                     players=players, since_accept=since_accept)
     league = load_league(players)
     if mode == "league" and not league:
         # Seed the league so the very first generation already faces a mixed
@@ -308,7 +318,7 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             m, se, lo, n, res, wr = challenge(
                 mutant, champion, field, players, screen, max_games,
                 seed0=(gen * 1_000_003 + j * 7717 + seed) % 10_000_019,
-                workers=workers, min_games=min_games)
+                workers=workers, min_games=min_games, accept_z=accept_z)
             tried.append({"edge": round(m, 4), "lo": round(lo, 4), "n": n,
                           "wr": round(wr, 4), "moved": len(moved), "op": op})
             if n == 0 or (res and res.get("errors", 0) > res.get("games", 0)):
@@ -366,7 +376,7 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
             rec["anchor_games"] = n_anchor
         append_gen(players, rec)
         save_weights(champ_path(players), champion, gen=gen, sigma=sigma,
-                     players=players)
+                     players=players, since_accept=since_accept)
         log(f"[{players}p] gen {gen} "
             + ("ACCEPT" if accepted else "reject ")
             + f" sigma={sigma:.3f} {rec['secs']}s "
@@ -411,10 +421,14 @@ def main(argv=None):
     ap.add_argument("--stall-kick", type=int, default=15,
                     help="after N consecutive rejections force a large jump "
                          "and re-open sigma (0 disables)")
+    ap.add_argument("--accept-z", type=float, default=1.2816,
+                    help="z for the one-sided accept CI (1.2816=90%%, "
+                         "0.8416=80%%); lower accepts more, faster, noisier")
     args = ap.parse_args(argv)
     run(args.players, args.hours, args.workers, args.lam, args.screen,
         args.max_games, args.seed, args.anchor_every, args.min_games,
-        mode=args.mode, stall_kick=args.stall_kick)
+        mode=args.mode, stall_kick=args.stall_kick,
+        accept_z=args.accept_z)
 
 
 if __name__ == "__main__":
