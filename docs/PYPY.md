@@ -519,3 +519,177 @@ another agent's). This is written up as a one-line change for its owner, with
 the measurement above as justification. It is the best
 effort-to-payoff ratio left on the table.
 
+
+## 6. Copy-on-write / undo stack — full design writeup and go/no-go
+
+*This section is the deliverable asked for: the design, the expected gain, the
+risk, and a recommendation. It is deliberately NOT implemented. Judge it
+first.*
+
+### 6.1 The case, in one paragraph
+
+GreedyBot copies the entire `GameState` once per candidate move, then throws
+the copy away microseconds later. Section 4b measured what that copy is for:
+**6.43 scalar slots and 5.37 container nodes change per candidate move, out of
+395.4 slots and 93.7 nodes copied.** That is **17x more container nodes copied
+than touched, 61x more scalar slots**, and section 4b showed the mutation size
+is *flat* (~6 slots at 2p and at 4p) while the copy grows with player count and
+game length. The copy is 50.6% of runtime (section 5) and the work it does is
+98.4% dead. No constant-factor improvement to the copier addresses that; only
+not copying does.
+
+### 6.2 Design A — undo stack (journalling `apply`). PREFERRED.
+
+GreedyBot's use is `copy -> apply(mv) -> evaluate -> discard`. It never holds
+two trial states at once and never needs the trial to outlive the `evaluate`
+call. So it does not need persistence at all — it needs `apply` to be
+*reversible*:
+
+```python
+j = journal.begin(state)
+try:
+    actions.apply(state, mv, rng)
+    val = evaluate(state, ...)
+finally:
+    journal.rollback(j)        # state is bit-identical to before
+```
+
+The journal is a plain list of undo records, appended by every write:
+
+| write | record | undo |
+|---|---|---|
+| `obj.attr = v` | `(0, obj.__dict__, 'attr', old)` or `_MISSING` | restore or `del` |
+| `d[k] = v` | `(0, d, k, old)` or `_MISSING` | restore or `del` |
+| `lst.append(x)` | `(1, lst)` | `lst.pop()` |
+| `lst.pop()/insert/remove/del` | `(2, lst, index, old)` | re-insert / restore |
+| `lst.sort()/reverse()/slice-assign` | `(3, lst, list(lst))` | `lst[:] = old` |
+| `set.add/discard` | `(4, s, x, was_present)` | inverse |
+
+At 6.43 mutated slots per candidate the journal is **~7 records per move**
+versus 395 slot copies and ~35 object allocations. Rollback is a reversed walk
+of ~7 records. Both are O(mutation), not O(state) — which is exactly the shape
+section 4b says the problem has.
+
+Mechanically the cheapest form is a tiny helper module `engine/journal.py`
+exporting `setattr_`, `setitem`, `append`, `pop`, ... that are no-ops
+(direct writes) when journalling is off — a module-global `_J = None` test,
+one branch. That keeps the non-search path (the real game, `play_game`,
+`experiments/`) at essentially current speed; only GreedyBot turns journalling
+on.
+
+### 6.3 Design B — copy-on-write with a version stamp
+
+Give every container a version stamp; `mutable(obj)` clones it into the current
+generation if its stamp is stale and rewires the parent pointer. Only the
+~5.4 nodes on the mutated path get cloned; the other ~88 are shared.
+
+Cost versus A: every *read* path stays as-is but every *write* path needs a
+`mutable()` call **and** the parent chain must be reachable (a `GameState`
+today has no parent pointers, so nodes need back-references or every write
+needs a root-relative path). It also makes true aliasing bugs possible — two
+logical states sharing one dict, where a missed `mutable()` silently corrupts
+the *real* game rather than just the trial.
+
+Design B's only advantage over A is that it supports holding **many** trial
+states alive simultaneously, i.e. real multi-ply search (minimax/MCTS), which
+an undo stack cannot do. Today no bot needs that.
+
+### 6.4 Expected speed-up — the arithmetic
+
+From section 5, `copy_state` is **50.6%** of GreedyBot 4p runtime.
+
+| scenario | copy component | whole-bot speed-up | greedy 4p games/cpu-s |
+|---|---|---|---|
+| today (post-fastcopy) | 50.6% | 1.00x | 1.32 |
+| another 1.3x on the copier (the realistic ceiling for "copy faster") | 38.9% | 1.19x | ~1.57 |
+| journal, optimistic (copy -> 0%) | 0% | **2.02x** | ~2.67 |
+| journal, realistic (journal+rollback costs ~1/10 of the copy, plus a branch on every write) | ~5% | **1.83x** | ~2.4 |
+
+So: **expect ~1.8x end-to-end on the cell the hill climbs actually run**, and
+more than that at 4p late game, because section 4b showed the wasted fraction
+*grows* with state size while the mutation stays flat. Stack it with the
+`random.Random(0)` fix (5a, another ~1.1x) and greedy 4p plausibly reaches
+~2.6-2.9 games/cpu-s versus 0.99 before this perf pass started — roughly 3x.
+
+It also helps PyPy disproportionately (section 3 blamed PyPy's loss partly on
+short-lived-object churn its GC handles worse than CPython's refcounting), so
+the PyPy verdict is explicitly worth re-testing after this change and not
+before.
+
+### 6.5 The risk, stated honestly
+
+**The binding constraint is that the digests must not move.** narrow
+`c2befef1…` / wide `47e06a41…`, 135 games, byte-identical logs and scores. A
+change that alters them is a bug in the change, not a new baseline. Specific
+hazards, in descending order of how likely they are to bite:
+
+1. **A missed mutation site.** ~385 candidate mutation sites exist across
+   `actions.py` (247 attribute writes), `effects.py`, `events.py`,
+   `economy.py`, `game.py`, `interact.py`, plus 107 list/dict mutator calls,
+   29 subscript assignments and 2 `del`s. Every single one that touches state
+   during a trial `apply` must be journalled. One miss = the *real* game state
+   is silently corrupted by a bot's hypothetical move. This is the whole risk.
+2. **`state.log`.** `copy_state` deliberately *drops* the log, so today trial
+   moves cannot touch it. Under journalling the trial `apply` calls `emit()`
+   on the real log — and `emit` truncates (`del self.log[:100]` past 400
+   entries), which is destructive. The log is *in the fingerprint digest*, so
+   this must be handled explicitly (suppress `emit` during trials, which is
+   also what the copy path effectively does today).
+3. **Dict/list ordering.** LIFO rollback restores insertion order exactly
+   (delete-then-reinsert only happens in the reverse of the order it occurred),
+   so ordering is safe *if and only if* rollback is strictly LIFO. Any
+   out-of-order rollback silently reorders `p.techs`, which the engine iterates.
+4. **The stats cache.** `_stats_cache` is `_`-prefixed and therefore not
+   copied today; each trial gets a clean cache. Under undo the *real* state's
+   cache is polluted by trial computes and must be invalidated (or restored)
+   on rollback. `invalidate` is only 1.4% of runtime, so clearing on rollback
+   is an acceptable and much safer choice than trying to restore it.
+5. **Exceptions mid-`apply`.** `STRICT` legality asserts and illegal-move
+   paths raise from the middle of a mutation sequence. Rollback must be in a
+   `finally`, and it must be correct from a *partial* journal.
+6. **Non-search callers.** `experiments/`, `analysis/` and `WeightedBot` also
+   call `copy_state`; the journal must be opt-in so they are unaffected.
+
+Mitigation that makes this tractable, and it is a strong one: a **paranoid
+mode** that does both — `copy_state` the state as today, run the journalled
+apply, roll back, and structurally diff the rolled-back state against the copy,
+raising on any difference. `tools/measure_mutation.py` already contains the
+structural differ needed. Run the 135-game fingerprint suite under paranoid
+mode and every mutation site that matters in real play is exercised and
+checked; then turn paranoid mode off for production. That converts "did I find
+all 385 sites?" from an audit question into a test question.
+
+### 6.6 GO / NO-GO
+
+**GO — but as its own branch, with the paranoid differ written FIRST, and not
+inside a perf pass.**
+
+Reasoning:
+* The prize is real and large: ~1.8x on the exact cell the hill climbs run,
+  and it is the only remaining change of that size. Everything else left is
+  1.05-1.2x.
+* The measurement supporting it is not a guess: 9235 candidate moves measured,
+  flat ~6-slot mutation against a 395-slot copy, confirmed at two player
+  counts, and the 50.6% copy share re-confirmed post-fastcopy.
+* The risk is concentrated in one failure mode (a missed mutation site) that
+  has a mechanical, complete detector (paranoid diff + the 135-game
+  fingerprint). That is an unusually good risk profile for a change this size.
+* It is reversible: the journal helpers are additive, and `copy_state` stays
+  in the tree as the fallback and as the paranoid-mode oracle.
+
+Conditions on the GO:
+1. Design **A (undo stack)**, not B. B's extra capability (many live trial
+   states) has no consumer today and it carries real-corruption risk instead of
+   trial-only risk.
+2. `engine/journal.py` + the paranoid differ land and pass on 135 games
+   **before** any call site is converted.
+3. Convert mutation sites module by module, running the fingerprint after each
+   module. Do not convert all six in one commit.
+4. Hard gate at every step: 58 tests green **and** narrow `c2befef1…` / wide
+   `47e06a41…` unchanged. Digest movement = revert.
+5. Do it while the hill climbs are quiescent, or at minimum never on the
+   checkout they are reading.
+
+**NO-GO on Design B** unless and until a bot needs simultaneous live trial
+states (multi-ply search). Revisit then, and reuse the journal for the
+single-ply case regardless.
