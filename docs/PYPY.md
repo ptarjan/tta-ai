@@ -693,3 +693,85 @@ Conditions on the GO:
 **NO-GO on Design B** unless and until a bot needs simultaneous live trial
 states (multi-ply search). Revisit then, and reuse the journal for the
 single-ply case regardless.
+
+## 7. Task 5 continued — exec-generated per-class copiers (commit c54f36b)
+
+Guided by section 5 (the copy is still 50.6% of GreedyBot 4p), the next
+constant-factor win goes after what the copier *decides* rather than what it
+copies. Per state copy the old code made ~209 per-field and ~115 per-element
+`type()` + frozenset probes, all of which are a pure function of the class.
+They are now decided once at import and baked into a straight-line
+`exec`-generated copy function per dataclass — the trick `dataclasses` uses
+for `__init__`. Field plans:
+
+| plan | applies to | generated code |
+|---|---|---|
+| scalar | annotation is `int`/`str`/`bool`/`float` or `X \| None` | `d['x']` (shared) |
+| atomic container | registry: decks, hands, event lists, `seeded_by`, … | `list(d['x'])` / `dict(d['x'])` — one C call |
+| dataclass container | `GameState.players`, `PlayerState.techs` | comprehension calling that class's generated copier, one `type() is` guard per element |
+| generic | everything else (`pacts`, `pending`, `one_time_discount`, …) | `_cv(d['x'])`, unchanged |
+
+The atomic-container registry is the only claim annotations cannot verify (the
+fields are annotated bare `list`/`dict`), so it gets three guards: a
+`len(__dict__)` check that falls back to the fully generic copier if the
+instance does not match its class schema (the one tolerated deviation is
+`effects`' private `_stats_cache`), per-element `type()` guards on the
+dataclass containers, and a new **paranoid mode** — `FASTCOPY_PARANOID=1`
+verifies every atomic-container element is immutable and raises otherwise.
+
+### Measurement
+
+`tools/bench_copy.py`, `nice -n 10`, A/B back to back against a `git worktree`
+at the pre-change commit, twice:
+
+| copy microbenchmark | leaf fast path (4a) | generated | ratio |
+|---|---|---|---|
+| rep 1 | 11306 copies/cpu-s (88.45 us) | **14209** (70.38 us) | **1.26x** |
+| rep 2 | 11494 copies/cpu-s (87.01 us) | **13985** (71.51 us) | **1.22x** |
+
+Cumulative on `copy_state` since the perf pass began: 6601 -> 14100
+copies/cpu-s = **2.14x**.
+
+End-to-end, `tools/bench_interp.py` (2 s warm / 6 s measure, `nice -n 10`,
+climbs running), same worktree A/B, twice:
+
+| GreedyBot | leaf fast path | generated | speed-up |
+|---|---|---|---|
+| 2p | 5.739 / 5.790 games/cpu-s | 6.458 / 6.531 | **1.13x** |
+| 3p | 2.864 / 2.872 | 3.218 / 3.286 | **1.13x** |
+| 4p | 1.317 / 1.332 | **1.494 / 1.500** | **1.13x** |
+
+Rep-to-rep spread under 1.5%. 1.24x on a 50.6% component predicts 1.11x
+overall; 1.13x measured, so Amdahl is again consistent and the 50.6% figure is
+independently confirmed.
+
+**Greedy 4p is now 1.50 games/cpu-s, from 0.99 before the fastcopy work —
+1.51x cumulative on the cell the hill climbs actually run.**
+
+Gate: 58/58 tests OK; narrow `c2befef1…` and wide `47e06a41…` unchanged, and
+**also unchanged under `FASTCOPY_PARANOID=1`** — 135 games of real play with
+every atomic container element-checked, no aliasing found.
+
+## Status / next steps (keep current) — updated
+
+- [x] Task 1-4 — see the checklist above; **NO interpreter switch.**
+- [x] Task 5a — re-profile after the 1.55x fastcopy win (section 5). Copy is
+      still #1 at 50.6%; `random.Random(0)` per candidate is a new #2 at 10.8%.
+- [x] Task 5b — copy-on-write / undo design writeup + go/no-go (section 6).
+      **GO on design A (undo stack), as its own branch, paranoid differ first.**
+- [x] Task 5c — exec-generated per-class copiers, 1.24x copy / 1.13x
+      end-to-end (section 7, commit c54f36b).
+- [ ] **Owner action, `engine/bots/__init__.py`** — the `random.Random(0)`
+      per candidate move (section 5a). ~10% of GreedyBot for a one-line,
+      provably digest-preserving change. Not applied here: that file is out of
+      scope for this pass.
+- [ ] **Owner action, same file** — `features()` does `from .. import cards as C`
+      / `from .. import economy` *inside the function*, i.e. once per candidate
+      move; `importlib._bootstrap._handle_fromlist` is 1.6% of runtime. Hoist to
+      module level if the import cycle allows, else bind once lazily.
+- [ ] Next constant-factor targets, in profile order after this change:
+      `effects.compute` (12.0%), `evaluate`/`features` (18.9%), and the
+      remaining generic `_cv` paths (`pacts`, `pending`, `queue`,
+      `one_time_discount`, `discarded_military`).
+- [ ] The real prize remains section 6: the undo stack, ~1.8x, on its own
+      branch. Re-test PyPy *after* that lands, not before.
