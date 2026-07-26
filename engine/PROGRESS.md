@@ -34,10 +34,17 @@ Speed target in ARCHITECTURE.md is ≥50 4p games/**minute**; we do ~1400/minute
 with the legality assert switched on (set `engine.actions.STRICT = False` for
 another ~25%).
 
+Extra fuzz: 600 further RandomBot games (2p/3p/4p × seeds 200-399) — 0
+failures, every game reached Age IV and scored.
+
 GreedyBot vs RandomBot, 2p × 30 seeds: greedy wins 30-0, mean culture 39.2 vs
 6.4. Random play scores near zero because random bots destroy their own
 buildings and never build a temple — expected, and it makes the invariant
-fuzzing harsher, not weaker.
+fuzzing harsher, not weaker. GreedyBot self-play mean final culture:
+30.0 (2p) / 32.9 (3p) / 62.7 (4p), max seen 146.
+
+Round robin (`python3 -m experiments.harness --games 24 --players 4`):
+greedy 43.1% win rate at 75.5 mean culture, random 4.4% at 9.1.
 
 ## Known gaps / deliberate simplifications
 - **Colonization auctions (§11) not implemented**: a territory revealed as the
