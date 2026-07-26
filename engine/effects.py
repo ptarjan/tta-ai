@@ -318,6 +318,17 @@ def compute(state, p):
         _apply_modifier(s, p, key, val)
 
     s.strength += army_strength(state, p)
+    # "Limits on Ratings" (rulebook, Civilization Statistics): *none* of your
+    # ratings can ever go below zero -- if the total contribution of your cards
+    # and workers is negative, that rating is 0.  Only happiness was clamped
+    # here before, which let Age III Fundamentalism (production science -2)
+    # drive a player's science *stock* negative once its penalty outweighed the
+    # player's labs/libraries.
+    s.science = max(0, s.science)
+    s.culture = max(0, s.culture)
+    s.food = max(0, s.food)
+    s.resources = max(0, s.resources)
+    s.strength = max(0, s.strength)
     s.happy = max(0, min(8, s.happy))
     return s
 
