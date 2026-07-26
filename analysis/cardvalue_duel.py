@@ -103,15 +103,21 @@ def card_potential(name, w):
         if fk:
             v += w.get(fk, 0.0) * amt
 
-    # what it still costs you to get there
+    # What it still costs you to get there.  Priced through max(0, w) on
+    # purpose: `science` and `resource_stock` are *stock* weights and a hill
+    # climb is free to drive them negative (the 4p champion has science =
+    # -6.09).  Without the clamp a negative stock weight turns "this card is
+    # expensive" into "this card is a bargain" -- Alchemy scored +67.04 under
+    # the 4p vector against +5.86 under the 2p one, and the 4p duel collapsed
+    # to 9.7% +/- 2.7%.  Paying a cost must never read as a gain.
     tc = card.get("techCost") or 0
     bc = card.get("buildCost") or 0
-    v -= tc * w.get("science", 0.0)
-    v -= bc * w.get("resource_stock", 0.0)
+    v -= tc * max(0.0, w.get("science", 0.0))
+    v -= bc * max(0.0, w.get("resource_stock", 0.0))
     if typ == "wonder":
         stages = card.get("stages") or []
         v += w.get("wonders", 0.0)
-        v -= sum(stages) * w.get("resource_stock", 0.0)
+        v -= sum(stages) * max(0.0, w.get("resource_stock", 0.0))
     _CACHE[key] = v
     return v
 
