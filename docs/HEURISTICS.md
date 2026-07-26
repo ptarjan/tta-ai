@@ -17,10 +17,12 @@ culture leak we measured), then the opening cheat sheet for your player count.
    and [mine or farm?](#mine-or-farm)
 4. [Midgame: late Age I through Age II](#midgame-late-age-i-through-age-ii-roughly-rounds-614)
 5. [Endgame: Age III and Age IV](#endgame-age-iii-and-age-iv-roughly-rounds-1523)
-6. [What changes with the player count](#what-changes-with-the-player-count)
-7. [Common traps](#common-traps) — six ways the game quietly takes points off you
-8. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
-9. [What this document does not know](#what-this-document-does-not-know)
+6. [Priority lists: which card do I take?](#priority-lists-which-card-do-i-take)
+   — leaders, wonders, civil buildings and technologies, ranked per age
+7. [What changes with the player count](#what-changes-with-the-player-count)
+8. [Common traps](#common-traps) — six ways the game quietly takes points off you
+9. [Quick reference](#quick-reference) — rulebook tables only, nothing learned
+10. [What this document does not know](#what-this-document-does-not-know)
 
 ---
 
@@ -1107,6 +1109,206 @@ about 4 × 4 = **16 culture** by the end — more than any Age III culture build
 will earn you in the same four turns. Before you apply "stop buying rate", do the
 subtraction in trap #2: gross food production minus 2 (or 3 if you are down to
 8 or fewer yellow tokens). If that number is negative, buy the farm.
+
+---
+
+## Priority lists: which card do I take?
+
+### These are per-age lists, not one global list — here is why
+
+The card row only ever contains cards from the current age and the one after it,
+and each age's deck is exhausted before the next begins [rules, §12.1]. **You will
+never once be choosing between an Age A temple and an Age III temple.** A single
+global ranking of individual cards would therefore be a list you could never
+actually use. So every list below ranks cards *within* an age.
+
+There is exactly one ranking worth stating globally, and it is between **kinds**
+of card rather than between cards. Averaged over 120 games at each player count,
+here is where the civil actions actually go — this is the real priority order:
+
+| Rank | Card type | Actions spent per game (2p / 3p / 4p) |
+|---|---|---|
+| 1 | **Mines** | 4.28 / 0.41 / 5.38 |
+| 2 | **Temples** | 3.65 / 2.84 / 3.71 |
+| 3 | **Labs** | 3.08 / 1.07 / 4.71 |
+| 4 | Infantry | 2.41 / **7.14** / 2.41 |
+| 5 | Libraries | 1.93 / 0.86 / 2.45 |
+| 6 | Special technologies | 1.93 / 1.24 / 2.36 |
+| 7 | Farms | 1.50 / 0.92 / 1.69 |
+| 8 | Cavalry | 1.23 / 0.56 / 1.32 |
+| 9 | Theaters | 1.14 / 0.68 / 1.98 |
+| 10 | Arenas | 0.78 / 0.75 / 0.94 |
+| 11 | Governments | 0.12 / 0.07 / 0.56 |
+
+(Infantry at 3 players is the outlier discussed at length in the per-count
+section; treat it as that one AI's habit, not as a 3-player rule.)
+
+### How much to trust these lists
+
+Two very different grades of evidence are mixed together here, and you should
+know which you are reading.
+
+- **Leaders and wonders: reasonably solid.** Putting a leader in play or paying a
+  wonder stage changes your board immediately, so the AI's judgement is actually
+  engaged when it chooses, and the counts below are what it chose across 120
+  games per player count.
+- **Buildings and technologies: weak, and you should mostly ignore the per-card
+  order.** When the AI *takes* a card off the row it genuinely cannot tell one
+  card from another: its scoring compresses your entire hand down to two numbers,
+  how many cards you hold and roughly what age they are. Taking `Ocean Liners`
+  and taking `Revolutionary Idea` look *identical* to it
+  (`docs/WASTED_ACTIONS.md` §4). So the per-card take counts are close to a
+  measure of what happened to be available and cheap. Trust the **type** order in
+  the table above; treat the card names below as a weak hint.
+- **Anything military or political is systematically underrated below.** The AI
+  never attacks, never defends, never signs a pact and never colonises (caveat
+  3). Every leader and wonder whose value is deterrence, aggression or politics —
+  Alexander, Caesar, Genghis Khan, Napoleon, Robespierre, Colossus, the Great
+  Wall, Transcontinental Railroad — is being judged by a player who cannot use
+  half the card. **A low number below is not evidence against those cards.**
+
+We do not have a sourced community ranking checked into this repo, so where this
+document says "human tables generally rate X higher", that is the author's
+recollection of common opinion and is **not** evidence. It is flagged so you can
+weigh it yourself.
+
+### Leaders, by age
+
+There are six leaders per age and you can only ever have one of that age in play
+[rules]. The percentage is the share of the 120 games in which the AI got that
+leader into play, averaged across the three player counts.
+
+**Read the spread, not the order.** Within every age the best and worst leader
+here are only about 1.5× apart, and much of that gap is availability rather than
+quality. The AI does not have strong leader opinions; take the ordering as a
+tiebreak, not as gospel.
+
+**Age A** — all six are within noise of each other (5.5%–8.3%). Effectively:
+*take whichever Age A leader you see on round 1.*
+
+| | Leader | Played | What it does for you |
+|---|---|---|---|
+| 1 | Julius Caesar | 8.3% | +1 strength, +1 military action, and one double political action — mostly military, so the AI is the wrong judge of it |
+| 2 | Alexander the Great | 7.8% | +1 strength per unit; cash him in later for a yellow token |
+| 3 | Hammurabi | 7.5% | Use a military action as a civil action, and cheaper leaders afterwards — the best *economic* Age A leader on the card text |
+| 4 | Moses | 6.1% | Population costs 1 food less; strong if you intend to grow hard, which at 3 players you do |
+| 5 | Homer | 5.6% | +1 happy face, plus a resource whenever you build a unit |
+| 6 | Aristotle | 5.5% | 1 science every time you take a technology card — rewards a high card-taking tempo |
+
+**Age I** — the one age where the AI has a mild opinion.
+
+| | Leader | Played | What it does for you |
+|---|---|---|---|
+| 1 | Christopher Columbus | 14.7% | Free colonisation. **Distrust this ranking entirely** — the AI never colonises, so it cannot possibly be valuing the actual ability |
+| 2 | Joan of Arc | 13.9% | +1 culture, +1 military action, and strength from your temple/government happy faces — pairs with the temple-first build order |
+| 3 | Michelangelo | 12.5% | 1 culture per happy face from temples, theaters and wonders. Human tables generally rate this the best Age I leader; the engine has it third |
+| 4 | Leonardo da Vinci | 11.4% | Extra science from your best lab or library, plus a resource per technology played |
+| 5 | Frederick Barbarossa | 10.6% | Population and a unit in one military action, cheaper |
+| 6 | Genghis Khan | 9.4% | Pure military — underrated here by definition |
+
+**Age II**
+
+| | Leader | Played | What it does for you |
+|---|---|---|---|
+| 1 | Isaac Newton | 10.8% | Big science from your best lab/library, and a civil action back every time you play a technology — the action refund is the real prize |
+| 2 | Napoleon Bonaparte | 10.0% | +2 military actions and large strength. Underrated here by definition |
+| 3 | William Shakespeare | 10.0% | +1 happy face and cheap theaters — the happy face is what matters |
+| 4 | James Cook | 8.6% | Colonies. Same warning as Columbus: untested, not weak |
+| 5 | Maximilien Robespierre | 8.3% | Makes revolutions cost military actions instead of civil ones — worth much more to a human who actually changes government |
+| 6 | J. S. Bach | 8.0% | Culture per theater and cheap theater technologies — but theaters are the *last* thing the AI builds, so this is circular |
+
+**Age III** — the AI plays these on round 18–19, i.e. for the last three or four
+production phases only. Judge them on how much they score in four turns.
+
+| | Leader | Played | What it does for you |
+|---|---|---|---|
+| 1 | Albert Einstein | 9.1% | Science from your best lab, and 3 culture per technology played |
+| 2 | Mahatma Gandhi | 8.9% | +2 culture and near-immunity to aggression. **The AI cannot value the immunity at all** — at a human table this is the point of the card |
+| 3 | Charlie Chaplin | 8.6% | +2 happy faces and double culture from your best theater |
+| 4 | Bill Gates | 7.2% | Your labs also produce resources |
+| 5 | Winston Churchill | 7.2% | 3 culture, or science-and-resources for military, every turn |
+| 6 | Sid Meier | 6.7% | Labs make culture instead of some science — a pure endgame conversion |
+
+### Wonders, by age
+
+Almost all of this comes from the 4-player AI, which is the only one that builds
+wonders in volume (235 builds across 120 games). "Started/completed" is out of
+120 games at 4 players. **The rule that matters is finishing, not starting.**
+
+| Age | Wonder | Started / completed (4p) | Verdict |
+|---|---|---|---|
+| **A** | **Hanging Gardens** | 14 / **12** | +1 culture and **+2 happy faces** for 6 resources. The best wonder in the game by this data — 86% completion, done by round 4 |
+| A | Library of Alexandria | 22 / 7 | +1 culture, +1 science, +1 to both hand limits. Started most often, finished a third of the time |
+| A | Pyramids | 13 / **0** | +1 civil action — excellent on paper, **never once finished in 120 games** |
+| A | Colossus | 11 / **0** | Strength and colony bids; never finished, and the AI could not use it anyway |
+| **I** | **Universitas Carolina** | 14 / **14** | +1 culture, +2 science. **100% completion.** Start it around round 7 |
+| **I** | **Taj Mahal** | 15 / **14** | +3 culture, +1 blue token. 93% completion |
+| I | St. Peter's Basilica | 8 / 13 | +2 culture, +1 happy face, and *doubles every other happy face source you own* — the strongest text on this list |
+| I | Great Wall | 21 / 5 | Culture, a happy face, and strength on infantry/artillery. 24% completion; the strength half is invisible to the AI |
+| **II** | **Eiffel Tower** | 22 / **17** | +4 culture, +1 happy face. **The only Age II wonder that ever finishes** — 77%, started round 12 |
+| II | Transcontinental Railroad | 21 / **0** | 0 for 21 |
+| II | Ocean Liners | 19 / **0** | 0 for 19 |
+| II | Kremlin | 18 / **0** | 0 for 18 |
+| III | First Space Flight | 12 / 4 | Culture for your whole technology pile — scales with a tech-heavy game |
+| III | Hollywood | 9 / 3 | Twice the culture output of your theaters and libraries |
+| III | Fast Food Chains | 8 / 3 | Culture per worker |
+| III | Internet | 8 / 3 | Culture for everything your urban buildings produce |
+
+**The single most useful line in this section:** the three 12-resource Age II
+wonders — Transcontinental Railroad, Ocean Liners and Kremlin — went **0 for 58**
+across 120 games. Not one was ever finished. Meanwhile the cheap Age A and Age I
+wonders started early finish 86–100% of the time. **Start a wonder by round 12 or
+do not start it**, and prefer the cheap early ones.
+
+### Civil (blue) buildings, by age
+
+The **type** order is the strong finding and it is the same at every player
+count: **temples first, then labs and libraries, and theaters and arenas last.**
+At 2 players the first temple goes up on **round 3 in 100% of games**; the first
+lab follows around round 5–6; theaters and arenas do not appear until rounds
+11–15.
+
+The reason is mechanical: a temple is a happy face *and* a culture point, so it
+pays the happiness bill that the population track keeps sending you while also
+scoring. A theater is culture with no happy face, so it can wait until you are
+safe. An arena gives happiness but no culture, and the AI reaches for it least of
+all.
+
+Per-card, within each age (remember: weak evidence, the AI is nearly card-blind
+when taking):
+
+| Age | Temple | Lab | Library | Theater | Arena |
+|---|---|---|---|---|---|
+| I | Theology | **Alchemy** | **Printing Press** | Drama | Bread and Circuses |
+| II | Organized Religion | Scientific Method | Journalism | Opera | — |
+| III | — | Computers | Multimedia | Movies | Professional Sports |
+
+Alchemy and Printing Press are the two most-taken Age I urban cards at every
+count that reaches for them, both around round 4–5. A dash means the card never
+appeared in any player count's top-30 list — that is an absence of data, not a
+verdict on the card.
+
+### Technologies, by age
+
+"Technology" here means everything else on a blue card: farms, mines, military
+units and the special technologies. Ranked by how often the AI took them, with
+the same card-blindness warning.
+
+| Age | Most-taken, in order |
+|---|---|
+| **I** | **Iron** (mine, round 3–5) → **Knights** (cavalry) → **Irrigation** (farm) → Swordsmen (infantry) → Warfare → Code of Laws → Cartography → Masonry |
+| **II** | **Cavalrymen** → **Cannon** → **Coal** (mine) → **Selective Breeding** (farm) → Riflemen → Architecture |
+| **III** | **Air Forces** → **Tanks** → **Mechanized Agriculture** (farm) → Rockets → Modern Infantry → Military Theory → Oil |
+
+Two things are worth pulling out of that:
+
+1. **Iron is the first technology you want.** It is the most-taken card in the
+   game at 2 and 4 players, at round 3–5, which lines up exactly with the
+   mine-on-round-2 build order.
+2. **The special technologies** (Warfare, Code of Laws, Cartography, Masonry,
+   Philosophy-line cards) are taken *early* — median round 3–5, in 89% / 78% /
+   99% of games. They are the least glamorous cards on this list and the AI
+   reaches for them more reliably than for anything except action cards.
 
 ---
 

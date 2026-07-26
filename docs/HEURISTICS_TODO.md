@@ -42,7 +42,15 @@ Plus four questions:
   --champion /tmp/ch4.json` and replace the 4p subsection with a real table.**
   Answers reader question 3 (mine or farm): **2p mines on round 2 in 100% of
   games, 3p farms on round 2 in 97%.**
-- **Units 3–5: TODO.**
+- **Unit 3 (priority lists): DONE.** New top-level section "Priority lists:
+  which card do I take?" — states up front that the lists are **per age, not
+  global** (the row only ever holds the current age and the next, so a global
+  card ranking is unusable), gives one global *type*-level order, then ranks
+  leaders / wonders / civil buildings / technologies within each age with a
+  one-line reason each. Flags loudly that (a) the AI is nearly card-blind when
+  *taking* a card so per-card take counts are weak, and (b) every military and
+  political card is systematically underrated because the AI cannot use it.
+- **Units 4–5: TODO.**
 
 ## Notes for the next person
 
