@@ -1113,7 +1113,7 @@ Tests: 5 new (`LogSuppression`), 120 total, gate green on all four arms.
       is the residual risk 6.5 did not name** and it must not be skipped.
       `coverage.py` turned out not to be installable — PEP 668 — so the tool
       uses `sys.monitoring` instead.)
-- [x] Step 7: **DONE** (9.12) — 1.75x measured on 4p greedy; gate 9/9 (9.11).
+- [x] Step 7: **DONE** (9.12) — 1.75x measured on 4p greedy; gate 10/10 (9.11).
 
 ### 9.6 Rebase onto master `6d0247c` — the baseline MOVED, legitimately
 
@@ -1279,7 +1279,9 @@ same local as the other 36), and 1 is `state.py:202`'s `del self.log[:100]` —
 hazard 2 of 6.5 by name, which cannot run inside a trial because `emit`
 returns early while `SUPPRESS_LOG` is set.
 
-### 9.11 The gate, all nine arms
+### 9.11 The gate, all TEN arms
+
+`bash tools/gate.sh --journal`, on the final tree:
 
 ```
 unittest                         OK   Ran 128 tests
@@ -1294,6 +1296,11 @@ wide JOURNAL                     OK   7814c5c9c276b0a2
 wide JOURNAL+PARANOID            OK   7814c5c9c276b0a2
 GATE PASS
 ```
+
+(The last arm is ~15 minutes on this box under the hill climbs' load -- 102
+games, each candidate move copied, applied, rolled back and diffed. It was
+run separately and returned the full
+`7814c5c9c276b0a2229b6b58143351c2ad1a1058f283db70d1d9a50d5448e8ce`.)
 
 Two gate bugs surfaced while assembling this table, and both are worth
 recording because both would have produced a *misleading reading* rather than
@@ -1373,7 +1380,7 @@ Every 6.6 condition is met:
 2. `engine/journal.py` + the paranoid differ landed and passed before any call
    site was converted. ✓
 3. Six modules, one commit each, gate after each. ✓
-4. Hard gate at every step, digests unchanged. ✓ (8/8 arms, 9.11)
+4. Hard gate at every step, digests unchanged. ✓ (10/10 arms, 9.11)
 5. Done on a worktree the hill climbs never read. ✓
 
 Plus the two things 6.6 did not ask for and should have: the coverage audit
