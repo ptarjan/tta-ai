@@ -480,7 +480,7 @@ def _load_line(board, ln):
         return
     if word == "row":
         names = [None if t == EMPTY else resolve_card(t, "row")
-                 for t in _split_cards(rest)]
+                 for t in _split_strict(rest)]
         sync_row(board, names)
         return
     if word == "events":
@@ -491,11 +491,11 @@ def _load_line(board, ln):
         return
     if word == "curev":
         st.current_events = [resolve_card(t, "military")
-                             for t in _split_cards(rest)]
+                             for t in _split_strict(rest)]
         return
     if word == "tactics":
         st.available_tactics = [resolve_card(t, "tactic")
-                                for t in _split_cards(rest)]
+                                for t in _split_strict(rest)]
         return
     if word == "last_round":
         st.last_round = True
@@ -535,7 +535,7 @@ def _load_player_line(board, idx, rest):
         return
     if head == "tech":
         p.techs = {}
-        for tok in _split_cards(tail):
+        for tok in _split_strict(tail):
             name, _, w = tok.rpartition(":")
             if not name:
                 name, w = tok, "0"
@@ -546,9 +546,9 @@ def _load_player_line(board, idx, rest):
     if head == "hand":
         civil, _, mil = tail.partition("|")
         p.hand_civil = [resolve_card(t, "row")
-                        for t in _split_cards(civil) if t != EMPTY]
+                        for t in _split_strict(civil) if t != EMPTY]
         p.hand_military = [resolve_card(t, "military")
-                           for t in _split_cards(mil) if t != EMPTY]
+                           for t in _split_strict(mil) if t != EMPTY]
         return
     if head == "hidden":
         kv = _kv(tail)
@@ -565,7 +565,7 @@ def _load_player_line(board, idx, rest):
         return
     if head == "built":
         p.completed_wonders = [resolve_card(t, "wonder")
-                               for t in _split_cards(tail)]
+                               for t in _split_strict(tail)]
         return
     if head == "leader":
         p.leader = None if tail.strip() in ("", EMPTY, "-") \
@@ -646,11 +646,11 @@ def _patch(board, line):
     rest = rest.strip()
 
     if word == "deal":
-        names = [resolve_card(t, "row") for t in _split_cards(rest)]
+        names = [resolve_card(t, "row") for t in _split_cards(rest, "row")]
         advance_row(board, names)
         return f"row advanced, dealt {len(names)} card(s)"
     if word == "row":
-        toks = _split_cards(rest)
+        toks = _split_cards(rest, "row")
         if not toks:
             raise PatchError("usage: row <up to 13 cards, '.' for empty>")
         names = [None if t == EMPTY else resolve_card(t, "row") for t in toks]
@@ -671,7 +671,7 @@ def _patch(board, line):
         board.hidden[(idx, "civil")] = board.hidden_count(idx, "civil") + 1
         return f"p{idx} took {name} from slot {slot}"
     if word == "event":
-        for t in _split_cards(rest):
+        for t in _split_cards(rest, "military"):
             st.current_events.append(resolve_card(t, "military"))
         return "current event(s) noted"
     if word == "age":
@@ -707,7 +707,7 @@ def _patch_player(board, idx, rest):
 
     if head in ("tech+", "+tech"):
         out = []
-        for tok in _split_cards(tail):
+        for tok in _split_cards(tail, "tech"):
             name, _, w = tok.rpartition(":")
             if not name:
                 name, w = tok, "1"
@@ -717,13 +717,13 @@ def _patch_player(board, idx, rest):
         effects.invalidate(st, p)
         return f"p{idx} techs " + ", ".join(out)
     if head in ("tech-", "-tech"):
-        for tok in _split_cards(tail):
+        for tok in _split_cards(tail, "tech"):
             name = resolve_card(tok, "tech", extra=list(p.techs))
             p.techs.pop(name, None)
         effects.invalidate(st, p)
         return f"p{idx} removed {tail}"
     if head in ("built+", "+built", "built"):
-        for tok in _split_cards(tail):
+        for tok in _split_cards(tail, "wonder"):
             name = resolve_card(tok, "wonder")
             if name not in p.completed_wonders:
                 p.completed_wonders.append(name)
