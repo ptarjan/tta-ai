@@ -156,6 +156,7 @@ def end_of_turn(state, p, rng):
     p.ocean_liners_used = False
     p.politics_done = False
     p.taken_this_turn = []
+    p.mil_discount = 0                   # §3.11 action-card discounts expire
 
 
 def _end_of_turn_leader_bonus(state, p):

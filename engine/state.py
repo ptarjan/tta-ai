@@ -79,6 +79,9 @@ class PlayerState:
     resigned: bool = False
     skip_next_politics: bool = False    # International Agreement (§ CoL p.12)
     ca_penalty_next_turn: int = 0       # Rebellion
+    # resource discount pool for military unit builds/upgrades this turn
+    # (Patriotism / Wave of Nationalism / Military Build-Up, §3.11)
+    mil_discount: int = 0
     # one-time event discount, e.g. {"build": {"resources": 1}} (§ Civil Life)
     one_time_discount: dict = field(default_factory=dict)
     # war bookkeeping: (war_name, attacker_idx, defender_idx)

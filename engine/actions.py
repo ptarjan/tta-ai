@@ -131,6 +131,32 @@ def wonder_stage_cost(state, p, k):
     return sum(stages[done:done + k])
 
 
+def build_cost_net(state, p, name):
+    """Build cost after the per-turn military discount pool (§3.11)."""
+    cost = build_cost_for(state, p, name)
+    if cost is None:
+        return None
+    if is_unit(name):
+        cost = max(0, cost - p.mil_discount)
+    return cost
+
+
+def upgrade_cost_net(state, p, lo, hi):
+    cost = upgrade_cost(state, p, lo, hi)
+    if is_unit(lo):
+        cost = max(0, cost - p.mil_discount)
+    return cost
+
+
+def _spend_mil_discount(p, name, raw):
+    """Consume as much of the discount pool as this build/upgrade uses."""
+    if not is_unit(name) or p.mil_discount <= 0:
+        return raw
+    used = min(p.mil_discount, raw)
+    p.mil_discount -= used
+    return raw - used
+
+
 def is_unit(name):
     return C.db().type_of(name) in C.UNIT_TYPES
 
@@ -236,7 +262,7 @@ def _action_moves(state, p):
             typ = db.type_of(name)
             if typ not in C.WORKER_TYPES:
                 continue
-            cost = build_cost_for(state, p, name)
+            cost = build_cost_net(state, p, name)
             if cost is None or p.resources < cost:
                 continue
             if typ in C.UNIT_TYPES:
@@ -265,7 +291,7 @@ def _action_moves(state, p):
                 continue
             if db.level_of(hi) <= db.level_of(lo):
                 continue
-            if p.resources >= upgrade_cost(state, p, lo, hi):
+            if p.resources >= upgrade_cost_net(state, p, lo, hi):
                 moves.append(("upgrade", lo, hi))
 
     # destroy / disband (§3.6, §4.3)
@@ -339,14 +365,140 @@ def _can_revolt(state, p, name):
 
 
 def _action_card_playable(state, p, name):
+    """§3.11: a yellow card that orders an action needs that action to be legal.
+
+    Note the ordered action is checked AFTER the card's own gains, because
+    the gains are what make it affordable (Breakthrough's +science pays for
+    the technology it develops, Frugality's +food for the population).
+    """
     eff = C.db().get(name).get("effects") or {}
-    return bool(eff) and any(k in ACTION_CARD_KEYS for k in eff)
+    if not eff:
+        return False
+    kind = eff.get("freeCivilAction")
+    if not kind:
+        return any(k in ACTION_CARD_KEYS for k in eff)
+    probe = _with_card_gains(state, p, eff)
+    return bool(free_action_moves(state, probe, kind,
+                                  eff.get("resourceDiscount", 0)))
 
 
 ACTION_CARD_KEYS = {
     "gainScience", "gainCulture", "gainFood", "gainResources",
     "gainPopulation", "extraCivilActions", "extraMilitaryActions",
+    "militaryActions", "gainFoodOrResources", "resourcesForMilitaryUnits",
+    "resourcesForMilitaryUnitsPerStrongerCivilization",
+    "culturePerCivilizationWithMoreCulture",
 }
+
+
+def _with_card_gains(state, p, eff):
+    """A throwaway clone of `p` with the card's immediate gains applied.
+
+    Only the scalar pools that gate the ordered action are moved, so this
+    stays cheap enough to call from `legal_moves`.
+    """
+    import copy as _copy
+    probe = _copy.copy(p)
+    probe.techs = p.techs                   # read-only in the probe
+    probe.food = p.food + eff.get("gainFood", 0)
+    probe.resources = p.resources + eff.get("gainResources", 0)
+    probe.science = p.science + eff.get("gainScience", 0)
+    n = eff.get("gainFoodOrResources", 0)
+    probe.food += n                         # best case for either choice
+    probe.resources += n
+    return probe
+
+
+# ------------------------------------------------- ordered (free) actions
+
+def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
+    """Concrete moves satisfying an action card's ordered action (§3.11).
+
+    The action is performed under normal rules but pays no civil/military
+    action, and `discount` resources come off its cost (floor 0).
+    """
+    db = C.db()
+    out = []
+    if kind == "increase_population":
+        cost = economy.pop_cost(state, p)          # at full price
+        if cost is not None and p.food >= cost:
+            out.append(("pop",))
+        return out
+    if kind == "build_one_wonder_stage":
+        if p.wonder is not None:
+            stages = db.get(p.wonder.name)["stages"]
+            if p.wonder.steps_built < len(stages):
+                if p.resources >= max(0, wonder_stage_cost(state, p, 1) - discount):
+                    out.append(("wonder_step", 1))
+        return out
+    if kind == "develop_technology":
+        for name in sorted(set(p.hand_civil)):
+            card = db.get(name)
+            if card["type"] not in (C.WORKER_TYPES | {"special-tech",
+                                                      "government"}):
+                continue
+            if p.science >= (effects.tech_cost(state, p, name) or 0):
+                out.append(("develop", name))
+            # RB p.15: Breakthrough may also pay for a revolution
+            if revolt_ok and card["type"] == "government" \
+                    and (card.get("revolutionCost") is not None) \
+                    and p.science >= card["revolutionCost"]:
+                out.append(("revolution", name))
+        return out
+
+    types = _FREE_BUILD_TYPES.get(kind)
+    if types is None:
+        return out
+    upgrade_only = kind.startswith("upgrade_")
+    s = effects.state_stats(state, p)
+    if not upgrade_only and p.workers_free > 0:
+        for name in sorted(p.techs):
+            typ = db.type_of(name)
+            if typ not in types:
+                continue
+            cost = build_cost_for(state, p, name)
+            if cost is None or p.resources < max(0, cost - discount):
+                continue
+            if typ in C.URBAN_TYPES and urban_count(p, typ) >= s.urban_limit:
+                continue
+            out.append(("build", name))
+    for lo in sorted(p.techs):
+        if p.techs[lo].workers <= 0 or db.type_of(lo) not in types:
+            continue
+        typ = db.type_of(lo)
+        for hi in sorted(p.techs):
+            if hi == lo or db.type_of(hi) != typ:
+                continue
+            if db.level_of(hi) <= db.level_of(lo):
+                continue
+            if p.resources >= max(0, upgrade_cost(state, p, lo, hi) - discount):
+                out.append(("upgrade", lo, hi))
+    return out
+
+
+_FREE_BUILD_TYPES = {
+    "build_or_upgrade_farm_or_mine": C.PRODUCTION_TYPES,
+    "build_or_upgrade_urban_building": C.URBAN_TYPES,
+    "upgrade_farm_mine_or_urban_building": C.PRODUCTION_TYPES | C.URBAN_TYPES,
+}
+
+
+def apply_free_action(state, p, move, discount=0):
+    """Perform an action-card's ordered action: no action cost, discounted."""
+    kind = move[0]
+    if kind == "pop":
+        economy.increase_population(state, p)
+    elif kind == "build":
+        do_build(state, p, move[1], discount=discount, free=True)
+    elif kind == "upgrade":
+        do_upgrade(state, p, move[1], move[2], discount=discount, free=True)
+    elif kind == "wonder_step":
+        do_wonder_step(state, p, 1, discount=discount, free=True)
+    elif kind == "develop":
+        _h_develop(state, p, ("develop", move[1]), None, free=True)
+    elif kind == "revolution":
+        _h_revolution(state, p, ("revolution", move[1]), None)
+    effects.invalidate(state, p)
 
 
 # ------------------------------------------------------------- apply
