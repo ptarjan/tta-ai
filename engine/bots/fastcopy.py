@@ -33,7 +33,11 @@ registries below:
   ``C``  container of a     -> a comprehension calling that class's generated
          known dataclass       copier, with one ``type() is`` guard per element
                               instead of the generic dispatch chain
-  ``G``  anything else      -> ``_cv(d['x'])``       (generic, recursive)
+  ``N``  dict of atomic     -> ``{k: list(x) ...}``  (``discarded_military``,
+         containers            ``one_time_discount``)
+  ``G``  anything else      -> ``_cv(d['x'])``, guarded by a walrus test so
+                              the (very common) empty / ``None`` case never
+                              pays for the call
 
 Guards, because ``A``/``C`` are claims about *element* types that the
 annotations cannot express (those fields are annotated bare ``list``/``dict``):
@@ -94,6 +98,15 @@ _ATOMIC_CONTAINERS = {
 _DC_CONTAINERS = {
     ("GameState", "players"): _PlayerState,     # list, 4 elements
     ("PlayerState", "techs"): _TechCard,        # dict, ~26 elements per state
+}
+
+# Dicts one level deeper: the outer dict's values are themselves containers of
+# immutable scalars, so each value is one C-level list()/dict() and the whole
+# field never enters the generic recursive path.  Same paranoid check as
+# _ATOMIC_CONTAINERS, applied to the inner containers.
+_NESTED_ATOMIC = {
+    ("GameState", "discarded_military"): "list",    # age -> [card names]
+    ("PlayerState", "one_time_discount"): "dict",   # "build" -> {"resources": 1}
 }
 
 # Annotations denoting an immutable scalar.  `from __future__ import
@@ -195,9 +208,25 @@ def _field_exprs(cls, skip=()):
         if fname in skip:
             continue
         ann = _annotation(f)
-        src = f"_cv(d[{fname!r}])"                       # G, the safe default
+        # G, the safe default.  Short-circuit the empty/None case: `pacts`,
+        # `pending`, `queue`, `wonder` and `final_scores` are empty or None in
+        # the overwhelming majority of copies, and a walrus test is far
+        # cheaper than the `_cv` call it replaces.
+        if "None" in ann:
+            src = f"(_cv(v) if (v := d[{fname!r}]) is not None else None)"
+        elif ann == "list":
+            src = f"(_cv(v) if (v := d[{fname!r}]) else [])"
+        elif ann == "dict":
+            src = f"(_cv(v) if (v := d[{fname!r}]) else {{}})"
+        else:
+            src = f"_cv(d[{fname!r}])"
+        nested = _NESTED_ATOMIC.get((cname, fname))
         dc = _DC_CONTAINERS.get((cname, fname))
-        if dc is not None:                               # C
+        if nested is not None:                           # N
+            inner = "_LIST(x)" if nested == "list" else "_DICT(x)"
+            src = (f"({{k: {inner} for k, x in v.items()}} "
+                   f"if (v := d[{fname!r}]) else {{}})")
+        elif dc is not None:                             # C
             tag, cpy = f"_t_{dc.__name__}", f"_c_{dc.__name__}"
             glb[tag], glb[cpy] = dc, _copier_for(dc)
             elem = f"({cpy}(x) if type(x) is {tag} else _cv(x))"
