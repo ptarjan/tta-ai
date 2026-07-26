@@ -84,6 +84,18 @@ shows every closed gap is actually being exercised, not just reachable:
 | aggressions played | 393 | 804 | 1582 |
 | wars declared | 155 | 250 | 527 |
 
+Speed note: RandomBot 4p fell from ~23 games/s to ~5.5 in this pass. About half
+of that is games genuinely being longer (mean player-turns 79 → 104, because
+colonies, action cards and pacts all extend a civilization's life) and the rest
+is the bigger move space plus `_action_card_playable`, which probes the ordered
+action of every yellow card in hand. 5.5 games/s is still ~330 4p games/minute
+against the ≥50/minute target in ARCHITECTURE.md, and `engine.actions.STRICT =
+False` buys back roughly another 25%.
+
+Hand-off note for the bots work: GreedyBot plays only 1.7 action cards per game
+versus RandomBot's 7.8, because its linear eval has no feature for them and it
+therefore almost never takes one from the row. Worth a `WeightedBot` feature.
+
 ## Known gaps / deliberate simplifications
 - The winner of a colonization auction sacrifices a greedy minimal force
   (weakest units first, bonus cards before extra units) rather than choosing;
