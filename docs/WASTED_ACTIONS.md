@@ -336,10 +336,12 @@ the experiments, so the live hill climb could not move the target mid-run.
 At 2p, **98.4%** of the turns where the champion destroys a civil action had
 an affordable legal move available, and in **60.1%** of them (44.9% at 3p) the
 bot declined a move its *own* evaluation scored above doing nothing. Only
-**1.6%** had genuinely nothing legal to spend on. Re-measured on the current
-deck after the `7d40f53` military-count fix: 3553 wasted-action turns and
-14183 civil actions destroyed over 200 games, against 3557 / 14229 before —
-unchanged.
+**1.6%** had genuinely nothing legal to spend on. Independently re-measured on
+the current deck after the `7d40f53` military-count fix, every headline number
+came back the same: 3553 wasted-action turns (was 3557), 14183 civil actions
+destroyed (was 14229), **59.9%** declining a self-scored improvement (was
+60.1%), 2.2% with no legal option (was 1.6%), mean flattery +12.41 (was
++12.57). This finding is not an artifact of one sample or one deck version.
 
 **The player's instinct is right, and by a larger margin than expected.** The
 control experiment settles it: a bot tuned to pass *more* often scores 67.3
