@@ -129,61 +129,131 @@ def elo(rows, n, iters=3000, lr=8.0):
 
 
 def matrix(rows, n):
+    """Row A / column B = A's share of the win when A sits alone at a table of Bs.
+
+    At 2p the reciprocal cell is exactly ``1 - x`` and is filled in.  At 3p and
+    4p it is NOT: "one CultureBot against three InfraBots" and "one InfraBot
+    against three CultureBots" are different games, so each ordered pair is
+    played separately and a cell is left blank until its own duel has run.
+
+    The ``mean`` column is deliberately **not** the mean of the printed row --
+    on a half-filled matrix that would silently average over whichever
+    opponents happened to be measured.  It is :func:`mean_share`, which counts
+    every game the bot appeared in, in both roles.
+    """
     ns = names_at(rows, n)
     c = cells(rows, n)
     lines = []
     head = [LABELS[e].replace("Bot", "") for e in ns]
-    lines.append("| A \\ table of B | " + " | ".join(head) + " | mean |")
+    lines.append("| A \\ table of B | " + " | ".join(head) + " | all games |")
     lines.append("|---|" + "---|" * (len(ns) + 1))
     for a in ns:
-        vals, out = [], []
+        out = []
         for b in ns:
             if a == b:
                 out.append("–")
                 continue
             v = c.get((a, b))
-            if v is None and (b, a) in c:
-                v = 1.0 - c[(b, a)] if n == 2 else None
-            if v is None:
-                out.append("")
-                continue
-            vals.append(v)
-            out.append(f"{v:.0%}")
-        m = f"**{sum(vals) / len(vals):.1%}**" if vals else ""
-        lines.append(f"| **{LABELS[a]}** | " + " | ".join(out) + f" | {m} |")
+            if v is None and n == 2 and (b, a) in c:
+                v = 1.0 - c[(b, a)]
+            out.append("" if v is None else f"{v:.0%}")
+        m = mean_share(rows, n, a)
+        lines.append(f"| **{LABELS[a]}** | " + " | ".join(out)
+                     + f" | **{m:.1%}** |")
     return "\n".join(lines)
 
 
 def mean_share(rows, n, e):
-    vals = []
+    """Mean share of the win over every game this bot played, either role.
+
+    As the lone challenger its share is ``win_rate``.  As one of the ``n-1``
+    identical defenders its share is the defenders' total ``1 - win_rate``
+    split between them, i.e. ``(1 - win_rate) / (n - 1)``.  Weighted by games
+    so a re-run at a different n does not distort the average.  The null is
+    1/n for every bot, so this is directly comparable across the roster.
+    """
+    num = den = 0.0
     for r in rows:
         if r["players"] != n:
             continue
+        g = r["games"]
         if r["a"] == e:
-            vals.append(r["win_rate"])
+            num += r["win_rate"] * g
+            den += g
         elif r["b"] == e:
-            vals.append((1.0 - r["win_rate"]) / (n - 1) * 1.0
-                        if n > 2 else 1.0 - r["win_rate"])
-    return sum(vals) / len(vals) if vals else float("nan")
+            # n-1 defender seats each played g games
+            num += (1.0 - r["win_rate"]) / (n - 1) * g * (n - 1)
+            den += g * (n - 1)
+    return num / den if den else float("nan")
+
+
+def summary_table(rows):
+    """Per-bot mean share at each player count, plus the Elo summary."""
+    els = {n: elo(rows, n) for n in (2, 3, 4) if names_at(rows, n)}
+    ns = [e for e in ORDER if any(e in els[n] for n in els)]
+    lines = ["| bot | 2p share | 3p share | 4p share | Elo 2p | Elo 3p | Elo 4p |",
+             "|---|---|---|---|---|---|---|"]
+    for e in ns:
+        sh, el = [], []
+        for n in (2, 3, 4):
+            if n in els and e in els[n]:
+                sh.append(f"{mean_share(rows, n, e):.1%}")
+                el.append(f"{els[n][e]:.0f}")
+            else:
+                sh.append("")
+                el.append("")
+        lines.append(f"| **{LABELS[e]}** | " + " | ".join(sh + el) + " |")
+    return "\n".join(lines)
+
+
+def behaviour_table(path):
+    """Per-game move counts and wall clock, from the mirror-table runs."""
+    if not os.path.exists(path):
+        return "_(not measured)_"
+    rows = {}
+    for line in open(path):
+        r = json.loads(line)
+        rows[(r["players"], r["label"])] = r
+    out = []
+    for n in (2, 3, 4):
+        got = [(e, rows[(n, e)]) for e in ORDER if (n, e) in rows]
+        if not got:
+            continue
+        out.append(f"\n**{n}-player mirror tables** "
+                   f"(counts are per game, summed over all {n} seats)\n")
+        out.append("| bot | wars | aggressions | pact offers | colony bids "
+                   "| colonies held | pacts live | moves/game | s/game "
+                   "| ms/move |")
+        out.append("|---|---|---|---|---|---|---|---|---|---|")
+        for e, r in got:
+            out.append(
+                f"| **{LABELS[e]}** | {r['war']:.2f} | {r['aggression']:.2f} "
+                f"| {r['offer_pact']:.2f} | {r['bid']:.2f} "
+                f"| {r['colonies_held_end']:.2f} | {r['pacts_live_end']:.2f} "
+                f"| {r['moves_per_game']:.0f} | {r['secs_per_game']:.2f} "
+                f"| {r['ms_per_move']:.2f} |")
+    return "\n".join(out)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--match", default="experiments/roster_match.jsonl")
     ap.add_argument("--behaviour", default="experiments/roster_behaviour.jsonl")
+    ap.add_argument("--section", default="all",
+                    choices=("all", "matrix", "summary", "behaviour"))
     args = ap.parse_args(argv)
 
     rows = load(args.match)
-    for n in (2, 3, 4):
-        if not names_at(rows, n):
-            continue
-        print(f"\n### {n} players (null = {1.0 / n:.1%})\n")
-        print(matrix(rows, n))
-        print()
-        r = elo(rows, n)
-        for e, v in sorted(r.items(), key=lambda kv: -kv[1]):
-            print(f"  {LABELS[e]:<18s} {v:7.0f}   mean share "
-                  f"{mean_share(rows, n, e):.1%}")
+    if args.section in ("all", "summary"):
+        print(summary_table(rows))
+    if args.section in ("all", "matrix"):
+        for n in (2, 3, 4):
+            if not names_at(rows, n):
+                continue
+            print(f"\n### {n} players (null = {1.0 / n:.1%})\n")
+            print(matrix(rows, n))
+    if args.section in ("all", "behaviour"):
+        print(behaviour_table(args.behaviour))
     return 0
 
 
