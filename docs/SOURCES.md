@@ -130,7 +130,10 @@ earlier corrections all came from this kind of conflict.
 
 ### The cross-check was NOT finished: the `.xls` has a second sheet, and it found a real bug
 
-**⚠ FLAG FOR THE USER — action needed, nothing changed in `data/` yet.**
+**✅ RESOLVED 2026-07-26 — the bug was real and the fix is now applied to `data/`. See
+"Verdict" at the end of this section for the second, independent confirmation. The text
+immediately below is the original flag, kept for the record; where it said "not applied",
+it now is.**
 
 `bgg_409053_player_card_counts.xls` has **two** sheets, `Civic Cards` (129 rows) and
 **`Military Cards` (131 rows)**. The write-up above compared only the civil side (121
@@ -216,6 +219,101 @@ Two smaller things found in the same pass, neither of them errors:
   deck at all. Excluding them is correct and matches BGA. They are also 2 of the 6 cards
   by which BGG's military total overshoots — consistent with 409053 being the sloppy file,
   as Conflicts A and B already established.
+
+### Verdict (2026-07-26): our counts were wrong; fixed. Two independent sources, one of them page-images
+
+The flag above rested on a single new source (`bgg_409053_player_card_counts.xls`, sheet
+`Military Cards`) plus our own derived `sources/bga_card_counts.tsv` and TTS. Before
+touching `data/` this was re-done from scratch against two sources that cannot have
+copied each other:
+
+**Source 1 — `sources/bgg_154670_card_reference_v109.pdf`, page 3.** Walter Kolczynski's
+Card Reference v1.09, created 2015-11-04. It is *four page-images* (`pdftotext` returns
+zero characters; `pdfimages -list` shows one RGB image per page), so it was read visually
+at 200 dpi. Page 3 carries the military deck as coloured tables — Bonus, Aggression, War,
+Pact, Tactic — each with a rightmost **`#` column giving the number of copies**. Read
+directly off the page:
+
+| Tactic | Age | # | | Aggression | Age | # |
+|---|---|---|---|---|---|---|
+| Fighting Band | I | **2** | | Enslave | I | **2** |
+| Heavy Cavalry | I | **2** | | Plunder | I | **2** |
+| Legion | I | **2** | | Raid | I | **2** |
+| Medieval Army | I | **2** | | Annex | II | 1 |
+| Phalanx | I | **2** | | Infiltrate | II | 2 |
+| Classic Army … Napoleonic Army (6) | II | 1 each | | Plunder / Raid / Spy | II | 2 each |
+| Entrenchments | III | 1 | | Armed Intervention | III | **4** |
+| Mechanized Army | III | **2** | | Plunder | III | **2** |
+| Modern Army | III | **2** | | Raid | III | **2** |
+| Shock Troops | III | 1 | | | | |
+
+Same page: wars 2 / 2 / 6, all ten pacts 1 each, military bonus **6** per age.
+
+**Source 2 — `sources/bga_throughtheages_material.inc.php` (the raw BGA file, not our
+extract).** Each card entry carries `qt2` / `qt3` / `qt4`. Entry 56 is
+`'category' => 'Tactics', 'qt2' => 2, 'qt3' => 2, 'qt4' => 2, … 'name' => 'Fighting Band'`,
+and likewise 2/2/2 for Heavy Cavalry (63), Legion (72), Medieval Army (76), Phalanx (84);
+Age I aggressions Enslave (54), Plunder (85), Raid (87) are all 2/2/2; Age III Mechanized
+Army (229) and Modern Army (234) are 2/2/2, Armed Intervention (191) is 4/4/4. Light
+Cavalry (74) is `0/0/0` — the php is edition-aware and zeroes the 2006-only card, which is
+a good sign these fields are exactly what they look like.
+
+The two agree with each other on every military card, and with the `.xls` and TTS. So the
+count is 4–0 against us, and two of the four are primary.
+
+**Where our error actually came from.** Not from BGA — from *our reading of it*. The
+derived file `sources/bga_card_counts.tsv` claims in its own header to be "Extracted from
+Board Game Arena implementation material.inc.php", yet lists Fighting Band as `1 1 1`
+where the php it names says `2 2 2`, and Age I Plunder as `4 4 4` where the php says
+`2 2 2`. The transcription error is in that extraction step, and `data/` inherited it.
+`sources/bga_card_counts.tsv` is therefore **not** an independent source and must not be
+cited as one again; cite the `.php` (and note that the tsv is still uncorrected).
+
+**Why the `.xls` disagreeing on deck *membership* does not weaken it on *counts*.** The
+`.xls` has five military rows we do not: `Hussars` (II tactic), `Positional Army` (III
+tactic), `Aggression Kidnap` (I), `Aggression Occupy` (III), `Hybrid War` (III), plus
+`Naval Trade Agreement` (I pact) and events `Call to Arms`, `Dark Ages`, `Knowledge of the
+Agents`, `Arms Industry`, `Freedom of Movement`, `International Negotiations`,
+`Impact of Culture`, `Impact of Harmony`. Every one of those is already on the
+**"New Leaders and Wonders" expansion** list in the *Edition filtering performed* section
+below (some under their NamuWiki names: Kidnapping, Occupy, Hybrid Wars, Maritime Trade
+Agreement, Knowledge of the Ancestors). The `.xls` is simply an **expansion-inclusive**
+file. That is the whole of its 168-vs-150 overshoot, and the PDF confirms it card for
+card: page 3 lists **no** Hussars, Positional Army, Kidnap, Occupy or Hybrid War, and page
+4 lists **no** Call to Arms, Dark Ages, Knowledge of the Agents. Our *membership* is right
+and stays untouched; only our *copy counts* were wrong. (The `.xls` also says the military
+bonus is 7 per age where the PDF says 6 and BGA says 6 — one more reason to treat it as
+the loosest of the four, on this too we keep our 6.)
+
+**Applied.** 13 `count` values in `data/cards_military_actions.json`, each across
+`2p`/`3p`/`4p`:
+
+| Card | Age | was | now |
+|---|---|---|---|
+| Fighting Band, Heavy Cavalry, Legion, Medieval Army, Phalanx | I | 1 | **2** |
+| Aggression: Enslave | I | 3 | **2** |
+| Aggression: Plunder | I | 4 | **2** |
+| Aggression: Raid | I | 4 | **2** |
+| Mechanized Army, Modern Army | III | 1 | **2** |
+| Aggression: Armed Intervention | III | 3 | **4** |
+| Aggression: Plunder | III | 4 | **2** |
+| Aggression: Raid | III | 3 | **2** |
+
+Age II was already correct everywhere and is untouched. Per-age military totals are
+unchanged (Age I: tactics 5→10 and aggressions 11→6; Age III: tactics 4→6 and aggressions
+10→8), so the deck is still 140 / 150 / 150 and `python3 data/validate_cards.py` still
+passes. The composition change is real, though: Age I tactics go from 5/45 to 10/45 of the
+Age I military deck. **This invalidates comparability of hill-climb generations run before
+this commit** — see `engine/PROGRESS.md`.
+
+**Two naming notes, deliberately NOT changed** (cosmetic, and renaming would churn the
+determinism digests for nothing):
+- Our `Military Alliance` (III pact) is `Military Pact` in the BGA php (entry 4068) and in
+  the `.xls`, but `Military Alliance` in the BGG PDF. The sources are split 1–1 and we
+  match the PDF, so the earlier note that we are alone here was wrong.
+- Our `Development of Civil Life` (A event) is `Development of Civilization` in all three
+  of the PDF, the php and the `.xls`. We are alone; this one is worth renaming if anyone
+  is ever diffing card names, but it is a label only.
 
 ## Edition filtering performed
 NamuWiki lists include content that is NOT in the base 2015 game. Excluded:
