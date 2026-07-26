@@ -72,16 +72,24 @@ def move_label(db, move):
 class Probe:
     """Wraps the champion; scores every candidate itself to see the reasons."""
 
-    def __init__(self, weights, idx, seed=0):
-        self.inner = WeightedBot(weights=weights, seed=seed)
+    def __init__(self, weights, idx, seed=0, kind="champion", eps=-0.05):
+        if kind == "passfix":
+            from analysis.passfix_duel import PassFixBot
+            self.inner = PassFixBot(weights=weights, seed=seed, eps=eps)
+        else:
+            self.inner = WeightedBot(weights=weights, seed=seed)
         self.w = self.inner.weights
         self.idx = idx
         self.events = []
+        self.turns = 0
+        self.ca_left = 0
 
     def __call__(self, state):
         moves = actions.legal_moves(state)
         mv = self.inner.pick(state, moves)
         if mv[0] == "end_turn":
+            self.turns += 1
+            self.ca_left += state.players[state.decider()].civil_actions
             p = state.players[state.decider()]
             if p.civil_actions > 0:
                 try:
@@ -159,13 +167,17 @@ class Probe:
 
 
 def _play_one(task):
-    seed, n, weights = task
-    probes = [Probe(weights, i, seed=seed * 97 + i) for i in range(n)]
+    seed, n, weights, kind, eps = task
+    probes = [Probe(weights, i, seed=seed * 97 + i, kind=kind, eps=eps)
+              for i in range(n)]
     try:
         st = game.play_game(probes, n, seed=seed)
     except Exception as e:
-        return {"seed": seed, "error": repr(e), "events": []}
+        return {"seed": seed, "error": repr(e), "events": [],
+                "turns": 0, "ca_left": 0}
     return {"seed": seed, "scores": game.scores(st),
+            "turns": sum(pr.turns for pr in probes),
+            "ca_left": sum(pr.ca_left for pr in probes),
             "events": [e for pr in probes for e in pr.events]}
 
 
@@ -176,10 +188,13 @@ def main():
     ap.add_argument("--champion", default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--bot", default="champion", choices=("champion", "passfix"))
+    ap.add_argument("--eps", type=float, default=-0.05)
     a = ap.parse_args()
 
     weights = load_weights(a.champion) if a.champion else dict(DEFAULT_WEIGHTS)
-    tasks = [(s * 7919 + 17, a.players, weights) for s in range(a.games)]
+    tasks = [(s * 7919 + 17, a.players, weights, a.bot, a.eps)
+             for s in range(a.games)]
     workers = a.workers or max(1, (os.cpu_count() or 2) - 1)
     if workers <= 1:
         recs = [_play_one(t) for t in tasks]
