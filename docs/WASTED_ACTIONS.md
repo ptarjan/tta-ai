@@ -3,17 +3,30 @@
 **Question asked (2026-07-26):** *"I'm really surprised they ever waste an
 action. Isn't taking or playing a yellow card almost always worth it?"*
 
-**Verdict: MIXED, but overwhelmingly a BUG at 2p and 3p.** The player's
-instinct is right. At 2 players **98.4%** of the turns where the champion
-throws away a civil action had at least one affordable, legal action it could
-have taken instead, and in **60.1%** of them the bot declined a move *its own
-evaluation scored as an improvement*. That is not judgement, it is a search
-artifact. At 4 players the picture is genuinely different and the root cause
-is a different (also real) defect — see §5.
+**Verdict: BUG — and the player's instinct understates it.** At 2 players
+**98.4%** of the turns where the champion throws away a civil action had at
+least one affordable, legal action available, and in **60.1%** of them the bot
+declined a move *its own evaluation scored as an improvement*. Only 1.6% had
+nothing legal to do. Wasting actions is also far more expensive than assumed:
+a variant tuned to pass more often scores 67 culture against 152 (§6).
 
-Evidence: `analysis/wasted_actions.py` (probe) + `analysis/wasted_summary.py`
-(aggregation), 200 self-play games per player count with the current
-champions, 8531 wasted-action turns in total.
+**But the fixable cause is not the obvious one.** The eye-catching defect —
+`end_turn` being scored a whole production phase ahead of its alternatives
+(§1) — is real, yet removing it by any of five threshold settings made the bot
+*significantly weaker* (§6). The real disease is that the evaluation is
+**blind to card identity**: it compresses the entire hand to a count and a sum
+of age levels, so it cannot prefer a good card to a bad one and taking any
+card scores ≈ 0. Adding one term that values a card by what it *does* — with
+the `end_turn` bug deliberately left in place — wins **69.6% ± 4.5%** of games
+and gains **+21 culture** at 2p (§7). At 3p the same term is not significant,
+so the fix is demonstrated at 2p and untested elsewhere.
+
+Read §10 for the actionable summary; §8 for the ranked fix.
+
+Evidence: `analysis/wasted_actions.py` (probe), `analysis/wasted_summary.py`
+(aggregation), `analysis/passfix_duel.py` and `analysis/cardvalue_duel.py`
+(A/B), 200 self-play games per player count plus ~3200 duel games. Nothing
+under `engine/` was modified.
 
 ---
 
