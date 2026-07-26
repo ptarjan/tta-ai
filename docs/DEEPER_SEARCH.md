@@ -122,7 +122,34 @@ speeds up 1-ply and quiescent search alike — but it is not a precondition.
 weights, timing with `time.process_time` (the hill climbs saturate the box, so
 wall clock is meaningless).
 
-RESULTS PENDING — see section 6.
+```
+nice -n 15 python3 tools/quiesce_bench.py --players N --games 8 \
+    --weights experiments/champion_Np.json
+```
+
+| players | 1-ply s/game | quiescent s/game | **cost ratio** | candidates needing quiescence | extra `apply` per candidate | truncated |
+|---|---|---|---|---|---|---|
+| 2p | 0.468 | 0.544 | **1.16x** | 2.67% | 0.035 | 0.0% |
+| 3p | 0.827 | 1.066 | **1.29x** | 3.77% | 0.069 | 1.9% |
+| 4p | 1.924 | 2.265 | **1.18x** | 4.05% | 0.047 | 0.0% |
+
+This is the result that decides the whole question, and it is much better than
+the brief assumed. Deeper search normally costs a branching-factor multiple per
+move. Quiescence does not, because **it only runs on the 3-4% of candidate
+moves that actually leave a decision hanging**. Build, take, pop, upgrade and
+end_turn — the overwhelming majority — resolve inside `apply` and cost exactly
+what they cost today. The average candidate pays for 0.03-0.07 extra `apply`
+calls, so the whole feature is a ~20% tax rather than a 5-30x one.
+
+Truncation (a budget running out before the position went quiet) is 0% at 2p
+and 4p and 1.9% at 3p, so the fallback path is essentially never taken and the
+`MAX_DEPTH`/`MAX_NODES` budgets are not binding at their current values.
+
+### Cost of `LEVELS = 2`
+
+Nested resolution costs ~5% on top of `LEVELS = 1` (2.97 vs 2.82 cpu-s on a
+sampled 4p game), for the same reason: the extra level also only fires on
+pending-creating candidates, of which there are few.
 
 ## 4. Strength A/B
 
