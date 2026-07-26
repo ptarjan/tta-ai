@@ -147,5 +147,105 @@ actions genuinely have nowhere to go. The waste is real but it is a
 
 ---
 
-*(§6 fix ranking and the A/B validation follow; see git history for the
-in-progress version.)*
+## 6. Trying to fix it — and why the obvious fix makes the bot WORSE
+
+This is the part that changes the recommendation, so it is reported in full.
+
+Two candidate fixes were implemented in `analysis/passfix_duel.py` (nothing in
+`engine/` was touched) and duelled against the unmodified champion, mirror
+match, seat-rotated, on a frozen weight snapshot (`analysis/frozen/`, 2p
+gen 220) so the live hill climb could not move the target:
+
+* **`PassFixBot`** — price `end_turn` on the *unmoved* board (the honest "what
+  is my position worth if I stop here"), plus a threshold `eps`.
+* **`HorizonBot`** — the more principled version: roll *every* candidate
+  forward through the same production phase, so all moves are priced as "what
+  is my board worth at the end of this turn if I do X". This removes the
+  asymmetry rather than trying to cancel it with a constant.
+
+| bot | win rate vs champion @2p | n |
+|---|---|---|
+| `passfix`, eps 0.0 | **38.4% ± 4.8%** | 400 |
+| `passfix`, eps −0.05 | **39.8% ± 4.8%** | 400 |
+| `horizon`, eps −0.01 | **38.3% ± 12.4%** | 60 |
+| (null) | 50.0% | |
+
+**Every fix that removes the artifact makes the bot significantly weaker.**
+Mean culture drops from 127.5 to 113.2. That is not noise; it is 10+ points
+outside the interval.
+
+### Why: the bug is load-bearing
+
+The behavioural measurement explains it. Waste rate at 2p, 60 games:
+
+| bot | turns ending with CA unspent | CA wasted / turn |
+|---|---|---|
+| champion (buggy) | 42.6% | 1.79 |
+| `passfix` eps −0.05 | **66.2%** | **2.34** |
+| `passfix` eps −2.0 | 19.1% | 0.48 |
+
+Removing the flattery at eps ≈ 0 does not even reduce the waste — it *raises*
+it, because the bot now spends its early actions on marginal moves, reaches
+different (worse) positions, and still refuses Age III takes since
+`hand_value_late` is −0.78 regardless.
+
+The deeper reason is that **the flattery was accidentally doing a useful job:
+it is a move-quality filter.** With a +12 phantom in front of it, only moves
+the evaluation is *confident* about get played — `develop` (+10.7),
+`wonder_step` (+8.9), `build` (+2.9). Everything the evaluation cannot
+actually rank — `take` (−0.16, and identical for every card in the row),
+`pop` (−0.06), `destroy` (−4.95) — is filtered out. Drop the threshold to
+zero and the bot starts acting on evaluation *noise*.
+
+So this is a **compensating-errors** situation, and the second error is the
+one that matters:
+
+> `features()` reduces the entire civil hand to `hand_civil` (a count) and
+> `hand_value` (sum of age level + 1). The evaluation is **blind to card
+> identity**. It cannot prefer a good card to a bad one, and a 1-ply search
+> cannot see a card's payoff because that lands on the *next* ply, when you
+> play it.
+
+That is why taking a card scores ≈ 0. The bot is not undervaluing yellow
+cards specifically — it cannot value *any* card. Refusing to act is its
+least-bad policy given an evaluation that cannot tell it what acting is
+worth. **The user's instinct is correct about the game and the bot is wrong;
+but the wasted action is a symptom, and deleting the symptom without curing
+the cause loses 10 culture a game.**
+
+## 7. Ranked fix
+
+1. **Make the evaluation see what a card does (root cause).** Score a card in
+   hand by the features it would add if played — its tech's production, its
+   wonder's culture, its action card's gains — discounted for the actions and
+   science it still needs. Until this exists, no `end_turn` change can help,
+   because there is nothing accurate to spend the freed actions on. This
+   subsumes the `hand_value_late = −0.78` pathology, which is the hill climb
+   correctly learning "cards this bot holds never become anything".
+2. **Then remove the horizon artifact**, preferably as `HorizonBot`'s
+   same-horizon scoring rather than a constant, and **re-run the hill climb**.
+   `end_turn_bias` must be retrained, not carried over: its current −8.28 is
+   fitted to cancel a +12 phantom that would no longer exist. Doing step 2
+   without step 1 is a measured 10-culture regression.
+3. **Investigate the 4p champion's weight vector separately** (§5). `science`
+   = −6.09 makes gaining 4 science score −24, which is why playing
+   `Revolutionary Idea` is valued at −36.85. `workers` = −1.94 and
+   `civil_actions` = −2.86 are equally indefensible. This looks like a
+   degenerate hill-climb basin, not a search artifact, and it should be
+   re-seeded from defaults.
+4. **Do not** simply retune `end_turn_bias`. It is a constant fighting a term
+   that scales with the economy (+7.05 in Age I, +26.28 in Age IV); no value
+   of it is right for more than one age.
+
+## 8. Reproducing
+
+```bash
+python3 analysis/wasted_actions.py --players 2 --games 200 \
+    --champion analysis/frozen/champion_2p.json --out /tmp/wasted_2p.json
+python3 analysis/wasted_summary.py /tmp/wasted_2p.json
+python3 analysis/passfix_duel.py --players 2 --games 400 \
+    --champion analysis/frozen/champion_2p.json --mode horizon --eps -0.01
+```
+
+`python3 -m unittest discover -s tests -q` → 58 tests, OK (there is no pytest
+in this environment). No file under `engine/` was modified by this work.

@@ -89,6 +89,14 @@ class HorizonBot(WeightedBot):
 
     name = "horizon"
 
+    def __init__(self, *a, eps=-0.01, **kw):
+        super().__init__(*a, **kw)
+        # Threshold added to `end_turn`'s value. NEGATIVE = act whenever the
+        # move helps at all. POSITIVE = only act when the move beats doing
+        # nothing by that margin -- a move-quality filter, which is what the
+        # unfixed flattery was accidentally providing.
+        self.eps = eps
+
     def pick(self, state, moves):
         if len(moves) == 1:
             return moves[0]
@@ -99,9 +107,7 @@ class HorizonBot(WeightedBot):
             ctx = {"rival_culture_rate": 0, "rival_science_rate": 0,
                    "rival_strength": 0}
         w = self.weights
-        # a hair of friction so an action is only spent when it strictly
-        # beats not spending it at the same horizon
-        eps = w.get("end_turn_bias", 0.0) * 0.0 - 0.01
+        eps = self.eps
         best, best_val = None, None
         for mv in moves:
             trial = copy_state(state)
@@ -142,8 +148,7 @@ def _play(task):
     for i in range(n):
         s = seed * 97 + i * 13 + 1
         if i == seat:
-            bots.append(cls(weights=w, seed=s, eps=eps) if mode == "passfix"
-                        else cls(weights=w, seed=s))
+            bots.append(cls(weights=w, seed=s, eps=eps))
         else:
             bots.append(WeightedBot(weights=w, seed=s))
     try:
