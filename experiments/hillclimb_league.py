@@ -589,6 +589,43 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     return champion
 
 
+def report(state_dir, players, log=print):
+    """Print the run's current standing: last full-pool check + weight credit.
+
+    The generation log is a large JSONL and the interesting rows are buried in
+    it, so this is what an operator actually wants to look at.
+    """
+    pp = paths(state_dir, players)
+    st = load_state(pp)
+    log(f"[{players}p] gen={st['gen']} sigma={st['sigma']} "
+        f"since_accept={st['since_accept']} state={state_dir}")
+    fc = st.get("last_full_check") or {}
+    if fc:
+        log(f"\n  full-pool check (champion vs every opponent):")
+        log(f"    {'opponent':<28}{'tier':<11}{'win%':>8}{'+/-':>8}{'null':>7}{'n':>6}")
+        for label, r in sorted(fc.items(),
+                               key=lambda kv: (-kv[1]["weight"], kv[0])):
+            log(f"    {label:<28}{r['tier']:<11}{r['win_rate']:8.1%}"
+                f"{r['ci']:8.1%}{r['null']:7.0%}{r['n']:6d}")
+    else:
+        log("  no full-pool check yet")
+    if os.path.exists(pp["credit"]):
+        with open(pp["credit"]) as fh:
+            credit = json.load(fh)
+        buckets = {}
+        for k, v in credit.items():
+            buckets.setdefault(v.get("last", "?"), []).append(
+                (v.get("mean_edge", 0.0), k, v.get("n", 0)))
+        log(f"\n  weight credit ({len(credit)} weights measured):")
+        for verdict in ("load-bearing", "harmful", "no-measurable-effect"):
+            rows = sorted(buckets.get(verdict, []))
+            log(f"    {verdict} ({len(rows)}):")
+            for edge, k, n in rows:
+                log(f"      {k:<28} mean_edge={edge:+.4f} n={n}")
+    else:
+        log("\n  no ablation cycles yet")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="TtA weight hill climbing against a diverse opponent pool")
@@ -636,7 +673,12 @@ def main(argv=None):
     ap.add_argument("--ablate-mode", choices=("zero", "default"), default="zero")
     ap.add_argument("--max-gens", type=int, default=0,
                     help="stop after N generations this process (0 = time only)")
+    ap.add_argument("--report", action="store_true",
+                    help="print the run's standing (last full-pool check and "
+                         "weight-credit ledger) and exit")
     args = ap.parse_args(argv)
+    if args.report:
+        return report(args.state_dir, args.players)
     tw = P.parse_tier_weights(args.pool_weights)
     run(players=args.players, hours=args.hours, workers=args.workers,
         lam=args.lam, block=args.block, min_blocks=args.min_blocks,
