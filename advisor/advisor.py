@@ -365,6 +365,25 @@ def _move_tokens(state, move):
     return toks
 
 
+def _why_not(state, kind, arg):
+    """A useful message when a move the human named is not legal."""
+    if kind == "take" and arg.isdigit():
+        slot = int(arg)
+        if not 0 <= slot < len(state.card_row):
+            return f"row slot {slot} does not exist (0..{len(state.card_row) - 1})"
+        name = state.card_row[slot]
+        if name is None:
+            return f"row slot {slot} is empty"
+        try:
+            cost = A.take_cost(state, state.actor(), slot)
+            return (f"you cannot take '{name}' from slot {slot}: it costs "
+                    f"{cost} civil actions and you have "
+                    f"{state.actor().civil_actions}")
+        except Exception:
+            return f"you cannot take '{name}' from slot {slot} right now"
+    return f"no legal {kind} matches {arg!r}"
+
+
 def parse_move(state, text, board=None):
     """Turn what the human typed into one of the legal moves.
 
@@ -396,7 +415,7 @@ def parse_move(state, text, board=None):
         cands = [m for m in cands
                  if any(_arg_matches(e, arg) for e in _move_tokens(state, m))]
         if not cands:
-            raise PatchError(f"no legal {kind} matches {arg!r}")
+            raise PatchError(_why_not(state, kind, arg))
     if len(cands) == 1:
         return cands[0]
     if len(cands) > 1:
@@ -724,8 +743,9 @@ class Console:
         slots = getattr(self.adv, "dealt_slots", [])
         if not slots:
             return
-        self.say(f"\n{len(slots)} card(s) were dealt into row slots "
-                 f"{', '.join(str(s) for s in slots)}.")
+        where = ", ".join(str(s) for s in slots)
+        self.say(f"\n{len(slots)} new card(s) in row "
+                 f"{'slot' if len(slots) == 1 else 'slots'} {where}.")
         while True:
             line = self.ask("  new cards (left to right, '?' if unseen)> ")
             line = line.strip()

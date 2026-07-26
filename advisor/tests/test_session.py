@@ -229,7 +229,8 @@ class TestScriptedSession(unittest.TestCase):
         # ... while 'take 4' at the same prompt is still a move
         con._snapshot = S.dumps(adv.board)
         con.handle_move_input("take 4", adv.recommend(1))
-        self.assertEqual(len(adv.state.players[0].hand_civil), 1)
+        self.assertIsNone(adv.state.card_row[4])
+        self.assertEqual(adv.state.players[0].civil_actions, 0)
 
     def test_take_p1_vs_take_4_are_told_apart(self):
         self.assertTrue(AD._looks_like_patch("take p1 3"))
