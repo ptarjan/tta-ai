@@ -687,6 +687,30 @@ class TestAggressionDefense(unittest.TestCase):
         self.assertLess(dfn.food, 9)
 
 
+class TestSerialization(unittest.TestCase):
+    def test_pending_decisions_survive_a_json_round_trip(self):
+        """The decision stack and the deferred queue stay JSON-serializable."""
+        import json
+        import random as _r
+        from engine.state import GameState
+        seen = 0
+        for seed in range(20):
+            st = game.new_game(3, seed=seed)
+            bots = [RandomBot(seed=seed * 7 + i) for i in range(3)]
+            rng = _r.Random(seed)
+            while not st.game_over:
+                actions.apply(st, bots[st.decider()](st), rng)
+                if st.pending or st.queue:
+                    st2 = GameState.from_dict(json.loads(json.dumps(st.to_dict())))
+                    self.assertEqual(
+                        [list(m) for m in actions.legal_moves(st)],
+                        [list(m) for m in actions.legal_moves(st2)])
+                    self.assertEqual(st.decider(), st2.decider())
+                    seen += 1
+                    break
+        self.assertGreater(seen, 10, "no pending decisions were reached")
+
+
 def _rng():
     import random
     return random.Random(0)

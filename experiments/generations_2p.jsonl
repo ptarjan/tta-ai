@@ -11,3 +11,4 @@
 {"gen": 11, "players": 2, "accepted": false, "sigma": 0.1535, "secs": 51.0, "tried": [{"wr": 0.4375, "lo": 0.3448, "n": 48, "moved": 19}], "at": "2026-07-26 06:33:48"}
 {"gen": 12, "players": 2, "accepted": false, "sigma": 0.1305, "secs": 157.7, "tried": [{"wr": 0.4479, "lo": 0.3952, "n": 144, "moved": 19}], "at": "2026-07-26 06:36:26"}
 {"gen": 13, "players": 2, "accepted": false, "sigma": 0.1109, "secs": 62.0, "tried": [{"wr": 0.4896, "lo": 0.3971, "n": 48, "moved": 19}], "at": "2026-07-26 06:37:28"}
+{"gen": 14, "players": 2, "accepted": false, "sigma": 0.0943, "secs": 54.2, "tried": [{"wr": 0.2917, "lo": 0.2067, "n": 48, "moved": 19}], "at": "2026-07-26 06:38:22"}
