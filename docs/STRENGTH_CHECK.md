@@ -1,6 +1,6 @@
 # Strength check: is our trained champion actually any good?
 
-**Status: in progress.** Partial results, written as they land.
+**Status: 2p and 3p final. 4p and the hybrid ablation still running.**
 
 ## Why this document exists
 
@@ -32,19 +32,49 @@ Every duel is seat-rotated (each seed is played once with the challenger in
 each seat) and every matchup at a given player count uses the same seed set,
 so the comparisons are paired on identical deals. Null hypothesis is 1/N.
 
-| matchup | players | n | win rate | 95% CI | p vs null |
-|---|---|---|---|---|---|
-| BookBot vs champion_2p | 2 | 60 | 61.7% | ±12.4% | 0.065 |
-| GreedyBot vs champion_2p | 2 | 60 | 11.7% | ±8.2% | <0.0001 |
+| matchup | players | n | win rate | 95% CI | null | p | mean culture |
+|---|---|---|---|---|---|---|---|
+| **BookBot vs champion_2p** | 2 | 400 | **62.9%** | ±4.7% | 50.0% | <0.0001 | 155 vs 124 |
+| **BookBot vs champion_3p** | 3 | 300 | **42.2%** | ±5.6% | 33.3% | 0.0019 | 124 vs 112 |
+| GreedyBot vs champion_2p | 2 | 400 | 8.2% | ±2.7% | 50.0% | <0.0001 | 61 vs 156 |
+| BookBot vs GreedyBot | 2 | 400 | 96.4% | ±1.8% | 50.0% | <0.0001 | 176 vs 51 |
 
-*(Larger runs at 2p/3p/4p are in flight; this table is replaced when they
-land.)*
+BookBot beats the champion at both player counts measured so far, and the
+margin is well outside the confidence interval in each case. At 2p it wins
+nearly two games in three; at 3p it takes 42.2% of a table where 33.3% is par,
+which is a 27% relative edge over its two opponents.
 
-The GreedyBot row is the control, and it is the important one. GreedyBot is
-the bot our champion was trained to beat, and it beats it convincingly —
-11.7% is a rout. So the champion is *not* broken: it is genuinely far stronger
-than the baseline it was measured against. It is just that the baseline was
-weak, and beating a weak baseline by a lot told us much less than we assumed.
+The GreedyBot rows are the control, and they matter as much as the headline.
+GreedyBot is the baseline our champion was trained against, and the champion
+demolishes it — 8.2%, a rout. So **the champion is not broken.** It is
+genuinely, enormously stronger than the thing we were measuring it against.
+The problem is that the yardstick was short: BookBot beats that same baseline
+96.4% of the time, so "crushes GreedyBot" was never evidence of good play. It
+was evidence of clearing a low bar.
+
+## Caveat, stated up front
+
+The champion weights being tested (gen 222 at 2p) were trained almost entirely
+*before* commit `7d40f53` corrected the military card counts, which landed at
+12:37 on the day of this benchmark. So the champion is being graded on a game
+whose military deck is not quite the one it trained against, while BookBot's
+rules were never tuned to any deck. That is a real handicap and it should be
+said plainly.
+
+Two things stop it from explaining the result:
+
+1. **The champion's deficit is not military.** In the per-round diff below,
+   the two bots' strength is within a point of each other all game. The gaps
+   that decide the games are unspent science, workers, civil actions and food
+   — none of which the military deck touches.
+2. **The control is unaffected.** GreedyBot plays the same corrected deck and
+   is still crushed by the same champion.
+
+Still, the honest form of this result is: *the champion loses to the book bot
+on the current rules*. Whether it also loses after being retrained on the
+corrected deck is an open question, and this benchmark should be re-run once
+a post-`7d40f53` champion exists. `experiments/frozen/` holds the exact
+weights used here so the comparison can be repeated.
 
 ## What the champion is doing wrong
 
@@ -65,6 +95,22 @@ the first two thirds of the game and loses anyway.** It banks early points
 while BookBot builds an engine; BookBot's culture *rate* passes it around
 round 15 and the score follows about four rounds later.
 
+At **3p** (12 paired games, BookBot won 7) the shape is different and just as
+damning:
+
+| round | culture | culture rate | strength | res rate | workers | civil actions | wonders |
+|---|---|---|---|---|---|---|---|
+| 5 | +1.0 | +0.2 | +0.8 | +0.9 | −0.3 | +0.7 | +0.3 |
+| 10 | +1.0 | +1.2 | −1.4 | +2.1 | −0.5 | +1.4 | +1.3 |
+| 15 | +9.2 | +1.3 | −3.9 | +2.0 | −0.3 | +1.3 | +1.4 |
+| 20 | +19.0 | +0.4 | −6.6 | +2.6 | −0.4 | +1.0 | +1.5 |
+
+Here the champion is **ahead on military all game** — by round 20 it carries
+6.6 more strength than BookBot — and loses by 19 culture anyway. It bought an
+army it never converted into anything, while falling 1.5 wonders and 1.0 civil
+actions behind. At 3p the champion's problem is not that it is too passive;
+it is that it spends on the wrong things.
+
 Concrete weaknesses, in order of how much they appear to cost:
 
 1. **The champion hoards science it never spends.** By round 19 it is sitting
@@ -82,8 +128,12 @@ Concrete weaknesses, in order of how much they appear to cost:
    BookBot takes and it does not.
 4. **It builds fewer wonders** (−0.9), which in this game is also a culture
    rate deficit, not just a one-off.
-5. **The horizon is too short.** Items 1–4 are all the same mistake seen from
-   different angles: the evaluator rewards culture that exists now over the
+5. **It buys military it never cashes.** At 3p it ends +6.6 strength up on
+   BookBot and still loses by 19 culture. Strength is only worth what you
+   convert into aggressions, wars or safety; hoarded, it is as dead as hoarded
+   science. This is the same defect as item 1 in a different currency.
+6. **The horizon is too short.** Items 1–5 are all the same mistake seen from
+   different angles: the evaluator rewards what is on the board now over the
    capacity to make culture later, so the champion cashes in early and is
    overtaken by anything that keeps investing.
 
