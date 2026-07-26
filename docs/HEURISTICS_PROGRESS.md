@@ -245,3 +245,19 @@
   midgame build-order subsection) were already correctly scoped.
 - Added a table of contents and a "five minutes before you play" reading path
   (rules -> trap #2 -> your count's opening cheat sheet).
+
+### 12:42 — SESSION CLOSE
+- HEURISTICS.md is STRUCTURALLY COMPLETE (1448 lines, 9 sections + TOC). Nothing
+  planned is missing. Future work is data refresh, not writing.
+- PROCESS NOTE FOR THE NEXT AGENT: do NOT use `git add -A` in this repo. The
+  hillclimb is live and rewrites experiments/champion_*.json, generations_*.jsonl
+  and league_*/ constantly, and other agents have files in flight (a
+  sources/bgg_*.xls appeared and vanished mid-session and got swept into two of
+  my commits). Stage explicitly:
+      git add docs/HEURISTICS.md docs/HEURISTICS_PROGRESS.md analysis
+- Refresh checklist when the climbs next accept mutants (currently gen
+  176 / 132 / 113, last acceptance 147 / 120 / 103):
+  1. re-run experiments/run_behaviour.sh at 120 games/count
+  2. re-run analysis/leak_check.py (60 games) for trap #2
+  3. re-run experiments/analyze_weights.py for every weight percentage
+  4. update the header snapshot (generations, accepted counts, anchor table)
