@@ -18,3 +18,4 @@
 {"gen": 17, "players": 4, "accepted": false, "sigma": 0.25, "secs": 68.7, "tried": [{"wr": 0.125, "lo": 0.0571, "n": 40, "moved": 19}], "at": "2026-07-26 07:03:57"}
 {"gen": 18, "players": 4, "accepted": false, "sigma": 0.2125, "secs": 52.8, "tried": [{"wr": 0.2234, "lo": 0.1459, "n": 47, "moved": 19}], "at": "2026-07-26 07:04:50"}
 {"gen": 19, "players": 4, "accepted": false, "sigma": 0.1806, "secs": 55.1, "tried": [{"wr": 0.2391, "lo": 0.1576, "n": 46, "moved": 19}], "at": "2026-07-26 07:05:45"}
+{"event": "search_update", "note": "switched to LEAGUE mode (paired edge vs mixed field of past champions + default/greedy); grouped/rescale/kick mutation operators; stall kick. 'edge' replaces 'wr' as the accept statistic", "players": 4, "accepted": false, "sigma": null, "at": "2026-07-26 07:10:46"}

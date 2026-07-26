@@ -28,3 +28,8 @@
 {"gen": 27, "players": 2, "accepted": false, "sigma": 0.1535, "secs": 34.4, "tried": [{"wr": 0.4896, "lo": 0.3971, "n": 48, "moved": 19}], "at": "2026-07-26 07:04:09"}
 {"gen": 28, "players": 2, "accepted": false, "sigma": 0.1305, "secs": 31.6, "tried": [{"wr": 0.4167, "lo": 0.3245, "n": 48, "moved": 19}], "at": "2026-07-26 07:04:40"}
 {"gen": 29, "players": 2, "accepted": false, "sigma": 0.1109, "secs": 37.7, "tried": [{"wr": 0.4583, "lo": 0.3652, "n": 48, "moved": 19}], "at": "2026-07-26 07:05:18"}
+{"gen": 30, "players": 2, "accepted": false, "sigma": 0.0943, "secs": 32.2, "tried": [{"wr": 0.3854, "lo": 0.2975, "n": 48, "moved": 19}], "at": "2026-07-26 07:05:50", "vs_default": 0.4844, "vs_default_ci": 0.1, "vs_greedy": 0.9167, "vs_greedy_ci": 0.0556, "anchor_games": 96}
+{"gen": 31, "players": 2, "accepted": false, "sigma": 0.0801, "secs": 28.6, "tried": [{"wr": 0.4688, "lo": 0.3764, "n": 48, "moved": 19}], "at": "2026-07-26 07:08:02"}
+{"gen": 32, "players": 2, "accepted": false, "sigma": 0.0681, "secs": 128.8, "tried": [{"wr": 0.5208, "lo": 0.4747, "n": 192, "moved": 19}], "at": "2026-07-26 07:10:11"}
+{"gen": 33, "players": 2, "accepted": false, "sigma": 0.0579, "secs": 26.4, "tried": [{"wr": 0.4792, "lo": 0.3858, "n": 48, "moved": 19}], "at": "2026-07-26 07:10:37"}
+{"event": "search_update", "note": "switched to LEAGUE mode (paired edge vs mixed field of past champions + default/greedy); grouped/rescale/kick mutation operators; stall kick. 'edge' replaces 'wr' as the accept statistic", "players": 2, "accepted": false, "sigma": null, "at": "2026-07-26 07:10:46"}
