@@ -25,13 +25,16 @@ Three findings, in order of how much they should change your mind:
    players*, the 4p weight vector still opens wonder-first 74% of the time.
    Played *at four players*, the 2p vector never does (0%). Player count changes
    nothing; the weight vector changes everything.
-3. **It is one weight, and it was a hitchhiker.** `wonder_remaining` was flipped
-   from −0.3 (penalise unbuilt wonder stages) to +0.32 by the gen-5 mutation,
-   which moved **19 weights at once**. Revert that one number in today's
-   champion and the wonder opening vanishes entirely (74% → 0%). The opening
-   rate has been frozen at 77% for all 125 generations since, unchanged by six
-   further accepted mutations — stable because nothing has searched it, not
-   because anything converged on it.
+3. **It is one weight, it was a hitchhiker, and it is worth nothing.**
+   `wonder_remaining` was flipped from −0.3 (penalise unbuilt wonder stages) to
+   +0.32 by the gen-5 mutation, which moved **19 weights at once**. Revert that
+   one number in today's champion and the wonder opening vanishes entirely
+   (74% → 0%). The opening rate has been frozen at 77% for all 125 generations
+   since, unchanged by six further accepted mutations — stable because nothing
+   has searched it, not because anything converged on it. Played head-to-head
+   against itself-with-the-weight-reverted over 192 games, the wonder-first
+   champion wins **0.276 ± 0.063 against a 0.25 null**: the behaviour buys no
+   measurable win rate at all.
 
 **What to do with it:** do not write "at 4 players, open with a wonder" as
 advice. There is no evidence for the player-count claim. The honest statement is
@@ -242,7 +245,27 @@ entire "4p opens with a wonder" finding.
 
 So the opening is **stable** — but stable because it is frozen, not because it
 was converged on. Stability here is evidence of *no further search*, not of
-optimality. Whether it is actually good is a separate question (below).
+optimality. Whether it is actually good is the next question.
+
+### Does the wonder opening earn anything? No.
+
+Direct A/B: `champion_4p` as challenger against a table of *itself with only
+`wonder_remaining` reverted to −0.3* — identical in all 77 other weights, and the
+only behavioural difference is the opening (74% wonder-first vs 0%). 192 games,
+challenger rotated through every seat, null = 0.25:
+
+| challenger | defenders | win rate | null | verdict |
+|---|---|---|---|---|
+| `champion_4p` (wonder-first) | `champion_4p` with the weight reverted | **0.276 ± 0.063** | 0.25 | **indistinguishable** |
+
+The confidence interval (0.213–0.339) straddles the null. The weight that
+produces the entire "at 4 players, open with a wonder" heuristic buys **no
+measurable win rate at all**. It is neutral drift that hitchhiked into the
+champion on generation 5 and was never worth anything.
+
+That is the difference between "the champion does X" and "X is good". The
+behaviour is 100% reproducible; its *value* is zero as far as 192 games can
+tell.
 
 ---
 
@@ -292,6 +315,7 @@ vs default on different `--seed` values (96 games each):
 |---|---|---|
 | 0 | 0.682 ± 0.093 | 134.6 |
 | 9000 | **0.844 ± 0.073** | 149.1 |
+| 31337 | 0.708 ± 0.091 | 136.5 |
 
 A 16-point swing from the seed alone — larger than the "±8–10 points" HEURISTICS
 estimates. So at **2p**, the 23-point gap (0.448 → 0.682) is only ~1.5x the
