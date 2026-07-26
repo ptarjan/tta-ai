@@ -5,9 +5,12 @@ The full run is a deliberate single clean restart and is launched by hand — se
 [Launching](#launching). Read
 [Go / no-go for a multi-hour run](#go--no-go-for-a-multi-hour-run) first: the
 smoke run found one bug that would have wasted the whole run (the variant tier
-was collapsed to a single opponent, now fixed) and one open calibration
-problem (the gate tier is currently unbeatable from the untrained vector, so it
-returns no gradient).
+was collapsed to a single opponent, now fixed) and one calibration problem
+(the gate tier is unbeatable from the untrained vector, so on win share it
+returned no gradient — **fixed 2026-07-26** by scoring the gate tier on
+[culture margin](#two-metrics-one-decision-win-share-and-culture-margin);
+measured before/after in
+[The pool is too hard at the bottom](#the-pool-is-too-hard-at-the-bottom)).
 
 ## Why the old loop had to be replaced
 
@@ -688,6 +691,60 @@ how the first hours are spent. Options, cheapest first:
 
 Option 2 is the real fix and the only one that does not trade away information.
 
+#### FIXED — working notes, 2026-07-26
+
+Option 2 shipped: gate tiers score on `margin_share(m) = 0.5·(1+tanh(m/120))`,
+everything else stays on win share. `--gate-metric winshare` reverts.
+`arena.duel` did **not** already return what was needed — it returned only the
+run-mean `culture_a`/`culture_b`, and pairing has to happen per game, so
+`per_game_margin` was added.
+
+Measured with `experiments/gate_gradient_proof.py`, which plays each duel once
+and scores it **both** ways, so before/after is one sample read twice. Raw
+JSON in `experiments/measurements/gate_margin/`.
+
+Gradient, clean `DEFAULT_WEIGHTS` start, n=192 per candidate (24 games × 8
+gate opponents):
+
+| | 3p | 4p |
+|---|---|---|
+| gate rows dead on win share (`edge=se=0`) | 12/32 | **27/32** |
+| gate rows dead on margin | **0/32** | **0/32** |
+| `mut:0` gate aggregate, win share | −0.0026 ±0.0131 | **+0.0000 ±0.0000** |
+| `mut:0` gate aggregate, margin | +0.0003 ±0.0097 | −0.0092 ±0.0075 |
+| `mut:1` gate aggregate, win share | −0.0208 ±0.0142 | **+0.0000 ±0.0000** |
+| `mut:1` gate aggregate, margin | +0.0000 ±0.0112 | −0.0199 ±0.0083 |
+
+At 4p both mutants' entire gate tier is `+0.0000 ±0.0000` on win share —
+literally no signal and no SE — while margin gives per-opponent edges from
+−0.0492 to +0.0161. Margin is also the *lower-variance* estimator (3p `mut:0`
+se 0.0097 vs 0.0131), so it costs no extra games.
+
+Direction check — vectors that are worse by construction:
+
+| vector | 3p win share | 3p margin | 4p win share | 4p margin |
+|---|---|---|---|---|
+| `all_zero` | −0.0339 ±0.0128 | −0.1351 ±0.0104 | **+0.0000 ±0.0000** | −0.0911 ±0.0068 |
+| `negate_all` | −0.0339 ±0.0128 | −0.1426 ±0.0103 | **+0.0000 ±0.0000** | −0.0381 ±0.0078 |
+
+Sign is correct and confident (`edge + 2·se < 0`) in all four cells. Two
+things worth keeping: at 3p win share gives `all_zero` and `negate_all` the
+*identical* −0.0339 — that is the floor, the champion's own gate win rate —
+and cannot order them, while margin can; at 4p **win share cannot tell that a
+bot with every weight set to zero is worse than the champion at all**.
+
+**Two probes that were meant to be sabotage and are not.** `science` negated
+(−2.0) scores **+0.0875 margin / +0.0599 win share at 3p** and **+0.1227
+margin at 4p**, taking BookBot from 0.0% to 12.5% at 3p; `culture` negated
+scores +0.1148 margin / +0.0755 win share at 3p. Win share independently
+agrees at 3p, so these are findings about `DEFAULT_WEIGHTS`, not about the
+metric. Note the collision with [the degeneracy guard](#the-rule): `NONNEG`
+clamps exactly these terms on the reasoning that a positive default means
+"more is better". At mild magnitudes that is measurably false here, though the
+old 4p champion's `science = −6.089` was still bad (9.7% ±2.7%) — so the
+relationship is non-monotonic and the guard is not simply wrong. Left clamping
+for the launch, since it prevents the known degeneracy; worth revisiting.
+
 ### Where the wall clock goes
 
 Per 36-game duel, on a contended box. The pattern is the same at both counts,
@@ -706,6 +763,13 @@ cut.** Three archived champions at ~3.5× the cost of a BookBot duel is ~30% of
 a full check spent on the anti-cycling ladder, whose whole job is a
 regression tripwire. `--past-k 2` or moving the `past` tier off the
 per-generation subset and onto the full check only would buy back most of it.
+
+**FIXED 2026-07-26: `--past-k` now defaults to 2.** `_spread` keeps the
+endpoints, so `k=2` is the founder (the most *different* archived opponent)
+plus the newest — which is the cycling test the tier exists for. Moving the
+tier onto the full check only was rejected: it saves more but strips the
+tier's ability to veto, so cycling would be reported up to
+`--full-check-every` generations late instead of prevented.
 
 `mirror` is the same story inside the acceptance loop: it is a `WeightedBot`
 table and therefore the most expensive entry there, which is worth knowing
@@ -772,6 +836,12 @@ about it. The clean-start path makes this moot (that is the intended launch),
 but if a warm start ever happens under `reject`, the name will have lied.
 Either make `reject` fatal at champion load or rename the champion-load
 behaviour.
+
+**FIXED 2026-07-26:** `reject` is now fatal at champion load — it raises
+`SystemExit` naming every violation and pointing at `clamp` / `flag` /
+`--init default`, so it means "refuse a sign-inverted vector" for the
+champion as well as for mutants. `flag` still logs and trains, which is what
+the name says. `clamp` was already the default and stays it.
 
 ### Crashes and nondeterminism
 
