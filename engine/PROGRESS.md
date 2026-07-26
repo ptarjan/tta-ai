@@ -146,6 +146,34 @@ seeds).  Every optimisation below kept it at
 `3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7`, and the 57
 tests stayed green.
 
+### Current determinism digests (re-baselined 2026-07-26 at 15b9764)
+
+`3229c4a0…` above is **stale**. It was invalidated by the *rules* change in
+f4bcac0 (yellow action cards resolve their ordered action first, gains after),
+not by any performance work. Measured at HEAD, `nice -n 10`, 58 tests green:
+
+| fingerprint | cases | digest |
+|---|---|---|
+| narrow (`perf_check check tools/fingerprint.json`) | 33 | `c2befef1bb640a05b5862627d7a1fb76134adff562fec748b044d89dc056755a` |
+| wide (`perf_check check --wide tools/fingerprint_wide.json`) | 102 | `47e06a41c8a888891a90090272374a0e9b87c237d8be103cb4db29627f4ec46d` |
+
+Both agree with the cross-interpreter baseline recorded in docs/PYPY.md, so
+CPython and PyPy still play all 135 fixed games byte-identically.
+
+Note for whoever owns `tools/`: **`tools/fingerprint.json` (3229c4a0…) and
+`tools/fingerprint_wide.json` (c7e73ede…) are the pre-f4bcac0 files and will
+report MISMATCH on every run** until they are re-saved. The digests above are
+what a re-save should produce.
+
+The four bot fixes of 2026-07-26 (6376981 `state.decider()`, 0808b64 deferred
+payoff credit, 166867d yield-based pact/colony pricing, 15b9764 weight reset)
+**did not move either digest** — `perf_check` fingerprints only `RandomBot`
+and `GreedyBot`, and all four changes are confined to
+`engine/bots/weighted.py`. `GreedyBot`'s own behaviour last changed at 5575110
+(lazy trial-rng reseed), which was verified digest-preserving at the time.
+`WeightedBot` behaviour *has* changed a great deal and is deliberately not
+under any fingerprint; see docs/PACTS_DIAGNOSIS.md for the measured effect.
+
 ## Baseline (commit fce7db8)
 
 | bot | 2p | 3p | 4p |
