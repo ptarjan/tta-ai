@@ -775,3 +775,51 @@ every atomic container element-checked, no aliasing found.
       `one_time_discount`, `discarded_military`).
 - [ ] The real prize remains section 6: the undo stack, ~1.8x, on its own
       branch. Re-test PyPy *after* that lands, not before.
+
+### 7a. Re-profile after the generated copiers, and one more copy pass (11bb52c)
+
+Same tool/method as section 5 (`--players 4 --games 10`, 735 samples, 6.9 cpu-s):
+
+| SELF % | INCL % | function |
+|---|---|---|
+| 17.0 | 32.7 | `<fastcopy:PlayerState>:_copy_PlayerState` |
+| 14.2 | 14.4 | `bots/fastcopy.py:_cv` (the remaining generic paths) |
+| 7.9 | **43.8** | `<fastcopy:GameState>:_copy_gs_nolog` — **the whole copy** |
+| 7.8 | **13.6** | `random.py:__init__` + `seed` — `random.Random(0)` per candidate |
+| 5.0 | 24.0 | `bots/__init__.py:evaluate` |
+| 4.8 | 13.2 | `engine/effects.py:compute` |
+| 4.5 | 4.5 | `<fastcopy:TechCard>:_copy_TechCard` |
+| 2.5 | 18.5 | `bots/__init__.py:features` |
+| 2.2 + 1.4 | — | `importlib._bootstrap:_handle_fromlist` / `:parent` — function-level imports |
+
+The copy fell 50.6% -> **43.8%**, and `random.Random(0)` construction rose to
+**13.6%**: it is now unambiguously the largest single fixable item, and it
+lives in the one file this pass may not touch (see 5a).
+
+`_cv`'s remaining 14.4% was the generic recursive path for the handful of
+fields with no plan. Two more plans close most of it: `discarded_military`
+(dict of name-lists) and `one_time_discount` (dict of scalar dicts) become
+`{k: list/dict(x) ...}`, and every remaining generic field short-circuits its
+empty/`None` case with a walrus test instead of paying for a `_cv` call —
+`pacts`, `pending`, `queue`, `wonder` and `final_scores` are empty or `None`
+in nearly every copy.
+
+| A/B, back to back, twice | before | after | ratio |
+|---|---|---|---|
+| `bench_copy` rep 1 | 13986 copies/cpu-s | **15861** | 1.13x |
+| `bench_copy` rep 2 | 14535 | **15913** | 1.09x |
+| `bench_interp` greedy 4p rep 1 | 1.506 games/cpu-s | 1.522 | 1.01x |
+| `bench_interp` greedy 4p rep 2 | 1.492 | 1.625 | 1.09x |
+
+**1.11x on the copy; end-to-end ~1.05x** — the two end-to-end reps straddle
+the Amdahl prediction (1.11x on a 43.8% component predicts 1.05x) and the
+spread between them is larger than the effect, so 1.05x is the honest number
+and the microbenchmark is what actually resolves this change. Diminishing
+returns on the copier are now obvious: 1.55x, then 1.24x, then 1.11x.
+
+Gate: 58/58 tests, narrow `c2befef1…` / wide `47e06a41…` unchanged, unchanged
+under `FASTCOPY_PARANOID=1`.
+
+**Cumulative for the whole perf pass: greedy 4p 0.99 -> ~1.55 games/cpu-s,
+`copy_state` 6601 -> 15900 copies/cpu-s (2.4x).** The copier is done; the next
+real step is section 6's undo stack.
