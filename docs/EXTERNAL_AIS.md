@@ -13,13 +13,18 @@ Classic fixes are (a) an external opponent that plays differently, and (b) an ex
 corpus of strong play to imitate or to score against. This document asks, honestly, which
 of those are actually **reachable** for Through the Ages, and what each would cost.
 
-Verdict up front (details below): there is no drop-in strong external TTA bot we can
-plug into a socket. The realistic wins are, in order, a **diverse-opponent league inside
-our own engine** (cheap, no external dependency), a **human-in-the-loop evaluation
-harness against the official app's Hard AI** (cheap-ish, low volume, high signal),
-and **rules/strategy corpora we already have** as a source of hand-written heuristic
-priors. Everything involving mining third-party game databases is a dead end or a
-scraping project with a bad effort/value ratio.
+Verdict up front (details below, full ranking in §7): there is no drop-in strong external
+TTA bot we can plug into a socket. The realistic wins are, in order, a
+**diverse-opponent league inside our own engine** (cheap, no external dependency),
+**rules/strategy corpora we already have** as a source of hand-written heuristic priors,
+**Boardgaming-Online's outcome metadata** (~178k finished 2015-edition games, public,
+no login — purely to calibrate our score scale), and a **human-in-the-loop evaluation
+harness against the official app's Hard AI** (12–18 hours once, and the only externally
+calibrated anchor that exists — this is the recommendation). Mining third-party
+databases for *move-level* data remains a bad effort/value trade: Board Game Arena
+forbids it outright, and BGO's journals — now proven readable and proven to be the 2015
+edition — never record the civil card row, so the choice set behind each decision is
+unrecoverable.
 
 ---
 
@@ -445,6 +450,11 @@ templates and parses cleanly with regexes. A representative census of that game:
  1  <P> puts Alexander the Great back in the row   <P> gets 1 civil action
  2  GAME DATA UPDATED  <P> culture: N -> N        (admin score corrections — filter these)
 ```
+
+**A parsed sample is committed: `sources/bgo_journal_7523809.tsv`** — all 392 entries of
+that game as `date / player_colour / age / round / text`, chronological. It is the
+evidence for every format claim in this section and the reference input for any future
+parser.
 
 **Card identities: named wherever the rules make them public.** Civil-row takes
 (`takes <card> in hand`), builds, upgrades, wonder stages, leader elections, tactics
