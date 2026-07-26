@@ -33,8 +33,10 @@ Three findings, in order of how much they should change your mind:
    since, unchanged by six further accepted mutations — stable because nothing
    has searched it, not because anything converged on it. Played head-to-head
    against itself-with-the-weight-reverted over 192 games, the wonder-first
-   champion wins **0.276 ± 0.063 against a 0.25 null**: the behaviour buys no
-   measurable win rate at all.
+   champion wins **0.276 ± 0.063 against a 0.25 null** — indistinguishable, even
+   though that test lets it take every wonder uncontested. (One caveat pointing
+   the other way, measured and reported in §4: against the *untrained* bot the
+   wonder version scores 0.792 vs the reverted version's 0.641.)
 
 **What to do with it:** do not write "at 4 players, open with a wonder" as
 advice. There is no evidence for the player-count claim. The honest statement is
