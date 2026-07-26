@@ -79,7 +79,7 @@ def apply_gains(state, p, block, rng=None, sign=1):
                                          "n": int(v)})
         elif key == "yellowTokens":
             if v:
-                p.yellow_bank = max(0, p.yellow_bank + sign * int(v))
+                effects.grant_yellow(p, sign * int(v))
         elif key == "blueTokens":
             if v:
                 p.blue_total = max(0, p.blue_total + sign * int(v))
@@ -264,7 +264,7 @@ def _apply_extras(state, p, block, rng):
         if victims:
             take = min(n, victims[0].yellow_bank)
             victims[0].yellow_bank -= take
-            p.yellow_bank += take
+            effects.grant_yellow(p, take)
     if block.get("decreasePopulationByHalfDiscontentWorkersRoundedUp"):
         from . import interact
         n = (economy.discontent(state, p) + 1) // 2
@@ -480,9 +480,8 @@ def start_aggression(state, attacker, name, defender, rng):
     attacker.military_actions -= cost
     attacker.hand_military.remove(name)
     economy.discard_military(state, name)
-    effects.cancel_attack_pacts(state, attacker, defender)   # §5.4.3
-    atk = (effects.state_stats(state, attacker).strength
-           + effects.pact_attack_bonus(state, attacker, defender))
+    atk = effects.attack_strength(state, attacker, defender)  # §5.4.2
+    effects.cancel_attack_pacts(state, attacker, defender)    # §5.4.3
     interact.start_defense(state, attacker, defender, name, atk, rng)
 
 
@@ -572,7 +571,7 @@ def resolve_war(state, attacker, rng):
     if kind == "territory":
         take = min(1 + adv // 5, loser.yellow_bank)
         loser.yellow_bank -= take
-        victor.yellow_bank += take
+        effects.grant_yellow(victor, take)
     elif kind == "technology":
         take = min(adv, loser.science)
         loser.science -= take

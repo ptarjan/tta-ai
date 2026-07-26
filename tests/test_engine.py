@@ -196,7 +196,7 @@ class TestFullGames(unittest.TestCase):
         rng = _r.Random(11)
         steps = 0
         while not st.game_over and steps < 20000:
-            actions.apply(st, bots[st.current](st), rng)
+            actions.apply(st, bots[st.decider()](st), rng)
             invariants(self, st)
             steps += 1
         self.assertTrue(st.game_over)
@@ -212,15 +212,17 @@ class TestFullGames(unittest.TestCase):
         ages_seen = 0
         while not st.game_over:
             before_age = st.age_civil
-            actions.apply(st, bots[st.current](st), rng)
+            actions.apply(st, bots[st.decider()](st), rng)
             if st.age_civil != before_age:
                 ages_seen += 1
                 if before_age != "A":
                     for p in st.players:
                         totals[p.idx] -= 2
             for p in st.players:
-                # tokens only move between bank / worker pool / cards
-                self.assertLessEqual(yellow_total(p), totals[p.idx],
+                # tokens only move between bank / worker pool / cards, plus
+                # what a card or a rival explicitly hands over (§11.5, §5.8)
+                self.assertLessEqual(yellow_total(p),
+                                     totals[p.idx] + p.yellow_granted,
                                      "yellow tokens created")
         self.assertGreaterEqual(ages_seen, 3)
 

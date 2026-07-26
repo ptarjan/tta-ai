@@ -54,6 +54,10 @@ class PlayerState:
     taken_leader_ages: list = field(default_factory=list)
     # pools
     yellow_bank: int = 18               # unborn population
+    # yellow tokens that entered this supply from OUTSIDE it (card grants and
+    # transfers).  Only bookkeeping: lets tests assert that nothing else ever
+    # creates a token (§12.2.4).
+    yellow_granted: int = 0
     workers_free: int = 1               # available (unused) workers
     blue_total: int = 16                # total blue tokens owned (bank+cards)
     food: int = 0

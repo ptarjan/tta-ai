@@ -185,7 +185,7 @@ def _c_annex(state, p, opt, ctx, rng):
     lose_colony(state, victim, opt)
     p.colonies.append(opt)
     perm = C.db().get(opt).get("permanentEffects") or {}
-    p.yellow_bank = max(0, p.yellow_bank + perm.get("yellowTokens", 0))
+    effects.grant_yellow(p, perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total + perm.get("blueTokens", 0))
     effects.invalidate(state, victim)
 
@@ -562,7 +562,7 @@ def gain_colony(state, p, name, rng=None):
     db = C.db()
     p.colonies.append(name)
     perm = db.get(name).get("permanentEffects") or {}
-    p.yellow_bank = max(0, p.yellow_bank + perm.get("yellowTokens", 0))
+    effects.grant_yellow(p, perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total + perm.get("blueTokens", 0))
     effects.invalidate(state, p)
     events.apply_gains(state, p, db.get(name).get("immediateEffects") or {},

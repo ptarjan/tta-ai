@@ -215,8 +215,8 @@ def _politics_moves(state, p):
                     continue
                 if effects.pact_forbids_attack(state, p, q):     # §5.4.2
                     continue
-                bonus = effects.pact_attack_bonus(state, p, q)
-                if effects.state_stats(state, q).strength >= s.strength + bonus:
+                if effects.state_stats(state, q).strength >= \
+                        effects.attack_strength(state, p, q):
                     continue
                 moves.append(("aggression", name, q.idx))
         elif typ == "war" and cost <= p.military_actions and not state.last_round:

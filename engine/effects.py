@@ -350,6 +350,26 @@ def pact_attack_bonus(state, attacker, defender):
     return tot
 
 
+def attack_strength(state, attacker, defender):
+    """§5.4.2: the attacker's strength for an attack on `defender`.
+
+    Includes bonuses that trigger when attacking them and EXCLUDES strength
+    granted by a pact between the two that ends the moment they attack --
+    so `legal_moves` and the resolution in events.py agree.
+    """
+    total = state_stats(state, attacker).strength
+    total += pact_attack_bonus(state, attacker, defender)
+    for pact in pacts_for(state, attacker.idx):
+        if pact_partner(pact, attacker.idx) != defender.idx:
+            continue
+        eff = _pact_effects(pact)
+        if not eff.get("cancelledIfPartiesAttackEachOther"):
+            continue
+        for block in _pact_blocks(pact, attacker.idx):
+            total -= block.get("strength", 0) or 0
+    return total
+
+
 def cancel_attack_pacts(state, attacker, defender):
     """§5.4.3: a pact that ends on attack is removed before resolving."""
     changed = False
@@ -656,6 +676,13 @@ def invalidate(state, p=None):
 # ------------------------------------------------------ enter/leave play
 
 
+def grant_yellow(p, n):
+    """Move `n` yellow tokens into `p`'s supply from a card or a rival."""
+    if n > 0:
+        p.yellow_granted += n
+    p.yellow_bank = max(0, p.yellow_bank + n)
+
+
 def on_enter_play(state, p, name):
     """Immediate one-time effects when a card enters play."""
     db = C.db()
@@ -663,7 +690,7 @@ def on_enter_play(state, p, name):
     if "blueTokens" in eff:
         p.blue_total += eff["blueTokens"]
     if "yellowTokens" in eff:
-        p.yellow_bank += eff["yellowTokens"]
+        grant_yellow(p, eff["yellowTokens"])
     invalidate(state, p)
 
 
