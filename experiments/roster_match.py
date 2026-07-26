@@ -65,6 +65,9 @@ def make_bot(spec, seed):
     if spec == "book2":
         from engine.bots.book import BookBot
         return BookBot(seed=seed, version=2)
+    if isinstance(spec, tuple) and spec and spec[0] == "bookimp":
+        from engine.bots.book import BookImprovedBot
+        return BookImprovedBot(weights=spec[1], seed=seed)
     return _BASE_MAKE_BOT(spec, seed)
 
 
@@ -94,11 +97,14 @@ def load_spec(spec, players):
         return spec
     if spec == "champion":
         return arena.load_spec(champion_path(players))
+    if spec == "bookimp":
+        return ("bookimp", arena.load_spec(champion_path(players)))
     return arena.load_spec(spec)
 
 
 DEFAULT_ENTRANTS = ["tempo", "infra", "military", "culture", "science",
-                    "wonder", "book2", "book", "champion"]
+                    "wonder", "book2", "book", "bookimp", "champion",
+                    "greedy", "random"]
 
 
 def run_pair(a, b, players, games, seed, workers):
@@ -127,6 +133,8 @@ def main(argv=None):
     ap.add_argument("--out", default="experiments/roster_match.jsonl")
     ap.add_argument("--table", action="store_true",
                     help="only re-render the table from --out")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip pairings already present in --out")
     args = ap.parse_args(argv)
 
     entrants = [e.strip() for e in args.entrants.split(",") if e.strip()]
@@ -135,18 +143,30 @@ def main(argv=None):
         print(render(rows, entrants))
         return rows
 
+    # Every completed pairing is appended to --out the moment it finishes, so
+    # a killed run (session limit, machine reboot) loses at most the single
+    # matchup that was in flight.  --resume then picks up from there.
+    done = set()
+    if args.resume and args.out and os.path.exists(args.out):
+        for line in open(args.out):
+            r = json.loads(line)
+            done.add((r["players"], r["a"], r["b"]))
+        print(f"resume: {len(done)} pairings already on disk", flush=True)
+
     counts = (2, 3, 4) if args.players == 0 else (args.players,)
     rows = []
     for n in counts:
         print(f"== {n} players ==", flush=True)
         for i, a in enumerate(entrants):
             for b in entrants[i + 1:]:
-                rows.append(run_pair(a, b, n, args.games, args.seed,
-                                     args.workers))
-    if args.out:
-        with open(args.out, "a") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
+                if (n, a, b) in done:
+                    continue
+                r = run_pair(a, b, n, args.games, args.seed, args.workers)
+                rows.append(r)
+                if args.out:
+                    with open(args.out, "a") as fh:
+                        fh.write(json.dumps(r) + "\n")
+                        fh.flush()
     print()
     print(render(rows, entrants))
     return rows
