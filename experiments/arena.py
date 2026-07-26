@@ -62,6 +62,7 @@ def make_bot(spec, seed):
         _, inner, opts = spec
         w = None if inner == "default" else inner
         return QuiescentBot(weights=w, seed=seed,
+                            levels=opts.get("levels"),
                             max_depth=opts.get("depth"),
                             max_nodes=opts.get("nodes"),
                             war_lookahead=(None if "war" not in opts
