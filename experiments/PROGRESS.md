@@ -228,6 +228,14 @@ three).
   up.
 * The champion is only ever evaluated against *itself*, so the climb finds a
   local best response, not a globally strong policy. A population/league would
-  fix this and is the natural next step.
+  fix this and is the natural next step. **This is already visible**: at 3p
+  gen 10 the champion beat `default` 52.1% (null 33.3%, a real gain) while its
+  score against `greedy` read 60.4%, *below* the 75.5% that `default` itself
+  scores. Rock-paper-scissors against a bot the climb never sees is exactly
+  the failure mode a self-play-only ladder produces. The anchor sample was
+  raised from 48 to >=96 games (with CIs recorded) so this can be read as a
+  trend rather than guessed at; if `vs_greedy` keeps sliding while
+  `vs_default` climbs, the fix is to make the climb play a mixed table
+  (champion + greedy + an older champion) rather than a pure mirror.
 * Search is strictly 1-ply. The evaluation's phase weights are the only
   substitute for planning ahead.
