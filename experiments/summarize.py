@@ -104,8 +104,13 @@ def report(k, top, out=print):
         out("  anchors (champion as challenger, null = "
             f"{1.0 / k:.0%}):")
         for r in anchors[-8:]:
-            out(f"    gen {r['gen']:>4}  vs_default {r['vs_default']:.1%}  "
-                f"vs_greedy {r['vs_greedy']:.1%}")
+            ci_d = r.get("vs_default_ci")
+            ci_g = r.get("vs_greedy_ci")
+            out(f"    gen {r['gen']:>4}  vs_default {r['vs_default']:.1%}"
+                + (f" +/-{ci_d:.1%}" if ci_d is not None else "")
+                + f"  vs_greedy {r['vs_greedy']:.1%}"
+                + (f" +/-{ci_g:.1%}" if ci_g is not None else "")
+                + (f"  (n={r['anchor_games']})" if "anchor_games" in r else ""))
 
     if champ is None:
         return

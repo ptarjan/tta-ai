@@ -195,12 +195,18 @@ def run(players, hours, workers, lam, screen, max_games, seed, anchor_every,
                         "games": best[3], "moved": best[4]})
         # periodic sanity check against a fixed anchor (default weights)
         if anchor_every and gen % anchor_every == 0:
-            a = arena.duel(champion, "default", players, max(24, screen),
+            # Big enough to be worth reading: at 48 games the CI is +/-14%,
+            # which cannot distinguish "the champion is drifting" from noise.
+            n_anchor = max(96, 2 * screen)
+            a = arena.duel(champion, "default", players, n_anchor,
                            seed0=gen * 13, workers=workers)
             rec["vs_default"] = round(a["win_rate"], 4)
-            g = arena.duel(champion, "greedy", players, max(24, screen),
+            rec["vs_default_ci"] = round(a["ci"], 4)
+            g = arena.duel(champion, "greedy", players, n_anchor,
                            seed0=gen * 17, workers=workers)
             rec["vs_greedy"] = round(g["win_rate"], 4)
+            rec["vs_greedy_ci"] = round(g["ci"], 4)
+            rec["anchor_games"] = n_anchor
         append_gen(players, rec)
         save_weights(champ_path(players), champion, gen=gen, sigma=sigma,
                      players=players)
