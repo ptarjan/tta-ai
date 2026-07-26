@@ -205,13 +205,17 @@ def main():
 
     events = [e for r in recs for e in r["events"]]
     errs = [r for r in recs if r.get("error")]
+    turns = sum(r.get("turns", 0) for r in recs)
+    ca_left = sum(r.get("ca_left", 0) for r in recs)
     with open(a.out, "w") as fh:
-        json.dump({"players": a.players, "games": a.games,
+        json.dump({"players": a.players, "games": a.games, "bot": a.bot,
                    "champion": a.champion, "errors": len(errs),
+                   "turns": turns, "ca_left": ca_left,
                    "error_sample": [r["error"] for r in errs[:3]],
                    "events": events}, fh)
-    print(f"{a.players}p: {len(events)} wasted-action turns from {a.games} "
-          f"games ({len(errs)} failed) -> {a.out}")
+    print(f"{a.players}p [{a.bot}]: {len(events)}/{turns} turns end with CA "
+          f"unspent ({len(events)/max(1,turns):.1%}), {ca_left} CA wasted "
+          f"= {ca_left/max(1,turns):.2f}/turn ({len(errs)} failed) -> {a.out}")
 
 
 if __name__ == "__main__":
