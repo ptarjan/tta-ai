@@ -6,3 +6,4 @@ experiments/results.jsonl
 experiments/champion.json
 experiments/logs/
 experiments/baselines.jsonl
+experiments/league_state/
