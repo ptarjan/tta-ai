@@ -48,9 +48,19 @@ public engine surface (`effects.compute` + `PlayerState` fields):
   Covered: culture, culture rate, science rate, food rate, resource rate,
   workers, relative strength, tech levels, wonder progress, hand value.
 
-Card-row cost bands are handled implicitly: a candidate `take_card` move is
-scored by the *resulting* state, so the civil-action cost of a far-right card
-shows up as a lower `ca_left` and the card's own value as `hand_value`.
+Two levers are encoded by a *pair* of features rather than a single named
+one, because the bot scores resulting states and not moves:
+
+* **Corruption margin** = `blue_free` (+, the headroom you are buying) plus
+  `corruption_loss` (−, the resources §6.2 actually takes at the current
+  band). Their ratio is what the search tunes: a large `blue_free` relative
+  to `corruption_loss` means "bank blue tokens before you need them", a small
+  one means "only pay when you are about to cross a band".
+* **Card-row cost bands**: a candidate `take_card` move is scored by the
+  *resulting* state, so the civil-action cost of a far-right card shows up as
+  a lower `ca_left` and the card's own worth as `hand_value` /
+  `hand_mil_value`. `ca_left` vs `hand_value` is therefore the "is this card
+  worth its row price?" trade-off, and both are free to move.
 
 The move vocabulary is never enumerated. `pick` applies every legal move to a
 fast copy and scores the child state, so new move types (colonization bids,
