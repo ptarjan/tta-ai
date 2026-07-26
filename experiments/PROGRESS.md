@@ -117,6 +117,33 @@ sides run the same deterministic policy the challenger wins exactly one of the
 K rotations of every seed. There is **no seat or asymmetry bias** — a mutant's
 win rate above `1/K` is real signal, not a artifact of being the odd one out.
 
+## Champion strength (2026-07-26 07:2x, `measure_champions.sh 96 1`)
+
+Champion at 2p gen 39 / 3p gen 29 / 4p gen 21, 96 seat-rotated games per cell,
+95% CIs, one challenger against a table of the named bot.
+
+| table of | 2p (null 50%) | 3p (null 33.3%) | 4p (null 25%) |
+|---|---|---|---|
+| `RandomBot` | **95.8%** ± 4.0 | **95.8%** ± 4.0 | **97.9%** ± 2.9 |
+| `GreedyBot` | **88.5%** ± 6.4 | **81.8%** ± 7.7 | **66.7%** ± 9.5 |
+| `default` (own start point) | 44.8% ± 9.9 (n.s.) | **60.4%** ± 9.7 | 39.6% ± 9.8 * |
+
+\* the 4p-vs-`default` cell is the gen-20 anchor measurement out of
+`generations_4p.jsonl` (same 96-game protocol); the sweep's own 4p/`default`
+row lands later in the same run.
+
+Mean final culture, champion vs table mean: 114/70 (2p), 142/74 (3p), 175/101
+(4p) against greedy.
+
+Read: **3p and 4p have gained real strength over the hand-set weights** (3p
+60.4% vs a 33.3% null, p<0.0001; 4p 39.6% vs a 25% null, p≈0.005 — and vs
+`greedy` 4p is up from 54.7% at default weights to 66.7%). **2p has not.** Its
+champion is statistically indistinguishable from `default` and its weights have
+barely moved (mean |drift| 0.05 vs 0.81 at 3p; see below). That is consistent
+with `default` already being near a 2p local optimum — 2p is the player count
+where the hand-set weights were strongest to begin with (88.5% vs greedy, the
+highest of the three).
+
 ## Hill climbing
 
 `(1+lambda)` evolution strategy over the weight dict:
@@ -284,46 +311,85 @@ and a crash costs at most one generation.
 
 ## What the search is favoring
 
-Refresh this section with `python3 -m experiments.summarize`; it prints the
-weights that have drifted furthest from `DEFAULT_WEIGHTS`, tagged by feature
-group. Snapshot at 2026-07-26 06:30 (2p gen 9, 3p gen 5, 4p gen 6 — **early,
-treat as direction not magnitude**):
+Refresh this section with `python3 experiments/analyze_weights.py` (drift from
+`DEFAULT_WEIGHTS` per player count, plus a cross-count consensus table);
+`python3 -m experiments.summarize` gives the same idea per climb.
 
-| lever | default | 3p champion | 4p champion | reading |
+Snapshot **2026-07-26 07:25**, champions at 2p gen 39 / 3p gen 29 / 4p gen 21.
+Relative drift is `(champion − default) / max(|default|, 0.25)`; the overall
+scale is pinned because `culture` is frozen at 1.0, so these are honest
+comparisons and not a global rescale.
+
+**How much each climb has actually moved.** Mean |drift| by group:
+
+| | biggest-moved groups |
+|---|---|
+| 2p | tech 0.05 > rivals 0.04 > happiness 0.03 > wonders 0.03 > economy 0.02 > military 0.02 |
+| 3p | military 0.81 > cards 0.68 > actions 0.65 > tech 0.57 > wonders 0.51 > economy 0.49 > rivals 0.31 > happiness 0.23 |
+| 4p | rivals 0.50 > happiness 0.43 > wonders 0.34 > tech 0.23 > economy 0.20 > cards 0.19 > military 0.13 > actions 0.11 |
+
+2p is an order of magnitude flatter than the others. **Only one mutant has ever
+been accepted at 2p**, so its "top movers" are noise-level and are not
+interpreted below.
+
+### Top movers, 3p (the climb that has gained the most)
+
+| weight | default | champion | rel | reading |
 |---|---|---|---|---|
-| `strength_rel` | 0.35 | **1.14** | −0.04 | at 3p, being stronger *than the strongest rival* is worth ~3x what the hand-set weight assumed; at 4p the raw relative term is being replaced by the asymmetric `strength_deficit`/`strength_lead` pair |
-| `culture_rate` | 5.0 | **8.66** | — | production rate beats stock even harder than assumed |
-| `science` (stock) | 0.5 | **−0.19** | — | *hoarding* science is a negative; banked science is dead weight until spent |
-| `leader` | 1.5 | **3.44** | — | having any leader out is undervalued by hand-set weights |
-| `military_actions` | 0.7 | **−0.09** | — | military action capacity is nearly worthless once relative strength is priced correctly |
-| `workers` / `prod_workers` | 1.4 / 0.3 | — | **3.63 / 0.90** | at 4p the search pushes hard on population and on farms+mines specifically |
-| `wonder_remaining` | −0.30 | — | **+0.32** | sign flip: at 4p a big *unfinished* wonder is an asset, not a liability |
-| `rival_mean_culture` | −0.10 | — | **−0.44** | at 4p you must suppress the *field*, not just the leader; at 3p this weight went slightly positive instead |
-| `rival_culture` | −0.35 | −0.60 | −0.60 | both counts agree: denying the leader is worth roughly twice the hand-set weight |
-| `uprising` | −12.0 | **−19.9** | — | uprisings are even more catastrophic than assumed |
-| `discontent` | −3.0 | — | +0.57 | 4p only, and almost certainly noise — flag to re-check once the anchor series is longer |
+| `strength_rel` | +0.35 | **+1.88** | +436% | being stronger *than the strongest rival* is worth ~5x the hand-set weight |
+| `hand_value_early` | +0.20 | **+0.80** | +240% | cards in hand are much more valuable in Ages A/I than assumed |
+| `best_arena` | +0.30 | **+0.97** | +224% | arenas (happiness + strength) are underrated |
+| `resource_stock` | +0.30 | **+0.93** | +210% | banked *resources* are good (unlike banked science) |
+| `corruption_loss` | −0.90 | **−2.55** | −183% | corruption hurts ~3x more than assumed |
+| `science` (stock) | +0.50 | **−0.19** | SIGN FLIP | hoarding science is a *negative*; unspent science is dead weight |
+| `leader` | +1.50 | **+3.44** | +129% | having any leader out is badly undervalued by hand |
+| `military_actions` | +0.70 | **−0.09** | SIGN FLIP | military action *capacity* is worthless once relative strength is priced |
+| `best_library` | +0.50 | **+1.03** | +106% | libraries beat labs at 3p |
+| `strength_rel_late` | +0.50 | **+1.02** | +103% | and relative strength matters even more in Age III |
+| `tech_levels` | +1.00 | **+1.86** | +86% | tech-curve progress is worth ~2x |
+| `blue_free` | +0.15 | **+0.37** | +89% | buy corruption headroom *before* you need it |
+| `rival_mean_culture` | −0.10 | **+0.10** | SIGN FLIP | at 3p, suppressing the field is not the job — deny the *leader* |
 
-Mean relative drift by group, which is the coarse "where is the signal?"
-answer:
+### Top movers, 4p
 
-* **3p** rivals 0.77x > military 0.73x > wonders 0.58x > economy 0.51x >
-  actions 0.49x > cards 0.45x > tech 0.37x > happiness 0.30x
-* **4p** rivals 0.91x > happiness 0.64x > economy 0.57x > cards 0.52x >
-  military 0.40x > tech 0.36x > actions 0.22x
+| weight | default | champion | rel | reading |
+|---|---|---|---|---|
+| `wonder_remaining` | −0.30 | **+0.32** | SIGN FLIP | a big *unfinished* wonder is an asset at 4p, not a liability |
+| `prod_workers` | +0.30 | **+0.90** | +200% | farms+mines specifically |
+| `workers` | +1.40 | **+3.63** | +159% | raw population is the 4p currency |
+| `rival_mean_culture` | −0.10 | **−0.44** | −137% | suppress the whole *field*, not one leader (opposite of 3p) |
+| `discontent` | −3.00 | **+0.57** | SIGN FLIP | almost certainly noise — flag; the anchor series is still short |
+| `strength_rel` | +0.35 | **−0.04** | SIGN FLIP | the raw relative term is replaced by the asymmetric `strength_deficit`/`strength_lead` pair |
+| `tech_levels_early` | +0.50 | **+0.98** | +95% | tech up *early* at 4p |
+| `rival_culture` | −0.35 | **−0.60** | −72% | denying the leader is worth ~2x the hand-set weight |
+| `culture_rate_early` | +2.00 | **+2.84** | +42% | early culture rate is underrated |
+| `hand_mil_value` | +0.15 | **+0.05** | −42% | military cards in hand are near-worthless at 4p |
 
-Both player counts agree on the headline: **the rival-relative terms are the
-most mis-set part of the hand-written evaluation.** The hand-set weights score
-your own board too much in absolute terms; the search keeps buying more
-"relative to the field" and less "absolute output". The second theme is
-player-count-dependent — 3p rewards military pressure (`strength_rel`,
-`leader`), 4p rewards raw economic scale (`workers`, `prod_workers`) — which
-is the main argument for keeping three separate champions rather than one.
+### What 3p and 4p agree on
 
-2p has accepted nothing in 9 generations and its sigma has already annealed
-0.25 → 0.21, which is the expected signature of a starting point that is
-already near a local optimum for that player count (consistent with the
-89.6% default-weights win rate against greedy at 2p, the highest of the
-three).
+`analyze_weights.py`'s consensus table finds **no full consensus lever yet**
+(2p has moved almost nothing, so nothing can be unanimous). Among the two
+counts that *have* moved, these all point the same way:
+
+* `hand_value_late` (−78% / −50%) — **cards in hand are worth less as the game
+  ages**; both counts also moved `hand_value_early` up. Hoard cards early,
+  dump them late.
+* `resource_rate_late` (−54% / −31%) and `science_rate_late` (−40% / −30%) —
+  **stop buying rate in Age III**; it will not pay back before scoring.
+* `culture_rate_early` (+54% / +42%) — buy culture *rate* early instead.
+* `best_library` (+106% / +62%) — libraries above their hand-set value at both.
+* `uprising` (−47% / −9%) and `corruption_loss` — the two "you broke your
+  economy" penalties are both under-weighted by hand.
+* `ma_left` / `ca_left` / `military_actions` all drift toward 0 or negative:
+  **leftover actions are not worth anything, spend them.**
+* `rival_strength` toward 0 (+51% / +38%) — an opponent's raw army is not the
+  threat; your own *deficit* is.
+
+And the one real **conflict**: `strength_rel` is +436% at 3p and −111% (sign
+flip) at 4p. At three players a military lead is directly convertible; at four
+it buys you nothing because there are three other people to fall behind. This
+single lever is the strongest argument for shipping **three separate
+champions** rather than one weight set.
 
 ## Known limitations
 
