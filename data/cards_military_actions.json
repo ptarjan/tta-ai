@@ -1,8 +1,8 @@
 {
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
- "complete": false,
- "progress": "tactics, aggressions, wars, pacts, military bonus cards, territories, all 55 events and all 33 yellow civil action cards written, each with 2p/3p/4p copy counts. Military per-card copy counts outside Age A and the split of action-card copies between names in Ages I-III are derived from sourced per-age deck totals, not from per-card sources.",
+ "complete": true,
+ "progress": "COMPLETE: 142 cards — 109 military-deck cards (tactics, aggressions, wars, pacts, military bonus cards, territories, all 55 events) + 33 yellow civil action-card variants (14 distinct names). Every card carries 2p/3p/4p copy counts. Validated by data/validate_cards.py: military decks 10/45/50/45 (=150, box count) with the 2-player pact removals (43/46/41), civil decks 20/53/53/53 at 4 players (=179 civil cards with the technologies in data/cards_civil.json and the wonders/leaders in data/cards_wonders_leaders.json).",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -39,7 +39,9 @@
    "playerCountTrimming": "Action cards carry no '3+'/'4' corner marks: all 9 cards removed from each of Civil I/II/III for 2 players (3 of them for 3 players) are technologies, so every action card's count is the same for 2, 3 and 4 players.",
    "ageACivilDeck": "The Age A civil deck is exactly 20 cards = 6 Age A leaders + 4 Age A wonders + 10 action cards. The six Age A technologies (Warriors, Agriculture, Bronze, Philosophy, Religion, Despotism) are printed on the player boards and are NOT in the deck, which is why data/cards_civil.json gives them count 0. 13 of these 20 cards are dealt to the card row at setup; the rest feed the first replenish, after which the remainder goes back in the box (RB p.4/p.8).",
    "playerCountScaledEffects": "Wave of Nationalism (II) and Military Build-Up (III) give resources for military units per stronger civilization, and Endowment for the Arts (III) gives culture per civilization with more culture: the printed amount depends on the player count (2p/3p/4p = 6/3/2 for Wave of Nationalism and Endowment, 8/5/3 for Military Build-Up)."
-  }
+  },
+  "scoringEvents": "All 15 Age III events are scoring events (the 'Impact of ...' cards). They are evaluated after the last turn from both the current and the future events decks (CoL p.1, RB p.23); Age I/II events left in those decks are ignored. Every Age III event in this file carries \"scoringEvent\": true.",
+  "validation": "data/validate_cards.py (run from the repo root) re-checks structure, duplicates and every deck size."
  },
  "cards": [
   {

@@ -52,6 +52,13 @@ FLAT_KEYS = {
     "militaryHandLimit": "military_hand_limit",
     "food": "food",
     "resources": "resources",
+    # aliases used by colony permanents and pact effects
+    "happiness": "happy",
+    "colonizationBonus": "colonize",
+    "cultureProduction": "culture",
+    "scienceProduction": "science",
+    "foodProduction": "food",
+    "resourceProduction": "resources",
 }
 
 # keys applied in phase 3 (need the base output first)

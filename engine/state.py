@@ -46,7 +46,9 @@ class PlayerState:
     tactic: str | None = None
     tactic_exclusive: bool = False      # still in my play area (not public)
     colonies: list = field(default_factory=list)
+    # pacts in MY play area: {name, owner, partner, a, b} (§5.9)
     pacts: list = field(default_factory=list)
+    flipped_wonders: list = field(default_factory=list)  # Ravages of Time
     hand_civil: list = field(default_factory=list)
     hand_military: list = field(default_factory=list)
     taken_leader_ages: list = field(default_factory=list)
@@ -75,6 +77,10 @@ class PlayerState:
     ocean_liners_used: bool = False
     caesar_double_politics_used: bool = False
     resigned: bool = False
+    skip_next_politics: bool = False    # International Agreement (§ CoL p.12)
+    ca_penalty_next_turn: int = 0       # Rebellion
+    # one-time event discount, e.g. {"build": {"resources": 1}} (§ Civil Life)
+    one_time_discount: dict = field(default_factory=dict)
     # war bookkeeping: (war_name, attacker_idx, defender_idx)
     wars_declared_on_me: list = field(default_factory=list)
     war_declared_by_me: tuple | None = None
@@ -115,10 +121,23 @@ class GameState:
     game_over: bool = False
     final_scores: list | None = None
     phase: str = "politics"              # politics | actions | done
+    # decisions owned by somebody other than the current player (engine.interact)
+    pending: list = field(default_factory=list)
+    queue: list = field(default_factory=list)
+    forced_winner: int | None = None     # last player standing (§5.11)
     log: list = field(default_factory=list)
 
     def me(self):
         return self.players[self.current]
+
+    def decider(self):
+        """Index of the player who must choose the next move."""
+        if self.pending:
+            return self.pending[-1]["player"]
+        return self.current
+
+    def actor(self):
+        return self.players[self.decider()]
 
     def active_players(self):
         return [p for p in self.players if not p.resigned]

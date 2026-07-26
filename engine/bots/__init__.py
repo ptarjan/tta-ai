@@ -12,8 +12,11 @@ from __future__ import annotations
 import random
 
 from .. import actions, effects
+from .fastcopy import copy_state
+from .weighted import DEFAULT_WEIGHTS, WeightedBot, load_weights, save_weights
 
-__all__ = ["RandomBot", "GreedyBot", "evaluate", "make_bots"]
+__all__ = ["RandomBot", "GreedyBot", "WeightedBot", "DEFAULT_WEIGHTS",
+           "evaluate", "make_bots", "load_weights", "save_weights"]
 
 
 class RandomBot:
@@ -133,7 +136,7 @@ class GreedyBot:
         # a fresh deterministic rng per candidate keeps the search from
         # consuming the game's rng stream
         for mv in moves:
-            trial = state.copy()
+            trial = copy_state(state)
             try:
                 actions.apply(trial, mv, random.Random(0))
             except Exception:
@@ -155,5 +158,10 @@ def make_bots(spec, num_players, seed=0):
     for i in range(num_players):
         kind = kinds[i % len(kinds)].strip()
         rng = random.Random(seed * 131 + i)
-        out.append(RandomBot(rng) if kind == "random" else GreedyBot(rng))
+        if kind == "random":
+            out.append(RandomBot(rng))
+        elif kind == "weighted":
+            out.append(WeightedBot(rng=rng))
+        else:
+            out.append(GreedyBot(rng))
     return out
