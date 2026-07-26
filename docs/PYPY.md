@@ -160,3 +160,32 @@ pypy3   -m unittest discover -s tests     ->  57 tests OK
 ```
 
 **Determinism gate: PASSED.** PyPy is cleared for training use.
+
+### Re-verification at HEAD 7c2eef1 (2026-07-26, post-fsum-fix)
+
+Independent re-run of the whole 33-case suite, both interpreters, from a clean
+checkout of master at `7c2eef1` (fsum fix is `4290459`):
+
+```
+$ nice -n 10 python3 -m engine.perf_check save /tmp/fp_cpy.json
+saved 3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7 (33 cases)
+
+$ nice -n 10 /usr/local/bin/pypy3 -m engine.perf_check check /tmp/fp_cpy.json
+OK  identical behaviour: 3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7
+```
+
+**33/33 cases byte-identical**, including the previously-diverging
+`(4, 'greedy', 2)`.  `check` compares per-case digests, and it printed no
+`differs:` lines — the digest covers the full game log, final scores, winners,
+move count, turn and round, so this is byte-identical game logs *and* scores,
+not just matching totals.
+
+## Status / next steps (keep current)
+
+- [x] Task 1 — determinism re-verified, 33/33 identical. PASS.
+- [ ] Task 1b — wide sweep (102 cases) for belt-and-braces.
+- [ ] Task 2 — steady-state games/s table, CPython vs PyPy, 2p/3p/4p x random/greedy.
+- [ ] Task 3 — core scaling / worker count.
+- [ ] Task 4 — switch climbs to pypy3 (only if PyPy wins on greedy).
+- [ ] Task 5 — further engine optimisation.
+
