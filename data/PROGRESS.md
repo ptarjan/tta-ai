@@ -12,3 +12,6 @@
   Knights): one of them has 2 copies at 4 players, not 3 — Age I currently totals 54 not 53.
   Documented the Age A civil deck: 20 cards = 6 leaders + 4 wonders + 10 action cards (the six
   Age A technologies are printed on the player boards, hence count 0).
+- 2026-07-26: complete=true on cards_military_actions.json (142 cards); added data/validate_cards.py;
+  OPEN_QUESTIONS items 1, 2, 6 and 8 resolved, new items 16-18 opened (Age II Breakthrough value,
+  action-card copy split within Ages I-III, Age I civil deck off by one).

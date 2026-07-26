@@ -38,6 +38,12 @@ class Stats:
     build_discount: dict = field(default_factory=dict)   # age -> resources
     free_pop_per_turn: bool = False
     no_aggression: bool = False
+    # pact-derived (§5.9)
+    tech_discount: int = 0               # science off every technology
+    war_immune: bool = False             # nobody may declare war on me
+    food_as_resource: int = 0            # food spendable as resources
+    resource_as_food: int = 0
+    science_partners: list = field(default_factory=list)  # must pay 1 science
 
 
 FLAT_KEYS = {
@@ -123,6 +129,14 @@ def _apply_flat(s, eff, mods):
             s.free_pop_per_turn = True
         elif k == "cannotPlayAggressionOrWar":
             s.no_aggression = True
+        elif k == "technologyScienceDiscount":
+            s.tech_discount += v
+        elif k == "cannotBeDeclaredWarOnByAnyone":
+            s.war_immune = True
+        elif k == "mayUseFoodAsResource":
+            s.food_as_resource += v
+        elif k == "mayUseResourceAsFood":
+            s.resource_as_food += v
         # everything else is action-time / trigger-time, handled elsewhere
 
 
@@ -158,6 +172,10 @@ def compute(state, p):
 
     # --- phase 2: wonders, leader, colonies
     for w in p.completed_wonders:
+        if w in p.flipped_wonders:
+            # Ravages of Time: effects gone, ruins produce culture instead
+            s.culture += 2
+            continue
         _apply_flat(s, db.get(w).get("effects"), mods)
         if p.homer_wonder == w:
             s.happy += 1
@@ -169,6 +187,8 @@ def compute(state, p):
         if card:
             _apply_flat(s, card.get("effects"), mods)
             _add_production(s, card.get("permanent"))
+            _apply_flat(s, _colony_permanents(card), mods)
+    _apply_pacts(state, s, p, mods)
 
     # event-granted permanents
     s.culture += p.culture_rate_extra
@@ -244,6 +264,147 @@ def _apply_modifier(s, p, key, val):
         s.culture += val * max(0, len(p.colonies) - 1)
 
 
+# ------------------------------------------------------------- pacts (§5.9)
+
+COLONY_PERMANENT_KEYS = {"strength", "happiness", "cultureProduction",
+                         "scienceProduction", "foodProduction",
+                         "resourceProduction", "colonizationBonus",
+                         "civilActions", "militaryActions", "culture",
+                         "science", "food", "resources", "happy"}
+
+
+def _colony_permanents(card):
+    """Rating symbols on a territory card (token grants are applied once)."""
+    perm = card.get("permanentEffects") or {}
+    return {k: v for k, v in perm.items() if k in COLONY_PERMANENT_KEYS}
+
+
+def pacts_for(state, idx):
+    """Every pact `idx` is party to, wherever it physically sits (§5.9)."""
+    out = []
+    for q in state.players:
+        for pact in q.pacts:
+            if idx in (pact["owner"], pact["partner"]):
+                out.append(pact)
+    return out
+
+
+def pact_partner(pact, idx):
+    return pact["partner"] if pact["owner"] == idx else pact["owner"]
+
+
+def _pact_blocks(pact, idx):
+    eff = C.db().get(pact["name"]).get("effects") or {}
+    blocks = []
+    if isinstance(eff.get("bothPlayers"), dict):
+        blocks.append(eff["bothPlayers"])
+    if idx == pact.get("a") and isinstance(eff.get("A"), dict):
+        blocks.append(eff["A"])
+    if idx == pact.get("b") and isinstance(eff.get("B"), dict):
+        blocks.append(eff["B"])
+    return blocks
+
+
+def _apply_pacts(state, s, p, mods):
+    for pact in pacts_for(state, p.idx):
+        other = state.players[pact_partner(pact, p.idx)]
+        for block in _pact_blocks(pact, p.idx):
+            _apply_flat(s, block, mods)
+            per = block.get(
+                "cultureProductionPerCompletedWonderOfTheOtherParty")
+            if per:
+                s.culture += per * len(other.completed_wonders)
+            if block.get("otherPartyPaysScience"):
+                s.science_partners.append(other.idx)
+
+
+def _pact_effects(pact):
+    return C.db().get(pact["name"]).get("effects") or {}
+
+
+def pact_forbids_attack(state, attacker, defender):
+    """§5.4.2 / §5.6: a pact may make an attack illegal."""
+    if state_stats(state, defender).war_immune:
+        pass       # only blocks wars; checked separately by war_forbidden()
+    for pact in pacts_for(state, attacker.idx):
+        if pact_partner(pact, attacker.idx) != defender.idx:
+            continue
+        if _pact_effects(pact).get("noAttacksBetweenParties"):
+            return True
+    return False
+
+
+def war_forbidden(state, attacker, defender):
+    return (pact_forbids_attack(state, attacker, defender)
+            or state_stats(state, defender).war_immune)
+
+
+def pact_attack_bonus(state, attacker, defender):
+    """Strength a pact grants the attacker when the parties fight (§5.4.2)."""
+    tot = 0
+    for pact in pacts_for(state, attacker.idx):
+        if pact_partner(pact, attacker.idx) != defender.idx:
+            continue
+        block = _pact_effects(pact).get("onAttackBetweenParties") or {}
+        tot += block.get("attackerStrength", 0) or 0
+    return tot
+
+
+def cancel_attack_pacts(state, attacker, defender):
+    """§5.4.3: a pact that ends on attack is removed before resolving."""
+    changed = False
+    for q in state.players:
+        keep = []
+        for pact in q.pacts:
+            parties = (pact["owner"], pact["partner"])
+            if (attacker.idx in parties and defender.idx in parties
+                    and _pact_effects(pact).get(
+                        "cancelledIfPartiesAttackEachOther")):
+                changed = True
+                continue
+            keep.append(pact)
+        q.pacts = keep
+    if changed:
+        invalidate(state)
+
+
+def drop_pacts_of(state, idx):
+    """Remove every pact `idx` is party to (resignation, §5.11)."""
+    for q in state.players:
+        q.pacts = [pact for pact in q.pacts
+                   if idx not in (pact["owner"], pact["partner"])]
+    invalidate(state)
+
+
+# ------------------------------------------------- resource substitution
+
+def avail_resources(state, p):
+    """Resources spendable, counting a Trade Routes pact's food (§5.9)."""
+    s = state_stats(state, p)
+    return p.resources + min(s.food_as_resource, p.food)
+
+
+def spend_resources(state, p, n):
+    take = min(p.resources, n)
+    p.resources -= take
+    rest = n - take
+    if rest > 0:
+        p.food = max(0, p.food - rest)
+
+
+def avail_food(state, p):
+    s = state_stats(state, p)
+    return p.food + min(s.resource_as_food, p.resources)
+
+
+def spend_food(state, p, n):
+    take = min(p.food, n)
+    p.food -= take
+    rest = n - take
+    if rest > 0:
+        p.resources = max(0, p.resources - rest)
+
+
 def _happy_from(p, types):
     db = C.db()
     tot = 0
@@ -276,6 +437,21 @@ def _happy_source_count(p):
 def army_strength(state, p):
     """Tactical strength from armies formed by the current tactic (§10)."""
     db = C.db()
+    units = []
+    for n, t in p.techs.items():
+        typ = db.type_of(n)
+        if typ in C.UNIT_TYPES and t.workers:
+            units.extend([(typ, db.level_of(n))] * t.workers)
+    return army_strength_units(state, p, units)
+
+
+def army_strength_units(state, p, units):
+    """§10.3-10.5 for an explicit (type, level) unit multiset.
+
+    Also used for colonization forces, where only the sacrificed units
+    form armies (§10.7).
+    """
+    db = C.db()
     if not p.tactic or p.tactic not in db.by_name:
         return 0
     card = db.get(p.tactic)
@@ -284,13 +460,6 @@ def army_strength(state, p):
         return 0
     tactic_lv = db.level_of(p.tactic)
     genghis = (p.leader == "Genghis Khan")
-
-    # units as (type, level) multiset
-    units = []
-    for n, t in p.techs.items():
-        typ = db.type_of(n)
-        if typ in C.UNIT_TYPES and t.workers:
-            units.extend([(typ, db.level_of(n))] * t.workers)
 
     need = {}
     for typ in comp:
