@@ -2,7 +2,7 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": false,
- "progress": "tactics + aggressions + wars written; pacts/defense/territories, events, civil actions still to write. Per-card copy counts are derived, not sourced -- see 'uncertain' fields.",
+ "progress": "tactics, aggressions, wars, pacts, military bonus cards and territories written; events and yellow civil action cards still to write. Per-card copy counts are derived, not sourced -- see 'uncertain' fields.",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -21,7 +21,10 @@
   "tacticsRules2015": "Playing a tactic from hand costs 1 military action (Action Phase). After you replenish the card row at the start of your next turn (before your Politics Phase) the card moves to the common tactics area, where any player may copy it for 2 military actions. Age II/III tactics show a second, lesser strength used for outdated armies (any unit in the set 2+ levels lower than the tactic's age).",
   "cardTextSource": "Exact 2015 card texts reconstructed from the official digital-edition localization strings (MilitaryCards_card_texts / MilitaryCards_card_names, Russian localization repo yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1), cross-checked against namu_military.txt, faq_v15.pdf and throughtheages.fandom.com. The digital edition implements the 2015 base rules exactly; expansion-only keys were excluded.",
   "aggressionRules": "Played as a political action against one opponent. Attacker pays the card's military action cost and reveals the card. The defender may add defense: military bonus cards (defense value in the upper half) plus any number of military cards discarded face down for +1 each; the total number of bonus cards played + cards discarded may not exceed the defender's military action total (2015 change: no unit sacrifice). Attacker strength > defender strength + defense bonus => the card's effect applies; otherwise the aggression fails and the card is discarded with no effect.",
-  "warRules": "Declared as a political action; resolved at the start of the declarer's next turn, before the Politics Phase. No defense bonuses and no sacrifices at resolution (2015 change). Either side can be the victor: the victor is whoever has the strictly higher strength rating at resolution; the difference is the strength advantage fed into the card's formula. Equal strength = no effect, card discarded. Spoils are capped by what the loser actually has. If the target resigns, the declarer scores 7 culture."
+  "warRules": "Declared as a political action; resolved at the start of the declarer's next turn, before the Politics Phase. No defense bonuses and no sacrifices at resolution (2015 change). Either side can be the victor: the victor is whoever has the strictly higher strength rating at resolution; the difference is the strength advantage fed into the card's formula. Equal strength = no effect, card discarded. Spoils are capped by what the loser actually has. If the target resigns, the declarer scores 7 culture.",
+  "pactRules": "Offered as a political action to a specific player, naming which side (A/B) each takes if the pact is asymmetric. The other player may accept (it takes effect immediately, placed between the two play areas) or refuse (it returns to the offerer's hand). A player may be a party to several pacts but may have only ONE pact of his or her own in play: offering a new one automatically cancels the previous one. You may also spend a political action to cancel any pact you are party to. Unless a pact says otherwise it does not prevent attacks and survives them. Pacts become obsolete (discarded) at the end of their age. REMOVED FROM THE MILITARY DECKS ENTIRELY IN 2-PLAYER GAMES.",
+  "colonizationRules": "A territory card revealed as the current event is auctioned. Bids are whole numbers, each higher than the last; you may not bid more than the maximum colonization force you can send. The winner must send a force of at least the winning bid: sacrifice one or more military units (their yellow tokens return to the yellow bank) and sum their strength, add any armies' tactical strength, add colonization modifiers from cards in play, and add the colonization value of any military bonus cards played. Effects that modify the strength RATING (Alexander the Great, Great Wall, Warfare, ...) do not apply to a colonization force, and arenas cannot be sent. If nobody bids, the territory goes to the past events pile. The winner takes the card as a colony: apply the permanent effect first, then the immediate benefit. Losing a colony later (Independence Declaration, Aggression: Annex) removes the permanent effect only.",
+  "militaryBonusCardRules": "A military bonus card is never 'played' for an action. Its upper half gives a defense bonus when you defend against an aggression; its lower half gives a colonization bonus when you send a colonization force. Both halves are on every card; you use whichever applies. 6 per age in the base game."
  },
  "cards": [
   {
@@ -747,6 +750,609 @@
    "text": "The victor takes 5 culture plus culture equal to the strength advantage.",
    "source": "digital-edition card text (WAR_OVER_CULTURE); throughtheages.fandom.com War over Culture ('New Story': 3 MA, 5 + strength advantage); count 6 asserted by namu_military.txt 4.2 ('there are six of these')",
    "uncertain": "count 6 comes from NamuWiki prose, not a printed list"
+  },
+  {
+   "name": "Open Borders Agreement",
+   "age": "I",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": null,
+   "effects": {
+    "bothPlayers": {
+     "militaryActions": 1
+    },
+    "onAttackBetweenParties": {
+     "attackerStrength": 2
+    }
+   },
+   "text": "Both players gain +1 military action. If they attack each other, the attacker gains +2 strength.",
+   "source": "digital-edition card text (OPEN_BORDERS_AGREEMENT); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Trade Routes Agreement",
+   "age": "I",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": [
+    "A",
+    "B"
+   ],
+   "effects": {
+    "A": {
+     "mayUseFoodAsResource": 1
+    },
+    "B": {
+     "mayUseResourceAsFood": 1
+    }
+   },
+   "text": "Player A may use 1 food as 1 resource. Player B may use 1 resource as 1 food.",
+   "source": "digital-edition card text (TRADE_ROUTES_AGREEMENT); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Acceptance of Supremacy",
+   "age": "II",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": [
+    "A",
+    "B"
+   ],
+   "effects": {
+    "noAttacksBetweenParties": true,
+    "A": {
+     "resourceProduction": 1
+    },
+    "B": {
+     "resourceProduction": -1
+    }
+   },
+   "text": "Neither player may attack the other. Player A gains +1 resource. Player B loses 1 resource.",
+   "source": "digital-edition card text (ACCEPTANCE_OF_SUPREMACY); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Scientific Cooperation",
+   "age": "II",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": null,
+   "effects": {
+    "bothPlayers": {
+     "technologyScienceDiscount": 2,
+     "otherPartyPaysScience": 1,
+     "note": "if the other party cannot pay the 1 science, the technology cannot be developed"
+    }
+   },
+   "text": "Developing technologies costs 2 science less and is possible only if the other party spends 1 science.",
+   "source": "digital-edition card text (SCIENTIFIC_COOPERATION); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "International Trade Agreement",
+   "age": "II",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": [
+    "A",
+    "B"
+   ],
+   "effects": {
+    "A": {
+     "resourceProduction": 1
+    },
+    "B": {
+     "foodProduction": 1
+    }
+   },
+   "text": "Player A gains +1 resource. Player B gains +1 food.",
+   "source": "digital-edition card text (INTERNATIONAL_TRADE_AGREEMENT); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Promise of Military Protection",
+   "age": "II",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": [
+    "A",
+    "B"
+   ],
+   "effects": {
+    "A": {
+     "cultureProduction": 1
+    },
+    "B": {
+     "strength": 4,
+     "cultureProduction": -1
+    },
+    "cancelledIfPartiesAttackEachOther": true,
+    "note": "the pact is cancelled before the attacking card is resolved, so the +4 strength does not defend against it"
+   },
+   "text": "Player A gains +1 culture. Player B gains +4 strength and loses 1 culture. The pact is cancelled if the parties attack each other.",
+   "source": "digital-edition card text (PROMISE_OF_MILITARY_PROTECTION); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Military Alliance",
+   "age": "III",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": null,
+   "effects": {
+    "bothPlayers": {
+     "strength": 3
+    },
+    "cancelledIfPartiesAttackEachOther": true
+   },
+   "text": "Both players gain +3 strength. The pact is cancelled if the parties attack each other.",
+   "source": "digital-edition card text (MILITARY_ALLIANCE); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Peace Treaty",
+   "age": "III",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": null,
+   "effects": {
+    "noAttacksBetweenParties": true,
+    "bothPlayers": {
+     "cultureProduction": 1
+    }
+   },
+   "text": "Neither player may attack the other. Both gain +1 culture.",
+   "source": "digital-edition card text (PEACE_TREATY); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "International Tourism",
+   "age": "III",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": null,
+   "effects": {
+    "bothPlayers": {
+     "cultureProductionPerCompletedWonderOfTheOtherParty": 1
+    }
+   },
+   "text": "Both players gain +1 culture for each wonder completed by the other.",
+   "source": "digital-edition card text (INTERNATIONAL_TOURISM); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Loss of Sovereignty",
+   "age": "III",
+   "deck": "military",
+   "type": "pact",
+   "count": {
+    "2p": 0,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "sides": [
+    "A",
+    "B"
+   ],
+   "effects": {
+    "noAttacksBetweenParties": true,
+    "A": {
+     "cultureProduction": 2
+    },
+    "B": {
+     "cultureProduction": -2,
+     "cannotBeDeclaredWarOnByAnyone": true
+    }
+   },
+   "text": "Neither player may attack the other. Player A gains +2 culture. Player B loses 2 culture. No one may declare war on player B.",
+   "source": "digital-edition card text (LOSS_OF_SOVEREIGNITY); cross-checked namu_military.txt 5"
+  },
+  {
+   "name": "Military Bonus (defense 2 / colonization 1)",
+   "age": "I",
+   "deck": "military",
+   "type": "bonus",
+   "count": {
+    "2p": 6,
+    "3p": 6,
+    "4p": 6
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "effects": {
+    "defenseBonus": 2,
+    "colonizationBonus": 1
+   },
+   "text": "Defense +2 (when defending against an aggression). Colonization +1 (when sending a colonization force).",
+   "source": "namu_military.txt 7 (6 cards per age; defense 2/4/6, colonization 1/2/3) + cge_code_of_laws.pdf p.11 card diagram + digital-edition card name DEFENCE_COLONISATION_1"
+  },
+  {
+   "name": "Military Bonus (defense 4 / colonization 2)",
+   "age": "II",
+   "deck": "military",
+   "type": "bonus",
+   "count": {
+    "2p": 6,
+    "3p": 6,
+    "4p": 6
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "effects": {
+    "defenseBonus": 4,
+    "colonizationBonus": 2
+   },
+   "text": "Defense +4 (when defending against an aggression). Colonization +2 (when sending a colonization force).",
+   "source": "namu_military.txt 7 (6 cards per age; defense 2/4/6, colonization 1/2/3) + cge_code_of_laws.pdf p.11 card diagram + digital-edition card name DEFENCE_COLONISATION_2"
+  },
+  {
+   "name": "Military Bonus (defense 6 / colonization 3)",
+   "age": "III",
+   "deck": "military",
+   "type": "bonus",
+   "count": {
+    "2p": 6,
+    "3p": 6,
+    "4p": 6
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "effects": {
+    "defenseBonus": 6,
+    "colonizationBonus": 3
+   },
+   "text": "Defense +6 (when defending against an aggression). Colonization +3 (when sending a colonization force).",
+   "source": "namu_military.txt 7 (6 cards per age; defense 2/4/6, colonization 1/2/3) + cge_code_of_laws.pdf p.11 card diagram + digital-edition card name DEFENCE_COLONISATION_3"
+  },
+  {
+   "name": "Vast Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "food": 3
+   },
+   "permanentEffects": {
+    "yellowTokens": 3,
+    "blueTokens": -1
+   },
+   "text": "Gain 3 food. Permanently: +3 yellow tokens, -1 blue token.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Wealthy Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "resources": 5
+   },
+   "permanentEffects": {
+    "blueTokens": 3
+   },
+   "text": "Gain 5 resources. Permanently: +3 blue tokens.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Inhabited Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "population": 1
+   },
+   "permanentEffects": {
+    "yellowTokens": 2
+   },
+   "text": "Increase population by 1. Permanently: +2 yellow tokens.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Strategic Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "drawMilitaryCards": 3
+   },
+   "permanentEffects": {
+    "strength": 2
+   },
+   "text": "Draw 3 military cards. Permanently: +2 strength.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Historic Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "culture": 6
+   },
+   "permanentEffects": {
+    "happiness": 1
+   },
+   "text": "Gain 6 culture. Permanently: +1 happy face.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Developed Territory",
+   "age": "I",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "science": 3
+   },
+   "permanentEffects": {
+    "yellowTokens": 1,
+    "blueTokens": 1
+   },
+   "text": "Gain 3 science. Permanently: +1 yellow token, +1 blue token.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Vast Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "food": 4
+   },
+   "permanentEffects": {
+    "yellowTokens": 4,
+    "blueTokens": -1
+   },
+   "text": "Gain 4 food. Permanently: +4 yellow tokens, -1 blue token.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Wealthy Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "resources": 9
+   },
+   "permanentEffects": {
+    "blueTokens": 4
+   },
+   "text": "Gain 9 resources. Permanently: +4 blue tokens.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Inhabited Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "population": 2
+   },
+   "permanentEffects": {
+    "yellowTokens": 3
+   },
+   "text": "Increase population by 2. Permanently: +3 yellow tokens.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Strategic Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "drawMilitaryCards": 5
+   },
+   "permanentEffects": {
+    "strength": 4
+   },
+   "text": "Draw 5 military cards. Permanently: +4 strength.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Historic Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "culture": 11
+   },
+   "permanentEffects": {
+    "happiness": 2
+   },
+   "text": "Gain 11 culture. Permanently: +2 happy faces.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
+  },
+  {
+   "name": "Developed Territory",
+   "age": "II",
+   "deck": "military",
+   "type": "territory",
+   "count": {
+    "2p": 1,
+    "3p": 1,
+    "4p": 1
+   },
+   "cost": {
+    "militaryActions": 0
+   },
+   "immediateEffects": {
+    "science": 5
+   },
+   "permanentEffects": {
+    "yellowTokens": 2,
+    "blueTokens": 2
+   },
+   "text": "Gain 5 science. Permanently: +2 yellow tokens, +2 blue tokens.",
+   "source": "namu_events.txt (2015 '(new)' values used where they differ from 2006); card is an event that, when revealed as the current event, is auctioned via colonization",
+   "uncertain": "copy count derived from published per-age deck totals (10/45/50/45), not directly sourced per card"
   }
  ]
 }
