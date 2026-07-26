@@ -128,6 +128,95 @@ own 6-and-3 removal rule. `python3 data/validate_cards.py` still passes. This is
 **confirmation**, not a correction — which is itself the useful result, since the four
 earlier corrections all came from this kind of conflict.
 
+### The cross-check was NOT finished: the `.xls` has a second sheet, and it found a real bug
+
+**⚠ FLAG FOR THE USER — action needed, nothing changed in `data/` yet.**
+
+`bgg_409053_player_card_counts.xls` has **two** sheets, `Civic Cards` (129 rows) and
+**`Military Cards` (131 rows)**. The write-up above compared only the civil side (121
+entries: civil techs, governments, wonders, leaders, yellow action cards). The military
+deck — tactics, aggressions, wars, pacts, bonus cards, events, territories — had never
+been cross-checked against anything since the original import. Doing it now turns up a
+discrepancy that is **not** a BGG-vs-us conflict: it is **us against all three of our own
+sources at once**.
+
+Read with `xlrd` (`python3 -m venv /tmp/xlsenv && /tmp/xlsenv/bin/pip install xlrd`;
+`xlrd` refuses `.xlsx` but this is a genuine OLE2 `.xls`, so it works).
+
+**Deck totals agree.** Ours and BGA both come out at **140 / 150 / 150** military cards
+(2p / 3p / 4p) — 150 is the printed component count. BGG 409053 gets 157/168/168, i.e. it
+is again the outlier on totals, for the same reason as Conflict A. So the aggregate is
+not where our problem is. The problem is the **distribution inside Ages I and III**:
+
+| Age | group | **ours** | BGA (#7) | TTS (#8) | BGG 409053 |
+|---|---|---|---|---|---|
+| I | tactic | **5** | 10 | 10 | 10 |
+| I | aggression | **11** | 6 | 6 | 7 |
+| III | tactic | **4** | 6 | 6 | 6 |
+| III | aggression | **10** | 8 | 8 | 9 |
+| II | tactic / aggression | 6 / 9 | 6 / 9 | 6 / 9 | 6 / 9 ✔ |
+
+Age II agrees everywhere. Ages I and III are an exact swap — we are short exactly 5
+tactic copies in Age I and 2 in Age III, and long by exactly the same number of
+aggressions — which is why the totals still came out right and the error survived.
+
+Per card, and this is unanimous 3–0 against us:
+
+| Card | Age | **ours** | BGA | TTS | BGG |
+|---|---|---|---|---|---|
+| Fighting Band | I | **1** | 2 | 2 | 2 |
+| Heavy Cavalry | I | **1** | 2 | 2 | 2 |
+| Legion | I | **1** | 2 | 2 | 2 |
+| Medieval Army | I | **1** | 2 | 2 | 2 |
+| Phalanx | I | **1** | 2 | 2 | 2 |
+| Mechanized Army | III | **1** | 2 | 2 | 2 |
+| Modern Army | III | **1** | 2 | 2 | 2 |
+| Aggression: Enslave | I | **3** | 2 | 2 | 2 |
+| Aggression: Plunder | I | **4** | 2 | 2 | 2 |
+| Aggression: Raid | I | **4** | 2 | 2 | 2 |
+| Aggression: Plunder | III | **4** | 2 | 2 | 2 |
+| Aggression: Raid | III | **3** | 2 | 2 | 2 |
+| Aggression: Armed Intervention | III | **3** | 4 | 4 | 4 |
+| Age II tactics (Classic Army, Conquistadors, Defensive Army, Fortifications, Mobile Artillery, Napoleonic Army) | II | 1 each | 1 each | 1 each | 1 each ✔ |
+| Entrenchments, Shock Troops | III | 1 each | 1 each | 1 each | 1 each ✔ |
+
+(TTS counts each card object twice — front/back — so its raw counts of 4/4/4/4/4, 12, 12,
+8, 2, 2 are halved above. Halving is confirmed by the Age II tactics and by
+Entrenchments/Shock Troops, which come out at 1 exactly as everyone agrees.)
+
+**Why this is a correction and not a conflict.** §7 of the source ranking already names
+BGA Studio as *authoritative for per-card copy counts* and TTS as its *independent
+confirmation*, and our data is supposed to have come from them. They agree with each
+other, TTS is genuinely independent of BGA, and BGG — an unrelated fourth author working
+from BGO — agrees with both. There is no source anywhere that supports our 1-copy
+tactics. This is a transcription error on our side, not a third-opinion disagreement.
+
+**Why it matters for the bot, a lot.** Tactic cards are the single highest-leverage
+military draw in the game, and we have been running the hill climb on a deck with **half
+the Age I tactics it should have** (5 instead of 10 out of 43 Age I military cards: 11.6%
+vs 23.3%) and a correspondingly aggression-heavy deck. Every weight the hill climb has
+learned about military tempo has been fitted to the wrong draw distribution.
+
+**Why it has NOT been applied.** The hill climb is live and two other agents are working;
+silently changing deck composition mid-run would make generations before and after
+incomparable and would poison their experiments. The fix is small and fully specified by
+the table above (13 `count` values in `data/cards_military_actions.json`; totals stay
+140/150/150 so `validate_cards.py` will still pass). **User's call on when to land it and
+whether to reset the hill climb.**
+
+Two smaller things found in the same pass, neither of them errors:
+- **Naming.** Our `Military Alliance` (III, pact) is called **`Military Pact`** by both
+  BGA and BGG. Same card (0/1/1, 3 military actions). Cosmetic, but it is the only name
+  in the military deck where we differ from BGA, and it will bite anyone diffing the two.
+  Likewise our `Development of Civil Life` (A) is `Development of Civilization` everywhere
+  else. Ours also spells `Loss of Sovereignty` correctly where BGA has `Sovereignity`.
+- **`Aggression Kidnap` (I) and `Aggression Occupy` (III)** appear in BGG 409053 (1 copy
+  each) and are absent from both our data and BGA. In TTS they appear exactly *once* each
+  where every real base-game card appears twice, i.e. they are not in the base military
+  deck at all. Excluding them is correct and matches BGA. They are also 2 of the 6 cards
+  by which BGG's military total overshoots — consistent with 409053 being the sloppy file,
+  as Conflicts A and B already established.
+
 ## Edition filtering performed
 NamuWiki lists include content that is NOT in the base 2015 game. Excluded:
 
