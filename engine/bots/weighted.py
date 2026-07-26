@@ -500,6 +500,13 @@ def features(state, idx, ctx=None):
         "strength_deficit": max(0, -rel),
         "strength_lead": min(6, max(0, rel)),
         "tactic_level": meta.get(p.tactic, ("?", 0))[1] if p.tactic else 0,
+        # §11.3 makes owning a unit a CLIFF, not a slope: colonizing requires
+        # sacrificing at least one military unit "even if other bonuses would
+        # cover the bid", so a player with zero units is dropped from every
+        # auction in `interact.start_auction` before it ever gets a decision,
+        # and can attack nobody.  `unit_workers` is linear and cannot express
+        # that the 1st unit is worth far more than the 5th (docs/AGGRESSION_FIX.md).
+        "has_unit": 1.0 if unit_workers else 0.0,
         "colonies": len(getattr(p, "colonies", ()) or ()),
         "pacts": pacts + pact_offers,
         "pact_blocks_attack": blocks_attack,
@@ -841,6 +848,8 @@ BASE_WEIGHTS = {
     "strength_deficit": -0.6,
     "strength_lead": 0.3,
     "tactic_level": 0.5,
+    # eligibility to colonize/attack at all (§11.3); see features()
+    "has_unit": 1.0,
     "colonies": 2.0,
     "pacts": 0.5,
     # a pact that forbids attacks between the parties (§5.4.2) buys safety no
