@@ -340,7 +340,7 @@ def _q_destroy_own(state, p, item, rng):
     db = C.db()
     opts = sorted(n for n, t in p.techs.items()
                   if t.workers > 0 and db.type_of(n) in
-                  (C.URBAN_TYPES | C.PRODUCTION_TYPES))
+                  C.URBAN_OR_PRODUCTION)
     push_choice(state, p.idx, "destroy_own", opts)
 
 

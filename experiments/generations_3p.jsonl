@@ -18,3 +18,6 @@
 {"gen": 18, "players": 3, "accepted": false, "sigma": 0.578, "secs": 47.6, "tried": [{"wr": 0.1562, "lo": 0.0897, "n": 48, "moved": 19}], "at": "2026-07-26 06:53:29"}
 {"event":"engine_update","note":"restarted against post-action-card engine fce7db8","gen":18,"accepted":false,"sigma":null,"players":3,"at":"2026-07-26 06:56:35"}
 {"gen": 19, "players": 3, "accepted": false, "sigma": 0.25, "secs": 99.9, "tried": [{"wr": 0.2639, "lo": 0.2167, "n": 144, "moved": 19}], "at": "2026-07-26 06:58:38"}
+{"gen": 20, "players": 3, "accepted": false, "sigma": 0.25, "secs": 35.5, "tried": [{"wr": 0.2917, "lo": 0.2067, "n": 48, "moved": 19}], "at": "2026-07-26 06:59:14", "vs_default": 0.5885, "vs_default_ci": 0.0984, "vs_greedy": 0.8333, "vs_greedy_ci": 0.0749, "anchor_games": 96}
+{"gen": 21, "players": 3, "accepted": false, "sigma": 0.25, "secs": 39.1, "tried": [{"wr": 0.2292, "lo": 0.1506, "n": 48, "moved": 19}], "at": "2026-07-26 07:01:47"}
+{"gen": 22, "players": 3, "accepted": false, "sigma": 0.25, "secs": 44.8, "tried": [{"wr": 0.3125, "lo": 0.2259, "n": 48, "moved": 19}], "at": "2026-07-26 07:02:32"}

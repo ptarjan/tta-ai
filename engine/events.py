@@ -433,7 +433,7 @@ def scoring_culture(state, p, block, order):
         elif key == "culturePerDistinctTypeOfUnitUrbanBuildingAndSpecialTech":
             kinds = {db.type_of(n) for n, t in p.techs.items()
                      if t.workers and db.type_of(n) in
-                     (C.UNIT_TYPES | C.URBAN_TYPES)}
+                     C.URBAN_OR_UNIT}
             kinds |= {n for n in p.techs if db.type_of(n) == "special-tech"}
             total += int(v or 0) * len(kinds)
     return total

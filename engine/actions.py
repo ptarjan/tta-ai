@@ -23,6 +23,9 @@ STRICT = os.environ.get("TTA_STRICT", "") not in ("", "0", "false", "no")
 ROW_SIZE = 13
 
 
+ROW_COST = (1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)
+
+
 def row_cost(idx):
     """Civil actions to take the card in row slot idx (0-based) (§2.3)."""
     if idx < 5:
@@ -110,27 +113,28 @@ def _take_gate(state, p, budget=None):
             surcharge, leader_discount)
 
 
-def _can_take_gated(state, p, idx, gate):
+def _can_take_gated(state, p, idx, gate, name=None):
     have, hand_full, surcharge, leader_discount = gate
-    name = state.card_row[idx]
     if name is None:
-        return False
-    card = C.db().by_name[name]
-    typ = card["type"]
-    cost = row_cost(idx)
+        name = state.card_row[idx]
+        if name is None:
+            return False
+    typ = C.db().type_by_name[name]
+    cost = ROW_COST[idx] if idx < 13 else row_cost(idx)
     if typ == "wonder":
         cost += surcharge
-    elif typ == "leader":
+        if cost > have:
+            return False
+        return p.wonder is None
+    if typ == "leader":
         cost -= leader_discount
     if cost > have:                      # cost is floored at 0 == max(0, ...)
         return False
-    if typ == "wonder":
-        return p.wonder is None
     # hand limit (§2.5) applies to everything that goes to hand
     if hand_full:
         return False
     if typ == "leader":
-        return card["age"] not in p.taken_leader_ages
+        return C.db().by_name[name]["age"] not in p.taken_leader_ages
     if name in p.hand_civil or name in p.techs or name == p.government:
         return False
     return True
@@ -268,9 +272,8 @@ def _action_moves(state, p):
 
     # take a card from the row
     gate = _take_gate(state, p)
-    row = state.card_row
-    for idx in range(len(row)):
-        if row[idx] is not None and _can_take_gated(state, p, idx, gate):
+    for idx, name in enumerate(state.card_row):
+        if name is not None and _can_take_gated(state, p, idx, gate, name):
             moves.append(("take", idx))
 
     if state.round == 1:
@@ -495,8 +498,7 @@ def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
     if kind == "develop_technology":
         for name in sorted(set(p.hand_civil)):
             card = db.get(name)
-            if card["type"] not in (C.WORKER_TYPES | {"special-tech",
-                                                      "government"}):
+            if card["type"] not in C.DEVELOPABLE_TYPES:
                 continue
             if p.science >= (effects.tech_cost(state, p, name) or 0):
                 out.append(("develop", name))
@@ -540,7 +542,7 @@ def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
 _FREE_BUILD_TYPES = {
     "build_or_upgrade_farm_or_mine": C.PRODUCTION_TYPES,
     "build_or_upgrade_urban_building": C.URBAN_TYPES,
-    "upgrade_farm_mine_or_urban_building": C.PRODUCTION_TYPES | C.URBAN_TYPES,
+    "upgrade_farm_mine_or_urban_building": C.URBAN_OR_PRODUCTION,
 }
 
 

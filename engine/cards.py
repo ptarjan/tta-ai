@@ -41,6 +41,12 @@ PRODUCTION_TYPES = {"farm", "mine"}
 # technology types that can hold workers
 WORKER_TYPES = URBAN_TYPES | UNIT_TYPES | PRODUCTION_TYPES
 
+# Precomputed unions.  These used to be spelled `A | B` inline inside the
+# hottest loops in the engine, which allocated a fresh set on every call.
+URBAN_OR_PRODUCTION = URBAN_TYPES | PRODUCTION_TYPES
+URBAN_OR_UNIT = URBAN_TYPES | UNIT_TYPES
+DEVELOPABLE_TYPES = WORKER_TYPES | {"special-tech", "government"}
+
 # military card types the engine needs before it can run the politics phase
 REQUIRED_MILITARY_TYPES = {"event", "territory", "aggression", "war",
                            "bonus", "tactic"}
@@ -91,6 +97,18 @@ class CardDB:
                                for n, t in self.type_by_name.items()}
         self.is_urban_name = {n: t in URBAN_TYPES
                               for n, t in self.type_by_name.items()}
+        # blue-token denominations (§6.4): farm -> food/turn, mine -> res/turn
+        self.denom_by_name = {}
+        for n, c in self.by_name.items():
+            t = c["type"]
+            if t == "farm":
+                v = (c.get("production") or {}).get("food", 0)
+            elif t == "mine":
+                v = (c.get("production") or {}).get("resources", 0)
+            else:
+                continue
+            if v > 0:
+                self.denom_by_name[n] = (t, v)
         self._deck_cache = {}
         # Military rules are playable as soon as every required military card
         # type is present; a part-file still marked "complete": false only

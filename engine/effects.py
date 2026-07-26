@@ -455,14 +455,41 @@ def _happy_source_count(p):
 
 
 def army_strength(state, p):
-    """Tactical strength from armies formed by the current tactic (§10)."""
+    """Tactical strength from armies formed by the current tactic (§10).
+
+    Hot path: called once per `compute`.  The tactic is checked FIRST (a
+    player without one always scores 0) and the unit multiset is accumulated
+    as type->count / type->fresh-count dicts instead of materialising one
+    tuple per worker.
+    """
+    tactic = p.tactic
+    if not tactic:
+        return 0
     db = C.db()
-    units = []
+    if tactic not in db.by_name:
+        return 0
+    card = db.by_name[tactic]
+    comp = card.get("composition") or []
+    if not comp:
+        return 0
+    tactic_lv = db.level_by_name[tactic]
+    type_of = db.type_by_name
+    level_of = db.level_by_name
+    unit_types = C.UNIT_TYPES
+    avail = {}
+    fresh = {}
     for n, t in p.techs.items():
-        typ = db.type_of(n)
-        if typ in C.UNIT_TYPES and t.workers:
-            units.extend([(typ, db.level_of(n))] * t.workers)
-    return army_strength_units(state, p, units)
+        w = t.workers
+        if not w:
+            continue
+        typ = type_of[n]
+        if typ not in unit_types:
+            continue
+        avail[typ] = avail.get(typ, 0) + w
+        if level_of[n] >= tactic_lv - 1:
+            fresh[typ] = fresh.get(typ, 0) + w
+    return _army_strength_counts(p, card, comp, tactic_lv, avail, fresh,
+                                 avail.get("air", 0))
 
 
 def army_strength_units(state, p, units):
@@ -479,16 +506,25 @@ def army_strength_units(state, p, units):
     if not comp:
         return 0
     tactic_lv = db.level_of(p.tactic)
+    avail = {}
+    fresh = {}
+    for typ, lv in units:
+        avail[typ] = avail.get(typ, 0) + 1
+        if lv >= tactic_lv - 1:
+            fresh[typ] = fresh.get(typ, 0) + 1
+    return _army_strength_counts(p, card, comp, tactic_lv, avail, fresh,
+                                 avail.get("air", 0))
+
+
+def _army_strength_counts(p, card, comp, tactic_lv, avail, fresh, air):
+    """Shared core of the two entry points above, on type->count dicts."""
     genghis = (p.leader == "Genghis Khan")
 
     need = {}
     for typ in comp:
         need[typ] = need.get(typ, 0) + 1
 
-    def count_armies(pool):
-        avail = {}
-        for typ, lv in pool:
-            avail[typ] = avail.get(typ, 0) + 1
+    def count_armies(avail):
         if genghis:
             # infantry may fill cavalry slots
             inf = avail.get("infantry", 0)
@@ -508,8 +544,9 @@ def army_strength_units(state, p, units):
         return min((avail.get(t, 0) // c for t, c in need.items()), default=0)
 
     # armies whose units are all recent enough are not outdated
-    fresh = [u for u in units if u[1] >= tactic_lv - 1]
-    total_armies = count_armies(units)
+    total_armies = count_armies(avail)
+    if not total_armies:
+        return 0
     fresh_armies = min(count_armies(fresh), total_armies)
     outdated_armies = total_armies - fresh_armies
 
@@ -521,7 +558,6 @@ def army_strength_units(state, p, units):
     # an air force doubles the tactical bonus of one army (§10.5).
     # Counted from `units`, so a colonization force only benefits from the
     # air units actually sacrificed into it (§11.3).
-    air = sum(1 for typ, _lv in units if typ == "air")
     if air and total_armies:
         total += min(air, total_armies) * (val if fresh_armies else old_val)
     return total
@@ -531,13 +567,17 @@ def army_strength_units(state, p, units):
 
 
 def _denoms(p, typ, key):
-    db = C.db()
+    """Blue-token denominations available to `p` for a farm/mine resource.
+
+    `key` is kept for the call sites' readability; the (type, value) pair is
+    precomputed per card in the DB, so this is one dict probe per tech.
+    """
+    denom = C.db().denom_by_name
     ds = {1}
     for n in p.techs:
-        if db.type_of(n) == typ:
-            v = (db.get(n).get("production") or {}).get(key, 0)
-            if v > 0:
-                ds.add(v)
+        d = denom.get(n)
+        if d is not None and d[0] == typ:
+            ds.add(d[1])
     return sorted(ds, reverse=True)
 
 
@@ -604,39 +644,46 @@ def pay_resources(p, n):
 def build_cost(state, p, name):
     """Resource cost to build a worker onto technology `name`."""
     db = C.db()
-    card = db.get(name)
+    card = db.by_name[name]
     cost = card.get("buildCost")
     if cost is None:
         return None
-    s = state_stats(state, p)
     typ = card["type"]
-    if typ in (C.URBAN_TYPES | C.PRODUCTION_TYPES):
+    # `state_stats` and the one-time-discount lookup are only consulted on the
+    # branches that can actually use them (hot: called once per buildable card
+    # per move-generation pass).
+    if p.one_time_discount and typ in C.URBAN_OR_PRODUCTION:
         cost -= (p.one_time_discount.get("build") or {}).get("resources", 0)
     if typ in C.URBAN_TYPES:
-        cost -= s.build_discount.get(card["age"], 0)
-        if typ == "theater" and p.leader == "William Shakespeare" and \
-                any(db.type_of(n) == "library" for n in p.techs):
-            cost -= 1
-        if typ == "library" and p.leader == "William Shakespeare" and \
-                any(db.type_of(n) == "theater" for n in p.techs):
-            cost -= 1
-    return max(0, cost)
+        bd = state_stats(state, p).build_discount
+        if bd:
+            cost -= bd.get(card["age"], 0)
+        if p.leader == "William Shakespeare":
+            type_of = db.type_by_name
+            if typ == "theater" and any(type_of[n] == "library"
+                                        for n in p.techs):
+                cost -= 1
+            elif typ == "library" and any(type_of[n] == "theater"
+                                          for n in p.techs):
+                cost -= 1
+    return cost if cost > 0 else 0
 
 
 def tech_cost(state, p, name):
     """Science cost to develop technology `name`."""
     db = C.db()
-    card = db.get(name)
-    if card["type"] == "government":
+    card = db.by_name[name]
+    typ = card["type"]
+    if typ == "government":
         cost = card.get("peacefulCost")
     else:
         cost = card.get("techCost")
     if cost is None:
         return None
     cost -= state_stats(state, p).tech_discount
-    cost -= (p.one_time_discount.get("developTechnology") or {}).get(
-        "science", 0)
-    typ = card["type"]
+    if p.one_time_discount:
+        cost -= (p.one_time_discount.get("developTechnology") or {}).get(
+            "science", 0)
     if typ == "theater":
         if p.leader == "J. S. Bach":
             cost -= 2
@@ -653,14 +700,20 @@ _STATS_CACHE_KEY = "_stats_cache"
 
 
 def state_stats(state, p):
-    """Cached per-mutation stats (invalidated by engine.actions.touch)."""
-    cache = getattr(state, _STATS_CACHE_KEY, None)
-    if cache is None:
-        cache = {}
-        setattr(state, _STATS_CACHE_KEY, cache)
-    if p.idx not in cache:
-        cache[p.idx] = compute(state, p)
-    return cache[p.idx]
+    """Cached per-mutation stats (invalidated by engine.actions.touch).
+
+    Hot: ~10 calls per generated move.  Attribute access via try/except and a
+    single dict probe beat getattr()+`in`+index by a wide margin here.
+    """
+    try:
+        cache = state._stats_cache
+    except AttributeError:
+        cache = state._stats_cache = {}
+    idx = p.idx
+    st = cache.get(idx)
+    if st is None:
+        st = cache[idx] = compute(state, p)
+    return st
 
 
 def invalidate(state, p=None):
@@ -715,7 +768,7 @@ def on_take_card(state, p, name):
 
 
 def _is_technology(card):
-    return card["type"] in (C.WORKER_TYPES | {"special-tech", "government"})
+    return card["type"] in C.DEVELOPABLE_TYPES
 
 
 def on_develop(state, p, name):
@@ -754,7 +807,7 @@ def _one_time_culture(state, p, name):
     db = C.db()
     if name == "Fast Food Chains":
         return (2 * workers_on_types(p, C.PRODUCTION_TYPES)
-                + workers_on_types(p, C.URBAN_TYPES | C.UNIT_TYPES))
+                + workers_on_types(p, C.URBAN_OR_UNIT))
     if name == "Hollywood":
         tot = 0
         for n, t in p.techs.items():

@@ -69,8 +69,16 @@ def _play(task):
     from engine import game
     gi, seed, seat = task
     n = _W["n"]
-    specs = [_W["b"]] * n
-    specs[seat] = _W["a"]
+    b = _W["b"]
+    if isinstance(b, list):
+        # A *field*: the defender seats are drawn from a pool.  The draw is
+        # keyed only on `seed`, never on the challenger, so two duels run with
+        # the same seeds face byte-identical opposition and can be paired.
+        r = random.Random(seed * 31 + 7)
+        others = [b[r.randrange(len(b))] for _ in range(n - 1)]
+    else:
+        others = [b] * (n - 1)
+    specs = others[:seat] + [_W["a"]] + others[seat:]
     bots = [make_bot(s, seed * 97 + i * 13 + 1) for i, s in enumerate(specs)]
     try:
         st = game.play_game(bots, n, seed=seed, move_cap=_W["cap"])
@@ -114,8 +122,16 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
          chunk=4):
     """Play `games` games of A-vs-table-of-B, seat-rotated.
 
+    `b` may be a single spec (every defender seat plays it -- then the null
+    win rate really is 1/num_players) or a *list* of specs, a "field", from
+    which each defender seat is drawn.  Against a field 1/num_players is no
+    longer the right null, so a field duel is only meaningful when compared
+    against a second duel run on the same seeds: see `hillclimb.challenge`.
+
     Returns a dict with the win share, its confidence interval, mean
-    cultures and the number of games actually completed.
+    cultures and the number of games actually completed.  `per_game` is the
+    task-ordered share list (None for a game the engine could not finish),
+    which is what makes two duels on the same seeds pairable.
     """
     tasks = []
     for g in range(games):
@@ -138,7 +154,9 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
             out = pool.map(_play, tasks, chunksize=chunk)
 
     shares, ca, cb, moves, errors = [], [], [], [], []
+    per_game = []                      # task-ordered, None where the game died
     for share, x, y, m in out:
+        per_game.append(share)
         if share is None:
             errors.append(x)
             continue
@@ -162,6 +180,7 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "errors": len(errors),
         "error_sample": errors[:3],
         "shares": shares,
+        "per_game": per_game,
     }
 
 
