@@ -18,6 +18,7 @@ from functools import lru_cache as _lru_cache
 from . import cards as C
 from . import economy
 from . import effects
+from . import journal
 from .state import TechCard, WonderInProgress
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
@@ -654,17 +655,17 @@ def take_card(state, p, idx):
     """Move row card `idx` into `p`'s hand/play area (actions already paid)."""
     db = _DB
     name = state.card_row[idx]
-    state.card_row[idx] = None
+    journal.touch(state.card_row)[idx] = None
     card = db.get(name)
     effects.on_take_card(state, p, name)
     if card["type"] == "wonder":
         p.wonder = WonderInProgress(name)
     else:
-        p.hand_civil.append(name)
+        journal.touch(p.hand_civil).append(name)
         if card["type"] == "leader":
-            p.taken_leader_ages.append(card["age"])
+            journal.touch(p.taken_leader_ages).append(card["age"])
         elif card["type"] == "action":
-            p.taken_this_turn.append(name)
+            journal.touch(p.taken_this_turn).append(name)
     state.emit(f"took {name}")
 
 
@@ -742,7 +743,7 @@ def do_wonder_step(state, p, k, discount=0, free=False):
     name = p.wonder.name
     if p.wonder.steps_built >= len(db.get(name)["stages"]):
         p.wonder = None
-        p.completed_wonders.append(name)
+        journal.touch(p.completed_wonders).append(name)
         effects.on_enter_play(state, p, name)
         gained = effects.on_wonder_complete(state, p, name)
         state.emit(f"completed wonder {name} (+{gained} culture)")
@@ -751,7 +752,7 @@ def do_wonder_step(state, p, k, discount=0, free=False):
 def _h_play_leader(state, p, move, rng):
     name = move[1]
     pay_ca(state, p, 1)
-    p.hand_civil.remove(name)
+    journal.touch(p.hand_civil).remove(name)
     if p.leader:
         old = p.leader
         effects.on_leave_play(state, p, old)
@@ -772,13 +773,13 @@ def _h_develop(state, p, move, rng, free=False):
     if not free:
         pay_ca(state, p, 1)
     p.science -= cost
-    p.hand_civil.remove(name)
+    journal.touch(p.hand_civil).remove(name)
     if card["type"] == "government":
         _set_government(state, p, name)
     elif card["type"] == "special-tech":
         _develop_special(state, p, name)
     else:
-        p.techs[name] = TechCard(name)
+        journal.touch(p.techs)[name] = TechCard(name)
         effects.on_enter_play(state, p, name)
     effects.on_develop(state, p, name)
     state.emit(f"developed {name} for {cost} science")
@@ -795,8 +796,8 @@ def _develop_special(state, p, name):
             return                      # the new (lower) card is removed
     for old in existing:
         effects.on_leave_play(state, p, old)
-        del p.techs[old]
-    p.techs[name] = TechCard(name)
+        del journal.touch(p.techs)[old]
+    journal.touch(p.techs)[name] = TechCard(name)
     effects.on_enter_play(state, p, name)
 
 
@@ -815,7 +816,7 @@ def _h_revolution(state, p, move, rng):
     name = move[1]
     card = db.get(name)
     p.science -= card["revolutionCost"]
-    p.hand_civil.remove(name)
+    journal.touch(p.hand_civil).remove(name)
     robespierre = (p.leader == "Maximilien Robespierre")
     if robespierre:
         p.military_actions = 0
@@ -847,7 +848,7 @@ def _h_churchill(state, p, move, rng):
 def _h_play_tactic(state, p, move, rng):
     name = move[1]
     p.military_actions -= 1
-    p.hand_military.remove(name)
+    journal.touch(p.hand_military).remove(name)
     p.tactic = name
     p.tactic_exclusive = True
     p.tactic_action_used = True
@@ -873,7 +874,7 @@ def _h_play_action(state, p, move, rng):
     name = move[1]
     revolt_ok = (p.civil_actions == ca_total(state, p))
     pay_ca(state, p, 1)
-    p.hand_civil.remove(name)
+    journal.touch(p.hand_civil).remove(name)
     eff = _DB.get(name).get("effects") or {}
     ordered = eff.get("freeCivilAction")
     if "extraCivilActions" in eff:
@@ -960,10 +961,10 @@ def _h_pol_pass(state, p, move, rng):
 def _h_prepare_event(state, p, move, rng):
     from . import events
     name = move[1]
-    p.hand_military.remove(name)
+    journal.touch(p.hand_military).remove(name)
     p.culture += _DB.level_of(name)
-    state.future_events.append(name)
-    state.seeded_by[name] = p.idx
+    journal.touch(state.future_events).append(name)
+    journal.touch(state.seeded_by)[name] = p.idx
     events.reveal_current_event(state, rng)
     p.politics_done = True
     state.phase = "actions"
@@ -980,7 +981,7 @@ def _h_offer_pact(state, p, move, rng):
     """§5.9: reveal the pact, name the partner and the sides."""
     from . import interact
     name, target, side = move[1], move[2], move[3]
-    p.hand_military.remove(name)
+    journal.touch(p.hand_military).remove(name)
     ctx = {"owner": p.idx, "name": name}
     if side == "B":
         ctx["a"], ctx["b"] = target, p.idx
@@ -1040,9 +1041,9 @@ def _h_war(state, p, move, rng):
     if state.players[target].leader == "Mahatma Gandhi":
         cost *= 2
     p.military_actions -= cost
-    p.hand_military.remove(name)
+    journal.touch(p.hand_military).remove(name)
     p.war_declared_by_me = (name, p.idx, target)
-    state.players[target].wars_declared_on_me.append((name, p.idx, target))
+    journal.touch(state.players[target].wars_declared_on_me).append((name, p.idx, target))
     p.politics_done = True
     state.phase = "actions"
 
