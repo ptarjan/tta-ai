@@ -407,6 +407,39 @@ def parse_move(state, text, board=None):
 
 # ------------------------------------------------------------- the session
 
+PATCH_VERBS = ("take", "deal", "row", "event", "age", "last", "turn", "set")
+
+
+def _looks_like_patch(line):
+    """Is this an update line rather than a list of card names?
+
+    Lets the human keep typing 'take p1 3' / 'p1 c=34' at the "which cards
+    were dealt" prompt instead of having to know which prompt they are at.
+    """
+    first = line.split()[0].lower() if line.split() else ""
+    import re as _re
+    return (first in PATCH_VERBS or bool(_re.fullmatch(r"p\d+", first))
+            or "=" in line.split()[0])
+
+
+def _new_slots(before, after):
+    """Row slots holding a card that was NOT in the row before.
+
+    The row slides left when it is replenished, so a positional diff would
+    flag almost every slot; what we want is the multiset difference, matched
+    to the rightmost occurrences (new cards are always dealt on the right).
+    """
+    from collections import Counter
+    added = Counter(n for n in after if n) - Counter(n for n in before if n)
+    slots = []
+    for i in range(len(after) - 1, -1, -1):
+        name = after[i]
+        if name and added.get(name, 0) > 0:
+            added[name] -= 1
+            slots.append(i)
+    return sorted(slots)
+
+
 class Advisor:
     """Board mirror + bot + the operations the interactive loop performs.
 
@@ -445,9 +478,7 @@ class Advisor:
         except Exception as exc:
             return False, f"the engine refused that move: {exc}"
         self.log.append(text)
-        self.dealt_slots = [i for i, (a, b) in
-                            enumerate(zip(row_before, st.card_row))
-                            if a != b and b is not None]
+        self.dealt_slots = _new_slots(row_before, st.card_row)
         return True, text
 
     def skip_opponent_turn(self):
@@ -474,9 +505,7 @@ class Advisor:
             who = st.current
             G.apply(st, ("end_turn",), self.rng)
             self.log.append(f"p{who} turn ended")
-        self.dealt_slots = [i for i, (a, b) in
-                            enumerate(zip(row_before, st.card_row))
-                            if a != b and b is not None]
+        self.dealt_slots = _new_slots(row_before, st.card_row)
         return self.dealt_slots
 
     def set_dealt(self, names):
@@ -499,6 +528,10 @@ class Advisor:
 
 
 # ------------------------------------------------------------------- REPL
+
+class _Quit(Exception):
+    """The human asked to leave."""
+
 
 BANNER = """\
 Through the Ages advisor.  Commands at the 'your move' prompt:
@@ -541,13 +574,18 @@ class Console:
         self.say(BANNER)
         self.say(f"bot: {self.adv.bot.source}")
         self.say(S.render(self.adv.board))
-        while not self.adv.state.game_over:
-            if self.adv.my_turn():
-                if not self.my_turn():
-                    return
-            else:
-                if not self.opponent_turn():
-                    return
+        try:
+            while not self.adv.state.game_over:
+                if self.adv.my_turn():
+                    if not self.my_turn():
+                        return
+                else:
+                    if not self.opponent_turn():
+                        return
+        except _Quit:
+            self.say("bye -- the snapshot below restores this game:")
+            self.say(S.dumps(self.adv.board))
+            return
         self.say("\ngame over.  final culture: "
                  + ", ".join(f"p{i}={s}" for i, s in
                              enumerate(G.scores(self.adv.state))))
@@ -659,6 +697,9 @@ class Console:
             self.report(line)
 
     def report(self, line):
+        line = line.strip()
+        if line.lower().startswith("set "):
+            line = line[4:].strip()
         try:
             msg = self.adv.patch(line)
             if msg:
@@ -677,10 +718,22 @@ class Console:
         while True:
             line = self.ask("  new cards (left to right, '?' if unseen)> ")
             line = line.strip()
+            if line.lower() in ("quit", "q", "exit"):
+                raise _Quit()
+            if line.lower() in ("help", "h"):
+                self.say(S.PATCH_HELP)
+                continue
+            if line.lower() == "board":
+                self.say(S.render(self.adv.board))
+                continue
             if line in ("", "?"):
                 self.adv.board.unknown.add("row.new")
                 self.adv.dealt_slots = []
                 return
+            if _looks_like_patch(line):
+                # the human is already reporting the rest of the turn
+                self.report(line)
+                continue
             try:
                 got = self.adv.set_dealt(S._split_cards(line, "row"))
                 self.say(f"    ok: {', '.join(got)}")

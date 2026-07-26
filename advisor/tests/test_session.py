@@ -183,6 +183,43 @@ class TestScriptedSession(unittest.TestCase):
         self.assertEqual(adv.state.players[1].culture, before)
         self.assertEqual(len(adv.board.unknown), 3)
 
+    def test_quit_at_the_new_cards_prompt_stops(self):
+        """Regression: 'quit' at the 'which cards were dealt' prompt used to
+        loop forever re-asking."""
+        board = S.new_board(2, me=0, seed=7)
+        adv = AD.Advisor(board, AD.load_bot(2, seed=7), seed=7)
+        adv.dealt_slots = [0, 1]
+        out = []
+        con = AD.Console(adv, inp=Script(["quit"], default="quit"),
+                         out=lambda *a: out.append(" ".join(map(str, a))))
+        con.run()
+        self.assertIn("bye", "\n".join(out))
+
+    def test_new_cards_prompt_accepts_update_lines(self):
+        board = S.new_board(2, me=0, seed=7)
+        adv = AD.Advisor(board, AD.load_bot(2, seed=7), seed=7)
+        adv.dealt_slots = [0]
+        out = []
+        con = AD.Console(adv, inp=Script(["p1 c=13", "bronze"]),
+                         out=lambda *a: out.append(" ".join(map(str, a))))
+        con.check_dealt()
+        self.assertEqual(adv.state.players[1].culture, 13)
+        self.assertEqual(adv.state.card_row[0], "Bronze")
+
+    def test_only_freshly_dealt_slots_are_asked_about(self):
+        """The row slides left when replenished; only the genuinely new
+        cards should be asked for."""
+        board = S.new_board(3, me=0, seed=21)
+        adv = AD.Advisor(board, AD.load_bot(3, seed=21), seed=21)
+        for _ in range(20):
+            while adv.my_turn():
+                adv.play(adv.recommend(1)[0].move)
+            if adv.state.round > 1:
+                break
+            adv.skip_opponent_turn()
+        adv.skip_opponent_turn()
+        self.assertLessEqual(len(adv.dealt_slots), 4)
+
     def test_quit_stops_cleanly(self):
         adv, out = run_console(["quit"], players=2, seed=1)
         self.assertFalse(adv.state.game_over)
