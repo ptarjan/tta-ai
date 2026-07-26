@@ -672,7 +672,7 @@ Share of civil actions left unspent at end of turn, by age:
 
 Age I is fully spent at every count. Age II is where 2p and 3p fall off a cliff
 and 4p does not. The 4p champion — the one that keeps spending — is also the one
-that ends with **16.35 technologies against 12.85 and 9.98**, and the only one
+that ends with **16.35 technologies against 12.88 and 9.81**, and the only one
 that finishes wonders. **[mixed]**
 
 We are not claiming the 4p champion is the strongest of the three; the strength
@@ -736,8 +736,8 @@ Unspent science points at the end of the game:
 
 | | science banked at end | final technologies |
 |---|---|---|
-| 2p | **25.7** | 12.85 |
-| 3p | 12.9 | 9.98 |
+| 2p | **25.7** | 12.88 |
+| 3p | 12.9 | 9.81 |
 | 4p | **6.2** | **16.35** |
 
 The count that ends with the *least* banked science ends with the *most*
@@ -1096,6 +1096,11 @@ Over **60 games per player count** (`experiments/logs/leak_check.log`):
 | 3p | 6.0 | 6.3% | 107.5 |
 | 4p | **56.1** | **46.1%** | 60.1 |
 
+(Those final-culture figures are from the leak_check run's own 60 games, which
+is why they differ by a few points from the 123.7 / 113.2 / 56.4 quoted
+elsewhere from the 120-game harvest. Different games, same champions, same
+story.)
+
 At 4 players the champion burns **roughly as much culture to starvation as it
 finishes the game with**. Compare that to the trap everyone worries about —
 uprisings cost 0.27 / 0.03 / 0.64 culture per player-game, essentially nothing.
@@ -1390,3 +1395,35 @@ starting player's turn. Most culture wins; ties share the win. [§12.5]
 | "Two strongest/weakest" | read as "the stronger/weaker" | normal | normal |
 
 Everything else is identical. [§13]
+
+---
+
+## What this document does not know
+
+Read this before you treat anything above as complete. These are not hedges;
+they are parts of the game the study has **no data on at all**, because the
+champions never went there.
+
+- **Pacts.** Zero pacts were played in 240 games at 3p and 4p — the move type
+  never appears in the log (`moves_per_game`, which lists every move the
+  champions made). Pacts are legal at 3p and 4p [rules, §13] and we can tell you
+  nothing about them.
+- **Colonies.** The champions bid on a colony **0.18 (2p) / 0.08 (3p) / 0.02
+  (4p) times per game** and pass instead 0.79 / 3.81 / 0.08 times
+  (`moves_per_game`: `bid`, `bid_pass`). Effectively they never colonise. This
+  document has no colony advice and you should not read the silence as "colonies
+  are bad" — read it as "untested".
+- **Fighting.** Zero wars in 360 games, aggressions 0.01 / 0.03 / 0.11 per game.
+  Everything above about military is about *deterrence levels*, inferred from a
+  world where nobody attacks. **We do not know what the correct army size is at
+  3p or 4p against opponents who attack.** See headline rule 8.
+- **Wonders at 2p and 3p.** Only 25% / 19% of games touch a wonder at all, so
+  the round-12 rule above rests on the 4p champion's 235 builds. At 2p and 3p we
+  have too few builds to say whether wonders are good.
+- **Which culture buildings are best.** We report *when* things get built and
+  *how many actions* they absorb, not what any individual card is worth. There
+  is no card-strength ranking in this document.
+- **Anything about a human opponent.** Every number here comes from mirror
+  self-play against copies of the same evaluation function. The champions have
+  never seen a bluff, a rush, a targeted aggression or a player who is behind
+  and playing for variance.

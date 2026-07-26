@@ -210,3 +210,27 @@
   6.6/12.x/13 -- all tables correct, no changes needed.
 - NEXT: final top-to-bottom consistency pass (numbers that appear twice), then
   declare structural completeness.
+
+### 12:28
+- Cross-section number sweep. Fixed final_techs quoted as 12.85 / 9.98 in two
+  places (endgame "stop banking science" table and the midgame waste section);
+  behaviour `overall.final_techs` is 12.88 / 9.81 / 16.35. Verified against the
+  JSON: rates by age, unspent-action shares (42.8% / 48.6% / 10.8% of turns with
+  something left), MA left per turn, end-of-age strengths -- all correct.
+- Noted in trap #2 that its final-culture column (129.9 / 107.5 / 60.1) comes
+  from leak_check's own 60 games, not the 120-game harvest (123.7 / 113.2 /
+  56.4), so the two are not a contradiction.
+- NEW CLOSING SECTION "What this document does not know": pacts (ZERO played in
+  240 games at 3p/4p -- the move type never appears in moves_per_game),
+  colonies (0.18/0.08/0.02 bids per game -- effectively never), fighting, wonders
+  at 2p/3p, per-card strength, and human opponents. This is the honest boundary
+  of the study and it was missing.
+- STRUCTURALLY COMPLETE. All planned sections exist: header + how to read,
+  If you remember nothing else (8 rules), Opening, Midgame, Endgame, Player
+  count, Common traps (6), Quick reference (rules-only), What this document does
+  not know. Every quantitative claim is cited to behaviour_{2,3,4}p.json,
+  leak_check.log, analyze_weights.py, PROGRESS.md or RULES_SPEC.md, and the
+  [rules]/[strong]/[mixed]/[provisional]/[thin] tags are in place throughout.
+- Remaining work is refresh, not structure: re-harvest behaviour when the climbs
+  accept new mutants (last acceptances were gen 147 / 120 / 103) and re-run the
+  header strength table.
