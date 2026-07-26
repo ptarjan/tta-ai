@@ -277,11 +277,15 @@ term untuned at every player count — see §8 step 1.
 
 ## 8. Ranked fix
 
-1. **Make the evaluation see what a card does (root cause). VALIDATED above:
-   +17 points of win rate at 2p, on its own.** Score a card in hand by the
-   features it would add if played, discounted (0.25 measured best of the
-   three tried). `analysis/cardvalue_duel.py` is a working reference
+1. **Make the evaluation see what a card does (root cause). VALIDATED at 2p:
+   +20 points of win rate (69.6% ± 4.5%) on its own, with the `end_turn` bug
+   left in place.** Score a card in hand by the features it would add if
+   played, discounted — 0.125 was the best of the four tried and the curve
+   falls off above it. `analysis/cardvalue_duel.py` is a working reference
    implementation; folding it into `weighted.features()` is the real fix.
+   **Tune the discount per player count and re-measure before shipping it at
+   3p/4p** — at 3p the same term was not significant (§7), so this is a
+   demonstrated 2p win and an untested change elsewhere.
 2. **Only then remove the horizon artifact**, as `HorizonBot`'s same-horizon
    scoring rather than a constant, and **re-run the hill climb**.
    `end_turn_bias` (−8.28) and `hand_value_late` (−0.78) are fitted to the
