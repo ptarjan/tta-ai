@@ -24,6 +24,7 @@ from __future__ import annotations
 from . import cards as C
 from . import economy
 from . import effects
+from . import journal
 
 # Module-level bindings for the singleton card DB: `C.db()` was ~734k calls
 # per 60 4p games.  cards.py has no engine imports, so this is safe at import.
@@ -65,7 +66,7 @@ def apply_pending(state, move, rng=None):
     pend = state.pending[-1]
     kind = move[0]
     if kind == "choose":
-        state.pending.pop()
+        journal.touch(state.pending).pop()
         _resolve_choice(state, pend, move[1], rng)
     elif kind in ("bid", "bid_pass"):
         _auction_move(state, pend, move, rng)
@@ -91,19 +92,19 @@ def push_choice(state, player_idx, tag, options, ctx=None, auto=True):
     if auto and len(options) == 1:
         _resolve_choice(state, pend, 0, None)
         return False
-    state.pending.append(pend)
+    journal.touch(state.pending).append(pend)
     return True
 
 
 def enqueue(state, item):
     """Defer a sub-effect (resolved in FIFO order once the stack empties)."""
-    state.queue.append(item)
+    journal.touch(state.queue).append(item)
 
 
 def run_queue(state, rng=None):
     """Resolve deferred sub-effects until one of them needs a decision."""
     while not state.pending and state.queue:
-        item = state.queue.pop(0)
+        item = journal.touch(state.queue).pop(0)
         _run_item(state, item, rng)
 
 
@@ -164,12 +165,12 @@ def _c_lose_colony(state, p, opt, ctx, rng):
 
 def _c_flip_wonder(state, p, opt, ctx, rng):
     if opt in p.completed_wonders and opt not in p.flipped_wonders:
-        p.flipped_wonders.append(opt)
+        journal.touch(p.flipped_wonders).append(opt)
 
 
 def _c_discard_military(state, p, opt, ctx, rng):
     if opt in p.hand_military:
-        p.hand_military.remove(opt)
+        journal.touch(p.hand_military).remove(opt)
         economy.discard_military(state, opt)
 
 
@@ -192,7 +193,7 @@ def _c_annex(state, p, opt, ctx, rng):
     """Aggression: Annex -- the colony's permanent bonus changes hands."""
     victim = state.players[ctx["victim"]]
     lose_colony(state, victim, opt)
-    p.colonies.append(opt)
+    journal.touch(p.colonies).append(opt)
     perm = _DB.get(opt).get("permanentEffects") or {}
     effects.grant_yellow(p, perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total + perm.get("blueTokens", 0))
@@ -224,7 +225,7 @@ def _c_pact_offer(state, p, opt, ctx, rng):
         state.emit(f"pact {name} between P{owner.idx} and P{p.idx}")
         effects.invalidate(state)
     else:
-        owner.hand_military.append(name)
+        journal.touch(owner.hand_military).append(name)
         state.emit(f"pact {name} refused by P{p.idx}")
 
 
@@ -364,7 +365,7 @@ def _q_lose_pop(state, p, item, rng):
             # remaining losses are re-queued behind the decision
             left = int(item.get("n", 1)) - 1
             if left > 0:
-                state.queue.insert(0, {"player": p.idx, "tag": "lose_pop",
+                journal.touch(state.queue).insert(0, {"player": p.idx, "tag": "lose_pop",
                                        "n": left})
             return
     effects.invalidate(state, p)
@@ -390,7 +391,7 @@ def _q_discard_military(state, p, item, rng):
         if push_choice(state, p.idx, "discard_military", opts):
             left = int(item.get("n", 1)) - 1
             if left > 0:
-                state.queue.insert(0, {"player": p.idx,
+                journal.touch(state.queue).insert(0, {"player": p.idx,
                                        "tag": "discard_military", "n": left})
             return
 
@@ -511,35 +512,35 @@ def start_auction(state, name, revealer_idx, rng=None):
     order = [q.idx for q in events._order_from(state, revealer_idx)]
     active = [i for i in order if max_force(state, state.players[i]) > 0]
     if not active:
-        state.past_events.append(name)
+        journal.touch(state.past_events).append(name)
         state.emit(f"territory {name}: nobody can colonize")
         return
-    state.pending.append({"kind": "auction", "card": name, "active": active,
+    journal.touch(state.pending).append({"kind": "auction", "card": name, "active": active,
                           "pos": 0, "bid": 0, "high": None,
                           "player": active[0]})
 
 
 def _auction_move(state, pend, move, rng):
     if move[0] == "bid":
-        pend["bid"] = move[1]
-        pend["high"] = pend["player"]
-        pend["pos"] = (pend["pos"] + 1) % len(pend["active"])
+        journal.touch(pend)["bid"] = move[1]
+        journal.touch(pend)["high"] = pend["player"]
+        journal.touch(pend)["pos"] = (pend["pos"] + 1) % len(pend["active"])
     else:
-        del pend["active"][pend["pos"]]
+        del journal.touch(pend["active"])[pend["pos"]]
         if pend["pos"] >= len(pend["active"]):
-            pend["pos"] = 0
+            journal.touch(pend)["pos"] = 0
     active = pend["active"]
     if not active:
-        state.pending.pop()
-        state.past_events.append(pend["card"])
+        journal.touch(state.pending).pop()
+        journal.touch(state.past_events).append(pend["card"])
         state.emit(f"territory {pend['card']}: no bids")
         return
     if len(active) == 1 and pend["high"] == active[0]:
-        state.pending.pop()
+        journal.touch(state.pending).pop()
         winner = state.players[active[0]]
         colonize(state, winner, pend["card"], pend["bid"], rng)
         return
-    pend["player"] = active[pend["pos"]]
+    journal.touch(pend)["player"] = active[pend["pos"]]
 
 
 def colonize(state, p, name, bid, rng=None):
@@ -549,7 +550,7 @@ def colonize(state, p, name, bid, rng=None):
         p.techs[n].workers -= 1
         p.yellow_bank += 1
     for n in bonuses:                     # §11.6 discarded before any draw
-        p.hand_military.remove(n)
+        journal.touch(p.hand_military).remove(n)
         economy.discard_military(state, n)
     effects.invalidate(state, p)
     state.emit(f"P{p.idx} colonized {name} with force {bid}")
@@ -576,7 +577,7 @@ def gain_colony(state, p, name, rng=None):
     """Permanent effects first, then the one-time effect (§11.5)."""
     from . import events
     db = _DB
-    p.colonies.append(name)
+    journal.touch(p.colonies).append(name)
     perm = db.get(name).get("permanentEffects") or {}
     effects.grant_yellow(p, perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total + perm.get("blueTokens", 0))
@@ -589,7 +590,7 @@ def lose_colony(state, p, name):
     """The permanent effects go away; the one-time effect is never undone."""
     if name not in p.colonies:
         return
-    p.colonies.remove(name)
+    journal.touch(p.colonies).remove(name)
     perm = _DB.get(name).get("permanentEffects") or {}
     p.yellow_bank = max(0, p.yellow_bank - perm.get("yellowTokens", 0))
     p.blue_total = max(0, p.blue_total - perm.get("blueTokens", 0))
@@ -608,7 +609,7 @@ def start_defense(state, attacker, defender, name, atk_strength, rng=None):
     if budget <= 0 or not defender.hand_military:
         _finish_defense(state, ctx, rng)
         return
-    state.pending.append(ctx)
+    journal.touch(state.pending).append(ctx)
 
 
 def _defense_move(state, pend, move, rng):
@@ -616,15 +617,15 @@ def _defense_move(state, pend, move, rng):
     d = state.players[pend["player"]]
     if move[0] == "defend":
         name = move[1]
-        d.hand_military.remove(name)
+        journal.touch(d.hand_military).remove(name)
         eff = (db.get(name).get("effects") or {}) if name in db.by_name else {}
         bonus = eff.get("defenseBonus")
-        pend["dfn"] += bonus if isinstance(bonus, int) else 1
-        pend["spent"] += 1
+        journal.touch(pend)["dfn"] += bonus if isinstance(bonus, int) else 1
+        journal.touch(pend)["spent"] += 1
         economy.discard_military(state, name)
         if pend["spent"] < pend["budget"] and d.hand_military:
             return
-    state.pending.pop()
+    journal.touch(state.pending).pop()
     _finish_defense(state, pend, rng)
 
 
