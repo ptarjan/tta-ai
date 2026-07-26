@@ -17,6 +17,12 @@ def _num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def _pkey(state):
+    """Player-count key for card tables, after any resignations (§13)."""
+    from . import game
+    return f"{game.live_count(state)}p"
+
+
 def _order_from(state, first_idx):
     """Players in clockwise order starting at `first_idx` (§5.3 tie-break)."""
     n = state.num_players
@@ -65,10 +71,12 @@ def apply_gains(state, p, block, rng=None, sign=1):
         elif key == "increasePopulation":
             for _ in range(int(v or 0)):
                 economy.increase_population(state, p)
-        elif key in ("decreasePopulation", "losePopulation",
-                     "opponentDecreasesPopulation"):
-            for _ in range(int(v or 0)):
-                economy.lose_population(state, p)
+        elif key in ("decreasePopulation", "losePopulation"):
+            # §6.5/FAQ p.15: the owner chooses which worker to lose
+            if v:
+                from . import interact
+                interact.enqueue(state, {"player": p.idx, "tag": "lose_pop",
+                                         "n": int(v)})
         elif key == "yellowTokens":
             if v:
                 p.yellow_bank = max(0, p.yellow_bank + sign * int(v))
@@ -112,13 +120,19 @@ def _draw_military(state, p, n):
 
 def reveal_current_event(state, rng):
     """Reveal and resolve the top card of the current events deck (§5.2)."""
+    from . import interact
     if not state.current_events:
         _recycle_future_events(state, rng)
         if not state.current_events:
             return None
     name = state.current_events.pop()
-    state.past_events.append(name)
-    resolve_event(state, name, rng, state.current)
+    db = C.db()
+    if name in db.by_name and db.type_of(name) == "territory":
+        # §11.1: a territory starts a colonization auction instead
+        interact.start_auction(state, name, state.current, rng)
+    else:
+        state.past_events.append(name)
+        resolve_event(state, name, rng, state.current)
     if not state.current_events:
         _recycle_future_events(state, rng)
     return name
@@ -143,18 +157,22 @@ def resolve_event(state, name, rng, revealer_idx):
         return
     card = db.get(name)
     if card["type"] == "territory":
-        # §11 colonization auctions are not implemented: the territory goes
-        # to the past events pile without being colonized.
-        state.emit(f"territory {name} revealed (auction not implemented)")
+        from . import interact
+        interact.start_auction(state, name, revealer_idx, rng)
         return
     eff = card.get("effects") or {}
     order = _order_from(state, revealer_idx)
     if not order:
         return
+    if state.last_round and isinstance(eff.get("lastRoundSubstitute"), dict):
+        eff = eff["lastRoundSubstitute"]      # Politics of Strength
 
     if "allPlayers" in eff:
         for q in order:
             _apply_player_block(state, q, eff["allPlayers"], order, rng)
+
+    if "target" in eff and "decreasePopulation" in eff:
+        _conditional_target(state, eff, order, rng)
 
     for key, stat, best in (("strongestPlayer", "strength", True),
                             ("weakestPlayer", "strength", False),
@@ -170,7 +188,7 @@ def resolve_event(state, name, rng, revealer_idx):
 
     for key, best in (("strongestPlayers", True), ("weakestPlayers", False)):
         if key in eff:
-            count = (eff[key] or {}).get(f"{state.num_players}p", 1)
+            count = (eff[key] or {}).get(_pkey(state), 1)
             block = eff.get("gain") if best else eff.get("lose")
             sign = 1 if best else -1
             if key == "weakestPlayers" and eff.get("gain"):
@@ -187,13 +205,123 @@ def _apply_player_block(state, p, block, order, rng):
     if culture:
         p.culture = max(0, p.culture + culture)
     if "rankingCulture" in block:
-        table = block["rankingCulture"].get(f"{state.num_players}p") or []
+        table = block["rankingCulture"].get(_pkey(state)) or []
         stat = block.get("statistic", "strengthRating")
         rank = _rank(state, order, _STAT_ALIASES.get(stat, "strength"), True)
         if p in rank:
             i = rank.index(p)
             if i < len(table):
                 p.culture = max(0, p.culture + table[i])
+    _apply_extras(state, p, block, rng)
+    _queue_decisions(state, p, block)
+
+
+def _conditional_target(state, eff, order, rng):
+    """Barbarians: 'the player with most culture, if among the weakest'."""
+    from . import interact
+    ranked = _rank(state, order, "culture", True)
+    if not ranked:
+        return
+    q = ranked[0]
+    among = ((eff.get("condition") or {}).get("amongWeakest")
+             or {}).get(_pkey(state))
+    if among and q not in _rank(state, order, "strength", False)[:among]:
+        return
+    interact.enqueue(state, {"player": q.idx, "tag": "lose_pop",
+                             "n": int(eff.get("decreasePopulation", 1))})
+
+
+def _apply_extras(state, p, block, rng):
+    """Event effects with no decision that apply_gains does not cover."""
+    db = C.db()
+    s = effects.state_stats(state, p)
+    if block.get("produceFood"):
+        effects.gain_food(p, s.food)
+    if block.get("produceResources"):
+        effects.gain_resources(p, s.resources)
+    if isinstance(block.get("extraProduction"), dict):
+        _extra_production(state, p, s)
+    if block.get("discardLeaderUnlessCurrentAge") and p.leader:
+        if db.age_of(p.leader) != state.age_civil:
+            effects.on_leave_play(state, p, p.leader)
+            p.leader = None
+    if block.get("takeYellowTokensFromWeakest"):
+        n = int(block["takeYellowTokensFromWeakest"])
+        order = _order_from(state, state.current)
+        victims = [q for q in _rank(state, order, "strength", False)
+                   if q.idx != p.idx]
+        if victims:
+            take = min(n, victims[0].yellow_bank)
+            victims[0].yellow_bank -= take
+            p.yellow_bank += take
+    if block.get("decreasePopulationByHalfDiscontentWorkersRoundedUp"):
+        from . import interact
+        n = (economy.discontent(state, p) + 1) // 2
+        if n:
+            interact.enqueue(state, {"player": p.idx, "tag": "lose_pop",
+                                     "n": n})
+    if "civilActionsPerDiscontentWorker" in block:
+        per = _num(block["civilActionsPerDiscontentWorker"]) or 0
+        loss = int(-per * economy.discontent(state, p))
+        if loss > 0:
+            p.civil_actions = max(0, p.civil_actions - loss)
+            p.ca_penalty_next_turn += loss
+    if isinstance(block.get("oneTimeDiscount"), dict):
+        p.one_time_discount = {k: v for k, v in block["oneTimeDiscount"].items()
+                               if isinstance(v, dict)}
+    if block.get("destroyOneUrbanBuildingOfEachOpponent"):
+        from . import interact
+        for q in state.players:
+            if q.idx != p.idx and not q.resigned:
+                interact.enqueue(state, {"player": p.idx, "tag": "raid",
+                                         "victim": q.idx, "max_age": "IV",
+                                         "no_loot": True})
+    if block.get("optionalTakeCardsWithCivilActions"):
+        from . import interact
+        p.skip_next_politics = True
+        interact.enqueue(state, {
+            "player": p.idx, "tag": "take_row",
+            "budget": int(block["optionalTakeCardsWithCivilActions"])})
+    effects.invalidate(state, p)
+
+
+def _extra_production(state, p, s):
+    """Economic Progress: corruption, food, consumption, resources (2015)."""
+    corr = economy.corruption(effects.blue_available(p))
+    paid = effects.pay_resources(p, corr)
+    p.food = max(0, p.food - (corr - paid))
+    effects.gain_food(p, s.food)
+    need = economy.consumption(p.yellow_bank)
+    if p.food >= need:
+        p.food -= need
+    else:
+        p.culture = max(0, p.culture - 4 * (need - p.food))
+        p.food = 0
+    effects.gain_resources(p, s.resources)
+
+
+def _queue_decisions(state, p, block):
+    """Event effects that require this player to choose (§5.3)."""
+    from . import interact
+    if isinstance(block.get("choose"), list) and block["choose"]:
+        interact.enqueue(state, {"player": p.idx, "tag": "choose",
+                                 "options": block["choose"]})
+    if isinstance(block.get("freeBuild"), dict):
+        interact.enqueue(state, {"player": p.idx, "tag": "free_build",
+                                 "spec": block["freeBuild"]})
+    if block.get("destroyOwnBuilding"):
+        for _ in range(int(block["destroyOwnBuilding"])):
+            interact.enqueue(state, {"player": p.idx, "tag": "destroy_own"})
+    if block.get("loseColony"):
+        for _ in range(int(block["loseColony"])):
+            interact.enqueue(state, {"player": p.idx, "tag": "lose_colony"})
+    if isinstance(block.get("flipCompletedWonder"), dict):
+        interact.enqueue(state, {
+            "player": p.idx, "tag": "flip_wonder",
+            "ages": block["flipCompletedWonder"].get("ages") or ["A", "I"]})
+    if block.get("discardMilitaryCards"):
+        interact.enqueue(state, {"player": p.idx, "tag": "discard_military",
+                                 "n": int(block["discardMilitaryCards"])})
 
 
 _STAT_ALIASES = {
@@ -318,7 +446,7 @@ def evaluate_final_events(state):
                 q.culture = max(0, q.culture + gained)
             if "rankingCulture" in block:
                 table = block["rankingCulture"].get(
-                    f"{state.num_players}p") or []
+                    _pkey(state)) or []
                 stat = _STAT_ALIASES.get(block.get("statistic",
                                                    "strengthRating"),
                                          "strength")
@@ -330,7 +458,9 @@ def evaluate_final_events(state):
 
 # ------------------------------------------------------------ aggressions
 
-def resolve_aggression(state, attacker, name, defender, rng):
+def start_aggression(state, attacker, name, defender, rng):
+    """§5.4.1-5.4.3, then hand the defense decision to the rival."""
+    from . import interact
     db = C.db()
     card = db.get(name)
     cost = (card.get("cost") or {}).get("militaryActions", 0)
@@ -339,28 +469,28 @@ def resolve_aggression(state, attacker, name, defender, rng):
     attacker.military_actions -= cost
     attacker.hand_military.remove(name)
     economy.discard_military(state, name)
+    effects.cancel_attack_pacts(state, attacker, defender)   # §5.4.3
+    atk = (effects.state_stats(state, attacker).strength
+           + effects.pact_attack_bonus(state, attacker, defender))
+    interact.start_defense(state, attacker, defender, name, atk, rng)
 
-    atk = effects.state_stats(state, attacker).strength
-    dfn = effects.state_stats(state, defender).strength
-    # §5.4.4 defender plays bonus cards / discards military cards, at most
-    # their military action total in cards
-    budget = effects.state_stats(state, defender).military_actions
-    spent = 0
-    while dfn < atk and spent < budget and defender.hand_military:
-        card_name = defender.hand_military.pop()
-        eff = (db.get(card_name).get("effects") or {}
-               if card_name in db.by_name else {})
-        dfn += _num(eff.get("defenseBonus")) or 1
-        economy.discard_military(state, card_name)
-        spent += 1
-    if dfn >= atk:
-        state.emit(f"aggression {name} vs P{defender.idx} failed")
+
+def finish_aggression(state, ctx, rng):
+    """§5.4.5-5.4.6: compare totals and resolve the card."""
+    from . import interact
+    db = C.db()
+    attacker = state.players[ctx["attacker"]]
+    defender = state.players[ctx["player"]]
+    name = ctx["card"]
+    if ctx["dfn"] >= ctx["atk"]:
+        state.emit(f"aggression {name} vs P{defender.idx} failed "
+                   f"({ctx['dfn']} >= {ctx['atk']})")
+        effects.invalidate(state)
         return False
 
-    eff = card.get("effects") or {}
+    eff = db.get(name).get("effects") or {}
     apply_gains(state, attacker, eff, rng)
-    take = (eff.get("takeFromOpponent") or {})
-    for key, raw in take.items():
+    for key, raw in (eff.get("takeFromOpponent") or {}).items():
         v = _num(raw)
         if not v:
             continue
@@ -378,33 +508,24 @@ def resolve_aggression(state, attacker, name, defender, rng):
             defender.culture -= moved
             attacker.culture += moved
     if eff.get("opponentDecreasesPopulation"):
-        for _ in range(int(eff["opponentDecreasesPopulation"])):
-            economy.lose_population(state, defender)
-    _destroy_buildings(state, defender, attacker, eff)
+        interact.enqueue(state, {
+            "player": defender.idx, "tag": "lose_pop",
+            "n": int(eff["opponentDecreasesPopulation"])})
+    for spec in eff.get("destroyUrbanBuildings") or []:
+        interact.enqueue(state, {"player": attacker.idx, "tag": "raid",
+                                 "victim": defender.idx,
+                                 "max_age": spec.get("maxAge", "A")})
+    if eff.get("stealColony"):
+        interact.enqueue(state, {"player": attacker.idx, "tag": "annex",
+                                 "victim": defender.idx})
+    if eff.get("removeFromGame"):
+        interact.enqueue(state, {
+            "player": attacker.idx, "tag": "infiltrate",
+            "victim": defender.idx,
+            "per": _num(eff.get("gainCulturePerLevelOfRemovedCard")) or 3})
     effects.invalidate(state)
     state.emit(f"aggression {name} vs P{defender.idx} succeeded")
     return True
-
-
-def _destroy_buildings(state, victim, attacker, eff):
-    """Raid: destroy urban buildings up to the listed ages (§5.5)."""
-    db = C.db()
-    specs = eff.get("destroyUrbanBuildings") or []
-    for spec in specs:
-        max_lv = C.level(spec.get("maxAge", "A"))
-        cands = [n for n, t in victim.techs.items()
-                 if t.workers and db.type_of(n) in C.URBAN_TYPES
-                 and db.level_of(n) <= max_lv]
-        if not cands:
-            continue
-        # destroy the most valuable one
-        target = max(cands, key=lambda n: db.get(n).get("buildCost") or 0)
-        victim.techs[target].workers -= 1
-        victim.workers_free += 1
-        printed = db.get(target).get("buildCost") or 0
-        effects.gain_resources(attacker, (printed + 1) // 2)
-    if specs:
-        effects.invalidate(state, victim)
 
 
 # ------------------------------------------------------------------ wars
@@ -426,7 +547,8 @@ def resolve_war(state, attacker, rng):
     attacker.war_declared_by_me = None
     defender.wars_declared_on_me = [
         w for w in defender.wars_declared_on_me if tuple(w) != tuple(war)]
-    a = effects.state_stats(state, attacker).strength
+    a = (effects.state_stats(state, attacker).strength
+         + effects.pact_attack_bonus(state, attacker, defender))
     d = effects.state_stats(state, defender).strength
     economy.discard_military(state, name)
     if a == d:

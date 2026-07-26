@@ -161,6 +161,7 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "moves": (sum(moves) / len(moves)) if moves else 0.0,
         "errors": len(errors),
         "error_sample": errors[:3],
+        "shares": shares,
     }
 
 

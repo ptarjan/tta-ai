@@ -146,7 +146,8 @@ def end_of_turn(state, p, rng):
     # 5. reset actions
     effects.invalidate(state, p)
     s = effects.state_stats(state, p)
-    p.civil_actions = s.civil_actions
+    p.civil_actions = max(0, s.civil_actions - p.ca_penalty_next_turn)
+    p.ca_penalty_next_turn = 0
     p.military_actions = s.military_actions
     p.tactic_action_used = False
     p.hammurabi_used = False

@@ -95,8 +95,13 @@ def new_game(num_players, seed=0):
 
 # ------------------------------------------------------------- card row
 
+def live_count(state):
+    """Player count for deck trimming / event tables (§13, resignations)."""
+    return max(2, min(4, len(state.active_players())))
+
+
 def _sweep_count(state):
-    return SWEEP[max(2, min(4, len(state.active_players())))]
+    return SWEEP[live_count(state)]
 
 
 def _replenish(state, rng):
@@ -112,6 +117,11 @@ def _replenish(state, rng):
         row[i] = None
     kept = [c for c in row if c is not None]
     state.card_row = kept + [None] * (ROW_SIZE - len(kept))
+    _deal(state, rng)
+
+
+def deal_row(state, rng):
+    """Fill empty row slots from the current civil deck (§2.1 step 3)."""
     _deal(state, rng)
 
 
@@ -151,10 +161,12 @@ def _advance_age(state, rng):
         state.military_deck = []
         _set_last_round(state)
     else:
-        state.civil_deck = db.civil_deck(nxt, state.num_players)
+        # §13: future-age decks are trimmed for the surviving player count
+        n = live_count(state)
+        state.civil_deck = db.civil_deck(nxt, n)
         rng.shuffle(state.civil_deck)
         if state.has_military:
-            state.military_deck = db.military_deck(nxt, state.num_players)
+            state.military_deck = db.military_deck(nxt, n)
             rng.shuffle(state.military_deck)
     effects.invalidate(state)
     state.emit(f"age {ended} ended -> age {nxt}")
@@ -178,7 +190,10 @@ def _antiquate(state, ended_level):
             p.leader = None
         if p.wonder and db.level_of(p.wonder.name) < ended_level:
             p.wonder = None                      # blue tokens return to bank
-        p.pacts = []                             # pacts antiquate away
+        # §12.2.2 antiquated pacts leave play (technologies, wonders,
+        # colonies, tactics and declared wars stay)
+        p.pacts = [pact for pact in p.pacts
+                   if db.level_of(pact["name"]) >= ended_level]
         effects.invalidate(state, p)
 
 
@@ -211,7 +226,10 @@ def start_turn(state, rng=None):
                         and state.round >= state.final_round_end)
     p.politics_done = False
     p.taken_this_turn = []
-    if state.round > 1 and state.has_military and not state.game_over:
+    if p.skip_next_politics:            # International Agreement (CoL p.12)
+        p.skip_next_politics = False
+        state.phase = "actions"
+    elif state.round > 1 and state.has_military and not state.game_over:
         state.phase = "politics"
         _auto_skip_politics(state, rng)
     else:
@@ -231,6 +249,22 @@ def end_turn(state, rng=None):
     rng = _rng_for(state, rng)
     p = state.me()
     economy.end_of_turn(state, p, rng)
+    return _advance_turn(state, rng)
+
+
+def after_resign(state, rng=None):
+    """§5.11: a resigning player's turn ends at once; last one left wins."""
+    rng = _rng_for(state, rng)
+    active = state.active_players()
+    if len(active) <= 1:
+        if active:
+            state.forced_winner = active[0].idx
+        _finish_game(state)
+        return state
+    return _advance_turn(state, rng)
+
+
+def _advance_turn(state, rng):
     state.turn += 1
 
     nxt = _next_player(state)
@@ -285,7 +319,8 @@ def _finish_game(state):
 # --------------------------------------------------------------- API
 
 def current_player(state):
-    return state.current
+    """Index of the player who must choose the next move (§ interact)."""
+    return state.decider()
 
 
 def is_over(state):
@@ -300,7 +335,9 @@ def scores(state):
 
 def winners(state):
     """Indices of the players with the most culture (ties share the win)."""
-    sc = scores(state)
+    if state.forced_winner is not None:
+        return [state.forced_winner]        # §5.11 last player standing
+    sc = [(-1 if p.resigned else s) for p, s in zip(state.players, scores(state))]
     best = max(sc)
     return [i for i, v in enumerate(sc) if v == best]
 
@@ -325,7 +362,7 @@ def play_game(bots, num_players=None, seed=0, move_cap=MOVE_CAP, state=None):
             state.move_cap_hit = True
             _finish_game(state)
             break
-        mv = bots[state.current](state)
+        mv = bots[state.decider()](state)
         apply(state, mv, rng)
         moves += 1
     state.moves_played = moves

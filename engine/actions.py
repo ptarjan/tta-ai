@@ -91,14 +91,16 @@ def urban_count(p, urban_type):
                if db.type_of(n) == urban_type)
 
 
-def can_take(state, p, idx):
+def can_take(state, p, idx, budget=None):
+    """§2.5 taking limits. `budget` overrides the civil-action check."""
     db = C.db()
     name = state.card_row[idx]
     if name is None:
         return False
     card = db.get(name)
     typ = card["type"]
-    if take_cost(state, p, idx) > spare_ca(state, p):
+    have = spare_ca(state, p) if budget is None else budget
+    if take_cost(state, p, idx) > have:
         return False
     if typ == "wonder":
         return p.wonder is None
@@ -138,6 +140,9 @@ def is_unit(name):
 def legal_moves(state):
     if state.game_over:
         return []
+    if state.pending:
+        from . import interact
+        return interact.pending_moves(state)
     p = state.me()
     if state.phase == "politics":
         return _politics_moves(state, p)
@@ -149,14 +154,31 @@ def _politics_moves(state, p):
     moves = [("pol_pass",)]
     if not state.has_military:
         return moves
+    s = effects.state_stats(state, p)
+    # §5.11 resign: not in age IV, and never the last player standing
+    if state.age_civil != "IV":
+        moves.append(("resign",))
+    for pact in effects.pacts_for(state, p.idx):        # §5.10
+        moves.append(("cancel_pact", pact["owner"]))
     for name in sorted(set(p.hand_military)):
         card = db.get(name)
         typ = card["type"]
         cost = (card.get("cost") or {}).get("militaryActions", 0)
         if typ in ("event", "territory"):
             moves.append(("prepare_event", name))
+        elif typ == "pact":
+            if len(state.active_players()) < 3:          # §13: no pacts in 2p
+                continue
+            sides = card.get("sides") or []
+            for q in state.players:
+                if q.idx == p.idx or q.resigned:
+                    continue
+                if sides:
+                    moves.append(("offer_pact", name, q.idx, "A"))
+                    moves.append(("offer_pact", name, q.idx, "B"))
+                else:
+                    moves.append(("offer_pact", name, q.idx, ""))
         elif typ == "aggression" and cost <= p.military_actions:
-            s = effects.state_stats(state, p)
             if s.no_aggression:
                 continue
             for q in state.players:
@@ -165,19 +187,24 @@ def _politics_moves(state, p):
                 mult = 2 if q.leader == "Mahatma Gandhi" else 1
                 if cost * mult > p.military_actions:
                     continue
-                if effects.state_stats(state, q).strength >= s.strength:
+                if effects.pact_forbids_attack(state, p, q):     # §5.4.2
+                    continue
+                bonus = effects.pact_attack_bonus(state, p, q)
+                if effects.state_stats(state, q).strength >= s.strength + bonus:
                     continue
                 moves.append(("aggression", name, q.idx))
         elif typ == "war" and cost <= p.military_actions and not state.last_round:
-            s = effects.state_stats(state, p)
             if s.no_aggression or p.war_declared_by_me:
                 continue
             for q in state.players:
                 if q.idx == p.idx or q.resigned:
                     continue
                 mult = 2 if q.leader == "Mahatma Gandhi" else 1
-                if cost * mult <= p.military_actions:
-                    moves.append(("war", name, q.idx))
+                if cost * mult > p.military_actions:
+                    continue
+                if effects.war_forbidden(state, p, q):           # §5.6
+                    continue
+                moves.append(("war", name, q.idx))
     return moves
 
 
@@ -325,10 +352,14 @@ ACTION_CARD_KEYS = {
 # ------------------------------------------------------------- apply
 
 def apply(state, move, rng=None):
+    from . import interact
     if STRICT:
         legal = legal_moves(state)
         assert move in legal or list(move) in [list(m) for m in legal], (
             f"illegal move {move!r} in phase {state.phase}")
+    if state.pending:
+        interact.apply_pending(state, move, rng)
+        return state
     p = state.me()
     kind = move[0]
     handler = _HANDLERS.get(kind)
@@ -336,17 +367,22 @@ def apply(state, move, rng=None):
         raise ValueError(f"unknown move {move!r}")
     handler(state, p, move, rng)
     effects.invalidate(state, p)
+    interact.run_queue(state, rng)
     return state
 
 
 # --- action phase handlers
 
 def _h_take(state, p, move, rng):
-    db = C.db()
     idx = move[1]
+    pay_ca(state, p, take_cost(state, p, idx))
+    take_card(state, p, idx)
+
+
+def take_card(state, p, idx):
+    """Move row card `idx` into `p`'s hand/play area (actions already paid)."""
+    db = C.db()
     name = state.card_row[idx]
-    cost = take_cost(state, p, idx)
-    pay_ca(state, p, cost)
     state.card_row[idx] = None
     card = db.get(name)
     effects.on_take_card(state, p, name)
@@ -358,7 +394,7 @@ def _h_take(state, p, move, rng):
             p.taken_leader_ages.append(card["age"])
         elif card["type"] == "action":
             p.taken_this_turn.append(name)
-    state.emit(f"took {name} for {cost} CA")
+    state.emit(f"took {name}")
 
 
 def _h_pop(state, p, move, rng):
@@ -587,9 +623,66 @@ def _h_prepare_event(state, p, move, rng):
 
 def _h_aggression(state, p, move, rng):
     from . import events
-    events.resolve_aggression(state, p, move[1], state.players[move[2]], rng)
     p.politics_done = True
     state.phase = "actions"
+    events.start_aggression(state, p, move[1], state.players[move[2]], rng)
+
+
+def _h_offer_pact(state, p, move, rng):
+    """§5.9: reveal the pact, name the partner and the sides."""
+    from . import interact
+    name, target, side = move[1], move[2], move[3]
+    p.hand_military.remove(name)
+    ctx = {"owner": p.idx, "name": name}
+    if side == "B":
+        ctx["a"], ctx["b"] = target, p.idx
+    else:
+        ctx["a"], ctx["b"] = p.idx, target
+    p.politics_done = True
+    state.phase = "actions"
+    interact.push_choice(state, target, "pact_offer", ["accept", "refuse"],
+                         ctx, auto=False)
+
+
+def _h_cancel_pact(state, p, move, rng):
+    """§5.10: remove any pact you are party to from play."""
+    owner = state.players[move[1]]
+    owner.pacts = [pact for pact in owner.pacts
+                   if p.idx not in (pact["owner"], pact["partner"])]
+    effects.invalidate(state)
+    p.politics_done = True
+    state.phase = "actions"
+    state.emit(f"P{p.idx} cancelled a pact")
+
+
+def _h_resign(state, p, move, rng):
+    """§5.11: leave the game; wars against you score their declarer 7."""
+    from . import game
+    p.resigned = True
+    p.hand_civil = []
+    for n in p.hand_military:
+        economy.discard_military(state, n)
+    p.hand_military = []
+    effects.drop_pacts_of(state, p.idx)
+    for war in list(p.wars_declared_on_me):
+        name, atk_idx, _ = tuple(war)
+        atk = state.players[atk_idx]
+        atk.culture += 7
+        if atk.war_declared_by_me and tuple(atk.war_declared_by_me)[0] == name:
+            atk.war_declared_by_me = None
+        economy.discard_military(state, name)
+    p.wars_declared_on_me = []
+    if p.war_declared_by_me:
+        name, _, tgt = tuple(p.war_declared_by_me)
+        d = state.players[tgt]
+        d.wars_declared_on_me = [w for w in d.wars_declared_on_me
+                                 if tuple(w)[0] != name]
+        economy.discard_military(state, name)
+        p.war_declared_by_me = None
+    p.politics_done = True
+    effects.invalidate(state)
+    state.emit(f"P{p.idx} resigned")
+    game.after_resign(state, rng)
 
 
 def _h_war(state, p, move, rng):
@@ -626,4 +719,7 @@ _HANDLERS = {
     "prepare_event": _h_prepare_event,
     "aggression": _h_aggression,
     "war": _h_war,
+    "offer_pact": _h_offer_pact,
+    "cancel_pact": _h_cancel_pact,
+    "resign": _h_resign,
 }

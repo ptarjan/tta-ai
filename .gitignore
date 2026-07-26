@@ -4,3 +4,5 @@ sources/*.pdf
 docs/rulebook.pdf
 experiments/results.jsonl
 experiments/champion.json
+experiments/logs/
+experiments/baselines.jsonl

@@ -22,15 +22,20 @@ __all__ = ["RandomBot", "GreedyBot", "WeightedBot", "DEFAULT_WEIGHTS",
 class RandomBot:
     name = "random"
 
-    def __init__(self, rng=None, seed=None):
+    def __init__(self, rng=None, seed=None, allow_resign=False):
         self.rng = rng or random.Random(seed)
+        self.allow_resign = allow_resign
 
     def __call__(self, state):
-        moves = actions.legal_moves(state)
-        return self.rng.choice(moves)
+        return self.choose(state, actions.legal_moves(state))
 
     def choose(self, state, moves, rng=None):
         """Adapter for experiments/harness.py."""
+        if not self.allow_resign:
+            # resigning (§5.11) is legal every turn; a uniform-random bot
+            # would end most games in round 2, so it is opt-in
+            live = [m for m in moves if m[0] != "resign"]
+            moves = live or moves
         return (rng or self.rng).choice(moves)
 
 
@@ -125,13 +130,17 @@ class GreedyBot:
         """Adapter for experiments/harness.py."""
         return self.pick(state, moves)
 
+    ALLOW_RESIGN = False
+
     def __call__(self, state):
         return self.pick(state, actions.legal_moves(state))
 
     def pick(self, state, moves):
+        if not self.ALLOW_RESIGN:
+            moves = [m for m in moves if m[0] != "resign"] or moves
         if len(moves) == 1:
             return moves[0]
-        idx = state.current
+        idx = state.decider()
         best, best_val = None, None
         # a fresh deterministic rng per candidate keeps the search from
         # consuming the game's rng stream

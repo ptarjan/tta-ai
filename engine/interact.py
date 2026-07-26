@@ -173,8 +173,9 @@ def _c_raid(state, p, opt, ctx, rng):
         return
     t.workers -= 1
     victim.workers_free += 1
-    printed = db.get(opt).get("buildCost") or 0
-    effects.gain_resources(p, (printed + 1) // 2)
+    if ctx.get("loot", True):
+        printed = db.get(opt).get("buildCost") or 0
+        effects.gain_resources(p, (printed + 1) // 2)
     effects.invalidate(state, victim)
 
 
@@ -376,7 +377,8 @@ def _q_raid(state, p, item, rng):
     opts = sorted(n for n, t in victim.techs.items()
                   if t.workers > 0 and db.type_of(n) in C.URBAN_TYPES
                   and db.level_of(n) <= max_lv)
-    push_choice(state, p.idx, "raid", opts, {"victim": victim.idx})
+    push_choice(state, p.idx, "raid", opts,
+                {"victim": victim.idx, "loot": not item.get("no_loot")})
 
 
 def _q_annex(state, p, item, rng):
