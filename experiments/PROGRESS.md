@@ -152,19 +152,9 @@ ps aux | grep -E 'hillclimb|run_hillclimb' | grep -v grep
 # live progress
 tail -f experiments/logs/hc_4p.log
 
-# generations accepted so far, per player count
-for k in 2 3 4; do
-  printf '%sp: ' "$k"
-  python3 - "$k" <<'EOF'
-import json,sys
-k=sys.argv[1]
-rows=[json.loads(l) for l in open(f"experiments/generations_{k}p.jsonl")]
-acc=[r for r in rows if r["accepted"]]
-anch=[r for r in rows if "vs_greedy" in r]
-print(f"{len(rows)} gens, {len(acc)} accepted, sigma={rows[-1]['sigma']}",
-      f"last anchor vs_default={anch[-1]['vs_default']} vs_greedy={anch[-1]['vs_greedy']}" if anch else "")
-EOF
-done
+# generations, accepts, anchor series and which weights moved
+python3 -m experiments.summarize            # all three player counts
+python3 -m experiments.summarize --players 4 --top 25
 
 # restart one (safe at any time -- it resumes from champion_Kp.json)
 cd ~/tta-ai && nohup experiments/run_hillclimb.sh 4 10 2 1 48 288 \
