@@ -44,3 +44,48 @@ $ sysctl -n hw.perflevel1.logicalcpu -> (absent)
 
 Coffee Lake i5-8500B: 6 physical cores, **no hyperthreading**, no E-cores.
 "Leave 2 free" therefore means **4 worker processes**.
+
+## 2. Correctness
+
+### Test suite: PASS on both
+
+```
+python3 -m unittest discover -s tests   ->  Ran 57 tests in  4.315s  OK
+pypy3   -m unittest discover -s tests   ->  Ran 57 tests in 14.358s  OK
+```
+
+(PyPy is *slower* on the test suite — 57 short tests never reach JIT warmup and
+pay ~3x interpretation + compile overhead. Expected; irrelevant to self-play.)
+
+### Determinism fingerprint: ONE case out of 33 diverges
+
+`engine/perf_check.py hash` covers 33 fixed (players, bot, seed) games.
+
+```
+CPython  3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7
+PyPy     63d62a709a24eb834e899605971300327266d2c9d74136cc3fa05f65e003583f
+```
+
+Per-case diff (`tools/dump_game.py`): **32/33 identical, 1 differs**, namely
+`(4, 'greedy', 2)`:
+
+```
+CPython scores [112, 92, 113, 228]
+PyPy    scores [112, 94, 113, 226]
+first divergence at log index 50 of 83/83
+  ctx 49: T93 P0: event Popularization of Science resolved
+  A  50: T104 P3: event National Pride resolved      <- CPython
+  B  50: T94  P1: event National Pride resolved      <- PyPy
+```
+
+Not a hash-randomisation problem — each interpreter is *self*-consistent and
+reproducible, and `PYTHONHASHSEED` in {0,1,2,12345} changes nothing on either:
+
+```
+CPython, every seed: [112, 92, 113, 228]
+PyPy,    every seed: [112, 94, 113, 226]
+```
+
+So it is a structural container-ordering dependency (a `set` iterated without
+sorting, or similar) that happens to be stable within one interpreter but
+differs between the two. Hunt below.
