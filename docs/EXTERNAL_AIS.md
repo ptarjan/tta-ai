@@ -72,7 +72,167 @@ through a **human at the keyboard**. See §6 for the design of that.
 
 ## 2. Board Game Arena
 
-TODO — under investigation.
+**Short version: BGA has the largest 2015-edition game corpus in existence and it is the
+one place we could get real move-level logs of the right edition — but it has no AI
+opponent at all, everything is behind a login, and their Terms of Service prohibit
+automated extraction in unusually explicit terms. The genuinely free win from BGA is
+their published source code as a rules oracle, not their data.**
+
+### 2a. There are two TTA games on BGA and you want the second one
+
+Verified from the game metadata embedded in BGA's own gamelist payload:
+
+| | 2006 original | **2015 "A New Story of Civilization"** |
+|---|---|---|
+| slug | `throughtheages` | **`throughtheagesnewstory`** |
+| BGA game id | 1011 | **1144** |
+| published | 2014-05-19 | **2019-05-10** |
+| games played | 553,111 | **1,187,441** |
+| players | 2–4 | 2–4 |
+| avg duration | 73 min | 32 min |
+| status | public, free, ranked | public, free, ranked (ELO league + 2p Arena) |
+
+[gamepanel (2015 edition)](https://en.boardgamearena.com/gamepanel?game=throughtheagesnewstory).
+Careful: `?game=throughtheages` is the **2006** game. Both BGA records carry
+`bgg_id: 25613` (the BGG entry for the original) and therefore both gamepanels display
+"Year: 2006" — that is a BGA metadata artifact, not an edition claim. The 2015 identity
+of `throughtheagesnewstory` is confirmed independently by the CGE "A New Story of
+Civilization" box art shipped in the implementation source (§2d) and by BGA's own
+[launch announcement](https://en.boardgamearena.com/news?id=186). Both are credited to
+developer Romain Fromi.
+
+**1.19M games of the right edition** is roughly twice BGO's whole finished-game count
+(§5a) and, unlike BGO, there is no doubt about which edition it is. That is the single
+largest TTA corpus we found anywhere.
+
+### 2b. Is there a bot? No. Not even a weak one.
+
+BGA's own documentation lists the complete set of bot-capable games —
+[Bots and Artificial Intelligence](https://en.doc.boardgamearena.com/Bots_and_Artificial_Intelligence)
+— as *Conspiracy, Glow, Crew, Crew Deepsea, Tapestry*, and adds "**None of them
+currently is a real AI.** Usually its implementation of 'Automa' rules". TTA is not on
+the list. Corroborating hard signal: bot-capable games expose a 1-player table
+(`tapestry` is `[1..5]`, `glow` `[1..6]`); both TTA games are `[2,3,4]`, so a solo table
+cannot even be created.
+
+The only automated player is BGA's **zombie** mechanism, which fires when a human
+quits. TTA's actual `zombieTurn()` is readable in the published source (§2d) and it does
+not play the game: on a normal turn it immediately transitions to end-of-turn; on the
+politics phase it calls **`concedeGame()`**; territory bids pass with 0; pact offers are
+refused; everything else is `zombiePass`. A zombied TTA seat concedes or does nothing.
+
+**So BGA contributes exactly zero as a sparring partner.** Any hope of "point our bot at
+BGA and measure it" would mean playing against *humans* through a bot account, which is
+both a ToS violation and a completely different (and much slower) experiment.
+
+### 2c. Export and the public archive: endpoints exist, all login-gated
+
+There is **no export button and no bulk download anywhere**. Everything goes through
+AJAX endpoints, reverse-engineered from BGA's own `ly_metasite.js` bundle
+(module `ebg.site.gamereview`). The real flow is:
+
+1. `GET /gamereview?table=<id>` — **requires login**; anonymous gets
+   `302 → /account?warn&redirect=…`. Loading this page is also what *materializes* the
+   archive; hitting the log endpoint without it fails (documented as a bug workaround in
+   a third-party scraper, [gcheckers `doc/BUGS.md`](https://github.com/JeromeA/gcheckers)).
+2. If the page carries a `not_allowed_beacon`, the JS bounces you to the **Premium**
+   sales page — the premium gate, confirmed in their shipped code. *Unverified:* the
+   exact server-side condition that sets it (own-game vs someone-else's-game vs quota).
+   Community threads also assert a **daily cap on replays** for free and premium users
+   alike, but `forum.boardgamearena.com` returned 504 on fetch and neither the
+   [FAQ](https://en.boardgamearena.com/faq) nor the
+   [Premium page](https://en.boardgamearena.com/premium) documents it. **Treat any
+   specific replay-quota number as unverified.**
+3. Not-yet-built archives: `POST /gamereview/gamereview/requestTableArchive.html`,
+   then poll `checkTableArchiveReady.html` every 5 s.
+4. Logs: `GET /archive/archive/logs.html?table=<id>&translated=true` → JSON
+   `{logs, players}`.
+
+Probed unauthenticated (no cookie): `/table/table/tableinfos.html?id=…`,
+`/archive/archive/logs.html?table=…` and `/gamestats/gamestats/getGames.html` all return
+HTTP 200 carrying `{"error":"Invalid session information for this action","code":806}` —
+i.e. **session cookie required**. `/gamestats?game=throughtheagesnewstory` 302s to the
+login page. (`/gamereview/gamereview/getGameLogs.html` does **not** exist — 404; the
+right endpoint is `/archive/archive/logs.html`.)
+
+ELO and Arena ratings exist for both TTA games (`is_ranking_disabled: false`), but the
+stats pages are login-gated the same way.
+
+**Blocked on a human:** every one of the above needs the user logged in to BGA in their
+own browser. I did not create an account and did not attempt a login. If the user has a
+BGA account and logs in in Chrome, a CDP-driven Playwright session could confirm in
+minutes whether TTA replay logs are actually readable and what a single game's JSON
+looks like. Until then, "we can read BGA TTA logs" is **UNPROVEN**.
+
+### 2d. Is there a rate-limited scraping path? Technically yes; permitted, no.
+
+- **robots.txt** ([boardgamearena.com/robots.txt](https://boardgamearena.com/robots.txt))
+  disallows `/table`, `/playerstat`, `/player`, `/play`, `/message/board`. `/gamereview`
+  and `/archive` are not named — but are login-gated regardless.
+- **The ToS is the blocker, and it is explicit**
+  ([legal?section=tos](https://en.boardgamearena.com/legal?section=tos)). Users undertake
+  "not to obtain information about Users and the Content they publish using automated
+  methods (such as robots, spiders, etc.); not to use the Services … using automated
+  methods … not to override any security feature or circumvent or avoid any control of
+  access". On top of that BGA (AD2G Studio SAS, France) asserts French *sui generis*
+  database rights (Art. L.341-1 / L.342-1 CPI) prohibiting "extraction by permanent or
+  temporary transfer of all or a … substantial part of the content" of their databases.
+  This is a stronger and more specific prohibition than the usual boilerplate.
+- **No public or documented API exists.** The path used in practice by people who have
+  done this is to *email BGA admins for approval first* — the author of a published
+  BGA-scraping write-up says exactly that, alongside "web scraping is not allowed by
+  bga's terms of service, so users may be banned for scraping"
+  ([medium write-up](https://medium.com/@liamdj/web-scraping-for-board-game-analysis-8f584379f3c)).
+- **Prior art, if we ever did get permission**: the mature example is
+  [HStrand/bga-tm-scraper](https://github.com/HStrand/bga-tm-scraper) (Terraforming Mars)
+  — account login, `REQUEST_DELAY = 2` seconds, explicit FAST/NORMAL/SLOW profiles.
+  Others: [pocc/bga_stockfish](https://github.com/pocc/bga_stockfish),
+  [davidspies/rftg-analyzer](https://github.com/davidspies/rftg-analyzer),
+  [liamdj/tokaido-analysis](https://github.com/liamdj/tokaido-analysis),
+  [bskinn/bga-wingspan-scraper](https://github.com/bskinn/bga-wingspan-scraper),
+  [th1rt3en/ark-nova-logs-ext](https://github.com/th1rt3en/ark-nova-logs-ext).
+  **No TTA-specific scraper exists.** ~2 s/request is the community norm; at that rate
+  even 10k games is ~6 hours of requests plus whatever the replay quota turns out to be.
+
+**Recommendation on BGA data: do not scrape it.** Not because it is technically hard —
+it is the most tractable log source we found — but because the ToS prohibition is
+explicit, the account is the user's own, and a ban costs them a service they use. If
+this corpus ever becomes important, the correct first move is a polite email to BGA
+asking for permission or a data dump, citing a non-commercial research use.
+
+### 2e. The part of BGA that IS free to use: their source code
+
+[github.com/srussking/throughtheages](https://github.com/srussking/throughtheages) —
+already cited elsewhere in this repo — turns out to be much more valuable than "the BGA
+implementation exists". It is a complete BGA Studio project containing **BGA production
+TTA source**, and it is the `throughtheagesnewstory` (2015) codebase: PHP, pushed
+2025-05-23, headers crediting Gregory Isabelli and Romain Fromi (the credited BGA TTA
+developer), and the 2015 box art in `img/game_box180.png`. Licence is "Other" (ships a
+`LICENCE_BGA` file) — **read it before copying anything**; treat this as readable
+reference, not as code we can vendor.
+
+What is in it:
+- `throughtheagesmobilereadability.game.php` — **~10,200 lines** of full game logic:
+  corruption and consumption tables, army strength, blue/yellow token banks, per-card
+  effect dispatch, final scoring, and `zombieTurn`.
+- `material.inc.php` — **~4,400 lines**, every card with `name`, `type`, `age`,
+  `techcost`, `resscost`, `food`, `ress`, `culture`, `strength`, `happy`, `science`,
+  `CA`, `MA`, `text`.
+- `states.inc.php`, `dbmodel.sql`, `stats.inc.php`, `gameoptions.inc.php` (which reveals
+  the supported variants: "Game version: Handbook / Complete", "Peaceful Variant").
+
+This is an **independent, production-tested implementation of the exact edition we are
+implementing**, readable in full. That makes it the best **rules cross-check** available
+to us by a wide margin: any disagreement between our `engine/` and this file on a card's
+numbers, on corruption, or on scoring is a bug in one of us, and `material.inc.php` is a
+direct cross-check for our card database. It costs nothing and needs no login. See §7 —
+this is the highest-value thing in this entire section.
+
+It also means that *if* log access were ever granted, parsing would be easy rather than
+guesswork: BGA replay logs are literally the recorded `notifyAllPlayers` /
+`notifyPlayer` notification stream ([Game replay](https://en.doc.boardgamearena.com/Game_replay):
+"All notifications sent to the browser are added to the archive… an exact recording"),
+and every notification type and its args are declared in that same `.game.php`.
 
 ## 3. Open-source TTA AI projects
 
