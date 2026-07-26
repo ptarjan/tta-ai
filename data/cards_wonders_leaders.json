@@ -1,0 +1,24 @@
+{
+ "scope": "base-2015",
+ "category": "wonders-leaders",
+ "complete": false,
+ "note": "Wonders done (16, verified vs namu_wonders new-edition values). Leaders TODO (24: 6 per age A/I/II/III, from namu_heroes.txt).",
+ "cards": [
+  {"name":"Pyramids","age":"A","type":"wonder","stages":[3,2,1],"effects":{"civilActions":1},"text":"+1 civil action."},
+  {"name":"Hanging Gardens","age":"A","type":"wonder","stages":[2,2,2],"effects":{"culture":1,"happy":2},"text":"+1 culture production, +2 happy faces."},
+  {"name":"Colossus","age":"A","type":"wonder","stages":[3,3],"effects":{"strength":2,"colonizeBonus":1},"text":"+2 strength, +1 to colonization bids."},
+  {"name":"Library of Alexandria","age":"A","type":"wonder","stages":[1,4,1],"effects":{"culture":1,"science":1,"civilHandLimit":1,"militaryHandLimit":1},"text":"+1 culture, +1 science production; civil and military hand limits +1."},
+  {"name":"Great Wall","age":"I","type":"wonder","stages":[2,2,3,2],"effects":{"culture":1,"happy":1,"strengthPerInfantry":1,"strengthPerArtillery":1},"text":"+1 culture, +1 happy face, each infantry and artillery unit gains +1 strength."},
+  {"name":"St. Peter's Basilica","age":"I","type":"wonder","stages":[4,4],"effects":{"culture":2,"happy":1,"extraHappyPerHappySource":1},"text":"+2 culture, +1 happy face; every building/card providing happy faces provides one additional happy face."},
+  {"name":"Universitas Carolina","age":"I","type":"wonder","stages":[3,3,3],"effects":{"culture":1,"science":2},"text":"+1 culture, +2 science production."},
+  {"name":"Taj Mahal","age":"I","type":"wonder","stages":[2,4,2],"effects":{"culture":3,"blueTokens":1},"text":"+3 culture production, +1 blue token."},
+  {"name":"Transcontinental Railroad","age":"II","type":"wonder","stages":[3,3,3,3],"effects":{"strength":4,"doubleBestMine":true},"text":"+4 strength; your best mine produces double resources. (2015 values: stages 3-3-3-3, strength +4 — verify doubleBestMine retained in 2015.)"},
+  {"name":"Eiffel Tower","age":"II","type":"wonder","stages":[3,7,3],"effects":{"culture":4,"happy":1},"text":"+4 culture production, +1 happy face."},
+  {"name":"Kremlin","age":"II","type":"wonder","stages":[4,4,4],"effects":{"culture":2,"civilActions":1,"militaryActions":1,"happy":-1},"text":"+2 culture, +1 civil action, +1 military action, -1 happy face (2015 values)."},
+  {"name":"Ocean Liners","age":"II","type":"wonder","stages":[4,2,2,4],"effects":{"freePopIncreasePerTurn":true},"text":"Once per turn you may increase population without spending a civil action or food (2015)."},
+  {"name":"First Space Flight","age":"III","type":"wonder","stages":[1,2,4,9],"effects":{"onBuildCulturePerTechLevelSum":true},"text":"When completed, gain culture equal to the sum of levels of all technologies you have developed."},
+  {"name":"Fast Food Chains","age":"III","type":"wonder","stages":[4,4,4,4],"effects":{"onBuildCulture":"2*workers(farm,mine)+1*workers(urban,military)"},"text":"When completed, gain 2 culture per worker on farms and mines and 1 per worker on urban/military technologies."},
+  {"name":"Internet","age":"III","type":"wonder","stages":[2,3,4,3,2],"effects":{"onBuildCulture":"cultureProductionOfUrbanBuildings+scienceProduction+strength? (namu: urban culture output + science output + military strength bonus) VERIFY"},"text":"When completed, gain culture equal to (2015, per namu) total culture production of urban buildings + science production + strength bonuses. VERIFY exact formula vs FAQ."},
+  {"name":"Hollywood","age":"III","type":"wonder","stages":[5,6,5],"effects":{"onBuildCulture":"2*(cultureProduction of theaters+libraries)"},"text":"When completed, gain culture equal to twice the total culture production of your theaters and libraries (2015)."}
+ ]
+}
