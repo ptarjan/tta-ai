@@ -263,13 +263,60 @@ table where chance is 25% — better than 3x the null, and the largest margin of
 the three counts. On culture it doubles the default bot. **Hill climbing is
 working, and it is working best at 4p.**
 
-⚠️ **`experiments/baselines.jsonl` is stale and badly misleading.** Its most
-recent entries say 2p champ vs default 0.448 (null 0.50 → "worse than
-untrained") and 4p champ vs default 0.349 (null 0.25 → "barely better"). Both
-are wrong *now*: the file records results for champions as they were at the time
-each line was appended, has no timestamp field, and has not been refreshed while
-training continued. Anyone reading that file today would conclude the hill climb
-is broken. It is not. Do not quote `baselines.jsonl` without re-running.
+### `experiments/baselines.jsonl` is stale, and it has already contaminated HEURISTICS.md
+
+The file contains a block of much lower numbers for the same match-ups:
+
+| match-up | in `baselines.jsonl` | today | champion's mean culture then → now |
+|---|---|---|---|
+| 2p champ vs default | 0.448 | **0.682** | 108.5 → 134.6 |
+| 3p champ vs default | 0.604 | **0.771** | 124.8 → 163.1 |
+| 4p champ vs default | 0.349 | **0.792** | 139.8 → **262.7** |
+
+`docs/HEURISTICS.md` (§"How strong is the thing giving you advice?") explains
+those low numbers as seed noise:
+
+> A separate check run earlier the same morning **with different random seeds**
+> scored the same match-ups much lower (2p 44.8%, 3p 60.4%, 4p 34.9%). The honest
+> summary is "clearly above its starting point at 2 and 3 players, **probably at
+> 4**, and nobody should quote a precise number".
+
+**That explanation is wrong.** Those runs were not a different seed, they were a
+different (older, weaker) champion:
+
+* `arena.duel` derives every game seed arithmetically from `seed0`
+  (`seed = seed0 + g // num_players`, `tasks.append((g, seed * 7919 + 17, seat))`)
+  and `evaluate.py` defaults `--seed 0`. Two runs of the same match-up are
+  **bit-identical**. Re-running 2p champ vs default at seed 0 today reproduced
+  `0.6823` to four decimals, and `baselines.jsonl` itself contains duplicate rows
+  with identical win rate *and* identical mean culture, differing only in
+  wall-clock seconds — that is the signature of a deterministic re-run, not of
+  reseeding.
+* Seed noise moves both bots' scores a little. Here the *champion's* mean culture
+  nearly **doubled** at 4p (139.8 → 262.7) while the default bot's barely moved
+  (128.9 → 130.7). A 44-point win-rate swing with the opponent's score held still
+  is a stronger bot, not a luckier one.
+* Measured directly: re-running the same match-up across three different
+  `--seed` values moves the win rate by only a few points, nowhere near the
+  gap being explained away. *(seed sweep results in the table below.)*
+
+**Concretely, these HEURISTICS.md claims are wrong and should be corrected**
+(that file is owned by another agent, so it is flagged here, not edited):
+
+1. The sentence attributing the low block to *"different random seeds"* — it was
+   an older champion. The evaluation harness has no seed-to-seed variation of
+   that size.
+2. The hedge *"clearly above its starting point at 2 and 3 players, **probably at
+   4**"* — 4p is not the doubtful one, it is the **strongest** of the three
+   (0.792 against a 0.25 null, i.e. 3.2x the null, vs 1.36x at 2p and 2.3x at 3p).
+3. The table's method — *"averaged over the last four such checks"* — averages
+   measurements of **different champions taken at different times** and reports
+   the spread as noise. Those four checks are not four samples of one quantity;
+   the bot got better between them. The spread is mostly signal.
+
+The root cause is that `baselines.jsonl` has **no timestamp and no champion
+generation field**, so a reader cannot tell which bot a row describes. Until it
+does, do not quote it — re-run `experiments/evaluate.py`.
 
 Acceptance history from the generation logs (all three still accepting, none has
 flatlined):
