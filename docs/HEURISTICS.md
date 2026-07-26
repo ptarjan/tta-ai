@@ -296,6 +296,215 @@ opening verdict is that they are not an opening.
 
 ---
 
+## Midgame: late Age I through Age II (roughly rounds 6–14)
+
+The fresh 4-player harvest is in for this section, so everything below is three
+counts at 120 games each.
+
+### Stop growing around round 9. All three champions do.
+
+This is the cleanest three-count consensus in the whole dataset. Watch the yellow
+bank (population tokens left):
+
+| Round | 2p | 3p | 4p |
+|---|---|---|---|
+| 7 | 14.0 | 13.5 | 14.8 |
+| 9 | 12.1 | 12.1 | 12.3 |
+| 11 | 12.1 | 12.0 | 12.0 |
+| 13 | 11.9 | 11.4 | 11.7 |
+| 14 (end of Age II) | 11.5 | — | 11.3 |
+
+All three sprint from 18 down to about 12 in the first eight or nine rounds, and
+then **stop dead and park just above 11 for the rest of Age II**. Total workers
+go 11.0 → 11.2 at 2p over rounds 8–14; 10.9 → 11.3 at 4p. **[strong]**
+
+That is not laziness, it is the population table. At **12–11 tokens left** a
+worker costs 4 food, you consume 2, and you need 2 happy faces. Cross into
+**10–9** and the happiness requirement jumps to **3** while consumption does not
+move — the cost of that worker is hidden, and it is the step that causes
+uprisings. [rules, §6.1] The champions buy the 12–11 band and sit in it.
+
+**Practical rule: get to 12 tokens fast, then stop until you have bought the
+third happy face.** Remember you also lose 2 tokens free at the end of each of
+Ages I, II and III [rules, §12.2] — the game pushes you across those steps
+whether you spend or not.
+
+### The midgame is reallocation, not expansion
+
+If total workers stop growing but your rates keep rising, the workers must be
+moving. They are:
+
+| Production → urban workers | round 8 | round 14 (2p/4p) / 13 (3p) |
+|---|---|---|
+| 2p production | 5.49 | 4.97 |
+| 2p urban | 4.55 | 5.17 |
+| 3p production | 3.98 | 3.62 |
+| 3p urban | 2.98 | 3.87 |
+| 4p production | 4.01 | 3.20 |
+| 4p urban | 4.28 | 5.43 |
+
+The 4p champion takes this furthest: by round 20 it is down to **2.39 production
+workers and 5.41 urban**, with 3.96 workers sitting unused. Every count moves the
+same direction. **[strong]**
+
+The mechanism is the `destroy` action: **destroying a farm, mine or urban
+building costs 1 civil action, returns the worker to your pool, and refunds
+nothing** [rules, §3.6]. The champions use it constantly — **5.9 (2p), 5.5 (3p),
+10.9 (4p) destroys per game**. A level-1 farm you built in Age I is not a
+building you keep, it is a worker you parked there.
+
+If you take one thing from this section: in the midgame, stop asking "can I
+afford another worker" and start asking "which of my existing workers is in the
+wrong place".
+
+### Build order inside the urban buildings
+
+Median round of the first build of each type, per game:
+
+| | 2p | 3p | 4p |
+|---|---|---|---|
+| Temple | **round 5** (3.65/game) | round 8 (2.84) | round 8 (3.71) |
+| Lab | round 10 (3.08) | round 11 (1.07) | round 10 (4.71) |
+| Library | round 10 (1.93) | round 9 (0.86) | round 12 (2.45) |
+| Arena | round 11 (0.78) | round 9 (0.75) | round 13 (0.94) |
+| Theater | round 12 (1.14) | round 11 (0.68) | round 15 (1.98) |
+
+**Temples are first and most-built at every player count** — 3.65 / 2.84 / 3.71
+per game, ahead of every other urban type at 2p and 4p. Theaters and arenas are
+consistently the *last* urban buildings anyone puts a worker on, at all three
+counts. **[strong]**
+
+The reason is that a temple is a happy face *and* a culture point, so it pays the
+happiness bill that the population table is sending you (previous section) while
+also scoring. A theater is pure culture with no happiness, which is why it can
+wait until you are safe.
+
+### Where the science/culture crossover actually is
+
+The headline rule says "science early, culture late". The fresh data says
+something more specific and slightly different. Science rate divided by culture
+rate, by age:
+
+| sci/culture | Age I | Age II | Age III | Age IV |
+|---|---|---|---|---|
+| 2p | 0.79 | 0.78 | 0.92 | 0.87 |
+| 3p | 1.67 | 0.63 | 0.60 | 0.58 |
+| 4p | 1.53 | 0.90 | 0.94 | 0.86 |
+
+The big move happens **between Age I and Age II at all three counts** — that is
+where culture overtakes science. After that the ratio is *flat*, not falling: at
+2p and 4p it even ticks back up in Age III. The old claim that it falls
+monotonically through the game does not survive the fresh data. **[strong on the
+Age I → II crossover, retracted on the monotone claim]**
+
+At 2p the champion's culture rate is above its science rate from **round 3
+onward** (round 5: science 1.58, culture 2.37). So at 2p there is barely a
+"science first" phase at all.
+
+Practically: **the turn Age II starts is the turn you stop buying labs first.**
+That is round 7–9 at all three counts.
+
+### Change government in the midgame, not the endgame
+
+| | ever change govt | median round | most common first govt |
+|---|---|---|---|
+| 2p | 70.0% | 8.5 | Theocracy (25.8%, round 5) |
+| 3p | 50.8% | 7 | Monarchy (23.3%, round 5.5) |
+| 4p | **85.0%** | 9 | Monarchy (35.8%, round 8) |
+
+The 4p champion changes government **1.12 times per game** and has Republic
+(32.5%), Democracy (30.8%) and Constitutional Monarchy (30.0%) in nearly a third
+of games each — it is often changing twice. 2p and 3p change once or not at all.
+**[mixed]** — the direction (midgame, not endgame) agrees at all three counts;
+the *frequency* does not.
+
+Remember the rules asymmetry: **revolution costs all your civil actions** and
+burns whatever the new government grants that turn, while a **peaceful change
+costs 1 CA plus a higher science price**. [rules, §8] A revolution on round 9 is
+a whole turn of your life.
+
+### Your military actions have three buyers, and you can only pay two
+
+This is the most under-appreciated thing in the data. Military actions are spent
+on tactics, on aggressions — and, if unspent at end of turn, on **drawing 1
+military card per unused MA, up to 3** [rules, §6.7]. Those cards are what let
+you **prepare an event, which scores culture equal to the card's age level
+(I = 1, II = 2, III = 3) as a political action, costing no civil action at all**
+[rules, §5.2].
+
+| per game | 2p | 3p | 4p |
+|---|---|---|---|
+| Copy a tactic (2 MA each) | 5.07 | 2.47 | **14.03** |
+| Play a tactic (1 MA) | 1.80 | 0.83 | 1.72 |
+| Prepare an event | **11.30** | 9.66 | **1.40** |
+| Pass in the Politics Phase | 9.16 | 9.98 | **18.38** |
+| Unused MA per turn | 1.93 | 1.82 | 1.22 |
+| Final culture | 123.7 | 113.2 | **56.4** |
+
+The 4p champion spends roughly 28 military actions a game copying tactics
+[rules: copying costs **2 MA**, §4.4-4.5, one play-or-copy per Action Phase], has
+the fewest unused MAs, therefore draws the fewest military cards, therefore has
+almost nothing to prepare — and passes in the Politics Phase on **87% of its
+turns**. It also scores less than half the culture of the 2p champion. Over 11.3
+preparations of mixed ages, the 2p champion is collecting on the order of 20
+culture from the Politics Phase alone — a sixth of its final score, for zero
+civil actions. **[mixed, and partly inference]**
+
+Two honest caveats. First, final culture is not comparable across player counts
+in a mirror — a 4p game divides the same card row four ways. Second, the 4p
+champion's weight vector is the youngest and the strangest, so its politics
+behaviour may simply be a hole in its evaluation rather than a strategy.
+
+But the *rules* logic stands on its own and you should act on it: **an unused
+military action at end of turn is a free card, and a green card with a harp on it
+is free culture in a phase that costs you no civil actions.** If you are ending
+turns with 2 military actions unspent and no plan for them, that is fine — it is
+when you spend them on nothing that you lose the events.
+
+### Wonders: the midgame is when you take one, if you take one
+
+| | ever take a wonder | median round taken | started/game | completed/game |
+|---|---|---|---|---|
+| 2p | 25.0% | 6.5 | 0.17 | 0.18 |
+| 3p | 19.2% | 6 | 0.06 | 0.04 |
+| 4p | **100%** | **1** | **1.96** | 0.79 |
+
+This is the largest disagreement in the document and it gets its own treatment in
+the per-player-count section. The midgame point is narrow: **at every count that
+touches wonders at all, the wonder is taken in Age I or early Age II, never
+later.** A wonder costs its row price **+1 CA per wonder you have already
+completed** [rules, §2.4], and you cannot take one while another is unfinished
+[rules, §9.2] — so a late wonder is both more expensive and more likely to be
+antiquated out from under you at the next age change.
+
+Note also 4p's completion rate: **1.96 started, 0.79 completed.** Over a game the
+4p champion loses more than one wonder per game to age-end removal. Do not copy
+that part.
+
+### Where your actions start going to waste
+
+Share of civil actions left unspent at end of turn, by age:
+
+| | Age I | Age II | Age III | Age IV |
+|---|---|---|---|---|
+| 2p | 1% | **41%** | 58% | 64% |
+| 3p | 2% | **48%** | 70% | 60% |
+| 4p | 0.5% | **6.5%** | 13% | 16% |
+
+Age I is fully spent at every count. Age II is where 2p and 3p fall off a cliff
+and 4p does not. The 4p champion — the one that keeps spending — is also the one
+that ends with **16.35 technologies against 12.85 and 9.98**, and the only one
+that finishes wonders. **[mixed]**
+
+We are not claiming the 4p champion is the strongest of the three; the strength
+table at the top says it is the least-improved. But when the counts disagree
+about *whether it is fine to waste half your actions in Age II*, the count that
+says "no" is the one with three more technologies, and that is the direction we
+would bet on. If you are ending Age II turns with 2 civil actions spare, you have
+run out of *plan*, not out of *game*.
+
+---
+
 ## Common traps
 
 Six ways this game quietly takes points off you. All six are things the search

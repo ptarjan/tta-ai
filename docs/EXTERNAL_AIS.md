@@ -454,3 +454,26 @@ invalidated the measurement without producing an error message.
 ## 7. Ranking and recommendation
 
 TODO — under investigation.
+
+---
+
+## Next steps for whoever picks this up
+
+State as of the last commit: §1, §4, §5, §6 written; §2 and §3 under active
+investigation; §7 waits on them.
+
+1. **§2 / §3** — if these are still marked TODO, the open questions are listed inside
+   each section stub. Both are pure research, no code.
+2. **Blocked on a human login** (do not create accounts): the pages that defeated
+   unauthenticated fetching are listed inline where they occur — BGO's per-game journal
+   view `boardgaming-online.com/index.php?cnt=202&pl=<gameid>` (§5a), BGG forum threads
+   and the BGG file section (403 to `curl`/WebFetch), and any Board Game Arena
+   replay/archive page noted in §2. If the user logs in to any of these in their normal
+   Chrome, a Playwright-over-CDP scrape becomes possible; until then those claims stay
+   marked UNPROVEN.
+3. **Cheapest unblocked follow-ups**, in order: re-scrape `sources/gamefaqs_75690.txt`
+   (currently a Cloudflare challenge page, §5b); pull 5–20k rows of BGO *metadata* (§5a,
+   public, no login) purely to calibrate our score distribution; resolve the BGO
+   2006-vs-2015 edition question, which decides whether that corpus is worth anything.
+4. **Do not** start a network-sniffing or save-file reverse-engineering project against
+   the CGE app (§1) without re-reading why it was ruled out.
