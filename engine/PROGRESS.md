@@ -128,3 +128,47 @@ therefore almost never takes one from the row. Worth a `WeightedBot` feature.
    docs/OPEN_QUESTIONS.md.
 3. Teach `WeightedBot` about the new move kinds (`bid`, `defend`, `choose`,
    `play_action`) — it currently sees them but has no dedicated features.
+
+---
+
+# Performance pass (2026-07-26)
+
+Goal: throughput for self-play hill climbing, with **zero behaviour change**.
+The guard rail is `engine/perf_check.py`:
+
+    python3 -m engine.perf_check save /tmp/fp.json   # fingerprint HEAD
+    python3 -m engine.perf_check check /tmp/fp.json  # after every change
+    python3 -m engine.perf_check bench               # games/second table
+
+The fingerprint is a SHA-256 over the full log, final scores, winners, move
+count, turn and round of 33 fixed games (2p/3p/4p x RandomBot/GreedyBot x
+seeds).  Every optimisation below kept it at
+`3229c4a0f0d6a4a122ee5e16d44cbc99728da4a9e1855e6ceb36532045223ad7`, and the 57
+tests stayed green.
+
+## Baseline (commit fce7db8)
+
+| bot | 2p | 3p | 4p |
+|---|---|---|---|
+| random | 20.07 games/s | 13.35 | 7.73 |
+| greedy | 1.98 games/s | 1.06 | 0.47 |
+
+Profile, 60 4p RandomBot games, 25.3 s, 24.5 M calls, `tottime` order:
+
+| tottime | cum | function |
+|---|---|---|
+| 2.77 | 18.10 | `actions._action_moves` |
+| 1.86 | 7.07 | `actions.can_take` (581 k calls) |
+| 1.45 | 2.40 | `effects.build_cost` (321 k) |
+| 1.35 | 5.13 | `effects.compute` (52 k) |
+| 1.34 | 1.99 | `actions.take_cost` (586 k) |
+| 1.21 | — | `dict.get` (3.0 M) |
+| 0.85 | — | `cards.type_of` (2.55 M) |
+| 0.82 | 6.28 | `effects.state_stats` (1.06 M) |
+| 0.72 | — | `cards.get` (2.52 M) |
+| 0.57 | — | `cards.db()` (2.47 M) |
+
+Read: **move generation is the whole cost.** `legal_moves` is called twice per
+move (once by the bot, once by the STRICT assert in `apply`), and inside it the
+same card-database facts and the same per-player stats are re-derived hundreds
+of times per call.

@@ -3,17 +3,22 @@
 Moves are small JSON-serializable tuples, e.g. ("take", 3),
 ("build", "Bronze"), ("upgrade", "Bronze", "Iron"), ("wonder_step", 2).
 
-`legal_moves(state)` is the single source of truth: `apply()` asserts the
-move it is given is legal (set STRICT = False to skip the check for speed).
+`legal_moves(state)` is the single source of truth: `apply()` can assert the
+move it is given is legal.  That assert doubles the cost of every move (it
+regenerates the whole move list), so STRICT is OFF by default and ON in the
+test suite; set the env var TTA_STRICT=1 to turn the legality fuzzer back on
+for a self-play smoke run.
 """
 from __future__ import annotations
+
+import os
 
 from . import cards as C
 from . import economy
 from . import effects
 from .state import TechCard, WonderInProgress
 
-STRICT = True
+STRICT = os.environ.get("TTA_STRICT", "") not in ("", "0", "false", "no")
 
 ROW_SIZE = 13
 

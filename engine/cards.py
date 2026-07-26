@@ -78,6 +78,20 @@ class CardDB:
                 raise ValueError(f"duplicate card name {c['name']}")
             self.by_name[c["name"]] = c
         self.types = {c["type"] for c in cards}
+        # Precomputed per-card lookups.  Card data is immutable once loaded,
+        # so the hot loops (legal_moves, effects.compute) index these dicts
+        # directly instead of re-deriving from the card dict every call.
+        self.type_by_name = {n: c["type"] for n, c in self.by_name.items()}
+        self.level_by_name = {n: AGE_LEVEL[c["age"]]
+                              for n, c in self.by_name.items()}
+        # name -> True for the type sets legal_moves tests constantly
+        self.is_unit_name = {n: t in UNIT_TYPES
+                             for n, t in self.type_by_name.items()}
+        self.is_worker_name = {n: t in WORKER_TYPES
+                               for n, t in self.type_by_name.items()}
+        self.is_urban_name = {n: t in URBAN_TYPES
+                              for n, t in self.type_by_name.items()}
+        self._deck_cache = {}
         # Military rules are playable as soon as every required military card
         # type is present; a part-file still marked "complete": false only
         # means more cards may arrive later, not that the data is unusable.
@@ -112,13 +126,13 @@ class CardDB:
         return self.by_name[name]
 
     def type_of(self, name):
-        return self.by_name[name]["type"]
+        return self.type_by_name[name]
 
     def age_of(self, name):
         return self.by_name[name]["age"]
 
     def level_of(self, name):
-        return AGE_LEVEL[self.by_name[name]["age"]]
+        return self.level_by_name[name]
 
     def civil_deck(self, age, num_players):
         """Card names (with multiplicity) for the civil deck of an age.
@@ -131,12 +145,16 @@ class CardDB:
         return self._deck("military", age, num_players)
 
     def _deck(self, deck, age, num_players):
-        key = f"{num_players}p"
-        out = []
-        for c in self.cards:
-            if c["deck"] == deck and c["age"] == age:
-                out.extend([c["name"]] * c["count"].get(key, 0))
-        return out
+        ck = (deck, age, num_players)
+        out = self._deck_cache.get(ck)
+        if out is None:
+            key = f"{num_players}p"
+            out = []
+            for c in self.cards:
+                if c["deck"] == deck and c["age"] == age:
+                    out.extend([c["name"]] * c["count"].get(key, 0))
+            self._deck_cache[ck] = out
+        return list(out)          # callers shuffle/mutate their copy
 
     def wonders(self, age):
         return [c for c in self.cards

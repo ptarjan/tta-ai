@@ -16,6 +16,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine import actions, cards as C, economy, effects, game  # noqa: E402
 from engine.bots import GreedyBot, RandomBot                     # noqa: E402
 
+# The legality assert in apply() is off by default (it doubles the cost of
+# every move); the test suite always runs with it on, so every self-play game
+# in here is still a legality fuzz test.
+actions.STRICT = True
+
 
 # --------------------------------------------------------------- §6 tables
 
