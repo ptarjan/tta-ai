@@ -197,6 +197,11 @@ Eight rules. In rough order of how much they are worth.
    the leader's strength and spends **48–52% of its turns below half the
    strongest rival's strength** [`military_by_age`, 120 games each].
 
+   In absolute terms, so you know what these ratios are ratios *of*: mean
+   strength at the end of Age III is **3.1 (2p) / 6.8 (3p) / 2.3 (4p)**, against
+   a strongest rival of 3.0 / 8.8 / 3.8. A 3p table is running roughly twice the
+   army of a 2p table at the same point in the game.
+
    **Read this as a possible weakness in the AI, not as advice.** In mirror
    self-play nobody attacks, so being weak is never punished and the search has
    no gradient telling it to build an army. A human table will punish it. What
