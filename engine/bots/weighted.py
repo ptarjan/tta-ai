@@ -67,32 +67,107 @@ PHASE_KEYS = (
 # strictly dominated by `pol_pass` in every position and can never be picked.
 PACT_OFFER_CREDIT = 0.5
 
+# Effect-block key -> feature key.  A *deferred* gain is priced with exactly
+# the same weights as the real thing: a pact that pays +1 culture a turn is
+# worth one `culture_rate`, not one generic "pact".  That is what lets the
+# evaluator tell `Peace Treaty` (+1 culture to both) from the B side of
+# `Loss of Sovereignty` (-2 culture) instead of counting cards.
+_YIELD_TO_FEATURE = {
+    # pact effect blocks / colony permanentEffects
+    "cultureProduction": "culture_rate",
+    "scienceProduction": "science_rate",
+    "foodProduction": "food_rate",
+    "resourceProduction": "resource_rate",
+    "strength": "strength",
+    "happy": "happy",
+    "happiness": "happy",
+    "civilActions": "civil_actions",
+    "militaryActions": "military_actions",
+    "yellowTokens": "yellow_bank",
+    "blueTokens": "blue_free",
+    # territory immediateEffects
+    "culture": "culture",
+    "science": "science",
+    "food": "food_stock",
+    "resources": "resource_stock",
+    "population": "free_workers",
+    "drawMilitaryCards": "hand_military",
+}
 
-def pending_credit(state, idx):
-    """Deferred payoffs the 1-ply trial state cannot show yet.
 
-    Returns ``(pact_offers, auction_committed)``:
+_NO_GAINS = {}          # shared empty mapping: no pending decision, no gains
 
-    * ``pact_offers`` -- pacts `idx` has offered whose accept/refuse is still
-      pending, already discounted by :data:`PACT_OFFER_CREDIT`.
-    * ``auction_committed`` -- 1/(1+rivals still bidding) when `idx` holds the
-      high bid of a live colonization auction, i.e. the share of a colony the
-      bid has bought.  Bidding while others are active mutates only the
-      auction dict, so without this every bid scores EXACTLY equal to
-      ``bid_pass`` and the strict-`>` tie-break always takes the pass.
+
+def _add_block(gains, block, scale, state, idx, other):
+    """Accumulate one effect block's yields, scaled by how likely it is."""
+    if not block:
+        return
+    for k, v in block.items():
+        if v is True or v is False or not isinstance(v, (int, float)):
+            continue
+        fk = _YIELD_TO_FEATURE.get(k)
+        if fk:
+            gains[fk] = gains.get(fk, 0.0) + scale * v
+    per = block.get("cultureProductionPerCompletedWonderOfTheOtherParty")
+    if per and other is not None:
+        wonders = len(state.players[other].completed_wonders)
+        gains["culture_rate"] = gains.get("culture_rate", 0.0) + \
+            scale * per * wonders
+
+
+def deferred_credit(state, idx):
+    """Payoffs the 1-ply trial state cannot show yet, priced by their yield.
+
+    Two moves spend something now and pay off only inside *another* player's
+    decision, so applying them to a trial state shows the cost and none of
+    the gain (docs/PACTS_DIAGNOSIS.md):
+
+    * ``offer_pact`` -- the pact object is created in the partner's response,
+      so the mover sees only a card leaving its hand.  Credited at
+      :data:`PACT_OFFER_CREDIT` of the side `idx` would take.
+    * ``bid`` while rivals are still bidding -- mutates only the auction
+      dict, so every bid scored EXACTLY equal to ``bid_pass`` and the
+      strict-`>` tie-break always took the pass at index 0.  Credited at
+      1/(1+rivals still in) of the territory's own effects.
+
+    Returns ``(pact_offers, auction_committed, auction_bid, blocks_attack,
+    gains)``, where `gains` maps feature keys to deferred amounts.
     """
-    offers = 0.0
-    auction = 0.0
+    db = C.db()
+    gains = {}
+    offers = committed = bid_cost = blocks_attack = 0.0
     for pend in state.pending:
         kind = pend.get("kind")
         if kind == "choice":
-            if (pend.get("tag") == "pact_offer"
-                    and (pend.get("ctx") or {}).get("owner") == idx):
-                offers += PACT_OFFER_CREDIT
+            ctx = pend.get("ctx") or {}
+            if pend.get("tag") != "pact_offer" or ctx.get("owner") != idx:
+                continue
+            name = ctx.get("name")
+            if name not in db.by_name:
+                continue
+            offers += PACT_OFFER_CREDIT
+            eff = db.get(name).get("effects") or {}
+            if eff.get("noAttacksBetweenParties"):
+                blocks_attack += PACT_OFFER_CREDIT
+            pact = {"name": name, "a": ctx.get("a"), "b": ctx.get("b")}
+            partner = pend.get("player")
+            for block in effects._pact_blocks(pact, idx):
+                _add_block(gains, block, PACT_OFFER_CREDIT, state, idx,
+                           partner)
         elif kind == "auction" and pend.get("high") == idx:
             rivals = sum(1 for i in pend.get("active", ()) if i != idx)
-            auction = 1.0 / (1.0 + rivals)
-    return offers, auction
+            share = 1.0 / (1.0 + rivals)
+            committed += share
+            # the winner sacrifices units worth at least the bid (§11.3);
+            # none of that is in the trial state either
+            bid_cost += share * pend.get("bid", 0)
+            card = db.by_name.get(pend.get("card"))
+            if card:
+                _add_block(gains, card.get("permanentEffects"), share,
+                           state, idx, None)
+                _add_block(gains, card.get("immediateEffects"), share,
+                           state, idx, None)
+    return offers, committed, bid_cost, blocks_attack, gains
 
 
 def rival_context(state, idx):
@@ -154,10 +229,32 @@ def features(state, idx, ctx=None):
         workers += t.workers
     tech_levels += meta.get(p.government, ("?", 0))[1]
 
+    # pacts live in the OWNER's area but bind both parties (§5.9), so count
+    # every pact idx is a party to, not just the ones sitting in front of it
+    pacts = 0
+    blocks_attack = 0.0
+    for q in state.players:
+        for pact in q.pacts:
+            if idx in (pact["owner"], pact["partner"]):
+                pacts += 1
+                if (db.get(pact["name"]).get("effects") or {}).get(
+                        "noAttacksBetweenParties"):
+                    blocks_attack += 1.0
+    # deferred payoffs: an offered pact and a live high bid are both real
+    # positions the trial state cannot show (docs/PACTS_DIAGNOSIS.md)
+    pact_offers = auction_committed = auction_bid = 0.0
+    gains = _NO_GAINS
+    if state.pending:
+        pact_offers, auction_committed, auction_bid, pending_blocks, gains = \
+            deferred_credit(state, idx)
+        blocks_attack += pending_blocks
+    g = gains.get
+
     happy_req = economy.happy_required(p.yellow_bank)
-    margin = s.happy - happy_req
+    margin = s.happy - happy_req + g("happy", 0.0)
     discontent = max(0, -margin)
-    blue_free = effects.blue_available(p)
+    blue_have = effects.blue_available(p)
+    blue_free = blue_have + g("blue_free", 0.0)
     pop_base = economy.pop_cost_base(p.yellow_bank)
     pop_cost = 8 if pop_base is None else max(0, pop_base - s.pop_food_discount)
 
@@ -175,35 +272,25 @@ def features(state, idx, ctx=None):
     rival_mean = (sum(q.culture for q in rivals) / len(rivals)) if rivals else 0
     if ctx is None:
         ctx = rival_context(state, idx)
-    rel = s.strength - ctx["rival_strength"]
-
-    # pacts live in the OWNER's area but bind both parties (§5.9), so count
-    # every pact idx is a party to, not just the ones sitting in front of it
-    pacts = 0
-    for q in state.players:
-        for pact in q.pacts:
-            if idx in (pact["owner"], pact["partner"]):
-                pacts += 1
-    pact_offers = auction_committed = 0.0
-    if state.pending:
-        pact_offers, auction_committed = pending_credit(state, idx)
+    strength = s.strength + g("strength", 0.0)
+    rel = strength - ctx["rival_strength"]
 
     return {
         # --- economy
-        "culture": p.culture,
-        "culture_rate": s.culture,
-        "science": p.science,
-        "science_rate": s.science,
-        "food_rate": s.food,
-        "resource_rate": s.resources,
-        "food_stock": p.food,
-        "resource_stock": p.resources,
+        "culture": p.culture + g("culture", 0.0),
+        "culture_rate": s.culture + g("culture_rate", 0.0),
+        "science": p.science + g("science", 0.0),
+        "science_rate": s.science + g("science_rate", 0.0),
+        "food_rate": s.food + g("food_rate", 0.0),
+        "resource_rate": s.resources + g("resource_rate", 0.0),
+        "food_stock": p.food + g("food_stock", 0.0),
+        "resource_stock": p.resources + g("resource_stock", 0.0),
         "blue_free": blue_free,
-        "corruption_loss": economy.corruption(blue_free),
+        "corruption_loss": economy.corruption(blue_have),
         "consumption": economy.consumption(p.yellow_bank),
         "pop_cost": pop_cost,
-        "yellow_bank": p.yellow_bank,
-        "free_workers": p.workers_free,
+        "yellow_bank": p.yellow_bank + g("yellow_bank", 0.0),
+        "free_workers": p.workers_free + g("free_workers", 0.0),
         "workers": workers,
         "prod_workers": prod_workers,
         "urban_workers": urban_workers,
@@ -213,19 +300,21 @@ def features(state, idx, ctx=None):
         "discontent": discontent,
         "uprising": 1.0 if discontent > p.workers_free else 0.0,
         # --- actions
-        "civil_actions": s.civil_actions,
-        "military_actions": s.military_actions,
+        "civil_actions": s.civil_actions + g("civil_actions", 0.0),
+        "military_actions": s.military_actions + g("military_actions", 0.0),
         "ca_left": p.civil_actions,
         "ma_left": p.military_actions,
         # --- military
-        "strength": s.strength,
+        "strength": strength,
         "strength_rel": rel,
         "strength_deficit": max(0, -rel),
         "strength_lead": min(6, max(0, rel)),
         "tactic_level": meta.get(p.tactic, ("?", 0))[1] if p.tactic else 0,
         "colonies": len(getattr(p, "colonies", ()) or ()),
         "pacts": pacts + pact_offers,
+        "pact_blocks_attack": blocks_attack,
         "auction_committed": auction_committed,
+        "auction_bid": auction_bid,
         # --- technology
         "tech_levels": tech_levels,
         "gov_level": meta.get(p.government, ("?", 0))[1],
@@ -247,7 +336,7 @@ def features(state, idx, ctx=None):
         # --- cards
         "hand_civil": len(p.hand_civil),
         "hand_value": hand_value,
-        "hand_military": len(p.hand_military),
+        "hand_military": len(p.hand_military) + g("hand_military", 0.0),
         "hand_mil_value": hand_mil_value,
         # --- rivals
         "rival_culture": rival_culture,
@@ -297,9 +386,15 @@ BASE_WEIGHTS = {
     "tactic_level": 0.5,
     "colonies": 2.0,
     "pacts": 0.5,
+    # a pact that forbids attacks between the parties (§5.4.2) buys safety no
+    # other feature can see
+    "pact_blocks_attack": 0.5,
     # holding the high bid of a live auction: the expected colony, discounted
-    # by the rivals who can still outbid you
+    # by the rivals who can still outbid you.  Its yields are priced through
+    # the economy features; these two are the colony itself and its price in
+    # sacrificed units (§11.3-11.4), which the trial state cannot show.
     "auction_committed": 2.0,
+    "auction_bid": -0.4,
     # technology
     "tech_levels": 1.0,
     "gov_level": 2.0,
