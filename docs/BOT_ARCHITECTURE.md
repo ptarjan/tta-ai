@@ -1033,3 +1033,70 @@ treat "beat all humans" as a direction rather than a destination. Doing this
 well is worth more than doing it ambitiously; this project's recurring failure
 is not lack of ambition, it is confident measurement of the wrong thing.
 
+
+---
+
+## 8. Reproducing everything in this document
+
+All tools added by this work are on branch `arch/bot-shape`. Frozen inputs live
+in `experiments/arch_frozen/` (the trainer rewrites `experiments/champion_*.json`
+under you, so nothing here reads those live) and raw duel outputs in
+`experiments/arch_results/`.
+
+```bash
+# §1  engine cost census
+nice -n 15 python3 tools/cost_census.py --players 2 --games 10 \
+    --weights experiments/arch_frozen/champ2p_gen344.json
+
+# §2.3  does 1-ply search read hidden cards?           (94.9% of end_turn)
+nice -n 15 python3 tools/infoleak.py --players 2 --games 15 \
+    --weights experiments/arch_frozen/champ2p_gen344.json
+
+# §2.3  does it change any move?                       (0 of 3957)
+nice -n 15 python3 tools/leak_impact.py --players 2 --games 25 --k 8 \
+    --weights experiments/arch_frozen/champ2p_gen344.json
+
+# §2.3b + §3b  self-play rows -> ridge fit -> ranking accuracy
+nice -n 15 python3 tools/gen_value_data.py --players 2 --games 1200 \
+    --weights experiments/arch_frozen/champ2p_gen344.json \
+    --out /tmp/v.jsonl --workers 2 --rows every
+python3 - <<'PY'                       # split by GAME, never by row
+import json
+tr=open('/tmp/v_train.jsonl','w'); te=open('/tmp/v_test.jsonl','w')
+for l in open('/tmp/v.jsonl'):
+    (te if json.loads(l)['seed']%5==0 else tr).write(l)
+PY
+python3 tools/fit_value.py /tmp/v_train.jsonl \
+    --ref experiments/arch_frozen/champ2p_gen344.json \
+    --out /tmp/fit.json --lam 5.0 --scale 60
+python3 tools/eval_quality.py /tmp/v_test.jsonl \
+    --weights experiments/arch_frozen/champ2p_gen344.json --compare /tmp/fit.json
+
+# §3   the headline duel, and its control
+python3 -m experiments.evaluate --games 400 --players 2 --workers 4 --json \
+    --a plan:experiments/arch_frozen/champ2p_gen344.json \
+    --b experiments/arch_frozen/champ2p_gen344.json
+python3 -m experiments.evaluate --games 200 --players 2 --json \
+    --a experiments/arch_frozen/champ2p_gen344.json \
+    --b experiments/arch_frozen/champ2p_gen344.json    # must be exactly 0.500
+
+# §3b  the lambda ladder; the top rung is the control
+for L in 20 2000 200000 20000000; do
+  python3 tools/fit_value.py /tmp/v_train.jsonl \
+      --ref experiments/arch_frozen/champ2p_gen344.json \
+      --prior experiments/arch_frozen/champ2p_gen344.json \
+      --out /tmp/p$L.json --lam $L --scale 60 --end-turn-bias -14.43899
+  python3 -m experiments.evaluate --a /tmp/p$L.json \
+      --b experiments/arch_frozen/champ2p_gen344.json --games 100 --players 2
+done
+```
+
+Test suite: `python3 -m unittest discover -s tests -q` -> **156, OK**, unchanged
+from master `8e751cb`. The one engine-side change on this branch is
+`WeightedBot`'s `allow_resign` guard, verified byte-identical for the trained
+champions over 12 mirror games.
+
+New files: `engine/bots/plan.py`, `tools/cost_census.py`, `tools/infoleak.py`,
+`tools/leak_impact.py`, `tools/gen_value_data.py`, `tools/fit_value.py`,
+`tools/eval_quality.py`, plus a `plan:` spec in `experiments/arena.py` that
+mirrors the existing `quiesce:` one.
