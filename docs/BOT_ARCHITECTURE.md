@@ -20,6 +20,44 @@ result I cite it with its n.
 
 ---
 
+## 0. Summary
+
+Five measured results, in order of how much they should change what happens next.
+
+1. **A whole-turn beam search beats the trained champion 88.6% +/- 3.1%
+   (n=400), at identical weights**, mean culture 194.5 vs 125.8, with an
+   exactly-0.500 mirror control. It uses no `end_turn_bias`, determinizes the
+   decks so it plays with *less* information than its opponent, and costs ~16x
+   the CPU. §3.
+2. **The champion's evaluation does not out-predict counting culture.** Pairwise
+   ranking accuracy on held-out games: evaluate 0.698 +/- 0.029, raw `culture`
+   0.701 +/- 0.029. 344 generations, 82 weights, no better than one number. §2.3b.
+3. **A better predictor is a worse policy, monotonically.** A ridge fit on the
+   same 80 features reaches 0.812 ranking accuracy and wins **0 of 400**. A
+   lambda ladder with a working control (lam -> infinity reproduces the champion
+   to 0.015 and duels at 0.53) shows win rate falling 0.53 -> 0.26 -> 0.00 as
+   prediction improves. **Monte-Carlo value regression is the wrong objective**;
+   TD or a pairwise-ranking objective is the fix. §3b.
+4. **MCTS is the wrong tool here.** The forward model runs at ~8,700 steps per
+   cpu-second; full-rollout MCTS is 46 hours for one n=400 A/B, and the only
+   affordable variant buys about one extra turn of depth for several times
+   PlanBot's price, in a game whose payoffs land 10+ turns out. §1, §4.
+5. **The search reads the real future deck on 94.9% of `end_turn` candidates**,
+   and it is inert *only* because the evaluator cannot tell `Crusades` from
+   `Rats`. Fixing military-card blindness and fixing the leak are the same
+   ticket. §2.3.
+
+Plus one bug found and fixed on the way: `WeightedBot` never guarded against
+`("resign",)` the way `RandomBot` always has, and a fitted vector resigned on
+turn 3 — byte-identical for the trained champions, a correctness fix for every
+new vector.
+
+**Straight answer on the goal (§7):** beating the app's Hard AI handily is
+plausible and should be the working target; beating all humans is not reachable
+with these resources, and we currently cannot measure where we are at all.
+
+---
+
 ## 1. Engine cost census — the budget everything else has to fit in
 
 MEASURED, `tools/cost_census.py`, 2 players, 10 games, champion weights:
