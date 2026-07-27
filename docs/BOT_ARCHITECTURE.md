@@ -558,3 +558,90 @@ So: **self-play value regression first** (free, immediate, already built),
 decision), **BGO value learning third** (real, expensive, do it once self-play
 has visibly plateaued), **BGO imitation last** (the original objection stands).
 
+---
+
+## 6. Staged roadmap
+
+Each stage is independently verifiable, ships on its own, and is a no-op for the
+next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
+
+| # | stage | what it fixes | verification | cost |
+|---|---|---|---|---|
+| **M1** | **PlanBot** — turn-level beam, one horizon, determinized | §2.4 items 3, 4 and the §2.3 leak | n=400 A/B vs champion, identical weights | built; A/B running |
+| **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | ~1 day |
+| **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
+| **M4** | **Value regression replaces hill climbing** (`tools/fit_value.py`), then iterate as approximate policy iteration | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot* | built; pending data |
+| **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | unlocks §4.3 | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
+| **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
+| **M7** | **Absolute anchor** (§5) | tells us where we actually are | one number with a CI | one user decision |
+
+Ordering rules that fall out of the measurements, and that should be treated as
+hard constraints:
+
+* **M2 must not ship without M1's determinization.** The moment the evaluator
+  can read military-card identity, the 94.9%-leaky `end_turn` candidate starts
+  reading the real future (§2.3). Today it is inert; after M2 it is a cheat.
+* **M4 must not be run on top of the climbed vector.** Those 13 zeros and the
+  -14.4 `end_turn_bias` are fitted to the artifacts M1 removes
+  (docs/WASTED_ACTIONS.md §11 makes the same argument about `hand_value_late`).
+  Fit from data, do not seed from the champion.
+* **M5 is the only stage that changes what is *possible*** rather than what is
+  good. If it lands at >=3x, re-open §4.3.
+* Nothing here needs the expansion, an external AI, or a GPU.
+
+---
+
+## 7. Is the goal reachable? A straight answer
+
+**"Beat the app AI handily": plausible, and it should be the working target.**
+`docs/EXTERNAL_AIS.md` §1 concludes — from community consensus, not
+measurement — that the CGE app's Hard AI is a weighting/scoring heuristic, i.e.
+**the same architectural class as `WeightedBot`**, with a ceiling around a strong
+club human. A bot that fixes the evaluation defects in §2.4 and searches a turn
+at a time should beat that class. It is unproven only because we have never
+played it.
+
+**"Beat all humans, as Stockfish does for chess": no. Not with these
+resources.** Blunt version:
+
+* **The bots are weak on an absolute scale.** The most damning number in the
+  repo is that a ~200-line hand-written priority list beats 344 generations of
+  hill climbing **62.9% +/- 4.7% (n=400)**, and the trained champion places
+  **10th of 12** in a 47,520-game round robin at 1.02x par. The learned bot has
+  not yet reached the level of a competent human writing down what they know.
+  We are not near the human frontier; we are below the "wrote the obvious
+  heuristics down" line.
+* **The compute gap is 4-5 orders of magnitude in the wrong place.** Stockfish
+  searches ~10^8 nodes/s. Our forward model runs at **8.7 x 10^3 steps/cpu-s**
+  (MEASURED). TtA rewards depth far less than chess does, which helps — but not
+  by four orders of magnitude.
+* **The data engine is, surprisingly, the *least* of the problems.** At 2.22
+  games/cpu-s x 4 cores we can produce **~760,000 self-play games per day** with
+  the 1-ply bot. 10^7 games — AlphaZero-lite territory for a small model — is
+  ~13 days of the box. That is genuinely feasible. It is only feasible with a
+  *cheap* bot, though: at PlanBot's 16x it becomes 200+ days, so a strong
+  training loop needs M5.
+* **What superhuman would actually require:** a compiled or heavily optimised
+  forward model (10-100x), a learned nonlinear value function with a real
+  training loop rather than a hill climb, and 10^7-10^8 self-play games — plus
+  an external anchor to know when you have got there. Items 1 and 3 are
+  multi-week projects on this box; item 2 is the work in M4/M6; item 4 does not
+  exist yet at all.
+
+**Quantifying the gap, in the only currency we have.** There is no external
+anchor, so this is a calibrated statement rather than a number: the distance
+from today's champion to BookBot is one investigation's worth of work
+(`hand_potential` closed a similar-sized gap in one day). Expert commentary
+implies competent human play scores roughly **1.5-2x** the champion's mean
+culture (§5, INFERRED from prose). Strong tournament humans are further again.
+So the honest shape is: **several BookBot-sized improvements to reach competent
+human, and an unknown but larger number beyond that** — with the crucial caveat
+that we cannot currently measure any of it, which is why §5 and M7 matter more
+than their apparent glamour.
+
+**Recommendation.** Set the goal to *beat the app's Hard AI handily and beat
+BookBot decisively*, get an absolute anchor so the claim means something, and
+treat "beat all humans" as a direction rather than a destination. Doing this
+well is worth more than doing it ambitiously; this project's recurring failure
+is not lack of ambition, it is confident measurement of the wrong thing.
+
