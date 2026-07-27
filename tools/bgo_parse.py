@@ -128,7 +128,20 @@ RE_WINWAR = re.compile(
     r"^(%s) wins (War over \w+) Attacker's strength: (\d+); "
     r"Defender's strength: (\d+)" % _COL)
 RE_AGGR = re.compile(r"^(%s) plays ([A-Za-z' -]+?) against (%s) " % (_COL, _COL))
-RE_STAGE = re.compile(r"^(%s) builds (\d+) stages? of (.+?)(?: \1 spends|$)" % _COL)
+# NOT anchored: 2809 of the corpus's 18307 stage lines are nested inside
+# `<P> plays Engineering Genius <P> builds 1 stage of X; ...`, and anchoring
+# this at the start of the line loses every free stage -- a 40% undercount of
+# completed wonders, which is one of the headline comparisons.  The wonder
+# name runs to the next `;` or to the next colour word (the `<P> spends ...`
+# clause), whichever comes first.
+RE_STAGE = re.compile(
+    r"(%s) builds (\d+) stages? of ([A-Za-z'. ]+?)(?=;|\s(?:%s)\s|$)"
+    % (_COL, _COL))
+#: BGO prints this marker in the same entry as the stage that finished the
+#: wonder.  It is authoritative and is used instead of counting stages against
+#: `data/cards_wonders_leaders.json`, which cannot see stages this parser
+#: failed to match and cannot see a wonder finished by an event.
+WONDER_DONE = "Wonder completed"
 RE_REVOLUTION = re.compile(
     r"^(%s) revolutions (?:using \w[\w ]*? )?Change government to ([A-Za-z ]+?);" % _COL)
 # `discovers X`, `discovers X using Breakthrough`, either followed by the
@@ -209,6 +222,7 @@ def parse_game(gid, rows, meta):
     colonies = Counter()
     bids = Counter()
     stages = defaultdict(Counter)   # colour -> wonder -> stages built
+    unknown_wonder = Counter()      # names RE_STAGE matched but data doesn't know
     completed = defaultdict(set)    # colour -> completed wonders
     completed_at_take = {}
     gov_path = defaultdict(list)    # colour -> [(round, gov)]
@@ -268,13 +282,15 @@ def parse_game(gid, rows, meta):
             pending[(c, card)].append(len(take_events) - 1)
             continue
 
-        m = RE_STAGE.match(text)
+        m = RE_STAGE.search(text)
         if m:
             c, n, w = m.group(1), int(m.group(2)), norm(m.group(3))
             if w in WONDER_STAGES:
                 stages[c][w] += n
-                if stages[c][w] >= WONDER_STAGES[w]:
+                if text.count(WONDER_DONE):
                     completed[c].add(w)
+            else:
+                unknown_wonder[w] += 1
             continue
 
         m = RE_DECLARE.match(text)

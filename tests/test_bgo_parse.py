@@ -52,10 +52,12 @@ class TakeBacks(unittest.TestCase):
 
 class WonderSurcharge(unittest.TestCase):
     def test_completed_wonders_are_subtracted_from_the_take_cost(self):
-        # Colossus is a 2-stage wonder (3,3).  After completing it the next
-        # wonder take costs +1, so "uses 3 civil action" is really row tier 2.
+        # After completing a wonder the next wonder take costs +1, so
+        # "uses 3 civil action" is really row tier 2.  Completion comes from
+        # BGO's own "Wonder completed" marker, not from counting stages.
         r = one(rows(
-            "Orange builds 2 stages of Colossus Orange spends 6 resources",
+            "Orange builds 2 stages of Colossus Orange spends 6 resources; ; "
+            "Wonder completed",
             "Orange takes Great Wall in hand Orange uses 3 civil action",
         ))
         self.assertEqual(r["wonders_completed"], 1)
@@ -67,6 +69,27 @@ class WonderSurcharge(unittest.TestCase):
     def test_no_surcharge_before_any_wonder_completes(self):
         r = one(rows("Orange takes Great Wall in hand Orange uses 3 civil action"))
         self.assertEqual(r["tier3"], 1)
+
+
+class WonderStagesNestedInAnActionCard(unittest.TestCase):
+    def test_engineering_genius_free_stage_is_counted(self):
+        # 2809 of the corpus's 18307 stage lines look like this.  Anchoring
+        # the stage regex at the start of the line loses all of them.
+        r = one(rows(
+            "Orange plays Engineering Genius Orange builds 1 stage of "
+            "Library of Alexandria; Orange spends 2 resources",
+            "Orange plays Engineering Genius Orange builds 1 stage of "
+            "First Space Flight; Orange spends 4 resources; ; "
+            "Wonder completed; Orange scores 3 culture",
+        ))
+        self.assertEqual(r["wonder_stages"], 2)
+        self.assertEqual(r["wonders_started"], 2)
+        self.assertEqual(r["wonders_completed"], 1)
+
+    def test_a_stage_with_no_spend_clause_still_parses(self):
+        r = one(rows("Orange builds 2 stages of Pyramids"))
+        self.assertEqual(r["wonder_stages"], 2)
+        self.assertEqual(r["wonders_started"], 1)
 
 
 class HammurabiMilitaryAction(unittest.TestCase):
