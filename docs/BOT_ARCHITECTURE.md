@@ -379,9 +379,56 @@ MEASURED cost, 2p mirror vs WeightedBot, champion weights: **~280 expanded
 nodes per decision**, 7.5 cpu-s for a PlanBot-vs-WeightedBot game pair, i.e.
 roughly **16x the 1-ply bot** — comfortably inside the affordable band of §1.
 
-### Result
+### Result — MEASURED, n=400, and it is large
 
-<!-- RESULT PENDING -->
+```
+python3 -m experiments.evaluate --a plan:experiments/champion_2p.json \
+    --b experiments/champion_2p.json --games 400 --players 2
+```
+
+Both sides load the **identical** weight file, so this is a search-only A/B.
+
+| | PlanBot | champion (1-ply) |
+|---|---|---|
+| **win rate** | **88.6% +/- 3.1%** (n=400, null 50%, p ~ 7e-133) | 11.4% |
+| mean final culture | **194.5** | 125.8 |
+| culture margin | **+68.7** | |
+| moves per game | 209.1 | |
+| engine errors | 0 | |
+
+**Control, run afterwards:** the same champion against itself, n=200, returns a
+win rate of **exactly 0.500**, mean culture identical to the decimal
+(155.75 vs 155.75) and a culture margin of **exactly 0.0**. So the harness is
+unbiased and the two weight loads were the same object; the effect above is not
+seating, not tie-handling and not a stale file.
+
+For scale: `docs/STRENGTH_CHECK.md` measured BookBot — the hand-written priority
+list that has been beating this champion all along — at **155 mean culture**
+(n=400). PlanBot at **194.5** is well past that mark on the same metric, on the
+champion's own weights, with no strategy knowledge added at all.
+
+Three things make the number *bigger* than it looks, and one makes it smaller.
+
+Bigger:
+* The weights are hill-climbed **against the artifacts PlanBot removes** — a
+  -14.4 `end_turn_bias` fitted to a flattery that no longer exists, and thirteen
+  zeros fitted to a search that could not see interaction (§2.2). PlanBot is
+  winning while wearing the previous bot's compensations.
+* It uses no `end_turn_bias` at all, so it is *not* the constant doing the work.
+* It determinizes, so it is playing with strictly *less* information than its
+  opponent (§2.3).
+
+Smaller:
+* It costs ~16x the CPU. Affordable, but it is not free, and §4.4 is where that
+  is priced.
+* One player count, one weight vector. 3p/4p and a re-fit are M1's remaining
+  work.
+
+**What this does *not* say.** It does not say search beats evaluation. PlanBot's
+gain comes from removing three *evaluation-comparability* defects — the horizon
+asymmetry, the single-action myopia and the information leak — using search as
+the mechanism. §2.3b still stands: the underlying evaluation is a poor outcome
+predictor, and §3b below shows what happens when you try to fix that naively.
 
 ---
 
