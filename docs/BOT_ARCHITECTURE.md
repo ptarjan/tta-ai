@@ -872,38 +872,56 @@ decision from the user, answers the absolute-strength question), and hold the
 12-18 hour Hard-AI harness in reserve for when there is a bot worth spending
 the user's evenings on.
 
-### On the BGO corpus as *training* data
+### On the BGO corpus: a training corpus that does not exist
 
-The coordinator is right that `docs/EXTERNAL_AIS.md` §7 ranked move-level BGO
-logs #6 ("defer") on a reason — "the choice set is unrecoverable" — that is an
-objection to **imitation learning** (which needs `(state, choice set, chosen
-move)`) and not to **value learning** (which needs only `(state, outcome)`).
-The ranking should move up. But not to #1, for three reasons that are about cost
-rather than principle:
+The question put to me was whether `docs/EXTERNAL_AIS.md` §7 was wrong to rank
+move-level BGO logs #6 ("defer") on the grounds that "the choice set is
+unrecoverable". The reasoning behind that objection **is** wrong in the way
+suggested: an unrecoverable choice set kills *imitation* learning, which needs
+`(state, choice set, chosen move)`, and does not touch *value* learning, which
+needs only `(state, outcome)`. The policy/value distinction is real and the
+ranking should not have rested on that argument.
 
-1. **Reconstructing state is not parsing, it is replaying.** Our ~57 features
-   need workers per tech, resources, food, science, happiness, government,
-   wonders, units, colonies. Getting them from a journal means executing the
-   logged moves through our engine in a *forced-replay* mode that bypasses
-   `legal_moves` — a new engine entry point, a mapping from every journal event
-   type to an engine mutation, and a reconciliation loop for the events the
-   journal summarises rather than states. That is real engineering, and it is
-   also a superb correctness test of the engine, which is a genuine bonus.
-2. **The reconstructed state is partial in exactly the place we most need it.**
-   Military hands are hidden until played and the card row is never logged, so
-   we would learn a value function over a *reduced* observation. That is fine
-   for a public-information value head and useless for the military-card
-   blindness of §2.3.
-3. **A value function fitted to mixed-skill human play estimates V under that
-   population's policy, not V\*.** It is a good *initialiser* and a good
-   *regulariser* against self-play blind spots — the coordinator's argument for
-   it is sound — but it is not a substitute for policy iteration, and AlphaGo's
-   own experience was that the human-data value net was the weaker of the two.
+**But the conclusion survives, for a completely different reason that was
+measured after the question was asked.** The scrape pilot established by
+fetching real pages that **BGO retains move-by-move journals for only about the
+last five months** — reliably back to ~2026-02-09, noisy for a stretch before
+that, and literally "No entries found." for identifiable finished games from
+~6 months back through the entire remaining history. The 178,000 finished games
+are real; the *journalled* ones are not. The hard ceiling is **~2,250 candidate
+games**, and after resignations, timeouts, solitaire games, expansion games and
+edition filtering, realistically **a few hundred to ~1,000**.
 
-So: **self-play value regression first** (free, immediate, already built),
-**human score distribution as the absolute anchor second** (cheap, one user
-decision), **BGO value learning third** (real, expensive, do it once self-play
-has visibly plateaued), **BGO imitation last** (the original objection stands).
+That is two orders of magnitude smaller than the number the option was proposed
+on, and it settles it: **a value function trained primarily on human
+trajectories is off the table.** A few hundred trajectories cannot compete with
+self-play data this box can generate at ~760,000 games/day (§7) while otherwise
+idle. Do not architect around it.
+
+Three consequences worth carrying forward:
+
+1. **BGO's remaining value is as a measuring instrument, not fuel** — and it is
+   genuinely valuable in that role. Score distributions and game-length
+   distributions give the absolute anchor §5 wants. More pointedly, **how often
+   real humans declare wars and play aggressions** is directly comparable to the
+   move histogram in §3: our champion attacks **0.00** times per game and
+   PlanBot **1.67**. Knowing the human rate tells us immediately whether PlanBot
+   has fixed the defect or overshot it, and it is the only external check on the
+   whole conflict subsystem that we can get without playing games by hand.
+2. It is also a small **held-out sanity set**: positions real players reach, on
+   which a self-play-trained evaluator can be checked for being confidently
+   wrong. A few hundred games is plenty for that and far too few for training.
+3. **Self-play is therefore the only source of training data at scale, which
+   makes games-per-CPU-second *directly* the training budget.** That promotes
+   M5 (engine throughput) from an enabler of §4.3 to a first-order constraint on
+   everything: at 2.22 games/cpu-s the box yields ~760k games/day, and every
+   factor of 2 on the forward model is a factor of 2 on the data.
+
+Revised ranking: **self-play with a better objective first** (M4, and note §3b
+measured what happens when the objective is wrong), **engine throughput
+alongside it** (M5, now first-order), **BGO as an anchor and a sanity set**
+(cheap, bounded, worth doing once), **BGO as a training corpus never** — not
+because of the choice-set argument, but because the data is not there.
 
 ---
 
