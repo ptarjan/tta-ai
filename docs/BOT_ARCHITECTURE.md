@@ -277,7 +277,7 @@ I do **not** claim the trained weights are tuned against a cheat. The measured
 answer is the opposite: the cheat is currently unreadable, so it cannot have
 influenced training. It is a loaded gun, not a fired one.
 
-### 2.3b The evaluation does not predict the outcome — MEASURED, and this is the headline
+### 2.3b The evaluation does not predict the outcome — MEASURED
 
 Nobody in this repo appears to have asked the simplest possible question about
 the evaluation function: **does it predict who wins?**
@@ -289,15 +289,20 @@ is the player who actually ends with more culture. Every scorer is judged on
 because raw culture is 0 for everybody in the opening and would otherwise be
 silently graded on a later, easier subset.
 
-MEASURED, 2p, champion-mirror self-play, **955 pairs from held-out games**
-(the regression below never saw them):
+MEASURED, 2p, champion-mirror self-play. Three runs at growing sample size, all
+on **held-out games** the regression never saw (split by game seed, never by
+row):
 
-| scorer | pairwise ranking accuracy |
-|---|---|
-| the trained champion's `evaluate` (gen 344, 82 weights, ~57 features) | **0.6984 +/- 0.0291** |
-| `culture` — one number | 0.7005 +/- 0.0291 |
-| `culture + 5 * culture_rate` — two numbers | 0.7037 +/- 0.0290 |
-| **ridge fit on the SAME 80 columns, ~470 games of data** | **0.7843 +/- 0.0261** |
+| scorer | 955 pairs | 1,938 pairs | 2,940 pairs |
+|---|---|---|---|
+| the trained champion's `evaluate` (gen 344, 82 weights, ~57 features) | 0.6984 +/- 0.0291 | 0.6796 +/- 0.0208 | **0.6694 +/- 0.0170** |
+| `culture` — one number | 0.7005 +/- 0.0291 | 0.6863 +/- 0.0207 | **0.6786 +/- 0.0169** |
+| `culture + 5 * culture_rate` — two numbers | 0.7037 +/- 0.0290 | 0.6904 +/- 0.0206 | **0.6949 +/- 0.0166** |
+| **ridge fit on the SAME 80 columns** | 0.7843 +/- 0.0261 | 0.7430 +/- 0.0195 | **0.8116 +/- 0.0141** |
+
+(The rightmost column adds mid-turn states to the fit's training set, which is
+why its fitted row is higher; the champion and baseline rows are the same
+evaluation measured on a larger sample and move only within noise.)
 
 Two readings, both blunt:
 
