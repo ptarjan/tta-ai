@@ -66,8 +66,8 @@ import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from engine.bots.weighted import (DEFAULT_WEIGHTS, load_weights,  # noqa: E402
-                                  save_weights)
+from engine.bots.weighted import (DEFAULT_WEIGHTS, PHASE_KEYS,  # noqa: E402
+                                  load_weights, save_weights)
 from experiments import arena  # noqa: E402
 from experiments import hillclimb_pool as P  # noqa: E402
 # Reuse -- not fork -- the mutation operators and the accept-z machinery the
@@ -89,18 +89,56 @@ DEFAULT_STATE = os.path.join(HERE, "league_state")
 # mirror of itself -- a mirror is equally happy to be wrong in the same way.
 #
 # The rule below is derived from the weight vector rather than hand-listed,
-# which is what keeps it correct as the vector grows: a term whose DEFAULT is
-# strictly POSITIVE means "more of this is better", so a trained value below
-# zero is a sign inversion, not a strategy.  Every legitimately negative term
-# already has a negative default and is therefore untouched -- `rival_*`,
-# the `*_late` phase multipliers, `discontent`, `uprising`, `pop_cost`,
-# `wonder_remaining` and `end_turn_bias` included.
+# which is what keeps it correct as the vector grows: a VALUE term's default
+# sign says which direction of the feature is good for its owner, so a trained
+# value on the far side of zero is a sign inversion, not a strategy.
 #
-# NB `end_turn_bias` (-3.0) is one of those.  It looks like a bug and is NOT:
-# removing it was measured twice, five ways, and makes the bot much weaker
-# (see the comment on it in engine/bots/weighted.py, and docs/WASTED_ACTIONS.md
-# section 6).  Nothing here should be read as licence to "fix" it.
+# It used to be ONE-SIDED -- only defaults `> 0` were checked -- on the stated
+# grounds that "every legitimately negative term already has a negative default
+# and is therefore untouched".  That was the bug.  25 of the 82 weights have a
+# negative default and could invert freely with nothing logged, and one of them
+# did: the 4p champion reached `rival_culture` = +5.611 against a default of
+# -0.35 in a single accepted `kick` at gen 30, which prices one culture point in
+# the leading rival's hands at +5.6 of the bot's own and makes stealing 10
+# culture off the culture leader score -41.25.  See docs/CULTURE_GAP.md section
+# 2c for the reproduction.  The guard below is two-sided: a value term may not
+# cross zero away from its default sign, in either direction.
+#
+# NB `end_turn_bias` (-3.0) is one of the terms this newly protects.  It looks
+# like a bug and is NOT: removing it was measured twice, five ways, and makes
+# the bot much weaker (see the comment on it in engine/bots/weighted.py, and
+# docs/WASTED_ACTIONS.md section 6), and "pass MORE instead" -- i.e. driving it
+# positive -- measured 11.0%.  Locking its sign is protecting it, not fixing it.
+#
+# EXEMPTION -- the early/late PHASE MULTIPLIERS are deliberately not sign-locked
+# in the newly-added direction.  They are not value terms.  A feature in
+# PHASE_KEYS contributes `(w[k] + (1-L)*w[k_early] + L*w[k_late]) * v`, so the
+# triple (base, early, late) is over-parameterised by exactly one degree of
+# freedom: adding c to BOTH phase weights and subtracting c from the base is the
+# identical policy.  The sign of a phase multiplier is therefore not even
+# gauge-invariant -- `culture_rate_late` can be made positive without changing a
+# single move -- and "the sign flipped" carries no information about whether the
+# policy inverted.  What a phase weight's sign does encode is a strategic
+# hypothesis about WHEN a thing matters ("strength_rel_early < 0" = being ahead
+# on army early is not worth paying for), and the search is entitled to
+# disagree with the default.
+#
+# Left alone on purpose: the ten phase multipliers whose default is POSITIVE
+# (`culture_late`, `culture_rate_early`, ...) are still clamped one-sided,
+# because that is what the live run has been training under and dropping the
+# clamp is a behaviour change to the search, not a correctness fix.  By the
+# gauge argument above those clamps are probably also meaningless and they do
+# fire in practice (`culture_late` 27 times at 3p, `wonder_progress_early` 28) --
+# but removing them belongs in its own separately-measured commit.
+_PHASE_MULT = frozenset(k + suf for k in PHASE_KEYS
+                        for suf in ("_early", "_late"))
+
+#: value terms whose default is > 0: a trained value below zero is inverted
 NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0)
+#: value terms whose default is < 0: a trained value above zero is inverted.
+#: Phase multipliers excluded -- see the EXEMPTION note above.
+NONPOS = frozenset(k for k, v in DEFAULT_WEIGHTS.items()
+                   if v < 0 and k not in _PHASE_MULT)
 
 # Applied ONLY when a run starts from DEFAULT_WEIGHTS (a clean restart).
 # `hand_potential` (the card-identity fix, 72.5% +/- 4.4% at 2p) defaults to
@@ -118,9 +156,9 @@ def guard_weights(w, mode="clamp"):
     """
     out = dict(w)
     viol = []
-    for k in sorted(NONNEG):
+    for k in sorted(NONNEG | NONPOS):
         v = out.get(k, 0.0)
-        if v < 0:
+        if (v < 0) if k in NONNEG else (v > 0):
             viol.append({"weight": k, "value": round(float(v), 4),
                          "default": DEFAULT_WEIGHTS[k]})
             if mode == "clamp":
