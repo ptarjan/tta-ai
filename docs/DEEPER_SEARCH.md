@@ -513,15 +513,20 @@ The reservations, in order of seriousness:
 4. **It invalidates the current champions.** The trainer would be climbing a
    different objective. `deferred_credit`'s `PACT_OFFER_CREDIT`,
    `auction_committed` and `auction_bid` become dead code whenever quiescence
-   completes (measured truncation 0.0%/1.9%/0.0%), so those three weights stop
-   being selected on at all and their current values become noise.
+   completes (re-measured truncation 0.0% at every table size), so those three
+   weights stop being selected on at all and their current values become noise.
 
 **Recommendation: pool now (6.1), challenger later**, gated on one experiment
 that has not been run: a league arm whose challenger *and* whose mirror
-opponent are both quiescent, measured against the existing 1-ply league on the
-external roster of `docs/BOT_ROSTER.md` rather than against itself. Until that
-exists, switching the challenger would change what three live arms train
-against on the strength of a number measured in a setting the change destroys.
+opponent are both quiescent, run for long enough to produce a champion, and
+then compared with the existing 1-ply champion **on opponents held out of both
+pools**. Note that `docs/BOT_ROSTER.md` is not that comparison as it stands —
+`build_pool` puts `book`, `book2` and every variant into the training pool, so
+the roster measures in-distribution performance. A genuine hold-out needs at
+least one entrant excluded from training (`build_pool(exclude=...)` already
+supports it). Until that exists, switching the challenger would change what
+three live arms train against on the strength of a number measured in a
+setting the change destroys.
 
 ### 6.3 Bugs found in QuiescentBot
 
