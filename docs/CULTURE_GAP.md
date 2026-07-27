@@ -1177,3 +1177,40 @@ That is the head start the probe begins with. It is in a different metric
 Given 13c#5 and the number of matched points available before the window closes,
 the last row is the most likely outcome and it is the one I expect to be
 writing.
+
+### 13f. A second, sharper observable — also pre-registered
+
+The win-rate trajectory is the noisy half of this probe. §12 supplies a
+mechanism observable that is discrete rather than statistical, and the probe
+tests it for free.
+
+§12c predicts that **the horizon fix alone will not keep the shaping alive.**
+The probe starts from `DEFAULT_WEIGHTS`, whose culture-rate shaping is the full
+`(2.0, −2.0)`, `Σ|late−early| = 16.9` across all ten phase keys — so it begins
+with everything the horizon has leverage on. But the step-size trap is
+untouched by fix #2: as soon as `culture_rate`'s base runs away, the level
+coordinate's step outruns the shape coordinate's, and a `guard_weights` clamp
+of `culture_rate_early` becomes an available one-way exit.
+
+The live 4p arm's own record of that happening, from `ladder_4p/`:
+
+```
+gen 00000  base  5.000  early  2.000  late -2.000   shape  -4.00
+gen 00018  base  3.116  early  2.900  late -2.920   shape  -5.82   (shaping intact)
+gen 00030  base 12.837  early 11.907  late -0.637   shape -12.54   (base begins to run)
+gen 00037  base 17.453  early  0.000  late -0.367   shape  -0.37   (clamp; collapsed)
+gen 00051  base 35.574  early  0.000  late -0.316   shape  -0.32   (base absorbs it)
+```
+
+So: **if the probe's `culture_rate` base also runs away and its shape also
+collapses toward zero within its first ~40 generations, that is direct evidence
+that a clean restart on fix #2 alone buys a transient starting advantage which
+the search then spends** — and it makes fix #2 conditional on the step-size
+change in §12e(2) rather than sufficient on its own. If the probe holds its
+shaping through gen 40+, §12c is wrong or at least not the whole story, and
+fix #2 stands on its own.
+
+This is n=1 either way and a search is stochastic, so a single arm holding or
+losing its shaping is suggestive, not proof. But it is a *discrete* event with a
+named cause and a logged trigger, which is a better class of evidence than a
+0.03 difference in a pooled win rate.
