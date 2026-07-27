@@ -59,6 +59,18 @@ class PlayerState:
     flipped_wonders: list = field(default_factory=list)  # Ravages of Time
     hand_civil: list = field(default_factory=list)
     hand_military: list = field(default_factory=list)
+    # Cards KNOWN to be in this hand whose identity we do not know.  Always 0
+    # in a real game and in every self-play line: the engine deals every card
+    # by name, so `hidden_* == 0` and `hand_size()` is `len(hand_*)` exactly.
+    #
+    # They exist for the app harness (docs/APP_HARNESS.md), which mirrors a
+    # rival whose hand SIZE is public (§2.6: cards are taken from an open row
+    # in full view) but whose contents it did not transcribe.  Without them a
+    # rival with three untranscribed cards reads as an EMPTY hand, which is
+    # not "unknown", it is *wrong*: the hand-limit gate (§2.5) says they can
+    # still take, and `features()` scores them as holding nothing.
+    hidden_civil: int = 0
+    hidden_military: int = 0
     taken_leader_ages: list = field(default_factory=list)
     # pools
     yellow_bank: int = 18               # unborn population
@@ -111,6 +123,12 @@ class PlayerState:
 
     def has(self, name):
         return name in self.techs
+
+    def hand_size(self, which="civil"):
+        """Cards in hand, named or not.  The quantity §2.5 actually counts."""
+        if which == "civil":
+            return len(self.hand_civil) + self.hidden_civil
+        return len(self.hand_military) + self.hidden_military
 
     def worker_count(self, name):
         t = self.techs.get(name)

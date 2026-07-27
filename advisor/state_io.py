@@ -152,11 +152,19 @@ def resolve_card(text, kind="any", extra=()):
 
 @dataclass
 class Board:
-    """Engine state + the advisor's book-keeping about hidden information."""
+    """Engine state + the advisor's book-keeping about hidden information.
+
+    Cards whose identity we do not know used to live in a `hidden` dict here,
+    beside the state rather than in it.  That is exactly one layer too high:
+    `weighted.features()` is handed a `GameState`, never a `Board`, so a rival
+    holding three untranscribed cards scored as holding NONE -- the harness
+    typed `hc=3` every round and the number went nowhere (docs/APP_HARNESS.md
+    section 2).  The counts now live on `PlayerState.hidden_civil/military`,
+    one source of truth, carried by `state.copy()` and by the search's
+    fastcopy for free.
+    """
     state: GameState
     me: int = 0
-    # cards a player holds whose identity we do not know: {(idx, "civil"): n}
-    hidden: dict = field(default_factory=dict)
     # fields the human explicitly declared unknown, e.g. {"p1.culture"}
     unknown: set = field(default_factory=set)
 
@@ -172,16 +180,16 @@ class Board:
         return self.state.players[idx]
 
     def hidden_count(self, idx, which):
-        return self.hidden.get((idx, which), 0)
+        return getattr(self.player(idx), f"hidden_{which}")
+
+    def set_hidden(self, idx, which, n):
+        setattr(self.player(idx), f"hidden_{which}", max(0, int(n)))
 
     def hand_size(self, idx, which="civil"):
-        p = self.player(idx)
-        known = p.hand_civil if which == "civil" else p.hand_military
-        return len(known) + self.hidden_count(idx, which)
+        return self.player(idx).hand_size(which)
 
     def copy(self):
-        return Board(self.state.copy(), self.me, dict(self.hidden),
-                     set(self.unknown))
+        return Board(self.state.copy(), self.me, set(self.unknown))
 
 
 def new_board(num_players, me=0, seed=0):
@@ -271,7 +279,7 @@ def _set_player_key(board, p, key, tok):
     if key in ("hc", "hm"):
         which = "civil" if key == "hc" else "military"
         known = len(p.hand_civil if which == "civil" else p.hand_military)
-        board.hidden[(p.idx, which)] = max(0, _int(tok, key) - known)
+        board.set_hidden(p.idx, which, _int(tok, key) - known)
         return f"p{p.idx} {which} hand = {board.hand_size(p.idx, which)}"
     if key in FORCED:
         _force(board, p, key, _int(tok, key))
@@ -281,6 +289,12 @@ def _set_player_key(board, p, key, tok):
         setattr(p, SCALARS[key], _int(tok, key))
         effects.invalidate(board.state, p)
         return f"p{p.idx} {SCALARS[key]} = {tok}"
+    if key in ("w", "won", "wonders"):
+        # the harness asks for this number every round, but as a CHECK on what
+        # the mirror derived -- forcing a count would throw away the names,
+        # and the names carry the effects
+        raise PatchError("completed wonders are set by NAME: "
+                         f"'p{p.idx} built+ Colossus'")
     raise PatchError(f"unknown player key {key!r} "
                      f"(try: {', '.join(sorted(set(SCALARS) | set(FORCED)))})")
 
@@ -552,8 +566,8 @@ def _load_player_line(board, idx, rest):
         return
     if head == "hidden":
         kv = _kv(tail)
-        board.hidden[(idx, "civil")] = _int(kv.get("hc", 0), "hc")
-        board.hidden[(idx, "military")] = _int(kv.get("hm", 0), "hm")
+        board.set_hidden(idx, "civil", _int(kv.get("hc", 0), "hc"))
+        board.set_hidden(idx, "military", _int(kv.get("hm", 0), "hm"))
         return
     if head == "wonder":
         bits = tail.rsplit(None, 1)
@@ -611,7 +625,7 @@ between-turn updates (one per line, blank line when done):
   p1 tech+ Bronze:2     add/replace a technology (name:workers)
   p1 tech- Warriors     remove a technology
   p1 wonder Pyramids 2  wonder in progress + steps built
-  p1 built+ Colossus    completed a wonder
+  p1 built+ Colossus    completed a wonder (by NAME -- there is no w= count)
   p1 leader Caesar      played a leader ('-' clears)
   p1 tactic Legion      played a tactic
   p1 gov=Monarchy       changed government
@@ -668,7 +682,12 @@ def _patch(board, line):
         if name is None:
             raise PatchError(f"row slot {slot} is already empty")
         st.card_row[slot] = None
-        board.hidden[(idx, "civil")] = board.hidden_count(idx, "civil") + 1
+        # counted, not named.  We know what they took, but we do not track
+        # what they PLAY, so a named hand could only ever grow -- and then
+        # `hc=` (which can only set the unnamed remainder) could no longer
+        # bring the count back down.  One counter the round check can force is
+        # worth more than a name list that silently drifts upward.
+        board.set_hidden(idx, "civil", board.hidden_count(idx, "civil") + 1)
         return f"p{idx} took {name} from slot {slot}"
     if word == "event":
         for t in _split_cards(rest, "military"):

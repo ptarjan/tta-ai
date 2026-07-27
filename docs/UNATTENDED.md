@@ -78,12 +78,17 @@ it, then `pkill -f run_league.sh`.
 
 1. **No external anchor.** Everything above is our bots playing our bots. The
    app harness (`harness/`, `docs/APP_HARNESS.md`) is the remedy and needs a
-   human at a keyboard: ~50-80 min/game, ~10-16h for ten usable games. That
-   estimate is being re-derived — the new rival features added observables.
-2. **`tests/test_harness_mirror.py` fails on master.** The harness asserts that
-   four numbers per rival reconstruct every `rival_*` feature; today's feature
-   work added three more. The tripwire is correct — do not weaken it. Fix is
-   owned by the harness agent.
+   human at a keyboard. Re-derived after the GAP-3 rival features added three
+   observables: **~52-83 min/game, ~11-18h for ten usable games** (was 50-80
+   and 10-16h). Three of the seven rival fields exist for features weighted
+   0.0 today; if the league leaves them there, drop them and take the ~4
+   min/game back.
+2. **`tests/test_harness_mirror.py`** — fixed on `harness-tripwire`. The
+   tripwire fired correctly: `rival_free_ca` / `rival_hand_civil` /
+   `rival_wonders` were not reconstructible from the four numbers we asked
+   for, and `hc=` in particular wrote into an advisor-side dict `features()`
+   never read. Hidden-card counts now live on `PlayerState`, the ask grew to
+   seven, and rival wonder *count* is the first hard check on the rival side.
 3. **The gate's margin metric may double-count theft.** War moves culture from
    victim to attacker, so a margin of (mine - theirs) counts a steal twice, and
    the league gates accepts on margin. Under investigation; do not change the

@@ -669,7 +669,7 @@ class Console:
             if self._snapshot:
                 board = S.loads(self._snapshot)
                 adv.board.state = board.state
-                adv.board.hidden = board.hidden
+                # hidden-card counts ride on the state itself now
                 adv.board.unknown = board.unknown
                 self.say("rolled back to the start of your turn")
             return True

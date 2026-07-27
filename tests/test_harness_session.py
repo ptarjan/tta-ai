@@ -26,8 +26,9 @@ class Operator:
     construction it is in perfect sync unless `drift` says otherwise."""
 
     def __init__(self, console_ref, stop_round=4, drift=None, move="",
-                 overrides=0):
+                 overrides=0, rival_drift=None):
         self.ref = console_ref            # filled in after construction
+        self.rival_drift = rival_drift or {}   # {round: {key: delta}}
         self.stop_round = stop_round
         self.drift = drift or {}          # {round: {key: delta}}
         self.move = move
@@ -46,12 +47,21 @@ class Operator:
         p = prompt.strip()
         if "new cards" in p:
             return "?"
-        if "c/cr/sr/str" in p:
+        if "/".join(M.RIVAL_ASK_KEYS) in p:
             idx = int(re.search(r"p(\d+)", p).group(1))
             q = self.board.state.players[idx]
             from engine import effects
             s = effects.compute(self.board.state, q)
-            return f"{q.culture}/{s.culture}/{s.science}/{s.strength}"
+            # a perfect operator reads every asked field off the panel,
+            # including the wonder count the mirror derives for itself
+            vals = {"c": q.culture, "cr": s.culture, "sr": s.science,
+                    "str": s.strength, "ca": q.civil_actions,
+                    "hc": q.hand_size("civil"),
+                    "w": len(q.completed_wonders)}
+            for k, delta in self.rival_drift.get(
+                    self.board.state.round, {}).items():
+                vals[k] += delta
+            return "/".join(str(vals[k]) for k in M.RIVAL_ASK_KEYS)
         if "/".join(M.SPINE) in p:
             snap = M.self_snapshot(self.board, M.SPINE)
             rnd = self.board.state.round
@@ -166,6 +176,29 @@ class DriftingOperator(unittest.TestCase):
             resyncs = [r for r in log.records if r["type"] == "resync"]
             self.assertEqual(len(resyncs), 1)
             self.assertEqual(resyncs[0]["round"], 3)
+
+    def test_a_missed_rival_wonder_stops_the_game(self):
+        """The one HARD check on the rival side.
+
+        Everything else about a rival is forced, so it cannot disagree.
+        Wonders arrive by name (`p1 built+ ...`) because the name carries the
+        effects -- which means the mirror holds a count it can be wrong about,
+        and the count on the panel is a real checksum.  An operator who forgot
+        a `built+` must not be able to play on.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            con, op, out, log = build(d, {"stop_round": 9,
+                                          "rival_drift": {3: {"w": 1}}})
+            rec = con.run()
+            self.assertTrue(any("DESYNC" in line for line in out))
+            self.assertTrue(rec["aborted"])
+            self.assertIn("w", rec["abort_reason"])
+            bad = [r for r in log.records
+                   if r["type"] == "check" and not r["ok"]]
+            self.assertEqual([d_["key"] for d_ in bad[0]["discrepancies"]],
+                             ["w", "w"])          # one per rival
+            self.assertTrue(all(d_["severity"] == M.FAIL
+                                for d_ in bad[0]["discrepancies"]))
 
     def test_the_failing_check_is_in_the_log_with_both_numbers(self):
         with tempfile.TemporaryDirectory() as d:

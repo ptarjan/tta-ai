@@ -70,7 +70,7 @@ class TestRoundTrip(unittest.TestCase):
                     break
                 G.apply(st, bots[st.decider()](st), rng)
             b = S.Board(st, me=0)
-            b.hidden[(1, "civil")] = 2
+            b.set_hidden(1, "civil", 2)
             b.unknown.add("p2.culture")
             text = S.dumps(b)
             b2 = S.loads(text)
@@ -81,7 +81,10 @@ class TestRoundTrip(unittest.TestCase):
             self.assertEqual(b2.state.players[0].culture, st.players[0].culture)
             self.assertEqual(b2.state.players[0].techs.keys(),
                              st.players[0].techs.keys())
-            self.assertEqual(b2.hidden[(1, "civil")], 2)
+            self.assertEqual(b2.hidden_count(1, "civil"), 2)
+            # the counts are STATE now, so the evaluator can see them
+            self.assertEqual(b2.state.players[1].hand_size("civil"),
+                             len(b2.state.players[1].hand_civil) + 2)
             self.assertIn("p2.culture", b2.unknown)
 
     def test_hand_and_wonders_survive(self):

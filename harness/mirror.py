@@ -13,14 +13,23 @@ The asymmetry that makes this tractable:
   resources, actions, hand sizes and banks.  A prediction can be checked, and
   the app prints all of it on one panel.  These are the real checksums.
 * **Rival boards are FORCED.**  We never replay a rival's turn; the human types
-  four numbers and `state_io._force` back-solves the mirror to match.  A forced
-  value can never disagree with itself, so it is *not* a checksum.  The only
-  cross-check available there is arithmetic consistency over time, which is a
-  warning, not a proof.
+  a handful of numbers off the app's player panel and `state_io._force`
+  back-solves the mirror to match.  A forced value can never disagree with
+  itself, so it is *not* a checksum.  The only cross-check available there is
+  arithmetic consistency over time, which is a warning, not a proof.
 
-So: everything in `SELF_CHECKS` is a hard failure when it disagrees, and
-`rival_consistency` is a soft warning.  Nothing here ever "fixes up" the mirror
-on its own -- an automatic repair is exactly how a silent corruption survives.
+There is now one exception, and it is worth its keystroke: **completed wonders
+are DERIVED, not forced.**  Their names arrive as they happen (`p1 built+
+Colossus`) because a name carries effects a count cannot, so the mirror holds
+an opinion about how many each rival has -- and an opinion can be checked
+against the number on the panel.  That makes `w` the first and only hard rival
+check in this file: it catches the one rival-side failure that is otherwise
+permanent, an operator who missed a `built+` and never finds out.
+
+So: everything in `SELF_CHECKS` and `RIVAL_CHECKS` is a hard failure when it
+disagrees, and `rival_consistency` is a soft warning.  Nothing here ever "fixes
+up" the mirror on its own -- an automatic repair is exactly how a silent
+corruption survives.
 """
 
 from __future__ import annotations
@@ -226,7 +235,10 @@ def parse_line(text, spine=None, allowed=None):
 def parse_rival_line(text):
     """``p1 c=41 cr=5 sr=3 str=12`` -> (idx, {key: value}, errors).
 
-    Accepts the bare positional form too: ``p1 41/5/3/12``.
+    Accepts the bare positional form too: ``p1 41/5/3/12/4/3/1``, and any
+    prefix of it -- a trailing field left off is simply not reported, which
+    for a forced key means "unchanged" and for a checked key means "not
+    checked this round".
     """
     toks = text.split()
     if not toks:
@@ -237,8 +249,8 @@ def parse_rival_line(text):
     except ValueError:
         return None, {}, [f"{toks[0]!r} is not a player like 'p1'"]
     vals, errs = parse_line(" ".join(toks[1:]),
-                            spine=["c", "cr", "sr", "str"],
-                            allowed={"c", "cr", "sr", "str"})
+                            spine=list(RIVAL_ASK_KEYS),
+                            allowed=set(RIVAL_ASK_KEYS))
     return idx, vals, errs
 
 
@@ -275,8 +287,14 @@ def missing_spine(reported, spine=None):
 
 
 def round_check(board, reported, history=None, rivals=None):
-    """Full per-round verification.  `rivals` is {idx: {c, cr, sr, str}}."""
-    ds = check_self(board, reported) + check_board(board, reported)
+    """Full per-round verification.  `rivals` is {idx: {key: value}}.
+
+    Called BEFORE the forced rival values are applied, which is the only order
+    that makes `check_rivals` mean anything: after the patches the mirror
+    agrees with the operator by construction.
+    """
+    ds = (check_self(board, reported) + check_board(board, reported)
+          + check_rivals(board, rivals))
     if history is not None:
         for idx, vals in (rivals or {}).items():
             ds += history.check(idx, board.state.round,
@@ -285,16 +303,94 @@ def round_check(board, reported, history=None, rivals=None):
 
 
 # ------------------------------- the claim the cost estimate rests on ------
-
+#
+# Every rival-derived feature `weighted.features()` produces, and the inputs
+# the app prints that pin each of them down.  `tests/test_harness_mirror.py`
+# asserts the two still line up, by wrecking every rival board and rebuilding
+# it from nothing but what the operator types.  That test is the tripwire on a
+# moving target, and it has already fired once: the GAP-3 work added
+# `rival_free_ca` / `rival_hand_civil` / `rival_wonders`, and the four numbers
+# we asked for could not reconstruct any of the three.
+#
+# The rule when it fires again is NOT "append the new name here".  It is:
+#   1. is the quantity public at the table?  (If it is not, the feature is
+#      cheating and the evaluator is the thing that has to change.)
+#   2. can `state_io` apply it to a rival we never mirror?
+#   3. does the wreck-and-restore test below still pass through that path?
+# Only then does the name belong in this tuple.
 
 RIVAL_FEATURE_KEYS = ("rival_culture", "rival_mean_culture",
                       "rival_culture_rate", "rival_science_rate",
-                      "rival_strength")
+                      "rival_strength", "rival_free_ca",
+                      "rival_hand_civil", "rival_wonders")
 
-# Every rival-derived feature `weighted.features()` produces, and the four
-# numbers the app prints that pin it down.  `tests/test_harness_mirror.py`
-# asserts these two lists still line up; when the card-row / opponent-hand
-# features land and add a rival term that four numbers cannot reconstruct,
-# that test fails, and the harness's whole "do not mirror opponent boards"
-# shortcut has to be revisited.  This is the tripwire on the moving target.
-RIVAL_ASK_KEYS = ("c", "cr", "sr", "str")
+# What the operator reads off one rival's panel, in prompt order.  All seven
+# are public information in Through the Ages: culture and the two rates are
+# printed on the panel, strength is printed on the panel, action tokens and
+# completed wonders sit face up in the player's area, and civil cards are only
+# ever taken from an open row in full view (RULES_SPEC.md 2.6).  Nothing here
+# asks the human to look at a hidden zone.
+RIVAL_ASK_KEYS = ("c", "cr", "sr", "str", "ca", "hc", "w")
+
+# ...of which these are pushed into the mirror as `state_io` patch lines.
+# `c/cr/sr/str` back-solve through `_force`; `ca` sets the civil-action
+# counter; `hc` sets the count of cards in hand we cannot name (which is what
+# `rival_hand_civil` reads -- see PlayerState.hand_size).
+RIVAL_FORCE_KEYS = ("c", "cr", "sr", "str", "ca", "hc")
+
+# ...and this one is CHECKED instead.  A wonder's name carries its effects, so
+# the mirror learns wonders by name (`p1 built+ Colossus`) as they are built;
+# the count on the panel then verifies we did not miss one.
+RIVAL_CHECKS = [
+    Check("w", "completed wonders (face up in their area)",
+          lambda st, q: len(q.completed_wonders)),
+]
+RIVAL_CHECK_BY_KEY = {c.key: c for c in RIVAL_CHECKS}
+
+# Each asked field's probe in `harness.fields`, so the static ask above and the
+# derived field list can be held against each other -- and so the operator can
+# be told, at startup, which of the seven the bot does not actually read today.
+# `tests/test_harness_mirror.py` asserts every key here names a real probe: a
+# field we ask for with no probe behind it is a field that can quietly stop
+# mattering (or quietly start) and nobody would ever find out.
+RIVAL_PROBE_IDS = {
+    "c": "rival.culture",
+    "cr": "rival.culture_rate",
+    "sr": "rival.science_rate",
+    "str": "rival.strength",
+    "ca": "rival.civil_actions",
+    "hc": "rival.hand_civil_size",
+    "w": "rival.wonders",
+}
+
+# One line of operator-facing help per asked field, so `harness.play` and
+# `docs/APP_HARNESS.md` cannot drift apart from this file.
+RIVAL_LABELS = {
+    "c": "culture (their score)",
+    "cr": "culture per turn",
+    "sr": "science per turn",
+    "str": "military strength",
+    "ca": "civil actions (their total -- between turns it is all of them)",
+    "hc": "civil cards in hand",
+    "w": "completed wonders",
+}
+
+
+def rival_snapshot(board, idx):
+    """What the mirror believes about the CHECKED rival quantities."""
+    q = board.state.players[idx]
+    return {c.key: c.get(board.state, q) for c in RIVAL_CHECKS}
+
+
+def check_rivals(board, rivals):
+    """Hard checks on rival values the mirror DERIVES rather than forces.
+
+    `rivals` is {idx: {key: value}}.  A key the operator left blank is not
+    checked -- same rule as everywhere else here, absence is never agreement.
+    """
+    out = []
+    for idx, vals in (rivals or {}).items():
+        if not 0 <= idx < len(board.state.players):
+            continue
+        out += compare(rival_snapshot(board, idx), vals, FAIL, f"p{idx}")
+    return out

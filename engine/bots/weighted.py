@@ -224,7 +224,7 @@ def rival_context(state, idx):
         best_sci = max(best_sci, s.science)
         best_str = max(best_str, s.strength)
         gate = (s.civil_actions,
-                len(q.hand_civil) >= s.civil_actions + s.civil_hand_limit,
+                q.hand_size("civil") >= s.civil_actions + s.civil_hand_limit,
                 0 if q.leader == "Michelangelo"
                 else len(q.completed_wonders) + q.destroyed_wonders,
                 1 if q.leader == "Hammurabi" else 0)
@@ -451,8 +451,12 @@ def features(state, idx, ctx=None):
     # the fullest civil hand is the one closest to being unable to take
     # anything at all (§2.5), and completed wonders are both score and the
     # +1/wonder take surcharge they will pay for the next one.
+    # `hand_size`, not `len(hand_civil)`: a hand of three cards we cannot name
+    # is a hand of three cards.  Identical in self-play (`hidden_civil` is
+    # always 0 there); the difference is the app harness, where the count is
+    # public and the identities are not (docs/APP_HARNESS.md section 2).
     rival_free_ca = max((q.civil_actions for q in rivals), default=0)
-    rival_hand_civil = max((len(q.hand_civil) for q in rivals), default=0)
+    rival_hand_civil = max((q.hand_size("civil") for q in rivals), default=0)
     rival_wonders = max((len(q.completed_wonders) for q in rivals), default=0)
     if ctx is None:
         ctx = rival_context(state, idx)

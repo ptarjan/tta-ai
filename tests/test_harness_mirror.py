@@ -156,15 +156,57 @@ class RivalConsistency(unittest.TestCase):
         self.assertFalse(res.failed)
 
 
+def _read_the_panel(st, me):
+    """Exactly what the operator types, for every rival, this round.
+
+    Returns {idx: ({forced key: value}, [completed wonder names])} -- the two
+    channels the harness really has: numbers off the player panel, and wonder
+    names transcribed as they are completed.
+    """
+    out = {}
+    for q in st.players:
+        if q.idx == me:
+            continue
+        s = effects.compute(st, q)
+        out[q.idx] = ({"c": q.culture, "cr": s.culture, "sr": s.science,
+                       "str": s.strength, "ca": q.civil_actions,
+                       "hc": q.hand_size("civil")},
+                      list(q.completed_wonders))
+    return out
+
+
+def _wreck(st, me):
+    """Every rival board as a completely untranscribed opponent looks: no
+    workers, no score, no wonders, no government, no cards, no actions."""
+    for q in st.players:
+        if q.idx == me:
+            continue
+        for t in q.techs.values():
+            t.workers = 0
+        q.culture = 0
+        q.completed_wonders = []
+        q.government = "Despotism"
+        q.hand_civil = []
+        q.hidden_civil = 0
+        q.civil_actions = 0
+        effects.invalidate(st, q)
+
+
 class ForcedRivalsAreExact(unittest.TestCase):
     """The claim the whole cost estimate rests on.
 
-    We never mirror an opponent's board -- the human types four numbers off the
-    app's player panel and `state_io` back-solves.  That is only sound if those
-    four numbers pin down every rival-derived feature.  If the card-row /
-    opponent-hand feature work adds a rival term that four scalars cannot
-    reconstruct, this test fails, and the shortcut has to be revisited BEFORE
-    anyone spends ten evenings on it.
+    We never mirror an opponent's board -- the human reads a few numbers off
+    the app's player panel, names the wonders they complete, and `state_io`
+    back-solves.  That is only sound if what we ask for pins down every
+    rival-derived feature.  If the feature work adds a rival term the operator
+    is not asked for, this test fails, and the shortcut has to be revisited
+    BEFORE anyone spends ten evenings on it.
+
+    It has fired for real once (the GAP-3 rival features), which is the whole
+    reason it exists.  The fix is never to append a name to RIVAL_FEATURE_KEYS
+    -- that silences the alarm and leaves the harness feeding the bot a zero
+    for the whole game, so the advice logged against the app AI comes from a
+    policy nobody trained.
     """
 
     def test_rival_feature_keys_are_the_ones_we_ask_for(self):
@@ -175,45 +217,100 @@ class ForcedRivalsAreExact(unittest.TestCase):
         self.assertEqual(
             rival_keys, set(M.RIVAL_FEATURE_KEYS),
             "the evaluator grew or lost a rival feature. harness.mirror asks "
-            "for c/cr/sr/str only; check that those four still determine every "
-            "rival_* feature, and update RIVAL_FEATURE_KEYS.")
+            f"for {'/'.join(M.RIVAL_ASK_KEYS)}; check that those still "
+            "determine every rival_* feature -- and if they do not, grow the "
+            "ASK, do not just grow RIVAL_FEATURE_KEYS.")
 
-    def test_four_numbers_reconstruct_the_rival_features(self):
+    def test_what_we_ask_for_reconstructs_the_rival_features(self):
         board = midgame()
         st = board.state
         me = board.me
+        # a rival with a completed wonder, so the wonder arm of this test is
+        # exercised rather than decorative (self-play has not built one by
+        # round 8).  This is exactly the state the operator's `built+` leaves.
+        S.patch(board, f"p{(me + 1) % st.num_players} built+ Colossus")
         before = W.features(st, me)
+        for k in ("rival_free_ca", "rival_hand_civil", "rival_wonders"):
+            self.assertGreater(before[k], 0,
+                               f"{k} is 0 here, so restoring it proves nothing")
+        panel = _read_the_panel(st, me)
+        _wreck(st, me)
 
-        wanted = {}
-        for q in st.players:
-            if q.idx == me:
-                continue
-            s = effects.compute(st, q)
-            wanted[q.idx] = {"c": q.culture, "cr": s.culture,
-                             "sr": s.science, "str": s.strength}
-
-        # wreck every rival board the way a completely untranscribed opponent
-        # would look, then restore ONLY the four reported numbers
-        for q in st.players:
-            if q.idx == me:
-                continue
-            for t in q.techs.values():
-                t.workers = 0
-            q.culture = 0
-            q.completed_wonders = []
-            q.government = "Despotism"
-            q.hand_civil = []
-            effects.invalidate(st, q)
-
-        for idx, vals in wanted.items():
-            for key, val in vals.items():
-                S.patch(board, f"p{idx} {key}={val}")
+        for idx, (vals, wonders) in panel.items():
+            # ...in the order the table happens: wonders are named as they are
+            # completed, the panel numbers are forced at the round check.
+            if wonders:
+                S.patch(board, f"p{idx} built+ " + ", ".join(wonders))
+            for key in M.RIVAL_FORCE_KEYS:
+                S.patch(board, f"p{idx} {key}={vals[key]}")
 
         after = W.features(st, me)
         for k in M.RIVAL_FEATURE_KEYS:
             self.assertAlmostEqual(
                 before[k], after[k], places=6,
-                msg=f"{k} could not be restored from c/cr/sr/str alone")
+                msg=f"{k} could not be restored from what the operator types "
+                    f"({'/'.join(M.RIVAL_ASK_KEYS)} + wonder names)")
+
+    def test_every_asked_key_is_applicable_or_checkable(self):
+        """No key may be prompted for that goes nowhere.
+
+        That is precisely the bug this branch fixed: `hc=` was asked for every
+        round, parsed, logged -- and written into an advisor-side dict that
+        `features()` never reads.
+        """
+        self.assertEqual(set(M.RIVAL_ASK_KEYS),
+                         set(M.RIVAL_FORCE_KEYS) | set(M.RIVAL_CHECK_BY_KEY))
+        board = midgame()
+        for key in M.RIVAL_FORCE_KEYS:
+            with self.subTest(key=key):
+                S.patch(board, f"p1 {key}=3")        # must not raise
+
+    def test_each_forced_key_actually_moves_its_feature(self):
+        """A forced key that changes no feature is unpaid data entry; a key
+        that is asked for but does not reach the feature is worse."""
+        moves = {"c": "rival_culture", "cr": "rival_culture_rate",
+                 "sr": "rival_science_rate", "str": "rival_strength",
+                 "ca": "rival_free_ca", "hc": "rival_hand_civil"}
+        for key, feat in moves.items():
+            with self.subTest(key=key):
+                board = midgame()
+                st = board.state
+                base = W.features(st, board.me)[feat]
+                for q in st.players:
+                    if q.idx != board.me:
+                        S.patch(board, f"p{q.idx} {key}={int(base) + 9}")
+                self.assertAlmostEqual(W.features(st, board.me)[feat],
+                                       base + 9, places=6)
+
+    def test_a_missed_wonder_is_caught_by_the_count(self):
+        """Wonders come in by NAME, so the mirror can be wrong about them --
+        and therefore the count on the panel is a real check, the only hard
+        one on the rival side."""
+        board = midgame()
+        st = board.state
+        idx = next(q.idx for q in st.players if q.idx != board.me)
+        mirror_says = len(st.players[idx].completed_wonders)
+        self.assertEqual(M.check_rivals(board, {idx: {"w": mirror_says}}), [])
+        ds = M.check_rivals(board, {idx: {"w": mirror_says + 1}})
+        self.assertEqual([(d.key, d.severity) for d in ds], [("w", M.FAIL)])
+        # and typing the name that was missed clears it
+        S.patch(board, f"p{idx} built+ Colossus")
+        self.assertEqual(
+            M.check_rivals(board, {idx: {"w": mirror_says + 1}}), [])
+
+    def test_every_asked_key_has_a_probe_watching_it(self):
+        """The ask is static, the derivation is dynamic.  Every asked field
+        must have a probe, or it can stop mattering (or start) unseen."""
+        from harness import fields as F
+        for key, pid in M.RIVAL_PROBE_IDS.items():
+            with self.subTest(key=key):
+                self.assertIn(pid, F.PROBES_BY_ID)
+        self.assertEqual(set(M.RIVAL_PROBE_IDS), set(M.RIVAL_ASK_KEYS))
+
+    def test_an_unasked_rival_key_is_not_silently_dropped(self):
+        _, vals, errs = M.parse_rival_line("p1 c=10 zz=3")
+        self.assertTrue(errs)
+        self.assertEqual(vals, {"c": 10})
 
 
 if __name__ == "__main__":

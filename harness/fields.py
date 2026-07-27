@@ -186,11 +186,16 @@ def _rival_hand_ids(state, seat):
 
 
 def _rival_hand_size(state, seat):
-    card = _any_card(_civil_pool(state.num_players))
-    if card is None:
-        raise ValueError("no civil card to add")
+    """One more card in each rival hand, WITHOUT an identity.
+
+    Deliberately `hidden_civil` rather than appending a named card: that keeps
+    this probe a pure test of the *size* channel (`hc=`, which is all the
+    operator types) and leaves the identity channel entirely to
+    `_rival_hand_ids`.  Appending a real card moved both at once and made the
+    two verdicts uninterpretable.
+    """
     for p in _rivals(state, seat):
-        p.hand_civil = list(p.hand_civil) + [card]
+        p.hidden_civil += 1
 
 
 def _rival_mil_hand_size(state, seat):
@@ -276,8 +281,10 @@ PROBES = [
     # ---- rival board and hands (the expensive stuff)
     Probe("rival.techs", "rival tableau: every tech and its workers",
           "p{i} tech+ <card>:<n>", "rival", _rival_techs, 25.0),
+    # a name when one is completed (a handful of times a game), plus one digit
+    # a round for `mirror.RIVAL_CHECKS` to verify none was missed
     Probe("rival.wonders", "rival completed wonders", "p{i} built+ <wonder>",
-          "rival", _rival_wonders, 4.0),
+          "rival", _rival_wonders, 2.5),
     Probe("rival.government", "rival government", "p{i} gov=",
           "rival", _rival_gov, 2.0),
     Probe("rival.hand_civil_size", "rival civil hand size", "p{i} hc=",

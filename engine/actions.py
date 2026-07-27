@@ -119,7 +119,10 @@ def _take_gate(state, p, budget=None):
     surcharge = (0 if p.leader == "Michelangelo"
                  else len(p.completed_wonders) + p.destroyed_wonders)
     leader_discount = 1 if p.leader == "Hammurabi" else 0
-    return (have, len(p.hand_civil) >= civil_hand_limit(state, p),
+    # `hand_size`, not `len(hand_civil)`: §2.5 counts CARDS, and the app
+    # harness can hold a rival's hand as a count without names.  Identical in
+    # self-play, where `hidden_civil` is always 0.
+    return (have, p.hand_size("civil") >= civil_hand_limit(state, p),
             surcharge, leader_discount)
 
 

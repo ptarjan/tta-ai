@@ -6,12 +6,13 @@ added here is only the three things `docs/EXTERNAL_AIS.md` section 6 says are
 missing:
 
 1. **A minimal, derived prompt.**  Opponent turns ask for the freshly dealt row
-   cards and nothing else.  Rival state is collected once per round as four
-   numbers per rival, read straight off the app's player panel, because
-   `harness.fields` shows those four numbers reconstruct every rival-derived
-   feature the evaluator has.  The derivation is re-run every round against the
-   live board, so when the card-row / opponent-hand features land the harness
-   starts demanding them **by itself** and says so out loud.
+   cards, and for anything of theirs that became public (a completed wonder).
+   Rival state is collected once per round as `mirror.RIVAL_ASK_KEYS` numbers
+   per rival, read straight off the app's player panel, because that set is
+   what reconstructs every rival-derived feature the evaluator has -- no more,
+   and no fewer.  The derivation is re-run every round against the live board,
+   so when a feature grows an eye for something else the harness starts
+   demanding it **by itself** and says so out loud.
 2. **A mandatory per-round checksum** on our own board, which the mirror
    *predicts* and can therefore be caught getting wrong.
 3. **A structured record** (`harness.record`) with the setup, the pact bias and
@@ -40,19 +41,31 @@ Through the Ages -- CGE app harness.
 
 Per round you type this, and nothing else:
   * the cards dealt into the row, as you see them ('bro irr alc' is enough)
-  * one line for your own panel     c/s/str/f/r
-  * one line per rival panel        c/cr/sr/str
+  * one line for your own panel     %(spine)s
+  * one line per rival panel        %(rival)s
+  * the NAME of any wonder a rival completes, when it happens
+      p1 built+ Colossus
 
-Everything else on their boards -- techs, wonders, government, food,
-resources, actions, hand sizes -- is provably invisible to the evaluator
-(`python3 -m harness.fields` prints the derivation).  Do not type it.  If the
-evaluator grows an eye for something new, this harness will start asking for
-it on its own, mid-game, in capital letters.
+%(fields)s
+
+Everything else on their boards -- techs, government, food, resources,
+military actions, free workers, happiness -- is provably invisible to the
+evaluator (`python3 -m harness.fields` prints the derivation).  Do not type
+it.  If the evaluator grows an eye for something new, this harness will start
+asking for it on its own, mid-game, in capital letters.
+
+Every number above is public information at the table (RULES_SPEC.md 2.6 for
+the hand: civil cards are only ever taken from the open row).  If you find
+yourself opening a hidden zone to answer one of them, stop -- that is a bug in
+this harness, not a thing you should type.
 
 STRICT MODE IS THE MEASUREMENT.  Press Enter and play what the bot starred.
 The moment you "help" it, the score stops measuring the bot -- and only the
 note you write at the end will ever say so.
-"""
+""" % {"spine": "/".join(M.SPINE),
+       "rival": "/".join(M.RIVAL_ASK_KEYS),
+       "fields": "\n".join(f"    {k:<4} {M.RIVAL_LABELS[k]}"
+                           for k in M.RIVAL_ASK_KEYS)}
 
 
 class HarnessConsole(Console):
@@ -147,8 +160,11 @@ class HarnessConsole(Console):
         who = adv.state.decider()
         self.check_dealt()
         self.say(f"\n-- p{who}'s turn.")
-        line = self.ask(f"  did p{who} hit YOU or change the shared board? "
-                        f"(Enter = no) > ").strip()
+        # wonders are named here, not counted at the round check: the name
+        # carries the effects, and `mirror.RIVAL_CHECKS` verifies the COUNT a
+        # moment later, so a missed one is caught rather than lived with.
+        line = self.ask(f"  did p{who} hit YOU, complete a WONDER, or change "
+                        f"the shared board? (Enter = no) > ").strip()
         while line:
             if line.lower() in ("quit", "q", "exit"):
                 return False
@@ -183,16 +199,39 @@ class HarnessConsole(Console):
         for d in result.discrepancies:
             if d.severity == M.WARN:
                 self.say(f"  ? {d}  (arithmetic, not proof -- re-read it)")
-        if result.failed and not self.handle_desync(result):
+        if result.failed and not self.handle_desync(result, rivals):
             return False
+        # only now, and only the forced keys: `w` is a check on what the
+        # mirror already believes, so writing it back would erase the check.
         for idx, vals in rivals.items():
-            for key in M.RIVAL_ASK_KEYS:
+            for key in M.RIVAL_FORCE_KEYS:
                 if vals.get(key) is not None:
                     self.report(f"p{idx} {key}={vals[key]}")
         self.log.observed(st.round, getattr(self.adv, "dealt_slots", []),
                           {str(k): v for k, v in rivals.items()}, self.typed)
         self.typed = []
         return True
+
+    def ask_set_note(self):
+        """Say out loud which asked fields this bot does not currently read.
+
+        The rival ask is deliberately STATIC while the derivation is dynamic,
+        and that gap has to be visible rather than implied.  A field whose
+        weight is 0.0 today still gets typed, because the whole value of a
+        logged position is that a bot trained next week can re-score it -- but
+        the operator is entitled to know they are paying for the future, and
+        `docs/APP_HARNESS.md` section 6 prices exactly these fields.
+        """
+        idle = [k for k in M.RIVAL_ASK_KEYS
+                if self.verdicts.get(M.RIVAL_PROBE_IDS.get(k, ""), F.INERT)
+                not in F.MANDATORY]
+        if not idle:
+            return "every rival field you are asked for moves this bot's move."
+        return ("note: " + ", ".join(idle) + " are ADVISORY for this bot -- "
+                "they do not change the move it plays today. You are typing "
+                "them so the position can be re-scored by the bot that "
+                "finishes training next; docs/APP_HARNESS.md section 6 prices "
+                "them at ~4 min/game.")
 
     def _rederive(self):
         """Re-run the field derivation against the live board.
@@ -260,7 +299,7 @@ class HarnessConsole(Console):
                 break
         return rivals
 
-    def handle_desync(self, result):
+    def handle_desync(self, result, rivals=None):
         """A hard mismatch.  There is no 'continue anyway' option, by design."""
         self.say("\n" + "!" * 70)
         self.say("DESYNC. The mirror and the app disagree:")
@@ -296,7 +335,8 @@ class HarnessConsole(Console):
                     cause = self.ask("  a cause is required > ")
                 self.log.resync(result.round, result.discrepancies, patches,
                                 cause.strip())
-                after = M.round_check(self.adv.board, result.reported)
+                after = M.round_check(self.adv.board, result.reported,
+                                      rivals=rivals)
                 if after.failed:
                     self.say("  ! still out of sync:")
                     for d in after.discrepancies:
@@ -310,6 +350,7 @@ class HarnessConsole(Console):
 
     def run(self):
         self.say(HEADER)
+        self.say(self.ask_set_note())
         self.say(f"bot: {getattr(self.adv.bot, 'source', '?')}")
         self.say(S.render(self.adv.board))
         try:
