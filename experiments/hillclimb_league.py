@@ -123,18 +123,31 @@ DEFAULT_STATE = os.path.join(HERE, "league_state")
 # on army early is not worth paying for), and the search is entitled to
 # disagree with the default.
 #
-# Left alone on purpose: the ten phase multipliers whose default is POSITIVE
-# (`culture_late`, `culture_rate_early`, ...) are still clamped one-sided,
-# because that is what the live run has been training under and dropping the
-# clamp is a behaviour change to the search, not a correctness fix.  By the
-# gauge argument above those clamps are probably also meaningless and they do
-# fire in practice (`culture_late` 27 times at 3p, `wonder_progress_early` 28) --
-# but removing them belongs in its own separately-measured commit.
+# THE EXEMPTION IS NOW SYMMETRIC (docs/CULTURE_GAP.md 19c fix #1).  It used to
+# apply only to the ten phase multipliers whose default is NEGATIVE, on the
+# stated grounds that dropping the clamp on the ten POSITIVE-default ones
+# (`culture_late`, `culture_rate_early`, ...) was "a behaviour change to the
+# search, not a correctness fix", and belonged in its own measured commit.
+# CULTURE_GAP 15a is that measurement, and it says the clamp is NECESSARY AND
+# SUFFICIENT for a spurious attractor at exactly 0.000:
+#
+#   pure-drift simulation (real mutate + real guard_weights, coin-flip accept,
+#   120 gens, 300 runs, tools/drift_sim.py), rate of landing on EXACTLY 0.000:
+#
+#     positive-default phase multipliers, guard ON   15.7%   (20.0% observed)
+#     negative-default phase multipliers, guard off   0.0%   ( 0.0% observed)
+#     both halves, guard turned OFF                   0.0%
+#
+# So the asymmetry in the champions is manufactured by the guard, not by the
+# game, and the gauge argument above says the clamp could not have been
+# protecting anything in the first place.  Both halves are exempt now.
 _PHASE_MULT = frozenset(k + suf for k in PHASE_KEYS
                         for suf in ("_early", "_late"))
 
-#: value terms whose default is > 0: a trained value below zero is inverted
-NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0)
+#: value terms whose default is > 0: a trained value below zero is inverted.
+#: Phase multipliers excluded -- see the EXEMPTION note above.
+NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items()
+                   if v > 0 and k not in _PHASE_MULT)
 #: value terms whose default is < 0: a trained value above zero is inverted.
 #: Phase multipliers excluded -- see the EXEMPTION note above.
 NONPOS = frozenset(k for k, v in DEFAULT_WEIGHTS.items()

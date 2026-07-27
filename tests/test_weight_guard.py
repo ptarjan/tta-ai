@@ -91,13 +91,47 @@ class GuardWeights(unittest.TestCase):
         self.assertEqual(viol, [])
         self.assertEqual(out["culture_rate_late"], 0.9)
 
+    def test_phase_exemption_is_symmetric(self):
+        """docs/CULTURE_GAP.md 15a/19c fix #1.
+
+        The ten POSITIVE-default phase multipliers used to stay one-sided
+        clamped, which made "exactly 0.000" a spurious attractor: 15.7% per
+        multiplier under pure drift with the guard on, 0.0% with it off,
+        against 20.0% observed in the live champions.  The gauge argument that
+        exempts the negative-default half applies verbatim to this half, so the
+        exemption must be symmetric or the clamp keeps manufacturing zeros.
+        """
+        phase = [k + s for k in PHASE_KEYS for s in ("_early", "_late")]
+        pos_phase = [k for k in phase if DEFAULT_WEIGHTS.get(k, 0.0) > 0]
+        # the ten the old guard still clamped -- assert we are actually
+        # exercising them, so this test cannot silently become vacuous
+        self.assertGreaterEqual(len(pos_phase), 10)
+        for k in pos_phase:
+            with self.subTest(weight=k):
+                self.assertNotIn(k, NONNEG)
+                # a positive-default phase multiplier may go negative and must
+                # NOT be rewritten to 0.0 -- that rewrite is the attractor
+                out, viol = guard_weights(dict(DEFAULT_WEIGHTS, **{k: -0.75}))
+                self.assertEqual(viol, [])
+                self.assertEqual(out[k], -0.75)
+
+    def test_value_terms_are_still_clamped_both_ways(self):
+        """The exemption must not leak into the value terms it protects."""
+        for k, v in (("science", -6.089), ("rival_culture", 5.611),
+                     ("end_turn_bias", 4.0), ("culture", -1.0)):
+            with self.subTest(weight=k):
+                out, viol = guard_weights(dict(DEFAULT_WEIGHTS, **{k: v}))
+                self.assertIn(k, _viol_names(viol))
+                self.assertEqual(out[k], 0.0)
+
     def test_the_two_sets_partition_the_vector(self):
         """Nothing is in both sets, and only phase multipliers are unguarded."""
         self.assertEqual(NONNEG & NONPOS, frozenset())
         unguarded = set(DEFAULT_WEIGHTS) - NONNEG - NONPOS
         phase = {k + s for k in PHASE_KEYS for s in ("_early", "_late")}
         self.assertEqual(unguarded, {k for k in phase
-                                     if DEFAULT_WEIGHTS.get(k, 0.0) < 0})
+                                     if DEFAULT_WEIGHTS.get(k, 0.0) != 0.0}
+                         | {k for k, v in DEFAULT_WEIGHTS.items() if v == 0.0})
 
     def test_clean_default_vector_is_untouched(self):
         out, viol = guard_weights(dict(DEFAULT_WEIGHTS))
