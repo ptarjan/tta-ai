@@ -60,6 +60,11 @@ def main():
     print(f"loaded {args.ckpt} on {device} "
           f"({torch.cuda.get_device_name(0) if device.startswith('cuda') else 'cpu'})",
           flush=True)
+    # a second neural opponent (candidate-vs-best gating): `--opponent neural:PATH`
+    opp_value = None
+    if args.opponent.startswith("neural:"):
+        opp_value = NeuralValue.from_checkpoint(args.opponent[len("neural:"):],
+                                                device)
 
     n = args.players
     shares, ca, cb, moves, errs = [], [], [], [], 0
@@ -75,10 +80,11 @@ def main():
         for i in range(n):
             if i == seat:
                 bots.append(neural)
-            elif args.opponent == "neural":
-                # self-play control: the opponent is another NeuralBot sharing
-                # the same value model (should duel near the 1/n null).
-                bots.append(NeuralBot(value, seed=gseed * 97 + i * 13 + 1,
+            elif args.opponent == "neural" or opp_value is not None:
+                # self control (`neural`, shares model) OR candidate-vs-best
+                # gating (`neural:PATH`, a second loaded model).
+                bots.append(NeuralBot(opp_value or value,
+                                      seed=gseed * 97 + i * 13 + 1,
                                       determinize=bool(args.determinize),
                                       end_turn_bias=args.end_turn_bias))
             else:
@@ -121,6 +127,9 @@ def main():
     print(f"oppo cult    {cbm:.1f} +/- {cbh:.1f}")
     print(f"margin       {mm:+.1f} +/- {mh:.1f}")
     print(f"moves/game   {sum(moves)/len(moves):.0f}   engine errors {errs}")
+    # machine-parseable line for the self-play loop orchestrator
+    print(f"SUMMARY win={m:.4f} ci={half:.4f} neural={cam:.1f} opp={cbm:.1f} "
+          f"margin={mm:.1f} n={len(shares)} errs={errs}", flush=True)
 
 
 if __name__ == "__main__":

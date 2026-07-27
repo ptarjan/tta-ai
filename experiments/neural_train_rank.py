@@ -66,6 +66,17 @@ def main():
     ap.add_argument("--blocks", type=int, default=3)
     ap.add_argument("--dropout", type=float, default=0.15)
     ap.add_argument("--lam", type=float, default=1.0, help="ranking weight")
+    ap.add_argument("--vweight", type=float, default=1.0,
+                    help="value-loss weight; raise it to pin the output SCALE "
+                         "(the BT ranking loss is scale-hungry and decalibrates "
+                         "the value head at vweight=1 -- val MAE ballooned to 84 "
+                         "in Stage 1b). See docs/NEURAL_EVAL.md.")
+    ap.add_argument("--init", default=None,
+                    help="warm-start checkpoint (for the self-play loop)")
+    ap.add_argument("--select", default="combo",
+                    choices=("pair", "mae", "combo"),
+                    help="best-checkpoint criterion: pair acc, value MAE, or a "
+                         "combo (pair_acc - mae/300) that keeps both healthy")
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--out", default="checkpoints/value_rank.pt")
     ap.add_argument("--device", default="cuda")
@@ -87,6 +98,10 @@ def main():
           f"train vals {len(Xv)}  dim {Xa.shape[1]}", flush=True)
 
     net = ValueNet(Xa.shape[1], args.hidden, args.blocks, args.dropout).to(device)
+    if args.init and os.path.exists(args.init):
+        obj = torch.load(args.init, map_location=device, weights_only=False)
+        net.load_state_dict(obj["state_dict"])
+        print(f"warm-started from {args.init}", flush=True)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
 
@@ -100,7 +115,7 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     npairs = len(Xa_t)
     nval_rows = len(Xv_t)
-    best_pa, best_ep = -1.0, 0
+    best_score, best_ep, best_pa_at, best_mae_at = -1e9, 0, 0.0, 0.0
     for ep in range(args.epochs):
         net.train()
         perm = torch.randperm(npairs)
@@ -123,7 +138,7 @@ def main():
             rank = F.softplus(-(va - vb)).mean()
             vpred = net(xv)
             vloss = F.smooth_l1_loss(vpred, yv_b)
-            loss = vloss + args.lam * rank
+            loss = args.vweight * vloss + args.lam * rank
             loss.backward()
             opt.step()
             tot_r += rank.item()
@@ -146,18 +161,25 @@ def main():
                 vp.append(net(Xv_vt[i:i + 8192]).cpu())
             vp = torch.cat(vp).numpy()
         val_mae = float(np.abs(vp - yv_vs).mean() * MARGIN_SCALE)
-        best = pair_acc > best_pa
+        if args.select == "pair":
+            score = pair_acc
+        elif args.select == "mae":
+            score = -val_mae
+        else:  # combo: keep ranking high AND value calibrated
+            score = pair_acc - val_mae / 300.0
+        best = score > best_score
         print(f"epoch {ep+1:3d}  rank {tot_r/nb:.4f}  vloss {tot_v/nb:.4f}  "
               f"val_pair_acc {pair_acc:.4f}  val_mae {val_mae:.1f}"
               f"{'  *best' if best else ''}", flush=True)
         if best:
-            best_pa, best_ep = pair_acc, ep + 1
+            best_score, best_ep = score, ep + 1
+            best_pa_at, best_mae_at = pair_acc, val_mae
             save_checkpoint(args.out, net, meta={
                 "val_pair_acc": pair_acc, "val_mae_culture": val_mae,
-                "epoch": ep + 1, "lam": args.lam,
+                "epoch": ep + 1, "lam": args.lam, "vweight": args.vweight,
                 "hidden": args.hidden, "blocks": args.blocks})
-    print(f"best val_pair_acc {best_pa:.4f} at epoch {best_ep}; saved {args.out}",
-          flush=True)
+    print(f"best epoch {best_ep}: pair_acc {best_pa_at:.4f} mae {best_mae_at:.1f}"
+          f"; saved {args.out}", flush=True)
 
 
 if __name__ == "__main__":
