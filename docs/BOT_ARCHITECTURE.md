@@ -880,6 +880,15 @@ Written before the win rates landed, so it cannot be tuned to them.
 * The determinization re-shuffles only the two decks. Rival military *hands* are
   also hidden and are not re-dealt; `weighted.features` reads no rival hand, so
   nothing currently reads them, but a future evaluator would need them handled.
+* **Unchecked: is it exploiting the engine rather than the game?** 194.5 mean
+  culture is higher than anything previously recorded here, and a deeper searcher
+  is exactly the thing that finds a mispriced action. PlanBot only ever plays
+  moves the harness's own `legal_moves` produced, so nothing illegal can happen,
+  but a *mispriced* legal action is not ruled out — and `docs/COMBAT_AUDIT.md`
+  found three real rules bugs on another branch the same night. The cheap check
+  is a move-kind histogram against the champion (what is it doing *more* of?)
+  followed by a rules read of whatever dominates. That should be run before the
+  88.6% is quoted anywhere as a strategy result rather than a search result.
 
 **On the cost census.**
 * All timings were taken on a box running 20-25 runnable processes on 6 cores.
