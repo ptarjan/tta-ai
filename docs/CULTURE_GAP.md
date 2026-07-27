@@ -1370,3 +1370,89 @@ Nothing is claimed from gen 10. The comparison starts to mean something around
 gen 40, where the live arm's own trajectory finally moves
 (0.047 → 0.050 → 0.074 → **0.175** → 0.189 → **0.340** at gens 10–60), and the
 probe-vs-control pair is the one that will carry it.
+
+---
+
+# Part 4 — the mechanism, separated into the part that needs selection and the part that does not
+
+The probe was stood down at 21:26 MDT (the horizon fix was adopted on the
+strength of §8d rather than waiting for it; supervisors 54418 and 60757 killed,
+box returned to the three live arms). Everything below is about §10 #1.
+
+Branch rebased onto master `8e751cb`. The 3p/4p evidence base is now
+`experiments/archive_prehorizon/`, which reproduces §12's numbers exactly
+(4p champion `culture_rate` 35.574 / `_early` 0.002 / `_late` −0.316 at gen 119;
+3p 6.250 / 2.158 / −1.320 at gen 212). The 2p arm was not restarted, so it is
+still live at gen 335 — and it is still reading `culture_rate_early` **0.000**
+while its base has grown 23.927 → **32.246** in the ninety minutes since §12 was
+written. The mechanism is still running.
+
+## 15. A pure-drift simulation: which half of this needs selection?
+
+`tools/drift_sim.py`. The §12 argument is about the **search's move generator**,
+not about Through the Ages, so it can be tested without playing a single game:
+run the real `hillclimb.mutate()` and the real `guard_weights()` for 120
+generations, two proposals per generation exactly as the trainer does, and
+**accept on a coin flip** (p=0.20, the live arms' measured accept rate) with no
+reference to whether the candidate is any good. 300 independent runs.
+
+| | simulated, pure drift | observed, live/archived champions |
+|---|---|---|
+| exactly-zero rate, the **10 positive-default** phase multipliers (guard-clamped) | **15.7%** | **6/30 = 20.0%** |
+| exactly-zero rate, the **10 negative-default** ones (guard-exempt, §7) | **0.0%** | **0/30 = 0.0%** |
+| same, with the guard turned OFF (counterfactual) | **0.0% / 0.0%** | — |
+| `culture_rate` base, median [p90] | **3.22 [10.54]** | 32.25 (2p) · 6.25 (3p) · **35.57 (4p)** |
+| `culture_rate` shape retention `|late−early| / 4.0`, median | **0.90** | 0.11 (2p) · 0.87 (3p) · **0.08 (4p)** |
+
+Three conclusions, and the second and third **correct §12c**.
+
+### 15a. The exactly-zero pile-up needs no selection at all — and the guard is exactly the cause
+
+Drift plus the one-sided clamp reproduces the observed pile-up quantitatively
+(15.7% simulated vs 20.0% observed) *and* reproduces the asymmetry exactly
+(0.0% on the guard-exempt half, in both). Turning the guard off in the
+simulation drives the rate to **0.0% on both halves** — so the clamp is not
+merely correlated with the pile-up, it is necessary and sufficient for it.
+
+§12a's Fisher p=0.012 said the asymmetry was real. This says what produces it,
+with a working counterfactual, and says that **no selection pressure is
+involved**: the optimiser does this to itself.
+
+### 15b. The base runaway is NOT drift — it is selected
+
+Drift leaves `culture_rate` at a median of 3.22 after 120 generations, with a
+90th percentile of 10.54 — *below* its own 5.0 starting value at the median,
+because the step is multiplicative and multiplicative random walks have a
+negative log-drift. The observed 32.2 (2p, 335 gens) and 35.6 (4p, 119 gens)
+are far outside that. **Something is paying the search to inflate this weight.**
+
+§12c framed the level/shape step-size ratio as the trap. That framing was
+wrong in its causality and I am correcting it: the ratio is *downstream*. A
+large base produces a large step, but drift alone does not produce a large base.
+The ratio is what makes the collapse **irreversible**, not what causes it.
+
+### 15c. The shape collapse is not drift either
+
+Drift's median shape retention is **0.90** — the shaping survives 120
+generations of undirected random walk essentially intact. The observed 0.11
+(2p) and 0.08 (4p) are not drift. Note the consistency check that falls out:
+**3p, the one arm that kept its shaping, reads 0.87 retention on a base of 6.25
+— which is almost exactly what pure drift predicts (0.90 on a base of ~3-5).**
+3p looks like an arm where nothing selected on this axis at all; 2p and 4p look
+like arms where something selected hard on the base.
+
+### 15d. So the chain is now, with each link separately established
+
+1. **Selection inflates the `culture_rate` base.** Measured as not-drift (15b).
+   The candidate cause is §16.
+2. **A large base starves the shape coordinate.** Once base = 35.6, `mutate`'s
+   step `gauss(0,s)·(|w|+0.15)` gives the level 39–41× the shape's step sd
+   (§12c, recomputed on the archived vectors). Exact, from the code.
+3. **The one-sided guard clamp then pins `*_early` at exactly 0.** Drift alone
+   suffices once step 2 has made the coordinate small; reproduced in simulation
+   at 15.7% vs 20.0% observed, and eliminated by turning the guard off (15a).
+4. **The result cannot be undone.** Rebuilding the default's `|late−early| = 4.0`
+   from 0.32 at a shape step sd of 0.056 needs ~66σ of coherent drift, on a
+   coordinate the trainer's own ablation scores at 0.000 ± 0.005 (§11).
+
+Steps 2, 3 and 4 are settled. Step 1 is the open one and is §16.
