@@ -106,6 +106,7 @@ _DC_CONTAINERS = {
 # _ATOMIC_CONTAINERS, applied to the inner containers.
 _NESTED_ATOMIC = {
     ("GameState", "discarded_military"): "list",    # age -> [card names]
+    ("GameState", "civil_discard"): "list",         # age -> [card names]
     ("PlayerState", "one_time_discount"): "dict",   # "build" -> {"resources": 1}
 }
 

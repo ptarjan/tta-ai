@@ -665,7 +665,13 @@ def apply(state, move, rng=None):
 
 def _h_take(state, p, move, rng):
     idx = move[1]
-    pay_ca(state, p, take_cost(state, p, idx))
+    cost = take_cost(state, p, idx)
+    pay_ca(state, p, cost)
+    # the ONLY place civil actions are spent reaching into the row; record it
+    # so the evaluator can price it apart from `ca_left` (INFORMATION_AUDIT
+    # GAP 1).  `take_card` below is also reachable for free takes (events,
+    # leaders), which correctly do not count here.
+    p.ca_spent_taking += cost
     take_card(state, p, idx)
 
 

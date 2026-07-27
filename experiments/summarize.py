@@ -34,7 +34,13 @@ GROUPS = {
                 "yellow_bank", "free_workers", "workers", "prod_workers",
                 "urban_workers", "unit_workers"),
     "happiness": ("happy_margin", "discontent", "uprising"),
-    "actions": ("civil_actions", "military_actions", "ca_left", "ma_left"),
+    "actions": ("civil_actions", "military_actions", "ca_left", "ma_left",
+                "take_cost_paid"),
+    # the card row as a strategic axis of its own: what the sweep is about to
+    # destroy and what waiting would save (docs/INFORMATION_AUDIT.md gap 2).
+    # Its own group so hillclimb's `rescale`/`group` operators can move row
+    # pricing coherently instead of only ever scattering onto one of the two.
+    "row": ("row_urgency", "row_bargain_forgone"),
     "military": ("strength", "strength_rel", "strength_deficit",
                  "strength_lead", "tactic_level", "colonies", "pacts",
                  "pact_blocks_attack", "auction_committed", "auction_bid"),
@@ -45,7 +51,8 @@ GROUPS = {
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
               "hand_potential"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
-               "rival_science_rate", "rival_strength"),
+               "rival_science_rate", "rival_strength", "rival_free_ca",
+               "rival_hand_civil", "rival_wonders", "rival_hand_potential"),
     "search": ("end_turn_bias",),
 }
 

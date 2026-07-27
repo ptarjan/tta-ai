@@ -35,8 +35,8 @@ from .fastcopy import copy_state
 from .trial import USE_JOURNAL, fresh_trial_rng
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
-           "card_potential", "hand_potential",
-           "load_weights", "save_weights"]
+           "card_potential", "hand_potential", "rival_hand_potential",
+           "row_pressure", "load_weights", "save_weights"]
 
 # ---------------------------------------------------------------- metadata
 
@@ -173,14 +173,49 @@ def deferred_credit(state, idx):
     return offers, committed, bid_cost, blocks_attack, gains
 
 
+class _RivalView:
+    """An immutable snapshot of the parts of a rival's board `can_take` reads.
+
+    `rival_context` is computed ONCE per decision, at the root, and is handed
+    unchanged to every candidate -- including on the journalled path, where
+    the "root state" is the very object the candidates mutate and un-mutate.
+    That is why `rival_context` has always returned plain numbers and never
+    references into the state (see its docstring).  A view keeps that
+    invariant: every field is copied out into an immutable container at
+    build time, so nothing here can be aliased to a rollback.
+
+    The attribute names are exactly the ones `actions._can_take_gated` reads
+    off a player, so the real legality rules are reused rather than restated.
+    """
+    __slots__ = ("idx", "wonder", "taken_leader_ages", "hand_civil",
+                 "techs", "government")
+
+    def __init__(self, q):
+        self.idx = q.idx
+        # `_can_take_gated` only ever asks `p.wonder is None`
+        self.wonder = None if q.wonder is None else True
+        self.taken_leader_ages = tuple(q.taken_leader_ages)
+        self.hand_civil = frozenset(q.hand_civil)
+        self.techs = frozenset(q.techs)          # `name in p.techs`
+        self.government = q.government
+
+
 def rival_context(state, idx):
     """Rival aggregates that only change when *they* move.
 
     Computed once per decision at the root and reused for every candidate
     move, which keeps the 1-ply search from recomputing every opponent's
     full statistics ~30 times per decision.
+
+    `rival_views` carries, per live rival, an immutable `_RivalView` plus the
+    `actions._take_gate` tuple for that rival budgeted at their FULL civil
+    action allotment -- i.e. what they will be able to reach on their next
+    turn, not what is left of this one.  It is built here for the same reason
+    everything else here is: `effects.compute` is the expensive part and the
+    trial states thrown at `evaluate` have no stats cache.
     """
     best_rate = best_sci = best_str = 0
+    views = []
     for q in state.players:
         if q.idx == idx or q.resigned:
             continue
@@ -188,8 +223,14 @@ def rival_context(state, idx):
         best_rate = max(best_rate, s.culture)
         best_sci = max(best_sci, s.science)
         best_str = max(best_str, s.strength)
+        gate = (s.civil_actions,
+                len(q.hand_civil) >= s.civil_actions + s.civil_hand_limit,
+                0 if q.leader == "Michelangelo"
+                else len(q.completed_wonders) + q.destroyed_wonders,
+                1 if q.leader == "Hammurabi" else 0)
+        views.append((_RivalView(q), gate))
     return {"rival_culture_rate": best_rate, "rival_science_rate": best_sci,
-            "rival_strength": best_str}
+            "rival_strength": best_str, "rival_views": tuple(views)}
 
 
 # ------------------------------------------------------- the game horizon
@@ -404,6 +445,15 @@ def features(state, idx, ctx=None):
     rivals = [q for q in state.players if q.idx != idx and not q.resigned]
     rival_culture = max((q.culture for q in rivals), default=0)
     rival_mean = (sum(q.culture for q in rivals) / len(rivals)) if rivals else 0
+    # public rival board facts the evaluator was blind to (GAP 3).  `max`
+    # everywhere, so each term means the same thing at 2p, 3p and 4p: the
+    # most action-rich rival is the one who can reach deepest into the row,
+    # the fullest civil hand is the one closest to being unable to take
+    # anything at all (§2.5), and completed wonders are both score and the
+    # +1/wonder take surcharge they will pay for the next one.
+    rival_free_ca = max((q.civil_actions for q in rivals), default=0)
+    rival_hand_civil = max((len(q.hand_civil) for q in rivals), default=0)
+    rival_wonders = max((len(q.completed_wonders) for q in rivals), default=0)
     if ctx is None:
         ctx = rival_context(state, idx)
     strength = s.strength + g("strength", 0.0)
@@ -438,6 +488,12 @@ def features(state, idx, ctx=None):
         "military_actions": s.military_actions + g("military_actions", 0.0),
         "ca_left": p.civil_actions,
         "ma_left": p.military_actions,
+        # civil actions spent THIS turn reaching into the row (GAP 1).  A
+        # separate channel from `ca_left` on purpose: row depth used to reach
+        # the evaluation only through `ca_left`, whose 3p champion weight is
+        # -0.0974, so paying 3 CA instead of 1 for the identical card scored
+        # as a GAIN of 0.195 (docs/INFORMATION_AUDIT.md section 0).
+        "take_cost_paid": p.ca_spent_taking,
         # --- military
         "strength": strength,
         "strength_rel": rel,
@@ -478,6 +534,9 @@ def features(state, idx, ctx=None):
         "rival_culture_rate": ctx["rival_culture_rate"],
         "rival_science_rate": ctx["rival_science_rate"],
         "rival_strength": ctx["rival_strength"],
+        "rival_free_ca": rival_free_ca,
+        "rival_hand_civil": rival_hand_civil,
+        "rival_wonders": rival_wonders,
     }
 
 
@@ -601,6 +660,119 @@ def hand_potential(state, idx, w):
     return total
 
 
+def rival_hand_potential(state, idx, w, rivals=None):
+    """The most dangerous rival civil hand, priced through the same weights.
+
+    LEGAL, and this is the point of it: cards taken from the row are public
+    knowledge (docs/RULES_SPEC.md:71, "open civil cards convention"), so
+    `q.hand_civil` is information a human at the table has and the evaluator
+    simply never looked at (docs/INFORMATION_AUDIT.md section 3).  It reads no
+    hidden field, so unlike the military hand it does not interact with the
+    determinization leak in section 6.
+
+    `max` over rivals rather than `sum`, so the term means the same thing at
+    2p, 3p and 4p.
+    """
+    if rivals is None:
+        rivals = [q for q in state.players
+                  if q.idx != idx and not q.resigned]
+    best = 0.0
+    for q in rivals:
+        if not q.hand_civil:
+            continue
+        total = 0.0
+        for n in q.hand_civil:
+            total += card_potential(n, w)
+        if total > best:
+            best = total
+    return best
+
+
+# ------------------------------------------------- take now vs let it slide
+#
+# `game.SWEEP`, duplicated because `engine.game` imports `engine.actions`
+# which this module imports -- importing game here is a cycle.  `test_row_
+# features.py` asserts the two are equal, so the copy cannot rot.
+_SWEEP = {2: 3, 3: 2, 4: 1}
+
+# P(a rival who CAN legally take a card I also want actually takes it) before
+# my next turn.  One constant, deliberately: the alternative on offer was the
+# seven measured per-slot survival rates in docs/INFORMATION_AUDIT.md 2.1,
+# and that audit flags them itself as directional (n~210 per slot, and the
+# opponents generating them were themselves row-blind bots, so a field that
+# actually competed for cards would take more).  Baking seven numbers fitted
+# on blind play into the evaluator would be fitting the bug.  The legality
+# gate underneath -- can that rival reach that slot at all, is their hand
+# full, do they already hold the card, are they mid-wonder -- is EXACT, and
+# is where the signal the expert sources single out actually lives
+# (docs/EXPERT_STRATEGY.md:546: wonders and second leaders are safe to let
+# slide).  This constant only shapes how fast the bargain decays in the
+# number of rivals who could take it.
+RIVAL_TAKE_P = 0.25
+
+
+def row_pressure(state, idx, w, ctx=None):
+    """(row_urgency, row_bargain_forgone) for the civil row.
+
+    The slide is arithmetic, not a guess.  `_replenish` runs at the START of
+    every player's turn (`game.start_turn`), so between one of my turns and
+    the next there are exactly `live` replenishes of `SWEEP[live]` cards --
+    6 slots at 2p, 6 at 3p, 4 at 4p -- plus one more for every card to the
+    left of it that somebody takes.  Ignoring those takes makes `next_slot`
+    an UPPER bound on what the card will cost me next turn, i.e. the bargain
+    below is understated, never overstated.
+
+    * **row_urgency** -- summed `card_potential` of the cards I could legally
+      take that the sweep destroys before I act again.  Take it now or never.
+    * **row_bargain_forgone** -- summed civil actions I overpay by taking a
+      card now instead of next turn, discounted by the chance a rival takes
+      it first.
+
+    Both are evaluated on the POST-move state like every other feature, so
+    taking a doomed card lowers `row_urgency` and taking a card that was
+    about to get cheaper leaves `row_bargain_forgone` behind for the
+    candidate that did not.  Cards whose `card_potential` is <= 0 are skipped
+    in both sums: the sweep destroying a card I do not want is not a loss,
+    and waiting for one is not a bargain.
+
+    Reads `state.card_row` (public), my own board, and the public rival
+    boards/civil hands snapshotted into `ctx`.  No hidden field, so this does
+    not load the `end_turn` information leak (INFORMATION_AUDIT section 6).
+    """
+    row = state.card_row
+    if not row:
+        return 0.0, 0.0
+    p = state.players[idx]
+    n = _live(state)
+    slide = n * _SWEEP[n]
+    mine = actions._take_gate(state, p, budget=actions.ca_total(state, p))
+    views = ctx.get("rival_views", ()) if ctx else ()
+    cost_of = actions.ROW_COST
+    gated = actions._can_take_gated
+    urgency = bargain = 0.0
+    for i, name in enumerate(row):
+        if name is None:
+            continue
+        if not gated(state, p, i, mine, name):
+            continue
+        val = card_potential(name, w)
+        if val <= 0.0:
+            continue
+        nxt = i - slide
+        if nxt < 0:
+            urgency += val
+            continue
+        saving = cost_of[i] - cost_of[nxt]
+        if saving <= 0:
+            continue
+        survive = 1.0
+        for view, gate in views:
+            if gated(state, view, i, gate, name):
+                survive *= 1.0 - RIVAL_TAKE_P
+        bargain += saving * survive
+    return urgency, bargain
+
+
 # ------------------------------------------------------------ default weights
 
 BASE_WEIGHTS = {
@@ -632,6 +804,37 @@ BASE_WEIGHTS = {
     "military_actions": 0.7,
     "ca_left": 0.05,
     "ma_left": 0.05,
+    # --- INFORMATION_AUDIT gaps 1/2/3, all defaulted to 0.0 ON PURPOSE.
+    #
+    # Every one of these is a NEW channel, not a change to an existing one, so
+    # at 0.0 the evaluation is bit-identical to the one the three frozen
+    # champions were trained under and `analysis/frozen/champion_*.json` stay
+    # valid (`load_weights` fills them in from here).  That is the whole point:
+    # the cutover costs nothing and the trainer decides what they are worth.
+    #
+    # 0.0 is not a dead weight either -- `hillclimb.mutate` perturbs by
+    # `gauss(0, s) * (abs(w) + 0.15)`, and that 0.15 floor is exactly what
+    # lets a term that starts at zero move on the first generation that
+    # scatters onto it.
+    #
+    # `take_cost_paid` is deliberately NOT sign-constrained: the sources say a
+    # CA spent grabbing from the row gets MORE valuable late while a CA spent
+    # upgrading gets less (docs/EXPERT_STRATEGY.md:550), so a fitted sign is
+    # the answer here, not a prior.  (A 0.0 default also keeps it out of
+    # hillclimb_league's NONNEG/NONPOS, which are derived from the sign of the
+    # default.)
+    "take_cost_paid": 0.0,
+    # take now vs let it slide (GAP 2): value the sweep is about to destroy,
+    # and civil actions forgone by not waiting.  Both are priced through `w`
+    # itself (like `hand_potential`), so they are scales on a non-linear term
+    # and must not pick up the early/late phase multipliers.
+    "row_urgency": 0.0,
+    "row_bargain_forgone": 0.0,
+    # public rival board/hand facts (GAP 3)
+    "rival_free_ca": 0.0,
+    "rival_hand_civil": 0.0,
+    "rival_wonders": 0.0,
+    "rival_hand_potential": 0.0,
     # military
     "strength": 0.35,
     "strength_rel": 0.35,
@@ -766,6 +969,23 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
     hp = get("hand_potential")
     if hp:
         total += hp * hand_potential(state, idx, w)
+    # The row / rival-hand terms, same shape and same reason as
+    # `hand_potential` above: they are priced through `w`, so they are not
+    # linear features and cannot live in `features()`.  Each is skipped
+    # entirely when its scale is 0, which is the default -- so a champion
+    # trained before these existed evaluates exactly as it did, and pays
+    # nothing for them either.
+    rhp = get("rival_hand_potential")
+    if rhp:
+        total += rhp * rival_hand_potential(state, idx, w)
+    ru = get("row_urgency")
+    rb = get("row_bargain_forgone")
+    if ru or rb:
+        urgency, bargain = row_pressure(state, idx, w, ctx)
+        if ru:
+            total += ru * urgency
+        if rb:
+            total += rb * bargain
     return total
 
 
@@ -817,7 +1037,7 @@ class WeightedBot:
             ctx = rival_context(state, idx)
         except Exception:
             ctx = {"rival_culture_rate": 0, "rival_science_rate": 0,
-                   "rival_strength": 0}
+                   "rival_strength": 0, "rival_views": ()}
         w = self.weights
         end_bias = w.get("end_turn_bias", 0.0)
         if USE_JOURNAL:

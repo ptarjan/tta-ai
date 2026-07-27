@@ -114,7 +114,15 @@ def _replenish(state, rng):
 
     n = _sweep_count(state)
     row = state.card_row
+    db = C.db()
     for i in range(min(n, len(row))):
+        name = row[i]
+        if name is not None:
+            # keep the public record of what was destroyed (§2.1) -- see
+            # GameState.civil_discard and docs/INFORMATION_AUDIT.md GAP 5
+            age = db.age_of(name) if name in db.by_name else state.age_civil
+            journal.touch(journal.touch(state.civil_discard)
+                          .setdefault(age, [])).append(name)
         journal.touch(row)[i] = None
     kept = [c for c in row if c is not None]
     state.card_row = kept + [None] * (ROW_SIZE - len(kept))
@@ -227,6 +235,7 @@ def start_turn(state, rng=None):
                         and state.round >= state.final_round_end)
     p.politics_done = False
     p.taken_this_turn = []
+    p.ca_spent_taking = 0
     if p.skip_next_politics:            # International Agreement (CoL p.12)
         p.skip_next_politics = False
         state.phase = "actions"

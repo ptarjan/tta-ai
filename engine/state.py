@@ -83,6 +83,15 @@ class PlayerState:
     politics_done: bool = False
     tactic_action_used: bool = False    # max 1 play/copy tactic per phase
     taken_this_turn: list = field(default_factory=list)  # action cards
+    # civil actions spent THIS TURN reaching into the card row (§2.3 slot
+    # cost + the wonder surcharge / Hammurabi discount).  Reset in
+    # game.start_turn next to `taken_this_turn`.  Pure bookkeeping: nothing in
+    # the rules reads it, but `features()` cannot see how a civil action was
+    # spent, and "a CA spent grabbing from the row" and "a CA spent upgrading a
+    # worker" move in OPPOSITE directions as the game goes on
+    # (docs/EXPERT_STRATEGY.md:550), so the evaluator needs them as two
+    # channels rather than one `ca_left`.  See docs/INFORMATION_AUDIT.md GAP 1.
+    ca_spent_taking: int = 0
     hammurabi_used: bool = False        # 1 MA used as CA per turn
     churchill_used: bool = False
     bach_upgrade_used: bool = False
@@ -130,6 +139,15 @@ class GameState:
     scoring_events: list = field(default_factory=list)  # Age III events
     available_tactics: list = field(default_factory=list)  # common area
     discarded_military: dict = field(default_factory=dict)  # age -> [names]
+    # Civil cards swept off the left of the row and destroyed (§2.1), age ->
+    # [names], exactly mirroring `discarded_military` above.  A human at the
+    # table sees every one of these go; the engine used to write `None` over
+    # the slot and destroy the record with it, which made the legal card count
+    #     unseen(age) = civil_deck(age, n) - row - hands - tableaux - discard
+    # uncomputable.  Nothing in the rules or the turn loop reads this list --
+    # it is a record, not state -- so it cannot change play.  See
+    # docs/INFORMATION_AUDIT.md GAP 5.
+    civil_discard: dict = field(default_factory=dict)       # age -> [names]
     has_military: bool = False           # military data complete?
     last_round: bool = False
     final_round_end: int | None = None   # turn index after which game ends
