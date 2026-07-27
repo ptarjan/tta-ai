@@ -1530,7 +1530,7 @@ sites unexecuted**, exit status 0. The 12 unconverted misses are the same 12
 and `state.py:202`'s `del self.log[:100]`, which cannot run inside a trial
 because `emit` returns early while `SUPPRESS_LOG` is set.
 
-#### The gate — 14 arms, and the 135-game paranoid suite with WeightedBot searching
+#### The gate — 16 arms, and the 135-game paranoid suite with WeightedBot searching
 
 The four weighted arms are the coverage argument cashed in. `TTA_JOURNAL=1
 JOURNAL_PARANOID=1` with WeightedBot searching means: on **every candidate move
@@ -1571,7 +1571,32 @@ So the arm can fail, and does, and the pass means something.
 `WWIDE=477d1c1f`) alongside the six it had; the greedy digests `6f5c72ef` /
 `7814c5c9` are unchanged throughout.
 
-`tests/test_journal_weighted.py`: 7 tests, 135 total.
+`tests/test_journal_weighted.py`: 7 tests, 135 total.  `bash tools/gate.sh
+--journal` on the final tree:
+
+```
+unittest                         OK   Ran 135 tests
+unittest JOURNAL_PARANOID        OK   Ran 135 tests
+narrow fingerprint               OK   6f5c72ef7c011cf7
+narrow FASTCOPY_PARANOID         OK   6f5c72ef7c011cf7
+weighted narrow                  OK   dff85378482c9fbd
+wide fingerprint                 OK   7814c5c9c276b0a2
+wide FASTCOPY_PARANOID           OK   7814c5c9c276b0a2
+weighted wide                    OK   477d1c1fe6d2e770
+narrow JOURNAL                   OK   6f5c72ef7c011cf7
+narrow JOURNAL+PARANOID          OK   6f5c72ef7c011cf7
+wide JOURNAL                     OK   7814c5c9c276b0a2
+wide JOURNAL+PARANOID            OK   7814c5c9c276b0a2
+weighted narrow JOURNAL          OK   dff85378482c9fbd
+weighted narrow JOURNAL+PARANOID OK   dff85378482c9fbd
+weighted wide JOURNAL            OK   477d1c1fe6d2e770
+weighted wide JOURNAL+PARANOID   OK   477d1c1fe6d2e770
+GATE PASS
+```
+
+Both greedy digests unchanged from 9.6, both weighted digests equal to master's.
+270 games played by undo instead of by copy, 270 of them additionally
+copy-diffed on every candidate move.
 
 ### 9.15 MEASURED end-to-end throughput on WeightedBot: 1.40x at 3p, 1.44x at 4p
 
@@ -1717,7 +1742,7 @@ So:
 1. `export TTA_JOURNAL=1` in `experiments/run_league.sh`, so the trainer takes
    the 1.44x and nothing else changes behaviour.
 2. Leave `USE_JOURNAL` defaulting off everywhere else.
-3. `bash tools/gate.sh --journal` (14 arms) before any merge that touches
+3. `bash tools/gate.sh --journal` (16 arms) before any merge that touches
    `engine/`, not the 6-arm default.
 4. Re-run `tools/mutation_coverage.py --bot weighted` **and** `--bot greedy`
    after any engine change that adds a container mutation. 9.14 showed the two
