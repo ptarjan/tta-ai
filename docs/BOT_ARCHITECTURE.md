@@ -684,6 +684,44 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
 | **M7** | **Absolute anchor** (§5) | tells us where we actually are | one number with a CI | one user decision |
 
+### M2 in detail — the military-card yield table
+
+`weighted._card_yields` prices a civil card by walking its `production` and
+`effects` dicts through `_PROD_TO_FEATURE` / `_EFF_TO_FEATURE`. The military
+deck is just as structured, so the same trick applies. MEASURED inventory of
+every effect key that actually appears on a military card in `data/`, with how
+many cards carry it:
+
+| type | keys (count of cards) |
+|---|---|
+| `aggression` | `takeFromOpponent` (5), `gainResources` (4), `destroyUrbanBuildings` (3), `gainFood` (1), `stealColony` (1), `gainCulturePerLevelOfRemovedCard` (1), `opponentDecreasesPopulation` (1), `removeFromGame` (1), `colonyImmediateBonusApplies` (1), `colonyPermanentBonusTransfers` (1) |
+| `bonus` | `defenseBonus` (3), `colonizationBonus` (3) |
+| `tactic` | `tacticBonus` (15), `tacticBonusObsolete` (10) |
+| `war` | `victorTakesCulture`, `victorTakesYellowTokens`, `victorTakesScienceUpTo`, `orTakesSpecialTechnologiesOfSameTotalScienceCost` (1 each) |
+| `event` | `allPlayers` (39), `strongestPlayer` (6), `weakestPlayer` (6), `strongestPlayers` (2), `weakestPlayers` (2), `playerWithMostCulture` / `LeastCulture` / `MostDiscontentWorkers` / `MostHappyFaces` (1 each) |
+| `pact` | `bothPlayers` (5), `A`/`B` (5 each), `noAttacksBetweenParties` (3), `cancelledIfPartiesAttackEachOther` (2), `onAttackBetweenParties` (1) |
+
+Three notes that matter for getting it right rather than merely done:
+
+* **An aggression is a double swing.** `takeFromOpponent` moves a resource from
+  a rival to me, which in a race is worth roughly twice a gain from the bank.
+  `weighted.features` already carries `rival_*` aggregates, so this can be
+  priced rather than guessed.
+* **Gate on feasibility, not on hope.** An aggression I cannot win is worth
+  nothing: it needs military actions *and* a strength edge over the target.
+  `docs/CULTURE_GAP.md` §4 measured a forced-attack oracle *losing* ground at 2p
+  precisely because the champion's strength (2.46) was below CultureBot's
+  (3.35), so it forced wars it lost. Multiply the yield by a feasibility gate.
+* **Do not hand-price wars.** `events.resolve_war` is a pure deterministic
+  function of the two strengths and consumes no rng, and
+  `QuiescentBot._war_value` already calls it on a scratch copy. Reuse that;
+  it is the engine's own answer, not a constant.
+* **Clamp costs through `max(0, w)`,** exactly as `card_potential` learned to
+  after the 4p `science = -6.09` inversion turned expensive cards into bargains
+  (docs/WASTED_ACTIONS.md §7). The same failure will happen here if a weight
+  vector has an inverted military term, and seven of the champion's thirteen
+  zeros are military/interaction terms.
+
 Ordering rules that fall out of the measurements, and that should be treated as
 hard constraints:
 
