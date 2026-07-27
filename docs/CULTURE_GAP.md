@@ -1709,6 +1709,14 @@ representation is more parameters for the walk to wander in.
 
 ## 19. §16's retraction was itself too strong: there IS a gradient, and it is sub-threshold
 
+> **RETRACTED IN PART — see §23.** Every number below is still correct, but the
+> headline conclusion ("+0.011 accept statistic and zero additional wins") is
+> not. The "zero wins" half was read off win rates against opponents the bot
+> loses to 100% of the time, which are 0.000 for every vector and therefore
+> cannot show it. Played head-to-head against the vector it was inflated from,
+> `culture_rate = 35.574` wins **41.7% ± 7.8%** against a 25.0% null. Fix #2
+> was stood down on the strength of that and the gate's scoring is unchanged.
+
 §15b claimed selection. §16 retracted it on a sign test that came back 9/13
 (p=0.27) and a drift null that put the observed base at a ~3% tail. Neither was
 significant, so I called it drift. **Measuring the gradient directly shows the
@@ -1877,3 +1885,175 @@ stronger than the entire horizon signal (0.21σ) that the just-adopted fix
 improves. Unless #1 and #2 land, the freshly restarted 3p/4p arms should
 re-inflate `culture_rate` and re-flatten their phase weights within a few
 hundred generations. `experiments/league_state/ladder_{3,4}p/` will show it.
+
+---
+
+# Part 5 — landing fixes #1 and #2 (2026-07-27, branch `train/loop-fix`)
+
+Working notes, not a write-up.
+
+## 21. Fix #1 landed: the phase exemption is symmetric now
+
+Two lines in `experiments/hillclimb_league.py` — `NONNEG` now excludes
+`_PHASE_MULT` exactly as `NONPOS` already did — plus two test cases in
+`tests/test_weight_guard.py`. §15a's own counterfactual, re-run on the patched
+code (`tools/drift_sim.py --gens 120 --runs 300`):
+
+| exactly-zero rate | before | after |
+|---|---|---|
+| the 10 **positive**-default phase multipliers, guard ON | **15.9%** | **0.0%** |
+| the 10 **negative**-default ones, guard ON | 0.0% | 0.0% |
+| both halves, guard OFF (counterfactual) | 0.0% | 0.0% |
+| `culture_rate` shape retention `\|late−early\|/4.0`, median | 0.97 | **1.00** |
+
+Guard-ON is now bit-identical in behaviour to guard-OFF on the phase
+coordinates, which is the whole claim of §15a: the attractor at exactly 0.000
+was manufactured by the clamp. Value terms are untouched and still clamped in
+both directions (a test asserts the exemption does not leak into them).
+
+## 22. Fix #2, pre-registered before the data was read
+
+§19c fix #2 offers two remedies — cap the margin credit, or score the gate
+tiers on margin **rank**. Neither can be judged on "does the perverse gradient
+go away", because **any monotone function of margin pays for margin**: a
+remedy that kills the perverse gradient by brute force kills the real one with
+it. §19 measured only the perverse cell, so it cannot distinguish the two.
+
+The mechanism that *could* separate them is **convexity**. A credit function
+that saturates hard below the win boundary responds sub-linearly to a small
+shift of a hopeless margin distribution (+10 to +13 culture points, which is
+all the `culture_rate` axis buys) and super-linearly to a large one (+100,
+which is what a real strength difference buys, §20). Whether that is enough is
+an empirical question about the actual margin *distributions*, not about the
+shape of `tanh`.
+
+`tools/margin_credit_ab.py` therefore separates collection from scoring: it
+plays six vectors against the real 4p pool on identical seeds, dumps every
+game's `(win share, culture margin)`, and re-scores the same games under every
+candidate credit function. Nothing is replayed when the candidate changes.
+
+The six vectors, and what each is for:
+
+| vector | what | expected |
+|---|---|---|
+| `base` | `DEFAULT_WEIGHTS` | the reference every edge is paired against |
+| `perverse` | `culture_rate = 35.574` | §19's exact cell. A remedy must shrink this toward 0 |
+| `sci_neg` | `science = -6.089` | the degenerate old-4p vector, 9.7% ± 2.7%. Must still be detected, hugely |
+| `cr_zero` | `culture_rate = 0` | the trainer's own ablation prices this at 0.11–0.18 win share (§11) |
+| `drift` | a pure-drift sibling (§20) | genuinely worse than `DEFAULT_WEIGHTS` |
+| `flat_shape` | `tools/shape_ab.py`'s de-shaped vector | the borderline case, 0.21σ (§17). Must not get *relatively* worse |
+
+`tools/margin_credit_truth.py` adds the column §19 never had: **head-to-head
+win rate against `base`**. Without it, "buys accept statistic and no strength"
+rests on the gate opponents' win rates being 0.000, which only says the vector
+cannot beat *BookBot* — it says nothing about whether it beats
+`DEFAULT_WEIGHTS`.
+
+**Decision rule, fixed before the n=150 numbers existed** (only an n=6 smoke
+had been seen): adopt the credit function that maximises the smallest
+`|edge_real| / |edge_perverse|` ratio across `sci_neg`, `cr_zero` and `drift`,
+subject to every real contrast keeping (a) the correct sign and (b) a
+detectability `|edge|/SE` no worse than `tanh/120`'s. If nothing clears that
+bar, land nothing and say so.
+
+**Outcome: the rule was never reached, because the ground-truth column
+invalidated the premise first. See §23 — fix #2 is stood down and the gate's
+scoring is unchanged.**
+
+## 23. Fix #2 is STOOD DOWN, and §19's headline is retracted
+
+**Nothing in the gate's scoring was changed. §19 is left in place above, with
+this section as its correction — the numbers in it are all still correct; the
+conclusion drawn from them is not.**
+
+### 23a. The measurement §19 never made
+
+§19 concluded that inflating `culture_rate` 5 → 35.574 buys "+0.011 accept
+statistic and **zero additional wins**". That second half was read off the win
+rate against `var:culture` and `book`, which is 0.000 at *every* level of the
+weight. **That is a saturated statistic, not a null.** Those are opponents the
+bot loses to 100% of the time; their win rate is 0.000 for every vector anyone
+has ever tested, so it cannot distinguish "this change is worthless" from "this
+change is large". The only thing it establishes is that the change is not large
+enough to start beating BookBot, which nothing at 4p is.
+
+The comparison that answers the question is the one the trainer's accept test
+actually makes — **candidate against its own reference** — and §19 never ran it.
+`tools/margin_credit_truth.py`, 4p, n=150, one seat against a table of
+`DEFAULT_WEIGHTS`, seat-rotated, null 0.250:
+
+| vector | win rate vs `DEFAULT_WEIGHTS` | culture margin | |
+|---|---|---|---|
+| `culture_rate = 35.574` (§19's "perverse" cell) | **0.417 ± 0.078** | +9.4 | **stronger** |
+| `science = -6.089` (the degenerate old-4p vector) | **0.840 ± 0.059** | +134.5 | **stronger** |
+
+So the axis §19 called perverse is one the gate was **right** to pay for: the
+inflated vector beats the vector it was inflated from, by +16.7 points against a
+25.0% null. For scale, that is the same size as the entire QuiescentBot search
+upgrade at 4p (`docs/DEEPER_SEARCH.md` 4.2: +16.7% ± 3.0%).
+
+The gate was not buying margin it could not convert. It was buying strength,
+and the win-rate column that was supposed to prove otherwise was blind by
+construction.
+
+### 23b. What this is NOT
+
+**This is 2.1σ on a single cell at one player count, and it is not settled.**
+It is enough to *block* a change to the gate's scoring — which is what it was
+used for — and nowhere near enough to claim the opposite of §19. Specifically
+it does not show:
+
+* that `culture_rate = 35.574` is anywhere near optimal. 5 → 35 being a real
+  gain says nothing about 35 → 60, and **the ratchet lives above 35, not below
+  it.** The measurement that would settle it is the head-to-head ladder
+  (`tools/margin_credit_truth.py --ladder 5,20,35.574,60`), which was queued and
+  then stood down when the box was needed for training. That is the single most
+  useful next experiment on this axis.
+* that the gate is well-calibrated in general. §17's finding stands untouched:
+  the horizon shape is worth 3.79 ± 2.47 culture points = **0.21σ** of one
+  evaluation block, so the gate is under-powered on that axis by ~5x. "The gate
+  rewarded a real improvement here" and "the gate is too noisy to see small real
+  improvements" are both true.
+* anything about §12d's arithmetic, which stands: pricing +1 culture/turn at
+  35.6 flat is above the theoretical ceiling (rounds remaining, ~29) everywhere
+  in the game. A weight can be both *above its own ceiling* and *better than the
+  alternative that was tested*, if the vector it is competing against is worse
+  for other reasons — which the `science = -6.089` row above makes very hard to
+  ignore.
+
+### 23c. The `science = -6.089` row, flagged and not acted on
+
+The vector the two-sided weight guard exists to clamp — §2c's degenerate 4p
+champion, described in `hillclimb_league.py`'s own comment as collapsing 4p play
+to 9.7% ± 2.7% — beats `DEFAULT_WEIGHTS` at 4p **84.0% ± 5.9%** against a 25.0%
+null, with +134.5 culture margin.
+
+Both numbers can be true: 9.7% was measured against a *trained champion*, this
+is against the *default vector*, and "worse than a trained bot" and "much better
+than the untrained default" are compatible. **No action is being taken on this
+and the guard is not being touched.** It is recorded because it is a large,
+reproducible fact that nobody has explained, and because it is one more instance
+of the same methodological point: at 4p, `DEFAULT_WEIGHTS` is a weak reference,
+and conclusions of the form "X is degenerate" that were established against one
+reference should not be carried over to another.
+
+### 23d. Method note, which is the transferable part
+
+The tooling built for this is worth keeping even though the fix it was built to
+justify was stood down:
+
+* `tools/margin_credit_ab.py` — separates **collection from scoring**. It plays
+  a set of vectors against the real pool on identical seeds, dumps every game's
+  `(win share, culture margin)`, and re-scores the same games under any number
+  of candidate credit functions (`tanh` at several scales, a reach cap, within-
+  block margin rank). Nothing is replayed when the candidate changes, so
+  comparing six scoring rules costs the same as measuring one. `--only` /
+  `--merge` shard it across processes.
+* `tools/margin_credit_truth.py` — the ground-truth column: head-to-head against
+  the reference, plus a `--ladder` mode for the "is the gradient still positive
+  up there" question.
+
+And the rule that generalises: **a proxy metric must be checked against the
+thing it proxies, on the comparison the system actually makes.** §19 measured
+the gate's statistic carefully and correctly, then validated it against a
+statistic that was structurally incapable of disagreeing.
