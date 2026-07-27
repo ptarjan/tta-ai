@@ -987,6 +987,11 @@ finding (GreedyBot-only, so `WeightedBot`/feature-vector commits are inert),
 the fingerprint is insensitive to *every* kind of change master has made so
 far during this branch's life. `tools/gate.sh` still needs no edit.
 
+**Stale as of 9.18**: "insensitive to every kind of change" stopped being true
+twice more after this was written — an actual `engine/actions.py` rules change
+moved all four digests. See 9.18 for the current values; this section stays
+as the historical record of what was true up to `15b9764`.
+
 ### 9.1 Step 1 — the paranoid structural differ (commit 5f168fb, DONE)
 
 6.6 condition 2: differ first, no call site converted. `engine/statediff.py`
@@ -1153,6 +1158,13 @@ nothing.** `tools/gate.sh` now gates on these. The old pair
 (`c2befef1…` / `47e06a41…`) was correct up to master `15b9764` and is dead —
 anyone still quoting it, including the task description that sent me here, is
 quoting a stale number. That is the 9.0 trap, third occurrence.
+
+**Stale as of 9.18, fourth occurrence of the same trap**: `6f5c72ef…` /
+`7814c5c9…` were themselves superseded twice more — first (never recorded
+here, only in `tools/gate.sh`'s own comments) by the combat-audit rules fixes
+at master `4886b65` (WIDE only: `7814c5c9…` → `a966d158…`), then by the
+coverage-audit rules fixes at master `3439b0e` (both NARROW and WIDE moved
+this time). See 9.18 for the current values and the two-sided derivation.
 
 ### 9.7 GreedyBot's journal path was wired BEFORE step 5, on purpose
 
@@ -1774,6 +1786,9 @@ action, and reverting is the same one line.
 | converted sites reached, games only | 54/61 | 54/61 (union 55, +tests 61) |
 | 135-game paranoid suite | `6f5c72ef` / `7814c5c9` | `dff85378` / `477d1c1f` |
 
+(Stale as of 9.18 — all four digests in this row moved, twice, after two
+legitimate rules fixes landed on master. See 9.18 for the current values.)
+
 Remaining work is unchanged from 9.13 except that the WeightedBot item is done:
 
 - [x] Convert `WeightedBot` (9.14) and measure it (9.15).
@@ -1786,3 +1801,111 @@ Remaining work is unchanged from 9.13 except that the WeightedBot item is done:
       guard for that day is the test above, not a comment.
 - [ ] Re-run `tools/mutation_coverage.py` with **both** bots after any engine
       change that adds a container mutation.
+
+### 9.18 Two more rebases while parked — combat audit (`4886b65`) then coverage
+### audit (`3439b0e`) — all four digests moved, and this time NARROW did too
+
+Master moved twice more since 9.17 while this work sat merged-but-undocumented.
+Both hops are real rules fixes, not gate noise, and per 9.0's rule neither was
+trusted without deriving it twice, independently, and requiring agreement.
+
+**Hop 1 — combat audit, master `4886b65` (done by a different session; recorded
+here for the first time because it never made it into this file, only into
+`tools/gate.sh`'s own comments).** `33bd156` ("Fix three combat rules bugs
+found by the audit") changed `engine/actions.py` and `engine/effects.py` —
+real war/pact/aggression fixes that GreedyBot's evaluation goes through — and
+`e990920` (well before `33bd156`, but not yet reflected in the WNARROW/WWIDE
+pair at the time) replaced WeightedBot's default `lateness()` schedule, which
+every WeightedBot feature reads. WIDE moved because the wider 10-seed greedy
+set happened to contain a game touching one of the three combat bugs; NARROW's
+3 greedy seeds did not. Both weighted digests moved because *every*
+WeightedBot feature prices against `lateness()`.
+
+| | 9.6/9.17 (`6d0247c`) | hop 1 (`4886b65`) |
+|---|---|---|
+| narrow (33 games) | `6f5c72ef7c011cf7` | `6f5c72ef7c011cf7` (unchanged) |
+| wide (102 games) | `7814c5c9c276b0a2` | `a966d158f0486366` |
+| weighted narrow (33 games) | `dff85378482c9fbd` | `b943e1a6…` |
+| weighted wide (102 games) | `477d1c1fe6d2e770` | `540c3f97…` |
+
+**Hop 2 — coverage audit, master `3439b0e` (this session).** `git diff
+4886b65..3439b0e --stat` touches exactly one file inside `engine/`:
+`engine/actions.py`. Everything else in range —
+`experiments/arena.py`'s degenerate-champion guard, `experiments/summarize.py`'s
+feature-grouping fix, and the new standalone `tools/coverage_census.py` /
+`tools/feature_variance.py` — is additive or reporting-only and not on the
+`perf_check` hash path (confirmed by reading each diff, not by assumption).
+`engine/actions.py`'s two changes (docs/COVERAGE_AUDIT.md Secs 2.1-2.2), both
+of which **either bot's evaluation goes through** since they are in shared
+action-generation/resolution code, not a bot file:
+
+* `_h_revolution` no longer discards the actions the new government grants —
+  only the pool that *paid* for the revolution is emptied; the other pool is
+  capped at the new government's total instead of zeroed, so a revolt from
+  Despotism to Monarchy now correctly yields 3 military actions, not 2.
+  Revolution has a 30-65% take-rate across the fingerprint's games, so this
+  moves both GreedyBot's and WeightedBot's play — which is exactly why NARROW
+  moved this time, unlike hop 1: this is not a combat-specific interaction confined
+  to the wider seed set, it is a core turn-structure change common enough that
+  even 3 greedy seeds hit it.
+* the one-per-name rule (`_can_take_gated`) is no longer applied to yellow
+  ACTION cards, which exist in 2-3 copies per deck and are not technologies —
+  holding one copy no longer blocks taking another.
+
+Derived per 9.0's rule: computed from scratch on a fresh detached checkout of
+master `3439b0e` at `/tmp/tta-gate-verify-A`, and independently in a second
+worktree (`gate-rebaseline`, branched off the same `3439b0e`), each run
+`nice -n 15`, at most 2 concurrent `perf_check` processes. Not just the 8-char
+summary compared — the full per-case digest list in each side's `perf_check
+save` output was diffed key-by-key (33/102/33/102 cases respectively) and
+found identical in every case, both sides, all four arms:
+
+| | side A (fresh checkout) | side B (worktree) |
+|---|---|---|
+| narrow (33 games) | `2fd656b38729de71` | `2fd656b38729de71` |
+| wide (102 games) | `1169007df1517e33` | `1169007df1517e33` |
+| weighted narrow (33 games) | `a7691eaac8b59fac` | `a7691eaac8b59fac` |
+| weighted wide (102 games) | `c7045ab13862e4fb` | `c7045ab13862e4fb` |
+
+Full digests:
+
+```
+narrow          2fd656b38729de718361749330edf220d8a908c07000829b86708b456faf8f44
+wide            1169007df1517e33681f9c567839a1ae3dc9e7c88fac6288f5549bce3328d9ba
+weighted narrow a7691eaac8b59fac996786f2d90db852b122bf2230386244b2ab9c0c208dec69
+weighted wide   c7045ab13862e4fb8542b09aa51392fbfa84da1b3b7137be433e362424baa510
+```
+
+**The two sides agreeing, per-case, is the entire proof — not either number
+alone**, same as 9.6 and every prior re-derivation. `tools/gate.sh` now gates
+on these four; `tools/fingerprint.json` / `tools/fingerprint_wide.json`
+re-saved via `perf_check save` to match (narrow/wide only — there is no
+committed weighted fingerprint file, same as before). Negative control run
+alongside this (nudge a default weight on a scratch copy, confirm the gate
+FAILS, then discard the scratch copy): the gate can fail, so the pass above
+means something.
+
+```
+unittest                         OK   Ran 248 tests
+unittest JOURNAL_PARANOID        OK   Ran 248 tests
+narrow fingerprint                OK   2fd656b38729de71
+narrow FASTCOPY_PARANOID          OK   2fd656b38729de71
+weighted narrow                   OK   a7691eaac8b59fac
+wide fingerprint                  OK   1169007df1517e33
+wide FASTCOPY_PARANOID            OK   1169007df1517e33
+weighted wide                     OK   c7045ab13862e4fb
+GATE PASS
+```
+
+Updated table for 9.17's row, current as of `3439b0e`:
+
+| | GreedyBot | WeightedBot |
+|---|---|---|
+| 135-game paranoid suite | `2fd656b3` / `1169007d` | `a7691eaa` / `c7045ab1` |
+
+Lesson worth keeping: hop 1's writeup reasoned that NARROW's 3-seed greedy set
+"never happens to hit" a combat-rules interaction, and that held again through
+one more rebase — until hop 2, where it didn't. **"NARROW has historically
+been insensitive" is an empirical observation about specific past diffs, not a
+property of the narrow set.** Every rebase re-derives all four from scratch;
+none is ever assumed unchanged going in.

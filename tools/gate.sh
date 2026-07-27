@@ -1,9 +1,9 @@
 #!/bin/bash
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
-#   58 unit tests green
-#   narrow fingerprint == 6f5c72ef...   (33 games)
-#   wide   fingerprint == a966d158...   (102 games)
+#   248 unit tests green
+#   narrow fingerprint == 2fd656b3...   (33 games)
+#   wide   fingerprint == 1169007d...   (102 games)
 #   all of the above unchanged under FASTCOPY_PARANOID=1
 #
 # tools/fingerprint.json / tools/fingerprint_wide.json are now IN SYNC with
@@ -18,37 +18,41 @@
 set -u
 cd "$(dirname "$0")/.."
 
-# Re-derived on master 4886b65 (2026-07-26), per docs/PYPY.md 9.0's rule:
+# Re-derived on master 3439b0e (2026-07-26), per docs/PYPY.md 9.0's rule:
 # compute from scratch on a clean detached worktree of master AND
-# independently on this worktree, and require the two to agree -- agreement
-# is the proof, not either number alone.
+# independently on a second worktree, and require the two to agree --
+# agreement is the proof, not either number alone. Both narrow and wide moved
+# this time (previously it was WIDE only, and NARROW's 3-seed greedy set was
+# assumed too small to be touched -- this round it WAS touched, so nothing
+# was assumed and all four were re-derived from scratch).
 #
-# NARROW (6f5c72ef) is unchanged from the 6d0247c derivation (9.6): none of
-# its 3 greedy seeds happen to touch a combat rules interaction. WIDE moved,
-# 7814c5c9 -> a966d158: 33bd156 ("Fix three combat rules bugs found by the
-# audit", between 6d0247c and 4886b65) changed engine/actions.py and
-# engine/effects.py -- real war/pact/aggression rules fixes that GreedyBot's
-# own evaluation goes through -- and the wider 10-seed greedy set is large
-# enough to catch a game where one of the three bugs used to fire. This is a
-# legitimate behaviour change, not a broken gate; verified as the cause by
-# `git log 6d0247c..4886b65 -- engine/ ':!engine/bots'` naming exactly that
-# commit as the only non-journal/non-perf-check engine change in range.
-NARROW=6f5c72ef
-WIDE=a966d158
+# Cause: commit 7315494 ("Coverage audit: census + variance instruments, 3
+# rulebook fixes", see docs/COVERAGE_AUDIT.md Sec 2) changed engine/actions.py
+# with two real rules fixes both bots' evaluation goes through --
+# (1) `_h_revolution` no longer discards the actions the new government
+# grants (Sec 2.1: a revolt from Despotism to Monarchy now correctly yields
+# 3 military actions, not 2 -- Revolution has a 30-65% take-rate, so this
+# moves many games), and (2) the one-per-name rule is no longer applied to
+# yellow action cards, which exist in 2-3 copies per deck (Sec 2.2). Verified
+# as the only behaviour-affecting change in range: `git diff 4886b65..3439b0e
+# --stat` touches engine/actions.py only inside engine/; everything else in
+# range (experiments/arena.py's degenerate-champion guard, experiments/
+# summarize.py's feature grouping, the new standalone tools/coverage_census.py
+# and tools/feature_variance.py) is additive/reporting-only and not on the
+# perf_check hash path.
+NARROW=2fd656b3
+WIDE=1169007d
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
 # catch a change to WeightedBot, the bot the league actually trains (9.14).
 # These two are the same 33/102 split played by WeightedBot instead.
 #
-# Re-derived on master 4886b65 (2026-07-26), same two-sided discipline as
-# above. Both moved from the dff85378/477d1c1f pair derived at 6d0247c:
-# e990920 replaced WeightedBot's default `lateness()` schedule (the
-# turns-remaining horizon fix) well after 6d0247c, and that is exactly the
-# function every WeightedBot feature reads to price a card/action against the
-# turns remaining -- there was never a chance the old pair would still match.
-WNARROW=b943e1a6
-WWIDE=540c3f97
+# Re-derived on master 3439b0e (2026-07-26), same two-sided discipline and the
+# same cause (7315494) as above -- both bots' evaluation reads
+# `_h_revolution`/`_can_take_gated` in engine/actions.py.
+WNARROW=a7691eaa
+WWIDE=c7045ab1
 
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }
