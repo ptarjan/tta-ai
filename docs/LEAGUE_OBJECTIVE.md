@@ -351,6 +351,37 @@ never fires. That is exploiting an implementation artefact.
    tuned for an opponent that does not play. They are one flag away
    (`--pool-weights floor=0.5`) and §3 reports what they would have done.
 
+### The human bots landed mid-flight, and they are in
+
+`docs/HUMAN_BOTS.md` merged to master **between** this branch's first merge
+and its second, and that agent rebased onto this rebalance rather than around
+it: `human` is a new tier at 0.6 (four corpus-fitted archetypes at 0.15 each),
+it joins `DEFAULT_GATE_TIERS`, and `watchdog.sh` passes `--human-bots`. The
+combined pool at 2p:
+
+```
+[pool] book(0.30) book2(0.30) hum:builder(0.15) hum:tempo(0.15)
+       hum:warlord(0.15) hum:wonder(0.15) var:*(0.10 x6) mirror(1.00)
+       past:*(0.60 x2) hall:*(0.40 x4)
+[pool] tier share: book=11%, human=11%, variant=11%, mirror=18%, past=21%,
+       hall=29%  (external/fixed 32%, self-play 68%)
+```
+
+That changed one thing here: the `tier share` log line used to call only
+`book+variant` "static", which after the human tier landed would have
+under-reported the fixed side by 11 points. It now reports
+**external/fixed vs self-play**, and `human` counts as external — those bots
+are fitted and frozen, so they are an anchor like `book`, not a gradient like
+`mirror`. External is 32%, not the 24% this document reported before the
+merge; self-play is 68%, not 76%. Both still invert the 69/31 that started
+this.
+
+This is a strict improvement on the rebalance's weakest point. §7 said "the
+pool is still 100% our own artefacts"; four of its nineteen opponents are now
+fitted to 1,011 human games and, unlike the `var:*` roster, have no
+hand-written threshold to hold shut. That was the exploit
+`docs/TWOP_PROFILE.md` §9 could not rule out.
+
 ### And one addition to the hall of fame
 
 `experiments/hall_of_fame/` is untracked trainer output, so this is an
@@ -569,13 +600,19 @@ Both preserved.
   raising the table's more — the alpha term is the only thing pushing back on
   that, and 0.15 of a coarse signal is not much push. If a future champion
   turns out to score 170 and lose, this is the sentence that predicted it.
-* **The pool is still 100% our own artefacts.** Adding the 1-ply-lineage
-  vector to the hall makes it *more* diverse, not diverse. Every opponent is
-  either a BookBot subclass or something this trainer produced. The
-  human-derived pool bots another agent is building were **not on master at
-  the time of the restart**, so they are not in this pool; whoever lands them
-  should add them to `--hall-dir` or a new tier and re-check the tier shares
-  in the `[pool] tier share:` line.
+* **The pool is still mostly our own artefacts.** This was written as "100%"
+  and the human bots (§4) fixed the worst of it — but fifteen of nineteen
+  opponents are still either a BookBot subclass or something this trainer
+  produced, and the four that are not are *fitted to* human games rather than
+  being humans. Adding the 1-ply-lineage vector to the hall makes it more
+  diverse, not diverse.
+* **The human bots were not in the pool for the arms' first hour.** They
+  merged after the 13:00 relaunch, so the arms ran ~15 minutes without them
+  before being restarted a second time. Nothing is contaminated — the second
+  restart resumed the same champions — but the first fifteen minutes of
+  generations were scored against an 15-opponent pool and everything after
+  against a 19-opponent one, which is visible in `generations_Kp.jsonl`'s
+  `pool` snapshot if anyone diffs across that boundary.
 * **Dropping the floor tier is a judgement, not a measurement.** §3 reports
   what those three opponents would have contributed under each objective, but
   "they would pull the vector toward farming a bot that does not play" is an

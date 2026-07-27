@@ -676,11 +676,18 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
     share = {}
     for e in pool.entries:
         share[e.tier] = share.get(e.tier, 0.0) + e.weight
-    static = sum(v for k, v in share.items() if k in ("book", "variant"))
+    # The split an operator actually needs: how much of the accept decision
+    # comes from opponents that IMPROVE (mirror / the past ladder / the frozen
+    # hall) versus fixed external ones.  Before the 2026-07-27 rebalance the
+    # external side was 69%.  `human` counts as external, not self-play: those
+    # bots are fitted to the BGO corpus and frozen (docs/HUMAN_BOTS.md), so
+    # they are an anchor like `book`, not a gradient like `mirror`.
+    external = sum(v for k, v in share.items()
+                   if k in ("book", "human", "variant", "quiescent"))
     log("[pool] tier share: " + ", ".join(
         f"{t}={share[t] / tot:.0%}" for t in TIER_ORDER if t in share)
-        + f"  (static book+variant {static / tot:.0%}, "
-        f"self-play {(tot - static) / tot:.0%})")
+        + f"  (external/fixed {external / tot:.0%}, "
+        f"self-play {(tot - external) / tot:.0%})")
     return pool
 
 
