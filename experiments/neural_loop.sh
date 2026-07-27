@@ -23,12 +23,20 @@ GAMES=${3:-480}         # total self-play games per iter (split over workers)
 GATE=${4:-300}          # head-to-head games for the promotion gate
 WORKERS=12
 WINDOW=3                # replay buffer: train on the last WINDOW iters' data
-EPOCHS=12
+EPOCHS=8
+LR=3e-4                 # gentle warm-start fine-tune (don't drift off BEST)
 LAM=1.0
 VWEIGHT=${5:-1}         # keep pair-acc (ranking = 1-ply strength) maximal;
                         # measured: raising it calibrates value but hurts play
 SELECT=pair             # best-checkpoint by ranking accuracy (drives strength)
-EPS=0.2                 # epsilon-greedy exploration (scale-independent)
+EPS=0.1                 # epsilon-greedy exploration (scale-independent)
+# BookBot anchor: mix the strong teacher's ranking pairs into every train so a
+# candidate cannot drift BELOW book-level. iteration 1 of pure self-play
+# regressed (cand 54 vs best 96 culture) -- self-play data from a sub-BookBot
+# policy pulls the net down toward its own weaker play. The anchor caps that
+# downside; surpassing book still needs a stronger target operator (Stage 3
+# beam), see docs/NEURAL_EVAL.md.
+ANCHOR="rankdata/rk_*.npz"
 REFEVERY=3
 CHAMP=analysis/frozen/champion_2p.json
 
@@ -71,11 +79,12 @@ for it in $(seq 1 "$ITERS"); do
   for k in $(seq 0 $((WINDOW-1))); do
     j=$((it-k)); [ "$j" -ge 1 ] && globs="$globs iterdata/it${j}_w*.npz"
   done
-  # (2) train candidate warm-started from BEST
+  # (2) train candidate warm-started from BEST (self-play + BookBot anchor)
   wait_if_paused
-  $PY experiments/neural_train_rank.py --data $globs --init "$BEST" \
-      --epochs "$EPOCHS" --lam "$LAM" --vweight "$VWEIGHT" --select "$SELECT" \
-      --out checkpoints/cand.pt --device cuda > "loop/train_it${it}.log" 2>&1
+  $PY experiments/neural_train_rank.py --data $globs $ANCHOR --init "$BEST" \
+      --epochs "$EPOCHS" --lr "$LR" --lam "$LAM" --vweight "$VWEIGHT" \
+      --select "$SELECT" --out checkpoints/cand.pt --device cuda \
+      > "loop/train_it${it}.log" 2>&1
   # (3) gate candidate vs best
   wait_if_paused
   [ -f checkpoints/cand.pt ] || { echo "  no cand (killed?) -> skip iter $it" | tee -a loop/master.log; continue; }
