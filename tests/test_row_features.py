@@ -24,6 +24,13 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from engine import actions as A, game as G, journal          # noqa: E402
+
+# `actions.STRICT` defaults to FALSE, so `apply` does not check legality unless
+# a test module turns it on -- test_engine/test_combat/test_coverage_audit all
+# do, and because that is a module global it leaks into every other test in a
+# discovery run.  A fixture that is only legal when this file runs alone is a
+# fixture that lies, so turn it on here too and mean it.
+A.STRICT = True
 from engine.state import TechCard, WonderInProgress          # noqa: E402
 from engine.bots import WeightedBot                          # noqa: E402
 from engine.bots import weighted as W                        # noqa: E402
@@ -60,12 +67,20 @@ class TakeCostPaid(unittest.TestCase):
     3p champion weight is -0.0974 -- so paying 3 CA rather than 1 for the
     identical card scored as a GAIN of 0.195."""
 
-    def _state_with_row(self):
+    def _state_with_row(self, second=None):
+        """A legal 13-slot row of one plain technology.
+
+        NOT `Bronze`: it is in `game.START_TECHS`, so the one-per-name rule
+        (§2.5) makes every take of it illegal.  `Alchemy` is an Age I lab
+        nobody starts with, and it is neither a wonder nor a leader, so no
+        surcharge or discount muddies the slot cost being asserted.
+        """
         st = G.new_game(2, 11)
         p = st.players[0]
         p.civil_actions = 6
-        # a plain technology, so no wonder surcharge / leader rules apply
-        st.card_row = ["Bronze"] * 13
+        st.card_row = ["Alchemy"] * 13
+        if second is not None:
+            st.card_row[9:] = [second] * 4
         return st, p
 
     def test_counter_is_the_civil_actions_actually_paid(self):
@@ -98,7 +113,9 @@ class TakeCostPaid(unittest.TestCase):
         self.assertEqual(vals, {0.0})
 
     def test_it_accumulates_within_a_turn(self):
-        st, p = self._state_with_row()
+        # a second, different card: once Alchemy is in hand the one-per-name
+        # rule makes a second Alchemy illegal
+        st, p = self._state_with_row(second="Theology")
         A.apply(st, ("take", 0), random.Random(0))
         A.apply(st, ("take", 9), random.Random(0))
         self.assertEqual(p.ca_spent_taking, 4)
@@ -382,7 +399,7 @@ class NewStateFieldsCopyAndRollBack(unittest.TestCase):
     def test_fastcopy_carries_ca_spent_taking(self):
         st = G.new_game(2, 61)
         st.players[0].civil_actions = 6
-        st.card_row = ["Bronze"] * 13
+        st.card_row = ["Alchemy"] * 13
         A.apply(st, ("take", 9), random.Random(0))
         self.assertEqual(copy_state(st).players[0].ca_spent_taking, 3)
 
@@ -390,6 +407,7 @@ class NewStateFieldsCopyAndRollBack(unittest.TestCase):
         st = G.new_game(2, 67)
         st.round = 2
         st.players[0].civil_actions = 6
+        st.card_row = ["Alchemy"] * 13
         journal.install()
         before_take = st.players[0].ca_spent_taking
         before_discard = copy.deepcopy(st.civil_discard)
