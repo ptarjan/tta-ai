@@ -522,15 +522,15 @@ different objective:
   keys, or constrain `early + late`), so the fit cannot put mass in directions
   the data cannot see.
 
-**Cause that turned out NOT to be it.** `end_turn_bias` is not
-part of `evaluate` — `WeightedBot.pick` adds it to one move kind — so a
-regression on the design matrix cannot fit it, and I set it to 0.0. That leaves
-the +12.6-point `end_turn` flattery (docs/WASTED_ACTIONS.md §1) completely
-unopposed, so the bot passes constantly. The 148.9 moves per game against the
-champion's 185 is the fingerprint, and the culture figure (21.3) is even below
-the 67.3 that §6 of that document measured for a deliberately
-pass-too-much control. **This duel mostly measures a missing constant, not the
-fitted weights.**
+**Cause that turned out NOT to be it.** My first reading of the 148.9 moves per
+game was that `end_turn_bias = 0.0` had left the +12.6-point `end_turn` flattery
+(docs/WASTED_ACTIONS.md §1) unopposed and the bot was simply passing. That was
+wrong, and it is recorded here *because* it was wrong: the short games were
+resignations, and once the ladder above restores the champion's own -14.44 the
+bot plays **longer** games than the champion (222 moves vs 216) and still scores
+24 culture. The constant was not the problem. I had a mechanism with arithmetic
+behind it and published it before the control; that is this project's documented
+failure mode and I walked straight into it.
 
 **What it proves anyway, and it is worth having.** A value function that
 predicts the outcome materially better can induce a catastrophically worse
@@ -538,23 +538,18 @@ policy. §5b said so before the number arrived; here is the number. Anyone
 proposing a learned evaluator in this project should be made to run this exact
 duel before claiming anything.
 
-**The principled fix, and why it is more interesting than tuning the constant
-back in.** The flattery exists because the hand-shaped evaluation is not
-calibrated *across the production boundary*: a mid-turn state and a
-post-end-of-turn state are scored on incompatible scales. A value function
-fitted to the realised final margin over **both** kinds of state has no such
-freedom — it must price them both in the same units, because they have the same
-target. The feature vector already carries what that needs (`ca_left`,
-`civil_actions`, `resource_stock`, `food_stock`). So the right experiment is not
-to re-introduce `end_turn_bias`; it is to **fit on the states the bot actually
-compares** and see whether the constant becomes unnecessary.
-`tools/gen_value_data.py --rows every` exists for exactly this and the run is
-under way. If it works, a hand-tuned hack that no value of which is right for
-more than one age (docs/WASTED_ACTIONS.md §8 item 4) is replaced by calibration.
+**What was tried and did not rescue it.** Fitting on mid-turn states as well as
+turn boundaries (`tools/gen_value_data.py --rows every`) does improve the
+*predictor* — held-out ranking accuracy rises from 0.743 to **0.812** — and does
+nothing at all for the *policy*. That is the cleanest statement of the problem
+in this section: the extra 7 points of prediction bought zero win rate.
 
-The other matched option is `PlanBot`, which evaluates only at turn boundaries —
-precisely the distribution the boundary-only fit was trained on — and which uses
-no `end_turn_bias` at all by construction.
+The remaining matched option, untested tonight for want of CPU, is
+`PlanBot` + a fitted vector: `PlanBot` evaluates only at turn boundaries, which
+is exactly the distribution the boundary-only fit was trained on, and it uses no
+`end_turn_bias` at all by construction. It is the natural next duel, but the
+lambda ladder above says not to expect much from it until the *objective*
+changes.
 
 ---
 
