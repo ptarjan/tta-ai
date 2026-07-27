@@ -545,6 +545,32 @@ the end of the first generation. The checks that are immediate and
 authoritative are `experiments/logs/watchdog.log` and, definitively,
 `ps -o command= -p $(pgrep -f "hillclimb_league --players K")`.
 
+### Two restarts, not one, and a third change landed after both
+
+The arms were stopped and relaunched **twice**:
+
+* **13:00** — the objective change. All three came back, 44h left.
+* **13:20** — again, because `docs/HUMAN_BOTS.md` merged in between and the
+  13:00 processes had already loaded the pre-human-bots modules. 43h left.
+  (`run_league.sh` restarts its child hourly, so they would have picked the
+  human bots up at ~14:00 on their own; restarting cost one cron cycle and
+  bought back that hour.)
+
+Then `4037c17` ("Fix four scoring bugs against the BGO corpus; all four gate
+digests move") merged **after** the 13:20 relaunch. Two consequences, neither
+requiring action but both worth knowing:
+
+1. The running climbers loaded the pre-fix engine and will pick the fix up at
+   their next hourly restart (~14:20), so there is an engine-behaviour seam in
+   the middle of the run. It is recorded in each generation's log by nothing —
+   **this paragraph is the only record of it**, which is why it is here.
+2. `CULTURE_CENTRE = 100` was reasoned against measured culture values from
+   the pre-fix engine. The scoring fixes are documented as worth single-digit
+   culture, so the constant is very unlikely to need moving — but it was
+   **not** re-derived, and if own-culture scores shift materially the check to
+   run is whether the 40-200 operating band still sits inside tanh's linear
+   core (§2).
+
 ### The 4p arm's two asymmetries
 
 Both preserved.
