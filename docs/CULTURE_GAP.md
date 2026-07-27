@@ -1049,3 +1049,131 @@ one experiment this branch exists to run.
 
 Ordering, if only one: (2). (1) is tidy and nearly free; (2) is the one §12c
 says is actually holding the axis shut.
+
+---
+
+## 13. The probe: 4p, clean restart, horizon fix on. Design and pre-registration
+
+Written and committed **before the probe's first full-pool check landed**, so
+the reading rule is not fitted to the result.
+
+### 13a. What is running
+
+```
+cd /tmp/tta-probe
+nohup experiments/run_league.sh 4 12 1 2 12 4 1.2816 \
+    --init default --weight-guard clamp --past-k 2 \
+    --state-dir /tmp/tta-probe/experiments/probe_state_4p &
+```
+
+Supervisor PID **54418**, started 20:50:23 MDT, `TTA_JOURNAL=1` (set by
+`run_league.sh`). State dir is `/tmp/tta-probe/experiments/probe_state_4p`,
+which did not exist before launch — mandatory, because `--init` is ignored once
+a state dir holds a champion (`docs/TRAINING_RUN.md`). Log
+`/tmp/tta-probe/experiments/logs/league_4p.log`. `experiments/league_state/` in
+the main checkout was read and never written.
+
+**One worker, not the live arms' two.** The box is a 6-core machine already
+running 3 supervisors × 2 workers = exactly 6. One extra is acceptable
+oversubscription; two is not. Measured cost of that choice: the probe is
+running at **124–137 s/generation against the live arm's 122 s/gen average**,
+i.e. the second worker was buying the live arms almost nothing on an already
+saturated box, and the probe is not meaningfully slower per generation. It is
+still ~100 generations behind in *total* because it started 4.3 hours later.
+
+### 13b. Why this is a paired A/B and not two unrelated runs
+
+Better than the brief assumed, and worth stating because it is what makes a
+handful of generations readable at all:
+
+* **Identical gen-0 champion.** `ladder_4p/gen00000.json` is byte-identical
+  between the probe and the live arm (`DEFAULT_WEIGHTS` + the 4p
+  `hand_potential → 0.0` init override). Verified, not assumed.
+* **Identical mutation stream.** `hillclimb_league.py:650` is
+  `rng = random.Random(seed * 7919 + players * 101 + gen)` — seeded by
+  generation number alone. At gen 1 both arms drew the same operator pair
+  (`kick`, `scatter`) against the same accept subset
+  (`mirror, book2, var:infra, var:military`).
+* **Identical evaluation seeds.** `seed0 = (gen*1_000_003 + j*7717 + seed) %
+  10_000_019` and `seed + label_seed(label)`; `label_seed` is crc32, explicitly
+  chosen to be stable across processes. **None of these read `workers`.** Worker
+  count changes wall clock and nothing else.
+* So gen 1 is a true paired duel: same start, same mutants, same games, one
+  variable. Live gen 1 scored the pair at edges (−0.135, −0.0001); the probe
+  scored the same pair at (−0.1032, −0.047). Both rejected.
+* The pairing decays from gen 2, where the arms diverged: both drew
+  (`rescale:actions`, `group:actions`), the live arm accepted the second and the
+  probe accepted the first. From there the mutants differ because `mutate`
+  reads the champion. The *seeds* stay matched forever; the *proposals* do not.
+
+### 13c. The confounds, enumerated
+
+1. **Worker count — not a confound on play.** See 13b. Wall clock only, and
+   measured at ~1.05×, not 2×.
+2. **The two-sided guard (fix #1) — the dominant confound, and unavoidable.**
+   The live arm's generations 1–108 ran the **one-sided** guard; master gained
+   the two-sided version at `8543933` and the live arms only picked it up at
+   their 20:50 restart. The probe has had it since gen 1. Measured: the
+   `NONPOS` half fires **~0.8 times per generation, 27% of all guard hits**, in
+   the probe's early generations. So the probe is not "the live arm plus the
+   horizon" — it is "the live arm plus the horizon **plus** a different guard".
+   §9 bounded the guard's effect on a *fixed champion's play* at ±0.024 win
+   rate, but that is not the same quantity: §12a is a worked example of a single
+   guard clamp permanently redirecting a *trajectory* in one accepted
+   generation. This confound cannot be removed without disobeying the
+   instruction to rebase onto current master, and it should not be — the live
+   arms now run the guard too, so the probe matches their future, not their past.
+   (Verified prediction, incidentally: §10 said the live 4p champion's
+   `rival_culture` would be clamped from +5.611 to 0.0 within the hour. It reads
+   **0.0** as of the 20:50 restart.)
+3. **Engine version.** The live arm's generations 1–49 ran on the pre-journal
+   engine; it relaunched on the journal engine at 18:41
+   (`docs/TRAINING_RUN.md`). Per `docs/PYPY.md` 9.14 the journal branch's
+   `perf_check` baselines were required to agree with master's, i.e. it is a
+   bit-identical-play optimisation. **That is taken from the doc, not
+   re-verified here.**
+4. **Pool drift at matched generation.** Both arms open with the identical
+   14-member pool. The `past:` tier (`--past-k 2`, weight 1.0 of 8.0 total)
+   rotates in each arm's **own** archived champions as its ladder fills, so from
+   ~gen 30 the two arms are graded against different `past:` opponents — each
+   against its own ancestors. Symmetric by design, but not identical, and it
+   means the fullcheck is not the same exam at matched gen.
+5. **n = 1 trajectory per arm.** There are no error bars on "this hill climb
+   went higher than that one". The per-point sampling error (13d) is *not* the
+   relevant noise; the relevant noise is trajectory-to-trajectory variance in a
+   stochastic search, and one run of each measures it at zero degrees of freedom.
+6. **Sigma.** The live arm's `sigma` has collapsed to 0.08 at 4p; the probe
+   starts at 0.25. Endogenous — part of what is being compared, not a nuisance —
+   but it means "matched generation" is not "matched search temperature".
+
+### 13d. The metric and its resolution
+
+Both arms write `fullcheck_4p.jsonl`: every 10 generations, 48 games against
+each of the 13 pool opponents. `tools/probe_compare.py` reports the
+pool-weight-averaged win rate and culture margin. Its quoted standard error
+treats opponents as independent binomials, which is optimistic (one candidate
+plays all 13, so its own strength is a shared term). Sanity check: the live
+arm's own converged plateau reads 0.399 / 0.364 / 0.392 / 0.381 / 0.375 at gens
+60–100, sd **0.013**, comfortably inside the ±0.022 the script quotes.
+
+**So a difference between the two arms smaller than about ±0.05 in pool win
+rate at a single generation is not interpretable, and even a consistent
+difference is one trajectory against one trajectory.**
+
+### 13e. Reading rule, fixed in advance
+
+The gen-0 anchor already exists: §8d measured the horizon fix on
+`DEFAULT_WEIGHTS` at 4p as **+7.5 points over a 25% null, n=400, p=0.0013**.
+That is the head start the probe begins with. It is in a different metric
+(BookBot-pool duels) from the fullcheck, so it is directional, not subtractable.
+
+| pattern over the matched generations | reading |
+|---|---|
+| probe above live by ≳0.05 at 3+ consecutive matched gens, gap roughly **constant** | the fix is a level shift; a clean restart banks §8d's +7.5 and training neither amplifies nor erodes it. **Supports restarting.** |
+| gap **widens** with generation | the fix raised the ceiling. Strongest possible support for restarting. |
+| gap **closes** toward zero | training routes around the bad shaping; the 174/99 generations already invested are worth more than the fix. **Argues against restarting.** |
+| everything inside ±0.05, or sign flips between points | **the probe cannot distinguish the hypotheses.** Report that and do not round it up. |
+
+Given 13c#5 and the number of matched points available before the window closes,
+the last row is the most likely outcome and it is the one I expect to be
+writing.
