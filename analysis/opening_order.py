@@ -32,22 +32,24 @@ from experiments.arena import load_spec, make_bot  # noqa: E402
 
 
 def card_type(db, name):
-    """Cards in the db are plain dicts: {'name':..., 'age':..., 'type':...}."""
-    c = db.get(name)
+    """Cards in the db are plain dicts: {'name':..., 'age':..., 'type':...}.
+
+    Look the name up in ``db.by_name`` rather than ``db.get``: ``CardDB.get``
+    is ``self.by_name[name]``, so it *raises* KeyError on an unknown name
+    instead of returning None, and the "unknown card" branch below could never
+    be reached (a KeyError here is swallowed into an ``ERR`` log row instead).
+    """
+    c = db.by_name.get(name)
     if not c:
         return "?"
-    if isinstance(c, dict):
-        return c.get("type") or "?"
-    return getattr(c, "type", None) or getattr(c, "kind", "?")
+    return c.get("type") or "?"
 
 
 def card_age(db, name):
-    c = db.get(name)
+    c = db.by_name.get(name)
     if not c:
         return "?"
-    if isinstance(c, dict):
-        return c.get("age") or "?"
-    return getattr(c, "age", "?")
+    return c.get("age") or "?"
 
 
 class Logger:

@@ -34,9 +34,38 @@ from engine import game                     # noqa: E402
 from engine.bots import GreedyBot, RandomBot  # noqa: E402
 
 
+#: The bot kinds `--kinds` accepts, same names and same construction as
+#: `engine.perf_check._bots` (engine/perf_check.py:43-57), so a row labelled
+#: `weighted` here means the same thing as a row labelled `weighted` there.
+BOT_KINDS = ("random", "greedy", "weighted", "quiescent")
+
+
 def _bots(kind, n, seed):
-    return [(RandomBot if kind == "random" else GreedyBot)(
-        random.Random(seed * 131 + i)) for i in range(n)]
+    """Build `n` bots of `kind`, seeded exactly as `perf_check` seeds them.
+
+    This used to read `(RandomBot if kind == "random" else GreedyBot)`, so
+    `--kinds weighted` silently benchmarked GreedyBot and printed the numbers
+    under the label `weighted`.  Unknown kinds are now a hard error rather
+    than a quiet fallback.
+    """
+    if kind not in BOT_KINDS:
+        raise SystemExit(
+            f"bench_interp: unknown bot kind {kind!r}; "
+            f"expected one of {', '.join(BOT_KINDS)}")
+    out = []
+    for i in range(n):
+        rng = random.Random(seed * 131 + i)
+        if kind == "random":
+            out.append(RandomBot(rng))
+        elif kind == "weighted":
+            from engine.bots import WeightedBot
+            out.append(WeightedBot(rng=rng))
+        elif kind == "quiescent":
+            from engine.bots.quiescent import QuiescentBot
+            out.append(QuiescentBot(rng=rng))
+        else:
+            out.append(GreedyBot(rng))
+    return out
 
 
 def _play(n, kind, seed):
@@ -82,13 +111,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--warmup", type=float, default=8.0)
     ap.add_argument("--measure", type=float, default=12.0)
-    ap.add_argument("--kinds", default="random,greedy")
+    ap.add_argument("--kinds", default="random,greedy",
+                    help=f"comma-separated, from: {', '.join(BOT_KINDS)}")
     ap.add_argument("--players", default="2,3,4")
     ap.add_argument("--ramp", action="store_true")
     ap.add_argument("--json")
     a = ap.parse_args()
+    kinds = [k.strip() for k in a.kinds.split(",") if k.strip()]
+    bad = [k for k in kinds if k not in BOT_KINDS]
+    if bad:
+        raise SystemExit(f"bench_interp: unknown bot kind(s) {', '.join(bad)}; "
+                         f"expected one of {', '.join(BOT_KINDS)}")
     rows = []
-    for kind in a.kinds.split(","):
+    for kind in kinds:
         for n in (int(x) for x in a.players.split(",")):
             r = cell(kind, n, a.warmup, a.measure, a.ramp)
             rows.append(r)

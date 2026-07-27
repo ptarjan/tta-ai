@@ -252,6 +252,13 @@ def _q(xs, f):
     return ys[min(len(ys) - 1, int(f * len(ys)))]
 
 
+def all_snaps_iter(recs):
+    """Every end-of-turn snapshot across a list of per-game records."""
+    for r in recs:
+        for s in r["snaps"]:
+            yield s
+
+
 def _summarize_group(recs, label):
     """Turn a list of per-game records into human-readable behaviour."""
     n = len(recs)

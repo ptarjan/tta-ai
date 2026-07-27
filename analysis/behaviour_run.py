@@ -1,9 +1,13 @@
 """Run experiments.behaviour with a missing helper patched in.
 
-`experiments/behaviour.py` calls a module-level `all_snaps_iter(recs)` inside
-`_summarize_group` but never defines it, so every run dies at the aggregation
-step *after* playing all the games.  That file is owned by another agent, so
-rather than edit it this wrapper injects the one-line helper and calls `main()`.
+HISTORICAL: `experiments/behaviour.py` used to call a module-level
+`all_snaps_iter(recs)` inside `_summarize_group` without ever defining it, so
+every run died at the aggregation step *after* playing all the games.  That
+file was owned by another agent, so rather than edit it this wrapper injected
+the one-line helper and called `main()`.  `behaviour.py` now defines
+`all_snaps_iter` itself, so the injection below is a no-op and
+`python3 -m experiments.behaviour` works standalone; this wrapper is kept only
+so existing invocations keep working.
 
 Usage is identical to `python3 -m experiments.behaviour`:
 
