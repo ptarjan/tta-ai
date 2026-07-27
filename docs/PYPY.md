@@ -1476,3 +1476,288 @@ weighted narrow (33 games)  dff85378482c9fbd8f04319dbe1fdd2975cb49870e71efd3f29b
 That agreement is also the first evidence that step 5's 100 converted container
 sites are inert under a *different move distribution* — everything before this
 point was checked with GreedyBot's moves only.
+
+#### The conversion (commit 47c0e5b)
+
+`WeightedBot._pick_journalled`, behind the same `USE_JOURNAL` flag, following
+`GreedyBot._pick_journalled` line for line — the copy path is left exactly as it
+was so it stays available as the paranoid oracle. Three of WeightedBot's own
+semantics are **not** GreedyBot's and are preserved deliberately:
+
+* `ctx` is computed once at the root on the unmutated state and passed to every
+  candidate. Under the journal the root state *is* the object the candidates
+  mutate, so capturing before the loop is load-bearing rather than incidental.
+  `rival_context` returns a plain dict of numbers, so it is not aliased to
+  anything a rollback restores.
+* `end_bias` is **added**; GreedyBot subtracts a fixed 0.01.
+* `evaluate` sits **inside** the `except Exception: continue`. GreedyBot's
+  journalled loop evaluates outside its `try`; copying that shape here would
+  convert WeightedBot's "an unscorable candidate is skipped, never fatal" into a
+  mid-game crash. This is the one place where following the existing pattern
+  exactly would have been the bug.
+
+`USE_JOURNAL` and the trial rng moved to a new leaf module `engine/bots/trial.py`,
+because `bots/__init__.py` imports `bots.weighted` at module scope and a
+package-level import from `weighted` would depend on the order of lines in
+`__init__.py`. Both names are re-exported, so `bots.USE_JOURNAL` still resolves
+for `tools/mutation_coverage.py` and `tests/test_journal.py`.
+
+#### Coverage — WeightedBot reaches a site GreedyBot's pass never did
+
+This is the whole risk argument, and it pays out. `tools/mutation_coverage.py`
+grows `--bot`; 60 games (20 seeds x 2p/3p/4p) per bot, **games only, no tests**,
+so the two move distributions can be compared honestly:
+
+| | converted sites unreached | unconverted (local) unreached |
+|---|---|---|
+| GreedyBot games only | 7 / 61 | 27 / 101 |
+| WeightedBot games only | 7 / 61 | 21 / 101 |
+| **union of both** | **6 / 61** | 19 / 101 |
+| either bot + the test suite | **0 / 61** | 12 / 101 |
+
+The sets are not nested:
+
+* WeightedBot reaches **`engine/interact.py:228`** — `journal.touch(owner.hand_military).append(name)`, the **refused pact offer**, which 9.10 listed by name as one of the seven converted sites 60 games of GreedyBot self-play never executed. WeightedBot plays pacts; GreedyBot does not. Under the journal that site is now proven in real play, not only by its targeted test.
+* GreedyBot reaches **`engine/actions.py:799`** — `del journal.touch(p.techs)[old]`, the tech-replacement `del`, which WeightedBot's 60 games never hit.
+* WeightedBot additionally executes 8 unconverted sites GreedyBot never does (6 in `effects.py`), i.e. more of the evaluation surface.
+
+So the previous pass's coverage claim was *bot-specific*, exactly as suspected,
+and re-running it under WeightedBot was not a formality. With the test suite
+traced as well (9.10's standard: a site driven by a targeted rollback test is
+better verified than one stumbled into), **both bots report 0 of 61 converted
+sites unexecuted**, exit status 0. The 12 unconverted misses are the same 12
+9.10 accounted for — 9 `cards.py` import-time DB construction, `actions.py:367`,
+and `state.py:202`'s `del self.log[:100]`, which cannot run inside a trial
+because `emit` returns early while `SUPPRESS_LOG` is set.
+
+#### The gate — 14 arms, and the 135-game paranoid suite with WeightedBot searching
+
+The four weighted arms are the coverage argument cashed in. `TTA_JOURNAL=1
+JOURNAL_PARANOID=1` with WeightedBot searching means: on **every candidate move
+of 135 WeightedBot games**, the state is copied, the candidate applied by undo,
+rolled back, and the two structurally diffed including dict key order.
+
+```
+weighted narrow(33)   master 6d0247c   dff85378482c9fbd   (25s)
+weighted narrow(33)   branch           dff85378482c9fbd   (22s)
+weighted narrow(33)   branch JOURNAL   dff85378482c9fbd   (19s)
+weighted narrow(33)   branch J+PARA    dff85378482c9fbd   (137s)
+weighted wide(102)    master 6d0247c   477d1c1fe6d2e770   (92s)
+weighted wide(102)    branch           477d1c1fe6d2e770   (69s)
+weighted wide(102)    branch JOURNAL   477d1c1fe6d2e770   (50s)
+weighted wide(102)    branch J+PARA    477d1c1fe6d2e770   (341s)
+```
+
+```
+weighted narrow dff85378482c9fbd8f04319dbe1fdd2975cb49870e71efd3f29bd77af536fb91
+weighted wide   477d1c1fe6d2e770e34f338d9425da3d8d7e7235a8b904a2c179fdbb27debcdc
+```
+
+No missed site, first try. 9.11's lesson says a first-try pass is exactly when
+to distrust the instrument, so the check was proved live in both directions
+before being believed:
+
+* **positive**: `journal.begin` counted at **4169 calls** in one 4p WeightedBot
+  game, with `weighted.USE_JOURNAL`, `bots.USE_JOURNAL` and `journal.PARANOID`
+  all confirmed `True` in the same process;
+* **negative**: `journal.touch` replaced by `lambda o: o` — record nothing,
+  return the object — in all five converted modules. The weighted paranoid run
+  then failed on the first game, by path:
+  `journal rollback did not restore the state: state.players[0].hand_civil: keys gained: ['0']`.
+
+So the arm can fail, and does, and the pass means something.
+
+`tools/gate.sh` grows the four weighted arms (`WNARROW=dff85378`,
+`WWIDE=477d1c1f`) alongside the six it had; the greedy digests `6f5c72ef` /
+`7814c5c9` are unchanged throughout.
+
+`tests/test_journal_weighted.py`: 7 tests, 135 total.
+
+### 9.15 MEASURED end-to-end throughput on WeightedBot: 1.40x at 3p, 1.44x at 4p
+
+9.12's protocol exactly: `engine.perf_check bench`, `time.process_time`,
+`nice -n 15`, ONE worker, and the arms interleaved **within** each round so any
+drift in machine load hits all three. Three arms, on three separate worktrees,
+so the journal win and the rng win are attributed independently:
+
+* `BASE` — master `6d0247c`: copy path, `random.Random(0)` per candidate
+* `RNG` — `3bcae9c`: copy path, shared trial rng
+* `JRNL` — branch with `TTA_JOURNAL=1`: undo stack + shared trial rng
+
+| games/cpu-s | 3p BASE | 3p RNG | 3p JRNL | 4p BASE | 4p RNG | 4p JRNL |
+|---|---|---|---|---|---|---|
+| round 1 | 1.86 | 1.97 | 2.61 | 0.92 | 0.97 | 1.41 |
+| round 2 | 1.86 | 1.96 | 2.63 | 1.06 | 1.00 | 1.47 |
+| round 3 | 1.88 | 2.00 | 2.62 | 1.00 | 0.97 | 1.42 |
+| **mean** | **1.87** | **1.98** | **2.62** | **0.99** | **0.98** | **1.43** |
+
+**Speed-up over master: 1.40x at 3p, 1.44x at 4p.** In moves/cpu-s, which is
+insensitive to game-length variation between seeds: 3p 406 → 569 (**1.40x**),
+4p 360 → 519 (**1.44x**) — the two metrics agreeing to three digits is the
+sanity check that the game-length noise 9.12 warned about is not driving this.
+
+Attributed separately, `JRNL / RNG` is the journal alone: **1.33x at 3p, 1.46x
+at 4p**.
+
+**Why this is less than GreedyBot's 1.75x, and why that is the expected
+direction.** The journal removes the copy; it does not touch evaluation.
+GreedyBot's evaluation is 19 features and one `fsum`. WeightedBot's is ~78
+weights over ~57 features plus `hand_potential`, which re-prices every card in
+hand. So the copy is a *smaller fraction* of a WeightedBot candidate than of a
+GreedyBot candidate, and Amdahl takes the rest. 1.44x on the bot that fills
+~69% of league seats is worth considerably more wall-clock than 1.75x on the
+one that fills ~2%.
+
+#### The rng fix: real, small, and NOT resolvable end-to-end — 8.1 for the third time
+
+5a profiled `random.Random(0)` per candidate at 10.8%. 8.1 A/B'd it on
+GreedyBot and found the profiler had overstated it. On WeightedBot the same
+thing happens again, and this time the honest answer is that the end-to-end
+measurement **cannot see it at all**:
+
+| | 3p | 4p |
+|---|---|---|
+| direct accounting: `Random(0)` cost x apply count / game cpu | **6.2%** | **4.4%** |
+| A/B, 3 rounds x 10 games (games/cpu-s) | +5.9% | −1.3% |
+| A/B, 5 rounds x 16 games (moves/cpu-s) | +0.9% | +2.6% |
+| paired, same-process, 8 reps (moves/cpu-s) | +6.7% (sd 0.17) | +0.9% (sd 0.07) |
+
+The direct accounting is solid — 9645 ns per `random.Random(0)` measured by
+`timeit`, times 1979 (3p) / 4169 (4p) `apply` calls per game, over 0.31 / 0.91
+cpu-s per game. The end-to-end arms are not: the round-to-round spread of the
+*baseline alone* is 380–471 moves/cpu-s at 3p, a ~20% noise floor with three
+hill climbs on the box, and a 5% effect does not survive that. Even the paired
+same-process design, which removes cross-process drift, has sd 0.17 at 3p.
+
+So: **keep the fix, claim ~4-6% from the accounting, and do not claim the A/B
+supports a number** — it is consistent with anything from 0% to 7%. The fix is
+worth keeping regardless because it is free: no behaviour change (all four
+weighted digests identical), no new failure mode, and it removes a real 9.6 us
+of work from every one of ~4000 candidates a game.
+
+The standing lesson of 8.3 now has three data points and should be read as a
+rule: **on this box, a profiler line under ~10% cannot be confirmed by an
+end-to-end A/B.** Either measure it directly (cost x count) or accept it
+unmeasured; do not run more rounds hoping the noise averages out, because the
+noise is contention, not sampling.
+
+### 9.16 QuiescentBot: the nesting verdict, and where USE_JOURNAL should live
+
+#### QuiescentBot cannot reach the journal — verified structurally and by execution
+
+9.13 was right that `QuiescentBot` must stay on the copy path: `_war_value`
+does `scratch = copy_state(state)` on a state that is *itself* already a trial
+(`quiescent.py:210`), `_pick` copies inside `_resolve` which is itself called
+from inside a candidate (`:176`), and `journal.begin` raises on nesting by
+design (`journal.py:166-169`). `copy_state` inside an open journal raises too
+(`journal.py:80-85`), so there is no quiet fallback to hide behind — which is
+the right shape: the failure is loud or it does not exist.
+
+The question 9.13 did not answer is whether journalling `WeightedBot` could
+reach a nested `begin` *through* QuiescentBot. It cannot:
+
+* `QuiescentBot` is a bare `class QuiescentBot:` (`quiescent.py:219`), not a
+  subclass of anything. Nothing in the tree subclasses `WeightedBot`.
+* It re-implements the 1-ply pick itself (`_pick`, `:164-196`) instead of
+  delegating. Its only imports from `weighted` are `DEFAULT_WEIGHTS`,
+  `evaluate` and `rival_context` (`:90`) — and an AST scan of the whole of
+  `weighted.py` finds **no writes to state at all**: every assignment and
+  container mutation in the file targets a local (`gains`, `out`, `best`), a
+  `self` field, or a module-level weight dict at import time. So the shared
+  surface is read-only and journal-free.
+* `engine/bots/book.py:905` is the one other caller of `WeightedBot.choose`
+  (`BookImprovedBot`). It calls it once, at its own root, on the real state —
+  no nesting — and it is not in the league pool regardless.
+
+`tests/test_journal_weighted.py` pins all of it, each assertion with a positive
+control because 9.11 caught a test on this branch that asserted nothing:
+
+* QuiescentBot opens **0** journals over a 60-move 3p game with
+  `USE_JOURNAL` forced on — while WeightedBot under the *same* counter opens
+  many, which is what makes the zero meaningful;
+* QuiescentBot enters `WeightedBot.pick` **0** times — again against a live
+  spy proven to fire for WeightedBot;
+* a nested `_pick_journalled` inside an open journal raises `JournalError`,
+  so if anyone ever does wire it up, they get a stack trace and not a
+  corrupted training run;
+* QuiescentBot's copy-inside-a-trial search still works with the journalling
+  `__setattr__` installed process-wide, which it will be as soon as any
+  WeightedBot search has run in that process.
+
+#### Standing constraint: the journal is process-global, so the harness must stay process-parallel
+
+`_J` is a module global. `experiments/arena.py:192` uses
+`multiprocessing.Pool`, and there is no `threading` anywhere in
+`hillclimb_league.py` / `hillclimb_pool.py` / `arena.py` / `harness.py`, so
+every worker has its own journal and the design is sound. **A thread-parallel
+harness would corrupt states across threads silently.** Anyone who moves the
+league to threads must put `_J` in a `threading.local` first.
+
+#### Recommendation: set it explicitly in `run_league.sh`; do NOT default it on
+
+9.13 reached "explicit in `run_league.sh`" for a reason that turns out to be
+wrong ("defaulting on makes `WeightedBot` and `QuiescentBot` pay the hook for
+nothing"). Both halves are wrong: `WeightedBot` is the *beneficiary*, at 1.44x
+and ~69% of seats; and `QuiescentBot` pays **zero**, because `journal.install()`
+is lazy — the hook goes on the dataclasses at the first `begin()`, and a process
+running only QuiescentBot never calls one.
+
+The conclusion survives its reasoning being replaced, for a better reason:
+
+**Keep the default OFF so the copy path stays the oracle.** The journal's whole
+safety story is that two independent implementations agree. If `USE_JOURNAL`
+defaults on, every caller in `analysis/`, `tools/` and `experiments/` switches
+to the undo path at once and there is nothing left to disagree with. The next
+engine change that adds a container mutation — and there will be one; that is
+what `tools/mutation_coverage.py` exists for — would then corrupt everything
+uniformly instead of showing up as a divergence between two paths.
+
+So:
+
+1. `export TTA_JOURNAL=1` in `experiments/run_league.sh`, so the trainer takes
+   the 1.44x and nothing else changes behaviour.
+2. Leave `USE_JOURNAL` defaulting off everywhere else.
+3. `bash tools/gate.sh --journal` (14 arms) before any merge that touches
+   `engine/`, not the 6-arm default.
+4. Re-run `tools/mutation_coverage.py --bot weighted` **and** `--bot greedy`
+   after any engine change that adds a container mutation. 9.14 showed the two
+   bots do not cover the same sites, so one bot is not an audit.
+
+**`experiments/run_league.sh` is deliberately NOT edited on this branch.** With
+the flag off, merging `journal-undo` still changes nothing until a human sets
+it — which is the property 9.13 wanted and the reason the supervisor's hourly
+relaunch is safe. The whole change is one line, to be added at the same moment
+the merge is made, not before:
+
+```diff
+ set -u
+ cd "$(dirname "$0")/.."
++export TTA_JOURNAL=1        # docs/PYPY.md 9.14-9.16: 1.44x on WeightedBot
+ K=${1:-2}; H=${2:-8}; W=${3:-6}; L=${4:-2}; B=${5:-12}; S=${6:-4}; Z=${7:-1.2816}
+```
+
+The three running climbs pick it up on their next hourly restart with no other
+action, and reverting is the same one line.
+
+### 9.17 Status — the branch now covers the bot the league actually runs
+
+| | GreedyBot (9.12) | WeightedBot (9.15) |
+|---|---|---|
+| share of league seats | ~2% | **~69%** |
+| speed-up at 3p | 1.65x | **1.40x** |
+| speed-up at 4p | 1.75x | **1.44x** |
+| converted sites reached, games only | 54/61 | 54/61 (union 55, +tests 61) |
+| 135-game paranoid suite | `6f5c72ef` / `7814c5c9` | `dff85378` / `477d1c1f` |
+
+Remaining work is unchanged from 9.13 except that the WeightedBot item is done:
+
+- [x] Convert `WeightedBot` (9.14) and measure it (9.15).
+- [x] Decide the `USE_JOURNAL` default (9.16: explicit in `run_league.sh`).
+- [x] Verify `QuiescentBot` cannot reach a nested `begin` (9.16).
+- [ ] `QuiescentBot` itself still needs either a stacked journal or design B
+      before it can leave the copy path. It is 0% of league seats today, so
+      this is not urgent — but `--with-quiescent` exists, and the day someone
+      passes it, the pool gains a bot that must not see `TTA_JOURNAL=1`. The
+      guard for that day is the test above, not a comment.
+- [ ] Re-run `tools/mutation_coverage.py` with **both** bots after any engine
+      change that adds a container mutation.

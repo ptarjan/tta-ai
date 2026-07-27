@@ -152,7 +152,22 @@ def main(argv):
     cases = wide_cases() if wide else CASES
     if "--weighted" in argv:
         cases = weighted_cases(_opt(argv, "--seeds", 34 if wide else 11))
-    pos = [a for a in argv[2:] if not a.startswith("--")]
+    # Positional args = everything that is neither a `--flag` nor the VALUE of
+    # one.  The old one-liner (`[a for a in argv[2:] if not a.startswith("--")]`)
+    # swallowed flag values, so `bench --kinds weighted` crashed with
+    # `int('weighted')` -- the default for --games is evaluated eagerly even
+    # when --games is given.  Pre-existing; it only bites once anyone passes
+    # --kinds or --players, which 9.14's A/B is the first thing to do.
+    _VALUED = ("--games", "--warmup", "--json", "--kinds", "--players", "--seeds")
+    pos, skip = [], False
+    for a in argv[2:]:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("--"):
+            skip = a in _VALUED
+            continue
+        pos.append(a)
     if cmd == "bench":
         bench(games=_opt(argv, "--games", int(pos[0]) if pos else None),
               warmup=_opt(argv, "--warmup"),

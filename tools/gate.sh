@@ -26,6 +26,15 @@ cd "$(dirname "$0")/.."
 NARROW=6f5c72ef
 WIDE=7814c5c9
 
+# The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
+# master rebases left it untouched (9.0/9.6) -- and exactly why it can never
+# catch a change to WeightedBot, the bot the league actually trains (9.14).
+# These two are the same 33/102 split played by WeightedBot instead.  Derived
+# per 9.0's rule: from scratch on a clean detached worktree of master 6d0247c
+# AND on this branch, agreeing.
+WNARROW=dff85378
+WWIDE=477d1c1f
+
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }
 
@@ -70,9 +79,11 @@ run_tests "unittest JOURNAL_PARANOID" "JOURNAL_PARANOID=1"
 
 check_fp "narrow fingerprint"        "$NARROW" ""
 check_fp "narrow FASTCOPY_PARANOID"  "$NARROW" "FASTCOPY_PARANOID=1"
+check_fp "weighted narrow"           "$WNARROW" "" --weighted
 if [ "${1:-}" != "--fast" ]; then
   check_fp "wide fingerprint"        "$WIDE" "" --wide
   check_fp "wide FASTCOPY_PARANOID"  "$WIDE" "FASTCOPY_PARANOID=1" --wide
+  check_fp "weighted wide"           "$WWIDE" "" --weighted --wide
 fi
 
 # The journal arms.  These only mean anything once step 5 has converted every
@@ -87,6 +98,15 @@ if [ "${1:-}" = "--journal" ]; then
   check_fp "narrow JOURNAL+PARANOID"   "$NARROW" "TTA_JOURNAL=1 JOURNAL_PARANOID=1"
   check_fp "wide JOURNAL"              "$WIDE" "TTA_JOURNAL=1" --wide
   check_fp "wide JOURNAL+PARANOID"     "$WIDE" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --wide
+  # The same four arms with WEIGHTED searching.  9.14 showed the two bots do
+  # not cover the same mutation sites -- WeightedBot reaches the refused-pact
+  # site (interact.py:228) that 60 games of GreedyBot never execute -- so these
+  # are not a duplicate of the arms above, they are the other half of the
+  # coverage claim.
+  check_fp "weighted narrow JOURNAL"          "$WNARROW" "TTA_JOURNAL=1" --weighted
+  check_fp "weighted narrow JOURNAL+PARANOID" "$WNARROW" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --weighted
+  check_fp "weighted wide JOURNAL"            "$WWIDE" "TTA_JOURNAL=1" --weighted --wide
+  check_fp "weighted wide JOURNAL+PARANOID"   "$WWIDE" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --weighted --wide
 fi
 
 if [ "$fail" = 0 ]; then echo "GATE PASS"; else echo "GATE FAIL"; fi
