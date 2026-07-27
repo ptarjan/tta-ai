@@ -233,6 +233,65 @@ I do **not** claim the trained weights are tuned against a cheat. The measured
 answer is the opposite: the cheat is currently unreadable, so it cannot have
 influenced training. It is a loaded gun, not a fired one.
 
+### 2.3b The evaluation does not predict the outcome — MEASURED, and this is the headline
+
+Nobody in this repo appears to have asked the simplest possible question about
+the evaluation function: **does it predict who wins?**
+
+`tools/eval_quality.py` scores every state of a self-play game with a candidate
+evaluation and asks, within each game-turn, whether the player it ranks higher
+is the player who actually ends with more culture. Every scorer is judged on
+**exactly the same pairs** — a pair counts only if all scorers separate it —
+because raw culture is 0 for everybody in the opening and would otherwise be
+silently graded on a later, easier subset.
+
+MEASURED, 2p, champion-mirror self-play, **955 pairs from held-out games**
+(the regression below never saw them):
+
+| scorer | pairwise ranking accuracy |
+|---|---|
+| the trained champion's `evaluate` (gen 344, 82 weights, ~57 features) | **0.6984 +/- 0.0291** |
+| `culture` — one number | 0.7005 +/- 0.0291 |
+| `culture + 5 * culture_rate` — two numbers | 0.7037 +/- 0.0290 |
+| **ridge fit on the SAME 80 columns, ~470 games of data** | **0.7843 +/- 0.0261** |
+
+Two readings, both blunt:
+
+1. **344 generations of hill climbing have bought nothing over counting
+   culture.** The champion's whole evaluation is statistically indistinguishable
+   from a single feature. I cannot say it is *worse* — the intervals overlap —
+   but I can say it is not better, and that is enough.
+2. **The hypothesis class is not the problem; the trainer is.** Identical
+   features, identical linear parameterisation, identical 80 free parameters,
+   fitted by ridge regression on a few hundred games instead of by 344
+   generations of mutate-and-select: **+8.6 points of ranking accuracy, on
+   held-out games, non-overlapping intervals.** Held-out R2 against the realised
+   culture margin is 0.29-0.35.
+
+The by-round table shows the shape of the failure. The champion's eval beats
+raw culture in rounds 5-13 (0.604 vs 0.569 at round 6) — so the features *do*
+carry early-game information — and then loses to it from round 15 on (0.846 vs
+0.932 at round 19), because late in the game culture simply *is* the answer and
+the other 79 terms are adding noise on top of it.
+
+**Why this settles the search-versus-evaluation question.** A search is an
+amplifier: it converts evaluation *differences* into move choices. The bot uses
+`evaluate` to rank sibling states that differ by a single action — a far finer
+discrimination than ranking two whole positions. If the evaluation cannot
+reliably rank two whole positions, its marginal preferences between
+nearly-identical positions are mostly noise, and searching harder on it
+amplifies the noise. That is not a theory: it is exactly what
+docs/WASTED_ACTIONS.md §6 measured five separate times, and §7 said so in
+words — "what is broken is the bot's ability to tell one action from another".
+This measurement puts a number on it.
+
+Caveats, stated because this project's failure mode is exactly this: the
+regression's target is the *realised* margin under the champion's own policy,
+so it estimates V^pi, not V*; ranking accuracy is not a win rate; and a
+value function that predicts well can still induce a bad greedy policy. The
+A/B in §7 is the test that counts. But the champion-versus-culture row needs no
+such caveat — that is a straight comparison of two evaluations on the same data.
+
 ### 2.4 So what is actually wrong with the bot
 
 Ranked by the evidence, most-supported first:
