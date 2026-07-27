@@ -346,6 +346,42 @@ class TestWarResolution(unittest.TestCase):
         self.assertEqual(p1.yellow_bank, 18 - 1)
         self.assertEqual(p0.yellow_bank, 18 + 1)
 
+    def test_several_players_may_declare_war_on_the_same_civilization(self):
+        # [FAQ p.11] 'Multiple Attacks: More than one player may attack ...
+        # the same Civilization in a given round.'
+        st = st_military(players=4)
+        for attacker in (0, 2):
+            st.current = attacker
+            st.phase = "politics"
+            p = st.players[attacker]
+            p.politics_done = False
+            p.hand_military = ["War over Territory"]
+            p.military_actions = 2
+            declare_war(st, "War over Territory", 1)
+        self.assertEqual(len(st.players[1].wars_declared_on_me), 2)
+        set_strength(st, st.players[0], 6)
+        set_strength(st, st.players[2], 6)
+        set_strength(st, st.players[1], 1)
+        events.resolve_war(st, st.players[0], None)
+        events.resolve_war(st, st.players[2], None)
+        self.assertEqual(st.players[1].wars_declared_on_me, [])
+        self.assertEqual(st.players[1].yellow_bank, 18 - 4)   # 2 each
+
+    def test_you_may_resolve_a_war_and_then_aggress_the_same_rival(self):
+        # [FAQ p.11] '... a single player to both resolve a War and conduct
+        # an Aggression against the same player during a single turn.'
+        st, p0, p1 = self._declared()
+        set_strength(st, p0, 6)
+        set_strength(st, p1, 1)
+        st.current = 0
+        st.round = 4
+        p0.hand_military = ["Aggression: Plunder (I)"]
+        p0.military_actions = 2          # a fresh turn's red tokens
+        game.start_turn(st)
+        self.assertIsNone(p0.war_declared_by_me)
+        self.assertIn(("aggression", "Aggression: Plunder (I)", 1),
+                      actions.legal_moves(st))
+
     def test_resigning_removes_the_war_and_pays_seven_culture(self):
         # [CoL p.4] 'the players who declared them remove their war cards from
         # play and score 7 culture points.'

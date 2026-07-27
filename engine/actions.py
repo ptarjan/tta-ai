@@ -256,7 +256,14 @@ def _politics_moves(state, p):
         if typ in ("event", "territory"):
             moves.append(("prepare_event", name))
         elif typ == "pact":
-            if len(state.active_players()) < 3:          # §13: no pacts in 2p
+            # §13 / CoL p.2: pacts are removed from the military DECKS when
+            # the game is set up for two players -- a setup rule, not a live
+            # one.  FAQ p.11 on resigning: "Do not remove any Pacts or 3+ or
+            # 4-player cards from the current-Age decks; but do remove them
+            # from any future-Age decks."  So the survivors of a resignation
+            # keep drawing pacts from the current deck and may still play
+            # them; only `game._advance_age` re-trims.
+            if state.num_players < 3:
                 continue
             sides = card.get("sides") or []
             for q in state.players:
@@ -278,7 +285,7 @@ def _politics_moves(state, p):
                     continue
                 if effects.pact_forbids_attack(state, p, q):     # §5.4.2
                     continue
-                if effects.state_stats(state, q).strength >= \
+                if effects.defense_strength(state, p, q) >= \
                         effects.attack_strength(state, p, q):
                     continue
                 moves.append(("aggression", name, q.idx))
@@ -1035,6 +1042,7 @@ def _h_resign(state, p, move, rng):
 
 
 def _h_war(state, p, move, rng):
+    """§5.6 / CoL p.4: reveal, pay, name the rival, drop the pact, place it."""
     db = _DB
     name, target = move[1], move[2]
     cost = (db.get(name).get("cost") or {}).get("militaryActions", 0)
@@ -1042,6 +1050,11 @@ def _h_war(state, p, move, rng):
         cost *= 2
     p.military_actions -= cost
     journal.touch(p.hand_military).remove(name)
+    # CoL p.4: "If you and your rival have a pact that says it ends if you
+    # attack, remove that pact from play."  FAQ p.11 spells out that this
+    # covers "either by Aggression or by declaring War", and that the
+    # strength such a pact granted therefore never applies to the war.
+    effects.cancel_attack_pacts(state, p, state.players[target])
     p.war_declared_by_me = (name, p.idx, target)
     journal.touch(state.players[target].wars_declared_on_me).append((name, p.idx, target))
     p.politics_done = True

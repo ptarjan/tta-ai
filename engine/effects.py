@@ -491,6 +491,26 @@ def pact_attack_bonus(state, attacker, defender):
     return tot
 
 
+def _doomed_pact_strength(state, one, other, idx):
+    """Strength `idx` draws from a pact between `one` and `other` that ends
+    the moment either of them attacks (§5.4.3).
+
+    FAQ p.11: "The Military Strength given by either Pact will not affect
+    any War or Aggression which is declared between the two civilizations
+    -- for the Pact is cancelled immediately."  That is true of BOTH
+    parties, so the same helper serves the attacker and the defender.
+    """
+    total = 0
+    for pact in pacts_for(state, one.idx):
+        if pact_partner(pact, one.idx) != other.idx:
+            continue
+        if not _pact_effects(pact).get("cancelledIfPartiesAttackEachOther"):
+            continue
+        for block in _pact_blocks(pact, idx):
+            total += block.get("strength", 0) or 0
+    return total
+
+
 def attack_strength(state, attacker, defender):
     """§5.4.2: the attacker's strength for an attack on `defender`.
 
@@ -500,15 +520,22 @@ def attack_strength(state, attacker, defender):
     """
     total = state_stats(state, attacker).strength
     total += pact_attack_bonus(state, attacker, defender)
-    for pact in pacts_for(state, attacker.idx):
-        if pact_partner(pact, attacker.idx) != defender.idx:
-            continue
-        eff = _pact_effects(pact)
-        if not eff.get("cancelledIfPartiesAttackEachOther"):
-            continue
-        for block in _pact_blocks(pact, attacker.idx):
-            total -= block.get("strength", 0) or 0
-    return total
+    total -= _doomed_pact_strength(state, attacker, defender, attacker.idx)
+    return max(0, total)
+
+
+def defense_strength(state, attacker, defender):
+    """§5.4.2: the defender's strength for the legality comparison.
+
+    The mirror image of `attack_strength`.  A pact that ends when the two
+    attack each other is removed BEFORE the aggression is resolved
+    (`cancel_attack_pacts`), so `start_defense` already sees a defender
+    without it; the "may I attack at all?" test in `legal_moves` has to
+    agree, or a legal attack looks illegal by up to the pact's strength.
+    """
+    total = state_stats(state, defender).strength
+    total -= _doomed_pact_strength(state, attacker, defender, defender.idx)
+    return max(0, total)
 
 
 def cancel_attack_pacts(state, attacker, defender):
