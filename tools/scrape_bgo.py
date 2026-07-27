@@ -124,6 +124,19 @@ def _cells(row: str) -> list[str]:
     return out
 
 
+def fetch_board(sess: Session, game_id: int) -> str:
+    """Raw HTML of one game's final board (index.php?cnt=202).
+
+    Used by tools/bgo_corpus.py as a per-game, content-based edition/expansion
+    check: the page's "Leaders and wonders" section lists exactly the
+    leader/wonder card pool available in *that* game, so it reveals whether
+    any non-base (2006-only, or BGO/Czech/Polish/Spanish expansion-set) card
+    names are in play -- something the finished-games index itself cannot
+    show. One GET, no pagination.
+    """
+    return sess.fetch(f"index.php?cnt={CNT_BOARD}&pl={game_id}&nat=-1")
+
+
 def scrape_journal(sess: Session, game_id: int, max_pages: int = 40):
     """Every journal entry of one game, oldest first."""
     rows: list[list[str]] = []
