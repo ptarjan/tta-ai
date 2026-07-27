@@ -268,6 +268,31 @@ Two readings, both blunt:
    held-out games, non-overlapping intervals.** Held-out R2 against the realised
    culture margin is 0.29-0.35.
 
+**Two independent measurements landed the same night and agree.** While this was
+running, `docs/CULTURE_GAP.md` §17-18 (a different agent, a different method)
+measured that (a) the trainer's accept test is **under-powered by ~5x in sigma**
+on the culture-rate horizon axis — a real 3.79 +/- 2.47 culture effect is 0.21
+sigma of the accept statistic at the trainer's own 48-game block, needing ~1050
+games to resolve at 1 sigma — and (b) the 2p and 3p champions' individual weight
+marginals are **statistically indistinguishable from an undirected random walk**
+(KS against a matched drift null, p=0.59 and p=0.80). That is the same
+conclusion as mine, reached from the optimiser's side rather than the
+evaluation's: *the accept test cannot see the effects it is supposed to select
+on.*
+
+Be careful not to overstate it, and their §18b is the honest counterweight: the
+2p arm's pool win rate really did go **0.20 -> 0.76 over 342 generations**, so
+training is not doing nothing. Both facts hold at once — the climb makes large
+joint improvements while no individual coordinate is readable and the eval it
+produces does not out-predict a single feature. That is the classic signature of
+a sloppy model, and it is also exactly the regime where **replacing a
+comparison-based accept test with a regression is the fix**: regression does not
+need the gate to resolve anything, because it never runs a gate.
+
+Their closing advice — "do NOT add more features or more shaping, the gate
+cannot resolve the shaping that already exists" — is right *given the current
+trainer*, and it is an argument for M4 before M2, not against M2.
+
 The by-round table shows the shape of the failure. The champion's eval beats
 raw culture in rounds 5-13 (0.604 vs 0.569 at round 6) — so the features *do*
 carry early-game information — and then loses to it from round 15 on (0.846 vs
