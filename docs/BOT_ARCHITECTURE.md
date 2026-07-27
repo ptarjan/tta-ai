@@ -445,6 +445,58 @@ list that has been beating this champion all along — at **155 mean culture**
 (n=400). PlanBot at **194.5** is well past that mark on the same metric, on the
 champion's own weights, with no strategy knowledge added at all.
 
+### What it is actually doing — MEASURED, and it is not an engine exploit
+
+The obvious worry about a deeper searcher is that it has found a mispriced legal
+action rather than a better plan. MEASURED, 24 games, seat-alternated, moves per
+game by kind (both bots on the identical champion weights):
+
+| move | PlanBot | champion |
+|---|---|---|
+| **aggression** | **1.67** | **0.00** |
+| **bid** (colony auction) | **0.50** | 0.08 |
+| wonder_step | **4.58** | 2.75 |
+| develop | **8.21** | 6.79 |
+| upgrade | **4.08** | 2.83 |
+| take | **25.21** | 22.58 |
+| play_action | **4.88** | 3.21 |
+| prepare_event | 10.67 | 8.96 |
+| destroy (a wasted civil action) | **3.17** | 5.00 |
+| pol_pass | **5.12** | 8.46 |
+| copy_tactic | 0.46 | **6.92** |
+| play_tactic | 1.67 | **4.42** |
+| build | 9.00 | **12.25** |
+| defend / defend_done | 0.00 / 0.00 | 0.71 / 1.62 |
+| end_turn | 18.92 | 18.92 |
+| mean final culture | **200.3** | 145.1 |
+
+Read that top row. **The champion attacks 0.00 times per game; PlanBot attacks
+1.67.** `docs/AGGRESSION_FIX.md` §B and `docs/CULTURE_GAP.md` §2b both proved
+that aggressions are *strictly dominated* under any weight vector at 1 ply,
+because the trial state holds the whole cost and none of the gain. PlanBot
+resolves the defender's pending decision before scoring, so the gain is visible,
+and the move becomes playable — **at the identical weights**. This is
+`docs/DEEPER_SEARCH.md` §5's never-run behaviour count, arriving from a
+different bot: the dominated move class is gone, and it is gone by playing the
+rules out rather than by hand-pricing anything. Colony bids move the same way
+(0.08 -> 0.50).
+
+The rest is a coherent strategic profile, not an exploit. PlanBot takes more
+cards, develops more, upgrades more, builds **67% more wonder steps**, plays
+more action cards, wastes **a third fewer** civil actions to `destroy`, and
+passes the politics phase far less often. It spends much less on tactic
+shuffling (`copy_tactic` 0.46 vs 6.92, `play_tactic` 1.67 vs 4.42) and slightly
+less on plain `build`, which is the trade: fewer units and tactic swaps, more
+economy and more wonders. Every one of those movements is in the direction
+`docs/STRENGTH_CHECK.md` said the champion was failing — "under-buys civil
+actions, -0.9 wonders, buys military it never cashes" — arrived at
+independently. And the champion has to `defend` 0.71 times a game while PlanBot
+never does, because only one of them ever attacks.
+
+n=24 games, so these are **rates, not a strength claim** (the strength claim is
+the n=400 above). But 0.00 versus 1.67 over ~450 player-turns is qualitative,
+not statistical.
+
 Three things make the number *bigger* than it looks, and one makes it smaller.
 
 Bigger:
