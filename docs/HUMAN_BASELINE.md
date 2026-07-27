@@ -255,9 +255,10 @@ easy they'd be to fix:
    government purchase buys civil actions the bot then fails to convert into
    cards or wonders — but *this doc does not test that story*, it only
    measures the two facts separately.
-4. **It goes to war 3-5x too often**, worsening with table size, and to
+4. **It goes to war 2.9-5.4x too often**, worsening with table size, and to
    aggression 1.5-2.7x too often. The user's prior ("1.98 wars/game") is the
-   right shape; the measured number for this champion under `levels=1` is 1.48
+   right shape (it is not this measurement, and its provenance is not
+   recorded here); the number for this champion under `levels=1` is 1.48
    [1.07,1.90] per 2p game, against a human 0.51. The "never loses one" half of
    the prior is *not* anomalous — humans win 84% of theirs (2p 295/351, 3p
    58/64, 4p 99/114).
@@ -278,7 +279,7 @@ easy they'd be to fix:
   depends on engine scoring details as well as play, and nothing here
   independently verifies that our end-of-game scoring matches BGO's. The
   supporting evidence that the gap is real play and not a scoring bug is
-  behavioural (7.4 vs 1.9 wonder stages, 34 vs 24 takes), not arithmetic. A
+  behavioural (8.8 vs 1.9 wonder stages, 34 vs 24 takes), not arithmetic. A
   direct check — score one reconstructed human final position through our
   scorer — has **not** been done and is the obvious next validation.
 * **Human ≠ optimal.** BGO's population is Prince-to-Emperor club players, and
