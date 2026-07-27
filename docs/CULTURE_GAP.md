@@ -1706,3 +1706,98 @@ natural use for that machinery now that the horizon question is settled.
 shows the gate cannot resolve the shaping that already exists to within a factor
 of five. Until the accept test can see an effect of that size, more
 representation is more parameters for the walk to wander in.
+
+## 19. §16's retraction was itself too strong: there IS a gradient, and it is sub-threshold
+
+§15b claimed selection. §16 retracted it on a sign test that came back 9/13
+(p=0.27) and a drift null that put the observed base at a ~3% tail. Neither was
+significant, so I called it drift. **Measuring the gradient directly shows the
+retraction over-corrected.** The truth needs both halves.
+
+`tools/level_sweep.py`: `DEFAULT_WEIGHTS` with `culture_rate` set to each of
+4 levels, everything else untouched (including `_early`/`_late`), same seeds,
+4p, n=200 per cell. `gate score` is the trainer's *own* accept statistic for
+that opponent — `margin_share(culture margin)` on margin tiers, win share on
+the floor tier.
+
+| `culture_rate` | `var:culture` gate | `book` gate | `greedy` **win rate** |
+|---|---|---|---|
+| **5.0** (default) | 0.0760 ± 0.0081 | 0.1074 ± 0.0104 | 0.840 ± 0.050 |
+| 10.0 | 0.0725 ± 0.0076 | 0.1150 ± 0.0109 | 0.848 ± 0.050 |
+| 20.0 | 0.0826 ± 0.0084 | 0.1216 ± 0.0123 | 0.853 ± 0.049 |
+| **35.574** (the 4p champion's) | **0.0886 ± 0.0098** | **0.1311 ± 0.0139** | **0.807 ± 0.055** |
+| Δ over the 7× range | **+0.0126** | **+0.0237** (monotone) | −0.033 (n.s.) |
+
+**Win rate against both gate opponents is 0.000 at every level.** A seven-fold
+increase in the weight buys the trainer's accept statistic +0.013 to +0.024 and
+**not one additional game won.** Pool-weighted across the tiers measured (6.0 of
+the 8.0 total pool weight; `mirror` and `past` unmeasured and counted as zero):
+
+```
+(+0.0237 x 3.0  +0.0126 x 2.5  -0.0325 x 0.5) / 8.0  =  +0.0108
+```
+
+**+0.011 of accept statistic, for free, in exchange for zero wins.**
+
+### 19a. Why neither of my earlier tests could see it
+
+Against the trainer's own 48-game evaluation block, whose accept-statistic
+standard error is ~0.021, that bias is **0.51σ — spread over the *entire* 7×
+range of the weight.** Per generation, per mutation, it is a small fraction of
+that. So:
+
+* the **sign test (§16a) had no power.** A bias of a fraction of a σ produces
+  something like 9-up/4-down over 13 moves, which is exactly what was observed
+  (p=0.27). I read a null as evidence of absence.
+* the **drift null (§16b) was the wrong comparison.** A weak, never-changing-sign
+  gradient superimposed on a geometric random walk does not look like selection
+  at any single step; it looks like a walk that happens to have gone up. Over
+  335 generations it integrates.
+
+### 19b. The correct statement, combining §16 and §19
+
+**Both components are needed and neither is sufficient:**
+
+1. **A sub-threshold perverse gradient.** The gate scores 5.5 of 8.0 pool weight
+   on *culture margin*, explicitly because those opponents are "the ones it
+   loses to ~100% of the time, where win share carries no information". That is
+   a defensible design — culture margin is the game's real score. But it means
+   the trainer is paid for **losing by less in games it always loses**, and the
+   most direct lever on culture margin is the weight on culture production. The
+   payment is +0.011 for a 7× inflation, ~0.5σ of one evaluation block across
+   the whole range. Invisible per generation; **it never changes sign.**
+2. **A geometric random walk that offers no resistance.** `mutate`'s step is
+   proportional to `|w|` (§16b), so there is no restoring force at all — the
+   walk's own median takes `culture_rate` from 5.0 to 0.99 and its p99 to the
+   ±60 clamp. A weight under a persistent sub-threshold push, with no restoring
+   force and a step that grows as it grows, ratchets.
+
+So §10 #1's "something in the search is actively flattening this axis" was
+**half right for the wrong reason.** Nothing is flattening the *shape*. Something
+is very slowly inflating the *level*, and the shape is collateral damage:
+inflating the level starves the shape's step size 39–41× (§12c) and the
+one-sided guard clamp then pins `_early` at exactly zero (§15a).
+
+### 19c. This changes the fix ranking
+
+§18d's fix #3 ("give the geometric walk a restoring force") was ranked
+medium-**low** because the diagnosis was "the walk is arbitrary". It is now
+"the walk is arbitrary **and there is a persistent perverse push along it**",
+which is worse and more actionable. Revised:
+
+| # | change | why, now | confidence |
+|---|---|---|---|
+| **1** | Symmetric phase exemption in `guard_weights` | unchanged — §15a, necessary and sufficient for the exactly-zero attractor, 2 lines | **high** |
+| **2** | **Cap the margin credit, or score gate tiers on margin *rank* rather than raw margin** | §19: the gate pays +0.011 for a 7× weight inflation that wins zero games. `margin_share`'s `tanh(m/120)` is nearly linear at `m ≈ −140`, so it hands out unbounded credit for narrowing a hopeless loss. Saturating it sooner, or scoring on within-block margin rank, removes the push without giving up the fine gradation the margin tiers exist for. | **medium-high** — the defect is measured and monotone; the specific remedy is not yet A/B'd |
+| **3** | Decouple the phase multipliers' step size from the base | unchanged — §12c, 39–41× vs 2.6× | medium |
+| **4** | Restoring force on the geometric walk | now **more** important (§19b#2), but #2 addresses the same failure closer to its source | medium |
+
+**Note the interaction with the horizon fix that was just adopted.** Fix #2 of
+Part 2 makes the *shape* more accurate. §17 measured the entire shape signal at
+0.21σ of one evaluation block, and §19 measures a competing incentive on the
+*level* at 0.51σ pointing the wrong way. **The level's perverse gradient is
+about 2.4× stronger than the whole shape signal the horizon fix improves.**
+That does not make the horizon fix wrong — it is a correctness fix and §8d
+measured it at +7.5 points from default — but it does predict that the restarted
+3p/4p arms will re-inflate `culture_rate` and re-flatten their phase weights
+unless #1 and #2 land as well.
