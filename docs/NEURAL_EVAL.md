@@ -1,9 +1,18 @@
 # Neural value evaluator — build log and findings
 
-Status: **Stage 1 in progress.** Branch `neural-eval`, worktree
-`/Users/pt/tta-ai-neural`. Base game only (2015 "A New Story of Civilization"),
-2 players unless stated. This document is for the next engineer: negatives and
-nulls included, not a glossy report.
+Status: **Stage 0 PASS (CUDA on the 3090); Stage 1 complete — infrastructure
+pass, strength a genuine step but not yet champion-level.** Branch `neural-eval`,
+worktree `/Users/pt/tta-ai-neural`. Base game only (2015 "A New Story of
+Civilization"), 2 players unless stated. This document is for the next engineer:
+negatives and nulls included, not a glossy report.
+
+TL;DR: MC value regression → weak (0.07 vs the linear champion, ~54 culture),
+exactly as BOT_ARCHITECTURE §3b predicted. Switching to a pairwise-ranking
+objective (the prescribed fix), same pipeline, roughly DOUBLED the net's culture
+(~85-94) and took it to ~even with the `default` linear bot (0.427) — but it
+still loses to the trained champion (0.095) and BookBot (0.15). The objective was
+the binding constraint; the remaining gap is strength, so Stage 2 self-play is
+unblocked. See §Stage 1b.
 
 The bet (owner's instruction): replace the hand-crafted linear evaluator with a
 trained neural value net — the AlphaZero-shaped path, justified by our having a
@@ -180,37 +189,93 @@ suppression champion's native 64.7.
   binding constraint. The plateau of val ranking-accuracy at 0.771 (right where
   the ridge fit sat) is the same fact from the prediction side.
 
+## Stage 1b — the pairwise-ranking objective (the prescribed fix), MEASURED
+
+The MC null above pointed at the objective, so I built the fix BOT_ARCHITECTURE
+§3b prescribes and ran it, same pipeline. `experiments/neural_rankdata.py`
+generates **sibling-preference** data from a strong teacher (BookBot, which
+beats the linear champion 62.9%): at each sampled decision it records the
+encoding of the child state BookBot CHOSE and up to 6 REJECTED sibling children,
+plus a value anchor row (pre-move state + mover's eventual margin). 613k pairs +
+126k value rows. `experiments/neural_train_rank.py` trains the SAME net with a
+**combined loss = value Huber + λ·Bradley-Terry ranking** (softplus(−(v(chosen)−
+v(rejected)))) — the ranking term is exactly the sibling discrimination the
+1-ply argmax consumes. Best held-out **pair accuracy 0.821** (net orders
+BookBot's chosen sibling above a rejected one 82% of the time).
+
+Same n=200 duel battery, ranking net vs the MC net:
+
+| opponent | MC-net win | **rank-net win** | MC cult | **rank cult** | rank margin |
+|---|---|---|---|---|---|
+| self (control) | 0.500 | **0.500** ± 0.069 | 52.6 | 84.8 | +0.0 |
+| `default` (1-ply linear) | 0.297 | **0.427** ± 0.068 | 56.0 | **94.4** | −7.2 ± 6.8 |
+| linear champion (gen-209) | 0.070 | **0.095** ± 0.041 | 54.9 | 89.8 | −62.5 ± 6.6 |
+| quiescent champion | 0.060 | 0.070 ± 0.035 | 54.9 | 84.0 | −69.8 ± 6.5 |
+| BookBot | 0.075 | **0.150** ± 0.050 | 50.4 | 71.6 | −75.6 ± 9.9 |
+| `default`, determinize OFF | 0.312 | 0.410 ± 0.068 | 51.6 | 94.5 | −7.6 ± 6.3 |
+
+**The objective was the binding constraint, confirmed.** Switching MC → ranking,
+with everything else identical, lifts NeuralBot's own culture by **~+40** (54 →
+~85-94), takes it from losing to `default` (0.297, −23) to **within one CI of
+even** (0.427, −7.2 ± 6.8), and **doubles** the win rate vs BookBot (0.075 →
+0.150). Determinize on/off is still identical (0.427 vs 0.410) — no
+information-leak dependence. This is a real, measured step and it is exactly the
+direction docs/BOT_ARCHITECTURE.md §3b predicted.
+
+**But it still does NOT beat the trained champion** (0.095, −62.5). The champion
+is a suppression engine: against a book-style production bot it runs its own
+score to ~152. The ranking net cloned BookBot's move *ordering* but at 82% pair
+accuracy the 1-ply argmax compounds ~18% wrong sibling orderings over ~180
+moves, and the value head's calibration degraded (val MAE 84 culture at the
+best-ranking epoch) — so it plays a *weaker* BookBot, ~even with the default
+linear bot, not yet at champion strength.
+
 ### Verdict on Stage 1
 
-**Qualified pass on infrastructure, honest null on strength.** Delivered: CUDA
-toolchain, a faithful tested encoder, a value net, a `NeuralBot` in the existing
-search, and a measured head-to-head battery with error bars against the linear
-champion, the quiescent champion and BookBot, plus the reference points. The net
-plays competently *enough* to be non-degenerate but does not reach the linear
-champion.
+**Infrastructure: pass. Strength: a genuine step, not yet champion-level.**
+Delivered end-to-end and measured with error bars: the CUDA toolchain on the
+3090; a faithful, tested, torch-free encoder; a value net; a `NeuralBot` in the
+existing 1-ply search; two training objectives (MC and pairwise-ranking); and a
+full head-to-head battery against the linear champion, the quiescent champion and
+BookBot with the human/champion/lineage reference points. The best NeuralBot
+(ranking) reaches ~even with the `default` linear bot and ~85-94 culture (vs the
+suppression champion's native 64.7), but loses to the trained champion (0.095)
+and BookBot (0.15). Zero engine errors across ~2400 duel games; self-control
+exactly 0.500 both nets.
 
-### Do NOT do this next (and what to do instead)
+### What to do next (Stage 2/3)
 
-Do **not** start the Stage-2 self-play improvement loop on top of this MC value
-net — it would iterate on a foundation the evidence says is mis-objected. The
-right Stage-2 move, exactly as docs/BOT_ARCHITECTURE.md §3b prescribes and calls
-"arguably the single most actionable finding", is to **change the training
-objective before adding self-play**:
+The remaining gap to the champion is now a *strength* gap, not an *objective*
+gap, so the AlphaZero-shaped path is unblocked and worth it:
 
-1. **A pairwise / learning-to-rank objective** over the sibling states the data
-   policy actually chose between (`(state, chosen, alternatives)`), which is the
-   objective the 1-ply policy is graded on. The self-play generator already has
-   these siblings in hand at pick time; it currently throws them away. This is
-   the cheapest high-value change and it reuses this whole pipeline.
-2. **TD(0)/TD(λ)** along trajectories (`V(s) ≈ V(s')`), which buys the *local*
-   consistency needed to rank near-identical siblings — the Samuel/TD-Gammon
-   recipe, and the same one docs/EXTERNAL_AIS.md §4d singled out.
-3. Only once the net-in-1-ply beats the linear champion should the AlphaZero
-   self-play loop (Stage 2) and a policy head / search (Stage 3) go on top.
+1. **Better value calibration in the combined loss** (cheap): the val MAE
+   ballooned to 84 culture as the ranking term dominated. Sweep λ and use a
+   separate value head / a value-only warm start so the net both ranks siblings
+   AND is calibrated — calibration is what the champion is exploiting.
+2. **Self-play iteration (Stage 2)** now stands on a sound objective: play
+   ranking-net-in-1-ply games, regenerate sibling data from the NET's own
+   improving choices (not just BookBot's), retrain, gate each net against the
+   previous best by head-to-head win rate. This is where the net can pass its
+   BookBot teacher instead of imitating it.
+3. **Policy head + shallow search (Stage 3)** — PlanBot already shows whole-turn
+   beam search is worth ~+35 pts over 1-ply (docs/BOT_ARCHITECTURE.md §3);
+   NeuralBot's evaluator dropped into that beam is the natural combination.
 
-Everything needed for those is in place: encoder, net, batched GPU inference,
-data generator, trainer, and the duel harness. The one thing to add is the
-objective.
+Everything for these is in place: encoder, net, batched GPU inference, two data
+generators (`neural_selfplay.py` MC, `neural_rankdata.py` sibling), two trainers,
+and the duel harness. Checkpoints on the desktop: `~/tta-ai/checkpoints/`
+(`value2p.pt` = MC, `value2p_rank.pt` = ranking; both git-ignored).
+
+## Reproducing (updated)
+
+```
+# desktop (GPU + engine co-located)
+bash ~/gen_data2.sh            # MC self-play shards       -> data2/*.npz
+bash ~/gen_rank.sh             # BookBot sibling pairs      -> rankdata/*.npz
+python experiments/neural_train.py      --data data2/*.npz      --out checkpoints/value2p.pt
+python experiments/neural_train_rank.py --data rankdata/*.npz --lam 1.0 --out checkpoints/value2p_rank.pt
+bash ~/eval_all.sh checkpoints/value2p_rank.pt 200      # the duel battery
+```
 
 ## Reproducing
 
