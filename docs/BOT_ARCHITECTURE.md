@@ -25,7 +25,8 @@ result I cite it with its n.
 Five measured results, in order of how much they should change what happens next.
 
 1. **A whole-turn beam search beats the trained champion 88.6% +/- 3.1%
-   (n=400), at identical weights**, mean culture 194.5 vs 125.8, with an
+   (n=400) and the *current* gen-344 champion 85.1% +/- 3.5% (n=400)**, at
+   identical weights, mean culture 194.5-202.3 vs 125.8-131.9, with an
    exactly-0.500 mirror control. It uses no `end_turn_bias`, determinizes the
    decks so it plays with *less* information than its opponent, and costs ~16x
    the CPU. §3.
@@ -42,6 +43,11 @@ Five measured results, in order of how much they should change what happens next
    cpu-second; full-rollout MCTS is 46 hours for one n=400 A/B, and the only
    affordable variant buys about one extra turn of depth for several times
    PlanBot's price, in a game whose payoffs land 10+ turns out. §1, §4.
+4b. **It attacks.** The champion plays 0.00 aggressions per game; PlanBot plays
+   1.67, at identical weights, because resolving the defender's pending decision
+   makes a strictly-dominated move class playable. It also bids on colonies
+   (0.50 vs 0.08), builds 67% more wonder steps and wastes a third fewer civil
+   actions. §3.
 5. **The search reads the real future deck on 94.9% of `end_turn` candidates**,
    and it is inert *only* because the evaluator cannot tell `Crusades` from
    `Rats`. Fixing military-card blindness and fixing the leak are the same
@@ -995,7 +1001,7 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 | **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | ~1 day |
 | **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
 | **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
-| **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | unlocks §4.3 | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
+| **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | **first-order**: self-play is the only training data at scale, so games/cpu-s *is* the training budget (§5) | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
 | **M7** | **Absolute anchor** (§5) | tells us where we actually are | one number with a CI | one user decision |
 
@@ -1055,7 +1061,10 @@ hard constraints:
   the -14.4 `end_turn_bias` are fitted to the artifacts M1 removes
   (docs/WASTED_ACTIONS.md §11 makes the same argument about `hand_value_late`).
 * **M5 is the only stage that changes what is *possible*** rather than what is
-  good. If it lands at >=3x, re-open §4.3.
+  good, and the BGO correction (§5) promoted it: with a human corpus of a few
+  hundred games rather than 178,000, self-play is the sole data source and every
+  factor of 2 on the forward model is a factor of 2 on the training set. If it
+  lands at >=3x, re-open §4.3 as well.
 * Nothing here needs the expansion, an external AI, or a GPU.
 
 ---
