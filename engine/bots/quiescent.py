@@ -89,7 +89,7 @@ from .. import actions
 from .fastcopy import copy_state
 from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
 
-__all__ = ["QuiescentBot"]
+__all__ = ["QuiescentBot", "war_value"]
 
 _NO_CTX = {"rival_culture_rate": 0, "rival_science_rate": 0,
            "rival_strength": 0}
@@ -198,12 +198,20 @@ def _pick(state, moves, idx, weights, end_bias, level, box, max_depth):
 
 # --------------------------------------------------------- war lookahead
 
-def _war_value(state, idx, weights, ctx):
+def war_value(state, idx, weights, ctx):
     """Value of the position with the declarer's pending war already fought.
 
     ``events.resolve_war`` is deterministic and consumes no rng, so this is a
     real (if optimistic -- the defender gets a turn in between) resolution
     rather than a priced guess.
+
+    Public because ``engine/bots/plan.py`` reuses it verbatim: PlanBot has the
+    same blind spot for the same reason (a war resolves on the declarer's next
+    turn, which is past both searches' horizons), and two searches that price
+    the same move class differently produce weight vectors that do not transfer
+    between them -- see docs/TRANSFER_TEST.md and docs/PLAN_WAR_LOOKAHEAD.md.
+    ``state`` is never mutated; the resolution happens on a scratch copy, so a
+    caller may score the same position with and without it.
     """
     from .. import events
     scratch = copy_state(state)
@@ -212,6 +220,10 @@ def _war_value(state, idx, weights, ctx):
         return evaluate(scratch, idx, weights, ctx)
     except Exception:
         return None
+
+
+#: historical private name, kept so nothing that imported it breaks
+_war_value = war_value
 
 
 # -------------------------------------------------------------- the bot

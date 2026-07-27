@@ -114,7 +114,7 @@ def load_spec(spec):
     if spec in BUILTINS:
         return spec
     if spec.startswith("plan:"):
-        # `plan:FILE,width=8,samples=1,det=1` -- whole-turn beam search under
+        # `plan:FILE,width=8,samples=1,det=1,war=1` -- whole-turn beam search under
         # the SAME weights, so `--a plan:champ.json --b champ.json` is an
         # exact search-only A/B (engine/bots/plan.py).
         rest = spec[len("plan:"):].split(",")
@@ -149,7 +149,9 @@ def make_bot(spec, seed):
         return PlanBot(weights=w, seed=seed,
                        width=opts.get("width"),
                        samples=opts.get("samples"),
-                       determinize=bool(opts.get("det", 1)))
+                       determinize=bool(opts.get("det", 1)),
+                       war_lookahead=(None if "war" not in opts
+                                      else bool(opts["war"])))
     if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
         from engine.bots.quiescent import QuiescentBot
         _, inner, opts = spec

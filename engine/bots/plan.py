@@ -41,6 +41,25 @@ state that `apply` happens to leave behind.
 
 Cost is bounded by ``WIDTH`` (beam) x branching x turn length; see
 `docs/BOT_ARCHITECTURE.md` for the measured numbers.
+
+4. **War priced as pure cost.**  ``_quiesce`` below drains ``state.pending``,
+   so pacts, colony bids, aggressions and action cards all reach a quiet
+   position before they are scored.  A **war** does not: it pushes nothing
+   onto the pending stack and resolves at the start of the declarer's *next*
+   turn, a full round past this search's horizon (end of my current turn).  So
+   without ``WAR_LOOKAHEAD`` a war candidate is scored with its whole cost --
+   a military card and 1-3 military actions gone -- and none of its loot,
+   exactly the defect QuiescentBot's module docstring describes for pacts.
+
+   `docs/TRANSFER_TEST.md` measured what that costs: a vector trained under
+   ``QuiescentBot`` (which *does* price wars) is +36.3 +/- 4.8 margin better
+   than a 1-ply-trained vector under quiescence and 32.5 +/- 6.9 *worse* under
+   PlanBot -- the sign of the difference flips with the search, and ablating
+   ``QuiescentBot.WAR_LOOKAHEAD`` alone accounts for 52.8 +/- 4.3 of it.  Two
+   searches that disagree about one move class do not share a weight vector.
+   ``WAR_LOOKAHEAD`` here calls the identical helper
+   (``quiescent.war_value``) so the two price the move class the same way; see
+   `docs/PLAN_WAR_LOOKAHEAD.md` for the before/after measurement.
 """
 from __future__ import annotations
 
@@ -48,6 +67,7 @@ import random
 
 from .. import actions
 from .fastcopy import copy_state
+from .quiescent import war_value
 from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
 
 __all__ = ["PlanBot", "determinize"]
@@ -107,18 +127,25 @@ class PlanBot:
     MAX_NODES = 4000
     #: how many determinizations to average the search over (1 = one sample)
     SAMPLES = 1
+    #: score an unresolved war of mine through the engine's own `resolve_war`
+    #: (defect 4 in the module docstring).  `plan:FILE,war=0` turns it off.
+    WAR_LOOKAHEAD = True
     #: fall back to a plain 1-ply pick when it is not my ordinary turn
     #: (a pending decision owned by somebody else has no turn to plan)
 
     def __init__(self, weights=None, rng=None, seed=None, name=None,
-                 width=None, samples=None, determinize=True):
+                 width=None, samples=None, determinize=True,
+                 war_lookahead=None):
         self.weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
         self.rng = rng or random.Random(seed)
         self.width = self.WIDTH if width is None else width
         self.samples = self.SAMPLES if samples is None else samples
         self.determinize = determinize
+        if war_lookahead is not None:
+            self.WAR_LOOKAHEAD = war_lookahead
         self.nodes = 0
         self.searches = 0
+        self.wars_priced = 0
         if name:
             self.name = name
 
@@ -202,24 +229,53 @@ class PlanBot:
                     # resolve decisions owned by anybody, so the position is
                     # quiet before it is either scored or expanded
                     self._quiesce(t, w)
+                    try:
+                        v = self._score(t, me, w, ctx)
+                    except Exception:
+                        continue
                     if t.game_over or t.current != me:
-                        try:
-                            v = evaluate(t, me, w, ctx)
-                        except Exception:
-                            continue
                         if f not in best or v > best[f]:
                             best[f] = v
                     else:
-                        try:
-                            v = evaluate(t, me, w, ctx)
-                        except Exception:
-                            continue
                         nxt.append((v, t, f))
             if not nxt or budget <= 0:
                 break
             nxt.sort(key=lambda e: -e[0])
             frontier = nxt[:self.width]
         return best
+
+    def _score(self, t, me, w, ctx):
+        """Evaluate a quiet position, pricing an unresolved war of mine.
+
+        Every node in the beam goes through here, not just the node where the
+        ``war`` move was played, because the beam searches whole-turn
+        *sequences*: the war is typically declared at ply 1 and the position
+        that gets scored (and the positions that get ranked for the beam) are
+        2-5 plies later.  Pricing only at the declaring node would let the war
+        line be ranked as pure cost and pruned before it ever reached a
+        terminal, which is the same bug in a different place.
+
+        There is no double counting across plies.  ``war_value`` resolves on a
+        scratch copy and returns a *replacement* score for the position, so the
+        spoils enter each score exactly once and never enter the state that the
+        next ply expands.  A player may hold at most one declared war
+        (``actions.py`` refuses a second while ``war_declared_by_me`` is set),
+        and the beam's horizon is the end of my own turn, so the engine can
+        never resolve the war inside the search either.
+
+        Skipped when ``t.game_over``: a war declared into a finished game never
+        resolves, and the position is already scored on final culture, so
+        adding spoils there would be inventing points.  The narrower case -- a
+        war declared in the last round of a game that has not ended yet in this
+        line -- is NOT handled; see docs/PLAN_WAR_LOOKAHEAD.md.
+        """
+        if (self.WAR_LOOKAHEAD and not t.game_over
+                and t.players[me].war_declared_by_me is not None):
+            wv = war_value(t, me, w, ctx)
+            if wv is not None:
+                self.wars_priced += 1
+                return wv
+        return evaluate(t, me, w, ctx)
 
     def _quiesce(self, st, w, cap=12):
         """Drain the pending stack with plain 1-ply picks for whoever decides."""
