@@ -18,9 +18,16 @@ exactly the core count. Everything else is the measured config verbatim.
 
 | K  | supervisor PID | log                             |
 |----|----------------|---------------------------------|
-| 2p | 97887          | `experiments/logs/league_2p.log` |
-| 3p | 97888          | `experiments/logs/league_3p.log` |
-| 4p | 97889          | `experiments/logs/league_4p.log` |
+| 2p | 26277          | `experiments/logs/league_2p.log` |
+| 3p | 26278          | `experiments/logs/league_3p.log` |
+| 4p | 26279          | `experiments/logs/league_4p.log` |
+
+Relaunched 2026-07-26 18:41 on the journal engine (`17c03ea`, `docs/PYPY.md`
+9.14-9.16). The first launch (PIDs 97887/97888/97889) was stopped at 2p gen
+131 / 3p gen 85 / 4p gen 49 and **resumed** rather than reset — `--init
+default` is ignored once the state dir holds a champion, which is the
+documented gotcha below working in our favour for once. The generation
+counters continuing past those numbers is the proof it resumed.
 
 State (champion, run state, generation log, ladder) is under
 `experiments/league_state/`. The supervisor restarts the climber every hour;
