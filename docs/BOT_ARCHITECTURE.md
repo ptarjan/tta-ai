@@ -866,7 +866,7 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 | **M1** | **PlanBot** — turn-level beam, one horizon, determinized | §2.4 items 3, 4 and the §2.3 leak | n=400 A/B vs champion, identical weights | built; A/B running |
 | **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | ~1 day |
 | **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
-| **M4** | **Value regression replaces hill climbing** (`tools/fit_value.py`), then iterate as approximate policy iteration | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot* | built; pending data |
+| **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
 | **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | unlocks §4.3 | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
 | **M7** | **Absolute anchor** (§5) | tells us where we actually are | one number with a CI | one user decision |
@@ -915,10 +915,17 @@ hard constraints:
 * **M2 must not ship without M1's determinization.** The moment the evaluator
   can read military-card identity, the 94.9%-leaky `end_turn` candidate starts
   reading the real future (§2.3). Today it is inert; after M2 it is a cheat.
-* **M4 must not be run on top of the climbed vector.** Those 13 zeros and the
-  -14.4 `end_turn_bias` are fitted to the artifacts M1 removes
+* **M4 must use an objective that scores *differences between sibling moves*,
+  not the value of a position.** §3b measures the Monte-Carlo alternative
+  losing 400/400 while being a materially *better* outcome predictor, on a
+  ladder with a working lam->infinity control. This is the single most
+  transferable thing measured tonight: in this game, being right about "who is
+  winning" is nearly useless for deciding what to do next.
+* **Every learned or hand-written vector must be duelled with the resign guard
+  on** (§3b) and with an explicit control that recovers the reference vector.
+* **M4's output must not be seeded from the climbed vector.** Those 13 zeros and
+  the -14.4 `end_turn_bias` are fitted to the artifacts M1 removes
   (docs/WASTED_ACTIONS.md §11 makes the same argument about `hand_value_late`).
-  Fit from data, do not seed from the champion.
 * **M5 is the only stage that changes what is *possible*** rather than what is
   good. If it lands at >=3x, re-open §4.3.
 * Nothing here needs the expansion, an external AI, or a GPU.
