@@ -434,6 +434,17 @@ Both sides load the **identical** weight file, so this is a search-only A/B.
 | moves per game | 209.1 | |
 | engine errors | 0 | |
 
+**Replicated against the *current* champion.** The table above uses
+`experiments/champion_2p.json` (gen 209). Repeated against the live arm's
+generation-**344** vector, frozen into `experiments/arch_frozen/`:
+
+| | PlanBot | champion gen 344 |
+|---|---|---|
+| **win rate** | **85.1% +/- 3.5%** (n=400) | 14.9% |
+| mean final culture | **202.3** | 131.9 |
+
+Two different champions, 135 generations apart, same answer.
+
 **Control, run afterwards:** the same champion against itself, n=200, returns a
 win rate of **exactly 0.500**, mean culture identical to the decimal
 (155.75 vs 155.75) and a culture margin of **exactly 0.0**. So the harness is
