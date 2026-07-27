@@ -17,34 +17,38 @@ Positional args are `PLAYERS HOURS WORKERS LAMBDA BLOCK SUBSET ACCEPT_Z`.
 
 | K  | workers | supervisor PID | log                             |
 |----|---------|----------------|---------------------------------|
-| 2p | 1       | 96921          | `experiments/logs/league_2p.log` |
-| 3p | 2       | 96935          | `experiments/logs/league_3p.log` |
-| 4p | 2       | 96947          | `experiments/logs/league_4p.log` |
+| 2p | 1       | 98146          | `experiments/logs/league_2p.log` |
+| 3p | 2       | 98147          | `experiments/logs/league_3p.log` |
+| 4p | 2       | 98148          | `experiments/logs/league_4p.log` |
 
 Five workers, not the six the previous run used: the box is a 6-core Mac mini
 and a BGO scraper has one. 2p gets the single worker because its games are the
 cheapest, so it still ends up with the most generations of the three.
 
-### !! These arms run from the WORKTREE, not from the main checkout
+### These arms run from the MAIN CHECKOUT
 
-    /Users/pt/tta-ai-trainfix          <- branch train/loop-fix
+    /Users/pt/tta-ai                   <- branch master
 
-They have to: `--candidate-bot` does not exist on `master`. `run_league.sh`
-does `cd "$(dirname "$0")/.."`, so the state dir, the logs and the engine code
-are all the worktree's. Consequences, in order of how much they will hurt:
+They were launched from `/Users/pt/tta-ai-trainfix` (PIDs 96921/96935/96947),
+because `--candidate-bot` did not exist on `master` yet. Once `train/loop-fix`
+merged (`7e3b7d5`) that reason was gone, and running from a worktree is
+actively harmful: `run_league.sh` does `cd "$(dirname "$0")/.."`, so the arms
+would keep restarting into the worktree's frozen snapshot and never pick up
+anything landing on `master` — which defeats the entire point of the hourly
+restart.
 
-* **Do not `git worktree remove` this while the arms are running.** They die.
-* Every hourly restart picks up the worktree's current code, so committing to
-  `train/loop-fix` changes what the running arms do at the next restart.
-* When `train/loop-fix` is integrated into `master`, the arms should be
-  stopped, `experiments/league_state/` copied into the main checkout, and the
-  arms relaunched from there **with `--candidate-bot` still on the command
-  line** (see the resume gotcha below).
+So at gen ~2 the worktree arms were stopped, `experiments/league_state/` was
+copied into the main checkout, and they were relaunched from there with
+`--candidate-bot` still on the command line. Confirmed at launch by the
+`[Kp] trained architecture: quiescent {'levels': 1}` line in each log — that
+line is the only thing that tells you the architecture, because the flag is
+not persisted in the champion file.
 
-State is `/Users/pt/tta-ai-trainfix/experiments/league_state/`, which was empty
-at launch, so this is a genuinely clean start from `DEFAULT_WEIGHTS` and not a
-resume. The previous 1-ply run's state was moved to
-`/Users/pt/tta-ai/experiments/archive_preplan/` rather than deleted.
+The worktree arms' state was a genuinely clean start from `DEFAULT_WEIGHTS`,
+and copying it forward preserves that lineage. The previous 1-ply run's state
+is in `/Users/pt/tta-ai/experiments/archive_preplan/` rather than deleted.
+
+`/Users/pt/tta-ai-trainfix` is now idle and safe to `git worktree remove`.
 
 ## Why quiescent and not plan, in numbers
 
