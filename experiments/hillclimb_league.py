@@ -671,6 +671,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         tier_weights=None, past_k=2, with_quiescent=False, init="default",
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
+        hall_dirs=(),
         weight_guard="clamp", gate_metric="margin",
         margin_scale=P.MARGIN_SCALE, candidate_bot=None, log=print):
     global CANDIDATE_ARCH
@@ -741,6 +742,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         return P.build_pool(players, ladder_dirs=ladders,
                             tier_weights=tier_weights, past_k=past_k,
                             with_quiescent=with_quiescent,
+                            hall_dirs=hall_dirs,
                             margin_tiers=margin_tiers, log=log)
 
     pool = build()
@@ -986,6 +988,11 @@ def main(argv=None):
     ap.add_argument("--pool-weights", default="",
                     help="tier totals, e.g. 'book=4,variant=2.5,past=0.5,"
                          "floor=0.25'; 0 removes a tier")
+    ap.add_argument("--hall-dir", action="append", default=[],
+                    metavar="DIR",
+                    help="directory of frozen champion weight files that join "
+                         "the pool permanently and are never rotated out, "
+                         "unlike the --past-k ladder.  Repeatable.")
     ap.add_argument("--past-k", type=int, default=2,
                     help="archived champions in the pool (spread oldest.."
                          "newest).  Default 2, not 3: a past:* duel is the "
@@ -1057,7 +1064,8 @@ def main(argv=None):
         max_gens=args.max_gens, weight_guard=args.weight_guard,
         gate_metric=args.gate_metric, margin_scale=args.margin_scale,
         candidate_bot=parse_candidate_bot(args.candidate_bot),
-        legacy_ladders=not args.no_legacy_ladders)
+        legacy_ladders=not args.no_legacy_ladders,
+        hall_dirs=tuple(args.hall_dir))
 
 
 if __name__ == "__main__":

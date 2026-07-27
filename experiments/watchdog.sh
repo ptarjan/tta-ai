@@ -30,7 +30,7 @@ REMAIN=$(( (DEADLINE - NOW + 3599) / 3600 ))
 launch() {   # players workers block extra...
     local K=$1 W=$2 B=$3; shift 3
     nohup experiments/run_league.sh "$K" "$REMAIN" "$W" 2 "$B" 4 1.2816 \
-        --weight-guard clamp --past-k 2 \
+        --weight-guard clamp --past-k 2 --hall-dir experiments/hall_of_fame \
         --candidate-bot quiescent:levels=1 "$@" >/dev/null 2>&1 &
     echo "$(date '+%F %T') watchdog: relaunched ${K}p (${REMAIN}h left, workers=$W block=$B)" >> "$LOG"
 }

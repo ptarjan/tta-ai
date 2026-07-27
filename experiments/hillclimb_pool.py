@@ -459,7 +459,7 @@ def parse_tier_weights(s, base=None):
 
 def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
                with_quiescent=False, quiesce_opts=None, exclude=(),
-               gate_tiers=DEFAULT_GATE_TIERS,
+               gate_tiers=DEFAULT_GATE_TIERS, hall_dirs=(),
                margin_tiers=DEFAULT_MARGIN_TIERS, log=None):
     """Assemble the full pool for one player count.
 
@@ -487,6 +487,25 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
     for label, spec in discover_past_champions(players, ladder_dirs,
                                                k=past_k, log=log):
         add(label, spec, "past")
+    # The hall of fame: frozen champions that are NEVER rotated out, unlike
+    # the `past` ladder whose k slots are re-spread every generation so a
+    # champion is eventually aged out by its own descendants.  Every file in
+    # these dirs joins the pool, so keep them small and deliberate.
+    #
+    # These are the least exploitable opponents we have.  Every other trained
+    # opponent here is BookBot or a BookBot subclass with hand-written numeric
+    # triggers, and docs/TWOP_PROFILE.md measured how much of the champion's
+    # margin comes from holding those triggers shut rather than from playing
+    # well -- MilitaryBot reaches its required +3 lead on 5.5% of turns against
+    # the champion versus 41-44% against the rest of the family.  A frozen
+    # trained vector has no such switch to find.
+    hall = []
+    for d in hall_dirs:
+        if os.path.isdir(d):
+            hall.extend(discover_past_champions(players, [d],
+                                                k=len(os.listdir(d)), log=log))
+    for label, spec in hall:
+        add(label.replace("past:", "hall:", 1), spec, "past")
     add("greedy", "greedy", "floor")
     add("random", "random", "floor")
     add("default", "default", "floor")
