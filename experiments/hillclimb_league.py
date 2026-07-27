@@ -327,44 +327,56 @@ def as_spec(w):
 # ------------------------------------------------------------------ duels
 
 def _series(spec, opp_spec, players, games, seed0, workers, metric,
-            margin_scale=P.MARGIN_SCALE):
+            params=None):
     """One duel -> the per-game series needed to score AND to report it.
 
-    ``score`` is the series the accept decision uses (win share or normalised
-    culture margin, per the opponent's metric); ``win`` and ``margin`` are
-    always the raw win share and raw culture margin of THE SAME GAMES.  Both
-    are kept whichever metric is in play, because the per-opponent table is a
-    diagnostic an operator reads: switching the gate tier to margin must not
-    cost us the win-rate column that tells us whether the bot can actually
-    beat BookBot yet.
+    ``score`` is the series the accept decision uses (per the opponent's
+    metric); ``win``, ``margin`` and ``culture`` are always the raw win share,
+    raw culture margin and raw own culture of THE SAME GAMES.  All are kept
+    whichever metric is in play, because the per-opponent table is a
+    diagnostic an operator reads: switching the objective must not cost us the
+    win-rate column that says whether the bot can actually beat BookBot yet,
+    nor the own-culture column that is comparable to the human baseline of
+    159.5 (docs/HUMAN_BASELINE.md).
     """
     res = arena.duel(as_spec(spec), as_spec(opp_spec), players, games,
                      seed0=seed0, workers=workers)
     return {
-        "score": P.score_series(res, metric, margin_scale),
+        "score": P.score_series(res, metric, params),
         "win": res["per_game"],
         "margin": res["per_game_margin"],
+        "culture": res.get("per_game_culture") or [],
     }
 
 
 class RefCache:
     """The champion's per-game series, computed once, reused by every mutant.
 
-    Keyed on (opponent label, block index).  A mirror entry needs no games at
-    all: champion-vs-a-table-of-itself is 1/players by construction, and its
-    culture margin is exactly 0 by the same symmetry -- over a complete seat
-    rotation of one identical deterministic policy the seat's culture and the
-    mean of the others' sum to the same total, so the margins cancel.
+    Keyed on (opponent label, block index).  Under `winshare` or `margin` a
+    mirror entry needs no games at all: champion-vs-a-table-of-itself is
+    1/players by construction, and its culture margin is exactly 0 by the same
+    symmetry -- over a complete seat rotation of one identical deterministic
+    policy the seat's culture and the mean of the others' sum to the same
+    total, so the margins cancel.
+
+    **That shortcut does not survive the own-culture objective**, and getting
+    this wrong would have been silent and fatal: a champion at a table of
+    itself has some perfectly ordinary own culture (~65 today) that is not
+    derivable from symmetry, so under `own`/`blend` the mirror reference is
+    PLAYED like any other.  It costs one extra block of games per generation
+    and it converts the mirror row from a constant into a real paired
+    comparison -- candidate-in-seat-s-against-champions versus
+    champion-in-seat-s-against-champions, identical opposition, same seeds.
     """
 
     def __init__(self, champion, players, workers, block, seed_base,
-                 margin_scale=P.MARGIN_SCALE):
+                 params=None):
         self.champion = champion
         self.players = players
         self.workers = workers
         self.block = block
         self.seed_base = seed_base
-        self.margin_scale = margin_scale
+        self.params = params or P.DEFAULT_SCORE_PARAMS
         self.cache = {}
         self.games = 0
 
@@ -376,16 +388,22 @@ class RefCache:
         key = (entry.label, b)
         if key in self.cache:
             return self.cache[key]
-        if entry.is_mirror:
+        if entry.is_mirror and entry.metric in P.ANALYTIC_MIRROR_METRICS:
             share = 1.0 / self.players
             out = {"score": [share] * self.block, "win": [share] * self.block,
-                   "margin": [0.0] * self.block}
+                   "margin": [0.0] * self.block, "culture": []}
             if entry.metric == "margin":
-                out["score"] = [P.margin_share(0.0, self.margin_scale)] * self.block
+                out["score"] = [P.margin_share(0.0, self.params.margin_scale)] * self.block
         else:
-            out = _series(self.champion, entry.spec, self.players, self.block,
+            # `entry.resolve` maps a mirror to the champion; for a non-mirror
+            # it is `entry.spec` unchanged.  Passing it through means the
+            # mirror reference is champion-vs-champion, which is exactly the
+            # opposition the candidate faces on that row.
+            out = _series(self.champion, entry.resolve(self.champion,
+                                                       self.champion),
+                          self.players, self.block,
                           self.seed_for(entry, b), self.workers, entry.metric,
-                          self.margin_scale)
+                          self.params)
             self.games += self.block
         self.cache[key] = out
         return out
@@ -409,6 +427,7 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
     per = {e.label: {"tier": e.tier, "weight": e.weight, "diffs": [],
                      "mine": [], "theirs": [],
                      "mine_margin": [], "theirs_margin": [],
+                     "mine_culture": [], "theirs_culture": [],
                      "metric": e.metric,
                      "gate": e.tier in gate_tiers} for e in entries}
     games = 0
@@ -417,7 +436,7 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
         for e in entries:
             mine = _series(cand, e.resolve(cand, ref.champion),
                            ref.players, ref.block, ref.seed_for(e, b),
-                           ref.workers, e.metric, ref.margin_scale)
+                           ref.workers, e.metric, ref.params)
             theirs = ref.get(e, b)
             games += ref.block
             d = per[e.label]
@@ -436,6 +455,10 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
                 if x is not None and y is not None:
                     d["mine_margin"].append(x)
                     d["theirs_margin"].append(y)
+            for x, y in zip(mine["culture"], theirs["culture"]):
+                if x is not None and y is not None:
+                    d["mine_culture"].append(x)
+                    d["theirs_culture"].append(y)
         blocks += 1
         m, se, lo = _aggregate(per, z)
         if lo > 0.0 and blocks >= min_blocks:
@@ -462,6 +485,12 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
             # sides -- which at 4p is every gate opponent at the clean start.
             "margin": _avg(d["mine_margin"], 2),
             "champ_margin": _avg(d["theirs_margin"], 2),
+            # Own final culture, the number the human baseline is quoted in
+            # (159.5 for a strong human, docs/HUMAN_BASELINE.md).  Reported on
+            # every row whatever the objective, so an operator can see the
+            # thing we are actually trying to raise.
+            "culture": _avg(d["mine_culture"], 2),
+            "champ_culture": _avg(d["theirs_culture"], 2),
             "gate": d["gate"],
         }
         out[label] = rec
@@ -518,12 +547,19 @@ def full_check(champion, pool, players, games, workers, seed, log=print):
             # (all eight opponents at 4p).  Without this column the full check
             # cannot tell "closed the gap by 30 culture" from "no change".
             "margin": round(res.get("margin", 0.0), 2),
+            # Own final culture: the only column in this table that is
+            # comparable to anything outside our own ecosystem (human 2p
+            # median 159.5, docs/HUMAN_BASELINE.md).
+            "culture": round(res.get("culture_a", 0.0), 2),
+            "opp_culture": round(res.get("culture_b", 0.0), 2),
             "metric": e.metric,
             "n": res["games"], "null": round(res["null"], 4),
             "secs": round(secs, 2),
             "secs_per_game": round(secs / max(1, res["games"]), 3),
         }
         log(f"    {e.label:<28} {res['win_rate']:6.1%} +/-{res['ci']:5.1%} "
+            f"culture {res.get('culture_a', 0.0):6.1f} vs "
+            f"{res.get('culture_b', 0.0):6.1f} "
             f"margin {res.get('margin', 0.0):+7.1f} "
             f"(null {res['null']:.0%}, n={res['games']}, tier={e.tier}, "
             f"{secs:.1f}s)")
@@ -560,7 +596,7 @@ def compare_checks(now, prev, tested, min_drop=0.03):
 
 def ablate(champion, keys, pool, players, games, workers, seed, z,
            gate_only=True, max_opponents=3, mode="zero",
-           margin_scale=P.MARGIN_SCALE, log=print):
+           params=None, log=print):
     """Single-weight ablation of the champion against the pool.
 
     For each key: set it to 0 (or to its DEFAULT_WEIGHTS value) and play the
@@ -579,8 +615,7 @@ def ablate(champion, keys, pool, players, games, workers, seed, z,
     entries = entries[:max_opponents]
     if not entries:
         return []
-    ref = RefCache(champion, players, workers, games, seed,
-                   margin_scale=margin_scale)
+    ref = RefCache(champion, players, workers, games, seed, params=params)
     out = []
     for key in keys:
         w = dict(champion)
@@ -595,7 +630,7 @@ def ablate(champion, keys, pool, players, games, workers, seed, z,
             # ablation verdict against an unbeaten opponent was
             # "no-measurable-effect" by construction, not by measurement.
             mine = _series(w, e.spec, players, games, ref.seed_for(e, 0),
-                           workers, e.metric, ref.margin_scale)
+                           workers, e.metric, ref.params)
             theirs = ref.get(e, 0)
             diffs = [x - y for x, y in zip(mine["score"], theirs["score"])
                      if x is not None and y is not None]
@@ -646,22 +681,26 @@ def format_table(per):
     rows = sorted(per.items(),
                   key=lambda kv: (-kv[1]["weight"], kv[0]))
     head = (f"      {'opponent':<26}{'tier':<11}{'w':>5} {'n':>4} "
-            f"{'win%':>7}{'champ%':>8}{'marg':>8}{'cmarg':>8}{'edge':>9}")
+            f"{'win%':>7}{'champ%':>8}{'cult':>7}{'ccult':>7}"
+            f"{'marg':>8}{'cmarg':>8}{'edge':>9}")
     lines = [head]
     for label, r in rows:
         wr = "  --  " if r["win_rate"] is None else f"{r['win_rate']:6.1%}"
         cr = "  --  " if r["champ_rate"] is None else f"{r['champ_rate']:6.1%}"
         mg = "   --  " if r.get("margin") is None else f"{r['margin']:+7.1f}"
         cm = "   --  " if r.get("champ_margin") is None else f"{r['champ_margin']:+7.1f}"
+        cu = "  --  " if r.get("culture") is None else f"{r['culture']:6.1f}"
+        cc = "  --  " if r.get("champ_culture") is None else f"{r['champ_culture']:6.1f}"
         flag = " GATE" if r["gate"] else ""
-        # A margin-scored row is marked, because its edge is NOT in win-share
-        # units and reading it as one would be wrong.
-        flag += "*" if r.get("metric") == "margin" else ""
+        # A row not scored on win share is marked, because its edge is NOT in
+        # win-share units and reading it as one would be wrong.
+        flag += "*" if r.get("metric") != "winshare" else ""
         lines.append(f"      {label:<26}{r['tier']:<11}{r['weight']:5.2f} "
-                     f"{r['n']:4d} {wr:>7}{cr:>8}{mg:>8}{cm:>8}"
-                     f"{r['edge']:+9.4f}{flag}")
-    lines.append("      (* = scored on culture margin, not win share; "
-                 "marg/cmarg are raw culture points)")
+                     f"{r['n']:4d} {wr:>7}{cr:>8}{cu:>7}{cc:>7}"
+                     f"{mg:>8}{cm:>8}{r['edge']:+9.4f}{flag}")
+    lines.append("      (* = not scored on win share -- see the objective line "
+                 "at startup; cult/marg are raw culture points, "
+                 "ccult/cmarg are the champion's on the same seeds)")
     return "\n".join(lines)
 
 
@@ -672,8 +711,10 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
         hall_dirs=(),
-        weight_guard="clamp", gate_metric="margin",
-        margin_scale=P.MARGIN_SCALE, candidate_bot=None, log=print):
+        weight_guard="clamp", objective="blend",
+        margin_scale=P.MARGIN_SCALE, culture_scale=P.CULTURE_SCALE,
+        culture_centre=P.CULTURE_CENTRE, alpha=P.DEFAULT_ALPHA,
+        candidate_bot=None, log=print):
     global CANDIDATE_ARCH
     CANDIDATE_ARCH = candidate_bot
     # A block must be a whole number of seat rotations, or the seats are not
@@ -736,14 +777,28 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         save_weights(os.path.join(pp["ladder"], f"gen{gen:05d}.json"),
                      champion, gen=gen, players=players)
 
-    margin_tiers = P.DEFAULT_MARGIN_TIERS if gate_metric == "margin" else ()
+    # LEGACY SHAPE.  `--objective margin` is the pre-2026-07-27 configuration
+    # and it is the only one that scores different tiers on different things:
+    # win share everywhere, culture margin on the gate tiers.  Every champion
+    # this project ever produced was selected under it, so it stays exactly as
+    # it was.  `own` and `blend` apply ONE metric to the whole pool.
+    if objective == "margin":
+        margin_tiers, pool_metric = P.DEFAULT_MARGIN_TIERS, "winshare"
+    elif objective == "winshare":
+        margin_tiers, pool_metric = (), "winshare"
+    else:
+        margin_tiers, pool_metric = (), objective
+    params = P.ScoreParams(margin_scale=margin_scale,
+                           culture_scale=culture_scale,
+                           culture_centre=culture_centre, alpha=alpha)
 
     def build():
         return P.build_pool(players, ladder_dirs=ladders,
                             tier_weights=tier_weights, past_k=past_k,
                             with_quiescent=with_quiescent,
                             hall_dirs=hall_dirs,
-                            margin_tiers=margin_tiers, log=log)
+                            margin_tiers=margin_tiers, metric=pool_metric,
+                            log=log)
 
     pool = build()
     log(f"[{players}p] league trainer: {len(pool)} opponents, "
@@ -753,12 +808,24 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
            f"{CANDIDATE_ARCH[0]} {CANDIDATE_ARCH[1] or '(defaults)'} -- the "
            f"champion, the mirror and the past ladder all play this; external "
            f"opponents are unchanged"))
-    log(f"[{players}p] gate metric: {gate_metric}"
-        + (f" (scale {margin_scale:g} culture points; tiers "
-           f"{','.join(margin_tiers)})" if margin_tiers else
-           " -- WARNING: win share is flat 0.0 against opponents the champion "
-           "never beats, so gate rows may return edge=0.0000 and neither "
-           "reward nor veto"))
+    if objective == "blend":
+        desc = (f"OWN CULTURE + win share (alpha={alpha:g} on win share), "
+                f"own_share centre {culture_centre:g} scale {culture_scale:g}"
+                f" -- the whole pool, every tier")
+    elif objective == "own":
+        desc = (f"OWN CULTURE only, own_share centre {culture_centre:g} "
+                f"scale {culture_scale:g} -- the whole pool, every tier")
+    elif objective == "margin":
+        desc = (f"LEGACY culture MARGIN on the gate tiers "
+                f"({','.join(margin_tiers)}, scale {margin_scale:g}), win "
+                f"share elsewhere.  This pays TWICE for a stolen culture "
+                f"point and once for a produced one -- see "
+                f"docs/LEAGUE_OBJECTIVE.md.  Historical reproduction only")
+    else:
+        desc = ("LEGACY win share everywhere -- WARNING: flat 0.0 against "
+                "opponents the champion never beats, so those rows return "
+                "edge=0.0000 and neither reward nor veto")
+    log(f"[{players}p] objective: {objective} = {desc}")
 
     start_gen = gen
     while time.time() < t_end and (not max_gens or gen < start_gen + max_gens):
@@ -773,7 +840,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                          for e in pool.sorted_entries()]
         seed_base = (gen * 1_000_003 + seed * 7717) % 10_000_019
         ref = RefCache(champion, players, workers, block, seed_base,
-                       margin_scale=margin_scale)
+                       params=params)
 
         forced = None
         if stall_kick and since_accept and since_accept % stall_kick == 0:
@@ -884,7 +951,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
             log(f"[{players}p] gen {gen} ABLATION cycle: {todo}")
             recs = ablate(champion, todo, pool, players, ablate_games,
                           workers, seed_base + 77, accept_z,
-                          mode=ablate_mode, margin_scale=margin_scale, log=log)
+                          mode=ablate_mode, params=params, log=log)
             for r in recs:
                 append_jsonl(pp["ablation"],
                              dict(r, gen=gen, players=players,
@@ -930,12 +997,13 @@ def report(state_dir, players, log=print):
     if fc:
         log(f"\n  full-pool check (champion vs every opponent):")
         log(f"    {'opponent':<28}{'tier':<11}{'win%':>8}{'+/-':>8}"
-            f"{'margin':>9}{'null':>7}{'n':>6}")
+            f"{'culture':>9}{'margin':>9}{'null':>7}{'n':>6}")
         for label, r in sorted(fc.items(),
                                key=lambda kv: (-kv[1]["weight"], kv[0])):
-            mg = r.get("margin")
+            mg, cu = r.get("margin"), r.get("culture")
             log(f"    {label:<28}{r['tier']:<11}{r['win_rate']:8.1%}"
                 f"{r['ci']:8.1%}"
+                + (f"{cu:9.1f}" if cu is not None else f"{'--':>9}")
                 + (f"{mg:+9.1f}" if mg is not None else f"{'--':>9}")
                 + f"{r['null']:7.0%}{r['n']:6d}")
     else:
@@ -986,8 +1054,14 @@ def main(argv=None):
                     help="'default' (DEFAULT_WEIGHTS) or a weights JSON path; "
                          "ignored once the state dir has a champion")
     ap.add_argument("--pool-weights", default="",
-                    help="tier totals, e.g. 'book=4,variant=2.5,past=0.5,"
-                         "floor=0.25'; 0 removes a tier")
+                    help="tier totals, e.g. 'book=0.6,variant=0.6,mirror=1,"
+                         "past=1.2,hall=1.6,floor=0'; 0 removes a tier.  "
+                         "Tiers: book variant quiescent mirror past hall "
+                         "floor.  Defaults put 76%% of the weight on "
+                         "opponents that improve (mirror/past/hall) and 24%% "
+                         "on the static BookBot family; the pre-2026-07-27 "
+                         "pool was the other way round and is restored with "
+                         "'" + P.legacy_weight_string() + "'")
     ap.add_argument("--hall-dir", action="append", default=[],
                     metavar="DIR",
                     help="directory of frozen champion weight files that join "
@@ -1003,17 +1077,43 @@ def main(argv=None):
                          "(the most different archived opponent) plus the "
                          "newest -- which is exactly the cycling test the "
                          "tier exists for")
-    ap.add_argument("--gate-metric", choices=("margin", "winshare"),
-                    default="margin",
-                    help="how the gate tiers are scored.  'margin' (default) "
-                         "uses the normalised culture-point differential; "
-                         "'winshare' restores the old behaviour, which "
-                         "returns edge=0.0000 against any opponent the "
-                         "champion never beats")
+    ap.add_argument("--objective", "--gate-metric", dest="objective",
+                    choices=("blend", "own", "margin", "winshare"),
+                    default="blend",
+                    help="WHAT THE ACCEPT DECISION MAXIMISES.  'blend' "
+                         "(default) scores every opponent on "
+                         "(1-alpha)*own_final_culture + alpha*win_share -- you "
+                         "win Through the Ages by having the most culture, and "
+                         "own culture is the dense version of that while win "
+                         "share is the literal one.  'own' drops the win-share "
+                         "tiebreak.  'margin' and 'winshare' are the "
+                         "PRE-2026-07-27 modes, kept so historical vectors "
+                         "stay reproducible: 'margin' scores the gate tiers on "
+                         "(mine - theirs), which pays twice for a culture "
+                         "point stolen in a war and once for one produced, and "
+                         "is why the champion it selected scores 64.7 against "
+                         "a human 159.5.  See docs/LEAGUE_OBJECTIVE.md.  "
+                         "--gate-metric is an accepted alias")
+    ap.add_argument("--objective-alpha", type=float, default=P.DEFAULT_ALPHA,
+                    help="weight on the WIN-SHARE half of --objective blend "
+                         "(default %(default)g).  Small on purpose: per-game "
+                         "win share is a 0/1 step with ~10x the paired "
+                         "variance of the culture term, so a large alpha buys "
+                         "noise, not objective-alignment.  0 == --objective "
+                         "own, 1 == --objective winshare")
+    ap.add_argument("--culture-scale", type=float, default=P.CULTURE_SCALE,
+                    help="culture points per unit of own-culture score "
+                         "(default %(default)g)")
+    ap.add_argument("--culture-centre", type=float, default=P.CULTURE_CENTRE,
+                    help="the culture score own_share maps to 0.5 (default "
+                         "%(default)g, between our 64.7 and a human 159.5); "
+                         "it is what keeps the marginal value of a culture "
+                         "point flat across the band we care about")
     ap.add_argument("--margin-scale", type=float, default=P.MARGIN_SCALE,
                     help="culture points per unit of margin score "
                          "(default %(default)g, measured -- see "
-                         "experiments/margin_calib.py)")
+                         "experiments/margin_calib.py).  Only used by "
+                         "--objective margin")
     ap.add_argument("--with-quiescent", action="store_true",
                     help="add the QuiescentBot search opponent (~1.2x cost)")
     ap.add_argument("--candidate-bot", default="weighted",
@@ -1062,7 +1162,9 @@ def main(argv=None):
         ablate_every=args.ablate_every, ablate_k=args.ablate_k,
         ablate_games=args.ablate_games, ablate_mode=args.ablate_mode,
         max_gens=args.max_gens, weight_guard=args.weight_guard,
-        gate_metric=args.gate_metric, margin_scale=args.margin_scale,
+        objective=args.objective, margin_scale=args.margin_scale,
+        culture_scale=args.culture_scale, culture_centre=args.culture_centre,
+        alpha=args.objective_alpha,
         candidate_bot=parse_candidate_bot(args.candidate_bot),
         legacy_ladders=not args.no_legacy_ladders,
         hall_dirs=tuple(args.hall_dir))

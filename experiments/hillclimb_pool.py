@@ -32,8 +32,12 @@ tier             members
                  legacy ``experiments/league_*p/`` ladders.  A historical
                  ladder is what guards against *cycling*, where a new
                  champion beats the current one but loses to an older one.
+``hall``         frozen champions from ``--hall-dir``, which -- unlike
+                 ``past`` -- are never rotated out.  Its own tier since the
+                 2026-07-27 rebalance, so it can be weighted separately.
 ``floor``        GreedyBot / RandomBot / the untrained default weights:
-                 cheap floor checks.  Cheap, and weighted like it.
+                 cheap floor checks.  **Weight 0 by default** -- they are
+                 saturated (see the comment in ``build_pool``).
 ===============  =========================================================
 
 Weighting
@@ -74,26 +78,72 @@ ROOT = os.path.dirname(HERE)
 
 MIRROR = "@mirror"          # placeholder spec: resolved to the candidate itself
 
-# Tier totals.  Strong, external, non-self-play opponents carry the most.
-# Everything here is a dial: --pool-weights book=4,variant=2.5,past=0.5 ...
+# Tier totals.  Everything here is a dial:
+#   --pool-weights book=4,variant=2.5,past=0.5,hall=0,floor=0 ...
+#
+# THE 2026-07-27 REBALANCE (docs/LEAGUE_OBJECTIVE.md section 3).  The previous
+# totals were book 3.0 / variant 2.5 / mirror 1.0 / past 1.0 / floor 0.5, i.e.
+# 5.5 of 8.0 = **69% of the training signal came from hand-written static bots
+# that never improve**, and every one of them is `BookBot` or a `BookBot`
+# subclass (docs/TWOP_PROFILE.md section 9: the pool is a monoculture).  The
+# champion learned to farm that monoculture's hard-coded numeric triggers --
+# `var:military` reaches the +3 strength lead its offence is gated on for 5.5%
+# of turns against the champion versus 41-44% against the rest of its own
+# family.  That is exploiting an implementation artefact, not learning the game.
+#
+# So the static tiers are cut to 24% of the total: enough to be a SANITY FLOOR
+# (they still hold the veto, see DEFAULT_GATE_TIERS) and a source of
+# behavioural diversity, not enough to be the gradient.  The majority now sits
+# on opponents that move: `mirror` (the candidate's own parent), `past` (the
+# rotating archived ladder) and `hall` (frozen champions that never age out).
 DEFAULT_TIER_WEIGHTS = {
-    "book": 3.0,            # the external yardstick we currently LOSE to
-    "variant": 2.5,         # human strategy archetypes
-    "quiescent": 2.0,       # deeper search (opt-in: expensive)
-    "mirror": 1.0,          # self-play: kept, demoted below every real bot
-    "past": 1.0,            # anti-cycling ladder
-    "floor": 0.5,           # greedy / random / untrained default
+    "book": 0.6,            # external yardstick: sanity floor + veto, not gradient
+    "variant": 0.6,         # human strategy archetypes: diversity, not gradient
+    "quiescent": 2.0,       # deeper search (opt-in: expensive; off by default)
+    "mirror": 1.0,          # self-play against the immediate parent
+    "past": 1.2,            # the rotating anti-cycling ladder
+    "hall": 1.6,            # frozen champions, the least exploitable opponents
+    "floor": 0.0,           # greedy / random / untrained default -- OFF, see below
+}
+
+#: The weights every champion before 2026-07-27 was selected under.  Pass
+#: `--pool-weights "$(python3 -c 'import experiments.hillclimb_pool as P;
+#: print(P.legacy_weight_string())')"` (or just the literal string below) to
+#: reproduce a historical run.  NB `hall` did not exist as a tier then -- the
+#: hall-of-fame files were added to `past` and diluted it.
+LEGACY_TIER_WEIGHTS = {
+    "book": 3.0, "variant": 2.5, "quiescent": 2.0,
+    "mirror": 1.0, "past": 1.0, "hall": 1.0, "floor": 0.5,
 }
 
 # Tiers whose opponents can VETO an acceptance on their own: losing to these
-# is not something a good aggregate is allowed to excuse.
+# is not something a good aggregate is allowed to excuse.  Deliberately still
+# the STATIC tiers even though their weight was cut by 5x: their job changed
+# from "supply the gradient" to "stop the climber walking off a cliff", and a
+# veto is exactly that job.  A self-play tier cannot do it -- "do not regress
+# against your own parent" is a statement about the lineage, not about play.
 DEFAULT_GATE_TIERS = ("book", "variant", "quiescent")
 
+#: Tiers that `acceptance_subset` guarantees a representative of every
+#: generation, alongside `mirror` and one rotating gate.  Without this the
+#: rotation can hand a generation mirror + three 0.10-weight variants, and
+#: mirror alone then carries 77% of that generation's accept decision -- which
+#: is the mirror-only training loop this whole module exists to replace.
+DEFAULT_LADDER_TIERS = ("hall", "past")
+
 # Tiers scored on CULTURE MARGIN instead of win share.  See `margin_share`.
+# Only consulted by the LEGACY `--objective margin` mode; the own/blend
+# objectives apply one metric to the whole pool.
 DEFAULT_MARGIN_TIERS = ("book", "variant", "quiescent")
 
 # Tier order used for display.
-TIER_ORDER = ("book", "variant", "quiescent", "mirror", "past", "floor")
+TIER_ORDER = ("book", "variant", "quiescent", "mirror", "past", "hall", "floor")
+
+
+def legacy_weight_string(base=None):
+    """The `--pool-weights` string that restores the pre-2026-07-27 pool."""
+    return ",".join(f"{k}={v:g}" for k, v in
+                    sorted((base or LEGACY_TIER_WEIGHTS).items()))
 
 
 # --------------------------------------------------------------- bot specs
@@ -187,10 +237,19 @@ class Pool:
     """A weighted, tiered collection of opponents."""
 
     def __init__(self, entries, tier_weights=None, gate_tiers=DEFAULT_GATE_TIERS,
-                 margin_tiers=DEFAULT_MARGIN_TIERS):
+                 margin_tiers=DEFAULT_MARGIN_TIERS, metric="winshare",
+                 ladder_tiers=DEFAULT_LADDER_TIERS):
         self.entries = list(entries)
         self.tier_weights = dict(tier_weights or DEFAULT_TIER_WEIGHTS)
         self.gate_tiers = tuple(gate_tiers)
+        self.ladder_tiers = tuple(ladder_tiers)
+        # The pool-wide default metric.  `margin_tiers` overrides it per tier
+        # and exists only so the LEGACY objective (win share everywhere except
+        # a margin-scored gate) stays reproducible bit for bit.  Under the
+        # own/blend objectives `margin_tiers` is empty and every opponent is
+        # scored on the same thing, which is the point: the objective is a
+        # property of the RUN, not of which tier an opponent happens to sit in.
+        self.metric = metric
         # Which tiers score on culture margin rather than win share.  Only the
         # tiers where win share is DEGENERATE need it: the champion beats
         # `floor`, plays `past` and `mirror` roughly evenly, and win share is
@@ -208,7 +267,7 @@ class Pool:
         for e in self.entries:
             total = self.tier_weights.get(e.tier, 0.0)
             e.weight = total / counts[e.tier] if counts[e.tier] else 0.0
-            e.metric = "margin" if e.tier in self.margin_tiers else "winshare"
+            e.metric = "margin" if e.tier in self.margin_tiers else self.metric
 
     def __len__(self):
         return len(self.entries)
@@ -245,11 +304,17 @@ class Pool:
         the whole pool at once, and any opponent left out this generation is
         re-checked later (and by the periodic full-pool check).
 
-        Two invariants:
-          * mirror is always in, when present (it is nearly free -- the
-            reference share is 1/players by construction, no champion games);
+        Three invariants:
+          * mirror is always in, when present (under win share it is nearly
+            free -- the reference share is 1/players by construction and needs
+            no champion games; under own/blend the reference IS played);
           * at least one GATE opponent is always in, rotating through them,
-            so "beat five weak bots" can never be a winning strategy.
+            so "beat five weak bots" can never be a winning strategy;
+          * at least one LADDER opponent (`hall`/`past`) is always in,
+            rotating.  This one is new and it is load-bearing after the weight
+            rebalance: the gate tiers now carry 0.10-0.30 each against
+            mirror's 1.0, so a generation whose two free slots both land on
+            variants would be decided ~77% by mirror alone.
         """
         size = max(1, size)
         chosen, seen = [], set()
@@ -259,12 +324,15 @@ class Pool:
                 seen.add(e.label)
                 chosen.append(e)
 
+        def rotate(pool_):
+            if pool_:
+                take(sorted(pool_, key=lambda e: e.label)[gen % len(pool_)])
+
         mirrors = [e for e in self.entries if e.tier == "mirror"]
         for e in mirrors:
             take(e)
-        gates = sorted(self.gates(), key=lambda e: e.label)
-        if gates:
-            take(gates[gen % len(gates)])
+        rotate(self.gates())
+        rotate([e for e in self.entries if e.tier in self.ladder_tiers])
         # deterministic rotation over the rest: generation g starts reading
         # the (stable, sorted) remainder at offset g, so coverage is uniform.
         rest = [e for e in self.sorted_entries() if e.label not in seen]
@@ -460,13 +528,22 @@ def parse_tier_weights(s, base=None):
 def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
                with_quiescent=False, quiesce_opts=None, exclude=(),
                gate_tiers=DEFAULT_GATE_TIERS, hall_dirs=(),
-               margin_tiers=DEFAULT_MARGIN_TIERS, log=None):
+               margin_tiers=None, metric="winshare",
+               ladder_tiers=DEFAULT_LADDER_TIERS, log=None):
     """Assemble the full pool for one player count.
 
     Tiers whose weight is 0 are dropped entirely -- that is how you turn a
     tier off (``--pool-weights past=0``) without a second flag.
+
+    `margin_tiers` defaults to the legacy gate-tier list when `metric` is the
+    legacy ``winshare`` and to *nothing* otherwise.  A caller that asks for
+    ``own``/``blend`` means it for the whole pool; silently leaving the gate
+    tiers on margin would reproduce the exact bug this change exists to fix,
+    in the half of the pool that used to carry 69% of the weight.
     """
     log = log or (lambda *_a: None)
+    if margin_tiers is None:
+        margin_tiers = DEFAULT_MARGIN_TIERS if metric == "winshare" else ()
     tw = dict(tier_weights or DEFAULT_TIER_WEIGHTS)
     exclude = set(exclude or ())
     entries = []
@@ -505,15 +582,35 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
             hall.extend(discover_past_champions(players, [d],
                                                 k=len(os.listdir(d)), log=log))
     for label, spec in hall:
-        add(label.replace("past:", "hall:", 1), spec, "past")
+        add(label.replace("past:", "hall:", 1), spec, "hall")
+    # The floor tier defaults to weight 0 and is therefore usually absent.
+    # Under win share it was inert-by-construction (the champion beats all
+    # three 97.9-100%, so candidate and reference both score 1.0 and every
+    # paired diff is exactly 0.0 with se 0.0 -- docs/UNATTENDED.md trap 2).
+    # Under `own`/`blend` it is NOT inert any more: a punching bag that never
+    # competes for the card row and never attacks lets a candidate farm
+    # culture in a way no real opponent does, so it would start actively
+    # pulling the vector toward a policy tuned for an opponent that does not
+    # play.  Turning it on under those objectives is a deliberate act:
+    # `--pool-weights floor=0.5`.
     add("greedy", "greedy", "floor")
     add("random", "random", "floor")
     add("default", "default", "floor")
     pool = Pool(entries, tier_weights=tw, gate_tiers=gate_tiers,
-                margin_tiers=margin_tiers)
+                margin_tiers=margin_tiers, metric=metric,
+                ladder_tiers=ladder_tiers)
     log("[pool] " + ", ".join(
-        f"{e.label}(w={e.weight:.2f}{',margin' if e.metric == 'margin' else ''})"
+        f"{e.label}(w={e.weight:.2f},{e.metric})"
         for e in pool.sorted_entries()))
+    tot = sum(e.weight for e in pool.entries) or 1.0
+    share = {}
+    for e in pool.entries:
+        share[e.tier] = share.get(e.tier, 0.0) + e.weight
+    static = sum(v for k, v in share.items() if k in ("book", "variant"))
+    log("[pool] tier share: " + ", ".join(
+        f"{t}={share[t] / tot:.0%}" for t in TIER_ORDER if t in share)
+        + f"  (static book+variant {static / tot:.0%}, "
+        f"self-play {(tot - static) / tot:.0%})")
     return pool
 
 
@@ -596,17 +693,136 @@ def margin_share(margin, scale=MARGIN_SCALE):
     return 0.5 * (1.0 + math.tanh(float(margin) / float(scale)))
 
 
-def score_series(res, metric, scale=MARGIN_SCALE):
+# -------------------------------------------------- own-culture scoring
+#
+# WHY THIS REPLACED MARGIN AS THE DEFAULT (docs/LEAGUE_OBJECTIVE.md).
+#
+# You win Through the Ages by having the most culture.  You do not win it by
+# having the biggest gap.  Those are the same objective in a two-player game
+# ONLY if culture is conserved -- and it is not: war and aggression MOVE
+# culture from the victim to the attacker.  A stolen point moves
+# (mine - theirs) by TWO; a produced point moves it by ONE.  So a margin gate
+# pays double for theft, and a hill climber will find that.
+#
+# It did.  docs/TWOP_PROFILE.md measures the resulting 2p champion: 69% of its
+# 85.5-point margin against `book` is the war/aggression move class, banning
+# that class barely moves its own score (131.0 -> 119.8) while nearly doubling
+# `book`'s (45.5 -> 93.8), and it is BEHIND on tech and wonders while doing it.
+# On the same engine, with scoring validated exact against 1,011 human BGO
+# journals (docs/SCORE_VALIDATION.md), final own culture reads:
+#
+#     humans                          159.5  [156.0, 163.0]
+#     the 1-ply vector we replaced    139.8  [131.6, 148.3]
+#     the margin-trained champion      64.7
+#
+# It holds its rival to 26 and scores 65.  It wins 97.9% of its pool and would
+# be crushed by a competent player.  Scoring on `per_game_culture` pays a
+# stolen point exactly once, which is what the rules do.
+#
+# THE SQUASH.  Same three requirements as `margin_share`: land in (0, 1) so a
+# paired edge lands in (-1, +1) and can be averaged in one aggregate with win
+# share; be strictly monotone in culture so more culture is always a better
+# score; be bounded so one blowout cannot carry an accept.  One difference:
+# a margin is centred on 0 by construction, whereas own culture is strictly
+# positive and lives around 40-200, so the squash has to be OFFSET or the
+# whole operating band sits on one side of the curve where the slope decays.
+#
+#     own_share(c) = 0.5 * (1 + tanh((c - CULTURE_CENTRE) / CULTURE_SCALE))
+#
+# CULTURE_CENTRE = 100 sits between where we are (65) and where humans are
+# (160); with CULTURE_SCALE = 120 the marginal value of one culture point is
+# 0.00383 at c=65 and 0.00327 at c=160, i.e. **flat to 17% across the entire
+# band we care about**.  Uncentred (the naive `tanh(c/120)`) the same ratio is
+# 3.1x, which would have priced a point of culture at a human score at a third
+# of a point at our current score -- a built-in bias against ever getting
+# there.  The 40-200 band maps to |u| <= 0.83, comfortably inside tanh's
+# near-linear core, while a 400-point outlier still saturates at 0.99.
+CULTURE_SCALE = 120.0
+CULTURE_CENTRE = 100.0
+
+#: Weight on the WIN-SHARE component of the `blend` objective; 1 - alpha goes
+#: on own culture.  See `score_series` and docs/LEAGUE_OBJECTIVE.md section 2.
+DEFAULT_ALPHA = 0.15
+
+
+def own_share(culture, scale=CULTURE_SCALE, centre=CULTURE_CENTRE):
+    """Own final culture -> a win-share-like score in (0, 1).  See above."""
+    if culture is None:
+        return None
+    return 0.5 * (1.0 + math.tanh((float(culture) - centre) / float(scale)))
+
+
+class ScoreParams:
+    """The constants a per-game score needs, carried as one object.
+
+    Threading five floats through `RefCache`, `_series`, `score_candidate` and
+    `ablate` individually is how a run ends up scoring the candidate on one
+    objective and the reference on another.  One object, passed everywhere.
+    """
+
+    __slots__ = ("margin_scale", "culture_scale", "culture_centre", "alpha")
+
+    def __init__(self, margin_scale=MARGIN_SCALE, culture_scale=CULTURE_SCALE,
+                 culture_centre=CULTURE_CENTRE, alpha=DEFAULT_ALPHA):
+        self.margin_scale = float(margin_scale)
+        self.culture_scale = float(culture_scale)
+        self.culture_centre = float(culture_centre)
+        self.alpha = float(alpha)
+
+    def __repr__(self):
+        return (f"ScoreParams(margin_scale={self.margin_scale:g}, "
+                f"culture_scale={self.culture_scale:g}, "
+                f"culture_centre={self.culture_centre:g}, "
+                f"alpha={self.alpha:g})")
+
+
+DEFAULT_SCORE_PARAMS = ScoreParams()
+
+#: Metrics whose champion reference against a MIRROR opponent is known
+#: analytically and therefore costs no games.  See `RefCache.get`: a champion
+#: at a table of itself takes 1/players of the wins and a culture margin of
+#: exactly 0 by symmetry, but its own CULTURE is an ordinary unknown quantity
+#: that has to be played for.
+ANALYTIC_MIRROR_METRICS = ("winshare", "margin")
+
+
+def score_series(res, metric, params=None):
     """Per-game scoring series from an `arena.duel` result.
 
-    `metric` is ``"winshare"`` (the task-ordered per-game share list) or
-    ``"margin"`` (the same games' culture margins, squashed by
-    `margin_share`).  Both are task-ordered and None-preserving, so a
-    candidate series and a champion series played on the same seeds pair
-    element by element either way.
+    `metric` is one of:
+
+      ``winshare``  the task-ordered per-game share list (the historical
+                    default; flat 0.0 against an opponent nobody beats, and
+                    saturated at 0.94-0.97 against `book` under PlanBot, so it
+                    cannot discriminate at either end);
+      ``margin``    the same games' culture margins through `margin_share`
+                    (the historical GATE metric -- kept so every vector
+                    selected under it stays reproducible, and because it is
+                    still the right thing when you genuinely want a
+                    differential);
+      ``own``       the same games' OWN final culture through `own_share`:
+                    dense, continuous, and the thing the rules score;
+      ``blend``     ``(1 - alpha) * own + alpha * winshare``.  Both components
+                    are already in (0, 1) with a paired null of exactly 0, so
+                    a convex combination of them is too.
+
+    Every branch is task-ordered and None-preserving, so a candidate series and
+    a champion series played on the same seeds pair element by element.
     """
+    p = params or DEFAULT_SCORE_PARAMS
     if metric == "margin":
-        return [margin_share(m, scale) for m in res.get("per_game_margin") or []]
+        return [margin_share(m, p.margin_scale)
+                for m in res.get("per_game_margin") or []]
+    if metric == "own":
+        return [own_share(c, p.culture_scale, p.culture_centre)
+                for c in res.get("per_game_culture") or []]
+    if metric == "blend":
+        own = [own_share(c, p.culture_scale, p.culture_centre)
+               for c in res.get("per_game_culture") or []]
+        win = res["per_game"]
+        a = p.alpha
+        return [None if (o is None or w is None) else (1.0 - a) * o + a * w
+                for o, w in zip(own, win)]
     return res["per_game"]
 
 

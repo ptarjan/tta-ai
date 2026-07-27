@@ -267,6 +267,15 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     bottom").  The mean of this list is `culture_a - culture_b`; it is
     returned per game because pairing against a reference duel has to happen
     game by game.
+
+    `per_game_culture` is the same list again for **A's own final culture**,
+    which is the quantity you actually win Through the Ages on.  It is not
+    derivable from the other two: `per_game_margin` is a DIFFERENCE, and a
+    difference cannot tell "I scored 140, they scored 60" from "I scored 80,
+    they scored 0".  War and aggression move culture from the victim to the
+    attacker, so a stolen point moves the margin by two and a produced point
+    by one; `experiments/hillclimb_league.py --objective own|blend` scores on
+    this list instead, so theft is paid for exactly once (docs/LEAGUE_OBJECTIVE.md).
     """
     tasks = []
     for g in range(games):
@@ -291,9 +300,11 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     shares, ca, cb, moves, errors = [], [], [], [], []
     per_game = []                      # task-ordered, None where the game died
     per_game_margin = []               # ditto, culture_a - culture_b
+    per_game_culture = []              # ditto, culture_a on its own
     for share, x, y, m in out:
         per_game.append(share)
         per_game_margin.append(None if share is None else float(x - y))
+        per_game_culture.append(None if share is None else float(x))
         if share is None:
             errors.append(x)
             continue
@@ -320,6 +331,7 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "shares": shares,
         "per_game": per_game,
         "per_game_margin": per_game_margin,
+        "per_game_culture": per_game_culture,
     }
 
 
