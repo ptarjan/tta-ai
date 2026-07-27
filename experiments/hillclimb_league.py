@@ -267,6 +267,63 @@ def load_champion(pp, init, players, overrides=True, log=print):
     return w, "default"
 
 
+# -------------------------------------------------- the trained architecture
+#
+# The climber trains a WEIGHT VECTOR, but a weight vector is not a policy -- it
+# only becomes one when some bot reads it.  Every trained vector reached the
+# arena as a bare dict, and `arena.make_bot`'s fallthrough turns a bare dict
+# into a 1-ply `WeightedBot`.  So the loop could only ever train weights for
+# greedy 1-ply play, which is a problem now that two searching policies
+# (`engine/bots/plan.py`, `engine/bots/quiescent.py`) read the SAME vector and
+# beat the 1-ply bot with it: an evaluation function has to be tuned with the
+# search it will run under, because the searcher's blind spots are what the
+# weights have to cover.  docs/DEEPER_SEARCH.md.
+#
+# `arena.make_bot` already accepts `("plan", weights, opts)` and
+# `("quiescent", weights, opts)`, so all that was missing was the wrapping.
+# `as_spec` is applied at every point a trained vector crosses into the arena
+# and NOWHERE else -- `mutate`, `guard_weights`, the champion file and the
+# ladder all keep seeing plain dicts, so nothing about the search or the
+# on-disk format changes.
+#
+# It wraps any plain dict, which deliberately includes the MIRROR opponent
+# (the champion) and the PAST-ladder opponents (older champions): those are the
+# same policy family and must be played by the same architecture or the
+# self-play and anti-cycling tiers would be measuring an architecture gap
+# instead of a weight gap.  It never wraps a str or tuple spec, which is every
+# external opponent (`book`, `var:*`, `greedy`, ...), so those stay untouched
+# and stay cheap.
+#
+# NOT persisted: the architecture is a property of the RUN, not of the vector,
+# so it must be re-supplied on every restart.  `run_league.sh` forwards its
+# extra args verbatim to each hourly restart, so passing it once is enough --
+# but resuming an arm by hand without the flag silently reverts it to 1-ply.
+CANDIDATE_ARCH = None       # None = 1-ply WeightedBot, the historical default
+
+
+def parse_candidate_bot(text):
+    """``"plan:width=8,samples=2"`` -> ``("plan", {"width": 8, "samples": 2})``."""
+    if not text or text in ("weighted", "1ply", "default"):
+        return None
+    kind, _, rest = text.partition(":")
+    if kind not in ("plan", "quiescent"):
+        raise SystemExit(f"--candidate-bot: unknown architecture {kind!r} "
+                         f"(want weighted, quiescent or plan)")
+    opts = {}
+    for part in filter(None, rest.split(",")):
+        k, _, v = part.partition("=")
+        opts[k.strip()] = float(v) if "." in v else int(v)
+    return (kind, opts)
+
+
+def as_spec(w):
+    """A trained weight vector -> the arena spec for the architecture in play."""
+    if CANDIDATE_ARCH is None or not isinstance(w, dict):
+        return w
+    kind, opts = CANDIDATE_ARCH
+    return (kind, dict(w), dict(opts))
+
+
 # ------------------------------------------------------------------ duels
 
 def _series(spec, opp_spec, players, games, seed0, workers, metric,
@@ -281,8 +338,8 @@ def _series(spec, opp_spec, players, games, seed0, workers, metric,
     cost us the win-rate column that tells us whether the bot can actually
     beat BookBot yet.
     """
-    res = arena.duel(spec, opp_spec, players, games, seed0=seed0,
-                     workers=workers)
+    res = arena.duel(as_spec(spec), as_spec(opp_spec), players, games,
+                     seed0=seed0, workers=workers)
     return {
         "score": P.score_series(res, metric, margin_scale),
         "win": res["per_game"],
@@ -447,7 +504,7 @@ def full_check(champion, pool, players, games, workers, seed, log=print):
         if e.is_mirror:
             continue
         t0 = time.time()
-        res = arena.duel(champion, e.spec, players, games,
+        res = arena.duel(as_spec(champion), as_spec(e.spec), players, games,
                          seed0=(seed + label_seed(e.label)) % 10_000_019,
                          workers=workers)
         # Wall clock per opponent, recorded because it is a budget decision:
@@ -615,7 +672,9 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
         weight_guard="clamp", gate_metric="margin",
-        margin_scale=P.MARGIN_SCALE, log=print):
+        margin_scale=P.MARGIN_SCALE, candidate_bot=None, log=print):
+    global CANDIDATE_ARCH
+    CANDIDATE_ARCH = candidate_bot
     # A block must be a whole number of seat rotations, or the seats are not
     # balanced and the "same seeds, same seats" pairing quietly stops being
     # an apples-to-apples comparison at 3p and 4p.
@@ -687,6 +746,11 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     pool = build()
     log(f"[{players}p] league trainer: {len(pool)} opponents, "
         f"gen={gen} sigma={sigma:.3f} state={state_dir}")
+    log(f"[{players}p] trained architecture: "
+        + ("WeightedBot (1-ply greedy)" if CANDIDATE_ARCH is None else
+           f"{CANDIDATE_ARCH[0]} {CANDIDATE_ARCH[1] or '(defaults)'} -- the "
+           f"champion, the mirror and the past ladder all play this; external "
+           f"opponents are unchanged"))
     log(f"[{players}p] gate metric: {gate_metric}"
         + (f" (scale {margin_scale:g} culture points; tiers "
            f"{','.join(margin_tiers)})" if margin_tiers else
@@ -945,6 +1009,15 @@ def main(argv=None):
                          "experiments/margin_calib.py)")
     ap.add_argument("--with-quiescent", action="store_true",
                     help="add the QuiescentBot search opponent (~1.2x cost)")
+    ap.add_argument("--candidate-bot", default="weighted",
+                    help="the architecture the trained weights are played by: "
+                         "weighted (1-ply, default), quiescent[:levels=1,...] "
+                         "or plan[:width=8,samples=1,det=1].  An evaluation "
+                         "must be tuned with the search it runs under, so "
+                         "this is what makes the run train the policy we ship "
+                         "rather than the one we are replacing.  Applies to "
+                         "the champion, the mirror and the past ladder; "
+                         "external opponents are unaffected")
     ap.add_argument("--no-legacy-ladders", action="store_true",
                     help="ignore the pre-existing experiments/league_Np dirs")
     ap.add_argument("--full-check-every", type=int, default=10)
@@ -983,6 +1056,7 @@ def main(argv=None):
         ablate_games=args.ablate_games, ablate_mode=args.ablate_mode,
         max_gens=args.max_gens, weight_guard=args.weight_guard,
         gate_metric=args.gate_metric, margin_scale=args.margin_scale,
+        candidate_bot=parse_candidate_bot(args.candidate_bot),
         legacy_ladders=not args.no_legacy_ladders)
 
 
