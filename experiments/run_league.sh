@@ -19,6 +19,7 @@
 # Watch it:  tail -f experiments/logs/league_2p.log
 set -u
 cd "$(dirname "$0")/.."
+export TTA_JOURNAL=1        # docs/PYPY.md 9.14-9.16: 1.44x on WeightedBot
 K=${1:-2}; H=${2:-8}; W=${3:-6}; L=${4:-2}; B=${5:-12}; S=${6:-4}; Z=${7:-1.2816}
 shift $(( $# > 7 ? 7 : $# ))
 mkdir -p experiments/logs
