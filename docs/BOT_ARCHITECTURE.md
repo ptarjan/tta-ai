@@ -901,7 +901,7 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 
 | # | stage | what it fixes | verification | cost |
 |---|---|---|---|---|
-| **M1** | **PlanBot** — turn-level beam, one horizon, determinized | §2.4 items 3, 4 and the §2.3 leak | n=400 A/B vs champion, identical weights | built; A/B running |
+| **M1** | **PlanBot** — turn-level beam, one horizon, determinized | §2.4 items 3, 4 and the §2.3 leak | **DONE at 2p: 88.6% +/- 3.1%, n=400, mirror control exactly 0.500.** Remaining: 3p/4p, and a beam-width/cost curve | built; ~16x CPU |
 | **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | ~1 day |
 | **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
 | **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
@@ -1007,10 +1007,19 @@ resources.** Blunt version:
   multi-week projects on this box; item 2 is the work in M4/M6; item 4 does not
   exist yet at all.
 
+**Updated by tonight's result, in the honest direction.** PlanBot's 194.5 mean
+culture is above BookBot's 155 on the same metric, which is the first time
+anything in this project has cleared that bar. So "beat BookBot decisively" may
+already be within reach rather than a milestone — and that raises the value of
+M7 sharply, because BookBot was the only yardstick we had and we may have just
+run past it with nothing behind it. A bot that beats every yardstick you own is
+a bot you can no longer measure.
+
 **Quantifying the gap, in the only currency we have.** There is no external
 anchor, so this is a calibrated statement rather than a number: the distance
 from today's champion to BookBot is one investigation's worth of work
-(`hand_potential` closed a similar-sized gap in one day). Expert commentary
+(`hand_potential` closed a similar-sized gap in one day, and PlanBot appears to
+have closed this one in a night). Expert commentary
 implies competent human play scores roughly **1.5-2x** the champion's mean
 culture (§5, INFERRED from prose). Strong tournament humans are further again.
 So the honest shape is: **several BookBot-sized improvements to reach competent
