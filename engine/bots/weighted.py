@@ -776,9 +776,11 @@ class WeightedBot:
 
     name = "weighted"
 
-    def __init__(self, weights=None, rng=None, seed=None, name=None):
+    def __init__(self, weights=None, rng=None, seed=None, name=None,
+                 allow_resign=False):
         self.weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
         self.rng = rng or random.Random(seed)
+        self.allow_resign = allow_resign
         if name:
             self.name = name
 
@@ -790,6 +792,20 @@ class WeightedBot:
         return self.pick(state, actions.legal_moves(state))
 
     def pick(self, state, moves):
+        # `("resign",)` (§5.11) is legal on almost every turn, and in a 2p game
+        # it is never right -- it hands the win to the opponent immediately.
+        # `RandomBot` has guarded against it since it was written, because a
+        # uniform bot would otherwise end most games in round 2; `WeightedBot`
+        # never did, and that is a live trap rather than a theoretical one: a
+        # value vector fitted by regression resigned on turn 3 of 3 games in 12
+        # (docs/BOT_ARCHITECTURE.md §3b), which silently contaminated an n=400
+        # duel with games that ended at round 2 with scores [0, 0].  The trained
+        # champions happen never to resign, so this filter is a no-op for them
+        # and a correctness fix for every new vector.
+        if not self.allow_resign and len(moves) > 1:
+            live = [m for m in moves if m[0] != "resign"]
+            if live:
+                moves = live
         if len(moves) == 1:
             return moves[0]
         # Score for whoever actually owns the move. On a pending decision that
