@@ -9,12 +9,16 @@
 # BEST vs the linear champion / book / default for the honest learning curve.
 # Everything logged to loop/curve.tsv and loop/iter*.log. Checkpoints kept.
 set -u
+# survive an SSH-session teardown: ignore HUP so a dropped connection cannot
+# kill the overnight loop (child workers are non-PTY and file-redirected, so
+# they already survive; this protects the driver bash itself).
+trap '' HUP
 cd ~/tta-ai || exit 1
 PY=/c/Users/micro/AppData/Local/Programs/Python/Python312/python.exe
 export PYTHONPATH=.
 
 GEN0=${1:-checkpoints/value2p_rank.pt}   # strongest 1-ply net (vw=1, pair 0.821)
-ITERS=${2:-40}
+ITERS=${2:-120}
 GAMES=${3:-480}         # total self-play games per iter (split over workers)
 GATE=${4:-300}          # head-to-head games for the promotion gate
 WORKERS=12
@@ -28,9 +32,22 @@ EPS=0.2                 # epsilon-greedy exploration (scale-independent)
 REFEVERY=3
 CHAMP=analysis/frozen/champion_2p.json
 
+PAUSE=~/tta-ai/PAUSE
+# honor the gaming guard's PAUSE flag: block before launching any python so a
+# game gets the whole box. The guard KILLS our python on detection (freeing
+# VRAM); this keeps us from relaunching until the guard clears PAUSE.
+wait_if_paused() {
+  while [ -f "$PAUSE" ]; do
+    echo "[$(date)] PAUSED for gaming; holding" >> loop/master.log
+    sleep 30
+  done
+}
+
 mkdir -p loop iterdata checkpoints
 BEST=checkpoints/best.pt
-cp "$GEN0" "$BEST"
+# resume-safe: only seed BEST from gen0 if we don't already have one (a reboot
+# mid-run should keep the promoted champion, not reset to gen0)
+[ -f "$BEST" ] || cp "$GEN0" "$BEST"
 CURVE=loop/curve.tsv
 if [ ! -f "$CURVE" ]; then
   echo -e "iter\tpromoted\tcand_vs_best_win\tci\tcand_cul\tbest_cul\tvs_champ\tvs_book\tvs_default\tts" > "$CURVE"
@@ -40,6 +57,7 @@ echo "LOOP START $(date)  gen0=$GEN0 iters=$ITERS games=$GAMES gate=$GATE vw=$VW
 per=$(( (GAMES + WORKERS - 1) / WORKERS ))
 for it in $(seq 1 "$ITERS"); do
   echo "== ITER $it  $(date) ==" | tee -a loop/master.log
+  wait_if_paused
   # (1) self-play generation with BEST
   for w in $(seq 0 $((WORKERS-1))); do
     s=$(( it*100000 + w*5000 ))
@@ -54,10 +72,13 @@ for it in $(seq 1 "$ITERS"); do
     j=$((it-k)); [ "$j" -ge 1 ] && globs="$globs iterdata/it${j}_w*.npz"
   done
   # (2) train candidate warm-started from BEST
+  wait_if_paused
   $PY experiments/neural_train_rank.py --data $globs --init "$BEST" \
       --epochs "$EPOCHS" --lam "$LAM" --vweight "$VWEIGHT" --select "$SELECT" \
       --out checkpoints/cand.pt --device cuda > "loop/train_it${it}.log" 2>&1
   # (3) gate candidate vs best
+  wait_if_paused
+  [ -f checkpoints/cand.pt ] || { echo "  no cand (killed?) -> skip iter $it" | tee -a loop/master.log; continue; }
   $PY experiments/neural_eval.py --ckpt checkpoints/cand.pt \
       --opponent "neural:$BEST" --games "$GATE" --players 2 --device cuda \
       > "loop/gate_it${it}.log" 2>&1

@@ -286,3 +286,88 @@ python experiments/neural_train.py --data data2/*.npz --epochs 30 \
     --out checkpoints/value2p.pt --device cuda
 bash ~/eval_all.sh checkpoints/value2p.pt 200   # the duel battery
 ```
+
+## Stage 2 — overnight self-play loop + the box-wide gaming guard
+
+Authorised by the owner as the best-in-world path, to run autonomously overnight
+on the 3090. Two pieces: a gaming guard (so training yields the whole box the
+instant the owner games) and the self-play improvement loop.
+
+### The gaming guard (`experiments/gpu_guard.py`, + `experiments/deploy/`)
+
+A standalone forever-loop (15s poll) that is the single arbiter for the whole
+box: it writes/removes the `C:\Users\micro\tta-ai\PAUSE` flag that every training
+loop reads, and hard-kills our training python to free VRAM cleanly when a game
+appears.
+
+**Detection — and a real constraint.** This is a consumer **WDDM** box, so
+`nvidia-smi` reports **per-process VRAM as N/A** (the coordinator's ">500 MB
+VRAM" signal is a TCC/datacenter feature, unavailable here — verified on the
+box). What IS available: `nvidia-smi --query-compute-apps=pid,process_name` lists
+every GPU process **with its full path**, including graphics (C+G) apps. So the
+guard detects games by **path**: a GPU process is FOREIGN if its path is neither
+our python nor one of many benign desktop/launcher apps (dwm, chrome, discord,
+steam helper, powertoys, nvidia, razer, battle.net launcher, …). Games live in
+their own dirs (`World of Warcraft\Wow.exe`, `steamapps\common\<game>\…`) and
+never match the benign set. The cost asymmetry is deliberate — a false pause just
+stops training briefly (it relaunches); a missed game causes the stutter the
+owner forbids — so anything unrecognized on the GPU is treated as a game. A
+2-poll (~30 s) debounce prevents thrashing. The guard runs **elevated**
+(scheduled-task RunLevel HighestAvailable, since `micro` is an admin) so
+`nvidia-smi` can read every process path; unreadable paths (`[Insufficient
+Permissions]`) are treated as benign so a lower-integrity fallback can't
+false-trigger.
+
+**Verified end to end (2p, on the box):** at idle it correctly finds no foreign
+process and never pauses; on a simulated game (`GUARD_TEST_FOREIGN` hook) it
+detected within ~2 polls, wrote PAUSE, **killed all 16 training pythons and
+survived itself**, then on clear removed PAUSE after the 30 s debounce and
+training resumed — a full `PAUSE ON → PAUSE OFF` cycle in the guard log.
+
+### Durability without a human (Windows Scheduled Tasks)
+
+Both the guard and the neural loop are registered as scheduled tasks
+(`schtasks`, XML in `experiments/deploy/`): trigger ONLOGON **with an hourly
+repetition** and `RestartOnFailure`, `MultipleInstancesPolicy=IgnoreNew`
+(a per-process lockfile also enforces single-instance), no execution time limit.
+So they survive a reboot (auto-login → ONLOGON), a crash (restart / hourly
+re-fire), and this SSH session / the driving agent ending. The loop runs at
+task **Priority 7 (below-normal)** so its python children yield CPU to a game
+even if the guard's kill lags; the guard runs at Priority 5. The CPU league-arm
+worker reads the SAME PAUSE flag and runs LOW — the guard is the only writer.
+
+Confirm it is working:
+```
+schtasks /Query /TN tta_gpu_guard      # Status: Running
+schtasks /Query /TN tta_neural_loop
+type C:\Users\micro\tta-ai\experiments\logs\gpu_guard.log   # START / PAUSE transitions
+dir C:\Users\micro\tta-ai\PAUSE         # present only while a game is up
+```
+
+### The self-play loop (`experiments/neural_loop.sh`)
+
+AlphaZero-style generalized policy iteration on the 1-ply value-net policy.
+Per iteration: (1) parallel CPU self-play (12 workers, ε-greedy) with the current
+BEST net → value rows (state→eventual margin, the on-policy GPI signal) + ranking
+pairs (the net's greedy child vs rejected, keeping siblings sharp)
+(`neural_gen_iter.py`); (2) train a candidate warm-started from BEST on a 3-iter
+replay window (`neural_train_rank.py`); (3) **gate** candidate-vs-best
+head-to-head n=300 (`neural_eval.py --opponent neural:BEST`); **promote only if
+the 95% CI lower bound clears 0.5**; (4) every 3 iters, a reference curve vs the
+linear champion / BookBot / default → `loop/curve.tsv`. It honors the PAUSE flag
+before every python launch and is resume-safe (keeps the promoted champion
+across restarts).
+
+**Calibration finding (measured, before iterating).** The coordinator asked to
+fix the value-head calibration first (Stage-1b MAE was ~84). A sweep of the
+value-loss weight did fix it (MAE 84 → ~41 at vweight=3) **but it HURT 1-ply play
+strength** (0.427 → 0.258 vs default): a 1-ply value-argmax policy is driven by
+the sibling **ordering** (pair-accuracy), not value MAE, and this loop regresses
+value to real game outcomes each iteration (no bootstrapping), so a miscalibrated
+head is **not** amplified. So the loop starts from the strongest net (vw=1, pair
+0.821) with `select=pair`, and explores with scale-independent ε-greedy. This is
+an honest deviation from the letter of the instruction, justified by the
+measurement; documented here for the next engineer.
+
+_(learning curve to follow in loop/curve.tsv; the headline question is whether
+self-play takes the 1-ply net past the linear champion, currently 0.095 vs it.)_
