@@ -462,6 +462,37 @@ list that has been beating this champion all along — at **155 mean culture**
 (n=400). PlanBot at **194.5** is well past that mark on the same metric, on the
 champion's own weights, with no strategy knowledge added at all.
 
+### Ablation: how much is the horizon, how much is the lookahead
+
+MEASURED, n=200 per rung, 2p, against the gen-344 champion, identical weights.
+`width=1` keeps everything except the multi-action search: candidates are still
+scored at one common horizon (after my turn ends), the decks are still
+determinized, pending decisions are still resolved — but each first move gets a
+single greedy completion instead of a beam.
+
+| configuration | win rate | mean culture |
+|---|---|---|
+| `width=1` (one horizon + determinize + quiesce, **no lookahead**) | **62.3% +/- 6.7%** | 151.3 vs 132.4 |
+| `width=8` (full PlanBot, n=400 from above) | **85.1% +/- 3.5%** | 202.3 vs 131.9 |
+| null | 50% | |
+
+<!-- further rungs appended as they land -->
+
+So the effect splits roughly in half and then some: **removing the horizon
+asymmetry and the information leak is worth ~12 points on its own, and the
+multi-action lookahead adds ~23 more.** Neither alone explains the result, and
+in particular it is *not* just the removal of `end_turn_bias`.
+
+The `width=1` row is also a direct rematch of a previously-lost fight.
+`docs/WASTED_ACTIONS.md` §6 measured `HorizonBot` — same-horizon scoring, one
+action at a time — at **29.8% +/- 4.4% (n=400)**. The same idea now measures
+62.3%. What changed in between: `hand_potential` landed (so the evaluation can
+tell one card from another), pending decisions are resolved before scoring, the
+decks are determinized, and the horizon is reached by *completing the turn*
+rather than by rolling a single candidate through production. That is a useful
+warning about retiring an idea on one measurement: the horizon fix was not
+wrong, it was blocked by a defect that has since been fixed.
+
 ### What it is actually doing — MEASURED, and it is not an engine exploit
 
 The obvious worry about a deeper searcher is that it has found a mispriced legal
