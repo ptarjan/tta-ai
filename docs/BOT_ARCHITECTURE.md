@@ -477,11 +477,39 @@ This is worth doing because it answers the question the win-rate harness does
 *not*: **how strong are these bots on an absolute scale**, which is the question
 this project has never been able to answer.
 
+**Correction, landed while this was being written.** `docs/BGO_PILOT.md`
+(commit `42cfdb7`) establishes that BGO's finished-games index is **not**
+readable without a login — `docs/EXTERNAL_AIS.md` §5a reached its "readable"
+conclusion inside an authenticated session and that does not generalise. So BGO
+is not a free data source for either the anchor or the corpus; it is an
+account-and-consent source. That does not kill the anchor, it changes where the
+numbers should come from. In descending order of cheapness:
+
+1. **A published aggregate.** BGG threads already cited in
+   `docs/EXPERT_STRATEGY.md` reference a "30k-game data with skill-filtering"
+   analysis. A published score distribution costs zero scraping, zero user time
+   and zero credentials. This should be checked first.
+2. **The tournament corpus already in hand.** `docs/EXPERT_STRATEGY.md` is built
+   on 39 games from 3 Internationals and 3 Intermezzos, scored by civil actions
+   spent per card. If those records carry final scores, the anchor is already
+   sitting in the repo.
+3. **A user-authorised BGO metadata pull**, which is now an explicit ask for
+   credentials and consent, not a free read.
+
+There is also a weak anchor available immediately, from expert commentary
+rather than data, and it is worth stating because it points the same way:
+`docs/EXPERT_STRATEGY.md` records a competent Age III culture rate of **10-15
+per round** over ~6 rounds, Age III wonders at **20-35 culture each**, single
+events worth **20+**, and "it is very common to be down by **100 points** and
+still comfortably win". Against that, our 2p champion's **124** mean final
+culture and BookBot's **155** (n=400, docs/STRENGTH_CHECK.md) look like a
+sub-competent table. That is INFERRED from prose, not measured, and it is
+exactly the kind of claim this project keeps getting burned by — but it is the
+only absolute reading available today and it is not flattering.
+
 Cost, and what it asks of the user:
 
-* It needs **final scores only**, not journals — the summary/outcome metadata,
-  which `docs/EXTERNAL_AIS.md` already costs at ~3.6k polite GETs for the whole
-  index, and far fewer for a 200-500 game sample.
+* It needs **final scores only**, not journals — the summary/outcome metadata.
 * n=200-500 finished 2p and 3p base-game games is enough: the per-game sd of
   final culture is 40-50, so a 500-game sample pins the population mean to about
   +/- 4 culture.
