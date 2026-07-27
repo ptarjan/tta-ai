@@ -822,3 +822,230 @@ way (49.9% vs a 50.0% null) and could take the change in place.
   `engine.perf_check` rounds on a loaded box read 511 vs 478 moves/cpu-s, which
   is ~6.5% — but the base arm's own spread across those rounds was 486/548/499,
   so that measurement cannot resolve 1% from 6%. Take the micro-benchmark.
+
+
+# Part 3 — the horizon probe, and why the culture-rate axis goes flat (2026-07-26, branch `probe/horizon-4p`)
+
+Working notes, appended by the probe agent. Worktree `/tmp/tta-probe`, branch
+`probe/horizon-4p` = current master `8543933` (which already carries fix #1)
+with fix #2 rebased on top. Nothing pushed or merged. The three live trainers
+in the main checkout were not touched and `experiments/league_state/` was read
+only.
+
+Part 2 ended with two open items. §10's "what I would look at next" #1 asked
+*why* the champions have thrown away the phase shaping they already had, and #2
+asked whether `--ablate` calls those weights load-bearing. **Both are answered
+below, and the answer to #1 is a mechanism with exact arithmetic behind it.**
+The probe that motivated the branch is §13, and it is the weaker half of this
+document.
+
+---
+
+## 11. §10 #2, answered from data already on disk: the shaping is not load-bearing in any arm
+
+`experiments/league_state/ablation_{2,3,4}p.jsonl` — the trainer's own
+`--ablate` machinery, n=72, paired, against `book`/`book2`/`var:culture`. The
+cursor walks the weight list alphabetically, so `culture_rate*` has come up at
+2p and 3p and not yet at 4p:
+
+| arm | weight | value → 0 | edge | verdict |
+|---|---|---|---|---|
+| 2p (gen 175) | `culture_rate` | 20.108 → 0 | **−0.1104 ± 0.0285** | load-bearing |
+| | `culture_rate_early` | 0.271 → 0 | **+0.0000 ± 0.0000** | no measurable effect |
+| | `culture_rate_late` | 0.126 → 0 | **+0.0000 ± 0.0000** | no measurable effect |
+| 3p (gen 175) | `culture_rate` | 6.136 → 0 | **−0.1791 ± 0.0231** | load-bearing |
+| | `culture_rate_early` | 2.042 → 0 | −0.0003 ± 0.0054 | no measurable effect |
+| | `culture_rate_late` | −1.187 → 0 | −0.0010 ± 0.0044 | no measurable effect |
+
+Read the standard errors. At 2p both phase multipliers ablate to **exactly
+zero edge with exactly zero standard error** — that is not a statistical null,
+it is the discrete statement that deleting them changed **not one game**. The
+2p shaping is literally inert.
+
+At 3p it is not inert (some games differ, so `se` is non-zero) but it is worth
+`0.000 ± 0.005` win share — and 3p is the arm that *kept* its shaping
+(2.042 / −1.187, close to the default's 2.0 / −2.0). **So even where the
+shaping survives, the gate cannot see it, while the level term next to it is
+worth 0.11–0.18 win share.**
+
+§10 #2 predicted exactly this fork: "if it says harmless while §4's rate curves
+say the race is lost on exactly that axis, the gate metric is not seeing the
+middle game." The fork is now live and I cannot close it from these numbers
+alone. Two readings, both consistent with everything measured:
+
+* **(A) the shaping really does not matter.** The ablation is a local
+  derivative at the champion's own operating point against three opponents; it
+  says removing the shaping from *this* vector costs nothing.
+* **(B) the gate is blind to it.** §8d measured the new horizon as **+7.5
+  points at 4p (p=0.0013)** on `DEFAULT_WEIGHTS`, whose `Σ|late−early|` is 16.9
+  — a vector with real shaping. If shaping were globally worthless, changing
+  the function it multiplies could not be worth 7.5 points on any vector.
+
+(B) is not proof, because the horizon changes `L`, not the weights, and its
+leverage is exactly `dL × |w_late − w_early|` (§8c). A vector with no shaping
+is *immune* to the horizon by construction — which is the same fact viewed from
+the other side, and is also why the 2p champion (`Σ = 7.5`, culture-rate
+shaping ≈ 0) did not notice the fix at all.
+
+## 12. §10 #1, answered: the search cannot afford to explore the shaping axis
+
+Three facts, none of them noisy.
+
+### 12a. The exactly-zero values are the weight guard's fingerprint
+
+Current champions, all 20 phase multipliers each:
+
+| arm | positive-default multipliers at **exactly** 0.000 | negative-default multipliers at exactly 0.000 |
+|---|---|---|
+| 2p | 2/10 (`culture_rate_early`, `food_rate_early`) | 0/10 |
+| 3p | 2/10 (`culture_late`, `wonder_progress_early`) | 0/10 |
+| 4p | 2/10 (`tech_levels_early`, `wonder_progress_early`) | 0/10 |
+| **total** | **6/30** | **0/30** |
+
+Fisher exact, one-sided: **p = 0.012**. And several more of the positive set sit
+one step off the floor — 2p `resource_rate_early` 0.006, `workers_early` 0.006;
+4p `culture_rate_early` 0.002, `culture_late` 0.018.
+
+The negative-default half is **not** merely non-zero, it crosses zero freely:
+10 of those 30 currently hold the *opposite* sign to their default (2p
+`culture_rate_late` +0.429, 3p `tech_levels_late` +1.771, 4p `culture_early`
++8.32, …). Sign crossing is a ~33%-frequency event in this search for the
+multipliers that are allowed to do it, and a 0%-frequency event with a pile-up
+at the boundary for the ones that are not.
+
+The asymmetry is `guard_weights`. `NONNEG` is still `{k: DEFAULT_WEIGHTS[k] >
+0}` with no phase exemption, so the ten **positive**-default multipliers are
+sign-locked while fix #1's `_PHASE_MULT` exemption freed only the ten
+**negative**-default ones. §7 flagged this and deferred it: *"By the gauge
+argument above those clamps are probably also meaningless and they do fire in
+practice … but removing them belongs in its own separately-measured commit."*
+The evidence below upgrades "probably meaningless" to "measurably not".
+
+**How `culture_rate_early` reached 0.000, traced exactly.**
+`experiments/league_state/ladder_4p/` archives every accepted champion:
+
+```
+gen   culture_rate  _early    _late     late-early
+00034      12.837   27.470   -0.113       -27.582
+00037      17.453    0.000   -0.367        -0.367
+```
+
+`guard_4p.jsonl` gen 37: mutant:0, op `group:economy`, proposed
+`culture_rate_early = -8.0696`, **clamped to 0.0**. `generations_4p.jsonl` gen
+37: that mutant was **accepted**, edge +0.1551, lo +0.0616. One accepted
+generation destroyed the entire culture-rate shaping and the base weight moved
+12.837 → 17.453 to partly absorb it.
+
+2p is the same event at gen 241: `guard_2p.jsonl` clamps mutant:0 (`kick`)
+`culture_rate_early = -0.505` → 0.0, `generations_2p.jsonl` accepts it (edge
++0.0826, lo +0.0027), and `ladder_2p/gen00241.json` reads 0.000. It has not
+moved off 0.000 in the 33 generations since.
+
+### 12b. The clamp is *not* an expressiveness bug — and that is the point
+
+Being fair to the guard: the constraint `early ≥ 0` restricts **nothing** in
+policy space. §7's own gauge argument cuts both ways — `(base, early, late) →
+(base−c, early+c, late+c)` is the identical policy, so any vector with
+`early < 0` can be re-expressed with `early = 0`. The clamp is a legal gauge
+fixing.
+
+What it is not is a *gauge-preserving* one. `guard_weights` sets `early := 0`
+**without** the compensating `−c` on the base and `+c` on the late. So the
+clamped mutant is a genuinely different policy from the one the operator
+proposed, substituted silently, and the difference is concentrated exactly on
+the early-game valuation. Above, `culture_rate_early = −8.07` proposed a
+price of `17.45 − 8.07 = 9.4` at `L=0`; what was actually evaluated and
+accepted priced it at `17.45`.
+
+### 12c. The step size is the real trap: level moves 61× faster than shape
+
+`hillclimb.mutate:207` is
+
+```python
+new = _clamp(out[k] + rng.gauss(0.0, s) * (abs(out[k]) + 0.15))
+```
+
+— the proposal step is **proportional to the weight's own magnitude**, with a
+floor of `0.15·s`. Sampling 4000 real `mutate()` calls on each live champion at
+its own current `sigma`, and projecting onto the two gauge-meaningful
+coordinates (level `= base + early`, i.e. the price at `L=0`; shape
+`= late − early`, the entire horizon signal):
+
+| arm | sigma | `culture_rate` base | step sd, **level** | step sd, **shape** | ratio | shaping today |
+|---|---|---|---|---|---|---|
+| 2p | 0.50 | 23.927 | 10.82 | **0.43** | **25×** | −0.27 (flat) |
+| 3p | 0.50 | 6.136 | 4.27 | **1.59** | **2.7×** | −3.23 (intact) |
+| 4p | 0.08 | 35.574 | 3.42 | **0.056** | **61×** | −0.32 (flat) |
+
+**The three arms rank on this ratio exactly as they rank on whether they kept
+their shaping, and 3p — the one arm with an intact culture-rate horizon — is
+also the one whose base weight never ran away.** That is the mechanism: once
+`culture_rate` grows large, the multiplicative step hands the *level* an
+enormous exploration budget and starves the *shape*, which is pinned near the
+`0.15·s` floor. The gauge degeneracy guarantees the search can always cash a
+shape change out as a level change, and the level is where all the step size
+is, so it does.
+
+The arithmetic of the trap at 4p: rebuilding the default's shaping (`|late −
+early| = 4.0`) from the current 0.32 at a step sd of 0.056 needs ~66 σ of
+*coherent drift*, or ~4400 steps of undirected random walk, in a coordinate the
+ablation in §11 says the gate cannot even see. Meanwhile one accepted move on
+the base shifts it by ~3.4. The search is not "declining to use the
+representation"; it is being offered the shape coordinate at 1/61 the resolution
+of the level coordinate and priced on a metric that scores the shape at
+0.000 ± 0.005.
+
+### 12d. What the flattened axis actually costs, in culture points
+
+`culture_rate` is `s.culture`, culture **production per turn**, and `culture`
+is the FROZEN stock weight = 1.0. So the true value of `+1` culture rate
+acquired with `R` rounds left is exactly `R` culture points. Measured game
+lengths (§8a): 2p 22.7, 3p 23.6, 4p 28.9 rounds; 4p rounds-left by age is
+A 28.9 / I 24.9 / II 15.9 / III 6.4 / IV 2.0.
+
+| vector | price at `L=0` | price at `L=1` | true value, start → end |
+|---|---|---|---|
+| DEFAULT | 7.00 | 3.00 | ~29 → 2 |
+| 2p champion | 23.93 | **24.36** | ~23 → 2 |
+| 3p champion | 8.18 | 4.95 | ~24 → 2 |
+| **4p champion** | **35.58** | **35.26** | ~29 → 2 |
+
+The 4p champion prices a culture rate at 35.6 culture points *flat* — **above
+the theoretical ceiling at every single point in the game**, and ~18× over on
+the last two turns. The 2p champion's slope is outright inverted (24.36 late >
+23.93 early). Only 3p has a correctly-signed slope, and it is the arm that
+under- rather than over-prices.
+
+This is the same defect §4 measured behaviourally ("it buys the right asset too
+late"), now in closed form: the hill climb correctly discovered that the
+default's level was far too low and pushed it up by 7×, and the step geometry
+meant the only way it could do that was through the base term, which flattened
+the slope on the way. **The level was cheap to fix and the slope was
+unaffordable, so it fixed the level and paid for it with the slope.**
+
+### 12e. Two changes this argues for — neither of them measured, both cheap
+
+Stated as proposals, not results. I did not implement either, because editing
+`experiments/hillclimb_league.py` or `experiments/hillclimb.py` in this worktree
+would be picked up by the probe's own hourly supervisor restart and confound the
+one experiment this branch exists to run.
+
+1. **Make the phase exemption symmetric.** Change `NONNEG` to
+   `frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0 and k not in
+   _PHASE_MULT)`, matching `NONPOS`. Two lines, plus a test case. §7's own gauge
+   argument already justifies it; §12a supplies the evidence that the
+   asymmetry is doing damage rather than nothing. **Caveat: by §12b this is not
+   an expressiveness fix**, it only stops the silent non-gauge substitution and
+   the pile-up at 0. On its own it will not rebuild a slope — §12c will still
+   starve it.
+2. **Decouple the phase multipliers from the base's step size.** The floor
+   `abs(w) + 0.15` is right for value terms and wrong for multipliers, whose
+   natural scale is O(1) regardless of how large the base grew. Something like
+   `abs(w) + 0.15 + 0.5*(k in _PHASE_MULT)` — or, better, mutating in the
+   (level, shape) basis so the two coordinates get comparable budgets — would
+   restore the search's access to the axis. This is the load-bearing change of
+   the two and it is a real search change: it needs its own A/B and it must not
+   be dropped into a running arm.
+
+Ordering, if only one: (2). (1) is tidy and nearly free; (2) is the one §12c
+says is actually holding the axis shut.
