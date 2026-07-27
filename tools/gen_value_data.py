@@ -76,10 +76,11 @@ def row_for(state, idx, w):
     return r, off
 
 
-def _init(spec, n, mode):
+def _init(spec, n, mode, every=False):
     _W["w"] = spec
     _W["n"] = n
     _W["mode"] = mode
+    _W["every"] = every
 
 
 def _one(seed):
@@ -96,8 +97,15 @@ def _one(seed):
     rows = []
     last_turn = None
     moves = 0
+    every = _W.get("every")
     while not game.is_over(st):
-        if st.turn != last_turn and not st.pending:
+        # `--rows turn` samples only turn boundaries: consecutive mid-turn
+        # states differ by one action and are massively autocorrelated.  But a
+        # 1-ply WeightedBot *compares* mid-turn states, so a value function fit
+        # only on boundaries is being asked to extrapolate off its own training
+        # distribution.  `--rows every` covers that at the price of correlation.
+        take = (st.turn != last_turn) if not every else (moves % 3 == 0)
+        if take and not st.pending:
             last_turn = st.turn
             snap = []
             for i in range(n):
@@ -140,6 +148,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed0", type=int, default=100000)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--rows", default="turn", choices=("turn", "every"))
     args = ap.parse_args()
 
     w = load_weights(args.weights) if args.weights else dict(DEFAULT_WEIGHTS)
@@ -147,12 +156,12 @@ def main():
     written = 0
     with open(args.out, "a") as fh:
         if args.workers <= 1:
-            _init(w, args.players, args.mode)
+            _init(w, args.players, args.mode, args.rows == "every")
             it = (_one(s) for s in seeds)
         else:
             ctx = mp.get_context("fork")
             pool = ctx.Pool(args.workers, initializer=_init,
-                            initargs=(w, args.players, args.mode))
+                            initargs=(w, args.players, args.mode, args.rows == "every"))
             it = pool.imap_unordered(_one, seeds, chunksize=2)
         for rows in it:
             for r in rows:
