@@ -26,12 +26,22 @@ def load(state_dir):
 
 
 def pooled(rec):
-    """Pool-weight-averaged win rate and culture margin for one fullcheck."""
+    """Pool-weight-averaged win rate and culture margin for one fullcheck.
+
+    The standard error treats each opponent's `win_rate` as a binomial over its
+    own n (48) and the opponents as independent, which is optimistic -- the same
+    candidate vector plays all of them, so its own strength is a shared term
+    that this does not price.  Read it as a floor on the error, not the error.
+    """
     res = rec["results"]
     tw = sum(v["weight"] for v in res.values())
     win = sum(v["win_rate"] * v["weight"] for v in res.values()) / tw
     mar = sum(v["margin"] * v["weight"] for v in res.values()) / tw
-    return win, mar
+    var = 0.0
+    for v in res.values():
+        p, n = v["win_rate"], max(1, v["n"])
+        var += (v["weight"] / tw) ** 2 * p * (1 - p) / n
+    return win, mar, var ** 0.5
 
 
 def gens(state_dir):
@@ -54,17 +64,19 @@ def main():
           f"  {sum(r['secs'] for r in lg) / max(1, len(lg)):.0f}s/gen")
     print()
     lvm = {r["gen"]: r for r in lv}
-    print("  gen |  PROBE win  margin |   LIVE win  margin |   d(win)  d(margin)")
-    print("  ----+--------------------+--------------------+--------------------")
+    print("  gen |     PROBE win  margin |      LIVE win  margin |   d(win)+/-se  d(marg)")
+    print("  ----+-----------------------+-----------------------+----------------------")
     for r in pr:
         g = r["gen"]
-        pw, pm = pooled(r)
+        pw, pm, pse = pooled(r)
         if g in lvm:
-            lw, lm = pooled(lvm[g])
-            print(f"  {g:>3} |     {pw:.3f} {pm:>7.1f} |     {lw:.3f} {lm:>7.1f} |"
-                  f"   {pw - lw:+.3f}    {pm - lm:+6.1f}")
+            lw, lm, lse = pooled(lvm[g])
+            dse = (pse ** 2 + lse ** 2) ** 0.5
+            print(f"  {g:>3} | {pw:.3f}+/-{pse:.3f} {pm:>7.1f} | {lw:.3f}+/-{lse:.3f} {lm:>7.1f} |"
+                  f"  {pw - lw:+.3f}+/-{dse:.3f} {pm - lm:+6.1f}")
         else:
-            print(f"  {g:>3} |     {pw:.3f} {pm:>7.1f} |         -       - |        -         -")
+            print(f"  {g:>3} | {pw:.3f}+/-{pse:.3f} {pm:>7.1f} |            -       - |"
+                  f"        -           -")
     if not pr:
         print("  (probe has not reached its first fullcheck yet)")
     # per-opponent detail at the last matched generation
