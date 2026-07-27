@@ -710,7 +710,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         tier_weights=None, past_k=2, with_quiescent=False, init="default",
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
-        hall_dirs=(),
+        hall_dirs=(), human_bots=("all",),
         weight_guard="clamp", objective="blend",
         margin_scale=P.MARGIN_SCALE, culture_scale=P.CULTURE_SCALE,
         culture_centre=P.CULTURE_CENTRE, alpha=P.DEFAULT_ALPHA,
@@ -796,7 +796,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         return P.build_pool(players, ladder_dirs=ladders,
                             tier_weights=tier_weights, past_k=past_k,
                             with_quiescent=with_quiescent,
-                            hall_dirs=hall_dirs,
+                            hall_dirs=hall_dirs, human_bots=human_bots,
                             margin_tiers=margin_tiers, metric=pool_metric,
                             log=log)
 
@@ -1067,6 +1067,14 @@ def main(argv=None):
                     help="directory of frozen champion weight files that join "
                          "the pool permanently and are never rotated out, "
                          "unlike the --past-k ladder.  Repeatable.")
+    ap.add_argument("--human-bots", default="all", metavar="LIST",
+                    help="corpus-fitted human archetypes to put in the pool: "
+                         "'all' (default), 'none', or a comma list of "
+                         "builder,wonder,tempo,warlord.  These are the only "
+                         "pool opponents fitted to real human games "
+                         "(docs/HUMAN_BOTS.md); the default is ON so a "
+                         "relaunch that forgets the flag cannot silently "
+                         "train against the old monoculture.")
     ap.add_argument("--past-k", type=int, default=2,
                     help="archived champions in the pool (spread oldest.."
                          "newest).  Default 2, not 3: a past:* duel is the "
@@ -1167,7 +1175,9 @@ def main(argv=None):
         alpha=args.objective_alpha,
         candidate_bot=parse_candidate_bot(args.candidate_bot),
         legacy_ladders=not args.no_legacy_ladders,
-        hall_dirs=tuple(args.hall_dir))
+        hall_dirs=tuple(args.hall_dir),
+        human_bots=tuple(x.strip() for x in args.human_bots.split(",")
+                         if x.strip()))
 
 
 if __name__ == "__main__":

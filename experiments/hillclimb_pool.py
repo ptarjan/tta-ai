@@ -17,6 +17,11 @@ tier             members
 ``book``         BookBot / BookBot v2 -- the external, expert-derived
                  yardstick.  Not produced by our training loop, so beating
                  it means something in absolute terms.
+``human``        the corpus-fitted archetypes in ``engine/bots/human/``.
+                 These are the only opponents in the pool whose behaviour was
+                 FITTED to something outside this repo -- the 1,011 BGO human
+                 games -- and the only stochastic ones.  See
+                 docs/HUMAN_BOTS.md.
 ``variant``      the strategy archetypes in ``engine/bots/variants/``
                  (tempo, infrastructure, military, culture, science,
                  wonder-heavy...).  Discovered DYNAMICALLY: the pool grows
@@ -99,6 +104,12 @@ MIRROR = "@mirror"          # placeholder spec: resolved to the candidate itself
 DEFAULT_TIER_WEIGHTS = {
     "book": 0.6,            # external yardstick: sanity floor + veto, not gradient
     "variant": 0.6,         # human strategy archetypes: diversity, not gradient
+    # Corpus-fitted, stochastic, no hand-written trigger to hold shut
+    # (docs/HUMAN_BOTS.md).  This is the non-exploitable replacement for the
+    # `variant` monoculture, so it takes the same veto/diversity role and the
+    # same weight -- the 2026-07-27 rebalance moved the gradient onto the
+    # self-play tiers, and these bots are external anchors, not gradient.
+    "human": 0.6,
     "quiescent": 2.0,       # deeper search (opt-in: expensive; off by default)
     "mirror": 1.0,          # self-play against the immediate parent
     "past": 1.2,            # the rotating anti-cycling ladder
@@ -122,7 +133,9 @@ LEGACY_TIER_WEIGHTS = {
 # from "supply the gradient" to "stop the climber walking off a cliff", and a
 # veto is exactly that job.  A self-play tier cannot do it -- "do not regress
 # against your own parent" is a statement about the lineage, not about play.
-DEFAULT_GATE_TIERS = ("book", "variant", "quiescent")
+# `human` joins them: an unexploitable external opponent is exactly the kind
+# of cliff-guard the monoculture could not be (docs/HUMAN_BOTS.md).
+DEFAULT_GATE_TIERS = ("book", "variant", "quiescent", "human")
 
 #: Tiers that `acceptance_subset` guarantees a representative of every
 #: generation, alongside `mirror` and one rotating gate.  Without this the
@@ -134,10 +147,11 @@ DEFAULT_LADDER_TIERS = ("hall", "past")
 # Tiers scored on CULTURE MARGIN instead of win share.  See `margin_share`.
 # Only consulted by the LEGACY `--objective margin` mode; the own/blend
 # objectives apply one metric to the whole pool.
-DEFAULT_MARGIN_TIERS = ("book", "variant", "quiescent")
+DEFAULT_MARGIN_TIERS = ("book", "variant", "quiescent", "human")
 
 # Tier order used for display.
-TIER_ORDER = ("book", "variant", "quiescent", "mirror", "past", "hall", "floor")
+TIER_ORDER = ("book", "human", "variant", "quiescent", "mirror", "past",
+              "hall", "floor")
 
 
 def legacy_weight_string(base=None):
@@ -172,10 +186,28 @@ def make_bot(spec, seed):
             return BookImprovedBot(weights=spec[1], seed=seed)
         if spec[0] == "variant":
             return _make_variant(spec[1], spec[2], seed)
+        if spec[0] == "human":
+            return _make_human(spec, seed)
     return _BASE_MAKE_BOT(spec, seed)
 
 
 arena.make_bot = make_bot
+
+
+def _make_human(spec, seed):
+    """Build ``engine.bots.human.<module>.<cls>``, optionally re-profiled.
+
+    Spec shape is ``("human", module, cls_name)`` or, for the fitter,
+    ``("human", module, cls_name, profile_json)`` -- a JSON string rather than
+    a dict because the spec has to survive pickling into an arena worker and a
+    frozenset knob (``tech_veto``) does not round-trip through JSON as itself.
+    Only ``tools/human_fit.py`` uses the four-element form; the pool always
+    ships the fitted class as written.
+    """
+    mod = importlib.import_module(f"engine.bots.human.{spec[1]}")
+    cls = getattr(mod, spec[2])
+    prof = json.loads(spec[3]) if len(spec) > 3 and spec[3] else None
+    return cls(seed=seed, profile=prof)
 
 
 def _make_variant(module, cls_name, seed):
@@ -462,6 +494,41 @@ def discover_variants(log=None):
     return out
 
 
+def discover_humans(names=("all",), log=None):
+    """The corpus-fitted archetypes in ``engine/bots/human/``.
+
+    `names` is ``("all",)``, ``("none",)`` or an explicit list of short names.
+    Never raises: like `discover_variants`, a missing or broken package logs
+    one line and leaves the tier empty, so a training run started against an
+    older checkout still works.
+    """
+    log = log or (lambda *_a: None)
+    if not names or "none" in names:
+        return []
+    try:
+        from engine.bots.human import HUMANS
+    except Exception as exc:
+        log(f"[pool] no engine/bots/human ({exc.__class__.__name__}: {exc})"
+            " -- human tier empty")
+        return []
+    want = sorted(HUMANS) if "all" in names else [n for n in names]
+    out = []
+    for n in want:
+        cls = HUMANS.get(n)
+        if cls is None:
+            log(f"[pool] unknown human archetype {n!r};"
+                f" known: {sorted(HUMANS)}")
+            continue
+        spec = ("human", cls.__module__.rsplit(".", 1)[-1], cls.__name__)
+        try:                                     # prove it constructs
+            _make_human(spec, 1)
+        except Exception as exc:
+            log(f"[pool] skip human:{n}: {exc.__class__.__name__}: {exc}")
+            continue
+        out.append((f"hum:{n}", spec))
+    return out
+
+
 def _spread(items, k):
     """`k` items spread evenly over `items`, endpoints always included."""
     if k <= 0 or not items:
@@ -529,7 +596,8 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
                with_quiescent=False, quiesce_opts=None, exclude=(),
                gate_tiers=DEFAULT_GATE_TIERS, hall_dirs=(),
                margin_tiers=None, metric="winshare",
-               ladder_tiers=DEFAULT_LADDER_TIERS, log=None):
+               ladder_tiers=DEFAULT_LADDER_TIERS, human_bots=("all",),
+               log=None):
     """Assemble the full pool for one player count.
 
     Tiers whose weight is 0 are dropped entirely -- that is how you turn a
@@ -555,6 +623,8 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
 
     add("book", "book", "book")
     add("book2", "book2", "book")
+    for label, spec in discover_humans(human_bots, log=log):
+        add(label, spec, "human")
     for label, spec in discover_variants(log=log):
         add(label, spec, "variant")
     if with_quiescent:

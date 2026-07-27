@@ -13,6 +13,13 @@
 #
 # DEADLINE is an absolute epoch second, written at setup time.  Cron gives no
 # clean way to say "stop after N hours", so the deadline lives in a file.
+#
+# EVERY pool-affecting flag must be repeated here.  A relaunch that silently
+# drops one is a failure mode this project has already hit: --candidate-bot is
+# not persisted in the state dir (docs/UNATTENDED.md trap 5) and neither are
+# --hall-dir or --human-bots, so an arm restarted without them keeps training
+# but against a different, weaker pool -- and nothing in the logs says so
+# except the [pool] line.  Check that line after any relaunch.
 set -u
 cd "$(dirname "$0")/.."
 DEADLINE_FILE=experiments/logs/watchdog_deadline
@@ -56,9 +63,10 @@ COMMON=(
     --past-k 2
     --hall-dir experiments/hall_of_fame
     --candidate-bot quiescent:levels=1
+    --human-bots all
     --objective blend
     --objective-alpha 0.15
-    --pool-weights book=0.6,variant=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
+    --pool-weights book=0.6,variant=0.6,human=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
 )
 
 launch() {   # players workers block extra...
