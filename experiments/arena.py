@@ -22,6 +22,77 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 BUILTINS = ("random", "greedy", "default")
 
+#: docs/TRAINING_RUN.md:39-44 -- this file holds the pre-horizon-fix 4p
+#: champion (science=-6.089) and says explicitly "never warm-start from it".
+#: docs/CULTURE_GAP.md Sec 8f measured it at 20.1% against a 25% null once the
+#: turns-remaining horizon fix (`e990920`) landed.  Three tools (quiesce_bench,
+#: no_credit_check, behaviour_counts) used to default or example their
+#: --weights/--spec argument straight to this file and printed numbers for it
+#: without warning.  `refuse_if_degenerate_champion` below is the one place
+#: any of them -- or anything written later that loads a spec through
+#: `load_spec` -- can be routed through so this cannot recur through a
+#: different path.
+DEGENERATE_CHAMPION_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "champion_4p.json")
+
+
+def _weights_of(path):
+    with open(path) as fh:
+        d = json.load(fh)
+    return d.get("weights", d)
+
+
+def _spec_weight_path(spec):
+    """Pull the on-disk weights path out of a raw --weights/--spec string,
+    unwrapping a ``quiesce:PATH,opt=1,...`` prefix the same way `load_spec`
+    does. Returns None for a builtin ('random'/'greedy'/'default') or an
+    empty/absent spec -- neither can be the degenerate file."""
+    if not spec or spec in BUILTINS:
+        return None
+    if spec.startswith("quiesce:"):
+        spec = spec[len("quiesce:"):].split(",")[0]
+    if not spec or spec in BUILTINS:
+        return None
+    return spec
+
+
+def refuse_if_degenerate_champion(spec, tool_name):
+    """Hard-refuse (``SystemExit``) if `spec` resolves to the known-degenerate
+    ``experiments/champion_4p.json`` vector -- checked by PATH and by CONTENT,
+    so a copy or rename of the file is still caught. See
+    `DEGENERATE_CHAMPION_PATH`'s comment for why this exists. A no-op for
+    builtins, empty specs, and any path that isn't that vector."""
+    path = _spec_weight_path(spec)
+    if path is None or not os.path.exists(path):
+        return
+    known_path = DEGENERATE_CHAMPION_PATH
+    if not os.path.exists(known_path):
+        return
+    same_path = os.path.samefile(path, known_path)
+    same_content = False
+    if not same_path:
+        try:
+            mine = _weights_of(path)
+            known = _weights_of(known_path)
+            same_content = bool(known) and all(
+                mine.get(k) == v for k, v in known.items())
+        except (OSError, ValueError):
+            same_content = False
+    if same_path or same_content:
+        sys.stderr.write(
+            "\n" + "!" * 70 + "\n"
+            f"! {tool_name}: REFUSING to load {path!r}\n"
+            "! This is (or byte-matches) experiments/champion_4p.json, the\n"
+            "! pre-horizon-fix vector docs/TRAINING_RUN.md says never to\n"
+            "! warm-start from (science=-6.089; docs/CULTURE_GAP.md Sec 8f\n"
+            "! measured it at 20.1% against a 25% null after the horizon\n"
+            "! fix landed). Pass a different --weights/--spec -- e.g. a file\n"
+            "! under experiments/league_state/ (the live league champion) --\n"
+            "! or omit the flag entirely for DEFAULT_WEIGHTS.\n"
+            + "!" * 70 + "\n\n")
+        raise SystemExit(
+            f"{tool_name}: refusing degenerate weights vector {path!r}")
+
 
 # ------------------------------------------------------------ bot specs
 
@@ -34,8 +105,9 @@ def load_spec(spec):
 
     A ``quiesce:`` prefix runs the SAME weights under
     :class:`engine.bots.quiescent.QuiescentBot` instead of the 1-ply
-    ``WeightedBot``, so ``--a quiesce:experiments/champion_4p.json --b
-    experiments/champion_4p.json`` is an exact search-only A/B.  Optional
+    ``WeightedBot``, so ``--a quiesce:experiments/league_state/champion_4p.json
+    --b experiments/league_state/champion_4p.json`` is an exact search-only
+    A/B.  Optional
     tuning follows the path, comma-separated: ``quiesce:FILE,depth=8,nodes=300,
     war=0``.  The returned spec is a plain tuple/dict, still picklable.
     """

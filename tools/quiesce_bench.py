@@ -6,7 +6,14 @@ machine could distort.  Timing is `time.process_time`, because the hill climbs
 saturate the box and wall clock is meaningless there.
 
     nice -n 15 python3 tools/quiesce_bench.py --players 4 --games 6 \
-        --weights experiments/champion_4p.json
+        --weights experiments/league_state/champion_4p.json
+
+`--weights` defaults to "" (DEFAULT_WEIGHTS) rather than any champion file, so
+this tool never silently benchmarks a stale/degenerate vector. It also
+refuses (see experiments.arena.refuse_if_degenerate_champion) if pointed at
+experiments/champion_4p.json -- the pre-horizon-fix vector
+docs/TRAINING_RUN.md says never to warm-start from -- by path or by content,
+so a copy of that file is refused too.
 """
 from __future__ import annotations
 
@@ -19,7 +26,8 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from engine import game                                    # noqa: E402
-from experiments.arena import load_spec, make_bot          # noqa: E402
+from experiments.arena import (                            # noqa: E402
+    load_spec, make_bot, refuse_if_degenerate_champion)
 
 
 def run(spec, players, games, seed0, move_cap=20000):
@@ -52,6 +60,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     base = a.weights or "default"
+    refuse_if_degenerate_champion(base, "quiesce_bench.py")
     one = load_spec(base)
     qui = load_spec("quiesce:" + base + a.extra)
 

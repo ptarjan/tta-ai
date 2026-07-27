@@ -11,7 +11,14 @@ final cultures move for move.  If the two runs are identical, every choice the
 bot made was made without the hand-priced patches, and they can be deleted.
 
     nice -n 15 python3 tools/no_credit_check.py --players 4 --games 8 \
-        --spec quiesce:experiments/champion_4p.json,levels=2
+        --spec quiesce:experiments/league_state/champion_4p.json,levels=2
+
+The default --spec below uses DEFAULT_WEIGHTS rather than any champion file,
+so this tool never needs a trained champion to exist just to run. It also
+refuses (see experiments.arena.refuse_if_degenerate_champion) if pointed at
+experiments/champion_4p.json -- the pre-horizon-fix vector
+docs/TRAINING_RUN.md says never to warm-start from -- by path or by content,
+so a copy of that file is refused too.
 """
 from __future__ import annotations
 
@@ -24,7 +31,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from engine import game                                    # noqa: E402
 from engine.bots import weighted                           # noqa: E402
-from experiments.arena import load_spec, make_bot          # noqa: E402
+from experiments.arena import (                            # noqa: E402
+    load_spec, make_bot, refuse_if_degenerate_champion)
 
 _ZERO = (0.0, 0.0, 0.0, 0.0, {})
 
@@ -48,9 +56,10 @@ def main(argv=None):
     ap.add_argument("--players", type=int, default=4, choices=(2, 3, 4))
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--seed", type=int, default=700)
-    ap.add_argument("--spec", default="quiesce:experiments/champion_4p.json,levels=2")
+    ap.add_argument("--spec", default="quiesce:default,levels=2")
     a = ap.parse_args(argv)
 
+    refuse_if_degenerate_champion(a.spec, "no_credit_check.py")
     spec = load_spec(a.spec)
     real = weighted.deferred_credit
 

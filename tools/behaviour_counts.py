@@ -12,7 +12,13 @@ That is the right comparison for the emergence question -- a bot that attacks
 only because its opponents cannot retaliate has not learned anything.
 
     nice -n 15 python3 tools/behaviour_counts.py --players 4 --games 40 \
-        --spec quiesce:experiments/champion_4p.json,levels=2
+        --spec quiesce:experiments/league_state/champion_4p.json,levels=2
+
+`--spec` is required (no default), and is refused (see
+experiments.arena.refuse_if_degenerate_champion) if it points at
+experiments/champion_4p.json -- the pre-horizon-fix vector
+docs/TRAINING_RUN.md says never to warm-start from -- by path or by content,
+so a copy of that file is refused too.
 """
 from __future__ import annotations
 
@@ -24,7 +30,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from engine import game                                    # noqa: E402
-from experiments.arena import load_spec, make_bot          # noqa: E402
+from experiments.arena import (                            # noqa: E402
+    load_spec, make_bot, refuse_if_degenerate_champion)
 
 # move kinds we care about, in report order
 KINDS = ("offer_pact", "war", "aggression", "bid", "cancel_pact",
@@ -82,6 +89,7 @@ def main(argv=None):
     ap.add_argument("--label", default="")
     a = ap.parse_args(argv)
 
+    refuse_if_degenerate_champion(a.spec, "behaviour_counts.py")
     res = run(load_spec(a.spec), a.players, a.games, a.seed)
     print(json.dumps({"label": a.label or a.spec, "players": a.players,
                       "games": a.games, "per_game": res}))
