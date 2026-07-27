@@ -432,7 +432,7 @@ flips — so `flip` answers "does it matter *to this champion*".
 champ, 2p default, 3p champ, 4p champ).
 
 This is structural, not a sampling accident. `WeightedBot.pick`
-(`weighted.py:800`) computes `rival_context` **once at the root, on the unmoved
+(`weighted.py:792`) computes `rival_context` **once at the root, on the unmoved
 board**, and passes the same dict to every candidate — a deliberate ~30x saving
 documented at `weighted.py:176`. `features()` copies those three numbers
 straight out of `ctx`. Every candidate therefore gets the same value, the term
