@@ -40,7 +40,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # weights that must not change sign or scale wildly: culture IS the score,
 # it anchors the whole evaluation's units.
-FROZEN = {"culture"}
+#
+# `horizon_age` is not a strategy weight at all -- it is the A/B escape hatch
+# in `weighted.evaluate` that restores the pre-fix age-bucket `lateness()`,
+# and it is read as a BOOLEAN.  It is absent from DEFAULT_WEIGHTS so it never
+# appears in a trained vector; frozen here so that if a hand-written A/B file
+# is ever warm-started from, a mutation cannot silently flip the horizon
+# out from under the run by nudging 1.0 towards zero.
+FROZEN = {"culture", "horizon_age"}
 
 # Coherent mutation groups.  `summarize.GROUPS` names the base features;
 # here each group also owns its `_early` / `_late` phase copies, so a group

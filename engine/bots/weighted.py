@@ -192,10 +192,141 @@ def rival_context(state, idx):
             "rival_strength": best_str}
 
 
+# ------------------------------------------------------- the game horizon
+#
+# `lateness()` scales every early/late phase weight, and what those weights are
+# mostly pricing is RATES: a +1 culture rate is worth one culture point for each
+# of your remaining turns and nothing at all on the last one.  It used to be
+#
+#     min(1.0, C.level(state.age_civil) / 3.0)
+#
+# -- a four-step function of the civil deck's age, SATURATED AT 1.0 FROM AGE III
+# ON.  Age III and Age IV therefore priced a production rate identically, which
+# is exactly the stretch where the true value collapses: measured over 46
+# WeightedBot self-play games, a decision in Age III has 6.2 rounds left on
+# average and a decision in Age IV has 2.0.  docs/CULTURE_GAP.md section 4
+# measured the consequence -- the 4p champion pays 35.6 culture points for a +1
+# culture rate on the last turn of the game, and buys its culture engine several
+# rounds after CultureBot does.
+#
+# WHAT THE ENGINE ACTUALLY KNOWS.  There is no fixed turn count.  The game ends
+# when the Age III civil deck runs out (RULES_SPEC 12.2/12.3): Age IV begins,
+# `_set_last_round` fixes `final_round_end` at this round or the next, and play
+# stops.  So:
+#
+#   * once `state.final_round_end` is set the remaining rounds are EXACT;
+#   * before that, the number of civil cards still to be dealt is exact -- the
+#     current deck plus every later age's deck, whose sizes are fixed by the
+#     card data and the live player count -- and the only estimated quantity is
+#     the RATE at which the row eats them.  `game.SWEEP[n]` cards are swept and
+#     redealt per player-turn, which is exact; on top of that players take cards
+#     off the row, which is policy-dependent and is the part that is a guess.
+#
+# CARDS_PER_ROUND below is the measured total (game.SWEEP[n]*n is 6 / 6 / 4 of
+# it; the remainder is cards taken off the row).  Against ground truth over
+# those 46 games (2p/3p/4p, 1078 pre-Age-IV decisions) the resulting estimate
+# has a residual sd of 0.68 / 1.00 / 1.13 rounds and a bias under a quarter of
+# a round; the age bucket it replaces cannot do better than 2.7 rounds even if
+# you hand it the per-age mean.  It is at its best where it matters -- sd 0.86
+# rounds in Age III at 4p, and exact in Age IV -- and at its worst in Age A,
+# which is fine: Age A is two rounds long and no rate horizon is decided there.
+# It is calibrated on WeightedBot self-play; a much more card-hungry policy
+# would drain the row faster and this would then run long.
+CARDS_PER_ROUND = {2: 6.29, 3: 6.73, 4: 5.71}
+AGE_IV_ROUNDS = 2.0      # 12.3: Age IV is this round or the next, then it ends
+
+# Cards left in the decks of every age AFTER the given one, by live player
+# count.  Built once; `C.db().civil_deck` is far too slow for the search loop.
+_TAIL = {}
+
+
+def _tail(n, age):
+    key = (n, age)
+    out = _TAIL.get(key)
+    if out is None:
+        db = C.db()
+        lv = C.level(age)
+        out = sum(len(db.civil_deck(a, n)) for a in C.AGES[lv + 1:]
+                  if a != "IV")
+        _TAIL[key] = out
+    return out
+
+
+def _live(state):
+    """`game.live_count` without importing game (circular).  RULES_SPEC 13."""
+    n = 0
+    for p in state.players:
+        if not p.resigned:
+            n += 1
+    return 2 if n < 2 else (4 if n > 4 else n)
+
+
+def rounds_left(state, n=None):
+    """Estimated rounds still to play, including the one in progress.
+
+    Exact once Age IV has begun; before that it is cards-still-to-deal divided
+    by the measured deal rate.  Never returns less than 1.0.
+    """
+    fre = state.final_round_end
+    if fre is not None:
+        return max(1.0, float(fre - state.round + 1))
+    if n is None:
+        n = _live(state)
+    cards = len(state.civil_deck) + _tail(n, state.age_civil)
+    return cards / CARDS_PER_ROUND[n] + AGE_IV_ROUNDS
+
+
+# The affine map from `rounds_left` to L.  The phase blend is
+# `w[k] + (1-L)*w[k_early] + L*w[k_late]`, so an AFFINE change of L is pure
+# GAUGE: adding c to both phase weights and subtracting c from the base is the
+# identical policy, and any (scale, offset) applied to L can be absorbed the
+# same way.  Only the NON-affine part of this change moves a decision -- and
+# that part is the whole fix, because no affine function of rounds_left can be
+# flat inside an age.
+#
+# The gauge is therefore free, and it is spent on not breaking the three
+# already-trained champions: these constants make the new L the least-squares
+# best linear-in-rounds_left approximation of the OLD age-bucket L, fitted per
+# player count on the same measured decisions (residual sd 0.10 in L; per-age
+# means land within 0.05 of the old 0 / 1/3 / 2/3 / 1 / 1).  Per player count
+# because a 4p game runs ~29 rounds against ~23 at 2p/3p, and each arm's
+# champion was trained against its own arm's schedule.  `_L_ONE` came out at
+# 5.0 / 5.2 / 5.1 independently and is rounded to a single 5.0: the old
+# schedule's "late" was, in effect, "about five rounds from the end".
+_L_ZERO = {2: 27.1, 3: 28.7, 4: 36.1}   # rounds left at which L = 0
+_L_ONE = 5.0                            # rounds left at which L = 1
+
+
 def lateness(state):
-    """0.0 at the start of Age A, 1.0 from Age III on."""
-    lv = C.level(state.age_civil)
-    return min(1.0, lv / 3.0)
+    """0.0 with a whole game ahead, 1.0 with 5 or fewer rounds left, monotone
+    in estimated rounds remaining in between.
+
+    CLAMPED TO [0, 1], and that clamp is load-bearing.  The unclamped line
+    reaches ~1.1 with two rounds left, which makes `1 - L` negative and FLIPS
+    THE SIGN of every `_early` term.  Measured, n=400 head-to-head (see
+    docs/CULTURE_GAP.md section 8d): unclamped, the 4p champion drops to 19.9%
+    against a 25% null and the 3p champion to 13.6% against 33.3%.  The
+    mechanism on the 4p champion is exact -- its `culture_early` is 8.792, so
+    at `1 - L = -0.096` its own culture is priced at
+    `1.000 - 0.096*8.792 = 0.156` instead of the frozen 1.000, i.e. it stops
+    caring about the score in the last two rounds.  `1 - L` outside [0, 1] is
+    an extrapolation beyond anything the search has ever been scored on, and
+    linear evaluators do not extrapolate.
+    """
+    n = _live(state)
+    z = _L_ZERO[n]
+    lv = (z - rounds_left(state, n)) / (z - _L_ONE)
+    if lv <= 0.0:
+        return 0.0
+    return lv if lv < 1.0 else 1.0
+
+
+def lateness_by_age(state):
+    """The pre-fix schedule: 0.0 in Age A, 1.0 from Age III on.
+
+    Kept only so `horizon_age` in a weight file can select it for an A/B.
+    """
+    return min(1.0, C.level(state.age_civil) / 3.0)
 
 
 def features(state, idx, ctx=None):
@@ -607,7 +738,15 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
         wk = get(k)
         if wk:
             total += wk * v
-    late = lateness(state)
+    # `horizon_age` is an A/B escape hatch, not a strategy weight: it restores
+    # the pre-fix four-step age bucket for THIS weight vector only, so the old
+    # and new horizons can be seated at the same table and duelled directly
+    # (docs/CULTURE_GAP.md section 7).  Deliberately absent from
+    # DEFAULT_WEIGHTS, so the trainer never emits it, `mutate` never perturbs it
+    # and `guard_weights` never sees it; it exists only in hand-written A/B
+    # weight files.  The extra `get` costs one dict lookup per evaluation
+    # against the ~90 the loop above already does.
+    late = lateness_by_age(state) if get("horizon_age") else lateness(state)
     early = 1.0 - late
     for k in PHASE_KEYS:
         v = f[k]
