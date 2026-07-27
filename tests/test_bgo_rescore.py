@@ -155,6 +155,26 @@ class Wonders(unittest.TestCase):
                    )["Orange"]
         self.assertEqual(s.completed, ["Colossus"])
 
+    def test_a_completion_line_is_captured_as_a_scoring_oracle(self):
+        """"...; Wonder completed; <Colour> scores N culture" is BGO's own
+        Age III one-time bonus -- the fourth oracle in the corpus, and the one
+        that localised the Hollywood/Internet bug to a leader."""
+        s = replay("Orange builds 3 stages of Hollywood Orange spends 16 "
+                   "resources; Wonder completed; Orange scores 24 culture"
+                   )["Orange"]
+        self.assertEqual([(r["wonder"], r["want"]) for r in s.wonder_scores],
+                         [("Hollywood", 24)])
+
+    def test_a_completion_line_naming_two_figures_is_not_used(self):
+        """The oracle is only unambiguous when one wonder finished and one
+        culture figure is attributed to its owner; anything else could be a
+        sum of two effects and is dropped rather than guessed at."""
+        s = replay("Orange builds 3 stages of Hollywood Orange spends 16 "
+                   "resources; Wonder completed; Orange scores 24 culture; "
+                   "Purple scores 3 culture")["Orange"]
+        self.assertEqual(s.completed, ["Hollywood"])
+        self.assertEqual(s.wonder_scores, [])
+
     def test_ravages_of_time_flips_the_wonder_it_names(self):
         s = replay("Orange builds 2 stages of Colossus Orange spends 6 resources"
                    "; ; Wonder completed",

@@ -118,6 +118,136 @@ def best_card(p, types, require_workers=False):
     return best
 
 
+# --------------------------------------------------- per-building output
+#
+# Three cards score what a *particular set of the player's buildings*
+# produces, rather than a rating:
+#
+#   Impact of Industry  "culture equal to the amount of resources its mines
+#                        produce.  (Ignore any production from other
+#                        sources.)"                                  [§12.5.2]
+#   Hollywood           "culture equal to twice the total culture production
+#                        of your theaters and libraries"              [§9.2]
+#   Internet            "culture equal to the combined culture, science and
+#                        strength your urban buildings give"          [§9.2]
+#
+# What they score is the *effective* output of those buildings, i.e. printed
+# production plus every card effect in play that changes what those buildings
+# themselves produce -- Chaplin doubling a theater, Sid Meier turning lab
+# science into culture, Einstein/Newton adding science to the best lab or
+# library, Shakespeare's library/theater pairs, Bach's theaters, the
+# Transcontinental Railroad's doubled mine worker (FAQ v1.5 p.9).  Anything
+# that adds the same *rating* from somewhere that is not one of those
+# buildings does not count: Bill Gates' labs make resources but "labs
+# affected by Bill Gates are not mines" (the card's own text), colonies and
+# governments produce from themselves, and Michelangelo pays for happy faces
+# rather than for a building's output.
+#
+# The mapping below is what makes that distinction mechanical instead of
+# hand-written per card.  `_BUILDING_OUTPUT` maps a modifier key to
+# (building types it modifies, rating it modifies); a modifier counts only
+# when the caller asked about those types AND that rating.
+_BUILDING_OUTPUT = {
+    "bestTheaterDoubleCulture":        (frozenset({"theater"}), "culture"),
+    "culturePerTheater":               (frozenset({"theater"}), "culture"),
+    "culturePerLabEqualToLevel":       (frozenset({"lab"}), "culture"),
+    "sciencePerLab":                   (frozenset({"lab"}), "science"),
+    "resourcesPerLabEqualToLevel":     (frozenset({"lab"}), "resources"),
+    "sciencePerBestLabOrLibraryLevel": (frozenset({"lab", "library"}),
+                                        "science"),
+    "culturePerLibraryTheaterPair":    (frozenset({"library", "theater"}),
+                                        "culture"),
+    "doubleBestMine":                  (frozenset({"mine"}), "resources"),
+}
+
+
+def building_output(p, types, attrs):
+    """Effective output of the player's buildings of `types`, over `attrs`.
+
+    Printed per-worker production plus the in-play modifiers that change what
+    those buildings produce, and nothing else.  See `_BUILDING_OUTPUT`.
+    """
+    db = _DB
+    tot = 0
+    for n, t in p.techs.items():
+        if db.type_of(n) not in types or not t.workers:
+            continue
+        prod = db.get(n).get("production") or {}
+        for a in attrs:
+            v = prod.get(a, 0)
+            if v:
+                tot += v * t.workers
+    for key, val in _output_modifiers(p):
+        mtypes, attr = _BUILDING_OUTPUT[key]
+        # a modifier counts only if EVERY building it reads is one the caller
+        # asked about (Shakespeare's pair straddles a library and a theater,
+        # so it counts for Hollywood but would not for a theaters-only card)
+        if attr in attrs and mtypes <= types:
+            tot += _building_modifier(p, key, val)
+    return tot
+
+
+def _output_modifiers(p):
+    """(key, value) for every `_BUILDING_OUTPUT` modifier this player has."""
+    db = _DB
+    out = []
+    srcs = [p.government]
+    srcs.extend(p.techs)
+    srcs.extend(p.colonies)
+    # a wonder flipped by Ravages of Time is ruins: its effects are gone
+    srcs.extend(w for w in p.completed_wonders if w not in p.flipped_wonders)
+    if p.leader:
+        srcs.append(p.leader)
+    for n in srcs:
+        if n not in _BY_NAME:
+            continue
+        for k, v in (db.get(n).get("effects") or {}).items():
+            if k in _BUILDING_OUTPUT:
+                out.append((k, v))
+    return out
+
+
+def _building_modifier(p, key, val):
+    """How much one `_BUILDING_OUTPUT` modifier adds, in its own rating.
+
+    Deliberately the same arithmetic as the matching branch of
+    `_apply_modifier`: a card that scores a building's output and the rating
+    that building feeds must never disagree.
+    """
+    db = _DB
+    if key == "bestTheaterDoubleCulture":
+        b = best_card(p, {"theater"}, require_workers=True)
+        if b:
+            return (db.get(b).get("production") or {}).get("culture", 0)
+    elif key == "culturePerTheater":
+        return val * workers_on_types(p, {"theater"})
+    elif key == "culturePerLabEqualToLevel":
+        return sum(db.level_of(n) * t.workers for n, t in p.techs.items()
+                   if db.type_of(n) == "lab")
+    elif key == "sciencePerLab":
+        return val * workers_on_types(p, {"lab"})
+    elif key == "resourcesPerLabEqualToLevel":
+        return sum(db.level_of(n) * t.workers for n, t in p.techs.items()
+                   if db.type_of(n) == "lab")
+    elif key == "sciencePerBestLabOrLibraryLevel":
+        b = best_card(p, {"lab", "library"})
+        if b:
+            return db.level_of(b)
+    elif key == "culturePerLibraryTheaterPair":
+        return val * min(workers_on_types(p, {"library"}),
+                         workers_on_types(p, {"theater"}))
+    elif key == "doubleBestMine":
+        b = best_card(p, {"mine"}, require_workers=True)
+        if b:
+            return (db.get(b).get("production") or {}).get("resources", 0)
+    return 0
+
+
+def mine_resources(p):
+    """Resources produced BY THIS PLAYER'S MINES (Impact of Industry)."""
+    return building_output(p, frozenset({"mine"}), ("resources",))
+
+
 # Effect keys that need bespoke handling in `_apply_special` (everything
 # outside FLAT_KEYS / MODIFIER_KEYS that touches Stats at all).
 SPECIAL_KEYS = frozenset((
@@ -368,8 +498,7 @@ def _apply_modifier(s, p, key, val):
     elif key == "bestTheaterDoubleCulture":
         b = best_card(p, {"theater"}, require_workers=True)
         if b:
-            cult = (db.get(b).get("production") or {}).get("culture", 0)
-            s.culture += cult * p.worker_count(b)
+            s.culture += (db.get(b).get("production") or {}).get("culture", 0)
     elif key == "culturePerHappyFromTemplesTheatersWonders":
         happy = _happy_from(p, {"temple", "theater"})
         for w in p.completed_wonders:
@@ -1059,28 +1188,19 @@ def on_wonder_complete(state, p, name):
 
 
 def _one_time_culture(state, p, name):
-    db = _DB
     if name == "Fast Food Chains":
         return (2 * workers_on_types(p, C.PRODUCTION_TYPES)
                 + workers_on_types(p, C.URBAN_OR_UNIT))
+    # Hollywood and the Internet score what the buildings ACTUALLY produce,
+    # not their printed production: see `_BUILDING_OUTPUT`.  Before that these
+    # two summed printed values with an ad-hoc Sid Meier special case, which
+    # under-scored every Chaplin, Shakespeare, Newton and Einstein completion.
     if name == "Hollywood":
-        tot = 0
-        for n, t in p.techs.items():
-            if db.type_of(n) in ("theater", "library"):
-                tot += (db.get(n).get("production") or {}).get(
-                    "culture", 0) * t.workers
-        return 2 * tot
+        return 2 * building_output(p, frozenset({"theater", "library"}),
+                                   ("culture",))
     if name == "Internet":
-        tot = 0
-        for n, t in p.techs.items():
-            if db.type_of(n) in C.URBAN_TYPES:
-                prod = db.get(n).get("production") or {}
-                per = (prod.get("culture", 0) + prod.get("science", 0)
-                       + prod.get("strength", 0))
-                tot += per * t.workers
-                if p.leader == "Sid Meier" and db.type_of(n) == "lab":
-                    tot += (db.level_of(n) - 1) * t.workers
-        return tot
+        return building_output(p, frozenset(C.URBAN_TYPES),
+                               ("culture", "science", "strength"))
     return 0
 
 

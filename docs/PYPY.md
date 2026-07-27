@@ -2032,3 +2032,53 @@ turns out to be — cheap here because the intervening commits were docs/tools
 only, but the check has to happen regardless of how the diff turns out,
 because the alternative is exactly the failure mode this section exists to
 name: a baseline that was already stale the moment it landed.
+
+### 9.20 Hop 4 — the scoring bugfix (`score-bugfix`), all four arms moved and
+### the attribution is exact
+
+`docs/SCORE_BUGFIX.md` changed four things in `engine/`, deliberately, so this
+is not a rebase hop (though master did move under it, to `9c8b6f5`, and all
+four were re-confirmed after rebasing -- the new `engine/bots/human/` package
+is additive and off the `perf_check` path, and moved nothing): the gate was *expected* to fail and the job was to say
+precisely which change moved which arm.
+
+Old: `NARROW 2fd656b3`, `WIDE 1169007d`, `WNARROW 7fc72fca`, `WWIDE 9dc0a5a6`.
+New: `NARROW 0a6ed6ad`, `WIDE 4a8c6ca6`, `WNARROW 302c546c`, `WWIDE 4e40a58c`.
+
+**Attributed by reverting each of the four fixes on its own and re-hashing all
+four arms**, which is stronger than the usual "read the diff and reason about
+it" and was cheap (narrow 6.5s, wide 39s, weighted wide 2m28s per arm):
+
+| revert | NARROW | WIDE | WNARROW | WWIDE |
+|---|---|---|---|---|
+| `Impact of Industry` (mine production, not the rating) | SAME | SAME | `142b3371` | `d7328f3a` |
+| `Impact of Population` (count unused workers) | **`2fd656b3`** | **`1169007d`** | `4ce2cf6e` | `ecbfc9dd` |
+| Hollywood/Internet effective output | SAME | SAME | SAME | SAME |
+| Chaplin doubles one theater, not a card | SAME | SAME | SAME | SAME |
+| the two `Impact of ...` fixes **together** | — | — | **`7fc72fca`** | **`9dc0a5a6`** |
+
+The bold cells are the proof, and they are better than a narrative cause:
+reverting one fix puts the two GreedyBot arms back on their old digests to the
+byte, and reverting two puts the two WeightedBot arms back on theirs. There is
+no residue to explain.
+
+**Two of the four engine changes move no digest at all, and that is a coverage
+statement about this gate, not a statement about those changes.** The 135
+games essentially never complete an Age III wonder (measured: one Hollywood in
+80 seat-games for the *trained* production vector, zero for GreedyBot and
+DEFAULT_WEIGHTS), and never reach Charlie Chaplin holding two workers on his
+best theater. `tools/gate.sh` therefore cannot catch a regression in either —
+`tests/test_scoring_bugfix.py` and `tools/bgo_rescore.py` are the only guards
+that can. 9.14's lesson generalises: the fingerprint covers the *code paths
+its bots execute*, and a rules fix in a card almost nobody plays is invisible
+to it no matter how many arms it has.
+
+Lesson worth keeping, and it cost an hour here: **a script that patches the
+tree in place must restore it in a `finally`, and nothing else may be
+measured while it runs.** A first attribution pass was killed by a timeout
+mid-hash and left `engine/effects.py` in a reverted state — `git status`
+still said "modified" (the new helper was there), so it looked normal, and a
+concurrently-launched measurement process imported the reverted module at
+start-up and produced numbers that were wrong by exactly one game. Both were
+caught by re-deriving on a verified-clean tree and diffing against the
+recorded run; the fix is a `try/finally` and a rule not to overlap.

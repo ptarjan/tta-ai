@@ -391,7 +391,10 @@ def scoring_culture(state, p, block, order):
     for key, raw in block.items():
         v = _num(raw)
         if key == "culturePerResourceProducedByMines":
-            total += int(v or 0) * s.resources
+            # "the amount of resources its MINES produce (ignore any
+            # production from other sources)" -- NOT the resource rating,
+            # which also carries Bill Gates' labs and colony symbols.
+            total += int(v or 0) * effects.mine_resources(p)
         elif key == "culturePerFoodProducedByFarms":
             total += int(v or 0) * s.food
             bonus = _num(block.get("bonusIfProductionExceedsConsumption"))
@@ -410,7 +413,12 @@ def scoring_culture(state, p, block, order):
             for w in p.completed_wonders:
                 total += int(raw.get(db.age_of(w), 0))
         elif key == "culturePerContentWorkerAbove10":
-            workers = sum(t.workers for t in p.techs.values())
+            # A yellow token in the worker pool is a worker too: a discontent
+            # worker is physically an UNUSED worker moved onto the happiness
+            # track (ubg "A Discontent Worker"), so the population this card
+            # counts is on-card workers PLUS unused ones, minus discontent.
+            workers = (sum(t.workers for t in p.techs.values())
+                       + p.workers_free)
             content = max(0, workers - economy.discontent(state, p))
             total += int(v or 0) * max(0, content - 10)
         elif key == "culturePerColony":

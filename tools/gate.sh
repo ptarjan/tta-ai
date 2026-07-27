@@ -2,8 +2,8 @@
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
 #   254 unit tests green
-#   narrow fingerprint == 2fd656b3...   (33 games)
-#   wide   fingerprint == 1169007d...   (102 games)
+#   narrow fingerprint == 0a6ed6ad...   (33 games)
+#   wide   fingerprint == 4a8c6ca6...   (102 games)
 #   all of the above unchanged under FASTCOPY_PARANOID=1
 #
 # tools/fingerprint.json / tools/fingerprint_wide.json are now IN SYNC with
@@ -46,8 +46,35 @@ cd "$(dirname "$0")/.."
 # see WNARROW/WWIDE below), which GreedyBot's search never touches, so NARROW
 # and WIDE were re-derived from scratch (not assumed) and landed on the same
 # two values.
-NARROW=2fd656b3
-WIDE=1169007d
+#
+# Re-derived on `score-bugfix`, rebased onto master 9c8b6f5 (2026-07-27) and
+# re-confirmed there.  Same two-sided discipline: computed from scratch in the
+# working worktree AND independently in a second detached worktree of the
+# commit, required to agree, and diffed PER CASE (33/102, key-by-key, not just
+# the 8-char prefix) rather than by digest alone.  Negative control run too --
+# perturb `Impact of Industry` by +1 on a scratch worktree, confirm the gate
+# FAILs, restore, confirm it passes again.
+#
+# Cause: the four scoring fixes in docs/SCORE_BUGFIX.md.  ATTRIBUTED, not
+# assumed -- each of the four was reverted on its own and all four arms
+# re-hashed (docs/SCORE_BUGFIX.md 4):
+#
+#   * NARROW and WIDE moved for exactly ONE of them, `Impact of Population`
+#     now counting unused workers (engine/events.py).  Reverting only that one
+#     puts both back on 2fd656b3 / 1169007d to the byte, which is the proof
+#     that the other three are inert for GreedyBot.
+#   * WNARROW and WWIDE moved for that one AND for `Impact of Industry` now
+#     scoring mine production instead of the resource rating.  Reverting both
+#     `engine/events.py` hunks puts them back on 7fc72fca / 9dc0a5a6.
+#   * The other two fixes -- Hollywood/Internet's one-time culture, and
+#     Charlie Chaplin doubling one theater instead of a whole card -- move
+#     NO arm.  Measured, not assumed: the fingerprint's bots essentially never
+#     complete an Age III wonder (1 in 80 seat-games for the trained
+#     production vector, 0 here), and neither GreedyBot nor DEFAULT_WEIGHTS
+#     reaches Chaplin with two workers on its best theater.  Worth writing
+#     down as a COVERAGE hole: these 135 games cannot catch a bug in either.
+NARROW=0a6ed6ad
+WIDE=4a8c6ca6
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
@@ -71,8 +98,12 @@ WIDE=1169007d
 # is not (fb9c12a's message: "byte-identical for the trained champions"),
 # which is exactly why only the two WEIGHTED arms moved and NARROW/WIDE
 # (GreedyBot, which never resigns either way) did not.
-WNARROW=7fc72fca
-WWIDE=9dc0a5a6
+#
+# Re-derived on `score-bugfix`, rebased onto master 9c8b6f5 (2026-07-27), alongside
+# NARROW/WIDE above; see the attribution note there.  These two moved for two
+# of the four fixes rather than one.
+WNARROW=302c546c
+WWIDE=4e40a58c
 
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }

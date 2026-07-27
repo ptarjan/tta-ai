@@ -153,6 +153,11 @@ class Seat:
         self.tokens = 25
         self.extra_culture = 0       # culture scored after the last End turn
         self.gates_bonus = None      # BGO's "Bill Gates scoring" line
+        #: BGO's fourth oracle: every "...; Wonder completed; <Colour> scores
+        #: N culture" line is an Age III wonder's one-time bonus, computed by
+        #: somebody else on a tableau we can rebuild.  Entries are dicts (see
+        #: `_wonder_snapshot`).
+        self.wonder_scores = []
 
     # -- worker bookkeeping ------------------------------------------------
     def add_worker(self, tech):
@@ -169,6 +174,20 @@ class Seat:
         else:
             self.free += 1
         return True
+
+
+def _wonder_snapshot(s, wonder, printed):
+    """Freeze a seat's tableau at the instant a wonder completed."""
+    return {"wonder": wonder, "want": printed,
+            "snap": (dict(s.techs), s.government, s.leader, list(s.completed),
+                     list(s.flipped), list(s.colonies), s.bank, s.blue_extra,
+                     None),
+            "bad": s.bad,
+            #: the seat's own token audit at this instant, and the index of
+            #: the last End-turn snapshot before it (whose five production
+            #: numbers BGO printed -- that is what verifies the tableau)
+            "tokens_ok": (s.bank + s.free + sum(s.techs.values()) == s.tokens),
+            "prev_snap": len(s.snaps) - 1}
 
 
 def _special_icon(name):
@@ -281,6 +300,7 @@ def _apply_line(seats, seat, text, warn, last_terr_age):
         seat(m.group(1)).gates_bonus = int(m.group(2))
 
     # --- wonder stages (may be nested inside Engineering Genius)
+    finished = []
     for colour, n, wname in RE_BUILD_STAGE.findall(text):
         s = seat(colour)
         w = fix(wname)
@@ -290,6 +310,16 @@ def _apply_line(seats, seat, text, warn, last_terr_age):
         s.wonder_stages[w] += int(n)
         if s.wonder_stages[w] >= WONDER_STAGES[w] and w not in s.completed:
             s.completed.append(w)
+            finished.append((s, w))
+    # "... Wonder completed; <Colour> scores N culture" -- the Age III
+    # one-time bonus.  Only used when exactly ONE wonder finished on the line
+    # and exactly one culture figure is attributed to its owner, so the number
+    # cannot be a sum of two effects.
+    if len(finished) == 1 and "Wonder completed" in text:
+        s, w = finished[0]
+        paid = RE_SCORES.findall(text)
+        if len(paid) == 1 and paid[0][0] == s.colour:
+            s.wonder_scores.append(_wonder_snapshot(s, w, int(paid[0][1])))
 
     # --- plain build (worker onto a technology)
     m = RE_BUILD.match(text)
@@ -542,7 +572,7 @@ def check_game(path, verbose=False, age_loss=2):
            "rounds": rounds, "players": len(order),
            "rate_rows": 0, "rate_ok": 0, "impacts": [], "warn": warn,
            "final_delta": None, "cons": Counter(), "gates": [],
-           "turns": Counter()}
+           "turns": Counter(), "wonders": []}
     res = []
     for colour in order:
         s = seats[colour]
@@ -611,6 +641,21 @@ def check_game(path, verbose=False, age_loss=2):
                       f"{' (rank)' if ranking else ''}"
                       f"{'' if colour in ok_colours else ' (dirty)'}")
 
+    # --- Age III wonder one-time bonuses, at the instant of completion
+    for colour in order:
+        s = seats[colour]
+        for rec in s.wonder_scores:
+            i = rec["prev_snap"]
+            verified = (i >= 0
+                        and _rates_from_snap(s.snaps[i], len(order), s.idx)
+                        == s.snaps[i][-1])
+            gs2, p2 = _state_from_snap(rec["snap"], len(order), s.idx)
+            out["wonders"].append(
+                {"wonder": rec["wonder"], "want": rec["want"],
+                 "got": effects.on_wonder_complete(gs2, p2, rec["wonder"]),
+                 "leader": p2.leader or "-",
+                 "clean": rec["bad"] == 0 and rec["tokens_ok"] and verified})
+
     for colour in order:
         s = seats[colour]
         if s.gates_bonus is not None:
@@ -633,8 +678,8 @@ def check_game(path, verbose=False, age_loss=2):
 LBL = ("culture", "science", "food", "consumption", "resources")
 
 
-def _rates_from_snap(snap, nplayers, idx):
-    (techs, gov, leader, comp, flip, cols, bank, blue, want) = snap
+def _state_from_snap(snap, nplayers, idx):
+    (techs, gov, leader, comp, flip, cols, bank, blue, _want) = snap
     gs = GameState(num_players=max(1, nplayers), seed=0)
     for i in range(max(1, nplayers)):
         gs.players.append(PlayerState(idx=i))
@@ -648,6 +693,11 @@ def _rates_from_snap(snap, nplayers, idx):
                   if n in _DB.by_name]
     p.yellow_bank = max(0, bank)
     p.blue_total = 16 + blue
+    return gs, p
+
+
+def _rates_from_snap(snap, nplayers, idx):
+    gs, p = _state_from_snap(snap, nplayers, idx)
     st = effects.state_stats(gs, p)
     cons = economy.consumption(p.yellow_bank)
     return (st.culture, st.science, st.food - cons, cons, st.resources)
@@ -706,6 +756,9 @@ def main(argv=None):
     cons = Counter()
     gates = Counter()
     turns = Counter()
+    per_wonder = defaultdict(Counter)
+    wresid = defaultdict(Counter)
+    wleader = defaultdict(Counter)
     for path in files:
         if a.verbose:
             print("==", os.path.basename(path))
@@ -744,6 +797,18 @@ def main(argv=None):
                 resid[key][d["got"] - d["want"]] += 1
             if d["clean"]:
                 bucket["alt_ok"] += int(d["alt"] == d["want"])
+        for d in r["wonders"]:
+            b = per_wonder[d["wonder"]]
+            tag = "clean" if d["clean"] else "dirty"
+            b[tag + "_n"] += 1
+            if d["want"] == d["got"]:
+                b[tag + "_ok"] += 1
+            elif d["clean"]:
+                wresid[d["wonder"]][d["got"] - d["want"]] += 1
+            if d["clean"]:
+                wleader[d["wonder"]][d["leader"]] += 1
+                wleader[d["wonder"]][d["leader"] + " ok"] += int(
+                    d["want"] == d["got"])
         if r["final_delta"]:
             for c, dv in r["final_delta"].items():
                 final_bad[dv] += 1
@@ -802,6 +867,26 @@ def main(argv=None):
             top = sorted(resid[name].items(), key=lambda kv: -kv[1])[:5]
             print("      residuals (ours - BGO):",
                   ", ".join(f"{d:+d}x{n}" for d, n in top))
+
+    print("\n=== Age III wonder one-time bonus, at the instant of completion "
+          "===")
+    print(f"{'wonder':28s} {'clean n':>8s} {'exact':>7s} {'%':>7s}   "
+          f"{'all n':>7s} {'exact':>7s}")
+    for name in sorted(per_wonder):
+        b = per_wonder[name]
+        cn, co = b["clean_n"], b["clean_ok"]
+        an, ao = cn + b["dirty_n"], co + b["dirty_ok"]
+        print(f"{name:28s} {cn:8d} {co:7d} {100.0*co/max(1,cn):6.1f}%   "
+              f"{an:7d} {ao:7d}")
+        if wresid[name] and co < cn:
+            top = sorted(wresid[name].items(), key=lambda kv: -kv[1])[:5]
+            print("      residuals (ours - BGO):",
+                  ", ".join(f"{d:+d}x{n}" for d, n in top))
+            bad = [(l, wleader[name][l] - wleader[name][l + " ok"])
+                   for l in sorted(wleader[name]) if not l.endswith(" ok")]
+            print("      by leader (wrong/clean):",
+                  ", ".join(f"{l} {w}/{wleader[name][l]}"
+                            for l, w in bad if w))
     return 0
 
 

@@ -181,6 +181,18 @@ Reading the rows that are not 100%:
 Nothing was fixed on this branch — `tools/gate.sh` digests are unmoved on
 purpose. These are handed over as findings.
 
+> **All three are FIXED on master; see `docs/SCORE_BUGFIX.md`.** A fourth fell
+> out of fixing §3.3 (Charlie Chaplin was doubling every worker on the best
+> theater card instead of one building), and it is the only one of the four
+> that moves a rating rather than a score: fixing it took our agreement with
+> BGO's printed per-turn culture from 91.9% to 92.9% over 43,847 lines.
+> §6.2's wonder A/B was re-run on both vectors afterwards and **did not
+> move** — every P row shifted by less than a fifth of its own SE and every Q
+> row is identical to one decimal — because the unforced production bot
+> completes exactly *one* Age III wonder in 80 seat-games, so the two cards
+> §3.3 is about were essentially never being scored. §6.3's conclusions
+> stand.
+
 ### 3.1 `Impact of Industry` scores the resource *rating*, not mine production
 
 `engine/events.py:393` reads `culturePerResourceProducedByMines` as
