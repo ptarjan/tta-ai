@@ -1909,3 +1909,126 @@ one more rebase — until hop 2, where it didn't. **"NARROW has historically
 been insensitive" is an empirical observation about specific past diffs, not a
 property of the narrow set.** Every rebase re-derives all four from scratch;
 none is ever assumed unchanged going in.
+
+### 9.19 Hop 3 — WeightedBot's own resign guard (`fb9c12a`), only the two
+### weighted arms moved this time
+
+`bash tools/gate.sh` FAILed on clean master with the greedy pair (NARROW,
+WIDE) still `OK` and only WNARROW/WWIDE off — the mirror image of hop 1
+(where WIDE alone moved and NARROW didn't). That localises the change to
+WeightedBot before looking at a single diff.
+
+**Master moved twice under this hop, which is itself worth recording.** The
+FAIL was first observed at `e8c9062`. `git diff 3439b0e..e8c9062 --stat --
+engine/` showed exactly two files: `engine/bots/plan.py` (new, additive —
+PlanBot, not on the `perf_check` path) and `engine/bots/weighted.py`, whose
+*entire* diff across that whole multi-commit range was byte-for-byte commit
+`fb9c12a`'s 18 lines and nothing else. Before committing anything, master was
+re-checked and had already advanced to `52a4cb6` (ten more `CULTURE_GAP`
+commits). Per 9.0/9.18's rule this was **not** waved through as "probably
+fine" — both sides were reset to `52a4cb6` and every arm was re-derived from
+scratch there too. `git diff 3439b0e..52a4cb6 --stat -- engine/` confirmed the
+same two files, same byte-for-byte `weighted.py` diff; the ten intervening
+commits touch only `docs/CULTURE_GAP.md` and standalone `tools/*.py` scripts
+never imported by `engine/perf_check.py`. Master was re-checked a third time
+immediately before the gate.sh/PYPY.md commit below and had not moved again.
+
+**The cause.** `fb9c12a` ("WeightedBot: guard against resign, as RandomBot
+always has") adds `allow_resign=False` to `WeightedBot.__init__` and, in
+`pick()`, filters `("resign",)` out of the legal moves whenever a non-resign
+move exists (`engine/bots/weighted.py` ~lines 780-805). The commit message
+claims it is "byte-identical for the trained champions" — true, but beside
+the point for a *fingerprint* gate: `perf_check`'s weighted cases play
+`DEFAULT_WEIGHTS` (`WeightedBot(rng=rng)`, no weight vector), not any trained
+champion, and under `DEFAULT_WEIGHTS` a resign move is apparently scored
+competitively often enough to get picked on some of the 33/102 seeds. That is
+exactly why WNARROW and WWIDE moved and NARROW/WIDE (GreedyBot, which has no
+`allow_resign` concept and was untouched by this commit) did not.
+
+This is judged a legitimate, intended behaviour change, not a regression:
+`docs/COVERAGE_AUDIT.md` independently established that resign is a
+guaranteed loss no evaluation feature can see (nothing reads the resigned
+flag; 9/12 games resigned in one 4p probe, 0 wins) — a bot that stops
+resigning is strictly better, so the digests moving is the gate doing its
+job, not the gate breaking.
+
+**Derived per 9.0's rule**, against the actual final head `52a4cb6`: computed
+from scratch on a fresh detached checkout (`/tmp/tta-gate-verify-A2`) and
+independently in a second worktree (`gate-rebaseline-2`, branched off the
+same `52a4cb6`), `nice -n 15`, at most 2 concurrent `perf_check` processes.
+Both narrow arms were re-derived too, not assumed unchanged, even though the
+diff audit above already predicted they would be — the full per-case digest
+list (33/102/33/102 cases) was diffed key-by-key between the two sides for
+all four arms and found identical in every case:
+
+| | side A (fresh checkout) | side B (worktree) |
+|---|---|---|
+| narrow (33 games) | `2fd656b38729de71` | `2fd656b38729de71` (unchanged) |
+| wide (102 games) | `1169007df1517e33` | `1169007df1517e33` (unchanged) |
+| weighted narrow (33 games) | `7fc72fcab0726803` | `7fc72fcab0726803` |
+| weighted wide (102 games) | `9dc0a5a66e2edf62` | `9dc0a5a66e2edf62` |
+
+Full digests:
+
+```
+narrow          2fd656b38729de718361749330edf220d8a908c07000829b86708b456faf8f44
+wide            1169007df1517e33681f9c567839a1ae3dc9e7c88fac6288f5549bce3328d9ba
+weighted narrow 7fc72fcab07268031e113c06e49a2dea969fa5a77d25c0cd571f3713ec3039e3
+weighted wide   9dc0a5a66e2edf62f38c672e14090d31c4864f3f23b35130c1953f18fe66fb71
+```
+
+`tools/gate.sh` now gates on these four (narrow/wide unchanged from 9.18;
+WNARROW/WWIDE updated with the cause above written inline). `tools/
+fingerprint.json` / `tools/fingerprint_wide.json` needed no re-save this time
+— narrow and wide didn't move, so the files `perf_check save` had already
+written at hop 2 were still correct; diffed to confirm rather than assumed.
+`bash tools/gate.sh` (full, both narrow and wide, both plain and
+FASTCOPY_PARANOID):
+
+```
+unittest                         OK   Ran 254 tests
+unittest JOURNAL_PARANOID        OK   Ran 254 tests
+narrow fingerprint                OK   2fd656b38729de71
+narrow FASTCOPY_PARANOID          OK   2fd656b38729de71
+weighted narrow                   OK   7fc72fcab0726803
+wide fingerprint                  OK   1169007df1517e33
+wide FASTCOPY_PARANOID            OK   1169007df1517e33
+weighted wide                     OK   9dc0a5a66e2edf62
+GATE PASS
+```
+
+(254, not 248 or 135's-worth of a stray count — `tests/test_quiescent.py`
+landed since 9.18 and the unit-test count in `gate.sh`'s header comment was
+stale; corrected in passing.)
+
+Negative control, run in the same worktree after the PASS above: bumped
+`BASE_WEIGHTS["culture"]` from `1.0` to `1.5` in `engine/bots/weighted.py`,
+re-ran `bash tools/gate.sh --fast`. Result:
+
+```
+weighted narrow                  FAIL 922f9aae8f2721c1 != 7fc72fca...
+GATE FAIL
+```
+
+— narrow (GreedyBot) still `OK`, exactly as expected for a WeightedBot-only
+perturbation. Reverted with `git checkout -- engine/bots/weighted.py`,
+diffed byte-for-byte against a pre-change backup to confirm the revert was
+exact, then re-ran `--fast` to confirm `GATE PASS` again before leaving the
+worktree. No artifact left behind.
+
+Updated table for 9.18's row, current as of `52a4cb6`:
+
+| | GreedyBot | WeightedBot |
+|---|---|---|
+| 135-game paranoid suite | `2fd656b3` / `1169007d` | `7fc72fca` / `9dc0a5a6` |
+
+Lesson worth keeping, on top of 9.18's: **a re-baseline is only as good as
+the head it was derived against, and that head can move while you are still
+deriving it.** This hop's FAIL was first read on `e8c9062`; by the time both
+sides had finished the first full pass, master was `52a4cb6`. The fix is not
+to derive faster, it is to re-check immediately before trusting the numbers
+and redo the whole two-sided derivation against whatever the actual head
+turns out to be — cheap here because the intervening commits were docs/tools
+only, but the check has to happen regardless of how the diff turns out,
+because the alternative is exactly the failure mode this section exists to
+name: a baseline that was already stale the moment it landed.

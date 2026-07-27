@@ -1,7 +1,7 @@
 #!/bin/bash
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
-#   248 unit tests green
+#   254 unit tests green
 #   narrow fingerprint == 2fd656b3...   (33 games)
 #   wide   fingerprint == 1169007d...   (102 games)
 #   all of the above unchanged under FASTCOPY_PARANOID=1
@@ -40,6 +40,12 @@ cd "$(dirname "$0")/.."
 # summarize.py's feature grouping, the new standalone tools/coverage_census.py
 # and tools/feature_variance.py) is additive/reporting-only and not on the
 # perf_check hash path.
+#
+# Reconfirmed unchanged on master 52a4cb6 (2026-07-26, PYPY.md 9.19): the only
+# engine/ change since 3439b0e is engine/bots/weighted.py (the resign guard,
+# see WNARROW/WWIDE below), which GreedyBot's search never touches, so NARROW
+# and WIDE were re-derived from scratch (not assumed) and landed on the same
+# two values.
 NARROW=2fd656b3
 WIDE=1169007d
 
@@ -48,11 +54,25 @@ WIDE=1169007d
 # catch a change to WeightedBot, the bot the league actually trains (9.14).
 # These two are the same 33/102 split played by WeightedBot instead.
 #
-# Re-derived on master 3439b0e (2026-07-26), same two-sided discipline and the
-# same cause (7315494) as above -- both bots' evaluation reads
-# `_h_revolution`/`_can_take_gated` in engine/actions.py.
-WNARROW=a7691eaa
-WWIDE=c7045ab1
+# Re-derived on master 52a4cb6 (2026-07-26, PYPY.md 9.19), same two-sided
+# discipline as always -- fresh detached checkout vs. a second worktree,
+# full per-case JSON diffed key-by-key, not just the two hex prefixes below.
+#
+# Cause: commit fb9c12a ("WeightedBot: guard against resign, as RandomBot
+# always has") added an `allow_resign=False` guard to WeightedBot.pick() that
+# filters `("resign",)` out of the legal moves whenever a non-resign move
+# exists. `git diff 3439b0e..52a4cb6 --stat -- engine/` touches exactly two
+# files: engine/bots/plan.py (new, additive -- PlanBot, not reachable from
+# perf_check) and engine/bots/weighted.py, whose full diff across that whole
+# range is byte-for-byte fb9c12a's 18-line resign guard and nothing else --
+# confirmed by reading the diff, not by assuming the commit message. Under
+# DEFAULT_WEIGHTS (what the fingerprint plays), a resign move is apparently
+# live and gets chosen on some seeds; under the trained champions' weights it
+# is not (fb9c12a's message: "byte-identical for the trained champions"),
+# which is exactly why only the two WEIGHTED arms moved and NARROW/WIDE
+# (GreedyBot, which never resigns either way) did not.
+WNARROW=7fc72fca
+WWIDE=9dc0a5a6
 
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }
