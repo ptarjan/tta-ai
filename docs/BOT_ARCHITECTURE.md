@@ -381,13 +381,65 @@ roughly **16x the 1-ply bot** — comfortably inside the affordable band of §1.
 
 ### Result
 
-n=400 A/B running; results are appended here when it lands. The A/B is
-search-only: both sides load the *identical* weight file, so anything measured
-is attributable to the search and not to tuning. Note that this handicaps
-PlanBot, because those weights were hill-climbed to compensate for the very
-artifacts PlanBot removes (§2.2).
-
 <!-- RESULT PENDING -->
+
+---
+
+## 3b. Prototype: the fitted value vector, and its first duel — a hard NULL
+
+The §2.3b regression produced a vector that ranks positions much better than the
+champion's. Dropped straight into the 1-ply `WeightedBot`, it is a disaster.
+
+MEASURED, n=400, 2p, seat-rotated:
+
+```
+python3 -m experiments.evaluate --a experiments/arch_frozen/fit2p_ridge.json \
+    --b experiments/arch_frozen/champ2p_gen344.json --games 400 --players 2
+```
+
+| | value |
+|---|---|
+| win rate | **0.0% (0 of 400)**, null 50% |
+| mean culture | **21.3** vs 154.4 |
+| culture margin | -133.1 |
+| moves per game | **148.9** (champion mirror: 185) |
+
+This is reported first and in full because it is the single most important
+result of the night for anyone tempted to read §2.3b as a win.
+
+**Cause, and it is mechanical rather than mysterious.** `end_turn_bias` is not
+part of `evaluate` — `WeightedBot.pick` adds it to one move kind — so a
+regression on the design matrix cannot fit it, and I set it to 0.0. That leaves
+the +12.6-point `end_turn` flattery (docs/WASTED_ACTIONS.md §1) completely
+unopposed, so the bot passes constantly. The 148.9 moves per game against the
+champion's 185 is the fingerprint, and the culture figure (21.3) is even below
+the 67.3 that §6 of that document measured for a deliberately
+pass-too-much control. **This duel mostly measures a missing constant, not the
+fitted weights.**
+
+**What it proves anyway, and it is worth having.** A value function that
+predicts the outcome materially better can induce a catastrophically worse
+policy. §5b said so before the number arrived; here is the number. Anyone
+proposing a learned evaluator in this project should be made to run this exact
+duel before claiming anything.
+
+**The principled fix, and why it is more interesting than tuning the constant
+back in.** The flattery exists because the hand-shaped evaluation is not
+calibrated *across the production boundary*: a mid-turn state and a
+post-end-of-turn state are scored on incompatible scales. A value function
+fitted to the realised final margin over **both** kinds of state has no such
+freedom — it must price them both in the same units, because they have the same
+target. The feature vector already carries what that needs (`ca_left`,
+`civil_actions`, `resource_stock`, `food_stock`). So the right experiment is not
+to re-introduce `end_turn_bias`; it is to **fit on the states the bot actually
+compares** and see whether the constant becomes unnecessary.
+`tools/gen_value_data.py --rows every` exists for exactly this and the run is
+under way. If it works, a hand-tuned hack that no value of which is right for
+more than one age (docs/WASTED_ACTIONS.md §8 item 4) is replaced by calibration.
+
+The other matched option is `PlanBot`, which evaluates only at turn boundaries —
+precisely the distribution the boundary-only fit was trained on — and which uses
+no `end_turn_bias` at all by construction.
 
 ---
 
