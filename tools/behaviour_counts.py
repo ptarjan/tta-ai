@@ -33,36 +33,95 @@ from engine import game                                    # noqa: E402
 from experiments.arena import (                            # noqa: E402
     load_spec, make_bot, refuse_if_degenerate_champion)
 
-# move kinds we care about, in report order
-KINDS = ("offer_pact", "war", "aggression", "bid", "cancel_pact",
-         "prepare_event")
+# move kinds we care about, in report order.  `play_action` is the fourth of
+# the four classes docs/DEEPER_SEARCH.md section 1 lists as strictly dominated
+# at 1 ply and was missing from the original tuple; `take` is here because
+# docs/WASTED_ACTIONS.md section 6 shows it is the move the evaluation is least
+# able to price, so it is the control for "did the bot just get busier".
+KINDS = ("offer_pact", "war", "aggression", "bid", "play_action",
+         "cancel_pact", "prepare_event", "take")
+
+#: move kinds that spend a CIVIL action -- same table as analysis/wasted_actions
+_CIVIL_KINDS = {"take", "pop", "wonder_step", "play_leader", "develop",
+                "revolution", "play_action"}
+_MAYBE_CIVIL = {"build", "upgrade", "destroy"}
+
+#: the action cards whose effect ORDERS a free civil action, i.e. the ones that
+#: leave a `free_civil` decision pending and are therefore invisible to a 1-ply
+#: search.  The other 15 action cards resolve entirely inside `apply`.
+def _ordered_action_cards():
+    from engine import actions as A
+    return frozenset(c["name"] for c in A._DB.cards
+                     if (c.get("effects") or {}).get("freeCivilAction"))
+
+
+ORDERED_ACTION_CARDS = _ordered_action_cards()
+
+
+def _costs_civil_action(move):
+    kind = move[0]
+    if kind in _CIVIL_KINDS:
+        return True
+    if kind in _MAYBE_CIVIL:
+        from engine import actions
+        return not actions.is_unit(move[1])
+    return False
 
 
 class _Counting:
-    """Wraps a bot and tallies the move kinds it chooses."""
+    """Wraps a bot and tallies the move kinds it chooses.
+
+    Also records the two numbers docs/WASTED_ACTIONS.md section 6 turns on:
+    how often a turn is ended with civil actions still in hand, and how many
+    die that way.  Those are read off the state at the moment ``end_turn`` is
+    CHOSEN, i.e. before it is applied, so ``p.civil_actions`` is still the
+    count remaining for the turn being ended.
+    """
 
     def __init__(self, bot):
         self.bot = bot
         self.counts = {}
+        self.turns = 0
+        self.turns_with_ca_left = 0
+        self.ca_wasted = 0
+        self.civil_spent = 0
 
-    def _note(self, mv):
+    def _note(self, state, mv):
         if mv:
             k = mv[0]
             if k in KINDS:
                 self.counts[k] = self.counts.get(k, 0) + 1
+            if k == "play_action":
+                # only the 18 of 33 action cards that ORDER a free action
+                # enqueue a pending decision; the rest gain immediately and
+                # were never blind to the 1-ply search in the first place.
+                sub = ("action_ordered" if mv[1] in ORDERED_ACTION_CARDS
+                       else "action_immediate")
+                self.counts[sub] = self.counts.get(sub, 0) + 1
+            if _costs_civil_action(mv):
+                self.civil_spent += 1
+            elif k == "end_turn":
+                self.turns += 1
+                try:
+                    left = state.players[state.decider()].civil_actions
+                except Exception:
+                    left = 0
+                if left > 0:
+                    self.turns_with_ca_left += 1
+                    self.ca_wasted += left
         return mv
 
     def choose(self, state, moves, rng=None):
-        return self._note(self.bot.choose(state, moves, rng))
+        return self._note(state, self.bot.choose(state, moves, rng))
 
     def __call__(self, state):
-        return self._note(self.bot(state))
+        return self._note(state, self.bot(state))
 
 
 def run(spec, players, games, seed0):
-    tot = {k: 0 for k in KINDS}
+    tot = {k: 0 for k in KINDS + ("action_ordered", "action_immediate")}
     colonies = pacts = 0
-    offers_accepted = 0
+    turns = ca_left_turns = ca_wasted = civil_spent = 0
     for g in range(games):
         bots = [_Counting(make_bot(spec, 1000 + i)) for i in range(players)]
         st = game.play_game(bots, num_players=players,
@@ -70,13 +129,23 @@ def run(spec, players, games, seed0):
         for b in bots:
             for k, v in b.counts.items():
                 tot[k] += v
+            turns += b.turns
+            ca_left_turns += b.turns_with_ca_left
+            ca_wasted += b.ca_wasted
+            civil_spent += b.civil_spent
         for p in st.players:
             colonies += len(getattr(p, "colonies", ()) or ())
             pacts += len(getattr(p, "pacts", ()) or ())
     n = float(games)
-    out = {k: round(tot[k] / n, 3) for k in KINDS}
+    out = {k: round(tot[k] / n, 3)
+           for k in KINDS + ("action_ordered", "action_immediate")}
     out["colonies_held_end"] = round(colonies / n, 3)
     out["pacts_live_end"] = round(pacts / n, 3)
+    t = float(max(turns, 1))
+    out["turns_per_game"] = round(turns / n, 2)
+    out["ca_unspent_turn_rate"] = round(ca_left_turns / t, 4)
+    out["ca_wasted_per_turn"] = round(ca_wasted / t, 3)
+    out["civil_spent_per_turn"] = round(civil_spent / t, 3)
     return out
 
 

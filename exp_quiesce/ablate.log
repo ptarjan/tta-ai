@@ -1,0 +1,5 @@
+=== qnw_2p (800 games, 2p) 22:34:52
+qnw_2p vs 1ply @2p: win rate 53.6% +/- 3.4% (null 50.0%, p=0.0392, n=800) culture 151 vs 145 [555.7s]
+=== bqnw_2p 22:44:08
+{"label": "bqnw_2p", "players": 2, "games": 120, "per_game": {"offer_pact": 0.0, "war": 0.0, "aggression": 2.05, "bid": 0.125, "play_action": 8.425, "cancel_pact": 0.0, "prepare_event": 13.942, "take": 43.525, "action_ordered": 2.742, "action_immediate": 5.683, "colonies_held_end": 0.125, "pacts_live_end": 0.0, "turns_per_game": 37.87, "ca_unspent_turn_rate": 0.0942, "ca_wasted_per_turn": 0.323, "civil_spent_per_turn": 2.847}}
+=== qnw_3p (801 games, 3p) 22:45:42
