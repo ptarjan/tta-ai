@@ -145,8 +145,15 @@ def _can_take_gated(state, p, idx, gate, name=None):
         return False
     if typ == "leader":
         return _BY_NAME[name]["age"] not in p.taken_leader_ages
-    if name in p.hand_civil or name in p.techs or name == p.government:
-        return False
+    # §2.5/§7.1: the one-per-name rule is about TECHNOLOGIES -- civil cards
+    # with a science cost.  Yellow ACTION cards have none, are not
+    # technologies, and several of them (Rich Land, Urban Growth, Frugality,
+    # Breakthrough, Reserves, Efficient Upgrade, Revolutionary Idea) exist in
+    # two or three copies in the same deck, so holding one must not block
+    # taking the other.
+    if typ != "action":
+        if name in p.hand_civil or name in p.techs or name == p.government:
+            return False
     return True
 
 
@@ -467,7 +474,11 @@ def _action_moves(state, p):
             if _can_revolt(state, p, name):
                 moves.append(("revolution", name))
         elif typ == "action":
-            if ca >= 1 and name not in p.taken_this_turn \
+            # §3.11: not in the Action Phase it was TAKEN in.  Counted, not
+            # tested by name: a second copy taken this turn must not lock up
+            # the copy that was already in hand.
+            if ca >= 1 and (p.hand_civil.count(name)
+                            > p.taken_this_turn.count(name)) \
                     and _action_card_playable(state, p, name):
                 moves.append(("play_action", name))
         elif typ in C.WORKER_TYPES or typ == "special-tech":
@@ -825,19 +836,26 @@ def _h_revolution(state, p, move, rng):
     p.science -= card["revolutionCost"]
     journal.touch(p.hand_civil).remove(name)
     robespierre = (p.leader == "Maximilien Robespierre")
-    if robespierre:
-        p.military_actions = 0
-    else:
-        p.civil_actions = 0
+    # §8.3.4 (RB p.13): only the pool that PAYS for the revolution is emptied.
+    # The other one behaves exactly as it does in a peaceful change -- what was
+    # already spent stays spent, and anything the new government adds is
+    # available this turn.  Capping it at the new total instead (the old
+    # behaviour) silently threw away every action the new government granted,
+    # so a revolution to Monarchy left the player on Despotism's 2 military
+    # actions rather than Monarchy's 3.
+    old = effects.state_stats(state, p)
+    spent = ((old.civil_actions - p.civil_actions) if robespierre
+             else (old.military_actions - p.military_actions))
     p.government = name
     effects.invalidate(state, p)
     s = effects.state_stats(state, p)
     if robespierre:
-        p.civil_actions = min(p.civil_actions, s.civil_actions)
+        p.military_actions = 0
+        p.civil_actions = max(0, s.civil_actions - spent)
         p.culture += 3
     else:
         p.civil_actions = 0
-        p.military_actions = min(p.military_actions, s.military_actions)
+        p.military_actions = max(0, s.military_actions - spent)
     if p.leader == "Isaac Newton":
         p.civil_actions = min(s.civil_actions, p.civil_actions + 1)
     state.emit(f"revolution -> {name}")
