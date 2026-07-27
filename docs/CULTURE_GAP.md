@@ -1801,3 +1801,79 @@ That does not make the horizon fix wrong — it is a correctness fix and §8d
 measured it at +7.5 points from default — but it does predict that the restarted
 3p/4p arms will re-inflate `culture_rate` and re-flatten their phase weights
 unless #1 and #2 land as well.
+
+## 20. The confirmation: the champion crushes the vectors that merely drifted
+
+§18 asserted that the improvement lives in the joint structure while no
+individual marginal is distinguishable from drift. That was an argument. This is
+the measurement.
+
+`tools/champ_vs_drift.py` plays the 2p champion (335 generations, 47 accepts)
+head-to-head against **its own drift siblings** — vectors produced by
+`tools/drift_sim.py` from the same `DEFAULT_WEIGHTS`, with the same generation
+count, the same accept rate and the real `mutate`/`guard_weights`, differing
+only in that acceptance was a coin flip. n=200 each, null 0.500:
+
+| opponent | champion win rate | culture margin |
+|---|---|---|
+| `DEFAULT_WEIGHTS` (the shared starting point) | **0.927 ± 0.036** | +97.0 ± 8.6 |
+| drift sibling #1 | **0.985 ± 0.017** | +161.6 ± 8.0 |
+| drift sibling #2 | **0.940 ± 0.033** | +112.8 ± 9.0 |
+| drift sibling #3 | **0.960 ± 0.027** | +130.7 ± 8.9 |
+
+The champion beats drift siblings **more** easily than it beats the default
+(0.94–0.99 vs 0.93) — undirected drift makes a vector *worse* than the
+hand-designed starting point, which is the expected behaviour of a random walk
+through a space where most directions are bad.
+
+So both halves of §18 are now measured, not argued:
+
+* **Training works, enormously.** 0.96 average against vectors that had exactly
+  the same number of generations and accepts and differed only in whether the
+  accept test was consulted.
+* **And none of it is legible in any individual weight.** The same champion's
+  81 free weights sit at a Uniform(0,1) position inside the drift null
+  (KS p=0.14–0.59, §18a).
+
+**A trained weight is not a strategic statement.** The value `culture_rate_early
+= 0.000` carries about as much information about how this bot plays as any
+single coordinate of a random walk does — which is what makes §10 #1's premise
+(*"both arms that lose the culture-rate race price a culture rate as a
+constant"*) a pattern read into noise, even though every number in it was
+correctly measured.
+
+---
+
+# Summary of Part 3–4, for anyone who does not want to read two self-corrections
+
+**The question:** why have the 2p and 4p champions driven
+`culture_rate_early/late` to near-constant against a default of (+2.0, −2.0)?
+What is flattening that axis?
+
+**The answer, in one line:** the *shape* is not being flattened by anything —
+it is collateral damage from the *level* being slowly, perversely inflated, and
+neither is visible to the accept test.
+
+| finding | evidence | confidence |
+|---|---|---|
+| The gate scores 5.5 of 8.0 pool weight on **culture margin**, so it pays for *losing by less* in games lost 100% of the time. Inflating `culture_rate` 7× buys **+0.011 accept statistic and zero extra wins**. | §19, n=200/cell, monotone in `book` | **high** |
+| That bias is **0.51σ of one 48-game block across the whole 7× range** — never individually detectable, never changes sign. | §19a | high |
+| `mutate`'s step is proportional to `|w|`, so there is **no restoring force**: drift's own median takes `culture_rate` 5.0 → 0.99 and its p99 to the ±60 clamp. Weak push + no restoring force = ratchet. | §16b, §19b | high |
+| Once the base runs, the **level is explored 39–41× faster than the shape** (2.6× at 3p, whose base did not run). | §12c, exact from code | high |
+| `guard_weights`' one-sided clamp then pins the ten *positive*-default phase multipliers at **exactly 0.000** — 15.7% per multiplier under pure drift, 20.0% observed, **0.0% with the guard off**. | §15a, simulated counterfactual | **high** |
+| The horizon shape is real but worth **3.79 ± 2.47 culture points = 0.21σ** of one block. The gate is blind to it by ~5×. | §17, n=600 paired | high |
+| The 2p/3p champions' weight **marginals are indistinguishable from a random walk** (KS p=0.14–0.80) — while the same champion beats its drift siblings **0.94–0.99**. | §18a, §20 | high |
+| Therefore no individual trained weight can be read as a strategic statement, and §10 #1's premise does not survive. | §18c, §20 | high |
+
+**Fixes, ranked** (§19c; none landed, per instruction):
+1. Symmetric phase exemption in `guard_weights` — 2 lines, high confidence.
+2. Cap the margin credit or score gate tiers on margin **rank** — removes the
+   perverse push at its source.
+3. Decouple phase-multiplier step size from the base.
+4. A restoring force on the geometric walk.
+
+**Prediction, on the record:** the level's perverse gradient (0.51σ) is ~2.4×
+stronger than the entire horizon signal (0.21σ) that the just-adopted fix
+improves. Unless #1 and #2 land, the freshly restarted 3p/4p arms should
+re-inflate `culture_rate` and re-flatten their phase weights within a few
+hundred generations. `experiments/league_state/ladder_{3,4}p/` will show it.
