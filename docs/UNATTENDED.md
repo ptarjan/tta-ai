@@ -1,0 +1,101 @@
+# Unattended run — state as of 2026-07-27 08:05, handoff note
+
+Written because the arms are set to run 48h with nobody watching. If you are
+picking this up cold, read this first.
+
+## The arms
+
+Budget **48h from 2026-07-27 08:04**, i.e. until **2026-07-29 08:04**.
+
+| K  | workers | block | init                                    |
+|----|---------|-------|-----------------------------------------|
+| 2p | 1       | 12    | `default` (resumes existing state)       |
+| 3p | 2       | 12    | `default` (resumes existing state)       |
+| 4p | 2       | **24**| warm start from the **2p** champion      |
+
+Two deliberate asymmetries at 4p, both from `docs/FOURP_GAP.md`:
+
+* **block 24, not 12.** Every arm was buying the same 48 games per accept
+  decision while 4p carries **2.8x the per-game spread** (sd 107.2 vs 38.8).
+  One block's SE was +/-5.6 culture at 2p and +/-15.5 at 4p, with optional
+  stopping on top. The 4p arm was accepting noise.
+* **warm start from `hall_of_fame/preinfo_2p_gen00188.json`.** At matched
+  generation count the 2p vector scores **57.4% +/- 2.5%** at 4p where the
+  4p-trained vector scored **27.6% +/- 2.2%** (paired, z=9.5). The 4p arm was
+  not struggling with a hard table, it was climbing toward a bad policy. Note
+  this is NOT the forbidden warm start from `experiments/champion_4p.json`.
+
+`--init` is ignored once a state dir holds a champion, so on 2p/3p it is inert
+and those arms resumed their existing lineage.
+
+## The watchdog
+
+`experiments/watchdog.sh`, from cron every 10 min plus `@reboot`. Relaunches
+any arm whose supervisor has died, with only the time **remaining** on the
+original budget. It stops relaunching once
+`experiments/logs/watchdog_deadline` (an absolute epoch second) has passed;
+after that the cron entry is a harmless no-op. Log:
+`experiments/logs/watchdog.log`.
+
+To extend the run: rewrite the deadline file. To stop everything early: delete
+it, then `pkill -f run_league.sh`.
+
+## What changed today, and what it means for these numbers
+
+* **Feature set grew 82 -> 89 weights** (`c2a4246`): the card row, row cost
+  pressure, and public rival state. All seven new weights start at **0.0** and
+  are trainable; existing champion vectors load unchanged and all four gate
+  digests were unmoved by the addition. `docs/INFORMATION_AUDIT.md` has the
+  proof that the evaluator previously read **none** of this — deleting the
+  entire card row left the feature vector bit-identical.
+* **The 2p champion is a war bot** (`docs/TWOP_PROFILE.md`): 1.98 wars/game,
+  never loses one, and war/aggression transfers are 62.0 +/- 2.0 of its
+  85.5 +/- 2.5 margin against book. Critically, **the fighting comes from
+  quiescence, not the weights** — the identical vector at 1 ply declares 0.00
+  wars.
+* Therefore **the arms are training a policy whose strength is newly search-
+  dependent, on a feature set that is one commit old.** Early generations of
+  this run are not comparable to yesterday's.
+
+## Traps, all of which have already bitten this repo
+
+1. **n=48 full-check rows are unusable at 4p** (+/-6-7 win points). Do not read
+   them generation-to-generation. A gen-100 row read 50.0% where n=400 said
+   27.6%.
+2. **`default`/`greedy`/`random` are saturated.** 100% against them is not
+   evidence of anything.
+3. **Every pool opponent is a BookBot subclass.** A large part of the 2p
+   champion's margin is threshold effects of that one hand-written family —
+   `var:military` is held to 5.5% of turns at its required +3 lead and never
+   gets to fight. Beating the pool is not the same as playing well.
+4. **Individual trained weights are not interpretable.** Champion marginals are
+   indistinguishable from a random walk (KS p=0.14-0.80).
+5. **`--candidate-bot` is not persisted.** Resuming an arm by hand without it
+   silently reverts to 1-ply. The startup line `[Kp] trained architecture: ...`
+   is the only check. The watchdog always passes it.
+
+## Open, ranked
+
+1. **No external anchor.** Everything above is our bots playing our bots. The
+   app harness (`harness/`, `docs/APP_HARNESS.md`) is the remedy and needs a
+   human at a keyboard: ~50-80 min/game, ~10-16h for ten usable games. That
+   estimate is being re-derived — the new rival features added observables.
+2. **`tests/test_harness_mirror.py` fails on master.** The harness asserts that
+   four numbers per rival reconstruct every `rival_*` feature; today's feature
+   work added three more. The tripwire is correct — do not weaken it. Fix is
+   owned by the harness agent.
+3. **The gate's margin metric may double-count theft.** War moves culture from
+   victim to attacker, so a margin of (mine - theirs) counts a steal twice, and
+   the league gates accepts on margin. Under investigation; do not change the
+   metric without re-measuring, it would invalidate every historical vector.
+4. **Does a quiescent-tuned vector transfer to PlanBot?** Still unmeasured.
+   PlanBot is 49-66x to train and remains the strongest policy we have.
+5. **`has-unit`** — 9 lines, still needs its 3p/4p A/B before it earns a merge.
+
+## BGO corpus
+
+Scrape finished 2026-07-27 ~08:04: **1011 games** (692 2p / 133 3p / 186 4p).
+Skips were principled, not failures — 717 empty journals, 277 edition
+unconfirmed or expansion, 139 incomplete/resigned, 115 below skill cutoff, 114
+solitaire. Lives in the `bgo-corpus` worktree, **not yet merged or analysed**.
+Credentials and cookie jar were deleted automatically on completion.
