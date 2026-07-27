@@ -454,7 +454,75 @@ python3 -m experiments.evaluate --a experiments/arch_frozen/fit2p_ridge.json \
 This is reported first and in full because it is the single most important
 result of the night for anyone tempted to read §2.3b as a win.
 
-**Cause, and it is mechanical rather than mysterious.** `end_turn_bias` is not
+**First cause, found and fixed: the bot was resigning.** `("resign",)` (§5.11)
+is legal on almost every turn. `RandomBot` has filtered it since it was written
+— "a uniform-random bot would end most games in round 2" — but `WeightedBot`
+never did, and the trained champions merely *happen* not to pick it. The fitted
+vector resigned on **turn 3 in 3 of 12 traced games**, ending them at round 2
+with scores `[0, 0]`. Fixed on this branch by giving `WeightedBot` the same
+`allow_resign=False` guard; **verified byte-identical for the champion** (12
+mirror games, identical move counts and scores with the guard on and off), so it
+is a correctness fix for every new vector and a no-op for the existing ones.
+This is a live trap for anyone who learns or hand-writes a weight vector here.
+
+**Second cause, still standing after the fix.** With resignation blocked, the
+fitted bot plays a full-length game (222 moves, *more* than the champion's 216)
+and still scores **24.0 culture against 170.1**, n=100. It is not passing and it
+is not quitting. It is playing badly.
+
+**The lambda ladder, which is the real experiment.** `tools/fit_value.py
+--prior` shrinks toward the champion instead of toward zero, so `--lam` sweeps a
+continuous line from the champion's own vector (lam -> infinity) to the pure
+regression fit (lam -> 0). MEASURED, n=100 per rung, 2p, against the champion:
+
+| lam | max abs delta vs champion | ranking accuracy (held out) | win rate | mean culture |
+|---|---|---|---|---|
+| 2e7 | **0.015** | (= champion) | **0.53** | 149.6 vs 156.8 |
+| 2e5 | 1.29 | — | 0.26 | 94.0 vs 137.2 |
+| 2e3 | 11.97 | 0.636 | 0.00 | 14.4 vs 152.2 |
+| 200 | — | 0.715 | 0.01 | 6.6 vs 153.9 |
+| 20 | 15.18 | **0.799** | 0.00 | 17.0 vs 153.0 |
+| 0 (zero-centred) | — | **0.812** | 0.00 | 24.0 vs 170.1 |
+
+The top row is the control that makes the rest believable: at maximum shrinkage
+the fit reproduces the champion to within 0.015 on every weight and duels at
+**0.53** — i.e. the pipeline, the file format and the harness are all correct.
+
+And then: **every step toward the better predictor makes the policy
+monotonically worse, while ranking accuracy monotonically improves.** 0.53 ->
+0.26 -> 0.00 as accuracy goes 0.669 -> 0.799.
+
+**Why, and this is the architectural lesson.** Outcome regression minimises
+squared error on "what is this position worth", and that error is dominated by
+the coarse question *am I ahead or behind*. The quantity a greedy bot actually
+needs is the **difference between sibling states one action apart**, which is a
+tiny fraction of a position's value. A least-squares fit spends essentially none
+of its capacity there. Worse, the design matrix is exactly rank-deficient — for
+every phase key, `(base+c, early-c, late-c)` is the identical function — so the
+unconstrained directions are precisely the phase multipliers, and the argmax
+over candidate moves searches deliberately along directions the data never
+constrained.
+
+So: **Monte-Carlo value regression is the wrong training objective for this
+bot,** and the hill climb, for all its appalling one-bit-per-batch signal rate,
+is at least optimising the right thing. The fix is not more data; it is a
+different objective:
+
+* **TD(0)/TD(lambda) instead of Monte Carlo.** TD fits `V(s) ~ V(s')` along the
+  trajectory, which buys *local* consistency — exactly the property needed to
+  compare siblings — rather than only global calibration. This is the
+  Samuel/TD-Gammon recipe and it is precisely what `docs/EXTERNAL_AIS.md` §4d
+  named as "arguably the single most actionable finding in this whole document"
+  (Keldon's Race for the Galaxy bot). The measurement above is the ablation that
+  shows the TD-versus-MC distinction is not pedantic here: it is the difference
+  between 0.53 and 0.00.
+* **Or a pairwise/learning-to-rank objective** over the sibling states the bot
+  actually chose between, which is the objective the policy is evaluated on.
+* Either way, **remove the gauge freedom first** (drop the base term for phase
+  keys, or constrain `early + late`), so the fit cannot put mass in directions
+  the data cannot see.
+
+**Cause that turned out NOT to be it.** `end_turn_bias` is not
 part of `evaluate` — `WeightedBot.pick` adds it to one move kind — so a
 regression on the design matrix cannot fit it, and I set it to 0.0. That leaves
 the +12.6-point `end_turn` flattery (docs/WASTED_ACTIONS.md §1) completely
