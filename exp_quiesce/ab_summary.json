@@ -74,5 +74,43 @@
   "errors": 0,
   "secs": 1584.5,
   "ctrl_secs": 672.1
+ },
+ {
+  "players": 3,
+  "levels": "nw",
+  "games": 801,
+  "seed_groups": 267,
+  "win_rate": 0.39325842696629215,
+  "win_ci": 0.030459370675315657,
+  "null": 0.3333333333333333,
+  "d_win": 0.0599250936329588,
+  "d_win_ci": 0.03045937067531566,
+  "d_margin": 5.48314606741573,
+  "d_margin_ci": 2.0308795001961326,
+  "culture_a": 134.36953807740323,
+  "culture_b": 128.8863920099875,
+  "ctrl_win": 0.3333333333333333,
+  "errors": 0,
+  "secs": 603.5,
+  "ctrl_secs": 672.1
+ },
+ {
+  "players": 4,
+  "levels": 1,
+  "games": 800,
+  "seed_groups": 200,
+  "win_rate": 0.416875,
+  "win_ci": 0.02969184865002988,
+  "null": 0.25,
+  "d_win": 0.166875,
+  "d_win_ci": 0.02969184865002988,
+  "d_margin": 20.0825,
+  "d_margin_ci": 2.862029333370882,
+  "culture_a": 175.30125,
+  "culture_b": 155.21875,
+  "ctrl_win": 0.25,
+  "errors": 0,
+  "secs": 1026.0,
+  "ctrl_secs": null
  }
 ]

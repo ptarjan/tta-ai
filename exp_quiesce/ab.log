@@ -17,3 +17,6 @@ skip q1_2p
 skip ctrl_3p
 skip q1_3p
 === q1_4p (800 games, 4p) 22:46:26
+q1_4p vs 1ply @4p: win rate 41.7% +/- 3.4% (null 25.0%, p=0.0000, n=800) culture 175 vs 155 [1026.0s]
+skip q2_2p
+DONE 23:03:32

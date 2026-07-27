@@ -1,0 +1,9 @@
+=== y_1ply_culture (400 games, 2p) 22:59:41
+y_1ply_culture vs culture @2p: win rate 51.6% +/- 4.9% (null 50.0%, p=0.5144, n=400) culture 171 vs 171 [80.4s]
+=== y_qui_culture (400 games, 2p) 23:01:02
+y_qui_culture vs culture @2p: win rate 57.9% +/- 4.8% (null 50.0%, p=0.0013, n=400) culture 168 vs 158 [122.1s]
+=== y_1ply_book (400 games, 2p) 23:03:04
+y_1ply_book vs book2 @2p: win rate 72.1% +/- 4.4% (null 50.0%, p=0.0000, n=400) culture 161 vs 126 [77.8s]
+=== y_qui_book (400 games, 2p) 23:04:22
+y_qui_book vs book2 @2p: win rate 78.0% +/- 4.0% (null 50.0%, p=0.0000, n=400) culture 164 vs 115 [121.7s]
+DONE 23:06:24

@@ -157,7 +157,41 @@ and 4p and 1.9% at 3p, so the fallback path is essentially never taken and the
 
 Nested resolution costs ~5% on top of `LEVELS = 1` (2.97 vs 2.82 cpu-s on a
 sampled 4p game), for the same reason: the extra level also only fires on
-pending-creating candidates, of which there are few.
+pending-creating candidates, of which there are few. It is nonetheless not
+worth taking — see section 4.5, where it measured *weaker*.
+
+### 3.1 Correction: the table above is optimistic in two ways
+
+Re-measured after the strength A/B, and the headline "~20% tax" does not
+survive. `time.process_time`, n=24 games, same tool:
+
+| | 1-ply s/game | quiescent s/game | ratio | quiesce rate |
+|---|---|---|---|---|
+| 2p, champion weights, `TTA_JOURNAL=0` | 0.416 | 0.520 | **1.25x** | 1.83% |
+| 2p, champion weights, `TTA_JOURNAL=1` | 0.337 | 0.556 | **1.65x** | 1.83% |
+| 4p, default weights, `TTA_JOURNAL=0` | 1.157 | 1.916 | **1.66x** | 9.76% |
+| 4p, default weights, `TTA_JOURNAL=1` | 0.761 | 2.016 | **2.65x** | 9.76% |
+
+Two separate effects, and both push the same way.
+
+1. **The journal only speeds up the bot that can use it.**
+   `experiments/run_league.sh` now exports `TTA_JOURNAL=1`, which buys
+   `WeightedBot` 1.2–1.5x here. `journal.install()` is lazy and
+   `QuiescentBot` never calls `journal.begin` — it holds several live trial
+   states at once and must stay on `copy_state` (docs/PYPY.md 9.15) — so it
+   gets none of it. **In the trainer's actual configuration the ratio is 1.65x
+   at 2p and 2.65x at 4p, not 1.2x.** This is the honest number for any
+   budgeting decision.
+2. **The cost depends on the weight vector, not just the table size.** The
+   original 4p row used the then-champion and saw 4.05% of candidates leave
+   something pending; the default vector sees 9.76%. A bot that attacks more
+   pays more, so a *trained* quiescent champion would pay more than either
+   figure, not less.
+
+The qualitative conclusion of section 3 survives — this is still a small
+constant factor rather than the branching-factor multiple a real ply costs,
+and truncation is 0.0% everywhere so the budgets are still not binding. But
+"a ~20% tax" was wrong; call it **1.6x–2.7x under the trainer's own flags**.
 
 ## 4. Strength A/B
 
@@ -226,11 +260,20 @@ also running three live trainers.
 | 2 | LEVELS=1, no war lookahead | 800 | 400 | 53.6% ± 2.9% | 50.0% | **+3.6% ± 2.9%** | +5.54 ± 3.08 | 0 |
 | 2 | LEVELS=2 | 800 | 400 | 53.7% ± 2.9% | 50.0% | **+3.7% ± 2.9%** | +7.08 ± 3.14 | 0 |
 | 3 | LEVELS=1 | 801 | 267 | 42.8% ± 3.0% | 33.3% | **+9.5% ± 3.0%** | **+10.09 ± 2.12** | 0 |
-| 3 | LEVELS=1, no war lookahead | 801 | 267 | QNW3_WIN | 33.3% | QNW3_D | QNW3_M | 0 |
-| 4 | LEVELS=1 | 800 | 200 | Q14_WIN | 25.0% | Q14_D | Q14_M | 0 |
+| 3 | LEVELS=1, no war lookahead | 801 | 267 | 39.3% ± 3.0% | 33.3% | **+6.0% ± 3.0%** | +5.48 ± 2.03 | 0 |
+| 4 | LEVELS=1 | 800 | 200 | 41.7% ± 3.0% | 25.0% | **+16.7% ± 3.0%** | **+20.08 ± 2.86** | 0 |
 
-**QuiescentBot is stronger, at every table size, well outside the interval.**
-Zero engine errors in 6400+ games.
+**QuiescentBot is stronger, at every table size, well outside the interval,
+and the effect grows with the number of players** — +5.8pp at 2p, +9.5pp at 3p,
++16.7pp at 4p, i.e. 1.12x, 1.28x and **1.67x par**. That ordering is what the
+mechanism predicts: more players means more rivals with pending decisions to
+resolve, more aggression targets, and (at 3p/4p) the pact and colony layers
+existing at all. Zero engine errors in the 4,802 games of this table.
+
+The 4p number carries the caveat from 4.1 doubled: it is quiescence against
+the *default* vector, and section 5.1 shows that vector wastes three civil
+actions a turn. Read +16.7pp as "quiescence is worth a lot at a full table",
+not as a prediction for a trained 4p champion.
 
 ### 4.3 The two things it bundles, separated
 
@@ -239,17 +282,45 @@ stack, so quiescence provably cannot see one, and the lookahead is a separate
 mechanism that calls `events.resolve_war` on a scratch copy. Turning it off
 and re-running the same seeds splits the 2p result:
 
-| component | Δ win at 2p | Δ culture |
+| component | Δ win at 2p | Δ win at 3p |
 |---|---|---|
-| quiescence proper | **+3.6% ± 2.9%** | +5.54 ± 3.08 |
-| war lookahead, on top | **+2.2% ± 1.8%** (paired vs LEVELS=1) | +4.43 ± 1.29 |
-| both | +5.8% ± 3.0% | +9.96 ± 3.31 |
+| quiescence proper | **+3.6% ± 2.9%** | **+6.0% ± 3.0%** |
+| war lookahead, on top | **+2.2% ± 1.8%** | **+3.5% ± 2.4%** |
+| both | +5.8% ± 3.0% | +9.5% ± 3.0% |
 
-Roughly a 60/40 split, and section 5 shows the two are behaviourally disjoint:
-the lookahead is responsible for **all** of the wars and **none** of the
-aggressions.
+(the "on top" row is paired directly against the LEVELS=1 arm on the same seed
+groups, which is why its interval is tighter than the difference of the other
+two.) Roughly a 60/40 split at both table sizes, and section 5 shows the two
+are behaviourally disjoint: the lookahead is responsible for **all** of the
+wars and **none** of the aggressions.
 
-### 4.4 LEVELS=2 is not worth it
+### 4.4 Cross-check against opponents that are not 1-ply searchers
+
+A win over a mirror of yourself is the weakest kind of evidence, and the
+biggest reservation about this result (6.2, point 2) is that `_pick` models a
+rival's pending decision with a 1-ply pick — which is *exactly right* when the
+rival is a `WeightedBot`, and might be where the whole gain comes from. The
+test is to put the same two bots against opponents whose policy the model gets
+completely wrong: `BookBot v2` and `CultureBot` are rule lists with no
+evaluator and no search at all.
+
+2p, 400 games each, same seeds, paired by seed group:
+
+| challenger | vs `CultureBot` | vs `BookBot v2` |
+|---|---|---|
+| 1-ply champion | 51.6% ± 5.1% | 72.1% ± 4.8% |
+| quiescent champion | 57.9% ± 4.8% | 78.0% ± 4.2% |
+| **paired Δ** | **+6.2% ± 5.1%** | **+5.9% ± 4.5%** |
+| paired Δ culture | +10.20 ± 5.75 | +14.84 ± 6.82 |
+
+**The gain replicates, at the same size, against opponents the search models
+incorrectly** (+6.2 and +5.9 against +5.8 in the mirror). The `CultureBot`
+interval only just clears zero and should not be quoted alone; the two
+together, plus the mirror, are the claim. This is the single most reassuring
+number in the document, because it says the +5.8% is not an artefact of the
+opponent model happening to be exact.
+
+### 4.5 LEVELS=2 is not worth it
 
 Section 3 measured LEVELS=2 at only ~5% more CPU and this document assumed it
 would be at least as strong. It is not. Paired on the same 400 seed groups:
@@ -293,6 +364,25 @@ Same weights as the A/B (2p: league champion; 3p/4p: default).
 † Pacts are removed from the deck in a 2-player game (`actions.py:258`,
 `data/cards_military_actions.json`). The 2p zero is correct and is not
 evidence of anything.
+
+The `war=0` ablation arm, same cells at 2p, is what makes the attribution
+below possible:
+
+| 2p per game | 1-ply | quiescent | quiescent, **no war lookahead** |
+|---|---|---|---|
+| wars | 0.000 | 1.433 | **0.000** |
+| aggressions | 0.175 | 1.883 | **2.050** |
+| ordered action cards | 1.725 | 2.842 | 2.742 |
+
+**How much of this is noise.** 120 games x P seats, so a rate of r per game
+rests on ~120r events and has a Poisson standard error of about
+sqrt(120r)/120. The war and aggression rows are 10-25 sigma and are not in
+question. The pact-offer and colony-bid falls are 8-20 sigma. The
+`colonies held at end` rise (1.708 -> 1.967 at 3p, 2.725 -> 3.017 at 4p) is
+only about 1.5-2 sigma and is **suggestive, not established** -- it is quoted
+as the direction that makes the bid story coherent, not as a result on its
+own. The civil-action rows in 5.1 rest on thousands of turns each and their
+differences are ~4 sigma but small in absolute terms.
 
 **The counts move, and they move where the theory said they would.**
 
@@ -390,26 +480,30 @@ supervisor restart rather than by killing a running arm.
 
 ### 6.2 Make QuiescentBot the trainer's CHALLENGER — **conditional GO**, not yet
 
-The evidence for: stronger at 2p (+5.8%), 3p (+9.5%) and 4p (Q14_D) on
-n ≥ 800/801/800 with zero engine errors; the mechanism is confirmed
-independently of the win rate; the cost is a ~1.2x tax, not a branching-factor
-multiple, because only 3–4% of candidates leave anything pending.
+The evidence for: stronger at 2p (+5.8%), 3p (+9.5%) and 4p (+16.7%) on
+n = 800/801/800 with zero engine errors; the mechanism is confirmed
+independently of the win rate (section 5); and — the load-bearing one — the
+gain **replicates at the same size against two rule-list opponents the search
+models incorrectly** (+6.2% and +5.9%, section 4.4), so it is not an artefact
+of the mirror.
 
 The reservations, in order of seriousness:
 
-1. **The measured strength is against a 1-ply field, and part of it is an
-   exactly-correct opponent model.** `_pick` answers a rival's pending decision
-   with a 1-ply pick — which is precisely what a `WeightedBot` rival will do.
-   Section 4.4 is the proof that this matters: making the model *better*
-   (LEVELS=2) made the bot *worse*, because the model stopped matching the
-   opponent. In a league where the challenger is quiescent, the challenger's
-   model of its rivals is wrong in the same way, and some of the +5.8% is not
-   available. **How much is unmeasured and cannot be measured by a win rate**
-   (quiescent-vs-quiescent is a mirror). This is the single biggest open item.
-2. **The rival model uses the challenger's own weight vector.** In self-play
-   that is exact. The league is *not* self-play — it duels a challenger against
-   a pool of structurally different opponents — so a quiescent challenger would
-   model a `BookBot` or a `CultureBot` rival as a copy of itself.
+1. **Cost, restated honestly.** Section 3.1: under the trainer's own
+   `TTA_JOURNAL=1` the ratio is **1.65x at 2p and 2.65x at 4p**, not the 1.2x
+   the original section 3 advertised, because the journal accelerates only
+   `WeightedBot`. A 2.65x slower 4p arm is a real budget decision, not a
+   rounding error, and the arm that would pay it most is the one furthest from
+   convergence.
+2. **The opponent model is wrong in a league and the size of that is
+   unmeasured.** `_pick` answers a rival's pending decision with a 1-ply pick
+   at the *challenger's own* weights. Against a `WeightedBot` field that is
+   exactly right; against the league's pool of rule bots and past champions it
+   is not. Section 4.5 shows this matters in principle — making the model
+   *stronger* (LEVELS=2) made the bot *weaker* — and section 4.4 shows it does
+   not destroy the gain in practice. What is still unmeasured is
+   quiescent-vs-quiescent, which a win rate cannot measure at all (it is a
+   mirror); it needs a full league arm scored on the external roster.
 3. **It reads hidden information.** Resolving a defender's `defense` decision
    requires the defender's real `hand_military`, which is hidden in the real
    game. `WeightedBot` already leaks (applying `end_turn` reveals the true next
@@ -448,7 +542,8 @@ adds six, and all six passed first time:
 
 Two *documentation* defects were found and corrected: the action-card claim in
 section 1 (18 of 33, not all), and section 3's implicit assumption that
-LEVELS=2 was a free upgrade (it is a small regression — section 4.4).
+LEVELS=2 was a free upgrade (it is a small regression — section 4.5), plus
+section 3.1, where the cost ratio itself turned out to be understated.
 
 ### 6.4 A note on `TTA_JOURNAL=1` and the cost numbers
 
@@ -525,27 +620,58 @@ evaluation was *blind* to, at a 1.2x cost, not by looking further ahead.
 
 ### 7.3 How strong are these bots, absolutely
 
-Weak. Stated plainly, from measurements already in this repo:
+Unknown on any human scale, and weaker than the repo's older documents claim
+in one direction and stronger in another. Both corrections matter, so both are
+given.
 
-* `docs/STRENGTH_CHECK.md`: **BookBot**, a ~200-line hand-written priority
-  list with no search, no evaluator and no learned weights, beats the trained
-  champion **62.9% at 2p, 42.2% at 3p (par 33.3%), 64.3% at 4p (par 25%)**.
-* `docs/BOT_ROSTER.md`, a 12-entrant round robin at n=240 per pairing: the
-  trained champion places **fifth of twelve**. `CultureBot` — again a rule
-  list — takes a 79.0% share at 2p against the champion's 50.9%.
-* The champion beats `GreedyBot` 91.8% and `RandomBot` almost always. That is
-  the bar it was trained against and it means nothing.
+**The old external verdict is stale.** `docs/STRENGTH_CHECK.md` reports
+BookBot — a ~200-line hand-written priority list with no search, no evaluator
+and no learned weights — beating the trained champion 62.9% at 2p, and
+`docs/BOT_ROSTER.md` places the champion fifth of twelve. Both were measured
+against the **frozen gen-222 snapshot**, before the league pool existed. The
+*current* 2p champion (gen 337) does not lose to those bots. Measured here,
+400 games each, 2p:
 
-So the honest summary is: **our learned bot loses to simple hand-written
-heuristics that encode what human strategy articles already say.** Until this
-branch it never declared a war, never pressed an aggression, and at 3p/4p
-default weights it still ends three turns in four with civil actions unspent.
-On a human scale that is an advanced beginner: it builds a reasonable economy,
-it cannot fight, it cannot tell one card from another, and it wastes tempo.
+| | vs `BookBot v2` | vs `CultureBot` |
+|---|---|---|
+| champion, 1-ply | **72.1% ± 4.8%** | **51.6% ± 5.1%** |
+| champion, quiescent | **78.0% ± 4.2%** | **57.9% ± 4.8%** |
 
-Quiescence's +5.8% / +9.5% is a real improvement and it opens a whole layer of
-the game that was previously unreachable. It is a step *within* that band, not
-a step out of it.
+So the league training in `docs/LEAGUE_TRAINING.md` did what it was for: the
+2p champion went from losing to a rule list to beating it comfortably.
+
+**But this is no longer an external yardstick, and it should not be read as
+one.** `experiments/hillclimb_pool.build_pool` puts `book`, `book2` and every
+variant *including* `culture` **into the training pool**. The champion was
+trained against these exact opponents. What the table above measures is that
+the training worked on its own distribution — a real and useful result, and
+emphatically not evidence about play against anything the pool does not
+contain. `docs/STRENGTH_CHECK.md`'s original point stands undamaged: we have
+never measured this bot against anything outside its own training loop, and we
+have **no human benchmark at all**.
+
+What can be said honestly, then:
+
+* The 2p champion is at least as good as a competent rule list built from
+  published human strategy writing. That is a real bar and it has been cleared.
+* Only just, against the best of them: 51.6% ± 5.1% against `CultureBot` is a
+  dead heat, and `CultureBot` is a priority list a person can hold in their
+  head.
+* The 3p and 4p arms restarted clean and are running at essentially default
+  weights — 5 and 21 of 82 weights moved. At those table sizes the bot ends
+  **three turns in four with civil actions unspent** (section 5.1). Those are
+  not strong players by any standard.
+* Until this branch, no champion at any table size had ever declared a war
+  (exactly 0.00 per game) or pressed an aggression (0.02–0.18 per game). A bot
+  that never uses a whole third of the rulebook is not playing the game well,
+  whatever its self-play win rate says.
+* The evaluation still cannot tell a good card from a bad one
+  (`docs/WASTED_ACTIONS.md` §6). That is a large, known, unfixed hole.
+
+Quiescence's +5.8% / +9.5% / +16.7% is a real improvement, it replicates
+against opponents of a completely different design, and it opens a layer of the
+game that was previously unreachable. It is a step *within* that band, not a
+step out of it.
 
 ### 7.4 The realistic next architectural step
 
@@ -557,10 +683,13 @@ classical search is deliberately last.
    civil hand to a count and a sum of age levels, so the evaluation **cannot
    tell a good card from a bad one**, and therefore cannot price `take` at all.
    `hand_potential` is a first pass at this and measured 69.6% ± 4.5% at 2p.
-   That is where the gap to BookBot lives — BookBot has *no* search whatsoever
-   and still wins, which is close to a proof that the missing strength is in
-   the evaluation. Cost: days of feature work plus a re-climb. Highest
-   value/cost ratio available today, by a distance.
+   The standing argument that this is where the strength is: `CultureBot` has
+   **no search whatsoever** and holds the current 2p champion to a dead heat
+   (7.3). A rule list matching a 1-ply searcher means the search is buying
+   almost nothing that the rules do not already encode — so buy better rules,
+   or a better evaluation, before buying more search. Cost: days of feature
+   work plus a re-climb. Highest value/cost ratio available today, by a
+   distance.
 2. **A learned value function.** Replace the 82-weight linear form with a small
    network trained to regress final culture (or win probability) from self-play
    — the AlphaZero-family answer, and the only path to genuinely strong play.
