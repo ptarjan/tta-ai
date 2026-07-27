@@ -2,38 +2,53 @@
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
 #   58 unit tests green
-#   narrow fingerprint == c2befef1...   (33 games)
-#   wide   fingerprint == 47e06a41...   (102 games)
+#   narrow fingerprint == 6f5c72ef...   (33 games)
+#   wide   fingerprint == a966d158...   (102 games)
 #   all of the above unchanged under FASTCOPY_PARANOID=1
 #
-# NOTE: do NOT use `python3 -m engine.perf_check check tools/fingerprint.json`.
-# Those JSON files are STALE (last saved at commit 7c2eef1, digests 3229c4a0 /
-# c7e73ede) and legitimate behaviour changes landed after them without a
-# re-save.  The digests this project actually gates on are the ones written
-# down in docs/PYPY.md, which is what this script compares against.
+# tools/fingerprint.json / tools/fingerprint_wide.json are now IN SYNC with
+# the values below (re-saved via `perf_check save`) -- `python3 -m
+# engine.perf_check check tools/fingerprint.json` is safe to use again. The
+# digests this script gates on are still the ones written down here, not
+# re-read from those files, so this comment (and PYPY.md, where this table is
+# mirrored) remains the thing to update whenever a digest legitimately moves.
 #
 #   bash tools/gate.sh            # tests + both fingerprints, plain and paranoid
 #   bash tools/gate.sh --fast     # tests + narrow only (quick inner loop)
 set -u
 cd "$(dirname "$0")/.."
 
-# Re-derived on master 6d0247c (docs/PYPY.md 9.6).  The previous pair
-# (c2befef1 / 47e06a41) was correct up to master 15b9764; 6d0247c's effects.py
-# clamps every rating at 0 rather than only happiness, which GreedyBot's
-# evaluation goes through, so the digests legitimately moved.  Both numbers
-# below were computed from scratch on a clean master worktree AND on this
-# branch, and agree -- which is the only thing that makes them trustworthy.
+# Re-derived on master 4886b65 (2026-07-26), per docs/PYPY.md 9.0's rule:
+# compute from scratch on a clean detached worktree of master AND
+# independently on this worktree, and require the two to agree -- agreement
+# is the proof, not either number alone.
+#
+# NARROW (6f5c72ef) is unchanged from the 6d0247c derivation (9.6): none of
+# its 3 greedy seeds happen to touch a combat rules interaction. WIDE moved,
+# 7814c5c9 -> a966d158: 33bd156 ("Fix three combat rules bugs found by the
+# audit", between 6d0247c and 4886b65) changed engine/actions.py and
+# engine/effects.py -- real war/pact/aggression rules fixes that GreedyBot's
+# own evaluation goes through -- and the wider 10-seed greedy set is large
+# enough to catch a game where one of the three bugs used to fire. This is a
+# legitimate behaviour change, not a broken gate; verified as the cause by
+# `git log 6d0247c..4886b65 -- engine/ ':!engine/bots'` naming exactly that
+# commit as the only non-journal/non-perf-check engine change in range.
 NARROW=6f5c72ef
-WIDE=7814c5c9
+WIDE=a966d158
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
 # catch a change to WeightedBot, the bot the league actually trains (9.14).
-# These two are the same 33/102 split played by WeightedBot instead.  Derived
-# per 9.0's rule: from scratch on a clean detached worktree of master 6d0247c
-# AND on this branch, agreeing.
-WNARROW=dff85378
-WWIDE=477d1c1f
+# These two are the same 33/102 split played by WeightedBot instead.
+#
+# Re-derived on master 4886b65 (2026-07-26), same two-sided discipline as
+# above. Both moved from the dff85378/477d1c1f pair derived at 6d0247c:
+# e990920 replaced WeightedBot's default `lateness()` schedule (the
+# turns-remaining horizon fix) well after 6d0247c, and that is exactly the
+# function every WeightedBot feature reads to price a card/action against the
+# turns remaining -- there was never a chance the old pair would still match.
+WNARROW=b943e1a6
+WWIDE=540c3f97
 
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }
