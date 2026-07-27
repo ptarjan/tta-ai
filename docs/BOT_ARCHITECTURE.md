@@ -304,3 +304,229 @@ PlanBot, because those weights were hill-climbed to compensate for the very
 artifacts PlanBot removes (§2.2).
 
 <!-- RESULT PENDING -->
+
+---
+
+## 4. The architecture options, priced
+
+All costs INFERRED from the §1 census; the multipliers are against the current
+1-ply WeightedBot at 2p (0.451 cpu-s/game, 163 decisions/game, 115 us per
+forward-model step, 30 us per evaluation).
+
+### 4.1 Vanilla MCTS with full random rollouts — NO-GO
+
+One simulation costs one full playout: **10.3 ms** measured from a mid-game
+position. At S simulations per decision the game costs `163 * S * 10.3 ms`.
+
+| S | cpu-s/game | x current | n=400 A/B on 4 workers |
+|---|---|---|---|
+| 100 | 168 | 373x | 4.7 h |
+| 400 | 671 | 1490x | 18.6 h |
+| 1000 | 1679 | 3720x | 46.6 h |
+
+With a branching factor of 11.6, S=100 is barely one visit per child — it is
+noise, not search. The budget that would actually be a search (S>=1000) is
+**46 hours for a single A/B** and is unusable for training. Rule it out.
+
+### 4.2 MCTS with truncated rollouts + linear eval at the leaf — affordable once, not trainable
+
+A depth-`d` truncated rollout costs `d * 115 us + 30 us`. At d=10 that is
+1.18 ms/sim.
+
+| S | cpu-s/game | x current | n=400 on 4 workers |
+|---|---|---|---|
+| 100 | 19 | 43x | 32 min |
+| 400 | 77 | 170x | 2.1 h |
+
+Affordable for one experiment. Not affordable for a self-play training loop,
+which needs thousands of games per generation.
+
+### 4.3 MCTS with eval-only leaves (no rollout) — the affordable MCTS
+
+One simulation is one `apply` + one `legal_moves` + one `evaluate` plus Python
+tree bookkeeping: call it **200 us**.
+
+| S | cpu-s/game | x current | n=400 on 4 workers |
+|---|---|---|---|
+| 400 | 13 | 29x | 22 min |
+| 1600 | 52 | 116x | 1.4 h |
+
+This is the only MCTS variant that is both affordable and trainable. But price
+what it *buys*. With branching 11.6, S=1600 spread uniformly is 2.9 plies; MCTS
+concentrates, so a realistic principal line is 6-10 plies. A 2p player-turn is
+**~4.6 moves** (185 moves / ~40 player-turns). So an affordable MCTS sees
+**my turn plus roughly the opponent's reply** — one turn more than §4.4 gets for
+2-7x less money.
+
+In a game whose payoffs land 5-15 turns out (a wonder started in round 12
+completes 59% of the time; started round 13+, 14% — docs/HEURISTICS.md, 235
+builds over 120 games), one extra turn of depth is not where the value is. And
+at 3-4 players the scalar backup breaks: you need max^n or paranoid, and the
+opponent's reply has to be modelled by *its own* turn-level search, so the cost
+squares.
+
+**Verdict: MCTS is the wrong tool for TtA on this hardware in this language.**
+Not because MCTS is bad — because the forward model is three orders of magnitude
+too slow relative to the game's payoff horizon. The leverage in TtA is in the
+leaf evaluation, not in the tree. This is the opposite of chess and it follows
+from the game's structure (economic engine-building, low branching, long payoff
+horizon, almost all information public) rather than from an analogy.
+
+The measured record backs this: every intervention in this repo that produced a
+large gain was about *knowing what a thing is worth* (`hand_potential`, +20
+points, n=400; BookBot's priority list, +12.9 points over the champion, n=400),
+and every intervention that changed *when/where to look* without changing what
+the evaluator knows made the bot worse (five thresholds, two methods, n=200-400).
+
+**Re-open this if the engine gets ~10x faster.** At 10x, §4.3 at S=400 costs 3x
+current and becomes trainable. `legal_moves` is 60% of the forward model
+(MEASURED, cProfile) and recomputes every card's cost from scratch on every
+call, so an incremental generator plus the journal (1.44x measured on
+WeightedBot, docs/PYPY.md 9.15) plausibly gets 2.5-4x. 10x needs a compiled
+core. **A 10x forward-model speedup is worth more than any algorithmic
+cleverness available here**, exactly as the brief suspected.
+
+### 4.4 Turn-level beam search with one horizon and determinization — the prototype
+
+`PlanBot`, §3. MEASURED at **~16x** current. Affordable for experiments *and*
+for training. It is the smallest change that removes three defects at once
+(horizon asymmetry, single-action myopia, information leak) and it is the only
+search proposal that survives the §6 prior, because it buys lookahead rather
+than only removing the flattery.
+
+### 4.5 A learned value function — the largest available lever
+
+Two things are true at once about the current trainer:
+
+* the hypothesis class is a **linear function of 80 engineered features**, and
+* it is fitted by a hill climb whose signal is a win-rate comparison over a
+  batch of games — on the order of **one bit per batch, for 82 parameters**.
+
+A regression on outcomes extracts a real-valued target from **every state of
+every game**. MEASURED: `tools/gen_value_data.py` emits ~76 rows per 2p game
+(one per player per turn boundary), so 500 games is ~38,000 labelled rows for
+225 cpu-s of self-play. That is three to four orders of magnitude more signal
+per CPU-second than the climb.
+
+Crucially, the design matrix can be made **exactly** `evaluate`'s
+parameterisation — base feature, `_early` = (1-L) * feature, `_late` = L *
+feature — so a fitted coefficient vector is a **drop-in weight file**. A
+head-to-head between a fitted vector and a climbed vector, in the same bot, is
+therefore a clean test of the *trainer* with everything else held fixed. That
+experiment is `tools/fit_value.py` and it is the second prototype; results
+below.
+
+Beyond linear, on a 6-core CPU box with **no numpy, no sklearn and no torch in
+the engine's interpreter** (verified: all three absent; the engine is stdlib by
+design):
+
+* **Linear (80 params).** Inference 30 us. Fit by stdlib Cholesky. Available
+  tonight.
+* **Linear + hand-picked crosses** (e.g. rate features x rounds-left, strength
+  x rival strength). Inference ~50 us. Cheap and keeps the eval smooth, which
+  matters: a search needs to *rank* near-identical positions.
+* **Small MLP**, 80->32->16->1 = ~3,200 multiply-adds. Pure-Python inference is
+  ~500 us, i.e. **16x the linear eval and 4x a whole search node** — it would
+  dominate everything. Train it under numpy in a venv and export JSON, but it is
+  only affordable inside a *shallow* bot (1-ply or PlanBot with a small beam),
+  not inside MCTS.
+* **Gradient-boosted trees**, 100 trees x depth 4 = ~400 comparisons, ~40 us
+  inference: the best accuracy-per-microsecond on tabular features. The risk is
+  that a tree ensemble is piecewise constant, so near-identical candidate moves
+  get **identical** scores and the search cannot rank them — which is precisely
+  the failure mode docs/WASTED_ACTIONS.md §7 diagnosed ("taking any card scores
+  ~0, and identical for every card in the row"). Use it only with a linear term
+  added back for tie-breaking.
+
+The honest ordering is: **fix what the features can see, then fit them properly,
+and only then consider a bigger hypothesis class.** A nonlinear model over
+features that cannot tell `Crusades` from `Rats` (§2.3) will learn a better
+function of the wrong inputs.
+
+### 4.6 What to do with the existing linear eval
+
+Keep it. It is a working, fast (30 us), smooth ranking function, and it is the
+right *prior* and *rollout policy* for anything built on top. Nothing in the
+diagnosis argues for throwing it away; the arguments are all about (a) what it
+can see, (b) where it is called, and (c) how its coefficients are chosen.
+
+---
+
+## 5. The external anchor (Phase 4) — the cheapest credible option
+
+`docs/EXTERNAL_AIS.md` §7 recommends 10-15 logged games against the CGE app's
+Hard AI, costed at **12-18 hours of the user's time**. That is still the only
+way to get a *win rate* against a named external opponent, and its §6c power
+analysis is right that a win rate is the expensive statistic (33% -> 42% needs
+~220 games).
+
+There is a much cheaper anchor that nobody has costed, and it follows from
+§6c's own observation that **score margin is the dense statistic**:
+
+> **Use the distribution of final culture scores in real human games as an
+> absolute yardstick.**
+
+Mean final culture per player is a population statistic of *how well the table
+plays*, and it needs no bot-versus-human matches at all. Our 2p champion scores
+~124 mean culture and BookBot ~155 (n=400, docs/STRENGTH_CHECK.md). If human 2p
+base-game finals average, say, 210, then both bots are far below competent human
+play and we know it for the cost of reading a few hundred game summaries. If
+they average 150, BookBot is already at human average.
+
+This is worth doing because it answers the question the win-rate harness does
+*not*: **how strong are these bots on an absolute scale**, which is the question
+this project has never been able to answer.
+
+Cost, and what it asks of the user:
+
+* It needs **final scores only**, not journals — the summary/outcome metadata,
+  which `docs/EXTERNAL_AIS.md` already costs at ~3.6k polite GETs for the whole
+  index, and far fewer for a 200-500 game sample.
+* n=200-500 finished 2p and 3p base-game games is enough: the per-game sd of
+  final culture is 40-50, so a 500-game sample pins the population mean to about
+  +/- 4 culture.
+* **It requires the user's decision to run any scrape at all.** I have not
+  scraped anything, and a pilot is being run separately. The ask is a yes/no on
+  a rate-limited metadata pull, not hours of play.
+* Caveats to state up front: mixed skill pool, unknown timeout/abandon rate,
+  and score inflation from long games. All of those bias the human mean in
+  knowable directions and none of them destroy the comparison.
+
+**Recommendation: do the score-distribution anchor first** (cheap, needs one
+decision from the user, answers the absolute-strength question), and hold the
+12-18 hour Hard-AI harness in reserve for when there is a bot worth spending
+the user's evenings on.
+
+### On the BGO corpus as *training* data
+
+The coordinator is right that `docs/EXTERNAL_AIS.md` §7 ranked move-level BGO
+logs #6 ("defer") on a reason — "the choice set is unrecoverable" — that is an
+objection to **imitation learning** (which needs `(state, choice set, chosen
+move)`) and not to **value learning** (which needs only `(state, outcome)`).
+The ranking should move up. But not to #1, for three reasons that are about cost
+rather than principle:
+
+1. **Reconstructing state is not parsing, it is replaying.** Our ~57 features
+   need workers per tech, resources, food, science, happiness, government,
+   wonders, units, colonies. Getting them from a journal means executing the
+   logged moves through our engine in a *forced-replay* mode that bypasses
+   `legal_moves` — a new engine entry point, a mapping from every journal event
+   type to an engine mutation, and a reconciliation loop for the events the
+   journal summarises rather than states. That is real engineering, and it is
+   also a superb correctness test of the engine, which is a genuine bonus.
+2. **The reconstructed state is partial in exactly the place we most need it.**
+   Military hands are hidden until played and the card row is never logged, so
+   we would learn a value function over a *reduced* observation. That is fine
+   for a public-information value head and useless for the military-card
+   blindness of §2.3.
+3. **A value function fitted to mixed-skill human play estimates V under that
+   population's policy, not V\*.** It is a good *initialiser* and a good
+   *regulariser* against self-play blind spots — the coordinator's argument for
+   it is sound — but it is not a substitute for policy iteration, and AlphaGo's
+   own experience was that the human-data value net was the weaker of the two.
+
+So: **self-play value regression first** (free, immediate, already built),
+**human score distribution as the absolute anchor second** (cheap, one user
+decision), **BGO value learning third** (real, expensive, do it once self-play
+has visibly plateaued), **BGO imitation last** (the original objection stands).
+
