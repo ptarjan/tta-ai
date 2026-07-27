@@ -113,6 +113,19 @@ def load_spec(spec):
     """
     if spec in BUILTINS:
         return spec
+    if spec.startswith("plan:"):
+        # `plan:FILE,width=8,samples=1,det=1` -- whole-turn beam search under
+        # the SAME weights, so `--a plan:champ.json --b champ.json` is an
+        # exact search-only A/B (engine/bots/plan.py).
+        rest = spec[len("plan:"):].split(",")
+        path, opts = rest[0], {}
+        for kv in rest[1:]:
+            if not kv:
+                continue
+            k, _, v = kv.partition("=")
+            opts[k.strip()] = int(v)
+        inner = "default" if path in ("", "default") else load_spec(path)
+        return ("plan", inner, opts)
     if spec.startswith("quiesce:"):
         rest = spec[len("quiesce:"):].split(",")
         path, opts = rest[0], {}
@@ -129,6 +142,14 @@ def load_spec(spec):
 
 def make_bot(spec, seed):
     from engine import bots as B
+    if isinstance(spec, tuple) and spec and spec[0] == "plan":
+        from engine.bots.plan import PlanBot
+        _, inner, opts = spec
+        w = None if inner == "default" else inner
+        return PlanBot(weights=w, seed=seed,
+                       width=opts.get("width"),
+                       samples=opts.get("samples"),
+                       determinize=bool(opts.get("det", 1)))
     if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
         from engine.bots.quiescent import QuiescentBot
         _, inner, opts = spec
@@ -149,8 +170,8 @@ def make_bot(spec, seed):
 
 
 def spec_name(spec, fallback):
-    if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
-        return "quiescent"
+    if isinstance(spec, tuple) and spec and spec[0] in ("quiescent", "plan"):
+        return spec[0]
     return spec if isinstance(spec, str) else fallback
 
 
