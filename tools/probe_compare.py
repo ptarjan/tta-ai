@@ -1,102 +1,133 @@
 #!/usr/bin/env python3
-"""Compare the horizon-fix probe arm's trajectory against the live 4p arm's own
-first-N-generation history, matched on GENERATION, not wall clock.
+"""Compare 4p league arms' trajectories, matched on GENERATION, not wall clock.
 
-Both arms write `fullcheck_4p.jsonl` -- a 48-game duel against every pool member
-every 10 generations.  The pool-weighted win rate and culture margin over that
-file is the only trajectory metric both arms produce on the same schedule.
+    python3 tools/probe_compare.py
 
-    python3 tools/probe_compare.py [PROBE_STATE] [LIVE_STATE]
+Arms are configured in `ARMS` below.  Read-only: never writes to any state dir.
 
-Read-only.  Never writes to either state dir.
+WHY THERE IS A "HORIZON-INVARIANT" METRIC HERE
+----------------------------------------------
+The obvious statistic -- the pool-weight-averaged win rate over the whole
+`fullcheck_4p.jsonl` -- is NOT comparable between an arm running the new
+`lateness()` and an arm running the old one, because three of the thirteen full
+check opponents are themselves `WeightedBot`s and therefore change when the
+horizon changes:
+
+    default                   arena.make_bot: WeightedBot(seed)  -> DEFAULT_WEIGHTS
+    past:ladder_4p/gen00000   WeightedBot(weights=...)
+    past:league_4p/gen00103   WeightedBot(weights=...)
+
+and `docs/CULTURE_GAP.md` 8d/8f measured that the new horizon makes
+DEFAULT_WEIGHTS *stronger* (+7.5 points at 4p) and makes an already-trained
+champion *weaker* (20.1% against a 25% null).  So an arm on the new horizon
+faces a harder `default` and a crippled `past:league_4p/gen00103` -- movement
+that says nothing about the arm itself.  It showed up immediately: at matched
+gen 10 the probe read +0.396 against `past:league_4p/gen00103` and -0.198
+against `default`, which is the artifact, not a result.
+
+The other ten opponents never call `lateness()` and are byte-identical across
+the two builds:
+
+    book, book2                       BookBot v1 / v2      (rule-based)
+    var:{culture,infra,military,      VariantBot           (BookBot subclass)
+         science,tempo,wonder}
+    greedy                            GreedyBot            (its own WEIGHTS,
+                                                            its own evaluate())
+    random                            RandomBot
+
+Those ten are the fixed yardstick and `HORIZON_INVARIANT` below is exactly that
+set.  Both metrics are printed; the invariant one is the one to read.
 """
 import json
 import os
 import sys
 
-PROBE = sys.argv[1] if len(sys.argv) > 1 else "experiments/probe_state_4p"
-LIVE = sys.argv[2] if len(sys.argv) > 2 else "/Users/pt/tta-ai/experiments/league_state"
+LIVE = "/Users/pt/tta-ai/experiments/league_state"
+ARMS = [
+    ("probe  (new horizon)", "/tmp/tta-probe/experiments/probe_state_4p"),
+    ("control(old horizon)", "/tmp/tta-control/experiments/control_state_4p"),
+    ("live   (old horizon)", LIVE),
+]
+
+#: opponents whose play does not depend on `weighted.lateness()` -- see module
+#: docstring.  Everything else in the full check is a WeightedBot.
+HORIZON_INVARIANT = frozenset((
+    "book", "book2", "greedy", "random",
+    "var:culture", "var:infra", "var:military",
+    "var:science", "var:tempo", "var:wonder",
+))
 
 
-def load(state_dir):
-    p = os.path.join(state_dir, "fullcheck_4p.jsonl")
+def load(state_dir, name):
+    p = os.path.join(state_dir, name)
     if not os.path.exists(p):
         return []
-    return [json.loads(l) for l in open(p)]
+    with open(p) as fh:
+        return [json.loads(l) for l in fh]
 
 
-def pooled(rec):
-    """Pool-weight-averaged win rate and culture margin for one fullcheck.
+def pooled(rec, only=None):
+    """Pool-weight-averaged win rate, culture margin, and a standard error.
 
-    The standard error treats each opponent's `win_rate` as a binomial over its
-    own n (48) and the opponents as independent, which is optimistic -- the same
-    candidate vector plays all of them, so its own strength is a shared term
-    that this does not price.  Read it as a floor on the error, not the error.
+    The se treats each opponent as an independent binomial over its own n.
+    That is optimistic -- one candidate vector plays all of them, so its own
+    strength is a shared term this does not price -- so read it as a floor.
     """
-    res = rec["results"]
+    res = {k: v for k, v in rec["results"].items()
+           if only is None or k in only}
+    if not res:
+        return None
     tw = sum(v["weight"] for v in res.values())
     win = sum(v["win_rate"] * v["weight"] for v in res.values()) / tw
     mar = sum(v["margin"] * v["weight"] for v in res.values()) / tw
-    var = 0.0
-    for v in res.values():
-        p, n = v["win_rate"], max(1, v["n"])
-        var += (v["weight"] / tw) ** 2 * p * (1 - p) / n
+    var = sum((v["weight"] / tw) ** 2 * v["win_rate"] * (1 - v["win_rate"])
+              / max(1, v["n"]) for v in res.values())
     return win, mar, var ** 0.5
 
 
-def gens(state_dir):
-    p = os.path.join(state_dir, "generations_4p.jsonl")
-    if not os.path.exists(p):
-        return []
-    return [json.loads(l) for l in open(p)]
-
-
 def main():
-    pr, lv = load(PROBE), load(LIVE)
-    pg, lg = gens(PROBE), gens(LIVE)
-    print(f"probe  {PROBE}")
-    print(f"  generations {len(pg)}  accepts {sum(1 for r in pg if r['accepted'])}"
-          f"  wall {sum(r['secs'] for r in pg) / 3600:.2f}h"
-          f"  {sum(r['secs'] for r in pg) / max(1, len(pg)):.0f}s/gen")
-    print(f"live   {LIVE}")
-    print(f"  generations {len(lg)}  accepts {sum(1 for r in lg if r['accepted'])}"
-          f"  wall {sum(r['secs'] for r in lg) / 3600:.2f}h"
-          f"  {sum(r['secs'] for r in lg) / max(1, len(lg)):.0f}s/gen")
+    arms = []
+    for label, sd in ARMS:
+        fc = load(sd, "fullcheck_4p.jsonl")
+        gens = load(sd, "generations_4p.jsonl")
+        arms.append((label, sd, fc, gens))
+
+    print("=" * 78)
+    for label, sd, fc, gens in arms:
+        if not gens:
+            print(f"{label}  {sd}\n    (not started)")
+            continue
+        secs = sum(r["secs"] for r in gens)
+        print(f"{label}  {sd}")
+        print(f"    gen {len(gens):>4}   accepts {sum(1 for r in gens if r['accepted']):>3}"
+              f"   {secs / max(1, len(gens)):>5.0f}s/gen (in-generation)"
+              f"   fullchecks {len(fc)}")
+
+    live_fc = {r["gen"]: r for r in arms[-1][2]}
+    for metric_name, subset in (("HORIZON-INVARIANT (10 opponents)", HORIZON_INVARIANT),
+                                ("all 13 opponents (confounded, see docstring)", None)):
+        print("\n" + "-" * 78)
+        print(metric_name)
+        hdr = "  gen |"
+        for label, _, fc, _ in arms:
+            if fc:
+                hdr += f" {label.split()[0]:>17} |"
+        print(hdr)
+        print("      | " + " | ".join("      win   margin" for l, _, f, _ in arms if f))
+        allgens = sorted({r["gen"] for _, _, fc, _ in arms for r in fc})
+        for g in allgens:
+            row = f"  {g:>3} |"
+            for label, _, fc, _ in arms:
+                if not fc:
+                    continue
+                rec = next((r for r in fc if r["gen"] == g), None)
+                if rec is None:
+                    row += "        -        - |"
+                    continue
+                w, m, se = pooled(rec, subset)
+                row += f"  {w:.3f}+-{se:.3f} {m:>7.1f} |"
+            print(row)
     print()
-    lvm = {r["gen"]: r for r in lv}
-    print("  gen |     PROBE win  margin |      LIVE win  margin |   d(win)+/-se  d(marg)")
-    print("  ----+-----------------------+-----------------------+----------------------")
-    for r in pr:
-        g = r["gen"]
-        pw, pm, pse = pooled(r)
-        if g in lvm:
-            lw, lm, lse = pooled(lvm[g])
-            dse = (pse ** 2 + lse ** 2) ** 0.5
-            print(f"  {g:>3} | {pw:.3f}+/-{pse:.3f} {pm:>7.1f} | {lw:.3f}+/-{lse:.3f} {lm:>7.1f} |"
-                  f"  {pw - lw:+.3f}+/-{dse:.3f} {pm - lm:+6.1f}")
-        else:
-            print(f"  {g:>3} | {pw:.3f}+/-{pse:.3f} {pm:>7.1f} |            -       - |"
-                  f"        -           -")
-    if not pr:
-        print("  (probe has not reached its first fullcheck yet)")
-    # per-opponent detail at the last matched generation
-    matched = [r for r in pr if r["gen"] in lvm]
-    if matched:
-        r = matched[-1]
-        g = r["gen"]
-        print(f"\nper-opponent at matched gen {g} (n=48 each, so +/-0.12 on a win rate):")
-        pres, lres = r["results"], lvm[g]["results"]
-        print(f"  {'opponent':<26} {'probe':>7} {'live':>7} {'d':>7} | "
-              f"{'probeM':>8} {'liveM':>8}")
-        for k in sorted(set(pres) | set(lres)):
-            a, b = pres.get(k), lres.get(k)
-            if not a or not b:
-                print(f"  {k:<26} {'-' if not a else a['win_rate']:>7} "
-                      f"{'-' if not b else b['win_rate']:>7}   (only one arm)")
-                continue
-            print(f"  {k:<26} {a['win_rate']:>7.3f} {b['win_rate']:>7.3f} "
-                  f"{a['win_rate'] - b['win_rate']:>+7.3f} | "
-                  f"{a['margin']:>8.1f} {b['margin']:>8.1f}")
 
 
 if __name__ == "__main__":

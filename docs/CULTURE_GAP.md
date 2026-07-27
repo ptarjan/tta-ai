@@ -1258,3 +1258,115 @@ separately, because there is nothing to measure: it is gauge.
 `C.db()` call stays out of the search loop, `horizon_age` is correctly kept out
 of `DEFAULT_WEIGHTS` and inside `hillclimb.FROZEN` so no mutation can reach it,
 and the [0,1] clamp is pinned by a test. No defects found.)
+
+---
+
+## 14. The time box was lifted mid-run: a matched control arm, and a metric bug
+
+Two changes to the experiment, both made after §13 was written and committed.
+
+### 14a. A control arm, which removes confounds 13c#2 and 13c#3 outright
+
+`/tmp/tta-control` is a **detached** worktree at master `8543933` — that is
+exactly the probe's branch minus the horizon commit, since everything else on
+`probe/horizon-4p` is documentation and `tools/`. Launched 21:22 MDT:
+
+```
+cd /tmp/tta-control
+nohup experiments/run_league.sh 4 24 1 2 12 4 1.2816 \
+    --init default --weight-guard clamp --past-k 2 \
+    --state-dir /tmp/tta-control/experiments/control_state_4p &
+```
+
+Supervisor PID **60757**. Same fresh-state-dir setup, same `--init default`,
+same one worker, same current master, same two-sided guard, same journal
+engine — **the horizon function is the only difference.** That deletes the two
+confounds §13c could only enumerate:
+
+* **13c#2 (the two-sided guard) — gone.** Both arms have it from gen 1.
+* **13c#3 (pre-journal engine) — gone.** Both arms are journal-only throughout.
+
+The live arm's on-disk history stays in the tables as a third reference point,
+but it is now the *weak* comparison and the probe-vs-control pair is the
+experiment. §13c#1 (worker count) was already shown not to affect play, #4
+(pool drift) and #5 (n=1 per arm) and #6 (sigma) survive unchanged — with the
+important improvement that #4 is now symmetric between two arms started the
+same way rather than between a fresh arm and a 4-hour-old one.
+
+**Core budget.** The box is 6 cores with 3 live arms × 2 workers = 6. Probe and
+control are 1 worker each, so the box now runs 8 workers on 6 cores — 33%
+oversubscribed. That is a deliberate choice, authorised, and it costs wall clock
+only: §13b established that nothing in the seed derivation reads `--workers`, so
+the *play* is unaffected and the generation-matched comparison is not damaged.
+The live arms are slowed proportionally and were not otherwise touched.
+
+### 14b. The obvious metric was measuring the opponents, not the arm
+
+Caught at the probe's first full-pool check, and it is large enough to have
+produced a false positive if it had gone unnoticed.
+
+`fullcheck_4p.jsonl` grades against 13 opponents. **Three of them are
+`WeightedBot`s and therefore change when `lateness()` changes:**
+
+| opponent | how it is built | horizon-sensitive? |
+|---|---|---|
+| `default` | `arena.make_bot:74` → `WeightedBot(seed)` | **yes** |
+| `past:ladder_4p/gen00000` | `WeightedBot(weights=…)` | **yes** |
+| `past:league_4p/gen00103` | `WeightedBot(weights=…)` | **yes** |
+| `book`, `book2` | `BookBot` v1/v2 — rule-based, no evaluator | no |
+| `var:`×6 | `VariantBot`, a `BookBot` subclass | no |
+| `greedy` | `GreedyBot` — its own `WEIGHTS` and its own `evaluate()` in `engine/bots/__init__.py` | no |
+| `random` | `RandomBot` | no |
+
+And §8d/§8f already measured which way each moves: the new horizon makes
+`DEFAULT_WEIGHTS` **stronger** (+7.5 points at 4p) and makes an
+already-trained champion **weaker** (20.1% against a 25% null). So an arm on
+the new horizon is graded against a *harder* `default` and a *crippled*
+`past:league_4p/gen00103`.
+
+That is exactly what the raw gen-10 numbers showed, and they showed it loudly:
+
+| gen-10 opponent | probe | live | Δ |
+|---|---|---|---|
+| `past:league_4p/gen00103` | 0.396 | 0.000 | **+0.396** |
+| `greedy` | 0.917 | 0.688 | +0.229 |
+| `default` | 0.229 | 0.427 | **−0.198** |
+| all 8 book/variant opponents | **0.000** | **0.000** | 0.000 |
+
+The two biggest movements are both on horizon-sensitive opponents and they
+point in *opposite* directions — precisely the signature of the opponent
+changing rather than the arm improving.
+
+`tools/probe_compare.py` therefore reports a **horizon-invariant** metric over
+the 10 unaffected opponents, and that is the one to read. Effect of the
+correction at gen 10:
+
+| metric | probe | live | Δ |
+|---|---|---|---|
+| all 13 opponents (confounded) | 0.092 ± 0.007 | 0.065 ± 0.005 | **+0.027** |
+| **horizon-invariant, 10 opponents** | **0.053 ± 0.002** | **0.047 ± 0.003** | **+0.006** |
+
+**The +0.027 was four fifths artifact.** Anyone comparing two horizons through
+this file without the subset will read a win that is not there.
+
+### 14c. Matched generation 10: a null, and the reason it must be
+
+Horizon-invariant, probe vs the live arm's own gen 10:
+
+| | probe | live |
+|---|---|---|
+| win rate | 0.053 ± 0.002 | 0.047 ± 0.003 |
+| culture margin | −114.6 | −117.8 |
+
+Both arms score **exactly 0.000 against all eight book/variant opponents**;
+the entire invariant win rate at this stage is `greedy` and `random`, the two
+floor bots. Ten generations from `DEFAULT_WEIGHTS` is far too early for this
+metric to have any resolution — the live arm did not clear 0.10 on the
+invariant metric until gen 40. Culture margin is the more sensitive statistic
+while win rates are pinned at zero, and it too is a wash (+3.2 points, against
+per-opponent margin swings of ±10).
+
+Nothing is claimed from gen 10. The comparison starts to mean something around
+gen 40, where the live arm's own trajectory finally moves
+(0.047 → 0.050 → 0.074 → **0.175** → 0.189 → **0.340** at gens 10–60), and the
+probe-vs-control pair is the one that will carry it.
