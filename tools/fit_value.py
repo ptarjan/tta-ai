@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 
@@ -41,11 +42,30 @@ def load(paths, target, holdout=0.15, seed=0):
     return cols, tr, te
 
 
-def target_of(d, target, scale):
+def target_of(d, target, scale, prior=None, cols=None):
+    """The regression target.
+
+    With `--prior`, fit the RESIDUAL against a reference vector instead of
+    against zero.  That turns the ridge penalty into shrinkage toward a known
+    working policy rather than toward the origin, which matters here for a
+    concrete reason: the design matrix is exactly rank-deficient (for each
+    PHASE_KEY, `(base+c, early-c, late-c)` is the identical function), so a
+    zero-centred ridge picks a minimum-norm solution with large cancelling
+    coefficients.  Those cancel *on the data manifold* and not off it -- and
+    a greedy bot's argmax deliberately searches off it.  See
+    docs/BOT_ARCHITECTURE.md §3b for the duel that this explains.
+
+    lam -> infinity recovers the prior exactly; lam -> 0 recovers the plain
+    fit.  So `--lam` sweeps a straight line between the champion and the data.
+    """
     y = d["margin"] if target == "margin" else d["win"]
     if target == "margin" and scale:
         y = math.tanh(y / scale) * scale
-    return y - d["off"]
+    y -= d["off"]
+    if prior:
+        x = d["x"]
+        y -= sum(prior.get(c, 0.0) * x.get(c, 0.0) for c in cols)
+    return y
 
 
 def cholesky_solve(A, b):
@@ -69,7 +89,7 @@ def cholesky_solve(A, b):
     return x
 
 
-def fit(cols, rows, target, lam, scale):
+def fit(cols, rows, target, lam, scale, prior=None):
     n = len(cols)
     # standardise so one ridge penalty means the same thing on every column
     mean = [0.0] * n
@@ -92,7 +112,7 @@ def fit(cols, rows, target, lam, scale):
         x = d["x"]
         z = [(x.get(c, 0.0) - mean[j]) / sd[j] for j, c in enumerate(cols)]
         z.append(1.0)
-        y = target_of(d, target, scale)
+        y = target_of(d, target, scale, prior, cols)
         for i in range(n + 1):
             zi = z[i]
             if zi:
@@ -112,12 +132,12 @@ def fit(cols, rows, target, lam, scale):
     return raw, intercept, mean, sd
 
 
-def r2(cols, rows, raw, intercept, target, scale):
+def r2(cols, rows, raw, intercept, target, scale, prior=None):
     ys, ps = [], []
     for d in rows:
         x = d["x"]
         p = intercept + sum(raw[c] * x.get(c, 0.0) for c in cols)
-        ys.append(target_of(d, target, scale))
+        ys.append(target_of(d, target, scale, prior, cols))
         ps.append(p)
     my = sum(ys) / len(ys)
     ss_t = sum((y - my) ** 2 for y in ys)
@@ -135,17 +155,26 @@ def main():
     ap.add_argument("--scale", type=float, default=0.0,
                     help="tanh-squash the margin at this scale (0 = raw)")
     ap.add_argument("--end-turn-bias", type=float, default=0.0)
+    ap.add_argument("--prior", default=None,
+                    help="shrink toward this weight file instead of toward 0")
     args = ap.parse_args()
 
     cols, tr, te = load(args.data, args.target)
-    print(f"{len(tr)} train rows, {len(te)} holdout rows, {len(cols)} columns")
-    raw, intercept, _, _ = fit(cols, tr, args.target, args.lam, args.scale)
-    print(f"train R2 {r2(cols, tr, raw, intercept, args.target, args.scale):.4f}   "
-          f"holdout R2 {r2(cols, te, raw, intercept, args.target, args.scale):.4f}")
+    prior = None
+    if args.prior:
+        pj = json.load(open(args.prior))
+        prior = pj.get("weights", pj)
+    print(f"{len(tr)} train rows, {len(te)} holdout rows, {len(cols)} columns"
+          + (f", prior={os.path.basename(args.prior)}" if args.prior else ""))
+    raw, intercept, _, _ = fit(cols, tr, args.target, args.lam, args.scale, prior)
+    print(f"residual train R2 {r2(cols, tr, raw, intercept, args.target, args.scale, prior):.4f}   "
+          f"holdout R2 {r2(cols, te, raw, intercept, args.target, args.scale, prior):.4f}")
+    if prior:
+        raw = {c: raw.get(c, 0.0) + prior.get(c, 0.0) for c in cols}
 
     ref = json.load(open(args.ref))
     refw = ref.get("weights", ref)
-    out = {k: 0.0 for k in refw}
+    out = dict.fromkeys(refw, 0.0)
     out.update({k: round(v, 6) for k, v in raw.items()})
     # not linear in the design matrix -> carried over, not fitted
     out["hand_potential"] = refw.get("hand_potential", 0.0)
