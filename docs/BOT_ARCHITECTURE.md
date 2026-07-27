@@ -619,6 +619,56 @@ has visibly plateaued), **BGO imitation last** (the original objection stands).
 
 ---
 
+## 5b. Threats to validity, stated before the results
+
+Written before the win rates landed, so it cannot be tuned to them.
+
+**On the ranking-accuracy result (§2.3b).**
+* The states come from champion-versus-champion self-play, so they are on the
+  champion's *own* state distribution. If anything that favours the champion.
+* The ridge fit was trained on the same distribution and evaluated on games it
+  never saw, split **by game seed**, never by row — rows from one game share an
+  outcome, so a row-level split would leak.
+* At 2p, `margin(p0) = -margin(p1)`, so a within-turn pair asks exactly "which
+  of these two players is ahead", which is the right question for an evaluator
+  in a race. It does not test discrimination between two states one action
+  apart, which is what the bot actually does — see the next bullet.
+* **Ranking accuracy is not a win rate.** A value function that predicts the
+  outcome well can still induce a bad greedy policy, and the fitted V estimates
+  V^pi for the champion's policy rather than V*. The §7 duels are the test that
+  counts, and if they come back null the honest conclusion is "better predictor,
+  no better policy", not "the measurement was wrong".
+* The fitted vector is fitted **only on turn-boundary states**, but a 1-ply
+  `WeightedBot` compares *mid-turn* states, so it is being asked to extrapolate.
+  `tools/gen_value_data.py --rows every` exists to close that gap and is the
+  obvious follow-up if the 1-ply duel disappoints. `PlanBot`, by contrast,
+  evaluates only at turn boundaries — exactly the distribution the fit was
+  trained on — so the fitted vector and `PlanBot` are a matched pair by
+  construction.
+
+**On PlanBot.**
+* It runs on weights hill-climbed to compensate for the artifacts it removes
+  (§2.2), so the A/B *understates* what the design is worth. A fair number needs
+  a re-fit, which is M4.
+* `end_turn_bias` is deliberately not applied. Against a champion tuned to
+  -14.44 this is a genuine change of policy, not just of search.
+* The determinization re-shuffles only the two decks. Rival military *hands* are
+  also hidden and are not re-dealt; `weighted.features` reads no rival hand, so
+  nothing currently reads them, but a future evaluator would need them handled.
+
+**On the cost census.**
+* All timings were taken on a box running 20-25 runnable processes on 6 cores.
+  `time.process_time` is immune to that for *totals*, but cache pressure is not,
+  so absolute microsecond figures may be 10-20% pessimistic. Ratios are safe.
+
+**What I did not verify.** I did not re-derive the archaeology (owned by
+`docs/ARCHAEOLOGY.md`), the combat rules conformance (`docs/COMBAT_AUDIT.md`),
+the coverage census (`docs/COVERAGE_AUDIT.md`) or the QuiescentBot strength A/B
+(`docs/DEEPER_SEARCH.md` §4). Numbers taken from those and from the older docs
+are marked INHERITED with their n.
+
+---
+
 ## 6. Staged roadmap
 
 Each stage is independently verifiable, ships on its own, and is a no-op for the
