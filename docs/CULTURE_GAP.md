@@ -1214,3 +1214,47 @@ This is n=1 either way and a search is stochastic, so a single arm holding or
 losing its shaping is suggestive, not proof. But it is a *discrete* event with a
 named cause and a logged trigger, which is a better class of evidence than a
 0.03 difference in a pooled win rate.
+
+### 13g. A code-review note on what a restart should restart *on*
+
+Not a probe result — read off the implementation and the gauge argument, while
+waiting for generations. Relevant because the question on the table is what to
+restart the 3p/4p arms on, and the answer should not be "exactly the commit that
+happened to exist".
+
+`_L_ZERO = {2: 27.1, 3: 28.7, 4: 36.1}` are the rounds-left values at which the
+new `L` reaches 0. They were chosen (§8b, and the commit message says so
+outright) as the least-squares fit to the **old** age-bucket schedule, with the
+gauge "spent on not breaking the three already-trained champions."
+
+Evaluated at the opening position of a real game:
+
+| players | `_L_ZERO` | `rounds_left()` at game start | **L at game start** | usable span of L |
+|---|---|---|---|---|
+| 2 | 27.1 | 24.10 | 0.136 | 0.864 |
+| 3 | 28.7 | 25.33 | 0.142 | 0.858 |
+| 4 | 36.1 | 31.07 | **0.162** | **0.838** |
+
+**L never reaches 0 in a game that is actually played.** `1 − L` tops out at
+0.84–0.86, so an `_early` phase weight has ~16% less leverage over the opening
+position than it had under the old schedule, and the top ~16% of L's declared
+range is dead. That is not a bug — it is the exact price of the calibration
+target, and §8b states the Age A offset — but **the calibration target is void
+at a clean restart.** There are no trained champions left to protect; the gauge
+is free again and is currently being spent on preserving vectors that a restart
+throws away.
+
+If the arms do restart on fix #2, set `_L_ZERO[n]` to `rounds_left()` at the
+opening position (24.1 / 25.3 / 31.1) so L spans the full [0, 1]. By the gauge
+argument this changes **no reachable policy** — it is an affine reparametrisation
+— so it cannot be sold as a strategy improvement. What it changes is the *scale
+the search's steps act on*, handing the phase weights back ~16% of their
+dynamic range on an axis §12c already measures as starved by 61×. Cheap,
+principled, and it should ride along with any restart rather than be measured
+separately, because there is nothing to measure: it is gauge.
+
+(Reviewed the rest of `db5aa4d` at the same time. `rounds_left` is exact once
+`final_round_end` is set, `_tail` is memoised per (players, age) so the
+`C.db()` call stays out of the search loop, `horizon_age` is correctly kept out
+of `DEFAULT_WEIGHTS` and inside `hillclimb.FROZEN` so no mutation can reach it,
+and the [0,1] clamp is pinned by a test. No defects found.)
