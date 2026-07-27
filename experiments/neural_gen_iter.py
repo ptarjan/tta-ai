@@ -66,7 +66,7 @@ def _final_margins(state):
     return out
 
 
-def play_and_record(value, n, seed, temp, stride, krej, det=True):
+def play_and_record(value, n, seed, temp, stride, krej, epsilon=0.0, det=True):
     rng = random.Random(seed * 7919 + 17)
     st = game.new_game(n, seed=seed)
     pa, pb, vstates, vseat = [], [], [], []
@@ -95,8 +95,13 @@ def play_and_record(value, n, seed, temp, stride, krej, det=True):
                 for j in rej[:krej]:
                     pa.append(encs[gi])
                     pb.append(encs[j])
-            # sample a move by softmax over child values (exploration)
-            if temp <= 0:
+            # exploration: epsilon-greedy (scale-INDEPENDENT, robust to the
+            # ranking loss inflating value magnitudes) OR softmax over values.
+            # The ranking target above is always the greedy argmax `gi`; only
+            # the PLAYED move explores.
+            if epsilon > 0 and rng.random() < epsilon and len(valid) > 1:
+                ci = rng.randrange(len(valid))
+            elif temp <= 0:
                 ci = gi
             else:
                 m = max(vals)
@@ -126,9 +131,11 @@ def main():
     ap.add_argument("--ckpt", required=True, help="current best value net")
     ap.add_argument("--games", type=int, default=100)
     ap.add_argument("--players", type=int, default=2)
-    ap.add_argument("--temp", type=float, default=0.5,
+    ap.add_argument("--temp", type=float, default=0.0,
                     help="softmax exploration temperature over child margins "
-                         "(culture units); 0 = greedy")
+                         "(culture units); 0 = greedy (use --epsilon instead)")
+    ap.add_argument("--epsilon", type=float, default=0.2,
+                    help="epsilon-greedy exploration (scale-independent)")
     ap.add_argument("--stride", type=int, default=3)
     ap.add_argument("--krej", type=int, default=6)
     ap.add_argument("--seed0", type=int, default=0)
@@ -157,7 +164,8 @@ def main():
 
     for g in range(args.games):
         a, b, vs, y = play_and_record(value, args.players, args.seed0 + g,
-                                      args.temp, args.stride, args.krej)
+                                      args.temp, args.stride, args.krej,
+                                      args.epsilon)
         for ea, eb in zip(a, b):
             Xa[na] = ea
             Xb[na] = eb
