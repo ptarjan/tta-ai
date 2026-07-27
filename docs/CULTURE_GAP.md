@@ -1456,3 +1456,96 @@ like arms where something selected hard on the base.
    coordinate the trainer's own ablation scores at 0.000 ± 0.005 (§11).
 
 Steps 2, 3 and 4 are settled. Step 1 is the open one and is §16.
+
+## 16. Correction to §15b: the base runaway is not selected either. Nothing is selecting on this axis at all.
+
+§15b said "something is paying the search to inflate this weight". Two further
+tests say that is wrong, and I am retracting it.
+
+### 16a. A sign test on the accepted steps finds no directional selection anywhere
+
+`mutate`'s proposal is `new = w + gauss(0, s)·(|w| + 0.15)` — **symmetric around
+the current value**. So under "no selection on this coordinate", the accepted
+steps in it are a 50/50 coin flip, with no model of the game required. Every
+accepted champion is on disk in the ladders, so every accepted step is directly
+observable.
+
+| arm | accepted champions | global up-rate, all weights | `culture_rate` up-rate | p (two-sided) |
+|---|---|---|---|---|
+| 2p | 48 | **454/907 = 0.501** | 9/13 = 0.69 | 0.267 |
+| 3p | 31 | 38/79 = 0.481 | — (<8 moves) | — |
+| 4p | 23 | 41/80 = 0.512 | — (<8 moves) | — |
+
+The global up-rate is **0.501 across 907 accepted moves** — the null is exactly
+right, which is the sanity check that the test works. And *no weight in any arm
+is significant after multiplicity*: the smallest p anywhere is 0.0215
+(`strength_deficit`, 2p) against 75 weights tested, i.e. an expected 1.6 hits at
+that level by chance. `culture_rate` itself is p=0.27.
+
+**There is no directional selection on `culture_rate`, or on anything else.**
+
+### 16b. Then how did 5.0 become 32.2? Because the step is multiplicative
+
+A 9-up/4-down sign pattern moves a weight enormously when the step size is
+proportional to the weight. An up-move at w=20 adds ~5; a down-move at w=5
+removes ~1.25. That is a geometric random walk, and geometric random walks have
+a very fat right tail. Matched drift nulls (`/tmp/drift_pct.py`: same generation
+count, same accept rate, real `mutate` and real `guard_weights`, coin-flip
+acceptance, 200 runs):
+
+| arm | gens | accept | observed `culture_rate` | drift median | drift p90 | drift p99 | **P(drift ≥ observed)** |
+|---|---|---|---|---|---|---|---|
+| 2p | 335 | 14.0% | **32.25** | 0.99 | 18.4 | 60.0 | **3.5%** (σ=.25) / 5.5% (σ=.5) |
+| 3p | 212 | 14.2% | 6.25 | 2.54 | 13.9 | 52.0 | 27.5% / 20.5% |
+| 4p | 119 | 18.5% | **35.57** | 4.72 | 18.1 | 60.0 | **2.5%** (σ=.25) |
+
+Note the p99 column: **undirected drift reaches the `_clamp` ceiling of ±60
+within a few hundred generations.** The observed values sit at the ~3% tail at
+2p and 4p and at the *median-ish* 20–27% at 3p — and `culture_rate` was picked
+out post hoc from ten phase keys, so a 3% tail in two arms is not a result. It
+is what this optimiser does.
+
+The median is the other half of the story: drift takes `culture_rate` from 5.0
+down to **0.99** at the median, because a multiplicative walk has negative
+log-drift. So the *typical* outcome of this optimiser is not "the weight stays
+near its sensible default" — it is "the weight ends up somewhere between 0.1 and
+60, essentially at random". Two arms went up. One went nowhere.
+
+### 16c. The revised answer to §10 #1
+
+**Nothing is actively flattening the culture-rate axis. The axis was never
+explored.** The whole effect is the optimiser's move generator plus one guard
+asymmetry, with the game playing no part:
+
+1. `mutate`'s step is proportional to `|w|`, so every unbounded weight performs
+   a **geometric random walk** that the accept test is too weak to constrain in
+   the flat region the champion occupies. (`culture_rate` *is* load-bearing —
+   ablating it to 0 costs 0.11–0.18 win share, §11 — but the evaluation is flat
+   between 20 and 35, so the walk is free there.)
+2. Two of three arms happened to walk up. That inflates the level coordinate's
+   step by the same factor, so the walk accelerates — no selection needed.
+3. The phase multipliers are O(1) and stay at the `0.15·s` step floor. Once the
+   base is 35, the level is explored **39–41× faster than the shape** (2.6× at
+   3p, the arm whose base did not run). That is why the shape stops moving.
+4. `guard_weights`' one-sided clamp then pins the ten *positive*-default
+   multipliers at exactly 0.000 — 15.7% per multiplier under pure drift,
+   against 20.0% observed, and 0.0% with the guard off (§15a).
+
+So the honest headline is not "the search is being paid to do something
+perverse". It is: **the trained weight vector's large entries are substantially
+random, and the phase-shaping entries are frozen — and the guard freezes half of
+them at exactly zero.** That both arms which lost the culture-rate race have a
+flat culture rate is then not a strategic signature; it is the same optimiser
+artefact showing up twice, and the correlation with losing the race is
+unestablished and may be coincidence at n=3 arms.
+
+### 16d. What stands, and what I retracted
+
+| claim | status |
+|---|---|
+| Exactly-zero pile-up on positive-default phase multipliers is caused by the one-sided guard clamp | **stands** — Fisher p=0.012 observed, 15.7% vs 20.0% in simulation, 0.0% with the guard off, and two specific accepted generations traced (4p gen 37, 2p gen 241) |
+| `mutate`'s step is multiplicative, giving a 39–41× level/shape exploration asymmetry at 2p/4p and 2.6× at 3p | **stands** — exact, from the code |
+| The 4p champion prices +1 culture/turn at 35.6 flat, above the theoretical ceiling (rounds remaining, ~29) everywhere | **stands** — exact arithmetic |
+| The trainer's own ablation scores the culture-rate phase multipliers at 0.000 ± 0.005 while the base is worth 0.11–0.18 | **stands** — its own logs |
+| §12c: "the step-size ratio is the trap that flattens the axis" | **corrected** (§15b) — the ratio is downstream; it makes the collapse irreversible, it does not cause it |
+| §15b: "something is paying the search to inflate the base" | **retracted** (§16a/b) — no directional selection is detectable; a multiplicative random walk explains it |
