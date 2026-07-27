@@ -36,12 +36,14 @@ GROUPS = {
     "happiness": ("happy_margin", "discontent", "uprising"),
     "actions": ("civil_actions", "military_actions", "ca_left", "ma_left"),
     "military": ("strength", "strength_rel", "strength_deficit",
-                 "strength_lead", "tactic_level", "colonies", "pacts"),
+                 "strength_lead", "tactic_level", "colonies", "pacts",
+                 "pact_blocks_attack", "auction_committed", "auction_bid"),
     "tech": ("tech_levels", "gov_level", "best_farm", "best_mine", "best_lab",
              "best_temple", "best_theater", "best_library", "best_arena",
              "best_unit", "num_techs", "special_techs"),
     "wonders": ("wonders", "wonder_progress", "wonder_remaining", "leader"),
-    "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value"),
+    "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
+              "hand_potential"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
                "rival_science_rate", "rival_strength"),
     "search": ("end_turn_bias",),
@@ -49,6 +51,18 @@ GROUPS = {
 
 
 def group_of(key):
+    """The feature-group label for `key`, used to tag every published weight
+    table (docs/HEURISTICS.md, docs/HEURISTICS_PROGRESS.md,
+    experiments/PROGRESS.md all pass through here via analyze_weights.py).
+
+    Raises rather than returning "?" for anything GROUPS does not name: a
+    silent "?" is how four features (pact_blocks_attack, auction_committed,
+    auction_bid, hand_potential -- including hand_potential, the single
+    most load-bearing 2p weight in the ablation ledger) vanished from every
+    weight table this project has generated. A new feature must be added to
+    GROUPS in the same commit that adds it to BASE_WEIGHTS/PHASE_KEYS; this
+    exception is what makes that a hard requirement instead of a silent gap.
+    """
     base = key
     for suf in ("_early", "_late"):
         if key.endswith(suf):
@@ -57,7 +71,10 @@ def group_of(key):
     for g, keys in GROUPS.items():
         if base in keys:
             return g + ("/phase" if base != key else "")
-    return "?"
+    raise KeyError(
+        f"summarize.group_of: {key!r} (feature {base!r}) is not in any "
+        "GROUPS bucket in experiments/summarize.py. Add it to the right "
+        "group there -- do not let it fall through to '?'.")
 
 
 def load(k):
