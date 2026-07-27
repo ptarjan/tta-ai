@@ -8,3 +8,10 @@ experiments/logs/
 experiments/baselines.jsonl
 experiments/league_state/
 games/
+
+# Neural value-net checkpoints and self-play data (kept on the 3090 desktop,
+# not committed -- see docs/NEURAL_EVAL.md). Multi-hundred-MB artifacts.
+checkpoints/
+*.pt
+data/
+data2/

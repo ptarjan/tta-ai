@@ -1,0 +1,89 @@
+"""Encoder shape / determinism / legality tests (torch-free).
+
+These run on the Mac in the normal `python3 -m unittest` suite: the encoder
+has no torch dependency by design.  The neural NET tests live elsewhere and
+skip when torch is absent.
+"""
+import unittest
+
+from engine import game, actions
+from engine.bots import neural_encode as E
+
+
+class TestNeuralEncode(unittest.TestCase):
+    def test_card_vec_dim_constant(self):
+        self.assertEqual(len(E.card_vec("Pyramids")), E.CARD_VEC_DIM)
+        self.assertEqual(len(E.card_vec(None)), E.CARD_VEC_DIM)
+        self.assertEqual(len(E.card_vec("no such card")), E.CARD_VEC_DIM)
+        # a None/unknown card is the zero vector
+        self.assertTrue(all(x == 0.0 for x in E.card_vec(None)))
+
+    def test_fixed_length_across_player_counts(self):
+        for n in (2, 3, 4):
+            for seed in (0, 1, 2):
+                st = game.new_game(n, seed=seed)
+                for idx in range(n):
+                    v = E.encode(st, idx)
+                    self.assertEqual(len(v), E.ENCODING_DIM, (n, seed, idx))
+                    self.assertTrue(all(isinstance(x, float) for x in v))
+
+    def test_length_stable_through_a_game(self):
+        # advance a real game a few dozen plies and keep checking the length
+        from engine.bots import WeightedBot
+        bots = [WeightedBot(seed=1), WeightedBot(seed=2)]
+        st = game.new_game(2, seed=7)
+        import random
+        rng = random.Random(0)
+        for _ in range(120):
+            if st.game_over:
+                break
+            moves = actions.legal_moves(st)
+            if not moves:
+                break
+            mv = bots[st.decider()].pick(st, moves)
+            v = E.encode(st, st.decider())
+            self.assertEqual(len(v), E.ENCODING_DIM)
+            actions.apply(st, mv, rng)
+
+    def test_deterministic(self):
+        st = game.new_game(3, seed=11)
+        self.assertEqual(E.encode(st, 0), E.encode(st, 0))
+
+    def test_row_cost_matches_engine(self):
+        self.assertEqual(tuple(E._ROW_COST), tuple(actions.ROW_COST))
+
+    def test_describe_consistent(self):
+        d = E.describe()
+        self.assertEqual(
+            d["encoding_dim"],
+            d["global_dim"] + d["row_dim"]
+            + d["max_players"] * d["player_block_dim"])
+        st = game.new_game(2, seed=3)
+        self.assertEqual(len(E.encode(st, 0)), d["encoding_dim"])
+
+    def test_does_not_leak_civil_deck_order(self):
+        # Shuffling the hidden civil-deck ORDER must not change the encoding:
+        # the encoder is only allowed to read the deck's SIZE (via rounds_left),
+        # never its order.  (Card identities in the visible ROW are public and
+        # ARE encoded; those are untouched here.)
+        import random
+        st = game.new_game(2, seed=4)
+        # advance a little so decks are non-trivial
+        from engine.bots import WeightedBot
+        bots = [WeightedBot(seed=1), WeightedBot(seed=2)]
+        rng = random.Random(0)
+        for _ in range(20):
+            if st.game_over:
+                break
+            moves = actions.legal_moves(st)
+            mv = bots[st.decider()].pick(st, moves)
+            actions.apply(st, mv, rng)
+        before = E.encode(st, st.decider())
+        random.Random(99).shuffle(st.civil_deck)
+        random.Random(98).shuffle(st.military_deck)
+        after = E.encode(st, st.decider())
+        self.assertEqual(before, after)
+
+
+if __name__ == "__main__":
+    unittest.main()

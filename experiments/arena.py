@@ -113,6 +113,21 @@ def load_spec(spec):
     """
     if spec in BUILTINS:
         return spec
+    if spec.startswith("neural:"):
+        # `neural:CKPT.pt,det=1,etb=0` -- the value net inside the 1-ply search
+        # (engine/bots/neural_bot.py).  Torch is imported lazily in make_bot,
+        # so this branch and load_spec stay torch-free on the Mac.  NOTE: for a
+        # multi-game duel prefer experiments/neural_eval.py (single process,
+        # one GPU-resident model); through arena's process pool each worker
+        # reloads the checkpoint per game.
+        rest = spec[len("neural:"):].split(",")
+        path, opts = rest[0], {}
+        for kv in rest[1:]:
+            if not kv:
+                continue
+            k, _, v = kv.partition("=")
+            opts[k.strip()] = v
+        return ("neural", path, opts)
     if spec.startswith("plan:"):
         # `plan:FILE,width=8,samples=1,det=1,war=1` -- whole-turn beam search under
         # the SAME weights, so `--a plan:champ.json --b champ.json` is an
@@ -142,6 +157,18 @@ def load_spec(spec):
 
 def make_bot(spec, seed):
     from engine import bots as B
+    if isinstance(spec, tuple) and spec and spec[0] == "neural":
+        # lazy: torch only imported when a neural spec is actually built
+        from engine.bots.neural_net import NeuralValue
+        from engine.bots.neural_bot import NeuralBot
+        _, path, opts = spec
+        import os
+        device = opts.get("device") or ("cuda" if os.environ.get(
+            "NEURAL_DEVICE", "cuda") == "cuda" else "cpu")
+        value = NeuralValue.from_checkpoint(path, device)
+        return NeuralBot(value, seed=seed,
+                         determinize=bool(int(opts.get("det", 1))),
+                         end_turn_bias=float(opts.get("etb", 0.0)))
     if isinstance(spec, tuple) and spec and spec[0] == "plan":
         from engine.bots.plan import PlanBot
         _, inner, opts = spec
