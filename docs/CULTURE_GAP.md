@@ -1549,3 +1549,160 @@ unestablished and may be coincidence at n=3 arms.
 | The trainer's own ablation scores the culture-rate phase multipliers at 0.000 ± 0.005 while the base is worth 0.11–0.18 | **stands** — its own logs |
 | §12c: "the step-size ratio is the trap that flattens the axis" | **corrected** (§15b) — the ratio is downstream; it makes the collapse irreversible, it does not cause it |
 | §15b: "something is paying the search to inflate the base" | **retracted** (§16a/b) — no directional selection is detectable; a multiplicative random walk explains it |
+
+## 17. §11's fork, settled: the shape IS load-bearing, and the gate cannot see it
+
+§11 could not distinguish "(A) the shaping really does not matter" from "(B) the
+gate is blind to it", because the trainer's `--ablate` zeroes one multiplier at
+a time, which changes the *average price* of a rate as well as its shape. A
+null there is ambiguous between "no effect" and "two effects cancelled".
+
+`tools/shape_ab.py` removes the ambiguity by construction. It replaces
+`(base, early, late)` with `(base + (1−L̄)·early + L̄·late, 0, 0)` — **the same
+average price of a culture rate, no shape at all** — where `L̄` is the measured
+mean of `lateness()` over real decisions (0.6348 / 0.6672 / 0.6819 at 2/3/4p,
+from 9.8k/16.3k/30.0k candidate scorings). At 4p that is
+`(5.000, +2.000, −2.000)` → `(4.272, 0, 0)`: a price that runs 6.35 → 3.00 over
+the game, against a flat 4.27.
+
+Paired on identical seeds, `hillclimb_league._series`, 4p, `DEFAULT_WEIGHTS`,
+n=200 per opponent:
+
+| opponent | win rate flat vs shaped | **culture margin edge (flat − shaped)** |
+|---|---|---|
+| `var:culture` | 0.000 vs 0.000 | −1.90 ± 4.03 |
+| `book` | 0.000 vs 0.000 | −2.95 ± 4.07 |
+| `book2` | 0.000 vs 0.000 | −6.54 ± 4.70 |
+| **POOLED, n=600** | **0.000 vs 0.000** | **−3.79 ± 2.47** |
+
+**The shape is worth 3.79 ± 2.47 culture points** — negative edge means removing
+it hurts, and the 95% interval [−6.26, −1.32] excludes zero. So it is real, it
+is small, and at these opponents it converts to **exactly zero** additional wins.
+
+### The number that matters: what that is worth to the trainer's accept test
+
+The gate scores these tiers with `margin_share(m) = 0.5·(1 + tanh(m/120))`. At
+the measured operating point (`margin ≈ −166`),
+
+```
+d(gate score)/d(culture point) = (1/240)·sech²(−166/120) = 0.000928
+so 3.79 culture points  ->  0.0035 of gate score
+```
+
+against a measured gate-score standard error of **0.0081 at n=200** and
+therefore **0.0165 at the trainer's own 48-game evaluation block**.
+
+**The entire culture-rate horizon signal is 0.21σ of the trainer's accept
+statistic at its own block size.** Resolving it at 1σ would take ~1050 games per
+candidate; the trainer spends 48–192. §11's reading **(B) is correct**: the
+shaping is load-bearing and the gate is blind to it, by a factor of about five
+in standard errors. The trainer's own n=72 ablation reporting `0.000 ± 0.005`
+was not wrong — it was under-powered by ~20× in games.
+
+## 18. The synthesis, and the thing that turned out to be bigger than the question
+
+### 18a. Most of a trained weight vector is not distinguishable from a random walk
+
+`/tmp/drift_gof.py`: for every free weight, build the matched pure-drift null
+(same generation count, same accept rate, real `mutate`, real `guard_weights`,
+coin-flip acceptance, 300 runs) and locate the champion's actual value in it.
+Under "training moved this weight somewhere the accept test could resolve", the
+percentiles pile at the extremes. Under "it wandered", they are Uniform(0,1).
+Kolmogorov–Smirnov against uniform, swept over σ because the arms' σ varied
+0.08–0.8 with a mean near 0.35:
+
+| arm | gens | σ=0.15 | σ=0.25 | σ=0.35 | weights outside the null's central 90% (10% expected) |
+|---|---|---|---|---|---|
+| **2p** | 335 | p=0.14 | **p=0.59** | p=0.50 | 9 / **4** / 1 of 81 |
+| **3p** | 212 | p=0.52 | **p=0.80** | p=0.46 | 12 / **5** / 4 of 81 |
+| 4p | 119 | p<0.0001 | p=0.0041 | p=0.077 | 28 / 12 / 8 of 81 |
+
+**The 2p and 3p champions' weight vectors are statistically indistinguishable
+from an undirected random walk, at every σ tested.** Only 4p — the *youngest*
+arm at 119 generations — is distinguishable, and in the direction "weights are
+somewhat larger than drift" (median percentile 0.59–0.63).
+
+That the youngest arm is the most distinguishable is the tell: **the drift null
+widens with generation count faster than the recoverable signal accumulates.**
+
+### 18b. And yet the arms genuinely, massively improve
+
+This is not "training does nothing". The 2p arm, horizon-invariant pool win rate
+by generation:
+
+```
+gen  10   50  100  150  200  250  300  330
+    .200 .353 .450 .447 .654 .616 .645 .758
+```
+
+0.20 → 0.76 over 342 generations, still climbing, culture margin −58 → +48.
+Real, large, sustained.
+
+**Both facts are true at once, and that is the finding.** The search is making
+large real improvements while each individual weight's marginal value is where
+an undirected walk would have put it. The improvement therefore lives in the
+*joint* structure — the combination — not in any individual coordinate. This is
+the classic signature of a **sloppy model**: a few stiff directions carry the
+objective, the rest are nearly flat, and parameters along flat directions
+random-walk freely while performance improves along the stiff ones.
+
+*Caveat, stated plainly:* §18a tests **marginals**, one weight at a time. It is
+by construction blind to correlations, so it cannot and does not show that the
+*vector* is drift — §18b proves it is not. What it shows is that **no individual
+weight's value can be read as a strategic statement.**
+
+### 18c. Which dissolves the question §10 #1 asked
+
+§10 #1 said: *"Both arms that lose the culture-rate race price a culture rate as
+a constant. Something in the search is actively flattening this axis, and
+finding out what is worth more than any further shaping."*
+
+The premise does not survive:
+
+* **Nothing is actively flattening it.** No directional selection is detectable
+  on any weight in any arm (§16a: global up-rate 454/907 = 0.501; nothing
+  significant after multiplicity).
+* **`(0.000, −0.316)` and `(0.415, 0.148)` are not strategic statements.** They
+  are two coordinates of a vector whose marginals are indistinguishable from
+  drift (§18a), on an axis the gate cannot resolve to within a factor of five in
+  σ (§17).
+* **That two of three arms did it is not a signature.** Undirected drift plus
+  the one-sided guard clamp produces an exactly-zero positive-default phase
+  multiplier 15.7% of the time per multiplier (§15a), against 20.0% observed;
+  and `culture_rate` sits at the ~3% tail of drift at 2p and 4p but at an
+  ordinary 20–27% at 3p (§16b), on a weight selected post hoc from ten.
+
+What *does* survive, and is worth acting on:
+
+1. **The gate is under-powered on this axis by ~5× in σ** (§17). Measured, exact.
+2. **The one-sided guard clamp creates a spurious attractor at exactly 0** for
+   the ten positive-default phase multipliers (§15a). Measured, with a working
+   counterfactual.
+3. **`mutate`'s multiplicative step makes every unbounded weight a geometric
+   random walk** whose median takes `culture_rate` from 5.0 to 0.99 and whose
+   p99 reaches the ±60 clamp (§16b). The trained large values are, individually,
+   substantially arbitrary.
+4. **The 4p champion's 35.6 flat price for a culture rate is above the
+   theoretical ceiling everywhere in the game** (§12d). Exact. It is not
+   *caused* by anything strategic, but it is still wrong, and it is invisible to
+   the gate that is supposed to correct it.
+
+### 18d. Three proposed fixes, ranked, none landed
+
+Per instruction, these are proposals. I have not touched the climber.
+
+| # | change | evidence | cost | confidence |
+|---|---|---|---|---|
+| **1** | **Make the phase exemption symmetric.** `NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0 and k not in _PHASE_MULT)`, matching `NONPOS`. | §15a: the clamp is *necessary and sufficient* for the exactly-zero attractor — 15.7% per multiplier with the guard on, **0.0% with it off**, against 20.0% observed. §7's own gauge argument already says these clamps are meaningless. | 2 lines + a test case | **high.** The only judgement is that §7 already made this argument and deferred it; the counterfactual now supports it. |
+| **2** | **Decouple the phase multipliers' step size from the base.** In `mutate`, the step scale `(abs(w) + 0.15)` is right for value terms and wrong for O(1) multipliers. Either add a constant for `_PHASE_MULT` keys, or — better — propose in the (level, shape) basis so both coordinates get comparable budgets. | §12c/§16c: the level is explored **39–41×** faster than the shape at 2p/4p once the base runs, versus 2.6× at 3p whose base did not. Exact, from the code. | small code, **large validation** | medium. This is a real search change and must not be dropped into a running arm; it needs its own multi-hundred-generation A/B. |
+| **3** | **Give the geometric walk a restoring force.** `_clamp` at ±60 is the only bound, and drift reaches it by p99. Options: shrink the multiplicative component (`0.3·|w| + 0.3`), add a weak log-prior toward `DEFAULT_WEIGHTS`, or bound each weight at a sane multiple of its default. | §16b: drift's median takes `culture_rate` 5.0 → **0.99** and its p99 to the ±60 clamp; §18a: 2p/3p champions' marginals are indistinguishable from that walk. | small code, **large validation** | medium-low as stated. The *diagnosis* is solid; which of the three remedies is right is not measured, and scale-adaptive steps exist for good reasons. |
+
+Fix 1 is cheap, well-evidenced and self-contained. Fixes 2 and 3 are the ones
+that matter and neither can be validated without a training run of its own —
+which is exactly the experiment the probe arm was set up to do, and is the
+natural use for that machinery now that the horizon question is settled.
+
+**What I would NOT do:** add more features or more shaping to the evaluator. §17
+shows the gate cannot resolve the shaping that already exists to within a factor
+of five. Until the accept test can see an effect of that size, more
+representation is more parameters for the walk to wander in.
