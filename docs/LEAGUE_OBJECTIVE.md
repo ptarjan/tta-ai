@@ -472,6 +472,48 @@ the opposite of what "the champion scores 64.7, throw it away" suggests:
 * And 44 hours is not 48: a cold start would spend a large part of the
   remaining budget re-reaching a place the warm start is already at.
 
+### The restart as it happened, 2026-07-27 13:00
+
+All three arms came back on the cron tick, with **44h** left of the original
+48h budget and the deadline file untouched at `1785333865`
+(2026-07-29 08:04:25).
+
+```
+2026-07-27 13:00:00 watchdog: relaunched 2p (44h left, workers=1 block=12) ... --objective blend --objective-alpha 0.15 --pool-weights book=0.6,variant=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
+2026-07-27 13:00:01 watchdog: relaunched 3p (44h left, workers=2 block=12) ... --objective blend --objective-alpha 0.15 --pool-weights book=0.6,variant=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
+2026-07-27 13:00:01 watchdog: relaunched 4p (44h left, workers=2 block=24) ... --objective blend --objective-alpha 0.15 --pool-weights book=0.6,variant=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
+```
+
+and each arm's own log agrees (2p shown; 3p and 4p are identical but for the
+ladder members and `gen=`):
+
+```
+[pool] book(w=0.30,blend), book2(w=0.30,blend), var:culture(w=0.10,blend),
+       var:infra(w=0.10,blend), var:military(w=0.10,blend),
+       var:science(w=0.10,blend), var:tempo(w=0.10,blend),
+       var:wonder(w=0.10,blend), mirror(w=1.00,blend),
+       past:ladder_2p/gen00000(w=0.60,blend), past:ladder_2p/gen00228(w=0.60,blend),
+       hall:hall_of_fame/oneply_2p_gen00355(w=0.40,blend),
+       hall:hall_of_fame/preinfo_2p_gen00188(w=0.40,blend),
+       hall:hall_of_fame/preinfo_3p_gen00205(w=0.40,blend),
+       hall:hall_of_fame/preinfo_4p_gen00102(w=0.40,blend)
+[pool] tier share: book=12%, variant=12%, mirror=20%, past=24%, hall=32%
+       (static book+variant 24%, self-play 76%)
+[2p] league trainer: 15 opponents, gen=242 sigma=0.097
+[2p] trained architecture: quiescent {'levels': 1} -- ...
+[2p] objective: blend = OWN CULTURE + win share (alpha=0.15 on win share),
+     own_share centre 100 scale 120 -- the whole pool, every tier
+```
+
+**One log-reading trap, recorded because it nearly produced a false alarm.**
+The 2p arm runs `--workers 1` and Python block-buffers stdout into a
+redirected file, so for three minutes after the restart `league_2p.log` still
+ended with the **old** `[pool] book(w=1.50,margin) ...` line from the previous
+process while the new one was already running correctly. The buffer flushes at
+the end of the first generation. The checks that are immediate and
+authoritative are `experiments/logs/watchdog.log` and, definitively,
+`ps -o command= -p $(pgrep -f "hillclimb_league --players K")`.
+
 ### The 4p arm's two asymmetries
 
 Both preserved.
