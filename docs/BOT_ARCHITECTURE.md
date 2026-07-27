@@ -1,0 +1,306 @@
+# Bot architecture: what shape the TtA bot should be
+
+Status: **in progress**, written incrementally so a crash loses nothing.
+Branch `arch/bot-shape`, worktree `.claude/worktrees/arch`, based on master
+`8e751cb`. Base game only (2015 "A New Story of Civilization"), no expansion.
+
+Every number below is labelled **MEASURED** (I ran it, on this branch, with the
+command given) or **INFERRED** (arithmetic or argument on top of measured
+numbers) or **INHERITED** (someone else's number, with its n). Strength claims
+need n>=400 and a 95% CI; anything smaller is called a lead, not a result.
+
+Measurement environment: Mac mini 8,1, i5-8500B, 6 physical cores, no SMT.
+CPython 3.14.6. All timings `time.process_time` under `nice -n 15`, because the
+2p training arm is live and wall clock is meaningless. `TTA_JOURNAL` **off** for
+every number here, so the copy path is the oracle (docs/PYPY.md 9.16).
+
+Archaeology of the 22 existing docs is **not** in this file; it has its own
+agent and its own document (`docs/ARCHAEOLOGY.md`). Where I lean on an existing
+result I cite it with its n.
+
+---
+
+## 1. Engine cost census — the budget everything else has to fit in
+
+MEASURED, `tools/cost_census.py`, 2 players, 10 games, champion weights:
+
+```
+nice -n 15 python3 tools/cost_census.py --players 2 --games 10 \
+    --weights experiments/champion_2p.json
+```
+
+| quantity | 2p value |
+|---|---|
+| moves per game, WeightedBot mirror | 185 |
+| of which real decisions (>1 legal move) | 163 |
+| branching factor | mean **11.6**, median 10, p90 24, max 40 |
+| decisions with only one legal move | 12.2% |
+| decisions with a non-empty pending stack | 2.8% |
+| `copy_state` | **52 us** |
+| `legal_moves` | **49 us** |
+| `apply` (mid-game, sampled) | ~80 us |
+| `evaluate` (one linear eval, ~57 features) | **30 us** |
+| **one forward-model step** (`legal_moves` + `apply`) | **~115 us** |
+| full random playout from a mid-game state | **10.3 ms** (103 moves) |
+| WeightedBot 1-ply self-play game | **0.451 cpu-s** (2.22 games/cpu-s) |
+| RandomBot game | 0.019 cpu-s (52 games/cpu-s) |
+
+The single number that governs every architecture decision:
+
+> **The forward model runs at about 8,700 steps per CPU-second.**
+
+For comparison, a search-based engine in a compiled language works at 10^6-10^7
+nodes/s. We are three orders of magnitude below that, in a game whose branching
+factor (11.6) is *lower* than chess's. **Throughput, not algorithm choice, is
+the binding constraint**, and any design that needs thousands of simulations per
+decision is not affordable on this box in this language.
+
+MEASURED, profile of the raw forward model (`cProfile`, 30 random 2p games):
+`legal_moves` (`actions._action_moves` and callees) is **60% of cumulative
+time**; `apply` is 33%. Move generation, not move application, is the hot path.
+That is unusual and it is good news: `legal_moves` recomputes `build_cost` /
+`cost_of` / `_can_take_gated` for every card in the row on every call, and it is
+called once per node. An incremental or memoised generator is the highest-value
+engine optimisation available, and it would speed up *every* design below.
+
+### What that budget buys
+
+INFERRED from the above. A flagship A/B at n=400 2p games costs 400 x (per-game
+cpu-s), run on 4 workers:
+
+| per-game cost | x current bot | n=400 on 4 workers |
+|---|---|---|
+| 0.45 cpu-s | 1x | 45 s |
+| 4.5 cpu-s | 10x | 7.5 min |
+| 45 cpu-s | 100x | 75 min |
+| 450 cpu-s | 1000x | 12.5 h |
+
+So **~100x the current bot is the affordable ceiling for one flagship
+experiment**, and ~10-20x is the ceiling for a bot you would actually *train*
+(training needs thousands of games, not hundreds).
+
+At 163 decisions/game, 100x = 45 cpu-s/game = **0.27 cpu-s per decision =
+~2,400 forward-model steps per decision**. Hold that number; section 4 spends
+it.
+
+---
+
+## 2. Honest diagnosis
+
+### 2.1 The pending-stack defect is real, and it is already fixed in code but not in the trained bot
+
+INHERITED and re-verified by reading the code: `apply()` returns with
+`state.pending` non-empty for `offer_pact`, aggressions, colony `bid` and
+action cards, so the trial state shows the whole cost and none of the gain.
+`docs/PACTS_DIAGNOSIS.md` proves it by exact arithmetic (the `offer_pact` delta
+is exactly -1.10445 and *no other feature moves*), which makes those moves
+strictly dominated under **any** weight vector. That is not a tuning problem.
+
+`engine/bots/quiescent.py` already resolves the stack before evaluating, at a
+measured 1.16-1.29x cost (n=8 games/count, docs/DEEPER_SEARCH.md §3). Its
+**strength was never measured** (§4/§5/§6 are still "RESULTS PENDING"; another
+agent is running that A/B now) and, per docs/PYPY.md 9.14, `QuiescentBot`
+occupies **0% of league training seats**. So the fix exists and the trained
+champion has never seen it.
+
+### 2.2 The trained champion's zeros are a compensation fingerprint — VERIFIED
+
+MEASURED (read of `experiments/league_state/champion_2p.json`, the live arm at
+**generation 344**): **13 of 82 weights are at exactly 0.0**.
+
+```
+ca_left  civil_actions  colonies  corruption_loss  culture_rate_early
+hand_military  leader  pact_blocks_attack  pacts  rival_culture
+rival_science_rate  strength_rel  uprising
+```
+
+Exact zeros do not arise from a multiplicative random walk; they are the
+signature of `guard_weights` clamping a search that keeps trying to push these
+*negative* (docs/CULTURE_GAP.md §12a measures the pile-up at Fisher p=0.012, and
+§15's 300-run drift simulation shows the guard is necessary *and* sufficient for
+it). The brief's claim is confirmed and is if anything understated: it is not
+three weights, it is thirteen.
+
+Read the list. Seven of the thirteen are **the entire model of the other
+players** — `colonies`, `pacts`, `pact_blocks_attack`, `rival_culture`,
+`rival_science_rate`, `strength_rel`, `hand_military`. The trained 2p champion
+has, by search, deleted its representation of interaction. That is exactly what
+you would expect from §2.1: if every interactive move is strictly dominated,
+then every feature that prices interaction is pure noise to the fitness
+function, and noise features get walked to whatever the guard allows.
+
+The other two are worse. `civil_actions` and `ca_left` are the *resource the
+game is metered in*, and both are pinned at zero. The mechanism is visible:
+under 1-ply greedy scoring, the CA count is an asset in the feature vector and
+every action spends one, so a positive `civil_actions` weight taxes every move
+the bot could make. Since acting is worth an enormous amount (docs/WASTED_ACTIONS.md
+§6 measures a pass-more-often bot at an **11.0% +/- 4.3% win rate, n=200**), the
+climb correctly learns to stop taxing action — by deleting the feature. The
+weight is not encoding strategy. It is cancelling a search artifact.
+
+`end_turn_bias` is the same thing in the open: -14.44 at gen 344 against a
+-3.0 default, and docs/WASTED_ACTIONS.md §1 measures the artifact it fights at
++12.6 evaluation points at 2p, rising to +26.3 in Age IV — a constant fighting a
+term that scales with the economy.
+
+**How much of the hill-climbing result is real?** Partly. The climb is
+demonstrably optimising *something*: `docs/OPENING_AUDIT.md` §5 measures trained
+vectors well above their untrained start (n=96/cell, so a lead not a result).
+But `docs/BOT_ROSTER.md` (n=240/cell, 47,520 games) ranks the trained 2p
+champion **10th of 12** and at 1.02x par, and `docs/STRENGTH_CHECK.md` measures
+a ~200-line rule-based BookBot beating it **62.9% +/- 4.7% (n=400)**. The
+honest summary is: **332+ generations of hill climbing have produced a bot that
+loses to a hand-written priority list, and a measurable fraction of its
+parameters are spent cancelling defects in its own search rather than describing
+the game.** The training loop is not broken; it is optimising the wrong object.
+
+There is also a sample-efficiency point that no doc makes. The climb's signal is
+a win-rate comparison over a batch of games: on the order of **one bit per
+batch**, for 82 parameters. A regression-based value learner extracts a
+real-valued target from **every one of the ~185 states in every game**. The
+current trainer is throwing away between three and four orders of magnitude of
+signal. See §4.3.
+
+### 2.3 A new defect: the search reads cards the player cannot know — MEASURED
+
+`engine/state.py` keeps `civil_deck` and `military_deck` as full ordered lists
+inside `GameState`, and `fastcopy.copy_state` copies them verbatim. There is no
+information-set abstraction anywhere in the engine. So a trial `apply` that
+draws a card draws **the real next card**.
+
+MEASURED, `tools/infoleak.py --players 2 --games 15` (2,458 decisions, 32,437
+candidate moves, champion weights):
+
+| | share of candidates |
+|---|---|
+| candidate whose trial drew from a real deck or revealed a real row card | **5.46%** |
+| ...of which: civil deck drawn | 5.03% |
+| ...military deck drawn | 4.94% |
+| ...own military hand grew | 4.73% |
+| ...card row revealed a card not previously visible | 5.41% |
+| **decisions with at least one such candidate** | **71.1%** |
+
+By move kind: **`end_turn` is 94.9% leaky** (1735/1829). `prepare_event` 2.0%,
+`choose` 9.1%; nothing else leaks at all. That is because `apply(("end_turn",))`
+runs my end-of-turn economy, advances the turn *and* runs the next player's
+`game.start_turn`, which replenishes the row from the real deck. The single
+most-evaluated move in the game is the one that peeks.
+
+**But the leak is currently inert, and that is the interesting part.**
+
+MEASURED, `tools/leak_impact.py --players 2 --games 25 --k 8`: over **3,957
+comparable decisions**, re-shuffling the unseen decks before scoring (8
+determinizations, averaged) changed the bot's chosen move **0 times**
+(95% CI [0, 0.09%]). The `end_turn` candidate's evaluation was **bit-identical**
+across all 8 determinizations (spread sd 0.000 over 2,931 comparisons).
+
+Why? MEASURED directly:
+
+```
+turn 6, my military hand ['Aggression: Enslave'], deck 39 cards
+  k=0 hand [Enslave, Military Bonus, Crusades]        hand_mil_value 6  eval 37.517925
+  k=1 hand [Enslave, Rats, Scientific Breakthrough]   hand_mil_value 6  eval 37.517925
+  k=2 hand [Enslave, Heavy Cavalry, Aggression: Raid] hand_mil_value 6  eval 37.517925
+  k=3 hand [Enslave, Phalanx, Aggression: Raid]       hand_mil_value 6  eval 37.517925
+```
+
+Four completely different military hands, one identical evaluation.
+`features()` reduces the military hand to a count and a sum of age levels, so
+**`Crusades` and `Rats` are literally the same feature vector**. This is the
+exact mirror, on the military side, of the civil-hand card-identity blindness
+that docs/WASTED_ACTIONS.md §7 measured as worth **+20 points of win rate
+(69.6% +/- 4.5%, n=400)** when fixed. The civil side was fixed
+(`hand_potential`); the military side was not.
+
+Three consequences, and they are architectural rather than cosmetic:
+
+1. **The leak is harmless today only because the evaluator is blind.** Any
+   improvement to military-card valuation — which is the obvious next eval fix,
+   and the one that AGGRESSION_FIX §B and CULTURE_GAP §2b both need — turns the
+   leak live on the same day. The two must be fixed together.
+2. **Any deeper search makes it worse.** Depth draws more cards. A search that
+   plays two rounds ahead is reading two rounds of the real deck. **Any
+   MCTS/rollout design must determinize from the start**; it cannot be
+   retrofitted.
+3. The observation set is unusually clean, which makes determinization cheap:
+   everything about the *board* is public (this is a large part of TtA's
+   design), and the only hidden state is (a) the order of the two draw decks and
+   (b) other players' military hands. `weighted.features()` reads only public
+   rival aggregates, so the evaluator itself does not cheat. Re-shuffling two
+   lists is the whole of determinization: `engine/bots/plan.py:determinize`.
+
+I do **not** claim the trained weights are tuned against a cheat. The measured
+answer is the opposite: the cheat is currently unreadable, so it cannot have
+influenced training. It is a loaded gun, not a fired one.
+
+### 2.4 So what is actually wrong with the bot
+
+Ranked by the evidence, most-supported first:
+
+1. **The evaluation cannot tell one card from another** — fixed for civil cards
+   (+20 pts, n=400), unfixed for military cards (MEASURED above), and unfixed
+   for the *row* (the bot cannot see what it could take next turn at all).
+2. **The evaluation has no representation of conflict.** No feature reads
+   `war_declared_by_me` / `wars_declared_on_me` (AGGRESSION_FIX §B), so wars are
+   a structural zero: 0.00 wars per game in 360 games. Every aggression scores
+   exactly `hand_military` below `pol_pass` — the cost of the card leaving hand,
+   and nothing else.
+3. **Scoring happens at whatever horizon `apply` happens to stop at**, so
+   candidates are not comparable: `end_turn` has banked a production phase that
+   nothing else has, and pending-stack moves have banked a cost with no gain.
+4. **A whole turn's worth of actions is chosen one action at a time.** The game
+   meters players in civil actions (2-7 a turn); the bot commits action 1 before
+   it knows what actions 2..4 will be.
+5. **The trainer's signal is ~1 bit per batch for 82 parameters**, and a
+   measurable share of those parameters is spent cancelling 1-4.
+
+Note that 1 and 2 are *evaluation* problems and 3-5 are *search and training*
+problems, and the only two interventions that have ever produced a large
+measured gain in this repo (`hand_potential`, +20 pts; BookBot's hand-written
+priority list, +12.9 pts over the champion) were both about **knowing what a
+card is worth**, not about looking further ahead. Every attempt so far to fix
+the horizon alone made the bot *worse* (five thresholds, two methods, n=200-400,
+docs/WASTED_ACTIONS.md §6). That is the strongest prior in this project and any
+search proposal has to survive it.
+
+---
+
+## 3. Prototype: PlanBot
+
+`engine/bots/plan.py`. A beam search over whole-turn action *sequences*, scored
+at one fixed horizon, on a determinized state. It attacks 2.4's items 3, 4 and
+2.3 simultaneously, because they are the same bug seen from three sides.
+
+* **One horizon.** A candidate is not a move, it is a *sequence ending in
+  `end_turn`*, and it is scored on the state immediately after my turn ends.
+  "End turn now" is just the length-1 sequence. The `end_turn` flattery cannot
+  exist because every leaf has banked exactly one production phase. No
+  `end_turn_bias` term is used at all.
+* **Plan, not action.** Beam width `W` (default 8) over sequences, so the bot
+  prices "increase population, then build the lab, then take the card" as one
+  object.
+* **Determinized.** The two draw decks are re-shuffled before the search.
+* **Quiet leaves.** Pending decisions are drained with 1-ply picks for whoever
+  the decider is, so the strictly-dominated class of §2.1 is visible here too
+  (the same idea as `QuiescentBot`, reimplemented inside the beam).
+
+Why this is not the `HorizonBot` that already failed at 29.8% (n=400): that bot
+rolled each *single* candidate forward through production but still chose one
+action at a time. It paid the whole cost of removing the flattery (which
+docs/WASTED_ACTIONS.md §6 shows was acting as a move-quality filter) and bought
+none of the lookahead. PlanBot only makes sense *with* the sequence search, and
+it inherits `hand_potential`, which did not exist when HorizonBot was measured.
+
+MEASURED cost, 2p mirror vs WeightedBot, champion weights: **~280 expanded
+nodes per decision**, 7.5 cpu-s for a PlanBot-vs-WeightedBot game pair, i.e.
+roughly **16x the 1-ply bot** — comfortably inside the affordable band of §1.
+
+### Result
+
+n=400 A/B running; results are appended here when it lands. The A/B is
+search-only: both sides load the *identical* weight file, so anything measured
+is attributable to the search and not to tuning. Note that this handicaps
+PlanBot, because those weights were hill-climbed to compensate for the very
+artifacts PlanBot removes (§2.2).
+
+<!-- RESULT PENDING -->
