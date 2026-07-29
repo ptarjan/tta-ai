@@ -505,3 +505,141 @@ class RootRowBudget(unittest.TestCase):
                          W.row_pressure(st, 0, self.ROW_W, rebuilt))
         leaky = W.rival_context(st, 0)                # recomputed = the bug
         self.assertNotEqual(root["root_row"], leaky["root_row"])
+
+
+class RootRowOrder(unittest.TestCase):
+    """The RESIDUAL leak the budget above left open, INFORMATION_AUDIT 6.4.
+
+    A per-name count closes the "dealt duplicate" hole but not the "swept
+    donor" one: `_replenish` discards the leftmost slots, so a root-row card
+    that gets swept never spends its own count, and a freshly dealt card with
+    the SAME NAME spends it instead.  That is the WHOLE of the residual 0.005
+    within-decision eval sd 6.2 left open: decomposing the eval per weight key
+    across K=6 determinizations, 11 of 1583 `end_turn` candidates at 3p move
+    and all 11 move `row_bargain_forgone`, while `hand_mil_value` -- the
+    suspect 6.2 named -- moves in 0 of 1583 and cannot move at all, because it
+    prices a card's AGE and a military deck holds one age (6.4).
+
+    The fix is a forward-only cursor over the root row as an ORDERED sequence.
+    Every test here carries a vacuity guard, because "mask more" passes any
+    masking test on its own: the guards below pin that the dealt card is one
+    the evaluator really would have priced, and that survivors sitting to the
+    right of departed cards are STILL priced.
+    """
+
+    ROW_W = RootRowBudget.ROW_W
+
+    def _st(self):
+        st = play(2, seed=43, plies=40)
+        for p in st.players:
+            p.civil_actions = 6
+        st.players[0].hand_civil = []
+        st.card_row = [None] * 13
+        return st
+
+    def test_root_row_is_a_sequence_in_row_order(self):
+        st = self._st()
+        st.card_row[1] = "Alchemy"
+        st.card_row[4] = "Theology"
+        st.card_row[6] = "Alchemy"
+        self.assertEqual(W.root_row_budget(st),
+                         ("Alchemy", "Theology", "Alchemy"))
+
+    def test_swept_card_cannot_lend_its_name_to_a_dealt_card(self):
+        """The measured residual: Theology is swept, then dealt again."""
+        st = self._st()
+        st.card_row[0] = "Theology"                   # about to be swept
+        st.card_row[4] = "Alchemy"
+        ctx = W.rival_context(st, 0)
+        # the sweep: Theology destroyed, Alchemy slides left
+        st.card_row[0] = None
+        st.card_row[4] = None
+        st.card_row[1] = "Alchemy"
+        honest = W.row_pressure(st, 0, self.ROW_W, ctx)
+        # ...and the deck happens to deal a SECOND copy of the same name
+        st.card_row[7] = "Theology"
+        self.assertEqual(honest, W.row_pressure(st, 0, self.ROW_W, ctx))
+        # Vacuity guard 1: the dealt card is one the unmasked evaluator would
+        # have priced, so the equality above is a mask working, not a no-op.
+        unmasked = {k: v for k, v in ctx.items() if k != "root_row"}
+        self.assertNotEqual(honest,
+                            W.row_pressure(st, 0, self.ROW_W, unmasked))
+        # Vacuity guard 2: and the mask is not just "price nothing" -- the
+        # slid survivor is still priced, which is the whole feature.
+        self.assertNotEqual(honest, (0.0, 0.0))
+
+    def test_survivor_to_the_right_of_a_hole_is_still_priced(self):
+        """Negative control: a take removes a card, the ones behind it stay
+        public.  Masking them would make the bot worse than legal."""
+        st = self._st()
+        st.card_row[2] = "Alchemy"
+        st.card_row[5] = "Theology"
+        ctx = W.rival_context(st, 0)
+        st.card_row[2] = None                         # somebody took Alchemy
+        holed = W.row_pressure(st, 0, self.ROW_W, ctx)
+        # identical to the honest answer computed with Alchemy never there --
+        # a departed card must not change how its neighbours are priced
+        fresh = W.rival_context(st, 0)
+        self.assertEqual(holed, W.row_pressure(st, 0, self.ROW_W, fresh))
+        self.assertNotEqual(holed, (0.0, 0.0))        # vacuity guard
+
+    def test_empty_root_row_masks_everything(self):
+        """An empty root row means every card present was dealt.  `None`
+        (the degraded no-ctx path) still masks nothing, as documented."""
+        st = self._st()
+        ctx = W.rival_context(st, 0)
+        self.assertEqual(ctx["root_row"], ())
+        st.card_row[3] = "Alchemy"
+        self.assertEqual(W.row_pressure(st, 0, self.ROW_W, ctx), (0.0, 0.0))
+        unmasked = {k: v for k, v in ctx.items() if k != "root_row"}
+        self.assertNotEqual(W.row_pressure(st, 0, self.ROW_W, unmasked),
+                            (0.0, 0.0))               # vacuity guard
+
+    def test_known_hole_a_taken_card_can_still_lend_its_name(self):
+        """The one departure direction the cursor CANNOT see, pinned so it is
+        not mistaken for closed (INFORMATION_AUDIT 6.4).
+
+        The cursor passes a root name only when it accepts a slot to that
+        name's right, so it retires the names of cards that left from the LEFT
+        (swept) but not from the RIGHT (taken by a rival).  A card dealt later
+        with a taken card's name is therefore still priced.  Reaching it needs
+        a take AND a turn boundary in the same trial, so it is unreachable at
+        1 ply and invisible to tools/leak_impact.py.
+
+        This test asserts the CURRENT, bounded behaviour.  If a future change
+        adds provenance to the row slots and closes it, this test SHOULD fail
+        -- flip the assertion and delete the caveat from `root_row_budget`.
+        """
+        st = self._st()
+        st.card_row[0] = "Alchemy"                    # swept
+        st.card_row[4] = "Theology"                   # survives
+        st.card_row[6] = "Printing Press"             # a rival TAKES this
+        ctx = W.rival_context(st, 0)
+        st.card_row = [None] * 13
+        st.card_row[0] = "Theology"                   # compacted survivor
+        honest = W.row_pressure(st, 0, self.ROW_W, ctx)
+        self.assertNotEqual(honest, (0.0, 0.0))       # vacuity guard
+        st.card_row[1] = "Printing Press"             # dealt, same name
+        self.assertNotEqual(honest, W.row_pressure(st, 0, self.ROW_W, ctx),
+                            "the taken-donor hole has been closed -- see the "
+                            "docstring, this is good news, flip the assertion")
+        # ...and it is genuinely only the departure DIRECTION that matters: the
+        # same coincidence on a SWEPT card's name is masked (test above).
+
+    def test_replenish_keeps_survivors_as_a_prefix(self):
+        """The engine invariant the cursor rests on: `_replenish` compacts the
+        survivors to the left IN ORDER and deals only into the slots behind
+        them, so every dealt card is strictly right of every survivor.  If a
+        future change deals into a middle hole instead, the ordered mask would
+        start masking real survivors -- fail here, loudly, first."""
+        for n in (2, 3, 4):
+            st = play(n, seed=11 + n, plies=30)
+            for _ in range(3):
+                before = list(st.card_row)
+                sweep = G._sweep_count(st)
+                st = copy_state(st)
+                G._replenish(st, random.Random(5))
+                kept = [c for c in before[sweep:] if c is not None]
+                self.assertEqual(list(st.card_row)[:len(kept)], kept,
+                                 f"{n}p: survivors are not a prefix")
+                self.assertTrue(len(st.card_row) >= len(kept))

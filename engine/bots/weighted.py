@@ -201,7 +201,7 @@ class _RivalView:
 
 
 def root_row_budget(state):
-    """Multiset of the card-row names VISIBLE AT THE ROOT of a search.
+    """The card-row names VISIBLE AT THE ROOT of a search, IN ROW ORDER.
 
     The one piece of hidden information the evaluator can actually read.
     `_replenish` runs at the start of every player's turn, so any trial that
@@ -212,23 +212,53 @@ def root_row_budget(state):
     once the 3p arm fitted real row weights it began changing the chosen move
     (docs/INFORMATION_AUDIT.md 6.1).
 
-    A multiset, not a set, because the civil decks contain duplicate card
-    names: with a plain set, a freshly dealt SECOND copy of a card already in
-    the root row would still be priced, and the leak would only mostly close.
-    Counting multiplicity makes the mask exact.
+    A SEQUENCE, not a set and not a bare multiset.  Both weaker forms leak,
+    for the same reason and by different amounts:
+
+    * A set would price a freshly dealt SECOND copy of a card the root row
+      held once -- the civil decks contain duplicate names.
+    * A multiset with a per-name count closes that, but still leaks through
+      the cards that LEAVE the row.  `_replenish` discards the leftmost
+      `_sweep_count` slots, so a root-row card that gets SWEPT never spends
+      its own budget entry, and a freshly dealt card with the same name then
+      spends it instead.  That donor hole is the ENTIRE residual left open by
+      docs/INFORMATION_AUDIT.md 6.2: 11 of 1583 `end_turn` candidates at 3p,
+      and it is `row_bargain_forgone` in every one of them -- the military
+      hand named as the suspect there varies in 0 of 1583 (see 6.4).
+
+    Order closes the swept case because the row is a QUEUE and every write to
+    it is order-preserving: `_replenish` discards from the left, compacts the
+    survivors keeping their relative order, and `_deal` fills the empty slots
+    left to right -- as does `interact._finish_take_row`, which compacts first
+    for exactly that reason.  So in any reachable state **every dealt card
+    sits strictly to the right of every surviving root card**, and a
+    forward-only cursor over this sequence (`row_pressure` below) never
+    rewinds onto the name of a card that was swept off the left.
+
+    It is a bound, not an identity, and the gap is documented rather than
+    papered over.  A root card that left the row from a slot to the RIGHT of
+    the survivors -- one a rival TOOK -- has not been passed by the cursor
+    yet, so a later dealt card sharing its name is still priced
+    (`test_known_hole_a_taken_card_can_still_lend_its_name`).  That needs a
+    take AND a turn boundary in the same trial, so it is unreachable at 1 ply
+    and invisible to `tools/leak_impact.py`; closing it exactly needs
+    provenance on the row slots, not a cleverer reading of the names, because
+    names alone cannot distinguish a survivor from its own duplicate
+    (INFORMATION_AUDIT 6.4).
 
     Cards that merely SLID LEFT are unaffected -- the slide is public
     arithmetic every player can do, and the card keeps its name -- so they are
     still priced, at their new (cheaper) slot.  That is the whole point of
-    evaluating the row on the post-move state, and it survives.
+    evaluating the row on the post-move state, and it survives; so does a
+    survivor sitting to the right of a hole a take left behind.
     """
-    counts = {}
+    names = []
     for c in state.card_row:
         if c is None:
             continue
-        n = c["name"] if isinstance(c, dict) else getattr(c, "name", c)
-        counts[n] = counts.get(n, 0) + 1
-    return counts
+        names.append(c["name"] if isinstance(c, dict)
+                     else getattr(c, "name", c))
+    return tuple(names)
 
 
 def rival_context(state, idx, root_row=None):
@@ -781,10 +811,20 @@ def row_pressure(state, idx, w, ctx=None):
     Reads `state.card_row`, my own board, and the public rival boards/civil
     hands snapshotted into `ctx`.  The row is public AT THE ROOT only: a trial
     that crossed a turn boundary has had the real next cards dealt into it, so
-    every slot is checked against `ctx["root_row"]` and cards that were not
-    visible when the decision started are SKIPPED.  Without that check this
-    function is the mechanism of the `end_turn` information leak, and it was
-    measurably changing the chosen move at 3p (INFORMATION_AUDIT 6.1).
+    every slot is matched against `ctx["root_row"]` -- the root row's names in
+    ROW ORDER -- with a forward-only cursor, and cards that were not visible
+    when the decision started are SKIPPED.  Without that check this function is
+    the mechanism of the `end_turn` information leak, and it was measurably
+    changing the chosen move at 3p (INFORMATION_AUDIT 6.1).
+
+    The cursor only ever moves right, and that is what tightened the mask from
+    the per-name count it replaced.  Skipping over root names to find a match
+    is how swept cards, taken cards and the holes they leave are tolerated
+    (their slots are public arithmetic); consuming each root name at most once,
+    IN ORDER, is what stops a dealt card reusing the name of a card that was
+    swept off the left, which a per-name count could not (INFORMATION_AUDIT
+    6.4).  It is an upper bound on the survivors, not an identity -- see
+    `root_row_budget` for the one departure direction it still cannot see.
 
     `ctx` without a `root_row` key (a caller that built its own dict, or the
     degraded no-ctx path) masks nothing and is leaky, as it was before; the
@@ -793,10 +833,15 @@ def row_pressure(state, idx, w, ctx=None):
     row = state.card_row
     if not row:
         return 0.0, 0.0
-    # Local copy: decremented as slots are accepted, so N dealt copies of a
-    # card the root row held once are priced once.
-    budget = ctx.get("root_row") if ctx else None
-    budget = dict(budget) if budget else None
+    # Forward-only cursor into the root row's name SEQUENCE, advanced as slots
+    # are accepted.  Never rewound, so N dealt copies of a card the root row
+    # held once are priced once, and a root card that was swept off the left
+    # cannot lend its name to a dealt card (see `root_row_budget`).
+    # `None` (a caller-built ctx or the degraded no-ctx path) masks nothing and
+    # is leaky, as documented below; an EMPTY tuple is a genuinely empty root
+    # row and masks everything, because then every card present was dealt.
+    root = ctx.get("root_row") if ctx else None
+    cursor, n_root = 0, 0 if root is None else len(root)
     p = state.players[idx]
     n = _live(state)
     slide = n * _SWEEP[n]
@@ -808,11 +853,15 @@ def row_pressure(state, idx, w, ctx=None):
     for i, name in enumerate(row):
         if name is None:
             continue
-        if budget is not None:
-            left = budget.get(name, 0)
-            if left <= 0:            # dealt after the decision began: unknowable
-                continue
-            budget[name] = left - 1
+        if root is not None:
+            k = cursor
+            while k < n_root and root[k] != name:
+                k += 1               # swept, or taken out from under the row
+            if k >= n_root:
+                # Dealt after the decision began, and -- because dealt cards
+                # are always a suffix -- so is every slot to its right.
+                break
+            cursor = k + 1
         if not gated(state, p, i, mine, name):
             continue
         val = card_potential(name, w)

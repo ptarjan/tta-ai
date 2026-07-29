@@ -698,6 +698,10 @@ happened.
 prices `hand_mil_value` at 0.15. That is ~1.5% of the row terms' effect and is a
 separate follow-up, not a loose end in this fix.
 
+> **That guess was wrong.** `hand_mil_value` varies in **0 of 1583** `end_turn`
+> candidates and structurally cannot vary. The residual was still the row.
+> Measured and fixed in **6.4** below; read that instead.
+
 ### 6.3 What actually caught the bug in the fix, and the three layers now guarding it
 
 Worth writing down because the fix above shipped with a bug in it, and the way
@@ -766,6 +770,148 @@ here because 38k exceptions per four games is not free: `effects.state_stats`
 raising `AttributeError` 23,305 times to lazily initialise a cache (a class-level
 default or `getattr` would remove it), and `actions.cost_of` raising `KeyError`
 ~15k times as name-probe flow control.
+
+---
+
+### 6.4 The residual closed — and the hypothesis that was wrong, measured 2026-07-29
+
+6.2 left a within-decision eval sd of 0.005 and *guessed* at the cause: the
+`end_turn` trial also draws my own next military card, and the champion prices
+`hand_mil_value`. **The guess was wrong.** It was tested before it was fixed,
+and the test is the most valuable thing in this subsection.
+
+#### The hypothesis is refuted, n=1583
+
+`evaluate` was decomposed into its additive parts — every linear feature key
+times its weight, both early/late phase channels, and the four non-linear terms
+priced through `w` — and each part's spread across K=6 honest re-shuffles was
+recorded for every `end_turn` candidate. The decomposition was checked to sum
+to `evaluate` to 1.1e-13 before it was trusted. 3p, 8 games, live champion
+`experiments/league_state/champion_3p.json` at gen 1166:
+
+```
+component                  varies    rate    mean sd
+row_bargain_forgone         11/1583  0.70%    0.4478      <- the entire residual
+(every other component)      0/1583  0.00%    0.0000
+```
+
+`hand_mil_value` moves in **0 of 1583**, and cannot move at all. The reason is
+structural, not statistical: `_meta()` maps a card to `(type, level(age))`, so
+`hand_mil_value` prices only a drawn card's **age**, and a military deck holds
+exactly one age — 1633 live `military_deck` snapshots across 6 games at 3p, **0
+with mixed age levels**. Shuffling the military deck therefore cannot change
+the feature. `hand_military` is a count, and a count is legally knowable. The
+military draw is a real *deal* of hidden information; the evaluator simply
+cannot read it.
+
+**The answer was already written down in this repo.**
+`docs/BOT_ARCHITECTURE.md:243-252` measured it directly and years-old-style
+plainly: four completely different determinized military hands, one identical
+`hand_mil_value 6` and one identical eval `37.517925`, because "`Crusades` and
+`Rats` are literally the same feature vector". 6.2 proposed a cause that an
+existing measurement in a neighbouring doc had already ruled out. The cheapest
+step in this whole subsection was grepping for the feature name before writing
+code — worth more than the fix.
+
+**This is a loaded gun, not a closed one.** The moment anything prices military
+card *identity* — strength, type, `Aggression` vs `Defence` — the `end_turn`
+military draw becomes a live leak with no mask in front of it, exactly as §6
+predicted for the row. GAP 6 is where that belongs.
+
+#### The real cause: the multiset budget's swept-donor hole
+
+6.2's mask is a **multiset**, and the leak survived in the cards that *leave*
+the row. `_replenish` destroys the leftmost `_sweep_count` slots, so a swept
+root card never spends its own budget entry — and a freshly dealt card with the
+same name spends it instead and gets priced. Only `row_bargain_forgone` was
+affected, and that is mechanistic too: dealt cards land in the **rightmost**
+slots, so `i - slide >= 0` and they can never reach the `row_urgency` branch,
+which is reserved for cards the next sweep destroys.
+
+The fix follows 6.2's principle. `root_row_budget` now returns the root row's
+names **in row order** as a tuple, and `row_pressure` walks it with a
+**forward-only cursor**: skipping root names to find a match tolerates swept
+cards, taken cards and the holes they leave (all public arithmetic), while
+consuming each name at most once *in order* stops a dealt card reusing the name
+of a card that was swept off the left. It rests on an engine invariant —
+`_replenish` and `interact._finish_take_row` both compact survivors to a prefix
+in order and `_deal` fills only the slots behind them, so **every dealt card is
+strictly right of every survivor** — which is now pinned directly by
+`test_replenish_keeps_survivors_as_a_prefix` at 2p/3p/4p, so a future change
+that deals into a middle hole fails loudly instead of silently over-masking.
+
+#### Measured, before and after
+
+Both runs are the same command against the same **snapshot** of the live
+champion (gen 1166, copied to a fixed file — the league rewrites that file
+mid-run, and 6.2's 0.005 was measured at gen 1149, which is why the "before"
+here reads 0.003: the residual's size is a function of the row weights, and
+they move). `experiments/champion_3p.json` remains a stale export with no row
+weights that would show a fake zero.
+
+```
+tools/leak_impact.py --players 3 --games 8 --k 6, champion gen 1166
+                     decisions  move changed              within-decision eval sd
+multiset (6.2)            2264  0 = 0.00%  (0/2264)       0.003
+ordered cursor (6.4)      2264  0 = 0.00%  (0/2264)       0.000  exactly
+                                end_turn candidates: 1583 in both runs
+                                cheat - determinized mean: -0.003 -> -0.000
+                                                      sd:  0.039 -> 0.000
+```
+
+Read this honestly:
+
+* **The move-flip rate did not improve, because it was already 0.** At this
+  residual size no move flipped either way: 0 of 2264, whose one-sided 95%
+  bound is 0.13% (rule of three), so anything under ~3 flips is invisible at
+  this n. The 0.48% flip rate in 6.2's table belonged to the *unmasked* leak,
+  which was ~100x larger. Claiming a move-quality win here would be reading
+  small-n noise, the mistake this repo has made six times.
+* **What did improve is provable, not statistical.** The eval spread is now
+  *identically* 0.000 across every determinization, with the per-component
+  breakdown confirming 0 of 1583 candidates move any component at all. At 1 ply
+  the evaluator is now demonstrably a function of legal information only —
+  the same standing this file gave `DEFAULT_WEIGHTS` in 6.1, now earned with
+  real row weights fitted.
+* `tools/infoleak.py` is unchanged and irrelevant here, for 6.2's reason: it
+  counts trials that *deal* a card, not trials that *read* one.
+
+#### A second, smaller behaviour change in the same edit
+
+6.2's mask was disabled by a *falsy* budget (`dict(budget) if budget else None`),
+so a genuinely **empty** root row masked nothing and every dealt card was
+priced — the worst case, since with an empty root row *every* card present was
+dealt. The tuple form distinguishes the two: `None` (a caller-built ctx or the
+degraded no-ctx path) still masks nothing by design, while `()` masks
+everything. Pinned by `test_empty_root_row_masks_everything`. An empty row is
+rare mid-game, which is why it did not show up in the numbers above.
+
+#### One hole knowingly left open, and pinned
+
+The cursor is an **upper bound** on the survivors, not an identity. It retires
+a root name only by accepting a slot to that name's right, so it sees
+departures from the **left** (swept) but not from the **right** (a card a rival
+took). A card dealt later sharing a *taken* card's name is still priced —
+demonstrated, and pinned by
+`test_known_hole_a_taken_card_can_still_lend_its_name`, which is written to
+fail if someone closes it so the caveat cannot rot.
+
+It needs a take *and* a turn boundary in the same trial, so it is unreachable
+at 1 ply, invisible to `leak_impact.py`, and reachable only in quiescent/plan
+search. Closing it exactly needs **provenance on the row slots** — names alone
+cannot tell a survivor from a duplicate of itself, and the two cheap proxies
+both fail: a deck-size delta miscounts once a dealt card is itself swept, and
+widening the mask over-masks public cards, which 6.2 records as being as much a
+bug as leaking (rival civil hands are public, RULES_SPEC.md:71).
+
+#### Inert, as required
+
+The change is inert under `DEFAULT_WEIGHTS`, which price `row_urgency` and
+`row_bargain_forgone` at 0.0 and skip `row_pressure` entirely. `bash
+tools/gate.sh` prints GATE PASS with all 14 digests unchanged — narrow
+`0a6ed6ad`, wide `4a8c6ca6`, weighted `302c546c`/`4e40a58c`, quiescent
+`0e90a7e6`/`41f078e5`, plan `ad64a55b`/`441cd256`. No digest was re-derived;
+6.3 records what re-blessing a moved digest costs.
 
 ---
 
