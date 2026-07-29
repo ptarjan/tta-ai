@@ -24,3 +24,6 @@ checkpoints/
 *.pt
 data/
 data2/
+
+# Agent scratch: transcripts and ephemeral worktrees, never part of the project.
+.claude/
