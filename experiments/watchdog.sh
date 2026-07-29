@@ -178,7 +178,26 @@ launch() {   # players workers block extra...
     echo "$(date '+%F %T') watchdog: relaunched ${K}p (${REMAIN}h left, workers=$W block=$B) ${ALL[*]}" >> "$LOG"
 }
 
-pgrep -f "run_league.sh 2 " >/dev/null || launch 2 1 12 --init default
+# 2p: warm-started from P, the 1-PLY LINEAGE vector
+# (experiments/archive_preplan/league_state_1ply_20260726/champion_2p.json,
+# gen 355, sha256 55c7a3dea72e..., byte-identical to the pool's
+# hall_of_fame/oneply_2p_gen00355.json), NOT from its own quiescent-trained
+# champion.  Under `plan:width=8` -- the policy this arm now gates on -- P
+# scores 190.6 [185.5, 196.3] own culture in a 2p mirror against the league
+# champion's 61.4 [56.6, 65.9] at n=162 per vector, and 213.4 against `book`
+# where the league champion's descendant measures 132.8
+# (docs/PROXY_GUARDRAIL.md's first reading, and docs/PLAN_WAR_LOOKAHEAD.md 4a).
+# Warm-starting a PlanBot arm from the quiescent lineage would have started it
+# ~80-130 culture points behind, on a vector whose whole strategy the ship
+# policy prices differently (docs/TRANSFER_TEST.md).
+#
+# `--init` is IGNORED once the state dir holds a champion, so this is
+# load-bearing exactly once: the 2p state was moved to
+# experiments/archive_2p_quiescent_20260729/ on 2026-07-29 to make it fire.
+# The quiescent champion (gen 727, sha256 69e01f781a4a...) is recoverable
+# there and remains the best vector under the quiescent proxy.
+pgrep -f "run_league.sh 2 " >/dev/null || \
+    launch 2 1 12 --init experiments/archive_preplan/league_state_1ply_20260726/champion_2p.json
 pgrep -f "run_league.sh 3 " >/dev/null || launch 3 2 12 --init default
 # 4p: block 24 because its per-game spread is 2.8x the 2p spread (FOURP_GAP),
 # and warm-started from the 2p champion, which measured 57.4% vs the 4p arm's

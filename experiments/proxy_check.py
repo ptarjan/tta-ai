@@ -46,21 +46,34 @@ and appends one record to `proxy_history_{K}p.jsonl` plus one legible block to
 
 How to read the output
 ----------------------
-Each reading gets a VERDICT from the head-to-head confidence interval:
+Each reading gets a VERDICT from the head-to-head CULTURE MARGIN and its 95%
+CI (see `verdict_of` for why margin and not win share):
 
-    confirms   win share lower bound > null.  The proxy's accepts reached the
-               ship policy.
-    flat       the CI covers the null.  The accepts bought nothing MEASURABLE
-               here -- which at these sample sizes is not the same as "bought
-               nothing", so read the series, not the reading.
-    INVERTED   win share upper bound < null.  The champion the proxy chose is
-               WORSE under the ship policy than the one it replaced.  This is
-               the `docs/TRANSFER_TEST.md` failure, live.
+    confirms      lower bound above +MARGIN_MIN.  A real gain, resolved.
+    INVERTED      upper bound below -MARGIN_MIN.  A real LOSS: the champion
+                  the proxy chose is worse under the ship policy than the one
+                  it replaced.  The `docs/TRANSFER_TEST.md` failure, live.
+    flat          the CI is tighter than MARGIN_RESOLUTION and covers the
+                  no-effect band.  Measured, and there is nothing there.
+    inconclusive  the CI is wider than MARGIN_RESOLUTION.  **NOT MEASURED.**
+                  Not reassurance, not a divergence -- an instrument problem.
 
-One `flat` is noise.  A run of them, while accepts keep piling up, is the
-finding: the proxy and the target have decoupled.  So the log prints the whole
-history under every reading and shouts when the last `--divergence-run`
-readings are all non-confirming or any reading is INVERTED.
+The fourth verdict is the one that keeps this file honest.  Without it the
+first real reading printed `confirms` off a win-share lower bound of 50.03%
+against a 50% null: a coin flip reported as reassurance, which is
+`docs/UNATTENDED.md` trap 1 committed by the very thing meant to catch it.
+
+Two separate alarms, because they need different responses:
+
+    !! PROXY DIVERGENCE      an INVERTED reading, or `--divergence-run`
+                             consecutive RESOLVED readings with no gain while
+                             accepts pile up.  The training loop is the
+                             problem.
+    !! GUARDRAIL NOT RESOLVING   `--divergence-run` consecutive inconclusive
+                             readings.  The guardrail is the problem: raise
+                             --deals and --every-accepts together.
+    !! PROXY GUARDRAIL STARVED   --stale-hours have passed with accepted
+                             champions and no successful reading at all.
 
 Cost, and why it cannot hurt the arms
 -------------------------------------
@@ -72,7 +85,9 @@ Cost, and why it cannot hurt the arms
 * `nice -n 19`, `--workers 1`, and n bounded by `--deals` / `--anchor-deals`.
   The defaults are sized per player count so one reading costs a few percent
   of the arm's throughput between readings; `--dry-run` prints the estimate.
-* A lock file means two arms never measure at once.
+* A lock file means two arms never measure at once.  It WAITS for the lock
+  rather than skipping, because a neighbouring job that holds it whenever
+  cron looks would otherwise starve the guardrail in silence.
 """
 from __future__ import annotations
 
@@ -106,15 +121,40 @@ SHIP_POLICY = "plan:width=8"
 #: Per-player-count budget.  A deal is one seed played from every seat, so a
 #: reading is `deals * players` head-to-head games plus `anchor_deals *
 #: players` anchor games.  These fall with player count because the cost of a
-#: PlanBot game rises steeply with it (docs/TRAINING_RUN.md: 7.2 / 9.6 / 17.4
-#: cpu-s per game at 2p/3p/4p against `book`, ~3x that with every seat
-#: searching), while the arms' generations get *slower*, so the ratio of
-#: guardrail cost to arm throughput stays in the same few percent.
+#: PlanBot game rises steeply with it (docs/TRAINING_RUN.md: 9.1 / ~12 / 17.4
+#: cpu-s per game against `book`, 15.8 / ~30 / 51.3 with every seat searching),
+#: while the arms' generations get *slower*, so the ratio of guardrail cost to
+#: arm throughput stays in the same few percent.
+#:
+#: THE FIRST SIZING WAS TOO SMALL AND THE VERDICT RULE HID IT.  20 deals at 2p
+#: gave a win-share half-width of 15.0 points, and the first reading came back
+#: 65.0% +/- 15.0% -- a lower bound sitting exactly on the null, reported as
+#: `confirms`.  On a project that has been burned repeatedly by small-n
+#: over-reading, a guardrail whose reassuring verdict is a coin flip is worse
+#: than no guardrail.  Two things changed together: `n` roughly doubled AND the
+#: cadence went sparse to pay for it, so the cost per unit time is unchanged
+#: and each reading is worth acting on.  See `verdict_of` for the other half.
 BUDGET = {
-    2: {"deals": 20, "anchor_deals": 10, "every_accepts": 5, "max_hours": 8.0},
-    3: {"deals": 10, "anchor_deals": 5, "every_accepts": 15, "max_hours": 12.0},
-    4: {"deals": 6, "anchor_deals": 3, "every_accepts": 12, "max_hours": 16.0},
+    2: {"deals": 40, "anchor_deals": 15, "every_accepts": 12, "max_hours": 12.0},
+    3: {"deals": 20, "anchor_deals": 8, "every_accepts": 20, "max_hours": 16.0},
+    4: {"deals": 12, "anchor_deals": 5, "every_accepts": 15, "max_hours": 20.0},
 }
+
+#: A reading must clear the null by this much in CULTURE MARGIN before it may
+#: say `confirms` (or fall this far below it to say `INVERTED`).  Culture, not
+#: win share: win share is a 0/1 step with ~10x the paired variance, it
+#: saturates against `book` at 0.94-0.97 under PlanBot (docs/TRANSFER_TEST.md
+#: 3), and every finding in TRANSFER_TEST / PLAN_WAR_LOOKAHEAD is quoted in
+#: margin for exactly that reason.  5 culture points is small against the
+#: differences those documents measure (+98.8, -32.5, +11.4) and large against
+#: nothing.
+MARGIN_MIN = 5.0
+
+#: A reading may only say `flat` -- "measured, and there is no effect" -- if it
+#: could have SEEN an effect of this size.  A wider CI than this is
+#: `inconclusive`, which is a different statement and must not read as
+#: reassurance.
+MARGIN_RESOLUTION = 15.0
 
 #: Seeds are FIXED across readings on purpose: every reading plays the same
 #: deals, so two readings differ because the champions differ and not because
@@ -201,21 +241,37 @@ class Lock:
     that silently stops monitoring is the one thing this module cannot have.
     """
 
-    def __init__(self, path=LOCK, stale_h=6.0):
+    def __init__(self, path=LOCK, stale_h=6.0, wait_s=900.0, poll_s=20.0):
         self.path, self.stale_h, self.fd = path, stale_h, None
+        self.wait_s, self.poll_s, self.waited = wait_s, poll_s, 0.0
 
-    def __enter__(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+    def _try(self):
         try:
             self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            return True
         except OSError as exc:
             if exc.errno != errno.EEXIST:
                 raise
+            return False
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        # WAIT, do not skip.  The first version returned immediately when the
+        # lock was held, and a neighbouring measurement job held it every time
+        # cron looked -- so proxy_watch.log filled with "another measurement
+        # holds the lock, skipping" and the guardrail never ran at all.
+        # Skip-and-forget turns a busy box into a silent monitor.
+        t0 = time.time()
+        while not self._try():
             age = time.time() - os.path.getmtime(self.path)
-            if age < self.stale_h * 3600:
+            if age >= self.stale_h * 3600:      # holder died mid-run
+                os.unlink(self.path)
+                continue
+            if time.time() - t0 >= self.wait_s:
+                self.waited = time.time() - t0
                 return None
-            os.unlink(self.path)
-            self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            time.sleep(self.poll_s)
+        self.waited = time.time() - t0
         os.write(self.fd, f"{os.getpid()} {time.strftime('%F %T')}\n".encode())
         return self
 
@@ -231,6 +287,15 @@ class Lock:
 
 # ------------------------------------------------------------------ duels
 
+def _lock_holder():
+    """Who holds the lock, for the message -- never raises."""
+    try:
+        with open(LOCK) as fh:
+            return fh.read().strip() or "unknown"
+    except OSError:
+        return "released just now"
+
+
 def spec_for(path, policy):
     """A ladder file -> the arena spec that plays it under the ship policy."""
     L.CANDIDATE_ARCH = L.parse_candidate_bot(policy)
@@ -245,10 +310,17 @@ def measure(new_path, base_path, players, policy, deals, anchor_deals,
     t0 = time.time()
     h = arena.duel(new_spec, base_spec, players, deals * players,
                    seed0=H2H_SEED, workers=workers)
+    # The margin's own CI, which `arena.duel` does not return -- it reports the
+    # mean margin but a CI only for the win share.  The verdict is a threshold
+    # on this, so it has to be computed rather than eyeballed.
+    mm, mci = arena.mean_ci([x for x in (h.get("per_game_margin") or [])
+                             if x is not None])
     out["h2h"] = {"win_rate": h["win_rate"], "ci": h["ci"], "null": h["null"],
-                  "margin": h.get("margin"), "culture": h.get("culture_a"),
+                  "margin": h.get("margin"), "margin_ci": mci,
+                  "culture": h.get("culture_a"),
                   "opp_culture": h.get("culture_b"), "games": h["games"],
                   "deals": deals, "secs": round(time.time() - t0, 1)}
+    del mm
     if anchor_deals > 0:
         t1 = time.time()
         a = arena.duel(new_spec, "book", players, anchor_deals * players,
@@ -262,32 +334,55 @@ def measure(new_path, base_path, players, policy, deals, anchor_deals,
     return out
 
 
-def verdict_of(h2h):
-    lo = h2h["win_rate"] - h2h["ci"]
-    hi = h2h["win_rate"] + h2h["ci"]
-    if lo > h2h["null"]:
+def verdict_of(h2h, margin_min=MARGIN_MIN, resolution=MARGIN_RESOLUTION):
+    """FOUR verdicts, on the paired CULTURE MARGIN, not on win share.
+
+        confirms      lower bound above +margin_min: a real gain, resolved
+        INVERTED      upper bound below -margin_min: a real LOSS, resolved
+        flat          the CI is tighter than `resolution` and covers the
+                      no-effect band: measured, and there is nothing there
+        inconclusive  the CI is wider than `resolution`: NOT MEASURED
+
+    The fourth one is the important one and the first version of this file did
+    not have it.  Its first reading came back at a win-share lower bound of
+    50.03% against a 50% null and printed `confirms` -- a coin flip that landed
+    right, reported as reassurance.  `docs/UNATTENDED.md` trap 1 is the same
+    mistake in the full check (an n=48 row read 50.0% where n=400 said 27.6%),
+    and a guardrail that repeats the error it exists to catch is worthless.
+
+    `inconclusive` is deliberately NOT a divergence -- it is a statement about
+    the instrument, and it drives its own separate loud line (see
+    `divergence`), because "we are not measuring anything" and "the proxy has
+    decoupled" need different responses.
+    """
+    m = h2h.get("margin")
+    ci = h2h.get("margin_ci")
+    if m is None or ci is None:
+        return "inconclusive"
+    if m - ci > margin_min:
         return "confirms"
-    if hi < h2h["null"]:
+    if m + ci < -margin_min:
         return "INVERTED"
-    return "flat"
+    if ci <= resolution:
+        return "flat"
+    return "inconclusive"
 
 
 # ------------------------------------------------------------------ report
 
 def format_history(hist, players):
     lines = [f"    {'at':<17}{'champ':>7}{'base':>7}{'acc':>5}"
-             f"{'ship win%':>11}{'+/-':>7}{'lo':>7}{'margin':>9}"
-             f"{'own cult':>10}{'vs book':>9}  verdict"]
+             f"{'margin':>9}{'+/-':>7}{'win%':>7}{'own cult':>10}"
+             f"{'vs book':>9}  verdict"]
     for r in hist:
         h = r.get("h2h") or {}
         a = r.get("anchor") or {}
         lines.append(
             f"    {r.get('at', '?')[:16]:<17}{r.get('champion_gen', -1):>7}"
             f"{r.get('baseline_gen', -1):>7}{r.get('accepts_between', 0):>5}"
-            f"{(h.get('win_rate') or 0):>10.1%}"
-            f"{(h.get('ci') or 0):>7.1%}"
-            f"{(h.get('win_rate') or 0) - (h.get('ci') or 0):>7.1%}"
             f"{(h.get('margin') or 0):>+9.1f}"
+            f"{(h.get('margin_ci') or 0):>7.1f}"
+            f"{(h.get('win_rate') or 0):>7.1%}"
             f"{(h.get('culture') or 0):>10.1f}"
             f"{(a.get('culture') or 0):>9.1f}"
             f"  {r.get('verdict', '?')}")
@@ -301,6 +396,11 @@ def divergence(hist, run=3):
     bound on its own metric, so `accepts_between > 0` IS a claim.  So the
     question is never "did the proxy claim something", it is "did the ship
     policy ever agree".
+
+    `inconclusive` readings do NOT count toward a divergence.  They are the
+    instrument failing, not the proxy failing, and conflating the two is how a
+    guardrail ends up crying wolf about the training loop when the real fault
+    is its own sample size.  They get their own alarm in `starvation`.
     """
     if not hist:
         return False, ""
@@ -309,14 +409,54 @@ def divergence(hist, run=3):
         return True, ("the champion the proxy just accepted is WORSE under "
                       "the ship policy than the one it replaced -- this is "
                       "docs/TRANSFER_TEST.md's failure mode, live")
-    tail = hist[-run:]
-    if len(tail) >= run and all(r.get("verdict") != "confirms" for r in tail):
+    tail = [r for r in hist if r.get("verdict") in ("confirms", "flat")][-run:]
+    if len(tail) >= run and all(r.get("verdict") == "flat" for r in tail):
         acc = sum(r.get("accepts_between", 0) for r in tail)
-        return True, (f"{run} consecutive readings without a measurable gain "
+        return True, (f"{run} consecutive RESOLVED readings with no gain "
                       f"under the ship policy, across {acc} accepted "
                       f"champions -- the proxy is claiming progress the "
                       f"policy we would ship cannot see")
     return False, ""
+
+
+def unresolved(hist, run=3):
+    """(is_unresolved, message).  The guardrail complaining about ITSELF.
+
+    A run of `inconclusive` readings means the instrument cannot see an effect
+    of the size that matters at the n it is being given.  That is not
+    reassurance and it is not a divergence: it is a request to raise --deals
+    (and, to pay for it, --every-accepts).
+    """
+    tail = hist[-run:]
+    if len(tail) >= run and all(r.get("verdict") == "inconclusive"
+                                for r in tail):
+        ci = [((r.get("h2h") or {}).get("margin_ci") or 0.0) for r in tail]
+        return True, (f"{run} consecutive readings too wide to resolve "
+                      f"+/-{MARGIN_RESOLUTION:g} culture (half-widths "
+                      + ", ".join(f"{c:.1f}" for c in ci)
+                      + ") -- the guardrail is not measuring anything at this "
+                        "sample size; raise --deals and --every-accepts "
+                        "together so the cost per hour is unchanged")
+    return False, ""
+
+
+def starvation(hist, newest_gen, accepts_pending, hours_since, stale_hours):
+    """(is_starved, message).  A monitor that stops monitoring, loudly.
+
+    The failure this exists for is mundane and real: the lock was held by
+    another job every time cron looked, so `proxy_watch.log` filled up with
+    "another measurement holds the lock, skipping" and nothing was ever
+    measured.  Silence from a monitor is indistinguishable from good news,
+    which is the one thing a monitor may never be.
+    """
+    if accepts_pending < 1 or hours_since < stale_hours:
+        return False, ""
+    last = f"gen {hist[-1]['champion_gen']}" if hist else "NEVER"
+    return True, (f"no successful reading for {hours_since:.1f}h (last: "
+                  f"{last}) while {accepts_pending} champions have been "
+                  f"accepted, newest gen {newest_gen}.  The arm is training "
+                  f"unvalidated.  Check experiments/logs/proxy_watch.log for "
+                  f"lock contention and the box for a competing job")
 
 
 def log_block(fh, players, rec, hist, policy, run=3):
@@ -332,32 +472,40 @@ def log_block(fh, players, rec, hist, policy, run=3):
     w(f"  proxy claim   : {rec['accepts_between']} accepted champions, "
       f"summed accepted edge {rec['proxy_edge_sum']:+.4f} "
       f"(training metric, {rec['objective_note']})")
-    # The lower bound is printed explicitly because the verdict is a
-    # threshold on it, and at these sample sizes a `confirms` can sit a
-    # fraction of a point above the null.  A verdict that cannot be seen to be
-    # marginal is a verdict that gets over-quoted.  `ci` is arena's 95%
-    # two-sided half-width (z=1.96), so "lower bound above the null" is a
-    # one-sided 97.5% claim.
-    w(f"  ship policy   : win share {h.get('win_rate', 0):.1%} "
-      f"+/- {h.get('ci', 0):.1%} (95% CI, lower bound "
-      f"{h.get('win_rate', 0) - h.get('ci', 0):.1%}) vs null "
-      f"{h.get('null', 0):.1%} over {h.get('games', 0)} games "
+    # The bounds are printed explicitly because the verdict is a threshold on
+    # them.  A verdict that cannot be SEEN to be marginal is a verdict that
+    # gets over-quoted, and this project has been burned by exactly that.
+    # `ci` is arena's 95% two-sided half-width (z=1.96).
+    mg, mci = h.get("margin") or 0.0, h.get("margin_ci") or 0.0
+    w(f"  ship policy   : culture margin {mg:+.1f} +/- {mci:.1f} "
+      f"(95% CI [{mg - mci:+.1f}, {mg + mci:+.1f}], "
+      f"needs {MARGIN_MIN:+g} to confirm, "
+      f"+/-{MARGIN_RESOLUTION:g} to resolve)")
+    w(f"                  own culture {h.get('culture', 0):.1f} vs "
+      f"{h.get('opp_culture', 0):.1f}; win share "
+      f"{h.get('win_rate', 0):.1%} +/- {h.get('ci', 0):.1%} vs null "
+      f"{h.get('null', 0):.1%} (secondary: a 0/1 step with ~10x the variance)")
+    w(f"                  over {h.get('games', 0)} games "
       f"({h.get('deals', 0)} deals, {h.get('secs', 0):.0f}s)")
-    w(f"                  culture {h.get('culture', 0):.1f} vs "
-      f"{h.get('opp_culture', 0):.1f}, margin "
-      f"{h.get('margin', 0):+.1f}")
     if a:
         w(f"  anchor vs book: own culture {a.get('culture', 0):.1f} "
           f"(book {a.get('opp_culture', 0):.1f}), win share "
           f"{a.get('win_rate', 0):.1%} +/- {a.get('ci', 0):.1%}, "
           f"n={a.get('games', 0)}")
-    w(f"  VERDICT       : {rec['verdict']}")
+    w(f"  VERDICT       : {rec['verdict']}"
+      + ("   (NOT MEASURED -- the CI is too wide to call, do not read this "
+         "as reassurance)" if rec["verdict"] == "inconclusive" else ""))
     diverging, why = divergence(hist, run)
     if diverging:
         w("")
         w("  !! PROXY DIVERGENCE !!")
         w(f"  !! {why}")
         w("  !! see docs/PROXY_GUARDRAIL.md 'what to do about a divergence'")
+    wide, why_wide = unresolved(hist, run)
+    if wide:
+        w("")
+        w("  !! GUARDRAIL NOT RESOLVING !!")
+        w(f"  !! {why_wide}")
     w("")
     w("  history (every reading for this arm):")
     w(format_history(hist, players))
@@ -379,7 +527,7 @@ def log_block(fh, players, rec, hist, policy, run=3):
 def check_arm(players, state_dir=DEFAULT_STATE, policy=SHIP_POLICY,
               deals=None, anchor_deals=None, every_accepts=None,
               max_hours=None, workers=1, force=False, dry_run=False,
-              run=3, log=print):
+              run=3, stale_hours=24.0, log=print):
     b = BUDGET.get(players, BUDGET[2])
     deals = b["deals"] if deals is None else deals
     anchor_deals = b["anchor_deals"] if anchor_deals is None else anchor_deals
@@ -415,6 +563,18 @@ def check_arm(players, state_dir=DEFAULT_STATE, policy=SHIP_POLICY,
         base_gen = gen_of(base_path)
         accepts = sum(1 for p in files if base_gen < gen_of(p) <= new_gen)
         hours = float("inf")
+
+    # STARVATION: shout before deciding whether a reading is due, because the
+    # whole failure mode is "never due, never run, never noticed".
+    starved, why_starved = starvation(hist, new_gen, accepts,
+                                      0.0 if hours == float("inf")
+                                      else hours, stale_hours)
+    if starved:
+        msg = (f"[{players}p] !! PROXY GUARDRAIL STARVED: {why_starved}")
+        log(msg)
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a") as fh:
+            fh.write(f"\n!! {time.strftime('%F %T')} {msg}\n")
 
     due = force or accepts >= every_accepts or (accepts >= 1 and
                                                 hours >= max_hours)
@@ -501,11 +661,21 @@ def main(argv=None):
                          "champion was accepted -- a slow arm still gets a "
                          "time series")
     ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--stale-hours", type=float, default=24.0,
+                    help="shout if this long has passed with accepted "
+                         "champions and no successful reading")
     ap.add_argument("--divergence-run", type=int, default=3,
                     help="consecutive non-confirming readings that count as a "
                          "divergence")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--lock-wait", type=float, default=15.0,
+                    metavar="MIN",
+                    help="minutes to WAIT for the measurement lock before "
+                         "giving up (default %(default)g).  Waiting rather "
+                         "than skipping is deliberate: a neighbour job that "
+                         "holds the lock whenever cron looks would otherwise "
+                         "starve the guardrail silently")
     ap.add_argument("--no-lock", action="store_true")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args(argv)
@@ -515,13 +685,20 @@ def main(argv=None):
               deals=a.deals, anchor_deals=a.anchor_deals,
               every_accepts=a.every_accepts, max_hours=a.max_hours,
               workers=a.workers, force=a.force, dry_run=a.dry_run,
-              run=a.divergence_run)
+              run=a.divergence_run, stale_hours=a.stale_hours)
     if a.no_lock or a.dry_run:
         check_arm(**kw)
         return
-    with Lock() as lk:
+    lock = Lock(wait_s=a.lock_wait * 60.0)
+    with lock as lk:
         if lk is None:
-            print("proxy check: another measurement holds the lock, skipping")
+            # Not silent, and not final: the next cron invocation retries, and
+            # if the lock never clears the --stale-hours alarm fires from
+            # inside check_arm.  A monitor that quietly gives up is the bug
+            # this message exists to make visible.
+            print(f"proxy check [{a.players}p]: gave up after waiting "
+                  f"{lock.waited / 60:.0f} min for {LOCK} (held by "
+                  f"{_lock_holder()}); the next invocation retries")
             return
         check_arm(**kw)
 

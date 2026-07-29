@@ -18,12 +18,63 @@ moving. The retarget buys a far smaller number of generations, each of which
 measures a policy much closer to the one we would ship — which is the trade the
 convergence makes worth taking, and only for that arm.
 
-**Warm start, not a clean start.** The state dir is untouched, so the arm
-resumed its own gen-727 champion at sigma 0.664 and kept its ladder. The
-pre-restart state is archived at
-`experiments/archive_2p_quiescent_20260729/` (champion, state, 105 ladder
-files, all four JSONLs, and the log), so the quiescent-trained champion is
-recoverable byte for byte.
+### Warm-started from P, the 1-PLY lineage — **not** from its own champion
+
+This was the second decision and it reversed the first one. The obvious move
+is to resume the arm's own gen-727 quiescent champion. The measurement says
+don't:
+
+| under `plan:width=8`, 2p | own final culture | n |
+|---|---|---|
+| human corpus reference | 159.5 [156.0, 163.0] | — |
+| **P**, the 1-ply lineage vector, mirror | **190.6 [185.5, 196.3]** | 162 |
+| **Q**, a league champion (gen 239), mirror | **61.4 [56.6, 65.9]** | 162 |
+| P against `book` (`docs/PLAN_WAR_LOOKAHEAD.md` §4a) | 213.4 | 100 |
+| the live 2p champion (gen 725) against `book` | **132.8** | 20 |
+
+The first two rows are a replication run on this box on post-scoring-fix
+master, cluster-bootstrapped; the last row is the proxy guardrail's own first
+reading on the arm's actual champion. They agree in direction and the gap is
+large either way: **under the policy this arm now gates on, the quiescent
+lineage is 80-130 culture points behind the vector the previous 1-ply run
+produced.** Warm-starting a PlanBot arm from it would have spent the whole
+48h climbing out of a hole that a file already sitting in the repo does not
+have.
+
+So the arm starts from
+
+    experiments/archive_preplan/league_state_1ply_20260726/champion_2p.json
+    gen 355, sha256 55c7a3dea72e...   (byte-identical to
+    experiments/hall_of_fame/oneply_2p_gen00355.json, which is already a
+    `hall` pool opponent)
+
+verified key-by-key in place: all 82 of P's weights identical in the live
+`champion_2p.json`, the 7 newer features at `DEFAULT_WEIGHTS` (the same fill
+`docs/TRANSFER_TEST.md` §7 describes), `ladder_2p/gen00000.json` equal to the
+champion, gen 0.
+
+**`--init` is ignored once the state dir holds a champion**, so this needed a
+genuinely fresh state, which is the one thing this document says twice to be
+careful about. The old state was archived first and verified recoverable:
+
+    experiments/archive_2p_quiescent_20260729/
+      champion_2p.json      gen 727, sigma 0.664, sha256 69e01f781a4a...
+      ladder_2p/            105 files
+      generations_2p.jsonl  727 rows
+      state/fullcheck/ablation/guard/credit, league_2p.log,
+      proxy_history_2p.jsonl
+
+That champion remains the best vector we have **under the quiescent proxy** and
+nothing about this retarget says otherwise. It is one `--init` away from being
+resumed.
+
+Two consequences worth knowing:
+
+* the arm's `past` ladder restarts empty, so for the first generations the
+  self-play tier is thin and the `hall` and external tiers carry more of the
+  decision. `--past-k 6` fills it back up quickly.
+* `hall:oneply_2p_gen00355` **is** the starting champion, so that row reads
+  ~50% until the lineage moves. That is informative, not broken.
 
 ### The width, and the measurement that picked it
 

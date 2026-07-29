@@ -41,6 +41,18 @@ one* — but shrinking a gap is not closing it, and `width=2`'s strength has
 never been measured (`docs/BOT_ARCHITECTURE.md` has `width=1` at 62.3% and
 `width=8` at 85.1% against 1-ply, and nothing in between).
 
+**The guardrail's very first reading is also the evidence that this was a real
+risk and not a hypothetical.** It measured the live 2p champion at **132.8**
+own culture against `book` under `plan:width=8`, next to
+`docs/PLAN_WAR_LOOKAHEAD.md` §4a's **127.8** for the frozen quiescent-trained
+vector and **213.4** for the 1-ply lineage vector. 725 generations of proxy
+progress had produced a suppression engine holding `book` to 43.2, not a
+production one — and that single number is what the 2p arm's warm start was
+changed on the strength of. Note that the 2p series therefore **restarts** with
+the P lineage: readings before 2026-07-29 08:14 are archived in
+`experiments/archive_2p_quiescent_20260729/proxy_history_2p.jsonl` and describe
+a different lineage.
+
 ## 2. What it measures
 
 Every `--every-accepts` accepted champions, **or** `--max-hours` since the last
@@ -67,61 +79,70 @@ whether the ship policy agrees.
 
 ## 3. How to read the output
 
-`experiments/logs/proxy_check.log`, one block per reading. This is the real
-first one, taken on the 2p arm at 08:07 on 2026-07-29:
+`experiments/logs/proxy_check.log`, one block per reading:
 
 ```
 ==============================================================================
-[2p] PROXY CHECK 2026-07-29 08:07:00  policy=plan:width=8  gen 657 -> 725
-     (5 accepts, 68 generations)
-  proxy claim   : 5 accepted champions, summed accepted edge +0.1687
-  ship policy   : win share 65.0% +/- 15.0% (95% CI, lower bound 50.0%)
-                  vs null 50.0% over 40 games (20 deals, 1529s)
-                  culture 103.3 vs 91.6, margin +11.7
+[2p] PROXY CHECK <time>  policy=plan:width=8  gen A -> B (N accepts, M gens)
+  proxy claim   : N accepted champions, summed accepted edge +0.1687
+  ship policy   : culture margin +11.7 +/- 11.9 (95% CI [-0.2, +23.6],
+                  needs +5 to confirm, +/-15 to resolve)
+                  own culture 103.3 vs 91.6; win share 65.0% +/- 15.0% vs
+                  null 50.0% (secondary: a 0/1 step with ~10x the variance)
+                  over 40 games (20 deals, 1529s)
   anchor vs book: own culture 132.8 (book 43.2), win share 90.0% +/- 13.5%
-  VERDICT       : confirms
+  VERDICT       : inconclusive   (NOT MEASURED -- the CI is too wide to call)
   history (every reading for this arm):
-    at                champ   base  acc  ship win%    +/-     lo   margin  own cult  vs book  verdict
-    2026-07-29 08:07    725    657    5     65.0%  15.0%  50.0%    +11.7     103.3    132.8  confirms
+    at                champ   base  acc   margin    +/-   win%  own cult  vs book  verdict
+    ...
 ==============================================================================
 ```
 
-Read that reading honestly, because it is a good example of what these numbers
-can and cannot say. The lower bound is 50.03% — it clears the null by three
-hundredths of a point. It is a `confirms` by the rule and it is one game away
-from `flat`, which is exactly why the lower bound is printed next to the
-verdict. What it does establish: the last five accepted champions did **not**
-produce a `docs/TRANSFER_TEST.md`-style inversion. What it does not establish
-is a magnitude.
+### The four verdicts, and why the statistic is culture and not win share
 
-The `vs book` column is the one to watch across readings. 132.8 own culture
-under `plan:width=8` sits close to `docs/PLAN_WAR_LOOKAHEAD.md` §4a's **127.8**
-for the frozen quiescent-trained vector and far below its **213.4** for the
-1-ply lineage vector — i.e. after 725 generations this arm is still producing a
-suppression engine (it holds `book` to 43.2), not a production one. That is the
-kind of statement the guardrail exists to make and nothing else in the loop
-could make.
+| verdict | rule | meaning |
+|---|---|---|
+| `confirms` | margin lower bound > **+5** | a real gain, resolved |
+| `INVERTED` | margin upper bound < **−5** | a real **loss**: the champion the proxy chose is worse under the ship policy than the one it replaced. `docs/TRANSFER_TEST.md`'s failure, live |
+| `flat` | half-width ≤ **15** and the CI covers the no-effect band | measured, and there is nothing there |
+| `inconclusive` | half-width > **15** | **not measured.** Not reassurance, not a divergence — an instrument problem |
 
-The **verdict** comes from the head-to-head confidence interval:
+The statistic is the paired **culture margin**, not win share. Win share is a
+0/1 step with ~10x the paired variance, it saturates against `book` at
+0.94-0.97 under PlanBot (`docs/TRANSFER_TEST.md` §3), and every finding in
+`docs/TRANSFER_TEST.md` and `docs/PLAN_WAR_LOOKAHEAD.md` is quoted in margin
+for exactly that reason. Win share is still printed, as a secondary.
 
-| verdict | meaning |
-|---|---|
-| `confirms` | win-share lower bound above the null. The accepts reached the ship policy. |
-| `flat` | the CI covers the null. The accepts bought nothing *measurable here* — at these sample sizes that is not the same as "bought nothing". |
-| `INVERTED` | upper bound below the null. The champion the proxy chose is **worse** under the ship policy than the one it replaced. This is `docs/TRANSFER_TEST.md`'s failure, live. |
+**`inconclusive` is the verdict that keeps this file honest, and the first
+version did not have it.** That version's first real reading — 2p, gen 657 →
+725, 5 accepts, 20 deals — came back at a win-share lower bound of **50.03%**
+against a 50% null and printed `confirms`. A coin flip that landed right,
+reported as reassurance: `docs/UNATTENDED.md` trap 1 (an n=48 row read 50.0%
+where n=400 said 27.6%) committed by the very thing meant to catch it. Under
+the current rule that reading is `inconclusive`, which is what it always was.
 
-**One `flat` is noise. A run of them is the finding.** So the guardrail shouts
-— `!! PROXY DIVERGENCE !!` in the log, and a `!! PROXY DIVERGENCE` line on
-stdout, which lands in `experiments/logs/proxy_watch.log` — when either:
+Two things changed together so the cost per hour did not move: `--deals`
+roughly doubled (2p 20 → 40, 3p 10 → 20, 4p 6 → 12) **and** the cadence went
+sparse (2p every 5 accepts → 12, 3p 15 → 20, 4p 12 → 15).
 
-* any reading is `INVERTED`, or
-* the last `--divergence-run` (default 3) readings all failed to confirm,
-  reported together with how many champions were accepted across them.
+### Three alarms, because they need three different responses
 
-Grep for it:
+| alarm | fires when | whose problem |
+|---|---|---|
+| `!! PROXY DIVERGENCE !!` | any `INVERTED` reading, or `--divergence-run` (3) consecutive **resolved** readings with no gain while accepts pile up | the training loop |
+| `!! GUARDRAIL NOT RESOLVING !!` | 3 consecutive `inconclusive` readings | the guardrail: raise `--deals` and `--every-accepts` together |
+| `!! PROXY GUARDRAIL STARVED` | `--stale-hours` (24) with accepted champions and no successful reading at all | the box: a lock that never clears, or a dead cron entry |
+
+`inconclusive` readings deliberately do **not** count toward a divergence.
+They are the instrument failing, not the proxy failing, and conflating the two
+is how a guardrail ends up crying wolf about the training loop when the real
+fault is its own sample size.
+
+Grep for all three:
 
 ```
-grep -n "PROXY DIVERGENCE" experiments/logs/proxy_check.log
+grep -nE "PROXY DIVERGENCE|NOT RESOLVING|STARVED" experiments/logs/proxy_check.log
+grep -n "gave up after waiting" experiments/logs/proxy_watch.log
 python3 -m experiments.proxy_check --report        # the whole series, all arms
 ```
 
@@ -163,9 +184,9 @@ lever is `--deals`, not the trainer.
 
 | | 2p | 3p | 4p |
 |---|---|---|---|
-| head-to-head deals | 20 | 10 | 6 |
-| anchor deals | 10 | 5 | 3 |
-| a reading is due every | 5 accepts / 8h | 15 accepts / 12h | 12 accepts / 16h |
+| head-to-head deals | 40 | 20 | 12 |
+| anchor deals | 15 | 8 | 5 |
+| a reading is due every | 12 accepts / 12h | 20 accepts / 16h | 15 accepts / 20h |
 
 The deal counts fall with player count because a `plan:width=8` game gets much
 more expensive with it (measured at 2p on the 2p champion: 9.07 cpu-s/game
@@ -182,7 +203,16 @@ Five structural reasons it cannot damage a run:
   accepted and never rewritten. `champion_<K>p.json` is rewritten every
   generation and reading it would race a live arm; the ladder cannot tear;
 * it writes only its own log and history file;
-* a lock file means two arms never measure at once.
+* a lock file means two arms never measure at once -- and it is **waited**
+  on, not skipped. The first version skipped, a neighbouring agent's
+  replication job held the lock every time cron looked, and
+  `proxy_watch.log` filled with six "another measurement holds the lock,
+  skipping" lines while nothing was ever measured. A monitor that goes quiet
+  when the box is busy goes quiet exactly when you need it. Each arm now
+  waits up to 5 minutes (`--lock-wait`), a stale lock is stolen after 6h, a
+  second `proxy_watch.lock` stops two watcher invocations overlapping, the
+  arm order rotates every 20 minutes so a slow 4p reading cannot starve the
+  arm behind it, and `--stale-hours` shouts if all of that still fails.
 
 ## 6. Operating it
 
