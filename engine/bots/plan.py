@@ -258,7 +258,7 @@ class PlanBot:
                     f = mv if first is None else first
                     # resolve decisions owned by anybody, so the position is
                     # quiet before it is either scored or expanded
-                    self._quiesce(t, w)
+                    self._quiesce(t, w, root_row=ctx.get("root_row"))
                     try:
                         v = self._score(t, me, w, ctx)
                     except Exception:
@@ -340,7 +340,7 @@ class PlanBot:
                         f = mv if first is None else first
                         # resolve decisions owned by anybody, so the position
                         # is quiet before it is either scored or expanded
-                        self._quiesce(st, w)
+                        self._quiesce(st, w, root_row=ctx.get("root_row"))
                         try:
                             v = self._score(st, me, w, ctx)
                         except Exception:
@@ -359,11 +359,12 @@ class PlanBot:
             # the order they were appended in -- identical to the copy path,
             # where the tuples held states that were never compared either.
             nxt.sort(key=lambda e: -e[0])
-            frontier = [(v, self._replay(parent, mv, w), f)
+            frontier = [(v, self._replay(parent, mv, w,
+                                         ctx.get("root_row")), f)
                         for v, parent, mv, f in nxt[:self.width]]
         return best
 
-    def _replay(self, parent, mv, w):
+    def _replay(self, parent, mv, w, root_row=None):
         """Rebuild the child of `parent` by `mv` as a real, persistent state.
 
         Runs with no journal of its own: the caller has rolled back, so
@@ -371,7 +372,7 @@ class PlanBot:
         """
         t = copy_state(parent)
         actions.apply(t, mv, _rng())
-        self._quiesce(t, w)
+        self._quiesce(t, w, root_row=root_row)
         return t
 
     def _score(self, t, me, w, ctx):
@@ -407,8 +408,16 @@ class PlanBot:
                 return wv
         return evaluate(t, me, w, ctx)
 
-    def _quiesce(self, st, w, cap=12):
-        """Drain the pending stack with plain 1-ply picks for whoever decides."""
+    def _quiesce(self, st, w, cap=12, root_row=None):
+        """Drain the pending stack with plain 1-ply picks for whoever decides.
+
+        `root_row` is the search root's visible card row, threaded down from
+        `pick` so the opponent picks made in here price the same row the real
+        decider could see -- not the row a trial `end_turn` has already
+        replenished with the deck's next real cards.  It has to arrive as an
+        argument: this runs deep inside the beam, where the root context is
+        long out of scope.
+        """
         n = 0
         while st.pending and n < cap and not st.game_over:
             n += 1
@@ -420,7 +429,7 @@ class PlanBot:
                 actions.apply(st, mvs[0], _rng())
                 continue
             try:
-                dctx = rival_context(st, d)
+                dctx = rival_context(st, d, root_row)
             except Exception:
                 dctx = dict(_NO_CTX)
             mv = self._one_ply(st, mvs, d, w, dctx)

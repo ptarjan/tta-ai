@@ -425,3 +425,83 @@ class NewStateFieldsCopyAndRollBack(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RootRowBudget(unittest.TestCase):
+    """The `end_turn` information leak, INFORMATION_AUDIT 6.1.
+
+    `row_pressure` runs on the POST-move state deliberately, so taking a doomed
+    card lowers `row_urgency`.  But a candidate that crosses a turn boundary has
+    had `_replenish` deal the REAL next civil cards into the row, and the row
+    terms then priced cards the mover cannot know -- 94.2% of `end_turn`
+    candidates at 2p, and at 3p it changed the chosen move.  The fix budgets the
+    row against `ctx["root_row"]`.
+
+    The negative control matters as much as the mask: a card that merely SLID
+    LEFT must still be priced, because the slide is public arithmetic.  A mask
+    that also hid slid cards would "fix" the leak by deleting the feature.
+    """
+
+    ROW_W = dict(W.DEFAULT_WEIGHTS, row_urgency=1.0, row_bargain_forgone=1.0)
+
+    def _st(self):
+        st = play(2, seed=43, plies=40)
+        for p in st.players:
+            p.civil_actions = 6
+        # `_can_take_gated` refuses a card I already hold and refuses
+        # everything once my hand is at the limit -- p0's dealt hand happens to
+        # contain "Alchemy", which would gate every card below to 0.0 and make
+        # the negative control vacuous rather than failing.
+        st.players[0].hand_civil = []
+        st.card_row = [None] * 13
+        return st
+
+    def test_dealt_card_is_not_priced(self):
+        st = self._st()
+        st.card_row[2] = "Alchemy"
+        ctx = W.rival_context(st, 0)                  # root: Alchemy only
+        before = W.row_pressure(st, 0, self.ROW_W, ctx)
+        st.card_row[5] = "Theology"                   # dealt by _replenish
+        after = W.row_pressure(st, 0, self.ROW_W, ctx)
+        self.assertEqual(before, after)
+        # Vacuity guard: the dealt card must be one the unmasked function would
+        # have priced, or this test would pass with the mask deleted.
+        unmasked = {k: v for k, v in ctx.items() if k != "root_row"}
+        self.assertNotEqual(before,
+                            W.row_pressure(st, 0, self.ROW_W, unmasked))
+
+    def test_slid_card_is_still_priced(self):
+        """Negative control: same card, cheaper slot, must move the value."""
+        st = self._st()
+        st.card_row[9] = "Alchemy"
+        ctx = W.rival_context(st, 0)
+        far = W.row_pressure(st, 0, self.ROW_W, ctx)
+        st.card_row[9] = None
+        st.card_row[2] = "Alchemy"                    # slid left, still visible
+        near = W.row_pressure(st, 0, self.ROW_W, ctx)
+        self.assertNotEqual(far, near)
+
+    def test_duplicate_names_counted_by_multiplicity(self):
+        """A set-based mask would price a freshly dealt SECOND copy."""
+        st = self._st()
+        st.card_row[2] = "Alchemy"
+        ctx = W.rival_context(st, 0)
+        one = W.row_pressure(st, 0, self.ROW_W, ctx)
+        st.card_row[6] = "Alchemy"                    # a dealt duplicate
+        two = W.row_pressure(st, 0, self.ROW_W, ctx)
+        self.assertEqual(one, two)
+
+    def test_rebuilt_context_keeps_the_root_budget(self):
+        """The mid-search rebuild (rivals moved, aggregates stale) must carry
+        the root budget forward; recomputing it from the trial re-opens the
+        leak for exactly the deep nodes that have one."""
+        st = self._st()
+        st.card_row[2] = "Alchemy"
+        root = W.rival_context(st, 0)
+        st.card_row[5] = "Theology"                   # revealed deeper in
+        rebuilt = W.rival_context(st, 0, root.get("root_row"))
+        self.assertEqual(root["root_row"], rebuilt["root_row"])
+        self.assertEqual(W.row_pressure(st, 0, self.ROW_W, root),
+                         W.row_pressure(st, 0, self.ROW_W, rebuilt))
+        leaky = W.rival_context(st, 0)                # recomputed = the bug
+        self.assertNotEqual(root["root_row"], leaky["root_row"])

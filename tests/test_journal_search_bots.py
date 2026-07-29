@@ -258,7 +258,8 @@ class TheChecksCanFail(_JournalFlagCase):
         `test_beam_returns_identical_scores` would have caught it."""
         from engine.bots.weighted import DEFAULT_WEIGHTS, rival_context
         real = PlanBot._replay
-        PlanBot._replay = lambda self, parent, mv, w: copy_state(parent)
+        PlanBot._replay = (lambda self, parent, mv, w, root_row=None:
+                           copy_state(parent))
         try:
             differed = False
             for st in _positions(n=2, seed=7, moves=80, every=9):

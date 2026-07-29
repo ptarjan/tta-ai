@@ -200,7 +200,38 @@ class _RivalView:
         self.government = q.government
 
 
-def rival_context(state, idx):
+def root_row_budget(state):
+    """Multiset of the card-row names VISIBLE AT THE ROOT of a search.
+
+    The one piece of hidden information the evaluator can actually read.
+    `_replenish` runs at the start of every player's turn, so any trial that
+    crosses a turn boundary -- every `end_turn` candidate, and every deeper
+    ply of a search -- deals the REAL next civil cards into `state.card_row`,
+    and `row_pressure` below would then price cards the mover cannot know.
+    Measured at 94.2% of `end_turn` candidates at 2p and 92.0% at 3p, and
+    once the 3p arm fitted real row weights it began changing the chosen move
+    (docs/INFORMATION_AUDIT.md 6.1).
+
+    A multiset, not a set, because the civil decks contain duplicate card
+    names: with a plain set, a freshly dealt SECOND copy of a card already in
+    the root row would still be priced, and the leak would only mostly close.
+    Counting multiplicity makes the mask exact.
+
+    Cards that merely SLID LEFT are unaffected -- the slide is public
+    arithmetic every player can do, and the card keeps its name -- so they are
+    still priced, at their new (cheaper) slot.  That is the whole point of
+    evaluating the row on the post-move state, and it survives.
+    """
+    counts = {}
+    for c in state.card_row:
+        if c is None:
+            continue
+        n = c["name"] if isinstance(c, dict) else getattr(c, "name", c)
+        counts[n] = counts.get(n, 0) + 1
+    return counts
+
+
+def rival_context(state, idx, root_row=None):
     """Rival aggregates that only change when *they* move.
 
     Computed once per decision at the root and reused for every candidate
@@ -213,6 +244,12 @@ def rival_context(state, idx):
     turn, not what is left of this one.  It is built here for the same reason
     everything else here is: `effects.compute` is the expensive part and the
     trial states thrown at `evaluate` have no stats cache.
+
+    `root_row` must be passed by any caller REBUILDING this context on a trial
+    state mid-search (the rivals moved, so the aggregates went stale).  Without
+    it the row budget would be recomputed from the trial's own row, which is
+    precisely the leaked information the budget exists to hide, and the rebuild
+    would silently re-open the leak for exactly the deep nodes that have one.
     """
     best_rate = best_sci = best_str = 0
     views = []
@@ -230,7 +267,9 @@ def rival_context(state, idx):
                 1 if q.leader == "Hammurabi" else 0)
         views.append((_RivalView(q), gate))
     return {"rival_culture_rate": best_rate, "rival_science_rate": best_sci,
-            "rival_strength": best_str, "rival_views": tuple(views)}
+            "rival_strength": best_str, "rival_views": tuple(views),
+            "root_row": root_row_budget(state) if root_row is None
+            else root_row}
 
 
 # ------------------------------------------------------- the game horizon
@@ -739,13 +778,25 @@ def row_pressure(state, idx, w, ctx=None):
     in both sums: the sweep destroying a card I do not want is not a loss,
     and waiting for one is not a bargain.
 
-    Reads `state.card_row` (public), my own board, and the public rival
-    boards/civil hands snapshotted into `ctx`.  No hidden field, so this does
-    not load the `end_turn` information leak (INFORMATION_AUDIT section 6).
+    Reads `state.card_row`, my own board, and the public rival boards/civil
+    hands snapshotted into `ctx`.  The row is public AT THE ROOT only: a trial
+    that crossed a turn boundary has had the real next cards dealt into it, so
+    every slot is checked against `ctx["root_row"]` and cards that were not
+    visible when the decision started are SKIPPED.  Without that check this
+    function is the mechanism of the `end_turn` information leak, and it was
+    measurably changing the chosen move at 3p (INFORMATION_AUDIT 6.1).
+
+    `ctx` without a `root_row` key (a caller that built its own dict, or the
+    degraded no-ctx path) masks nothing and is leaky, as it was before; the
+    bots all go through `rival_context`, which always supplies it.
     """
     row = state.card_row
     if not row:
         return 0.0, 0.0
+    # Local copy: decremented as slots are accepted, so N dealt copies of a
+    # card the root row held once are priced once.
+    budget = ctx.get("root_row") if ctx else None
+    budget = dict(budget) if budget else None
     p = state.players[idx]
     n = _live(state)
     slide = n * _SWEEP[n]
@@ -757,6 +808,11 @@ def row_pressure(state, idx, w, ctx=None):
     for i, name in enumerate(row):
         if name is None:
             continue
+        if budget is not None:
+            left = budget.get(name, 0)
+            if left <= 0:            # dealt after the decision began: unknowable
+                continue
+            budget[name] = left - 1
         if not gated(state, p, i, mine, name):
             continue
         val = card_potential(name, w)
