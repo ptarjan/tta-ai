@@ -39,6 +39,13 @@ import time
 
 HOME = r"C:\Users\micro\tta-ai"
 PAUSE = os.path.join(HOME, "PAUSE")
+#: Operator hold.  While this file exists the guard will WRITE `PAUSE` but
+#: never REMOVE it, so a human (or an agent doing maintenance) can pin training
+#: off without becoming a second writer of `PAUSE` and without racing the
+#: guard's own clear.  Delete the hold to hand control back to the guard.
+#: Added after an operator wrote `PAUSE` by hand during a gaming session and
+#: the guard would have cleared it 30 seconds later.
+HOLD = os.path.join(HOME, "PAUSE_HOLD")
 LOGDIR = os.path.join(HOME, "experiments", "logs")
 LOG = os.path.join(LOGDIR, "gpu_guard.log")
 LOCK = os.path.join(HOME, "gpu_guard.lock")
@@ -200,19 +207,35 @@ def main():
             clear_streak += 1
             foreign_streak = 0
 
+        # An operator (or a crashed predecessor) may have left PAUSE on disk
+        # while this guard was not running.  Re-sync every poll rather than
+        # trusting the local `paused` variable, or the guard can sit believing
+        # it is unpaused while PAUSE sits on disk stopping every loop forever.
+        on_disk = os.path.exists(PAUSE)
+        if on_disk != paused:
+            log(f"resync: PAUSE {'present' if on_disk else 'absent'} on disk "
+                f"but guard thought {'paused' if paused else 'running'}")
+            paused = on_disk
+
         if not paused and foreign_streak >= CONFIRM:
             names = ", ".join(os.path.basename(p) for _, p in foreign)
-            open(PAUSE, "w").write(f"game: {names}\n")
+            with open(PAUSE, "w") as f:
+                f.write(f"game: {names}\n")
             n = kill_training()
             log(f"PAUSE ON  game detected [{names}] -> wrote PAUSE, "
                 f"killed {n} training python")
             paused = True
         elif paused and clear_streak >= CONFIRM:
-            if os.path.exists(PAUSE):
-                os.remove(PAUSE)
-            log("PAUSE OFF  no foreign GPU process for "
-                f"{CONFIRM*POLL}s -> removed PAUSE, training may resume")
-            paused = False
+            if os.path.exists(HOLD):
+                if clear_streak % 40 == 1:      # ~10 min, don't spam the log
+                    log("HOLD in place (PAUSE_HOLD exists) -> leaving PAUSE "
+                        "set even though no game is on the GPU")
+            else:
+                if os.path.exists(PAUSE):
+                    os.remove(PAUSE)
+                log("PAUSE OFF  no foreign GPU process for "
+                    f"{CONFIRM*POLL}s -> removed PAUSE, training may resume")
+                paused = False
 
         time.sleep(POLL)
 
