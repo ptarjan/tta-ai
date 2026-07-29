@@ -85,8 +85,9 @@ from __future__ import annotations
 
 import random
 
-from .. import actions
+from .. import actions, journal
 from .fastcopy import copy_state
+from .trial import USE_JOURNAL
 from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
 
 __all__ = ["QuiescentBot", "war_value"]
@@ -165,6 +166,9 @@ def _pick(state, moves, idx, weights, end_bias, level, box, max_depth):
     """Best move for `idx`.  ``level <= 0`` is a plain 1-ply pick."""
     if len(moves) == 1:
         return moves[0]
+    if USE_JOURNAL:
+        return _pick_journalled(state, moves, idx, weights, end_bias, level,
+                                box, max_depth)
     try:
         root_ctx = rival_context(state, idx)
     except Exception:
@@ -196,6 +200,52 @@ def _pick(state, moves, idx, weights, end_bias, level, box, max_depth):
     return best if best is not None else moves[0]
 
 
+def _pick_journalled(state, moves, idx, weights, end_bias, level, box,
+                     max_depth):
+    """`_pick` with the undo stack instead of `copy_state` (docs/PYPY.md 10).
+
+    Line-for-line the copy path above, with the candidate applied to the real
+    state and undone.  This one is *nested by construction*: `_resolve` calls
+    it from inside a journal that `QuiescentBot.pick` (or an outer `_pick`)
+    already opened, and it opens another for each candidate, which is exactly
+    the strict-LIFO nesting `journal.begin` grew in section 10.  Every copy
+    QuiescentBot makes is discard-shaped -- `tools/copy_census.py` measures
+    100.0% at both 2p and 4p -- so there is nothing here the copy path buys.
+
+    The copy path is deliberately left intact: it is the paranoid oracle.
+    """
+    try:
+        root_ctx = rival_context(state, idx)
+    except Exception:
+        root_ctx = _NO_CTX
+    best, best_val = None, None
+    for mv in moves:
+        j = journal.begin(state)
+        try:
+            try:
+                actions.apply(state, mv, _fresh(2 * level + 1))
+            except Exception:
+                continue            # the `finally` still rolls back
+            ctx = root_ctx
+            if level > 0 and state.pending:
+                _resolve(state, weights, end_bias, level - 1, box, max_depth)
+                try:
+                    ctx = rival_context(state, idx)
+                except Exception:
+                    ctx = root_ctx
+            try:
+                val = evaluate(state, idx, weights, ctx)
+            except Exception:
+                continue
+        finally:
+            journal.rollback(j)
+        if mv[0] == "end_turn":
+            val += end_bias
+        if best_val is None or val > best_val:
+            best, best_val = mv, val
+    return best if best is not None else moves[0]
+
+
 # --------------------------------------------------------- war lookahead
 
 def war_value(state, idx, weights, ctx):
@@ -214,6 +264,20 @@ def war_value(state, idx, weights, ctx):
     caller may score the same position with and without it.
     """
     from .. import events
+    if USE_JOURNAL:
+        # Same resolution, on the state itself, undone afterwards.  The
+        # "never mutated" promise in the docstring is kept by the rollback
+        # rather than by the copy -- and it is checked, not asserted:
+        # JOURNAL_PARANOID=1 diffs the rolled-back state against a
+        # `copy_state` oracle here as everywhere else.
+        j = journal.begin(state)
+        try:
+            events.resolve_war(state, state.players[idx], None)
+            return evaluate(state, idx, weights, ctx)
+        except Exception:
+            return None
+        finally:
+            journal.rollback(j)
     scratch = copy_state(state)
     try:
         events.resolve_war(scratch, scratch.players[idx], None)
@@ -283,6 +347,9 @@ class QuiescentBot:
         box = [self.MAX_NODES]
         depth = self.MAX_DEPTH
         levels = self.LEVELS
+        if USE_JOURNAL:
+            return self._pick_journalled(state, moves, idx, root_ctx, w,
+                                         end_bias, box, depth, levels)
         best, best_val = None, None
         for mv in moves:
             st["candidates"] += 1
@@ -311,6 +378,70 @@ class QuiescentBot:
                 wv = _war_value(trial, idx, w, ctx)
                 if wv is not None:
                     val = wv
+            if mv[0] == "end_turn":
+                val += end_bias
+            if best_val is None or val > best_val:
+                best, best_val = mv, val
+        if best is None:
+            return self.rng.choice(moves)
+        return best
+
+    def _pick_journalled(self, state, moves, idx, root_ctx, w, end_bias,
+                         box, depth, levels):
+        """`pick`'s candidate loop with the undo stack (docs/PYPY.md 10).
+
+        The root of the nest: this opens journal depth 1, `_resolve` ->
+        `_pick_journalled` opens depth 2 for each rival decision it prices, and
+        `war_value` opens one inside that.  `journal.begin` refused to nest
+        until section 10, which is the whole reason QuiescentBot was pinned to
+        the copy path even though 100% of its copies are discard-shaped.
+
+        Two things are deliberately NOT inside the journal and must not be:
+
+        * `box` (the node budget) and `self.stats` are plain Python objects
+          owned by the bot, not reachable from the state, so nothing journals
+          them and budget consumption is identical to the copy path -- which
+          matters, because a different budget is a different search.
+        * `root_ctx` is computed once by `pick`, on the unmutated state,
+          exactly as the copy path does.  Under the journal the root state is
+          the object the candidates mutate, so capturing it before the loop is
+          load-bearing rather than incidental (the same point as WeightedBot's
+          `ctx`, docs/PYPY.md 9.14).
+        """
+        st = self.stats
+        begin, rollback = journal.begin, journal.rollback
+        best, best_val = None, None
+        for mv in moves:
+            st["candidates"] += 1
+            j = begin(state)
+            try:
+                try:
+                    actions.apply(state, mv, _fresh(2 * levels + 1))
+                except Exception:
+                    continue            # the `finally` still rolls back
+                ctx = root_ctx
+                if levels > 0 and state.pending:
+                    st["quiesced"] += 1
+                    before = box[0]
+                    quiet = _resolve(state, w, end_bias, levels - 1, box,
+                                     depth)
+                    st["qnodes"] += before - box[0]
+                    if not quiet:
+                        st["truncated"] += 1
+                    try:
+                        ctx = rival_context(state, idx)
+                    except Exception:
+                        ctx = root_ctx
+                try:
+                    val = evaluate(state, idx, w, ctx)
+                except Exception:
+                    continue
+                if self.WAR_LOOKAHEAD and mv[0] == "war":
+                    wv = _war_value(state, idx, w, ctx)
+                    if wv is not None:
+                        val = wv
+            finally:
+                rollback(j)
             if mv[0] == "end_turn":
                 val += end_bias
             if best_val is None or val > best_val:

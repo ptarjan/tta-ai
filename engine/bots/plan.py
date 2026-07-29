@@ -65,9 +65,10 @@ from __future__ import annotations
 
 import random
 
-from .. import actions
+from .. import actions, journal
 from .fastcopy import copy_state
 from .quiescent import war_value
+from .trial import USE_JOURNAL
 from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
 
 __all__ = ["PlanBot", "determinize"]
@@ -190,6 +191,8 @@ class PlanBot:
         return max(scored, key=lambda t: t[0])[1]
 
     def _one_ply(self, state, moves, me, w, ctx):
+        if USE_JOURNAL:
+            return self._one_ply_journalled(state, moves, me, w, ctx)
         best, bv = None, None
         for mv in moves:
             t = copy_state(state)
@@ -202,8 +205,35 @@ class PlanBot:
                 best, bv = mv, v
         return best if best is not None else moves[0]
 
+    def _one_ply_journalled(self, state, moves, me, w, ctx):
+        """`_one_ply` with the undo stack (docs/PYPY.md 10).
+
+        Pure copy-apply-score-discard, so it needs nothing beyond `begin` /
+        `rollback` -- but it is almost always *nested*, because `_quiesce`
+        calls it from inside a beam node's journal.  That nesting is what
+        section 10 added and what 9.13 wrongly read as a property of the bot
+        rather than of the journal.
+        """
+        begin, rollback = journal.begin, journal.rollback
+        best, bv = None, None
+        for mv in moves:
+            j = begin(state)
+            try:
+                try:
+                    actions.apply(state, mv, _rng())
+                    v = evaluate(state, me, w, ctx)
+                except Exception:
+                    continue        # the `finally` still rolls back
+            finally:
+                rollback(j)
+            if bv is None or v > bv:
+                best, bv = mv, v
+        return best if best is not None else moves[0]
+
     def _beam(self, root, moves, me, w, ctx):
         """Return {first_move: best terminal score reachable through it}."""
+        if USE_JOURNAL:
+            return self._beam_journalled(root, moves, me, w, ctx)
         self.searches += 1
         budget = self.MAX_NODES
         # frontier entries: (ordering_score, state, first_move)
@@ -243,6 +273,106 @@ class PlanBot:
             nxt.sort(key=lambda e: -e[0])
             frontier = nxt[:self.width]
         return best
+
+    def _beam_journalled(self, root, moves, me, w, ctx):
+        """`_beam` with the undo stack, and a re-apply for the survivors.
+
+        The beam is the one place in this repo where the flat
+        copy-apply-score-discard shape does NOT hold, and it is worth being
+        precise about why, because it is what section 6.3 meant by "design B's
+        only advantage is holding many trial states alive simultaneously".
+        A beam holds ``width`` states alive at once, so *some* of these copies
+        are load-bearing.  How many is a measurement, not a guess:
+        `tools/copy_census.py` counts, over whole games at the league's own
+        ``plan:width=2``,
+
+            2p   47790 `_beam` copies, 10.6% expanded again (89.4% discarded)
+            4p   43101 `_beam` copies, 10.0% expanded again (90.0% discarded)
+
+        so ~90% of them are journal-shaped and ~10% genuinely have to persist.
+
+        The scheme: expand every child under a journal (no copy at all), keep
+        only its score and the (parent, move) pair that produced it, and after
+        the prune **re-apply** the ~``width`` winners onto fresh copies.  That
+        trades ``width`` extra ``apply``+``_quiesce`` per ply for
+        ``nodes - width`` copies, which the census says is a ~9:1 trade.  The
+        alternative -- copy the survivor from inside the journal, before the
+        rollback -- would work too now that `copy_state` detaches (section 10),
+        but it copies at the same rate as this does and needs the copy to
+        happen at a point where the state is half-unwound, so there is nothing
+        to gain and a sharper edge to cut yourself on.
+
+        Re-applying is exact, not approximate, and rests on one property:
+        ``_rng()`` hands out a Mersenne Twister that is always at the start of
+        the ``Random(0)`` stream (it re-seeds lazily, iff the previous consumer
+        drew -- docs/PYPY.md 8.2).  So ``apply(child_of(parent, mv))`` is a
+        deterministic function of ``(parent, mv)`` and calling it twice cannot
+        diverge, however many rng calls happened in between.
+
+        ``self.nodes``, ``self.searches``, ``self.wars_priced`` and ``budget``
+        count expansions only; the re-apply is deliberately not counted,
+        because a different budget would be a different search.
+        """
+        self.searches += 1
+        budget = self.MAX_NODES
+        begin, rollback = journal.begin, journal.rollback
+        # frontier entries: (ordering_score, state, first_move)
+        frontier = [(0.0, root, None)]
+        best = {}
+        for _ply in range(self.MAX_PLIES):
+            # nxt entries: (ordering_score, PARENT state, move, first_move)
+            nxt = []
+            for _, st, first in frontier:
+                mvs = moves if first is None else actions.legal_moves(st)
+                for mv in mvs:
+                    if mv[0] == "resign":
+                        continue
+                    if budget <= 0:
+                        break
+                    budget -= 1
+                    self.nodes += 1
+                    j = begin(st)
+                    try:
+                        try:
+                            actions.apply(st, mv, _rng())
+                        except Exception:
+                            continue
+                        f = mv if first is None else first
+                        # resolve decisions owned by anybody, so the position
+                        # is quiet before it is either scored or expanded
+                        self._quiesce(st, w)
+                        try:
+                            v = self._score(st, me, w, ctx)
+                        except Exception:
+                            continue
+                        stop = st.game_over or st.current != me
+                    finally:
+                        rollback(j)
+                    if stop:
+                        if f not in best or v > best[f]:
+                            best[f] = v
+                    else:
+                        nxt.append((v, st, mv, f))
+            if not nxt or budget <= 0:
+                break
+            # `sort` is stable and the key is the score alone, so ties keep
+            # the order they were appended in -- identical to the copy path,
+            # where the tuples held states that were never compared either.
+            nxt.sort(key=lambda e: -e[0])
+            frontier = [(v, self._replay(parent, mv, w), f)
+                        for v, parent, mv, f in nxt[:self.width]]
+        return best
+
+    def _replay(self, parent, mv, w):
+        """Rebuild the child of `parent` by `mv` as a real, persistent state.
+
+        Runs with no journal of its own: the caller has rolled back, so
+        `parent` is exactly what it was when the child was scored.
+        """
+        t = copy_state(parent)
+        actions.apply(t, mv, _rng())
+        self._quiesce(t, w)
+        return t
 
     def _score(self, t, me, w, ctx):
         """Evaluate a quiet position, pricing an unresolved war of mine.

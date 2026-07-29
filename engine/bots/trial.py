@@ -18,10 +18,15 @@ __all__ = ["USE_JOURNAL", "TrialRandom", "TRIAL_RNG", "TRIAL_RNG_STATE",
            "fresh_trial_rng"]
 
 #: Search with the undo stack (docs/PYPY.md section 6) instead of `copy_state`.
-#: OPT-IN and off by default.  `QuiescentBot` must NEVER honour this: it holds
-#: several live trial states at once (`_war_value` copies a state that is
-#: itself already a trial) and `journal.begin` raises on nesting by design --
-#: docs/PYPY.md 9.13 and 9.15.
+#: OPT-IN and off by default, so the copy path stays in the tree as the second
+#: implementation the paranoid oracle diffs against.
+#:
+#: Honoured by GreedyBot and WeightedBot (section 9), and -- since section 10
+#: made `journal.begin` nest, strictly LIFO -- by QuiescentBot and PlanBot too.
+#: 9.13/9.15 said those two "must NEVER honour this" because they copy from
+#: inside an already-open trial and `begin` raised on nesting; that was a
+#: statement about the journal, not about the bots, and it stopped being true
+#: when the journal grew a stack.
 USE_JOURNAL = os.environ.get("TTA_JOURNAL") == "1"
 
 
