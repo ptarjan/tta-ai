@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import random
 import sys
@@ -37,43 +38,87 @@ from engine.bots import GreedyBot, RandomBot  # noqa: E402
 #: The bot kinds `--kinds` accepts, same names and same construction as
 #: `engine.perf_check._bots` (engine/perf_check.py:43-57), so a row labelled
 #: `weighted` here means the same thing as a row labelled `weighted` there.
-BOT_KINDS = ("random", "greedy", "weighted", "quiescent")
+BOT_KINDS = ("random", "greedy", "weighted", "quiescent", "plan")
 
 
-def _bots(kind, n, seed):
-    """Build `n` bots of `kind`, seeded exactly as `perf_check` seeds them.
+def _one_bot(kind, opts, rng):
+    """One bot of `kind`, options parsed from a spec suffix.
+
+    `kind` may carry options exactly as `experiments/arena.py::load_spec`
+    spells them, so `plan:width=2` and `quiescent:levels=1` here mean the same
+    search the league's `--candidate-bot` means (section 10).
+    """
+    if kind == "random":
+        return RandomBot(rng)
+    if kind == "greedy":
+        return GreedyBot(rng)
+    if kind == "weighted":
+        from engine.bots import WeightedBot
+        return WeightedBot(rng=rng)
+    if kind == "quiescent":
+        from engine.bots.quiescent import QuiescentBot
+        return QuiescentBot(rng=rng, levels=opts.get("levels"),
+                            max_depth=opts.get("depth"),
+                            max_nodes=opts.get("nodes"))
+    if kind == "plan":
+        from engine.bots.plan import PlanBot
+        return PlanBot(rng=rng, width=opts.get("width"),
+                       samples=opts.get("samples"))
+    raise SystemExit(f"bench_interp: unknown bot kind {kind!r}; "
+                     f"expected one of {', '.join(BOT_KINDS)}")
+
+
+def _parse(spec):
+    """`"plan:width=2"` -> `("plan", {"width": 2})`."""
+    kind, _, rest = spec.partition(":")
+    opts = {}
+    for kv in rest.split(","):
+        if kv:
+            k, _, v = kv.partition("=")
+            opts[k.strip()] = int(v)
+    if kind not in BOT_KINDS:
+        raise SystemExit(f"bench_interp: unknown bot kind {kind!r}; "
+                         f"expected one of {', '.join(BOT_KINDS)}")
+    return kind, opts
+
+
+def _bots(spec, n, seed, opponent=None):
+    """Build `n` bots, seeded exactly as `perf_check` seeds them.
 
     This used to read `(RandomBot if kind == "random" else GreedyBot)`, so
     `--kinds weighted` silently benchmarked GreedyBot and printed the numbers
     under the label `weighted`.  Unknown kinds are now a hard error rather
     than a quiet fallback.
+
+    With `opponent` set, seat 0 gets `spec` and seats 1..n-1 get `opponent` --
+    the shape a league game actually has (one candidate against a pool).
     """
-    if kind not in BOT_KINDS:
-        raise SystemExit(
-            f"bench_interp: unknown bot kind {kind!r}; "
-            f"expected one of {', '.join(BOT_KINDS)}")
+    kind, opts = _parse(spec)
+    okind, oopts = _parse(opponent) if opponent else (kind, opts)
     out = []
     for i in range(n):
         rng = random.Random(seed * 131 + i)
-        if kind == "random":
-            out.append(RandomBot(rng))
-        elif kind == "weighted":
-            from engine.bots import WeightedBot
-            out.append(WeightedBot(rng=rng))
-        elif kind == "quiescent":
-            from engine.bots.quiescent import QuiescentBot
-            out.append(QuiescentBot(rng=rng))
-        else:
-            out.append(GreedyBot(rng))
+        out.append(_one_bot(kind, opts, rng) if i == 0
+                   else _one_bot(okind, oopts, rng))
     return out
 
 
-def _play(n, kind, seed):
-    return game.play_game(_bots(kind, n, seed), n, seed=seed)
+def _play(n, kind, seed, opponent=None):
+    return game.play_game(_bots(kind, n, seed, opponent), n, seed=seed)
 
 
-def cell(kind, n, warmup_s, measure_s, ramp=False):
-    """Play games until `warmup_s` CPU-seconds are burnt, then measure."""
+def cell(kind, n, warmup_s, measure_s, ramp=False, opponent=None,
+         measure_games=0):
+    """Play games until `warmup_s` CPU-seconds are burnt, then measure.
+
+    With `measure_games` set the measure window is a FIXED SET OF SEEDS
+    (0..measure_games-1) rather than a fixed number of CPU-seconds.  That
+    matters for the expensive bots: a 4p `plan:width=2` game is ~16 CPU-s, so
+    a time-boxed window would compare CPython on seeds 0-2 against PyPy on
+    seeds 0-1, i.e. two different workloads.  With a fixed seed set both
+    interpreters play byte-identical games (section 2's determinism result is
+    what licenses this) and every game is a *paired* observation.
+    """
     seed = 10_000
     ramp_trace = []
     t0 = time.process_time()
@@ -83,7 +128,7 @@ def cell(kind, n, warmup_s, measure_s, ramp=False):
         el = time.process_time() - t0
         if el >= warmup_s:
             break
-        _play(n, kind, seed)
+        _play(n, kind, seed, opponent)
         seed += 1
         played += 1
         if ramp and time.process_time() - mark >= 1.0:
@@ -93,17 +138,27 @@ def cell(kind, n, warmup_s, measure_s, ramp=False):
 
     seed = 0
     games = moves = 0
+    per_game = []
     t1 = time.process_time()
-    while time.process_time() - t1 < measure_s:
-        st = _play(n, kind, seed)
+    while True:
+        if measure_games:
+            if games >= measure_games:
+                break
+        elif time.process_time() - t1 >= measure_s:
+            break
+        g0 = time.process_time()
+        st = _play(n, kind, seed, opponent)
+        per_game.append(round(time.process_time() - g0, 4))
         seed += 1
         games += 1
         moves += getattr(st, "moves_played", 0)
     dt = time.process_time() - t1
-    return {"kind": kind, "players": n, "warmup_s": warmup_s,
+    return {"kind": kind, "opponent": opponent, "players": n,
+            "warmup_s": warmup_s,
             "warmup_games": played, "games": games, "cpu_s": round(dt, 3),
             "games_per_cpu_s": round(games / dt, 4),
             "moves_per_cpu_s": round(moves / dt, 1),
+            "cpu_s_per_game": per_game,
             "ramp_games_per_s": ramp_trace}
 
 
@@ -111,29 +166,47 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--warmup", type=float, default=8.0)
     ap.add_argument("--measure", type=float, default=12.0)
+    ap.add_argument("--games", type=int, default=0,
+                    help="measure a fixed set of seeds instead of a fixed "
+                         "number of CPU-seconds (paired across interpreters)")
     ap.add_argument("--kinds", default="random,greedy",
                     help=f"comma-separated, from: {', '.join(BOT_KINDS)}")
     ap.add_argument("--players", default="2,3,4")
     ap.add_argument("--ramp", action="store_true")
+    ap.add_argument("--opponent", default=None,
+                    help="seats 1..n-1 play this instead (league shape)")
+    ap.add_argument("--hook", action="store_true",
+                    help="install the journalling __setattr__ without opening "
+                         "any journal -- what a mixed league worker looks like "
+                         "to a bot that searches by copy_state")
     ap.add_argument("--json")
     a = ap.parse_args()
-    kinds = [k.strip() for k in a.kinds.split(",") if k.strip()]
-    bad = [k for k in kinds if k not in BOT_KINDS]
-    if bad:
-        raise SystemExit(f"bench_interp: unknown bot kind(s) {', '.join(bad)}; "
-                         f"expected one of {', '.join(BOT_KINDS)}")
+    # ';' as well as ',' so a spec's own options (`quiescent:levels=1,depth=8`)
+    # can be passed without the outer split eating them.
+    sep = ";" if ";" in a.kinds else ","
+    kinds = [k.strip() for k in a.kinds.split(sep) if k.strip()]
+    for k in kinds:
+        _parse(k)                      # validates, raises SystemExit if bad
+    if a.opponent:
+        _parse(a.opponent)
+    if a.hook:
+        from engine import journal
+        journal.install()
     rows = []
     for kind in kinds:
         for n in (int(x) for x in a.players.split(",")):
-            r = cell(kind, n, a.warmup, a.measure, a.ramp)
+            r = cell(kind, n, a.warmup, a.measure, a.ramp, a.opponent,
+                     a.games)
             rows.append(r)
-            print(f"{kind:7s} {n}p  {r['games_per_cpu_s']:8.3f} games/cpu-s  "
+            print(f"{kind:22s} {n}p  {r['games_per_cpu_s']:8.4f} games/cpu-s  "
                   f"{r['moves_per_cpu_s']:10.0f} moves/cpu-s  "
                   f"(warm {r['warmup_games']}g, meas {r['games']}g)", flush=True)
             if r["ramp_games_per_s"]:
                 print("        ramp:", r["ramp_games_per_s"], flush=True)
     out = {"impl": platform.python_implementation(),
-           "version": platform.python_version(), "rows": rows}
+           "version": platform.python_version(),
+           "journal": os.environ.get("TTA_JOURNAL", "0"),
+           "hook": bool(a.hook), "opponent": a.opponent, "rows": rows}
     if a.json:
         Path(a.json).write_text(json.dumps(out, indent=1))
     return 0

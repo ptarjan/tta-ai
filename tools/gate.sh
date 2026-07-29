@@ -129,6 +129,11 @@ QNARROW=0e90a7e6
 QWIDE=41f078e5
 
 fail=0
+# The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs
+# every arm under PyPy and requires the SAME digests, which is the
+# cross-interpreter determinism check docs/PYPY.md section 2 did by hand and
+# section 11 needed for the journal arms as well.  Default unchanged.
+PY="${PY:-python3}"
 note() { printf '%-32s %s\n' "$1" "$2"; }
 
 # NOTE: /bin/bash on macOS is 3.2.  An earlier version of these two helpers
@@ -142,7 +147,7 @@ note() { printf '%-32s %s\n' "$1" "$2"; }
 check_fp() {   # name  want-prefix  "ENV=1 ENV2=2"  [perf_check args...]
   local name="$1" want="$2" envstr="$3"; shift 3
   local got
-  got=$(env $envstr nice -n 10 python3 -m engine.perf_check hash "$@" 2>&1 \
+  got=$(env $envstr nice -n 10 "$PY" -m engine.perf_check hash "$@" 2>&1 \
         | awk '/^FINGERPRINT/{print $2}')
   case "$got" in
     "$want"*) note "$name" "OK   ${got:0:16}" ;;
@@ -153,7 +158,7 @@ check_fp() {   # name  want-prefix  "ENV=1 ENV2=2"  [perf_check args...]
 run_tests() {   # name  "ENV=1"
   local name="$1" envstr="$2"
   local out
-  out=$(env $envstr nice -n 10 python3 -m unittest discover -s tests 2>&1 | tail -4)
+  out=$(env $envstr nice -n 10 "$PY" -m unittest discover -s tests 2>&1 | tail -4)
   if echo "$out" | grep -q '^OK'; then
     note "$name" "OK   $(echo "$out" | grep -o 'Ran [0-9]* tests')"
   else

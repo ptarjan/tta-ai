@@ -268,6 +268,13 @@ Re-test pypy3 if any of these change: PyPy gains a faster GC for
 short-lived-object churn, the bots stop copying a whole `GameState` per
 candidate move, or the project moves to an older/non-specialising CPython.
 
+**SUPERSEDED IN PART — see section 11.** The second condition happened (the
+undo stack, section 9) and the re-test was run. "PyPy loses every single cell"
+is **no longer true**: PyPy now wins GreedyBot by 1.45-1.65x and PlanBot by
+1.12-1.24x. The *decision* is unchanged, but for a different reason — the
+league stopped running GreedyBot and now runs WeightedBot pools with
+`plan`/`quiescent` candidates, and PyPy loses those.
+
 ## Status / next steps (keep current)
 
 - [x] Task 1 — determinism re-verified, 33/33 + 102/102 identical. PASS.
@@ -276,6 +283,10 @@ candidate move, or the project moves to an older/non-specialising CPython.
 - [x] Task 3 — core scaling / worker count: 6 physical cores, no SMT -> 4 workers.
 - [x] Task 4 — **NO SWITCH.** Climbs stay on CPython 3.14.6, untouched.
 - [ ] Task 5 — further engine optimisation (favouring both runtimes).
+- [x] **Re-test PyPy after the undo stack lands — DONE, section 11.**
+      Still no switch for the league, but the per-cell picture inverted for
+      GreedyBot and PlanBot. Read section 11 before quoting anything from
+      section 3.
 
 ### Re-baseline note (commit f4bcac0, 2026-07-26)
 
@@ -773,8 +784,13 @@ every atomic container element-checked, no aliasing found.
       `effects.compute` (12.0%), `evaluate`/`features` (18.9%), and the
       remaining generic `_cv` paths (`pacts`, `pending`, `queue`,
       `one_time_discount`, `discarded_military`).
-- [ ] The real prize remains section 6: the undo stack, ~1.8x, on its own
-      branch. Re-test PyPy *after* that lands, not before.
+- [x] The real prize remains section 6: the undo stack, ~1.8x, on its own
+      branch. Re-test PyPy *after* that lands, not before. **DONE — the undo
+      stack landed (`17c03ea`, `47c0e5b`, `ae20f2b`) and the re-test is
+      section 11.** The answer is now bot-dependent: PyPy wins GreedyBot
+      (1.45-1.65x) and PlanBot (1.12-1.24x) and loses WeightedBot (0.82-0.97x),
+      so the league still stays on CPython. Section 3's "PyPy loses every cell"
+      is retired; its *conclusion* survives, for a different reason.
 
 ### 7a. Re-profile after the generated copiers, and one more copy pass (11bb52c)
 
@@ -2539,3 +2555,352 @@ it is decoration.
       change that adds a container mutation. The `--bot plan` arm is the
       expensive one; 1 game per player count is enough.
 
+## 11. The re-test section 3 asked for — run at last, and the answer is now
+## BOT-DEPENDENT: PyPy wins the bots the league does not run
+
+Section 3 measured GreedyBot/RandomBot on CPython 3.14.6 vs PyPy 7.3.23, found
+PyPy losing every cell by 11–44%, and both status checklists then said, twice:
+**"Re-test PyPy *after* [the undo stack] lands, not before."** The undo stack
+landed (`17c03ea`, `47c0e5b`, `ae20f2b`; section 9). Nobody had re-tested. This
+is that re-test, at master `9794bd7`.
+
+> **Read this before quoting the `plan` / `quiescent` rows.** Everything below
+> was measured at `9794bd7`, i.e. **before** section 10's `7ef6ac8` put
+> PlanBot and QuiescentBot on a nested undo stack. At `9794bd7` those two bots
+> searched by `copy_state` and opened zero journals (11.3 measures exactly
+> that), so their `TTA_JOURNAL=0` rows are their only rows and section 10 has
+> since changed the code underneath them. What that does to *this* comparison
+> is not knowable from either section alone: section 10 measures the journal's
+> win on CPython (1.25x at `plan:width=2` 2p, 1.37x/1.46x at
+> `quiescent:levels=1` 3p/4p) and this section measures PyPy against CPython
+> on the copy path. The two effects are not independent — 11.4 shows the
+> journal changes PyPy's *ratio* on GreedyBot (up) and on WeightedBot (down),
+> in opposite directions — so **the 3p/4p league rows in 11.6 must be re-taken
+> on top of `7ef6ac8` before anyone acts on them.** The verdict in 11.10 does
+> not turn on that (it is a "do not switch", and section 10 makes the CPython
+> side faster, which can only make switching *less* attractive), but the
+> numbers do.
+
+Two things make it a different measurement rather than a re-run of section 3's
+command, and both turned out to matter:
+
+1. **The workload changed shape.** Section 3 benchmarked `greedy` and `random`.
+   The league today runs neither. The live `--candidate-bot` flags are
+   `plan:width=2` on the 2p arm and `quiescent:levels=1` on the 3p and 4p arms,
+   against a pool of `WeightedBot` seats — deep search, long games, a tight
+   `copy_state` / `actions.apply` / `evaluate` loop.
+2. **The journal changed what is hot.** Under `TTA_JOURNAL=1` (which
+   `experiments/run_league.sh:22` sets) WeightedBot's inner loop is an undo
+   stack driven by a `__setattr__` hook installed on the state dataclasses.
+
+### 11.1 Method, and what is different from section 3
+
+Same tool (`tools/bench_interp.py`), same metric (`time.process_time` — CPU
+seconds burnt by the benchmark process, never wall clock), same `nice -n 10`,
+same discipline of a CPU-seconds warm-up. Four changes:
+
+* **`--kinds` now takes the league's own bot specs.** `plan:width=2` and
+  `quiescent:levels=1` mean here exactly what they mean on the
+  `hillclimb_league` command line. Before this, `bench_interp` could not
+  express the bots the project actually trains.
+* **`--games N` measures a FIXED SET OF SEEDS**, not a fixed number of
+  CPU-seconds. This matters at the top of the table: a 4p `plan:width=2` game
+  is ~16 CPU-s, so a 30 s window compares CPython on seeds 0–2 against PyPy on
+  seeds 0–1 — two different workloads. With a fixed seed set the two
+  interpreters play *byte-identical* games (11.8 is what licenses that) and
+  every game is a **paired** observation.
+* **CPython and PyPy run back to back inside each cell**, and each cell is
+  repeated 3 times (5 for the two noisiest). The ratio of a back-to-back pair
+  is the result; the absolute is not (11.2).
+* **`--opponent` and `--hook`** were added for the two cells that model a real
+  league worker rather than a bot playing itself.
+
+### 11.2 The contention caveat, stated with numbers rather than adjectives
+
+6 physical cores, no hyperthreading, no E-cores. Five `hillclimb_league`
+workers were CPU-busy throughout at `nice 19`; load average 7.4–10.1. The
+benchmark process got 85–90% of a core.
+
+CPU-time-per-game is far more stable than wall clock here but it is **not**
+load-independent — cache and memory-bandwidth contention inflate it. Measured,
+not assumed: the same cell measured 1.4576 and then 1.0798–1.1383 games/cpu-s
+on CPython across five repeats, a 35% spread, with no code change. **Only
+back-to-back A/B pairs are trustworthy on this box.** Every ratio below comes
+from a pair measured within ~60 s of itself; no absolute number here should be
+compared with an absolute number from any other section.
+
+A free replication fell out of a regime change mid-run: the league arms were
+reniced to 19 partway through, so the first pass (archived, not used in the
+tables) is a second measurement of the same cells under *heavier* contention.
+
+| cell | PyPy/CPython, league at nice 0 | PyPy/CPython, league at nice 19 |
+|---|---|---|
+| greedy 2p j0 | 1.463 | 1.445 |
+| greedy 2p j1 | 1.566 | 1.597 |
+| greedy 4p j0 | 1.432 | 1.465 |
+| greedy 4p j1 | 1.816 | 1.648 |
+| quiescent 2p | 0.941 | 1.009 |
+| quiescent 4p | 0.873 | 0.919 |
+| weighted 2p j0 | 1.008 | 0.972 |
+| weighted 2p j1 | 0.874 | 0.938 |
+| weighted 4p j0 | 0.873 | 0.861 |
+| weighted 4p j1 | 0.813 | 0.809 |
+
+Ten cells, two scheduling regimes, same sign and same rough magnitude in all
+ten. The contention level is not what produces the result.
+
+### 11.3 The cells that were skipped, and the measurement that justifies it
+
+`TTA_JOURNAL=1` was **not** run for `plan:width=2` or `quiescent:levels=1`,
+because at this commit it is structurally a no-op for them. That is measured,
+not read off the source: counting `journal.begin` calls over one full 2p game,
+
+```
+USE_JOURNAL = True
+greedy     journal.begin calls in one 2p game: 1200
+weighted   journal.begin calls in one 2p game: 1386
+plan       journal.begin calls in one 2p game:    0
+quiescent  journal.begin calls in one 2p game:    0
+```
+
+Both bots search by `copy_state` (9.16: `journal.begin` raises on nesting, and
+QuiescentBot holds several live trial states at once), and `journal.install()`
+is lazy, so a process running only those bots never even gets the hook. The
+journal-on and journal-off cells would be the same code.
+
+They would *not* be the same code in a mixed league worker, where a WeightedBot
+seat installs the hook process-wide. That case is measured instead, twice: with
+`--hook` (11.5) and in the league-shaped cells (11.6).
+
+### 11.4 The main table — {CPython 3.14.6, PyPy 7.3.23} x bot x players x journal
+
+games/cpu-s, mean over repeats, +/- sample SD. The ratio column is the mean of
+the per-repeat back-to-back ratios, with the full [min, max] over repeats,
+because that range is the honest error bar and the mean alone is not.
+
+| bot | np | j | CPython | PyPy | PyPy/CPython | [min, max] | n |
+|---|---|---|---|---|---|---|---|
+| greedy | 2p | 0 | 5.301 +/- 0.297 | **7.659 +/- 0.939** | **1.45** | [1.23, 1.62] | 5 |
+| greedy | 2p | 1 | 7.663 +/- 0.409 | **12.241 +/- 0.694** | **1.60** | [1.51, 1.71] | 3 |
+| greedy | 4p | 0 | 1.282 +/- 0.081 | **1.879 +/- 0.151** | **1.46** | [1.42, 1.49] | 3 |
+| greedy | 4p | 1 | 2.445 +/- 0.128 | **4.030 +/- 0.159** | **1.65** | [1.60, 1.72] | 3 |
+| plan:width=2 | 2p | 0 | 0.2428 +/- 0.0016 | **0.3007 +/- 0.0064** | **1.24** | [1.20, 1.26] | 3 |
+| plan:width=2 | 4p | 0 | 0.0638 +/- 0.0023 | **0.0714 +/- 0.0008** | **1.12** | [1.08, 1.14] | 3 |
+| quiescent:levels=1 | 2p | 0 | 2.307 +/- 0.020 | 2.327 +/- 0.035 | 1.01 | [1.00, 1.02] | 3 |
+| quiescent:levels=1 | 4p | 0 | **0.4379 +/- 0.0116** | 0.4025 +/- 0.0054 | 0.92 | [0.91, 0.93] | 3 |
+| weighted | 2p | 0 | **3.146 +/- 0.060** | 3.059 +/- 0.076 | 0.97 | [0.92, 1.00] | 3 |
+| weighted | 2p | 1 | **3.972 +/- 0.031** | 3.728 +/- 0.175 | 0.94 | [0.90, 0.98] | 3 |
+| weighted | 4p | 0 | **0.788 +/- 0.037** | 0.678 +/- 0.020 | 0.86 | [0.80, 0.94] | 5 |
+| weighted | 4p | 1 | **1.184 +/- 0.155** | 0.958 +/- 0.036 | 0.82 | [0.63, 0.90] | 5 |
+
+Bold is the winner. Two notes on the last row: its CPython spread is one
+outlier (1.4576 on repeat 1, then 1.0798 / 1.1290 / 1.1383 on the rest); with
+that repeat dropped the ratio is 0.86 [0.85, 0.90]. Either way PyPy loses it,
+and the pessimistic-for-the-claim reading (0.90) still loses.
+
+RandomBot, section 3's other bot, re-taken in the current tree for continuity
+(3 repeats, 100 games per measure window): **2p 0.92x [0.88, 0.98], 4p 0.81x
+[0.78, 0.82]**. Section 3 measured 0.56x and 0.89x. So the pure engine loop
+with no search in it still favours CPython, exactly as it did in July.
+
+**The verdict is no longer uniform.** PyPy is 1.45–1.65x faster on GreedyBot,
+1.12–1.24x faster on PlanBot, a wash on QuiescentBot at 2p, and 0.81–0.94x —
+i.e. slower — on RandomBot, QuiescentBot 4p and WeightedBot everywhere. The
+undo stack did move the needle: on GreedyBot, turning `TTA_JOURNAL` on improves
+PyPy's ratio (1.45 -> 1.60 at 2p, 1.46 -> 1.65 at 4p). On WeightedBot it makes
+it slightly worse (0.97 -> 0.94, 0.86 -> 0.82).
+
+### 11.5 The write-barrier tax on the copy path is under 1%, on both
+### interpreters
+
+The worry that a Python-level `__setattr__` on four dataclasses would be a
+megamorphic write barrier punishing the bots that still search by `copy_state`
+turns out to be small. `--hook` installs the hook and opens no journal — what
+QuiescentBot sees in a worker where some WeightedBot seat has already searched:
+
+| cell | hook off | hook on | tax |
+|---|---|---|---|
+| quiescent 2p, CPython | 2.307 | 2.289 | 0.8% |
+| quiescent 2p, PyPy | 2.327 | 2.314 | 0.6% |
+| quiescent 4p, CPython | 0.4379 | 0.4803 | none measurable (noise) |
+| quiescent 4p, PyPy | 0.4025 | 0.4054 | none measurable (noise) |
+
+No cell is outside its own repeat spread (the 4p rows differ by more in
+the direction that would mean the hook makes things *faster*, which is how you
+know you are reading noise). This retires the concern; it does not
+need to be modelled in any capacity planning.
+
+### 11.6 The cells that actually decide it — league-shaped games
+
+A league game is not a bot playing itself. It is one candidate seat against
+`n-1` pool seats, with `TTA_JOURNAL=1`, so the WeightedBot pool takes the undo
+path and installs the hook while the candidate searches by copy. `--opponent
+weighted` reproduces exactly that, and the candidate spec is the one the
+corresponding live arm is running right now:
+
+| league arm | candidate | CPython | PyPy | PyPy/CPython | [min, max] |
+|---|---|---|---|---|---|
+| 2p | `plan:width=2` | 0.4917 +/- 0.0260 | **0.5699 +/- 0.0135** | **1.16** | [1.08, 1.23] |
+| 3p | `quiescent:levels=1` | **1.682 +/- 0.074** | 1.373 +/- 0.151 | 0.82 | [0.77, 0.87] |
+| 4p | `quiescent:levels=1` | **0.8072 +/- 0.0191** | 0.6923 +/- 0.0525 | 0.86 | [0.80, 0.90] |
+
+3 repeats each, back-to-back pairs. **The 2p arm would gain ~16% from PyPy; the
+3p and 4p arms would lose 14–18%.**
+
+### 11.7 Why — NOT ANSWERED, and three failed attempts are the reason
+
+This is the part to be honest about. Three independent attempts to decompose
+the whole-game result disagreed with each other by up to 2.5x *on PyPy* while
+agreeing on CPython, so no mechanism is claimed here.
+
+1. **Per-operation microbenchmark** (`tools/bench_hotspots.py`, new). PyPy wins
+   nearly every primitive: `copy_state` 1.97x, `copy_state+apply` 1.61x,
+   `weighted.features` 3.47x, `weighted.evaluate` 3.59x, `legal_moves` 2.02x,
+   `math.fsum` 2.78x, an `lru_cache` hit 2.44x, a plain attribute write 2.29x.
+   The single exception is `journal begin+apply+rollback` at 0.73x. Suspecting
+   PyPy escape analysis was deleting work whose result was discarded, every
+   benchmarked call was changed to store its result in a module-level `SINK`;
+   the ratios moved by less than 0.1 (e.g. `copy_state` 2.24 -> 1.97). So that
+   was not the artefact — but this decomposition predicts PyPy should win
+   WeightedBot outright, and it does not.
+2. **Real move distribution.** The micro above applies one fixed cheap move. A
+   sweep that copies and applies *every legal move* over 6 mid-game states —
+   the shape of a 1-ply search — gives `copy+apply` at **0.95x** rather than
+   1.61x, and `journal+apply` at 1.23x. So the move distribution alone is worth
+   1.7x on that row, which is a real caution about all fixed-move micros.
+3. **`pick()`-level timing.** Timing each bot's own `pick` on fixed mid-game
+   states says PyPy is 1.58x (Greedy) and 2.18x (Weighted) faster — 2.39x and
+   2.69x on late-game states. Wrapping `pick` in a `time.process_time()` pair
+   inside whole games says the opposite: PyPy 0.96x on Greedy. Instrumentation
+   perturbs PyPy far more than it perturbs CPython.
+
+Three decompositions, three different answers, one of them contradicting the
+uninstrumented whole-game measurement that all five repeats agree on. **The
+uninstrumented, paired, whole-game numbers in 11.4 and 11.6 are the result; the
+decompositions are not evidence for anything and are recorded so that the next
+person does not repeat them expecting a mechanism.** If someone wants the
+mechanism, the tool to reach for is a PyPy JIT log (`PYPYLOG=jit-summary:-`),
+not another Python-level timer.
+
+### 11.8 Correctness — the determinism gate re-run under PyPy, journal included
+
+PyPy wins somewhere, so this had to be established before any recommendation.
+`tools/gate.sh`'s hard-coded digests were derived before master's last
+`engine/effects.py` and `engine/events.py` changes, so they are not the
+reference here: **CPython at this commit is the reference.** CPython saves,
+PyPy checks — section 2's protocol, self-baselining, immune to a stale
+constant. `tools/gate.sh` also grew a `PY=` override so the whole gate can be
+run under either interpreter (`PY=pypy3 bash tools/gate.sh --journal`).
+
+All eight arms, all green, at `9794bd7`:
+
+```
+                            digest (CPython, this commit)     PyPy check
+narrow          (33 greedy) 0a6ed6ad9f22e914...               OK  identical
+wide           (102 greedy) 4a8c6ca6f31afc9c...               OK  identical
+weighted narrow (33 wtd)    302c546c8a0eb181...               OK  identical
+weighted wide  (102 wtd)    4e40a58c196f5b3a...               OK  identical
+narrow          TTA_JOURNAL=1                                 OK  identical
+wide            TTA_JOURNAL=1                                 OK  identical
+weighted narrow TTA_JOURNAL=1                                 OK  identical
+weighted wide   TTA_JOURNAL=1                                 OK  identical
+```
+
+**270 games x 2 search paths x 2 interpreters, every digest identical.** Three
+independent claims fall out of that one table, and it is worth naming them
+separately because they are not the same claim:
+
+* **Cross-interpreter.** PyPy reproduces CPython byte for byte on all 270
+  games (33 + 102 GreedyBot, 33 + 102 WeightedBot). Section 2's `math.fsum`
+  fix is still doing its job.
+* **Cross-path.** The journal-on digests equal the journal-off digests on both
+  interpreters — the undo stack and `copy_state` agree, under PyPy too. That
+  is the property section 9's whole safety story rests on, and it had never
+  been checked on PyPy.
+* **Structural.** The two narrow arms re-run under
+  `TTA_JOURNAL=1 JOURNAL_PARANOID=1` on PyPy — every rollback checked against a
+  `copy_state` oracle and structurally diffed — also pass. A missed mutation
+  site would raise there naming the attribute, not merely change a digest.
+
+Unit tests, 536 of them:
+
+```
+python3 -m unittest discover -s tests                    Ran 536 tests in 36.9s  OK
+pypy3   -m unittest discover -s tests                    Ran 536 tests in 64.4s  OK
+JOURNAL_PARANOID=1 pypy3 -m unittest discover -s tests   Ran 536 tests in 63.6s  OK
+```
+
+(PyPy is 1.7x *slower* on the suite, as in section 2 and for the same reason:
+536 short tests never reach JIT warm-up. It says nothing about self-play.)
+
+Incidental but worth recording: all four CPython digests came out **exactly
+equal to the constants hard-coded in `tools/gate.sh`**, so despite the
+`engine/effects.py` and `engine/events.py` changes on master since those were
+derived, the gate's baseline is current at `9794bd7` and needs no re-derivation.
+
+
+### 11.9 What of the tree is PyPy-eligible at all
+
+The neural code imports torch, so it was worth checking what that rules out.
+On this box it rules out nothing, because **neither interpreter has torch**:
+
+```
+python3 -c "import torch"  ->  ModuleNotFoundError
+pypy3   -c "import torch"  ->  ModuleNotFoundError
+python3 -c "import numpy"  ->  ModuleNotFoundError
+pypy3   -c "import numpy"  ->  ModuleNotFoundError
+```
+
+Torch training lives on the desktop compute node, not here. `engine/` is
+torch-free apart from `engine/bots/neural_net.py`, which defers the import
+behind `HAVE_TORCH`; `experiments/arena.py` keeps `load_spec` torch-free for
+`neural:` and `nplan:` on purpose (`tests/test_neural_plan.py::
+test_load_spec_is_torch_free` pins it). Verified directly: `pypy3` imports
+`experiments.arena`, `experiments.hillclimb_league` and
+`engine.bots.neural_encode` fine, parses `plan:`, `quiesce:` and `nplan:`
+specs, and fails on `make_bot("neural:...")` with the *same* error CPython
+gives on this machine. So the entire Mac-side league stack — engine, arena,
+hillclimb, gate, perf_check — is pure stdlib and PyPy-eligible; only actually
+building a neural bot is not, and that cannot run here on CPython either.
+
+### 11.10 VERDICT: **DO NOT SWITCH** the league. Optionally switch the 2p arm.
+
+The arithmetic, over the five live workers (`run_league.sh 2 …` x1,
+`run_league.sh 3 …` x2, `run_league.sh 4 …` x2), using 11.6:
+
+```
+switch everything:  (1 x 1.16 + 2 x 0.82 + 2 x 0.86) / 5  =  0.90   -> 10% LOSS
+switch the 2p arm:   1 x 1.16 on 1 of 5 workers            =  +3.2% aggregate
+switch 3p/4p only:  (2 x 0.82 + 2 x 0.86) / 4              =  0.84   -> 16% LOSS
+```
+
+So:
+
+* **The 3p and 4p arms stay on CPython 3.14.6.** They are 4 of the 5 workers
+  and PyPy costs them 14–18%. This is not close and no amount of warm-up
+  changes it (the warm-up is 25–40 CPU-seconds per cell and both interpreters
+  play 8–23 warm-up games before the window opens).
+* **The 2p arm *could* move to PyPy for a real 1.16x [1.08, 1.23].** It is one
+  worker, so the aggregate gain is ~3%, against the cost of running one live
+  training arm on a second interpreter. Not recommended on those grounds alone
+  — but it is now a real option rather than a closed question, and if the 2p
+  arm ever gets more workers, or if `plan:width=N` spreads to 3p/4p, the
+  arithmetic changes and this should be re-run.
+* **Section 3's "PyPy loses every cell" is retired.** It is no longer true:
+  PyPy wins GreedyBot by 1.45–1.65x and PlanBot by 1.12–1.24x. What survives is
+  its *conclusion for the workload the league runs*, which is unchanged for a
+  completely different reason than in July.
+* **The `math.fsum` determinism work (section 2) remains the thing worth
+  keeping** and it is what made this re-test cheap: 135 games byte-identical
+  across interpreters means the two can be handed the same seeds and compared
+  as paired samples, which is the only reason a 2-game measure window is
+  defensible at the top of the table.
+
+Re-test again if: the league's `--candidate-bot` changes (PlanBot at 3p/4p
+would flip at least part of this), or CPython's specialising interpreter
+regresses. **One of those triggers has already fired**: section 10's `7ef6ac8`
+gave `QuiescentBot` and `PlanBot` a nested undo stack, which retires 11.3's
+"the journal is a no-op for these two bots" and makes the 3p/4p rows of 11.4
+and 11.6 pre-conversion measurements. Re-taking them is one command per cell
+(`--kinds quiescent:levels=1 --opponent weighted` with `TTA_JOURNAL` both
+ways) and it should be done before anyone quotes 0.82x/0.86x as current.
