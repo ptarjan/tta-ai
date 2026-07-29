@@ -1,6 +1,8 @@
 #!/bin/bash
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
+#   ruff clean               (static: F821 undefined-name and friends)
+#   bug audit clean          (dynamic: no swallowed NameError/TypeError/...)
 #   546 unit tests green
 #   narrow fingerprint == 0a6ed6ad...   (33 games)
 #   wide   fingerprint == 4a8c6ca6...   (102 games)
@@ -166,6 +168,48 @@ run_tests() {   # name  "ENV=1"
   fi
 }
 
+# -- static analysis, first because it is the cheapest arm in the file ------
+#
+# ~200ms, no game played.  It exists because of the `_quiesce` bug
+# (docs/INFORMATION_AUDIT.md 6.3): `ctx.get("root_row")` in a method with no
+# `ctx` in scope, wrapped in `except Exception:`.  Every call raised NameError,
+# the except ate it, and all 550 tests passed -- only `plan wide` below caught
+# it, and only because the damage happened to move the final scores.  `ruff
+# check --select F821` flags that line instantly.  Rule set is correctness-only
+# and deliberately narrow; see ruff.toml for what is excluded and why.
+#
+# Skipped with a loud note rather than a FAIL if ruff is absent, so the gate
+# still works on a machine without it.
+run_lint() {
+  if ! command -v ruff >/dev/null 2>&1; then
+    note "ruff" "SKIP (not installed: pip install ruff)"; return
+  fi
+  local out
+  out=$(ruff check --no-cache . 2>&1)
+  if [ $? = 0 ]; then note "ruff" "OK   $(echo "$out" | tail -1)"
+  else note "ruff" "FAIL"; echo "$out" | tail -20; fail=1; fi
+}
+
+# -- swallowed-programmer-error audit --------------------------------------
+#
+# The dynamic half of the same guard, for the cases static analysis cannot see
+# (a name that exists but is None, a signature that drifted, an unguarded
+# denominator).  Watches sys.monitoring's RAISE event, which fires BEFORE any
+# `except` runs, so it sees a swallowed NameError/TypeError/... without touching
+# the ~56 deliberate `except Exception:` blocks that keep a 40-hour league run
+# alive.  4p, all four bots -- the widest search, ~20s.
+#
+# tests/test_no_swallowed_bugs.py is the 4-second 2p version inside the suite,
+# and carries the negative control proving the instrument can still fail.
+run_audit() {
+  local out
+  out=$(nice -n 10 "$PY" -m tools.bug_audit --games 1 --players 4 2>&1)
+  if [ $? = 0 ]; then note "bug audit" "OK   $(echo "$out" | tail -1 | cut -c1-40)"
+  else note "bug audit" "FAIL"; echo "$out" | head -20; fail=1; fi
+}
+
+run_lint
+run_audit
 run_tests "unittest" ""
 # The suite again with the journal checking itself against a copy_state oracle
 # on every rollback.  This is nearly free (the tests are seconds) and it is a

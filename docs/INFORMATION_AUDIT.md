@@ -656,6 +656,119 @@ sweep destroy before I act again", which is a question about the row I can see.
 
 ---
 
+### 6.2 Fixed — the root-row budget, measured 2026-07-29
+
+The second option above shipped. `weighted.root_row_budget(state)` snapshots the
+card row **as a multiset of names** at the search root; `rival_context` carries
+it in `ctx["root_row"]`; `row_pressure` keeps a decremented local copy and skips
+any slot whose name has no budget left.
+
+Three details that are the whole correctness argument:
+
+* **A multiset, not a set.** The civil decks contain duplicate card names, so a
+  set-based mask would still price a freshly dealt *second* copy of a card the
+  root row held once. The budget is decremented as slots are accepted.
+* **Cards that merely slid left are still priced**, at their new cheaper slot.
+  The slide is public arithmetic every player at the table can do, and the card
+  keeps its name, so masking it would make the bot *worse than legal*.
+* **The budget is threaded, never recomputed.** `quiescent.py` rebuilds `ctx`
+  at four mid-search sites and `plan.py` at one; all five now pass the root
+  budget down. Recomputing it from the trial state would re-open the leak for
+  exactly the deep nodes that have one.
+
+Measured against the **live** 3p champion (`experiments/league_state/champion_3p.json`,
+gen 1149, `row_bargain_forgone` 1.5164 — *not* the stale `experiments/champion_3p.json`
+export, gen 152, which has no row weights at all and would have shown a fake zero):
+
+```
+tools/leak_impact.py, 3p, K=6, 8 games
+                  decisions   move changed         within-decision eval sd
+master (leaky)         2302   11 = 0.48% +/-0.28%  0.333
+root-row budget        2267    0 = 0.00%           0.005
+```
+
+`tools/infoleak.py` is **unchanged** at 92.0% `end_turn` leaky, exactly as it
+should be: it counts trials that *deal* a real card, and the fix does not stop
+the dealing, it stops the *reading*. Only `leak_impact.py` can measure this fix.
+Anyone re-checking with `infoleak.py` alone will wrongly conclude nothing
+happened.
+
+**Residual, unfixed:** the post-fix within-decision sd is 0.005, not 0. An
+`end_turn` trial also draws my own next **military** card, and the champion
+prices `hand_mil_value` at 0.15. That is ~1.5% of the row terms' effect and is a
+separate follow-up, not a loose end in this fix.
+
+### 6.3 What actually caught the bug in the fix, and the three layers now guarding it
+
+Worth writing down because the fix above shipped with a bug in it, and the way
+it was found says more than the fix does.
+
+`plan.py`'s `_quiesce` got the line `rival_context(st, d, ctx.get("root_row"))`.
+`_quiesce(self, st, w, cap=12)` has **no `ctx` in scope** — it runs deep inside
+the beam, where the root context is long gone. So every call raised `NameError`,
+the pre-existing `except Exception: dctx = dict(_NO_CTX)` two lines below
+swallowed it, and PlanBot silently played *every* quiesced opponent decision
+with no rival aggregates at all. 1112 raises in a single 4p game.
+
+* **550 unit tests passed.**
+* Three plausible diagnoses were chased and refuted first: a stale digest on
+  master (master reproduced `441cd256` exactly), the new mask firing (turning it
+  off changed nothing, and a counter wrapped around `rival_context` read **zero**
+  — the `NameError` fires *before* `rival_context` is entered, so that counter
+  could never have seen it), and 4p non-determinism (six master runs including
+  three `PYTHONHASHSEED` values were byte-identical).
+* What found it was a **file-level bisect** — revert `plan.py` alone and master's
+  scores return; revert `weighted.py` alone and they do not.
+* What *caught* it in the first place was the **`plan wide` fingerprint arm**,
+  added one commit earlier for precisely the reason docs/PYPY.md 9.14 gives: a
+  digest can only catch a change to a bot it actually plays. No other arm moved.
+  It was also one decision away from being laundered: the honest-looking move
+  when a fingerprint fails is to re-derive it and write "fingerprints moved, as
+  expected" in the commit message.
+
+The lesson is not "write fewer `except Exception`". The ~56 of them in `engine/`
+are mostly load-bearing — a search speculatively `apply`s a move that turns out
+illegal, and skipping the candidate rather than crashing is what makes a 40-hour
+unattended league run survivable. The lesson is that a *swallowed* `NameError`
+is never a legitimate game-state failure, it is always a bug, and nothing in the
+repo could see one. Three layers now can, cheapest first, and none subsumes the
+others:
+
+| layer | file | cost | catches |
+|---|---|---|---|
+| static | `ruff.toml`, `ruff` arm in `tools/gate.sh` | ~200ms, no game | F821 undefined name — *this* bug, before a reproducer is even run |
+| dynamic, thorough | `tools/bug_audit.py`, `bug audit` arm in the gate | ~20s, 4p x 4 bots | anything in `BUG_TYPES` raised anywhere under the repo, caught or not |
+| dynamic, cheap | `tests/test_no_swallowed_bugs.py` | ~4s, in the suite | same, 2p x weighted+plan, plus the negative control |
+
+`bug_audit.py` uses `sys.monitoring`'s `RAISE` event, which fires *before* any
+`except` runs. That is what lets it see swallowed exceptions without editing a
+single one of the 56 sites.
+
+`BUG_TYPES` membership is **measured, not guessed**. `--all` over 36 games
+(2p/3p/4p x seeds 0,1,2 x greedy/weighted/quiescent/plan) swallows ~44k
+exceptions per 4p batch and **every one is `KeyError` or `AttributeError`** —
+nothing else raises at all, so `NameError`, `TypeError`, `ImportError`,
+`IndexError`, `ZeroDivisionError` and `ValueError` all sit in the strict set for
+free. `AttributeError` and `KeyError` are deliberately excluded and
+`tests/test_no_swallowed_bugs.py` pins that exclusion, because both are
+load-bearing control flow here: `effects.state_stats` initialises
+`_stats_cache` off a caught `AttributeError` (23,305 per 4p batch) and
+`actions.cost_of` probes card names with a caught `KeyError` (~15k). Including
+either would fail on every clean tree — a gate that cries wolf, which
+docs/PYPY.md 9.0 records as expensive here.
+
+Both layers were verified with the real bug re-introduced: `ruff` names
+`plan.py:432:45`, and the unit test fails with
+`NameError in engine/bots/plan.py:411 _quiesce() -- name 'ctx' is not defined (x256)`.
+
+**Two performance findings fell out of the audit and are NOT bugs**, recorded
+here because 38k exceptions per four games is not free: `effects.state_stats`
+raising `AttributeError` 23,305 times to lazily initialise a cache (a class-level
+default or `getattr` would remove it), and `actions.cost_of` raising `KeyError`
+~15k times as name-probe flow control.
+
+---
+
 ## 7. Ranked gaps and bounded proposals
 
 Ordered by (value / implementation cost). Each is a feature-level change; none
