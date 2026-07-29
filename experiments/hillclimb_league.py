@@ -522,18 +522,30 @@ def _aggregate(per, z):
 
 # ------------------------------------------------------------- full check
 
-def full_check(champion, pool, players, games, workers, seed, log=print):
+def full_check(champion, pool, players, games, workers, seed, log=print,
+               inert_games=None):
     """The champion against EVERY pool opponent.  Absolute win rates.
 
     Mirror is skipped: a champion against a table of itself is 1/players by
     construction and measures nothing.
+
+    A SATURATED opponent (`e.inert`, i.e. it was at or above `--saturation`'s
+    HI at the last check) is re-measured with `inert_games` instead of `games`.
+    The full check is the most expensive thing the loop does -- at 2p it is
+    ~730s against ~1680s of training per ten generations -- and most of that
+    was being spent re-establishing that a 98% opponent is still about 98%.
+    It is still re-measured, because the whole point of deriving saturation
+    from the check is that an opponent can come BACK; it is just not measured
+    to four significant figures.
     """
     out = {}
     for e in pool.sorted_entries():
         if e.is_mirror:
             continue
+        n = games if not e.inert else (inert_games or max(4, games // 2))
+        n = max(players, (n // players) * players)
         t0 = time.time()
-        res = arena.duel(as_spec(champion), as_spec(e.spec), players, games,
+        res = arena.duel(as_spec(champion), as_spec(e.spec), players, n,
                          seed0=(seed + label_seed(e.label)) % 10_000_019,
                          workers=workers)
         # Wall clock per opponent, recorded because it is a budget decision:
@@ -707,14 +719,15 @@ def format_table(per):
 def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         max_blocks=4, subset=4, seed=1, accept_z=1.2816, veto_z=1.0,
         sigma_floor=0.08, stall_kick=15, state_dir=DEFAULT_STATE,
-        tier_weights=None, past_k=2, with_quiescent=False, init="default",
+        tier_weights=None, past_k=6, with_quiescent=False, init="default",
         full_check_every=10, check_games=48, ablate_every=25, ablate_k=3,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
         hall_dirs=(), human_bots=("all",),
         weight_guard="clamp", objective="blend",
         margin_scale=P.MARGIN_SCALE, culture_scale=P.CULTURE_SCALE,
         culture_centre=P.CULTURE_CENTRE, alpha=P.DEFAULT_ALPHA,
-        candidate_bot=None, log=print):
+        candidate_bot=None, sat_lo=P.SAT_LO, sat_hi=P.SAT_HI,
+        sat_floor=P.SAT_FLOOR, past_recent=True, log=print):
     global CANDIDATE_ARCH
     CANDIDATE_ARCH = candidate_bot
     # A block must be a whole number of seat rotations, or the seats are not
@@ -792,17 +805,36 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                            culture_scale=culture_scale,
                            culture_centre=culture_centre, alpha=alpha)
 
+    def win_rates():
+        """label -> the champion's win rate at the last FULL POOL CHECK.
+
+        This is the entire input to the saturation rule, and it is a number the
+        league already pays for every `--full-check-every` generations, so the
+        rule costs nothing extra and cannot go stale: a champion that stops
+        beating an opponent gets that opponent's weight back at the next check.
+        """
+        return {k: v.get("win_rate")
+                for k, v in (st.get("last_full_check") or {}).items()
+                if isinstance(v, dict)}
+
     def build():
         return P.build_pool(players, ladder_dirs=ladders,
                             tier_weights=tier_weights, past_k=past_k,
                             with_quiescent=with_quiescent,
                             hall_dirs=hall_dirs, human_bots=human_bots,
                             margin_tiers=margin_tiers, metric=pool_metric,
-                            log=log)
+                            win_rates=win_rates(), sat_lo=sat_lo,
+                            sat_hi=sat_hi, sat_floor=sat_floor,
+                            past_recent=past_recent, log=log)
 
     pool = build()
     log(f"[{players}p] league trainer: {len(pool)} opponents, "
         f"gen={gen} sigma={sigma:.3f} state={state_dir}")
+    log(f"[{players}p] saturation: weight x1.0 at or below {sat_lo:.0%} win "
+        f"rate, falling to x{sat_floor:g} at {sat_hi:.0%} and skipped by the "
+        f"acceptance rotation from there; past ladder k={past_k}, "
+        + ("newest-biased" if past_recent else "even spread")
+        + f", {len(win_rates())} opponents measured")
     log(f"[{players}p] trained architecture: "
         + ("WeightedBot (1-ply greedy)" if CANDIDATE_ARCH is None else
            f"{CANDIDATE_ARCH[0]} {CANDIDATE_ARCH[1] or '(defaults)'} -- the "
@@ -826,6 +858,14 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                 "opponents the champion never beats, so those rows return "
                 "edge=0.0000 and neither reward nor veto")
     log(f"[{players}p] objective: {objective} = {desc}")
+    # The startup block is the RECEIPT for a relaunch -- `[Kp] objective:`,
+    # `[Kp] trained architecture:`, `[Kp] saturation:` and `[pool]` are the
+    # only evidence that the arm is training what someone intended
+    # (docs/UNATTENDED.md trap 5).  stdout is block-buffered into the
+    # supervisor's log file, so without this the receipts do not appear until
+    # the first generation ends -- which under PlanBot is ten-plus minutes of
+    # not knowing.
+    sys.stdout.flush()
 
     start_gen = gen
     while time.time() < t_end and (not max_gens or gen < start_gen + max_gens):
@@ -918,8 +958,11 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
 
         # ------------------------------------------------ periodic checks
         if full_check_every and gen % full_check_every == 0:
+            n_inert = sum(1 for e in pool.entries
+                          if e.inert and not e.is_mirror)
             log(f"[{players}p] gen {gen} FULL POOL CHECK "
-                f"({check_games} games x {len(pool) - 1} opponents)")
+                f"({check_games} games x {len(pool) - 1 - n_inert} live "
+                f"opponents, {max(4, check_games // 2)} x {n_inert} saturated)")
             now = full_check(champion, pool, players, check_games, workers,
                              seed_base, log=log)
             regs, untested = compare_checks(now, st.get("last_full_check"),
@@ -943,6 +986,11 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                         f"{r['was']:.1%} -> {r['now']:.1%} (tested on)")
             st["last_full_check"] = now
             tested_since_check = set()
+            # The check just re-measured every opponent, so the saturation
+            # multipliers are stale by exactly one line of code.  Rebuilding
+            # here is what makes the rule SELF-MAINTAINING rather than a
+            # snapshot taken at process start.
+            pool = build()
 
         if ablate_every and gen % ablate_every == 0:
             keys = [k for k in sorted(DEFAULT_WEIGHTS) if k not in FROZEN]
@@ -1075,16 +1123,21 @@ def main(argv=None):
                          "(docs/HUMAN_BOTS.md); the default is ON so a "
                          "relaunch that forgets the flag cannot silently "
                          "train against the old monoculture.")
-    ap.add_argument("--past-k", type=int, default=2,
-                    help="archived champions in the pool (spread oldest.."
-                         "newest).  Default 2, not 3: a past:* duel is the "
-                         "wall-clock hog at 3.5-4.4x a BookBot duel (21.9s vs "
-                         "4.9s at 4p), ~30%% of a full check, and the tier is "
-                         "a regression tripwire rather than a gradient.  "
-                         "_spread keeps the ENDPOINTS, so k=2 is the founder "
-                         "(the most different archived opponent) plus the "
-                         "newest -- which is exactly the cycling test the "
-                         "tier exists for")
+    ap.add_argument("--past-k", type=int, default=6,
+                    help="archived champions in the pool, selected "
+                         "NEWEST-BIASED (offsets 0,1,3,7,15... back from the "
+                         "newest, plus the founder).  Was 2 with an EVEN "
+                         "spread, on the grounds that a past:* duel is the "
+                         "wall-clock hog (3.5-4.4x a BookBot duel) and the "
+                         "tier is a cycling tripwire rather than a gradient.  "
+                         "Both halves of that changed: an even spread over a "
+                         "700-generation ladder puts every member but the "
+                         "newest in the saturated band (2p full check: "
+                         "founder 95.8%%, newest 50.0%%, nothing between), and "
+                         "--saturation now prices a saturated opponent down "
+                         "automatically, so the extra members cost their "
+                         "weight only while they are worth something.  See "
+                         "docs/LEAGUE_POOL.md")
     ap.add_argument("--objective", "--gate-metric", dest="objective",
                     choices=("blend", "own", "margin", "winshare"),
                     default="blend",
@@ -1133,6 +1186,25 @@ def main(argv=None):
                          "rather than the one we are replacing.  Applies to "
                          "the champion, the mirror and the past ladder; "
                          "external opponents are unaffected")
+    ap.add_argument("--saturation", default="",
+                    metavar="LO,HI,FLOOR",
+                    help="AUTOMATIC POOL PRUNING.  An opponent's weight within "
+                         "its tier is multiplied by 1.0 at or below LO win "
+                         "rate, falling linearly to FLOOR at HI, using the "
+                         "win rates the FULL POOL CHECK already measures.  The "
+                         "freed weight goes to the informative members of the "
+                         "SAME tier, so the external/self-play balance is "
+                         "unchanged.  At or above HI an opponent is also "
+                         "skipped by the acceptance rotation (but never by the "
+                         "gate/ladder invariants, and never by the full "
+                         "check).  Default "
+                         f"{P.SAT_LO:g},{P.SAT_HI:g},{P.SAT_FLOOR:g}; pass "
+                         "'0,1,1' to switch the whole rule off")
+    ap.add_argument("--past-even", action="store_true",
+                    help="select the --past-k ladder by EVEN spread over the "
+                         "archive (the pre-2026-07-29 rule) instead of the "
+                         "newest-biased doubling walk.  Even spread puts every "
+                         "member but the newest deep in the saturated band")
     ap.add_argument("--no-legacy-ladders", action="store_true",
                     help="ignore the pre-existing experiments/league_Np dirs")
     ap.add_argument("--full-check-every", type=int, default=10)
@@ -1159,6 +1231,12 @@ def main(argv=None):
     if args.report:
         return report(args.state_dir, args.players)
     tw = P.parse_tier_weights(args.pool_weights)
+    sat = (P.SAT_LO, P.SAT_HI, P.SAT_FLOOR)
+    if args.saturation:
+        parts = [float(x) for x in args.saturation.split(",")]
+        if len(parts) != 3:
+            raise SystemExit("--saturation wants LO,HI,FLOOR")
+        sat = tuple(parts)
     run(players=args.players, hours=args.hours, workers=args.workers,
         lam=args.lam, block=args.block, min_blocks=args.min_blocks,
         max_blocks=args.max_blocks, subset=args.subset, seed=args.seed,
@@ -1174,6 +1252,8 @@ def main(argv=None):
         culture_scale=args.culture_scale, culture_centre=args.culture_centre,
         alpha=args.objective_alpha,
         candidate_bot=parse_candidate_bot(args.candidate_bot),
+        sat_lo=sat[0], sat_hi=sat[1], sat_floor=sat[2],
+        past_recent=not args.past_even,
         legacy_ladders=not args.no_legacy_ladders,
         hall_dirs=tuple(args.hall_dir),
         human_bots=tuple(x.strip() for x in args.human_bots.split(",")

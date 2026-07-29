@@ -2,7 +2,91 @@
 
 Terse operational note, not a write-up.
 
-## Current run: the QUIESCENT arms, launched 2026-07-27 from `train/loop-fix`
+## 2026-07-29: the 2p arm now trains under PlanBot
+
+**The three arms are no longer identical.** 2p trains under
+`plan:width=2`; 3p and 4p stay on `quiescent:levels=1`.
+
+| K  | workers | block | candidate bot | why |
+|----|---------|-------|---------------|-----|
+| 2p | 1 | 12 | **`plan:width=2`** | converged: 8-10 accepts in its last 100 generations, culture flat in a 128-149 band |
+| 3p | 2 | 12 | `quiescent:levels=1` | still productive: 19 accepts in its last 100 |
+| 4p | 2 | 24 | `quiescent:levels=1` | still climbing |
+
+A converged arm is spending compute re-measuring a number that has stopped
+moving. The retarget buys a far smaller number of generations, each of which
+measures a policy much closer to the one we would ship — which is the trade the
+convergence makes worth taking, and only for that arm.
+
+**Warm start, not a clean start.** The state dir is untouched, so the arm
+resumed its own gen-727 champion at sigma 0.664 and kept its ladder. The
+pre-restart state is archived at
+`experiments/archive_2p_quiescent_20260729/` (champion, state, 105 ladder
+files, all four JSONLs, and the log), so the quiescent-trained champion is
+recoverable byte for byte.
+
+### The width, and the measurement that picked it
+
+`tools/arch_cost.py --players 2 --games 8 --plan-games 4 --weights <the live
+2p champion>` (cpu-seconds per game, `TTA_JOURNAL=1`, `workers=1`). **Measured
+at 2p on the champion**, not extrapolated from the 4p `DEFAULT_WEIGHTS` table
+further down this document — `--weights` was added for this and the difference
+is large: quiescent costs 0.732 cpu-s/game on the champion against 0.272 on the
+defaults, because cost rises with how much the vector attacks
+(`docs/DEEPER_SEARCH.md` 3.1) and this champion is a war bot.
+
+| architecture | vs `book` | mirror | x quiescent, real mix | generations left in 46h |
+|---|---|---|---|---|
+| `weighted` (1-ply) | 0.330 | 0.625 | 0.4x | — |
+| `quiescent:levels=1` | 0.732 | 1.498 | 1.0x | ~1000 |
+| `plan:width=1` | 1.395 | 3.316 | 2.2x | ~450 |
+| **`plan:width=2`** | **2.097** | **6.504** | **4.1x** | **~200** |
+| `plan:width=4` | 6.116 | 9.702 | 6.7x | ~145 |
+| `plan:width=8` (ship) | 9.069 | 15.829 | 10.8x | ~90 |
+
+"real mix" is ~3/4 mirror-shaped duels (mirror + the past/hall ladder) and ~1/4
+`book`-shaped, which reproduces the arm's observed 168 s/generation under
+quiescence to within 10%. So `width=2` is ~690 s/generation.
+
+Why not the others:
+
+* **`width=8`** — training under the exact ship policy would retire the proxy
+  question entirely, and at 2p it is only 10.8x quiescent rather than the
+  49-66x the old 4p/default-weights table implies. But ~90 generations at a
+  ~10% accept rate is ~9 accepts. That is not a climb.
+* **`width=4`** — ~145 generations, ~15 accepts. Too thin to justify against
+  `width=2`'s ~200.
+* **`width=1`** — cheap, but `docs/BOT_ARCHITECTURE.md` describes it as
+  "everything except the multi-action search": no beam at all. It is not the
+  shape we ship.
+* **`width=2`** is the cheapest configuration that is still a beam search.
+
+**This does not close the proxy gap, it narrows it** — from *quiescence vs
+PlanBot* to *a narrow beam vs a wide one*, and `width=2`'s strength has never
+been measured (`docs/BOT_ARCHITECTURE.md` has `width=1` at 62.3% and `width=8`
+at 85.1% against 1-ply, nothing between). The residual is exactly what
+`docs/PROXY_GUARDRAIL.md` measures.
+
+Three flags come with the retarget, all in the 2p branch of
+`experiments/watchdog.sh`: `--full-check-every 25 --check-games 24
+--ablate-every 0`. A full check plays every pool opponent and an ablation
+cycle plays four duels per weight; at ~10x the per-game cost the arm would
+otherwise spend more time checking than training. Ablation is off rather than
+merely rarer — single trained weights are not interpretable anyway
+(`docs/UNATTENDED.md` trap 4) and this arm exists to climb.
+
+### Two other changes landed the same day
+
+* **`docs/LEAGUE_POOL.md`** — the pool now downweights opponents by their
+  measured win rate and deepens the self-ladder (`--past-k 6`, newest-biased).
+  15 of the 2p arm's 18 opponents were between 87.5% and 100%.
+* **`docs/PROXY_GUARDRAIL.md`** — every few accepted champions, the new
+  champion is played under `plan:width=8` against the previously validated one
+  and against `book`, and the result is appended to a time series that answers
+  "is proxy progress producing real progress". Separate cron entry, `nice -n
+  19`, never touches an arm.
+
+## Previous run: the QUIESCENT arms, launched 2026-07-27 from `train/loop-fix`
 
 **This run trains a different policy from every run before it.** The weight
 vector is identical in shape, but it is now scored by `QuiescentBot`
@@ -179,6 +263,13 @@ Check with `python3 tools/drift_sim.py` for the null and
    passing it once is enough — but **resuming an arm by hand without the flag
    silently reverts it to 1-ply**, and nothing will complain. The startup line
    `[Kp] trained architecture: ...` in the log is how you check.
+
+   Since 2026-07-29 the arms differ from each other, so `experiments/
+   watchdog.sh` carries per-arm overrides in one `arm_flags` function and
+   **refuses to launch an arm** whose assembled command line is missing any of
+   `--candidate-bot --objective --hall-dir --human-bots --pool-weights
+   --past-k --saturation`. A dead arm is loud; a silently mis-configured one
+   is not. See `docs/UNATTENDED.md` trap 5.
 
 ## Resuming
 

@@ -45,9 +45,9 @@ from experiments import hillclimb_pool as P  # noqa: E402  (installs make_bot)
 ARCHES = ("weighted", "quiescent:levels=1", "plan:width=8")
 
 
-def bench(arch, opp, players, games, seed=4242):
+def bench(arch, opp, players, games, seed=4242, weights=None):
     L.CANDIDATE_ARCH = L.parse_candidate_bot(arch)
-    w = dict(DEFAULT_WEIGHTS)
+    w = dict(weights or DEFAULT_WEIGHTS)
     spec = L.as_spec(w)
     opp_spec = spec if opp == "mirror" else opp
     t0, w0 = time.process_time(), time.time()
@@ -66,18 +66,31 @@ def main():
     ap.add_argument("--cores", type=float, default=5.0,
                     help="cores this run would get, for the games/hour column")
     ap.add_argument("--json", default=None)
+    # DEFAULT_WEIGHTS systematically UNDER-states the cost of the search bots:
+    # docs/DEEPER_SEARCH.md 3.1 shows quiescent cost rises with how much the
+    # vector attacks, and a trained champion attacks far more than the default
+    # vector does.  Budgeting a retarget from the default-vector column is how
+    # you pick a width you cannot afford, so point this at the champion the arm
+    # would actually resume from.
+    ap.add_argument("--weights", default=None,
+                    help="weight JSON to benchmark (default DEFAULT_WEIGHTS)")
     a = ap.parse_args()
+    weights = None
+    if a.weights:
+        from engine.bots.weighted import load_weights
+        weights = load_weights(a.weights)
 
-    out = {"players": a.players, "cells": {}}
+    out = {"players": a.players, "cells": {}, "weights": a.weights or "default"}
     print(f"# {a.players}p  TTA_JOURNAL={os.environ['TTA_JOURNAL']}  workers=1  "
-          f"cpu-seconds per game (contention-immune)")
+          f"cpu-seconds per game (contention-immune)  "
+          f"weights={a.weights or 'DEFAULT_WEIGHTS'}")
     print(f"  {'architecture':<20}{'opponent':<9}{'n':>4}{'cpu_s/game':>12}"
           f"{'x 1-ply':>10}{'games/h @'+format(a.cores, '.0f')+'c':>14}")
     base = {}
     for arch in a.arches.split(","):
         for opp in a.opponents.split(","):
             n = (a.plan_games or a.games) if arch.startswith("plan") else a.games
-            cpu, wall = bench(arch, opp, a.players, n)
+            cpu, wall = bench(arch, opp, a.players, n, weights=weights)
             base.setdefault(opp, cpu)
             gph = 3600.0 * a.cores / cpu
             print(f"  {arch:<20}{opp:<9}{n:>4}{cpu:>12.3f}{cpu / base[opp]:>9.1f}x"

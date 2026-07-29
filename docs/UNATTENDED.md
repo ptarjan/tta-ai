@@ -70,9 +70,42 @@ it, then `pkill -f run_league.sh`.
    gets to fight. Beating the pool is not the same as playing well.
 4. **Individual trained weights are not interpretable.** Champion marginals are
    indistinguishable from a random walk (KS p=0.14-0.80).
-5. **`--candidate-bot` is not persisted.** Resuming an arm by hand without it
-   silently reverts to 1-ply. The startup line `[Kp] trained architecture: ...`
-   is the only check. The watchdog always passes it.
+5. **`--candidate-bot` is not persisted**, and neither are `--objective`,
+   `--hall-dir`, `--human-bots`, `--pool-weights`, `--past-k` or
+   `--saturation`. Resuming an arm by hand without one silently trains against
+   a different, weaker configuration; nothing crashes and nothing in the log
+   says so except the startup lines. **Updated 2026-07-29:** this used to be
+   enforced by "ONE `COMMON` array, no per-arm copies", which stopped working
+   the moment the 2p arm was retargeted to PlanBot and the arms stopped being
+   identical. `experiments/watchdog.sh` now has
+
+   * `COMMON` — every flag that is the same for all three arms, still one
+     array;
+   * `arm_flags` — a `case` with one branch per arm, the ONLY place they may
+     differ;
+   * `REQUIRED` — the non-persisted flags. `launch` counts each one in the
+     assembled command line and **refuses to start the arm** unless it appears
+     exactly once, logging the refusal to `experiments/logs/watchdog.log`.
+
+   The refusal is deliberate: a dead arm is loud (`pgrep -f run_league.sh`
+   shows two supervisors), a mis-configured arm looks healthy for two days.
+
+   The receipts, after any relaunch, in `experiments/logs/league_Kp.log`:
+   `[Kp] objective:`, `[Kp] trained architecture:`, `[Kp] saturation:` and
+   `[pool]`. Note the log is block-buffered — at PlanBot generation lengths
+   those lines can take one full generation to appear.
+
+6. **A saturated pool is not a strong bot.** Since 2026-07-29 the pool
+   downweights opponents by their measured win rate and skips them in the
+   acceptance rotation (`docs/LEAGUE_POOL.md`). Read the
+   `[pool] informative ...` line: at 2p, 8 of 18 opponents are inert. "The
+   champion beats the pool" says less than it used to, not more.
+
+7. **The training proxy is not known to track shipped strength.**
+   `docs/PROXY_GUARDRAIL.md` runs the check that says whether it does, from
+   its own cron entry. Before quoting any arm's progress as strength, run
+   `python3 -m experiments.proxy_check --report` and
+   `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.
 
 ## Open, ranked
 

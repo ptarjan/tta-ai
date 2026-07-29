@@ -48,10 +48,18 @@ tier             members
 Weighting
 ---------
 Each TIER carries a total weight (``DEFAULT_TIER_WEIGHTS``, overridable from
-the CLI).  A tier's total is split evenly across its members, so an entry's
-weight is ``tier_weight / len(tier)``.  That is deliberate: adding a seventh
-strategy variant must not let the ``variant`` tier outvote BookBot; it splits
-the variant tier's say seven ways instead.  The aggregate score is the
+the CLI).  A tier's total is split across its members, so an entry's weight is
+``tier_weight / len(tier)``.  That is deliberate: adding a seventh strategy
+variant must not let the ``variant`` tier outvote BookBot; it splits the
+variant tier's say seven ways instead.
+
+The split is even only while nothing has been MEASURED.  Once the full pool
+check has win rates, each member's share is scaled by
+``saturation_multiplier`` -- an opponent the champion beats 98% of the time
+cannot teach it anything, so its weight moves to the members of the same tier
+that are still competitive.  The tier total never changes, which is what keeps
+the external/self-play balance a decision rather than an accident.  See the
+saturation section below and docs/LEAGUE_POOL.md.  The aggregate score is the
 weight-weighted mean over per-game paired samples, and every per-opponent
 number is reported alongside it so the aggregate can never quietly hide a
 candidate that farms five weak bots and loses to the book.
@@ -136,6 +144,69 @@ LEGACY_TIER_WEIGHTS = {
 # `human` joins them: an unexploitable external opponent is exactly the kind
 # of cliff-guard the monoculture could not be (docs/HUMAN_BOTS.md).
 DEFAULT_GATE_TIERS = ("book", "variant", "quiescent", "human")
+
+# ------------------------------------------------------------ saturation
+#
+# A 98% win rate cannot go up.  An opponent the champion already beats
+# 87.5-100% of the time contributes a paired edge that is ~0 with ~0 variance
+# whatever the candidate does, so the games spent on it buy no gradient -- they
+# are pure wall clock.  The 2p arm's full check on 2026-07-29 is the receipt:
+# 15 of its 18 opponents sat between 87.5% and 100%, and only ONE
+# (`past:ladder_2p/gen00715`, 50.0%) was in a band where a mutation could show.
+#
+# So the pool DOWNWEIGHTS an opponent as a function of its measured win rate,
+# and hands the freed weight to the informative members of the same tier.  The
+# numbers come from the FULL POOL CHECK the league already runs every
+# `--full-check-every` generations, so the rule is self-maintaining: an
+# opponent that becomes saturated fades automatically, and one the champion
+# starts losing to comes back automatically at the next check.  A hand-edited
+# drop list would be stale within a day and would have to be re-derived by a
+# human every time the champion moved.
+#
+# THE MULTIPLIER (`saturation_multiplier`): 1.0 at or below `sat_lo`, falling
+# linearly to `sat_floor` at `sat_hi`, and flat at `sat_floor` above it.  It is
+# a multiplier on the entry's share of its TIER total, and the tier total is
+# unchanged -- so this reallocates weight WITHIN a tier and cannot change the
+# external/self-play balance that docs/LEAGUE_OBJECTIVE.md section 3 set.
+# That is deliberate: the monoculture trap (docs/UNATTENDED.md trap 3) was
+# caused by static hand-written bots owning 69% of the signal, and a rule that
+# quietly deleted the external tiers because we currently beat them would walk
+# straight back into it from the other side.
+#
+# THE FLOOR IS NOT ZERO.  A saturated opponent keeps `sat_floor` of its share
+# because the tiers are also the VETO tiers: "you may not regress against
+# BookBot" is a statement we want to keep being able to make, and a zero-weight
+# entry cannot veto (see `_aggregate`, which skips weight<=0).
+#
+# INERT is the wall-clock half of the same idea.  An entry at the floor is
+# marked `inert` and `acceptance_subset` will not spend a generation's games on
+# it in the free slots -- but the gate and ladder invariants still take one
+# each, so every generation still faces at least one external opponent and at
+# least one ladder opponent even when the whole pool is saturated.  Inert
+# entries stay IN the pool and are still measured by the full check, which is
+# what lets them come back.
+SAT_LO = 0.70          # at or below this win rate an opponent is fully weighted
+SAT_HI = 0.95          # at or above it, it is at the floor and inert
+SAT_FLOOR = 0.15       # the share a saturated opponent keeps (never 0: veto)
+
+
+def saturation_multiplier(win_rate, lo=SAT_LO, hi=SAT_HI, floor=SAT_FLOOR):
+    """Measured win rate -> weight multiplier in [floor, 1].  See above.
+
+    `None` (never measured) means 1.0: a new opponent is presumed informative
+    until the full check says otherwise, which is the safe direction -- the
+    alternative would silently mute every freshly archived champion.
+    """
+    if win_rate is None:
+        return 1.0
+    if hi <= lo:
+        return 1.0
+    if win_rate <= lo:
+        return 1.0
+    if win_rate >= hi:
+        return floor
+    return 1.0 - (1.0 - floor) * (float(win_rate) - lo) / (hi - lo)
+
 
 #: Tiers that `acceptance_subset` guarantees a representative of every
 #: generation, alongside `mirror` and one rotating gate.  Without this the
@@ -232,9 +303,11 @@ def _make_variant(module, cls_name, seed):
 class PoolEntry:
     """One opponent: ``(spec, weight, label)`` plus its tier."""
 
-    __slots__ = ("label", "spec", "tier", "weight", "metric")
+    __slots__ = ("label", "spec", "tier", "weight", "metric", "win_rate",
+                 "sat", "inert")
 
-    def __init__(self, label, spec, tier, weight=0.0, metric="winshare"):
+    def __init__(self, label, spec, tier, weight=0.0, metric="winshare",
+                 win_rate=None):
         self.label = label
         self.spec = spec
         self.tier = tier
@@ -242,6 +315,14 @@ class PoolEntry:
         # "winshare" or "margin" -- which per-game series this opponent is
         # scored on.  Set by the owning Pool from its `margin_tiers`.
         self.metric = metric
+        #: the champion's win rate against this opponent at the last FULL POOL
+        #: CHECK, or None if it has never been measured.  Set by the owning
+        #: Pool from the `win_rates` it was built with.
+        self.win_rate = win_rate
+        #: saturation multiplier on this entry's share of its tier, and whether
+        #: the entry is at the floor.  Both are derived in `Pool.renormalise`.
+        self.sat = 1.0
+        self.inert = False
 
     @property
     def is_mirror(self):
@@ -270,11 +351,18 @@ class Pool:
 
     def __init__(self, entries, tier_weights=None, gate_tiers=DEFAULT_GATE_TIERS,
                  margin_tiers=DEFAULT_MARGIN_TIERS, metric="winshare",
-                 ladder_tiers=DEFAULT_LADDER_TIERS):
+                 ladder_tiers=DEFAULT_LADDER_TIERS, win_rates=None,
+                 sat_lo=SAT_LO, sat_hi=SAT_HI, sat_floor=SAT_FLOOR):
         self.entries = list(entries)
         self.tier_weights = dict(tier_weights or DEFAULT_TIER_WEIGHTS)
         self.gate_tiers = tuple(gate_tiers)
         self.ladder_tiers = tuple(ladder_tiers)
+        # Measured win rates from the last full pool check, label -> rate.
+        # Empty (the default) means "nothing measured yet", which leaves every
+        # multiplier at 1.0 and the pool exactly as it was before saturation
+        # existed -- so a fresh state dir behaves identically to the old code.
+        self.win_rates = dict(win_rates or {})
+        self.sat_lo, self.sat_hi, self.sat_floor = sat_lo, sat_hi, sat_floor
         # The pool-wide default metric.  `margin_tiers` overrides it per tier
         # and exists only so the LEGACY objective (win share everywhere except
         # a margin-scored gate) stays reproducible bit for bit.  Under the
@@ -292,13 +380,25 @@ class Pool:
         self.renormalise()
 
     def renormalise(self):
-        """entry.weight = tier total / members of that tier (see docstring)."""
-        counts = {}
+        """entry.weight = its SATURATION SHARE of its tier's total.
+
+        With no measured win rates every multiplier is 1.0 and this is exactly
+        the historical rule, "tier total split evenly over its members".  With
+        them, a member's share is proportional to its multiplier, so weight the
+        champion can no longer move (a 98% opponent) flows to the members of
+        the same tier where a mutation can still show.  The TIER total never
+        changes, so the external/self-play balance is untouched.
+        """
+        sums = {}
         for e in self.entries:
-            counts[e.tier] = counts.get(e.tier, 0) + 1
+            e.win_rate = self.win_rates.get(e.label, e.win_rate)
+            e.sat = saturation_multiplier(e.win_rate, self.sat_lo, self.sat_hi,
+                                          self.sat_floor)
+            e.inert = e.sat <= self.sat_floor + 1e-9 and e.win_rate is not None
+            sums[e.tier] = sums.get(e.tier, 0.0) + e.sat
         for e in self.entries:
             total = self.tier_weights.get(e.tier, 0.0)
-            e.weight = total / counts[e.tier] if counts[e.tier] else 0.0
+            e.weight = total * e.sat / sums[e.tier] if sums[e.tier] else 0.0
             e.metric = "margin" if e.tier in self.margin_tiers else self.metric
 
     def __len__(self):
@@ -347,6 +447,15 @@ class Pool:
             rebalance: the gate tiers now carry 0.10-0.30 each against
             mirror's 1.0, so a generation whose two free slots both land on
             variants would be decided ~77% by mirror alone.
+
+        SATURATION.  Each rotation prefers entries that are not `inert` (win
+        rate at or above `sat_hi` at the last full check), because a generation
+        spent measuring a 98% opponent measures nothing.  The preference is
+        soft everywhere: if a rotation's whole candidate list is inert it
+        rotates over the inert list rather than returning nothing, so the two
+        invariants above hold even when the champion has saturated the entire
+        pool -- which at 2p it very nearly has.  The subset is always filled to
+        `size` for the same reason.
         """
         size = max(1, size)
         chosen, seen = [], set()
@@ -356,7 +465,13 @@ class Pool:
                 seen.add(e.label)
                 chosen.append(e)
 
+        def live_first(pool_):
+            """The non-inert members, or all of them if none is live."""
+            live = [e for e in pool_ if not e.inert]
+            return live or list(pool_)
+
         def rotate(pool_):
+            pool_ = live_first(pool_)
             if pool_:
                 take(sorted(pool_, key=lambda e: e.label)[gen % len(pool_)])
 
@@ -367,13 +482,22 @@ class Pool:
         rotate([e for e in self.entries if e.tier in self.ladder_tiers])
         # deterministic rotation over the rest: generation g starts reading
         # the (stable, sorted) remainder at offset g, so coverage is uniform.
+        # Live entries are read first and inert ones only top the subset up,
+        # so the free slots go where a mutation can actually show.
         rest = [e for e in self.sorted_entries() if e.label not in seen]
+        rest = ([e for e in rest if not e.inert]
+                + [e for e in rest if e.inert])
+        live_n = sum(1 for e in rest if not e.inert)
         if rest:
-            start = (gen * max(1, size - len(chosen))) % len(rest)
-            i = 0
-            while len(chosen) < size and i < len(rest):
-                take(rest[(start + i) % len(rest)])
-                i += 1
+            span = live_n or len(rest)
+            start = (gen * max(1, size - len(chosen))) % span
+            # rotate within the live prefix, then fall through to the inert
+            # tail only once the live entries are exhausted.
+            order = [rest[(start + i) % span] for i in range(span)] + rest[span:]
+            for e in order:
+                if len(chosen) >= size:
+                    break
+                take(e)
         return chosen
 
 
@@ -542,13 +666,51 @@ def _spread(items, k):
     return [items[i] for i in idx]
 
 
-def discover_past_champions(players, ladder_dirs, k=3, log=None):
-    """Up to `k` archived champions, spread from oldest to newest.
+def _recent_spread(items, k):
+    """`k` items biased toward the NEWEST, with the oldest always included.
 
-    Oldest is always kept: the founder is the most *different* opponent in
-    the archive, and difference is the whole point of a historical ladder.
-    The selection is deterministic given the directory contents, so the
-    same opponent set is faced by every candidate in a generation.
+    `_spread` picks evenly, which is the right shape for an anti-cycling
+    tripwire and the wrong shape for a GRADIENT.  Evenly spread over a 700-
+    generation ladder, every member except the newest is an ancestor the
+    champion has long since left behind -- the 2026-07-29 2p full check has the
+    founder at 95.8% and the newest at 50.0%, with nothing in between because
+    there IS nothing in between.
+
+    A self-ladder is informative where the opponent is close enough to lose
+    sometimes, so this takes the newest and then steps back in doubling strides
+    (offsets 0, 1, 3, 7, 15, ... from the end).  That puts several recent
+    selves in the 50-70% band, keeps a couple of mid-distance ones, and still
+    keeps index 0 -- the founder, the most *different* opponent in the archive
+    and the reason the tier exists at all.
+
+    Deterministic given the directory contents, so every candidate in a
+    generation faces the same set.
+    """
+    if k <= 0 or not items:
+        return []
+    if len(items) <= k:
+        return list(items)
+    n = len(items)
+    idx = {0}                       # the founder: the anti-cycling tripwire
+    off, step = 0, 1
+    while len(idx) < k and off < n:
+        idx.add(n - 1 - off)
+        off += step
+        step *= 2
+    # A doubling walk can run off the front before it has k members (a short
+    # ladder); top up from the newest end so `k` is honoured exactly.
+    i = n - 1
+    while len(idx) < k and i >= 0:
+        idx.add(i)
+        i -= 1
+    return [items[i] for i in sorted(idx)]
+
+
+def discover_past_champions(players, ladder_dirs, k=3, log=None, recent=True):
+    """Up to `k` archived champions from the ladder directories.
+
+    `recent` (the default) selects with `_recent_spread` -- newest-biased,
+    founder retained.  `recent=False` restores the historical even `_spread`.
     """
     log = log or (lambda *_a: None)
     from engine.bots.weighted import DEFAULT_WEIGHTS
@@ -561,7 +723,7 @@ def discover_past_champions(players, ladder_dirs, k=3, log=None):
                 files.append(os.path.join(d, fn))
     files.sort(key=lambda p: (os.path.basename(p), p))
     out = []
-    for path in _spread(files, k):
+    for path in (_recent_spread(files, k) if recent else _spread(files, k)):
         try:
             with open(path) as fh:
                 j = json.load(fh)
@@ -592,12 +754,13 @@ def parse_tier_weights(s, base=None):
     return out
 
 
-def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
+def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
                with_quiescent=False, quiesce_opts=None, exclude=(),
                gate_tiers=DEFAULT_GATE_TIERS, hall_dirs=(),
                margin_tiers=None, metric="winshare",
                ladder_tiers=DEFAULT_LADDER_TIERS, human_bots=("all",),
-               log=None):
+               win_rates=None, sat_lo=SAT_LO, sat_hi=SAT_HI,
+               sat_floor=SAT_FLOOR, past_recent=True, log=None):
     """Assemble the full pool for one player count.
 
     Tiers whose weight is 0 are dropped entirely -- that is how you turn a
@@ -632,7 +795,8 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
         add("quiescent", ("quiescent", "default", opts), "quiescent")
     add("mirror", MIRROR, "mirror")
     for label, spec in discover_past_champions(players, ladder_dirs,
-                                               k=past_k, log=log):
+                                               k=past_k, log=log,
+                                               recent=past_recent):
         add(label, spec, "past")
     # The hall of fame: frozen champions that are NEVER rotated out, unlike
     # the `past` ladder whose k slots are re-spread every generation so a
@@ -668,10 +832,30 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=2,
     add("default", "default", "floor")
     pool = Pool(entries, tier_weights=tw, gate_tiers=gate_tiers,
                 margin_tiers=margin_tiers, metric=metric,
-                ladder_tiers=ladder_tiers)
+                ladder_tiers=ladder_tiers, win_rates=win_rates,
+                sat_lo=sat_lo, sat_hi=sat_hi, sat_floor=sat_floor)
     log("[pool] " + ", ".join(
-        f"{e.label}(w={e.weight:.2f},{e.metric})"
+        f"{e.label}(w={e.weight:.2f},{e.metric}"
+        + (f",{e.win_rate:.0%}" if e.win_rate is not None else "")
+        + (",INERT" if e.inert else "") + ")"
         for e in pool.sorted_entries()))
+    dead = [e for e in pool.sorted_entries() if e.inert]
+    if dead:
+        # Loud on purpose: this line is how an operator sees that a tier has
+        # gone quiet, and how much of the pool is now only a veto rather than
+        # a gradient.
+        log(f"[pool] saturated at >= {sat_hi:.0%} (weight cut to {sat_floor:g}"
+            f" of an even share, skipped by the acceptance rotation unless an "
+            f"invariant needs them): "
+            + ", ".join(f"{e.label} {e.win_rate:.0%}" for e in dead))
+    live = [e for e in pool.sorted_entries()
+            if not e.inert and not e.is_mirror]
+    log(f"[pool] informative (win rate < {sat_hi:.0%} or unmeasured): "
+        f"{len(live)} of {len(pool) - 1} -- "
+        + (", ".join(f"{e.label}"
+                     + (f" {e.win_rate:.0%}" if e.win_rate is not None
+                        else " new")
+                     for e in live) or "NONE"))
     tot = sum(e.weight for e in pool.entries) or 1.0
     share = {}
     for e in pool.entries:

@@ -14,12 +14,40 @@
 # DEADLINE is an absolute epoch second, written at setup time.  Cron gives no
 # clean way to say "stop after N hours", so the deadline lives in a file.
 #
-# EVERY pool-affecting flag must be repeated here.  A relaunch that silently
-# drops one is a failure mode this project has already hit: --candidate-bot is
-# not persisted in the state dir (docs/UNATTENDED.md trap 5) and neither are
-# --hall-dir or --human-bots, so an arm restarted without them keeps training
-# but against a different, weaker pool -- and nothing in the logs says so
-# except the [pool] line.  Check that line after any relaunch.
+# ---------------------------------------------------------------------------
+# HOW THE FLAGS ARE ORGANISED, AND WHY IT IS NOT NEGOTIABLE
+# ---------------------------------------------------------------------------
+# `--candidate-bot`, `--objective`, `--hall-dir`, `--human-bots`,
+# `--pool-weights` and `--past-k` are NOT persisted in the state dir
+# (docs/UNATTENDED.md trap 5).  An arm the watchdog relaunches without one of
+# them keeps training -- against a different, weaker configuration, with
+# nothing crashing and nothing in the logs saying so except the `[pool]` line.
+# This project has already hit that exact mode once.
+#
+# It used to be enforced by "ONE array, no per-arm copies".  That worked while
+# all three arms were identical and stopped working on 2026-07-29, when the
+# converged 2p arm was retargeted to train under PlanBot (docs/TRAINING_RUN.md)
+# and the arms stopped being identical.  So the structure is now:
+#
+#   COMMON      every flag that is the same for all three arms.  Still one
+#               array, still no copies.
+#   arm_flags   the ONLY place an arm may differ, one `case` branch each, so
+#               the difference between the arms is a three-line diff you can
+#               read in one screen rather than three drifting arrays.
+#   REQUIRED    the flags that are not persisted.  `launch` asserts each
+#               appears EXACTLY ONCE in the assembled command line and
+#               REFUSES to start the arm otherwise.
+#
+# The refusal is the point.  A dead arm is loud -- `pgrep -f run_league.sh`
+# shows two supervisors instead of three -- while a silently mis-configured
+# arm looks perfectly healthy for two days and produces a champion trained on
+# something nobody chose.  Given the choice, fail loudly.
+#
+# The receipts, after ANY relaunch, in experiments/logs/league_Kp.log:
+#     [Kp] objective: ...
+#     [Kp] trained architecture: ...
+#     [Kp] saturation: ...
+#     [pool] ...
 set -u
 cd "$(dirname "$0")/.."
 DEADLINE_FILE=experiments/logs/watchdog_deadline
@@ -34,46 +62,120 @@ if [ "$NOW" -ge "$DEADLINE" ]; then exit 0; fi
 REMAIN=$(( (DEADLINE - NOW + 3599) / 3600 ))
 [ "$REMAIN" -lt 1 ] && REMAIN=1
 
-# EVERY flag that defines the run lives in ONE array, used by all three
-# launches.  This is not style.  `--candidate-bot` is not persisted in the
-# state dir (docs/UNATTENDED.md trap 5) and neither is `--objective`: an arm
-# that the watchdog relaunches without them silently reverts to a 1-ply bot
-# trained on the OLD objective, which is the worst possible failure because
-# nothing crashes and the log looks normal.  This project has already hit that
-# exact mode once.  One array, no per-arm copies, and the startup lines
-# `[Kp] objective: ...` / `[Kp] trained architecture: ...` / `[pool] ...` in
-# experiments/logs/league_Kp.log are the receipts to check after a relaunch.
-#
 # --objective blend    accept on (1-alpha)*own final culture + alpha*win share.
 #                      The old default was culture MARGIN, which pays twice for
 #                      a culture point stolen in a war and once for one
 #                      produced, and selected a champion that scores 64.7
 #                      against a human 159.5.  docs/LEAGUE_OBJECTIVE.md.
-# --pool-weights       76% of the training signal on opponents that improve
-#                      (mirror / past ladder / frozen hall) and 24% on the
-#                      static hand-written BookBot family, which was 69%
-#                      before.  Passed EXPLICITLY rather than relying on the
-#                      module default, so the log records the pool this run
-#                      actually used even if the default later moves.
-#                      floor=0 drops greedy/random/default: they are saturated
-#                      (docs/UNATTENDED.md trap 2) and under own-culture
-#                      scoring they stop being inert and start pulling.
+# --pool-weights       the tier totals: 32% of the training signal on fixed
+#                      external opponents (book / human archetypes / strategy
+#                      variants) and 68% on opponents that improve (mirror /
+#                      past ladder / frozen hall).  It was 69% external before
+#                      the 2026-07-27 rebalance.  Passed EXPLICITLY rather than
+#                      relying on the module default, so the log records the
+#                      pool this run actually used even if the default later
+#                      moves.  floor=0 drops greedy/random/default: they are
+#                      saturated (docs/UNATTENDED.md trap 2) and under
+#                      own-culture scoring they stop being inert and start
+#                      pulling.
+# --saturation         AUTOMATIC PRUNING, docs/LEAGUE_POOL.md.  An opponent's
+#                      share of its tier is scaled by its measured win rate
+#                      from the full pool check: full weight at or below 70%,
+#                      down to 0.15 at 95% and above, where it also stops
+#                      being drawn into the acceptance rotation.  A 98% win
+#                      rate cannot go up, so those games bought no gradient.
+#                      The freed weight stays INSIDE the tier, so the 32/68
+#                      external/self-play split above is untouched and the
+#                      pool cannot collapse into pure self-play.
+# --past-k 6           the self-ladder, newest-biased (offsets 0,1,3,7,15 from
+#                      the newest, plus the founder).  It was 2, which under
+#                      even spreading meant exactly ONE informative self-play
+#                      opponent (the newest, ~50%) and one saturated founder
+#                      (~96%).  Six recent selves put several opponents in the
+#                      50-70% band where a mutation can show.
 COMMON=(
     --weight-guard clamp
-    --past-k 2
+    --past-k 6
     --hall-dir experiments/hall_of_fame
-    --candidate-bot quiescent:levels=1
     --human-bots all
     --objective blend
     --objective-alpha 0.15
+    --saturation 0.70,0.95,0.15
     --pool-weights book=0.6,variant=0.6,human=0.6,mirror=1.0,past=1.2,hall=1.6,floor=0
 )
 
+# Not persisted in the state dir; a launch missing one of these is refused.
+REQUIRED="--candidate-bot --objective --hall-dir --human-bots --pool-weights --past-k --saturation"
+
+arm_flags() {   # players -> the flags that are NOT shared, space separated
+    case "$1" in
+    2)
+        # 2p CONVERGED under the quiescent proxy: 8 accepts in its last 100
+        # generations, culture flat in a 128-149 band.  A converged arm is
+        # spending compute to re-measure a number that has stopped moving, so
+        # it is retargeted to train under the search we would SHIP.
+        #
+        # width=2, from `tools/arch_cost.py --players 2 --weights <the 2p
+        # champion>` (cpu-s/game, TTA_JOURNAL=1, workers=1) -- measured AT 2p
+        # ON THE CHAMPION, not extrapolated from the 4p DEFAULT_WEIGHTS table
+        # in docs/TRAINING_RUN.md, which understates a trained vector badly
+        # (quiescent is 0.732 here against that table's 0.272):
+        #
+        #     arch                book   mirror   x quiescent on the real mix
+        #     quiescent:levels=1  0.732   1.498    1.0x  <- what it trained on
+        #     plan:width=1        1.395   3.316    2.2x
+        #     plan:width=2        2.097   6.504    4.1x  <- chosen
+        #     plan:width=4        6.116   9.702    6.7x
+        #     plan:width=8        9.069  15.829   10.8x  <- the ship policy
+        #
+        # "the real mix" is ~3/4 mirror-shaped duels (mirror + the past/hall
+        # ladder) and ~1/4 book-shaped, which reproduces the arm's observed
+        # 168 s/generation under quiescence.  So width=2 is ~690 s/generation
+        # => ~200 generations in the 46h left, against ~1000 at quiescence.
+        # width=4 gives ~145 and width=8 ~90, which is too few accepts to
+        # climb with; width=1 is cheap but docs/BOT_ARCHITECTURE.md calls it
+        # "everything except the multi-action search" -- no beam at all, so it
+        # is not the shape we ship.  width=2 is the cheapest configuration
+        # that is still a beam search.
+        #
+        # The residual gap between training at width=2 and shipping at
+        # width=8 is exactly what experiments/proxy_check.py measures.
+        #
+        # --full-check-every 25 --check-games 24 --ablate-every 0: a full
+        # check plays EVERY pool opponent and an ablation cycle plays four
+        # more duels per weight, and under PlanBot each of those games costs
+        # ~10x what it did.  At the old cadence this arm would spend more time
+        # checking than training.  Ablation is off rather than merely rarer:
+        # single trained weights are not interpretable anyway
+        # (docs/UNATTENDED.md trap 4) and this arm exists to climb.
+        echo "--candidate-bot plan:width=2 --full-check-every 25 --check-games 24 --ablate-every 0"
+        ;;
+    3|4)
+        # Still productive (3p: 19 accepts in its last 100 generations), so
+        # still on the affordable proxy.  docs/PROXY_GUARDRAIL.md is what
+        # tells us whether that proxy is still tracking real strength.
+        echo "--candidate-bot quiescent:levels=1"
+        ;;
+    esac
+}
+
 launch() {   # players workers block extra...
     local K=$1 W=$2 B=$3; shift 3
+    # shellcheck disable=SC2046  -- deliberate word splitting; no flag value
+    # here contains a space, and bash 3.2 (macOS) has no better option.
+    local ALL=("${COMMON[@]}" $(arm_flags "$K") "$@")
+    local req n
+    for req in $REQUIRED; do
+        n=0
+        for f in "${ALL[@]}"; do [ "$f" = "$req" ] && n=$((n + 1)); done
+        if [ "$n" != 1 ]; then
+            echo "$(date '+%F %T') watchdog: REFUSING to launch ${K}p -- $req appears $n times in: ${ALL[*]}" >> "$LOG"
+            return 1
+        fi
+    done
     nohup experiments/run_league.sh "$K" "$REMAIN" "$W" 2 "$B" 4 1.2816 \
-        "${COMMON[@]}" "$@" >/dev/null 2>&1 &
-    echo "$(date '+%F %T') watchdog: relaunched ${K}p (${REMAIN}h left, workers=$W block=$B) ${COMMON[*]}" >> "$LOG"
+        "${ALL[@]}" >/dev/null 2>&1 &
+    echo "$(date '+%F %T') watchdog: relaunched ${K}p (${REMAIN}h left, workers=$W block=$B) ${ALL[*]}" >> "$LOG"
 }
 
 pgrep -f "run_league.sh 2 " >/dev/null || launch 2 1 12 --init default
