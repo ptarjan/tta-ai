@@ -29,6 +29,7 @@ from engine.bots.fastcopy import copy_state                         # noqa: E402
 from engine.bots.quiescent import QuiescentBot                      # noqa: E402
 from engine.bots.weighted import WeightedBot                        # noqa: E402
 from engine.bots import weighted as weighted_mod                    # noqa: E402
+from engine.bots import quiescent as quiescent_mod                  # noqa: E402
 
 
 def _positions(n=3, seed=5, moves=90, every=7):
@@ -126,19 +127,24 @@ class JournalledPickAgreesWithCopyPick(unittest.TestCase):
         self.assertEqual(statediff.diff(oracle, st, include_log=True), [])
 
 
-class QuiescentBotStaysOnTheCopyPath(unittest.TestCase):
-    """docs/PYPY.md 9.13/9.15 -- the nesting hazard, pinned.
+class QuiescentBotHasItsOwnSearch(unittest.TestCase):
+    """docs/PYPY.md 9.13/9.15, revised by section 10.
 
-    If somebody later gives QuiescentBot a journal, or routes it through
-    `WeightedBot.pick`, one of these fails.
+    This class used to pin "QuiescentBot must never open a journal", because
+    `journal.begin` raised on nesting.  Section 10 gave the journal a strictly
+    LIFO stack and converted QuiescentBot, so that assertion is now inverted:
+    it opens journals, and it *nests* them.  What has not changed, and is
+    still worth pinning, is that QuiescentBot has its own `pick` and does not
+    route through `WeightedBot.pick` -- the two searches would otherwise share
+    a journalling loop that only one of them was written for.
     """
 
     def setUp(self):
         journal.install()
 
     def tearDown(self):
-        if journal.active():
-            journal._J = None
+        del journal._STACK[:]
+        journal._J = None
         state_mod.SUPPRESS_LOG = False
 
     @staticmethod
@@ -151,28 +157,42 @@ class QuiescentBotStaysOnTheCopyPath(unittest.TestCase):
                 break
             actions.apply(st, bots[st.decider()](st), rng)
 
-    def _count_begins(self, make_bot):
-        """Journals opened during a short game, with TTA_JOURNAL=1 simulated."""
-        opened = [0]
+    def _trace_begins(self, make_bot):
+        """(journals opened, deepest nesting) over a short game, as if
+        TTA_JOURNAL=1.  The flag is read at import into each bot module's own
+        namespace, so every module that searches has to be patched -- missing
+        one is how this test would quietly stop testing anything."""
+        opened, deepest = [0], [0]
         real_begin = journal.begin
 
         def counting(state=None):
             opened[0] += 1
-            return real_begin(state)
+            j = real_begin(state)
+            deepest[0] = max(deepest[0], journal.depth())
+            return j
 
+        mods = (weighted_mod, quiescent_mod)
         journal.begin = counting
-        weighted_mod.journal.begin = counting
-        real_flag = weighted_mod.USE_JOURNAL
-        weighted_mod.USE_JOURNAL = True          # as if TTA_JOURNAL=1
+        flags = [m.USE_JOURNAL for m in mods]
+        for m in mods:
+            m.journal.begin = counting
+            m.USE_JOURNAL = True                 # as if TTA_JOURNAL=1
         try:
             self._play(make_bot)
         finally:
             journal.begin = real_begin
-            weighted_mod.journal.begin = real_begin
-            weighted_mod.USE_JOURNAL = real_flag
-        return opened[0]
+            for m, f in zip(mods, flags):
+                m.journal.begin = real_begin
+                m.USE_JOURNAL = f
+        return opened[0], deepest[0]
 
-    def test_quiescent_opens_no_journal_even_with_the_flag_on(self):
+    def _count_begins(self, make_bot):
+        return self._trace_begins(make_bot)[0]
+
+    def _max_depth(self, make_bot):
+        return self._trace_begins(make_bot)[1]
+
+    def test_quiescent_opens_journals_and_nests_them(self):
         # POSITIVE CONTROL FIRST.  9.11 records a test on this branch that
         # asserted nothing at all for a while; an isolation test that cannot
         # fail is worth less than no test.  Prove the counter is wired by
@@ -182,11 +202,16 @@ class QuiescentBotStaysOnTheCopyPath(unittest.TestCase):
                            "positive control failed: the begin() counter is "
                            "not wired, so the assertion below proves nothing")
         quiescent = self._count_begins(lambda i: QuiescentBot(seed=i))
-        self.assertEqual(
+        self.assertGreater(
             quiescent, 0,
-            "QuiescentBot opened a journal.  It holds several live trial "
-            "states at once (_war_value copies a state that is itself a "
-            "trial) and journal.begin cannot nest -- docs/PYPY.md 9.15.")
+            "QuiescentBot opened no journal with USE_JOURNAL on -- section 10 "
+            "converted it, so it is back on the copy path for free")
+        # ...and it reaches depth >= 2, which is the whole point of section 10:
+        # `_resolve` prices a rival's pending decision inside a candidate.
+        self.assertGreaterEqual(
+            self._max_depth(lambda i: QuiescentBot(seed=i)), 2,
+            "QuiescentBot never nested a journal; either _resolve stopped "
+            "being reached or _pick_journalled is not wired")
 
     def test_quiescent_does_not_route_through_weightedbot_pick(self):
         """The structural half: even if QuiescentBot never begins a journal
@@ -212,21 +237,29 @@ class QuiescentBotStaysOnTheCopyPath(unittest.TestCase):
                          "QuiescentBot entered WeightedBot.pick; with the "
                          "journal on that is a nested begin()")
 
-    def test_nesting_fails_loudly_rather_than_silently(self):
-        """The safety net.  Whatever anyone does later, a nested journalled
-        search must raise, not corrupt.  `copy_state` inside an open journal
-        raises too, so there is no quiet fallback to hide behind -- which is
-        the point."""
+    def test_a_nested_journalled_search_leaves_the_outer_trial_intact(self):
+        """The safety net, rewritten for section 10.  A nested journalled
+        search used to be a `JournalError`; now it is legal, so what has to be
+        pinned instead is that it does not disturb the trial it is nested
+        inside.  The outer trial's own mutations must survive the inner
+        search, and the inner search must leave nothing behind."""
         st = _positions()[0]
-        moves = actions.legal_moves(st)
         bot = WeightedBot(seed=0)
-        j = journal.begin(st)
+        j_outer = journal.begin(st)
         try:
-            with self.assertRaises(journal.JournalError):
-                bot._pick_journalled(st, list(moves), st.decider(), {},
-                                     bot.weights, 0.0)
+            # an outer "trial" mutation, of the kind a candidate `apply` makes
+            actions.apply(st, ("end_turn",), random.Random(0))
+            mid = copy_state(st, keep_log=True)
+            moves = [m for m in actions.legal_moves(st) if m[0] != "resign"]
+            mv = bot._pick_journalled(st, list(moves), st.decider(), {},
+                                      bot.weights, 0.0)
+            self.assertIn(mv, moves)
+            # the nested search is invisible to the trial it ran inside
+            self.assertEqual(statediff.diff(mid, st, include_log=True), [])
+            self.assertEqual(journal.depth(), 1)
         finally:
-            journal.rollback(j)
+            journal.rollback(j_outer)
+        self.assertEqual(journal.depth(), 0)
 
     def test_quiescent_search_is_unaffected_by_an_installed_hook(self):
         """QuiescentBot's copy-inside-a-trial pattern still works once the

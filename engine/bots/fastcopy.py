@@ -57,6 +57,7 @@ from __future__ import annotations
 import copy as _copy
 import os as _os
 
+from .. import journal as _journal
 from ..state import (GameState as _GameState, PlayerState as _PlayerState,
                      TechCard as _TechCard, WonderInProgress as _WonderInProgress)
 
@@ -293,8 +294,7 @@ _copy_gs_log = _build(_GameState, "_copy_gs_log")
 _COPIERS[_GameState] = _copy_gs_nolog
 
 
-def copy_state(state, keep_log=False):
-    """Copy a GameState for search purposes."""
+def _copy_state(state, keep_log):
     if type(state) is _GameState:
         return _copy_gs_log(state) if keep_log else _copy_gs_nolog(state)
     # a subclass or a stand-in: stay fully generic
@@ -302,3 +302,27 @@ def copy_state(state, keep_log=False):
     if not keep_log:
         new.log = []
     return new
+
+
+def copy_state(state, keep_log=False):
+    """Copy a GameState for search purposes.
+
+    Runs with any open journal DETACHED (`engine/journal.py`).  A copy only
+    ever writes to objects it has just allocated -- including the wholesale
+    ``n.__dict__ = {...}`` the generated copiers do -- so journalling those
+    writes would record undo entries for objects that did not exist when the
+    journal opened, and rollback would empty a copy the caller is still using.
+    Detaching cannot lose a record, because a copy never mutates its source.
+
+    The alternative (raise, as this did before section 10) forbade copying
+    inside a journal at all, which is what pinned `QuiescentBot` and `PlanBot`
+    to the copy path: both copy from inside an already-open trial.
+    """
+    j = _journal._J
+    if j is None:
+        return _copy_state(state, keep_log)
+    _journal.detach()
+    try:
+        return _copy_state(state, keep_log)
+    finally:
+        _journal.attach(j)

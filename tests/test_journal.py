@@ -31,9 +31,13 @@ class JournalTestCase(unittest.TestCase):
 
     def tearDown(self):
         # never leave a journal open -- or the log suppressed -- for the
-        # next test
-        if journal.active():
-            journal._J = None
+        # next test.  Journals nest now (section 10), so the whole stack has
+        # to be dropped, not just the innermost: a test that leaks one would
+        # otherwise make every later test run with `emit` suppressed, which is
+        # exactly the shape of failure that first showed up when nesting
+        # landed.
+        del journal._STACK[:]
+        journal._J = None
         state_mod.SUPPRESS_LOG = False
 
 
@@ -211,14 +215,40 @@ class Lifecycle(JournalTestCase):
         self.assertEqual(statediff.diff(before, st), [])
         self.assertFalse(journal.active())
 
-    def test_nesting_is_refused(self):
+    def test_nesting_is_lifo(self):
+        """Section 10: journals nest, but only strictly LIFO.  An
+        out-of-order rollback restores container contents in the wrong order,
+        which is hazard 3 of 6.5 and invisible to `==`."""
         st = _st()
-        j = journal.begin(st)
-        try:
-            with self.assertRaises(journal.JournalError):
-                journal.begin(st)
-        finally:
-            journal.rollback(j)
+        j1 = journal.begin(st)
+        j2 = journal.begin(st)
+        self.assertEqual(journal.depth(), 2)
+        with self.assertRaises(journal.JournalError):
+            journal.rollback(j1)          # j2 is the innermost
+        journal.rollback(j2)
+        self.assertEqual(journal.depth(), 1)
+        journal.rollback(j1)
+        self.assertEqual(journal.depth(), 0)
+
+    def test_nested_rollback_restores_each_level_exactly(self):
+        st = _st()
+        oracle0 = copy_state(st, keep_log=True)
+        j1 = journal.begin(st)
+        st.players[0].food += 3
+        journal.touch(st.players[0].hand_civil).append("Philosophy")
+        oracle1 = copy_state(st, keep_log=True)
+
+        j2 = journal.begin(st)
+        st.players[0].food += 100
+        journal.touch(st.players[0].hand_civil).append("Bronze")
+        journal.touch(st.players[0].techs).pop(
+            next(iter(st.players[0].techs)))
+        journal.rollback(j2)
+        # the inner journal restores to ITS begin state, not to the root's
+        statediff.assert_same(oracle1, st, what="inner rollback")
+
+        journal.rollback(j1)
+        statediff.assert_same(oracle0, st, what="outer rollback")
 
     def test_rollback_of_the_wrong_journal_is_refused(self):
         st = _st()
@@ -236,16 +266,49 @@ class Lifecycle(JournalTestCase):
         journal.rollback(j)
         self.assertFalse(hasattr(st, "_stats_cache"))
 
-    def test_copy_state_inside_a_journal_is_refused(self):
-        """Aliasing a half-mutated trial into a copy would be silent
-        corruption; it must be loud instead."""
+    def test_copy_state_inside_a_journal_is_faithful_and_not_rolled_back(self):
+        """Section 10 replaced "copying inside a journal is refused" with
+        "copying inside a journal detaches it".  Two things have to hold, and
+        the second is the one that made the old contract a `raise`: the copy
+        must see the MUTATED state, and rollback must not touch the copy."""
         st = _st()
         j = journal.begin(st)
         try:
-            with self.assertRaises(journal.JournalError):
-                copy_state(st)
+            st.players[0].food += 77
+            journal.touch(st.players[0].hand_civil).append("Philosophy")
+            snap = copy_state(st, keep_log=True)
+            self.assertEqual(snap.players[0].food, st.players[0].food)
+            self.assertIn("Philosophy", snap.players[0].hand_civil)
+            # no record was written for the copy's own object construction
+            self.assertNotIn(id(snap), [id(r[1]) for r in j if r[0]])
         finally:
             journal.rollback(j)
+        # the trial is undone; the copy taken mid-trial is untouched by that
+        self.assertEqual(snap.players[0].food, 77 + st.players[0].food)
+        self.assertIn("Philosophy", snap.players[0].hand_civil)
+        self.assertNotIn("Philosophy", st.players[0].hand_civil)
+        self.assertEqual(len(snap.__dict__), len(copy_state(st).__dict__))
+
+    def test_copy_state_restores_the_journal_even_if_the_copy_raises(self):
+        """The detach is in a `finally`.  If it were not, one failed copy
+        would leave the rest of the trial unjournalled -- i.e. it would
+        corrupt the real state, silently, which is the exact failure mode the
+        whole design exists to make impossible."""
+        from engine.bots import fastcopy
+        st = _st()
+        j = journal.begin(st)
+        real = fastcopy._copy_state
+        fastcopy._copy_state = lambda s, k: (_ for _ in ()).throw(
+            ValueError("boom"))
+        try:
+            with self.assertRaises(ValueError):
+                fastcopy.copy_state(st)
+            self.assertIs(journal._J, j)
+        finally:
+            fastcopy._copy_state = real
+            journal.rollback(j)
+        # ... and the journal really was live before and after
+        self.assertEqual(journal.depth(), 0)
 
 
 class LogSuppression(JournalTestCase):

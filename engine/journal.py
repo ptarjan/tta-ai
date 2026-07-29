@@ -36,6 +36,16 @@ a profile, that is the moment to trade this safety for records, not before.
 
 Journalling is **opt-in and off by default**: `_J is None` is the entire test,
 so `play_game`, `experiments/` and `analysis/` are unaffected.
+
+**Nesting (section 10).**  Journals nest, strictly LIFO.  `GreedyBot` and
+`WeightedBot` never needed it -- their search is one flat candidate loop -- but
+`QuiescentBot` and `PlanBot`, which are the two architectures the league
+actually trains, resolve a pending stack *inside* a trial and price each of
+those decisions with a trial of its own.  See `begin` for the invariant that
+makes the nested case correct, and `detach`/`attach` for how `copy_state` is
+still allowed to run while a journal is open (it must be: the paranoid oracle
+needs it at every level, and PlanBot's beam needs it to materialise the nodes
+that survive a prune).
 """
 from __future__ import annotations
 
@@ -44,8 +54,14 @@ import os
 from . import state as _state
 from . import statediff
 
-#: The active journal (a plain list of undo records), or None when off.
+#: The INNERMOST open journal (a plain list of undo records), or None when off.
+#: Kept as its own global rather than read off `_STACK[-1]` because `_J is
+#: None` is the test every journalled write performs.
 _J = None
+
+#: Every open journal, outermost first.  Nesting is strictly LIFO: see
+#: `begin`/`rollback`.
+_STACK = []
 
 _MISSING = object()
 
@@ -77,14 +93,41 @@ def _journalling_setattr(self, name, value):
         d = self.__dict__
         if name == "__dict__":
             # Wholesale __dict__ replacement is what the generated copiers in
-            # bots/fastcopy do.  Copying a state *while* a trial journal is
-            # open would mean the copy is journalled and the trial is aliased
-            # into it; refuse rather than corrupt.
+            # bots/fastcopy do, and they only ever do it to objects they have
+            # just allocated -- objects that did not exist when this journal
+            # opened, so journalling them would mean rollback *emptying a copy
+            # the caller is still holding*.  `copy_state` therefore detaches
+            # the journal around itself (`detach`/`attach` below) and this
+            # branch is unreachable from it.  Reaching it means something else
+            # replaced a live state object's `__dict__`, which no undo record
+            # in section 6.2's table can express.
             raise JournalError(
                 "__dict__ assigned while a journal is open -- copy_state must "
                 "not run inside a journalled apply")
         j.append((_ATTR, d, name, d[name] if name in d else _MISSING))
     object.__setattr__(self, name, value)
+
+
+# --------------------------------------------------------------------------
+# suspension -- `bots/fastcopy.copy_state` brackets itself with these.
+#
+# A copy allocates fresh objects and writes only to them; it never mutates its
+# source.  So detaching the journal for its duration cannot lose a record, and
+# it is the only way a copy can be taken while a journal is open at all --
+# which the paranoid oracle needs at every nesting level, and PlanBot needs to
+# materialise the survivors of a beam prune.
+# --------------------------------------------------------------------------
+def detach():
+    """Detach the innermost journal and return it (for `attach`)."""
+    global _J
+    j, _J = _J, None
+    return j
+
+
+def attach(j):
+    """Re-attach what `detach` returned.  Always from a `finally`."""
+    global _J
+    _J = j
 
 
 _installed = False
@@ -109,7 +152,7 @@ def uninstall():
     global _installed
     if not _installed:
         return
-    if _J is not None:
+    if _STACK:
         raise JournalError("cannot uninstall while a journal is open")
     for cls in JOURNALLED_CLASSES:
         del cls.__setattr__
@@ -163,10 +206,24 @@ class _Journal(list):
 
 
 def begin(state=None):
-    """Open a journal.  Nesting is not supported (GreedyBot never nests)."""
+    """Open a journal.  Journals nest, strictly LIFO.
+
+    Nesting is what `QuiescentBot` and `PlanBot` need and `GreedyBot` never
+    did: their searches resolve a pending stack *inside* a trial, and pricing
+    each of those decisions is itself a trial.  Correctness of the nested case
+    is one invariant -- **each journal records the pre-state of everything
+    mutated while it is the innermost open journal** -- and rolling the
+    innermost back therefore restores exactly its own `begin` state, by
+    induction on the depth.  Both mechanisms already have that property:
+    `_journalling_setattr` appends to `_J`, and `touch`'s `seen` set is
+    per-journal, so an object touched at depth 2 is snapshotted again there
+    even if depth 1 has already snapshotted it.
+
+    LIFO is enforced by `rollback`, not merely assumed: an out-of-order
+    rollback would restore container contents in the wrong order, which is
+    hazard 3 of section 6.5 and the one corruption `==` cannot see.
+    """
     global _J
-    if _J is not None:
-        raise JournalError("a journal is already open (nesting unsupported)")
     if not _installed:
         install()
     j = _Journal()
@@ -174,9 +231,11 @@ def begin(state=None):
     if PARANOID and state is not None:
         from .bots.fastcopy import copy_state
         # keep_log=True: `emit` is suppressed below, so the log must come back
-        # unchanged and the oracle has to be able to prove it.
+        # unchanged and the oracle has to be able to prove it.  `copy_state`
+        # detaches any enclosing journal itself, so this works at any depth.
         j.oracle = copy_state(state, keep_log=True)
     _state.SUPPRESS_LOG = True     # see GameState.emit
+    _STACK.append(j)
     if state is not None:
         # Start the trial with a COLD stats cache, which is exactly what the
         # copy path hands the search today (`_stats_cache` is `_`-prefixed and
@@ -200,9 +259,12 @@ def rollback(j):
     """
     global _J
     if _J is not j:
-        raise JournalError("rollback of a journal that is not the open one")
+        raise JournalError("rollback of a journal that is not the innermost "
+                           "open one (nesting must be strictly LIFO)")
+    _STACK.pop()
     _J = None                                  # restores are NOT journalled
-    _state.SUPPRESS_LOG = False
+    if not _STACK:
+        _state.SUPPRESS_LOG = False
     for rec in reversed(j):
         kind = rec[0]
         if kind == _ATTR:
@@ -230,6 +292,12 @@ def rollback(j):
         # polluted by trial computes, so drop it.  `invalidate` is 1.4% of
         # runtime; restoring it exactly is not worth the risk (6.5 hazard 4).
         st.__dict__.pop("_stats_cache", None)
+    # Re-arm the enclosing journal, if any.  After the undo replay, so that
+    # replay can never write records into it, and before the paranoid diff,
+    # which only reads, so that an oracle failure still leaves the stack in a
+    # state the enclosing `finally`s can roll back.
+    if _STACK:
+        _J = _STACK[-1]
     if j.oracle is not None:
         # include_log=True is affordable here (paranoid mode only) and is the
         # only mechanical proof that `emit` suppression really holds -- a
@@ -259,3 +327,8 @@ class scope:
 
 def active():
     return _J is not None
+
+
+def depth():
+    """How many journals are open.  0 when journalling is off."""
+    return len(_STACK)
