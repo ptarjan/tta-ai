@@ -1754,7 +1754,8 @@ So:
 1. `export TTA_JOURNAL=1` in `experiments/run_league.sh`, so the trainer takes
    the 1.44x and nothing else changes behaviour.
 2. Leave `USE_JOURNAL` defaulting off everywhere else.
-3. `bash tools/gate.sh --journal` (16 arms) before any merge that touches
+3. `bash tools/gate.sh --journal` (16 arms then; **28 as of section 10**)
+   before any merge that touches
    `engine/`, not the 6-arm default.
 4. Re-run `tools/mutation_coverage.py --bot weighted` **and** `--bot greedy`
    after any engine change that adds a container mutation. 9.14 showed the two
@@ -2082,3 +2083,459 @@ concurrently-launched measurement process imported the reverted module at
 start-up and produced numbers that were wrong by exactly one game. Both were
 caught by re-deriving on a verified-clean tree and diffing against the
 recorded run; the fix is a `try/finally` and a rule not to overlap.
+
+## 10. The undo stack reaches the bots the league actually trains
+
+Section 9 delivered 1.40–1.75x and 9.16 closed with "`QuiescentBot` itself
+still needs either a stacked journal or design B before it can leave the copy
+path. It is 0% of league seats today, so this is not urgent." **That stopped
+being true.** `experiments/run_league.sh` now trains
+
+| arm | `--candidate-bot` |
+|---|---|
+| 2p | `plan:width=2` (`engine/bots/plan.py`) |
+| 3p | `quiescent:levels=1` (`engine/bots/quiescent.py`) |
+| 4p | `quiescent:levels=1` |
+
+and **both of those bots were pinned to `copy_state`**, so section 9's win
+reached none of the CPU the box was actually spending. This section converts
+them. Everything below was measured on 2026-07-29.
+
+### 10.0 First correction: the profile that motivated this was wrong by 2x
+
+The brief that sent me here quoted a sampling profile of `plan:width=2` at 2p
+putting `copy_state` at "~50% inclusive". That profile had **16 samples**.
+Re-taken properly (`tools/profile_bot.py`, 2 ms sampling, 4266–4958 samples per
+cell, `nice -n 15`, league running):
+
+| cell | samples | cpu-s | `copy_state` INCL | `weighted.evaluate` INCL | `actions.apply` INCL |
+|---|---|---|---|---|---|
+| `plan:width=2` 2p | 4525 | 35.5 | **24.2%** | 45.8% | 15.6% |
+| `quiescent:levels=1` 2p | 4590 | 33.2 | **23.1%** | 48.8% | 15.9% |
+| `plan:width=2` 4p | 4958 | 42.4 | **28.2%** | 47.6% | 11.9% |
+| `quiescent:levels=1` 4p | 4266 | 29.6 | **24.0%** | 53.4% | 7.4% |
+
+Profiled with the league's own champion vectors, not `DEFAULT_WEIGHTS`, via a
+new `tools/profile_bot.py --weights` — `tools/arch_cost.py` records that the
+default vector systematically understates what a search bot costs.
+`tools/profile_bot.py --kind` now also accepts the league's own spec strings,
+so a profile quotes what the trainer was actually launched with.
+
+Self-time, top of each 4p cell, for the record:
+
+| `plan:width=2` 4p | SELF % | `quiescent:levels=1` 4p | SELF % |
+|---|---|---|---|
+| `_copy_PlayerState` | 15.6 | `_copy_PlayerState` | 13.2 |
+| `weighted.features` | 8.0 | `weighted.features` | 8.7 |
+| `weighted.evaluate` | 7.1 | `weighted.evaluate` | 7.7 |
+| `effects.compute` | 6.6 | `effects.compute` | 7.5 |
+| `_copy_gs_nolog` | 5.5 | `weighted.card_potential` | 5.1 |
+
+**So the ceiling for removing 100% of the copying is 1.30–1.39x, not 2x.**
+These two bots spend about half their time in `evaluate` — ~78 weights over ~57
+features plus `hand_potential` — which is the same reason 9.15 measured
+WeightedBot at 1.44x against GreedyBot's 1.75x, one step further along. Any
+claim above ~1.3x for this work was arithmetic-impossible, and it is worth
+knowing that *before* building rather than after.
+
+### 10.1 The census: what fraction of these copies is discard-shaped
+
+`tools/copy_census.py` (new) wraps `copy_state` in each bot module, counts by
+call site, and — for the beam — detects **survivors**: a copy is a survivor if
+it is later passed to `copy_state` again as the source, i.e. it survived the
+prune and got expanded at the next ply. Every copy is kept alive for the
+duration of one root decision so `id()` cannot be recycled underneath the
+measurement, and survivors are counted once per surviving *state*, not once per
+child it spawns. (The first version of the tool counted the latter and reported
+83% survival — the same number read backwards. Worth recording because it is a
+plausible-looking answer that would have killed the design.)
+
+| cell | copies | by site | discard-shaped |
+|---|---|---|---|
+| `quiescent:levels=1` 2p, 20 games | 49255 | `pick:289` 93.4%, `_pick:174` 6.3%, `war_value:217` 0.3% | **100.0%** |
+| `quiescent:levels=1` 4p, 4 games | 48970 | `_pick:174` 50.3%, `pick:289` 49.2%, `war_value:217` 0.5% | **100.0%** |
+| `plan:width=2` 2p, 3 games | 52438 | `_beam:223` 91.1%, `war_value` 4.7%, `_one_ply:195` 3.1%, `pick:180` 1.2% | **90.3%** |
+| `plan:width=2` 4p, 1 game | 53676 | `_beam:223` 80.3%, `_one_ply:195` 9.8%, `war_value` 9.1%, `pick:180` 0.8% | **92.0%** |
+
+Inside `_beam` alone: **10.6% of copies survive the prune at 2p, 10.0% at 4p.**
+The other ~90% are made, scored and thrown away.
+
+Two things fall out that the design has to respect:
+
+1. **QuiescentBot needs nothing but nesting.** 100.0% of its copies are
+   copy-apply-score-discard and its call graph is a strict stack: `pick` →
+   `_resolve` → `_pick` → `war_value` is depth 3.
+2. **`_pick`'s share of QuiescentBot's copies is 6% at 2p and 50% at 4p.** A
+   coverage claim made at one player count is not a claim at another; the
+   fingerprint cases below cover all three for that reason.
+
+### 10.2 The gate could not see either bot — four new arms, derived two-sided
+
+9.14's lesson ("no digest in this project can catch a change to WeightedBot")
+recurs verbatim one league re-target later: none of the four existing arms
+plays PlanBot or QuiescentBot, so **no digest could catch a change to either**,
+and converting them behind the greedy/weighted gate would have been a green
+gate proving nothing about the lines that changed.
+
+`engine/perf_check.py` grows a `plan` bot kind (width 2, as the league runs it —
+and the interesting case for the prune: at width 8 nearly every node survives,
+at width 2 nearly none does) plus `plan_cases()` / `quiescent_cases()` behind
+`--plan` / `--quiescent`. Sized by cost rather than by symmetry with the 33/102
+greedy split, because a 2p PlanBot game is ~4 cpu-s and a 4p one ~16 against
+~0.15 for a greedy game: plan narrow 3 games / wide 6, quiescent narrow 9 /
+wide 24.
+
+Derived on master `419012e` per 9.0's rule — from scratch on the working
+worktree at the pre-conversion commit, and independently in a second detached
+checkout of the same commit, requiring agreement:
+
+```
+plan narrow      ad64a55b57cae4c73d6d144ea8280dc8816599d72583f81835d98784aa7ccd7d
+plan wide        441cd256ec5c989ec8ba2d19cc1cf1e3b7d6f7e7d8b1742427513575c30a8501
+quiescent narrow 0e90a7e631c3d25f35cf8a6945c497792172a47bd3ade33d4eaee4eaa94bbecd
+quiescent wide   41f078e5a6c2cf5d7b9a0c79cf13f659cb2d5bee3b4397bc37e2d6fd86ab61bb
+```
+
+### 10.3 The journal change: a strictly-LIFO stack, and a copy that detaches
+
+Two edits to `engine/journal.py`, one to `engine/bots/fastcopy.py`.
+
+**Nesting.** `begin` pushes onto `_STACK`; `rollback` refuses anything but the
+innermost journal. The invariant that makes the nested case correct is one
+line: *each journal records the pre-state of everything mutated while IT is
+innermost*, so rolling it back restores exactly its own `begin` state, by
+induction on depth. Both mechanisms already had that property and neither
+needed changing — the `__setattr__` hook appends to `_J`, and `touch`'s `seen`
+set is per-journal, so an object touched at depth 2 is snapshotted again there
+even though depth 1 already snapshotted it. `SUPPRESS_LOG` is now lifted only
+when the stack empties.
+
+LIFO is *enforced*, not assumed. An out-of-order rollback restores container
+contents in the wrong order, which is hazard 3 of 6.5 and the one corruption
+`==` cannot see (9.1: `statediff` compares dict key order deliberately).
+
+**`copy_state` inside an open journal.** This used to raise, and that raise is
+precisely what pinned both bots to the copy path — 9.16 called it "the right
+shape: the failure is loud or it does not exist". It is now a `detach`/`attach`
+bracket instead, on one argument: **a copy allocates fresh objects and writes
+only to them, and it never mutates its source.** So detaching cannot lose a
+record. Journalling those writes, on the other hand, would have rollback empty
+a copy the caller is still holding — that is the corruption the raise was
+protecting against, and the reason the fix is "detach" rather than "ignore
+`__dict__` writes". The `__dict__` branch of `_journalling_setattr` still
+raises; it is now simply unreachable from `copy_state`. The detach is in a
+`finally`, with a test that injects a raising copier — without it, one failed
+copy would leave the rest of a trial unjournalled, which is the silent-real-
+state-corruption failure mode the whole design exists to prevent.
+
+The paranoid oracle needs this at every level (it copies the state at each
+`begin`), and PlanBot needs it to materialise survivors.
+
+**9.16's standing constraint is unchanged and now has a second name in it.**
+`_STACK` is a module global exactly as `_J` is, so the harness must stay
+process-parallel (`multiprocessing`, as `experiments/arena.py` is) — a
+thread-parallel harness would corrupt states across threads silently. Anyone
+moving the league to threads must put **both** `_J` and `_STACK` in a
+`threading.local` first.
+
+### 10.4 QuiescentBot — a pure nest; three sites, nothing else to arrange
+
+`pick`, `_pick` and `war_value` each grow a `_journalled` twin behind
+`USE_JOURNAL`, following `WeightedBot._pick_journalled` line for line. The copy
+paths stay exactly as they were, because they are the paranoid oracle.
+
+Two things are deliberately *outside* the journal and it matters:
+
+* `box` (the node budget) and `self.stats` are plain Python objects owned by
+  the bot and not reachable from the state, so nothing journals them and budget
+  consumption is bit-identical to the copy path. A different budget is a
+  different search.
+* `root_ctx` is computed once by `pick` on the unmutated state. Under the
+  journal the root state *is* the object the candidates mutate, so capturing it
+  before the loop is load-bearing rather than incidental — the same point 9.14
+  records for WeightedBot's `ctx`.
+
+`war_value`'s docstring promises "``state`` is never mutated". On the copy path
+that is free; on the journal path it is the rollback, so it gets its own test.
+
+### 10.5 PlanBot's beam — measure first, then re-apply the survivors
+
+The beam is the one place in this repo where copy-apply-score-discard does not
+hold: it holds `width` states alive at once. That is exactly what 6.3 meant by
+"design B's only advantage is holding many trial states alive simultaneously …
+today no bot needs that". A bot needs it now — but the census says it needs it
+for **10% of the nodes**, not for all of them.
+
+`_beam_journalled` therefore
+
+1. expands every child under a journal, with no copy at all;
+2. keeps only its score and the `(parent, move)` pair that produced it;
+3. sorts and prunes exactly as before;
+4. **re-applies** the ~`width` winners onto fresh copies of their parents.
+
+That trades `width` extra `apply`+`_quiesce` per ply for `nodes − width`
+copies, which the census prices at roughly 9:1 in our favour.
+
+Re-applying is exact, not approximate, and rests on a property that was already
+there for a different reason: `_rng()` hands out a Mersenne Twister that is
+always at the *start* of the `Random(0)` stream (it re-seeds lazily, iff the
+previous consumer drew — 8.2). So a child is a deterministic function of
+`(parent, move)` and applying it twice cannot diverge, however many rng calls
+happen in between. `self.nodes`, `self.searches`, `self.wars_priced` and the
+`MAX_NODES` budget count expansions only; the re-apply is deliberately not
+counted, and there is a test that both paths report the same `nodes`.
+
+`_one_ply` converts too (it is called from `_quiesce`, i.e. from inside a beam
+node's journal — nested by construction), and `_score`'s war lookahead inherits
+`quiescent.war_value`'s conversion.
+
+**Rejected: materialise-on-survive.** Now that `copy_state` detaches, a
+survivor could be copied from *inside* its journal just before the rollback,
+saving the re-apply. Not taken: the prune is global over the children of every
+frontier node, so you do not know which children survive until all of them are
+scored — meaning either you copy every child (the status quo) or you keep every
+child's journal open until the prune, which is not LIFO. A two-pass version of
+it is exactly the re-apply above with a sharper edge on it.
+
+**Not revisited: design B (copy-on-write).** 6.6's trigger for revisiting it was
+"a bot needs simultaneous live trial states", and PlanBot does — but only
+`width` of them, and a beam that holds `width` real copies plus a journal for
+the expansion has the same asymptotics as COW with none of COW's aliasing risk
+(6.3: a missed `mutable()` corrupts the *real* game, where a missed `touch()`
+only corrupts a trial and is caught by the oracle). **6.3's "no bot needs that"
+is now stale in its premise and still right in its conclusion.**
+
+### 10.6 The gate — 28 arms, and what the paranoid ones actually assert
+
+`tools/gate.sh` grows four plain arms and eight journal arms. The journal ones
+are the claim: `TTA_JOURNAL=1 JOURNAL_PARANOID=1` with PlanBot searching means
+that on **every node of every beam** the state was copied, the candidate applied
+by undo, rolled back, and the two structurally diffed *including dict key
+order*, at every nesting level. `plan wide JOURNAL+PARANOID` is by a wide
+margin the slowest arm in the file.
+
+`bash tools/gate.sh --journal` on the final tree, one uninterrupted run:
+
+```
+unittest                          OK   Ran 546 tests
+unittest JOURNAL_PARANOID         OK   Ran 546 tests
+narrow fingerprint                OK   0a6ed6ad9f22e914
+narrow FASTCOPY_PARANOID          OK   0a6ed6ad9f22e914
+weighted narrow                   OK   302c546c8a0eb181
+quiescent narrow                  OK   0e90a7e631c3d25f
+plan narrow                       OK   ad64a55b57cae4c7
+wide fingerprint                  OK   4a8c6ca6f31afc9c
+wide FASTCOPY_PARANOID            OK   4a8c6ca6f31afc9c
+weighted wide                     OK   4e40a58c196f5b3a
+quiescent wide                    OK   41f078e5a6c2cf5d
+plan wide                         OK   441cd256ec5c989e
+narrow JOURNAL                    OK   0a6ed6ad9f22e914
+narrow JOURNAL+PARANOID           OK   0a6ed6ad9f22e914
+wide JOURNAL                      OK   4a8c6ca6f31afc9c
+wide JOURNAL+PARANOID             OK   4a8c6ca6f31afc9c
+weighted narrow JOURNAL           OK   302c546c8a0eb181
+weighted narrow JOURNAL+PARANOID  OK   302c546c8a0eb181
+weighted wide JOURNAL             OK   4e40a58c196f5b3a
+weighted wide JOURNAL+PARANOID    OK   4e40a58c196f5b3a
+quiescent narrow JOURNAL          OK   0e90a7e631c3d25f
+quiescent narrow JOURNAL+PARANOID OK   0e90a7e631c3d25f
+plan narrow JOURNAL               OK   ad64a55b57cae4c7
+plan narrow JOURNAL+PARANOID      OK   ad64a55b57cae4c7
+quiescent wide JOURNAL            OK   41f078e5a6c2cf5d
+quiescent wide JOURNAL+PARANOID   OK   41f078e5a6c2cf5d
+plan wide JOURNAL                 OK   441cd256ec5c989e
+plan wide JOURNAL+PARANOID        OK   441cd256ec5c989e
+GATE PASS
+```
+
+The four pre-existing digests (`0a6ed6ad` / `4a8c6ca6` / `302c546c` / `4e40a58c`)
+are unchanged from 9.20 throughout, which is the check that nothing in
+section 10 leaked into GreedyBot's or WeightedBot's paths — the journal is
+shared machinery and the `copy_state` detach in particular is on every bot's
+copy path, so those four arms are not a formality here.
+
+`tools/mutation_coverage.py` re-run for **all four** searching bots (9.14: the
+bots do not cover the same sites, so one bot is not an audit), 2 games per
+player count plus the traced test suite (1 game for plan, which is 40x the cost
+per game):
+
+| searching bot | converted sites never executed | unconverted (local) |
+|---|---|---|
+| greedy | **0 / 62** | 11 / 106 |
+| weighted | **0 / 62** | 11 / 106 |
+| quiescent | **0 / 62** | 11 / 106 |
+| plan | **0 / 62** | 11 / 106 |
+
+Negative controls, because 9.11's lesson is that a first-try pass is exactly
+when to distrust the instrument. Both are permanent tests, not one-off probes:
+
+* `journal.touch` replaced by the identity → the QuiescentBot search comes back
+  with a corrupted state, and the check fires. It fires *differently* depending
+  on the environment — with `JOURNAL_PARANOID=1` the oracle inside `rollback`
+  raises first and names the path, without it the corruption survives to the
+  structural diff — so the test accepts either signal. Accepting only one would
+  have made the control silently vacuous under the gate's paranoid unittest
+  arm, which is the "test that asserted nothing" of 9.11 in a new costume.
+* `PlanBot._replay` made to rebuild the *parent* instead of the child → the two
+  beams' score dicts diverge. That is the test that the re-apply is doing real
+  work; without it, `test_beam_returns_identical_scores` could pass on a beam
+  that never re-applied anything.
+
+### 10.7 The digests only play `DEFAULT_WEIGHTS` — checked against the real champions too
+
+9.20's lesson is that the fingerprint covers *the code paths its bots execute*,
+and `perf_check`'s bots play `DEFAULT_WEIGHTS`. A trained champion attacks far
+more (docs/DEEPER_SEARCH.md 3.1), so it reaches wars, pacts and auctions at
+quite different rates — exactly the move classes whose journalling is hardest.
+So the same games were played under `experiments/league_state/champion_{2,3,4}p
+.json`, journal off and on, hashing the **full game log, the final scores and
+the move count**:
+
+```
+plan       2p champion_2p   OFF ac765ada6c653dc4   ON ac765ada6c653dc4   SAME
+quiescent  3p champion_3p   OFF 4a74693b31acad5e   ON 4a74693b31acad5e   SAME
+quiescent  4p champion_4p   OFF 23147cb2c6e148e6   ON 23147cb2c6e148e6   SAME
+```
+
+Those are the three cells `run_league.sh` is running right now, at the exact
+specs it is running them with.
+
+### 10.8 MEASURED throughput — 1.25x to 1.56x, and it grows with state size
+
+Method: one subprocess per arm (`TTA_JOURNAL` is read at import), the two arms
+**interleaved within each round**, three rounds, `nice -n 15`,
+`time.process_time`. Both arms play the **same seeds** — and, because the
+change is byte-identical, literally the same games — so cpu-seconds per game is
+like-for-like and none of the game-length noise 9.12 warned about can leak in.
+
+**All of these are post-renice.** The box's league arms were moved to `nice 19`
+part-way through this session; every number in this table was taken after that,
+and no arm of any pair straddles it. Load average during the run was 12–15 on 6
+cores, so absolute cpu-s/game are not comparable with any earlier section.
+
+| cell | journal OFF (cpu-s/game) | journal ON | speed-up | per-round range |
+|---|---|---|---|---|
+| `quiescent` 2p | 0.425 ± 0.004 | 0.322 ± 0.011 | **1.32x** | 1.29–1.37 |
+| `quiescent` 3p | 0.919 ± 0.018 | 0.670 ± 0.012 | **1.37x** | 1.35–1.40 |
+| `quiescent` 4p | 2.130 ± 0.131 | 1.461 ± 0.086 | **1.46x** | 1.44–1.47 |
+| `plan:width=2` 2p | 3.729 ± 0.145 | 2.983 ± 0.132 | **1.25x** | 1.19–1.35 |
+| `plan:width=2` 2p, re-run | 4.203 ± 0.062 | 3.319 ± 0.236 | **1.27x** | 1.20–1.41 |
+| `plan:width=2` 3p | 8.450 ± 0.298 | 6.054 ± 0.443 | **1.40x** | 1.34–1.47 |
+| `plan:width=2` 4p | 15.895 ± 0.438 | 10.179 ± 0.402 | **1.56x** | 1.51–1.60 |
+
+(± is the sample standard deviation over the rounds. 12 games/round at
+quiescent 2p down to 1 game/round at plan 4p, warm-up game excluded. The
+`plan` 2p re-run is 5 games/round over 4 rounds rather than 3 over 3.)
+
+**The honest reading, cell by cell.** Five of the six cells have a per-round
+range narrower than the effect and can be quoted as measured. **`plan` 2p
+cannot**, and it is annoyingly the league's actual 2p cell, so it was measured
+twice — seven post-renice rounds in total, whose ratios are
+
+```
+1.354  1.187  1.217        (3 games/round)
+1.227  1.245  1.204  1.409 (5 games/round)
+```
+
+Five of the seven sit in 1.20–1.25, with one low and one high outlier, and the
+two runs' means agree (1.250x and 1.266x) despite their *absolute* cpu-s/game
+differing by 13% between runs — which is exactly the contention drift 9.15
+describes, and exactly why the arms are interleaved. **The honest claim for
+this cell is ~1.25x, not a third digit**, and the second run did not tighten the
+range enough to say more. Per 9.15's rule ("the noise is contention, not
+sampling") more rounds will not fix it; a quiet box would.
+
+**The win exceeds what the profile predicts, and the excess grows with player
+count.** 10.0 measured the copy at 24–28% inclusive, which caps the achievable
+speed-up at 1.30–1.39x even if the journal were free — and it is not free. Yet
+4p measures 1.46x and 1.56x. Two candidate explanations were checked:
+
+* *`DEFAULT_WEIGHTS` vs champion weights.* Real, and part of it: re-profiling
+  `quiescent` 4p with `DEFAULT_WEIGHTS` (what the A/B plays) puts `copy_state`
+  at **27.7%** rather than the 24.0% the champion-vector profile showed. That
+  moves the ceiling to 1.38x. It does not close the gap.
+* *Garbage collection.* Ruled out. Running the copy-path arm with `gc.disable()`
+  changes `quiescent` 4p from 2.379 to 2.427 cpu-s/game — i.e. nothing, within
+  noise. The ~2 million container allocations a 4p game's copies make are
+  acyclic and die by refcount, so the cyclic collector was never the cost.
+
+The remaining candidate, offered as a **hypothesis and not as a measurement**,
+is cache footprint: a 4p `copy_state` moves ~40 KB, and a game makes ~50000 of
+them, so the copy evicts the working set that `evaluate` is about to read. That
+cost is real CPU time but a sampling profiler charges it to whichever frame
+stalls, so it is invisible in `copy_state`'s inclusive share. The supporting
+pattern is that the *excess over the Amdahl prediction grows monotonically with
+player count* — 2p 1.25–1.32x against a ~1.35x ceiling (at or below), 4p
+1.46–1.56x against a ~1.38x ceiling (well above) — which is what a
+state-size-driven effect looks like and is not what a fixed overhead looks
+like. Anyone who wants to settle it should count L2 misses, not re-run the A/B.
+
+**What this is worth to the league.** The 3p and 4p arms train
+`quiescent:levels=1` (1.37x, 1.46x) and the 2p arm trains `plan:width=2`
+(~1.25x). `experiments/run_league.sh` already exports `TTA_JOURNAL=1` for
+section 9's sake, so **all three arms pick this up on their next hourly
+restart with no further action** — and, per 10.7, with byte-identical play.
+
+
+
+### 10.9 Two things that did NOT work, and one profiler line that is a lie
+
+**The census tool's first survivor definition was wrong and looked right.**
+Counting "copies whose *source* was a survivor" instead of "distinct states
+that survived" reported 83.4% survival at `plan:width=2` 2p — i.e. it said the
+beam's copies were nearly all load-bearing and the whole idea was dead. The
+number is not absurd on its face (a beam does reuse its frontier), which is
+what makes it dangerous. The tell was arithmetic: at width 2 with ~10 legal
+moves, 79 copies per root decision cannot contain 66 surviving states. Anyone
+writing a survivorship counter should sanity-check it against `width × plies`
+before believing it.
+
+**`bots/quiescent.py:_fresh` is 5.0% of the sampling profile and 0.01% of the
+runtime.** It appears at 4.99% SELF at 4p and 5.03% at 2p, which reads like a
+free win sitting in a six-line function. Bounded directly instead, per 8.3:
+over two 4p games, `_fresh` is called 17546 times and actually re-seeds **65 of
+them (0.4%)**, exactly matching 8.2's measurement of how often a trial `apply`
+draws; `timeit` puts `setstate` at 10.26 us, so the whole re-seeding cost is
+0.001 cpu-s of 4.83 — **0.01%**. Even charging every call a full microsecond
+only reaches 0.36%. So the sampler over-attributes this frame by more than two
+orders of magnitude.
+
+That is the **fourth** time the 2 ms sampler has inflated a small,
+frequently-entered frame on this project (5a→8.1 for `random.__init__`, 9.15
+for the same item on WeightedBot, and now this). 8.3's rule should be read as
+binding, not advisory: **a sampling-profile line under ~10% on this box is not
+evidence.** Bound it with cost × count or with a probe that deletes the work,
+before writing any code.
+
+**The 16-sample profile in 10.0 is the third failure of the same kind**, one
+level up: it is not that the sampler was biased, it is that 16 samples has no
+resolution at all. `tools/profile_bot.py` prints its sample count in the header
+for exactly this reason; if the number is not in the hundreds, the table under
+it is decoration.
+
+### 10.10 Status and what is left
+
+- [x] `journal.begin` nests, strictly LIFO; `copy_state` detaches instead of
+      raising (10.3).
+- [x] `QuiescentBot` converted — all three copy sites (10.4).
+- [x] `PlanBot` converted — `_beam` by re-apply-for-survivors, plus `_one_ply`
+      and the war lookahead (10.5).
+- [x] `plan` / `quiescent` fingerprint arms, derived two-sided, in
+      `tools/gate.sh` (10.2). **This is the durable part**: those two bots now
+      have a determinism gate at all, which they did not before, whatever
+      happens to the undo stack.
+- [x] Coverage re-audited for all four searching bots (10.6).
+- [ ] `engine/bots/neural_plan.py`'s `NeuralPlanBot` has its own `_beam` and its
+      own `war_value` and reads no `USE_JOURNAL`, so it is untouched and still
+      copies. It is the same shape as `PlanBot._beam` and would take the same
+      treatment; nobody is training it on this box today, so it was left alone
+      rather than converted blind.
+- [ ] `evaluate` is now unambiguously the largest line item for both bots
+      (45.8–53.4% inclusive), and `effects.compute` inside it is 17–26%. That
+      is where the next 1.2x lives, and it is a different kind of work from
+      everything in sections 4–10: not "copy less" but "price fewer features
+      per candidate".
+- [ ] Re-run `tools/mutation_coverage.py` with all four bots after any engine
+      change that adds a container mutation. The `--bot plan` arm is the
+      expensive one; 1 game per player count is enough.
+
