@@ -276,8 +276,8 @@ def verdict_of(h2h):
 
 def format_history(hist, players):
     lines = [f"    {'at':<17}{'champ':>7}{'base':>7}{'acc':>5}"
-             f"{'ship win%':>11}{'+/-':>7}{'margin':>9}{'own cult':>10}"
-             f"{'vs book':>9}  verdict"]
+             f"{'ship win%':>11}{'+/-':>7}{'lo':>7}{'margin':>9}"
+             f"{'own cult':>10}{'vs book':>9}  verdict"]
     for r in hist:
         h = r.get("h2h") or {}
         a = r.get("anchor") or {}
@@ -286,6 +286,7 @@ def format_history(hist, players):
             f"{r.get('baseline_gen', -1):>7}{r.get('accepts_between', 0):>5}"
             f"{(h.get('win_rate') or 0):>10.1%}"
             f"{(h.get('ci') or 0):>7.1%}"
+            f"{(h.get('win_rate') or 0) - (h.get('ci') or 0):>7.1%}"
             f"{(h.get('margin') or 0):>+9.1f}"
             f"{(h.get('culture') or 0):>10.1f}"
             f"{(a.get('culture') or 0):>9.1f}"
@@ -331,9 +332,16 @@ def log_block(fh, players, rec, hist, policy, run=3):
     w(f"  proxy claim   : {rec['accepts_between']} accepted champions, "
       f"summed accepted edge {rec['proxy_edge_sum']:+.4f} "
       f"(training metric, {rec['objective_note']})")
+    # The lower bound is printed explicitly because the verdict is a
+    # threshold on it, and at these sample sizes a `confirms` can sit a
+    # fraction of a point above the null.  A verdict that cannot be seen to be
+    # marginal is a verdict that gets over-quoted.  `ci` is arena's 95%
+    # two-sided half-width (z=1.96), so "lower bound above the null" is a
+    # one-sided 97.5% claim.
     w(f"  ship policy   : win share {h.get('win_rate', 0):.1%} "
-      f"+/- {h.get('ci', 0):.1%} vs null {h.get('null', 0):.1%} "
-      f"over {h.get('games', 0)} games "
+      f"+/- {h.get('ci', 0):.1%} (95% CI, lower bound "
+      f"{h.get('win_rate', 0) - h.get('ci', 0):.1%}) vs null "
+      f"{h.get('null', 0):.1%} over {h.get('games', 0)} games "
       f"({h.get('deals', 0)} deals, {h.get('secs', 0):.0f}s)")
     w(f"                  culture {h.get('culture', 0):.1f} vs "
       f"{h.get('opp_culture', 0):.1f}, margin "

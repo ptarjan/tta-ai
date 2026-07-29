@@ -67,23 +67,40 @@ whether the ship policy agrees.
 
 ## 3. How to read the output
 
-`experiments/logs/proxy_check.log`, one block per reading:
+`experiments/logs/proxy_check.log`, one block per reading. This is the real
+first one, taken on the 2p arm at 08:07 on 2026-07-29:
 
 ```
 ==============================================================================
-[2p] PROXY CHECK 2026-07-29 08:12:41  policy=plan:width=8  gen 657 -> 725
+[2p] PROXY CHECK 2026-07-29 08:07:00  policy=plan:width=8  gen 657 -> 725
      (5 accepts, 68 generations)
-  proxy claim   : 5 accepted champions, summed accepted edge +0.1837
-  ship policy   : win share 55.0% +/- 15.6% vs null 50.0% over 40 games
-  anchor vs book: own culture 141.2 (book 39.8), win share 95.0% +/- 9.6%
-  VERDICT       : flat
+  proxy claim   : 5 accepted champions, summed accepted edge +0.1687
+  ship policy   : win share 65.0% +/- 15.0% (95% CI, lower bound 50.0%)
+                  vs null 50.0% over 40 games (20 deals, 1529s)
+                  culture 103.3 vs 91.6, margin +11.7
+  anchor vs book: own culture 132.8 (book 43.2), win share 90.0% +/- 13.5%
+  VERDICT       : confirms
   history (every reading for this arm):
-    at                champ   base  acc  ship win%    +/-   margin  own cult  vs book  verdict
-    ...
-  absolute trend: own culture vs book under plan:width=8 138.9 -> 141.2 (+2.3)
-                  over 17 accepted champions.
+    at                champ   base  acc  ship win%    +/-     lo   margin  own cult  vs book  verdict
+    2026-07-29 08:07    725    657    5     65.0%  15.0%  50.0%    +11.7     103.3    132.8  confirms
 ==============================================================================
 ```
+
+Read that reading honestly, because it is a good example of what these numbers
+can and cannot say. The lower bound is 50.03% — it clears the null by three
+hundredths of a point. It is a `confirms` by the rule and it is one game away
+from `flat`, which is exactly why the lower bound is printed next to the
+verdict. What it does establish: the last five accepted champions did **not**
+produce a `docs/TRANSFER_TEST.md`-style inversion. What it does not establish
+is a magnitude.
+
+The `vs book` column is the one to watch across readings. 132.8 own culture
+under `plan:width=8` sits close to `docs/PLAN_WAR_LOOKAHEAD.md` §4a's **127.8**
+for the frozen quiescent-trained vector and far below its **213.4** for the
+1-ply lineage vector — i.e. after 725 generations this arm is still producing a
+suppression engine (it holds `book` to 43.2), not a production one. That is the
+kind of statement the guardrail exists to make and nothing else in the loop
+could make.
 
 The **verdict** comes from the head-to-head confidence interval:
 
