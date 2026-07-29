@@ -52,6 +52,13 @@ def _bots(kind, n, seed):
         elif kind == "quiescent":
             from .bots.quiescent import QuiescentBot
             out.append(QuiescentBot(rng=rng))
+        elif kind == "plan":
+            from .bots.plan import PlanBot
+            # width=2 is what `experiments/run_league.sh` trains
+            # (`--candidate-bot plan:width=2`), and a narrow beam is also the
+            # interesting case for the prune: at width 8 almost every node
+            # survives, at width 2 almost none does.
+            out.append(PlanBot(rng=rng, width=PLAN_WIDTH))
         else:
             out.append(GreedyBot(rng))
     return out
@@ -68,6 +75,35 @@ def _bots(kind, n, seed):
 #: the same amount of play whichever bot is searching.
 def weighted_cases(nseeds=11):
     return [(n, "weighted", s) for n in (2, 3, 4) for s in range(nseeds)]
+
+
+#: beam width for the `plan` fingerprint cases (see `_bots`)
+PLAN_WIDTH = 2
+
+
+# The same argument as `weighted_cases`, one bot further on.  `experiments/
+# run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
+# `--candidate-bot quiescent:levels=1` at 3p/4p, and NEITHER of those bots is
+# played by any of the four existing arms -- so before this, no digest in the
+# project could catch a change to `PlanBot` or `QuiescentBot`.  That is the
+# 9.14 hole exactly, one league re-target later.
+#
+# Sized by cost, not by symmetry with the 33/102 greedy split: a 2p PlanBot
+# game is ~4 cpu-s and a 4p one ~16, against ~0.15 for a greedy game, so these
+# sets are games where the others are seeds.  Both sets cover every player
+# count in the wide form, because the copy sites they exercise
+# (`_beam`/`_one_ply`/`war_value`, `pick`/`_pick`/`war_value`) fire at
+# different rates per player count -- `tools/copy_census.py` measures
+# `_pick` at 6% of QuiescentBot's copies at 2p and 50% at 4p.
+def plan_cases(wide=False):
+    if wide:
+        return [(n, "plan", s) for n in (2, 3, 4) for s in range(2)]
+    return [(2, "plan", 0), (2, "plan", 1), (3, "plan", 0)]
+
+
+def quiescent_cases(wide=False):
+    n = 8 if wide else 3
+    return [(p, "quiescent", s) for p in (2, 3, 4) for s in range(n)]
 
 
 def _play(n, kind, seed):
@@ -152,6 +188,10 @@ def main(argv):
     cases = wide_cases() if wide else CASES
     if "--weighted" in argv:
         cases = weighted_cases(_opt(argv, "--seeds", 34 if wide else 11))
+    if "--plan" in argv:
+        cases = plan_cases(wide)
+    if "--quiescent" in argv:
+        cases = quiescent_cases(wide)
     # Positional args = everything that is neither a `--flag` nor the VALUE of
     # one.  The old one-liner (`[a for a in argv[2:] if not a.startswith("--")]`)
     # swallowed flag values, so `bench --kinds weighted` crashed with

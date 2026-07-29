@@ -31,8 +31,43 @@ from engine.bots import GreedyBot, RandomBot  # noqa: E402
 
 
 def _bots(kind, n, seed):
-    cls = RandomBot if kind == "random" else GreedyBot
-    return [cls(random.Random(seed * 131 + i)) for i in range(n)]
+    """Build `n` seats of `kind`.
+
+    ``random`` / ``greedy`` are the historical built-ins.  Anything else is
+    handed to ``experiments.arena.load_spec`` / ``make_bot``, so the exact
+    strings the league is launched with -- ``plan:width=2``,
+    ``quiescent:levels=1`` -- can be profiled without a translation step.
+    """
+    if kind in ("random", "greedy"):
+        cls = RandomBot if kind == "random" else GreedyBot
+        return [cls(random.Random(seed * 131 + i)) for i in range(n)]
+    from experiments import arena
+    spec = _spec(kind)
+    return [arena.make_bot(spec, seed * 131 + i) for i in range(n)]
+
+
+#: weight vector for a `plan:`/`quiescent:` spec that names no file; set from
+#: --weights.  None means DEFAULT_WEIGHTS.
+WEIGHTS = None
+
+
+def _spec(kind):
+    """League-style spec -> arena spec.
+
+    `--candidate-bot plan:width=2` (hillclimb_league.parse_candidate_bot) names
+    an architecture and its options only; the weights come from the champion.
+    `arena.load_spec` instead wants `plan:FILE,width=2`.  Accept the league
+    form so a profile can quote the exact string the trainer was launched with.
+    """
+    head, _, rest = kind.partition(":")
+    if head in ("plan", "quiescent") and "=" in rest.split(",")[0]:
+        opts = {}
+        for part in filter(None, rest.split(",")):
+            k, _, v = part.partition("=")
+            opts[k.strip()] = int(v)
+        return (head, WEIGHTS if WEIGHTS is not None else "default", opts)
+    from experiments import arena
+    return arena.load_spec(kind)
 
 
 class Sampler(threading.Thread):
@@ -118,7 +153,13 @@ def main():
     ap.add_argument("--interval", type=float, default=0.002)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--mode", default="sample", choices=("sample", "cprofile"))
+    ap.add_argument("--weights", default=None,
+                    help="weight JSON for a league-style plan:/quiescent: spec")
     a = ap.parse_args()
+    if a.weights:
+        from engine.bots.weighted import load_weights
+        global WEIGHTS
+        WEIGHTS = load_weights(a.weights)
     if a.mode == "sample":
         run_sample(a.kind, a.players, a.games, a.interval, a.top)
     else:

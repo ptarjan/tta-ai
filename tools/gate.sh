@@ -1,10 +1,12 @@
 #!/bin/bash
 # The verification gate for the journal/undo work (docs/PYPY.md section 6).
 #
-#   254 unit tests green
+#   546 unit tests green
 #   narrow fingerprint == 0a6ed6ad...   (33 games)
 #   wide   fingerprint == 4a8c6ca6...   (102 games)
 #   all of the above unchanged under FASTCOPY_PARANOID=1
+#   plus the weighted / quiescent / plan arms -- one per bot that searches,
+#   because a fingerprint can only catch a change to a bot it plays
 #
 # tools/fingerprint.json / tools/fingerprint_wide.json are now IN SYNC with
 # the values below (re-saved via `perf_check save`) -- `python3 -m
@@ -105,6 +107,27 @@ WIDE=4a8c6ca6
 WNARROW=302c546c
 WWIDE=4e40a58c
 
+# ...and the same argument one bot further on (docs/PYPY.md section 10).
+# `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
+# `--candidate-bot quiescent:levels=1` at 3p/4p.  NEITHER of those bots was
+# played by any arm above, so before these four, no digest in this project
+# could catch a change to PlanBot or QuiescentBot -- the 9.14 hole exactly,
+# one league re-target later.  Section 10 converts both to the undo stack, so
+# it could not be merged without them.
+#
+# Sized by cost rather than by symmetry with the 33/102 greedy split: a 2p
+# PlanBot game is ~4 cpu-s and a 4p one ~16, against ~0.15 for a greedy game.
+# plan narrow is 3 games, plan wide 6; quiescent narrow 9, quiescent wide 24.
+#
+# Derived at master 419012e on the pre-conversion tree (the tools/perf_check
+# commit, engine behaviour untouched) and independently in a second detached
+# checkout of the same commit, per 9.0's rule -- the two agreeing is the
+# proof, not either number alone.
+PNARROW=ad64a55b
+PWIDE=441cd256
+QNARROW=0e90a7e6
+QWIDE=41f078e5
+
 fail=0
 note() { printf '%-32s %s\n' "$1" "$2"; }
 
@@ -150,10 +173,14 @@ run_tests "unittest JOURNAL_PARANOID" "JOURNAL_PARANOID=1"
 check_fp "narrow fingerprint"        "$NARROW" ""
 check_fp "narrow FASTCOPY_PARANOID"  "$NARROW" "FASTCOPY_PARANOID=1"
 check_fp "weighted narrow"           "$WNARROW" "" --weighted
+check_fp "quiescent narrow"          "$QNARROW" "" --quiescent
+check_fp "plan narrow"               "$PNARROW" "" --plan
 if [ "${1:-}" != "--fast" ]; then
   check_fp "wide fingerprint"        "$WIDE" "" --wide
   check_fp "wide FASTCOPY_PARANOID"  "$WIDE" "FASTCOPY_PARANOID=1" --wide
   check_fp "weighted wide"           "$WWIDE" "" --weighted --wide
+  check_fp "quiescent wide"          "$QWIDE" "" --quiescent --wide
+  check_fp "plan wide"               "$PWIDE" "" --plan --wide
 fi
 
 # The journal arms.  These only mean anything once step 5 has converted every
@@ -177,6 +204,23 @@ if [ "${1:-}" = "--journal" ]; then
   check_fp "weighted narrow JOURNAL+PARANOID" "$WNARROW" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --weighted
   check_fp "weighted wide JOURNAL"            "$WWIDE" "TTA_JOURNAL=1" --weighted --wide
   check_fp "weighted wide JOURNAL+PARANOID"   "$WWIDE" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --weighted --wide
+  # Section 10's arms.  These are the ones that matter for the league today:
+  # QuiescentBot and PlanBot are what `run_league.sh` trains, and both now
+  # search by undo, NESTED (QuiescentBot reaches depth 3: pick -> _resolve/
+  # _pick -> war_value).  The PARANOID variants copy the state, apply the
+  # candidate by undo, roll back and structurally diff -- including dict key
+  # order -- at EVERY nesting level, on every node of every beam.
+  #
+  # `plan wide JOURNAL+PARANOID` is by far the slowest arm in this file
+  # (~20 min under load: 6 games x ~15k beam nodes, each copied and diffed).
+  check_fp "quiescent narrow JOURNAL"          "$QNARROW" "TTA_JOURNAL=1" --quiescent
+  check_fp "quiescent narrow JOURNAL+PARANOID" "$QNARROW" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --quiescent
+  check_fp "plan narrow JOURNAL"               "$PNARROW" "TTA_JOURNAL=1" --plan
+  check_fp "plan narrow JOURNAL+PARANOID"      "$PNARROW" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --plan
+  check_fp "quiescent wide JOURNAL"            "$QWIDE" "TTA_JOURNAL=1" --quiescent --wide
+  check_fp "quiescent wide JOURNAL+PARANOID"   "$QWIDE" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --quiescent --wide
+  check_fp "plan wide JOURNAL"                 "$PWIDE" "TTA_JOURNAL=1" --plan --wide
+  check_fp "plan wide JOURNAL+PARANOID"        "$PWIDE" "TTA_JOURNAL=1 JOURNAL_PARANOID=1" --plan --wide
 fi
 
 if [ "$fail" = 0 ]; then echo "GATE PASS"; else echo "GATE FAIL"; fi

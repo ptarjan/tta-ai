@@ -228,6 +228,14 @@ def make_bots(spec, num_players, seed=0):
             out.append(RandomBot(rng))
         elif kind == "weighted":
             out.append(WeightedBot(rng=rng))
+        elif kind == "quiescent":
+            from .quiescent import QuiescentBot
+            out.append(QuiescentBot(rng=rng))
+        elif kind == "plan":
+            # width 2, as `experiments/run_league.sh` trains it and as
+            # `engine/perf_check.py`'s plan cases play it
+            from .plan import PlanBot
+            out.append(PlanBot(rng=rng, width=2))
         else:
             out.append(GreedyBot(rng))
     return out
