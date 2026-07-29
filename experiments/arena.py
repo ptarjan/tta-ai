@@ -128,6 +128,21 @@ def load_spec(spec):
             k, _, v = kv.partition("=")
             opts[k.strip()] = v
         return ("neural", path, opts)
+    if spec.startswith("nplan:"):
+        # `nplan:CKPT.pt,width=8,det=1,war=1,nodes=1200` -- the value net as the
+        # LEAF of PlanBot's whole-turn beam (engine/bots/neural_plan.py).  So
+        # `--a nplan:c.pt --b neural:c.pt` is an exact search-only A/B on one
+        # evaluator, and `--a nplan:c.pt --b plan:champ.json` is an exact
+        # evaluator-only A/B at one search.  Torch is imported lazily in
+        # make_bot, so this branch stays torch-free on the Mac.
+        rest = spec[len("nplan:"):].split(",")
+        path, opts = rest[0], {}
+        for kv in rest[1:]:
+            if not kv:
+                continue
+            k, _, v = kv.partition("=")
+            opts[k.strip()] = v
+        return ("nplan", path, opts)
     if spec.startswith("plan:"):
         # `plan:FILE,width=8,samples=1,det=1,war=1` -- whole-turn beam search under
         # the SAME weights, so `--a plan:champ.json --b champ.json` is an
@@ -169,6 +184,23 @@ def make_bot(spec, seed):
         return NeuralBot(value, seed=seed,
                          determinize=bool(int(opts.get("det", 1))),
                          end_turn_bias=float(opts.get("etb", 0.0)))
+    if isinstance(spec, tuple) and spec and spec[0] == "nplan":
+        from engine.bots.neural_net import NeuralValue
+        from engine.bots.neural_plan import NeuralPlanBot
+        _, path, opts = spec
+        import os
+        device = opts.get("device") or os.environ.get("NEURAL_DEVICE", "cuda")
+        value = NeuralValue.from_checkpoint(path, device)
+        return NeuralPlanBot(value, seed=seed,
+                             width=(int(opts["width"]) if "width" in opts
+                                    else None),
+                             samples=(int(opts["samples"]) if "samples" in opts
+                                      else None),
+                             max_nodes=(int(opts["nodes"]) if "nodes" in opts
+                                        else None),
+                             determinize=bool(int(opts.get("det", 1))),
+                             war_lookahead=(None if "war" not in opts
+                                            else bool(int(opts["war"]))))
     if isinstance(spec, tuple) and spec and spec[0] == "plan":
         from engine.bots.plan import PlanBot
         _, inner, opts = spec

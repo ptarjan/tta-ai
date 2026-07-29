@@ -1,0 +1,290 @@
+"""NeuralPlanBot: PlanBot's whole-turn beam with the value net as the leaf.
+
+This is docs/NEURAL_EVAL.md "Stage 3" and the thing every prior measurement in
+this repo points at.  Two independent lines of evidence:
+
+* Search-only A/B on identical linear weights (docs/BOT_ARCHITECTURE.md 3):
+  ``PlanBot`` beats the same vector at 1 ply **88.6% +/- 3.1** (n=400), culture
+  194.5 vs 125.8.  The width ablation splits that: ``width=1`` -- horizon
+  equalisation + determinization + quiescence, *no lookahead* -- is already
+  62.3%, and the multi-action beam adds the other ~23 points.
+* The 1-ply-lineage vector scores 139.8 culture at 1 ply and **189.0** under
+  ``plan:width=8`` (docs/BEHAVIOUR_CLONE.md), above the human 159.5.
+
+``NeuralBot`` is 1 ply, so it eats *both* defects PlanBot fixes and has no
+``end_turn_bias`` to paper over the first one.  This class is the same search
+as :class:`engine.bots.plan.PlanBot` with exactly one thing swapped: the leaf
+scalar is the network's predicted final-culture margin instead of
+``weighted.evaluate``.
+
+Three deliberate differences from ``PlanBot``, all forced by the evaluator:
+
+1. **The beam is expanded ply-at-a-time and scored in ONE batch per ply.**
+   PlanBot scores each node the moment it is generated, which costs 30us with
+   a linear evaluator and a whole forward pass with a net.  Here every node of
+   a ply is encoded, then scored in a single batched call.  This changes no
+   decision -- the same nodes get the same scores -- only the wall clock.
+2. **War lookahead substitutes the ENCODING, not the score.**  ``PlanBot``
+   calls ``quiescent.war_value``, which resolves the declared war on a scratch
+   copy and returns ``evaluate(scratch)``.  The neural analogue encodes that
+   same scratch copy and lets the net score it, so both searches price the move
+   class the same way (docs/PLAN_WAR_LOOKAHEAD.md, docs/TRANSFER_TEST.md: two
+   searches that disagree about one move class do not share an evaluator).
+3. **The pending stack is drained with the LINEAR 1-ply pick**, exactly as
+   ``PlanBot._quiesce`` does, using ``DEFAULT_WEIGHTS``.  It touches ~1.8% of
+   candidates at 2p (docs/DEEPER_SEARCH.md 3.1) and keeping it identical to
+   PlanBot's makes ``nplan:CKPT`` vs ``plan:VECTOR`` an honest evaluator-only
+   A/B.  It is also the same on both sides of any candidate-vs-best gate.
+
+The evaluator is injected (anything with ``.value(list_of_encodings) ->
+list[float]``, i.e. an :class:`engine.bots.neural_net.NeuralValue`), so this
+module never imports torch.
+"""
+from __future__ import annotations
+
+import random
+
+from .. import actions
+from .fastcopy import copy_state
+from .neural_encode import encode
+from .plan import determinize as _determinize
+from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
+
+__all__ = ["NeuralPlanBot"]
+
+_NO_CTX = {"rival_culture_rate": 0, "rival_science_rate": 0,
+           "rival_strength": 0}
+
+_TRIAL = random.Random(0)
+
+
+class NeuralPlanBot:
+    """Beam search to the end of my own turn, leaves scored by a value net."""
+
+    name = "nplan"
+
+    #: beam width kept between plies (PlanBot's tuned value)
+    WIDTH = 8
+    #: hard cap on sequence length
+    MAX_PLIES = 16
+    #: hard cap on `apply` calls per root decision.  Lower than PlanBot's 4000
+    #: because a node costs an encode + a forward instead of a 30us dot
+    #: product; PlanBot measured ~280 nodes actually expanded per decision
+    #: (docs/BOT_ARCHITECTURE.md 4.4), so 1200 is still slack, not a squeeze.
+    MAX_NODES = 1200
+    #: determinizations averaged over
+    SAMPLES = 1
+    WAR_LOOKAHEAD = True
+
+    def __init__(self, value, seed=None, rng=None, name=None, width=None,
+                 samples=None, determinize=True, war_lookahead=None,
+                 max_nodes=None, drain_weights=None, allow_resign=False):
+        self.value = value
+        self.rng = rng or random.Random(seed)
+        self.width = self.WIDTH if width is None else width
+        self.samples = self.SAMPLES if samples is None else samples
+        self.determinize = determinize
+        self.allow_resign = allow_resign
+        if war_lookahead is not None:
+            self.WAR_LOOKAHEAD = war_lookahead
+        if max_nodes is not None:
+            self.MAX_NODES = max_nodes
+        self.drain_weights = dict(drain_weights or DEFAULT_WEIGHTS)
+        if name:
+            self.name = name
+        # instrumentation
+        self.decisions = 0
+        self.nodes = 0
+        self.evals = 0
+        self.searches = 0
+        self.wars_priced = 0
+
+    # -- harness adapters ---------------------------------------------------
+    def choose(self, state, moves, rng=None):
+        return self.pick(state, moves)
+
+    def __call__(self, state):
+        return self.pick(state, actions.legal_moves(state))
+
+    # -- leaf ---------------------------------------------------------------
+    def _leaf_enc(self, t, me):
+        """Encoding the net should score for position ``t`` from ``me``'s view.
+
+        Substitutes the war-resolved position when I hold a declared war, the
+        neural mirror of ``quiescent.war_value``.
+        """
+        if (self.WAR_LOOKAHEAD and not t.game_over
+                and t.players[me].war_declared_by_me is not None):
+            from .. import events
+            scratch = copy_state(t)
+            try:
+                events.resolve_war(scratch, scratch.players[me], None)
+                self.wars_priced += 1
+                t = scratch
+            except Exception:
+                pass
+        try:
+            return encode(t, me)
+        except Exception:
+            return None
+
+    def _score_many(self, states, me):
+        """Batched leaf values.  Returns a list aligned with ``states``, with
+        ``None`` where the position could not be encoded."""
+        encs, where = [], []
+        for i, t in enumerate(states):
+            e = self._leaf_enc(t, me)
+            if e is not None:
+                encs.append(e)
+                where.append(i)
+        out = [None] * len(states)
+        if not encs:
+            return out
+        self.evals += len(encs)
+        vals = self.value.value(encs)
+        for i, v in zip(where, vals):
+            out[i] = v
+        return out
+
+    # -- search -------------------------------------------------------------
+    def pick(self, state, moves):
+        if not self.allow_resign and len(moves) > 1:
+            live = [m for m in moves if m[0] != "resign"]
+            if live:
+                moves = live
+        if len(moves) == 1:
+            return moves[0]
+        me = state.decider()
+        self.decisions += 1
+
+        # Not my ordinary turn: there is no turn to plan, so fall back to the
+        # 1-ply neural pick at a common horizon of "now" (this is exactly what
+        # NeuralBot does, and what PlanBot._one_ply does for the linear bot).
+        if state.pending or state.current != me:
+            root = copy_state(state)
+            if self.determinize:
+                _determinize(root, self.rng)
+            return self._one_ply_neural(root, moves, me)
+
+        totals, seen = {}, {}
+        drng = random.Random((state.seed or 0) * 7919 + state.turn * 31 + me)
+        for _s in range(self.samples):
+            root = copy_state(state)
+            if self.determinize:
+                _determinize(root, drng)
+            for mv, v in self._beam(root, moves, me).items():
+                totals[mv] = totals.get(mv, 0.0) + v
+                seen[mv] = seen.get(mv, 0) + 1
+        if not totals:
+            return moves[0]
+        # index-keyed argmax: move tuples are not orderable against each other,
+        # so never let `max` fall through to comparing them on a tie.
+        bi, bv = 0, None
+        for i, mv in enumerate(moves):
+            if mv not in totals:
+                continue
+            v = totals[mv] / seen[mv]
+            if bv is None or v > bv:
+                bi, bv = i, v
+        return moves[bi]
+
+    def _one_ply_neural(self, state, moves, me):
+        states, valid = [], []
+        for mv in moves:
+            t = copy_state(state)
+            try:
+                actions.apply(t, mv, _TRIAL)
+            except Exception:
+                continue
+            states.append(t)
+            valid.append(mv)
+        if not states:
+            return moves[0]
+        vals = self._score_many(states, me)
+        best, bv = None, None
+        for mv, v in zip(valid, vals):
+            if v is None:
+                continue
+            if bv is None or v > bv:
+                best, bv = mv, v
+        return best if best is not None else moves[0]
+
+    def _beam(self, root, moves, me):
+        """{first_move: best terminal leaf value reachable through it}."""
+        self.searches += 1
+        budget = self.MAX_NODES
+        frontier = [(root, None)]
+        best = {}
+        for _ply in range(self.MAX_PLIES):
+            gen_states, gen_first = [], []
+            for st, first in frontier:
+                mvs = moves if first is None else actions.legal_moves(st)
+                for mv in mvs:
+                    if mv[0] == "resign":
+                        continue
+                    if budget <= 0:
+                        break
+                    budget -= 1
+                    self.nodes += 1
+                    t = copy_state(st)
+                    try:
+                        actions.apply(t, mv, _TRIAL)
+                    except Exception:
+                        continue
+                    self._quiesce(t)
+                    gen_states.append(t)
+                    gen_first.append(mv if first is None else first)
+                if budget <= 0:
+                    break
+            if not gen_states:
+                break
+            vals = self._score_many(gen_states, me)
+            nxt = []
+            for t, f, v in zip(gen_states, gen_first, vals):
+                if v is None:
+                    continue
+                if t.game_over or t.current != me:
+                    if f not in best or v > best[f]:
+                        best[f] = v
+                else:
+                    nxt.append((v, t, f))
+            if not nxt or budget <= 0:
+                break
+            nxt.sort(key=lambda e: -e[0])
+            frontier = [(t, f) for _v, t, f in nxt[:self.width]]
+        return best
+
+    def _quiesce(self, st, cap=12):
+        """Drain the pending stack with plain LINEAR 1-ply picks (see 3 above)."""
+        w = self.drain_weights
+        n = 0
+        while st.pending and n < cap and not st.game_over:
+            n += 1
+            d = st.decider()
+            mvs = actions.legal_moves(st)
+            if not mvs:
+                return
+            if len(mvs) == 1:
+                try:
+                    actions.apply(st, mvs[0], _TRIAL)
+                except Exception:
+                    return
+                continue
+            try:
+                dctx = rival_context(st, d)
+            except Exception:
+                dctx = dict(_NO_CTX)
+            best, bv = None, None
+            for mv in mvs:
+                t = copy_state(st)
+                try:
+                    actions.apply(t, mv, _TRIAL)
+                    v = evaluate(t, d, w, dctx)
+                except Exception:
+                    continue
+                if bv is None or v > bv:
+                    best, bv = mv, v
+            try:
+                actions.apply(st, best if best is not None else mvs[0], _TRIAL)
+            except Exception:
+                return

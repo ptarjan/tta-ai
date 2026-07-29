@@ -6,13 +6,18 @@ ranking loss that pushes the chosen sibling above each rejected one -- the exact
 signal the 1-ply argmax consumes, which plain MC regression starves
 (docs/BOT_ARCHITECTURE.md 3b, docs/NEURAL_EVAL.md).
 
-Splits shards by shard for val.  Reports val VALUE mae (culture) and, the metric
-that matters here, val PAIR ACCURACY: the fraction of held-out (chosen,rejected)
-pairs the net orders correctly.  Best-val-pair-accuracy checkpoint is kept.
-Play strength is still the real test (neural_eval.py).
+Val is a random ROW split by default and every reported number is only as
+meaningful as the LABELS in the data.  Read docs/NEURAL_LOOP_NULL.md before
+trusting `val_pair_acc`: when the "chosen" sibling was produced by the model
+being warm-started from, pair accuracy is an agreement-with-incumbent meter,
+not a quality metric, and selecting on it selects for doing nothing.  That is
+why this script now prints **epoch 0** and a `VACUITY` line: if the untrained
+warm-start already orders the training pairs correctly, the target is a fixed
+point and the run is a no-op.  Play strength head-to-head under the search that
+will be deployed (neural_eval.py) is the only promotion criterion.
 
 Usage:
-    python neural_train_rank.py --data rankdata/*.npz --epochs 25 \
+    python neural_train_rank.py --data teacherdata/*.npz --epochs 25 \
         --lam 1.0 --out checkpoints/value2p_rank.pt
 """
 from __future__ import annotations
@@ -73,11 +78,29 @@ def main():
                          "in Stage 1b). See docs/NEURAL_EVAL.md.")
     ap.add_argument("--init", default=None,
                     help="warm-start checkpoint (for the self-play loop)")
-    ap.add_argument("--select", default="combo",
-                    choices=("pair", "mae", "combo"),
-                    help="best-checkpoint criterion: pair acc, value MAE, or a "
-                         "combo (pair_acc - mae/300) that keeps both healthy")
+    ap.add_argument("--select", default="last",
+                    choices=("pair", "mae", "combo", "last"),
+                    help="best-checkpoint criterion. DEFAULT IS `last`: the "
+                         "41-hour null (docs/NEURAL_LOOP_NULL.md 3.2) selected "
+                         "on `pair` against a validation set whose labels the "
+                         "INCUMBENT had produced, so `pair` was an "
+                         "agreement-with-incumbent meter and selecting on it "
+                         "picked epoch 1 every time -- a regulariser toward "
+                         "doing nothing. The gate decides now, not the loss.")
     ap.add_argument("--val-frac", type=float, default=0.15)
+    ap.add_argument("--val-split", default="rows", choices=("rows", "shards"),
+                    help="`rows` (default): a random row-level split, so val "
+                         "is the SAME distribution as train. `shards`: the old "
+                         "behaviour -- the alphabetically first 15% of files, "
+                         "which silently made val a single data SOURCE (all "
+                         "self-play, none of the anchor) and made every "
+                         "reported number a distribution-shift artefact.")
+    ap.add_argument("--vacuity-warn", type=float, default=0.95,
+                    help="fail loudly if the UNTRAINED warm-start already "
+                         "orders this fraction of the training pairs "
+                         "correctly: the target is then a fixed point of the "
+                         "model and the run cannot learn anything "
+                         "(docs/NEURAL_LOOP_NULL.md 3.1 measured 0.9764)")
     ap.add_argument("--out", default="checkpoints/value_rank.pt")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -88,12 +111,27 @@ def main():
         print("gpu:", torch.cuda.get_device_name(0), flush=True)
 
     files = load(args.data)
-    nval = max(1, int(round(len(files) * args.val_frac)))
-    vfiles, tfiles = files[:nval], (files[nval:] or files)
-    Xa, Xb, Xv, yv = read(tfiles)
-    Xa_v, Xb_v, Xv_v, yv_v = read(vfiles)
-    print(f"{len(files)} shards -> {len(tfiles)} train / {len(vfiles)} val",
-          flush=True)
+    if args.val_split == "shards":
+        nval = max(1, int(round(len(files) * args.val_frac)))
+        vfiles, tfiles = files[:nval], (files[nval:] or files)
+        Xa, Xb, Xv, yv = read(tfiles)
+        Xa_v, Xb_v, Xv_v, yv_v = read(vfiles)
+        print(f"{len(files)} shards -> {len(tfiles)} train / {len(vfiles)} val "
+              f"(SHARD split: val may be a single data source -- see "
+              f"docs/NEURAL_LOOP_NULL.md 3.2)", flush=True)
+    else:
+        aA, aB, aV, aY = read(files)
+        rs = np.random.RandomState(12345)
+        pi = rs.permutation(len(aA))
+        pv = rs.permutation(len(aV))
+        ka = max(1, int(round(len(aA) * args.val_frac)))
+        kv = max(1, int(round(len(aV) * args.val_frac)))
+        Xa, Xb = aA[pi[ka:]], aB[pi[ka:]]
+        Xa_v, Xb_v = aA[pi[:ka]], aB[pi[:ka]]
+        Xv, yv = aV[pv[kv:]], aY[pv[kv:]]
+        Xv_v, yv_v = aV[pv[:kv]], aY[pv[:kv]]
+        print(f"{len(files)} shards -> random ROW split {args.val_frac:.2f}",
+              flush=True)
     print(f"train pairs {len(Xa)}  val pairs {len(Xa_v)}  "
           f"train vals {len(Xv)}  dim {Xa.shape[1]}", flush=True)
 
@@ -113,6 +151,39 @@ def main():
     yv_vs = yv_v / MARGIN_SCALE
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+
+    def evaluate_val():
+        net.eval()
+        with torch.no_grad():
+            va = torch.cat([net(Xa_vt[i:i + 8192])
+                            for i in range(0, len(Xa_vt), 8192)])
+            vb = torch.cat([net(Xb_vt[i:i + 8192])
+                            for i in range(0, len(Xb_vt), 8192)])
+            pa = (va > vb).float().mean().item()
+            vp = torch.cat([net(Xv_vt[i:i + 8192]).cpu()
+                            for i in range(0, len(Xv_vt), 8192)]).numpy()
+        return pa, float(np.abs(vp - yv_vs).mean() * MARGIN_SCALE)
+
+    # --- epoch 0: the vacuity check ----------------------------------------
+    # docs/NEURAL_LOOP_NULL.md 3.1: the 41-hour null trained on ranking pairs
+    # whose "chosen" label was the warm-start's OWN argmax, so the untrained
+    # net already ordered 97.6% of them correctly and the loss had nothing to
+    # teach.  Nobody looked, because epoch 0 was never printed.  It is printed
+    # now, and a target that is already satisfied is a loud failure, not a
+    # footnote.
+    pa0, mae0 = evaluate_val()
+    print(f"epoch   0  (warm start, UNTRAINED)          "
+          f"val_pair_acc {pa0:.4f}  val_mae {mae0:.1f}", flush=True)
+    print(f"VACUITY pair_acc_at_epoch0={pa0:.4f} "
+          f"threshold={args.vacuity_warn:.2f}", flush=True)
+    if pa0 >= args.vacuity_warn:
+        print("*** VACUOUS TARGET: the warm-start already satisfies "
+              f"{pa0:.1%} of the ranking pairs. The label is a fixed point of "
+              "the model being trained -- gradient descent can only inflate "
+              "margins it already holds. This is the exact defect that cost "
+              "41 hours and 0 promotions (docs/NEURAL_LOOP_NULL.md). Do not "
+              "trust anything downstream of this run. ***", flush=True)
+
     npairs = len(Xa_t)
     nval_rows = len(Xv_t)
     best_score, best_ep, best_pa_at, best_mae_at = -1e9, 0, 0.0, 0.0
@@ -145,23 +216,10 @@ def main():
             tot_v += vloss.item()
             nb += 1
         sched.step()
-        # validation
-        net.eval()
-        with torch.no_grad():
-            va = []
-            vb = []
-            for i in range(0, len(Xa_vt), 8192):
-                va.append(net(Xa_vt[i:i + 8192]))
-                vb.append(net(Xb_vt[i:i + 8192]))
-            va = torch.cat(va)
-            vb = torch.cat(vb)
-            pair_acc = (va > vb).float().mean().item()
-            vp = []
-            for i in range(0, len(Xv_vt), 8192):
-                vp.append(net(Xv_vt[i:i + 8192]).cpu())
-            vp = torch.cat(vp).numpy()
-        val_mae = float(np.abs(vp - yv_vs).mean() * MARGIN_SCALE)
-        if args.select == "pair":
+        pair_acc, val_mae = evaluate_val()
+        if args.select == "last":
+            score = float(ep)          # monotone: always keep the last epoch
+        elif args.select == "pair":
             score = pair_acc
         elif args.select == "mae":
             score = -val_mae
