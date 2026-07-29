@@ -12,19 +12,29 @@ the game:
 > you can wait. And to know that you have to keep track of what is in your
 > opponents board and hand."
 
-**The hypothesis was right, and it is stronger than stated.** Almost all of that
-information is already sitting in `GameState` in full, and
-`engine/bots/weighted.py:features()` reads *none* of it. The bot is not failing
-to track hidden information; it is failing to look at information the engine has
-already handed it.
+**The hypothesis was right, and it is stronger than stated** *(conclusion as of
+2026-07-27)*. Almost all of that information is already sitting in `GameState`
+in full, and `engine/bots/weighted.py:features()` reads *none* of it. The bot is
+not failing to track hidden information; it is failing to look at information
+the engine has already handed it.
+
+**Status as of 2026-07-29 (§0b).** Three of the six gaps below have shipped as
+code and two of them are now *live in a trained champion*. The 60-key table in
+§0a is preserved verbatim because it is still the correct description of
+`DEFAULT_WEIGHTS`, of all three frozen champions, and of the current 2p league
+arm. It is **no longer** a correct description of the 3p and 4p league
+champions. Read §0a and §0b together or you will draw the wrong conclusion in
+either direction.
 
 ---
 
-## 0. Headline result
+## 0a. Headline result — the 2026-07-27 measurement, 60 keys (HISTORICAL)
 
-`features()` (`engine/bots/weighted.py:332-481`) returns a 60-key dict. Measured
-invariance on a real mid-game 2p position (turn ~60, `/tmp/invcheck.py`, see
-§7.1):
+*Kept as measured. `features()` returned a 60-key dict; `DEFAULT_WEIGHTS` was 78
+keys. Measured invariance on a single real mid-game 2p position (turn ~60,
+`/tmp/invcheck.py`, see §7.1). Every row of this table was still reproduced on
+2026-07-29 under `DEFAULT_WEIGHTS` and under all three frozen champions — see
+§0b.*
 
 | perturbation of the state | feature vector | eval delta |
 |---|---|---|
@@ -50,10 +60,9 @@ rival.colonies             +0.0000
 rival.completed_wonders    +0.0000
 ```
 
-Only five of the 60 features are rival-derived at all — `rival_culture`,
+Only five of the 60 features were rival-derived at all — `rival_culture`,
 `rival_mean_culture`, `rival_culture_rate`, `rival_science_rate`,
-`rival_strength` (`engine/bots/weighted.py:476-480`, aggregates built in
-`rival_context`, `engine/bots/weighted.py:176-192`).
+`rival_strength` (aggregates built in `rival_context`).
 
 And the single most damaging consequence, measured in §7.2: pricing the **same
 card** at slot 0 (1 CA) versus slot 9 (3 CA),
@@ -65,9 +74,9 @@ card** at slot 0 (1 CA) versus slot 9 (3 CA),
 ```
 
 **The 3p champion prefers to pay 3 civil actions.** That is not a metaphor: the
-only channel by which row depth reaches the evaluation is the `ca_left` feature
-(`engine/bots/weighted.py:439`), whose 3p champion weight is **-0.0974**
-(`analysis/frozen/champion_3p.json`), so spending two extra civil actions is
+only channel by which row depth reached the evaluation was the `ca_left` feature,
+whose frozen 3p champion weight is **-0.0974**
+(`analysis/frozen/champion_3p.json`), so spending two extra civil actions was
 scored as a *gain* of 0.195. This is the mechanism behind an already-measured
 behaviour that nobody had explained: the 3p champion takes **56.9% of its cards
 from cost band 3 at 2.33 CA/card** while the 2p champion takes 88.4% from band 1
@@ -77,32 +86,203 @@ tournament baseline of **76% of Age I picks at 1 CA and 2.5% at 3 CA**
 
 ---
 
+## 0b. Re-measurement, 2026-07-29 — 89 weight keys
+
+`DEFAULT_WEIGHTS` is now **89 keys** and `features()` returns **64**. The
+protocol is §0a's, reconstructed from this document's own §7.1 description
+(the original `/tmp/invcheck.py` was throwaway and no longer exists) and
+generalised in two ways that the original could not distinguish:
+
+* **35 positions, not one** — seeds 0/1/2 x four ply depths x 2p/3p/4p,
+  distributed `{2p: 5 Age I, 3 Age II, 3 Age III; 3p: 6/3/3; 4p: 6 Age I,
+  6 Age II}`. A feature that does not respond at one position may respond at
+  another, and several of them do.
+* **seven weight vectors, not one** — `DEFAULT_WEIGHTS`, the three frozen
+  champions, and the three **live league champions** snapshotted mid-run at
+  gen 16 (2p) / gen 1139 (3p) / gen 308 (4p). This split turns out to be the
+  entire story.
+
+### 0b.1 The structural reason the headline both did and did not change
+
+Four of the eleven new weight keys are **not features at all**. `hand_potential`,
+`rival_hand_potential`, `row_urgency` and `row_bargain_forgone` are priced
+*through* the weight vector, so they are non-linear and live in `evaluate()`
+(`engine/bots/weighted.py:968-992`), not in `features()`. Two consequences,
+both measured:
+
+1. **`features()` is still bit-identical under every row, deck and event
+   perturbation, at all 35 positions.** That is not a bug; it is where the code
+   put them. Any tool that audits blindness by diffing feature vectors — this
+   document's own §0a method included — will now under-report what the bot sees.
+2. **Each term is skipped entirely when its scale is 0.0**, and 0.0 is the
+   default. So the new information is *wired but dark* unless a trainer has
+   fitted a non-zero scale onto it.
+
+Who has: measured off the weight files, not asserted.
+
+| weight | DEFAULT | frozen 2p/3p/4p | live 2p (g16) | live 3p (g1139) | live 4p (g308) |
+|---|---|---|---|---|---|
+| `row_urgency` | 0.0 | 0.0 (absent, filled from default) | 0.0 | **+0.1063** | +0.0024 |
+| `row_bargain_forgone` | 0.0 | 0.0 | 0.0 | **+1.5164** | +0.0238 |
+| `rival_hand_potential` | 0.0 | 0.0 | 0.0 | -0.0199 | **+1.3285** |
+| `rival_free_ca` | 0.0 | 0.0 | 0.0 | **-0.3234** | +0.0264 |
+| `rival_hand_civil` | 0.0 | 0.0 | 0.0 | **-0.3538** | -0.0149 |
+| `rival_wonders` | 0.0 | 0.0 | 0.0 | **+1.6887** | +0.0678 |
+| `take_cost_paid` | 0.0 | 0.0 | 0.0 | +0.0492 | -0.0260 |
+| `ca_left` | 0.05 | 0.064 / **-0.0974** / 0.034 | 0.0186 | **+0.6072** | +0.1473 |
+
+The frozen champions predate all eleven keys, so `load_weights` fills them from
+`DEFAULT_WEIGHTS` at 0.0 and they evaluate exactly as they did on 2026-07-27 —
+by design (`engine/bots/weighted.py:811-829`). The 2p arm restarted and is only
+at gen 16, so it has not scattered onto them yet. **GAP 1's wrong sign is fixed
+in the live 3p arm**: `ca_left` has climbed from -0.0974 to +0.6072, so paying
+two extra civil actions is now a cost, not a gain.
+
+### 0b.2 Structural perturbations, 35 positions
+
+"feat" = `features()` dict differs. "eval" = number of positions where
+`evaluate()` moved, out of the positions of that player count.
+
+| perturbation | feat chg | default | frozen (all 3) | live 2p | live 3p | live 4p |
+|---|---|---|---|---|---|---|
+| reverse the card row | **0/35** | 0/35 | 0/35 | 0/11 | **8/12** | **10/12** |
+| delete the card row | **0/35** | 0/35 | 0/35 | 0/11 | **8/12** | **10/12** |
+| change which cards are in the row | **0/35** | 0/35 | 0/35 | 0/11 | **8/12** | **10/12** |
+| rival `hand_civil` → different cards | **0/33** | 0/33 | 0/33 | 0/9 | **9/12** | **8/12** |
+| rival `hand_civil` → empty | 33/33 | 0/33 | 0/33 | 0/9 | **12/12** | **12/12** |
+| rival `hand_military` → empty | **0/35** | **0/35** | **0/35** | **0/11** | **0/12** | **0/12** |
+| wipe `future_events` + `current_events` | **0/35** | **0/35** | **0/35** | **0/11** | **0/12** | **0/12** |
+| `civil_deck` → every card "Bronze" | **0/35** | **0/35** | **0/35** | **0/11** | **0/12** | **0/12** |
+| `civil_deck` reordered | **0/35** | **0/35** | **0/35** | **0/11** | **0/12** | **0/12** |
+
+Magnitudes for "delete the card row", the bluntest row test, against a base
+evaluation whose mean magnitude is given for scale:
+
+```
+2p  n=11   delta  +0.000 +/- 0.000   (base |eval| 114.8)   row weights are 0.0
+3p  n=12   delta  -3.005 +/- 2.728   (base |eval| 264.5)
+4p  n=12   delta  -0.037 +/- 0.027   (base |eval|  92.6)
+```
+
+Read those against the *inter-candidate* spreads in §0a — a whole `take` was
+worth +1.45 at 2p and +0.07 at 4p. So at 3p the row is now a first-class term;
+at 4p its scale is ~0.002/0.024 and it is present but nearly dark.
+
+The zeros in the live columns are **not** blindness. Position-by-position,
+every zero-delta position is one where `row_pressure` returns `(0.0, 0.0)`
+structurally — no row card that is both legally takeable by me and has
+`card_potential > 0` (3p: 4/12 positions, 4p: 2/12). This is exactly the
+distinction the single-position 2026-07-27 run could not draw.
+
+### 0b.3 Per-rival-field sensitivity, 35 positions
+
+`+5` on a scalar, one extra entry on a list. Rows in **bold** are new since
+2026-07-27.
+
+| rival field | feature keys that move | feat chg | default / frozen | live 3p | live 4p |
+|---|---|---|---|---|---|
+| `culture` | `rival_culture`, `rival_mean_culture` | 35/35 | **yes** | yes | yes |
+| **`civil_actions`** | `rival_free_ca` | 35/35 | 0/35 (weight 0.0) | **12/12** | **12/12** |
+| **`completed_wonders`** | `rival_wonders` | 35/35 | 0/35 (weight 0.0) | **12/12** | **12/12** |
+| **`hand_civil` (size)** | `rival_hand_civil` | 33/33 | 0/33 (weight 0.0) | **12/12** | **12/12** |
+| **`hand_civil` (identity)** | *none* — eval-only | 0/33 | 0/33 | **9/12** | **8/12** |
+| `techs` | `rival_science_rate` 23/24, `rival_culture_rate` 17/24, `rival_strength` / `strength_rel` 13/24, `strength_lead` 8/24, `strength_deficit` 6/24 | 24/24 | yes | yes | yes |
+| `leader` / `tactic` | via the same three rates, 1-4/24 | 24/24 | yes | yes | yes |
+| `science` | *none* | 0/35 | 0 | 0 | 0 |
+| `food` | *none* | 0/35 | 0 | 0 | 0 |
+| `resources` | *none* | 0/35 | 0 | 0 | 0 |
+| `military_actions` | *none* | 0/35 | 0 | 0 | 0 |
+| `workers_free` | *none* | 0/35 | 0 | 0 | 0 |
+| `yellow_bank` | *none* | 0/35 | 0 | 0 | 0 |
+| `colonies` | *none* | 0/35 | 0 | 0 | 0 |
+| `wonder` (in progress) | *none* | 0/24 | 0 | 0 | 0 |
+| `destroyed_wonders` | *none* | 0/24 | 0 | 0 | 0 |
+| `hand_military` | *none* | 0/35 | **0** | **0** | **0** |
+
+Seven rival board fields the rules make public are still completely invisible:
+their **science, food and resource stocks, their military actions, their free
+workers, their yellow bank (population cost), their colonies**, and whether
+they have a **wonder under construction** — the last of which is the single
+cheapest "is this wonder safe to let slide" signal in the game and is already
+snapshotted into `_RivalView.wonder` for the legality gate but never scored.
+
+### 0b.4 Feature census: which of the 89 keys read what
+
+Measured by perturbing one information source at a time and recording which
+keys move (n=24 positions), not by grepping.
+
+```
+DEFAULT_WEIGHTS                                                89
+  features() keys                                              64
+  phase keys (_early/_late on 10 features)                     20
+  eval-only non-linear scales                                   4
+     hand_potential, rival_hand_potential,
+     row_urgency, row_bargain_forgone
+  search bias (not a feature)                                   1   end_turn_bias
+```
+
+* **Rival-derived: 12 of 89** (was 5 of 60).
+  Directly: `rival_culture`, `rival_mean_culture`, `rival_culture_rate`,
+  `rival_science_rate`, `rival_strength`, `rival_free_ca`, `rival_hand_civil`,
+  `rival_wonders` (8, all in `features()`); relative:
+  `strength_rel`, `strength_deficit`, `strength_lead` (3, functions of
+  `rival_strength`); eval-only: `rival_hand_potential` (1).
+  `pacts` and `pact_blocks_attack` read rival state only for pacts I am a party
+  to; no pact formed in the 35 sampled positions, so they are not counted.
+* **Row-derived: 3 of 89.** `row_urgency` and `row_bargain_forgone` (content and
+  slot cost, eval-only) and `take_cost_paid` (CA I spent reaching into the row
+  this turn — verified responsive, 24/24 positions). **Zero `features()` keys
+  read the row.** Was 0.
+* **Deck-derived: 0 for composition, and the count is read only indirectly.**
+  Replacing every card in `civil_deck` with one name moves the evaluation at
+  **0/24 positions under every one of the seven weight vectors**. Truncating the
+  deck by 20 cards moves it at **22/24** (mean -2.81 under live weights) — but
+  that is `len(state.civil_deck)` reaching `rounds_left`
+  (`engine/bots/weighted.py:316`) and thence `lateness()`, which scales the 20
+  phase keys. **The evaluator has a game clock, not a card counter.** Unchanged
+  since 2026-07-27.
+* **Event-derived: 0 of 89.** Wiping `future_events`, `current_events`,
+  `past_events`, `scoring_events` and `seeded_by` together moves **no feature
+  key at any of the 24 positions and no evaluation under any of the seven weight
+  vectors**. Unchanged since 2026-07-27. The owner's *first* item is still the
+  one nothing touches.
+* **Military discard: 0.** Emptying `discarded_military` moves nothing.
+
+### 0b.5 The one thing that got worse
+
+The `end_turn` information leak is **no longer inert**. See §6.1.
+
+---
+
 ## 1. Master table
 
 "Engine represents it" = the fact is recoverable from `GameState` today.
 "A feature reads it" = it changes the output of `weighted.features()` /
-`weighted.evaluate()`.
+`weighted.evaluate()`. **Updated 2026-07-29** — where a row changed, the old
+verdict is struck through and the weight vector under which the new verdict
+holds is named, because for six of these rows the answer is now
+weight-vector-dependent.
 
 | # | Information the rules make available to a player | Engine represents it? | Any feature reads it? |
 |---|---|---|---|
-| 1 | Which 13 cards are in the civil row | YES `engine/state.py:124` | **NO** (§0 test B) |
-| 2 | Each row card's slot, hence its CA cost | YES `engine/actions.py:36-45,79-89` | **NO** — only via `ca_left`, worth 0.05 (default) / **-0.097 (3p champ)** per CA `engine/bots/weighted.py:439` |
-| 3 | Where a card will slide to next turn | Derivable (exact sweep constant) `engine/game.py:41,104-121,219-220` | **NO** |
-| 4 | Whether a card will be swept before I act again | Derivable, same source | **NO** |
-| 5 | Whether an opponent can/wants to take a given row card | Derivable (their CA, hand limit, techs, wonder-in-progress, leader ages) | **NO** |
-| 6 | Opponents' civil cards in hand (PUBLIC, `docs/RULES_SPEC.md:71`) | YES `engine/state.py:60` | **NO** (§0 test C) |
-| 7 | Opponents' civil hand *size* | YES same field | **NO** |
-| 8 | Opponents' military hand *size* (public) | YES `engine/state.py:61` | **NO** (own hand only, `weighted.py:473`) |
-| 9 | Opponents' military hand *contents* (HIDDEN by rules) | YES, truthfully — no info-set abstraction | **NO** by features; **YES** by QuiescentBot's defence resolution `docs/DEEPER_SEARCH.md:507-512` |
-| 10 | Age I/II/III deck composition (fixed, public) | YES `engine/cards.py:155-175` | Only as a **count**, for the game-length horizon `engine/bots/weighted.py:243-276` |
+| 1 | Which 13 cards are in the civil row | YES `engine/state.py:151` | ~~NO~~ → **`evaluate()` only, and only where a scale is fitted**: `row_urgency`/`row_bargain_forgone` (`weighted.py:718-777`). Live 3p **yes** (8/12 positions), live 4p yes but ~0.002 scale, default/frozen/live-2p **still no**. `features()` itself: **NO**, 0/35 |
+| 2 | Each row card's slot, hence its CA cost | YES `engine/actions.py:36-45,79-89` | **YES** now — `row_bargain_forgone` prices the slide directly, and `take_cost_paid` (`weighted.py:500`) is a second channel beside `ca_left`. Live 3p `ca_left` is **+0.607**, so §0a's wrong sign is gone in that arm |
+| 3 | Where a card will slide to next turn | Derivable (exact sweep constant) `engine/game.py:41,104-121,219-220` | **YES** — `row_pressure` computes `nxt = i - live*SWEEP[live]` exactly (`weighted.py:751,765`) |
+| 4 | Whether a card will be swept before I act again | Derivable, same source | **YES** — `row_urgency` is exactly this sum |
+| 5 | Whether an opponent can/wants to take a given row card | Derivable (their CA, hand limit, techs, wonder-in-progress, leader ages) | **Legality YES, desire NO** — `_RivalView` + `_can_take_gated` per rival (`weighted.py:176-233,773-775`), then a single flat `RIVAL_TAKE_P = 0.25`. No desire model |
+| 6 | Opponents' civil cards in hand (PUBLIC, `docs/RULES_SPEC.md:71`) | YES `engine/state.py:60` | ~~NO~~ → **YES in `evaluate()`**: `rival_hand_potential` (`weighted.py:667-692`). Live 4p scale **+1.329**, live 3p -0.020. `features()`: **NO**, 0/33 |
+| 7 | Opponents' civil hand *size* | YES same field | ~~NO~~ → **YES**, `rival_hand_civil` (`weighted.py:459`), and it uses `hand_size` so the app harness's `hidden_civil` counts too |
+| 8 | Opponents' military hand *size* (public) | YES `engine/state.py:61` | **NO** — still own hand only |
+| 9 | Opponents' military hand *contents* (HIDDEN by rules) | YES, truthfully — no info-set abstraction | **NO** by features or eval, re-verified 0/35 positions x 7 weight vectors; **YES** by QuiescentBot's defence resolution `docs/DEEPER_SEARCH.md:507-512` |
+| 10 | Age I/II/III deck composition (fixed, public) | YES `engine/cards.py:155-175` | **NO** — still only a **count**, via `rounds_left` → `lateness` (`weighted.py:305-317`). Composition: 0/24 positions, all 7 vectors |
 | 11 | Which civil cards have already been seen (row/hands/boards) | Partially — **swept row cards are destroyed with no record** `engine/game.py:117-120` | **NO** |
-| 12 | Which military cards have been discarded | YES `engine/state.py:132`, `engine/economy.py:186-197` | **NO** |
-| 13 | **What I put into the politics (future events) deck** | YES, with owner attribution `engine/state.py:125,129`; written at `engine/actions.py:992` | **NO** (§0 test E) |
-| 14 | The current-events deck contents/order (hidden) | YES, in the clear `engine/state.py:126` | **NO** by features; **readable by any deeper search** — `plan.determinize` does not touch it `engine/bots/plan.py:82-94` |
+| 12 | Which military cards have been discarded | YES `engine/state.py:132`, `engine/economy.py:186-197` | **NO** (0/24) |
+| 13 | **What I put into the politics (future events) deck** | YES, with owner attribution `engine/state.py:125,129`; written at `engine/actions.py:992` | **NO** by the linear bot (0/24). **YES** by the neural encoder, correctly masked to my own seeds (`engine/bots/neural_encode.py:182-188`) |
+| 14 | The current-events deck contents/order (hidden) | YES, in the clear `engine/state.py:126` | **NO** by features; **readable by any deeper search** — `plan.determinize` still does not touch it `engine/bots/plan.py:111-114` |
 | 15 | Events already resolved (`past_events`, public) | YES `engine/state.py:127` | **NO** |
-| 16 | Opponent boards: techs, workers per card, government, leader, wonders, tactic, colonies, pacts, happiness, food/resources/science, CA/MA | YES `engine/state.py:43-101` | **Only 3 derived scalars**: their culture *rate*, science *rate*, strength (`weighted.py:183-191`), plus raw `culture`. Pacts are counted only when I am a party (`weighted.py:368-376`). |
-| 17 | Turn order / how many opponent turns before mine | YES `engine/state.py:117-119` | **NO** (only aggregate `rounds_left`, `weighted.py:264-276`) |
-| 18 | Civil deck order (HIDDEN) | YES, in the clear `engine/state.py:122` | **NO** by features; read by `end_turn` trials — 94.9% leaky, measured `docs/BOT_ARCHITECTURE.md:208-231` |
+| 16 | Opponent boards: techs, workers per card, government, leader, wonders, tactic, colonies, pacts, happiness, food/resources/science, CA/MA | YES `engine/state.py:43-101` | **3 derived rates + 3 raw scalars**: culture *rate*, science *rate*, strength, plus raw `culture`, `civil_actions` (`rival_free_ca`) and `len(completed_wonders)` (`rival_wonders`). Their science/food/resource stocks, MA, free workers, yellow bank, colonies and wonder-in-progress remain invisible (§0b.3) |
+| 17 | Turn order / how many opponent turns before mine | YES `engine/state.py:117-119` | **NO** (only aggregate `rounds_left`) |
+| 18 | Civil deck order (HIDDEN) | YES, in the clear `engine/state.py:122` | **NO** by features; read by `end_turn` trials — re-measured 2026-07-29 at **94.2%** leaky at 2p and 92.0% at 3p, and **it now changes the move** (§6.1) |
 
 ---
 
@@ -166,6 +346,18 @@ shape (slot 9 survives 85.4%, lands at 1 CA 88% of the time) because
 
 ### 2.2 What reads the row today
 
+**Updated 2026-07-29.** `row_pressure` (`engine/bots/weighted.py:718-777`) now
+implements GAP 2 almost exactly as proposed below, including the exact slide
+arithmetic and the per-rival legality gate from GAP 3 — but it deliberately did
+*not* bake in the §2.1 survival table, using one flat `RIVAL_TAKE_P = 0.25`
+instead, on the stated grounds that the table was fitted on row-blind opponents
+(`weighted.py:701-715`). Its two outputs are computed in `evaluate()` and are
+skipped when their scale is 0.0, which is the default. So the paragraph below is
+still true of `features()` and still true of every frozen champion; it is false
+of the live 3p and 4p league arms. See §0b.
+
+*Original text, 2026-07-27:*
+
 * **`features()` reads nothing about the row.** Grep: `card_row` appears in
   `advisor/`, `tools/`, `analysis/`, `experiments/`, `tests/` and
   `engine/bots/fastcopy.py:85` (as a field name to copy) — and in exactly two
@@ -204,14 +396,36 @@ shape (slot 9 survives 85.4%, lands at 1 CA 88% of the time) because
   `engine/actions.py:687`, but it is truncated to 400 entries
   (`engine/state.py:201-202`), suppressed during trials
   (`engine/state.py:198-199`), and nothing reads it during play.)
-* **No feature reads any opponent hand — contents or size.** `hand_civil`,
-  `hand_value`, `hand_military`, `hand_mil_value`
-  (`engine/bots/weighted.py:471-474`) are all `p = state.players[idx]`, i.e. self
-  only; `hand_potential` likewise (`engine/bots/weighted.py:593-601`).
-  Confirmed empirically, §0 tests C and D.
+* ~~**No feature reads any opponent hand — contents or size.**~~ **Superseded
+  2026-07-29.** Two terms now read the rival civil hand:
+  `rival_hand_civil` (size, via `hand_size` so the app harness's `hidden_civil`
+  counts, `weighted.py:459`) and `rival_hand_potential` (contents, priced
+  through the same weight vector, `weighted.py:667-692`). The size term is a
+  `features()` key; the contents term is eval-only and dark at scale 0.0.
+  Measured: emptying rival civil hands moves `features()` at 33/33 positions and
+  the evaluation at 12/12 under both the live 3p and live 4p champions;
+  *replacing* the contents with different cards moves `features()` at **0/33**
+  and the evaluation at 9/12 (3p) and 8/12 (4p).
+* **The legality of that is verified, not assumed.** `docs/RULES_SPEC.md:71`
+  reads verbatim: *"2.6 Cards taken are public knowledge (open civil cards
+  convention) [RB p.7]."* Reading `q.hand_civil` is therefore free public
+  information, not a cheat. The docstring on `rival_hand_potential` cites this
+  correctly.
+* **Nothing reads a rival's military hand.** Re-verified 2026-07-29 by
+  measurement, not grep: emptying every rival's `hand_military` leaves
+  `features()` bit-identical at **35/35** positions and the evaluation
+  bit-identical under **all seven** weight vectors (default, three frozen, three
+  live). Every `hand_military` read in `weighted.py` is `p = state.players[idx]`
+  — self. `engine/bots/neural_encode.py:230` is explicit about the same rule
+  (*"military hand contents: mine only; rival gets a zero-vector"*), and
+  `book.py:216` reads only the acting bot's own hand. Military cards are drawn
+  hidden (`docs/RULES_SPEC.md:196`); only the count is public.
 * The one place opponent military hands *are* read is QuiescentBot resolving a
   defender's `defense` decision — `docs/DEEPER_SEARCH.md:507-512` states this
-  openly and calls it indefensible for play against a human.
+  openly and calls it indefensible for play against a human. Still true: the
+  defender's legal `defense` moves are enumerated from its real hand inside the
+  search. That is a *search* cheat, not an evaluator cheat, and it is the only
+  one in the repo.
 
 ---
 
@@ -238,6 +452,14 @@ shape (slot 9 survives 85.4%, lands at 1 CA 88% of the time) because
   a count, never a composition, and it is the only deck-derived quantity in the
   evaluation. Test F in §0 confirms it: replacing every card in `civil_deck` with
   "Bronze" leaves the evaluation bit-identical.
+* **Re-verified 2026-07-29, and separated properly.** Over 24 positions and all
+  seven weight vectors: replacing every civil-deck card with one name moves the
+  evaluation at **0/24** positions; *truncating* the deck by 20 cards moves it at
+  **22/24** (mean -2.81 under the live champions, max |Δ| 14.8). The count is
+  read, the composition is not, and the count is read only as a game clock —
+  `len(state.civil_deck)` → `rounds_left` → `lateness()` → the 20 phase weights.
+  **There is still no card counting of any kind, at any player count, under any
+  weight vector.**
 
 ### 4.1 The military/politics deck specifically — the owner's first item
 
@@ -257,10 +479,18 @@ This is the biggest single blind spot in the audit.
   with an age suffix (`engine/cards.py:60-75`). Verified: no event or territory
   name appears twice in any age's military deck (the only duplicated military
   names are units, aggressions and Military Bonus).
-* **Nothing reads any of it.** Grep across `engine/bots/`: `future_events`,
-  `current_events`, `past_events`, `seeded_by`, `scoring_events` appear *only* in
-  `engine/bots/fastcopy.py:85-87` as field names to copy. §0 test E confirms:
-  deleting both event decks changes nothing.
+* **Nothing in the linear bot reads any of it, and that has not changed.**
+  Re-measured 2026-07-29: wiping `future_events`, `current_events`,
+  `past_events`, `scoring_events` **and** `seeded_by` together moves no
+  `features()` key at any of 24 positions, and moves the evaluation at 0/35
+  positions under all seven weight vectors including both live champions. This
+  is the owner's *first-listed* skill and it remains the single largest
+  untouched blind spot; GAP 4 below is unstarted.
+* The **neural** encoder does read it, and reads it legally: `seeded_n` /
+  `seeded_lv` are filtered to `owner == idx` (`neural_encode.py:182-188`) and it
+  explicitly does not encode other players' seeds or the current-events order
+  (`neural_encode.py:29-32`). So the legal design exists; the linear evaluator
+  the league trains has not adopted it.
 * Consequence for the bot's play: seeding an event is scored purely by the
   immediate culture gain and the military card leaving hand. A `Good Harvest`
   you planted and a `Barbarians` you planted are the same move. The bot cannot
@@ -293,12 +523,29 @@ What the feature set actually reads about a rival, exhaustively:
 6. Pact membership, and only for pacts I am a party to
    (`engine/bots/weighted.py:368-376`).
 
-So: **three derived rates plus one raw score.** Their happiness, food balance,
-worker count, government, leader, wonder progress, tactic, colonies, science
-stock, resource stock, civil/military action counts and hand are all invisible —
-confirmed field by field in §0. Their techs are read only insofar as they roll up
-into those three rates. It is aggregate strength and score and essentially
-nothing else.
+So (as of 2026-07-27): **three derived rates plus one raw score.**
+
+**Updated 2026-07-29.** Three more raw scalars and one non-linear term were
+added, all of them public:
+
+7. `q.civil_actions`, max over rivals, as `rival_free_ca` (`weighted.py:458`).
+8. `q.hand_size("civil")`, max, as `rival_hand_civil` (`weighted.py:459`).
+9. `len(q.completed_wonders)`, max, as `rival_wonders` (`weighted.py:460`).
+10. `q.hand_civil` *contents*, priced through `w`, as `rival_hand_potential`
+    (eval-only, `weighted.py:667-692`).
+
+Plus, for the row legality gate only and never scored directly, `_RivalView`
+snapshots `q.wonder is None`, `q.taken_leader_ages`, `q.techs` and
+`q.government` (`weighted.py:190-201`).
+
+Still invisible, confirmed field by field over 35 positions (§0b.3): their
+**science stock, food stock, resource stock, military actions, free workers,
+yellow bank, colonies, destroyed wonders, and whether they have a wonder under
+construction**. Also still invisible: their happiness margin, and their
+government and leader except insofar as those roll up into the three rates.
+`q.wonder` is the sharpest omission — the engine already snapshots it for
+legality, and "they cannot take a wonder while one is unfinished" is the exact
+signal `docs/EXPERT_STRATEGY.md:546` says to play around.
 
 ---
 
@@ -342,6 +589,71 @@ Where determinization stands:
   value card identity in the row or the deck must ship with determinization of
   the corresponding deck in the same change.
 
+### 6.1 The gun is now loaded — measured 2026-07-29
+
+The warning above was written as a prediction. It has come true, and the amount
+is small but no longer zero. `row_urgency` / `row_bargain_forgone` read
+`state.card_row`, which is public *at the root* — but an `end_turn` trial runs
+`_replenish`, which deals the **real** next civil cards into the row, and the
+row terms then price them. That is the exact mechanism §6 warned about, and
+`row_pressure`'s own docstring (`weighted.py:743`) asserts the opposite
+("does not load the `end_turn` information leak"). That assertion is wrong for
+`end_turn` specifically, and correct for every other move.
+
+Re-run of `tools/infoleak.py` (it still works, unmodified):
+
+```
+2p,  8 games   1046 decisions / 12421 candidates   end_turn 94.2% leaky
+                                                   (was 94.9%)
+               61.1% of decisions have >=1 leaky candidate
+3p,  5 games   1160 decisions / 13213 candidates   end_turn 92.0% leaky
+               86.2% of decisions have >=1 leaky candidate
+```
+
+Re-run of `tools/leak_impact.py`, which re-shuffles `civil_deck` and
+`military_deck` K times and asks whether the *chosen move* changes:
+
+```
+weights                       decisions   move changed        end_turn cheat-minus-honest
+DEFAULT (2p, 10 games, K=6)        1345   0 = 0.00% +/-0.00%  mean +0.000, sd 0.000
+                                                              within-decision sd 0.000
+live 3p champion, gen 1139         2281   10 = 0.44% +/-0.27% mean -0.012, sd 0.600
+  (8 games, K=6)                          honest-eval loss of  within-decision sd 0.315
+                                          the cheating pick
+                                          -0.570 mean
+live 4p champion, gen 308          2958   2 = 0.07% +/-0.09%  mean +0.000, sd 0.006
+  (6 games, K=6)                          (CI includes zero)   within-decision sd 0.003
+```
+
+Read the **last column**, not the first. Under `DEFAULT_WEIGHTS` the `end_turn`
+score is *identically* 0.000 across every determinization — the evaluator
+cannot see the cards it peeked at, so the leak is provably inert, exactly as in
+2026-07-27. Under the row-aware 3p champion the within-decision spread across
+determinizations is **0.315 eval points**, which is not a noise question: it is
+structurally non-zero because a term now reads the revealed cards. The
+move-flip rate of 0.44% +/- 0.27% (n=2281, 95% CI 0.17%-0.71%) excludes zero,
+but it is a *point* estimate on 10 events and should be treated as "small and
+real", not as a magnitude. The 4p arm tracks its own tiny row scales exactly:
+within-decision sd 0.003 and a move-flip rate whose CI still includes zero
+(2/2958). **The size of the leak's effect scales with the row weights**, which
+is the mechanism, and the 3p row weights are the ones the league is currently
+driving upward.
+
+**No BookBot anchor-leak fix has landed.** The commit named in the request,
+`9794bd7` ("Desktop: make training invisible while the owner games, and stop
+leaking drivers"), is a Windows scheduled-task and GPU-guard fix — the "leaking"
+in its subject is leaked driver processes, not information. `6e5061e`
+("Loop tuning: BookBot anchor + gentler fine-tune") is the neural loop's
+opponent anchor and does not touch determinization either. Nothing in the repo
+has changed `plan.determinize` or the trial-copy path since this audit was
+written; the leak is unfixed and, as of the 3p arm, live.
+
+**Required fix, and it is now urgent rather than prophylactic:** `end_turn`
+candidates must be scored against a re-shuffled `civil_deck`, or the row terms
+must be computed on the *root* row rather than the post-move row. The second is
+cheaper and is arguably more correct anyway — `row_urgency` asks "what will the
+sweep destroy before I act again", which is a question about the row I can see.
+
 ---
 
 ## 7. Ranked gaps and bounded proposals
@@ -349,7 +661,56 @@ Where determinization stands:
 Ordered by (value / implementation cost). Each is a feature-level change; none
 requires a new search architecture.
 
-### GAP 1 — Row depth is priced by a single scalar with the wrong sign. *(highest value, lowest cost)*
+### 7.0 Status and re-ranking, 2026-07-29
+
+| gap | 2026-07-27 rank | status | evidence |
+|---|---|---|---|
+| GAP 1 — row depth priced with the wrong sign | 1 | **SHIPPED and fitted.** `take_cost_paid` exists (`weighted.py:500`, responds 24/24) and the live 3p `ca_left` has gone from -0.0974 to **+0.6072** | §0b.1 |
+| GAP 2 — take now vs let it slide | 2 | **SHIPPED as code, fitted only at 3p.** `row_pressure` (`weighted.py:718-777`) implements the exact slide plus the legality gate; scales are 0.0 in DEFAULT, all frozen champions and the 2p arm, +0.106/+1.516 at 3p, ~0.002/0.024 at 4p | §0b.1-2 |
+| GAP 3 — opponent hands and boards invisible | 3 | **PARTIALLY SHIPPED.** 4 of the 6 proposed terms exist (`rival_free_ca`, `rival_hand_civil`, `rival_wonders`, `rival_hand_potential`). `rival_best_tech_level` and `rival_happy_margin` were not built; nor was the desire model — `RIVAL_TAKE_P` is one flat 0.25 | §0b.3, §5 |
+| GAP 4 — politics/event deck invisible | 4 | **UNSTARTED.** 0/24 positions, 0/35 evaluations, all seven weight vectors | §0b.4, §4.1 |
+| GAP 5 — no civil discard record | 5 | **UNSTARTED.** No `civil_discard` field; deck composition moves nothing, 0/24 | §0b.4, §4 |
+| GAP 6 — military hand identity | 6 | **UNSTARTED.** `hand_mil_value` is still a level sum | §3 |
+
+**Re-ranked remaining work**, by expected value per unit of cost, given what is
+now measured rather than what was predicted:
+
+1. **Fix the `end_turn` row leak (§6.1).** New, and it now outranks everything
+   because it is a *correctness* bug rather than a strength gap: the 3p arm is
+   currently being trained against a signal it will not have against a human.
+   Cost is a few lines (score the row terms on the root row, or shuffle
+   `civil_deck` in the trial). Do this before adding any further row or deck
+   feature.
+2. **GAP 4 — events.** Still the largest untouched blind spot and the owner's
+   first-listed skill. The evaluator has **zero** notion of any event, including
+   ones it seeded itself, verified by measurement across all seven weight
+   vectors. The neural encoder already demonstrates the legal masking
+   (`neural_encode.py:182-188`), so the design question is settled and only the
+   linear feature is missing. Must ship with the `current_events` shuffle in
+   `plan.determinize`.
+3. **Turn on GAP 2/GAP 3 at 2p and 4p.** The code is written and free; the
+   scales are simply still at 0.0 in two of three arms, and at 4p the fitted
+   scales are ~0.002 — i.e. the trainer has not yet found them. This is a
+   training-schedule question, not an engineering one, and it costs nothing but
+   generations. The 3p arm is the existence proof that the terms are reachable.
+4. **The seven missing public rival board fields (§0b.3).** Their wonder-in-
+   progress flag first — it is already snapshotted into `_RivalView.wonder` for
+   the legality gate, so scoring it is one line, and it is the exact "is this
+   wonder safe to let slide" signal in `docs/EXPERT_STRATEGY.md:546`. Then
+   `rival_happy_margin` and `rival_best_tech_level` from the original GAP 3.
+5. **GAP 5 — civil discard record**, which is the only prerequisite for any
+   principled card counting. Nearly free (one state field), no immediate payoff.
+6. **A rival *desire* model** to replace the flat `RIVAL_TAKE_P = 0.25`. Real
+   value but the highest cost of anything here, and worth nothing until the
+   arms have actually fitted the legality-gated version above it.
+7. **GAP 6 — military hand identity.** Unchanged in rank; it is the one item
+   that would make a *second* leak live (rival military hands in
+   `determinize`), so it must not ship before item 1's discipline is in place.
+
+*The original 2026-07-27 gap entries follow unchanged, for the proposals and
+the derivations. Read them with the status table above.*
+
+### GAP 1 — Row depth is priced by a single scalar with the wrong sign. *(highest value, lowest cost)* — SHIPPED
 
 **Evidence.** §0, §2.2, §7.2. The only path from slot cost to evaluation is
 `ca_left` (`engine/bots/weighted.py:439`); its 3p champion weight is -0.0974, so
@@ -551,6 +912,45 @@ to `/tmp`, not committed.
   tournament baseline) are cited from `docs/HEURISTICS_PROGRESS.md:119-121` and
   `docs/EXPERT_STRATEGY.md:688`, not re-measured.
 
+### 8.1 The 2026-07-29 re-measurement
+
+The original `/tmp/invcheck.py` no longer exists; it was **reconstructed from
+this document's own §7.1 description** ("advance a game, apply six perturbations
+plus ten single-field rival perturbations, compare `features()` dicts and
+`evaluate()` scalars") and then generalised. All scripts were throwaway, written
+to `/tmp`, not committed. Everything ran under `nice -n 19` alongside three live
+training arms.
+
+* **`/tmp/invcheck2.py`** — 35 positions: 2p/3p/4p x seeds 0/1/2 x four ply
+  depths each, self-played by `WeightedBot` under `DEFAULT_WEIGHTS`, snapshotted
+  with `fastcopy.copy_state`. Age distribution `{2p: 5 I / 3 II / 3 III;
+  3p: 6 / 3 / 3; 4p: 6 I / 6 II}` — **no Age IV or Age A position was sampled**,
+  and Age A in particular is where the row is shallowest, so the row results
+  should be read as mid-game. Nine structural perturbations x seven weight
+  vectors, plus the ten-field rival scalar sweep. Results in §0b.2-3. Runtime
+  ~90 s.
+* **`/tmp/invcheck3.py`** — 24 positions (seeds 0/1), one information source
+  wiped at a time, recording *which* `features()` keys move. Results in §0b.4.
+* Weight vectors were **snapshotted to `/tmp/snap/` before use** (live 2p gen
+  16, 3p gen 1139, 4p gen 308) because the league rewrites
+  `experiments/league_state/champion_*.json` continuously. Any re-run against
+  the live files will see different numbers; the *frozen* and *default* columns
+  are stable.
+* **`tools/infoleak.py`** — re-run unmodified, 2p/8 games and 3p/5 games. It
+  still works. Results in §6.1.
+* **`tools/leak_impact.py`** — re-run unmodified under `DEFAULT_WEIGHTS` (2p, 10
+  games), the live 3p champion (8 games) and the live 4p champion (6 games),
+  K=6 determinizations each. Results in §6.1.
+
+**Sample-size discipline.** The per-cell n in §0b.2 is 11-12 positions per
+player count, which is enough to distinguish "structurally cannot respond"
+(0/12 under a vector whose weight is literally 0.0) from "responds where the
+term is non-zero" (8/12, with the other 4/12 explained position-by-position by
+`row_pressure` returning `(0.0, 0.0)`). It is **not** enough to estimate a
+magnitude precisely; the delete-row deltas are quoted with their sd for that
+reason. The one number here that is a genuine small-n proportion is the 3p
+move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
+
 ## 9. Things I could not verify
 
 * Whether the military *discard pile* is public in the physical game.
@@ -561,6 +961,19 @@ to `/tmp`, not committed.
   settled, which affects how a military card-counter may use it.
 * The size of the event-order leak (§6, item 2). `tools/infoleak.py` does not
   instrument event reveals, so this is unmeasured rather than measured-small.
+  **Still true on 2026-07-29** — the tool is unchanged.
 * Whether `rival_hand_potential` (GAP 3) is worth anything at 3p/4p. The civil
   `hand_potential` term itself was only validated at 2p
-  (`engine/bots/weighted.py:673-677`).
+  (`engine/bots/weighted.py:673-677`). **Partial answer 2026-07-29:** the live
+  4p champion has fitted it to **+1.329** and the live 3p champion to -0.020,
+  i.e. two arms hill-climbing independently landed on opposite signs and very
+  different magnitudes. That is suggestive of the 4p arm having found something
+  and the 3p arm having found nothing, but a weight reached by hill climbing is
+  not evidence of value — it needs a head-to-head A/B at each player count,
+  which was **not run here**.
+* Whether any of the shipped GAP 1/2/3 terms actually make the bot **stronger**.
+  This audit measured only what the evaluator *reads*, never what it *wins*. The
+  live 3p arm's advantage over its own lineage is a league statistic and is not
+  attributable to these terms without an ablation.
+* Whether the Age A and Age IV positions behave like the Ages I-III sampled
+  here. Neither was sampled (§8.1).
