@@ -264,7 +264,15 @@ class Lifecycle(JournalTestCase):
         j = journal.begin(st)
         st._stats_cache = {"polluted": True}
         journal.rollback(j)
-        self.assertFalse(hasattr(st, "_stats_cache"))
+        # The instance attribute must be gone from `__dict__` -- that is what
+        # `copy_state`, `statediff` and `fastcopy`'s len(__dict__) guard all
+        # key off.  `hasattr` is deliberately NOT the assertion: GameState
+        # carries a class-level `_stats_cache = None` default so that
+        # `effects.state_stats` does not have to catch an AttributeError on
+        # every cold state, so `hasattr` is now always True.  Reading it back
+        # must give the cold `None`, not the polluted trial cache.
+        self.assertNotIn("_stats_cache", st.__dict__)
+        self.assertIsNone(st._stats_cache)
 
     def test_copy_state_inside_a_journal_is_faithful_and_not_rolled_back(self):
         """Section 10 replaced "copying inside a journal is refused" with

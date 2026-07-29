@@ -52,9 +52,9 @@ import sys
 # move was illegal, try the next one".
 #
 # The membership here is MEASURED, not guessed.  `--all` over 36 games (2p/3p/4p
-# x seeds 0,1,2 x greedy/weighted/quiescent/plan) swallows 44k exceptions per 4p
-# batch and every single one of them is `KeyError` or `AttributeError`.  Nothing
-# else raises at all, so everything else can sit in the strict set for free:
+# x seeds 0,1,2 x greedy/weighted/quiescent/plan) swallows 97 exceptions per 4p
+# batch and every single one of them is a `KeyError`.  Nothing else raises at
+# all, so everything else can sit in the strict set for free:
 #
 #   NameError            a typo, or a variable used outside its scope.  THE bug
 #                        this file exists for.  UnboundLocalError is a subclass,
@@ -72,15 +72,21 @@ import sys
 # requiring zero would be a gate that cries wolf (docs/PYPY.md 9.0 on how much
 # damage a misleading gate does on this project):
 #
-#   AttributeError  23,305 per 4p batch, almost all `effects.state_stats`
-#                   lazily initialising `_stats_cache` via a caught
-#                   AttributeError, plus the dict-or-object card accessors'
-#                   `getattr(c, "name", c)`.
-#   KeyError        ~15k per 4p batch, `actions.cost_of` probing a card name.
+#   AttributeError  0 per 4p batch today, but kept out on principle: the
+#                   dict-or-object card accessors' `getattr(c, "name", c)` is
+#                   a legitimate probe and a new one must not fail this gate.
+#   KeyError        97 per 4p batch, all four sites in engine/effects.py
+#                   (`_apply_flat` 44, `compute` 34, `_tactic_need` 15,
+#                   `_add_production` 4) -- each an intentional "is this key
+#                   present in the card's effects dict" probe.
 #
-# Those two counts are a PERFORMANCE smell worth its own look -- 38k exceptions
-# per four games is not free -- but they are not correctness bugs and they are
-# not this file's business.
+# This used to read "AttributeError 23,305 / KeyError ~15k per 4p batch ... a
+# PERFORMANCE smell worth its own look".  It got one: `effects.state_stats`
+# lazily initialising `_stats_cache` off a caught AttributeError (23,305) and
+# `actions.cost_of` memoising off a caught KeyError (20,618) are both gone, so
+# the whole 4p batch now raises 97 times instead of 44,020.  If either count
+# climbs back into the thousands, something has reintroduced
+# exceptions-as-control-flow on a hot path.
 #
 # If a member of the strict set ever does fire legitimately, the report names the
 # file, function and message, so the choice is an informed one: fix it, or move

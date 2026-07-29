@@ -2904,3 +2904,99 @@ gave `QuiescentBot` and `PlanBot` a nested undo stack, which retires 11.3's
 and 11.6 pre-conversion measurements. Re-taking them is one command per cell
 (`--kinds quiescent:levels=1 --opponent weighted` with `TTA_JOURNAL` both
 ways) and it should be done before anyone quotes 0.82x/0.86x as current.
+
+## 12. The two exceptions-as-control-flow sites — 44,020 raises per 4p batch
+## down to 97, and an honest 2.5% CPU
+
+`tools/bug_audit --all --games 1 --players 4` had been reporting ~44k *caught*
+exceptions per batch since the audit was written, and the comment at the top of
+`tools/bug_audit.py` explicitly parked them as "a PERFORMANCE smell worth its
+own look". This is that look. Two sites were essentially all of it:
+
+```
+before:  44020 raise(s), 121 distinct site(s)
+         23305  AttributeError  effects.py:1058 state_stats()  '_stats_cache'
+         20618  KeyError        actions.py:400   cost_of()      <card name> (23 names)
+            97  KeyError        effects.py 330/344/392/819      (intentional probes)
+after:      97 raise(s), 97 distinct site(s)   <- the same 97, nothing else left
+```
+
+### 12.1 `state_stats` — a class-level default, not a caught AttributeError
+
+`effects.state_stats` created its per-state cache lazily off
+`except AttributeError`. The reason it fired 23,305 times rather than four is
+that the cache is *deliberately* cold constantly: `_stats_cache` is
+`_`-prefixed, so `bots/fastcopy` never copies it, and `journal.begin` and
+`journal.rollback` both `__dict__.pop` it (see the comments there — a warm
+trial cache could hide a missing `effects.invalidate`). Every copy and every
+undo trial therefore paid a raise on its first stats read.
+
+The fix is one line in `state.py`: an **un-annotated** `_stats_cache = None` on
+`GameState`. Un-annotated matters — `@dataclass` only looks at
+`__annotations__`, so this is a plain class attribute and is invisible to
+`fields()`, `asdict()`, `statediff` (which walks `__dict__`) and fastcopy's
+generated copiers, and it does **not** appear in `__dict__`, which is what
+fastcopy's `len(obj.__dict__)` guard and `_PRIVATE` accounting key off. The
+absent-cache semantics are unchanged: the instance attribute is still what
+`state_stats` writes, still absent until then, still popped by the journal, and
+`invalidate`'s `getattr(state, ..., None)` still sees `None` on a cold state.
+
+`tests/test_journal.py::test_stats_cache_is_dropped_on_rollback` had to change
+its assertion from `assertFalse(hasattr(...))` to `assertNotIn("_stats_cache",
+st.__dict__)` plus `assertIsNone(st._stats_cache)`. That is a *strengthening*,
+not a weakening: `__dict__` membership is the property the three consumers
+above actually depend on, and `hasattr` was only ever a proxy for it.
+
+### 12.2 `cost_of` — `.get` with a sentinel, and why `.get(n)` will not do
+
+`_action_moves`'s per-call build-cost memo probed with `try: costs[n]`. The memo
+is local to the call, so the *first* probe of each card is always a miss: 20,618
+raises. Now `costs.get(n, _MISS)` against a module-level sentinel. The sentinel
+is required rather than a `None` test, because `effects.build_cost` returns
+`None` for "this card cannot be built" and that answer has to memoize like any
+other — `costs.get(n) is None` would recompute it on every probe.
+
+### 12.3 Behaviour: all 14 gate arms, all 8 digests byte-identical
+
+`bash tools/gate.sh` -> **GATE PASS**, with narrow `0a6ed6ad`, wide `4a8c6ca6`,
+weighted `302c546c` / `4e40a58c`, quiescent `0e90a7e6` / `41f078e5`, plan
+`ad64a55b` / `441cd256` — i.e. every digest in the table unchanged, nothing
+re-derived and nothing re-blessed (9.0's rule: a digest that moves is a
+behaviour change until proven otherwise, and re-deriving to make a gate green
+is how a real change gets laundered). Additionally the 553-test suite passes
+under `JOURNAL_PARANOID=1`, both narrow arms pass under `FASTCOPY_PARANOID=1`,
+and `narrow` + `quiescent narrow` were re-run under
+`TTA_JOURNAL=1 JOURNAL_PARANOID=1` (copy, apply-by-undo, roll back, structural
+diff at every nesting level) on the same two digests.
+
+### 12.4 Speed: ~2.5% CPU, and wall clock on this box cannot see it
+
+Measured against a clean extract of the parent commit, arms **interleaved**
+BEFORE/AFTER/BEFORE/AFTER so the drifting load of the three live league arms
+falls on both equally, everything under `nice -n 10`, on a 6-core Mac mini at
+load ~13. Paired ratios (before/after, >1 means the change is faster):
+
+| instrument | workload | n pairs | mean ratio | 95% CI | after faster |
+|---|---|---|---|---|---|
+| wall clock | narrow (33 games) | 15 | 1.035 | [0.979, 1.092] | 7/15 |
+| CPU (user+sys) | narrow (33 games) | 12 | 1.025 | [0.992, 1.058] | 9/12 |
+| CPU (user+sys) | quiescent narrow (9 games) | 8 | 1.025 | [1.000, 1.050] | 7/8 |
+| CPU, both pooled | — | 20 | 1.025 | [1.005, 1.046] | 16/20, sign p=0.012 |
+
+Read this honestly:
+
+* **Wall clock cannot resolve it.** Between-run sd is ~9% of the mean, against
+  an effect of ~2.5%. Anyone who quotes a wall-clock pair here is quoting load.
+  CPU time is the usable instrument on a contended box (sd 1–3%).
+* **The CPU result is small but it does look real**: the same 1.025 point
+  estimate turned up *independently* on two different workloads, 16 of 20
+  paired runs went the right way (sign test p = 0.012), and the pooled CI
+  excludes 1 — but only just, and a single arm's CI does not.
+* **It could not have been large, and that was predictable**: ~11k raises per
+  game at roughly a microsecond each is ~10ms against a 0.3–16s game. Anyone
+  who expected the "38k exceptions" headline to be worth double-digit percent
+  was reading a raise count as if it were a profile.
+
+So the case for this change is mostly *not* the 2.5%. It is that the audit's
+biggest signal was noise from a lazy-init idiom, which cost every future reader
+of that report 44k lines of chaff over the four sites that are real.

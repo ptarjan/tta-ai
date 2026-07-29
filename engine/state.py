@@ -178,6 +178,20 @@ class GameState:
     forced_winner: int | None = None     # last player standing (§5.11)
     log: list = field(default_factory=list)
 
+    # NOT a dataclass field (deliberately un-annotated, so `fields()`,
+    # `asdict()` and engine.bots.fastcopy's generated copiers never see it):
+    # a class-level default for the private stats cache `engine.effects` hangs
+    # off a live state.  `effects.state_stats` used to create the instance
+    # attribute off a caught AttributeError, which cost 23,305 raised-and-
+    # caught exceptions per 4p 4-game batch because every `copy_state` and
+    # every `journal.begin`/`rollback` drops the cache again (it is `_`-prefixed
+    # and so is never copied) and the next read re-raises.  With this default,
+    # a cold state reads `None` through the class instead of raising, and the
+    # cache-absent semantics are unchanged: the instance attribute is still
+    # what `state_stats` writes, still absent from `__dict__` until then, and
+    # still `__dict__.pop`ed by the journal.
+    _stats_cache = None
+
     def me(self):
         return self.players[self.current]
 

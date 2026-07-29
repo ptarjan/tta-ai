@@ -1061,10 +1061,15 @@ def state_stats(state, p):
     Hot: ~10 calls per generated move.  A cache entry is `[stats, key,
     dirty]`; the common case (clean entry) is one dict probe and two list
     indexings.
+
+    `GameState._stats_cache` is a class-level `None` (see state.py), so a cold
+    state -- which is what every `copy_state` and every `journal.begin`
+    produces, since the cache is `_`-prefixed and never copied -- reads it
+    without raising.  This used to be a caught `AttributeError` and was 23,305
+    of the 44,020 exceptions raised per 4p 4-game batch.
     """
-    try:
-        cache = state._stats_cache
-    except AttributeError:
+    cache = state._stats_cache
+    if cache is None:
         cache = state._stats_cache = {}
     idx = p.idx
     ent = cache.get(idx)

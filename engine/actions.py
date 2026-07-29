@@ -30,6 +30,10 @@ _LEVEL_BY_NAME = _DB.level_by_name
 
 STRICT = os.environ.get("TTA_STRICT", "") not in ("", "0", "false", "no")
 
+#: "not memoized yet" for the lazily-filled dicts in this module.  A distinct
+#: object, because `None` is a real memoized answer (see `cost_of`).
+_MISS = object()
+
 ROW_SIZE = 13
 
 
@@ -398,11 +402,15 @@ def _action_moves(state, p):
     build_cost = effects.build_cost
 
     def cost_of(n):
-        try:
-            return costs[n]
-        except KeyError:
+        # `.get` with a sentinel, not `try: costs[n]`: a cold probe was a
+        # raised-and-caught KeyError, 20,618 of them per 4p 4-game batch.  The
+        # sentinel (rather than `costs.get(n)` and a `None` test) is required
+        # because `build_cost` legitimately returns None for "cannot be built",
+        # and that answer has to memoize like any other.
+        c = costs.get(n, _MISS)
+        if c is _MISS:
             c = costs[n] = build_cost(state, p, n)
-            return c
+        return c
 
     have_ma = p.military_actions >= 1
     have_ca = ca >= 1
