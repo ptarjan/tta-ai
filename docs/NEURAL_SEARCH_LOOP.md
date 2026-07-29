@@ -176,3 +176,56 @@ The owner games on this machine and that outranks everything here.
 * `rm -f checkpoints/cand.pt` before each training run: a guard kill mid-train
   used to leave the *previous* iteration's candidate on disk to be gated as if
   it were this one's.
+
+### 8.1 The heartbeat is continuous, and promotion is atomic
+
+The relaunch guard reaps a driver whose `loop2/driver.beat` is older than
+`STALE_BEAT` with `kill -9`. As first written, `driver.beat` was touched only at
+script start, once per iteration, and every 30s while parked for a game — so the
+heartbeat measured *iteration boundaries*, and `STALE_BEAT=2700` was implicitly a
+bet that no iteration ever exceeds 45 minutes. The script's own estimate is
+20–40 min, i.e. about **5 minutes of margin**, and that estimate is not a ceiling:
+generation retries up to 4x on incomplete workers and stage-0 teacher generation
+up to 6x, each retry a full regeneration. **A 1441-second quiet stall was already
+observed and logged during Stage 0** — over half the threshold consumed by a
+single phase.
+
+The failure this produces is not two concurrent drivers (the takeover path
+SIGKILLs the recorded PID before writing its own, so they never overlap). It is
+the reaper `kill -9`-ing a live-but-slow driver *mid-write* at the checkpoint
+promotion, leaving a **truncated `checkpoints/best_search.pt`** — the one artifact
+the whole run is building.
+
+Two fixes, deliberately independent:
+
+1. **`beat_wait` replaces every bare `wait`.** It touches `$BEAT` every 15s for
+   as long as any background worker is running, and `beat_run` gives the two
+   foreground trainers the same coverage by backgrounding them and waiting
+   through `beat_wait`. `low()` also beats at each launch. Every long-quiet
+   stretch of this driver is one of those waits, so `$BEAT` now means "the driver
+   is executing", not "an iteration boundary just went by". `STALE_BEAT` is
+   thereby **decoupled from iteration length entirely**: it now only has to
+   exceed the gap between two beats (15s), which is ~180x of slack instead of
+   ~1.1x.
+2. **`install_ckpt` replaces `cp` at every site that writes `$BEST`.** It stages
+   into `${dst}.tmp.$$` — the same directory, hence the same filesystem, or the
+   rename would degrade to a copy — and then `mv -f`s it over the destination.
+   A rename within a filesystem is atomic, so a reader (and a `kill -9`) sees
+   either the whole old file or the whole new one, never a half-written one.
+   Stale `checkpoints/*.pt.tmp.*` from a kill mid-staging are swept at startup.
+   Windows can refuse to rename over a file another process still holds open, so
+   the rename is retried 3x and only then falls back to a plain `cp` with a loud
+   `WARNING` — that fallback is exactly the old behaviour, never worse.
+
+**Raising `STALE_BEAT` was considered and rejected**: it swaps one guess about
+iteration length for another, and since retries make iteration length unbounded
+there is no correct value. Fix 1 removes the coupling that made the number load-
+bearing; fix 2 removes the consequence of getting it wrong anyway. If you ever
+see a false reap, do not raise the number — find out why the beat stopped.
+
+Editing this script while it is running requires care: **bash reads a script
+lazily by byte offset**, so an in-place edit can make the live driver jump to a
+wrong offset and execute garbage. Write the new content to a temp file in the
+same directory and `mv` it over the original; the rename swaps the inode and the
+running bash keeps reading the old one to completion. The change takes effect on
+the next relaunch, not immediately.

@@ -72,7 +72,14 @@ BEAT=loop2/driver.beat
 # driver whose heartbeat has gone stale is presumed wedged and gets its tree
 # killed.  Both halves are needed -- the first stops duplicates, the second
 # stops a wedged driver from blocking recovery forever.
-STALE_BEAT=2700          # 45 min; one iteration is ~20-40 min
+# $BEAT is beaten CONTINUOUSLY -- every 15s while any worker runs (beat_wait)
+# and every 30s while parked (wait_if_paused) -- so a fresh heartbeat means
+# "the driver is executing", not "an iteration boundary just went by".  That is
+# what makes this threshold safe: it no longer has to exceed the longest
+# possible iteration, only the longest gap between two beats.  Do NOT "fix" a
+# false reap by raising this number; that only swaps one guess for another, and
+# gen retries (4x here, 6x in stage 0) mean iteration length has no ceiling.
+STALE_BEAT=2700          # 45 min; beats are 15s apart, so this is ~180x slack
 if [ -f "$PIDFILE" ]; then
   oldpid=$(cat "$PIDFILE" 2>/dev/null | tr -d '[:space:]')
   if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
@@ -89,6 +96,9 @@ fi
 echo $$ > "$PIDFILE"
 touch "$BEAT"
 trap 'rm -f "$PIDFILE"' EXIT
+# a driver killed mid-promotion leaves a staging file behind (see install_ckpt);
+# only one driver exists at this point, so anything left is ours and is dead
+rm -f checkpoints/*.pt.tmp.* 2>/dev/null || true
 
 wait_if_paused() {
   local said=0
@@ -106,7 +116,51 @@ say() { echo "$@" | tee -a "$LOG"; }
 # Never launch python while a game is up.  Priority comes from the Scheduled
 # Task (<Priority>7</Priority> = below normal) and is INHERITED by every child
 # process, so a game always outranks us without any per-process wrapper.
-low() { wait_if_paused; "$PY" "$@"; }
+low() { wait_if_paused; touch "$BEAT" 2>/dev/null; "$PY" "$@"; }
+
+# Every stretch where this driver goes quiet for tens of minutes is a `wait` on
+# python workers.  The relaunch guard above cannot tell a slow driver from a
+# wedged one -- it only reads $BEAT -- and it reaps with kill -9, which is how a
+# legitimately slow iteration gets its checkpoint write torn in half.  So beat
+# while we wait: this is the single choke point for every background phase (gen,
+# stage-0 teacher gen, gate, ref), and with beat_run it covers the foreground
+# training runs too.  A 1441s quiet stall was already observed in stage 0 --
+# more than half the reap threshold, from one phase.
+beat_wait() {
+  while [ -n "$(jobs -pr)" ]; do
+    touch "$BEAT" 2>/dev/null
+    sleep 15
+  done
+  wait
+  touch "$BEAT" 2>/dev/null
+}
+
+# A long FOREGROUND python (the trainers) with the same heartbeat coverage:
+# background it so beat_wait can beat, then wait for exactly it.  Callers keep
+# their own redirections; they check for the output file, not the exit status,
+# exactly as they did when this was a bare "$PY".
+beat_run() { low "$@" & beat_wait; }
+
+# Replace $BEST (or any checkpoint) ATOMICALLY.  cp writes in place, so a kill
+# -9 landing mid-copy -- from the reaper above, or from the gaming guard --
+# leaves a truncated best_search.pt, and best_search.pt is the one artifact the
+# whole run is building.  Stage into a temp file in the SAME directory (same
+# filesystem, or the rename is a copy and not atomic) and rename over the
+# destination: a reader then sees either the whole old file or the whole new
+# one, never a half-written one.
+install_ckpt() {   # install_ckpt SRC DST
+  local src=$1 dst=$2 tmp="${dst}.tmp.$$" i
+  cp "$src" "$tmp" || { rm -f "$tmp"; say "  WARNING: could not stage $src -> $tmp; $dst UNCHANGED"; return 1; }
+  for i in 1 2 3; do
+    mv -f "$tmp" "$dst" 2>/dev/null && return 0
+    sleep 2
+  done
+  # Windows refuses to rename over a file another process still holds open.
+  # Falling back to cp is exactly the old behaviour, so this is never worse than
+  # before -- but it is the one non-atomic path left, so it says so out loud.
+  say "  WARNING: atomic rename over $dst failed 3x; falling back to in-place cp"
+  cp "$tmp" "$dst"; rm -f "$tmp"; return 1
+}
 
 # ---------------------------------------------------------------- gate
 # Fan the head-to-head out over disjoint seed ranges and pool.  A beam-vs-beam
@@ -122,7 +176,7 @@ gate_parallel() {   # gate_parallel CAND OPP PREFIX
         --games "$per" --players 2 --device cpu --threads 1 --report 1000 \
         --seed0 $((w*1000)) > "${prefix}_${w}.log" 2>&1 &
   done
-  wait
+  beat_wait
   "$PY" experiments/pool_summary.py "${prefix}"_*.log
 }
 
@@ -151,15 +205,14 @@ if [ ! -f "$BEST" ]; then
           --games "$per" --width 8 --seed0 $((w*10000)) \
           --out "teacherdata/tg_w${w}" > "loop2/teacher_w${w}.log" 2>&1 &
     done
-    wait
+    beat_wait
     done_n=$(grep -l "^DONE" loop2/teacher_w*.log 2>/dev/null | wc -l)
     say "  teacher attempt $tries: $done_n/$GENW workers finished, "\
 "$(ls teacherdata/tg_*.npz 2>/dev/null | wc -l) shards"
     [ "$done_n" -ge "$GENW" ] && touch teacherdata/COMPLETE
   done
   [ -f teacherdata/COMPLETE ] || { say "  STAGE 0 could not complete generation; will retry on next task start"; exit 1; }
-  wait_if_paused
-  "$PY" experiments/neural_train_rank.py --data 'teacherdata/tg_*.npz' \
+  beat_run experiments/neural_train_rank.py --data 'teacherdata/tg_*.npz' \
       --epochs 20 --lr 1e-3 --lam "$LAM" --vweight "$VWEIGHT" \
       --select last --val-split rows --out checkpoints/boot.pt --device cuda \
       > loop2/train_boot.log 2>&1
@@ -170,7 +223,7 @@ if [ ! -f "$BEST" ]; then
   if [ -f checkpoints/best.pt ]; then
     say "  STAGE 0 boot vs old best (both under the beam): $(gate_parallel checkpoints/boot.pt checkpoints/best.pt loop2/gate_boot)"
   fi
-  cp checkpoints/boot.pt "$BEST"
+  install_ckpt checkpoints/boot.pt "$BEST"
   say "  STAGE 0 done -> $BEST"
 fi
 
@@ -197,7 +250,7 @@ for it in $(seq "$start_it" "$ITERS"); do
           --out "iterdata2/it${it}_w${w}" --device cpu --threads 1 \
           > "loop2/gen_it${it}_w${w}.log" 2>&1 &
     done
-    wait
+    beat_wait
     gdone=$(grep -l "^DONE" loop2/gen_it${it}_w*.log 2>/dev/null | wc -l)
     [ "$gdone" -ge "$GENW" ] && break
     say "  gen it$it attempt $gtries incomplete ($gdone/$GENW workers) -- retrying"
@@ -222,11 +275,10 @@ for it in $(seq "$start_it" "$ITERS"); do
   for k in $(seq 0 $((WINDOW-1))); do
     j=$((it-k)); [ "$j" -ge 1 ] && globs="$globs iterdata2/it${j}_w*.npz"
   done
-  wait_if_paused
   # a stale cand.pt from a guard-killed iteration would otherwise be gated as
   # if it were this iteration's candidate
   rm -f checkpoints/cand.pt
-  "$PY" experiments/neural_train_rank.py --data $globs 'teacherdata/tg_*.npz' \
+  beat_run experiments/neural_train_rank.py --data $globs 'teacherdata/tg_*.npz' \
       --init "$BEST" --epochs "$EPOCHS" --lr "$LR" --lam "$LAM" \
       --vweight "$VWEIGHT" --select last --val-split rows \
       --out checkpoints/cand.pt --device cuda \
@@ -244,8 +296,8 @@ for it in $(seq "$start_it" "$ITERS"); do
   # (4) promote iff the 95% CI lower bound clears 0.5
   promote=$(awk -v w="$win" -v c="$ci" 'BEGIN{print (w-c>0.5)?1:0}')
   if [ "$promote" = "1" ]; then
-    cp checkpoints/cand.pt "$BEST"
-    cp checkpoints/cand.pt "checkpoints/promoted_s_it${it}.pt"
+    install_ckpt checkpoints/cand.pt "$BEST"
+    install_ckpt checkpoints/cand.pt "checkpoints/promoted_s_it${it}.pt"
     say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul"
   else
     say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul"
@@ -262,7 +314,7 @@ for it in $(seq "$start_it" "$ITERS"); do
           --games "$perr" --players 2 --device cpu --threads 1 --report 1000 \
           --seed0 $((w*1000)) > "loop2/ref_it${it}_${w}.log" 2>&1 &
     done
-    wait
+    beat_wait
     RS=$("$PY" experiments/pool_summary.py loop2/ref_it${it}_*.log)
     vp=$(echo "$RS" | sed -n 's/.*win=\([0-9.]*\).*/\1/p')
     say "  REF it$it  vs plan:champion -> $RS"
