@@ -261,3 +261,302 @@ for its first N accepts has a blind spot exactly where a retarget lands.
   improving".** A converged arm produces `flat` readings honestly. Cross-read
   it against the arm's own accept rate before concluding anything about the
   proxy.
+
+---
+
+## 8. The first `INVERTED` reading, replicated — 2026-07-29
+
+The 3p arm's first-ever guardrail reading came back `INVERTED` at
+`gen 821 -> 918`, and it was one reading. This section is the follow-up
+measurement that was run to settle it. Raw per-game series and the driver
+script are not committed (trainer-output convention); every number below is
+reproducible from the commands in §8.11.
+
+**Three findings, and they do not all point the same way — read all three.**
+
+1. **The reading replicates.** At 2x the n the margin is −16.1 ± 9.9, upper
+   bound −6.2, still `INVERTED` under this file's own rule (§8.3). It is not
+   small-n noise.
+2. **But the 821 → 918 range is NOT a monotone slide, and it is not one bad
+   accept either.** Gen 850 is *better* than gen 821 by +27.2 ± 11.7 culture
+   on the absolute anchor — a real, resolved gain the proxy correctly found —
+   and the range then falls away from it (§8.4, §8.5). The resolved damage is
+   in the last step, 900 → 918.
+3. **The finding that dwarfs the alarm is the long series.** Own culture
+   against a fixed opponent under the ship policy falls **−79.8 ± 21.5** from
+   gen 0 to gen 930, paired on identical deals, at **−7.38 ± 1.71 culture per
+   100 generations** (§8.5). The arm's best-scoring vector under the policy we
+   would ship is the untrained one it started from.
+
+The synthesis in §8.6 is that "the 3p proxy is inverted" is the wrong shape of
+claim. The proxy is close to *uninformative* about the ship policy from one
+accept to the next — gen 850's accepts were genuinely good and gen 918's were
+genuinely bad — with a systematic downward bias on top. That is a random walk
+with drift, not a sign flip, and it needs a different fix from the one an
+inversion would need.
+
+### 8.1 What the original reading actually was
+
+The log line does not state its n. It is:
+
+| | n | what the CI is over |
+|---|---|---|
+| head to head, `-20.3 +/- 11.9` | **60 games = 20 deals x 3 seats** | `arena.mean_ci` over the **60 games** |
+| anchor, `own culture 141.0` | **24 games = 8 deals x 3 seats** | — |
+
+Two things follow that are worth knowing before quoting it. First, the null it
+is measured against is 0 culture margin, and the win-share null at 3p is
+**33.3%**, not 50%. Second, `measure()` computes the margin CI over *games*,
+but a deal at 3p is one seed played from all three seats **against the same
+opponent vector**, which makes a deal an internally paired unit: the
+challenger's gain in one seat is partly the defender's loss in another. So the
+games inside a deal are **negatively** correlated, and the deal-clustered CI
+comes out *tighter* than the game-level one, not wider (§8.3). The guardrail's
+CI is therefore conservative here. That is the safe direction, and it is the
+opposite of what clustering usually does — do not assume it holds at 2p or
+against `book`, where the pairing is not symmetric.
+
+### 8.2 Harness check: the same deals give the same answer
+
+The replication uses `proxy_check.py`'s own `H2H_SEED = 5150` and
+`ANCHOR_SEED = 90210`, so its first 20 deals **are** the reading's 20 deals.
+On those deals it returns, to the digit:
+
+```
+margin -20.3 +/- 11.9   own culture 65.5 vs 85.9   win share 20.6% +/- 10.2%
+```
+
+That matters for a second reason: the reading was taken with the pre-`7ef6ac8`
+PlanBot and the replication with the post-`7ef6ac8` one (`QuiescentBot and
+PlanBot search by undo stack, nested`). That commit claims byte-identical gate
+fingerprints; this is an independent confirmation of the claim on 60 live 3p
+games, and it means §8.3-8.5 are not measuring an engine change.
+
+### 8.3 The replication: gen 918 vs gen 821 at 2x the n
+
+Both vectors under `plan:width=8`, seat-rotated on the same deals, zero engine
+errors. `blend` is the league's own accept objective
+(`docs/LEAGUE_OBJECTIVE.md`: `own_share` centred 100, scale 120, alpha 0.15 on
+win share), scored per game for the challenger minus the defenders' mean and
+clustered by deal.
+
+| | n | culture margin | +/- (game) | +/- (deal) | own culture | opp culture | win share (null 33.3%) | d(blend) |
+|---|---|---|---|---|---|---|---|---|
+| guardrail's reading | 60 / 20 deals | −20.3 | 11.9 | 10.1 | 65.5 | 85.9 | 20.6% ± 10.2% | −0.093 ± 0.050 |
+| **this replication** | **120 / 40 deals** | **−16.1** | **9.9** | **8.5** | **70.9** | **86.9** | **24.4% ± 7.7%** | **−0.069 ± 0.039** |
+
+**The verdict is unchanged: `INVERTED`.** The margin's upper bound is **−6.2**
+game-clustered and **−7.6** deal-clustered, both below the file's own −5
+threshold. Own culture and win share move the *same* way — 70.9 against 86.9
+and 24.4% against a 33.3% null — so this is not a margin artefact dressed up as
+a regression, which is the specific failure `docs/LEAGUE_OBJECTIVE.md` §1 exists
+to prevent. The league's own `blend` objective agrees at −0.069 ± 0.039.
+
+### 8.4 Bracketing it: not one bad accept
+
+The same head to head from three intermediate rungs of `ladder_3p`, every one
+of them against the **same** gen 821 on the **same** deals:
+
+| challenger | n | culture margin | +/- (deal) | own culture | win share |
+|---|---|---|---|---|---|
+| gen 876 | 60 / 20 deals | −4.4 | 8.8 | 84.4 | 30.0% ± 11.7% |
+| gen 900 | 60 / 20 deals | −4.5 | 13.6 | 83.2 | 23.3% ± 10.8% |
+| gen 918 | 120 / 40 deals | **−16.1** | 8.5 | 70.9 | 24.4% ± 7.7% |
+
+Every rung is negative and none of the intermediates resolves on its own at
+n=60. Read alone this table says "a slow drift with the resolved damage in the
+tail", and that is as far as a chain of head-to-heads can take you — §7's first
+limit, that a chain is relative and drifts, applies to this table too.
+
+### 8.5 The absolute anchor settles it, and it is worse than the chain suggests
+
+Own culture against `book` under `plan:width=8`, **every rung on byte-identical
+deals**, so the columns are paired game by game. `n = 48 games / 16 deals` per
+row; the CI on the paired difference is clustered by deal.
+
+| gen | own culture | +/- | **paired d vs gen 0** | +/- | `book`'s culture | win share |
+|---|---|---|---|---|---|---|
+| **0** (untrained `DEFAULT_WEIGHTS`) | **217.8** | 14.5 | — | — | 130.2 | 85.4% ± 10.1% |
+| 309 | 191.7 | 15.7 | −26.1 | 23.4 | 87.7 | 91.7% ± 7.9% |
+| 603 | 174.1 | 13.2 | −43.7 | 21.0 | 85.4 | 85.4% ± 10.1% |
+| 711 | 171.4 | 19.2 | −46.3 | 25.1 | 93.6 | 70.8% ± 13.0% |
+| 821 | 152.2 | 13.0 | −65.6 | 20.1 | 87.8 | 79.2% ± 11.6% |
+| **918** | **141.1** | 10.9 | **−76.6** | **17.8** | 88.9 | 72.9% ± 12.7% |
+
+OLS on the 96 deal means: **−7.83 ± 1.88 culture per 100 generations**, i.e.
+4.2 SE from a flat line, monotone from the first rung to the last.
+
+**The 3p arm's best vector under the policy we would ship is the untrained one
+it started from.** 918 generations of proxy progress — 151 accepted champions,
+every accept requiring a positive one-sided lower bound on the training metric
+— bought **−76.6 ± 17.8** culture against a fixed external opponent. The
+`book` column is the mechanism and it is `docs/TRANSFER_TEST.md` §5 verbatim:
+the arm did not raise its own score, it learned to hold `book` down (130.2 →
+88), which `margin`-era intuitions read as progress and `own`/`blend` under
+the *ship* policy does not.
+
+The weight vectors say the same thing in the open. Across 821 → 930 the
+movement is monotone and it is military: `strength_lead` 0.530 → 3.211,
+`strength` 4.76 → 7.53, `pact_blocks_attack` 0.239 → 1.216, while
+`culture_rate` peaks at 12.3 (gen 850) and falls back to 9.1. That is precisely
+the move class `docs/TRANSFER_TEST.md` §6 identifies as the one the proxy
+prices and the ship policy does not.
+
+**So the answer to "a bad accept, or an inverted proxy" is the second one, and
+for the whole run rather than the last 97 generations.** The 2026-07-29
+retarget of the 2p arm (`docs/TRAINING_RUN.md`) was made on exactly this
+evidence shape at 2p; 3p is the same finding with a bigger effect and a longer
+lever arm.
+
+### 8.6 3p has never had a passing transfer check. Not once.
+
+This was checked directly rather than assumed:
+
+* `experiments/league_state/proxy_history_3p.jsonl` has **one** record — the
+  `INVERTED` one. `grep '\[3p\]' experiments/logs/proxy_check.log` returns one
+  block. It is the first and only ship-policy reading the arm has ever had.
+* The in-loop `FULL POOL CHECK` is **not** a transfer check.
+  `hillclimb_league.full_check` calls `as_spec`, which applies the module-level
+  `CANDIDATE_ARCH` — i.e. `quiescent:levels=1`. All 113 of the 3p arm's full
+  checks measure the proxy against itself.
+* `grep -niE "plan|width=8|transfer" experiments/logs/league_3p.log` returns
+  **nothing**. The arm has never played a `plan` game in its life.
+* Nothing in `docs/` carries a 3p `plan:width=8` number.
+  `docs/TRANSFER_TEST.md` §7 and `docs/PLAN_WAR_LOOKAHEAD.md` both say in
+  terms that they are 2p only and that 3p/4p were deliberately not attempted.
+
+**The 3p arm ran 1 131 generations and 151 accepted champions with no transfer
+check of any kind**, and the first one ever taken says the direction was wrong
+the whole way. That is the blind spot this whole document was built to close,
+found on its first look at this arm.
+
+### 8.7 Against the human baseline — and why it is not head to head
+
+`docs/HUMAN_BASELINE.md`: the human **3p** median final culture is **180**
+[140-211] over n=133 games. (The 159.5 quoted throughout this file is the **2p**
+figure and should not be used for a 3p reading.)
+
+Two of our numbers sit either side of it and **neither is comparable to it**:
+
+* **141.1 against `book`** — one weak opponent, seated twice. `book` is a
+  hand-written `BookBot` and the pool is a monoculture (§7). This flatters us.
+* **70.9 in the gen-918-vs-gen-821 mirror** — three strong searchers splitting
+  one table, which is *structurally* the shape the human 180 comes from (three
+  humans at a table). This is the more honest comparison of the two and it is
+  brutal: 71-95 against 180.
+
+Neither is a head-to-head result against humans, and this repo has no way to
+produce one. The human corpus is games humans played against each other, in
+which our vector never sat. **Suggestive, not equivalent.** What can be said
+without stretching: gen 0 at 217.8 against `book` and gen 918 at 141.1 are on
+opposite sides of the human 3p median, and the arm moved from the first to the
+second.
+
+### 8.8 What it costs to act
+
+`tools/arch_cost.py --players 3 --weights experiments/league_state/ladder_3p/
+gen00930.json`, i.e. measured **on the arm's own champion**, not on
+`DEFAULT_WEIGHTS` (`docs/TRAINING_RUN.md` warns the difference is large, and it
+is: quiescent costs 1.504 cpu-s/game in a mirror here against 0.357 on the
+defaults). cpu-seconds per game, `TTA_JOURNAL=1`, `workers=1`:
+
+| architecture | vs `book` | mirror | "real mix" (3/4 mirror) | x quiescent | 3p generations in 12h |
+|---|---|---|---|---|---|
+| `weighted` (1-ply) | 0.403 | 0.927 | 0.796 | 0.6x | ~270 |
+| `quiescent:levels=1` (today) | 0.591 | 1.504 | 1.276 | 1.0x | **~168** |
+| `plan:width=1` | 1.608 | 5.419 | 4.466 | 3.5x | ~48 |
+| **`plan:width=2`** | **2.880** | **7.836** | **6.597** | **5.2x** | **~32** |
+| `plan:width=4` | — | — | — | — | — |
+| `plan:width=8` (ship) | 8.056 | 30.374 | 24.795 | 19.4x | ~9 |
+
+So retargeting 3p to `plan:width=2` — the change made to 2p on 2026-07-29 —
+costs about **5.2x**, taking the arm from ~168 generations per 12h to ~32. At
+the arm's observed ~13% accept rate that is ~4 accepts per 12h against ~22.
+
+### 8.9 Limits — read before quoting §8.5
+
+* **`book` is one opponent and the pool is a monoculture.** §7's warning is
+  unchanged. The §8.5 series is a *paired* difference on a common opponent,
+  which is robust to that opponent being weak, but it is not evidence about a
+  human or the official app AI. It is possible in principle for a vector to
+  lose ground against `book` and gain it against something else; nothing here
+  rules that out, and the only cheap way to check would be to repeat §8.5
+  against `hall:oneply_2p_gen00355`, which was not done.
+* **`plan:width=8` is one point on a curve, and it is the *assumed* ship
+  policy.** §7's "it validates the vector, not the search" applies in full. If
+  `width=8` is not what we ship at 3p, §8.5 is measuring the wrong target.
+* **n is 48 games / 16 deals per anchor row.** The row-level CIs are ±11 to
+  ±19 culture and the *paired* differences are the load-bearing column. The
+  gen-930 row was measured at 8 deals only and is omitted from the OLS.
+* **The h2h rungs in §8.4 do not individually resolve.** Only gen 918 does.
+  The claim "a steady decline, not one bad accept" rests on §8.5, not on §8.4.
+* **Six rungs is a coarse grid over 918 generations.** The decline is monotone
+  on the rungs measured; it is not established that it is monotone between
+  them, and a single catastrophic accept somewhere inside a gap would look the
+  same at this resolution.
+* **This does not say `quiescent:levels=1` is a bad search**, or that gen 918
+  is a bad vector. Under its own proxy the arm's full pool check has it winning
+  73-96% and scoring 147-190 own culture. `docs/TRANSFER_TEST.md` §8.4's
+  sentence applies unchanged: it is the better vector under everything except
+  the thing we would ship.
+
+### 8.10 Found on the way: both arms silently played zero games for ~55 minutes
+
+Unrelated to the proxy, and worse operationally. Reconstructed from
+`generations_3p.jsonl` / `generations_4p.jsonl` (`per_opponent[*].n == 0` on
+every candidate):
+
+| arm | dead from | to | generations burnt |
+|---|---|---|---|
+| 3p | gen 933, 11:33:00 | gen 1130, 12:29:32 | **197** |
+| 4p | gen 235, 11:33:36 | gen 303, 12:16:03 | **68** |
+
+Every game raised, so every candidate scored `edge 0.0, lo -1.0`, so nothing
+could be accepted. The window opens **27 seconds** after a
+`pull -q --ff-only origin master` at 11:32:33 (git reflog) that landed the
+undo-stack commits, and closes at each arm's next hourly process restart. The
+mechanism was not confirmed and should not be quoted as fact; the coincidence
+is exact.
+
+**Nothing anywhere said so**, and that is the part to fix:
+
+* `arena._play` catches every exception and returns `share=None`
+  ("engine bug: report, do not kill the tournament"), which is right;
+* but `hillclimb_league` records the result as `n: 0` with **no error text**,
+  and `league_3p.log` contains zero occurrences of `error`;
+* `run_league.sh`'s 60-second backoff triggers on "the engine won't
+  **import**", which a runtime failure is not;
+* and the proxy guardrail cannot see it either — it reads ladder files, and a
+  dead arm simply stops writing them, which is indistinguishable from a
+  converged one.
+
+`docs/UNATTENDED.md`'s standing warning is that silence from a monitor reads as
+good news. Here the arm's *own* log was the silent monitor. A one-line
+"n=0 on every opponent, `arena` reported N errors, first: `<repr>`" would have
+caught it in one generation. **This also means "3p has accepted nothing since
+gen 930" is the outage, not convergence** — it accepted again at gen 1132 as
+soon as it recovered.
+
+### 8.11 Reproducing
+
+```
+# the guardrail's own reading, forced
+nice -n 19 python3 -m experiments.proxy_check --players 3 --force
+
+# the replication and the bracket: arena.duel on ladder files under
+# plan:width=8, H2H_SEED=5150 / ANCHOR_SEED=90210 as proxy_check.py uses,
+# via experiments.hillclimb_league.parse_candidate_bot + as_spec
+#   h2h    : duel(spec(X), spec(821), 3, deals*3, seed0=5150)
+#   anchor : duel(spec(X), "book",    3, deals*3, seed0=90210)
+# for X in 850 876 900 918 930 and, for the anchor, also 0 309 603 711.
+
+# the cost table
+python3 tools/arch_cost.py --players 3 --games 6 --plan-games 3 --cores 2 \
+    --weights experiments/league_state/ladder_3p/gen00930.json \
+    --arches "weighted,quiescent:levels=1,plan:width=1,plan:width=2,plan:width=8"
+```
+
+Run at normal priority against five `nice -n 19` league workers on a 6-core
+box; ~20 000 cpu-seconds total, zero engine errors in every duel reported
+above. The live arms were not stopped, reconfigured or touched, and no engine
+code was changed.
