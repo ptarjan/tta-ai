@@ -173,7 +173,16 @@ launch() {   # players workers block extra...
             return 1
         fi
     done
-    nohup experiments/run_league.sh "$K" "$REMAIN" "$W" 2 "$B" 4 1.2816 \
+    # nice 19: training is the box's background load, not its foreground job.
+    # Nothing else runs here normally, so the arms still get every idle cycle
+    # -- but any benchmark, profile or A/B run at the default priority now
+    # preempts them instead of timesharing with 8 workers on 6 cores.  Without
+    # this, every perf measurement on this machine is taken under ~1.6x
+    # oversubscription and cache contention, and the numbers cannot be
+    # compared across runs (docs/PYPY.md).  Children inherit it, so this one
+    # word covers the whole arm.  Reverting means dropping `nice -n 19` and
+    # waiting for the next relaunch; no running process needs touching.
+    nohup nice -n 19 experiments/run_league.sh "$K" "$REMAIN" "$W" 2 "$B" 4 1.2816 \
         "${ALL[@]}" >/dev/null 2>&1 &
     echo "$(date '+%F %T') watchdog: relaunched ${K}p (${REMAIN}h left, workers=$W block=$B) ${ALL[*]}" >> "$LOG"
 }
