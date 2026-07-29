@@ -77,6 +77,131 @@ from experiments.hillclimb import FROZEN, mutate  # noqa: E402,F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STATE = os.path.join(HERE, "league_state")
+LOG_DIR = os.path.join(HERE, "logs")
+
+#: A generation that finished this share of its games or fewer, but more than
+#: none, gets a WARN line.  Partial death is a real mode (one bot spec broken,
+#: one seat-count crashing) and it silently halves the sample the accept test
+#: is run on, but it is not proof the arm is useless, so it does not halt.
+HIGH_DEATH_RATE = 0.10
+
+
+# --------------------------------------------------------- zero-game alarm
+#
+# `arena._play` catches every exception per game so that one engine bug cannot
+# kill a whole tournament.  The price of that is the failure mode this alarm
+# exists for: if something breaks such that EVERY game dies, this loop keeps
+# running perfectly happily.  It proposes mutants, every duel returns zero
+# completed games, `_aggregate` sees no samples, nothing is ever accepted, and
+# the arm burns hours writing a generation log with no data in it.  It has cost
+# this project real time (docs/UNATTENDED.md trap 8).
+#
+# Two halves, and the second is the one that took thought:
+#
+# 1. arena now reports a per-type exception CENSUS (count + one repr + the
+#    frame + a reproducing seed).  `DeathTally` folds every duel of a
+#    generation into one of those, so the log line says what broke, not just
+#    that something did.
+#
+# 2. A fully dead generation writes a STOP SENTINEL and exits.  It cannot
+#    simply crash: `experiments/run_league.sh` restarts the climber in a loop
+#    and `experiments/watchdog.sh` relaunches the supervisor from cron every
+#    10 minutes, so a bare crash would spin forever and the alarm would scroll
+#    past at six lines an hour.  Both of those check the sentinel and refuse to
+#    (re)start THIS arm while it exists, so the halt survives the watchdog.
+#    Per-arm rather than global: the arm that proved itself dead stops, and any
+#    other arm that is equally dead writes its own file at its next generation.
+#    Recovery is `rm` on the file -- the watchdog then relaunches within 10
+#    minutes on its own, with no other state touched.
+
+
+def stop_path(players, log_dir=None):
+    """The sentinel file for one arm.  Lives next to `league_Kp.log` because
+    that is where an operator already looks, and both shell scripts test for
+    exactly this path."""
+    return os.path.join(log_dir or LOG_DIR, f"stop_league_{players}p.json")
+
+
+class DeathTally:
+    """Census of the games one generation asked for and did not get."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.requested = 0
+        self.completed = 0
+        self.errors = 0
+        self.types = {}         # type name -> {count, repr, where, seed}
+
+    def add(self, res):
+        """Fold one `arena.duel` result in."""
+        self.requested += int(res.get("requested") or 0)
+        self.completed += int(res.get("games") or 0)
+        self.errors += int(res.get("errors") or 0)
+        for name, info in (res.get("error_types") or {}).items():
+            slot = self.types.setdefault(
+                name, {"count": 0, "repr": info.get("repr"),
+                       "where": info.get("where"), "seed": info.get("seed")})
+            slot["count"] += int(info.get("count") or 0)
+
+    @property
+    def death_rate(self):
+        return (self.errors / self.requested) if self.requested else 0.0
+
+    def is_fatal(self):
+        """Games were asked for and NOT ONE came back.  Nothing this loop does
+        afterwards can mean anything, so it is not a warning."""
+        return self.requested > 0 and self.completed == 0
+
+    def brief(self):
+        return arena.error_brief(self.types) or "no exception was reported"
+
+    def record(self):
+        return {"requested": self.requested, "completed": self.completed,
+                "errors": self.errors, "death_rate": round(self.death_rate, 4),
+                "types": {k: dict(v) for k, v in self.types.items()}}
+
+
+#: Module-level because `_series` is called from three call sites nested inside
+#: the scoring machinery and threading an accumulator through all of them would
+#: touch every signature.  `run` resets it at the top of every generation, so
+#: its contents are always "this generation".
+DEATHS = DeathTally()
+
+
+def halt_dead_generation(players, gen, tally, path, log=print):
+    """Write the stop sentinel, shout into the log, return the halt message.
+
+    The caller raises; this function is separately testable and does the two
+    things that make the halt stick -- the file the launchers check, and a log
+    line that names the exception.
+    """
+    payload = {
+        "at": time.strftime("%F %T"), "players": players, "gen": gen,
+        "reason": "zero completed games in a generation",
+        "deaths": tally.record(),
+        "remedy": ("Every game of this generation raised.  Fix the engine (the "
+                   "reprs and seeds are above; reproduce with "
+                   "`python3 -m experiments.arena`-driven tools or "
+                   "`engine.perf_check`), then delete this file.  "
+                   "experiments/watchdog.sh relaunches this arm within 10 "
+                   "minutes of the file going away; nothing else needs "
+                   "restarting.  While it exists, run_league.sh and "
+                   "watchdog.sh both refuse to start the {}p arm."
+                   .format(players)),
+    }
+    write_json(path, payload)          # creates the directory, atomic replace
+    bar = "!" * 72
+    msg = (f"[{players}p] gen {gen} ZERO COMPLETED GAMES: "
+           f"{tally.errors}/{tally.requested} games died -- {tally.brief()}")
+    for line in (bar, msg,
+                 f"[{players}p] HALTING.  Wrote {path}; run_league.sh and "
+                 f"watchdog.sh will not restart this arm until it is deleted.",
+                 bar):
+        log(line)
+    sys.stdout.flush()
+    return msg
 
 
 # ------------------------------------------------------- degeneracy guard
@@ -341,6 +466,9 @@ def _series(spec, opp_spec, players, games, seed0, workers, metric,
     """
     res = arena.duel(as_spec(spec), as_spec(opp_spec), players, games,
                      seed0=seed0, workers=workers)
+    # Every duel the loop plays goes through here, so this one line is what
+    # makes the zero-game alarm above see the whole generation.
+    DEATHS.add(res)
     return {
         "score": P.score_series(res, metric, params),
         "win": res["per_game"],
@@ -548,6 +676,10 @@ def full_check(champion, pool, players, games, workers, seed, log=print,
         res = arena.duel(as_spec(champion), as_spec(e.spec), players, n,
                          seed0=(seed + label_seed(e.label)) % 10_000_019,
                          workers=workers)
+        DEATHS.add(res)               # the check's games count too
+        if res["errors"]:
+            log(f"    !! {e.label}: {res['errors']}/{n} games died -- "
+                + arena.error_brief(res.get("error_types")))
         # Wall clock per opponent, recorded because it is a budget decision:
         # opponents differ by more than an order of magnitude in cost, and a
         # long run spends its hours wherever this number is largest.
@@ -727,7 +859,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         margin_scale=P.MARGIN_SCALE, culture_scale=P.CULTURE_SCALE,
         culture_centre=P.CULTURE_CENTRE, alpha=P.DEFAULT_ALPHA,
         candidate_bot=None, sat_lo=P.SAT_LO, sat_hi=P.SAT_HI,
-        sat_floor=P.SAT_FLOOR, past_recent=True, log=print):
+        sat_floor=P.SAT_FLOOR, past_recent=True, stop_file=None, log=print):
     global CANDIDATE_ARCH
     CANDIDATE_ARCH = candidate_bot
     # A block must be a whole number of seat rotations, or the seats are not
@@ -738,6 +870,17 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         log(f"[{players}p] --block {block} is not a multiple of {players}; "
             f"using {want} so seat rotation stays exact")
         block = want
+    # The zero-game sentinel is checked BEFORE any work: run_league.sh and
+    # watchdog.sh both check it too, but a hand-launched climber would not, and
+    # the whole point of the halt is that it is not undone by accident.
+    stop = stop_file or stop_path(players)
+    if os.path.exists(stop):
+        raise SystemExit(
+            f"[{players}p] REFUSING to train: {stop} exists, i.e. a previous "
+            f"generation completed ZERO games and halted this arm.  Read the "
+            f"file (it names the exception, the frame and a reproducing seed), "
+            f"fix it, then delete the file -- experiments/watchdog.sh "
+            f"relaunches the arm within 10 minutes.")
     pp = paths(state_dir, players)
     os.makedirs(state_dir, exist_ok=True)
     st = load_state(pp)
@@ -871,6 +1014,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     while time.time() < t_end and (not max_gens or gen < start_gen + max_gens):
         gen += 1
         t0 = time.time()
+        DEATHS.reset()
         entries = pool.acceptance_subset(gen, subset)
         tested_since_check.update(e.label for e in entries)
         # snapshot BEFORE any accept rebuilds the pool, so the log records the
@@ -920,6 +1064,20 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
             log(format_table(per))
             if lo > 0.0 and not veto and (best is None or lo > best[2]):
                 best = (mutant, m, lo, games, moved, op, per)
+
+        # ------------------------------------------- the zero-game alarm
+        # Checked HERE, before the accept bookkeeping and before the periodic
+        # checks: if not one game of this generation finished, every number
+        # below is computed from an empty sample and every hour after this one
+        # is wasted.
+        if DEATHS.is_fatal():
+            append_jsonl(pp["gens"], {"gen": gen, "players": players,
+                                      "accepted": False, "halted": True,
+                                      "at": time.strftime("%F %T"),
+                                      "secs": round(time.time() - t0, 1),
+                                      "engine_deaths": DEATHS.record()})
+            raise SystemExit(halt_dead_generation(players, gen, DEATHS,
+                                                  stop, log=log))
 
         accepted = best is not None
         if accepted:
@@ -1012,6 +1170,18 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                      if v.get("last") == "no-measurable-effect"]
             log(f"[{players}p] weight credit so far: {len(work)} load-bearing, "
                 f"{len(noise)} no measurable effect")
+
+        # ------------------------------------------- partial engine death
+        # Not fatal (games did come back), but it silently shrinks the sample
+        # the accept test runs on, and it is the shape a fully dead generation
+        # arrives in one commit early.  Every death gets a line; a death RATE
+        # over HIGH_DEATH_RATE gets a loud one.
+        if DEATHS.errors:
+            rec["engine_deaths"] = DEATHS.record()
+            loud = "!!" if DEATHS.death_rate >= HIGH_DEATH_RATE else ".."
+            log(f"[{players}p] gen {gen} {loud} {DEATHS.errors}/"
+                f"{DEATHS.requested} games died "
+                f"({DEATHS.death_rate:.1%}) -- {DEATHS.brief()}")
 
         # --------------------------------------------------- checkpoint
         append_jsonl(pp["gens"], rec)

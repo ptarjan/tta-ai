@@ -268,7 +268,20 @@ def _play(task):
         sc = game.scores(st)
         moves = getattr(st, "moves_played", 0)
     except Exception as e:  # engine bug: report, do not kill the tournament
-        return (None, repr(e), seed, 0)
+        # What travels back is a DIAGNOSABLE record, not a bare "a game died":
+        # the exception type, its repr, the deepest frame that raised, and the
+        # seed that reproduces it.  A count alone is what let a fully-broken
+        # engine look like a quiet run (docs/UNATTENDED.md trap 8); the repr is
+        # what turns the alarm into a fix.  Plain str/int only, because this
+        # crosses a multiprocessing pipe and an arbitrary exception object may
+        # not pickle.
+        tb, where = e.__traceback__, ""
+        while tb is not None:
+            where = (f"{os.path.basename(tb.tb_frame.f_code.co_filename)}"
+                     f":{tb.tb_lineno}")
+            tb = tb.tb_next
+        return (None, {"type": type(e).__name__, "repr": repr(e),
+                       "where": where, "seed": seed}, None, 0)
     best = max(sc)
     tied = [i for i, v in enumerate(sc) if v == best]
     share = (1.0 / len(tied)) if seat in tied else 0.0
@@ -299,6 +312,35 @@ def p_value(mean, half, null):
     return math.erfc(z / math.sqrt(2))
 
 
+# ------------------------------------------------------- error reporting
+
+def census(errors):
+    """Error records -> ``{exception type: {count, repr, where, seed}}``.
+
+    One worked example per distinct type, plus how many games that type ate.
+    Grouping by type rather than keeping every repr keeps the record small
+    enough to log and to store in a generation record, while still naming the
+    thing that has to be fixed.
+    """
+    out = {}
+    for e in errors:
+        slot = out.setdefault(e["type"], {"count": 0, "repr": e["repr"],
+                                          "where": e["where"],
+                                          "seed": e["seed"]})
+        slot["count"] += 1
+    return out
+
+
+def error_brief(types):
+    """A one-line human summary of a `census` mapping, worst type first."""
+    if not types:
+        return ""
+    return "; ".join(
+        f"{v['repr']} at {v['where']} x{v['count']} (seed {v['seed']})"
+        for _, v in sorted(types.items(), key=lambda kv: (-kv[1]["count"],
+                                                          kv[0])))
+
+
 # ------------------------------------------------------------------ duel
 
 def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
@@ -326,6 +368,13 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     bottom").  The mean of this list is `culture_a - culture_b`; it is
     returned per game because pairing against a reference duel has to happen
     game by game.
+
+    `errors` is how many games the engine could not finish, `error_types` maps
+    each distinct exception type name to ``{count, repr, where, seed}`` -- one
+    worked example per type -- and `error_sample` keeps the first three reprs
+    as plain strings.  Callers that run unattended (`hillclimb_league.py`) act
+    on `error_types`: a swallowed exception the caller cannot see is the same
+    thing as no exception at all.
 
     `per_game_culture` is the same list again for **A's own final culture**,
     which is the quantity you actually win Through the Ages on.  It is not
@@ -374,6 +423,7 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     m, half = mean_ci(shares)
     null = 1.0 / num_players
     return {
+        "error_types": census(errors),
         "players": num_players,
         "games": len(shares),
         "requested": games,
@@ -385,7 +435,7 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "culture_b": (sum(cb) / len(cb)) if cb else 0.0,
         "moves": (sum(moves) / len(moves)) if moves else 0.0,
         "errors": len(errors),
-        "error_sample": errors[:3],
+        "error_sample": [e["repr"] for e in errors[:3]],
         "margin": ((sum(ca) / len(ca)) - (sum(cb) / len(cb))) if ca else 0.0,
         "shares": shares,
         "per_game": per_game,
@@ -399,4 +449,6 @@ def fmt(res, name_a="A", name_b="B"):
             f"win rate {res['win_rate']:.1%} +/- {res['ci']:.1%} "
             f"(null {res['null']:.1%}, p={res['p']:.4f}, n={res['games']}) "
             f"culture {res['culture_a']:.0f} vs {res['culture_b']:.0f}"
-            + (f" [{res['errors']} engine errors]" if res["errors"] else ""))
+            + (f" [{res['errors']} engine errors: "
+               f"{error_brief(res.get('error_types'))}]"
+               if res["errors"] else ""))

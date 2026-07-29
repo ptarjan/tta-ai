@@ -24,9 +24,23 @@ K=${1:-2}; H=${2:-8}; W=${3:-6}; L=${4:-2}; B=${5:-12}; S=${6:-4}; Z=${7:-1.2816
 shift $(( $# > 7 ? 7 : $# ))
 mkdir -p experiments/logs
 LOG=experiments/logs/league_${K}p.log
+# The zero-game stop sentinel (docs/UNATTENDED.md trap 8).  The climber writes
+# it when a whole generation completed ZERO games, which means the engine is
+# broken and every further hour is wasted.  Restarting is what this script does
+# for a living, so the halt has to be a file this loop checks -- otherwise the
+# loop, and the 10-minute cron watchdog above it, would undo the halt within
+# seconds.  Written by experiments/hillclimb_league.py:stop_path().
+STOP=experiments/logs/stop_league_${K}p.json
 END=$(python3 -c "import time,sys; print(time.time()+float(sys.argv[1])*3600)" "$H")
 echo "=== league ${K}p started $(date) budget ${H}h workers=$W lambda=$L block=$B subset=$S z=$Z $* ===" >> "$LOG"
 while python3 -c "import time,sys; sys.exit(0 if time.time() < float(sys.argv[1]) else 1)" "$END"; do
+    if [ -f "$STOP" ]; then
+        echo "=== league ${K}p HALTED $(date): $STOP exists -- a generation" \
+             "completed ZERO games.  \`cat\` it for the exception census;" \
+             "fix the engine and delete it, and the cron watchdog relaunches" \
+             "this arm within 10 minutes. ===" >> "$LOG"
+        exit 0
+    fi
     T0=$SECONDS
     python3 -m experiments.hillclimb_league --players "$K" --hours 1 \
         --workers "$W" --lambda "$L" --block "$B" --subset "$S" \

@@ -107,6 +107,38 @@ it, then `pkill -f run_league.sh`.
    `python3 -m experiments.proxy_check --report` and
    `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.
 
+8. **A generation can complete ZERO games and nothing used to notice.**
+   `experiments/arena.py`'s `_play` catches every exception per game on
+   purpose — one engine bug must not kill a 40-hour tournament — so a bug that
+   kills *every* game presented as a perfectly quiet run: mutants proposed,
+   zero completed games, no accepts, hours burned, a generation log with no
+   data in it. Since 2026-07-29:
+
+   * `arena.duel` returns `error_types`, a census keyed by exception type with
+     a **repr, the frame that raised and a reproducing seed** per type (plus
+     the old `errors` count and `error_sample` strings). A count alone is not
+     diagnosable, which is why it was ignorable.
+   * `hillclimb_league.py` folds every duel of a generation into `DeathTally`.
+     Any death at all gets a log line; a death rate at or above
+     `HIGH_DEATH_RATE` (10%) gets a loud one and lands in the generation
+     record as `engine_deaths`. Partial death only warns — it shrinks the
+     accept sample without proving the arm is useless.
+   * **Zero completed games halts the arm.** It cannot merely crash:
+     `run_league.sh` restarts the climber in a loop and `watchdog.sh`
+     relaunches the supervisor from cron every 10 minutes, so a bare crash
+     spins forever and the alarm scrolls past. Instead the climber writes
+     `experiments/logs/stop_league_Kp.json` (the exception census plus the
+     remedy), logs a banner, and exits; `run_league.sh`, `watchdog.sh` **and
+     `run()` itself** all refuse to (re)start that arm while the file exists.
+     Per-arm, so a dead 2p arm does not stop a healthy 4p one.
+
+   To resume: fix the engine, `rm experiments/logs/stop_league_Kp.json`. The
+   watchdog relaunches the arm within 10 minutes; nothing else needs touching.
+   `tests/test_zero_game_alarm.py` pins it, negative control first — every
+   test there is a pair (break every game, require the alarm / break nothing,
+   require silence), because a guard that has never been shown to fire is not
+   evidence of anything.
+
 ## Open, ranked
 
 1. **No external anchor.** Everything above is our bots playing our bots. The

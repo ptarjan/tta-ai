@@ -43,6 +43,9 @@
 # arm looks perfectly healthy for two days and produces a champion trained on
 # something nobody chose.  Given the choice, fail loudly.
 #
+# `launch` refuses for a second reason too: experiments/logs/stop_league_Kp.json,
+# the zero-game stop sentinel.  See the comment on it in `launch`.
+#
 # The receipts, after ANY relaunch, in experiments/logs/league_Kp.log:
 #     [Kp] objective: ...
 #     [Kp] trained architecture: ...
@@ -161,6 +164,17 @@ arm_flags() {   # players -> the flags that are NOT shared, space separated
 
 launch() {   # players workers block extra...
     local K=$1 W=$2 B=$3; shift 3
+    # THE ZERO-GAME HALT (docs/UNATTENDED.md trap 8).  hillclimb_league.py
+    # writes this file when a whole generation completed zero games -- i.e. the
+    # engine is broken and the arm is burning CPU for nothing.  This watchdog is
+    # exactly what would undo a plain crash-halt, ten minutes at a time, so it
+    # has to be the thing that respects it.  Deleting the file is the resume:
+    # the next 10-minute tick relaunches the arm with nothing else to do.
+    local STOP=experiments/logs/stop_league_${K}p.json
+    if [ -f "$STOP" ]; then
+        echo "$(date '+%F %T') watchdog: NOT launching ${K}p -- $STOP exists (a generation completed ZERO games; the file names the exception, the frame and a reproducing seed).  Fix the engine and delete the file." >> "$LOG"
+        return 1
+    fi
     # shellcheck disable=SC2046  -- deliberate word splitting; no flag value
     # here contains a space, and bash 3.2 (macOS) has no better option.
     local ALL=("${COMMON[@]}" $(arm_flags "$K") "$@")
