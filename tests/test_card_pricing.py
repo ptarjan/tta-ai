@@ -287,9 +287,24 @@ class TestTheCardsTheOmissionCost(unittest.TestCase):
             "Internet", "Ocean Liners"])
 
     def test_masonry_and_friends_price_their_wonder_help(self):
-        self.assertEqual(self._yield_of("Masonry", "build_discount"), 3.0)
+        self.assertEqual(self._yield_of("Masonry", "build_discount"), 1.0)
         self.assertEqual(
             self._yield_of("Masonry", "wonder_stages_per_action"), 1.0)
+
+    def test_build_discount_is_the_best_single_build_not_the_sum(self):
+        """`buildDiscount` is {age: resources off} and the ages are mutually
+        exclusive -- a building has exactly one age, so the card can take at
+        most its LARGEST entry off any one build.  `engine.effects.build_cost`
+        does `cost -= bd.get(card["age"], 0)`, a single lookup, and never pays
+        out a sum.  Summing (the behaviour until docs/UNCOVERED_TYPES.md 2)
+        priced the three Construction techs 3 : 5 : 6 against the rules'
+        1 : 2 : 3, i.e. it got their relative order wrong as well as their
+        magnitude."""
+        for name, want in (("Masonry", 1.0),        # {I:1, II:1, III:1}
+                           ("Architecture", 2.0),   # {I:1, II:2, III:2}
+                           ("Engineering", 3.0)):   # {I:1, II:2, III:3}
+            self.assertEqual(self._yield_of(name, "build_discount"), want,
+                             name)
 
 
 class TestFinishDiscipline(unittest.TestCase):

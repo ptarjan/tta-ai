@@ -874,7 +874,9 @@ _UNIT_TO_FEATURE = {"strength": "strength"}
 # the value is a dict, an offset, or a bare presence flag.  Handled in
 # `_card_yields`; listed here so the coverage test can see them as priced.
 _EFF_SPECIAL = {
-    # {age: resources off}, e.g. Masonry {"I": 1, "II": 1, "III": 1}
+    # {age: resources off}, e.g. Masonry {"I": 1, "II": 1, "III": 1}.
+    # Reduced by MAX, not by sum -- the per-age entries are ALTERNATIVES, one
+    # of which applies to any given build, not a stack.  See `_card_yields`.
     "buildDiscount": "build_discount",
     # 2 means "two stages per action", i.e. a bonus of one
     "wonderStagesPerAction": "wonder_stages_per_action",
@@ -1201,7 +1203,19 @@ def _card_yields(name):
     if "buildDiscount" in _EFF_SPECIAL:
         bd = eff.get("buildDiscount")
         if isinstance(bd, dict):
-            got = sum(v for v in bd.values() if isinstance(v, (int, float)))
+            # MAX, not sum.  `buildDiscount` is {age: resources off} and the
+            # ages are MUTUALLY EXCLUSIVE: a build is of exactly one age, so
+            # Engineering's {"I": 1, "II": 2, "III": 3} takes at most 3 off any
+            # one urban building, never 6.  `effects.build_cost` (engine, l.980)
+            # already does the right thing -- `cost -= bd.get(card["age"], 0)`,
+            # one lookup -- so summing here priced the card at something the
+            # rules engine will never pay out.  The error was not uniform
+            # either: it scaled the three Construction techs 3 : 5 : 6 when the
+            # rules scale them 1 : 2 : 3, so it got their ORDER wrong too.
+            # Max is the ceiling of what one build can realise; see
+            # docs/UNCOVERED_TYPES.md section 2.
+            vals = [v for v in bd.values() if isinstance(v, (int, float))]
+            got = max(vals) if vals else 0
             if got:
                 out.append(("build_discount", float(got), _Y_GAIN))
     if "wonderStagesPerAction" in _EFF_SPECIAL:
