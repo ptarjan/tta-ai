@@ -278,6 +278,16 @@ def _c_pact_offer(state, p, opt, ctx, rng):
     owner = state.players[ctx["owner"]]
     name = ctx["name"]
     if opt == "accept":
+        # ASSIGNMENT, and it is the printed rule, not a bug -- it has been
+        # reported as one.  sources/ubg_full-game.txt:70 (2015 rulebook):
+        # "You can be a party to more than one pact, but you can have only one
+        # pact in YOUR PLAY AREA.  If you offer a new pact and the player
+        # accepts, any pact in your play area is automatically cancelled."
+        # So agreeing a new pact as OWNER replaces the one you own, and that is
+        # all this line does.  It does not cost you the pacts you are party to
+        # but do not own: `effects.pacts_for` scans every player's list, so
+        # those live in the other owner's play area and are untouched.
+        # tests/test_combat.py pins both halves of that sentence.
         owner.pacts = [{"name": name, "owner": owner.idx, "partner": p.idx,
                         "a": ctx.get("a", owner.idx), "b": ctx.get("b", p.idx)}]
         state.emit(f"pact {name} between P{owner.idx} and P{p.idx}")

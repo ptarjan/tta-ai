@@ -776,8 +776,104 @@ class TestPacts(unittest.TestCase):
         events.resolve_war(st, p0, None)
         self.assertEqual(p1.yellow_bank, 18 - 2)      # 1 + 5 // 5
 
+    def _pact_offer_to(self, st, offerer, target, name=ALLIANCE):
+        """Put a live `pact_offer` decision in front of `target`."""
+        st.players[offerer].hand_military = [name]
+        st.current = offerer
+        st.phase = "politics"
+        st.players[offerer].politics_done = False
+        actions.apply(st, ("offer_pact", name, target, ""))
+        self.assertEqual(st.pending[-1]["tag"], "pact_offer")
+        return st.pending[-1]
+
+    def test_bookbot_refuses_a_pact_that_props_up_the_culture_leader(self):
+        """BookBot's refusal branch had never once executed.
+
+        `book.py:_choice` read `pend["ctx"]["from"]` to find the counterparty,
+        but `actions._h_offer_pact` builds the ctx as
+        {"owner", "name", "a", "b"} and has never written a "from".  `.get`
+        returned None, `leading` was therefore always False, and the bot
+        ACCEPTED EVERY PACT IT WAS EVER OFFERED -- a whole branch of its policy
+        was dead code.  The counterparty is the offerer, `ctx["owner"]`.
+
+        Both directions are checked, because a fix that always REFUSES would
+        pass a one-sided version of this test just as happily.
+        """
+        from engine.bots.book import BookBot
+        bot = BookBot(seed=1)
+
+        # (a) the offerer is far ahead on culture -> refuse
+        st = st_military(players=3)
+        st.players[0].culture = 60
+        st.players[1].culture = 0
+        pend = self._pact_offer_to(st, 0, 1)
+        mv = bot(st)
+        self.assertEqual(pend["options"][mv[1]], "refuse")
+
+        # (b) the offerer is not ahead -> accept
+        st = st_military(players=3)
+        st.players[0].culture = 0
+        st.players[1].culture = 60
+        pend = self._pact_offer_to(st, 0, 1)
+        mv = bot(st)
+        self.assertEqual(pend["options"][mv[1]], "accept")
+
+    def test_offer_pact_ctx_carries_the_offerer(self):
+        """The key any bot must read to know who it is dealing with.
+
+        This is the guardrail for the bug above: it fails if `_h_offer_pact`
+        ever renames or drops the key, instead of the failure showing up as a
+        bot silently agreeing to everything for another season.
+        """
+        st = st_military(players=3)
+        pend = self._pact_offer_to(st, 0, 1)
+        self.assertEqual(pend["ctx"]["owner"], 0)
+        self.assertEqual(pend["player"], 1)
+        self.assertNotIn("from", pend["ctx"])
+
+    def test_you_stay_party_to_pacts_you_do_not_own(self):
+        """The FIRST half of the printed sentence, and the half that was
+        missing: accepting a new pact as OWNER must not cost you the pacts you
+        are party to but do not own.
+
+        sources/ubg_full-game.txt:70 (2015 rulebook): "You can be a party to
+        MORE THAN ONE PACT, but you can have only one pact in your play area.
+        If you offer a new pact and the player accepts, any pact in your play
+        area is automatically cancelled."
+
+        `_c_pact_offer`'s `owner.pacts = [...]` has been reported as a bug --
+        "assignment, not append, so accepting a pact destroys every other pact
+        that player holds".  It does not, and this test is the difference:
+        `effects.pacts_for` scans every player's list, so a pact someone else
+        owns sits in THEIR play area and survives.  Only the owner's own is
+        replaced, which is the rule.  Pinning it here means a future
+        "correction" to `append` fails against the printed text rather than
+        against taste.
+        """
+        st = st_military(players=4)
+        p0, p2 = st.me(), st.players[2]
+        # P1 owns a pact with P0: P0 is a party to it but does not own it.
+        give_pact(st, st.players[1], p0, PROMISE)
+        self.assertEqual(len(effects.pacts_for(st, 0)), 1)
+        # now P0 offers one of its own and P2 accepts
+        p0.hand_military = [ALLIANCE]
+        actions.apply(st, ("offer_pact", ALLIANCE, 2, ""))
+        actions.apply(st, ("choose",
+                           st.pending[-1]["options"].index("accept")))
+        self.assertEqual([pact["name"] for pact in p0.pacts], [ALLIANCE])
+        names = sorted(pact["name"] for pact in effects.pacts_for(st, 0))
+        self.assertEqual(names, sorted([ALLIANCE, PROMISE]),
+                         "accepting a pact as owner ate a pact P0 was party "
+                         "to but did not own")
+        self.assertEqual(len(effects.pacts_for(st, 1)), 1,
+                         "P1's own pact was destroyed by P0's agreement")
+        self.assertEqual(len(effects.pacts_for(st, 2)), 1)
+
     def test_only_one_pact_may_sit_in_your_own_play_area(self):
-        # [FAQ p.11] 'You can have only one Pact in front of you.'
+        # [FAQ p.11] 'You can have only one Pact in front of you.'  Same rule
+        # in the rulebook transcription, with the mechanism spelled out:
+        # sources/ubg_full-game.txt:70 "If you offer a new pact and the player
+        # accepts, any pact in your play area is automatically cancelled."
         st = st_military(players=4)
         p0 = st.me()
         p0.hand_military = [ALLIANCE, "Peace Treaty"]

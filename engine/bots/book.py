@@ -817,8 +817,15 @@ class BookBot:
             return pick(lambda o: 1.0 if o == "leader" else 0.5)
 
         if tag == "pact_offer":
-            # accept a pact unless it props up the culture leader
-            partner = pend.get("ctx", {}).get("from")
+            # accept a pact unless it props up the culture leader.
+            # The key is "owner", not "from": `actions._h_offer_pact` builds
+            # the ctx as {"owner", "name", "a", "b"} and has never written a
+            # "from".  `.get("from")` was therefore always None, `leading` was
+            # always False, and this bot ACCEPTED EVERY PACT EVER OFFERED --
+            # the refusal branch below had never executed once.  From the
+            # deciding player's seat the counterparty is the offerer, which is
+            # exactly `ctx["owner"]` (the choice is pushed to the target).
+            partner = pend.get("ctx", {}).get("owner")
             leading = (partner is not None
                        and state.players[partner].culture > p.culture + 5)
             want = "refuse" if leading else "accept"
