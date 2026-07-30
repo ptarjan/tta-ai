@@ -32,21 +32,52 @@ that starts eight times as many wonders and finishes 37% of them better or
 worse than one that starts almost none?  The objective should answer this and
 nobody has asked it.
 
-## 3. The three bonus cards are still unpriced
+## 3. The three bonus cards are priced now; the seam is closed; the weights mostly aren't
 
-`defenseBonus` and `colonizationBonus` have no reader.  A mapping and the
+~~`defenseBonus` and `colonizationBonus` have no reader.  A mapping and the
 `hand_mil_potential` seam were designed and dropped to avoid a collision
 between two lanes.  Note `hand_mil_potential` is 0.0 on all three live
 champions and calls `card_potential` **without a state**, so board pricing
 cannot fire for military cards at all -- pricing these without fixing that seam
-would be inert by construction.
+would be inert by construction.~~ **SUPERSEDED 2026-07-30.** Both now have a
+reader: `_BONUS_TO_FEATURE` in `engine/bots/weighted.py` maps `defenseBonus`
+-> `defense_bonus` and `colonizationBonus` -> `colonize_bonus`, and
+`_card_yields` prices them (gated by `bonus_card_credit`, which is 1.0 -- the
+printed number is fully believed -- on all three live champions). The seam is
+also closed: `hand_mil_potential` is now `def hand_mil_potential(state, idx,
+w)` and calls `card_potential(n, w, state, idx)` with both, so board-aware
+pricing is no longer blocked for military cards by construction (see the
+function's own docstring in `weighted.py` for what still keeps it inert
+today -- `board_yields`/`board_extra`/`_board_credit_key` have no entries for
+a military type, so a military card's board credit falls through to the bare
+`card_board_credit`, which is 0.0 on all three live champions).
+
+Reading `experiments/league_state/champion_{2,3,4}p.json` (118-key vectors,
+2026-07-30) directly: **`defense_bonus` is 0.0 on all three** -- pricing
+exists but the league has not put weight on it, so the defence increment
+these cards carry is still effectively unpriced, exactly the state this
+section used to describe for all three cards. `colonize_bonus` is different:
+**0.0 at 2p, but 0.04196 at 3p and -0.07368 at 4p** -- nonzero, so the
+colonization increment is live at two of three player counts. `hand_mil_potential`
+is **0.0 at 2p and 4p, 0.01079 at 3p** -- also live, but only at 3p. So: two of
+the three cards have a real, nonzero champion weight today, and it is only
+`defenseBonus` that is still priced-but-inert everywhere.
 
 ## 4. `cost.militaryActions` is read by no bot code
 
-54 cards carry it.  The rules engine gates legality on it
-(`actions.py:269,1083`, `events.py:493`) and nothing under `engine/bots/` sees
-it, so War over Culture (3 MA) and War over Territory (2 MA) are the same card
-to every pricing path.  Reaches only `hand_mil_potential`, so see §3.
+Re-checked 2026-07-30 against the current `engine/bots/` and this is still
+true: 54 cards carry it. The rules engine gates legality on it
+(`actions.py:269,1083`, `events.py:493`) and nothing under `engine/bots/`
+reads `card.get("cost")` at all (`grep` for it across `weighted.py`,
+`book.py`, `board_yields.py`, `neural_encode.py` returns nothing), so War
+over Culture (3 MA) and War over Territory (2 MA) are still the same card to
+every pricing path. `_EFF_TO_FEATURE`'s `militaryActions` -> `military_actions`
+entry (nonzero on all three live champions, e.g. 3.47652 at 3p) is a
+different thing: it prices a card's `effects`/production GRANT of military
+actions (governments, action cards), not a war card's `cost` to play. §3's
+`hand_mil_potential` now takes a state, but that closes the board-pricing
+seam for military cards in general -- it does not add a reader for `cost`,
+which no function in `engine/bots/` touches.
 
 ## 5. The defence drain is landed and now ON (`a214804`, 2026-07-30)
 

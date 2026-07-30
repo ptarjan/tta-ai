@@ -191,6 +191,39 @@ Every number above is about the *loop*, not the *net*.
    agrees most with the incumbent; and the gate -- head-to-head play under the
    search that will actually be deployed -- is the only promotion criterion.
 
+### 5.1 Results, 21 iterations in (2026-07-30)
+
+This section described the design with no results attached; there are now
+results, from `loop2/` on the desktop (`C:\Users\micro\tta-ai`), exactly as
+recorded in `loop2/curve.tsv` and `loop2/master.log`. This is a genuine and
+important contrast with the v1 null above, not a repeat of it.
+
+| statistic | v1 (this document, §2) | loop2 |
+|---|---|---|
+| iterations | 74 | 21 |
+| promotions | **0** | **4** (it1, it2, it4, it7) |
+| `best` vs linear champion | 0.095 | see reference metric below (no single equivalent figure) |
+
+The `DISAGREE` health meter named in item 1 above -- "a run whose `DISAGREE`
+decays to zero has gone vacuous again and must stop" -- is the direct test of
+whether this loop fell into the same trap as v1. It has not: `DISAGREE` has
+held at **0.5375-0.5843 across all 21 iterations**, currently 0.5632. The beam
+still overrules the net's 1-ply argmax on well over half of decisions, so the
+training target is still demonstrably stronger than the net it labels, unlike
+v1's 97.6%-already-satisfied self-play pairs (§3.1).
+
+Reference metric, candidate vs `plan:champion` (same beam, linear evaluator),
+n=240 per point from it10 on: it1 **0.4028** (culture margin -16.2), rising to
+it12 **0.5042** (margin -1.4), it17 **0.4854** (-0.2), it20 **0.4833** (-2.1).
+
+**But it has plateaued: no promotion since it7.** From it10 through it21 the
+self-play gate (ARM A) BLOCKs every time -- win rate 0.476-0.5685, the 95% CI
+lower bound never clears 0.5 -- while the anchor gate (ARM B) PASSes every
+time. So: the loop reached rough parity with the linear (`plan:champion`)
+champion by around it12-it20 and stopped improving there. That is parity, not
+victory -- it is not yet better than the linear champion, and "approaching
+parity" should not be rounded up to "better" when quoting this run.
+
 ## 6. Reusable lessons
 
 * **Any self-play loop must state its improvement operator, and it must be

@@ -28,14 +28,20 @@ types (26 cards) that are real problems but not mispricings; and 11 types
 (103 cards) healthy.**
 
 Underneath all of it is one structural fact that took the whole audit to see
-plainly: **each frozen champion is a 78-key file and the evaluator now has
-112 weights, so 34 of the shipped policy's weights were never trained, and 28
-of those default to `0.0`.** The entire card-identity channel is a single
-untrained weight — `hand_potential` = 0.125 — and everything that does not
-flow through it flows through a zero. That count is *growing*: it was 110
-weights when this census was measured and 112 by the time it landed, because
-sibling lanes are correctly adding pricing behind 0.0 defaults faster than
-anything turns one on. See §9.
+plainly: **each frozen champion is a 78-key file and the evaluator [at the
+time this was written] had 112 weights, so 34 of the shipped policy's
+weights were never trained, and 28 of those default to `0.0`.** The entire
+card-identity channel is a single untrained weight — `hand_potential` =
+0.125 — and everything that does not flow through it flows through a zero.
+That count is *growing*: it was 110 weights when this census was measured
+and 112 by the time it landed, because sibling lanes are correctly adding
+pricing behind 0.0 defaults faster than anything turns one on. See §9. **By
+2026-07-30 it reached 118**, and the live `experiments/league_state/
+champion_{2,3,4}p.json` grew to 118 keys along with it — see the box above
+and `docs/OPEN_AFTER_THE_AUDIT.md` §3. This paragraph's "78 vs 112" gap is
+about the *frozen* snapshots this census actually ran against, which are
+still 78-key and still accurate as described; it is not a current statement
+about the live evaluator.
 
 The headline is therefore that the wonder pipe is not weak, it is **severed**:
 `row_urgency` is `0.0` in all three frozen champions — they do not contain
@@ -64,6 +70,17 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 > **+0.5731 (+88%, p<1e-4)**, against the −0.0050 null (MDE 0.0089) the frozen
 > vector produced. See §5.4 there and `analysis/frozen/README.md`.
 >
+> **UPDATED 2026-07-30: the 99-key figure above is itself superseded.** The
+> live `experiments/league_state/champion_{2,3,4}p.json` now carry **118**
+> keys, matching `engine/bots/weighted.py`'s `DEFAULT_WEIGHTS` exactly (no
+> evaluator key is missing from any of the three live champions any more —
+> the untrained-weight gap this document is about is closed for the live
+> bot, though the *frozen* snapshots under `analysis/frozen/` remain the
+> 78-key files described throughout, unchanged). The count keeps growing, so
+> treat any hardcoded key count in this document as dated to when it was
+> written, not as current. `row_urgency = −0.19109` for the live 2p champion
+> is unchanged from when this box was first written.
+>
 > What this does and does not cost the census:
 > * **The plumbing map is untouched and is the durable contribution.** A
 >   wonder really does reach the policy through `row_pressure` alone. That is
@@ -86,9 +103,15 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 > * **The 4p column is separately unreliable** — `analysis/frozen/champion_4p`
 >   is the known-degenerate vector; see `analysis/frozen/README.md`.
 > * **The ranking in §4 may reorder.** Wonders were ranked suspect #1 on the
->   strength of a severed pipe. Territories (`hand_mil_potential = 0.0`) are
->   still 0.0 in the live champions and are the better candidate for "a pure
->   severed pipe a single non-zero weight fixes".
+>   strength of a severed pipe. Territories (`hand_mil_potential = 0.0`) were
+>   still 0.0 in the live champions when this was written. **UPDATED
+>   2026-07-30:** `hand_mil_potential` is now nonzero on the live 3p champion
+>   (`0.01079`, confirmed by reading
+>   `experiments/league_state/champion_3p.json`), though still `0.0` at 2p
+>   and 4p — see `docs/OPEN_AFTER_THE_AUDIT.md` §3. The pipe is no longer
+>   uniformly severed across player counts, which weakens "the better
+>   candidate for a pure severed pipe" at 3p specifically; 2p and 4p are
+>   unaffected.
 >
 > The generalisable lesson survives intact and is arguably the real finding:
 > **a weight at 0.0 makes an A/B return a null that is an arithmetic identity,
@@ -230,8 +253,10 @@ are the ones §4.1 arrives at, after the search control in §4.0 — a type that
 is dead at 1 ply and alive under `plan:width=2` is Tier B, not a bug.
 
 **The critical fact, and reading `DEFAULT_WEIGHTS` alone will not give it to
-you.** Each frozen champion is a **78-key** file. The evaluator has **112**
-weights (110 when the census was measured at `50ba471`). `load_weights`
+you.** Each frozen champion is a **78-key** file. The evaluator had **112**
+weights at the time this was written (110 when the census was measured at
+`50ba471`; **118 as of 2026-07-30**, and still growing — see the note in the
+"One-paragraph answer" section above). `load_weights`
 fills the gap from `DEFAULT_WEIGHTS`, so **34 of the 112 weights in the
 shipped policy were never trained** — they were added after the champions
 were frozen, and every one of them sits at whatever default it was born

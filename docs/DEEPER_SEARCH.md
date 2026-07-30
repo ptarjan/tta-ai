@@ -478,7 +478,7 @@ current champions have been trained in a game with no military layer; that is
 the cheapest available fix. Do this first, and do it at the next natural
 supervisor restart rather than by killing a running arm.
 
-### 6.2 Make QuiescentBot the trainer's CHALLENGER — **conditional GO**, not yet
+### 6.2 Make QuiescentBot the trainer's CHALLENGER — ~~**conditional GO**, not yet~~ **tried, then reverted (2026-07-30)**
 
 The evidence for: stronger at 2p (+5.8%), 3p (+9.5%) and 4p (+16.7%) on
 n = 800/801/800 with zero engine errors; the mechanism is confirmed
@@ -527,6 +527,30 @@ least one entrant excluded from training (`build_pool(exclude=...)` already
 supports it). Until that exists, switching the challenger would change what
 three live arms train against on the strength of a number measured in a
 setting the change destroys.
+
+**What actually happened, recorded rather than smoothed over.** The gating
+experiment above was never run. The 3p and 4p arms' challenger was switched to
+`quiescent:levels=1` anyway, and stayed there for roughly 1300 generations at
+3p (to gen 1315) and to 4p gen 370. **Reverted 2026-07-30 in `1fbf128`**, back
+to `plan:width=2`, and the two discarded champions (3p gen 1315, 4p gen 370)
+were backed up outside the repo rather than carried forward. The reason is
+reservation 3 above, and it is disqualifying rather than merely a cost:
+QuiescentBot resolves a defender's `defense` decision by reading the
+defender's real hidden `hand_military` — fine for a symmetric self-play
+trainer, but the shipped bot plays humans and cannot read a human's hand. Every
+3p/4p generation trained under that challenger had tuned its weights to exploit
+information the ship policy will never have; that is not a proxy that is
+merely expensive to validate, it is an objective the shipped bot cannot
+pursue. Cost was also confirmed higher than advertised in the field
+(~4.1x/game, ~690s/generation against ~168s), paid knowingly while it ran.
+
+**So: 6.2's caution was correct, and it was overridden without the experiment
+it asked for, and that turned out to be a real mistake rather than a
+reasonable bet that didn't pay off** — reservation 3 alone would have stopped
+the switch outright had it been read as disqualifying at the time rather than
+as one item in a numbered list. Read reservation 3 as the load-bearing one:
+cost and opponent-model concerns are things a league can absorb; playing
+against information a human referee will never supply is not.
 
 ### 6.3 Bugs found in QuiescentBot
 

@@ -1,5 +1,13 @@
 # BOT ROSTER — WORKING NOTES
 
+> **This document predates PlanBot and QuiescentBot entirely (flagged
+> 2026-07-30, not re-run).** Its `champion` entrant is the 1-ply `WeightedBot`
+> evaluator only (confirmed below, "`champion` runs the 1-ply evaluator") —
+> there is no `plan:width=2` or `quiescent:levels=1` row anywhere in this
+> roster. Do not read this as a current ranking of the bots the league
+> actually trains and ships today; it is a snapshot of the 1-ply generation.
+> A re-run against the current search-based bots has not been done.
+
 **Not a deliverable.** Raw measurements + honest read, parked here so nothing is
 lost. The polished tier-list write-up is deliberately deferred until a bot has
 actually finished hill climbing — a ranking of bots is only worth reading once
