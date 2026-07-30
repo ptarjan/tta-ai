@@ -964,3 +964,108 @@ class TestWondersAreBoardPriced(unittest.TestCase):
             self.assertNotEqual(W.card_potential(name, self.W1, st, 0),
                                 W.card_potential(name, W.DEFAULT_WEIGHTS),
                                 name)
+
+
+class TestWonderIdentityReachesThePolicy(unittest.TestCase):
+    """The plumbing bug, not the pricing bug.
+
+    A wonder never enters `hand_civil` -- `engine/actions.py:take_card` puts
+    it straight into `p.wonder` -- so `hand_potential`, the live term the
+    search optimises, never prices one. Every other `wonder_*` feature is
+    arithmetic on resources and cannot tell Eiffel Tower from Ocean Liners.
+    That is why repricing wonders moved play so much less than repricing
+    leaders, and no amount of better pricing fixes it. `wonder_potential`
+    is the term that reads it.
+    """
+
+    def _mid(self, seed=17, plies=300):
+        import random
+        from engine import actions as A, game as G
+        from engine.bots import WeightedBot
+        w = W.load_weights_or_default() if hasattr(
+            W, "load_weights_or_default") else dict(W.DEFAULT_WEIGHTS)
+        st = G.new_game(2, seed)
+        rng = random.Random(seed)
+        bots = [WeightedBot(weights=w, seed=seed + i) for i in range(2)]
+        for _ in range(plies):
+            if st.game_over:
+                break
+            A.apply(st, bots[st.decider()].pick(st, A.legal_moves(st)), rng)
+        return st
+
+    def test_a_wonder_never_reaches_the_hand(self):
+        """The premise. If this ever fails, `hand_potential` covers wonders
+        and `wonder_potential` is redundant -- which would be good news, but
+        somebody has to notice."""
+        from engine import actions as A, game as G
+        st = G.new_game(2, 3)
+        p = st.players[0]
+        row = st.card_row
+        i = next((i for i, n in enumerate(row) if n and
+                  C.db().by_name[n]["type"] == "wonder"), None)
+        if i is None:
+            st.card_row[0] = "Pyramids"
+            i = 0
+        A.take_card(st, p, i)
+        self.assertNotIn("Pyramids", p.hand_civil)
+        self.assertIsNotNone(p.wonder)
+
+    def test_zero_with_no_wonder_in_progress(self):
+        st = self._mid()
+        st.players[0].wonder = None
+        self.assertEqual(
+            W.wonder_potential(st, 0, dict(W.DEFAULT_WEIGHTS,
+                                           wonder_potential=1.0)), 0.0)
+
+    def test_two_wonders_are_no_longer_the_same_card(self):
+        """The whole point. Under the pre-existing feature set these two
+        differ only by `wonder_remaining`."""
+        from engine.state import WonderInProgress
+        st = self._mid()
+        p = st.players[0]
+        w = dict(W.DEFAULT_WEIGHTS, wonder_potential=1.0,
+                 card_board_credit=1.0)
+        vals = {}
+        for n in ("Eiffel Tower", "Ocean Liners", "Fast Food Chains",
+                  "Pyramids"):
+            p.wonder = WonderInProgress(n)
+            vals[n] = W.wonder_potential(st, 0, w)
+        self.assertEqual(len(set(vals.values())), len(vals), vals)
+        self.assertGreater(vals["Eiffel Tower"], vals["Ocean Liners"])
+
+    def test_it_does_not_charge_for_the_stages(self):
+        """`wonder_remaining` already prices the outstanding resources, and
+        prices them right for a PART-BUILT wonder. Charging here as well
+        would double-count and would bill for stages already paid."""
+        from engine.state import WonderInProgress
+        st = self._mid()
+        p = st.players[0]
+        w = dict(W.DEFAULT_WEIGHTS, wonder_potential=1.0)
+        p.wonder = WonderInProgress("Eiffel Tower")
+        none_built = W.wonder_potential(st, 0, w)
+        p.wonder.steps_built = 2
+        self.assertEqual(W.wonder_potential(st, 0, w), none_built)
+        self.assertGreater(none_built, 0.0)
+
+    def test_taking_a_wonder_is_now_priced_by_which_wonder(self):
+        """The second and more important bite. `take_card` sets `p.wonder`,
+        so the 1-ply search's POST-MOVE state already holds it -- which is
+        what turns this from a build-time term into a take-time one."""
+        from engine import actions as A
+        from engine.bots.fastcopy import copy_state
+        st = self._mid()
+        w = dict(W.DEFAULT_WEIGHTS, wonder_potential=1.0,
+                 card_board_credit=1.0)
+        seen = {}
+        for n in ("Eiffel Tower", "Ocean Liners"):
+            tr = copy_state(st)
+            tr.players[0].wonder = None
+            tr.card_row[0] = n
+            A.take_card(tr, tr.players[0], 0)
+            seen[n] = W.evaluate(tr, 0, w)
+        self.assertNotEqual(seen["Eiffel Tower"], seen["Ocean Liners"])
+
+    def test_it_is_inert_by_default(self):
+        self.assertEqual(W.DEFAULT_WEIGHTS["wonder_potential"], 0.0)
+        from experiments import summarize
+        self.assertTrue(summarize.group_of("wonder_potential"))

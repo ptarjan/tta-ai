@@ -50,7 +50,8 @@ GROUPS = {
              "best_unit", "num_techs", "special_techs"),
     "wonders": ("wonders", "wonder_progress", "wonder_remaining", "leader",
                 "wonder_stages_left", "wonder_turns_to_finish",
-                "wonder_overrun", "wonder_stages_per_action"),
+                "wonder_overrun", "wonder_stages_per_action",
+                "wonder_potential"),
     # effect keys `_card_yields` used to drop on the floor
     # (docs/CARD_BLINDNESS.md).  Their own group because they are one
     # coherent change and hillclimb's `rescale`/`group` operators should be

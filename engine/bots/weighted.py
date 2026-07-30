@@ -48,7 +48,8 @@ from .fastcopy import copy_state
 from .trial import USE_JOURNAL, fresh_trial_rng
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
-           "card_potential", "hand_potential", "rival_hand_potential",
+           "card_potential", "hand_potential", "wonder_potential",
+           "rival_hand_potential",
            "row_pressure", "load_weights", "save_weights"]
 
 # ---------------------------------------------------------------- metadata
@@ -1230,6 +1231,77 @@ def hand_potential(state, idx, w):
     return total
 
 
+def wonder_potential(state, idx, w):
+    """WHICH wonder am I building?  `hand_potential`'s missing sibling.
+
+    THE PLUMBING BUG THIS EXISTS TO FIX.  `hand_potential` was added because
+    two different cards in hand produced a byte-identical feature vector, so
+    the search had no basis to prefer a good card to a bad one.  That argument
+    applies verbatim to the wonder in progress, and nothing covered it:
+
+    * `engine/actions.py:take_card` puts a wonder **straight into
+      `p.wonder`** -- a wonder NEVER enters `hand_civil`.  So
+      `hand_potential`, the live term the search optimises at every decision,
+      never sees one.
+    * `features()` reads `p.wonder` only for `stages` and `steps_built`
+      (`wonder_progress`, `wonder_remaining`, `wonder_stages_left`,
+      `wonder_turns_to_finish`, `wonder_overrun`).  Every one of those is
+      arithmetic on RESOURCES.  Eiffel Tower and Ocean Liners at the same
+      stage of the same cost are the same card to all five.
+    * The only path left is `row_pressure`, gated on `row_urgency` /
+      `row_bargain_forgone`, which default to 0.0 and are unset in all three
+      frozen champions -- so in practice a wonder's identity reached the
+      policy through nothing at all.
+
+    That is why repricing a leader moves play hard and repricing a wonder
+    barely moves it: leaders go to hand and are priced by a live term,
+    wonders are not.  Pricing the wonders better cannot fix that; only a term
+    that reads them can.
+
+    This is an omission of the same kind as the missing `culture` mapping,
+    not a design decision.  It was worth checking for a rules reason and
+    there is none: a wonder in progress is public (`rival_context` already
+    exposes `q.wonder`, reduced to a bool only because `_can_take_gated` asks
+    nothing else of it), so this reads no hidden state and does not touch the
+    determinization leak that keeps rival military hands out of the
+    evaluation.
+
+    It bites at BOTH decisions that matter, and the second one is the point:
+
+    1. keep paying stages into this wonder, or stop;
+    2. **take this wonder from the row at all** -- because `take_card` sets
+       `p.wonder` immediately, the 1-ply search's post-move state already has
+       the wonder in place, so taking Eiffel Tower and taking Ocean Liners
+       stop looking identical.
+
+    GAINS ONLY.  The stage cost is deliberately dropped: `wonder_remaining`
+    already prices the outstanding resources, and it prices them correctly
+    for a PART-BUILT wonder, which `_card_yields`' flat `-sum(stages)` does
+    not.  Adding the cost here would double-count it and would charge for
+    stages already paid.
+
+    Scaled by its own weight, `wonder_potential`, default 0.0 -- so this is
+    inert until the league is told to look, exactly like `hand_potential`
+    before it was measured.
+    """
+    p = state.players[idx]
+    if p.wonder is None:
+        return 0.0
+    credit = w.get("card_rate_credit", 1.0)
+    board = w.get("card_board_credit", 0.0)
+    name = p.wonder.name
+    if board:
+        swap = _BY.board_yields(name, state, idx)
+        if swap is not None:
+            return board * _sum_yields(_gains_only(swap), w, credit)
+    return _sum_yields(_gains_only(_card_yields(name)), w, credit)
+
+
+def _gains_only(triples):
+    """Drop `_Y_COST` triples -- see `wonder_potential`'s last paragraph."""
+    return tuple(t for t in triples if t[2] != _Y_COST)
+
+
 def tactic_terms(state, idx):
     """(tactic_gain, tactic_short) -- the two halves of the tactic deadlock.
 
@@ -1561,6 +1633,14 @@ BASE_WEIGHTS = {
     "wonder_overrun": 0.0,
     # Masonry and friends: stages per build action, above the base of one.
     "wonder_stages_per_action": 0.0,
+    # Identity of the wonder in progress, which nothing else in the vector
+    # can see: every other `wonder_*` term is arithmetic on resources.  0.0
+    # for the usual reason -- a new channel, not a change to an existing one
+    # -- but note that unlike the three finish-discipline terms this one is
+    # NOT a near-dead coordinate: it differs across candidates at every
+    # take-a-wonder decision, because `take_card` sets `p.wonder` in the
+    # post-move state the search scores.
+    "wonder_potential": 0.0,
     "leader": 1.5,
     # --- effect keys that were dropped on the floor and now have somewhere to
     # land.  0.0 for the same reason as the INFORMATION_AUDIT block above: a
@@ -1760,6 +1840,11 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
     hp = get("hand_potential")
     if hp:
         total += hp * hand_potential(state, idx, w)
+    # which wonder am I building (and, through the post-move state, which
+    # one am I taking) -- see `wonder_potential`.  0.0 by default.
+    wp = get("wonder_potential")
+    if wp:
+        total += wp * wonder_potential(state, idx, w)
     # The row / rival-hand terms, same shape and same reason as
     # `hand_potential` above: they are priced through `w`, so they are not
     # linear features and cannot live in `features()`.  Each is skipped
