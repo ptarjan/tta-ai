@@ -3,13 +3,18 @@
 The honest-instrument question about `PlanBot._one_ply_quiet`.  `pick`'s beam
 path re-shuffles the unseen decks first (`determinize`), because
 `fastcopy.copy_state` copies `civil_deck`/`military_deck` verbatim and a trial
-`apply` that draws therefore draws the *real* next card -- `tools/infoleak.py`
-measures 94.9% of `end_turn` candidates doing exactly that at 2p.  The pending
-short-circuit does NOT determinize, on either the drained or the undrained
-path.  So before a +20pp win-rate move is attributed to better defence, it has
-to be shown that the drain is not simply seeing the future: an extra
-`_quiesce` per candidate is extra `apply` calls, and extra `apply` calls are
-extra chances to draw.
+`apply` that draws therefore draws the *real* next card unless the root was
+determinized first.  The pending short-circuit does NOT determinize, on
+either the drained or the undrained path.  So before a +20pp win-rate move is
+attributed to better defence, it has to be shown that the drain is not simply
+seeing the future: an extra `_quiesce` per candidate is extra `apply` calls,
+and extra `apply` calls are extra chances to draw.
+
+(`tools/infoleak.py`'s 94.9%-of-`end_turn` figure is a `WeightedBot` draw
+count, not a leak measurement -- see that file's own docstring -- so it is not
+cited here as evidence of anything about this bot's pending path.  This tool
+measures the pending path's own draw rate directly instead, which is the
+point of it existing.)
 
 This tool counts, at every real pending decision the bot owns, how many
 candidate evaluations consume real deck cards or change the visible card row --

@@ -135,11 +135,16 @@ def _child_enc(state, mv, seat):
     actions.apply(t, mv, _TRIAL_RNG)
 ```
 
-No determinization. `tools/infoleak.py` measures 94.9% of `end_turn` candidates
-at 2p drawing the *real* next civil card. So the anchor taught the net to price
-`end_turn` -- the single most-evaluated move in the game -- off a card that is
-re-shuffled away before `NeuralBot` ever scores it (`NeuralBot` does determinize
-at the root). Train/serve skew on the highest-frequency move class.
+No determinization. `tools/infoleak.py` measured, on `WeightedBot` at 2p, that
+94.9% of `end_turn` candidates draw a card -- a draw count, not by itself proof
+of a leak, since it does not change whether the root was determinized
+(docs/AGGRESSION_RATE.md §9a). But `_child_enc` above never determinizes
+either, so for it the two coincide the same way they do for `WeightedBot`: a
+draw here really is the *real* next civil card. So the anchor taught the net
+to price `end_turn` -- the single most-evaluated move in the game -- off a
+card that is re-shuffled away before `NeuralBot` ever scores it (`NeuralBot`
+does determinize at the root). Train/serve skew on the highest-frequency move
+class.
 
 ### 3.5 The loop had no state, so it was one experiment run 74 times
 

@@ -87,11 +87,15 @@ boundary-only fit is trained on ... the fitted vector and PlanBot are a matched
 pair by construction."
 
 It also fixes a leak the old anchor had. `neural_rankdata.py` applied candidate
-moves to the **real** state, and `tools/infoleak.py` measures 94.9% of `end_turn`
-candidates at 2p drawing the real next civil card. The BookBot anchor was
-therefore teaching the net to price the most-evaluated move in the game off a
-card that is reshuffled away before the bot ever plays. Every child in both new
-generators is applied to a determinized copy.
+moves to the **real** state, with no determinization at all. `tools/infoleak.py`
+measured, on `WeightedBot` at 2p, that 94.9% of `end_turn` candidates draw a
+card -- a draw count, not proof of a leak by itself, since it is unaffected by
+whether the root is determinized (docs/AGGRESSION_RATE.md §9a). But
+`neural_rankdata.py`'s undeterminized root makes the two coincide the same way
+they do for `WeightedBot`: a draw there really is the real next civil card.
+The BookBot anchor was therefore teaching the net to price the most-evaluated
+move in the game off a card that is reshuffled away before the bot ever plays.
+Every child in both new generators is applied to a determinized copy.
 
 ## 4. Stage 0: bootstrap from the strongest bot on record
 

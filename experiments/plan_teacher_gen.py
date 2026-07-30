@@ -17,9 +17,13 @@ Two distribution bugs in the old pipeline that this file fixes
    value rows ARE the positions the teacher's search scored, taken straight out
    of its `_score`, war-substitution included.
 2. **Hidden information in the labels.**  `neural_rankdata.py` encoded children
-   from the REAL state, so an `end_turn` candidate drew the real next card --
-   `tools/infoleak.py` measures 94.9% of `end_turn` candidates doing exactly
-   that.  The net was therefore taught to price `end_turn` off a card it cannot
+   from the REAL state, with no determinization at all, so an `end_turn`
+   candidate drew the real next card.  (`tools/infoleak.py` measures, on
+   `WeightedBot`, that 94.9% of `end_turn` candidates draw a card -- a draw
+   count, not by itself proof of a leak, since determinizing the root can't
+   move it; but `neural_rankdata.py`'s root was never determinized either, so
+   there a draw really is the real next card -- docs/AGGRESSION_RATE.md §9a.)
+   The net was therefore taught to price `end_turn` off a card it cannot
    see when it plays, which is noise at play time.  Here every child is applied
    to a DETERMINIZED copy, the same one the teacher searched.
 

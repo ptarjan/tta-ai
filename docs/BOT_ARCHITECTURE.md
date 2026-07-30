@@ -238,6 +238,20 @@ runs my end-of-turn economy, advances the turn *and* runs the next player's
 `game.start_turn`, which replenishes the row from the real deck. The single
 most-evaluated move in the game is the one that peeks.
 
+**Terminology, added 2026-07-30, read this before quoting the number above
+out of this section.** This section predates `plan.py`'s `determinize` and is
+entirely about `WeightedBot`'s search, so "leaky" is literal here: `WeightedBot`
+never determinizes, so every draw its candidates make really is the true next
+card. But the 94.9% figure itself is a **draw count** — it counts candidates
+whose trial `apply` draws, a quantity identical whether or not the root is
+determinized — and it was later mis-cited elsewhere in this repo (§0 bullet 5,
+the M1/M2 notes below) as though it described `PlanBot`'s beam, which has
+determinized its root since it was written and for which this number is not
+evidence either way. `tools/infoleak.py --true-card`
+(docs/AGGRESSION_RATE.md §9a) is the instrument that actually distinguishes a
+leak from a draw, and it found the beam's real leak in `current_events`, a
+different pile than anything measured in this section.
+
 **But the leak is currently inert, and that is the interesting part.**
 
 MEASURED, `tools/leak_impact.py --players 2 --games 25 --k 8`: over **3,957
@@ -1236,9 +1250,13 @@ under you, so nothing here reads those live) and raw duel outputs in
 nice -n 15 python3 tools/cost_census.py --players 2 --games 10 \
     --weights experiments/arch_frozen/champ2p_gen344.json
 
-# §2.3  does 1-ply search read hidden cards?           (94.9% of end_turn)
+# §2.3  does 1-ply search draw real cards?              (94.9% of end_turn)
 nice -n 15 python3 tools/infoleak.py --players 2 --games 15 \
     --weights experiments/arch_frozen/champ2p_gen344.json
+# ^ a draw count, on WeightedBot, which never determinizes -- not a general
+#   leak instrument.  `tools/infoleak.py --true-card` is the one that answers
+#   "does 1-ply search read hidden cards" for a determinizing bot like
+#   PlanBot (docs/AGGRESSION_RATE.md §9a).
 
 # §2.3  does it change any move?                       (0 of 3957)
 nice -n 15 python3 tools/leak_impact.py --players 2 --games 25 --k 8 \

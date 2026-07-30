@@ -609,6 +609,19 @@ Where determinization stands:
   value card identity in the row or the deck must ship with determinization of
   the corresponding deck in the same change.
 
+  **Correction, 2026-07-30.** The 94.9% above is a `WeightedBot` draw count —
+  a candidate whose trial `apply` draws, which is identical whether or not the
+  root is determinized — not a general leak measurement. It happens to equal
+  a true leak rate here only because `WeightedBot` never determinizes at all;
+  it does *not* describe the `plan.py` determinize this section opens with,
+  which was already shuffling `civil_deck`/`military_deck` at the time this
+  was written and has determinized `PlanBot`'s root since `PlanBot` was
+  written. The beam's actual remaining leak, found later, was a pile this
+  paragraph doesn't mention: `current_events` was never shuffled by
+  `determinize` at all, so every `end_turn` a determinizing search expanded
+  still revealed the true next event (100.0% true-card, 38.3% after the fix).
+  See `docs/AGGRESSION_RATE.md` §9a and `tools/infoleak.py --true-card`.
+
 ### 6.1 The gun is now loaded — measured 2026-07-29
 
 The warning above was written as a prediction. It has come true, and the amount
@@ -629,6 +642,14 @@ Re-run of `tools/infoleak.py` (it still works, unmodified):
 3p,  5 games   1160 decisions / 13213 candidates   end_turn 92.0% leaky
                86.2% of decisions have >=1 leaky candidate
 ```
+
+(`infoleak.py`'s "leaky" here counts a draw or a row reveal, not a proven read
+— on `WeightedBot`, which never determinizes, the two coincide, but the
+percentage itself is a draw/reveal count and would not move if a determinize
+step were added, so it cannot on its own certify a fix. The next table,
+`leak_impact.py`, is what actually settles whether the *chosen move* is
+affected, which is why this section leans on it rather than on the count
+above.)
 
 Re-run of `tools/leak_impact.py`, which re-shuffles `civil_deck` and
 `military_deck` K times and asks whether the *chosen move* changes:
@@ -1478,6 +1499,11 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
 * The size of the event-order leak (§6, item 2). `tools/infoleak.py` does not
   instrument event reveals, so this is unmeasured rather than measured-small.
   **Still true on 2026-07-29** — the tool is unchanged.
+  **Resolved 2026-07-30**: `tools/infoleak.py --true-card` was added and
+  measured it directly — 100.0% true-card on `current_events` before the fix
+  (an identity, on the un-shuffled pile `plan.determinize` was missing) and
+  38.3% after, moving 78 of 3,448 beam picks at 3p. See
+  `docs/AGGRESSION_RATE.md` §9a.
 * Whether `rival_hand_potential` (GAP 3) is worth anything at 3p/4p. The civil
   `hand_potential` term itself was only validated at 2p
   (`engine/bots/weighted.py:673-677`). **Partial answer 2026-07-29:** the live

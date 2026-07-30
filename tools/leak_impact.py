@@ -1,8 +1,13 @@
 """How much does the hidden-information leak actually change the bot's move?
 
-`tools/infoleak.py` shows 94.9% of `end_turn` candidates draw the REAL next
-military card and reveal the REAL next civil cards.  That is a leak; this
-script asks whether it is a leak that *matters*, by comparing:
+`tools/infoleak.py`'s default mode shows 94.9% of `end_turn` candidates draw a
+card.  That is a draw count, not a leak measurement by itself -- it is
+identical whether or not the root is determinized, and it is measured on
+`WeightedBot`, not on `PlanBot`'s beam (which determinizes and has since it
+was written; see `engine/bots/plan.py`).  `WeightedBot` itself never
+determinizes at all, though, so its draws really are of the true next card
+(`tools/infoleak.py --true-card` puts it at 100.0%, docs/AGGRESSION_RATE.md
+§9a.1) -- that is the leak this script measures the impact of, by comparing:
 
   cheat  -- the bot's actual pick (trial applies read the true deck order)
   det    -- the same pick after re-shuffling the unseen decks, averaged over
@@ -11,6 +16,11 @@ script asks whether it is a leak that *matters*, by comparing:
 Reported: disagreement rate on the chosen move, and the eval delta on the
 `end_turn` candidate specifically (cheat score minus mean determinized score),
 which is the term `end_turn_bias` has been fighting.
+
+CAVEAT, added 2026-07-30: `determinize` below only re-shuffles `civil_deck`
+and `military_deck`, never `current_events` -- the pile that turned out to be
+the beam's real leak (docs/AGGRESSION_RATE.md §9a).  So the disagreement rate
+this script reports never exercises that component and is a lower bound.
 
     nice -n 15 python3 tools/leak_impact.py --players 2 --games 12 --k 8
 """
