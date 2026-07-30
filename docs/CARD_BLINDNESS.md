@@ -76,6 +76,16 @@ counted too) the totals are **125 dropped / 129 zero-gain**.
 completeness. They are *not* a measure of how well the bot values these cards,
 because the tool cannot see where they are actually priced.
 
+> **CORRECTION, 2026-07-30 (docs/MILITARY_SEAM.md).** "Never asked" is true of
+> `DEFAULT_WEIGHTS` and no longer true in general. `hand_mil_potential` walks
+> `p.hand_military` and calls `card_potential` → `_card_yields` on every card
+> in it, so any vector carrying a non-zero `hand_mil_potential` **does** ask —
+> the live 3p league champion carries 0.01079. That is how the territory row
+> below got priced, and it is why the `bonus` row's "genuinely unpriced" had
+> quietly become a leftover write-off rather than a limitation. Run
+> `tools/conduction_table.py` on the vector you care about before reading this
+> block as a statement about it.
+
 | card type | n | dropped key | "zero visible gain" | where it is really priced |
 |---|---|---|---|---|
 | event | 55 | 55 | 55 | Age III scoring events: `weighted.event_scoring_margin` → `events.final_event_culture`. The other 40 deliberately unpriced, reasons in EVENT_SEEDING §6 |
@@ -83,7 +93,7 @@ because the tool cannot see where they are actually priced.
 | territory | 12 | 0 | 12 | `deferred_credit`'s auction branch |
 | aggression | 11 | 11 | 10 | quiescence: the defender's `defense` pending is drained and the quiet position scored |
 | pact | 10 | 10 | 10 | `deferred_credit`; and `count 2p: 0`, so absent from 2p entirely |
-| bonus | 3 | 3 | 3 | **genuinely unpriced** |
+| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. docs/MILITARY_SEAM.md |
 | war | 3 | 3 | 3 | `quiescent.war_value` → the engine's own `events.resolve_war` |
 | **SUBTOTAL** | **109** | **97** | **108** | |
 
@@ -247,6 +257,11 @@ This is the honest inventory:
 5. **military hand** (12 keys) — `hand_potential` walks `hand_civil` only, so
    `_card_yields` is *never called* for a tactic, war, aggression, territory
    or bonus card. Mapping `tacticBonus` today would change nothing. See §6.
+   *(Superseded for two of the twelve: `hand_mil_potential` does call it, so
+   `defenseBonus`/`colonizationBonus` were mapped rather than written off —
+   docs/MILITARY_SEAM.md. `tacticBonus` stays unpriced, but for the sharper
+   reason recorded in `DELIBERATELY_UNPRICED`: it is a duplicate spelling of
+   the top-level `strength` the engine actually reads.)*
 6. **addressing** (19 keys) — `allPlayers`, `weakestPlayer` and friends name
    *who* an event or pact side applies to. Pacts are already priced by
    `deferred_credit`, which reads inside these blocks.

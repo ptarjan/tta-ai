@@ -107,6 +107,36 @@ def report(path, md=False):
     elif not visw:
         add("   >> row_pressure runs but NO wonder clears the value gate, so a")
         add("   >> wonder's identity still reaches the policy through nothing.")
+
+    # The military deck, called out separately because BOTH gates above read
+    # differently for it and reading the `x/236` line as if it covered every
+    # card is the mistake this whole file exists to prevent.  There is no
+    # military row in the base game -- military cards are drawn blind from a
+    # deck -- so `row_pressure` never sees one, gate 2's `<= 0` threshold is
+    # not on their path, and `hand_mil_potential` is the ONLY consumer that
+    # can price one (`hand_potential`/`rival_hand_potential` walk
+    # `hand_civil`, `wonder_potential` walks `p.wonder`).
+    n_mil = sum(1 for c in C.db().cards if c.get("deck") == "military")
+    add("")
+    add("## The military deck: one consumer, and no value threshold")
+    add("")
+    hmp = w.get("hand_mil_potential")
+    add(f"   hand_mil_potential = {hmp}   "
+        f"({'OPEN' if hmp else 'closed'}) -- the only consumer that can")
+    add(f"   price any of the {n_mil} military-deck cards.  row_pressure "
+        "reads state.card_row,")
+    add("   which is the CIVIL row, so gate 2's `<= 0` skip cannot apply to "
+        "them:")
+    add("   hand_mil_potential SUMS the hand, threshold-free, and a card that "
+        "prices")
+    add("   negative subtracts rather than disappearing.")
+    if not hmp:
+        add("")
+        add("   >> MILITARY PRICING IS MOOT for this vector. Anything priced "
+            "onto a")
+        add("   >> territory, tactic, war, aggression, pact or bonus card "
+            "reaches the")
+        add("   >> score through nothing at all.")
     return "\n".join(out)
 
 

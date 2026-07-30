@@ -46,7 +46,8 @@ def _all_priced_keys():
     """
     return (set(W._PROD_TO_FEATURE) | set(W._EFF_TO_FEATURE)
             | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
-            | set(W._TERR_TO_FEATURE) | set(BY.BOARD_PRICED))
+            | set(W._TERR_TO_FEATURE) | set(W._BONUS_TO_FEATURE)
+            | set(BY.BOARD_PRICED))
 
 
 # ------------------------------------------------- the top-level card fields
@@ -85,8 +86,31 @@ TOP_LEVEL_UNPRICED = {
     "countSource": "provenance of the copy count, not a game value",
     "uncertain": "a data-confidence note, not a game value",
     # --- genuinely unpriced, with the reason
-    "cost": "military-action cost of playing the card; the evaluator sees "
-            "the action spent in the post-move state, not on the card",
+    # `{"militaryActions": n}` on all 54 cards that carry it, and the only
+    # subkey of `cost` anywhere in the database.  NOT priced, and the reason
+    # is the census rather than the post-move state:
+    #
+    #     cost 0 -- bonus 3, pact 10, territory 12   (nothing to price)
+    #     cost 1 -- aggression 5, tactic 15
+    #     cost 2 -- aggression 5, war 2
+    #     cost 3 -- aggression 1, war 1
+    #
+    # Every card with a NON-ZERO cost is an aggression, a tactic or a war,
+    # which is exactly and exhaustively the set of types whose GAIN
+    # `_card_yields` deliberately does not hold (aggressions and wars are
+    # priced by resolution -- quiescence and `quiescent.war_value`; a tactic's
+    # gain is `tactic_gain`/`tactic_short`, a board query).  Pricing the cost
+    # on its own would reproduce, exactly, the worst pricing defect this file
+    # documents: the ten unit cards that scored strictly negative because
+    # `_card_yields` read their `techCost` and `buildCost` and not their
+    # `strength`.  It would not be small either -- the live 3p champion
+    # carries `military_actions = 3.48`, so every aggression in hand would
+    # price at -3.48 x the credit before any payoff was counted.  Map this
+    # only in the change that also prices what the card BUYS.
+    "cost": "military-action cost of playing the card.  Non-zero only on the "
+            "aggressions, tactics and wars, whose gain is priced by "
+            "resolution rather than by this table -- pricing the cost alone "
+            "is the pure-cost bug that made every unit card negative",
     "target": "addressing: names who an aggression/war/event applies to",
     "scoringEvent": "end-of-age scoring, resolved by the rules engine",
     "sides": "pact structure; priced by deferred_credit, which reads inside",
@@ -182,6 +206,7 @@ class TestEffectCoverage(unittest.TestCase):
                    | set(W._EFF_TO_FEATURE.values())
                    | set(W._EFF_SPECIAL.values())
                    | set(W._TERR_TO_FEATURE.values())
+                   | set(W._BONUS_TO_FEATURE.values())
                    | {f for _a, f in BY._STATS_FEATURES}
                    | {"hand_limit", "build_discount", "no_aggression",
                       "gov_action_cost", "restricted_resources", "leader"})
@@ -213,7 +238,7 @@ class TestTheCensusStillReproducesMaster(unittest.TestCase):
         # the order they ran in.
         save = (dict(W._EFF_TO_FEATURE), dict(W._EFF_SPECIAL),
                 dict(W._EFF_CHOICE), dict(W._UNIT_TO_FEATURE),
-                dict(W._TERR_TO_FEATURE))
+                dict(W._TERR_TO_FEATURE), dict(W._BONUS_TO_FEATURE))
         try:
             cb.use_legacy_maps()
             types, dropped, zero, _k, _n, _c = cb.scan()
@@ -223,7 +248,8 @@ class TestTheCensusStillReproducesMaster(unittest.TestCase):
         finally:
             for reg, kept in zip((W._EFF_TO_FEATURE, W._EFF_SPECIAL,
                                   W._EFF_CHOICE, W._UNIT_TO_FEATURE,
-                                  W._TERR_TO_FEATURE), save):
+                                  W._TERR_TO_FEATURE, W._BONUS_TO_FEATURE),
+                                 save):
                 reg.clear()
                 reg.update(kept)
             W._card_yields.cache_clear()
@@ -384,7 +410,8 @@ class TestNewWeightsAreInert(unittest.TestCase):
 
     INERT = ("wonder_stages_left", "wonder_turns_to_finish", "wonder_overrun",
              "wonder_stages_per_action", "hand_limit", "colonize_bonus",
-             "build_discount", "free_civil_action", "resource_discount")
+             "build_discount", "free_civil_action", "resource_discount",
+             "defense_bonus")
 
     def test_defaults_are_zero(self):
         for k in self.INERT:
@@ -462,6 +489,32 @@ class TestTopLevelFieldsAreAccountedFor(unittest.TestCase):
             for k, why in d.items():
                 self.assertTrue(isinstance(why, str) and len(why) > 12,
                                 f"{k!r} needs a real reason, got {why!r}")
+
+    def test_the_cost_write_off_still_describes_the_cards(self):
+        """A write-off's REASON can go stale where the write-off itself
+        cannot, and nothing here could see it -- that is exactly how
+        `defenseBonus` sat behind "never reaches _card_yields" for a lane
+        after `hand_mil_potential` made it reachable (docs/MILITARY_SEAM.md).
+
+        `cost`'s reason is a factual claim about the card set: every card
+        with a NON-ZERO military-action cost is a type whose gain is priced
+        outside `_card_yields`, so pricing the cost alone would be the
+        pure-cost bug.  Claims can be tested; assert it rather than trust it.
+        If a future card breaks this, the write-off is what needs revisiting.
+        """
+        carriers, costly = 0, set()
+        for name, card in C.db().by_name.items():
+            cost = card.get("cost") or {}
+            if not cost:
+                continue
+            carriers += 1
+            self.assertEqual(sorted(cost), ["militaryActions"], name)
+            if cost["militaryActions"]:
+                costly.add(card["type"])
+        self.assertEqual(carriers, 54)
+        # aggressions and wars are priced by resolution (quiescence and
+        # `quiescent.war_value`), a tactic by `tactic_gain`/`tactic_short`
+        self.assertEqual(costly, {"aggression", "tactic", "war"})
 
 
 class TestUnitsArePricedByWhatTheyContribute(unittest.TestCase):
@@ -563,6 +616,144 @@ class TestTerritoriesArePricedFromTheAppliedEffect(unittest.TestCase):
         w = dict(W.DEFAULT_WEIGHTS, territory_credit=0.0)
         for n in self._terrs():
             self.assertEqual(W.card_potential(n, w), 0.0, n)
+
+
+class TestBonusCardsArePricedFromTheEngineArithmetic(unittest.TestCase):
+    """The three Military Bonus cards, and the write-off that outlived its
+    own reason.
+
+    They were listed in DELIBERATELY_UNPRICED as "military hand: never
+    reaches _card_yields (hand_potential is civil-only)".  That was true when
+    it was written and false by the time it was read: `hand_mil_potential`
+    walks `hand_military` and calls `card_potential` on every card in it, so
+    `_card_yields` IS asked about a bonus card -- it just had no entry.  A
+    write-off is not a test, which is why this class exists.
+    """
+
+    def _cards(self):
+        return [n for n, c in C.db().by_name.items() if c["type"] == "bonus"]
+
+    def _yield_of(self, name, feature):
+        return sum(a for k, a, _c in W._card_yields(name) if k == feature)
+
+    def test_there_are_exactly_three_and_they_carry_both_keys(self):
+        names = self._cards()
+        self.assertEqual(len(names), 3)
+        for n in names:
+            eff = C.db().get(n).get("effects") or {}
+            self.assertIn("defenseBonus", eff, n)
+            self.assertIn("colonizationBonus", eff, n)
+
+    def test_no_bonus_card_has_zero_visible_gain(self):
+        blind = [n for n in self._cards()
+                 if not [k for k, _a, kind in W._card_yields(n)
+                         if kind != W._Y_COST]]
+        self.assertEqual(sorted(blind), [], "was all 3")
+
+    def test_defence_is_priced_as_the_increment_over_a_face_down_card(self):
+        """`interact.defense_points` is the engine's authority and gives
+        EVERY military card 1.  The flat 1 is already carried by
+        `hand_military`, a count of the hand, so what a bonus card adds is
+        `defenseBonus - 1` -- pricing the printed 2/4/6 would count the
+        generic discard value of the card twice."""
+        from engine import interact
+        for n in self._cards():
+            self.assertEqual(self._yield_of(n, "defense_bonus"),
+                             float(interact.defense_points(n) - 1), n)
+        # ...and the baseline it is an increment over is real: every OTHER
+        # military card is worth exactly 1 to `_defense_move`.
+        others = [n for n, c in C.db().by_name.items()
+                  if c.get("deck") == "military" and c["type"] != "bonus"]
+        self.assertTrue(others)
+        for n in others:
+            self.assertEqual(interact.defense_points(n), 1, n)
+
+    def test_colonization_is_priced_in_the_engines_own_units(self):
+        """`interact.force_value` adds `colonizationBonus` into the SAME sum
+        as `state_stats(p).colonize`, which `features()` publishes as
+        `colonize_bonus`.  Sharing the weight is therefore the engine's
+        arithmetic, not a guess -- and this asserts the two cannot drift."""
+        db = C.db()
+        for n in self._cards():
+            printed = (db.get(n).get("effects") or {})["colonizationBonus"]
+            self.assertEqual(self._yield_of(n, "colonize_bonus"),
+                             float(printed), n)
+        self.assertEqual(W._BONUS_TO_FEATURE["colonizationBonus"],
+                         "colonize_bonus")
+        self.assertIn(("colonize", "colonize_bonus"), BY._STATS_FEATURES)
+
+    def test_the_three_ages_are_ordered(self):
+        w = dict(W.DEFAULT_WEIGHTS, defense_bonus=1.0, colonize_bonus=1.0)
+        vals = [W.card_potential(n, w)
+                for n in sorted(self._cards(),
+                                key=lambda n: C.level(C.db().get(n)["age"]))]
+        self.assertEqual(vals, sorted(vals))
+        self.assertLess(vals[0], vals[-1])
+
+    def test_the_credit_recovers_the_pre_change_pricing_exactly(self):
+        w = dict(W.DEFAULT_WEIGHTS, bonus_card_credit=0.0,
+                 defense_bonus=1.0, colonize_bonus=1.0)
+        for n in self._cards():
+            self.assertEqual(W.card_potential(n, w), 0.0, n)
+
+
+class TestTheMilitaryHandPassesTheBoardThrough(unittest.TestCase):
+    """`hand_mil_potential` called `card_potential(n, w)` with no state.
+
+    `card_potential` gates both board branches on `state is not None and idx
+    is not None`, so board-aware pricing could not fire for a military card
+    whatever the weights said -- and any later pricing work layered on top of
+    it would have been dead on arrival.  It is inert TODAY (no military type
+    is in `SWAP_TYPES`, none is in `board_extra`'s card set), which is why
+    only a test can keep the seam open.
+    """
+
+    def _state(self):
+        import random
+        from engine import actions as A, game as G
+        from engine.bots import WeightedBot
+        st = G.new_game(2, 11)
+        rng = random.Random(11)
+        bots = [WeightedBot(seed=11 + i) for i in range(2)]
+        for _ in range(40):
+            if st.game_over:
+                break
+            A.apply(st, bots[st.decider()].pick(st, A.legal_moves(st)), rng)
+        return st
+
+    def test_the_state_reaches_card_potential(self):
+        seen = []
+        real = W.card_potential
+
+        def spy(name, w, state=None, idx=None):
+            seen.append((name, state is not None, idx is not None))
+            return real(name, w, state, idx)
+
+        st = self._state()
+        p = next((q for q in st.players if q.hand_military), None)
+        if p is None:
+            self.skipTest("no military hand in this deal")
+        W.card_potential = spy
+        try:
+            W.hand_mil_potential(st, p.idx, W.DEFAULT_WEIGHTS)
+        finally:
+            W.card_potential = real
+        self.assertEqual(len(seen), len(p.hand_military))
+        for name, has_state, has_idx in seen:
+            self.assertTrue(has_state, name)
+            self.assertTrue(has_idx, name)
+
+    def test_passing_the_state_changes_no_number_today(self):
+        """The attribution half: this commit opens a seam, it does not
+        reprice anything.  If a later lane makes a military type board-aware
+        this test is the one that should be updated, deliberately."""
+        st = self._state()
+        w = dict(W.DEFAULT_WEIGHTS, hand_mil_potential=1.0,
+                 card_board_credit=1.0)
+        for p in st.players:
+            for n in p.hand_military:
+                self.assertEqual(W.card_potential(n, w),
+                                 W.card_potential(n, w, st, p.idx), n)
 
 
 class TestTacticPricing(unittest.TestCase):

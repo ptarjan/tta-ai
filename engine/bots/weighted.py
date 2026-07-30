@@ -892,6 +892,47 @@ _TERR_TO_FEATURE = dict(_YIELD_TO_FEATURE,
 # `tests/test_card_pricing.py` has something to point at.
 _UNIT_TO_FEATURE = {"strength": "strength"}
 
+# The three Military Bonus cards (age I/II/III, `type: "bonus"`, six copies
+# each at every player count).  They are the whole of the `bonus` type and
+# they carry BOTH keys, defence 2/4/6 and colonization 1/2/3.
+#
+# Both mappings are the engine's own arithmetic rather than an opinion, which
+# is the standard this file holds a table entry to:
+#
+#   * `colonizationBonus` -- `engine/interact.py:force_value` adds it into
+#     the SAME sum as `effects.state_stats(p).colonize`, and `features()`
+#     already publishes that stat as `colonize_bonus`.  One colonization
+#     point from a card and one from the board are the same point, so they
+#     share the weight, exactly as `civil_actions` is shared between the card
+#     that grants one and the board that has one.
+#
+#   * `defenseBonus` -- `engine/interact.py:defense_points` is the authority
+#     (`_defense_move` calls it) and it gives EVERY military card 1, these
+#     three 2/4/6.  The flat 1 is already priced, by `hand_military`, a count
+#     of the military hand; what is new information is the INCREMENT, so
+#     `_card_yields` prices `defenseBonus - 1` = 1/3/5 and not the printed
+#     number.  Pricing the printed number would count the generic
+#     face-down-discard value of the card twice.
+#
+# A registry rather than two literals in `_card_yields`, for the same reason
+# `_UNIT_TO_FEATURE` and `_TERR_TO_FEATURE` are: `tools/card_blindness.py
+# --legacy` has to be able to clear it and still reproduce master's census
+# exactly, or the baseline every later result is measured against quietly
+# rewrites itself.
+# How much of the printed number to believe is a separate question from what
+# the number means, and it is a WEIGHT: `bonus_card_credit` (BASE_WEIGHTS,
+# wired up through `_CREDIT_OF[_Y_BONUS]`).  A knob and not a constant for
+# the same reason `territory_credit` is one -- both keys are CONDITIONAL
+# payoffs, the defence half paying only if somebody aggresses against you and
+# you spend the card, the colonization half only if a territory is up and you
+# win the auction -- and how often that is, is for the league to measure
+# rather than for this line to assert.  1.0 is the printed number; 0.0
+# recovers the pre-change pricing byte for byte.
+_BONUS_TO_FEATURE = {
+    "defenseBonus": "defense_bonus",
+    "colonizationBonus": "colonize_bonus",
+}
+
 # Effect keys `_card_yields` prices but that need more than a table lookup:
 # the value is a dict, an offset, or a bare presence flag.  Handled in
 # `_card_yields`; listed here so the coverage test can see them as priced.
@@ -1015,6 +1056,18 @@ _unpriced(
 #    territories are priced from their `immediateEffects`/`permanentEffects`
 #    through `_TERR_TO_FEATURE`.  The keys below are the ones it still does
 #    not reach.
+#
+#    `defenseBonus` / `colonizationBonus` USED TO BE WRITTEN OFF HERE, with
+#    the reason "military hand: never reaches _card_yields (hand_potential is
+#    civil-only)".  That reason had been false since `hand_mil_potential`
+#    landed and nothing noticed, because a write-off is not a test: with a
+#    non-zero `hand_mil_potential` (the live 3p champion carries 0.01079)
+#    `evaluate` walks `p.hand_military` and calls `card_potential` ->
+#    `_card_yields` on every card in it, bonus cards included.  The proof is
+#    in this same file -- a territory is priced through `_TERR_TO_FEATURE`
+#    from inside `_card_yields`, reached by exactly that route.  So the two
+#    keys were not unreachable, only unmapped; they are mapped now, in
+#    `_BONUS_TO_FEATURE`, and see docs/MILITARY_SEAM.md.
 _unpriced(
     # A tactic's whole value is `tacticBonus x armies you can form`, which is
     # a board query, not a card constant -- and the engine never reads these
@@ -1027,10 +1080,6 @@ _unpriced(
     "tactic bonus: board-scaled, and a duplicate spelling of the top-level "
     "strength the engine actually reads (see tactic_outlook)",
     "tacticBonus", "tacticBonusObsolete",
-)
-_unpriced(
-    "military hand: never reaches _card_yields (hand_potential is civil-only)",
-    "defenseBonus", "colonizationBonus",
 )
 
 # 5a. The aggression and war payoffs.  These are written off here for a
@@ -1136,6 +1185,8 @@ _Y_UNIT = 3     # a military unit's per-worker strength, scaled by
 #                 w["unit_strength_credit"] -- same A/B-against-itself trick
 _Y_TERR = 4     # a territory's immediate/permanent effects, scaled by
 #                 w["territory_credit"]
+_Y_BONUS = 5    # a Military Bonus card's defence/colonization numbers,
+#                 scaled by w["bonus_card_credit"] -- same trick again
 
 # What kind is scaled by which weight, and what that weight defaults to when
 # the vector does not carry it.  One table so `card_potential` stays a single
@@ -1154,6 +1205,7 @@ _Y_TERR = 4     # a territory's immediate/permanent effects, scaled by
 _CREDIT_OF = {
     _Y_UNIT: ("unit_strength_credit", 0.0),
     _Y_TERR: ("territory_credit", 1.0),
+    _Y_BONUS: ("bonus_card_credit", 1.0),
 }
 
 
@@ -1267,6 +1319,23 @@ def _card_yields(name):
                 fk = _TERR_TO_FEATURE.get(k)
                 if fk:
                     out.append((fk, float(amt), _Y_TERR))
+    # The three Military Bonus cards.  Their `effects` block holds nothing
+    # else, so before `_BONUS_TO_FEATURE` they priced at exactly 0.0 -- the
+    # ONLY military-deck type left doing so once territories were priced, and
+    # written off in DELIBERATELY_UNPRICED with a reason (`hand_potential` is
+    # civil-only) that `hand_mil_potential` had already made false.  See the
+    # note on `_BONUS_TO_FEATURE` for why the defence number is priced as the
+    # increment over the flat +1 every military card is worth face down.
+    if typ == "bonus":
+        for k, amt in eff.items():
+            fk = _BONUS_TO_FEATURE.get(k)
+            if not fk or amt is True or amt is False or \
+                    not isinstance(amt, (int, float)):
+                continue
+            if k == "defenseBonus":
+                amt -= 1
+            if amt:
+                out.append((fk, float(amt), _Y_BONUS))
     tc = card.get("techCost") or 0
     if tc:
         out.append(("science", -float(tc), _Y_COST))
@@ -1634,13 +1703,32 @@ def hand_mil_potential(state, idx, w):
     no weight on it nothing calls `card_potential` on a military card and the
     evaluation is bit-identical.  It is the hook the other military card types
     need, not just territories.
+
+    THE SEAM.  This passed `card_potential(n, w)` -- no `state`, no `idx` --
+    and `card_potential` gates both of its board branches on `state is not
+    None and idx is not None`, so board-aware pricing could not fire for a
+    military card no matter what the weights said.  There was no reason for
+    it: this function is HANDED a state, and every caller of it goes through
+    `evaluate`, which has one.  It is fixed by passing them, not by threading
+    a None anywhere.
+
+    Passing them changes no number today, and the reason is worth writing
+    down so the next lane knows what it is inheriting: `board_yields` returns
+    None for anything outside `SWAP_TYPES` (leader/government/wonder),
+    `board_extra` returns () for anything outside its three civil action
+    cards, and `_board_credit_key` has no entry for a military type -- so a
+    military card's board credit is the bare `card_board_credit`, which is
+    0.0 on all three live champions and takes `card_potential`'s early
+    return.  This is the seam being OPEN, not a reprice; a board-aware
+    military pricing (an aggression priced against what the defender
+    actually holds, say) has somewhere to land now.
     """
     hand = state.players[idx].hand_military
     if not hand:
         return 0.0
     total = 0.0
     for n in hand:
-        total += card_potential(n, w)
+        total += card_potential(n, w, state, idx)
     return total
 
 
@@ -1931,6 +2019,13 @@ BASE_WEIGHTS = {
     # state for them and `features()` never emits them.
     "free_civil_action": 0.0,
     "resource_discount": 0.0,
+    # Also hand-only, and for a sharper reason than those two: a Military
+    # Bonus card's defence is worth something precisely BECAUSE it is still in
+    # hand -- spending it is what converts it, and once spent the card is
+    # gone, so there is no board state for `features()` to mirror.  (Its
+    # colonization half does have a board mirror and shares that weight;
+    # see `_BONUS_TO_FEATURE`.)  0.0 for the usual reason: a new channel.
+    "defense_bonus": 0.0,
     # --- board-aware card pricing (engine/bots/board_yields.py).  All 0.0,
     # so the whole of it is inert until `card_board_credit` is turned up.
     #
@@ -2047,6 +2142,14 @@ BASE_WEIGHTS = {
     # into an auction anyone can win, not played -- stays separable from
     # "how much the military hand matters at all".
     "territory_credit": 1.0,
+    # ...and the same knob for the three Military Bonus cards, 1.0 on the
+    # same terms: it costs nothing under DEFAULT_WEIGHTS, where
+    # `hand_mil_potential` is 0.0 and nothing calls `card_potential` on a
+    # military card, and 0.0 recovers the pre-change pricing exactly for an
+    # A/B.  Note this is NOT inert for the live 3p champion, which carries
+    # `hand_mil_potential = 0.01079` -- that vector is the one place in the
+    # league where this change conducts at all (docs/MILITARY_SEAM.md).
+    "bonus_card_credit": 1.0,
     # cards
     "hand_civil": 0.3,
     "hand_value": 0.25,

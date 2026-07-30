@@ -562,6 +562,12 @@ class TestAcquisitionAndOwnershipAgree(unittest.TestCase):
         "restricted_resources":
             "resources ring-fenced to military units, granted for a single "
             "turn by Patriotism and friends",
+        "defense_bonus":
+            "a Military Bonus card defends by being SPENT (interact."
+            "_defense_move discards it), so the quantity exists only while "
+            "the card is in hand and there is no board state left afterwards "
+            "-- unlike its colonization half, which shares colonize_bonus "
+            "with the board stat effects.state_stats().colonize",
     }
 
     def test_every_board_priced_feature_is_also_a_board_feature(self):

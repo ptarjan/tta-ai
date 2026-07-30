@@ -57,8 +57,9 @@ GROUPS = {
     # coherent change and hillclimb's `rescale`/`group` operators should be
     # able to move them together.
     "priced": ("hand_limit", "colonize_bonus", "build_discount",
-               "free_civil_action", "resource_discount",
-               "card_rate_credit", "unit_strength_credit", "territory_credit"),
+               "free_civil_action", "resource_discount", "defense_bonus",
+               "card_rate_credit", "unit_strength_credit", "territory_credit",
+               "bonus_card_credit"),
     # board-aware card pricing (engine/bots/board_yields.py): what a leader
     # or a government is worth on THIS board, by swapping it in and diffing
     # `effects.compute`.  Its own group for the same reason as "priced" --

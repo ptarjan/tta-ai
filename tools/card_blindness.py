@@ -22,11 +22,19 @@ exactly the thing being measured.
 
 WHAT THIS TOOL DOES **NOT** MEASURE, AND WHY THE SPLIT BELOW EXISTS
 -------------------------------------------------------------------
-`_card_yields` is reached only through `card_potential` <- `hand_potential`,
-and `hand_potential` walks `p.hand_civil` ONLY.  **It is never called for a
-card in the military deck** -- every event, aggression, war, pact, tactic,
-territory and bonus card.  For those 109 cards a "dropped key" is not a
-finding: mapping the key would change nothing, because nothing ever asks.
+`_card_yields` is reached through `card_potential`, and under
+`DEFAULT_WEIGHTS` the only consumer that is open is `hand_potential`, which
+walks `p.hand_civil` ONLY.  **Under the shipped defaults it is never called
+for a card in the military deck** -- every event, aggression, war, pact,
+tactic, territory and bonus card.  For those 109 cards a "dropped key" is
+then not a finding: mapping the key would change nothing, because nothing
+asks.
+
+Under a vector that carries a non-zero `hand_mil_potential` it IS called for
+all 109 (the live 3p league champion carries 0.01079), so the split below is
+a statement about a VECTOR and not about the code.  See
+`tools/conduction_table.py`, which prints which consumers a given vector
+leaves open, and docs/MILITARY_SEAM.md.
 
 The first version of this tool pooled them with the civil cards, which
 over-reported the blind spot by 109 cards and sent a whole work stream after
@@ -43,8 +51,13 @@ the census cannot see that either:
   * pacts       -- `weighted.deferred_credit`, and `count 2p: 0` besides
   * Age III scoring events -- `weighted.event_scoring_margin`, which calls
     `events.final_event_culture` (docs/EVENT_SEEDING.md)
-  * tactics/territories/bonus -- genuinely unpriced, but the fix is a
-    military sibling to `hand_potential`, not a table entry
+  * tactics -- `tactic_gain` / `tactic_short`, a board query
+  * territories -- `_TERR_TO_FEATURE`, reached through `hand_mil_potential`
+  * bonus -- `_BONUS_TO_FEATURE`, same route
+
+The last two are the sibling this list used to call for: `hand_mil_potential`
+exists now, so "nothing ever asks" is true only of a vector that leaves that
+weight at 0.0 (`DEFAULT_WEIGHTS` does; the live 3p champion does not).
 
 See docs/CARD_BLINDNESS.md and docs/EVENT_SEEDING.md.
 """
@@ -90,6 +103,11 @@ def use_legacy_maps():
     # all 22 of them "zero dropped keys, zero visible gain".
     W._UNIT_TO_FEATURE.clear()
     W._TERR_TO_FEATURE.clear()
+    # ...and the bonus-card pass, whose two keys ARE in an `effects` block but
+    # were written off rather than mapped (see `_BONUS_TO_FEATURE`).  Without
+    # this line the three Military Bonus cards stop counting as dropped/blind
+    # in the legacy column and the "before" numbers quietly move.
+    W._BONUS_TO_FEATURE.clear()
     W._card_yields.cache_clear()
     W._card_choices.cache_clear()
 
@@ -97,7 +115,8 @@ def use_legacy_maps():
 def _mapped(block, board=False):
     if block == "production":
         return set(W._PROD_TO_FEATURE)
-    out = set(W._EFF_TO_FEATURE) | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
+    out = (set(W._EFF_TO_FEATURE) | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
+           | set(W._BONUS_TO_FEATURE))
     out -= set(LEGACY_DROPPED) - set(W._EFF_TO_FEATURE)
     if board:
         out |= set(BY.BOARD_PRICED)
@@ -105,13 +124,23 @@ def _mapped(block, board=False):
 
 
 def reachable(card):
-    """Is `_card_yields` ever ASKED about this card?
+    """Is `_card_yields` ever ASKED about this card UNDER `DEFAULT_WEIGHTS`?
 
-    False for every military-deck card: `hand_potential` walks `hand_civil`
-    only, so a dropped key on a war or an event is not a blind spot, it is a
-    question nobody asks.  Wonders and leaders are not in `hand_civil` either,
-    but they are taken FROM THE CIVIL ROW and `card_potential` prices them
-    there, so they are reachable.
+    False for every military-deck card, and the qualification in the first
+    line is load-bearing rather than pedantic.  `hand_potential` walks
+    `hand_civil` only, so under the shipped defaults a dropped key on a war
+    or an event is not a blind spot, it is a question nobody asks.  Wonders
+    and leaders are not in `hand_civil` either, but they are taken FROM THE
+    CIVIL ROW and `card_potential` prices them there, so they are reachable.
+
+    But `hand_mil_potential` walks `hand_military` and calls `card_potential`
+    on every card in it, so a vector that carries a non-zero
+    `hand_mil_potential` DOES ask -- the live 3p league champion carries
+    0.01079.  Under that vector every "military" row below is reachable, and
+    a dropped key on one of those cards is a real blind spot.  This function
+    stays a statement about `DEFAULT_WEIGHTS` because that is what the
+    published census was generated under; run `tools/conduction_table.py` on
+    the vector you actually care about before believing the split.
     """
     return card.get("deck") != "military"
 
@@ -240,9 +269,12 @@ def main(argv=None):
     _rows(civil)
     _tot(civil, "SUBTOTAL")
     print()
-    print("-- MILITARY DECK: `_card_yields` is NEVER asked --------------")
-    print("   `hand_potential` walks hand_civil only.  A dropped key here")
-    print("   is not a blind spot; mapping it would change nothing.")
+    print("-- MILITARY DECK: not asked under DEFAULT_WEIGHTS ------------")
+    print("   `hand_potential` walks hand_civil only, so under the shipped")
+    print("   defaults a dropped key here is not a blind spot.  But")
+    print("   `hand_mil_potential` DOES walk hand_military, and a vector")
+    print("   carrying it (the live 3p champion: 0.01079) does ask -- run")
+    print("   tools/conduction_table.py on the vector you care about.")
     print("   Priced elsewhere -- see the module docstring.")
     _rows(mil)
     _tot(mil, "SUBTOTAL")
