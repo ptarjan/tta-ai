@@ -27,6 +27,7 @@ loop actually executes rather than of a copy that can drift away from it.
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -39,6 +40,30 @@ LOOP = os.path.join(ROOT, "experiments", "neural_search_loop.sh")
 def loop_src():
     with open(LOOP) as f:
         return f.read()
+
+
+def find_awk():
+    """Locate awk, including on the Windows box that actually runs the loop.
+
+    These tests execute awk programs lifted out of the driver script, which
+    means they are the only tests that can tell you the loop's rules still
+    hold -- and the machine with the most reason to ask is paul-desktop, where
+    the loop runs.  There, `awk` is not on cmd.exe's PATH: it ships inside
+    git-for-windows, which is also what interprets the driver script, so the
+    awk the loop will really use is the one under Git\\usr\\bin.  Falling back
+    to it turns six silent FileNotFoundError errors into six executed tests.
+    """
+    found = shutil.which("awk")
+    if found:
+        return found
+    for cand in (r"C:\Program Files\Git\usr\bin\awk.exe",
+                 r"C:\Program Files (x86)\Git\usr\bin\awk.exe"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+AWK = find_awk()
 
 
 def pool(paths):
@@ -167,6 +192,7 @@ class ReferenceRunsEveryIteration(unittest.TestCase):
                         "the anchor must be measured before promotion is decided")
 
 
+@unittest.skipIf(AWK is None, "awk not available; cannot execute the extracted rules")
 class AnchorGateRule(unittest.TestCase):
     """Arm 4: the actual arithmetic of arm B, extracted from the script.
 
@@ -183,7 +209,7 @@ class AnchorGateRule(unittest.TestCase):
 
     def ok(self, cand_win, cand_ci, inc_win, inc_ci):
         r = subprocess.run(
-            ["awk", "-v", "cw=%s" % cand_win, "-v", "cc=%s" % cand_ci,
+            [AWK, "-v", "cw=%s" % cand_win, "-v", "cc=%s" % cand_ci,
              "-v", "iw=%s" % inc_win, "-v", "ic=%s" % inc_ci, self.prog],
             stdin=subprocess.DEVNULL, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -260,6 +286,7 @@ class BothArmsAreRequiredAndLoggedSeparately(unittest.TestCase):
         self.assertIn('printf \'%s %s\\n\' "$cwin" "$cci" > "$ANCHORF"', block)
 
 
+@unittest.skipIf(AWK is None, "awk not available; cannot execute the extracted rules")
 class CommentRowsAreAnnotationsNotObservations(unittest.TestCase):
     """Arm 5: a '#' row in curve.tsv is prose, and prose is not data.
 
@@ -283,7 +310,7 @@ class CommentRowsAreAnnotationsNotObservations(unittest.TestCase):
     """
 
     def awk(self, prog, text, argv=()):
-        r = subprocess.run(["awk"] + list(argv) + [prog],
+        r = subprocess.run([AWK] + list(argv) + [prog],
                            input=text, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
