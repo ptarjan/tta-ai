@@ -1,0 +1,724 @@
+{
+ "games": 12087,
+ "meta": {
+  "bad": 0,
+  "by_players": {
+   "2": 6000,
+   "3": 4335,
+   "4": 1752
+  }
+ },
+ "arms": {
+  "2": {
+   "types": [
+    {
+     "type": "action",
+     "n_cards": 33,
+     "avail": 264849,
+     "held": 47535,
+     "played": 18751,
+     "play_rate": 0.39446723466919115,
+     "offered": 819378,
+     "taken": 47535
+    },
+    {
+     "type": "aggression",
+     "n_cards": 11,
+     "avail": 75443,
+     "held": 75443,
+     "played": 412,
+     "play_rate": 0.005461076574367403,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "air",
+     "n_cards": 1,
+     "avail": 11438,
+     "held": 22,
+     "played": 3,
+     "play_rate": 0.13636363636363635,
+     "offered": 44941,
+     "taken": 22
+    },
+    {
+     "type": "arena",
+     "n_cards": 3,
+     "avail": 18000,
+     "held": 6540,
+     "played": 6265,
+     "play_rate": 0.9579510703363915,
+     "offered": 50898,
+     "taken": 6540
+    },
+    {
+     "type": "artillery",
+     "n_cards": 2,
+     "avail": 17359,
+     "held": 69,
+     "played": 55,
+     "play_rate": 0.7971014492753623,
+     "offered": 52893,
+     "taken": 69
+    },
+    {
+     "type": "bonus",
+     "n_cards": 3,
+     "avail": 52584,
+     "held": 52584,
+     "played": 146,
+     "play_rate": 0.0027765099650083674,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "cavalry",
+     "n_cards": 3,
+     "avail": 28585,
+     "held": 138,
+     "played": 105,
+     "play_rate": 0.7608695652173914,
+     "offered": 87488,
+     "taken": 138
+    },
+    {
+     "type": "event",
+     "n_cards": 55,
+     "avail": 149825,
+     "held": 149825,
+     "played": 114701,
+     "play_rate": 0.7655664942432838,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "farm",
+     "n_cards": 4,
+     "avail": 23675,
+     "held": 7769,
+     "played": 7573,
+     "play_rate": 0.9747715278671644,
+     "offered": 65769,
+     "taken": 7769
+    },
+    {
+     "type": "government",
+     "n_cards": 8,
+     "avail": 42000,
+     "held": 10169,
+     "played": 9341,
+     "play_rate": 0.9185760645097847,
+     "offered": 117718,
+     "taken": 10169
+    },
+    {
+     "type": "infantry",
+     "n_cards": 4,
+     "avail": 23301,
+     "held": 200,
+     "played": 171,
+     "play_rate": 0.855,
+     "offered": 72526,
+     "taken": 200
+    },
+    {
+     "type": "lab",
+     "n_cards": 4,
+     "avail": 35497,
+     "held": 21017,
+     "played": 19912,
+     "play_rate": 0.9474235142979492,
+     "offered": 73666,
+     "taken": 21017
+    },
+    {
+     "type": "leader",
+     "n_cards": 24,
+     "avail": 131425,
+     "held": 20811,
+     "played": 20673,
+     "play_rate": 0.9933688914516362,
+     "offered": 331077,
+     "taken": 20811
+    },
+    {
+     "type": "library",
+     "n_cards": 3,
+     "avail": 29861,
+     "held": 23456,
+     "played": 21939,
+     "play_rate": 0.9353257162346521,
+     "offered": 48008,
+     "taken": 23456
+    },
+    {
+     "type": "mine",
+     "n_cards": 4,
+     "avail": 23608,
+     "held": 6372,
+     "played": 5160,
+     "play_rate": 0.8097928436911488,
+     "offered": 67228,
+     "taken": 6372
+    },
+    {
+     "type": "pact",
+     "n_cards": 10,
+     "avail": 0,
+     "held": 0,
+     "played": 0,
+     "play_rate": 0.0,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "special-tech",
+     "n_cards": 12,
+     "avail": 72000,
+     "held": 4285,
+     "played": 3116,
+     "play_rate": 0.7271878646441073,
+     "offered": 218142,
+     "taken": 4285
+    },
+    {
+     "type": "tactic",
+     "n_cards": 15,
+     "avail": 68802,
+     "held": 68802,
+     "played": 24544,
+     "play_rate": 0.3567338158774454,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "temple",
+     "n_cards": 3,
+     "avail": 17815,
+     "held": 12072,
+     "played": 12004,
+     "play_rate": 0.9943671305500331,
+     "offered": 30625,
+     "taken": 12072
+    },
+    {
+     "type": "territory",
+     "n_cards": 12,
+     "avail": 30866,
+     "held": 30866,
+     "played": 21849,
+     "play_rate": 0.7078662606103804,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "theater",
+     "n_cards": 3,
+     "avail": 29746,
+     "held": 20462,
+     "played": 17880,
+     "play_rate": 0.8738148763561724,
+     "offered": 52507,
+     "taken": 20462
+    },
+    {
+     "type": "war",
+     "n_cards": 3,
+     "avail": 35336,
+     "held": 35336,
+     "played": 0,
+     "play_rate": 0.0,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "wonder",
+     "n_cards": 16,
+     "avail": 87681,
+     "held": 1850,
+     "played": 1150,
+     "play_rate": 0.6216216216216216,
+     "offered": 324211,
+     "taken": 1850
+    }
+   ],
+   "known_zero": [
+    "war"
+   ]
+  },
+  "3": {
+   "types": [
+    {
+     "type": "action",
+     "n_cards": 33,
+     "avail": 192938,
+     "held": 23159,
+     "played": 12387,
+     "play_rate": 0.5348676540437842,
+     "offered": 630864,
+     "taken": 23159
+    },
+    {
+     "type": "aggression",
+     "n_cards": 11,
+     "avail": 48043,
+     "held": 48043,
+     "played": 572,
+     "play_rate": 0.011906000874216848,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "air",
+     "n_cards": 1,
+     "avail": 8378,
+     "held": 178,
+     "played": 1,
+     "play_rate": 0.0056179775280898875,
+     "offered": 24892,
+     "taken": 178
+    },
+    {
+     "type": "arena",
+     "n_cards": 3,
+     "avail": 17220,
+     "held": 8290,
+     "played": 7164,
+     "play_rate": 0.8641737032569361,
+     "offered": 43543,
+     "taken": 8290
+    },
+    {
+     "type": "artillery",
+     "n_cards": 2,
+     "avail": 16691,
+     "held": 231,
+     "played": 24,
+     "play_rate": 0.1038961038961039,
+     "offered": 44091,
+     "taken": 231
+    },
+    {
+     "type": "bonus",
+     "n_cards": 3,
+     "avail": 35709,
+     "held": 35709,
+     "played": 143,
+     "play_rate": 0.004004592679716598,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "cavalry",
+     "n_cards": 3,
+     "avail": 25057,
+     "held": 269,
+     "played": 37,
+     "play_rate": 0.137546468401487,
+     "offered": 80187,
+     "taken": 269
+    },
+    {
+     "type": "event",
+     "n_cards": 55,
+     "avail": 95759,
+     "held": 95759,
+     "played": 57112,
+     "play_rate": 0.5964139140968473,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "farm",
+     "n_cards": 4,
+     "avail": 25632,
+     "held": 14069,
+     "played": 11155,
+     "play_rate": 0.7928779586324544,
+     "offered": 55198,
+     "taken": 14069
+    },
+    {
+     "type": "government",
+     "n_cards": 8,
+     "avail": 42655,
+     "held": 12945,
+     "played": 7771,
+     "play_rate": 0.6003089996137505,
+     "offered": 105859,
+     "taken": 12945
+    },
+    {
+     "type": "infantry",
+     "n_cards": 4,
+     "avail": 25001,
+     "held": 265,
+     "played": 61,
+     "play_rate": 0.23018867924528302,
+     "offered": 80084,
+     "taken": 265
+    },
+    {
+     "type": "lab",
+     "n_cards": 4,
+     "avail": 25930,
+     "held": 22358,
+     "played": 13352,
+     "play_rate": 0.5971911620001789,
+     "offered": 33458,
+     "taken": 22358
+    },
+    {
+     "type": "leader",
+     "n_cards": 24,
+     "avail": 95039,
+     "held": 20222,
+     "played": 18479,
+     "play_rate": 0.9138067451290673,
+     "offered": 243469,
+     "taken": 20222
+    },
+    {
+     "type": "library",
+     "n_cards": 3,
+     "avail": 25988,
+     "held": 24493,
+     "played": 14279,
+     "play_rate": 0.5829828930714898,
+     "offered": 25685,
+     "taken": 24493
+    },
+    {
+     "type": "mine",
+     "n_cards": 4,
+     "avail": 25740,
+     "held": 15731,
+     "played": 6220,
+     "play_rate": 0.39539762252876487,
+     "offered": 51887,
+     "taken": 15731
+    },
+    {
+     "type": "pact",
+     "n_cards": 10,
+     "avail": 22213,
+     "held": 22213,
+     "played": 22092,
+     "play_rate": 0.9945527393868455,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "special-tech",
+     "n_cards": 12,
+     "avail": 64351,
+     "held": 18379,
+     "played": 8808,
+     "play_rate": 0.47924261385276673,
+     "offered": 182491,
+     "taken": 18379
+    },
+    {
+     "type": "tactic",
+     "n_cards": 15,
+     "avail": 45760,
+     "held": 45760,
+     "played": 14384,
+     "play_rate": 0.31433566433566434,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "temple",
+     "n_cards": 3,
+     "avail": 17285,
+     "held": 14755,
+     "played": 14004,
+     "play_rate": 0.9491019993222637,
+     "offered": 24856,
+     "taken": 14755
+    },
+    {
+     "type": "territory",
+     "n_cards": 12,
+     "avail": 19624,
+     "held": 19624,
+     "played": 9761,
+     "play_rate": 0.4974011414594374,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "theater",
+     "n_cards": 3,
+     "avail": 25971,
+     "held": 23644,
+     "played": 11228,
+     "play_rate": 0.47487734731855863,
+     "offered": 27447,
+     "taken": 23644
+    },
+    {
+     "type": "war",
+     "n_cards": 3,
+     "avail": 23030,
+     "held": 23030,
+     "played": 0,
+     "play_rate": 0.0,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "wonder",
+     "n_cards": 16,
+     "avail": 63211,
+     "held": 8720,
+     "played": 189,
+     "play_rate": 0.021674311926605506,
+     "offered": 278906,
+     "taken": 8720
+    }
+   ],
+   "known_zero": [
+    "war"
+   ]
+  },
+  "4": {
+   "types": [
+    {
+     "type": "action",
+     "n_cards": 33,
+     "avail": 78997,
+     "held": 34383,
+     "played": 16375,
+     "play_rate": 0.4762527993485153,
+     "offered": 508989,
+     "taken": 34383
+    },
+    {
+     "type": "aggression",
+     "n_cards": 11,
+     "avail": 27849,
+     "held": 27849,
+     "played": 1021,
+     "play_rate": 0.03666199863549858,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "air",
+     "n_cards": 1,
+     "avail": 4995,
+     "held": 1302,
+     "played": 604,
+     "play_rate": 0.46390168970814133,
+     "offered": 35523,
+     "taken": 1302
+    },
+    {
+     "type": "arena",
+     "n_cards": 3,
+     "avail": 8758,
+     "held": 8376,
+     "played": 7855,
+     "play_rate": 0.9377984718242598,
+     "offered": 25274,
+     "taken": 8376
+    },
+    {
+     "type": "artillery",
+     "n_cards": 2,
+     "avail": 8388,
+     "held": 1249,
+     "played": 807,
+     "play_rate": 0.6461168935148118,
+     "offered": 59466,
+     "taken": 1249
+    },
+    {
+     "type": "bonus",
+     "n_cards": 3,
+     "avail": 20482,
+     "held": 20482,
+     "played": 129,
+     "play_rate": 0.006298213065130358,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "cavalry",
+     "n_cards": 3,
+     "avail": 11830,
+     "held": 1509,
+     "played": 1023,
+     "play_rate": 0.6779324055666004,
+     "offered": 86394,
+     "taken": 1509
+    },
+    {
+     "type": "event",
+     "n_cards": 55,
+     "avail": 54522,
+     "held": 54522,
+     "played": 9728,
+     "play_rate": 0.1784233887238179,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "farm",
+     "n_cards": 4,
+     "avail": 12226,
+     "held": 10239,
+     "played": 9536,
+     "play_rate": 0.9313409512647719,
+     "offered": 49574,
+     "taken": 10239
+    },
+    {
+     "type": "government",
+     "n_cards": 8,
+     "avail": 19155,
+     "held": 10486,
+     "played": 9479,
+     "play_rate": 0.9039671943543772,
+     "offered": 99497,
+     "taken": 10486
+    },
+    {
+     "type": "infantry",
+     "n_cards": 4,
+     "avail": 10271,
+     "held": 1347,
+     "played": 885,
+     "play_rate": 0.6570155902004454,
+     "offered": 73606,
+     "taken": 1347
+    },
+    {
+     "type": "lab",
+     "n_cards": 4,
+     "avail": 12264,
+     "held": 12261,
+     "played": 11198,
+     "play_rate": 0.9133023407552402,
+     "offered": 15148,
+     "taken": 12261
+    },
+    {
+     "type": "leader",
+     "n_cards": 24,
+     "avail": 38388,
+     "held": 18264,
+     "played": 16451,
+     "play_rate": 0.9007336837494525,
+     "offered": 162714,
+     "taken": 18264
+    },
+    {
+     "type": "library",
+     "n_cards": 3,
+     "avail": 10512,
+     "held": 10500,
+     "played": 9616,
+     "play_rate": 0.9158095238095239,
+     "offered": 13704,
+     "taken": 10500
+    },
+    {
+     "type": "mine",
+     "n_cards": 4,
+     "avail": 12240,
+     "held": 10966,
+     "played": 9986,
+     "play_rate": 0.9106328652197702,
+     "offered": 42855,
+     "taken": 10966
+    },
+    {
+     "type": "pact",
+     "n_cards": 10,
+     "avail": 12377,
+     "held": 12377,
+     "played": 22384,
+     "play_rate": 1.8085157954270017,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "special-tech",
+     "n_cards": 12,
+     "avail": 27876,
+     "held": 16651,
+     "played": 14859,
+     "play_rate": 0.8923788361059396,
+     "offered": 148716,
+     "taken": 16651
+    },
+    {
+     "type": "tactic",
+     "n_cards": 15,
+     "avail": 25698,
+     "held": 25698,
+     "played": 13805,
+     "play_rate": 0.537201338625574,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "temple",
+     "n_cards": 3,
+     "avail": 7008,
+     "held": 6975,
+     "played": 6937,
+     "play_rate": 0.9945519713261649,
+     "offered": 15104,
+     "taken": 6975
+    },
+    {
+     "type": "territory",
+     "n_cards": 12,
+     "avail": 12301,
+     "held": 12301,
+     "played": 1797,
+     "play_rate": 0.14608568409072434,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "theater",
+     "n_cards": 3,
+     "avail": 10512,
+     "held": 10506,
+     "played": 9559,
+     "play_rate": 0.9098610317913574,
+     "offered": 15967,
+     "taken": 10506
+    },
+    {
+     "type": "war",
+     "n_cards": 3,
+     "avail": 12863,
+     "held": 12863,
+     "played": 0,
+     "play_rate": 0.0,
+     "offered": 0,
+     "taken": 0
+    },
+    {
+     "type": "wonder",
+     "n_cards": 16,
+     "avail": 25551,
+     "held": 18718,
+     "played": 4251,
+     "play_rate": 0.22710759696548777,
+     "offered": 41201,
+     "taken": 18718
+    }
+   ],
+   "known_zero": [
+    "war"
+   ]
+  }
+ }
+}
