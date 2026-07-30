@@ -42,29 +42,59 @@ python3 -m tools.card_blindness --legacy    # master
 python3 -m tools.card_blindness             # this branch
 ```
 
+> **CORRECTION, 2026-07-29 (docs/EVENT_SEEDING.md).** The table below
+> originally pooled both decks, and that **over-reported the blind spot by
+> 109 cards.** `_card_yields` is reached only through `card_potential` ←
+> `hand_potential`, and `hand_potential` walks `p.hand_civil` ONLY, so it is
+> **never called for a military-deck card** — every event, aggression, war,
+> pact, tactic, territory and bonus. For those, a "dropped key" is not a
+> finding: mapping it changes nothing, because nothing ever asks. Reading the
+> old pooled rows as "these 109 cards are unpriced" sent a work stream after
+> table entries that could not have helped. The tool now prints the two decks
+> separately and so does this table. An over-reporting measurement is exactly
+> as dangerous as an under-reporting one.
+
+**Civil row — `_card_yields` is asked about these.** This is the real census.
+
 | card type | n | with a dropped key (master → now) | zero visible gain (master → now) |
 |---|---|---|---|
-| event | 55 | 55 → 55 | 55 → 55 |
-| action | 33 | 28 → 10 | 19 → 6 |
+| action | 33 | 28 → 3 | 19 → 3 |
 | leader | 24 | 24 → 24 | 17 → 16 |
 | wonder | 16 | 15 → 8 | **7 → 5** |
-| tactic | 15 | 15 → 15 | 15 → 15 |
 | special-tech | 12 | 6 → 0 | 3 → 0 |
-| territory | 12 | 0 → 0 | 12 → 12 |
-| aggression | 11 | 11 → 11 | 10 → 10 |
-| pact | 10 | 10 → 10 | 10 → 10 |
 | government | 8 | 0 → 0 | 4 → 4 |
-| war | 3 | 3 → 3 | 3 → 3 |
-| bonus | 3 | 3 → 3 | 3 → 3 |
 | units (infantry/cavalry/artillery/air) | 10 | 1 → 1 | 10 → 10 |
 | farm/mine/lab/temple/library/arena/theater | 24 | 0 → 0 | 0 → 0 |
-| **TOTAL** | **236** | **171 → 140** | **168 → 149** |
+| **SUBTOTAL** | **127** | **74 → 36** | **60 → 38** |
+
+The "now" column moves as each lane lands; regenerate rather than trust it —
+`python3 -m tools.card_blindness` and `--legacy` for the master column. With
+`--board` (the board-aware evaluator of `docs/CARD_PRICING_LEADERS.md`
+counted too) the totals are **125 dropped / 129 zero-gain**.
+
+**Military deck — `_card_yields` is never asked.** These rows are recorded for
+completeness. They are *not* a measure of how well the bot values these cards,
+because the tool cannot see where they are actually priced.
+
+| card type | n | dropped key | "zero visible gain" | where it is really priced |
+|---|---|---|---|---|
+| event | 55 | 55 | 55 | Age III scoring events: `weighted.event_scoring_margin` → `events.final_event_culture`. The other 40 deliberately unpriced, reasons in EVENT_SEEDING §6 |
+| tactic | 15 | 15 | 15 | **genuinely unpriced** — needs a military sibling to `hand_potential`, not a table entry |
+| territory | 12 | 0 | 12 | `deferred_credit`'s auction branch |
+| aggression | 11 | 11 | 10 | quiescence: the defender's `defense` pending is drained and the quiet position scored |
+| pact | 10 | 10 | 10 | `deferred_credit`; and `count 2p: 0`, so absent from 2p entirely |
+| bonus | 3 | 3 | 3 | **genuinely unpriced** |
+| war | 3 | 3 | 3 | `quiescent.war_value` → the engine's own `events.resolve_war` |
+| **SUBTOTAL** | **109** | **97** | **108** | |
+
+| **TOTAL (both decks)** | **236** | **133** | **146** |
+|---|---|---|---|
 
 The pattern is crisp and worth stating on its own: **the evaluator prices a
 card correctly when the card is a bag of numbers, and not at all when its
 value is written in prose.** Every farm, mine, lab, temple, library, arena and
 theater — the 24 cards whose whole content is a production number — is priced
-exactly right. Every tactic, every event, every territory is invisible.
+exactly right.
 
 The wonders in full, before and after:
 

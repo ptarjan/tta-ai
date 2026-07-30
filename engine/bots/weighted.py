@@ -88,6 +88,76 @@ PHASE_KEYS = (
 # strictly dominated by `pol_pass` in every position and can never be picked.
 PACT_OFFER_CREDIT = 0.5
 
+
+# ------------------------------------------------- Age III scoring events
+#
+# `_h_prepare_event` grants `+level_of(name)` culture on the spot and puts the
+# card in `state.future_events`.  Those three points, plus one fewer
+# `hand_mil_value`, are the ENTIRE visible consequence of a plant: this file
+# contains no other reference to `future_events`, `current_events` or
+# `seeded_by`, and `docs/INFORMATION_AUDIT.md` confirms that deleting all three
+# moves no feature.
+#
+# For the fifteen Age III "Impact of ..." events that omits the whole card.
+# Each awards `events.scoring_culture` to EVERY player -- 5/4/3/2 culture per
+# completed wonder, 2 per content worker above ten, a 10/0 ranking on strength
+# -- either when it is revealed or, if it never is, at game end through
+# `events.evaluate_final_events`.  Measured at 2p under the frozen champion
+# (`tools/event_plants.py`, 20 games): the bot seeds 8.75 of them per game and
+# they swing 12.9 culture of final margin, but the margin its own choices buy
+# it averages +0.62 (sd 3.84, n=175).  It plants constantly and picks which
+# card to plant at random, because nothing it can see distinguishes them.
+#
+# This is deliberately a MARGIN and not a pair of own/rival terms.  An event
+# that pays me 8 and my rival 14 is a bad plant, and a feature that only knew
+# the 8 would rate it a good one -- which is exactly today's failure.  One
+# coordinate is also far likelier to be found by the hill climb than two
+# (docs/CARD_BLINDNESS.md 5.1 on dead coordinates).
+#
+# It is NOT double counting against the `margin_share` objective's double pay
+# for a stolen point: nothing here is stolen.  `evaluate_final_events` awards
+# culture to everyone out of the bank, so the differenced quantity below is
+# the only part of it that can move a margin at all.
+#
+# The forecast is the current board, and the payout is the board at reveal or
+# at game end.  That is an approximation and the honest one available: it is
+# the same estimate a human makes when deciding what to seed, and the
+# alternative is a model of one's own future development that the bot has not
+# got.  It also means the feature is not only about planting -- with "Impact
+# of Wonders" in play, finishing a wonder raises it too, which is a second and
+# correct source of gradient.
+_SCORING_MARGIN_CAP = 60.0
+
+
+def event_scoring_margin(state, idx):
+    """Final-scoring culture the pending Age III events owe me, less the best
+    rival's, clamped to +/-`_SCORING_MARGIN_CAP`.
+
+    Calls the engine's own `events.final_event_culture`, so the fifteen
+    scoring formulas are never restated here and cannot drift from the rules;
+    `tests/test_event_scoring.py` pins the agreement.
+
+    Zero once `state.game_over`: `game._finish_game` has by then already paid
+    these events into `p.culture`, and the decks still hold the names, so
+    counting them again would double the endgame.
+    """
+    if state.game_over or not state.has_military:
+        return 0.0
+    from .. import events as _events
+    try:
+        if not _events.pending_final_events(state):
+            return 0.0
+        owed = _events.final_event_culture(state)
+    except Exception:                                      # noqa: BLE001
+        return 0.0
+    rivals = [q.idx for q in state.players
+              if q.idx != idx and not q.resigned]
+    if not rivals:
+        return 0.0
+    margin = owed[idx] - max(owed[i] for i in rivals)
+    return max(-_SCORING_MARGIN_CAP, min(_SCORING_MARGIN_CAP, float(margin)))
+
+
 # Effect-block key -> feature key.  A *deferred* gain is priced with exactly
 # the same weights as the real thing: a pact that pays +1 culture a turn is
 # worth one `culture_rate`, not one generic "pact".  That is what lets the
@@ -665,6 +735,10 @@ def features(state, idx, ctx=None):
         "hand_value": hand_value,
         "hand_military": len(p.hand_military) + g("hand_military", 0.0),
         "hand_mil_value": hand_mil_value,
+        # --- the Age III scoring events already in play (see the block above
+        # `event_scoring_margin`).  0.0 whenever none are pending, which is
+        # every position before the first Age III event is seeded.
+        "event_scoring_margin": event_scoring_margin(state, idx),
         # --- rivals
         "rival_culture": rival_culture,
         "rival_mean_culture": rival_mean,
@@ -933,6 +1007,30 @@ _unpriced(
 _unpriced(
     "military hand: never reaches _card_yields (hand_potential is civil-only)",
     "defenseBonus", "colonizationBonus",
+)
+
+# 5a. The aggression and war payoffs.  These are written off here for a
+#     STRONGER reason than the rest of category 5, and the distinction matters
+#     because the census in docs/CARD_BLINDNESS.md counts these eleven
+#     aggressions and three wars as "zero visible gain" and they are not.
+#
+#     `_card_yields` is a board-independent table, and an aggression's value is
+#     board-dependent by construction: the loot is capped by what the defender
+#     actually holds, and `actions._politics_moves` only OFFERS an aggression
+#     whose target it can already beat.  The search does not price these from a
+#     table, it plays them out -- `QuiescentBot` drains the defender's
+#     `kind="defense"` pending with real 1-ply picks and evaluates the quiet
+#     position, and `PlanBot` inherits that.  Wars go through
+#     `quiescent.war_value`, which calls the engine's own `events.resolve_war`
+#     on a scratch copy and substitutes the result at the leaf.
+#
+#     So the numbers below are already priced, by the rules engine, more
+#     accurately than any weight on `victorTakesCulture` could manage.  Adding
+#     a table entry would not improve them; it would double count against a
+#     resolution that has already happened.  See docs/EVENT_SEEDING.md section 2.
+_unpriced(
+    "priced by resolution, not by table: quiescence plays the defense out and "
+    "quiescent.war_value calls the engine's own resolve_war",
     "destroyUrbanBuildings", "opponentDecreasesPopulation", "stealColony",
     "takeFromOpponent", "victorTakesYellowTokens", "victorTakesScienceUpTo",
     "victorTakesCulture", "decreasePopulation",
@@ -942,6 +1040,27 @@ _unpriced(
 #    resolved by the rules engine and pacts are already priced through
 #    `deferred_credit` / `_YIELD_TO_FEATURE`, which reads INSIDE these blocks.
 #    The outer keys are addressing, not value.
+#
+#    Three things are true about the 55 events and are worth writing here
+#    rather than only in docs/EVENT_SEEDING.md, because this is the block the
+#    next person reads:
+#
+#    * The fifteen Age III "Impact of ..." events ARE priced now, but not from
+#      this table and not per card.  `features()` carries
+#      `event_scoring_margin`, which asks the engine what the scoring events
+#      already in play will pay out.  A per-card table could not do it: the
+#      same card is worth +15 to the player with three wonders and -15 to the
+#      player facing him.
+#    * The 10 pacts have `count 2p: 0` -- they are not in a two-player deck at
+#      all, so nothing measured at 2p can say anything about them.
+#    * The 16 rank-addressed Age I/II events (`strongestPlayer` and friends)
+#      are left unpriced deliberately.  They fire at an unpredictable time --
+#      `events._recycle_future_events` shuffles the pile and pops it lowest-age
+#      first -- and they resolve against whoever is strongest or weakest AT
+#      THAT MOMENT, not at plant time.  Pricing them on the current board would
+#      assert a rank ordering several rounds out that the bot has no model for,
+#      and their printed swings are small (+/-3 to 4 culture).  A wrong price
+#      is worse than a known zero.
 _unpriced(
     "addressing: names who an event or pact side applies to, not a yield",
     "allPlayers", "bothPlayers", "weakestPlayer", "weakestPlayers",
@@ -1682,6 +1801,11 @@ BASE_WEIGHTS = {
     # potential` is byte-identical to the static-table answer, so the fix
     # can be duelled against itself paired, in one process, on one deal.
     "card_board_credit": 0.0,
+    # Final-scoring culture the pending Age III "Impact of ..." events owe me
+    # less the best rival's (see `event_scoring_margin`).  0.0 = inert: every
+    # trained vector plays exactly as it did and the digests do not move.  The
+    # A/B that says what it is worth is docs/EVENT_SEEDING.md.
+    "event_scoring_margin": 0.0,
     # How much of the short-spelling `effects.culture` / `effects.science`
     # (the two keys `_card_yields` used to drop on the floor) to believe when
     # pricing a card in hand.  1.0 = price them like any other per-turn

@@ -20,7 +20,33 @@ excluding the generic `("wonders", 1.0)` every wonder gets just for being one
 -- that term cannot tell Pyramids from Colossus, so counting it would hide
 exactly the thing being measured.
 
-See docs/CARD_BLINDNESS.md.
+WHAT THIS TOOL DOES **NOT** MEASURE, AND WHY THE SPLIT BELOW EXISTS
+-------------------------------------------------------------------
+`_card_yields` is reached only through `card_potential` <- `hand_potential`,
+and `hand_potential` walks `p.hand_civil` ONLY.  **It is never called for a
+card in the military deck** -- every event, aggression, war, pact, tactic,
+territory and bonus card.  For those 109 cards a "dropped key" is not a
+finding: mapping the key would change nothing, because nothing ever asks.
+
+The first version of this tool pooled them with the civil cards, which
+over-reported the blind spot by 109 cards and sent a whole work stream after
+table entries that could not have helped.  An over-reporting measurement is
+exactly as dangerous as an under-reporting one, so the two decks are now
+counted separately and the military rows carry the reason.
+
+Military-deck cards are not unpriced; they are priced somewhere else, and
+the census cannot see that either:
+
+  * aggressions -- `QuiescentBot` drains the defender's `defense` pending
+    with real picks and scores the quiet position (docs/AGGRESSION_FIX.md)
+  * wars        -- `quiescent.war_value` calls the engine's `resolve_war`
+  * pacts       -- `weighted.deferred_credit`, and `count 2p: 0` besides
+  * Age III scoring events -- `weighted.event_scoring_margin`, which calls
+    `events.final_event_culture` (docs/EVENT_SEEDING.md)
+  * tactics/territories/bonus -- genuinely unpriced, but the fix is a
+    military sibling to `hand_potential`, not a table entry
+
+See docs/CARD_BLINDNESS.md and docs/EVENT_SEEDING.md.
 """
 from __future__ import annotations
 
@@ -76,6 +102,18 @@ def _mapped(block, board=False):
     if board:
         out |= set(BY.BOARD_PRICED)
     return out
+
+
+def reachable(card):
+    """Is `_card_yields` ever ASKED about this card?
+
+    False for every military-deck card: `hand_potential` walks `hand_civil`
+    only, so a dropped key on a war or an event is not a blind spot, it is a
+    question nobody asks.  Wonders and leaders are not in `hand_civil` either,
+    but they are taken FROM THE CIVIL ROW and `card_potential` prices them
+    there, so they are reachable.
+    """
+    return card.get("deck") != "military"
 
 
 def _board_state():
@@ -181,11 +219,35 @@ def main(argv=None):
         use_legacy_maps()
 
     types, dropped, zero, keys, nonnum, cards = scan(a.board)
+    db = C.db()
+    civil = [t for t in types if any(
+        reachable(db.get(n)) for n, (tt, _, _) in cards.items() if tt == t)]
+    mil = [t for t in types if t not in civil]
+
+    def _rows(group):
+        for t in sorted(group, key=lambda x: (-types[x], x)):
+            print(f"{t:16s} {types[t]:4d} {dropped[t]:8d} {zero[t]:10d}")
+
+    def _tot(group, label):
+        n = sum(types[t] for t in group)
+        d = sum(dropped[t] for t in group)
+        z = sum(zero[t] for t in group)
+        print(f"{label:16s} {n:4d} {d:8d} {z:10d}")
+        return n, d, z
+
     print(f"{'type':16s} {'n':>4s} {'dropped':>8s} {'zero-gain':>10s}")
-    for t in sorted(types, key=lambda x: (-types[x], x)):
-        print(f"{t:16s} {types[t]:4d} {dropped[t]:8d} {zero[t]:10d}")
-    print(f"{'TOTAL':16s} {sum(types.values()):4d} "
-          f"{sum(dropped.values()):8d} {sum(zero.values()):10d}")
+    print("-- CIVIL ROW: `_card_yields` is asked about these ------------")
+    _rows(civil)
+    _tot(civil, "SUBTOTAL")
+    print()
+    print("-- MILITARY DECK: `_card_yields` is NEVER asked --------------")
+    print("   `hand_potential` walks hand_civil only.  A dropped key here")
+    print("   is not a blind spot; mapping it would change nothing.")
+    print("   Priced elsewhere -- see the module docstring.")
+    _rows(mil)
+    _tot(mil, "SUBTOTAL")
+    print()
+    _tot(list(types), "TOTAL (both)")
 
     if a.keys:
         print(f"\n{'dropped key':52s} {'cards':>6s} {'non-numeric':>12s}")

@@ -455,31 +455,88 @@ def scoring_culture(state, p, block, order):
     return total
 
 
-def evaluate_final_events(state):
-    """Age III events left in the current/future decks score at game end
-    (§12.5.2); the starting player counts as the current player."""
+def pending_final_events(state):
+    """The Age III scoring events still owed a payout, in scoring order.
+
+    Both `evaluate_final_events` (which pays them) and the bot evaluator
+    (which forecasts them) walk this, so the two cannot disagree about which
+    cards are in play.  `past_events` is deliberately excluded: an Age III
+    event that was revealed during play already paid out through
+    `_apply_player_block`, and its culture is banked in `p.culture`.
+    """
     db = _DB
-    order = _order_from(state, state.start_player)
+    out = []
     for name in list(state.current_events) + list(state.future_events):
         if name not in db.by_name or db.age_of(name) != "III":
             continue
-        eff = db.get(name).get("effects") or {}
-        block = eff.get("allPlayers")
-        if not block:
-            continue
+        block = (db.get(name).get("effects") or {}).get("allPlayers")
+        if block:
+            out.append((name, block))
+    return out
+
+
+def final_event_awards(state):
+    """THE Age III final-scoring calculation.  Everything else calls this.
+
+    Returns ``[(name, [(player_idx, culture), ...]), ...]``: one entry per
+    pending scoring event, holding the individual culture awards **in the
+    order the engine applies them** -- for each player in turn order, the
+    `scoring_culture` award and then the `rankingCulture` award.
+
+    The step list is deliberately not pre-summed.  `evaluate_final_events`
+    clamps a player's running culture at zero after *each* award, so a player
+    near zero with a net-negative scoring board gets a different total from
+    the pooled sum; returning the steps lets the payer reproduce that exactly
+    while the forecaster just adds them up.
+
+    Splitting this out is the point of the whole exercise: the fifteen
+    "Impact of ..." formulas are stated **once**, here, and the bot evaluator
+    forecasts the endgame by calling this rather than by restating them.
+    Restating them is the failure `docs/CARD_BLINDNESS.md` is a document
+    about.  `tests/test_event_scoring.py` fails if the two ever diverge.
+    """
+    order = _order_from(state, state.start_player)
+    out = []
+    for name, block in pending_final_events(state):
+        steps = []
         for q in order:
-            gained = scoring_culture(state, q, block, order)
-            if gained:
-                q.culture = max(0, q.culture + gained)
+            steps.append((q.idx, scoring_culture(state, q, block, order)))
             if "rankingCulture" in block:
-                table = block["rankingCulture"].get(
-                    _pkey(state)) or []
-                stat = _STAT_ALIASES.get(block.get("statistic",
-                                                   "strengthRating"),
-                                         "strength")
+                table = block["rankingCulture"].get(_pkey(state)) or []
+                stat = _STAT_ALIASES.get(
+                    block.get("statistic", "strengthRating"), "strength")
                 rank = _rank(state, order, stat, True)
                 if q in rank and rank.index(q) < len(table):
-                    q.culture = max(0, q.culture + table[rank.index(q)])
+                    steps.append((q.idx, table[rank.index(q)]))
+        out.append((name, steps))
+    return out
+
+
+def final_event_culture(state):
+    """`final_event_awards` summed per player, indexed by `player.idx`.
+
+    This is what the bot evaluator forecasts with
+    (`engine/bots/weighted.event_scoring_margin`).  Raw sums, i.e. before the
+    per-award zero clamp described in `final_event_awards`.
+    """
+    out = [0] * len(state.players)
+    for _name, steps in final_event_awards(state):
+        for idx, amount in steps:
+            out[idx] += amount
+    return out
+
+
+def evaluate_final_events(state):
+    """Age III events left in the current/future decks score at game end
+    (§12.5.2); the starting player counts as the current player.
+
+    Applies `final_event_awards` -- it does not recompute anything.
+    """
+    for name, steps in final_event_awards(state):
+        for idx, amount in steps:
+            if amount:
+                p = state.players[idx]
+                p.culture = max(0, p.culture + amount)
         state.emit(f"final scoring event {name}")
 
 
