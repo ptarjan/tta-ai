@@ -50,6 +50,41 @@ that pipe red-handed: the wonder take rate varies **76×** across the three
 champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 **1.7×** across a 14.4× value range within any one of them.
 
+> **The severing is real and is a property of the FROZEN champions only
+> (2026-07-30).** This section is scrupulous about saying "in all three frozen
+> champions", and §8 re-derived it from `load_weights` rather than
+> `DEFAULT_WEIGHTS` for exactly the right reason. The gap it could not see is
+> that **the frozen champions are not the bot the league is training.** They
+> are a 2026-07-26 snapshot of a 78-key climb; the live league champions carry
+> **99** keys, and `experiments/league_state/champion_2p.json` has
+> **`row_urgency = −0.19109`**. The wire is connected on the live bot.
+>
+> Re-running `docs/CARD_BLINDNESS.md` §5.3's wonder A/B against the live 2p
+> champion on the same 12,800 seat-games moves wonder completions
+> **+0.5731 (+88%, p<1e-4)**, against the −0.0050 null (MDE 0.0089) the frozen
+> vector produced. See §5.4 there and `analysis/frozen/README.md`.
+>
+> What this does and does not cost the census:
+> * **The plumbing map is untouched and is the durable contribution.** A
+>   wonder really does reach the policy through `row_pressure` alone. That is
+>   a fact about `engine/`, not about a vector.
+> * **"CONFIRMED BROKEN (Tier A)" for wonders should read "confirmed broken in
+>   the frozen champions".** On the live vector the pipe carries an effect
+>   large enough to shift the zero-wonder share from 43.5% to 19.3%.
+> * **The concordance numbers (0.525 / 0.534 / 0.383) are frozen-vector
+>   numbers** and have not been recomputed on the live champions.
+> * **The 4p column is separately unreliable** — `analysis/frozen/champion_4p`
+>   is the known-degenerate vector; see `analysis/frozen/README.md`.
+> * **The ranking in §4 may reorder.** Wonders were ranked suspect #1 on the
+>   strength of a severed pipe. Territories (`hand_mil_potential = 0.0`) are
+>   still 0.0 in the live champions and are the better candidate for "a pure
+>   severed pipe a single non-zero weight fixes".
+>
+> The generalisable lesson survives intact and is arguably the real finding:
+> **a weight at 0.0 makes an A/B return a null that is an arithmetic identity,
+> indistinguishable from a measured negative.** That is now enforced rather
+> than documented — `experiments.arena.assert_lever_conducts()`.
+
 Three findings I did not expect and would have got wrong without the
 controls. **`war` is declared 0 times in 71,229 draws at 1 ply — and 357
 times in 2,220 under `plan:width=2`.** Search repairs a missing rollout; it

@@ -58,6 +58,8 @@ import time
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, _ROOT)
 
+from experiments import paired_stats  # noqa: E402  (needs the path insert)
+
 DUEL_PATH = MIRROR_PATH = ""
 
 _W = {}
@@ -179,22 +181,39 @@ UNPRICED5 = ["Ocean Liners", "First Space Flight", "Fast Food Chains",
 PRICED_UNCHANGED = ["Pyramids", "Colossus", "Transcontinental Railroad"]
 
 
-def deltas():
-    from engine.bots.weighted import card_potential
+DEFAULT_ARMS = ("analysis/cardblind/champ2p_credit1.json",
+                "analysis/cardblind/champ2p_credit0.json")
+
+
+def deltas(arms=None):
+    from engine.bots.weighted import card_potential, load_weights
     from engine import cards as C
-    w1 = json.load(open(os.path.join(_ROOT, "analysis/cardblind/champ2p_credit1.json")))["weights"]
-    w0 = json.load(open(os.path.join(_ROOT, "analysis/cardblind/champ2p_credit0.json")))["weights"]
+    a1, a0 = arms or DEFAULT_ARMS
+    w1 = load_weights(a1 if os.path.isabs(a1) else os.path.join(_ROOT, a1))
+    w0 = load_weights(a0 if os.path.isabs(a0) else os.path.join(_ROOT, a0))
     return {c["name"]: card_potential(c["name"], w1) - card_potential(c["name"], w0)
             for c in C.db().cards if c["type"] == "wonder"}
 
 
 def stats(dv):
-    n = len(dv)
-    m = sum(dv) / n
-    var = sum((x - m) ** 2 for x in dv) / (n - 1)
-    se = math.sqrt(var / n)
-    p = math.erfc(abs(m / se) / math.sqrt(2)) if se > 0 else 1.0
-    return m, Z * se, p, K * se
+    """Interval on a list of PAIRED per-unit differences (arm A - arm B).
+
+    Routed through `experiments.paired_stats.cluster_ci` rather than an
+    open-coded `1.96 * sqrt(var/n)` so there is one estimator in the repo and
+    it is the corrected one (commit `6d6fec1`, `tests/test_paired_stats.py`).
+    In `mirror` mode each element is already one DEAL -- both arms play the
+    same deal and the per-seat values are averaged before they get here -- so
+    clustering on the element is clustering on the deal, which is the unit the
+    design randomises. The change from the previous open-coded version is the
+    t correction, worth ~0.1% at n=1600.
+
+    NOTE for `duel` mode: there each element is one GAME, and a 2p duel is
+    seat-paired, so the independent unit is still the deal and this is one
+    level too fine. The duel columns are kept for continuity with the
+    published table; the mirror columns are the ones to quote.
+    """
+    est = paired_stats.cluster_ci(dv, use_t=True, unit="deal")
+    return est.mean, est.half, est.p_against(0.0), K * est.se
 
 
 def row(lab, av, bv, extra=""):
@@ -218,17 +237,26 @@ def load_duel():
     return A, B
 
 
+MIRROR_TAGS = ("m_credit1", "m_credit0")
+
+
 def load_mirror():
     rs = [json.loads(l) for l in open(MIRROR_PATH)]
     rs = [r for r in rs if "error" not in r]
     by = collections.defaultdict(dict)
     for r in rs:
         by[r["seed"]][r["tag"]] = r
+    ta, tb = MIRROR_TAGS
     A, B = [], []          # per-deal, values SUMMED over the 2 seats
     for _, d in sorted(by.items()):
-        if "m_credit1" in d and "m_credit0" in d:
-            A.append(d["m_credit1"]["seats"])
-            B.append(d["m_credit0"]["seats"])
+        if ta in d and tb in d:
+            A.append(d[ta]["seats"])
+            B.append(d[tb]["seats"])
+    if not A:
+        seen = sorted({r["tag"] for r in rs})
+        raise SystemExit(
+            f"no deal carries both {ta!r} and {tb!r}; tags present: {seen}. "
+            f"Pass --tag-a/--tag-b.")
     return A, B
 
 
@@ -313,25 +341,30 @@ def distribution(label, A, B):
     print(f"{'total':>8s} {n:7d}          {n:7d}")
 
 
-def report_main():
-    d = deltas()
+def report_main(arms=None):
+    d = deltas(arms)
+    label = ("the frozen 2p champion" if arms is None
+             else f"{os.path.basename(arms[0])} vs {os.path.basename(arms[1])}")
     print("docs/CARD_BLINDNESS.md section 5.3.  Engine read-only.")
-    print("\ncard_potential delta (credit1 - credit0) under the frozen 2p champion:")
+    print(f"\ncard_potential delta (credit1 - credit0) under {label}:")
     for w in sorted(d, key=lambda x: -d[x]):
         tag = ("NEWLY PRICED" if w in NEW6 else
                "FROM NOTHING" if w in FROM_NOTHING else
                "still unpriced" if w in UNPRICED5 else "priced, unchanged")
         print(f"   {w:27s} {d[w]:+7.2f}   {tag}")
 
-    A, B = load_duel()
-    block("DUEL (contended): credit1 vs credit0 at the SAME table, seat-rotated",
-          A, B, "games", d)
-    distribution("DUEL", A, B)
+    if DUEL_PATH:
+        A, B = load_duel()
+        block("DUEL (contended): credit1 vs credit0 at the SAME table, "
+              "seat-rotated", A, B, "games", d)
+        distribution("DUEL", A, B)
 
-    MA, MB = load_mirror()
-    block("MIRROR (uncontended): every seat one arm, paired on the deal. "
-          "Per-seat means.", MA, MB, "deals", d)
-    distribution("MIRROR", [s for g in MA for s in g], [s for g in MB for s in g])
+    if MIRROR_PATH:
+        MA, MB = load_mirror()
+        block("MIRROR (uncontended): every seat one arm, paired on the deal. "
+              "Per-seat means.", MA, MB, "deals", d)
+        distribution("MIRROR", [s for g in MA for s in g],
+                     [s for g in MB for s in g])
 
 
 
@@ -353,12 +386,24 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", default="")
+    ap.add_argument("--tag-a", default="", help="mirror tag for the credit1 "
+                    "arm (default m_credit1)")
+    ap.add_argument("--tag-b", default="", help="mirror tag for the credit0 "
+                    "arm (default m_credit0)")
+    ap.add_argument("--no-lever-check", action="store_true",
+                    help="run even if the weight vector gates shut every path "
+                         "a wonder's card_potential could use. Only for "
+                         "reproducing the original (identically-zero) result.")
     args = ap.parse_args(argv)
 
-    global DUEL_PATH, MIRROR_PATH
+    global DUEL_PATH, MIRROR_PATH, MIRROR_TAGS
     if args.report:
         DUEL_PATH, MIRROR_PATH = args.duel, args.mirror
-        return report_main()
+        if args.tag_a or args.tag_b:
+            MIRROR_TAGS = (args.tag_a or MIRROR_TAGS[0],
+                           args.tag_b or MIRROR_TAGS[1])
+        arms = (args.a, args.b) if (args.a and args.b) else None
+        return report_main(arms)
     if not (args.a and args.mode and args.out):
         ap.error("--a, --mode and --out are required unless --report")
 
@@ -366,6 +411,21 @@ def main(argv=None):
     a = arena.load_spec(args.a)
     b = arena.load_spec(args.b) if args.b else a
     n = args.players
+
+    # This probe's whole subject is whether a WONDER's `card_potential` moves
+    # the policy. If the vector gates shut every path by which it could, the
+    # run returns a null that is an arithmetic identity -- which is exactly
+    # what the original 12,800-game run did (see docs/CARD_BLINDNESS.md 5.3
+    # and analysis/frozen/README.md). Refuse rather than produce it again.
+    if not args.no_lever_check:
+        from engine.bots.weighted import load_weights
+        for spec in (args.a, args.b):
+            path = arena._spec_weight_path(spec)
+            if path and os.path.exists(path):
+                arena.assert_lever_conducts(
+                    load_weights(path), "card_rate_credit",
+                    "wonder_mechanism.py",
+                    arena.WONDER_CARD_POTENTIAL_CONSUMERS)
 
     tasks = []
     if args.mode == "duel":

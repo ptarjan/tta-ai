@@ -72,6 +72,170 @@ class RefuseIfDegenerateChampion(unittest.TestCase):
             refuse_if_degenerate_champion(other, "test")  # must not raise
 
 
+class NearIdenticalDescendantsAreRefused(unittest.TestCase):
+    """The exact-content test this replaced had a hole big enough to drive
+    every 4p measurement through.
+
+    `analysis/frozen/champion_4p.json` is the degenerate vector six
+    generations later.  It reproduces all 62 of its informative weights
+    bit-for-bit -- including `science=-6.08883` -- and differs on exactly two
+    keys (`colonies`, `pacts`), which is enough to defeat
+    ``all(mine.get(k) == v ...)``.  It was the frozen 4p reference every A/B
+    harness loaded.
+    """
+
+    ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+    def test_the_frozen_4p_reference_is_refused(self):
+        """Under EITHER name.  The file was renamed to
+        `champion_4p.DEGENERATE.json` when it was quarantined; the guard must
+        not depend on that, which is the whole point of a content test."""
+        found = False
+        for base in ("champion_4p.json", "champion_4p.DEGENERATE.json"):
+            p = os.path.join(self.ROOT, "analysis", "frozen", base)
+            if not os.path.exists(p):
+                continue
+            found = True
+            with self.subTest(name=base), self.assertRaises(SystemExit):
+                refuse_if_degenerate_champion(p, "test")
+        self.assertTrue(found, "the quarantined 4p vector should still be on "
+                                "disk under one of its two names -- it is kept "
+                                "so published numbers stay auditable")
+
+    def test_the_frozen_4p_reference_is_not_loadable_under_its_old_name(self):
+        """The rename must be a real quarantine, not a second copy."""
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ROOT, "analysis", "frozen",
+                                        "champion_4p.json")),
+            "analysis/frozen/champion_4p.json is back -- it is the degenerate "
+            "vector and must stay renamed to champion_4p.DEGENERATE.json")
+
+    def test_a_vector_differing_on_two_keys_is_refused(self):
+        """The exact shape of the hole, built from scratch so this test does
+        not depend on the frozen file still being on disk."""
+        w = dict(arena._weights_of(DEGENERATE))
+        w["colonies"] = -0.96161
+        w["pacts"] = 0.46889
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".json", delete=False) as tmp:
+            json.dump({"gen": 139, "players": 4, "weights": w}, tmp)
+            near = tmp.name
+        try:
+            with self.assertRaises(SystemExit):
+                refuse_if_degenerate_champion(near, "test")
+        finally:
+            os.unlink(near)
+
+    def test_default_weights_alone_is_not_a_match(self):
+        """`DEFAULT_WEIGHTS` agrees with the degenerate vector on 20% of all
+        keys purely through untouched entries.  Scoring provenance on the
+        MOVED keys only is what keeps that from being a false positive."""
+        from engine.bots.weighted import DEFAULT_WEIGHTS
+        self.assertEqual(
+            arena._degenerate_match(DEFAULT_WEIGHTS,
+                                    arena._weights_of(DEGENERATE)), 0.0)
+
+    def test_live_league_champions_are_not_refused(self):
+        """The separation has to be total in BOTH directions, or the guard
+        starts refusing the bot we actually train."""
+        for n in ("2p", "3p", "4p"):
+            p = os.path.join(self.ROOT, "experiments", "league_state",
+                             f"champion_{n}.json")
+            if not os.path.exists(p):
+                continue
+            with self.subTest(players=n):
+                self.assertEqual(
+                    arena._degenerate_match(arena._weights_of(p),
+                                            arena._weights_of(DEGENERATE)),
+                    0.0)
+                refuse_if_degenerate_champion(p, "test")  # must not raise
+
+    def test_unrelated_champions_score_zero_not_merely_below_threshold(self):
+        """Every other champion vector in the repo must score a flat 0.0 on
+        the informative keys.  If any of them crept up toward the threshold
+        the fraction would be a similarity score, not a fingerprint."""
+        known = arena._weights_of(DEGENERATE)
+        for rel in ("analysis/frozen/champion_2p.json",
+                    "analysis/frozen/champion_3p.json",
+                    "experiments/champion_2p.json",
+                    "experiments/champion_3p.json"):
+            p = os.path.join(self.ROOT, rel)
+            if not os.path.exists(p):
+                continue
+            with self.subTest(vector=rel):
+                self.assertEqual(
+                    arena._degenerate_match(arena._weights_of(p), known), 0.0)
+
+
+class LeverMustBePluggedIn(unittest.TestCase):
+    """The other half of the same failure: a vector that cannot express the
+    thing being measured returns a clean null, not an error.
+
+    `docs/CARD_BLINDNESS.md` Sec 5.3 spent 12,800 games measuring
+    `card_rate_credit` against a vector whose `row_urgency` is 0.0. For a
+    WONDER that is the only channel, so the answer was zero before the first
+    game was dealt.
+    """
+
+    ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+    def _w(self, rel):
+        return arena._weights_of(os.path.join(self.ROOT, rel))
+
+    def test_frozen_2p_cannot_express_a_wonder_reprice(self):
+        from engine.bots.weighted import load_weights
+        w = load_weights(os.path.join(self.ROOT,
+                                      "analysis/frozen/champion_2p.json"))
+        open_, closed = arena.lever_conduction(
+            w, arena.WONDER_CARD_POTENTIAL_CONSUMERS)
+        self.assertEqual(open_, (), "frozen 2p should have NO open wonder path")
+        self.assertEqual(set(closed), {"wonder_potential", "row_pressure"})
+        with self.assertRaises(SystemExit):
+            arena.assert_lever_conducts(
+                w, "card_rate_credit", "test",
+                arena.WONDER_CARD_POTENTIAL_CONSUMERS)
+
+    def test_frozen_2p_CAN_express_a_leader_reprice(self):
+        """The same vector, the same lever, a different card class -- which is
+        why Sec 5's +9.5pp headline is real and its wonder null is not."""
+        from engine.bots.weighted import load_weights
+        w = load_weights(os.path.join(self.ROOT,
+                                      "analysis/frozen/champion_2p.json"))
+        open_, _ = arena.lever_conduction(w)          # all consumers
+        self.assertIn("hand_potential", open_)
+        arena.assert_lever_conducts(w, "card_rate_credit", "test")  # no raise
+
+    def test_a_live_league_champion_can_express_a_wonder_reprice(self):
+        from engine.bots.weighted import load_weights
+        p = os.path.join(self.ROOT, "experiments/league_state/champion_2p.json")
+        if not os.path.exists(p):
+            p = os.path.join(self.ROOT,
+                             "analysis/frozen/champion_2p_gen54_99key.json")
+        if not os.path.exists(p):
+            self.skipTest("no 99-key champion available")
+        w = load_weights(p)
+        open_, _ = arena.lever_conduction(
+            w, arena.WONDER_CARD_POTENTIAL_CONSUMERS)
+        self.assertIn("row_pressure", open_)
+        arena.assert_lever_conducts(
+            w, "card_rate_credit", "test",
+            arena.WONDER_CARD_POTENTIAL_CONSUMERS)                  # no raise
+
+    def test_every_gate_names_real_weights(self):
+        """A typo in EVALUATE_GATES would silently make a closed gate look
+        open forever."""
+        from engine.bots.weighted import DEFAULT_WEIGHTS
+        for fn, gates in arena.EVALUATE_GATES.items():
+            for g in gates:
+                with self.subTest(fn=fn, gate=g):
+                    self.assertIn(g, DEFAULT_WEIGHTS)
+
+    def test_consumer_lists_are_covered_by_the_gate_map(self):
+        for fn in (arena.CARD_POTENTIAL_CONSUMERS
+                   + arena.WONDER_CARD_POTENTIAL_CONSUMERS):
+            self.assertIn(fn, arena.EVALUATE_GATES)
+
+
 class ToolDefaultsAreSafe(unittest.TestCase):
     """The actual argparse defaults, today, must not resolve to the
     degenerate file -- this is the "fix" half of job 2."""

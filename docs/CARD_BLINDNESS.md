@@ -470,6 +470,40 @@ the reason is structural, not a fact about wonders being weak.
 Measured at commit `6968256`, 2p, frozen champion, engine read-only, three
 runs, 12,800 games, zero engine errors.
 
+> **CORRECTION (see `analysis/frozen/README.md`). The wonder null below is an
+> arithmetic identity, not a measurement.** This section is right that the
+> mechanism is plumbing and right that it is not the wonders — but it reached
+> that by the wrong route, and the quantitative null cannot be quoted.
+>
+> Below, this section correctly identifies `row_urgency` as *the single
+> channel* by which a wonder's `card_potential` can reach the policy. **In the
+> frozen champion that weight is 0.0**, and `evaluate()` gates the
+> `row_pressure` call behind `if row_urgency or row_bargain_forgone:`. So the
+> function is never called, and repricing the eight wonders cannot change the
+> evaluation of any state. Measured directly: `evaluate()` credit1 vs credit0
+> on states with a repriced wonder in the row differs on **0 of 480** under
+> the frozen champion (max delta 0.0000) and on **480 of 480** under the live
+> 2p league champion (max delta 21.1403).
+>
+> Consequences, precisely:
+> * **"Wonders completed: a null … I could have detected an 8.5% relative
+>   change" — withdraw the MDE.** A power calculation implies an effect that
+>   could have existed. No sample size can move a coefficient multiplied by
+>   zero. The 12,800 games measured nothing about wonder repricing.
+> * **"take wonder −0.0444, p<1e-4" is real but is displacement, not
+>   repricing.** The same table shows *every* card class falling; the bot
+>   spends its freed actions on the two leaders. That is the only causal story
+>   available, because the wonder arm of the treatment is inert.
+> * **§5's +9.5pp / 59.53% headline is unaffected.** The ten repriced cards
+>   are eight wonders and two leaders; leaders enter `hand_civil` and are
+>   priced by `hand_potential` (0.125), which conducts fine. The headline was
+>   always the two leaders. This section already said so.
+> * **The conclusion "a correctly priced wonder has almost no path into the
+>   decision" holds for this vector and is stronger than stated — it has
+>   *none*. Whether it holds for the bot the league actually trains is a
+>   separate question:** the live 2p champion carries `row_urgency = −0.19109`,
+>   so the channel is open there. That re-run is reported in §5.4.
+
 **The measurement stack validates against §5.** The probe reproduces the
 published headline independently — **59.08% win rate and 151.0 vs 140.9
 culture, against §5's 59.53% and 150.8 vs 140.4**, on the same generator but a
@@ -603,9 +637,18 @@ So a wonder never enters `hand_civil`, and `hand_potential` — which sums
 `row_urgency`, a take-*timing* heuristic that asks whether a card is worth
 grabbing before it slides. A leader gets both channels.
 
+**And in the vector measured here, that one channel is closed.**
+`analysis/frozen/champion_2p.json` has no `row_urgency` entry at all, so
+`load_weights` fills it from `DEFAULT_WEIGHTS` as 0.0, and `evaluate()` gates
+the `row_pressure` call behind `if ru or rb:` — the function never runs. The
+channel is not narrow, it is absent. That is why the reprice moved *exactly*
+nothing rather than nearly nothing, and it is why no sample size here could
+have said otherwise.
+
 **That is why repricing Eiffel Tower by +23.50 moved nothing and repricing
 Joan of Arc by +5.88 moved the policy 5.9x.** The size of the reprice is
-irrelevant when the term it lands in is not one the search can act on.
+irrelevant when the term it lands in is not one the search can act on — and
+doubly irrelevant when the term is switched off.
 
 This reframes the question this document started from. "The bot does not build
 wonders — are wonders modelled wrong?" The answer is no: §6.1 of
@@ -615,6 +658,12 @@ the evaluator the printed numbers. The bot still does not build them, because
 plumbing bug, not a pricing bug, and fixing it means giving wonder-in-progress
 its own evaluator term — something the search can actually optimise — not
 another row in a lookup table.
+
+*Qualified:* "almost no path" is right in general and an understatement for
+this vector, where the path is closed outright. But the prescription — a new
+wonder-in-progress term — assumes the existing channel is inadequate rather
+than merely switched off. The live league champion has `row_urgency` non-zero,
+so that assumption is testable rather than given; see §5.4.
 
 #### Own culture: +2.58, not +10
 
@@ -685,6 +734,93 @@ fixing the number every decision reads.
   an engine-level patch counts hypothetical moves. The real number is ~0.15.
   Anything that counts engine calls has to filter to the real state or, as
   here, record only the move the bot actually chose.
+
+### 5.4 The same measurement against the LIVE champion: §5.3 does not survive
+
+§5.3 measured the frozen 2p champion, whose `row_urgency` is 0.0 — the single
+channel a wonder's `card_potential` has. This is the identical experiment
+against the bot the league is actually training.
+
+**Arms.** `analysis/frozen/champion_2p_gen54_99key.json` (a frozen copy of
+`experiments/league_state/champion_2p.json`, gen 54, 99 keys,
+`row_urgency = −0.19109`) with `card_rate_credit` 1.0 vs 0.0 — one key apart,
+exactly as §5.3's arms were. Mirror design, 3200 deals × 2 arms = **12,800
+seat-games**, matching §5.3's sample exactly. Zero engine errors. Intervals
+are deal-clustered with the t correction (`experiments/paired_stats`, commit
+`6d6fec1`), not the independent-samples formula §5.3's caveat warned about.
+
+| metric | frozen (§5.3) | **live (this run)** |
+|---|---|---|
+| wonders COMPLETED, credit1 | 0.0997 | **1.2233** |
+| wonders COMPLETED, credit0 | 0.1047 | **0.6502** |
+| **diff** | **−0.0050** [−0.0112, +0.0012], p=0.117 | **+0.5731** [+0.5502, +0.5960], p<1e-4 |
+| relative | −4.8% (a null, MDE 0.0089) | **+88%** |
+| wonders STARTED | −0.0200 | **+1.1756** (2.2991 vs 1.1234) |
+| civil actions sunk into stages | 0.317 → 0.302 (*fell*) | 2.5288 → 4.6966 (**+2.17**) |
+
+**The effect is 64× the minimum detectable effect §5.3 quoted while calling
+the result a clean null.**
+
+And the causal specificity is now exactly right, which it was not before:
+
+| group | frozen (§5.3) | **live** |
+|---|---|---|
+| all 8 **repriced**, completed | −0.0044, p=0.160 | **+0.5725 (+88.1%)** |
+| all 8 **unrepriced**, completed | −0.0006, p=0.317 | **+0.0006 (+0.0%)** |
+
+§5.3 had to report that *the unpriced set fell more than the repriced set* —
+"the opposite of the causal prediction". That anomaly is gone. On the live
+vector the eight cards the treatment touches move by 88% and the eight it does
+not touch move by a rounding error. Distribution of wonders completed per
+seat-game: the share finishing **zero** wonders drops from **43.5% to 19.3%**,
+and 3+ goes from 0.36% to 6.25%.
+
+#### What this changes
+
+* **"Repricing wonders moves wonder behaviour by zero" is false for the bot we
+  train.** It was true, and necessarily true, of the vector §5.3 measured.
+* **"A correctly priced wonder has almost no path into the decision" is false
+  for the bot we train.** `row_urgency = −0.19109` carries it comfortably. The
+  one channel is narrow but it is not weak.
+* **The prescription — "fixing it means giving wonder-in-progress its own
+  evaluator term" — is not established.** Worth noting that such a term
+  already exists: `evaluate()` calls `wonder_potential(state, idx, w)` behind
+  `if wp:`, and `wonder_potential` is 0.0 in *every* champion in the repo,
+  frozen and live alike. Before building a new term, the cheaper experiment is
+  to let the league climb the one that is already there.
+* **§5.3's qualitative reading survives in one respect and one only:** a
+  wonder really does reach the policy through exactly one channel while a
+  leader gets two, so wonder pricing is *structurally* more fragile than
+  leader pricing. That was worth finding. The quantitative null attached to it
+  was not a finding.
+
+**Why the two runs disagree so violently.** They are not the same bot. The
+frozen champion is gen 220 of an older 78-key climb; the live one is gen 54 of
+a 99-key one, and 21 of those 99 keys — the entire card-row block — did not
+exist when the snapshot was cut. The baseline behaviour differs accordingly:
+the frozen bot completes 0.10 wonders a game and the live one 0.65 before any
+treatment is applied. See `analysis/frozen/README.md`.
+
+**Reproduce:**
+
+```bash
+nice -n 19 python3 tools/wonder_mechanism.py --mode mirror \
+  --a analysis/livechamp/live2p_credit1.json --deals 3200 \
+  --tag live_credit1 --out /tmp/live_mirror.jsonl --workers 8
+nice -n 19 python3 tools/wonder_mechanism.py --mode mirror \
+  --a analysis/livechamp/live2p_credit0.json --deals 3200 \
+  --tag live_credit0 --out /tmp/live_mirror.jsonl --workers 8
+nice -n 19 python3 tools/wonder_mechanism.py --report \
+  --mirror /tmp/live_mirror.jsonl \
+  --a analysis/livechamp/live2p_credit1.json \
+  --b analysis/livechamp/live2p_credit0.json \
+  --tag-a live_credit1 --tag-b live_credit0
+```
+
+The tool now refuses the §5.3 arms outright
+(`experiments.arena.assert_lever_conducts`) rather than reproduce a null that
+is an arithmetic identity; pass `--no-lever-check` if you want the original
+numbers back.
 
 ## 6. What is still broken after this
 

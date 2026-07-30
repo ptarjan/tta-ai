@@ -56,6 +56,16 @@ Two consequences, both live:
   (`weighted.py`, "the sweep destroying a card I do not want is not a loss").
   So **no unit card in the civil row was ever visible to `row_urgency` or
   `row_bargain_forgone`**, at any weight.
+
+  > **Sharpened (2026-07-30).** On the frozen champion this bullet was true
+  > but vacuous: `row_urgency` and `row_bargain_forgone` are both 0.0 there,
+  > so `row_pressure` is never called on *any* card. On the **live** 2p league
+  > champion (`row_urgency = −0.19109`) the function does run, and the bullet
+  > becomes a real, operative claim — units still price strictly negative
+  > (Warriors −3.46, Swordsmen −6.51, Air Forces −16.07, all 7/7 negative and
+  > 2–4× more negative than on the frozen vector), so `row_pressure` genuinely
+  > skips every one of them. **The finding holds on the bot the league trains
+  > and its mechanism is now demonstrable rather than untestable.**
 * `hand_potential` sums the raw value, so **holding a unit card lowered the
   evaluation**. Taking one was priced as taking a liability.
 
@@ -441,6 +451,16 @@ completions by a measured zero, because a wonder never enters `hand_civil` and
 so reaches the policy only through a take-timing heuristic. The same question
 for tactics: **which term actually carries a tactic's value into the policy?**
 
+> **Note on the premise (2026-07-30).** That "measured zero" was an arithmetic
+> identity, not a result: the take-timing heuristic is gated on `row_urgency`,
+> which is 0.0 in the frozen champion, so the wonder reprice could not have
+> moved anything. See `docs/CARD_BLINDNESS.md` §5.3 and
+> `analysis/frozen/README.md`. **This section's own finding does not depend on
+> that premise and is unaffected** — every feature in the table below is a
+> plain `features()` term consumed by the ungated weight loop in `evaluate()`,
+> so nothing here was switched off. It was re-run against the live 2p league
+> champion and got *stronger*; see the second table.
+
 Two measurements. First, there is no card-pricing path at all — with
 `hand_mil_potential`, `territory_credit` and `card_board_credit` all switched
 ON, `card_potential` is **0.0 for all fifteen tactics**, and
@@ -467,6 +487,28 @@ military hand, the sum of their age levels, and the tactic's own age —
 outweigh what the tactic is actually worth by about **11 to 1**. Pricing a
 tactic correctly cannot matter while that is true, and that is a statement
 about plumbing, not about the price.
+
+**Re-run against the live 2p league champion (gen 54, 99 keys), 451
+decisions.** The ratio is a property of a weight vector, so it has to be
+re-measured on the bot the league actually trains rather than on the frozen
+snapshot:
+
+| | frozen 2p (n=374) | live 2p (n=374 → 451) |
+|---|---|---|
+| `hand_military` | 0.464 | **0.0** |
+| `hand_mil_value` | 0.283 | **1.900** |
+| `tactic_level` | 0.267 | **0.0** |
+| bookkeeping subtotal | 1.014 | **1.900** |
+| `strength` | 0.066 | 0.070 |
+| **ratio** | **15.4 : 1** | **27.3 : 1** |
+| incl. `ma_left` + `military_actions` | — | **60.4 : 1** |
+
+**The finding survives and gets worse.** The live champion routes its
+bookkeeping through a different term — `hand_mil_value` instead of
+`hand_military` — but the shape is identical and the imbalance nearly doubles.
+It is also *more* blind than the frozen one: `strength_rel` and
+`strength_lead` are both 0.0 in the live vector, so `strength` at 0.070 is the
+only remaining term that reads what the tactic is actually worth.
 
 It also explains §4's strangest number mechanically. `copy_tactic` costs 2
 military actions but takes **no card out of hand**, so `hand_military` and

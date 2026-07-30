@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from experiments import paired_stats  # noqa: E402  (needs the path insert)
+from engine.bots.weighted import DEFAULT_WEIGHTS  # noqa: E402  (ditto)
 
 BUILTINS = ("random", "greedy", "default")
 
@@ -38,10 +39,55 @@ DEGENERATE_CHAMPION_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "champion_4p.json")
 
 
+#: Fraction of the degenerate vector's INFORMATIVE keys a candidate must
+#: reproduce exactly before it is treated as a copy of it.  See
+#: `_degenerate_match` for why the test is a fraction and not equality.
+DEGENERATE_MATCH_FRACTION = 0.5
+
+
 def _weights_of(path):
     with open(path) as fh:
         d = json.load(fh)
     return d.get("weights", d)
+
+
+def _informative_keys(known, defaults):
+    """The keys of `known` that a hill climb actually MOVED off the default.
+
+    Keys still sitting at their `DEFAULT_WEIGHTS` value carry no provenance --
+    every vector agrees with every other vector on those (`DEFAULT_WEIGHTS`
+    itself matches the degenerate champion on 20.5% of all keys, purely
+    through untouched entries).  Restricting the comparison to the moved keys
+    is what makes the match fraction a provenance signal instead of a
+    similarity score.
+    """
+    return [k for k, v in known.items() if v != defaults.get(k)]
+
+
+def _degenerate_match(mine, known):
+    """Fraction of the degenerate vector's informative keys `mine` reproduces.
+
+    WHY THIS IS NOT AN EQUALITY TEST.  The original guard asked for exact
+    agreement on every key, which is the one thing a live climb reliably
+    breaks: `analysis/frozen/champion_4p.json` is the degenerate vector six
+    generations later, differs from it on exactly two keys (`colonies`,
+    `pacts` -- and only because 15b9764 reset those two to defaults in the
+    committed copy while the on-disk climb kept going), and so walked straight
+    through the guard into every 4p number measured against it.
+
+    Exact float agreement is a provenance fingerprint, not a similarity
+    measure: two vectors from different climbs essentially never agree
+    bit-for-bit on a moved weight.  Measured on the real corpus the split is
+    total -- both descendants of the degenerate vector score 1.000, and every
+    other champion in the repo (2p/3p frozen, the committed 2p/3p champions,
+    all three LIVE league champions) and `DEFAULT_WEIGHTS` itself score
+    0.000.  Any threshold in (0, 1) separates them; 0.5 is the middle.
+    """
+    known_info = _informative_keys(known, DEFAULT_WEIGHTS)
+    if not known_info:
+        return 0.0
+    hits = sum(1 for k in known_info if mine.get(k) == known[k])
+    return hits / len(known_info)
 
 
 def _spec_weight_path(spec):
@@ -60,10 +106,14 @@ def _spec_weight_path(spec):
 
 def refuse_if_degenerate_champion(spec, tool_name):
     """Hard-refuse (``SystemExit``) if `spec` resolves to the known-degenerate
-    ``experiments/champion_4p.json`` vector -- checked by PATH and by CONTENT,
-    so a copy or rename of the file is still caught. See
+    ``experiments/champion_4p.json`` vector -- checked by PATH and by
+    PROVENANCE (`_degenerate_match` >= `DEGENERATE_MATCH_FRACTION`), so a
+    copy, a rename, OR A LATER GENERATION OF THE SAME CLIMB is caught. The
+    provenance test replaced an exact-content test that
+    `analysis/frozen/champion_4p.json` defeated by differing on two keys. See
     `DEGENERATE_CHAMPION_PATH`'s comment for why this exists. A no-op for
-    builtins, empty specs, and any path that isn't that vector."""
+    builtins, empty specs, and any path that isn't descended from that
+    vector."""
     path = _spec_weight_path(spec)
     if path is None or not os.path.exists(path):
         return
@@ -71,20 +121,19 @@ def refuse_if_degenerate_champion(spec, tool_name):
     if not os.path.exists(known_path):
         return
     same_path = os.path.samefile(path, known_path)
-    same_content = False
+    match = 0.0
     if not same_path:
         try:
-            mine = _weights_of(path)
-            known = _weights_of(known_path)
-            same_content = bool(known) and all(
-                mine.get(k) == v for k, v in known.items())
+            match = _degenerate_match(_weights_of(path),
+                                      _weights_of(known_path))
         except (OSError, ValueError):
-            same_content = False
-    if same_path or same_content:
+            match = 0.0
+    if same_path or match >= DEGENERATE_MATCH_FRACTION:
         sys.stderr.write(
             "\n" + "!" * 70 + "\n"
             f"! {tool_name}: REFUSING to load {path!r}\n"
-            "! This is (or byte-matches) experiments/champion_4p.json, the\n"
+            f"! ({'same file as' if same_path else f'{match:.0%} of the moved weights of'})\n"
+            "! experiments/champion_4p.json, the\n"
             "! pre-horizon-fix vector docs/TRAINING_RUN.md says never to\n"
             "! warm-start from (science=-6.089; docs/CULTURE_GAP.md Sec 8f\n"
             "! measured it at 20.1% against a 25% null after the horizon\n"
@@ -94,6 +143,93 @@ def refuse_if_degenerate_champion(spec, tool_name):
             + "!" * 70 + "\n\n")
         raise SystemExit(
             f"{tool_name}: refusing degenerate weights vector {path!r}")
+
+
+# --------------------------------------------------- is the lever plugged in?
+#
+# The failure this exists to stop is NOT a crash. `evaluate()` skips whole
+# feature functions when their scale weight is 0.0 (`if hp:`, `if ru or rb:`,
+# ...), so an A/B whose lever only reaches the score through a closed gate
+# returns a clean, well-powered NULL. It is indistinguishable from a real
+# negative result and it is not one -- it is an arithmetic identity, and no
+# sample size touches it.
+#
+# That is what happened to the 12,800-game wonder measurement in
+# `docs/CARD_BLINDNESS.md` Sec 5.3: both arms differed only in
+# `card_rate_credit`, which is read inside `card_potential`, which for a WONDER
+# is only ever reached from `row_pressure`, which `evaluate()` gates on
+# `row_urgency`/`row_bargain_forgone` -- both 0.0 in the frozen champion the
+# run used. See `analysis/frozen/README.md`.
+
+#: Each `evaluate()` feature function that is gated, and the weights that open
+#: it. Any one of them being non-zero opens the gate.
+EVALUATE_GATES = {
+    "hand_potential": ("hand_potential",),
+    "wonder_potential": ("wonder_potential",),
+    "hand_mil_potential": ("hand_mil_potential",),
+    "tactic_terms": ("tactic_gain", "tactic_short"),
+    "rival_hand_potential": ("rival_hand_potential",),
+    "row_pressure": ("row_urgency", "row_bargain_forgone"),
+}
+
+#: A weight read only from inside `card_potential` reaches the score through
+#: these consumers and through nothing else.
+CARD_POTENTIAL_CONSUMERS = ("hand_potential", "wonder_potential",
+                            "hand_mil_potential", "rival_hand_potential",
+                            "row_pressure")
+
+#: ...and for a WONDER, only through these. `engine/actions.py:take_card` puts
+#: a wonder straight into `p.wonder`, so it never enters `hand_civil` and
+#: `hand_potential` never sees one.
+WONDER_CARD_POTENTIAL_CONSUMERS = ("wonder_potential", "row_pressure")
+
+
+def lever_conduction(weights, consumers=CARD_POTENTIAL_CONSUMERS):
+    """Split `consumers` into the gates this vector leaves OPEN and CLOSED.
+
+    Returns ``(open_, closed)``, two tuples of feature-function names.
+    """
+    open_, closed = [], []
+    for fn in consumers:
+        gates = EVALUATE_GATES.get(fn, ())
+        (open_ if any(weights.get(g) for g in gates) else closed).append(fn)
+    return tuple(open_), tuple(closed)
+
+
+def assert_lever_conducts(weights, lever, tool_name,
+                          consumers=CARD_POTENTIAL_CONSUMERS):
+    """Hard-refuse (``SystemExit``) if `lever` cannot reach the score at all.
+
+    Call this at the top of any A/B whose treatment is a `card_potential`
+    multiplier (`card_rate_credit`, `card_board_credit`, `territory_credit`,
+    `unit_strength_credit`, ...). Pass `WONDER_CARD_POTENTIAL_CONSUMERS` when
+    the question is specifically about wonders.
+
+    A no-op when at least one consumer is open -- it does not check that the
+    effect is *large*, only that it is not identically zero.
+    """
+    open_, closed = lever_conduction(weights, consumers)
+    if open_:
+        return open_
+    gates = sorted({g for fn in closed for g in EVALUATE_GATES.get(fn, ())})
+    sys.stderr.write(
+        "\n" + "!" * 70 + "\n"
+        f"! {tool_name}: REFUSING to measure {lever!r} against this vector.\n"
+        "! Every path by which it could reach the score is gated shut:\n"
+        + "".join(f"!     {fn}  (needs one of: "
+                  f"{', '.join(EVALUATE_GATES.get(fn, ()))})\n"
+                  for fn in closed)
+        + "! and all of those weights are 0.0 or absent here:\n"
+        + "".join(f"!     {g} = {weights.get(g, 'ABSENT')}\n" for g in gates)
+        + "! This A/B would return a NULL that is an arithmetic identity, not\n"
+        "! a result -- exactly the way the 12,800-game wonder measurement in\n"
+        "! docs/CARD_BLINDNESS.md Sec 5.3 did. Use a vector that carries the\n"
+        "! gating weights (e.g. a live league champion), or measure something\n"
+        "! this vector can actually express.\n"
+        + "!" * 70 + "\n\n")
+    raise SystemExit(
+        f"{tool_name}: {lever!r} cannot reach the score under this vector "
+        f"(all of {', '.join(gates)} are 0.0/absent)")
 
 
 # ------------------------------------------------------------ bot specs

@@ -27,7 +27,13 @@ the trained champion at every player count:
 |---|---|---|---|---|---|
 | BookBot vs champion_2p | 2 | 400 | **62.9%** | ±4.7% | 50.0% |
 | BookBot vs champion_3p | 3 | 300 | **42.2%** | ±5.6% | 33.3% |
-| BookBot vs champion_4p | 4 | 300 | **64.3%** | ±5.4% | 25.0% |
+| BookBot vs champion_4p | 4 | 300 | **64.3%** ⚠ | ±5.4% | 25.0% |
+
+> **4p row quarantined (2026-07-30):** the `champion_4p` arm is the
+> known-degenerate vector (`science = -6.08883`, measured at 20.1% against a
+> 25% null). `refuse_if_degenerate_champion` tested exact content and the
+> frozen copy differs on two keys, so it walked through. Do not quote the 4p
+> number. See `analysis/frozen/README.md`.
 
 Meanwhile the champion beat GreedyBot — the baseline it was trained against —
 by 88%. Both facts are true at once, and that is the whole lesson: **beating a

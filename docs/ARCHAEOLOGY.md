@@ -400,7 +400,8 @@ nothing. Two-line fix.
 All three are cheap relative to what has already been spent on them.
 
 **(a) `docs/STRENGTH_CHECK.md:62-85`** — the BookBot-beats-champion result
-(62.9% / 42.2% / 64.3%, n=400/300/300, **PROVEN**) was measured on champions
+(62.9% / 42.2% / 64.3% ⚠, n=400/300/300, **PROVEN** at 2p/3p; the **4p arm is
+quarantined** — it is the known-degenerate vector, see `analysis/frozen/README.md`) was measured on champions
 trained almost entirely *before* `7d40f53` corrected the military card counts.
 The doc says plainly: *"this benchmark should be re-run once a post-`7d40f53`
 champion exists"*, and `experiments/frozen/` holds the exact weights so the
@@ -892,7 +893,8 @@ control arm and a negative result reported in full.**
 **Status: substantively COMPLETE; its own status header is STALE.**
 
 Line 3 reads *"Status: 2p and 3p final. 4p and the hybrid ablation still
-running"*, but the 4p row (64.3%, ±5.4%, n=300) and the `BookImprovedBot`
+running"*, but the 4p row (64.3%, ±5.4%, n=300 — now **quarantined**, see
+`analysis/frozen/README.md`) and the `BookImprovedBot`
 hybrid null (50.8% ± 5.7%, p=0.77, n=300) are both in the file, and commit
 `33d0ff1` is titled "Strength check: 4p result, the hybrid null, two tournament
 diagnostics". The header was never updated. Harmless, but it is the kind of

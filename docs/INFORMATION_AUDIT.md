@@ -3,6 +3,26 @@
 Base game 2015 ("A New Story of Civilization"), no expansion. Every claim below
 carries a `file:line`. Anything I could not verify says so.
 
+> **⚠ EVERY 4p NUMBER IN THIS DOCUMENT IS QUARANTINED (2026-07-30).** The 4p
+> vector it was measured against — `analysis/frozen/champion_4p.json`, now
+> renamed `analysis/frozen/champion_4p.DEGENERATE.json`, and its twin
+> `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
+> informative weights** of `experiments/champion_4p.json` bit-for-bit,
+> including `science = −6.08883`. That is the vector `docs/TRAINING_RUN.md`
+> says never to warm-start from and that `docs/CULTURE_GAP.md` §8f measured at
+> **20.1% against a 25% null** — a bot that loses to random seating.
+> `refuse_if_degenerate_champion` was supposed to catch it and did not: it
+> tested exact content, and the frozen copy is six generations later and
+> differs on two keys (`colonies`, `pacts`). The guard now tests provenance
+> over the informative keys and refuses it under any name.
+>
+> **The 4p rows below are not retracted — they are unreliable and left in
+> place so they stay auditable.** They describe a known-degenerate bot. Do not
+> quote them as facts about 4p play, and do not quote them as facts about the
+> engine. The 2p and 3p numbers in this document are unaffected by *this*
+> issue. See `analysis/frozen/README.md`.
+
+
 This audit was prompted by the project owner's description of the real skill of
 the game:
 
