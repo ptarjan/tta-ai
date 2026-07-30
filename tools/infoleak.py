@@ -41,11 +41,14 @@ is what a leak looks like.  Anything near 1/len(pile) is a sample.
 The measurement that found the event leak (2p, 8 games, 18,762 candidates):
 
     pile              draws   true-top on real root   true-top on det. root
-    civil_deck          800            100.0%                   23.6%
-    military_deck       639            100.0%                   15.8%
+    civil_deck          800            100.0%                   28.6%
+    military_deck       639            100.0%                   16.9%
     current_events      209            100.0%                  100.0%   <-- leak
 
 `plan.determinize` shuffled the two decks and never touched the event pile.
+After the fix the same run reads 28.6% / 17.2% / 38.3%: the two decks are
+unchanged (the military wobble is the third shuffle drawing different `rng`),
+and the event pile drops from the truth to a ~33% chance floor.
 """
 from __future__ import annotations
 

@@ -420,14 +420,20 @@ candidates:
 
 | pile | draws | true-top, real root | true-top, determinized root (before) | after |
 |---|---:|---:|---:|---:|
-| `civil_deck` | 800 | 100.0% | 23.6% | 28.6% |
-| `military_deck` | 639 | 100.0% | 15.8% | 17.2% |
+| `civil_deck` | 800 | 100.0% | 28.6% | 28.6% |
+| `military_deck` | 639 | 100.0% | 16.9% | 17.2% |
 | `current_events` | 209 | 100.0% | **100.0%** | 38.3% |
 
 100.0% is not a leak *rate*. It is the signature of a field nobody is
-shuffling. (The civil/military "after" figures differ from "before" only because
-adding a third shuffle consumes different `rng` draws; the pile is the same
-size and the sampling is the same.)
+shuffling. The two card decks were already being sampled and stay sampled;
+`current_events` goes from the truth to a ~33% chance floor for a 3-card pile.
+
+Both columns are the *same script on the same 18,762 candidates*, run once
+against a tree with the old two-deck `determinize` and once against this one —
+not two different measurements pasted side by side. The 16.9 → 17.2 wobble on
+`military_deck` is the third shuffle consuming different `rng` draws, and
+`civil_deck` does not move at all, which is what "this change touches the event
+pile and nothing else" should look like.
 
 **The event pile is age-ordered and that order is public.**
 `events._recycle_future_events` shuffles the pile and then sorts it by

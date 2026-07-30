@@ -38,7 +38,8 @@ state that `apply` happens to leave behind.
    So `pick` re-shuffles the unseen piles into `root` *before* `_beam` sees
    it, which is the determinization step an information-set search needs
    anyway, and every trial `apply` in the search then draws a sample rather
-   than the truth (measured 23.6% / 15.8% / matching-by-chance, 2p).
+   than the truth (measured 28.6% / 17.2% / 38.3% at 2p, against chance
+   floors set by each pile's length).
 
    Read that as a claim about THIS bot only.  `WeightedBot` and
    `QuiescentBot` do not determinize at all and still draw the true card on
@@ -152,9 +153,10 @@ def determinize(state, rng):
     ``end_turn`` a beam ever expands revealed the REAL next event.  Measured
     on the instrument that can tell the difference (`tools/infoleak.py
     --true-card`), 2p/8 games: on a determinized root the trial drew the true
-    top CIVIL card on 23.6% of civil draws and the true top EVENT on **100.0%**
+    top CIVIL card on 28.6% of civil draws and the true top EVENT on **100.0%**
     of event draws.  100% is not a leak rate, it is the signature of a field
-    nobody was shuffling.
+    nobody was shuffling; it is 38.3% now, against a ~33% chance floor for a
+    3-card pile.
 
     THE EVENT PILE IS AGE-ORDERED AND THAT ORDER IS PUBLIC.
     ``events._recycle_future_events`` shuffles the pile and then sorts it by
