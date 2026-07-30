@@ -134,6 +134,40 @@ to two different `Stats`. Over ~1300 distinct keys there are **no
 collisions**. A key that missed a field would serve silently stale card
 valuations, which is a worse bug than the blindness this module fixes.
 
+### 2.3 Which parts are rules and which are judgement calls
+
+Worth separating explicitly, because the two need different kinds of
+justification and only the second kind needs evidence.
+
+**Rule-faithful — no free parameter, no discount, nothing to tune.** These are
+not models of the rules, they are the rules, obtained by running them:
+
+* every `Stats` delta from the leader/government swap — all thirteen
+  `MODIFIER_KEYS` on leaders, both `_apply_special` keys, and the top-level
+  government action counts;
+* the replacement semantics (a leader replaces a leader), the engine's clamps,
+  and the government science cost, which is read off the card;
+* **Genghis Khan.** "One of the two strongest, ties in your favour" is
+  computed exactly from rival strengths. It looks like a judgement call and is
+  not one.
+
+**Judgement calls — a choice was made and could be made differently.** Each is
+flagged here so nobody later mistakes it for a derivation:
+
+| choice | what was chosen | the alternative |
+|---|---|---|
+| **Churchill's `perTurnChoice`** | value him at the culture option, 3/turn | model the military option's 6 ring-fenced points as worth more |
+| **Which government route to price** | revolution (`revolutionCost`), always the cheaper science | price the peaceful route, or the min of the two under current stats |
+| **Revolution's action cost** | its own `gov_action_cost` feature at 0.0 | fold it into `civil_actions`, i.e. assert an exchange rate |
+| **`resourcesForMilitaryUnits`** | own `restricted_resources` feature at 0.0 | treat ring-fenced resources as plain `resource_stock` |
+| **Reserves' "food OR resources"** | max under the current weights | a fixed 50/50, or always the resource side |
+
+Note the shape of that table: every judgement call except Churchill's was
+resolved by **creating a 0.0-weight feature rather than by picking a number**.
+That is deliberate — it converts a choice-with-a-free-parameter into something
+the league fits, so the only genuinely hand-set constant in the whole change is
+Churchill's 3.
+
 ## 3. The census
 
 `tools/card_blindness.py` grew a `--board` mode that counts the board-aware
@@ -424,12 +458,24 @@ the only leader the evaluator can see.
   is deliberate — a non-zero default would not be inert — but if the
   government decomposition arm comes out negative, this is the first thing to
   suspect.
-* **Cost.** Board pricing calls `effects.compute` once per swap-type card in
-  the hand and the row per leaf. The memo on
-  `(name, effects.stats_key(state, p))` only helps within a decision, because
-  `stats_key` includes the worker counts and so changes on nearly every move.
-  This is a real per-node cost and performance is Lane A's to own; the on-arm
-  is visibly slower than the off-arm in the A/B above.
+* **Cost, measured.** Board pricing calls `effects.compute` once per
+  swap-type card in the hand and the row per leaf. 2p self-play, 6 games,
+  same seeds, cache cleared between arms:
+
+  | arm | ms/ply | |
+  |---|---|---|
+  | `card_board_credit` 0.0 | 4.07 | |
+  | `card_board_credit` 1.0 | 5.14 | **1.26×** |
+
+  **At the shipped default the cost is exactly zero**, not merely small:
+  `card_potential` returns on `if not board` before touching
+  `board_yields` at all, which is the same early return that makes the
+  pricing byte-identical to master. The 1.26× is what turning it on costs,
+  and it is the number to beat if it is ever turned on for a league run.
+  The memo helps less than it looks like it should — 1894 distinct entries
+  over ~1100 plies — because `stats_key` includes the worker counts and so
+  changes on nearly every move; it collapses the several cards priced within
+  one decision, not across decisions.
 * **The four remaining flat leaders need a measured trigger rate**, not a
   guessed one. Aristotle pays 1 science per technology card taken, Newton
   refunds a civil action per technology played; pricing either honestly needs
