@@ -192,10 +192,41 @@ arm_flags() {   # players -> the flags that are NOT shared, space separated
         echo "--candidate-bot plan:width=2 --full-check-every 25 --check-games 24 --ablate-every 0"
         ;;
     3|4)
-        # Still productive (3p: 19 accepts in its last 100 generations), so
-        # still on the affordable proxy.  docs/PROXY_GUARDRAIL.md is what
-        # tells us whether that proxy is still tracking real strength.
-        echo "--candidate-bot quiescent:levels=1"
+        # WAS `quiescent:levels=1`, on the grounds that it was still
+        # productive (3p: 19 accepts in its last 100 generations) and it is
+        # ~4x cheaper per game.  SWITCHED TO PlanBot 2026-07-30, and the
+        # reason is not cost or strength -- it is that QuiescentBot is not a
+        # bot we can ship.
+        #
+        # `docs/DEEPER_SEARCH.md` 6.2 said so when it was adopted:
+        # "conditional GO, not yet", reservation 3 -- resolving a defender's
+        # `defense` decision requires the defender's real `hand_military`,
+        # which is hidden in the real game.  "For a symmetric self-play
+        # trainer this is defensible; for any claim about play against a
+        # human it is not."  The gating experiment 6.2 named (a league arm
+        # whose challenger AND mirror are both quiescent, scored on opponents
+        # held out of both pools) was never run, and the arms were switched
+        # anyway.
+        #
+        # That makes every 3p/4p generation since then a climb against an
+        # objective the shipped bot cannot pursue: the weights were being
+        # tuned to exploit information the ship policy will not have.  The
+        # project's goal is to beat humans and to tell a human what to play,
+        # so a bot that must see hidden hands is not a bot -- it is an upper
+        # bound.  Gen 1315 (3p) and gen 370 (4p) were discarded for this.
+        #
+        # PlanBot leaks too and that is being closed separately (the beam
+        # draws the true next deck card; docs/AGGRESSION_RATE.md 9).  The
+        # difference is that PlanBot's leak is a defect with a fix, and
+        # QuiescentBot's is the mechanism it works by.
+        #
+        # The cost is real and is accepted knowingly: ~4.1x per game (see the
+        # 2p table above), so ~690 s/generation against ~168 under
+        # quiescence.  Fewer, honest generations beat many dishonest ones.
+        # The check cadence is cut for the same reason it is cut at 2p --
+        # under PlanBot a full check costs ~10x, and at the old cadence these
+        # arms would spend more time checking than training.
+        echo "--candidate-bot plan:width=2 --full-check-every 25 --check-games 24 --ablate-every 0"
         ;;
     esac
 }
