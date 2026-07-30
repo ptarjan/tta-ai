@@ -55,6 +55,10 @@ def _meta():
 
 _BEST_TYPES = ("farm", "mine", "lab", "temple", "theater", "library", "arena")
 
+# `wonder_turns_to_finish` is a ratio, so it blows up when resource production
+# is near zero.  20 turns is already past "never" for a 20-round game.
+_TURNS_CAP = 20.0
+
 # features that additionally get an early-game and a late-game copy
 PHASE_KEYS = (
     "culture", "culture_rate", "science_rate", "food_rate", "resource_rate",
@@ -502,11 +506,43 @@ def features(state, idx, ctx=None):
     pop_base = economy.pop_cost_base(p.yellow_bank)
     pop_cost = 8 if pop_base is None else max(0, pop_base - s.pop_food_discount)
 
+    # --- wonders: how far in, and whether it can possibly be finished.
+    #
+    # `wonder_remaining` (resources still owed) already existed and is flat in
+    # the economy that has to pay them.  The three terms added here are the
+    # ones that separate "6 resources at 5/turn on round 4" from "12 resources
+    # at 4/turn on round 15", which the old feature set scored identically per
+    # resource.  Across 120 logged games the bot started Pyramids 13 times and
+    # finished it 0 times, and went 0-for-58 on the three 12-resource Age II
+    # wonders (docs/HEURISTICS.md, "Wonders, by age"); nothing in the
+    # evaluation could see that, because starting a wonder it will never
+    # complete looked exactly like starting one it will.
+    #
+    # All three are 0.0 with no wonder in progress and drop back to 0.0 the
+    # instant it completes, so a negative weight on any of them prices
+    # STARTING (and stalling), and completion is what removes the penalty.
+    # That is the shape the sources ask for -- "start a wonder by round 12 or
+    # do not start it" -- expressed as something the league can tune rather
+    # than a hard rule.
     progress = remaining = 0
+    stages_left = turns_to_finish = overrun = 0.0
     if p.wonder is not None:
         stages = db.get(p.wonder.name)["stages"]
-        progress = sum(stages[:p.wonder.steps_built])
-        remaining = sum(stages[p.wonder.steps_built:])
+        built = p.wonder.steps_built
+        progress = sum(stages[:built])
+        remaining = sum(stages[built:])
+        if remaining > 0:
+            stages_left = float(len(stages) - built)
+            # turns of the player's WHOLE resource output the wonder still
+            # owes, net of what is already banked.  Scale-free, so it means
+            # the same thing to an Age A economy and an Age III one.
+            owed = remaining - p.resources
+            if owed > 0:
+                turns_to_finish = min(
+                    _TURNS_CAP, owed / max(1.0, s.resources))
+                # ...and the part of that the game will not last long enough
+                # to pay.  This is the 0-for-58 detector.
+                overrun = max(0.0, turns_to_finish - rounds_left(state))
 
     hand_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_civil)
     hand_mil_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_military)
@@ -595,7 +631,20 @@ def features(state, idx, ctx=None):
         "wonders": len(getattr(p, "completed_wonders", ()) or ()),
         "wonder_progress": progress,
         "wonder_remaining": remaining,
+        # finish discipline (all 0.0 with nothing in progress)
+        "wonder_stages_left": stages_left,
+        "wonder_turns_to_finish": turns_to_finish,
+        "wonder_overrun": overrun,
+        "wonder_stages_per_action": float(s.wonder_stages - 1),
         "leader": 1.0 if p.leader else 0.0,
+        # --- board side of the card-pricing keys added with
+        # docs/CARD_BLINDNESS.md.  Same key on both sides, the way
+        # `civil_actions` already is: `_card_yields` prices the card in hand
+        # and this prices the effect once it is on the board.
+        "hand_limit": float(s.civil_hand_limit + s.military_hand_limit),
+        "colonize_bonus": float(s.colonize),
+        "build_discount": float(sum(s.build_discount.values())
+                                if s.build_discount else 0),
         # --- cards
         "hand_civil": len(p.hand_civil),
         "hand_value": hand_value,
@@ -649,6 +698,23 @@ _PROD_TO_FEATURE = {
 }
 
 # one-shot gains and permanent modifiers printed on the card
+#
+# THE OMISSION THIS MAP EXISTED WITH FOR MOST OF THE PROJECT: `culture` and
+# `science` were absent.  `engine/effects.py:FLAT_KEYS` treats an effect-block
+# `culture` exactly like `cultureProduction` -- it lands in `Stats.culture`,
+# i.e. it is culture PER TURN -- and ten cards use the short spelling,
+# including Eiffel Tower (4), Taj Mahal (3), St. Peter's Basilica (2),
+# Kremlin (2), Library of Alexandria, Universitas Carolina, Great Wall,
+# Hanging Gardens, Joan of Arc and Mahatma Gandhi.  Two more carry a dropped
+# `science` (Library of Alexandria 1, Universitas Carolina 2).  With those two
+# keys missing, seven of the sixteen wonders priced out at nothing beyond
+# "it is a wonder" -- including the two the tournament data likes best.  See
+# docs/CARD_BLINDNESS.md.
+#
+# They map to the RATE features, not the stock ones, because that is what the
+# engine does with them.  `_YIELD_TO_FEATURE` above spells the same two words
+# as stock gains and is CORRECT to: there they come from a territory's
+# `immediateEffects`, which really are one-shot.
 _EFF_TO_FEATURE = {
     "gainScience": "science",
     "gainCulture": "culture",
@@ -667,19 +733,165 @@ _EFF_TO_FEATURE = {
     "happy": "happy_margin",
     "yellowTokens": "yellow_bank",
     "blueTokens": "blue_free",
+    # --- keys whose amount is numeric but which no pre-existing feature
+    # matched.  Each gets its own weight, defaulting to 0.0 (see
+    # BASE_WEIGHTS), so adding them is inert for every trained vector and the
+    # league decides what they are worth.
+    "civilHandLimit": "hand_limit",
+    "militaryHandLimit": "hand_limit",
+    "colonizeBonus": "colonize_bonus",
+    "resourceDiscount": "resource_discount",
 }
+
+# Effect keys `_card_yields` prices but that need more than a table lookup:
+# the value is a dict, an offset, or a bare presence flag.  Handled in
+# `_card_yields`; listed here so the coverage test can see them as priced.
+_EFF_SPECIAL = {
+    # {age: resources off}, e.g. Masonry {"I": 1, "II": 1, "III": 1}
+    "buildDiscount": "build_discount",
+    # 2 means "two stages per action", i.e. a bonus of one
+    "wonderStagesPerAction": "wonder_stages_per_action",
+    # a string naming the action you get free ("build_or_upgrade_farm_or_mine").
+    # 18 cards.  Priced as a presence flag: WHICH free action it is varies, the
+    # fact that there is one does not.
+    "freeCivilAction": "free_civil_action",
+}
+
+# ---------------------------------------------------- the documented gap
+#
+# Everything else printed on a card that `_card_yields` does NOT price, with
+# the reason.  `tests/test_card_pricing.py` walks all 236 cards and fails if a
+# key in any `production`/`effects` block is neither mapped above nor listed
+# here, and also fails if a key listed here no longer appears on any card.
+#
+# The point is not that this set is empty -- it cannot be, most of it is
+# genuinely unpriceable by a board-independent per-card table.  The point is
+# that its SIZE IS VISIBLE.  `culture` sat in this gap silently for the whole
+# project and nobody could see it, which is the failure this test prevents.
+DELIBERATELY_UNPRICED = {}
+
+
+def _unpriced(reason, *keys):
+    for k in keys:
+        DELIBERATELY_UNPRICED[k] = reason
+
+
+# 1. The coefficient is numeric but the YIELD is coefficient x a board count.
+#    `_card_yields` is `lru_cache`d on the card name alone and has no state,
+#    so it cannot evaluate any of these.  Pricing them needs a board-aware
+#    card evaluator, which is the obvious next piece of work.
+_unpriced(
+    "board-scaled: numeric coefficient times a board count _card_yields "
+    "cannot see",
+    "strengthPerInfantry", "strengthPerArtillery", "strengthPerMilitaryUnit",
+    "strengthPerUnitType", "strengthPerTempleOrGovernmentHappy",
+    "extraHappyPerHappySource", "culturePerTheater",
+    "culturePerHappyFromTemplesTheatersWonders", "culturePerLibraryTheaterPair",
+    "cultureFirstColony", "culturePerAdditionalColony", "sciencePerLab",
+    "culturePerCivilizationWithMoreCulture", "cultureIfTopTwoStrength",
+    "gainCulturePerLevelOfRemovedCard",
+    "resourcesForMilitaryUnitsPerStrongerCivilization",
+)
+
+# 2. The value is a formula in text, or a bare True meaning "read the card".
+#    There is no number to multiply a weight by at all.
+_unpriced(
+    "text effect: the value is a formula or a bare flag, not a scalar",
+    "onBuildCulture", "onBuildCulturePerTechLevelSum",
+    "sciencePerBestLabOrLibraryLevel", "doubleBestMine",
+    "freePopIncreasePerTurn", "resourcesPerLabEqualToLevel",
+    "culturePerLabEqualToLevel", "bestTheaterDoubleCulture",
+    "cultureOnLeaveEqualToLabResourceProduction",
+    "doublesTacticBonusOfOneArmy", "infantryCountsAsCavalryForTactics",
+    "libraryDiscountsIfTheater", "perTurnChoice",
+)
+
+# 3. A rule change with no scalar value: it makes something legal, illegal or
+#    cheaper in a way only the rules engine can express.
+_unpriced(
+    "rule change: alters what is legal, not what is produced",
+    "noAttacksBetweenParties", "cancelledIfPartiesAttackEachOther",
+    "cannotPlayAggressionOrWar", "opponentsPayDoubleMilitaryActionsToAttackYou",
+    "wonderTakeNoExtraCivilActions", "revolutionUsesMilitaryActionsInstead",
+    "oncePerGameTwoPoliticalActions", "removeAsPoliticalActionForYellowToken",
+    "removeAsPoliticalActionFreeColonize", "peekTopEventCardInPolitics",
+    "militaryActionCombinedPopIncreaseAndUnitBuild",
+    "civilActionUpgradeUrbanBuildingToTheater",
+    "militaryActionAsCivilPerTurn", "civilActionBackOnTechDevelop",
+    "colonizeDiscardUpTo2MilitaryCardsForBonus",
+    "colonyPermanentBonusTransfers", "colonyImmediateBonusApplies",
+    "orTakesSpecialTechnologiesOfSameTotalScienceCost", "removeFromGame",
+    "onReplacePutUnderCompletedWonderHappy",
+)
+
+# 4. A trigger: it pays out when some later action happens, so the amount on
+#    the card is a rate per event, not a yield.  Several of these are large
+#    (Einstein's 3 culture per technology, Newton's action refund); pricing
+#    them needs a model of how often the trigger fires.
+_unpriced(
+    "trigger: pays per future event, not on play",
+    "scienceOnTechCardTake", "resourceOnTechDevelop", "cultureOnTechDevelop",
+    "resourceOnMilitaryUnitBuildOrUpgrade", "cultureOnRevolution",
+    "leaderTakeCivilActionDiscount", "popIncreaseFoodDiscount",
+    "comboFoodDiscount", "comboResourceDiscount",
+    "theaterTechScienceDiscount", "theaterResourceDiscountIfLibrary",
+    "theaterScienceDiscountIfLibrary", "resourcesForMilitaryUnits",
+    "gainFoodOrResources",
+)
+
+# 5. Military-hand cards.  `hand_potential` walks `hand_civil` ONLY, so
+#    `_card_yields` is never called for a tactic, war, aggression, territory
+#    or bonus card and mapping these keys would change nothing today.  The
+#    military hand reaches the evaluator through `hand_mil_value` (a sum of
+#    age+1), i.e. every military card of an age is interchangeable.  That is
+#    a real, separate blind spot -- see docs/CARD_BLINDNESS.md.
+_unpriced(
+    "military hand: never reaches _card_yields (hand_potential is civil-only)",
+    "tacticBonus", "tacticBonusObsolete", "defenseBonus", "colonizationBonus",
+    "destroyUrbanBuildings", "opponentDecreasesPopulation", "stealColony",
+    "takeFromOpponent", "victorTakesYellowTokens", "victorTakesScienceUpTo",
+    "victorTakesCulture", "decreasePopulation",
+)
+
+# 6. Event / pact structure: nested "who it happens to" blocks.  Events are
+#    resolved by the rules engine and pacts are already priced through
+#    `deferred_credit` / `_YIELD_TO_FEATURE`, which reads INSIDE these blocks.
+#    The outer keys are addressing, not value.
+_unpriced(
+    "addressing: names who an event or pact side applies to, not a yield",
+    "allPlayers", "bothPlayers", "weakestPlayer", "weakestPlayers",
+    "strongestPlayer", "strongestPlayers", "playerWithMostCulture",
+    "playerWithLeastCulture", "playersWithMostHappyFaces",
+    "playersWithMostDiscontentWorkers", "target", "condition", "duration",
+    "lastRoundSubstitute", "onAttackBetweenParties", "gain", "lose", "A", "B",
+)
+
+# 7. Prose.
+_unpriced("prose: a rules clarification for human readers", "note")
+
+
+# the third slot of a `_card_yields` triple
+_Y_GAIN = 0     # priced straight through w[k]
+_Y_COST = 1     # priced through max(0, w[k]) -- see the docstring below
+_Y_RATE = 2     # the newly-visible short-spelling culture/science, scaled by
+#                 w["card_rate_credit"] so the fix can be A/B'd against itself
 
 
 @_lru_cache(maxsize=None)
 def _card_yields(name):
-    """(feature, amount, clamp) triples for a card, independent of weights.
+    """(feature, amount, kind) triples for a card, independent of weights.
 
-    `clamp` marks a COST: it is priced through max(0, w) because `science`
+    `_Y_COST` marks a COST: it is priced through max(0, w) because `science`
     and `resource_stock` are stock weights a hill climb is free to drive
     negative (the 4p champion reached science = -6.09).  Unclamped, a
     negative stock weight turns "this card is expensive" into "this card is a
     bargain" -- Alchemy scored +67.04 under the 4p vector against +5.86 under
     the 2p one.  Paying a cost must never read as a gain.
+
+    `_Y_RATE` marks the two effect keys this function used to drop silently,
+    `culture` and `science` (docs/CARD_BLINDNESS.md).  They are separated only
+    so `card_rate_credit` can switch them off and recover the exact pre-fix
+    pricing for the A/B; they are ordinary gains otherwise.
     """
     db = C.db()
     card = db.by_name.get(name)
@@ -689,35 +901,60 @@ def _card_yields(name):
     for k, amt in (card.get("production") or {}).items():
         fk = _PROD_TO_FEATURE.get(k)
         if fk and isinstance(amt, (int, float)) and amt is not True:
-            out.append((fk, float(amt), False))
-    for k, amt in (card.get("effects") or {}).items():
+            out.append((fk, float(amt), _Y_GAIN))
+    eff = card.get("effects") or {}
+    for k, amt in eff.items():
         if amt is True or amt is False or not isinstance(amt, (int, float)):
             continue
         fk = _EFF_TO_FEATURE.get(k)
         if fk:
-            out.append((fk, float(amt), False))
+            kind = _Y_RATE if k in ("culture", "science") else _Y_GAIN
+            out.append((fk, float(amt), kind))
+    # the three `_EFF_SPECIAL` keys: a dict, an offset and a presence flag.
+    # Each is gated on its own `_EFF_SPECIAL` membership rather than written
+    # straight in, so `tools/card_blindness.py --legacy` can switch the whole
+    # set off and reproduce master's census exactly.
+    if "buildDiscount" in _EFF_SPECIAL:
+        bd = eff.get("buildDiscount")
+        if isinstance(bd, dict):
+            got = sum(v for v in bd.values() if isinstance(v, (int, float)))
+            if got:
+                out.append(("build_discount", float(got), _Y_GAIN))
+    if "wonderStagesPerAction" in _EFF_SPECIAL:
+        wsp = eff.get("wonderStagesPerAction")
+        # printed as the TOTAL stages per action (2); one is the base rate
+        if isinstance(wsp, (int, float)) and wsp is not True and wsp > 1:
+            out.append(("wonder_stages_per_action", float(wsp) - 1.0, _Y_GAIN))
+    if "freeCivilAction" in _EFF_SPECIAL and eff.get("freeCivilAction") is not None:
+        out.append(("free_civil_action", 1.0, _Y_GAIN))
     tc = card.get("techCost") or 0
     if tc:
-        out.append(("science", -float(tc), True))
+        out.append(("science", -float(tc), _Y_COST))
     bc = card.get("buildCost") or 0
     if bc:
-        out.append(("resource_stock", -float(bc), True))
+        out.append(("resource_stock", -float(bc), _Y_COST))
     if card["type"] == "wonder":
-        out.append(("wonders", 1.0, False))
+        out.append(("wonders", 1.0, _Y_GAIN))
         stages = card.get("stages") or []
         if stages:
-            out.append(("resource_stock", -float(sum(stages)), True))
+            out.append(("resource_stock", -float(sum(stages)), _Y_COST))
     return tuple(out)
 
 
 def card_potential(name, w):
     """Eval-points a single card in hand would be worth if it were played."""
     total = 0.0
-    for k, amt, clamp in _card_yields(name):
+    credit = None
+    for k, amt, kind in _card_yields(name):
         wk = w.get(k, 0.0)
-        if clamp and wk < 0.0:
-            wk = 0.0
-        if wk:
+        if kind == _Y_COST:
+            if wk < 0.0:
+                wk = 0.0
+        elif kind == _Y_RATE:
+            if credit is None:
+                credit = w.get("card_rate_credit", 1.0)
+            amt *= credit
+        if wk and amt:
             total += wk * amt
     return total
 
@@ -978,7 +1215,41 @@ BASE_WEIGHTS = {
     "wonders": 3.0,
     "wonder_progress": 1.0,
     "wonder_remaining": -0.3,
+    # --- finish discipline (docs/CARD_BLINDNESS.md).  All 0.0, so a trained
+    # vector is unchanged; the league decides the price.  Deliberately NOT
+    # given a negative prior even though the evidence points that way (0 for
+    # 58 on the three 12-resource Age II wonders): a negative default would
+    # also put them in hillclimb_league's NONPOS set and forbid the climber
+    # from ever discovering that a wonder programme is worth having.
+    "wonder_stages_left": 0.0,
+    "wonder_turns_to_finish": 0.0,
+    "wonder_overrun": 0.0,
+    # Masonry and friends: stages per build action, above the base of one.
+    "wonder_stages_per_action": 0.0,
     "leader": 1.5,
+    # --- effect keys that were dropped on the floor and now have somewhere to
+    # land.  0.0 for the same reason as the INFORMATION_AUDIT block above: a
+    # new channel, not a change to an existing one.
+    "hand_limit": 0.0,
+    "colonize_bonus": 0.0,
+    "build_discount": 0.0,
+    # hand-only: both live on one-shot action cards, so there is no board
+    # state for them and `features()` never emits them.
+    "free_civil_action": 0.0,
+    "resource_discount": 0.0,
+    # How much of the short-spelling `effects.culture` / `effects.science`
+    # (the two keys `_card_yields` used to drop on the floor) to believe when
+    # pricing a card in hand.  1.0 = price them like any other per-turn
+    # production, which is what the engine does with them on the board.
+    #
+    # This is the ONE weight in this change whose default is not 0.0, and it
+    # is deliberate: at 0.0 the fix would be off and the frozen champions
+    # would keep playing blind.  1.0 is therefore a real behaviour change for
+    # every vector, and the four WeightedBot/QuiescentBot/PlanBot fingerprint
+    # digests move for it (docs/CARD_BLINDNESS.md section 5).  It is a weight
+    # rather than a hard-coded mapping precisely so that 0.0 recovers the
+    # pre-fix pricing exactly and the two can be duelled in one process.
+    "card_rate_credit": 1.0,
     # cards
     "hand_civil": 0.3,
     "hand_value": 0.25,

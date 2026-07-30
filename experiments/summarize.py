@@ -47,7 +47,16 @@ GROUPS = {
     "tech": ("tech_levels", "gov_level", "best_farm", "best_mine", "best_lab",
              "best_temple", "best_theater", "best_library", "best_arena",
              "best_unit", "num_techs", "special_techs"),
-    "wonders": ("wonders", "wonder_progress", "wonder_remaining", "leader"),
+    "wonders": ("wonders", "wonder_progress", "wonder_remaining", "leader",
+                "wonder_stages_left", "wonder_turns_to_finish",
+                "wonder_overrun", "wonder_stages_per_action"),
+    # effect keys `_card_yields` used to drop on the floor
+    # (docs/CARD_BLINDNESS.md).  Their own group because they are one
+    # coherent change and hillclimb's `rescale`/`group` operators should be
+    # able to move them together.
+    "priced": ("hand_limit", "colonize_bonus", "build_discount",
+               "free_civil_action", "resource_discount",
+               "card_rate_credit"),
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
               "hand_potential"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
