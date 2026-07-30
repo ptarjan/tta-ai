@@ -48,7 +48,7 @@ would be inert by construction.
 it, so War over Culture (3 MA) and War over Territory (2 MA) are the same card
 to every pricing path.  Reaches only `hand_mil_potential`, so see §3.
 
-## 5. The defence drain is landed but switched off
+## 5. The defence drain is landed and now ON (`a214804`, 2026-07-30)
 
 `556ad85`.  PlanBot prices its own defence differently from the identical
 position inside its own search: `pick` short-circuits on `state.pending` to
@@ -58,9 +58,29 @@ spent in 335 hopeless ones.  588 of 589 winnable defences need 2+ cards, so the
 first `defend` always looks like pure cost.
 
 The fix takes held-off defences 0 -> 332 over 200 games at 4p, with every
-attempt winnable.  Default is `False` pending a strength A/B at 3p/4p.
+attempt winnable.
 
-**UPDATED 2026-07-30, and the item is bigger than it looked.**  See
+**RESOLVED 2026-07-30 in `a214804`: `QUIET_PENDING = True`.**  It landed as a
+CONSISTENCY FIX, not on a strength measurement -- the beam already drains
+before scoring and the live decision did not.  The A/B is in
+`docs/DRAIN_AB.md`; read it there rather than from the bullets below, because
+it is uneven: 3p is decisive (pure-`qp` pool 0.5217 own-win share against a
+0.3333 null over 600 games, z = 9.26) and **4p is NOT independently
+established** (one pure-`qp` block, 0.3000 against a 0.2500 null, z = 1.54,
+p ~ 0.12).  The leak objection in the second bullet below was answered, not
+argued away -- see that bullet.  `DETERMINIZE` was deliberately held at `False`
+so the digest movement is attributable to exactly one constant; it is still
+open and gets its own commit.
+
+Scope note, checked rather than assumed: only `plan.py` and `neural_plan.py`
+import `engine/bots/pending.py`, so this changes PlanBot and NeuralPlanBot
+only.  The live 3p/4p league arms climb `quiescent:levels=1`, and QuiescentBot
+resolves the pending stack to quiescence by construction -- it never had the
+defect.  The flip makes PlanBot behave the way QuiescentBot always did.
+
+**Written 2026-07-30 before the flip, and the item was bigger than it looked.**
+Retained because the diagnosis is still the record of what the defect was; the
+"do not flip" instruction in it is superseded by the paragraph above.  See
 `docs/AGGRESSION_RATE.md` 8-11.
 
 * Not mainly about defence: the short-circuit never tested the pending *kind*,
@@ -68,12 +88,17 @@ attempt winnable.  Default is `False` pending a strength A/B at 3p/4p.
   moved at 3p) against defence's 37.8%.  The bot was pricing a colony/pact bid
   on a position where the bid had not resolved.  That is the same defect
   `docs/CARD_CENSUS.md` 10 reached from the territory end.
-* **Do not flip `QUIET_PENDING` as shipped.**  Neither pending path
-  determinizes, so a trial `apply` draws the REAL next deck card, and the drain
-  adds `apply` calls: master leaks on 24.0% of candidate evaluations at 3p and
-  the drained arm on 34.7% (`tools/pending_leak.py`).  The first paired block
-  (53.28% +/- 5.89pp vs a 33.3% null) is contaminated by that.  The leak-neutral
-  contrast is `qp=1,qd=1` vs master.
+* ~~**Do not flip `QUIET_PENDING` as shipped.**~~ SUPERSEDED -- the objection
+  was real and was then answered.  Neither pending path determinizes, so a
+  trial `apply` draws the REAL next deck card, and the drain adds `apply`
+  calls: master leaks on 24.0% of candidate evaluations at 3p and the drained
+  arm on 34.7% (`tools/pending_leak.py`), so the first paired block (53.28%
+  +/- 5.89pp vs a 33.3% null) was contaminated.  The leak-neutral contrast
+  `qp=1,qd=1` vs plain was then run at the same seed as `qp=1` vs `qp=0` and
+  returned the SAME numbers to every printed digit (0.5325 win, +26.01
+  margin).  Removing the peek changes nothing, so the win is not the peek --
+  a second instrument agreeing with the 1,346-pick census.  `docs/DRAIN_AB.md`
+  3.
 * **The determinization leak is its own, older defect** and probably the larger
   prize: it is live in every league game today with no flag.  Scoped and costed
   in `docs/AGGRESSION_RATE.md` 9; not started.
