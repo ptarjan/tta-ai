@@ -48,10 +48,18 @@ Five measured results, in order of how much they should change what happens next
    makes a strictly-dominated move class playable. It also bids on colonies
    (0.50 vs 0.08), builds 67% more wonder steps and wastes a third fewer civil
    actions. §3.
-5. **The search reads the real future deck on 94.9% of `end_turn` candidates**,
-   and it is inert *only* because the evaluator cannot tell `Crusades` from
-   `Rats`. Fixing military-card blindness and fixing the leak are the same
-   ticket. §2.3.
+5. **`WeightedBot`'s 94.9%-of-`end_turn`-candidates figure is a draw count, not
+   a leak measurement** — it counts candidates that draw, a quantity identical
+   whether or not the root is determinized, and `WeightedBot` never
+   determinizes in the first place. The leak that *was* real: the beam's
+   `determinize` shuffled both card decks but never `current_events`, so every
+   `end_turn` it expanded revealed the true next event (100.0% true-card
+   before the fix, 38.3% after, 78/3448 beam picks moved at 3p) — fixed, and
+   pinned by `tests/test_search_root_is_determinized.py`. Separately,
+   `WeightedBot`/`QuiescentBot` never determinize at all, so once M2's
+   `hand_mil_potential` prices a military card, they read it by identity;
+   measured latent today (0/2138 move changes at the shipped weight). §2.3,
+   §6.
 
 Plus one bug found and fixed on the way: `WeightedBot` never guarded against
 `("resign",)` the way `RandomBot` always has, and a fitted vector resigned on
@@ -1033,13 +1041,32 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 
 | # | stage | what it fixes | verification | cost |
 |---|---|---|---|---|
-| **M1** | **PlanBot** — turn-level beam, one horizon, determinized | §2.4 items 3, 4 and the §2.3 leak | **DONE at 2p: 88.6% +/- 3.1%, n=400, mirror control exactly 0.500.** Remaining: 3p/4p, and a beam-width/cost curve | built; ~16x CPU |
-| **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | ~1 day |
+| **M1** | **PlanBot** — turn-level beam, one horizon, determinized (has been since `PlanBot` was written; scoped to `PlanBot`/`NeuralPlanBot`/`NeuralBot` — see note below) | §2.4 items 3, 4 | **DONE at 2p: 88.6% +/- 3.1%, n=400, mirror control exactly 0.500.** Remaining: 3p/4p, and a beam-width/cost curve | built; ~16x CPU |
+| **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) — SHIPPED, as `weighted.hand_mil_potential` (0.01079 on `champion_3p`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | shipped |
 | **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
 | **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
 | **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | **first-order**: self-play is the only training data at scale, so games/cpu-s *is* the training budget (§5) | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
 | **M7** | **Absolute anchor** (§5) | tells us where we actually are | one number with a CI | one user decision |
+
+**Note on the M1 row, added after re-reading `plan.py` rather than this table.**
+`pick` does `root = copy_state(state)` then `if self.determinize: determinize(root,
+drng)` before `_beam` ever prices a candidate. `determinize=True` is the
+constructor default, and `experiments/arena.py` builds every `plan:`/`nplan:`
+spec with `det=1`. So "determinized" was never something M1 had to land —
+`PlanBot` has done it since it was written, and the same call reaches
+`NeuralPlanBot` and `NeuralBot`. It reaches only those three: `WeightedBot` and
+`QuiescentBot` never call `plan.determinize` (docs/AGGRESSION_RATE.md §9a.1,
+and the hard constraint below). The row used to cite "the §2.3 leak" as
+something M1 fixes; that citation is dropped because the §2.3 number cannot
+tell whether the root was determinized at all (next paragraph).
+
+**Note on §2.3's 94.9% figure.** It is a `WeightedBot` **draw count**, not a
+leak measurement: it counts candidates whose trial `apply` draws a card, which
+is identical whether or not the root was determinized, and `WeightedBot` never
+determinizes in the first place. `tools/infoleak.py --true-card`
+(docs/AGGRESSION_RATE.md §9a) is the instrument that can actually tell a leak
+from a draw, and it was run against the beam, not `WeightedBot`.
 
 ### M2 in detail — the military-card yield table
 
@@ -1082,9 +1109,35 @@ Three notes that matter for getting it right rather than merely done:
 Ordering rules that fall out of the measurements, and that should be treated as
 hard constraints:
 
-* **M2 must not ship without M1's determinization.** The moment the evaluator
-  can read military-card identity, the 94.9%-leaky `end_turn` candidate starts
-  reading the real future (§2.3). Today it is inert; after M2 it is a cheat.
+* **M2 must not ship without M1's determinization — and the precondition split
+  in two.** It is **satisfied** for the beam bots: `PlanBot`, `NeuralPlanBot`
+  and `NeuralBot` determinize their root before `_beam` prices a single
+  candidate, and have since `PlanBot` was written. It is **violated** for the
+  two bots M2 actually landed on — `WeightedBot` and `QuiescentBot` never call
+  `plan.determinize`, so every trial `end_turn` they price draws the real next
+  military card and reads it by identity. M2 has shipped anyway, as
+  `weighted.hand_mil_potential` (0.01079 on the live `champion_3p`): the cheat
+  this bullet warned about is live in the repo today, in the two bots it was
+  never written to gate (docs/AGGRESSION_RATE.md §9a.1).
+  The 94.9%-of-`end_turn`-candidates figure this bullet used to cite (§2.3) is
+  not a leak measurement — it counts candidates that *draw*, a quantity
+  determinization cannot move, and it is measured on `WeightedBot`, which
+  doesn't determinize at all. It is a draw count, not evidence either way
+  about a leak.
+  **Measured severity, so this isn't a guess:** `tools/leak_impact.py` at 3p
+  with the live champion changed `WeightedBot`'s chosen move on **0 of 2138**
+  decisions; `end_turn` eval delta **-0.004 +/- 0.038** against a
+  within-decision spread of 0.015. The cheat is **latent, not active** — at
+  weight 0.01079 the identity term sits below sampling noise — but it goes
+  live the moment hill climbing grows that weight. Caveat: `leak_impact.py`
+  determinizes only the two card decks, so this 0/2138 never exercised the
+  `current_events` component below and is a lower bound.
+  **The leak that was real, and is fixed:** `determinize` shuffled
+  `civil_deck` and `military_deck` but never `current_events`, so every
+  `end_turn` the beam expanded revealed the true next event — 100.0%
+  true-card before the fix, 38.3% after, moving 78 of 3448 beam picks (2.3%)
+  at 3p. Closed in `engine/bots/plan.py`'s `determinize`; pinned by
+  `tests/test_search_root_is_determinized.py`.
 * **M4 must use an objective that scores *differences between sibling moves*,
   not the value of a position.** §3b measures the Monte-Carlo alternative
   losing 400/400 while being a materially *better* outcome predictor, on a
