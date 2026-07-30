@@ -117,9 +117,92 @@ net whose 1-ply lineage the beam does not share. Stage 0 is skipped once
 | vacuity guard | none | hard warning at pair_acc >= 0.95 | a target the model already satisfies must fail loudly, not silently burn 41 hours |
 | gate | 1-ply vs 1-ply | **beam vs beam** | gate the policy that actually ships |
 | yardstick | vs linear champion at 1 ply | vs `plan:champion,width=8` | compare at equal search, per `docs/TRANSFER_TEST.md` |
+| yardstick cadence | promotion iterations only | **every iteration** | iterations 3, 6 and 8 have `-` in `vs_planchamp`; an anchor curve with holes in it cannot show a trend |
+| yardstick n | 72 | **240** | at n=72 the CI is +-0.11 and every anchor score ever recorded sits inside every other one's interval |
+| missing measurement | written as `win=0.0000` | written as `-`, never a number | a reference run that completed zero games was recorded as a 0-72 defeat (row 4 of `curve.tsv`) |
+| promotion rule | self-play only | **self-play AND anchor** | see below |
 
-The promotion rule is unchanged and was never the problem: promote iff the 95%
-CI lower bound of the candidate's win rate clears 0.5.
+### 5.1 The promotion rule is no longer self-referential
+
+It used to be: promote iff the 95% CI lower bound of the candidate's
+beam-vs-beam win rate over the incumbent clears 0.5. That rule is necessary and
+was never wrong, but on its own it is a closed loop -- it only ever asks
+whether the candidate beats the last thing this same process produced, and
+drift satisfies that as readily as learning does.
+
+It did. Over iterations 1-7 self-play culture climbed 116 -> 143 and four
+candidates promoted, while the fixed anchor (`plan:champion_2p`, width 8) did
+not move: 0.4028, 0.3472, 0.3680, 0.3958, all n=72, all inside each other's
++-0.11 intervals, culture margin -16.2, -21.1, -18.7, -14.1. The loop was
+measuring its own reflection.
+
+This is the same treadmill `docs/CULTURE_GAP.md` describes for the weight hill
+climb, and it is *not* the v1 failure -- v1 never promoted at all
+(`docs/NEURAL_LOOP_NULL.md`). v2 promotes and gets stronger against itself. The
+question this change answers is whether it is getting stronger against anything
+else.
+
+**Read the flatness narrowly.** It is flatness *within this run's first seven
+iterations*, not a verdict on the neural line, which has climbed a long way
+against the champion:
+
+| stage | vs the champion | source |
+|---|---|---|
+| MC value regression, 1 ply | 0.070 +- 0.035 | `docs/NEURAL_EVAL.md` §results |
+| pairwise ranking, 1 ply | 0.095 +- 0.041 | `docs/NEURAL_EVAL.md` Stage 1b |
+| this loop, beam vs beam | ~0.40 +- 0.11 | `loop2/curve.tsv`, iterations 1-7 |
+
+0.095 -> ~0.40 is most of the distance from "not a contender" to "a contender",
+and the search-backed target plus the Stage 0 bootstrap is what bought it. What
+has stalled is the *last* stretch, and the reason it is hard to see is that the
+gate measuring it was pointed at the loop's own output. Nothing here says the
+approach is a dead end; it says the instrument was.
+
+So promotion now requires **both**, logged separately as `ARM A` and `ARM B` in
+`loop2/master.log` so a blocked promotion always names the arm that blocked it:
+
+* **Arm A, self-play** -- the existing test: candidate vs incumbent, beam vs
+  beam, CI lower bound over 0.500.
+* **Arm B, anchor** -- no significant regression against the frozen champion:
+  the candidate's win rate vs `plan:champion_2p` must not sit more than one
+  standard error *of the difference* (`sqrt(se_cand^2 + se_inc^2)`, se = ci/1.96)
+  below the incumbent's own score against that same opponent. The incumbent's
+  score is carried in `loop2/anchor_best.txt`, written only on promotion, so it
+  always describes whatever `best_search.pt` currently is.
+
+Arm B is deliberately **not** "beat the champion". The net is ~14pp behind it;
+a beat-it gate would freeze the run rather than fix it. It is "do not get worse
+than the net you are replacing on the one opponent that cannot move". At n=240
+the band is ~0.045, so a candidate has to give up about 4.5pp on the anchor
+before arm B blocks it -- wide enough to pass real progress, narrow enough that
+seven iterations of sideways drift do not all pass.
+
+This respects `NEURAL_LOOP_NULL.md` 5.3 ("the gate -- head-to-head play under
+the search that will actually be deployed -- is the only promotion criterion").
+Arm B is also head-to-head play under the deployed search; it is a second
+opponent, not a second *kind* of evidence. No offline metric gates anything.
+
+Arm B fails **closed** if its measurement produced no games, because promoting
+on an unevaluated gate is the hole this change exists to close. It fails
+**open** in exactly one place -- seeding, when no incumbent baseline exists yet
+-- and says so in the log when it does.
+
+**The floor is loose for the first iteration or two after a restart.** The band
+is `sqrt(se_cand^2 + se_inc^2)`, so it is only as tight as the *incumbent's*
+estimate, and the incumbent's estimate is whatever precision it was measured at
+when it was promoted. Carrying forward iteration 7's real anchor (0.3958
++-0.1130, n=72) against a candidate measured at n=240 gives
+
+    floor = 0.3958 - sqrt((0.063/1.96)^2 + (0.1130/1.96)^2) = 0.3298
+
+against a steady-state floor of ~0.351 once both sides are n=240. So a
+candidate that has given up ~6.6pp on the anchor can still promote immediately
+after the upgrade, where later it would need to stay within ~4.5pp. This is
+correct behaviour -- a gate must not reject on a baseline it does not trust --
+but it means **arm B gates more weakly for the first iteration or two than it
+will at steady state**, and an early promotion should not be read as evidence
+the anchor is holding. The seeding run measures the incumbent at n=240
+precisely to shorten that window to one iteration.
 
 ## 6. Kill conditions, pre-registered
 
@@ -132,7 +215,18 @@ informative. This one stops if any of these fire:
 2. No promotion in **15** iterations **and** the pooled candidate win rate's CI
    excludes 0.5. That is the signature of a systematic regression, not of a
    hard search; it was visible by iteration ~10 last time.
-3. `vs plan:champion` flat across 10 reference measurements.
+3. `vs plan:champion` flat across 10 reference measurements. These are now one
+   per iteration rather than one per promotion, so this condition is reached in
+   10 iterations (~5.5h) instead of "whenever enough promotions happen to
+   accumulate ten of them" -- which over iterations 1-8 meant four measurements
+   in nine hours. Flat is judged at n=240 (+-0.063), not n=72 (+-0.11); the old
+   sizing could not have distinguished flat from a 5pp climb either way, which
+   is the more embarrassing half of this condition's history.
+
+Arm B of the promotion gate (§5.1) is not a kill condition and must not be
+mistaken for one. It stops a *regression* on the anchor from being promoted; it
+does not stop a run that is merely going nowhere. Condition 3 is still what
+ends such a run.
 
 ## 7. Cost
 
@@ -147,6 +241,22 @@ Measured on the desktop (i7-14700F, one torch thread per process):
 
 So the beam is ~14x the 1-ply bot, which is why the gate is fanned out over
 disjoint seed ranges (`experiments/pool_summary.py`) instead of run serially.
+
+**Wall clock per iteration**, read off `loop2/master.log`'s `== ITER` timestamps
+on the desktop (2p, `GENW=GATEW=6`, six clean iterations):
+
+| phase | before | after |
+|---|---|---|
+| gen + train + self-play gate | ~22m40s | ~22m40s |
+| anchor match | ~3m at n=72, on promotion iterations only | ~10m at n=240, **every** iteration |
+| **iteration total** | 23m (no anchor) / 26m (anchor) | **~33m** |
+
+That is the price of a yardstick that can resolve the effects we are chasing,
+and it is the one cost of this change. It stays under the 45min `STALE_BEAT`
+reap threshold in the driver with room to spare -- but note that threshold is
+about the gap between *heartbeats*, not iteration length, and `beat_wait`
+covers the anchor fan-out like every other phase, so a longer anchor cannot
+cause a false reap.
 
 Two throughput notes that cost real time to find:
 

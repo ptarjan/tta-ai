@@ -31,9 +31,18 @@ def parse(path):
 def main():
     rows = [r for r in (parse(p) for p in sys.argv[1:]) if r and r.get("n")]
     if not rows:
-        print("SUMMARY win=0.0000 ci=1.0000 neural=0.0 opp=0.0 margin=0.0 "
+        # NO SHARDS IS NOT A SCORE OF ZERO.  This used to print
+        # `win=0.0000 ci=1.0000` and exit 0, and experiments/neural_search_loop.sh
+        # wrote that 0.0000 into curve.tsv as an observation -- see row 4 of the
+        # desktop's loop2/curve.tsv, which records a reference match that never
+        # ran as a 0-72 defeat.  A number that parses is the whole problem, so
+        # the win rate and CI are emitted as `NA`: any caller scraping them with
+        # a numeric pattern now gets nothing instead of a plausible lie.  The
+        # n/errs/shards counters stay numeric because 0 is the true count and
+        # callers test them.  Exit 3 so a caller that checks status sees it too.
+        print("SUMMARY win=NA ci=NA neural=NA opp=NA margin=NA "
               "n=0 errs=0 shards=0")
-        return
+        return 3
     n = sum(r["n"] for r in rows)
     wm = sum(r["win"] * r["n"] for r in rows) / n
     cam = sum(r["neural"] * r["n"] for r in rows) / n
@@ -50,4 +59,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

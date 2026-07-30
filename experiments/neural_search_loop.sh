@@ -50,7 +50,25 @@ LAM=1.0
 VWEIGHT=${VWEIGHT:-1}
 EPS=0.08
 CHAMP=analysis/frozen/champion_2p.json
-REFEVERY=5
+
+# Games in the ANCHOR match -- us vs plan:champion_2p, the strongest bot on
+# record and the only yardstick in this loop that does not move.  Was 72, run
+# on promotion iterations only; both of those were wrong.
+#
+#   n=72  -> 95% CI is about +-0.11.  Every anchor score ever recorded (0.4028,
+#           0.3472, 0.3680, 0.3958) sits inside every other one's interval, so
+#           seven iterations of "progress" are statistically indistinguishable
+#           from a flat line.  A yardstick that cannot resolve the ~5pp changes
+#           we are trying to make is not measuring anything.
+#   n=240 -> about +-0.063 (40 games x 6 shards), which can.
+#
+# Cost, measured off loop2/master.log timestamps on the desktop (six clean
+# iterations, 2p, 6 workers): an iteration with no anchor run is ~22m40s and
+# one with the old n=72 anchor is ~26m, so the anchor is ~3min at n=72 and
+# ~10min at n=240.  Running it EVERY iteration therefore puts an iteration at
+# ~33min, up from ~23-26min.  That is the price of a yardstick that works, and
+# it stays under the 45min STALE_BEAT reap threshold below with room to spare.
+REFN=${REFN:-240}
 
 mkdir -p loop2 iterdata2 checkpoints teacherdata
 BEST=checkpoints/best_search.pt
@@ -59,6 +77,12 @@ CURVE=loop2/curve.tsv
 PAUSE=~/tta-ai/PAUSE
 PIDFILE=loop2/driver.pid
 BEAT=loop2/driver.beat
+# The incumbent's own anchor score, carried forward from the iteration that
+# promoted it.  Two fields: `win ci`.  See the anchor gate in step (4).
+ANCHORF=loop2/anchor_best.txt
+# What curve.tsv holds when a measurement did not happen.  Deliberately not a
+# number: see `fanout` below.
+NULL='-'
 
 # ---- single driver, enforced -----------------------------------------------
 # The guard kills python.exe only, so THIS bash survives a game (deliberately:
@@ -162,26 +186,116 @@ install_ckpt() {   # install_ckpt SRC DST
   cp "$tmp" "$dst"; rm -f "$tmp"; return 1
 }
 
-# ---------------------------------------------------------------- gate
-# Fan the head-to-head out over disjoint seed ranges and pool.  A beam-vs-beam
-# game is ~18 cpu-s, so a serial n=200 gate is an hour; this is ~8 minutes.
-gate_parallel() {   # gate_parallel CAND OPP PREFIX
-  local cand=$1 opp=$2 prefix=$3
-  local per=$(( (GATE + GATEW - 1) / GATEW ))
+# ---------------------------------------------------------------- measurement
+# Pull a field out of a pooled SUMMARY line.  Returns empty if absent, which is
+# what every caller below tests for -- `win=NA` must never parse as a number.
+sfield() { printf '%s' "$2" | sed -n "s/.*[[:space:]]$1=\\(-\\?[0-9.]*\\).*/\\1/p"; }
+
+# say() on STDERR.  `say` tees to stdout, so calling it inside a function whose
+# stdout the caller captures with $(...) -- which is every measurement function
+# below -- would splice log prose into the SUMMARY string the caller then
+# parses with sfield.  The retry path is exactly where that happens: attempt 1
+# logs three lines, attempt 2 succeeds, and the caller's "win" becomes those
+# three lines plus a number.  Diagnostics go to stderr; only the measurement
+# goes to stdout.  Both still reach loop2/master.log (via tee) and master.out
+# (via the driver's 2>&1).
+sayerr() { echo "$@" | tee -a "$LOG" >&2; }
+
+# A MEASUREMENT THAT PRODUCED NO GAMES IS NOT A SCORE OF ZERO.
+#
+# This is the data-integrity half of this file.  `pool_summary.py` used to
+# print `win=0.0000 ci=1.0000 ... n=0 shards=0` and exit 0 when every shard was
+# missing or unparseable, and the loop wrote that 0.0000 into curve.tsv as if
+# it were an observation.  Row 4 of the desktop's curve says
+# `vs_planchamp=0.0000` and what actually happened is that the reference run
+# did not run -- indistinguishable, after the fact, from the net being beaten
+# 0-72 by the champion.  A plausible number standing in for absent work is
+# strictly worse than a gap, because a gap cannot be averaged into a trend.
+#
+# Same class of failure as the zero-game alarm in the hillclimb league (commit
+# 9018624): work that completes zero games must say so loudly instead of
+# quietly reporting on an empty sample.  Same remedy, scaled to this loop's
+# risk -- the league arm halts behind a sentinel because it would otherwise
+# crash-loop for hours; here one bad fan-out is recoverable, so:
+#
+#   1. log it loudly, with the summary line that came back, so it is
+#      diagnosable and not just a count;
+#   2. retry the whole fan-out ONCE (the usual cause is the gaming guard
+#      killing every worker, which is transient by definition);
+#   3. on a second failure return 1 and print NOTHING.  Callers write $NULL to
+#      curve.tsv and refuse to let the absent number drive a decision.
+#
+# Never widen this to "some shards came back".  A partial fan-out is a smaller
+# but honest sample and pool_summary weights it correctly; zero shards is the
+# only case that is a lie.
+fanout() {   # fanout CKPT OPPSPEC NGAMES PREFIX LABEL  -> SUMMARY on stdout
+  local ckpt=$1 opp=$2 total=$3 prefix=$4 label=$5
+  local per attempt w out n shards
+  per=$(( (total + GATEW - 1) / GATEW ))
   per=$(( (per + 1) / 2 * 2 ))          # even, so seats stay balanced
-  rm -f "${prefix}"_*.log
-  for w in $(seq 0 $((GATEW-1))); do
-    low experiments/neural_eval.py --ckpt "$cand" --search plan \
-        --width "$WIDTH" --nodes "$NODES" --opponent "nplan:$opp" \
-        --games "$per" --players 2 --device cpu --threads 1 --report 1000 \
-        --seed0 $((w*1000)) > "${prefix}_${w}.log" 2>&1 &
+  for attempt in 1 2; do
+    rm -f "${prefix}"_*.log
+    for w in $(seq 0 $((GATEW-1))); do
+      low experiments/neural_eval.py --ckpt "$ckpt" --search plan \
+          --width "$WIDTH" --nodes "$NODES" --opponent "$opp" \
+          --games "$per" --players 2 --device cpu --threads 1 --report 1000 \
+          --seed0 $((w*1000)) > "${prefix}_${w}.log" 2>&1 &
+    done
+    beat_wait
+    out=$("$PY" experiments/pool_summary.py "${prefix}"_*.log 2>/dev/null)
+    n=$(sfield n "$out"); shards=$(sfield shards "$out")
+    if [ -n "$n" ] && [ "${n%%.*}" -gt 0 ] 2>/dev/null \
+       && [ -n "$shards" ] && [ "${shards%%.*}" -gt 0 ] 2>/dev/null; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    sayerr "  *** NO GAMES: $label produced n=${n:-?} shards=${shards:-?} on attempt $attempt/2"
+    sayerr "  ***   pooled line was: ${out:-<no output>}"
+    sayerr "  ***   (guard kill, or every worker died -- see ${prefix}_*.log)"
   done
-  beat_wait
-  "$PY" experiments/pool_summary.py "${prefix}"_*.log
+  sayerr "  *** MEASUREMENT FAILED: $label produced no games twice; recording $NULL, NOT a score."
+  sayerr "  ***   A missing measurement is never written as 0.0000 (see fanout in this file)."
+  return 1
 }
 
+# The promotion gate: beam vs beam, the policy that actually ships.  A
+# beam-vs-beam game is ~18 cpu-s, so a serial n=200 gate is an hour; the
+# fan-out over disjoint seed ranges is ~8 minutes.
+gate_parallel() {   # gate_parallel CAND OPP PREFIX
+  fanout "$1" "nplan:$2" "$GATE" "$3" "gate $(basename "$1") vs $(basename "$2")"
+}
+
+# The anchor match: us vs the strongest bot on record, same search both sides.
+anchor_run() {      # anchor_run CKPT PREFIX LABEL
+  fanout "$1" "plan:$CHAMP,width=8" "$REFN" "$2" "anchor $3 vs plan:champion"
+}
+
+# curve.tsv schema.  The last four columns are new with the anchor gate:
+#   vs_planchamp  the CANDIDATE's anchor win rate this iteration (was: the
+#                 incumbent's, and only on promotion iterations).  This is the
+#                 number the gate tests, so it is the one that has to be here.
+#   anchor_ci     its 95% half-width, so a reader can tell 0.36 +-0.06 from
+#                 0.36 +-0.11 without going back to master.log.
+#   inc_anchor    the INCUMBENT's anchor at decision time.  The curve of the
+#                 net that actually ships is this column, not vs_planchamp;
+#                 they coincide exactly on promotion rows.
+#   selfplay_ok / anchor_ok
+#                 the two promotion criteria, separately, so a blocked
+#                 promotion says which half blocked it.
+# Any of them may be '-' ($NULL): see fanout().
+CURVE_HDR=$(printf 'iter\tpromoted\twin\tci\tcand_cul\tbest_cul\tdisagree\tvs_planchamp\tts\tanchor_ci\tinc_anchor\tselfplay_ok\tanchor_ok')
+CURVE_NCOL=13
 if [ ! -f "$CURVE" ]; then
-  printf 'iter\tpromoted\twin\tci\tcand_cul\tbest_cul\tdisagree\tvs_planchamp\tts\n' > "$CURVE"
+  printf '%s\n' "$CURVE_HDR" > "$CURVE"
+elif [ "$(head -1 "$CURVE" 2>/dev/null)" != "$CURVE_HDR" ]; then
+  # Migrate in place rather than starting a new file.  The anchor curve is the
+  # entire point of this change and it has to stay continuous across the
+  # upgrade; a header that disagrees with its own rows is how a reader ends up
+  # plotting anchor_ci as a win rate.
+  say "migrating $CURVE to the ${CURVE_NCOL}-column schema (old rows padded with '$NULL')"
+  awk -v hdr="$CURVE_HDR" -v n="$CURVE_NCOL" -v nul="$NULL" \
+      'BEGIN{FS=OFS="\t"; print hdr} NR>1{for(i=NF+1;i<=n;i++)$i=nul; print}' \
+      "$CURVE" > "$CURVE.mig" && mv -f "$CURVE.mig" "$CURVE"
 fi
 
 # ---------------------------------------------------------------- STAGE 0
@@ -221,13 +335,43 @@ if [ ! -f "$BEST" ]; then
   # sides under the beam.  Informational: the bootstrap starts a new lineage
   # either way, because the old net was never trained on a turn-boundary state.
   if [ -f checkpoints/best.pt ]; then
-    say "  STAGE 0 boot vs old best (both under the beam): $(gate_parallel checkpoints/boot.pt checkpoints/best.pt loop2/gate_boot)"
+    say "  STAGE 0 boot vs old best (both under the beam): $(gate_parallel checkpoints/boot.pt checkpoints/best.pt loop2/gate_boot || echo "$NULL no data")"
   fi
   install_ckpt checkpoints/boot.pt "$BEST"
   say "  STAGE 0 done -> $BEST"
 fi
 
-say "LOOP START $(date)  best=$BEST width=$WIDTH nodes=$NODES games=$GAMES gate=$GATE"
+say "LOOP START $(date)  best=$BEST width=$WIDTH nodes=$NODES games=$GAMES gate=$GATE refn=$REFN"
+
+okword() { [ "${1:-0}" = 1 ] && printf 'PASS' || printf 'BLOCK'; }
+
+# ------------------------------------------------------ incumbent anchor seed
+# Arm B of the gate compares the candidate's score against the frozen champion
+# with the INCUMBENT's score against that same champion.  The incumbent's score
+# is normally inherited from the iteration that promoted it -- it was measured
+# then, as that iteration's candidate, so steady state costs nothing extra.
+# But on the first run after this gate was added, and on a fresh box, there is
+# no such record, and an arm with no baseline is an arm that always passes.
+#
+# So measure it once, here, instead of defaulting to a number.  This is the
+# ONLY place the anchor gate fails open, and it says so when it does.
+if [ ! -s "$ANCHORF" ]; then
+  say "no incumbent anchor on record -- measuring $BEST vs plan:champion once to seed arm B"
+  if AS=$(anchor_run "$BEST" loop2/anchor_seed "incumbent"); then
+    # Only ever write two real numbers.  A blank field here would read back as
+    # awk 0, which silently turns arm B's floor into "beat -0.045" -- a gate
+    # that always passes, which is worse than no gate because it looks like one.
+    sw=$(sfield win "$AS"); sc=$(sfield ci "$AS")
+    if [ -n "$sw" ] && [ -n "$sc" ]; then
+      printf '%s %s\n' "$sw" "$sc" > "$ANCHORF"
+      say "  seeded incumbent anchor: $AS"
+    else
+      say "  *** anchor seed returned games but no parseable win/ci: $AS"
+    fi
+  else
+    say "  *** could not seed the incumbent anchor; arm B ABSTAINS until a promotion sets one"
+  fi
+fi
 
 start_it=$(( $(awk 'END{print NR-1}' "$CURVE" 2>/dev/null || echo 0) + 1 ))
 [ "$start_it" -lt 1 ] && start_it=1
@@ -285,43 +429,83 @@ for it in $(seq "$start_it" "$ITERS"); do
       > "loop2/train_it${it}.log" 2>&1
   [ -f checkpoints/cand.pt ] || { say "  no cand (killed?) -> skip iter $it"; continue; }
 
-  # (3) gate: beam vs beam, the policy that actually ships
-  SUM=$(gate_parallel checkpoints/cand.pt "$BEST" "loop2/gate_it${it}")
-  win=$(echo "$SUM" | sed -n 's/.*win=\([0-9.]*\).*/\1/p')
-  ci=$(echo "$SUM" | sed -n 's/.*ci=\([0-9.]*\).*/\1/p')
-  ccul=$(echo "$SUM" | sed -n 's/.*neural=\([0-9.-]*\).*/\1/p')
-  bcul=$(echo "$SUM" | sed -n 's/.*opp=\([0-9.-]*\).*/\1/p')
-  win=${win:-0}; ci=${ci:-1}; ccul=${ccul:-0}; bcul=${bcul:-0}
+  # (3) GATE ARM A -- self-play: beam vs beam, the policy that actually ships.
+  # This is the criterion the loop has always had.  On its own it is
+  # self-referential: it only ever asks "is this better than the last thing
+  # this same process produced", which is satisfied by drift as readily as by
+  # learning.  Seven iterations of it moved self-play culture 116 -> 143 while
+  # the fixed anchor did not move at all.  Hence arm B.
+  win=$NULL; ci=$NULL; ccul=$NULL; bcul=$NULL; selfplay_ok=0
+  if SUM=$(gate_parallel checkpoints/cand.pt "$BEST" "loop2/gate_it${it}"); then
+    win=$(sfield win "$SUM");   ci=$(sfield ci "$SUM")
+    ccul=$(sfield neural "$SUM"); bcul=$(sfield opp "$SUM")
+    selfplay_ok=$(awk -v w="$win" -v c="$ci" 'BEGIN{print (w-c>0.5)?1:0}')
+    say "  gate it$it  ARM A self-play : win=$win ci=$ci lo=$(awk -v w="$win" -v c="$ci" 'BEGIN{printf "%.4f", w-c}') vs 0.5000 -> $(okword "$selfplay_ok")  cul=$ccul vs $bcul"
+  else
+    # No games is not a loss.  Refuse to promote on an absent measurement, and
+    # write $NULL rather than the 0.0000 that used to land here.
+    say "  gate it$it  ARM A self-play : NO DATA -> $(okword 0)"
+  fi
 
-  # (4) promote iff the 95% CI lower bound clears 0.5
-  promote=$(awk -v w="$win" -v c="$ci" 'BEGIN{print (w-c>0.5)?1:0}')
+  # (4) GATE ARM B -- the frozen champion.  THIS is the arm that kills the
+  # treadmill, by making the one yardstick that does not move into a gate
+  # instead of a spectator.
+  #
+  # The test is deliberately NOT "beat the champion" -- the net is currently
+  # ~14pp behind it and would never promote again, which would freeze the run
+  # rather than fix it.  It is "do not get WORSE against the champion than the
+  # net you are replacing": the candidate's anchor win rate must not sit more
+  # than one standard error below the incumbent's.
+  #
+  # One standard error OF THE DIFFERENCE, sqrt(se_cand^2 + se_inc^2), not of
+  # either score alone -- both sides are estimates and the comparison has to
+  # carry both variances or it rejects on noise.  se = ci/1.96 since
+  # pool_summary reports a 95% half-width.  At n=240 a side is se~0.032, so the
+  # band is ~0.045: a candidate has to give up about 4.5pp on the anchor before
+  # arm B blocks it.  Wide enough to let real progress through, narrow enough
+  # that seven iterations of sideways drift do not all pass.
+  cwin=$NULL; cci=$NULL; iwin=$NULL; ici=$NULL; anchor_ok=0
+  if AS=$(anchor_run checkpoints/cand.pt "loop2/ref_it${it}" "cand it$it"); then
+    cwin=$(sfield win "$AS"); cci=$(sfield ci "$AS")
+    say "  REF it$it  cand vs plan:champion -> $AS"
+    if [ -s "$ANCHORF" ]; then
+      read -r iwin ici < "$ANCHORF"
+      anchor_ok=$(awk -v cw="$cwin" -v cc="$cci" -v iw="$iwin" -v ic="$ici" \
+        'BEGIN{se=sqrt((cc/1.96)^2+(ic/1.96)^2); print (cw >= iw - se) ? 1 : 0}')
+      say "  gate it$it  ARM B anchor   : cand=$cwin+-$cci vs incumbent=$iwin+-$ici floor=$(awk -v iw="$iwin" -v ic="$ici" -v cc="$cci" 'BEGIN{printf "%.4f", iw-sqrt((cc/1.96)^2+(ic/1.96)^2)}') -> $(okword "$anchor_ok")"
+    else
+      # Seeding failed earlier; abstain rather than block forever.
+      anchor_ok=1
+      say "  gate it$it  ARM B anchor   : no incumbent baseline -> ABSTAIN (treated as $(okword 1))"
+    fi
+  else
+    # Fails CLOSED, unlike the seed above: once a baseline exists, an anchor
+    # run that produced nothing means arm B could not be evaluated, and
+    # promoting on an unevaluated gate is exactly the hole this change closes.
+    say "  gate it$it  ARM B anchor   : NO DATA -> $(okword 0) (fails closed)"
+  fi
+
+  # (5) promote iff BOTH arms pass.  Both are always logged above, so a blocked
+  # promotion always names which arm blocked it.
+  promote=0
+  [ "$selfplay_ok" = 1 ] && [ "$anchor_ok" = 1 ] && promote=1
   if [ "$promote" = "1" ]; then
     install_ckpt checkpoints/cand.pt "$BEST"
     install_ckpt checkpoints/cand.pt "checkpoints/promoted_s_it${it}.pt"
-    say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul"
+    # The new incumbent's anchor is the score we just measured for it.  Written
+    # only on promotion, so it always describes whatever $BEST currently is.
+    if [ -n "$cwin" ] && [ "$cwin" != "$NULL" ] && [ -n "$cci" ]; then
+      printf '%s %s\n' "$cwin" "$cci" > "$ANCHORF"
+    fi
+    say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin"
   else
-    say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul"
+    say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin  (A=$(okword "$selfplay_ok") B=$(okword "$anchor_ok"))"
   fi
 
-  # (5) the honest yardstick: us vs the strongest bot on record, same search
-  vp="-"
-  if [ $(( it % REFEVERY )) -eq 0 ] || [ "$promote" = "1" ]; then
-    rm -f loop2/ref_it${it}_*.log
-    perr=$(( 40 / GATEW * 2 )); [ "$perr" -lt 2 ] && perr=2
-    for w in $(seq 0 $((GATEW-1))); do
-      low experiments/neural_eval.py --ckpt "$BEST" --search plan \
-          --width "$WIDTH" --nodes "$NODES" --opponent "plan:$CHAMP,width=8" \
-          --games "$perr" --players 2 --device cpu --threads 1 --report 1000 \
-          --seed0 $((w*1000)) > "loop2/ref_it${it}_${w}.log" 2>&1 &
-    done
-    beat_wait
-    RS=$("$PY" experiments/pool_summary.py loop2/ref_it${it}_*.log)
-    vp=$(echo "$RS" | sed -n 's/.*win=\([0-9.]*\).*/\1/p')
-    say "  REF it$it  vs plan:champion -> $RS"
-  fi
-
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$it" "$promote" "$win" "$ci" "$ccul" "$bcul" "$dis" "${vp:--}" "$(date +%s)" >> "$CURVE"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$it" "$promote" "$win" "$ci" "$ccul" "$bcul" "$dis" \
+    "${cwin:-$NULL}" "$(date +%s)" "${cci:-$NULL}" "${iwin:-$NULL}" \
+    "$selfplay_ok" "$anchor_ok" >> "$CURVE"
 
   # keep disk bounded
   old=$((it-WINDOW))

@@ -51,7 +51,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>wscript.exe</Command>
-      <Arguments>//B //Nologo "C:\Users\micro\tta-ai\tools\hidden_launch.vbs" "C:\Users\micro\tta-ai\run_loop.cmd"</Arguments>
+      <Arguments>//B //Nologo "C:\Users\micro\tta-ai\tools\hidden_launch.vbs" "C:\Users\micro\tta-ai\experiments\deploy\run_loop.cmd"</Arguments>
       <WorkingDirectory>C:\Users\micro\tta-ai</WorkingDirectory>
     </Exec>
   </Actions>

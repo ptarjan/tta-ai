@@ -7,6 +7,7 @@ would either promote regressions or freeze the loop.  Torch-free, so it runs in
 tools/gate.sh on the Mac.
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,14 +74,50 @@ class TestPoolSummary(unittest.TestCase):
             self.assertAlmostEqual(float(r["win"]), 0.7, places=4)
             self.assertEqual(int(r["shards"]), 1)
 
-    def test_no_shards_is_a_safe_non_promotion(self):
-        """Every worker dying (a guard kill) must read as ci=1.0 so that
-        `win - ci > 0.5` is false and nothing gets promoted on no evidence."""
+    def test_no_shards_is_not_a_score_at_all(self):
+        """Every worker dying (a guard kill) must not yield a parseable score.
+
+        This test used to require `win=0.0000 ci=1.0000`, on the reasoning that
+        `win - ci > 0.5` is then false and nothing gets promoted on no
+        evidence.  That much was true, and it is still true -- but it was only
+        half the contract, and the missing half cost a real measurement: the
+        loop ALSO writes the pooled win rate into loop2/curve.tsv, and row 4 of
+        the desktop's curve therefore records a reference match that never ran
+        as `vs_planchamp=0.0000`, indistinguishable afterwards from the net
+        being beaten 0-72 by the champion.
+
+        Failing closed on the promotion decision is not enough if the same
+        number is also a datum.  So the scores are now `NA` -- unparseable by
+        the numeric pattern the loop scrapes with, hence impossible to record
+        as an observation -- and the exit status is nonzero.  Both halves of
+        the original intent survive: no promotion on no evidence, and now no
+        data point either.
+        """
         with tempfile.TemporaryDirectory() as d:
-            r = _pool([os.path.join(d, "nope.log")])
-            self.assertEqual(int(r["n"]), 0)
-            self.assertGreaterEqual(float(r["ci"]), 1.0)
-            self.assertLess(float(r["win"]) - float(r["ci"]), 0.5)
+            out = subprocess.run(
+                [sys.executable, SCRIPT, os.path.join(d, "nope.log")],
+                capture_output=True, text=True, cwd=ROOT)
+            self.assertEqual(out.returncode, 3, out.stderr)
+            line = out.stdout.strip()
+            # the counters are honest zeroes; callers test them for emptiness
+            self.assertIn("n=0", line)
+            self.assertIn("shards=0", line)
+            # the scores are not numbers
+            self.assertIsNone(re.search(r"\swin=(-?[0-9.]+)", line))
+            self.assertIsNone(re.search(r"\sci=(-?[0-9.]+)", line))
+            self.assertNotIn("win=0.0000", line)
+
+    def test_positive_control_a_real_pool_still_scores_and_exits_zero(self):
+        """The matched pair for the test above: the guard must not fire on
+        evidence that does exist."""
+        with tempfile.TemporaryDirectory() as d:
+            out = subprocess.run(
+                [sys.executable, SCRIPT, _shard(d, "a.log", 0.4, 72)],
+                capture_output=True, text=True, cwd=ROOT)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            m = re.search(r"\swin=(-?[0-9.]+)", out.stdout)
+            self.assertIsNotNone(m)
+            self.assertAlmostEqual(float(m.group(1)), 0.4, places=4)
 
     def test_last_summary_wins_within_a_shard(self):
         with tempfile.TemporaryDirectory() as d:

@@ -25,5 +25,22 @@ checkpoints/
 data/
 data2/
 
+# The neural loop's working directories on the desktop training node. These are
+# regenerated output -- self-play shards, per-worker logs, the master log and
+# the learning curve -- and some are multi-GB. They are listed because the
+# desktop is now a real clone of this repo rather than a hand-copied tree (that
+# is how its engine/ silently fell two days behind), and `git status` there has
+# to be readable or nobody will look at it.
+loop/
+loop2/
+iterdata/
+iterdata2/
+teacherdata/
+evalout/
+rankdata/
+probe/
+smoke/
+archive/
+
 # Agent scratch: transcripts and ephemeral worktrees, never part of the project.
 .claude/
