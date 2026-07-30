@@ -406,6 +406,11 @@ hard to interpret and I did not run one.
 
 ## 6. What is still broken after this
 
+* **The 37 cards with 0 dropped keys and 0 visible gain** — territories,
+  units and tactics — are taken up in `docs/CARD_BLINDNESS_MILITARY.md`. Short
+  version: none of them keeps its value in `production`/`effects`, so neither
+  the census above nor the guardrail below could see them, and the ten unit
+  cards were priced *negative* rather than at zero.
 * **Military cards have no per-card pricing at all.** `weighted.py`'s
   `hand_mil_value` is `sum(age + 1)` over the military hand, so every tactic,
   war, aggression and territory of the same age is interchangeable. Tactics
