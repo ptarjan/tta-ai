@@ -26,7 +26,7 @@ Question 1 came back clean on all 39. Questions 2, 3 and 4 did not.
 | special-tech | 12 | clean | clean | **all 12 net negative** | **0.87%** | **BROKEN** |
 | farm/mine | 8 | clean | clean | absolute-not-delta | 1.7 – 11.5% | healthy-with-caveats |
 | lab/temple/library/arena/theater | 16 | clean | clean | absolute-not-delta | 0 – 60.6% | healthy |
-| bonus | 3 | clean | **rule violation** | n/a by construction | no take decision exists | **BROKEN** (handed off) |
+| bonus | 3 | clean | **rule violation** | n/a by construction | no take decision exists | **was BROKEN, fixed in `1c08790`** |
 
 "Pricing" above is the *net* sign of `card_potential`, not whether the keys are
 mapped. Every key on all 39 cards is mapped; the census that reports mapping was
@@ -34,12 +34,12 @@ right about mapping and that is why it missed all three defects.
 
 Three real defects, all confirmed by measurement, none previously known:
 
-* **D1** — the end-of-turn military hand-limit discard is FIFO with no decision,
-  in a step `docs/RULES_SPEC.md:188` explicitly calls "the only step requiring a
-  decision". It discards ~31–37 cards per 2p game, and on a third of the turns
-  it fires it destroys the best defence card in hand when a worse one was
-  available. *Handed to a dedicated lane; the
-  diagnosis is in section 4 and the fix is not in this change.*
+* **D1** — the end-of-turn military hand-limit discard was FIFO with no
+  decision, in a step `docs/RULES_SPEC.md:188` explicitly calls "the only step
+  requiring a decision". It destroyed the best defence card in hand, when a
+  worse one was available, on ~40% of the turns it fired. *Found here, routed to
+  a dedicated lane, and **FIXED on master in `1c08790`** with
+  `docs/MILITARY_DISCARD.md`. Diagnosis in section 4.*
 * **D2** — all 12 special technologies price at a strictly **negative** hand
   value, so the bot is actively repelled from a sixth of the civil deck. Six of
   the twelve are taken zero times in 40 player-games. The cause turns out to be
@@ -464,7 +464,21 @@ Every decision that touches them is therefore one of three, and two are fine
 (BookBot picks the highest `defenseBonus` when defending, `book.py:863`;
 colonisation auto-uses the whole pool). The third is **D1**.
 
-### D1 — the hand-limit discard makes no decision *(handed off, not fixed here)*
+### D1 — the hand-limit discard made no decision *(routed; FIXED on master)*
+
+> **Resolved.** `1c08790` — "The military discard is the player's choice, not
+> FIFO (§6.6 step 1)" — landed the fix, with `docs/MILITARY_DISCARD.md`. The
+> `pop(0)` below is gone; `economy.end_of_turn` now suspends and pushes the
+> player's discard decision through `interact.discard_excess_military`, and
+> returns `False` so the caller resumes it. This section is kept as the
+> diagnosis that routed it, not as an open item.
+>
+> `tools/uncovered_census.py` still reports the FIFO harm figure, but it is now
+> a **counterfactual** — what the old code would have destroyed — kept so the
+> fix stays attributable. On the fixed master, 8 2p games: 106 player-turns over
+> the limit (13.2/game), 166 cards above it (20.8/game), and `pop(0)` would have
+> destroyed the best defence card on 45 of those 106 turns (42.5%).
+
 
 `engine/economy.py:112-116`:
 

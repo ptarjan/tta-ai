@@ -20,9 +20,11 @@ Three numbers per card:
   ``upgrades`` in/out for the production buildings, whose real value is a
   DELTA over the level below and not the absolute number on the card.
 
-Plus the two counters that size the end-of-turn discard defect: how many
-military cards the hand-limit rule throws away per game, and how many of those
-were the single best DEFENCE card in the hand at the time.
+Plus the counters that sized the end-of-turn discard defect (D1): how much
+hand-limit pressure there is, and -- as a COUNTERFACTUAL now that `1c08790` has
+made the discard a real choice -- how often the old `pop(0)` would have
+destroyed the best defence card in the hand.  Kept so the fix stays
+attributable instead of becoming folklore.
 
     nice -n 19 python3 tools/uncovered_census.py --players 2 --games 40 \
         --spec analysis/frozen/champion_2p.json
@@ -77,10 +79,18 @@ class _Watch:
         self.stats, self.db = stats, db
 
     def _note_discard(self, state):
-        """What the hand-limit rule is about to destroy, at a REAL end_turn.
+        """Hand-limit pressure at a REAL end_turn, and what FIFO would cost.
 
         Read off the state at the moment ``end_turn`` is chosen -- before it is
-        applied -- so the hand and the limit are the ones the rule will see.
+        applied -- so the hand and the limit are the ones §6.6 step 1 will see.
+
+        `fifo_would_lose_best` is now a COUNTERFACTUAL, not a measurement of
+        what happens.  `engine/economy.py` used to `pop(0)` and make no
+        decision at all, which is the defect this counter was built to size
+        (docs/UNCOVERED_TYPES.md D1, docs/MILITARY_DISCARD.md).  The player now
+        chooses, so this number no longer describes play -- it describes the
+        size of the hole that was there, and it is kept so the fix stays
+        attributable rather than becoming folklore.
         """
         from engine import effects
         if self.stats is None:
@@ -92,15 +102,15 @@ class _Watch:
         excess = len(hand) - limit
         if excess <= 0:
             return
-        doomed = hand[:excess]                    # economy.py pops from the left
         self.stats["turns_over_limit"] += 1
-        self.stats["discarded"] += excess
+        self.stats["over_limit_by"] += excess
+        doomed = hand[:excess]              # what the OLD pop(0) would have hit
         for n in doomed:
             if self.db.type_of(n) == "bonus":
-                self.stats["bonus_discarded"] += 1
+                self.stats["fifo_would_lose_bonus"] += 1
         best = max(hand, key=_defence_of)
         if best in doomed and _defence_of(best) > 1:
-            self.stats["best_defence_discarded"] += 1
+            self.stats["fifo_would_lose_best"] += 1
 
     def _note(self, state, moves, mv):
         # `("take", idx)` is a ROW SLOT, not a card name (engine/actions.py:376)
@@ -150,8 +160,8 @@ def run(spec, players, games, seed0):
 
     # --- the discard probe (docs/UNCOVERED_TYPES.md D1), counted at the real
     # `end_turn` decision rather than inside the engine.  See `_Watch`.
-    stats = {"discarded": 0, "best_defence_discarded": 0,
-             "bonus_discarded": 0, "turns_over_limit": 0}
+    stats = {"turns_over_limit": 0, "over_limit_by": 0,
+             "fifo_would_lose_bonus": 0, "fifo_would_lose_best": 0}
 
     for g in range(games):
         bots = [_Watch(make_bot(spec, 1000 + i), offers, takes, plays,
@@ -198,12 +208,13 @@ def main(argv=None):
     d = out["discard"]
     print(f"# {a.players}p x{a.games} games  spec={a.spec}")
     over = d["turns_over_limit"] or 1
-    print(f"# hand-limit discards: {d['discarded']} "
-          f"({d['discarded']/g:.2f}/game) over {d['turns_over_limit']} "
-          f"player-turns above the limit; bonus cards among them "
-          f"{d['bonus_discarded']}; best defence card in the doomed prefix "
-          f"{d['best_defence_discarded']} times "
-          f"({100.0*d['best_defence_discarded']/over:.1f}% of those turns)")
+    print(f"# hand-limit pressure: {d['turns_over_limit']} player-turns over "
+          f"the limit ({d['turns_over_limit']/g:.1f}/game), "
+          f"{d['over_limit_by']} cards above it ({d['over_limit_by']/g:.1f}"
+          f"/game).  COUNTERFACTUAL, the old pop(0) would have destroyed the "
+          f"best defence card on {d['fifo_would_lose_best']} of those turns "
+          f"({100.0*d['fifo_would_lose_best']/over:.1f}%) and "
+          f"{d['fifo_would_lose_bonus']} bonus cards.")
     print(f"{'card':26s} {'type':13s} {'offers':>7s} {'takes':>6s} "
           f"{'rate':>6s} {'dev':>5s} {'built':>6s} {'upIn':>5s} "
           f"{'upOut':>6s} {'endW':>5s}")
