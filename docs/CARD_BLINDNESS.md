@@ -482,3 +482,58 @@ Everything above was run for this document; nothing is carried over.
 The one thing this document does **not** contain is a league run. Every
 result here is the *frozen* champion evaluated under better information, not
 a champion retrained with it.
+
+## 9. Operational: changing the evaluator invalidates the cached pool weights
+
+This is the part that is easy to miss, and it costs training time rather than
+correctness, so nothing fails loudly when you get it wrong.
+
+`experiments/hillclimb_league.py:win_rates()` prices every pool opponent from
+`state_Np.json:last_full_check` -- the champion's measured win rate at the last
+full pool check. `hillclimb_pool.saturation_multiplier` then cuts an opponent's
+weight from 1.0 toward `sat_floor` as that rate rises past `sat_lo`, and flags
+it `inert` at the top of the range, where it is dropped from the acceptance
+rotation entirely. The docstring says the rule "cannot go stale: a champion
+that stops beating an opponent gets that opponent's weight back at the next
+check." That is true **within** an engine and false **across** one. The cached
+rates were measured by a different evaluator; after a change like this one they
+describe a bot that no longer exists.
+
+`build()` runs once at process start, so a restart carries the stale weights
+into every generation until the next `--full-check-every` boundary. At the halt
+for this change the muting was **2p: 10 of 22 opponents at >=95%, 3p: 3 of 22,
+4p: 1 of 22** -- concentrated almost entirely in the arm with the longest
+generation.
+
+**The fix is to delete the key, not to re-measure it.** `saturation_multiplier`
+returns 1.0 for `win_rate is None` and `inert` is `False` unless a rate exists:
+
+```python
+if win_rate is None:
+    return 1.0          # never measured -> presumed informative
+...
+e.inert = e.sat <= self.sat_floor + 1e-9 and e.win_rate is not None
+```
+
+so an absent `last_full_check` yields a fully un-muted pool at full weight,
+which is exactly the honest post-change state: no valid evidence, therefore no
+opponent muted. The next scheduled full check then re-measures all 22 at full
+`--check-games` precision, because nothing is flagged inert and so nothing is
+sampled at the reduced `inert_games` rate.
+
+A forced full check at restart was considered and rejected: it costs 2p ~58
+min, 3p ~10 min, 4p ~26 min of *pure checking* to buy information the next
+scheduled check produces for free, while nulling the key costs nothing and
+leaves the pool in the strictly safer direction (over-weighting a beaten
+opponent wastes games; under-weighting a live one biases acceptance).
+
+**Checklist when you change the evaluator:**
+
+1. Stop the arms with `experiments/logs/stop_league_{2,3,4}p.json` and wait for
+   the generation boundary -- climbers do not poll mid-generation.
+2. `git pull` only once no climber is running.
+3. Back up `state_Np.json`, then delete its `last_full_check` key.
+4. Remove the sentinels and let `watchdog.sh` relaunch, so the REQUIRED-flag
+   assertion re-checks the arg list instead of you hand-typing it.
+5. Confirm each arm logs `0 opponents measured` on its startup pool line and
+   then advances a generation.
