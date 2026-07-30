@@ -69,7 +69,7 @@ Legend: **OK** = code matches the printed rule, with a test.
 | War over Territory: 1 token + 1 per full 5 advantage, capped by the loser's bank | `[card]`, `[FAQ p.11]` | `events.py:579-582` | OK |
 | War over Culture: 5 + advantage, capped by the victim's culture | `[card]`, `[FAQ p.11]` | `events.py:587-590` | OK |
 | War over Technology: science = advantage, capped by the loser's science | `[card]`, `[FAQ p.11]` | `events.py:583-586` | OK for the science branch |
-| War over Technology: victor may take blue special techs instead | `[CoL p.3]`, `[FAQ p.11]` | not implemented | **GAP 1** |
+| War over Technology: victor may take blue special techs instead | `[CoL p.3]`, `[FAQ p.11]` | ~~not implemented~~ `interact.war_tech_spoils` (`a7a5ef1`, 2026-07-30) | ~~**GAP 1**~~ RESOLVED |
 | Card discarded either way | `[CoL p.3]` | `events.py:571` | OK |
 | Declared wars survive antiquation; pacts do not | `[CoL p.3]` | `game._antiquate:176-198` | OK |
 | A pact accepted after declaration but before resolution counts | `[FAQ p.11]` | live `state_stats` at resolution | OK |
@@ -262,15 +262,21 @@ partner needed a **6-point** strength edge instead of 1.
 
 ## Gaps left unfixed (documented, not repaired)
 
-**GAP 1 — War over Technology cannot take blue special technologies.**
-`[CoL p.3]` and `[FAQ p.11]` let the victor take special techs instead of some
-or all of the science, with the no-duplicate and higher-level-replaces rules.
-`events.resolve_war:583-586` implements only the science branch. Because the
-choice belongs to the victor, taking science is always available, so this is an
-under-implementation rather than a wrong answer — except when the loser has
-little science but valuable blue techs, where the engine pays the victor less
-than the rules do. Left alone: it needs a new choice point plus special-tech
-transfer, and no bot has ever declared a war.
+**GAP 1 — ~~War over Technology cannot take blue special technologies.~~
+RESOLVED 2026-07-30 (`a7a5ef1`).** ~~`[CoL p.3]` and `[FAQ p.11]` let the
+victor take special techs instead of some or all of the science, with the
+no-duplicate and higher-level-replaces rules. `events.resolve_war:583-586`
+implements only the science branch. Because the choice belongs to the victor,
+taking science is always available, so this is an under-implementation rather
+than a wrong answer — except when the loser has little science but valuable
+blue techs, where the engine pays the victor less than the rules do. Left
+alone: it needs a new choice point plus special-tech transfer, and no bot has
+ever declared a war.~~ `resolve_war` now branches on the card's own
+`orTakesSpecialTechnologiesOfSameTotalScienceCost` key and offers the steal
+through `interact.war_tech_options`/`war_tech_spoils` on the existing
+pending-stack machinery. Every evaluator-driven bot gets the choice for free
+by construction; see `docs/WAR_OVER_TECHNOLOGY.md` for the full
+implementation and which bot needed new policy (BookBot).
 
 **GAP 2 — Plunder's food/resource split is chosen greedily, not by the
 attacker.** `[FAQ p.7]` says the aggressor chooses the mix.

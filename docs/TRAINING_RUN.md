@@ -2,10 +2,24 @@
 
 Terse operational note, not a write-up.
 
+## 2026-07-30: 3p and 4p reverted off QuiescentBot
+
+**Superseded, see this entry rather than the "stay on `quiescent:levels=1`"
+line right below.** `1fbf128` switched the 3p and 4p challengers back to
+`plan:width=2`: QuiescentBot resolves a defender's `defense` decision by
+reading the defender's real hidden `hand_military`, which the shipped bot
+cannot do against a human, and the gating experiment `docs/DEEPER_SEARCH.md`
+§6.2 asked for before promoting it to challenger was never run. 3p gen 1315
+and 4p gen 370 were discarded (backed up outside the repo) rather than
+carried forward, since every generation trained under that challenger had
+tuned weights to exploit hidden information the ship policy will not have.
+See `docs/DEEPER_SEARCH.md` §6.2 for the full arc.
+
 ## 2026-07-29: the 2p arm now trains under PlanBot
 
-**The three arms are no longer identical.** 2p trains under
-`plan:width=2`; 3p and 4p stay on `quiescent:levels=1`.
+**The three arms are no longer identical.** ~~2p trains under
+`plan:width=2`; 3p and 4p stay on `quiescent:levels=1`.~~ SUPERSEDED
+2026-07-30 — see the entry above; all three arms are on `plan:width=2` now.
 
 | K  | workers | block | candidate bot | why |
 |----|---------|-------|---------------|-----|

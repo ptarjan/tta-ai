@@ -61,7 +61,11 @@ section used to describe for all three cards. `colonize_bonus` is different:
 colonization increment is live at two of three player counts. `hand_mil_potential`
 is **0.0 at 2p and 4p, 0.01079 at 3p** -- also live, but only at 3p. So: two of
 the three cards have a real, nonzero champion weight today, and it is only
-`defenseBonus` that is still priced-but-inert everywhere.
+`defenseBonus` that is still priced-but-inert everywhere. The full derivation,
+including the conduction table and where the 3p effect actually shows up
+(the end-of-turn military discard, `engine/interact.py:_discard_military`),
+is `docs/MILITARY_SEAM.md`; that document is current and this paragraph is a
+condensed pointer to it, not a duplicate.
 
 ## 4. `cost.militaryActions` is read by no bot code
 
@@ -139,12 +143,19 @@ Retained because the diagnosis is still the record of what the defect was; the
 * Flipping the default moves **two** digests, `PNARROW`/`PWIDE` -- not eight,
   and not "plan and quiescent"; verified by recomputing all three narrow arms.
 
-## 6. War over Technology's alternative spoil is unimplemented
+## 6. ~~War over Technology's alternative spoil is unimplemented~~ RESOLVED 2026-07-30 (`a7a5ef1`)
 
-The only remaining inexactness in end-of-game scoring (22 of 23 types are
+~~The only remaining inexactness in end-of-game scoring (22 of 23 types are
 exact).  The victor may take blue technologies instead of science; that is a
 player *choice* the engine does not offer, not a number it gets wrong.  Adding
-it adds a decision point to every war.
+it adds a decision point to every war.~~ Implemented in `a7a5ef1`, "The victor
+of a War over Technology chooses (CoL p.3)": `engine/events.py:resolve_war`
+now branches on the card's own `orTakesSpecialTechnologiesOfSameTotalScienceCost`
+key and hands the decision to `engine/interact.py:war_tech_spoils` /
+`war_tech_options` on the existing `push_choice` pending-stack machinery,
+rather than always taking science. Full writeup, including which bots get the
+choice for free by construction and which needed new policy, is
+`docs/WAR_OVER_TECHNOLOGY.md`.
 
 ## 7. 3p `row_urgency` has an arbitrary sign
 
