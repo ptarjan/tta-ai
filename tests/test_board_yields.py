@@ -160,14 +160,69 @@ class TestTheTripleShapeAgrees(unittest.TestCase):
                 for k, _a, _c in triples:
                     self.assertIn(k, W.DEFAULT_WEIGHTS, f"{name}: {k}")
 
-    def test_the_type_knob_defaults_to_everything(self):
-        """`TTA_BOARD_TYPES` exists to decompose the A/B.  Unset must mean
-        every board-priced type, or a measurement arm silently becomes a
-        production one.  `wonder` joined the list when Lane A made wonders a
-        swap type; anything added here must be added there in the same
-        commit, which is what this assertion is for."""
-        self.assertEqual(sorted(BY._ENABLED),
-                         ["action", "government", "leader", "wonder"])
+
+class TestTheTypeKnobIsAWeightNow(unittest.TestCase):
+    """`TTA_BOARD_TYPES` used to decide which card types were board-priced,
+    at import, from the environment -- so the decomposition the A/B needed
+    was available to a human running a command and to nobody else.  It is
+    four weights now (`card_board_leader` / `_government` / `_action` /
+    `_wonder`), offsets on the shared `card_board_credit`, which is what lets
+    `hillclimb_league` fit the government half rather than be told it.
+
+    The arms the old variable expressed must still be expressible, exactly,
+    or the numbers in docs/CARD_PRICING_LEADERS.md stop being comparable to
+    anything measurable today.
+    """
+
+    def _priced_as_diff(self, name, w, st):
+        """Is `name` being priced by the swap diff, or off the static table?
+
+        Compared against `_card_yields` rather than against a constant: the
+        two answers differ for every leader and government in the deck, which
+        is the whole finding, so this cannot silently become vacuous."""
+        static = W._sum_yields(W._card_yields(name), w,
+                               w.get("card_rate_credit", 1.0))
+        return abs(W.card_potential(name, w, st, 0) - static) > 1e-9
+
+    def test_the_shipped_default_prices_nothing_on_the_board(self):
+        st = _played()
+        w = dict(W.DEFAULT_WEIGHTS)
+        for name in ("Michelangelo", "Republic"):
+            self.assertFalse(self._priced_as_diff(name, w, st), name)
+
+    def test_the_credit_alone_still_means_every_type(self):
+        """`card_board_credit` = 1.0 with no offsets is the aggregate arm."""
+        st = _played()
+        w = _w()
+        for name in ("Michelangelo", "Republic", "St. Peter's Basilica"):
+            self.assertTrue(self._priced_as_diff(name, w, st), name)
+
+    def test_a_negative_offset_reproduces_the_old_leader_only_arm(self):
+        st = _played()
+        w = _w(card_board_government=-1.0, card_board_action=-1.0,
+               card_board_wonder=-1.0)
+        self.assertTrue(self._priced_as_diff("Michelangelo", w, st))
+        self.assertFalse(self._priced_as_diff("Republic", w, st))
+        self.assertFalse(self._priced_as_diff("St. Peter's Basilica", w, st))
+
+    def test_a_positive_offset_turns_one_type_on_by_itself(self):
+        """The point of the conversion: the league can move the government
+        half on its own, from a zero credit, with no environment at all."""
+        st = _played()
+        w = dict(W.DEFAULT_WEIGHTS)
+        w["card_board_government"] = 1.0
+        self.assertTrue(self._priced_as_diff("Republic", w, st))
+        self.assertFalse(self._priced_as_diff("Michelangelo", w, st))
+
+    def test_the_environment_variable_is_gone(self):
+        """A leftover reader would silently re-gate a measurement arm: an
+        arm run with a stale `TTA_BOARD_TYPES` exported would quietly
+        measure a different configuration than its weights say."""
+        self.assertFalse(hasattr(BY, "_ENABLED"))
+        with open(BY.__file__) as fh:
+            src = fh.read()
+        self.assertNotIn("os.environ", src)
+        self.assertNotIn("getenv", src)
 
 
 class TestGovernmentsWereInvisible(unittest.TestCase):

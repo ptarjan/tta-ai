@@ -64,7 +64,9 @@ GROUPS = {
     # `effects.compute`.  Its own group for the same reason as "priced" --
     # one coherent change the climber should be able to move together.
     "board": ("urban_limit", "gov_action_cost", "pop_food_discount",
-              "no_aggression", "restricted_resources", "card_board_credit"),
+              "no_aggression", "restricted_resources", "card_board_credit",
+              "card_board_leader", "card_board_government",
+              "card_board_action", "card_board_wonder"),
     # what the Age III "Impact of ..." events already in play will pay out
     # (docs/EVENT_SEEDING.md).  Its own group, like "row" above, because it
     # prices one specific decision -- which event to seed -- and coupling it
@@ -72,7 +74,7 @@ GROUPS = {
     # operators would move it for reasons that have nothing to do with it.
     "events": ("event_scoring_margin",),
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
-              "hand_potential", "hand_mil_potential"),
+              "hand_potential", "hand_mil_potential", "hand_swap_extra"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
                "rival_science_rate", "rival_strength", "rival_free_ca",
                "rival_hand_civil", "rival_wonders", "rival_hand_potential"),

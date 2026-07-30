@@ -83,11 +83,10 @@ module exists to fix.
 """
 from __future__ import annotations
 
-import os
-
 from .. import cards as C, effects
 
-__all__ = ["board_yields", "board_choices", "SWAP_TYPES", "BOARD_PRICED"]
+__all__ = ["board_yields", "board_choices", "SWAP_TYPES", "SINGLE_SLOT",
+           "BOARD_PRICED"]
 
 _DB = C.db()
 
@@ -115,18 +114,33 @@ _DB = C.db()
 # Gandhi's printed +2.
 SWAP_TYPES = frozenset(("leader", "government", "wonder"))
 
-# Experiment knob, in the style of TTA_PARANOID / FASTCOPY_PARANOID: restrict
-# board-aware pricing to a comma-separated subset of card types, so that the
-# leader half, the government half and the action half can each be A/B'd on
-# their own instead of only in aggregate.  Unset means all three, which is
-# the only setting any production path ever uses.  Read once at import,
-# because a per-call `os.environ` lookup in this hot a function is not free.
+# The types that are single-slot, which is a STRICTLY SMALLER claim than
+# "priced by a swap diff" and is the one `weighted._hand_total` needs.
 #
-#     TTA_BOARD_TYPES=government python3 -m experiments.evaluate ...
-#     TTA_BOARD_TYPES=wonder     python3 -m experiments.evaluate ...
-_ENABLED = frozenset(
-    t.strip() for t in os.environ.get("TTA_BOARD_TYPES", "").split(",")
-    if t.strip()) or frozenset(("leader", "government", "action", "wonder"))
+# You hold one leader and one government, so two leaders in hand are two
+# candidates for ONE replacement and summing them is arithmetic nonsense.
+# A wonder is different in exactly the way the block above says: its diff is
+# a pure gain with nothing netted off, and two wonders in hand really can
+# both be built, one after the other.  Holding both is over-optimistic about
+# TIME, not impossible -- and the time is what `wonder_turns_to_finish` /
+# `wonder_overrun` exist to price.  So a wonder is a swap card and is NOT
+# collapsed; keying the hand collapse on `SWAP_TYPES` would silently start
+# collapsing wonders the moment they joined that set, which is why these are
+# two sets and not one.
+SINGLE_SLOT = frozenset(("leader", "government"))
+
+# Which card types are board-priced is NOT decided here any more.  It used to
+# be `TTA_BOARD_TYPES`, an environment variable read once at import, which
+# meant only a human running a command could turn the government half on and
+# the league could never learn it.  It is now four weights -- `card_board_
+# leader`, `card_board_government`, `card_board_action`, `card_board_wonder`
+# -- resolved by `weighted._board_credit_key`, which is where the credit they
+# offset lives too.  This module just prices; the caller decides how much of
+# the price to believe.
+#
+# `weighted.card_potential` calls neither `board_yields` nor `board_extra`
+# when the relevant credit is 0.0, so the cost of a disabled type is still
+# nothing.
 
 # --------------------------------------------------------------- features
 #
@@ -483,7 +497,7 @@ def board_yields(name, state, idx):
     if card is None:
         return None
     typ = card["type"]
-    if typ not in SWAP_TYPES or typ not in _ENABLED:
+    if typ not in SWAP_TYPES:
         return None
     p = state.players[idx]
     field = {"leader": "leader", "government": "government",
@@ -554,8 +568,6 @@ def board_extra(name, state, idx):
     if name not in _EXTRA_CARDS:
         return ()
     card = _DB.by_name[name]
-    if card["type"] not in _ENABLED:
-        return ()
     eff = card["effects"]
     p = state.players[idx]
     out = []

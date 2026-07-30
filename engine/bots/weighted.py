@@ -1315,53 +1315,176 @@ def _sum_yields(triples, w, credit):
     return total
 
 
+# ------------------------------------------------- how much board to believe
+#
+# `card_board_credit` is the shared credit on board-aware pricing.  These
+# four are per-type OFFSETS added to it, so:
+#
+#   * `card_board_credit` alone moves every type together, which is what
+#     the aggregate A/B measured;
+#   * a single offset moves one type on its own, which is what the
+#     decomposition arms measured -- and, unlike the `TTA_BOARD_TYPES`
+#     environment variable they used to be, these are weights, so
+#     `hillclimb_league` can fit them instead of a human setting them.
+#     `card_board_credit` 1.0 with `card_board_government` -1.0 is exactly
+#     the old `TTA_BOARD_TYPES=leader`, offsets being additive.
+#
+# All four default to 0.0 on top of a 0.0 credit, so the shipped evaluator
+# is byte-identical either way (docs/CARD_PRICING_LEADERS.md section 5).
+_BOARD_CREDIT_KEYS = {
+    "leader": "card_board_leader",
+    "government": "card_board_government",
+    "action": "card_board_action",
+    "wonder": "card_board_wonder",
+}
+
+
+@_lru_cache(maxsize=None)
+def _board_credit_key(name):
+    """The per-type offset key for `name`, or None if its type has none."""
+    return _BOARD_CREDIT_KEYS.get(C.db().type_by_name.get(name))
+
+
+@_lru_cache(maxsize=None)
+def _swap_type(name):
+    """`"leader"` / `"government"` for a single-slot card, else None.
+
+    `SINGLE_SLOT`, deliberately, and NOT `SWAP_TYPES`: a wonder is priced by
+    a swap diff too but two wonders in hand can both be built, so collapsing
+    them would be wrong.  See the note on both sets in `board_yields`.
+    """
+    typ = C.db().type_by_name.get(name)
+    return typ if typ in _BY.SINGLE_SLOT else None
+
+
 def card_potential(name, w, state=None, idx=None):
     """Eval-points a single card in hand would be worth if it were played.
 
     `state`/`idx` are optional and turn on board-aware pricing
     (`engine/bots/board_yields.py`), which is what lets a leader be priced by
     what it would actually do on THIS board instead of by the numbers printed
-    on it.  Board pricing is gated on `w["card_board_credit"]`, exactly as the
-    `effects.culture` fix is gated on `card_rate_credit`, so that 0.0 recovers
-    the old pricing byte-for-byte and the two can be duelled paired, in one
-    process, on the same deal.  Callers without a state (and the whole of
-    `analysis/`) keep the old signature and the old answer.
+    on it.  Board pricing is gated on `w["card_board_credit"]` plus the card
+    type's own offset, exactly as the `effects.culture` fix is gated on
+    `card_rate_credit`, so that 0.0 recovers the old pricing byte-for-byte and
+    the two can be duelled paired, in one process, on the same deal.  Callers
+    without a state (and the whole of `analysis/`) keep the old signature and
+    the old answer.
     """
     credit = w.get("card_rate_credit", 1.0)
-    board = w.get("card_board_credit", 0.0)
-    if not board:
-        # the exact pre-change answer, and the `if not board` is why: every
+    base = w.get("card_board_credit", 0.0)
+    key = _board_credit_key(name)
+    board = (base + w.get(key, 0.0)) if key is not None else base
+    if not base and not board:
+        # the exact pre-change answer, and this early return is why: every
         # branch below has to be behind the gate for the A/B to be paired.
         # `_card_choices` is in here too even though it needs no board --
         # it needs more than a table lookup, which is the same thing as far
         # as "does this move a digest" is concerned.
         return _sum_yields(_card_yields(name), w, credit)
     on_board = state is not None and idx is not None
-    if on_board:
+    if on_board and board:
         # A swap card is priced ONLY by the diff: `_card_yields` would count
         # Gandhi's printed +2 culture a second time on top of the delta that
-        # already contains it.
+        # already contains it.  A swap card whose type is credited 0.0 falls
+        # through to the static table instead, which is what the type knob
+        # meant when it was an environment variable.
         swap = _BY.board_yields(name, state, idx)
         if swap is not None:
             return board * _sum_yields(swap, w, credit)
     total = _sum_yields(_card_yields(name), w, credit)
+    # `_card_choices` rides the shared credit and not the `action` offset:
+    # it is not board-aware pricing at all (it needs no board), it is here
+    # because it is more than a table lookup.  That is also what the type
+    # knob did when it was an environment variable.
     for group in _card_choices(name):
-        total += board * max(_sum_yields(g, w, credit) for g in group)
-    if on_board:
+        total += base * max(_sum_yields(g, w, credit) for g in group)
+    if on_board and board:
         total += board * _sum_yields(_BY.board_extra(name, state, idx), w,
                                      credit)
     return total
 
 
+def _hand_total(hand, state, idx, w):
+    """`card_potential` over a civil hand, with the single-slot classes
+    collapsed to one card each.
+
+    THE THING THIS FIXES.  A leader and a government are priced as a swap
+    DIFF -- what replacing the one you have with this one would change
+    (board_yields, "Replacement").  Summing that over the hand asserts you
+    get to make the same replacement once per card you hold, and you do not:
+    holding Joan of Arc, a hand of {Michelangelo, Julius Caesar, Homer} was
+    priced at -6.95 (three replacements of Joan, two of them ruinous) when
+    the truthful answer is +3.60, because Michelangelo is the one you would
+    play and the other two you simply would not.  Harmless while the bot held
+    ~0 leaders; not harmless once board pricing made it take 55% more of them
+    (docs/CARD_PRICING_LEADERS.md sections 5.2 and 8).
+
+    So each slot contributes the BEST card in the hand for it, plus
+    `hand_swap_extra` times the rest.  The spares are not worthless -- you
+    may play the best one now and a better one two ages later -- but their
+    true incremental value is measured against the leader you will have by
+    then, not against the one you have now, which is not a quantity this
+    function can see.  `hand_swap_extra` is therefore a free parameter and it
+    is a 0.0-default WEIGHT rather than a constant somebody picked: 0.0 says a
+    spare leader is worth nothing extra, 1.0 is exactly the old summing (which
+    keeps the defect available as a paired control arm in one process), and
+    the league can find what is in between.  Linear in the weight, so
+    `hillclimb.mutate` has a gradient on it from 0.0.
+
+    Only cards that are ACTUALLY being priced as a diff are collapsed: with
+    the board credit at 0.0 a leader is priced off the static table like
+    anything else, there is no replacement being double-counted, and the hand
+    stays a plain sum -- which is what keeps the shipped default byte-
+    identical.  N = 1 is untouched either way; the sign of a lone unplayable
+    leader is a separate question and deliberately not changed here.
+    """
+    total = 0.0
+    slots = None
+    for n in hand:
+        v = card_potential(n, w, state, idx)
+        slot = _swap_slot(n, w)
+        if slot is None:
+            total += v
+            continue
+        if slots is None:
+            slots = {}
+        cur = slots.get(slot)
+        if cur is None:
+            slots[slot] = [v, v]          # best so far, sum so far
+        else:
+            if v > cur[0]:
+                cur[0] = v
+            cur[1] += v
+    if slots:
+        extra = w.get("hand_swap_extra", 0.0)
+        for best, tot in slots.values():
+            total += best + extra * (tot - best)
+    return total
+
+
+def _swap_slot(name, w):
+    """The single-slot class `name` is being priced as a diff for, or None.
+
+    None for an ordinary card, and also for a leader when the leader credit
+    is 0.0: then `card_potential` returned the static-table value, which is
+    not a replacement and must not be collapsed.
+    """
+    typ = _swap_type(name)
+    if typ is None:
+        return None
+    if not (w.get("card_board_credit", 0.0)
+            + w.get(_BOARD_CREDIT_KEYS[typ], 0.0)):
+        return None
+    return typ
+
+
 def hand_potential(state, idx, w):
-    """Summed `card_potential` over the civil hand (0.0 for an empty hand)."""
+    """`card_potential` over the civil hand, single-slot classes collapsed
+    (0.0 for an empty hand).  See `_hand_total`."""
     hand = state.players[idx].hand_civil
     if not hand:
         return 0.0
-    total = 0.0
-    for n in hand:
-        total += card_potential(n, w, state, idx)
-    return total
+    return _hand_total(hand, state, idx, w)
 
 
 def wonder_potential(state, idx, w):
@@ -1510,7 +1633,10 @@ def rival_hand_potential(state, idx, w, rivals=None):
     determinization leak in section 6.
 
     `max` over rivals rather than `sum`, so the term means the same thing at
-    2p, 3p and 4p.
+    2p, 3p and 4p.  Within one rival's hand the single-slot classes collapse
+    exactly as they do in mine (`_hand_total`): a rival holding three leaders
+    is not three replacements dangerous either, and pricing my hand and
+    theirs through two different functions is how the two drift apart.
     """
     if rivals is None:
         rivals = [q for q in state.players
@@ -1519,11 +1645,9 @@ def rival_hand_potential(state, idx, w, rivals=None):
     for q in rivals:
         if not q.hand_civil:
             continue
-        total = 0.0
-        for n in q.hand_civil:
-            # priced on the RIVAL's board -- a leader that pays per theater is
-            # worth what it is worth to the player who would play it
-            total += card_potential(n, w, state, q.idx)
+        # priced on the RIVAL's board -- a leader that pays per theater is
+        # worth what it is worth to the player who would play it
+        total = _hand_total(q.hand_civil, state, q.idx, w)
         if total > best:
             best = total
     return best
@@ -1820,6 +1944,29 @@ BASE_WEIGHTS = {
     # trained vector plays exactly as it did and the digests do not move.  The
     # A/B that says what it is worth is docs/EVENT_SEEDING.md.
     "event_scoring_margin": 0.0,
+    # Per-type offsets on that credit, replacing the `TTA_BOARD_TYPES`
+    # environment variable so the league can fit what only a human could set
+    # before.  The credit for a card of type T is `card_board_credit +
+    # card_board_T`, so one knob still moves all four together and each type
+    # can also move on its own.  The government half is the one with the
+    # measured positive (culture margin +1.85, z = 3.4, where the leader half
+    # is a null once its blocks are clustered honestly -- 48.20%, z = -1.46,
+    # p = 0.15: docs/CARD_PRICING_LEADERS.md 5.2 and its 2026-07-30
+    # correction), and this is what lets the climber find that without being
+    # told.
+    "card_board_leader": 0.0,
+    "card_board_government": 0.0,
+    "card_board_action": 0.0,
+    "card_board_wonder": 0.0,
+    # What a SPARE single-slot card is worth: the hand's best leader is priced
+    # in full and every other leader in the hand at this fraction of its own
+    # replacement diff (`weighted._hand_total`).  0.0 = a second leader adds
+    # nothing, because only one of them can be the replacement; 1.0 is exactly
+    # the summing this replaced, which is what makes the defect a paired
+    # control arm rather than something only a rebuild can reproduce.  A
+    # weight and not a constant because the honest value depends on how often
+    # a later leader beats the one you played, which nothing here can see.
+    "hand_swap_extra": 0.0,
     # How much of the short-spelling `effects.culture` / `effects.science`
     # (the two keys `_card_yields` used to drop on the floor) to believe when
     # pricing a card in hand.  1.0 = price them like any other per-turn

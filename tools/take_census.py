@@ -15,7 +15,11 @@ never saw the card" can be told apart.
     python3 tools/take_census.py --w analysis/laneC/off.json --games 40 \
         --type leader
 
-`TTA_BOARD_TYPES` applies here exactly as it does to experiments.evaluate.
+Which card types are board-priced is decided by the weight file, not by the
+environment: `card_board_credit` plus the per-type offsets `card_board_leader`
+/ `card_board_government` / `card_board_action` (engine/bots/weighted.py).
+This used to be `TTA_BOARD_TYPES`; a census run with a stale variable exported
+silently measured a different configuration than its weight file named.
 """
 from __future__ import annotations
 

@@ -171,6 +171,7 @@ flagged here so nobody later mistakes it for a derivation:
 | **Revolution's action cost** | its own `gov_action_cost` feature at 0.0 | fold it into `civil_actions`, i.e. assert an exchange rate |
 | **`resourcesForMilitaryUnits`** | own `restricted_resources` feature at 0.0 | treat ring-fenced resources as plain `resource_stock` |
 | **Reserves' "food OR resources"** | max under the current weights | a fixed 50/50, or always the resource side |
+| **A SPARE leader in hand** (§10) | `hand_swap_extra` at 0.0: the hand's best single-slot card is priced in full, the others at that fraction of their own diff | a fixed discount (½ for the second, ¼ for the third…), or keep summing them |
 
 Note the shape of that table: every judgement call except Churchill's was
 resolved by **creating a 0.0-weight feature rather than by picking a number**.
@@ -391,6 +392,10 @@ and the two candidates worth checking first are both in §8 already:
    over-count was harmless when the bot held ~0 leaders in hand and is not
    harmless now that it takes 55% more of them. This is the strongest
    candidate and it is a defect in the *hand term*, not in the pricing.
+   **Established and fixed in §10** — and note what the correction box above
+   does to the question: with the leaders arm a null rather than a −1.8pp
+   negative, the double-count is no longer a defect that needs to explain a
+   number. It is a defect because the arithmetic is wrong.
 2. **A leader's upside lands on well-fitted weights and its restrictions land
    on 0.0 ones**, per the asymmetry table below.
 
@@ -406,9 +411,12 @@ this experiment.
   safely.
 * If anyone turns this on, **turn the government half on first**. It is the
   half with a positive, individually significant signal, and
-  `TTA_BOARD_TYPES=government` already expresses exactly that configuration.
-  Making it a weight rather than an env knob is the obvious follow-up.
-* The leader half should wait on the `hand_potential` double-count.
+  `card_board_government` = 1.0 expresses exactly that configuration — a
+  weight, so the league can find it without being told (§10.2; it was
+  `TTA_BOARD_TYPES=government`, an environment variable, when this was
+  written).
+* The leader half should wait on the `hand_potential` double-count — which
+  §10 fixes and re-measures.
 
 ## 6. Does the bot actually take these cards?
 
@@ -474,12 +482,11 @@ the only leader the evaluator can see.
 
 ## 8. Known limitations, stated rather than discovered later
 
-* **Two leaders in one hand are both priced as replacing the current one.**
-  You can only play one, so this over-counts. It is the pre-existing shape of
-  `hand_potential` (two wonders in hand double-count the same way) rather than
-  something this change introduces, and fixing it means making
-  `hand_potential` a max-plus-remainder rather than a sum — a change to the
-  hand term, not to card pricing.
+* ~~**Two leaders in one hand are both priced as replacing the current one.**~~
+  **FIXED in §10**, as max-plus-remainder, and the wonder aside in the
+  original wording was wrong: see §10.1 for why a wonder is not the same
+  structure. The rest of this bullet stood — it was the pre-existing shape of
+  `hand_potential`, not something the pricing introduced.
 * **`gov_action_cost` sits at 0.0**, so in the on-arm a revolution's science
   cost is priced but the civil-action pool it burns is not. That makes
   governments somewhat too attractive until the league prices that weight. It
@@ -524,10 +531,136 @@ python3 -m unittest tests.test_board_yields tests.test_card_pricing
 python3 tools/take_census.py --w analysis/laneC/off.json --games 40 \
     --type leader
 
-# the A/B, and the two decomposition arms
+# the A/B, and the two decomposition arms.  The arm is a WEIGHT
+# configuration now, not an environment variable (section 10.2).
 bash analysis/laneC/run_ab.sh main
-TTA_BOARD_TYPES=government bash analysis/laneC/run_ab.sh government
-TTA_BOARD_TYPES=leader     bash analysis/laneC/run_ab.sh leader
+bash analysis/laneC/run_ab.sh government
+bash analysis/laneC/run_ab.sh leader
+bash analysis/laneC/run_ab.sh leader 1.0    # ...with the double-count back
 
 bash tools/gate.sh
 ```
+
+## 10. The hand double-count, fixed
+
+A follow-up lane, on the strongest of the two candidates §5.2 left open. The
+order matters and is deliberate: the defect is established as arithmetic
+first, fixed because it is wrong, and only then re-measured. It would still
+have shipped if the measurement came back flat.
+
+That ordering turned out to be load-bearing rather than merely tidy. This
+lane was commissioned to explain a −1.8pp negative, and while it was running,
+the unit-of-analysis audit **withdrew that negative** (the correction box in
+§5.2: the leaders arm is a null, z = −1.46, p = 0.15). A lane that had set
+out to explain the number would have had nothing left to do. The defect is
+independent of it: it is wrong arithmetic, it was demonstrated without
+playing a single game, and it would be worth fixing if the leaders arm had
+come back at +5pp.
+
+### 10.1 The defect, in the only terms that settle it
+
+`card_potential` prices a leader or a government as a **diff** — what
+replacing the one you have with this one would change. `hand_potential`
+summed that over the civil hand. Summing diffs against a single slot asserts
+you get to make the same replacement once per card you hold.
+
+Concretely, from `tests/test_hand_swap.py` (2p, seed 7, 60 plies, the player
+holding **Joan of Arc**):
+
+| leader in hand | swap diff |
+|---|---|
+| Michelangelo | **+3.60** |
+| Julius Caesar | −5.35 |
+| Homer | −5.20 |
+| `hand_potential`, before | **−6.95** |
+| `hand_potential`, after | **+3.60** |
+
+The old number is not merely too large or too small — it has **the wrong
+sign**. The hand contains a leader worth +3.60 and the evaluator priced the
+hand at −6.95, because it charged the bot for replacing Joan of Arc with two
+leaders it would obviously never play. The same file pins the pure form: three
+copies of one leader priced at exactly 3× that leader.
+
+**The fix.** Each single-slot class contributes the best card in the hand for
+it, plus `hand_swap_extra` × the rest. The spares are not worthless — you may
+play the best one now and a better one two ages later — but their true
+incremental value is a diff against *the leader you will have by then*, which
+this function cannot see. So it is a free parameter, and per §2.3's
+convention it is a **0.0-default weight and not a constant somebody picked**.
+Two properties fall out that are worth stating:
+
+* `hand_swap_extra = 1.0` **is** the old behaviour, exactly. The defect stays
+  reproducible as a control arm in the same binary rather than only by
+  checking out an old commit, which is what makes §10.3's before/after a
+  same-process comparison.
+* At `card_board_credit = 0.0` nothing is priced as a diff, so there is
+  nothing to collapse and the hand stays a plain sum. The shipped evaluator is
+  byte-identical: all eight `tools/gate.sh` fingerprint arms are unmoved.
+
+**What else has this shape**, since the whole point of a structural fix is
+that it is not one card class:
+
+* **Governments — yes, exactly.** One government slot, priced by the same
+  swap diff, and it was summed the same way. Fixed by the same code; the two
+  slots collapse independently, so a hand of two leaders and two governments
+  is one leader replacement plus one revolution, not four.
+* **`rival_hand_potential` — yes.** It prices a rival's hand through
+  `card_potential` on the rival's own board, and a rival holding three leaders
+  is not three replacements dangerous. Fixed in the same helper, deliberately:
+  pricing my hand and theirs through two different functions is how the two
+  drift apart.
+* **`row_pressure`'s `row_urgency` — yes, and NOT fixed here.** It sums
+  `card_potential` over the row cards the sweep is about to destroy, so two
+  leaders in the row are two replacements there too. Demonstrated: with an
+  empty leader slot and three leaders in the row, two of them contributed
+  2.70 + 2.55 to one `row_urgency`. It is a different question ("take now or
+  never") and a separate behavioural change, so it is written down here rather
+  than folded into a measured fix. **This is the next thing to do in this
+  area.**
+* **Wonders — no, and §8's original aside was wrong about this.** Lane A has
+  since made a wonder a swap card too, but its diff is a *pure gain with
+  nothing netted off* — you do not have a wonder slot that a second wonder
+  displaces, and `actions._take_gate` will not even let you take another
+  while one is in progress. Two wonders in hand is optimism about **time**,
+  not an arithmetic impossibility, and the time is what
+  `wonder_turns_to_finish` / `wonder_overrun` exist to price.
+
+  This is why the collapse is keyed on a new `board_yields.SINGLE_SLOT` and
+  **not** on `SWAP_TYPES`: had it been keyed on `SWAP_TYPES`, wonders would
+  have started collapsing silently the moment Lane A added them to that set,
+  with nothing failing. `tests/test_hand_swap.py` asserts a hand of two
+  wonders still sums, for exactly that reason.
+* **Tactics — same shape, currently inert.** One tactic in play, and
+  `hand_mil_potential` would sum two. It is 0.0 by default, so nothing calls
+  `card_potential` on a military card at all; `tactic_terms` already takes a
+  max over reachable tactics. Fix it when that weight is turned on, not
+  before.
+
+### 10.2 The type knob is a weight now, not an environment variable
+
+`TTA_BOARD_TYPES` gated board-aware pricing by card type. It was read from
+`os.environ` once at import, which means the configuration with the only
+individually significant result in §5.2 — governments alone, culture margin
++1.85, z = 3.4 — was reachable by a human typing a command and by nothing
+else. The league could never find it.
+
+It is now four weights, `card_board_leader` / `card_board_government` /
+`card_board_action` / `card_board_wonder` (Lane A's), **additive offsets** on
+the shared `card_board_credit`, so that:
+
+* `card_board_credit` alone still moves all four together — the aggregate arm
+  is unchanged and §5.2's top row is still the same experiment;
+* `card_board_government = 1.0` from a zero credit turns that half on by
+  itself, which is the recommendation in §5.2 expressed as something
+  `hillclimb_league` can fit;
+* `card_board_credit = 1.0` with `-1.0` on every other type is **exactly**
+  the old `TTA_BOARD_TYPES=leader`,
+  which is what keeps §10.3 comparable to the table in §5.2 rather than
+  nearly-comparable;
+* all three default to 0.0 on top of a 0.0 credit, so nothing ships turned on.
+
+`tests/test_board_yields.py:TestTheTypeKnobIsAWeightNow` asserts each of those
+four configurations by checking whether a leader and a government are actually
+priced by the diff or by the static table, and fails if any reader of the
+environment comes back — a stale exported variable would silently make a
+measurement arm measure something other than its weight file says.
