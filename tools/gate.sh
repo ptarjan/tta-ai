@@ -209,8 +209,43 @@ cd "$(dirname "$0")/.."
 # died that way and each appeared as a FAIL with a *blank* "got" field.  That
 # is a killed subprocess, not a moved hash.  Those runs were discarded and the
 # whole derivation was redone in a quiet window rather than written down.
-NARROW=cd0971ed
-WIDE=77c81e82
+# ---------------------------------------------------------------------------
+# Re-derived on `a7a5ef1` ("The victor of a War over Technology chooses",
+# 2026-07-30, docs/WAR_OVER_TECHNOLOGY.md).  SIX of the eight arms moved --
+# NARROW, WIDE, QNARROW, QWIDE, PNARROW, PWIDE -- and WNARROW/WWIDE did not.
+#
+#     arm       old         new
+#     NARROW    cd0971ed    ca255af3
+#     WIDE      77c81e82    f223cea1
+#     WNARROW   f0b240da    f0b240da   (unchanged)
+#     WWIDE     9010ec80    9010ec80   (unchanged)
+#     QNARROW   ad62a4e5    9ad67497
+#     QWIDE     caf7cdd7    e83054f7
+#     PNARROW   85c06781    32a99881
+#     PWIDE     12b1dce0    f7a092a2
+#
+# Two-sided as 9.0 requires: derived independently in /tmp/wardigest-a and
+# /tmp/wardigest-b, two separate clones of the same commit, and the two agreed
+# byte-for-byte on all eight arms including the two that did not move.
+#
+# CLEAN-BASE CONTROL FIRST, and it passed: a full gate on the parent 75f780f
+# reproduced all eight of the previously committed constants exactly (GATE
+# PASS).  So the base was known-good and these six moves are attributable to
+# this commit rather than to drift that a re-derivation would have buried.
+#
+# Cause: `events.resolve_war` is no longer total.  A won War over Technology
+# now leaves the victor a pending `war_tech` choice, and the spoils are settled
+# through `interact.settle_war_spoils` instead of being taken as science
+# unconditionally.  That changes the move sequence on every seed that resolves
+# such a war, which is why the two GreedyBot arms (NARROW/WIDE) moved for once:
+# unlike an evaluator change, this is a RULES change and GreedyBot plays the
+# rules.  WNARROW/WWIDE holding still is the informative part -- WeightedBot
+# under DEFAULT_WEIGHTS never declares a war in the 33/102-game fingerprint, so
+# its arms cannot see the change at all.  That is consistent with the war
+# lane's own census, which found zero war declarations in 52 default-weight
+# games, and it is a measurement of how rare the card is, not of its value.
+NARROW=ca255af3
+WIDE=f223cea1
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
@@ -301,10 +336,11 @@ WWIDE=9010ec80
 # search under the same `evaluate`, so `card_potential` is on their hash path
 # exactly as it is on WeightedBot's.
 # All four moved again on `military-discard`; see the block above NARROW.
-PNARROW=85c06781
-PWIDE=12b1dce0
-QNARROW=ad62a4e5
-QWIDE=caf7cdd7
+# All four moved again on `war-over-technology`; see the block above NARROW.
+PNARROW=32a99881
+PWIDE=f7a092a2
+QNARROW=9ad67497
+QWIDE=e83054f7
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

@@ -23,10 +23,11 @@ a per-fix attribution after. Section 9 has the table, and 9.2 records why the
 ## One-paragraph answer
 
 **Sixteen of the 23 types scored exactly right as found, nine real bugs came
-out of the other seven, and all nine are fixed — so 22 of 23 are exact now.**
+out of the other seven, and all nine are fixed — and with `a7a5ef1` the last
+gap closed too, so all 23 of 23 are exact now.**
 A tenth defect, in the *pricer*, fell out of re-auditing
-`engine/bots/board_yields.py`. The single type still not exact is **war**, and
-what is missing there is a player *choice* the engine does not offer (the
+`engine/bots/board_yields.py`. The type that was still not exact was **war**,
+and what was missing was a player *choice* the engine did not offer (the
 victor of `War over Technology` may take blue technologies instead of
 science), not a number it gets wrong. None is large: most are worth
 1-6 culture in the positions that reach them, but four are *per turn* rather
@@ -368,8 +369,9 @@ does not offer.
 
 Every row's tests are in `tests/test_score_audit.py` under the named class.
 **"As found" is the audit's verdict before the fixes; "now" is after them.**
-Post-fix the answer is **22 of 23 types exact**, and the one that is not is a
-missing player *choice* rather than a wrong number.
+Post-fix the answer is **23 of 23 types exact**. The last holdout was war,
+where what was missing was a missing player *choice* rather than a wrong
+number; `a7a5ef1` implements it (docs/WAR_OVER_TECHNOLOGY.md).
 
 | # | type | what the rules say | verdict |
 |---|---|---|---|
