@@ -133,10 +133,18 @@ class PlanBot:
     WAR_LOOKAHEAD = True
     #: fall back to a plain 1-ply pick when it is not my ordinary turn
     #: (a pending decision owned by somebody else has no turn to plan)
+    #:
+    #: ...and when that pending decision is MINE, drain the stack before
+    #: scoring, exactly as `_child` already does for every node inside the
+    #: beam.  See `_one_ply_quiet` for what this is for and what it costs.
+    #: `plan:FILE,width=2,qp=1` turns it on; the default False is today's
+    #: behaviour byte-for-byte, so the two can be duelled paired in one
+    #: process on the same deal (the `card_rate_credit` convention).
+    QUIET_PENDING = False
 
     def __init__(self, weights=None, rng=None, seed=None, name=None,
                  width=None, samples=None, determinize=True,
-                 war_lookahead=None):
+                 war_lookahead=None, quiet_pending=None):
         self.weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
         self.rng = rng or random.Random(seed)
         self.width = self.WIDTH if width is None else width
@@ -144,6 +152,8 @@ class PlanBot:
         self.determinize = determinize
         if war_lookahead is not None:
             self.WAR_LOOKAHEAD = war_lookahead
+        if quiet_pending is not None:
+            self.QUIET_PENDING = quiet_pending
         self.nodes = 0
         self.searches = 0
         self.wars_priced = 0
@@ -172,6 +182,8 @@ class PlanBot:
         # nested inside another player's turn): there is no turn to plan, so
         # score the candidates one ply deep at a common horizon of "now".
         if state.pending or state.current != me:
+            if self.QUIET_PENDING and state.pending:
+                return self._one_ply_quiet(state, moves, me, w, ctx)
             return self._one_ply(state, moves, me, w, ctx)
 
         totals = {mv: 0.0 for mv in moves}
@@ -189,6 +201,53 @@ class PlanBot:
         if not scored:
             return moves[0]
         return max(scored, key=lambda t: t[0])[1]
+
+    def _one_ply_quiet(self, state, moves, me, w, ctx):
+        """`_one_ply`, but drain the pending stack before scoring.
+
+        THE INCONSISTENCY THIS EXISTS TO REMOVE.  `_child` scores every node
+        inside the beam as `copy -> apply -> _quiesce -> _score`, so within its
+        own search this bot always prices an aggression by *playing the defence
+        out*.  At a REAL decision `pick` short-circuits to `_one_ply`, which is
+        `copy -> apply -> evaluate` with no drain -- so the identical position
+        is priced two different ways depending on whether the bot is the one
+        being searched or the one deciding.
+
+        Where that bites is the defender's own `kind="defense"` decision.
+        `interact._defense_move` leaves the decision on `state.pending` while
+        the defender still has room and cards, so after `("defend", card)` the
+        aggression has NOT resolved: the position `evaluate` sees is one
+        military card poorer with the attack still hanging.  `("defend_done",)`
+        by contrast pops the stack and calls `events.finish_aggression`
+        immediately, so its position shows the full loss.  Nothing in
+        `features()` reads `pend["atk"]` or `pend["dfn"]`, so the choice cannot
+        be about whether the defence SUCCEEDS.  What is left is a choice about
+        whether to defer bad news, and it points the wrong way: measured over
+        300 games of `plan:width=2` at 2p (`tools/aggression_census.py`), the
+        defender spent cards in 34 of 39 arithmetically HOPELESS defences and
+        in 3 of 52 WINNABLE ones, and held off 0 of 91 aggressions.
+
+        Draining first makes the real decision agree with the searched one.
+        It is not new knowledge and not a new weight: it is the same
+        `_quiesce` this class already trusts, called at the one place it was
+        being skipped.
+
+        Cost is bounded: `_quiesce` caps at 12 drained decisions, and a
+        pending stack is short, so this is a small constant multiple of
+        `_one_ply` on the (rare) decisions where `state.pending` is non-empty.
+        """
+        best, bv = None, None
+        for mv in moves:
+            t = copy_state(state)
+            try:
+                actions.apply(t, mv, _rng())
+                self._quiesce(t, w, root_row=ctx.get("root_row"))
+                v = self._score(t, me, w, ctx)
+            except Exception:
+                continue
+            if bv is None or v > bv:
+                best, bv = mv, v
+        return best if best is not None else moves[0]
 
     def _one_ply(self, state, moves, me, w, ctx):
         if USE_JOURNAL:

@@ -348,7 +348,9 @@ def make_bot(spec, seed):
                        samples=opts.get("samples"),
                        determinize=bool(opts.get("det", 1)),
                        war_lookahead=(None if "war" not in opts
-                                      else bool(opts["war"])))
+                                      else bool(opts["war"])),
+                       quiet_pending=(None if "qp" not in opts
+                                      else bool(opts["qp"])))
     if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
         from engine.bots.quiescent import QuiescentBot
         _, inner, opts = spec
