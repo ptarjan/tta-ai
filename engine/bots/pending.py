@@ -70,22 +70,34 @@ __all__ = ["QUIET_PENDING", "not_my_turn", "wants_quiet", "wants_determinize",
 #: in `tools/pending_leak.py` and it agrees with it.
 QUIET_PENDING = True
 
-#: THE SECOND HALF OF THE SAME INCONSISTENCY, and a live difference between
-#: the two bots.  `pick`'s beam path prices candidates on a *determinized*
-#: root, because `fastcopy.copy_state` copies the two draw decks verbatim and a
-#: trial `apply` that draws therefore draws the REAL next card
-#: (`tools/infoleak.py`: 94.9% of `end_turn` candidates at 2p).  On the pending
-#: path `NeuralPlanBot` already determinizes and `PlanBot` does not -- the copy
-#: had drifted from the original before anyone noticed it was a copy.
+#: THE SECOND HALF OF THE SAME INCONSISTENCY.  `pick`'s beam path prices
+#: candidates on a *determinized* root -- `fastcopy.copy_state` copies the
+#: hidden piles verbatim, so without that step a trial `apply` that draws would
+#: draw the REAL next card.  On the pending path `NeuralPlanBot` already
+#: determinized and `PlanBot` did not: the copy had drifted from the original
+#: before anyone noticed it was a copy.
 #:
-#: It matters here because the drain adds `apply` calls, and `tools/pending_leak.py`
-#: measures the drain consuming real deck cards in 34.7% of candidate
-#: evaluations at 3p (master's own apply: 24.0%).  So turning the drain on
-#: without this turns some of the peek up as well, and a win rate measured that
-#: way cannot be attributed to play.  Each bot names its own value below,
-#: because they differ today; the IMPLEMENTATION is shared so they cannot
-#: differ in more than that one documented value.
-DETERMINIZE = False
+#: It matters here because the drain adds `apply` calls, and
+#: `tools/pending_leak.py` measures the drain consuming real deck cards in
+#: 34.7% of candidate evaluations at 3p (master's own apply: 24.0%).  So
+#: turning the drain on without this turned some of the peek up as well, and a
+#: win rate measured that way could not be attributed to play.
+#:
+#: FLIPPED 2026-07-30, and it lands as a CORRECTNESS FIX with a measured-zero
+#: behavioural effect, which is the honest way to describe it.
+#: `tools/pending_divergence.py --lever det` asked the only question that
+#: matters at 1,346 of the bot's own pending decisions at 3p and the pick
+#: changed **0 times**.  `docs/AGGRESSION_RATE.md` 9 explains why that is not a
+#: fluke: the drain resolves the SAME pending stack for every candidate, so the
+#: peeked cards enter every candidate's score as a common additive term and an
+#: argmax is invariant to a common offset.  The leak is common-mode TODAY.  It
+#: is one refactor away from being differential, and nothing failed when it was
+#: open, which is the whole argument for closing it.
+#:
+#: Both bots now resolve this through `None` class attributes, so there is one
+#: answer rather than two.  `tests/test_pending_fallback_is_shared.py` fails if
+#: either grows a bool of its own.
+DETERMINIZE = True
 
 # Instrumentation the divergence test reads.  A call counter is a structural
 # guarantee: if either bot re-inlines the short-circuit, these stop moving and
@@ -121,11 +133,23 @@ def wants_quiet(bot, state) -> bool:
 
 
 def wants_determinize(bot, state) -> bool:
-    """Should ``bot`` re-shuffle the unseen decks before pricing candidates?
+    """Should ``bot`` re-shuffle the unseen piles before pricing candidates?
 
-    Same resolution order as :func:`wants_quiet`: the instance/class
-    ``PENDING_DETERMINIZE`` unless it is ``None``, otherwise :data:`DETERMINIZE`.
+    Two gates, in this order:
+
+    1. ``bot.determinize`` -- the bot-wide A/B switch (``plan:FILE,det=0``,
+       ``nplan:FILE,det=0``).  It already gates the beam's determinization, and
+       a run that sets it to measure the leak must get a bot that leaks
+       *everywhere*, not one that leaks in the beam and not at pendings.
+       ``NeuralPlanBot`` used to spell this gate itself, at the call site, and
+       ``PlanBot`` did not spell it at all -- which is a third place for the two
+       to drift.  It is here now, once.
+    2. the instance/class ``PENDING_DETERMINIZE`` unless it is ``None``,
+       otherwise this module's :data:`DETERMINIZE`.  Same resolution order as
+       :func:`wants_quiet`.
     """
+    if not getattr(bot, "determinize", True):
+        return False
     own = getattr(bot, "PENDING_DETERMINIZE", None)
     return DETERMINIZE if own is None else bool(own)
 

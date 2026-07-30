@@ -82,13 +82,12 @@ class NeuralPlanBot:
     #: class and `PlanBot` -- which is where this short-circuit was copied FROM
     #: -- cannot answer the question differently.  Do not put a bool here.
     QUIET_PENDING = None
-    #: re-shuffle the unseen decks before pricing a non-ordinary-turn decision.
-    #: True here and False on `PlanBot`: this class has always determinized on
-    #: this path and PlanBot never has, which is the drift that made "the same
-    #: short-circuit, copied out" not actually the same.  This one is right --
-    #: `tools/pending_leak.py` measures what the other one leaks -- so it is
-    #: pinned True here rather than changed to match.
-    PENDING_DETERMINIZE = True
+    #: re-shuffle the unseen piles before pricing a non-ordinary-turn decision.
+    #: This used to be `True` here and `False` on `PlanBot` -- the drift that
+    #: made "the same short-circuit, copied out" not actually the same.  This
+    #: class was the one that was right, so `PlanBot` moved to match and both
+    #: are now `None`: ask `engine.bots.pending`.  Do not put a bool here.
+    PENDING_DETERMINIZE = None
 
     def __init__(self, value, seed=None, rng=None, name=None, width=None,
                  samples=None, determinize=True, war_lookahead=None,
@@ -187,13 +186,12 @@ class NeuralPlanBot:
         # `engine.bots.pending`, shared with PlanBot so that the two cannot
         # answer this differently again; only the scorer here is ours.
         if pending.not_my_turn(state, me):
-            # `PENDING_DETERMINIZE` is True on this class, so `prepare_root`
-            # does what the three lines here used to do; `self.determinize`
-            # still gates it, as it gates the beam's own determinization.
-            root = state
-            if self.determinize:
-                root = pending.prepare_root(self, state, copy_state,
-                                            _determinize, self.rng)
+            # `prepare_root` does what the three lines here used to do, and it
+            # reads `self.determinize` itself now (`pending.wants_determinize`
+            # gate 1), so the bot-wide A/B switch is honoured in ONE place
+            # rather than spelled here and forgotten in `PlanBot`.
+            root = pending.prepare_root(self, state, copy_state,
+                                        _determinize, self.rng)
             return pending.fallback_pick(
                 self, state,
                 plain=lambda: self._one_ply_neural(root, moves, me),

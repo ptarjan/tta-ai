@@ -325,13 +325,13 @@ check that produced the finding.
 **The suspicion.** The first paired block of `qp=1` vs `qp=0` at 3p came back at
 **53.28% ± 5.89pp against a 33.3% null** (culture margin +25.59 ± 5.84,
 z = 6.76, n = 200, deal-clustered K = 66, rho = −0.154). That is far too large
-for a defence fix. `pick`'s beam path prices candidates on a **determinized**
-root, because `fastcopy.copy_state` copies both draw decks verbatim and a trial
-`apply` that draws therefore draws the **real next card** (`tools/infoleak.py`:
-94.9% of `end_turn` candidates at 2p). The pending short-circuit does not
-determinize at all — and the drain *adds* `apply` calls, so it should add
-peeking. `tools/pending_leak.py` confirms the mechanism exists, per candidate
-evaluation at the bot's own pending decisions:
+for a defence fix. `fastcopy.copy_state` copies the hidden piles verbatim — it
+is a copier, that is its job — so a trial `apply` that draws would draw the
+**real next card**. `pick`'s beam path is protected from that because it
+re-shuffles those piles into its root before `_beam` ever sees it. The pending
+short-circuit did not determinize at all — and the drain *adds* `apply` calls,
+so it should add peeking. `tools/pending_leak.py` confirms the mechanism
+exists, per candidate evaluation at the bot's own pending decisions:
 
 | | 3p (1,805 evals) | 4p (3,917 evals) |
 |---|---:|---:|
@@ -377,12 +377,82 @@ zero decisions changed**, which is the cheapest correctness fix in this
 document — but it is not free to *land*, because it moves `PNARROW`/`PWIDE` and
 restarts the league arms, so it ships with the drain rather than on its own.
 
+**CLOSED 2026-07-30.** `pending.DETERMINIZE` is `True` and both bots resolve it
+through `None` class attributes, so there is one answer instead of two.
+
 **What this episode is evidence for.** Two spectacular numbers tonight turned
 out to be instruments rather than results. This one turned out to be a result,
 and the only reason that is known is that it was attacked as hard as the other
 two. Attack the confound with the same conduction test you would apply to the
 treatment; "there is a mechanism by which this could be fake" is a hypothesis,
 not a finding.
+
+## 9a. The bigger leak was in the sentence above, not the one below it
+
+Section 9 was read, correctly, as saying two incompatible things: that the beam
+prices on a determinized root, *and* that a trial `apply` in the beam draws the
+real next card. Resolved by reading `engine/bots/plan.py` rather than the prose:
+**`pick` determinizes its root before `_beam` sees it, and has since PlanBot was
+written** (`root = copy_state(state)`, `if self.determinize: determinize(root,
+drng)`). `determinize=True` is the default and `experiments/arena.py` builds
+every `plan:` and `nplan:` spec with `det=1` unless a run asks otherwise, so the
+league has never played the beam un-determinized. There was no un-scoped beam
+leak. The garbled sentence was one clause of causation away from the truth and
+is fixed above.
+
+**But the determinization was incomplete, and that WAS an un-scoped leak.**
+`determinize` shuffled `civil_deck` and `military_deck`. It never touched
+`current_events`, and `events.reveal_current_event` pops that pile at the top of
+every turn — so every `end_turn` the beam expanded revealed the **true next
+event**, inside a search that believed it had determinized.
+
+The reason this survived is that `tools/infoleak.py` could not see it. Its
+headline number — 94.9% of `end_turn` candidates at 2p — counts candidates that
+**draw**. Determinization does not change how often a candidate draws, only
+what it draws, so that number is identical on a leaking and a clean root. It is
+also measured on `WeightedBot`, which does not determinize at all. It was
+quoted here and in `plan.py`'s docstring as though it described the beam.
+
+`tools/infoleak.py --true-card` asks the question that separates them: was the
+card consumed the card that was really on top? It applies every candidate twice,
+once from the real state and once from a determinized copy. 2p, 8 games, 18,762
+candidates:
+
+| pile | draws | true-top, real root | true-top, determinized root (before) | after |
+|---|---:|---:|---:|---:|
+| `civil_deck` | 800 | 100.0% | 23.6% | 28.6% |
+| `military_deck` | 639 | 100.0% | 15.8% | 17.2% |
+| `current_events` | 209 | 100.0% | **100.0%** | 38.3% |
+
+100.0% is not a leak *rate*. It is the signature of a field nobody is
+shuffling. (The civil/military "after" figures differ from "before" only because
+adding a third shuffle consumes different `rng` draws; the pile is the same
+size and the sampling is the same.)
+
+**The event pile is age-ordered and that order is public.**
+`events._recycle_future_events` shuffles the pile and then sorts it by
+descending age level, because `pop()` takes from the end and the oldest age must
+come out first. Everyone at the table knows an Age I event precedes an Age II
+one. A flat shuffle would hide private information by destroying public
+information, and would let the search see Age III events arrive early. So
+`determinize` repeats the engine's own two lines and permutes only within each
+age band.
+
+**The guarantee against this recurring** is
+`tests/test_search_root_is_determinized.py`, and it is deliberately not "is
+`determinize` called" — a call covering two of three piles passes that. It pins
+`plan.HIDDEN_ORDER` as a written-down decision, asserts each listed pile is
+really permuted, asserts every *other* container on the state is untouched
+(the visible row and the players' own hands are information a human legitimately
+has), asserts the multiset and the age bands survive, and then plays real games
+and asserts on tracked state that the pile handed to each search did not have
+the true next card on top. Negative control: reverting the one-line event
+shuffle fails it at **349/349, 100.0%**, against a ~33% chance floor.
+
+**What this episode is evidence for**, and it is the same lesson one turn
+further on: an instrument that returns the same number whether or not the
+defect is present is not evidence about the defect. Check that the measurement
+*can* move before quoting it as a measurement.
 
 ## 10. The duplicate, fixed by sharing (`engine/bots/pending.py`)
 
@@ -392,9 +462,13 @@ discount, the hand double-count, the population cost, the `rankingCulture`
 block). It is fixed by extracting the policy, not by patching the copy.
 
 **The copy was not even faithful, which is the argument in miniature.**
-`NeuralPlanBot`'s pending path always determinized; `PlanBot`'s never has. The
+`NeuralPlanBot`'s pending path always determinized; `PlanBot`'s never did. The
 two bots disagreed about the *leak* as well as the drain, and nobody knew,
-because there was no single place where the answer lived.
+because there was no single place where the answer lived. Closed 2026-07-30:
+both classes now carry `PENDING_DETERMINIZE = None` and there is one answer.
+The bot-wide `determinize` A/B switch moved into `wants_determinize` at the same
+time, because `NeuralPlanBot` spelled it at its own call site and `PlanBot` did
+not spell it at all — a third place for the same two to drift.
 
 `engine/bots/pending.py` owns three things and no scoring:
 

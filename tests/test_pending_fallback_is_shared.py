@@ -180,24 +180,46 @@ class SharedShortCircuit(unittest.TestCase):
                 f"{name} did not build its fallback root through "
                 f"pending.prepare_root ({pending.counters()})")
 
-    def test_the_determinize_difference_is_pinned_not_accidental(self):
-        # These two values differ ON PURPOSE and the difference is a measured
-        # defect in PlanBot's direction (tools/pending_leak.py: the drain
-        # consumes real deck cards in 34.7% of candidate evaluations at 3p).
-        # If you change either, the number that justifies it goes in
-        # docs/AGGRESSION_RATE.md -- do not "tidy" them into agreement.
-        self.assertIs(PlanBot.PENDING_DETERMINIZE, False)
-        self.assertIs(NeuralPlanBot.PENDING_DETERMINIZE, True)
+    def test_neither_class_carries_its_own_determinize_default(self):
+        # These two used to differ -- False on PlanBot, True on NeuralPlanBot
+        # -- and the difference was a measured defect in PlanBot's direction
+        # (tools/pending_leak.py: the drain consumes real deck cards in 34.7%
+        # of candidate evaluations at 3p).  It is closed: both are None, so
+        # `pending.DETERMINIZE` is the single answer.  A bool landing on either
+        # class is a SECOND default and the two bots will diverge again the
+        # next time somebody flips one.
+        for cls in (PlanBot, NeuralPlanBot):
+            self.assertIsNone(
+                cls.PENDING_DETERMINIZE,
+                f"{cls.__name__}.PENDING_DETERMINIZE must stay None ('ask "
+                f"engine.bots.pending'); that drift is what this module and "
+                f"docs/AGGRESSION_RATE.md 9 exist to prevent")
 
-    def test_determinize_off_prices_from_the_state_itself(self):
-        bot = PlanBot(weights=_W, seed=3, width=2, quiet_pending=True)
+    def test_the_bot_wide_switch_turns_this_path_off_too(self):
+        # `det=0` is the A/B control that measures the leak.  A bot built that
+        # way must leak EVERYWHERE -- beam and pending alike -- or the A/B is
+        # measuring half a lever.  The gate lives in `wants_determinize` so
+        # neither bot can spell it at its own call site again.
+        bot = PlanBot(weights=_W, seed=3, width=2, quiet_pending=True,
+                      determinize=False)
         st = defence(atk=6)
         self.assertFalse(pending.wants_determinize(bot, st))
         self.assertIs(
             pending.prepare_root(bot, st, lambda s: None, lambda s, r: None,
                                  bot.rng), st,
             "with determinization off the fallback must price the state "
-            "itself, so master's behaviour is byte-for-byte unchanged")
+            "itself, byte-for-byte")
+
+    def test_determinize_off_prices_from_the_state_itself(self):
+        bot = PlanBot(weights=_W, seed=3, width=2, quiet_pending=True,
+                      pending_determinize=False)
+        st = defence(atk=6)
+        self.assertFalse(pending.wants_determinize(bot, st))
+        self.assertIs(
+            pending.prepare_root(bot, st, lambda s: None, lambda s, r: None,
+                                 bot.rng), st,
+            "with determinization off the fallback must price the state "
+            "itself, so the `qd=0` A/B arm is byte-for-byte the old behaviour")
 
     def test_determinize_on_reshuffles_only_the_unseen_decks(self):
         from engine.bots.fastcopy import copy_state

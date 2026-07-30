@@ -30,14 +30,22 @@ state that `apply` happens to leave behind.
    horizon without gaining the lookahead removes a filter and adds nothing,
    which is exactly what those numbers look like.
 
-3. **Hidden information.**  `civil_deck` and `military_deck` are full ordered
-   lists inside `GameState`, and `fastcopy.copy_state` copies them verbatim,
-   so a trial `apply` that draws draws the *real* next card.
-   `tools/infoleak.py` measures 94.9% of `end_turn` candidates doing exactly
-   that at 2p (71.1% of all decisions have at least one such candidate), so
-   the single most-evaluated move in the game is priced against a peek at the
-   future.  Here the unseen decks are re-shuffled before the search, which is
-   the determinization step an information-set search needs anyway.
+3. **Hidden information.**  `civil_deck`, `military_deck` and
+   `current_events` are full ordered lists inside `GameState`, and
+   `fastcopy.copy_state` copies them verbatim, so a trial `apply` that draws
+   would draw the *real* next card.  `tools/infoleak.py --true-card` measures
+   it as 100% of draws on an undeterminized root -- not a rate, an identity.
+   So `pick` re-shuffles the unseen piles into `root` *before* `_beam` sees
+   it, which is the determinization step an information-set search needs
+   anyway, and every trial `apply` in the search then draws a sample rather
+   than the truth (measured 23.6% / 15.8% / matching-by-chance, 2p).
+
+   Read that as a claim about THIS bot only.  `WeightedBot` and
+   `QuiescentBot` do not determinize at all and still draw the true card on
+   100% of trial draws; `tools/infoleak.py`'s old headline number (94.9% of
+   `end_turn` candidates at 2p) is measured on `WeightedBot` and counts
+   candidates that DRAW, which is a number determinization cannot move.  It
+   was quoted here for years as if it described the beam.  It never did.
 
 Cost is bounded by ``WIDTH`` (beam) x branching x turn length; see
 `docs/BOT_ARCHITECTURE.md` for the measured numbers.
@@ -65,7 +73,7 @@ from __future__ import annotations
 
 import random
 
-from .. import actions, journal
+from .. import actions, cards, journal
 from . import pending
 from .fastcopy import copy_state
 from .quiescent import war_value
@@ -101,18 +109,64 @@ def _rng():
     return _TRIAL
 
 
+#: Every field of `GameState` whose ORDER a player at the table cannot see,
+#: and which some `actions.apply` can therefore consume during a trial.
+#: :func:`determinize` re-orders exactly these and nothing else.
+#:
+#: It is a named tuple rather than three inline `if`s so that
+#: `tests/test_search_root_is_determinized.py` can assert the set, and so that
+#: adding a fourth hidden pile to the engine is a decision somebody has to
+#: make in writing rather than an omission nobody notices.  The test also
+#: asserts the COMPLEMENT: every other list/dict field of `GameState` is
+#: identical across `determinize`, which is what stops a future "just shuffle
+#: everything" from re-dealing the visible card row.
+HIDDEN_ORDER = ("civil_deck", "military_deck", "current_events")
+
+
 def determinize(state, rng):
     """Re-shuffle what the mover cannot see.
 
     Public: the card row, every board, culture/science, everyone's *count* of
-    military cards.  Hidden: the ORDER of the two draw decks.  Rival military
-    hands are hidden too, but `weighted.features` reads only public rival
-    aggregates, so re-dealing them would change nothing that is read.
+    military cards, the two discard records, the tactics on offer, the events
+    already resolved.  Hidden: the ORDER of the two draw decks **and of the
+    current events deck**.  Rival military hands are hidden too, but
+    `weighted.features` reads only public rival aggregates, so re-dealing them
+    would change nothing that is read.
+
+    ``current_events`` is the one that was missing, and it was the whole
+    remaining leak on the beam path.  The two draw decks have been shuffled
+    here since PlanBot was written, so the module docstring's defect 3 was
+    fixed for cards and silently untrue for events: `engine/events.py`'s
+    ``reveal_current_event`` pops the pile at the top of every turn, so every
+    ``end_turn`` a beam ever expands revealed the REAL next event.  Measured
+    on the instrument that can tell the difference (`tools/infoleak.py
+    --true-card`), 2p/8 games: on a determinized root the trial drew the true
+    top CIVIL card on 23.6% of civil draws and the true top EVENT on **100.0%**
+    of event draws.  100% is not a leak rate, it is the signature of a field
+    nobody was shuffling.
+
+    THE EVENT PILE IS AGE-ORDERED AND THAT ORDER IS PUBLIC.
+    ``events._recycle_future_events`` shuffles the pile and then sorts it by
+    descending age level, because ``pop()`` takes from the end, so the oldest
+    age comes out first.  Everyone at the table knows an Age I event precedes
+    an Age II one.  Shuffling the pile flat would therefore *destroy* public
+    information as well as hiding private information, and would let the
+    search see Age III events arrive early.  So this repeats the engine's own
+    two lines -- shuffle, then stable-sort by descending level -- which
+    randomises within each age band and leaves the bands where they were.
     """
     if state.civil_deck:
         rng.shuffle(state.civil_deck)
     if state.military_deck:
         rng.shuffle(state.military_deck)
+    ev = state.current_events
+    if len(ev) > 1:
+        rng.shuffle(ev)
+        # `list.sort` is stable, so this restores the age bands exactly as
+        # `events._recycle_future_events` built them and permutes only within.
+        # The key is character-for-character the engine's own.
+        level_of = cards.db().level_of
+        ev.sort(key=lambda n: -level_of(n))
     return state
 
 
@@ -145,12 +199,17 @@ class PlanBot:
     #: short-circuit copied out -- cannot answer the question differently.
     #: Do not put a bool here.
     QUIET_PENDING = None
-    #: re-shuffle the unseen decks before pricing a non-ordinary-turn decision,
-    #: as `pick`'s beam path already does and as `NeuralPlanBot`'s pending path
-    #: already does.  `False` here is master's behaviour and a measured
-    #: information leak (`tools/pending_leak.py`); `plan:FILE,qd=1` turns it on.
-    #: See `engine.bots.pending.DETERMINIZE`.
-    PENDING_DETERMINIZE = False
+    #: re-shuffle the unseen piles before pricing a non-ordinary-turn decision,
+    #: as `pick`'s beam path a dozen lines below already does.
+    #:
+    #: `None` means "the shared default in `engine.bots.pending`", for exactly
+    #: the reason `QUIET_PENDING` above is `None`: this used to be `False` here
+    #: and `True` on `NeuralPlanBot`, which is the drift that made "the same
+    #: short-circuit, copied out" not actually the same.  Both are `None` now
+    #: and `pending.DETERMINIZE` is the one answer.  `plan:FILE,qd=0` turns it
+    #: off per-instance for an A/B; `plan:FILE,det=0` turns off *all*
+    #: determinization, this path included.  Do not put a bool here.
+    PENDING_DETERMINIZE = None
 
     def __init__(self, weights=None, rng=None, seed=None, name=None,
                  width=None, samples=None, determinize=True,

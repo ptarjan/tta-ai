@@ -37,6 +37,7 @@ import argparse
 import collections
 import json
 import os
+import random
 import sys
 from multiprocessing import Pool
 
@@ -62,6 +63,21 @@ class Probe(PlanBot):
     deck peek (§9) changes anything, which is the conduction question for
     `PENDING_DETERMINIZE`.  A lever that moves 0% of picks cannot be the cause
     of a win rate, however real the thing it removes is.
+
+    ``lever="ev"`` is the same conduction question one path over, on the BEAM
+    rather than on the pending short-circuit (§9a).  `determinize` used to
+    shuffle the two draw decks and leave `current_events` in its true order, so
+    every `end_turn` the beam expanded revealed the real next event.  This
+    lever runs the beam twice at each of the bot's own ordinary turns: once on
+    a root determinized the old way (decks only) and once on a root
+    determinized the new way (decks + events).
+
+    The two roots are built from **separately seeded but identical** RNGs, and
+    the deck shuffles run first in both, so the two roots have byte-identical
+    decks and differ in the event pile alone.  Without that the deck order
+    would change too and the measurement would be of "determinization is
+    stochastic", which is not a question.  Keyed by "beam" rather than by
+    pending kind, since there is no pending stack here.
     """
 
     def __init__(self, *a, counts=None, lever="drain", **kw):
@@ -70,10 +86,54 @@ class Probe(PlanBot):
         self.lever = lever
         self.counts = counts if counts is not None else collections.Counter()
 
+    @staticmethod
+    def _decks_only(state, rng):
+        """`plan.determinize` as it stood before the event pile was added.
+
+        Kept here rather than imported because the point is to compare against
+        a version of the code that no longer exists; a future edit to
+        `determinize` must NOT silently change this arm's control.
+        """
+        if state.civil_deck:
+            rng.shuffle(state.civil_deck)
+        if state.military_deck:
+            rng.shuffle(state.military_deck)
+        return state
+
+    def _beam_pick(self, state, moves, me, w, ctx, det_fn, key):
+        root = copy_state(state)
+        det_fn(root, random.Random(key))
+        best = self._beam(root, moves, me, w, ctx)
+        # argmax spelled exactly as `PlanBot.pick` spells it, including the
+        # first-wins tie break: a different tie break would show up here as a
+        # divergence the lever did not cause.
+        scored = [(best[mv], mv) for mv in moves if mv in best]
+        if not scored:
+            return moves[0]
+        return max(scored, key=lambda t: t[0])[1]
+
     def pick(self, state, moves):
         if len(moves) == 1:
             return moves[0]
         me = state.decider()
+        if self.lever == "ev":
+            if state.pending or state.current != me:
+                return super().pick(state, moves)
+            w = self.weights
+            try:
+                ctx = rival_context(state, me)
+            except Exception:
+                ctx = dict(_NO_CTX)
+            # same key both sides: the deck shuffles are drawn first and are
+            # therefore identical, so the ONLY difference is the event pile
+            key = (state.seed or 0) * 7919 + state.turn * 31 + me
+            old = self._beam_pick(state, moves, me, w, ctx,
+                                  self._decks_only, key)
+            new = self._beam_pick(state, moves, me, w, ctx, determinize, key)
+            self.counts[("seen", "beam")] += 1
+            if old != new:
+                self.counts[("moved", "beam")] += 1
+            return new
         if not state.pending:
             return super().pick(state, moves)
         # A real decision of somebody's, with a non-empty stack.  Only count
@@ -145,7 +205,8 @@ def main(argv=None):
     ap.add_argument("--weights")
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--out")
-    ap.add_argument("--lever", choices=("drain", "det"), default="drain",
+    ap.add_argument("--lever", choices=("drain", "det", "ev"),
+                    default="drain",
                     help="drain = does quiescing change the pick; "
                          "det = does removing the deck peek change the pick")
     a = ap.parse_args(argv)
