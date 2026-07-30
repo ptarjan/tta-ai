@@ -913,6 +913,243 @@ tools/gate.sh` prints GATE PASS with all 14 digests unchanged — narrow
 `0e90a7e6`/`41f078e5`, plan `ad64a55b`/`441cd256`. No digest was re-derived;
 6.3 records what re-blessing a moved digest costs.
 
+### 6.5 Did closing the leak make the champion WORSE? — paired A/B, 2026-07-29
+
+§6.2 measured that the fix *works*. That is a correctness measurement, and
+strength is a different question, because **the champions were hill-climbed WITH
+the leak**: every accept decision that drove `row_bargain_forgone` to 1.65 at 3p
+was taken by a bot whose row terms could see cards it had not been dealt. If any
+of that weight was fitted to the leak rather than to the game, removing the leak
+should cost strength until the league re-adapts — and that bears on a pending
+decision about rolling the 3p arm back. `tools/deleak_ab.py` measures it.
+
+The result stated up front: **no detectable loss of strength at either player
+count, at the n run here.** Numbers and the size of "detectable" below.
+
+#### The design
+
+* **Paired seeds.** Both arms play the same `seed0`, so game *g* of the leaky arm
+  and game *g* of the de-leaked arm are the same deal, the same seat rotation and
+  the same opponent draw. Every statistic is `mean(de-leaked − leaky)` over
+  **per-seed differences**, with the SE of that difference — not the difference
+  of two independent means, which would throw the pairing away and need roughly
+  an order of magnitude more games for the same error bar.
+* **The leaky arm wraps only the challenger**, and only for the duration of its
+  own `__call__`. A global patch would de-leak the *defenders* too, and the
+  mirror tier is the same policy family reading the same row weights, so a global
+  patch measures "everyone lost the leak at once" — under which a win share can
+  stay flat while every bot at the table gets worse.
+* **Complete seat rotations only** (`--games` must be a multiple of `--players`).
+  At the mirror this also gives an exact reference: identical policies in every
+  seat sum to 1 over a rotation, so the de-leaked mirror margin is **0.000 by
+  construction** and all of the paired variance comes from the leaky arm.
+* **Live champions, snapshotted first.** `experiments/league_state/champion_2p.json`
+  (**gen 24**) and `champion_3p.json` (**gen 1169**), copied to `/tmp` before use
+  because the arms rewrite them every generation. *Not*
+  `experiments/champion_3p.json`, which is a stale gen-152 export with **no row
+  weights at all** and would have shown a fake zero.
+* **The architecture must match the arm that fitted the weights**, or the run
+  measures a searcher gap instead of the leak. Read off the live processes: the
+  3p arm is `--candidate-bot quiescent:levels=1`, the 2p arm is
+  `--candidate-bot plan:width=2`.
+
+#### Two validations, because the whole thing rests on the leaky arm being real
+
+1. **`--verify-prefix`** plays the same BookBot seeds in three trees — an actual
+   checkout of the pre-fix commit (`git archive 0bec288^`), this tool's leaky
+   arm, and de-leaked master. BookBot never touches `row_pressure`, so the
+   defender is identical in all three and any difference belongs to the
+   challenger. Run **per architecture**, because `plan.py`'s threading is a
+   different code path from `quiescent.py`'s and is exactly where `0bec288`
+   shipped the `NameError` of §6.3:
+
+   ```
+   24 games each                  pre-fix == leaky arm    de-leaked differs
+   3p, quiescent:levels=1              24/24                   10/24
+   2p, plan:width=2                    24/24                    2/24
+   ```
+
+   So the leaky arm is not an approximation of the pre-fix code, it *is* the
+   pre-fix code, and the fix is live on these seeds.
+2. **`--placebo`** runs the entire `("leaky", ...)` wrapper path with the *real*
+   `root_row_budget` restored. **0 of 24 pairs diverged**, confirming the harness
+   itself is deterministic and that divergence in the real arms is the leak
+   rather than run-to-run noise.
+
+**Which version of the fix was measured.** The duels were played against the
+**multiset** mask of 6.2 (`f0e8b1e`). 6.4 above then replaced it with the
+ordered cursor, which raises the obvious question of whether these numbers still
+describe master. They do, and this was checked rather than assumed: the
+de-leaked arm's **first 150 games of the real A/B seed set** (3p vs `book`,
+`seed0` 279816) were replayed under the ordered cursor and came back
+**150/150 byte-identical** to the recorded series. `--verify-prefix` re-run on
+master likewise reproduces the pre-fix tree 24/24 with the same 10/24 differing
+and the same mean own culture 198.6250. The two fixes are the same policy on
+these games, so every table below applies to master unchanged. Consistent with
+6.4's own measurement that the ordered cursor changed 0 of 2,264 chosen moves.
+
+#### Result — 3p, `quiescent:levels=1`, champion gen 1169 (`row_bargain_forgone` 1.65171)
+
+Every cell is `de-leaked − leaky` on the same seed. **Negative = the fix cost
+strength.** `±` is 1.96·SE of the paired difference; `z` is mean/SE.
+
+| opponent | n pairs | diverged | Δ win share | Δ culture margin | Δ own culture | Δ defender culture |
+|---|---|---|---|---|---|---|
+| mirror | 900 | 359 (39.9%) | −0.0056 ±0.0184 (z −0.59) | −0.78 ±1.76 (−0.87) | −1.98 ±1.57 (−2.47) | −1.20 ±1.16 (−2.03) |
+| book | 600 | 219 (36.5%) | −0.0033 ±0.0080 (−0.82) | +0.07 ±1.48 (+0.09) | −0.36 ±1.33 (−0.52) | −0.43 ±1.01 (−0.83) |
+| book2 | 600 | 190 (31.7%) | −0.0017 ±0.0098 (−0.33) | +0.26 ±1.26 (+0.41) | **+1.25 ±1.17 (+2.10)** | +0.99 ±0.95 (+2.04) |
+| **POOLED** | **2100** | **768 (36.6%)** | **−0.0035 ±0.0075 (−0.93)** | **−0.15 ±0.88 (−0.33)** | **−0.36 ±0.79 (−0.90)** | −0.21 ±0.60 (−0.70) |
+
+Absolute levels, for scale: mirror win share 0.3389 leaky / 0.3333 de-leaked;
+book 0.9408 / 0.9375; book2 0.9417 / 0.9400.
+
+The mirror row is **two disjoint 450-pair runs** (base seeds 279765..279914 and
+779765..779914), because the first one produced the only cell in the whole
+experiment that looked like a finding — Δ own culture −2.59 ±2.21, z = −2.30 —
+and a single flagged cell selected out of many is exactly the thing that has to
+be re-shot on fresh seeds before it is believed. **It did not replicate.** On the
+independent seeds the same cell came back at **−1.37 ±2.24, z = −1.20**, half the
+size and not significant, and the Δ defender culture that had been z = −2.57
+collapsed to z = −0.33. The pooled n=900 figure above (−1.98, z = −2.47) still
+sits below zero, but it *contains* the run that motivated the replication, so its
+z is inflated by selection and should not be read as a two-sigma result. The
+clean, pre-specified test of that cell is the replication alone, and it is null.
+
+**Minimum detectable effect** (80% power, α=0.05 two-sided, pooled n=2100):
+**1.07 percentage points of win share** and **1.25 culture points of margin**.
+The 95% CI half-widths are 0.75pp and 0.88 points. So this run *can* distinguish
+"no change" from "2% worse" on both competitive metrics — a 2pp loss would have
+been caught with >99% probability — and it did not find one.
+
+#### Result — 2p, `plan:width=2`, champion gen 24 (`row_bargain_forgone` 0.04841)
+
+| opponent | n pairs | diverged | Δ win share | Δ culture margin | Δ own culture | Δ defender culture |
+|---|---|---|---|---|---|---|
+| mirror | 180 | 20 (11.1%) | +0.0000 ±0.0218 (0.00) | −0.34 ±2.49 (−0.27) | +0.26 ±2.23 (+0.23) | +0.60 ±1.59 (+0.74) |
+| book | 240 | 38 (15.8%) | +0.0042 ±0.0142 (+0.58) | +1.01 ±2.26 (+0.88) | +0.89 ±2.65 (+0.66) | −0.12 ±2.07 (−0.11) |
+| book2 | 240 | 27 (11.2%) | +0.0042 ±0.0183 (+0.45) | **−2.97 ±2.57 (−2.27)** | −2.28 ±2.05 (−2.18) | +0.69 ±1.66 (+0.81) |
+| **POOLED** | **660** | **85 (12.9%)** | **+0.0028 ±0.0106 (+0.51)** | **−0.77 ±1.41 (−1.07)** | **−0.38 ±1.34 (−0.55)** | +0.39 ±1.03 (+0.74) |
+
+MDE at 80% power: 1.52pp of win share, 2.01 culture points of margin.
+
+#### Reading the cells that crossed |z| = 1.96
+
+There are **24** of them (2 player counts x 3 opponents x 4 metrics) and **no
+multiplicity correction was applied**, so ~1.2 crossings are expected under a
+true null. Two survived into the final tables, and both are noise for reasons
+visible in the tables rather than only in the arithmetic:
+
+* **They point in opposite directions.** At 3p the de-leaked bot produced *less*
+  own culture against the mirror and **+1.25 more** against book2 (z = +2.10).
+  At 2p the culture margin is **−2.97 against book2** (z = −2.27) and **+1.01
+  against book** (z = +0.88). A real cost of losing the leak cannot flip sign
+  between two opponents at the same player count.
+* **The one that was re-shot did not replicate** (above): −2.59 → −1.37, z −2.30
+  → −1.20.
+
+The `Δ defender culture` column is what makes the mirror cell interpretable
+rather than just dismissible. It is `own − margin`, i.e. the mean culture of the
+*defenders*, who are byte-identical de-leaked champions in both arms. In the
+first mirror run it moved −2.12, essentially the same as the challenger's −2.59,
+while the competitive margin between them stayed flat at −0.47: on those seeds
+the whole table produced about 2 culture per seat less and **nobody was
+outplayed**. That is a change in the shape of the game, not a strength loss —
+total culture in Through the Ages is not conserved, it depends on game length and
+on how much production everyone built. **The mechanism was not investigated**;
+game length is the obvious candidate and `arena.duel` does not return per-game
+move counts, so this is unmeasured rather than explained. On the replication
+seeds the whole-table shift was absent (−0.28, z = −0.33), so even the shape
+effect is not established.
+
+One caveat that survives all of the above: the league's live objective is
+`--objective blend --objective-alpha 0.15`, which is **85% own final culture**
+and only 15% win share (`hillclimb_pool.own_share`, `CULTURE_CENTRE` 100,
+`CULTURE_SCALE` 120). Absolute own culture is therefore not a bystander metric
+here, it is most of the accept gradient — which is why it is reported with the
+same error bars as the rest rather than dropped as "not competitive". Pooled, it
+is −0.36 ±0.79 at 3p and −0.38 ±1.34 at 2p: consistent with zero at both.
+
+#### Headline
+
+**No detectable loss of strength from closing the leak, at either player count.**
+Pooled Δ win share is **−0.35 ±0.75 pp** at 3p (n=2100 pairs) and **+0.28 ±1.06
+pp** at 2p (n=660); pooled Δ culture margin is **−0.15 ±0.88** and **−0.77
+±1.41**. Nothing is significant on any metric, and the n is large enough that a
+2% effect would not have been missed at either count. The 3p arm's fitted
+`row_bargain_forgone` = 1.65 does **not** appear to have been buying its strength
+from the leak — so the de-leak is not, by itself, a reason to roll that arm back.
+(Read that together with the first bullet below, which is the part it does not
+cover.)
+
+#### What this does NOT establish
+
+Kept separate from the result on purpose, because all five are easy to read into
+the table above and none of them is in it.
+
+* **It does not say the 1,169 generations were well spent.** What is measured is
+  the *immediate* cost of removing the leak from a **fixed** weight vector. A
+  league that had never had the leak might have hill-climbed to a different and
+  better vector — the accept decisions themselves were taken under the leak, so
+  the *search path* was contaminated even if the endpoint's score is not. Testing
+  that means re-running the arm from scratch, which is a days-long experiment and
+  was **not run**. "No immediate strength loss" is therefore *not* an argument
+  against rolling the 3p arm back; it only removes the de-leak as a *reason* to.
+* **It does not cover the whole pool.** Only `mirror`, `book` and `book2` were
+  played — 3 of the 6 live tiers. `past`, `hall`, `human` and `variant` were
+  **not** measured, and the pool's own gate weighting (`past=1.2`, `hall=1.6`)
+  puts more weight on precisely the tiers left out. The mirror is the strongest
+  available probe *of the leak specifically* (the opponent reads the same row
+  weights), but it is not a substitute for the gate score.
+* **The 2p arm cannot answer the question at all**, and its numbers should not be
+  read as evidence of a null. Its champion is **gen 24** of a freshly restarted
+  `plan:width=2` arm with `row_bargain_forgone` = **0.048**, i.e. **34x smaller**
+  than 3p's 1.65. The effect of the leak scales with the row weights (§6.1), and
+  correspondingly only **2/24** games diverged at 2p against 10/24 at 3p. The 2p
+  run is a *consistency check* on the harness, not a measurement: it is a null
+  because there was almost nothing there to remove.
+* **No multiplicity correction was applied.** Four metrics x three opponents are
+  reported per player count. With effects this close to zero it does not matter,
+  but a reader treating any single cell as a discovery should account for it.
+* **The residual leak of §6.2 is untouched.** `hand_mil_value` still reads the
+  bot's own freshly drawn military card (within-decision sd 0.005). Both arms
+  here have it, so it cancels out of every paired difference — it is *invisible*
+  to this experiment, not shown to be harmless.
+
+#### Run log
+
+Unlike §8, these runs were **not** cheap: 5,520 duel games for the two tables
+above (3p mirror 1,800 / book 1,200 / book2 1,200; 2p mirror 360 / book 480 /
+book2 480), plus 144 for the two validations and 900 for the discarded
+replication described below. All under `nice -n 10` alongside three live
+training arms and another agent. Wall clock is not quoted anywhere because
+docs/PYPY.md records ~9% between-run wall-clock sd on this box under load.
+
+* `tools/deleak_ab.py` — committed, not a throwaway. `--placebo` and
+  `--verify-prefix` are the two validations; `--report a.json b.json c.json`
+  re-prints and merges saved runs without replaying anything.
+* Champions were **snapshotted to `/tmp` before use** (`cp
+  experiments/league_state/champion_{2,3}p.json /tmp/`), for the reason §8.1
+  gives: the arms rewrite them continuously. Any re-run will see a different
+  generation.
+* Architectures were read off the **live processes**, not guessed:
+  `ps ax | grep hillclimb_league` shows `--candidate-bot plan:width=2` on the 2p
+  arm and `--candidate-bot quiescent:levels=1` on 3p and 4p. **4p was not run.**
+* `experiments/champion_3p.json` (no `league_state/`) was **not** used. It is a
+  gen-152 export with 78 keys and no row weights at all; running against it would
+  have produced a confident zero that meant nothing.
+
+**A trap worth recording, found the hard way.** `--seed-base` is not a run
+identifier. `arena.duel` derives each game's deal as `seed0 + g // players`, so
+a "replication" at `--seed-base` **+1** replays `games/players − 1` of the same
+deals. A 450-game 3p mirror run at `20260730` returned the same 175/450
+divergence count and the same effect to three decimals as the run at `20260729`,
+because 149 of its 150 deals were the same deals. An independent replication has
+to move `--seed-base` by at least `games/players`. The tool now prints the base
+seed **range** it is about to play so the overlap is visible before the CPU is
+spent, and `--report` refuses to concatenate two runs of the same opponent whose
+base-seed ranges overlap. The 900 games of the bad replication are not in any
+table above; the valid replication at `--seed-base 20760729` is.
+
 ---
 
 ## 7. Ranked gaps and bounded proposals
@@ -1233,6 +1470,11 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
 * Whether any of the shipped GAP 1/2/3 terms actually make the bot **stronger**.
   This audit measured only what the evaluator *reads*, never what it *wins*. The
   live 3p arm's advantage over its own lineage is a league statistic and is not
-  attributable to these terms without an ablation.
+  attributable to these terms without an ablation. **Still true 2026-07-29**, with
+  one narrow exception: §6.5 is a strength measurement, but of *closing the leak*
+  in the row terms, not of the row terms themselves. It says the 3p champion is no
+  weaker without the leak; it says nothing about whether `row_urgency` /
+  `row_bargain_forgone` are worth their weights at all. That still needs an
+  ablation, which was not run.
 * Whether the Age A and Age IV positions behave like the Ages I-III sampled
   here. Neither was sampled (§8.1).
