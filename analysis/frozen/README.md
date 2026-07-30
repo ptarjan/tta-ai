@@ -78,6 +78,82 @@ The file is renamed rather than deleted so the numbers already published
 against it can still be reproduced and audited. It is refused by the guard
 under any name. **Do not use it for anything but forensics.**
 
+## The current reference vectors (use these)
+
+Cut 2026-07-30 from the live league champions, named for the generation and
+key count so the name cannot go stale silently. Every one carries
+`row_pressure` **open**, which is the thing the 78-key vectors did not and the
+reason they could not answer a wonder-pricing question.
+
+| file | gen | keys | `row_urgency` | `card_rate_credit` | wonder path | wonders visible |
+|---|---|---|---|---|---|---|
+| `champion_2p_gen54_99key.json` | 54 | 99 | −0.19109 | 0.12812 | `row_pressure` | 4/16 |
+| `champion_3p_gen1255_99key.json` | 1255 | 99 | **+0.16269** | 0.89906 | `row_pressure` | 2/16 |
+| `champion_4p_gen350_99key.json` | 350 | 99 | +0.00237 | 1.0 | `row_pressure` | 2/16 |
+| *(retired)* `champion_{2,3}p.json` | 220/160 | 78 | absent → 0.0 | 1.0 | **NOTHING** | — |
+| *(quarantined)* `champion_4p.DEGENERATE.json` | 139 | 78 | absent → 0.0 | 1.0 | **NOTHING** | — |
+
+Print the full table for any vector, and do it *before* you measure:
+
+```bash
+python3 tools/conduction_table.py analysis/frozen/champion_3p_gen1255_99key.json
+```
+
+### Two gates, and passing the first tells you nothing about the second
+
+**Gate 1 — is the consumer open?** `evaluate()` skips whole feature functions
+when their scale weight is 0.0. A wonder never enters `hand_civil`, so its
+`card_potential` reaches the policy only through `row_pressure`. On the 78-key
+vectors that gate is shut and the tool prints `for a WONDER specifically:
+NOTHING` — the one sentence that would have saved the 12,800-game null.
+
+**Gate 2 — does the card clear `card_potential > 0`?** `row_pressure` skips
+any card whose potential is `<= 0` ("the sweep destroying a card I do not want
+is not a loss"). This is a **threshold, not a slope**, and it is where the
++88% actually came from. At the live 2p champion's *trained*
+`card_rate_credit = 0.12812`, **4** of 16 wonders clear it; at 0.0, **0** do;
+at 1.0, **8** do — and those 8 are exactly the 8 repriced wonders that moved.
+**The reprice did not make wonders better, it made them visible.**
+
+That threshold is a property of the *vector*, not of the code, and it is easy
+to get backwards: under `DEFAULT_WEIGHTS` 11 of 16 wonders already price above
+zero and the same knob changes **nothing**. A probe run against defaults would
+have concluded there was no gate at all.
+`tests/test_conduction_table.py` pins both directions.
+
+### Caveat on the 3p reference: its `row_urgency` sign is arbitrary
+
+`row_urgency` is read off the **post-move** state, so it measures urgency
+*left behind*; taking the doomed card lowers it, and preferring that take
+therefore requires a **negative** weight (which is why
+`tests/test_row_features.py`'s `row_on()` helper uses −0.1). The 2p champion's
+−0.19109 has the right sign. **The 3p champion's +0.16269 does not**, and it
+was checked rather than assumed before this file was blessed:
+
+* **Not a per-player-count subtlety.** `_SWEEP = {2: 3, 3: 2, 4: 1}`, so the
+  slide is `n * SWEEP[n]` = 6 at 2p and 6 at 3p over the same 13-slot row. The
+  arithmetic at 2p and 3p is identical.
+* **Not an inert weight.** Measured across real decisions, the urgency term
+  varies between candidate moves on **35.0%** of 3p decisions with a mean
+  `|w| × range` of 0.2276 and a max of 5.99. It is doing something.
+* **But not decisive either.** `tools/guard_ab.py 3 300` with the sign flipped
+  (+0.16269 → −0.16269), paired on seeds against two opponents: pooled win
+  edge **+0.0025 ± 0.0305**, margin edge **+0.48 ± 2.73**, n=600. A tight null.
+
+So the climb has no usable gradient on this weight at the *strength* level and
+drifted to a semantically wrong sign without ever paying for it. The vector is
+still the right reference — it is the bot the league trains — but:
+
+> **Any behavioural measurement at 3p that reads card ordering (concordance,
+> take-rate ordering, row-timing) is reading a sign that is arbitrary.**
+> Win-rate and margin measurements are unaffected. Do not interpret 3p
+> row-pressure behaviour as a learned preference.
+
+The 4p champion's +0.00237 is a different case and *not* a defect: that weight
+varies on only 9.8% of decisions with a mean `|w| × range` of **0.0007**, so it
+is simply unidentifiable — there is no gradient for the climb to follow, and
+the value is noise around zero. Read no meaning into its sign either.
+
 ## The rule: freeze, but freeze something current
 
 Both instincts are right and they are not actually in conflict.
@@ -108,12 +184,12 @@ So:
 3. **State the vocabulary size in the doc that reports the result.** "Measured
    against the frozen 2p champion" is not a provenance statement. "gen 220,
    78 keys, code at 112" is.
-4. **Before running any A/B, assert the lever is non-zero in the base
-   vector.** One line. It would have caught this before the first of the
-   12,800 games. If the lever is gated (`evaluate()` has several
-   `if <weight>:` guards), assert the *gate* is non-zero too — that is the
-   specific trap here: `card_rate_credit` was set on both arms and still did
-   nothing, because `row_urgency` upstream of it was 0.0.
+4. **Before running any A/B, print the conduction table.**
+   `python3 tools/conduction_table.py <vector>` — one second, and it names
+   both gates. `experiments.arena.assert_lever_conducts()` enforces gate 1
+   automatically for anything routed through it. Gate 2 has no automatic
+   enforcement because a zero visible set is sometimes the honest answer; read
+   the line.
 5. **Report the live champion alongside**, on a smaller sample, whenever a
    result is going to be used to justify changing the bot. The frozen vector
    answers "is this lever real?"; only the live one answers "is this lever

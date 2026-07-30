@@ -72,7 +72,17 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 >   the frozen champions".** On the live vector the pipe carries an effect
 >   large enough to shift the zero-wonder share from 43.5% to 19.3%.
 > * **The concordance numbers (0.525 / 0.534 / 0.383) are frozen-vector
->   numbers** and have not been recomputed on the live champions.
+>   numbers.** 2p has been recomputed; 3p and 4p were blocked on there being
+>   no live reference, which is now fixed —
+>   `analysis/frozen/champion_3p_gen1255_99key.json` and
+>   `champion_4p_gen350_99key.json` are cut and carry `row_pressure` open, so
+>   both can be redone. **Read the 3p caveat in `analysis/frozen/README.md`
+>   first:** the 3p champion's `row_urgency` is `+0.16269`, the wrong sign for
+>   a post-move residual, and a seed-paired A/B (n=600) shows flipping it is
+>   worth `+0.0025 ± 0.0305` — a tight null. The weight is active on 35% of
+>   decisions but has no gradient at the strength level, so **3p card-ordering
+>   concordance is measured against an arbitrary sign.** That is a real
+>   caveat on any recomputed 3p concordance figure, not a blocker.
 > * **The 4p column is separately unreliable** — `analysis/frozen/champion_4p`
 >   is the known-degenerate vector; see `analysis/frozen/README.md`.
 > * **The ranking in §4 may reorder.** Wonders were ranked suspect #1 on the
