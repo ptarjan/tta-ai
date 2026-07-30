@@ -992,14 +992,38 @@ opponent wastes games; under-weighting a live one biases acceptance).
 
 **Checklist when you change the evaluator:**
 
-1. Stop the arms with `experiments/logs/stop_league_{2,3,4}p.json` and wait for
-   the generation boundary -- climbers do not poll mid-generation.
+1. Stop the arms with `experiments/logs/stop_league_{2,3,4}p.json`, then run
+   `experiments/watchdog.sh` once so it reaps the supervisors, and confirm
+   `pgrep -f run_league.sh` is empty before going on.
 2. `git pull` only once no climber is running.
 3. Back up `state_Np.json`, then delete its `last_full_check` key.
 4. Remove the sentinels and let `watchdog.sh` relaunch, so the REQUIRED-flag
    assertion re-checks the arg list instead of you hand-typing it.
 5. Confirm each arm logs `0 opponents measured` on its startup pool line and
    then advances a generation.
+
+**THE HALT CANNOT STOP A SUPERVISOR OLDER THAN THE HALT.** Step 1 used to read
+"wait for the generation boundary -- climbers do not poll mid-generation", and
+that was wrong twice over. The sentinel is not polled between generations at
+all: `hillclimb_league.main` tests it *once, at startup*, and `run_league.sh`
+tests it at the top of its restart loop, so the granularity is the `--hours 1`
+invocation and not the generation. Worse, `run_league.sh` is parsed by bash
+**once, when the supervisor launches** -- a `while` loop is a single compound
+command, read into memory whole -- so editing the script does not change the
+behaviour of an arm that is already running. On 2026-07-30 all three arms were
+launched on 07-29 at 08:14/08:50/09:20 and the stop-file check landed in
+`run_league.sh` at 07-29 15:33. Every one of them was executing a loop body
+that had never heard of the sentinel. 3p sat in a 60-second cycle -- climber
+refuses at startup, supervisor sleeps 60, restarts it, forever -- and would
+have done so until the deadline, looking busy in `ps` the entire time.
+
+So the sentinel's real and only job is to stop `watchdog.sh` from *relaunching*
+an arm. Stopping a *running* arm is a kill, and it always was. `watchdog.sh`
+now does that kill itself (`reap`), which is what makes step 1 above true
+rather than aspirational: the file is once again sufficient, because the thing
+that reads the file is the thing cron re-executes from disk every ten minutes.
+`watchdog.sh` can be fixed by editing it; `run_league.sh` cannot, and any
+future halt mechanism belongs in the watchdog for exactly that reason.
 
 ## 10. The unit of analysis: every interval in this project was computed on the wrong n
 

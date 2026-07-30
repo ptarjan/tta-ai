@@ -55,6 +55,44 @@ set -u
 cd "$(dirname "$0")/.."
 DEADLINE_FILE=experiments/logs/watchdog_deadline
 LOG=experiments/logs/watchdog.log
+
+# ---------------------------------------------------------------------------
+# REAP: the sentinel stops a RUNNING arm, not just a relaunch
+# ---------------------------------------------------------------------------
+# `launch` below refuses to START an arm whose sentinel exists, and that was
+# taken to mean the sentinel stops the arm.  It does not.  run_league.sh tests
+# the sentinel too, but bash parses its `while` loop ONCE, at supervisor start
+# -- so an arm launched before that test was written executes a loop body that
+# has never heard of the file, and no edit to run_league.sh can reach it.  On
+# 2026-07-30 that was all three arms, and 3p spun on a 60-second
+# refuse/sleep/restart cycle that would have run to the deadline looking
+# perfectly healthy in `ps` (docs/CARD_BLINDNESS.md 9).
+#
+# The fix belongs HERE and not there, because this file is what cron
+# re-executes from disk every ten minutes: fixing it fixes the arms already
+# running.  So the sentinel is now sufficient on its own -- write it, wait up
+# to ten minutes (or run this script by hand), and the arm is gone.
+#
+# The kill is per-arm and by matched command line: the supervisor first so it
+# cannot restart the climber, then the climber and its workers.  TERM, not
+# KILL -- a climber is between generations far more often than it is inside a
+# state write, and TERM lets it unwind.  This runs BEFORE the deadline check
+# on purpose: a halt must work even after the budget has expired.
+reap() {
+    local K sup clim
+    for K in 2 3 4; do
+        [ -f "experiments/logs/stop_league_${K}p.json" ] || continue
+        sup=$(pgrep -f "run_league.sh $K " || true)
+        clim=$(pgrep -f "hillclimb_league --players $K " || true)
+        [ -n "$sup$clim" ] || continue
+        [ -n "$sup" ] && kill -TERM $sup 2>/dev/null
+        sleep 2
+        [ -n "$clim" ] && kill -TERM $clim 2>/dev/null
+        echo "$(date '+%F %T') watchdog: REAPED ${K}p on its stop sentinel -- supervisor(s) [${sup:-none}] climber(s) [${clim:-none}].  The sentinel alone does not stop a supervisor launched before run_league.sh learned to check it." >> "$LOG"
+    done
+}
+reap
+
 [ -f "$DEADLINE_FILE" ] || exit 0
 DEADLINE=$(cat "$DEADLINE_FILE")
 NOW=$(date +%s)
