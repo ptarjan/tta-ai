@@ -84,13 +84,35 @@ def corruption(blue_available):
 
 # ------------------------------------------------------- derived checks
 
-def pop_cost(state, p):
-    base = pop_cost_base(p.yellow_bank)
+def pop_food_cost(stats, yellow_bank, one_time=None):
+    """Food to increase population, given already-computed `stats` (§6.1).
+
+    THE single implementation of the formula.  It existed in three copies --
+    here, `weighted.features` and `neural_encode` -- which is the shape of
+    bug this repo has now paid for twice (`buildDiscount` summed instead of
+    maxed, and the hand double-count).  The evaluators hold the `Stats`
+    already and must not pay for a second `state_stats`, which is why this
+    takes stats rather than state; `pop_cost` below is the state-taking
+    wrapper for callers that do not.
+
+    `one_time` is deliberately optional and the two evaluator callers pass
+    nothing, which preserves their exact current behaviour: neither has ever
+    applied `one_time_discount`.  That is a real (small) blind spot -- an
+    evaluator overprices a population increase while a one-shot discount is
+    pending -- but fixing it changes what the bot plays, so it belongs in its
+    own measured change rather than smuggled into a de-duplication.
+    """
+    base = pop_cost_base(yellow_bank)
     if base is None:
         return None
-    s = effects.state_stats(state, p)
-    base -= (p.one_time_discount.get("increasePopulation") or {}).get("food", 0)
-    return max(0, base - s.pop_food_discount)
+    if one_time:
+        base -= (one_time.get("increasePopulation") or {}).get("food", 0)
+    return max(0, base - stats.pop_food_discount)
+
+
+def pop_cost(state, p):
+    return pop_food_cost(effects.state_stats(state, p), p.yellow_bank,
+                         p.one_time_discount)
 
 
 def discontent(state, p):

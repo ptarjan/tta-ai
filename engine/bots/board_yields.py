@@ -83,7 +83,7 @@ module exists to fix.
 """
 from __future__ import annotations
 
-from .. import cards as C, effects
+from .. import cards as C, economy, effects
 
 __all__ = ["board_yields", "board_choices", "SWAP_TYPES", "SINGLE_SLOT",
            "BOARD_PRICED"]
@@ -160,9 +160,25 @@ _STATS_FEATURES = (
     ("colonize", "colonize_bonus"),
     # new channels, 0.0 by default (see weighted.BASE_WEIGHTS)
     ("urban_limit", "urban_limit"),
-    ("pop_food_discount", "pop_food_discount"),
     ("wonder_stages", "wonder_stages_per_action"),
 )
+
+# NOT in the table above, deliberately: `pop_food_discount`.
+#
+# Moses' "increasing your population costs 1 food less" is the one key here
+# whose board side was NEVER blind.  `weighted.features` subtracts
+# `Stats.pop_food_discount` from `pop_cost`, which carries a real trained
+# weight of -0.4, so a player holding Moses has always been valued correctly.
+# Giving the delta its own `pop_food_discount` feature therefore did not fix
+# an asymmetry, it created a SECOND representation of one quantity sitting at
+# 0.0 next to a live one -- the same shape as `buildDiscount` summed instead
+# of maxed, and as the hand double-count.
+#
+# So the diff prices Moses through `pop_cost`, the feature the board
+# evaluation actually reads, and there is exactly one representation again.
+# `economy.pop_food_cost` is the single implementation of the formula, shared
+# with `features` and `neural_encode`.
+_POP_SENTINEL = 8.0     # `features`' "cannot increase population at all"
 
 # the third slot of a yield triple, mirroring weighted._Y_GAIN / _Y_COST.
 # Imported by value rather than from weighted to keep this module free of a
@@ -199,6 +215,13 @@ _DELTA_CACHE = {}
 _DELTA_CACHE_MAX = 200_000
 
 
+def _pop_cost(stats, p):
+    """`weighted.features`' `pop_cost`, to the letter, including its
+    sentinel -- so the diff and the board cannot disagree about Moses."""
+    got = economy.pop_food_cost(stats, p.yellow_bank)
+    return _POP_SENTINEL if got is None else float(got)
+
+
 def _stats_delta(state, p, field, name):
     key = (name, effects.stats_key(state, p))
     hit = _DELTA_CACHE.get(key)
@@ -219,6 +242,11 @@ def _stats_delta(state, p, field, name):
          - sum(before.build_discount.values()))
     if d:
         out.append(("build_discount", float(d), _GAIN))
+    # Moses, priced through the feature the board evaluation actually reads.
+    # See the note beside `_STATS_FEATURES`.
+    d = _pop_cost(after, p) - _pop_cost(before, p)
+    if d:
+        out.append(("pop_cost", float(d), _GAIN))
     # Gandhi: `cannotPlayAggressionOrWar`.  A real cost (his owner may never
     # play an aggression or a war again) bundled with a real benefit
     # (`opponentsPayDoubleMilitaryActionsToAttackYou`, which is not in Stats).
@@ -441,11 +469,9 @@ def _free_pop_increase(state, p, name):
     Ocean Liners is worth exactly nothing, and a static table would still be
     offering them four stages of resources for it.
     """
-    from .. import economy
-    base = economy.pop_cost_base(p.yellow_bank)
-    if base is None:
+    food = economy.pop_food_cost(effects.state_stats(state, p), p.yellow_bank)
+    if food is None:
         return ()
-    food = max(0, base - effects.state_stats(state, p).pop_food_discount)
     return (("civil_actions", FREE_POP_UTIL, _GAIN),
             ("food_rate", FREE_POP_UTIL * food, _GAIN))
 

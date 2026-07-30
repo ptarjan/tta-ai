@@ -169,8 +169,9 @@ def _player_block(state, idx, me_idx, best_rival_strength, out):
     margin = s.happy - happy_req
     discontent = max(0, -margin)
     blue = effects.blue_available(p)
-    pop_base = economy.pop_cost_base(p.yellow_bank)
-    pop_cost = 8 if pop_base is None else max(0, pop_base - s.pop_food_discount)
+    pop_cost = economy.pop_food_cost(s, p.yellow_bank)
+    if pop_cost is None:
+        pop_cost = 8
 
     progress = remaining = 0
     if p.wonder is not None:

@@ -505,3 +505,189 @@ class TestBoardScaledActionCards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAcquisitionAndOwnershipAgree(unittest.TestCase):
+    """Anything `board_yields` prices while the bot is CONSIDERING a card,
+    `features` must price once the bot HOLDS it.
+
+    The failure this exists to stop is the mirror image of the blindness the
+    module was written for.  `_stats_delta` priced `urban_limit`,
+    `pop_food_discount` and `no_aggression`; `features` emitted none of the
+    three.  So a government that raises the urban building limit was worth
+    something in the take decision and worth nothing the moment it was
+    played -- value that appears on acquisition and evaporates on ownership.
+    Both directions produce a bot that misjudges what it owns.
+
+    Stated as a general invariant rather than three assertions, because the
+    specific three are already fixed and what matters is that a fourth
+    cannot appear quietly."""
+
+    def _emitted_features(self):
+        """Every feature name CARD PRICING can produce -- both the board path
+        and the static table -- gathered by actually running them over every
+        card rather than by reading the tables, because a rider that invents
+        a key is exactly the case a table-reading version would miss."""
+        st = _played()
+        p = st.players[0]
+        p.leader = None
+        effects.invalidate(st, p)
+        seen = set()
+        for name in C.db().by_name:
+            for triples in (BY.board_yields(name, st, 0) or (),
+                            BY.board_extra(name, st, 0),
+                            W._card_yields(name)):
+                seen.update(k for k, _a, _c in triples)
+            for group in W._card_choices(name):
+                for g in group:
+                    seen.update(k for k, _a, _c in g)
+        return seen, st
+
+    #: keys that are legitimately card-side only: they price something about
+    #: PLAYING the card that does not persist as board state afterwards.
+    #: Each needs a reason, exactly like DELIBERATELY_UNPRICED -- and the
+    #: list is short on purpose, because "it does not persist" is a much
+    #: rarer thing to be true than it first looks.
+    CARD_ONLY = {
+        "gov_action_cost":
+            "the civil-action pool a revolution empties on the turn it is "
+            "declared; gone by the next turn, so there is nothing standing "
+            "for features() to report",
+        "free_civil_action":
+            "a rider on a one-shot action card: the free action is spent "
+            "the moment the card resolves",
+        "resource_discount":
+            "same, the discount applies to the one build the action card "
+            "pays for and then it is over",
+        "restricted_resources":
+            "resources ring-fenced to military units, granted for a single "
+            "turn by Patriotism and friends",
+    }
+
+    def test_every_board_priced_feature_is_also_a_board_feature(self):
+        seen, st = self._emitted_features()
+        board = set(W.features(st, 0))
+        missing = sorted(seen - board - set(self.CARD_ONLY))
+        self.assertEqual(
+            missing, [],
+            "board_yields prices these while the card is being CONSIDERED "
+            "and weighted.features does not price them once it is OWNED, so "
+            "their value evaporates on play.  Either emit them in features() "
+            "or, if the quantity genuinely does not persist, add them to "
+            "CARD_ONLY with a reason: " + repr(missing))
+
+    def test_the_card_only_list_has_no_stale_entries(self):
+        """A key written off here that the evaluator no longer emits is rot,
+        and it would mask a real regression in the test above."""
+        seen, _st = self._emitted_features()
+        self.assertEqual(sorted(set(self.CARD_ONLY) - seen), [])
+
+    def test_card_only_entries_all_carry_a_reason(self):
+        for k, why in self.CARD_ONLY.items():
+            self.assertTrue(isinstance(why, str) and len(why) > 20, k)
+
+    def test_urban_limit_survives_being_played(self):
+        """The concrete case: Republic's urban cap is worth something in the
+        row and the same something on the board."""
+        st = _played()
+        p = st.players[0]
+        p.government = "Despotism"
+        effects.invalidate(st, p)
+        before = W.features(st, 0)["urban_limit"]
+        gain = dict((k, a) for k, a, _c in BY.board_yields("Republic", st, 0))
+        p.government = "Republic"
+        effects.invalidate(st, p)
+        after = W.features(st, 0)["urban_limit"]
+        self.assertEqual(after - before, gain["urban_limit"])
+
+    def test_gandhis_ban_survives_being_played(self):
+        st = _played()
+        p = st.players[0]
+        p.leader = None
+        effects.invalidate(st, p)
+        before = W.features(st, 0)["no_aggression"]
+        gain = dict((k, a) for k, a, _c
+                    in BY.board_yields("Mahatma Gandhi", st, 0))
+        p.leader = "Mahatma Gandhi"
+        effects.invalidate(st, p)
+        after = W.features(st, 0)["no_aggression"]
+        self.assertEqual(before, 0.0)
+        self.assertEqual(after - before, gain["no_aggression"])
+
+
+class TestMosesIsPricedThroughPopCost(unittest.TestCase):
+    """Moses is the one key here whose board side was NEVER blind, and the
+    fix is therefore the opposite of the other two: remove the duplicate
+    rather than add the missing half.
+
+    `features` already subtracts `Stats.pop_food_discount` inside `pop_cost`,
+    which carries a real trained weight of -0.4.  A separate
+    `pop_food_discount` feature at 0.0 was a SECOND representation of one
+    quantity sitting next to a live one -- the same shape as `buildDiscount`
+    summed instead of maxed."""
+
+    def test_there_is_no_pop_food_discount_feature_or_weight(self):
+        st = _played()
+        self.assertNotIn("pop_food_discount", W.features(st, 0))
+        self.assertNotIn("pop_food_discount", W.DEFAULT_WEIGHTS)
+        self.assertNotIn("pop_food_discount",
+                         [f for _a, f in BY._STATS_FEATURES])
+
+    def test_moses_is_priced_on_pop_cost_and_matches_the_board(self):
+        st = _played()
+        p = st.players[0]
+        p.leader = None
+        p.yellow_bank = max(p.yellow_bank, 5)      # so a pop cost exists
+        effects.invalidate(st, p)
+        before = W.features(st, 0)["pop_cost"]
+        gain = dict((k, a) for k, a, _c in BY.board_yields("Moses", st, 0))
+        p.leader = "Moses"
+        effects.invalidate(st, p)
+        after = W.features(st, 0)["pop_cost"]
+        self.assertEqual(after - before, gain["pop_cost"])
+        self.assertLess(gain["pop_cost"], 0.0)     # cheaper, and priced
+
+    def test_moses_now_prices_at_a_live_weight(self):
+        """The point of routing him through `pop_cost`: he is worth
+        something under a trained vector instead of nothing under a 0.0."""
+        st = _played()
+        p = st.players[0]
+        p.leader = None
+        p.yellow_bank = max(p.yellow_bank, 5)
+        effects.invalidate(st, p)
+        w = _w(card_board_leader=1.0)
+        self.assertNotEqual(W.card_potential("Moses", w, st, 0), 0.0)
+
+
+class TestThePopCostFormulaHasOneImplementation(unittest.TestCase):
+    """`max(0, pop_cost_base(bank) - stats.pop_food_discount)` existed in
+    four places: economy, weighted.features, neural_encode and Ocean Liners'
+    rider.  That is the shape of bug this repo has already paid for twice."""
+
+    def test_nobody_recomputes_it_by_hand(self):
+        import glob
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        offenders = []
+        for path in glob.glob(os.path.join(root, "engine", "**", "*.py"),
+                              recursive=True):
+            if os.path.basename(path) == "economy.py":
+                continue
+            with open(path) as fh:
+                for n, line in enumerate(fh, 1):
+                    if "pop_food_discount" in line and "max(" in line:
+                        offenders.append("%s:%d" % (os.path.relpath(path,
+                                                                    root), n))
+        self.assertEqual(
+            offenders, [],
+            "the population-cost formula belongs in "
+            "economy.pop_food_cost and nowhere else: " + repr(offenders))
+
+    def test_the_shared_helper_agrees_with_the_state_taking_wrapper(self):
+        from engine import economy
+        st = _played()
+        p = st.players[0]
+        s = effects.state_stats(st, p)
+        self.assertEqual(economy.pop_food_cost(s, p.yellow_bank,
+                                               p.one_time_discount),
+                         economy.pop_cost(st, p))

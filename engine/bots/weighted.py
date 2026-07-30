@@ -587,8 +587,12 @@ def features(state, idx, ctx=None):
     discontent = max(0, -margin)
     blue_have = effects.blue_available(p)
     blue_free = blue_have + g("blue_free", 0.0)
-    pop_base = economy.pop_cost_base(p.yellow_bank)
-    pop_cost = 8 if pop_base is None else max(0, pop_base - s.pop_food_discount)
+    # 8 is the "cannot increase population at all" sentinel (empty yellow
+    # bank).  The formula itself lives in exactly one place; see
+    # `economy.pop_food_cost`.
+    pop_cost = economy.pop_food_cost(s, p.yellow_bank)
+    if pop_cost is None:
+        pop_cost = 8
 
     # --- wonders: how far in, and whether it can possibly be finished.
     #
@@ -730,6 +734,24 @@ def features(state, idx, ctx=None):
         "colonize_bonus": float(s.colonize),
         "build_discount": float(sum(s.build_discount.values())
                                 if s.build_discount else 0),
+        # `board_yields` prices both of these when the bot is CONSIDERING a
+        # card and, until this line, nothing priced them once it HELD one --
+        # so a government's urban slots and Gandhi's aggression ban appeared
+        # in the take decision and then evaporated from the board.  That is
+        # the mirror image of the blindness docs/CARD_PRICING_LEADERS.md was
+        # written about, and it is fixed the way the convention above says:
+        # same key on both sides.
+        #
+        # `urban_limit` is real board state -- Despotism caps you at 2 urban
+        # buildings, the Age III governments at 4 -- and nothing else in this
+        # dict reflects it (`urban_workers` is workers, not the cap).
+        "urban_limit": float(s.urban_limit),
+        # Gandhi.  A flag rather than a count, and the weight stays unsigned
+        # at 0.0, because it bundles a restriction (he may never play an
+        # aggression or war, enforced at engine/actions.py:292) with a
+        # benefit (opponents pay double to attack him) and which dominates is
+        # a thing to measure, not to assert.
+        "no_aggression": 1.0 if s.no_aggression else 0.0,
         # --- cards
         "hand_civil": len(p.hand_civil),
         "hand_value": hand_value,
@@ -1922,8 +1944,12 @@ BASE_WEIGHTS = {
     # thing to spend than a 4-action Despotism turn).
     "urban_limit": 0.0,
     "gov_action_cost": 0.0,
-    # Moses: `Stats.pop_food_discount`, food off every population increase.
-    "pop_food_discount": 0.0,
+    # NO `pop_food_discount` weight, deliberately.  Moses' food discount is
+    # the one key in this block whose board side was never blind: `features`
+    # subtracts it inside `pop_cost`, which carries a real trained -0.4.  A
+    # second 0.0 feature beside a live one is not an extra channel, it is a
+    # duplicate -- so the swap diff prices Moses through `pop_cost` too.  See
+    # the note beside `board_yields._STATS_FEATURES`.
     # Gandhi: `Stats.no_aggression`.  Deliberately unsigned -- it bundles a
     # cost (he may never play an aggression or war) with a benefit
     # (opponents pay double to attack him), and which dominates is exactly

@@ -179,6 +179,76 @@ That is deliberate — it converts a choice-with-a-free-parameter into something
 the league fits, so the only genuinely hand-set constant in the whole change is
 Churchill's 3.
 
+### 2.4 Value that appears on acquisition and evaporates on ownership
+
+A follow-up found by the uncovered-types lane: `_stats_delta` priced
+`urban_limit`, `pop_food_discount` and `no_aggression`, and `weighted.features`
+emitted none of the three. So a government that raises the urban building
+limit was worth something while the bot was *considering* it and worth nothing
+the moment it was *played*.
+
+That is the mirror image of the blindness this document was written about.
+Both directions produce a bot that misjudges what it owns, and the same
+principle settles them: **a card whose gain is priced on one side and not the
+other is biased, not inert.**
+
+The three are *not* the same call, which is why they got three answers.
+
+| key | direction | why | kind |
+|---|---|---|---|
+| `urban_limit` | **emit it in `features`** | real persistent board state (Despotism caps you at 2 urban buildings, the Age III governments at 4) and nothing else in the feature dict reflects it — `urban_workers` is workers, not the cap | **rule-fact**: the file's own convention, written above these lines, is "same key on both sides, the way `civil_actions` already is" |
+| `no_aggression` | **emit it in `features`** | permanent board state, enforced at `engine/actions.py:292` | direction is rule-fact; the **judgement** is encoding it as a 0/1 flag rather than a count, and the weight stays unsigned at 0.0 so the league decides which of Gandhi's two halves dominates |
+| `pop_food_discount` | **stop pricing it in the delta** | see below — the opposite call | **rule-fact**: there must be exactly one representation, and `pop_cost` is the one the board already uses |
+
+**Moses is the interesting one, because the premise was wrong.** His board
+side was never blind. `features` computes
+
+```python
+pop_cost = max(0, pop_cost_base(bank) - s.pop_food_discount)
+```
+
+and `pop_cost` carries a real trained weight of **−0.4**. A player holding
+Moses has always been valued correctly. Giving the swap diff its own
+`pop_food_discount` feature therefore did not fix an asymmetry — it created a
+**second representation of one quantity, at 0.0, sitting next to a live one**.
+That is the same shape as `buildDiscount` summed instead of maxed, and as the
+hand double-count: this repo has now paid for it three times.
+
+So the diff prices Moses through `pop_cost`, the feature the board evaluation
+actually reads, and the `pop_food_discount` weight is deleted. Two consequences
+worth stating: Moses is now priced by a **live** weight instead of a dead one
+(he is worth something under a trained vector for the first time), and there is
+one representation again rather than two.
+
+**While confirming that, the formula turned out to exist in four places** —
+`economy.pop_cost`, `weighted.features`, `neural_encode`, and Ocean Liners'
+`freePopIncreasePerTurn` rider — and the three copies outside `economy` all
+omitted the `one_time_discount` term the canonical one applies. It is now one
+implementation, `economy.pop_food_cost`, with
+`TestThePopCostFormulaHasOneImplementation` walking `engine/` to forbid a
+fifth. The two evaluator callers still pass no `one_time_discount`, which
+preserves their exact behaviour: that omission is a real (small) blind spot,
+but fixing it changes what the bot plays and belongs in its own measured
+change rather than smuggled into a de-duplication.
+
+**The guardrail matters more than the three fixes.**
+`TestAcquisitionAndOwnershipAgree` gathers every feature name card pricing can
+emit — board path *and* static table, by running them over all 236 cards
+rather than by reading the tables, since a rider that invents a key is exactly
+what a table-reading version would miss — and fails unless each one is either
+emitted by `features` or listed in `CARD_ONLY` with a written reason. After
+this change `CARD_ONLY` has **four** entries, every one a genuinely one-shot
+quantity: `gov_action_cost` (the pool a revolution empties that turn),
+`free_civil_action`, `resource_discount` and `restricted_resources` (riders on
+one-shot action cards). Nothing else in the evaluator prices something on
+acquisition that it cannot price on ownership.
+
+This change is **inert**: both new features default to 0.0 and contribute
+exactly 0.0 to `evaluate`, the Moses reroute only fires when
+`card_board_leader` is non-zero (it is 0.0), and the `pop_food_cost`
+extraction is verified byte-identical to the inline formula over four games of
+self-play.
+
 ## 3. The census
 
 `tools/card_blindness.py` grew a `--board` mode that counts the board-aware

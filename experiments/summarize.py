@@ -63,7 +63,7 @@ GROUPS = {
     # or a government is worth on THIS board, by swapping it in and diffing
     # `effects.compute`.  Its own group for the same reason as "priced" --
     # one coherent change the climber should be able to move together.
-    "board": ("urban_limit", "gov_action_cost", "pop_food_discount",
+    "board": ("urban_limit", "gov_action_cost",
               "no_aggression", "restricted_resources", "card_board_credit",
               "card_board_leader", "card_board_government",
               "card_board_action", "card_board_wonder"),
