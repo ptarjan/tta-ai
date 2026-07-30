@@ -194,6 +194,96 @@ class TestShardClusteredInterval(unittest.TestCase):
                              capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(out.returncode, 3)
         self.assertIn("ci_cluster=NA", out.stdout)
+        self.assertIn("se_cluster=NA", out.stdout)
+
+
+class TestClusterStandardError(unittest.TestCase):
+    """`se_cluster=`, added 2026-07-30 for the neural loop's arm-B floor.
+
+    The floor combines variances -- `sqrt(se_cand^2 + se_inc^2)` -- so it needs
+    a STANDARD ERROR, and every way of recovering one from a published
+    half-width is wrong here:
+
+        ci / 1.96           the per-game binomial CI.  Blind to the shards.
+                            0.0320/side, band 4.52pp.  What shipped until now.
+        ci_cluster / 1.96   ci_cluster is t_{k-1}*se and already carries
+                            t5 = 2.571, so this leaves 2.571/1.96 behind.
+                            0.0643/side, band 9.09pp.  Too wide.
+        se_cluster          0.0490/side, band 6.93pp.  Correct.
+
+    Publishing the SE outright is what makes the middle line unnecessary, and
+    these tests exist so it stays that way.
+    """
+
+    ANCHOR = [0.3250, 0.3000, 0.3875, 0.5625, 0.4250, 0.5875]
+
+    def _pool_wins(self, wins, n=40):
+        with tempfile.TemporaryDirectory() as d:
+            ps = [_shard(d, f"s{i}.log", w, n) for i, w in enumerate(wins)]
+            return _pool(ps)
+
+    def test_anchor_se_cluster_is_the_0490_the_audit_reported(self):
+        r = self._pool_wins(self.ANCHOR)
+        self.assertAlmostEqual(float(r["se_cluster"]), 0.0490, places=4)
+
+    def test_se_cluster_times_t5_is_ci_cluster(self):
+        """The two fields describe one estimate; the only difference between
+        them is the critical value, and it is t_{k-1}, not 1.96."""
+        r = self._pool_wins(self.ANCHOR)
+        se, half = float(r["se_cluster"]), float(r["ci_cluster"])
+        self.assertEqual(int(r["df"]), 5)
+        self.assertAlmostEqual(half / se, 2.571, places=2)
+
+    def test_se_cluster_is_not_ci_cluster_over_196(self):
+        """The trap, asserted as a NON-equality so it cannot creep back in."""
+        r = self._pool_wins(self.ANCHOR)
+        se, half = float(r["se_cluster"]), float(r["ci_cluster"])
+        self.assertNotAlmostEqual(se, half / 1.96, places=3)
+        self.assertAlmostEqual(half / 1.96, 0.0643, places=4)
+        # and the band each would produce, which is the number a reader checks
+        self.assertAlmostEqual(math.sqrt(2) * se, 0.0693, places=4)
+        self.assertAlmostEqual(math.sqrt(2) * (half / 1.96), 0.0909, places=4)
+
+    def test_se_cluster_is_not_the_legacy_ci_over_196(self):
+        r = self._pool_wins(self.ANCHOR)
+        se, legacy = float(r["se_cluster"]), float(r["ci"]) / 1.96
+        self.assertAlmostEqual(legacy, 0.0320, places=4)
+        self.assertGreater(se / legacy, 1.5)
+        self.assertAlmostEqual(math.sqrt(2) * legacy, 0.0452, places=4)
+
+    def test_se_cluster_shrinks_as_shards_agree(self):
+        agree = self._pool_wins([0.50] * 6)
+        self.assertAlmostEqual(float(agree["se_cluster"]), 0.0, places=9)
+        self.assertGreater(float(self._pool_wins(self.ANCHOR)["se_cluster"]),
+                           0.04)
+
+    def test_single_shard_se_is_unparseable_so_the_gate_fails_closed(self):
+        """k=1 has no between-shard variance to estimate.  `inf` is emitted on
+        purpose: the loop's sed field-scraper matches [0-9.]* and captures
+        nothing, so arm B sees an empty SE and blocks rather than promoting on
+        a variance it never measured."""
+        with tempfile.TemporaryDirectory() as d:
+            out = subprocess.run(
+                [sys.executable, SCRIPT, _shard(d, "a.log", 0.55, 200)],
+                capture_output=True, text=True, cwd=ROOT).stdout.strip()
+            self.assertIn("se_cluster=inf", out)
+            m = re.search(r"\sse_cluster=(-?[0-9.]+)", out)
+            self.assertIsNone(m)
+
+    def test_the_loop_can_scrape_it(self):
+        """Same numeric pattern experiments/neural_search_loop.sh's sfield
+        uses, and it must not collide with ci_cluster=."""
+        r = self._pool_wins(self.ANCHOR)
+        with tempfile.TemporaryDirectory() as d:
+            ps = [_shard(d, f"s{i}.log", w, 40)
+                  for i, w in enumerate(self.ANCHOR)]
+            line = subprocess.run([sys.executable, SCRIPT] + ps,
+                                  capture_output=True, text=True,
+                                  cwd=ROOT).stdout.strip()
+        for key in ("ci", "ci_cluster", "se_cluster"):
+            m = re.search(r".*\s%s=(-?[0-9.]*)" % key, line)
+            self.assertIsNotNone(m, key)
+            self.assertAlmostEqual(float(m.group(1)), float(r[key]), places=4)
 
 
 if __name__ == "__main__":

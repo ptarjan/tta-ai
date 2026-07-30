@@ -1011,14 +1011,56 @@ a side is se ≈ 0.032, so the band is ~0.045". With the shard-clustered SE of
 about **1.5× tighter than the data supports**, which is the promotion-on-noise
 failure `docs/NEURAL_LOOP_NULL.md` documents at length.
 
-**This has deliberately not been changed.** `pool_summary` still emits `ci=`
-with the legacy value so a loop in flight sees byte-identical behaviour, and
-publishes `ci_cluster=`, `chi2=` and `overdispersed=` alongside. Moving a
-promotion threshold under a running experiment is a human's decision. When the
-run in flight finishes, the change is to read `ci_cluster` instead of `ci` —
-and to feed the loop the cluster **SE** directly rather than `ci_cluster/1.96`,
-since `ci_cluster` carries the t₅ factor and dividing it by 1.96 would
-double-count it (that path gives 9.09pp, which is too wide).
+**This was deliberately not changed by the audit.** `pool_summary` kept
+emitting `ci=` with the legacy value so a loop in flight saw byte-identical
+behaviour, and published `ci_cluster=`, `chi2=` and `overdispersed=` alongside.
+Moving a promotion threshold under a running experiment is a human's decision.
+
+### 10.6.1 The gate floor, as applied
+
+Applied 2026-07-30 at the iteration-11 boundary, on the box owner's
+instruction. `pool_summary` now also publishes **`se_cluster=`** — the cluster
+standard error itself — and arm B reads that field directly. Nothing divides a
+half-width by a critical value anywhere in the decision:
+
+| per-side SE | source | band | verdict |
+|---|---|---|---|
+| 0.0320 | `ci/1.96`, per-game binomial | **4.52pp** | what shipped to 2026-07-30; blind to the shards, ~1.5× too tight |
+| **0.0490** | **`se_cluster`, shard-clustered** | **6.93pp** | **the gate** |
+| 0.0643 | `ci_cluster/1.96` | 9.09pp | the trap: `ci_cluster` is t₅·se, so this leaves 2.571/1.96 behind |
+
+Why shard clustering and not the deal clustering of §10.2: the anchor's defect
+is between-shard over-dispersion (χ² = 11.76 on 5 df), not seat pairing, and
+seat pairing here would make the interval *tighter* — the wrong direction. The
+shards are disjoint `--seed0` ranges, so their independence is a fact of the
+design and needs no assumption about what happens inside one. It is also the
+only estimator computable in the pooling path, which sees shard means and not
+per-game vectors.
+
+**Only arm B moved.** Arm A (`win - ci > 0.5`) still reads the legacy `ci`:
+it is the arm carrying the type-I control, correcting it would *tighten*
+promotion, and moving two thresholds in one commit would make the
+discontinuity recorded in `loop2/curve.tsv` uninterpretable. Arm A's
+`ci_cluster`/`chi2`/`overdispersed` are now logged every iteration so that
+decision can be made on its own measured evidence.
+
+**What the band costs.** Arm B is a regression veto, not a significance test —
+the net is ~14pp behind the champion and a 5%-level test against it would
+freeze the loop. Under the null, arm B passed 74.3% of candidates at the old
+floor (−0.65 true SE) and passes 84.1% at the new one (−1.00 SE). Joint
+false-promotion, both arms, moves **1.9% → 2.1%**. Arm B was never the arm
+doing the rejecting, which is why loosening it is safe and why arm A must not
+be loosened alongside it.
+
+`ANCHORF` (`loop2/anchor_best.txt`) grew a third field, `win ci se`. A
+two-field file makes arm B **fail closed** with a message naming the fix: a
+cluster SE cannot be recovered from a per-game CI, and the one reconstruction
+available is the defect itself.
+
+Tests: `tests/test_gate_floor.py` extracts `anchor_floor` from the driver and
+executes it, asserting 6.93pp and asserting 4.52pp and 9.09pp as the two wrong
+answers; `tests/test_pool_summary.py::TestClusterStandardError` pins
+`se_cluster` at 0.0490 and asserts it is *not* `ci_cluster/1.96`.
 
 ### 10.7 How to compute an interval from now on
 

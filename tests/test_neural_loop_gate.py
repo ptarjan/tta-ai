@@ -203,52 +203,98 @@ class AnchorGateRule(unittest.TestCase):
 
     def setUp(self):
         src = loop_src()
-        m = re.search(r"'(BEGIN\{se=sqrt\([^']*)'", src, re.S)
-        self.assertIsNotNone(m, "could not find the anchor-gate awk program")
-        self.prog = m.group(1)
+        # The floor, lifted out of anchor_floor().  Since 2026-07-30 the rule
+        # is two pieces -- compute the floor, then compare against it -- and
+        # both are extracted so neither can drift away from the driver.
+        m = re.search(r"^anchor_floor\(\)[^\n]*\n.*?'(BEGIN\{[^']*)'",
+                      src, re.S | re.M)
+        self.assertIsNotNone(m, "could not find the anchor_floor awk program")
+        self.floor_prog = m.group(1)
+        d = re.search(r"anchor_ok=\$\(awk [^']*'(BEGIN\{[^']*)'", src, re.S)
+        self.assertIsNotNone(d, "could not find the anchor-gate awk program")
+        self.decide_prog = d.group(1)
 
-    def ok(self, cand_win, cand_ci, inc_win, inc_ci):
-        r = subprocess.run(
-            [AWK, "-v", "cw=%s" % cand_win, "-v", "cc=%s" % cand_ci,
-             "-v", "iw=%s" % inc_win, "-v", "ic=%s" % inc_ci, self.prog],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    def _awk(self, prog, **vars):
+        argv = [AWK]
+        for k, v in vars.items():
+            argv += ["-v", "%s=%s" % (k, v)]
+        r = subprocess.run(argv + [prog], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.strip()
 
-    # n=240 gives ci ~ 0.063 a side, so se_diff ~ 0.045.
-    CI = "0.063"
+    def floor(self, inc_win, cand_se, inc_se):
+        # `is` is a keyword, so the awk variable names go through a dict
+        return self._awk(self.floor_prog,
+                         **{"iw": inc_win, "cs": cand_se, "is": inc_se})
+
+    def ok(self, cand_win, cand_se, inc_win, inc_se):
+        return self._awk(self.decide_prog, cw=cand_win,
+                         f=self.floor(inc_win, cand_se, inc_se))
+
+    # The inputs are SHARD-CLUSTERED STANDARD ERRORS now, not the per-game 95%
+    # half-widths this class used to pass.  At n=240 over six shards a side is
+    # se ~ 0.049 (it was being read as ci/1.96 ~ 0.032), so the band is
+    # ~0.069 where it used to be ~0.045.  docs/CARD_BLINDNESS.md 10.6.1.
+    SE = "0.049"
 
     def test_negative_control_a_materially_worse_candidate_is_blocked(self):
         # 10pp below the incumbent on the fixed anchor: this is the treadmill
-        # case, and it must not promote no matter what self-play says.
-        self.assertEqual(self.ok("0.30", self.CI, "0.40", self.CI), "0")
+        # case, and it must not promote no matter what self-play says.  Still
+        # blocked at the wider band -- widening the floor did not disarm it.
+        self.assertEqual(self.ok("0.30", self.SE, "0.40", self.SE), "0")
 
     def test_positive_control_an_equal_candidate_passes(self):
-        self.assertEqual(self.ok("0.40", self.CI, "0.40", self.CI), "1")
+        self.assertEqual(self.ok("0.40", self.SE, "0.40", self.SE), "1")
 
     def test_a_better_candidate_passes(self):
-        self.assertEqual(self.ok("0.46", self.CI, "0.40", self.CI), "1")
+        self.assertEqual(self.ok("0.46", self.SE, "0.40", self.SE), "1")
 
     def test_noise_sized_regressions_are_tolerated(self):
-        # 2pp below, well inside one se of the difference (~0.045): the gate
+        # 2pp below, well inside one se of the difference (~0.069): the gate
         # must not reject on noise or nothing will ever promote again.
-        self.assertEqual(self.ok("0.38", self.CI, "0.40", self.CI), "1")
+        self.assertEqual(self.ok("0.38", self.SE, "0.40", self.SE), "1")
 
     def test_the_band_is_one_standard_error_of_the_DIFFERENCE(self):
-        # Both sides carry variance.  A candidate 4pp down passes with both
-        # sides measured (se_diff ~ 0.045) ...
-        self.assertEqual(self.ok("0.36", self.CI, "0.40", self.CI), "1")
-        # ... and the same 4pp gap is blocked once both sides are precise,
+        # Both sides carry variance.  A candidate 6pp down passes with both
+        # sides measured (se_diff ~ 0.069) ...
+        self.assertEqual(self.ok("0.34", self.SE, "0.40", self.SE), "1")
+        # ... and the same 6pp gap is blocked once both sides are precise,
         # which is the property that makes the gate bite as n grows.
-        self.assertEqual(self.ok("0.36", "0.010", "0.40", "0.010"), "0")
+        self.assertEqual(self.ok("0.34", "0.010", "0.40", "0.010"), "0")
 
     def test_a_wide_incumbent_estimate_widens_the_band_not_narrows_it(self):
         # An imprecisely known incumbent must make the gate MORE permissive,
         # never less -- otherwise early, noisy baselines would freeze the run.
-        tight = self.ok("0.34", self.CI, "0.40", self.CI)
-        wide = self.ok("0.34", self.CI, "0.40", "0.200")
+        tight = self.ok("0.32", self.SE, "0.40", self.SE)
+        wide = self.ok("0.32", self.SE, "0.40", "0.200")
         self.assertEqual(tight, "0")
         self.assertEqual(wide, "1")
+
+    def test_the_band_widened_from_452pp_to_693pp(self):
+        """The correction itself, as a decision rather than as arithmetic.
+
+        A candidate 5.5pp below the incumbent sits between the two floors: it
+        was blocked by the old per-game band (4.52pp) and passes under the
+        shard-clustered one (6.93pp).  This is exactly the class of candidate
+        the audit says was being rejected on an over-confident interval.
+        """
+        old_se = 0.0627 / 1.96          # what the loop used to compute
+        self.assertAlmostEqual(old_se, 0.032, places=3)
+        self.assertEqual(self.ok("0.3763", str(old_se), "0.4313",
+                                 str(old_se)), "0")
+        self.assertEqual(self.ok("0.3763", self.SE, "0.4313", self.SE), "1")
+
+    def test_the_floor_on_the_live_anchor_is_3620(self):
+        self.assertEqual(self.floor("0.4313", "0.0490", "0.0490"), "0.3620")
+
+    def test_the_floor_is_not_the_909pp_trap(self):
+        """ci_cluster/1.96 double-counts t5 and would put the floor at 0.3404.
+        Asserting the number we do NOT use keeps the mistake identifiable."""
+        trap = str(0.1260 / 1.96)
+        self.assertEqual(self.floor("0.4313", trap, trap), "0.3404")
+        self.assertNotEqual(self.floor("0.4313", "0.0490", "0.0490"),
+                            self.floor("0.4313", trap, trap))
 
 
 class BothArmsAreRequiredAndLoggedSeparately(unittest.TestCase):
@@ -283,7 +329,33 @@ class BothArmsAreRequiredAndLoggedSeparately(unittest.TestCase):
         src = loop_src()
         promoted = src.index('say "  PROMOTED it$it')
         block = src[src.index("promote=0"):promoted]
-        self.assertIn('printf \'%s %s\\n\' "$cwin" "$cci" > "$ANCHORF"', block)
+        # Three fields since 2026-07-30: `win ci se`, where `se` is the
+        # shard-clustered standard error the floor is built from.  Writing two
+        # would leave the next iteration with no SE and arm B failing closed.
+        self.assertIn(
+            'printf \'%s %s %s\\n\' "$cwin" "$cci" "$cse" > "$ANCHORF"', block)
+        self.assertNotIn('printf \'%s %s\\n\'', block)
+
+    def test_a_baseline_without_a_cluster_se_is_not_written(self):
+        """The matched negative: a promotion whose anchor run yielded no
+        cluster SE must leave $ANCHORF alone and say so, rather than write a
+        two-field baseline that the next iteration cannot gate against."""
+        src = loop_src()
+        promoted = src.index('say "  PROMOTED it$it')
+        block = src[src.index("promote=0"):promoted]
+        self.assertIn('[ -n "$cse" ]', block)
+        self.assertIn("not re-seeding", block)
+
+    def test_the_seed_path_also_writes_a_cluster_se(self):
+        """$ANCHORF has two writers -- the promotion path above and the
+        one-shot seed on a fresh box.  A seed that wrote two fields would make
+        arm B fail closed forever on a new machine."""
+        src = loop_src()
+        seed = src[src.index("no incumbent anchor on record"):
+                   src.index("The next iteration number is")]
+        self.assertIn('ss=$(sfield se_cluster "$AS")', seed)
+        self.assertIn('printf \'%s %s %s\\n\' "$sw" "$sc" "$ss"', seed)
+        self.assertIn('[ -n "$ss" ]', seed)
 
 
 @unittest.skipIf(AWK is None, "awk not available; cannot execute the extracted rules")

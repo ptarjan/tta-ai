@@ -11,7 +11,10 @@ independent, and it says nothing at all about whether the shards agree with
 each other.  The old `1.96*sqrt(p(1-p)/n)` over pooled games is blind to both.
 `ci_cluster=` is the shard-clustered replacement and `chi2=`/`overdispersed=`
 report whether the shards were consistent enough for any pooled interval to
-mean anything.  See experiments/paired_stats.py and docs/CARD_BLINDNESS.md.
+mean anything.  `se_cluster=` is the same estimate's STANDARD ERROR, published
+separately so that callers combining variances never divide `ci_cluster` by a
+critical value it already contains.  See experiments/paired_stats.py and
+docs/CARD_BLINDNESS.md.
 
 Prints one line in exactly the format neural_eval.py emits, so the loop's
 parsing is identical whether the gate ran in one process or twelve.
@@ -53,7 +56,7 @@ def main():
         # a numeric pattern now gets nothing instead of a plausible lie.  The
         # n/errs/shards counters stay numeric because 0 is the true count and
         # callers test them.  Exit 3 so a caller that checks status sees it too.
-        print("SUMMARY win=NA ci=NA ci_cluster=NA chi2=NA df=0 "
+        print("SUMMARY win=NA ci=NA ci_cluster=NA se_cluster=NA chi2=NA df=0 "
               "overdispersed=0 neural=NA opp=NA margin=NA "
               "n=0 errs=0 shards=0")
         return 3
@@ -87,6 +90,21 @@ def main():
     # their means are independent by construction and need no assumption about
     # what happens inside one.  With a handful of shards the variance estimate
     # is itself noisy, so this uses t_{k-1}, not 1.96 -- at k=6 that is 2.571.
+    #
+    # TWO numbers come out of this and they are not interchangeable:
+    #
+    #   ci_cluster = t_{k-1} * se   -- a 95% HALF-WIDTH.  Quote this.
+    #   se_cluster = se             -- the STANDARD ERROR.  Combine this.
+    #
+    # Anything that wants "one standard error" -- notably the neural loop's
+    # arm-B promotion floor, sqrt(se_cand^2 + se_inc^2) -- must read
+    # `se_cluster` DIRECTLY.  Writing `ci_cluster/1.96` is wrong: ci_cluster
+    # already carries t_{k-1}, so dividing by 1.96 leaves t_{k-1}/1.96 behind.
+    # On the loop's own anchor (k=6, t5=2.571) that inflates the per-side SE
+    # from 0.0490 to 0.0643 and the two-sided band from 6.93pp to 9.09pp --
+    # a real number, arrived at by double-counting, which is the failure mode
+    # this field exists to make impossible.  se_cluster is emitted so no
+    # caller ever has to divide anything.
     wins = [r["win"] for r in rows]
     est = paired_stats.cluster_ci(wins, unit="shard", n_games=int(n))
     chi2, df = float("nan"), max(0, len(rows) - 1)
@@ -97,6 +115,7 @@ def main():
     over = df >= 1 and chi2 == chi2 and chi2 > paired_stats._chi2_crit(df)
 
     print(f"SUMMARY win={wm:.4f} ci={half:.4f} ci_cluster={est.half:.4f} "
+          f"se_cluster={est.se:.4f} "
           f"chi2={chi2:.2f} df={df} overdispersed={int(bool(over))} "
           f"neural={cam:.1f} opp={cbm:.1f} "
           f"margin={mm:.1f} n={int(n)} errs={int(errs)} shards={len(rows)}")

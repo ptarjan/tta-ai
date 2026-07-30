@@ -78,7 +78,17 @@ PAUSE=~/tta-ai/PAUSE
 PIDFILE=loop2/driver.pid
 BEAT=loop2/driver.beat
 # The incumbent's own anchor score, carried forward from the iteration that
-# promoted it.  Two fields: `win ci`.  See the anchor gate in step (4).
+# promoted it.  THREE fields since the gate-floor correction: `win ci se`.
+#
+#   win  the incumbent's anchor win rate
+#   ci   pool_summary's legacy per-game 95% half-width.  Carried for continuity
+#        with older logs and printed in the gate line; NOT used in the decision.
+#   se   the SHARD-CLUSTERED standard error -- the only field the floor reads.
+#
+# A two-field (pre-correction) file is not silently upgraded: there is no way
+# to recover a cluster SE from a per-game CI, and the legacy `ci/1.96` is
+# exactly the too-tight number this change removes.  Arm B fails CLOSED and
+# says so.  See the anchor gate in step (4).
 ANCHORF=loop2/anchor_best.txt
 # What curve.tsv holds when a measurement did not happen.  Deliberately not a
 # number: see `fanout` below.
@@ -270,6 +280,24 @@ anchor_run() {      # anchor_run CKPT PREFIX LABEL
   fanout "$1" "plan:$CHAMP,width=8" "$REFN" "$2" "anchor $3 vs plan:champion"
 }
 
+# ---- ARM B FLOOR (single source of truth; tests/test_gate_floor.py runs it) --
+# One standard error OF THE DIFFERENCE below the incumbent's anchor.
+#
+# The two arguments are STANDARD ERRORS, not half-widths.  Read them from
+# pool_summary's `se_cluster=` field and pass them straight through.  Do not
+# reconstruct them by dividing a CI by anything:
+#
+#   se_cluster            0.0490  ->  band 6.93pp   CORRECT
+#   ci (legacy, /1.96)    0.0320  ->  band 4.52pp   the old, too-tight gate
+#   ci_cluster / 1.96     0.0643  ->  band 9.09pp   double-counts t_{k-1}
+#
+# The middle line is what shipped until 2026-07-30 and the bottom line is the
+# trap that looks like a fix.  docs/CARD_BLINDNESS.md 10.6 has the derivation.
+anchor_floor() {    # anchor_floor INC_WIN CAND_SE INC_SE -> floor on stdout
+  awk -v iw="$1" -v cs="$2" -v is="$3" \
+    'BEGIN{ printf "%.4f", iw - sqrt(cs*cs + is*is) }'
+}
+
 # curve.tsv schema.  The last four columns are new with the anchor gate:
 #   vs_planchamp  the CANDIDATE's anchor win rate this iteration (was: the
 #                 incumbent's, and only on promotion iterations).  This is the
@@ -372,15 +400,19 @@ okword() { [ "${1:-0}" = 1 ] && printf 'PASS' || printf 'BLOCK'; }
 if [ ! -s "$ANCHORF" ]; then
   say "no incumbent anchor on record -- measuring $BEST vs plan:champion once to seed arm B"
   if AS=$(anchor_run "$BEST" loop2/anchor_seed "incumbent"); then
-    # Only ever write two real numbers.  A blank field here would read back as
-    # awk 0, which silently turns arm B's floor into "beat -0.045" -- a gate
-    # that always passes, which is worse than no gate because it looks like one.
-    sw=$(sfield win "$AS"); sc=$(sfield ci "$AS")
-    if [ -n "$sw" ] && [ -n "$sc" ]; then
-      printf '%s %s\n' "$sw" "$sc" > "$ANCHORF"
+    # Only ever write three real numbers.  A blank field here would read back
+    # as awk 0, which silently turns arm B's floor into "beat the incumbent
+    # exactly" (or, before the sqrt was split out, "beat -0.045") -- a gate
+    # that is not the gate anyone wrote, which is worse than no gate because it
+    # looks like one.  `se` is the shard-clustered standard error and is the
+    # field the floor reads; a seed without it is not a baseline.
+    sw=$(sfield win "$AS"); sc=$(sfield ci "$AS"); ss=$(sfield se_cluster "$AS")
+    if [ -n "$sw" ] && [ -n "$sc" ] && [ -n "$ss" ]; then
+      printf '%s %s %s\n' "$sw" "$sc" "$ss" > "$ANCHORF"
       say "  seeded incumbent anchor: $AS"
     else
-      say "  *** anchor seed returned games but no parseable win/ci: $AS"
+      say "  *** anchor seed returned games but no parseable win/ci/se_cluster: $AS"
+      say "  *** (se_cluster needs >=2 shards; a single-shard seed cannot bound itself)"
     fi
   else
     say "  *** could not seed the incumbent anchor; arm B ABSTAINS until a promotion sets one"
@@ -460,6 +492,14 @@ for it in $(seq "$start_it" "$ITERS"); do
     ccul=$(sfield neural "$SUM"); bcul=$(sfield opp "$SUM")
     selfplay_ok=$(awk -v w="$win" -v c="$ci" 'BEGIN{print (w-c>0.5)?1:0}')
     say "  gate it$it  ARM A self-play : win=$win ci=$ci lo=$(awk -v w="$win" -v c="$ci" 'BEGIN{printf "%.4f", w-c}') vs 0.5000 -> $(okword "$selfplay_ok")  cul=$ccul vs $bcul"
+    # Logged, NOT acted on.  Arm B's floor moved on 2026-07-30 because the
+    # anchor's shards were measured and found over-dispersed; nobody has
+    # measured whether the GATE's shards are.  These three fields are that
+    # measurement, accumulating one row per iteration, so the same decision
+    # about arm A can be made on evidence rather than by symmetry.  Do not
+    # wire them into `selfplay_ok` without a written-up chi2 the way 10.6
+    # wrote up the anchor's.
+    say "  gate it$it  ARM A cluster   : ci_cluster=$(sfield ci_cluster "$SUM") se_cluster=$(sfield se_cluster "$SUM") chi2=$(sfield chi2 "$SUM") on $(sfield df "$SUM") df overdispersed=$(sfield overdispersed "$SUM")  [logged, not gated]"
   else
     # No games is not a loss.  Refuse to promote on an absent measurement, and
     # write $NULL rather than the 0.0000 that used to land here.
@@ -478,20 +518,58 @@ for it in $(seq "$start_it" "$ITERS"); do
   #
   # One standard error OF THE DIFFERENCE, sqrt(se_cand^2 + se_inc^2), not of
   # either score alone -- both sides are estimates and the comparison has to
-  # carry both variances or it rejects on noise.  se = ci/1.96 since
-  # pool_summary reports a 95% half-width.  At n=240 a side is se~0.032, so the
-  # band is ~0.045: a candidate has to give up about 4.5pp on the anchor before
-  # arm B blocks it.  Wide enough to let real progress through, narrow enough
-  # that seven iterations of sideways drift do not all pass.
-  cwin=$NULL; cci=$NULL; iwin=$NULL; ici=$NULL; anchor_ok=0
+  # carry both variances or it rejects on noise.
+  #
+  # WHICH standard error.  Until 2026-07-30 this read `ci/1.96`, where `ci` was
+  # pool_summary's independent-samples binomial half-width over pooled GAMES.
+  # That formula cannot see the six shards at all: shards whose spread is twice
+  # what binomial noise allows pool to the same number as shards that agree
+  # perfectly.  The anchor's own shards do not agree -- chi2 = 11.76 on 5 df
+  # against a critical 11.07 -- so the honest interval is the shard-clustered
+  # one, which assumes only that disjoint --seed0 ranges are independent (true
+  # by construction) and nothing whatever about what happens inside a shard.
+  #
+  #   old:  se = ci/1.96        = 0.0320/side  -> band 4.52pp
+  #   new:  se = se_cluster     = 0.0490/side  -> band 6.93pp
+  #
+  # The old gate was ~1.5x tighter than the data supports: it demanded more of
+  # a candidate than the evidence justified and blocked real improvements, and
+  # 74 iterations with zero promotions (docs/NEURAL_LOOP_NULL.md) is the shape
+  # that failure makes.  So a candidate now has to give up about 6.9pp on the
+  # anchor before arm B blocks it, not 4.5pp.
+  #
+  # NOT `ci_cluster/1.96`.  ci_cluster is t_{k-1}*se and already carries the
+  # t5 = 2.571 factor; dividing it by 1.96 leaves 2.571/1.96 behind and gives
+  # 9.09pp, which is too wide by exactly that ratio.  Read `se_cluster`.
+  #
+  # This is the ONLY arm that moved.  Arm A above still uses the legacy `ci`
+  # deliberately: it is the arm that carries the type-I control, moving it
+  # would TIGHTEN promotion, and changing two thresholds in one commit would
+  # make the discontinuity recorded in curve.tsv uninterpretable.  Arm A's
+  # cluster numbers are logged from here on so the evidence to decide that
+  # separately accumulates.
+  cwin=$NULL; cci=$NULL; iwin=$NULL; ici=$NULL; cse=""; floor=$NULL; anchor_ok=0
   if AS=$(anchor_run checkpoints/cand.pt "loop2/ref_it${it}" "cand it$it"); then
     cwin=$(sfield win "$AS"); cci=$(sfield ci "$AS")
+    cse=$(sfield se_cluster "$AS")
     say "  REF it$it  cand vs plan:champion -> $AS"
     if [ -s "$ANCHORF" ]; then
-      read -r iwin ici < "$ANCHORF"
-      anchor_ok=$(awk -v cw="$cwin" -v cc="$cci" -v iw="$iwin" -v ic="$ici" \
-        'BEGIN{se=sqrt((cc/1.96)^2+(ic/1.96)^2); print (cw >= iw - se) ? 1 : 0}')
-      say "  gate it$it  ARM B anchor   : cand=$cwin+-$cci vs incumbent=$iwin+-$ici floor=$(awk -v iw="$iwin" -v ic="$ici" -v cc="$cci" 'BEGIN{printf "%.4f", iw-sqrt((cc/1.96)^2+(ic/1.96)^2)}') -> $(okword "$anchor_ok")"
+      ise=""
+      read -r iwin ici ise < "$ANCHORF"
+      if [ -z "$cse" ] || [ -z "$ise" ]; then
+        # Fails CLOSED.  Either the candidate's fan-out returned a single
+        # shard (a cluster SE needs k>=2 and pool_summary emits `inf`, which
+        # sfield refuses to parse), or $ANCHORF is a pre-correction two-field
+        # file.  Neither can be repaired with the numbers on hand, and the one
+        # reconstruction available -- the legacy ci/1.96 -- is the defect.
+        anchor_ok=0
+        say "  gate it$it  ARM B anchor   : NO CLUSTER SE (cand='${cse:-}' inc='${ise:-}') -> $(okword 0) (fails closed)"
+        say "  gate it$it    re-seed $ANCHORF as 'win ci se' with the incumbent's se_cluster to clear this"
+      else
+        floor=$(anchor_floor "$iwin" "$cse" "$ise")
+        anchor_ok=$(awk -v cw="$cwin" -v f="$floor" 'BEGIN{print (cw >= f) ? 1 : 0}')
+        say "  gate it$it  ARM B anchor   : cand=$cwin+-$cci (se=$cse) vs incumbent=$iwin+-$ici (se=$ise) floor=$floor band=$(awk -v cs="$cse" -v is="$ise" 'BEGIN{printf "%.4f", sqrt(cs*cs+is*is)}') -> $(okword "$anchor_ok")"
+      fi
     else
       # Seeding failed earlier; abstain rather than block forever.
       anchor_ok=1
@@ -513,8 +591,15 @@ for it in $(seq "$start_it" "$ITERS"); do
     install_ckpt checkpoints/cand.pt "checkpoints/promoted_s_it${it}.pt"
     # The new incumbent's anchor is the score we just measured for it.  Written
     # only on promotion, so it always describes whatever $BEST currently is.
-    if [ -n "$cwin" ] && [ "$cwin" != "$NULL" ] && [ -n "$cci" ]; then
-      printf '%s %s\n' "$cwin" "$cci" > "$ANCHORF"
+    # Three fields: `win ci se`.  The se is the one the next iteration's floor
+    # reads, so refuse to write a baseline without it -- a two-field file makes
+    # arm B fail closed and that is better than a baseline whose SE has to be
+    # guessed at.
+    if [ -n "$cwin" ] && [ "$cwin" != "$NULL" ] && [ -n "$cci" ] && [ -n "$cse" ]; then
+      printf '%s %s %s\n' "$cwin" "$cci" "$cse" > "$ANCHORF"
+    else
+      say "  WARNING it$it  promoted but not re-seeding $ANCHORF (win=$cwin ci=$cci se=${cse:-<none>});"
+      say "  WARNING it$it    the incumbent baseline still describes the PREVIOUS net"
     fi
     say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin"
   else
