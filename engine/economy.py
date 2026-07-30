@@ -105,15 +105,28 @@ def uprising(state, p):
 # ------------------------------------------------- end-of-turn sequence
 
 def end_of_turn(state, p, rng):
-    """§6.6, exact order. Mutates the player in place."""
-    effects.invalidate(state, p)
-    s = effects.state_stats(state, p)
+    """§6.6, exact order. Mutates the player in place.
 
-    # 1. discard excess military cards (down to the military action total)
-    limit = s.military_actions + s.military_hand_limit
-    while len(p.hand_military) > limit:
-        name = journal.touch(p.hand_military).pop(0)
-        discard_military(state, name)
+    Returns False when step 1 pushed the player's discard decision and the
+    sequence is SUSPENDED: steps 2-5 have not run.  The caller resumes by
+    calling this again once the choice resolves (`game._resume_end_turn`,
+    driven by the `end_of_turn` queue item).  Step 1 is idempotent -- it
+    re-reads the hand limit -- so re-entry is the whole resume mechanism.
+
+    Returns True when the sequence ran to the end.  §6.6 step 1 is the only
+    step that can suspend: "Once you have decided which military cards to
+    discard, the rest of your turn is automatic. That is, it requires no more
+    decisions." [RB p.20, quoted in RULES_SPEC §6.6].
+    """
+    from . import interact
+    effects.invalidate(state, p)
+
+    # 1. discard excess military cards (down to the military action total).
+    #    The player CHOOSES which -- this is the one decision in §6.6.
+    if interact.discard_excess_military(state, p):
+        return False
+
+    s = effects.state_stats(state, p)
 
     # 2. uprising check
     rebels = uprising(state, p)
@@ -167,6 +180,7 @@ def end_of_turn(state, p, rng):
     p.politics_done = False
     p.taken_this_turn = []
     p.mil_discount = 0                   # §3.11 action-card discounts expire
+    return True
 
 
 def _end_of_turn_leader_bonus(state, p):

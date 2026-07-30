@@ -101,6 +101,64 @@ def enqueue(state, item):
     journal.touch(state.queue).append(item)
 
 
+# ------------------------------------------------- military hand discards
+
+def defense_points(name):
+    """What a military card adds to defense when spent defending (§5.4.4).
+
+    The three Military Bonus cards print 2/4/6; every other military card is
+    worth the flat +1 of a face-down card.  `_defense_move` is the authority
+    and calls this, so the two can never disagree.
+    """
+    eff = (_BY_NAME[name].get("effects") or {}) if name in _BY_NAME else {}
+    bonus = eff.get("defenseBonus")
+    return bonus if isinstance(bonus, int) else 1
+
+
+def discard_options(hand):
+    """Distinct military cards, LEAST defensively useful first.
+
+    Presentation order only -- every bot is free to score the options with its
+    own evaluator, and the search bots do.  It is load-bearing anyway, because
+    the weighted-family evaluator is documented-blind to military card identity
+    beyond age (`hand_mil_value` is a sum of age+1; docs/CARD_BLINDNESS.md §3
+    item 5, "military hand"),
+    so same-age options tie and every argmax in the project falls back to
+    option 0.  Alphabetical order made that tie-break arbitrary -- it would
+    pitch a Military Bonus (defense 6) ahead of a spent event on nothing but
+    the letter M.  Ordering by the engine's own defense arithmetic makes the
+    fallback "discard the card that defends least", which is the rule's intent
+    and is derived, not invented.  Name is the secondary key, so the order is
+    total and deterministic.
+    """
+    return sorted(set(hand), key=lambda n: (defense_points(n), n))
+
+
+def discard_excess_military(state, p):
+    """§6.6 step 1: discard down to the military hand limit (§6.7).
+
+    The player CHOOSES which card goes -- the rulebook's only end-of-turn
+    decision.  Returns True when a choice is now pending and the caller must
+    suspend; False when the hand is legal (nothing left to decide).
+
+    Idempotent: it re-reads the limit every call, so the resume path is just
+    "call it again".  The limit cannot move while the loop runs -- it is read
+    off cards in play, not off the hand.
+    """
+    while True:
+        s = effects.state_stats(state, p)
+        limit = s.military_actions + s.military_hand_limit
+        if len(p.hand_military) <= limit:
+            return False
+        opts = discard_options(p.hand_military)
+        if not opts:
+            return False
+        if push_choice(state, p.idx, "discard_military", opts):
+            return True
+        # one distinct name left: push_choice resolved it without a decision
+        # (§6.6 is still satisfied -- there was nothing to choose between)
+
+
 def run_queue(state, rng=None):
     """Resolve deferred sub-effects until one of them needs a decision."""
     while not state.pending and state.queue:
@@ -383,9 +441,21 @@ def _q_flip_wonder(state, p, item, rng):
     push_choice(state, p.idx, "flip_wonder", opts)
 
 
+def _q_end_of_turn(state, p, item, rng):
+    """Resume §6.6 after the player's discard decision (economy.end_of_turn).
+
+    The end-of-turn sequence is the one place a decision interrupts a phase
+    transition rather than an action, so the continuation rides the deferred
+    queue like any other sub-effect: `apply_pending` drains the queue after
+    the choice resolves, this runs, and the turn advances from there.
+    """
+    from . import game
+    game._resume_end_turn(state, p, rng)
+
+
 def _q_discard_military(state, p, item, rng):
     for _ in range(int(item.get("n", 1))):
-        opts = sorted(set(p.hand_military))
+        opts = discard_options(p.hand_military)
         if not opts:
             return
         if push_choice(state, p.idx, "discard_military", opts):
@@ -456,6 +526,7 @@ _QUEUE_ITEMS = {
     "lose_colony": _q_lose_colony,
     "flip_wonder": _q_flip_wonder,
     "discard_military": _q_discard_military,
+    "end_of_turn": _q_end_of_turn,
     "raid": _q_raid,
     "annex": _q_annex,
     "infiltrate": _q_infiltrate,
@@ -614,14 +685,11 @@ def start_defense(state, attacker, defender, name, atk_strength, rng=None):
 
 
 def _defense_move(state, pend, move, rng):
-    db = _DB
     d = state.players[pend["player"]]
     if move[0] == "defend":
         name = move[1]
         journal.touch(d.hand_military).remove(name)
-        eff = (db.get(name).get("effects") or {}) if name in db.by_name else {}
-        bonus = eff.get("defenseBonus")
-        journal.touch(pend)["dfn"] += bonus if isinstance(bonus, int) else 1
+        journal.touch(pend)["dfn"] += defense_points(name)
         journal.touch(pend)["spent"] += 1
         economy.discard_military(state, name)
         if pend["spent"] < pend["budget"] and d.hand_military:

@@ -257,8 +257,32 @@ def _auto_skip_politics(state, rng):
 def end_turn(state, rng=None):
     """End-of-Turn sequence, then hand the turn to the next player (§6.6)."""
     rng = _rng_for(state, rng)
-    p = state.me()
-    economy.end_of_turn(state, p, rng)
+    return _resume_end_turn(state, state.me(), rng)
+
+
+def _resume_end_turn(state, p, rng):
+    """Run §6.6 from step 1; suspend if the discard step needs a decision.
+
+    §6.6 step 1 is the only end-of-turn step that asks the player anything,
+    and it is a real choice (RB p.20: "Once you have decided which military
+    cards to discard, the rest of your turn is automatic").  When it pushes
+    that choice, the turn does NOT advance: the continuation is queued as an
+    `end_of_turn` item, `apply_pending` drains the queue once the player has
+    chosen, and `interact._q_end_of_turn` lands back here.  Steps 2-5 and the
+    hand-off therefore stay strictly after the discard, as the sequence
+    requires -- the next player may not start until the discarding is done.
+    """
+    from . import interact
+    # Derive the rng HERE and not only in `end_turn`: the resume path arrives
+    # from `interact._q_end_of_turn` with whatever rng `apply_pending` was
+    # given, which is None for callers that use the `actions.apply(state, mv)`
+    # default.  `_rng_for` reads seed/turn/round, none of which a discard can
+    # change, so deriving it at resume time gives the same stream the
+    # unsuspended sequence would have used.
+    rng = _rng_for(state, rng)
+    if not economy.end_of_turn(state, p, rng):
+        interact.enqueue(state, {"player": p.idx, "tag": "end_of_turn"})
+        return state
     return _advance_turn(state, rng)
 
 

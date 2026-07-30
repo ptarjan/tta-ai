@@ -70,13 +70,26 @@ class Derivation(unittest.TestCase):
         Whether it does depends on the position (you have to be near a clamp),
         which is exactly why `harness.play` re-derives every round and unions
         rather than deciding once.
+
+        This is a SAMPLING test, and that is its one hazard: `midgame(stop=N)`
+        is a self-play game replayed to round N, so ANY change to the move
+        stream re-rolls which positions get probed and a three-position sample
+        can come up empty without the property having moved at all.  It did
+        exactly that when the §6.6 military discard became a decision:
+        `tools/rival_strength_scan.py` measures the rate at MANDATORY 2/8 of
+        sampled rounds before that change and 1/10 after -- the same rare
+        property, different dice.  So sample a wider grid and stop at the
+        first hit: cheap when the property is healthy, and it fails only when
+        the property is really gone rather than when the positions shifted.
         """
         from advisor.advisor import load_bot
         w = load_bot(3).weights
         seen = set()
-        for stop in (8, 14, 20):
+        for stop in (5, 8, 11, 14, 17, 20):
             b = midgame(stop=stop)
             seen.add(F.probe_position(b.state, b.me, w)["rival.strength"])
+            if seen & set(F.MANDATORY):
+                break
         self.assertNotEqual(seen, {F.INERT},
                             "rival strength never reached the evaluation")
         self.assertTrue(seen & set(F.MANDATORY),

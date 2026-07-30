@@ -309,10 +309,93 @@ class TestEndOfTurn(unittest.TestCase):
         tactics = [c["name"] for c in C.db().of_type("tactic")][:6]
         p.hand_military = list(tactics)
         import random as _r
-        economy.end_of_turn(st, p, _r.Random(0))
+        rng = _r.Random(0)
+        # §6.6 step 1 is a DECISION now, so the sequence suspends until the
+        # player has picked; drive it the way the turn loop does.
+        guard = 0
+        while not economy.end_of_turn(st, p, rng):
+            guard += 1
+            self.assertLess(guard, 10)
+            self.assertTrue(st.pending)
+            self.assertEqual(st.pending[-1]["tag"], "discard_military")
+            actions.apply(st, ("choose", 0), rng)
         s = effects.compute(st, p)
         # discarded down to the military action total, then drew up to 3
         self.assertLessEqual(len(p.hand_military), s.military_actions + 3)
+
+    # --- §6.6 step 1: the one end-of-turn step that is the player's choice
+
+    def _overfull_hand_state(self):
+        """A live 2p game whose player 0 must discard, with distinct cards."""
+        st = game.new_game(2, seed=8)
+        st.round = 3
+        st.phase = "actions"
+        for q in st.players:
+            q.civil_actions, q.military_actions = 4, 2
+        return st
+
+    def test_military_discard_is_the_players_choice(self):
+        """RB p.20 / §6.6: the player DECIDES which cards to discard.
+
+        The engine used to pop(0) -- oldest first, no decision -- which threw
+        away the best defence card in the hand 19% of the time it fired.
+        """
+        st = self._overfull_hand_state()
+        if not st.has_military:
+            self.skipTest("military data unavailable")
+        p = st.players[0]
+        keep = "Military Bonus (defense 6 / colonization 3)"
+        tactics = [c["name"] for c in C.db().of_type("tactic")][:4]
+        p.hand_military = [keep] + list(tactics)     # `keep` is the OLDEST
+        science_before = p.science
+
+        actions.apply(st, ("end_turn",))
+        # suspended on the decision: the turn has NOT advanced and production
+        # has NOT run ("the next player may start as soon as you finish
+        # discarding" -- not before).
+        self.assertTrue(st.pending)
+        self.assertEqual(st.pending[-1]["tag"], "discard_military")
+        self.assertEqual(st.current, 0)
+        self.assertEqual(p.science, science_before)
+        self.assertEqual(game.current_player(st), 0)
+
+        # the offered options are the distinct cards in hand, and the player
+        # may keep the oldest one: choose anything that is not `keep`.
+        opts = st.pending[-1]["options"]
+        self.assertEqual(sorted(opts), sorted(set(p.hand_military)))
+        while st.pending and st.pending[-1]["tag"] == "discard_military":
+            opts = st.pending[-1]["options"]
+            i = max(range(len(opts)), key=lambda k: opts[k] != keep)
+            actions.apply(st, ("choose", i))
+
+        self.assertIn(keep, p.hand_military)         # FIFO would have lost it
+        self.assertGreater(p.science, science_before)   # production ran
+        self.assertEqual(st.current, 1)                 # and the turn advanced
+
+    def test_discard_options_are_ordered_least_defensive_first(self):
+        """The tie-break every argmax in the project falls back on (§5.4.4)."""
+        from engine import interact
+        hand = ["Military Bonus (defense 6 / colonization 3)",
+                "Military Bonus (defense 2 / colonization 1)"]
+        tactics = [c["name"] for c in C.db().of_type("tactic")][:2]
+        opts = interact.discard_options(hand + tactics + tactics)
+        self.assertEqual(len(opts), len(set(opts)))          # distinct
+        self.assertEqual(opts[-1], hand[0])                  # defence 6 last
+        self.assertEqual(opts[-2], hand[1])                  # defence 2 next
+        self.assertEqual(interact.defense_points(tactics[0]), 1)
+        self.assertEqual(interact.defense_points(hand[0]), 6)
+
+    def test_single_distinct_card_needs_no_decision(self):
+        """§6.6 stays automatic when there is nothing to choose between."""
+        st = self._overfull_hand_state()
+        if not st.has_military:
+            self.skipTest("military data unavailable")
+        p = st.players[0]
+        name = [c["name"] for c in C.db().of_type("tactic")][0]
+        p.hand_military = [name] * 5
+        actions.apply(st, ("end_turn",))
+        self.assertFalse(st.pending)
+        self.assertEqual(st.current, 1)
 
 
 # ------------------------------------------------------------ age rules

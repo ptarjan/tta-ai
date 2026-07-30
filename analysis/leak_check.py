@@ -42,13 +42,19 @@ def install(tally):
         rebels = economy.uprising(state, p)
         cul_before = p.culture
         sci_before = p.science
+        # §6.6 step 1 (the military discard) is a decision, so end_of_turn
+        # SUSPENDS and is re-entered once per discard; only the entry that
+        # returns True ran the production phase.  Tally on that one alone, or
+        # every counter here double-counts a turn with discards in it.
+        done = _ORIG_END(state, p, rng)
+        if not done:
+            return done
         rec["turns"] += 1
         rec["age_turns"][state.age_civil] = rec["age_turns"].get(state.age_civil, 0) + 1
         if rebels:
             rec["uprisings"] += 1
             rec["uprising_culture"] += s.culture
             rec["uprising_science"] += s.science
-        _ORIG_END(state, p, rng)
         if not rebels:
             gained = p.culture - cul_before
             gap = s.culture - gained          # >0 means culture was burned
@@ -60,6 +66,7 @@ def install(tally):
             elif gap < 0:
                 rec["bonus_culture"] += -gap  # leaders etc. paying out
             rec["science_gained"] += p.science - sci_before
+        return done
     economy.end_of_turn = end_of_turn
 
 

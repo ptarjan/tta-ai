@@ -532,6 +532,21 @@ class Advisor:
         if not st.game_over:
             who = st.current
             G.apply(st, ("end_turn",), self.rng)
+            # §6.6 step 1 is a DECISION (RULES_SPEC §6.6), so `end_turn` can
+            # leave the sequence suspended on the rival's discard instead of
+            # advancing the turn.  A rival's discard is hidden information --
+            # face down, never revealed -- so there is nothing to ask the
+            # human and the mirror resolves it for them; `discard_options`
+            # offers the least useful defender first, which is the best guess
+            # available.  Without this the mirror stalls mid-sequence and the
+            # opponent's production never runs.
+            guard = 0
+            while st.pending and not st.game_over and guard < 40:
+                guard += 1
+                moves = G.legal_moves(st)
+                if not moves:
+                    break
+                G.apply(st, moves[0], self.rng)
             self.log.append(f"p{who} turn ended")
         self.dealt_slots = _new_slots(row_before, st.card_row)
         return self.dealt_slots
@@ -690,7 +705,14 @@ class Console:
                 return True
         ok, msg = adv.play(move)
         self.say(("  -> " if ok else "  ! ") + msg)
-        if ok and move[0] == "end_turn":
+        # `end_turn` no longer finishes the turn on its own: §6.6 step 1 is
+        # the player's decision, so the sequence suspends and asks which
+        # military card to discard.  Only announce the turn as over once the
+        # engine has actually run it out.
+        if ok and move[0] == "end_turn" and not adv.state.pending:
+            self.after_my_turn()
+        elif ok and move[0] == "choose" and not adv.state.pending \
+                and adv.state.current != adv.board.me:
             self.after_my_turn()
         return True
 
