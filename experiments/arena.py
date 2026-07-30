@@ -415,7 +415,7 @@ def _play(task):
         # What travels back is a DIAGNOSABLE record, not a bare "a game died":
         # the exception type, its repr, the deepest frame that raised, and the
         # seed that reproduces it.  A count alone is what let a fully-broken
-        # engine look like a quiet run (docs/UNATTENDED.md trap 8); the repr is
+        # engine look like a quiet run (docs/HAZARDS.md trap 8); the repr is
         # what turns the alarm into a fix.  Plain str/int only, because this
         # crosses a multiprocessing pipe and an arbitrary exception object may
         # not pickle.

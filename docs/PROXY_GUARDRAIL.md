@@ -117,7 +117,7 @@ for exactly that reason. Win share is still printed, as a secondary.
 version did not have it.** That version's first real reading — 2p, gen 657 →
 725, 5 accepts, 20 deals — came back at a win-share lower bound of **50.03%**
 against a 50% null and printed `confirms`. A coin flip that landed right,
-reported as reassurance: `docs/UNATTENDED.md` trap 1 (an n=48 row read 50.0%
+reported as reassurance: `docs/HAZARDS.md` trap 1 (an n=48 row read 50.0%
 where n=400 said 27.6%) committed by the very thing meant to catch it. Under
 the current rule that reading is `inconclusive`, which is what it always was.
 
@@ -530,7 +530,7 @@ is exact.
   dead arm simply stops writing them, which is indistinguishable from a
   converged one.
 
-`docs/UNATTENDED.md`'s standing warning is that silence from a monitor reads as
+`docs/HAZARDS.md`'s standing warning is that silence from a monitor reads as
 good news. Here the arm's *own* log was the silent monitor. A one-line
 "n=0 on every opponent, `arena` reported N errors, first: `<repr>`" would have
 caught it in one generation. **This also means "3p has accepted nothing since

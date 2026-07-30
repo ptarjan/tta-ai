@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # `--candidate-bot`, `--objective`, `--hall-dir`, `--human-bots`,
 # `--pool-weights` and `--past-k` are NOT persisted in the state dir
-# (docs/UNATTENDED.md trap 5).  An arm the watchdog relaunches without one of
+# (docs/HAZARDS.md trap 5).  An arm the watchdog relaunches without one of
 # them keeps training -- against a different, weaker configuration, with
 # nothing crashing and nothing in the logs saying so except the `[pool]` line.
 # This project has already hit that exact mode once.
@@ -116,7 +116,7 @@ REMAIN=$(( (DEADLINE - NOW + 3599) / 3600 ))
 #                      relying on the module default, so the log records the
 #                      pool this run actually used even if the default later
 #                      moves.  floor=0 drops greedy/random/default: they are
-#                      saturated (docs/UNATTENDED.md trap 2) and under
+#                      saturated (docs/HAZARDS.md trap 2) and under
 #                      own-culture scoring they stop being inert and start
 #                      pulling.
 # --saturation         AUTOMATIC PRUNING, docs/LEAGUE_POOL.md.  An opponent's
@@ -188,7 +188,7 @@ arm_flags() {   # players -> the flags that are NOT shared, space separated
         # ~10x what it did.  At the old cadence this arm would spend more time
         # checking than training.  Ablation is off rather than merely rarer:
         # single trained weights are not interpretable anyway
-        # (docs/UNATTENDED.md trap 4) and this arm exists to climb.
+        # (docs/HAZARDS.md trap 4) and this arm exists to climb.
         echo "--candidate-bot plan:width=2 --full-check-every 25 --check-games 24 --ablate-every 0"
         ;;
     3|4)
@@ -233,7 +233,7 @@ arm_flags() {   # players -> the flags that are NOT shared, space separated
 
 launch() {   # players workers block extra...
     local K=$1 W=$2 B=$3; shift 3
-    # THE ZERO-GAME HALT (docs/UNATTENDED.md trap 8).  hillclimb_league.py
+    # THE ZERO-GAME HALT (docs/HAZARDS.md trap 8).  hillclimb_league.py
     # writes this file when a whole generation completed zero games -- i.e. the
     # engine is broken and the arm is burning CPU for nothing.  This watchdog is
     # exactly what would undo a plain crash-halt, ten minutes at a time, so it

@@ -1,6 +1,6 @@
 """The zero-game alarm: a generation in which EVERY game died must halt.
 
-The failure mode (docs/UNATTENDED.md trap 8).  `arena._play` catches every
+The failure mode (docs/HAZARDS.md trap 8).  `arena._play` catches every
 exception per game, deliberately, so one engine bug cannot kill a 40-hour
 tournament.  The price is that a bug which kills EVERY game is invisible:
 `hillclimb_league.py` kept proposing mutants against zero completed games,

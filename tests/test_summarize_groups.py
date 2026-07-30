@@ -2,7 +2,7 @@
 `group_of()` used to fall through to `"?"` for anything missing. Four
 BASE_WEIGHTS keys were missing -- pact_blocks_attack, auction_committed,
 auction_bid, hand_potential -- so every published weight table
-(docs/HEURISTICS.md, docs/HEURISTICS_PROGRESS.md, experiments/PROGRESS.md,
+(docs/HEURISTICS.md, docs/HEURISTICS.md, experiments/PROGRESS.md,
 all generated via experiments/analyze_weights.py's use of group_of) silently
 binned those four into "?". hand_potential is the ablation ledger's single
 most load-bearing 2p weight (mean_edge -0.194), so this was not a cosmetic

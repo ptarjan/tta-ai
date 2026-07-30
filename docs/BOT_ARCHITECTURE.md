@@ -15,7 +15,7 @@ CPython 3.14.6. All timings `time.process_time` under `nice -n 15`, because the
 every number here, so the copy path is the oracle (docs/PYPY.md 9.16).
 
 Archaeology of the 22 existing docs is **not** in this file; it has its own
-agent and its own document (`docs/ARCHAEOLOGY.md`). Where I lean on an existing
+agent and its own document (`docs/OPEN_ITEMS.md §6`). Where I lean on an existing
 result I cite it with its n.
 
 ---
@@ -888,7 +888,7 @@ This is worth doing because it answers the question the win-rate harness does
 *not*: **how strong are these bots on an absolute scale**, which is the question
 this project has never been able to answer.
 
-**Correction, landed while this was being written.** `docs/BGO_PILOT.md`
+**Correction, landed while this was being written.** `docs/BGO_CORPUS.md`
 (commit `42cfdb7`) establishes that BGO's finished-games index is **not**
 readable without a login — `docs/EXTERNAL_AIS.md` §5a reached its "readable"
 conclusion inside an authenticated session and that does not generalise. So BGO
@@ -1041,7 +1041,7 @@ Written before the win rates landed, so it cannot be tuned to them.
   so absolute microsecond figures may be 10-20% pessimistic. Ratios are safe.
 
 **What I did not verify.** I did not re-derive the archaeology (owned by
-`docs/ARCHAEOLOGY.md`), the combat rules conformance (`docs/COMBAT_AUDIT.md`),
+`docs/OPEN_ITEMS.md §6`), the combat rules conformance (`docs/COMBAT_AUDIT.md`),
 the coverage census (`docs/COVERAGE_AUDIT.md`) or the QuiescentBot strength A/B
 (`docs/DEEPER_SEARCH.md` §4). Numbers taken from those and from the older docs
 are marked INHERITED with their n.

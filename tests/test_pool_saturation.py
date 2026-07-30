@@ -3,7 +3,7 @@
 The property these tests defend is not "the numbers are these numbers", it is
 the two things the rule must never do:
 
-  * it must never let the pool become pure self-play (docs/UNATTENDED.md trap
+  * it must never let the pool become pure self-play (docs/HAZARDS.md trap
     2/3: the repo has been burned once by a monoculture and once by
     self-imitation), so a fixed EXTERNAL opponent is in every generation's
     subset even when the champion beats every one of them 100%; and

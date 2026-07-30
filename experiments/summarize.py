@@ -85,7 +85,7 @@ GROUPS = {
 
 def group_of(key):
     """The feature-group label for `key`, used to tag every published weight
-    table (docs/HEURISTICS.md, docs/HEURISTICS_PROGRESS.md,
+    table (docs/HEURISTICS.md, docs/HEURISTICS.md,
     experiments/PROGRESS.md all pass through here via analyze_weights.py).
 
     Raises rather than returning "?" for anything GROUPS does not name: a

@@ -1,5 +1,17 @@
 # Why the trained champion does not beat the book bots at 4 players
 
+
+> **SUBJECT: a 4p lineage that has since been discarded** (2026-07-30).
+> `docs/TRAINING_RUN.md` threw away the 4p arm at gen 370 when reverting off
+> QuiescentBot, and the 4p arm restarted at gen 0 = `DEFAULT_WEIGHTS`.  None of
+> the specific `champion_4p` numbers here describe anything currently running.
+> What survives is the method and the general finding: the **matched-generation
+> control** (at an identical gen-99 budget the 2p arm's vector beats `book` at 4p
+> 57.4% against the 4p arm's own vector at 27.6%, z = 9.5 paired) rules out "it
+> just needs more generations", and 4p is structurally noisier (per-game culture
+> margin sd 107.2 against 2p's 38.8, so equal resolution needs ~7.6x the games).
+> The still-unconfirmed mechanism is in `docs/OPEN_ITEMS.md` §4.
+
 Date: 2026-07-27. Diagnosis only — **nothing is fixed here.**
 
 Brief: at 4p the gen-99 champion scored `book` 18.8% / `book2` 18.8% against a
@@ -329,7 +341,7 @@ BookBots and scores 57.9%. Whatever the engine does at 4p, it is not what is
 holding the 4p champion to 27.6%. (Spot-checked anyway: `engine/game.py`'s
 `SWEEP = {2: 3, 3: 2, 4: 1}` matches `docs/RULES_SPEC.md` §2 [RB p.6/8, CoL
 p.3]; `cards.civil_deck` / `military_deck` return 20/53/53/53 civil and
-10/45/50/45 military at 4p, matching `docs/OPEN_QUESTIONS.md` items 2, 17 and
+10/45/50/45 military at 4p, matching `docs/RULES_SPEC.md appendix` items 2, 17 and
 18. `docs/CULTURE_GAP.md` §3 audited the war/aggression path at 4p in detail
 and found no engine bug; I did not re-derive it.)
 

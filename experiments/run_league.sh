@@ -24,7 +24,7 @@ K=${1:-2}; H=${2:-8}; W=${3:-6}; L=${4:-2}; B=${5:-12}; S=${6:-4}; Z=${7:-1.2816
 shift $(( $# > 7 ? 7 : $# ))
 mkdir -p experiments/logs
 LOG=experiments/logs/league_${K}p.log
-# The zero-game stop sentinel (docs/UNATTENDED.md trap 8).  The climber writes
+# The zero-game stop sentinel (docs/HAZARDS.md trap 8).  The climber writes
 # it when a whole generation completed ZERO games, which means the engine is
 # broken and every further hour is wasted.  Restarting is what this script does
 # for a living, so the halt has to be a file this loop checks -- otherwise the

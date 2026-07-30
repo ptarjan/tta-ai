@@ -236,7 +236,7 @@ Territory (I) and (II), Inhabited Territory (I) and (II) — the two that pay
 food and population rather than culture/science/resources.  Colonies at 2p are
 2.8× under the human rate; at 3p/4p the bot is at or above it.
 
-`docs/BEHAVIOUR_AFTER_FIXES.md`'s "colonies at 4p are still effectively zero"
+`docs/BEHAVIOUR_AFTER_FIXES.md` (deleted 2026-07-30)'s "colonies at 4p are still effectively zero"
 (0.01 bids/game, 2026-07-26) is **stale**: 4p is now 2.35 bids/seat and 1.19
 colonies/seat.
 
@@ -360,7 +360,7 @@ Per game: 1.57 pacts standing at the end of a 3p game and 2.21 at 4p, against a
 human corpus that logs **0.86 accepted per 3p game and 2.64 per 4p game**.  So
 3p is above the human rate and 4p slightly below it.  The corpus does not log
 pact *offers*, only acceptances, so only the standing count is comparable.
-`docs/BEHAVIOUR_AFTER_FIXES.md`'s pact fix holds up.  Cancellation is ~never
+`docs/BEHAVIOUR_AFTER_FIXES.md` (deleted 2026-07-30)'s pact fix holds up.  Cancellation is ~never
 used (1 in 260 seat-games); no human baseline.
 
 Label **(c)**.
@@ -456,7 +456,7 @@ And the opposite — **wildly above human**:
   bot now out-scores the human median.  Its war finding (2.9× over) survives
   and has got worse at 3p/4p; its "bot stops colonizing at 4p" finding does not
   survive (1.19 colonies/seat now).
-* **`docs/BEHAVIOUR_AFTER_FIXES.md` (2026-07-26) is stale on three rows.**
+* **`docs/BEHAVIOUR_AFTER_FIXES.md` (2026-07-26, deleted 2026-07-30) is stale on three rows.**
   Wars "0.00 at all counts" is now 1.10–4.79 per game; aggressions "0.00" are
   1.73–2.46 per game; colony bids at 4p "0.01, still ~zero" are 2.35 per seat.
   Its pact conclusion holds.

@@ -72,7 +72,7 @@ tier. `docs/LEAGUE_OBJECTIVE.md` §3 set the external/self-play split
 deliberately (32% fixed external, 68% opponents that improve) after the pool
 spent a long time as a 69%-external monoculture the champion learned to farm.
 A rule that deleted external opponents because we currently beat them would
-have walked back into `docs/UNATTENDED.md` trap 3 from the other side.
+have walked back into `docs/HAZARDS.md` trap 3 from the other side.
 `tests/test_pool_saturation.py::test_the_external_share_cannot_be_eroded_by_saturation`
 asserts that beating **every** external opponent 100% leaves the split
 unmoved.

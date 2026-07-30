@@ -1,5 +1,19 @@
 # Strength check: is our trained champion actually any good?
 
+
+> **SUBJECT: the frozen gen-222 pre-league champion.  The headline win rates are
+> stale as a description of the current bot** (2026-07-30).  `docs/DEEPER_SEARCH.md`
+> §7.3: the later gen-337 2p champion beats BookBot v2 72-78% and CultureBot
+> 52-58%.  But that is no longer an *external* test — BookBot and its variants
+> are now training-pool members, so it settles "training worked against what it
+> trains against", not "is the bot good".  The methodological point of this
+> document therefore stands undamaged, and so does its behavioural diagnosis
+> (hoards unspent science, under-grows population, under-buys civil actions,
+> under-builds wonders, hoards unconverted military strength), which was
+> independently re-derived from the weight vector itself.  The 4p rows are
+> separately quarantined by the banner below.  Current strength lives in
+> `docs/SYSTEM_COVERAGE.md`.
+
 **Status: 2p and 3p final. 4p and the hybrid ablation still running.**
 
 > **⚠ EVERY 4p NUMBER IN THIS DOCUMENT IS QUARANTINED (2026-07-30).** The 4p

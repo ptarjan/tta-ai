@@ -94,7 +94,7 @@ HIGH_DEATH_RATE = 0.10
 # running perfectly happily.  It proposes mutants, every duel returns zero
 # completed games, `_aggregate` sees no samples, nothing is ever accepted, and
 # the arm burns hours writing a generation log with no data in it.  It has cost
-# this project real time (docs/UNATTENDED.md trap 8).
+# this project real time (docs/HAZARDS.md trap 8).
 #
 # Two halves, and the second is the one that took thought:
 #
@@ -1004,7 +1004,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     # The startup block is the RECEIPT for a relaunch -- `[Kp] objective:`,
     # `[Kp] trained architecture:`, `[Kp] saturation:` and `[pool]` are the
     # only evidence that the arm is training what someone intended
-    # (docs/UNATTENDED.md trap 5).  stdout is block-buffered into the
+    # (docs/HAZARDS.md trap 5).  stdout is block-buffered into the
     # supervisor's log file, so without this the receipts do not appear until
     # the first generation ends -- which under PlanBot is ten-plus minutes of
     # not knowing.

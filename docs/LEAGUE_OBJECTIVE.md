@@ -343,7 +343,7 @@ never fires. That is exploiting an implementation artefact.
    they were provably inert: the champion beats `default`/`greedy`/`random`
    97.9-100%, so the candidate and the reference both score 1.0 and every
    paired diff is exactly 0.0 with se exactly 0.0 — 6% of the pool weight and
-   0 bits of information (`docs/UNATTENDED.md` trap 2). **Under own-culture
+   0 bits of information (`docs/HAZARDS.md` trap 2). **Under own-culture
    scoring they stop being inert**, which is worse, not better: they are the
    only opponents that never compete for the card row and never attack, so
    "farm quietly" scores against them in a way it cannot score against a real
@@ -468,7 +468,7 @@ reported above and nothing was cherry-picked (they are the first two).
 
 ### How to stop the arms — `pkill -f run_league.sh` is NOT enough
 
-`docs/UNATTENDED.md` says "to stop everything early: delete [the deadline
+`docs/HAZARDS.md` says "to stop everything early: delete [the deadline
 file], then `pkill -f run_league.sh`". That kills the **supervisor** and
 leaves its `python3 -m experiments.hillclimb_league` child running for up to
 an hour. The cron watchdog then sees no supervisor, launches a new one, and

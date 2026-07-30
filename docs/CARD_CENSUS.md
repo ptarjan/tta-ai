@@ -38,7 +38,7 @@ and 112 by the time it landed, because sibling lanes are correctly adding
 pricing behind 0.0 defaults faster than anything turns one on. See §9. **By
 2026-07-30 it reached 118**, and the live `experiments/league_state/
 champion_{2,3,4}p.json` grew to 118 keys along with it — see the box above
-and `docs/OPEN_AFTER_THE_AUDIT.md` §3. This paragraph's "78 vs 112" gap is
+and `docs/OPEN_ITEMS.md` §3. This paragraph's "78 vs 112" gap is
 about the *frozen* snapshots this census actually ran against, which are
 still 78-key and still accurate as described; it is not a current statement
 about the live evaluator.
@@ -108,7 +108,7 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 >   2026-07-30:** `hand_mil_potential` is now nonzero on the live 3p champion
 >   (`0.01079`, confirmed by reading
 >   `experiments/league_state/champion_3p.json`), though still `0.0` at 2p
->   and 4p — see `docs/OPEN_AFTER_THE_AUDIT.md` §3. The pipe is no longer
+>   and 4p — see `docs/OPEN_ITEMS.md` §3. The pipe is no longer
 >   uniformly severed across player counts, which weakens "the better
 >   candidate for a pure severed pipe" at 3p specifically; 2p and 4p are
 >   unaffected.

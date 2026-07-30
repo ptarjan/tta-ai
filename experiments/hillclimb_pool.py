@@ -168,7 +168,7 @@ DEFAULT_GATE_TIERS = ("book", "variant", "quiescent", "human")
 # a multiplier on the entry's share of its TIER total, and the tier total is
 # unchanged -- so this reallocates weight WITHIN a tier and cannot change the
 # external/self-play balance that docs/LEAGUE_OBJECTIVE.md section 3 set.
-# That is deliberate: the monoculture trap (docs/UNATTENDED.md trap 3) was
+# That is deliberate: the monoculture trap (docs/HAZARDS.md trap 3) was
 # caused by static hand-written bots owning 69% of the signal, and a rule that
 # quietly deleted the external tiers because we currently beat them would walk
 # straight back into it from the other side.
@@ -820,7 +820,7 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
     # The floor tier defaults to weight 0 and is therefore usually absent.
     # Under win share it was inert-by-construction (the champion beats all
     # three 97.9-100%, so candidate and reference both score 1.0 and every
-    # paired diff is exactly 0.0 with se 0.0 -- docs/UNATTENDED.md trap 2).
+    # paired diff is exactly 0.0 with se 0.0 -- docs/HAZARDS.md trap 2).
     # Under `own`/`blend` it is NOT inert any more: a punching bag that never
     # competes for the card row and never attacks lets a candidate farm
     # culture in a way no real opponent does, so it would start actively

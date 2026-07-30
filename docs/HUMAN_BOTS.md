@@ -11,7 +11,7 @@ useful part.
 
 ## Why
 
-`docs/UNATTENDED.md` trap 3: **every pool opponent is a BookBot subclass**, and
+`docs/HAZARDS.md` trap 3: **every pool opponent is a BookBot subclass**, and
 `docs/TWOP_PROFILE.md` measured the consequence — `var:military` needs a +3
 strength lead to fire, and the champion holds it under +3 on 94.5% of turns.
 The champion does not beat that bot, it switches it off. Then
@@ -94,7 +94,7 @@ Two things to be careful with:
 
 **`passive` was deliberately not built.** It is the losing tail (26% against a
 50% null). A bot fitted to it would be pool decoration, which is
-`docs/UNATTENDED.md` trap 2.
+`docs/HAZARDS.md` trap 2.
 
 ### Does skill predict style? Yes — and against the obvious direction
 
@@ -337,7 +337,7 @@ acceptance the way losing to book or a variant does.
   is load-bearing — like `--candidate-bot` and `--hall-dir`, the pool
   composition is **not** persisted in the state dir, so a relaunch that forgot
   the flag would keep training but against the old monoculture, with nothing
-  but the `[pool]` line to show it (`docs/UNATTENDED.md` trap 5). A test pins
+  but the `[pool]` line to show it (`docs/HAZARDS.md` trap 5). A test pins
   that the flag is in both files.
 
 The `[pool]` line this produces (verified from `build_pool`):

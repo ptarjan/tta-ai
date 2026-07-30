@@ -526,7 +526,7 @@ metric was changed.**
 
 1. **Do not warm-start a league arm from the pure clone.** It loses to `book` by
    44.0 ± 4.9 margin at a 15.6% win share. A hill climber starting there is
-   starting below the pool, and `docs/UNATTENDED.md`'s trap 5 is the reminder
+   starting below the pool, and `docs/HAZARDS.md`'s trap 5 is the reminder
    that a bad `--init` is worth many wasted generations. Stage 4 of the brief
    was conditional on stages 1-3 landing; stage 3 landed only under one of the
    three searches, so **no `--init` file is committed and no training was

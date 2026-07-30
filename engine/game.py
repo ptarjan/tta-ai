@@ -1,7 +1,7 @@
 """Turn loop, age progression and game end (docs/RULES_SPEC.md §1, §2, §5.0,
 §6.6, §12).
 
-Public API (docs/ARCHITECTURE.md):
+Public API (docs/README.md):
 
     new_game(num_players, seed)   -> GameState
     legal_moves(state)            -> [move, ...]

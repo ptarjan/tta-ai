@@ -29,7 +29,7 @@ right number.
 
 **`passive` is deliberately not built.**  It is the losing tail of the
 distribution (26% win share against a 50% null); a bot fitted to it would be
-decoration in the pool, and `docs/UNATTENDED.md` trap 2 is about exactly that.
+decoration in the pool, and `docs/HAZARDS.md` trap 2 is about exactly that.
 
 **The win-share column is endogenous and must not be read as "war is good".**
 The segments are cut on behaviour that is itself downstream of who is winning
@@ -106,7 +106,7 @@ _BASE = {
 #: moved the builder loss by less than its own block-to-block noise
 #: (0.157 -> 0.186 -> 0.171 on re-measurement of the SAME knobs).  Fitting a
 #: knob whose effect is smaller than the measurement noise is fitting noise,
-#: which is the thing docs/UNATTENDED.md keeps warning about.
+#: which is the thing docs/HAZARDS.md keeps warning about.
 _WONDER_KNOBS = {k: _COMMON_KNOBS[k] for k in
                  ("wonder_appetite", "wonder_finish_bias", "take_bias",
                   "price_scale", "hand_free")}

@@ -1,5 +1,19 @@
 # PyPy switchover
 
+> **CORRECTION 2026-07-30 — §11.10's 3p/4p verdict rests on a configuration that
+> has since changed.**  It says the 3p and 4p arms stay on CPython and computes
+> the loss from `quiescent:levels=1` ratios (0.82x, 0.86x).  Since `1fbf128`
+> (2026-07-30, "Switch the 3p/4p challenger off QuiescentBot: it cannot be
+> shipped"), `experiments/watchdog.sh` sets `--candidate-bot plan:width=2` for
+> **all three arms** — and §11.4 measured `plan:width=2` at **1.12-1.24x in
+> PyPy's favour**.  §11.10 anticipated exactly this trigger.  Do not quote
+> 0.82x/0.86x as current; re-measure `plan:width=2` at 3p/4p before making any
+> switch/no-switch call.
+>
+> **Every gate digest quoted in this file is stale** — they have moved at least
+> eight times.  Preserve the *method* (the 9.0 rule, `docs/HAZARDS.md`), never
+> the numbers; read live values out of `tools/gate.sh`.
+
 Working log, appended to continuously.
 
 ## 1. Install audit (2026-07-26) — VERDICT: native, no Rosetta, nothing to fix

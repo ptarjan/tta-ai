@@ -61,7 +61,7 @@ CI (see `verdict_of` for why margin and not win share):
 The fourth verdict is the one that keeps this file honest.  Without it the
 first real reading printed `confirms` off a win-share lower bound of 50.03%
 against a 50% null: a coin flip reported as reassurance, which is
-`docs/UNATTENDED.md` trap 1 committed by the very thing meant to catch it.
+`docs/HAZARDS.md` trap 1 committed by the very thing meant to catch it.
 
 Two separate alarms, because they need different responses:
 
@@ -346,7 +346,7 @@ def verdict_of(h2h, margin_min=MARGIN_MIN, resolution=MARGIN_RESOLUTION):
     The fourth one is the important one and the first version of this file did
     not have it.  Its first reading came back at a win-share lower bound of
     50.03% against a 50% null and printed `confirms` -- a coin flip that landed
-    right, reported as reassurance.  `docs/UNATTENDED.md` trap 1 is the same
+    right, reported as reassurance.  `docs/HAZARDS.md` trap 1 is the same
     mistake in the full check (an n=48 row read 50.0% where n=400 said 27.6%),
     and a guardrail that repeats the error it exists to catch is worthless.
 

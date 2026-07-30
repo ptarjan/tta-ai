@@ -1,7 +1,29 @@
 # BGO finished-game corpus for value-function training (2026-07-26)
 
-Owner of this doc: this pull only. Do not edit `BGO_PILOT.md`, `EXTERNAL_AIS.md`,
-or the other audit docs from here — see their own owners.
+> **`docs/BGO_PILOT.md` was folded in here and deleted on 2026-07-30.**  It was
+> the anonymous-only feasibility recon done before this scrape, and three of its
+> findings are still load-bearing:
+>
+> * **The BGO finished-games index is not readable anonymously at all** — not
+>   just the journals.  Only aggregate counters and empty pagination shells are
+>   public; the per-game rows (list, board, journal) all require login.  This
+>   corrects `docs/EXTERNAL_AIS.md` §5a, which assumed only journals were gated.
+> * `robots.txt` permits `index.php`; nothing this project's scraper touches is
+>   disallowed.
+> * **The civil card row is never printed in the journals**, only the chosen
+>   card — which kills imitation learning of "what was on offer" (though not
+>   value learning), and reconstructing it needs simulating the deck from journal
+>   plus discard data, a real project rather than a parse.  Military draws and
+>   discards are permanently opaque counts, never identities.
+>
+> The reusable pattern worth remembering from that pilot: check reachability
+> *before* spending credentials.
+>
+> **The `## Results` section below is an empty placeholder.**  Read the real
+> yield from `sources/bgo/index.tsv`, not from this document.
+
+Owner of this doc: this pull only.  Do not edit `EXTERNAL_AIS.md` or the other
+audit docs from here — see their own owners.
 
 Goal: ~2,000 finished, 2015-edition ("A New Story of Civilization") Through the
 Ages journals from Boardgaming-Online (BGO), sampled for training a value
@@ -143,7 +165,7 @@ expansion check:
   direct inspection: it's not a static site-wide reference — it reflects
   each game's own settings), so it's checked again for the same 40
   expansion-exclusive names, plus three government/tactics numeric
-  signatures that changed between editions (`docs/BGO_PILOT.md` /
+  signatures that changed between editions (`docs/BGO_CORPUS.md` /
   `EXTERNAL_AIS.md` §5a): Monarchy `2(8)` (2015) vs `3(9)` (2006),
   Napoleonic Army `7(4)` vs `8(4)`, Mechanized Army `10(5)` (2015; 2006
   value not established). These are matched with regexes, not literal

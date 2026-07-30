@@ -94,7 +94,7 @@ of that is games genuinely being longer (mean player-turns 79 → 104, because
 colonies, action cards and pacts all extend a civilization's life) and the rest
 is the bigger move space plus `_action_card_playable`, which probes the ordered
 action of every yellow card in hand. 5.5 games/s is still ~330 4p games/minute
-against the ≥50/minute target in ARCHITECTURE.md, and `engine.actions.STRICT =
+against the ≥50/minute target in README.md, and `engine.actions.STRICT =
 False` buys back roughly another 25%.
 
 Hand-off note for the bots work: GreedyBot plays only 1.7 action cards per game
@@ -114,7 +114,7 @@ therefore almost never takes one from the row. Worth a `WeightedBot` feature.
   TOTAL discount pool for the turn, not a per-unit discount. The printed text
   ("build or upgrade military units; pay N fewer resources", plural) supports
   the pool reading, but it is not confirmed by the rulebook — see
-  docs/OPEN_QUESTIONS.md.
+  docs/RULES_SPEC.md appendix.
 - **Assumption**: an action card's gains resolve BEFORE its ordered action.
   This makes the 2015 wording of Breakthrough/Frugality equivalent to the older
   editions' "pay N less" phrasing, which is almost certainly the intent.
@@ -125,7 +125,7 @@ therefore almost never takes one from the row. Worth a `WeightedBot` feature.
 ## Next steps
 1. Expose the colonization sacrifice as a decision (currently greedy).
 2. Confirm the two assumptions above against the rulebook/FAQ and record them in
-   docs/OPEN_QUESTIONS.md.
+   docs/RULES_SPEC.md appendix.
 3. Teach `WeightedBot` about the new move kinds (`bid`, `defend`, `choose`,
    `play_action`) — it currently sees them but has no dedicated features.
 

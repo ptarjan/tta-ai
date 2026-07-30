@@ -1,5 +1,18 @@
 # Heuristics for human players
 
+
+> **CAVEAT 2026-07-30: this document describes champions that no longer exist.**
+> The 3p and 4p champions it was written from were wiped and restarted, and even
+> the surviving 2p lineage's live weights contradict some of its headline advice —
+> 13 weights are clamped to exactly 0.0 (including `civil_actions`, `ca_left`,
+> `uprising`, `leader`, each contradicting a specific claim here) while the largest
+> live term is `end_turn_bias = −14.44`, a pure artefact correction.  The
+> document's own evidence grading ([rules] / [confirmed] / [strong] / [mixed] /
+> [provisional] / [thin] / [not evidence]) is the right way to read it: the
+> [rules] and [confirmed] material is durable, the self-play-derived material is a
+> snapshot.  For human strategy that does not depend on our bots at all, read
+> `docs/EXPERT_STRATEGY.md`.
+
 **Through the Ages: A New Story of Civilization — base game, 2015 edition, no expansion.**
 
 Written for someone sitting at a table with the physical game.

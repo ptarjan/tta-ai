@@ -100,7 +100,7 @@ whose frozen 3p champion weight is **-0.0974**
 scored as a *gain* of 0.195. This is the mechanism behind an already-measured
 behaviour that nobody had explained: the 3p champion takes **56.9% of its cards
 from cost band 3 at 2.33 CA/card** while the 2p champion takes 88.4% from band 1
-at 1.15 CA/card (`docs/HEURISTICS_PROGRESS.md:119-121`), against a human
+at 1.15 CA/card (`docs/HEURISTICS.md`), against a human
 tournament baseline of **76% of Age I picks at 1 CA and 2.5% at 3 CA**
 (`docs/EXPERT_STRATEGY.md:688`).
 
@@ -317,7 +317,7 @@ weight-vector-dependent.
   slots 5-8 cost 2 CA, slots 9-12 cost 3 CA**, with the same thing spelled as a
   function at `engine/actions.py:39-45` and the hot path using the tuple at
   `engine/actions.py:133`. This matches `docs/HEURISTICS.md:2178-2188` and
-  `docs/OPEN_QUESTIONS.md:38`, and is player-count independent. Verified from
+  `docs/RULES_SPEC.md appendix item 11`, and is player-count independent. Verified from
   code, not from memory.
 * Surcharges on top of the slot cost, `engine/actions.py:79-89`: a **wonder**
   costs +1 CA per completed *or destroyed* wonder you own (waived for
@@ -1253,7 +1253,7 @@ the derivations. Read them with the status table above.*
 `ca_left` (`engine/bots/weighted.py:439`); its 3p champion weight is -0.0974, so
 paying 3 CA instead of 1 for the identical card *raises* the score by 0.195.
 Measured downstream behaviour: 56.9% band-3 picks and 2.33 CA/card at 3p
-(`docs/HEURISTICS_PROGRESS.md:119-121`) against 76%-at-1-CA in human tournaments
+(`docs/HEURISTICS.md`) against 76%-at-1-CA in human tournaments
 (`docs/EXPERT_STRATEGY.md:688`).
 
 **Proposal — 1 feature, ~10 lines.** Add to `features()`:
@@ -1446,7 +1446,7 @@ to `/tmp`, not committed.
   rates would fall.**
 * **Not run:** any league/arena batch, any `experiments/` job, `pickstats`. The
   behavioural numbers quoted (2.33 CA/card at 3p, 88.4% band-1 at 2p, the human
-  tournament baseline) are cited from `docs/HEURISTICS_PROGRESS.md:119-121` and
+  tournament baseline) are cited from `docs/HEURISTICS.md` and
   `docs/EXPERT_STRATEGY.md:688`, not re-measured.
 
 ### 8.1 The 2026-07-29 re-measurement

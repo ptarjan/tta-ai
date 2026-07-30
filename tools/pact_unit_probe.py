@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two cheap base-rate probes that gate two items in docs/ARCHAEOLOGY.md.
+"""Two cheap base-rate probes that gate two items in docs/OPEN_ITEMS.md section 6.
 
 Both questions are "does this thing ever vary?", which is much cheaper to
 answer than the A/B each item asks for, and answering it first can make the

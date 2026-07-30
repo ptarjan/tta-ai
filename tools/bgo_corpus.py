@@ -122,7 +122,7 @@ NLW_NAMES = NLW_LEADERS + NLW_WONDERS
 RENAME_2015 = ["Charlie Chaplin", "Sid Meier"]
 RENAME_2006 = ["Rock'n'Roll Icon", "Alex Randolph"]
 
-# Numeric board-view fallback signatures (docs/BGO_PILOT.md / EXTERNAL_AIS.md
+# Numeric board-view fallback signatures (docs/BGO_CORPUS.md / EXTERNAL_AIS.md
 # 5a): government/tactics cards whose stat values changed between editions.
 # Only consulted when the journal text alone is inconclusive. Values are
 # regexes, not literal strings: stripping HTML tags leaves inconsistent

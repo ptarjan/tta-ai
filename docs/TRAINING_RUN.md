@@ -138,7 +138,7 @@ Three flags come with the retarget, all in the 2p branch of
 cycle plays four duels per weight; at ~10x the per-game cost the arm would
 otherwise spend more time checking than training. Ablation is off rather than
 merely rarer — single trained weights are not interpretable anyway
-(`docs/UNATTENDED.md` trap 4) and this arm exists to climb.
+(`docs/HAZARDS.md` trap 4) and this arm exists to climb.
 
 ### Two other changes landed the same day
 
@@ -334,7 +334,7 @@ Check with `python3 tools/drift_sim.py` for the null and
    **refuses to launch an arm** whose assembled command line is missing any of
    `--candidate-bot --objective --hall-dir --human-bots --pool-weights
    --past-k --saturation`. A dead arm is loud; a silently mis-configured one
-   is not. See `docs/UNATTENDED.md` trap 5.
+   is not. See `docs/HAZARDS.md` trap 5.
 
 ## Resuming
 

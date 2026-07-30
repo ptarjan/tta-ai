@@ -1,10 +1,27 @@
 # What strong humans actually do, and where our bot isn't human (2026-07-27)
 
+> **CORRECTION 2026-07-30 — THE BOT-SIDE NUMBERS BELOW ARE STALE ON FOUR AXES.**
+> This document measures the gen-224 quiescent champion and reports the 2p bot
+> at **0.40 wonders completed, 1.91 stages, 84.1 final score** against a human
+> median 156 (mean CI 159.5 [156.0, 163.0]).  `docs/SYSTEM_COVERAGE.md`, on the
+> current live 2p champion under `plan:width=2`, measures **1.53 / 5.50 /
+> 199.8** — the wonder gap has closed from 6.9x to 1.8x and **the score gap has
+> reversed: the 2p bot now out-scores the human median.**  Do not generalise
+> that past 2p: in the same table the 3p bot scores 124 against a human 176 and
+> the 4p bot 121 against 195.  This document's war finding (2.9x over) survives
+> and has got worse at 3p/4p; its "the bot stops colonizing at 4p" finding does
+> not survive (1.19 colonies/seat now).
+>
+> **Everything on the human side of this document is unaffected** and remains the
+> reference: the corpus, the parse, the medians, the cluster bootstrap, and the
+> skill-tier findings.  Read those from here; read bot-side numbers from
+> `docs/SYSTEM_COVERAGE.md`.
+
 Owner of this doc: the BGO-analysis pull. `docs/BGO_CORPUS.md` owns the scrape
 itself and is not edited from here.
 
 This is the **first external anchor this project has ever had.** Everything
-before it was our bots playing our bots, with `docs/UNATTENDED.md`'s "Open,
+before it was our bots playing our bots, with `docs/HAZARDS.md`'s "Open,
 ranked" item 1 (*"No external anchor"*) as the standing admission. The 1,011
 BGO journals in `sources/bgo/journals.tar.gz` now parse, and our champion has
 been measured on the same axes with the same code path.
@@ -177,7 +194,7 @@ description, not a verdict.
 
 Champion: `experiments/league_state/champion_2p/3p/4p.json` at gen 224/·/· as
 of 2026-07-27 10:08, run as `quiesce:...,levels=1` — the trap-5 setting from
-`docs/UNATTENDED.md`; running it as a bare weight file would have measured a
+`docs/HAZARDS.md`; running it as a bare weight file would have measured a
 1-ply bot that is not the champion. Mirror tables, every seat the same policy.
 **n = 40 games at 2p, 30 at 3p, 30 at 4p.** These are small; every claim below
 is stated with its CI and the ones that overlap are called overlapping.
@@ -289,7 +306,7 @@ easy they'd be to fix:
   and that humans under-fight. What the corpus establishes is that our bot's
   policy is not one any human plays, which for a policy trained purely against
   its own relatives is the thing worth knowing.
-* **Some human state is unrecoverable**, as `docs/BGO_PILOT.md` §6 predicted:
+* **Some human state is unrecoverable**, as `docs/BGO_CORPUS.md` §6 predicted:
   the card row is never printed (so "did they wait for it to slide?" can only
   be answered as "what did they pay", never as "what was on offer"), military
   hands are counts only, and **army strength appears nowhere except inside a
@@ -331,7 +348,7 @@ In the order the evidence supports, not the order of effort:
 4. **Do not "fix" the war rate directly.** It is downstream: a civilization
    with 24 cards and no wonders has little else to convert into culture, and
    the league's `var:military` opponent is held to 5.5% of turns
-   (`docs/UNATTENDED.md` trap 3), so war has never been punished in training.
+   (`docs/HAZARDS.md` trap 3), so war has never been punished in training.
    Re-measure the war rate *after* (2), and only add a war prior if it survives.
 5. **Use the corpus for what it was scraped for.** This analysis reads 1,011
    games as summary statistics; the journals also support per-turn culture and
