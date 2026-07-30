@@ -21,17 +21,96 @@ from engine import cards as C
 from engine.bots import board_yields as BY, weighted as W
 
 
+# The blocks the coverage walk opens.
+#
+# `immediateEffects` / `permanentEffects` were NOT here originally, and that
+# omission is why the census reported all 12 territories as "0 dropped keys,
+# zero visible gain" -- a territory's `effects` block is `{}` and its entire
+# content lives in these two.  A test that only looks where the values already
+# are cannot report a value in the wrong place, which is the same failure as
+# the one the file exists to prevent, one level out.
+_BLOCKS = ("production", "effects", "immediateEffects", "permanentEffects")
+
+
 def _blocks(card):
-    for block in ("production", "effects"):
+    for block in _BLOCKS:
         yield block, (card.get(block) or {})
+
+
+def _all_priced_keys():
+    """Every effect key any pricing path in the evaluator reads.
+
+    One definition, because three separate tests need it and they were
+    starting to drift apart as each lane added its own table -- which is the
+    same failure mode this file exists to prevent, in the file itself.
+    """
+    return (set(W._PROD_TO_FEATURE) | set(W._EFF_TO_FEATURE)
+            | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
+            | set(W._TERR_TO_FEATURE) | set(BY.BOARD_PRICED))
+
+
+# ------------------------------------------------- the top-level card fields
+#
+# The second place a printed value can hide, and the one that cost the ten
+# unit cards: a military unit's yield is a TOP-LEVEL `strength`, not
+# `production: {"strength": n}`, so no block walk could ever see it.  Every
+# top-level key on every card is either named below as carrying a priced
+# value, or written off with a reason, on exactly the same terms as
+# DELIBERATELY_UNPRICED.
+TOP_LEVEL_PRICED = {
+    # read by `_card_yields`
+    "strength": "unit per-worker strength / tactic per-army bonus",
+    "techCost": "priced as a science cost",
+    "buildCost": "priced as a resource cost",
+    "stages": "wonder: priced as the summed resource cost",
+    "composition": "tactic: what fills an army (engine/effects.tactic_outlook)",
+    "obsoleteStrength": "tactic: the outdated per-army bonus",
+}
+
+TOP_LEVEL_UNPRICED = {
+    # --- identity / bookkeeping, no value in them at all
+    "name": "card identity", "baseName": "printed name before disambiguation",
+    "age": "priced through the age level, not as a yield",
+    "type": "priced through the type, not as a yield",
+    "deck": "which deck the card comes from",
+    "count": "copies of the card per player count",
+    "effects": "walked as a block", "production": "walked as a block",
+    "immediateEffects": "walked as a block",
+    "permanentEffects": "walked as a block",
+    # --- prose and provenance
+    "text": "printed card text for human readers",
+    "note": "a rules clarification for human readers",
+    "aka": "alternate printed name for human readers",
+    "source": "provenance of the card data, not a game value",
+    "countSource": "provenance of the copy count, not a game value",
+    "uncertain": "a data-confidence note, not a game value",
+    # --- genuinely unpriced, with the reason
+    "cost": "military-action cost of playing the card; the evaluator sees "
+            "the action spent in the post-move state, not on the card",
+    "target": "addressing: names who an aggression/war/event applies to",
+    "scoringEvent": "end-of-age scoring, resolved by the rules engine",
+    "sides": "pact structure; priced by deferred_credit, which reads inside",
+    "urbanLimitCategory": "which urban cap the building counts against, a "
+                          "rule constraint rather than a yield",
+    # --- governments.  Same bug class as the unit `strength` above and NOT
+    # fixed here: a government's action counts are top-level, so `_card_yields`
+    # prices a government from its `production`/`effects` and never sees them.
+    # Written off rather than mapped because governments are another lane's
+    # card type; this entry is the visible record that it is still open.
+    "civilActions": "government: top-level action count _card_yields does "
+                    "not read -- the unit-strength bug, still open",
+    "militaryActions": "government: top-level action count _card_yields does "
+                       "not read -- the unit-strength bug, still open",
+    "urbanBuildingLimit": "government: a cap on what is legal, not a yield",
+    "peacefulCost": "government: science cost of the peaceful change route",
+    "revolutionCost": "government: science cost of the revolution route",
+}
 
 
 class TestEffectCoverage(unittest.TestCase):
 
     def test_every_effect_key_is_accounted_for(self):
-        priced = (set(W._PROD_TO_FEATURE) | set(W._EFF_TO_FEATURE)
-                  | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
-                  | set(BY.BOARD_PRICED))
+        priced = _all_priced_keys()
         known = priced | set(W.DELIBERATELY_UNPRICED)
         missing = {}
         for name, card in C.db().by_name.items():
@@ -67,6 +146,18 @@ class TestEffectCoverage(unittest.TestCase):
                 seen |= set(body)
         self.assertEqual(sorted(set(BY.BOARD_PRICED) - seen), [])
 
+    def test_no_key_is_both_priced_and_written_off(self):
+        """The stale check above catches a write-off no card carries any more.
+        It does NOT catch a write-off whose key someone has since MAPPED --
+        the set would still name a live key, and the file would be asserting
+        two contradictory things about it.  That is the shape of the mistake a
+        lane makes fixing its own card type: map the key, forget the entry."""
+        both = sorted(_all_priced_keys() & set(W.DELIBERATELY_UNPRICED))
+        self.assertEqual(
+            both, [],
+            "key(s) mapped to a feature AND listed as deliberately unpriced; "
+            "delete the DELIBERATELY_UNPRICED entry")
+
     def test_unpriced_keys_all_carry_a_reason(self):
         for k, why in W.DELIBERATELY_UNPRICED.items():
             self.assertTrue(isinstance(why, str) and len(why) > 20,
@@ -90,6 +181,7 @@ class TestEffectCoverage(unittest.TestCase):
         targets = (set(W._PROD_TO_FEATURE.values())
                    | set(W._EFF_TO_FEATURE.values())
                    | set(W._EFF_SPECIAL.values())
+                   | set(W._TERR_TO_FEATURE.values())
                    | {f for _a, f in BY._STATS_FEATURES}
                    | {"hand_limit", "build_discount", "no_aggression",
                       "gov_action_cost", "restricted_resources", "leader"})
@@ -120,7 +212,8 @@ class TestTheCensusStillReproducesMaster(unittest.TestCase):
         # priced -- which showed up as unrelated tests failing depending on
         # the order they ran in.
         save = (dict(W._EFF_TO_FEATURE), dict(W._EFF_SPECIAL),
-                dict(W._EFF_CHOICE))
+                dict(W._EFF_CHOICE), dict(W._UNIT_TO_FEATURE),
+                dict(W._TERR_TO_FEATURE))
         try:
             cb.use_legacy_maps()
             types, dropped, zero, _k, _n, _c = cb.scan()
@@ -129,7 +222,8 @@ class TestTheCensusStillReproducesMaster(unittest.TestCase):
             self.assertEqual(sum(zero.values()), 168)
         finally:
             for reg, kept in zip((W._EFF_TO_FEATURE, W._EFF_SPECIAL,
-                                  W._EFF_CHOICE), save):
+                                  W._EFF_CHOICE, W._UNIT_TO_FEATURE,
+                                  W._TERR_TO_FEATURE), save):
                 reg.clear()
                 reg.update(kept)
             W._card_yields.cache_clear()
@@ -303,6 +397,325 @@ class TestNewWeightsAreInert(unittest.TestCase):
         feature -- not silently in six months."""
         from experiments import summarize
         for k in self.INERT:
+            self.assertTrue(summarize.group_of(k))
+
+
+# ===================================================================
+# Lane B: territories, military units and tactics.  All 37 of these cards
+# were "zero visible gain" with ZERO dropped keys, which is a contradiction
+# only until you notice that neither the census nor this test looked anywhere
+# except `production` and `effects`.  Units keep their yield in a top-level
+# `strength`; territories keep theirs in `immediateEffects` /
+# `permanentEffects`; a tactic's is a board query.  See docs/CARD_BLINDNESS.md.
+# ===================================================================
+
+class TestTopLevelFieldsAreAccountedFor(unittest.TestCase):
+    """The block walk above cannot see a value printed OUTSIDE a block.
+
+    That is how all ten unit cards priced out as pure cost for the whole
+    project: `_card_yields` read their `techCost` and `buildCost` and never
+    their `strength`, because `strength` is not in `production`.  The same
+    hole is still open on governments (see TOP_LEVEL_UNPRICED), and this test
+    is what keeps that fact visible instead of silent.
+    """
+
+    def test_every_top_level_key_is_priced_or_written_off(self):
+        known = set(TOP_LEVEL_PRICED) | set(TOP_LEVEL_UNPRICED)
+        missing = {}
+        for name, card in C.db().by_name.items():
+            for k in card:
+                if k not in known:
+                    missing.setdefault(k, []).append(name)
+        self.assertEqual(
+            missing, {},
+            "top-level card field(s) neither in TOP_LEVEL_PRICED nor in "
+            "TOP_LEVEL_UNPRICED.  A value printed outside `production` / "
+            "`effects` is invisible to `_card_yields` unless it is read "
+            "explicitly -- that is the bug that cost the ten unit cards:\n"
+            + repr(missing))
+
+    def test_no_stale_top_level_entries(self):
+        seen = set()
+        for card in C.db().by_name.values():
+            seen |= set(card)
+        stale = sorted((set(TOP_LEVEL_PRICED) | set(TOP_LEVEL_UNPRICED))
+                       - seen)
+        self.assertEqual(stale, [])
+
+    def test_top_level_entries_carry_a_reason(self):
+        for d in (TOP_LEVEL_PRICED, TOP_LEVEL_UNPRICED):
+            for k, why in d.items():
+                self.assertTrue(isinstance(why, str) and len(why) > 12,
+                                f"{k!r} needs a real reason, got {why!r}")
+
+
+class TestUnitsArePricedByWhatTheyContribute(unittest.TestCase):
+
+    def _yield_of(self, name, feature):
+        return sum(a for k, a, _c in W._card_yields(name) if k == feature)
+
+    def test_every_unit_card_prices_its_printed_strength(self):
+        units = [n for n, c in C.db().by_name.items()
+                 if c["type"] in C.UNIT_TYPES]
+        self.assertEqual(len(units), 10)
+        for n in units:
+            printed = C.db().get(n).get("strength") or 0
+            self.assertEqual(self._yield_of(n, "strength"), float(printed), n)
+            self.assertGreater(printed, 0, n)
+
+    def test_unit_strength_matches_what_the_engine_does_with_it(self):
+        """The same agreement argument as `culture` -> `culture_rate`:
+        `effects._tech_prog` puts a unit card's TOP-LEVEL `strength` into the
+        per-worker programme, in the slot it puts a farm's `production.food`
+        into.  So pricing it as the `strength` feature is not an opinion."""
+        from engine import effects
+        for n, c in C.db().by_name.items():
+            if c["type"] not in C.UNIT_TYPES:
+                continue
+            items, _eff = effects._tech_prog(n)
+            self.assertEqual(dict(items).get("strength"),
+                             c.get("strength"), n)
+        self.assertEqual(W._PROD_TO_FEATURE["strength"], "strength")
+
+    def test_an_age_ii_cavalry_and_artillery_are_no_longer_the_same_card(self):
+        """Not that they must DIFFER -- Cavalrymen and Cannon are genuinely
+        the same numbers -- but that the pricing now comes from those numbers
+        instead of from `age + 1`, so a card whose strength changed would
+        move.  Riflemen (3) against Modern Infantry (5) is the live case."""
+        self.assertGreater(self._yield_of("Modern Infantry", "strength"),
+                           self._yield_of("Riflemen", "strength"))
+        on = dict(W.DEFAULT_WEIGHTS, unit_strength_credit=1.0)
+        off = dict(W.DEFAULT_WEIGHTS, unit_strength_credit=0.0)
+        self.assertLess(W.card_potential("Modern Infantry", off),
+                        W.card_potential("Modern Infantry", on))
+
+    def test_the_credit_recovers_the_pre_fix_pricing_exactly(self):
+        w = dict(W.DEFAULT_WEIGHTS, unit_strength_credit=0.0)
+        for n, c in C.db().by_name.items():
+            if c["type"] not in C.UNIT_TYPES:
+                continue
+            # only the cost terms survive, so every unit is <= 0: the bug
+            self.assertLessEqual(W.card_potential(n, w), 0.0, n)
+
+
+class TestTerritoriesArePricedFromTheAppliedEffect(unittest.TestCase):
+
+    def _terrs(self):
+        return [n for n, c in C.db().by_name.items()
+                if c["type"] == "territory"]
+
+    def test_no_territory_has_zero_visible_gain(self):
+        blind = []
+        for n in self._terrs():
+            gains = [k for k, _a, kind in W._card_yields(n)
+                     if kind != W._Y_COST]
+            if not gains:
+                blind.append(n)
+        self.assertEqual(sorted(blind), [], "was all 12")
+
+    def test_the_map_cannot_drift_from_the_auction_path(self):
+        """`deferred_credit` prices a territory you hold the high bid on by
+        pushing the SAME two blocks through `_YIELD_TO_FEATURE`.  The hand
+        path must agree with it, or the evaluator values the identical card
+        differently depending on which code found it."""
+        for k, v in W._YIELD_TO_FEATURE.items():
+            if k in ("happy", "happiness"):
+                # the one allowed difference, and it is required: "happy" is
+                # not a weight, `features()` resolves it by hand
+                self.assertEqual(W._TERR_TO_FEATURE[k], "happy_margin")
+                self.assertNotIn(v, W.DEFAULT_WEIGHTS)
+                continue
+            self.assertEqual(W._TERR_TO_FEATURE[k], v, k)
+        self.assertEqual(set(W._TERR_TO_FEATURE), set(W._YIELD_TO_FEATURE))
+
+    def test_every_key_the_engine_applies_is_priced(self):
+        """Derived from what `interact.gain_colony` actually does, not from a
+        re-reading of the card text."""
+        for n in self._terrs():
+            card = C.db().get(n)
+            for block in ("immediateEffects", "permanentEffects"):
+                for k in (card.get(block) or {}):
+                    self.assertIn(k, W._TERR_TO_FEATURE, f"{n}.{block}.{k}")
+
+    def test_a_big_territory_outprices_a_small_one(self):
+        w = dict(W.DEFAULT_WEIGHTS)
+        self.assertGreater(W.card_potential("Historic Territory (II)", w),
+                           W.card_potential("Historic Territory (I)", w))
+        self.assertGreater(W.card_potential("Historic Territory (I)", w),
+                           W.card_potential("Inhabited Territory (I)", w))
+
+    def test_the_credit_recovers_the_pre_fix_pricing_exactly(self):
+        w = dict(W.DEFAULT_WEIGHTS, territory_credit=0.0)
+        for n in self._terrs():
+            self.assertEqual(W.card_potential(n, w), 0.0, n)
+
+
+class TestTacticPricing(unittest.TestCase):
+
+    def test_the_duplicate_spelling_agrees_with_the_engine(self):
+        """`effects.tacticBonus` is written off partly because it is a
+        DUPLICATE of the top-level `strength` the engine actually reads
+        (`_army_value`).  If the two ever disagree, the written-off reason is
+        a lie and the card is mispriced."""
+        n = 0
+        for name, c in C.db().by_name.items():
+            if c["type"] != "tactic":
+                continue
+            n += 1
+            eff = c.get("effects") or {}
+            self.assertEqual(eff.get("tacticBonus"), c.get("strength"), name)
+            self.assertEqual(eff.get("tacticBonusObsolete"),
+                             c.get("obsoleteStrength"), name)
+        self.assertEqual(n, 15)
+
+    def _board(self, units, tactic=None, hand=()):
+        import random
+        from engine import game as G
+        st = G.new_game(2, 7)
+        p = st.players[0]
+        for name, k in units.items():
+            if name not in p.techs:
+                from engine.state import TechCard
+                p.techs[name] = TechCard(name)
+            p.techs[name].workers = k
+        p.tactic = tactic
+        p.hand_military = list(hand)
+        del random
+        return st, p
+
+    def test_no_tactic_no_units_is_zero(self):
+        from engine import effects
+        st, p = self._board({})
+        self.assertEqual(effects.tactic_outlook(st, p, []), (0, 0))
+
+    def test_it_reports_the_units_still_owed(self):
+        """Heavy Cavalry is 3 cavalry for +4.  With two, the tactic is worth
+        nothing yet and the shortfall is exactly one -- which is the gradient
+        that gets the third built while the payoff is still flat at zero."""
+        from engine import effects
+        st, p = self._board({"Knights": 2})
+        val, short = effects.tactic_outlook(st, p, ["Heavy Cavalry"])
+        self.assertEqual((val, short), (0, 1))
+        st, p = self._board({"Knights": 3})
+        val, short = effects.tactic_outlook(st, p, ["Heavy Cavalry"])
+        self.assertEqual(val, 4)
+        self.assertEqual(short, 3)      # a SECOND army needs three more
+
+    def test_building_the_missing_unit_is_what_moves_the_feature(self):
+        """The deadlock, as a test.  Holding Heavy Cavalry with two cavalry,
+        neither playing the tactic (+0 strength) nor building the cavalry
+        (+2 printed) shows the +4 that doing both is worth.  `tactic_gain`
+        is the term that does."""
+        st2, _ = self._board({"Knights": 2}, hand=["Heavy Cavalry"])
+        st3, _ = self._board({"Knights": 3}, hand=["Heavy Cavalry"])
+        self.assertEqual(W.tactic_terms(st2, 0), (0.0, 1.0))
+        self.assertEqual(W.tactic_terms(st3, 0)[0], 4.0)
+        self.assertEqual(W.features(st3, 0)["strength"],
+                         W.features(st2, 0)["strength"] + 2)
+
+    def test_playing_the_tactic_converts_the_gain_into_strength(self):
+        """`tactic_gain` must go to 0 when the tactic is in play, or a
+        positive weight would price holding the card rather than using it."""
+        played, _ = self._board({"Knights": 3}, tactic="Heavy Cavalry")
+        unplayed, _ = self._board({"Knights": 3}, hand=["Heavy Cavalry"])
+        self.assertEqual(W.tactic_terms(played, 0)[0], 0.0)
+        self.assertEqual(W.features(played, 0)["strength"],
+                         W.features(unplayed, 0)["strength"] + 4)
+
+    def test_the_terms_cost_nothing_when_their_weights_are_zero(self):
+        """The gate, not the value: `tactic_terms` is +19% on `features()`,
+        so a vector that does not use it must never call it."""
+        called = []
+        real = W.tactic_terms
+        try:
+            W.tactic_terms = lambda *a: called.append(a) or (0.0, 0.0)
+            st, _ = self._board({"Knights": 3}, hand=["Heavy Cavalry"])
+            W.evaluate(st, 0, dict(W.DEFAULT_WEIGHTS))
+            self.assertEqual(called, [])
+            W.evaluate(st, 0, dict(W.DEFAULT_WEIGHTS, tactic_gain=0.4))
+            self.assertEqual(len(called), 1)
+        finally:
+            W.tactic_terms = real
+
+
+class TestLaneBWeightsAreInert(unittest.TestCase):
+    """The whole lane is inert: every fingerprint digest is byte-identical to
+    master's and every trained vector evaluates exactly as it did.
+
+    That is a choice, and the reason is measured -- see the comment on
+    `unit_strength_credit` in weighted.py.  This test is what stops the choice
+    being undone by accident: flipping any of these to a non-zero default
+    moves six fingerprint digests, and the gate should not be the first place
+    anybody finds that out.
+    """
+
+    INERT = ("tactic_gain", "tactic_short", "hand_mil_potential",
+             "unit_strength_credit")
+
+    def test_defaults_are_zero(self):
+        for k in self.INERT:
+            self.assertIn(k, W.DEFAULT_WEIGHTS)
+            self.assertEqual(W.DEFAULT_WEIGHTS[k], 0.0, k)
+
+    def test_credit_fallbacks_match_the_defaults(self):
+        """`card_potential` is called both with a vector `load_weights` has
+        filled in and with a raw champion dict.  If `_CREDIT_OF`'s fallback
+        disagrees with `DEFAULT_WEIGHTS`, the same vector prices the same card
+        differently depending on how it was loaded."""
+        for _kind, (key, fallback) in W._CREDIT_OF.items():
+            self.assertIn(key, W.DEFAULT_WEIGHTS)
+            self.assertEqual(W.DEFAULT_WEIGHTS[key], fallback, key)
+
+    def test_a_raw_champion_dict_prices_as_the_loaded_one_does(self):
+        import json
+        import os
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(here, "analysis", "frozen", "champion_2p.json")
+        if not os.path.exists(path):
+            self.skipTest("no frozen 2p champion")
+        with open(path) as fh:
+            d = json.load(fh)
+        raw = d.get("weights", d)
+        filled = dict(W.DEFAULT_WEIGHTS)
+        filled.update(raw)
+        for n in ("Swordsmen", "Air Forces", "Historic Territory (II)",
+                  "Eiffel Tower"):
+            self.assertEqual(W.card_potential(n, raw),
+                             W.card_potential(n, filled), n)
+
+    def test_territory_credit_is_believed_but_gated(self):
+        """`territory_credit` is 1.0 -- a territory's printed effect is worth
+        what it says -- and inert anyway, because `hand_mil_potential` is 0.0
+        and nothing else calls `card_potential` on a military card."""
+        self.assertEqual(W.DEFAULT_WEIGHTS["territory_credit"], 1.0)
+        self.assertEqual(W.DEFAULT_WEIGHTS["hand_mil_potential"], 0.0)
+
+    def test_territory_pricing_is_inert_without_the_military_hand_term(self):
+        """`territory_credit` is 1.0, i.e. not itself inert -- but nothing
+        calls `card_potential` on a military card until `hand_mil_potential`
+        is non-zero, so the change costs a trained vector nothing."""
+        import random
+        from engine import actions as A, game as G
+        from engine.bots import WeightedBot
+        w0 = dict(W.DEFAULT_WEIGHTS)
+        w1 = dict(W.DEFAULT_WEIGHTS, territory_credit=0.0)
+        st = G.new_game(2, 5)
+        rng = random.Random(5)
+        bots = [WeightedBot(seed=1), WeightedBot(seed=2)]
+        seen = 0
+        for _ in range(160):
+            if st.game_over:
+                break
+            i = st.decider()
+            self.assertEqual(W.evaluate(st, i, w0), W.evaluate(st, i, w1))
+            if st.players[i].hand_military:
+                seen += 1
+            A.apply(st, bots[i].pick(st, A.legal_moves(st)), rng)
+        self.assertGreater(seen, 0, "no military hand ever held; vacuous")
+
+    def test_group_of_names_every_new_key(self):
+        from experiments import summarize
+        for k in self.INERT + ("unit_strength_credit", "territory_credit"):
             self.assertTrue(summarize.group_of(k))
 
 

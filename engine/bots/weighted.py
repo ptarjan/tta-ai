@@ -581,6 +581,7 @@ def features(state, idx, ctx=None):
     strength = s.strength + g("strength", 0.0)
     rel = strength - ctx["rival_strength"]
 
+
     return {
         # --- economy
         "culture": p.culture + g("culture", 0.0),
@@ -771,6 +772,29 @@ _EFF_CHOICE = {
     "gainFoodOrResources": "food_stock|resource_stock",
 }
 
+# A territory's `immediateEffects` / `permanentEffects`, keyed the same way
+# `deferred_credit` keys them.  DERIVED from `_YIELD_TO_FEATURE` rather than
+# retyped, so the auction path and the hand path cannot drift apart -- that
+# drift is the whole failure mode this file keeps hitting.
+#
+# One substitution, and it is required, not cosmetic.  `_YIELD_TO_FEATURE`
+# sends `happy`/`happiness` to the string `"happy"`, which is NOT a weight:
+# `features()` resolves it by hand into `happy_margin` (`margin = s.happy -
+# happy_req + g("happy", 0.0)`).  `card_potential` has no such step -- it does
+# a bare `w.get(k, 0.0)` -- so leaving it as `"happy"` would silently drop
+# Historic Territory's whole permanent effect, which is exactly the bug class
+# above one level down.  `tests/test_card_pricing.py` asserts both halves:
+# that this map agrees with `_YIELD_TO_FEATURE` everywhere else, and that
+# every value it names is a real key of `DEFAULT_WEIGHTS`.
+_TERR_TO_FEATURE = dict(_YIELD_TO_FEATURE,
+                        happy="happy_margin", happiness="happy_margin")
+
+# A military unit's TOP-LEVEL `strength`, the per-worker yield `production`
+# never held.  A one-entry registry rather than a literal so `--legacy` can
+# clear it (see `_card_yields`), and so the top-level-field walk in
+# `tests/test_card_pricing.py` has something to point at.
+_UNIT_TO_FEATURE = {"strength": "strength"}
+
 # Effect keys `_card_yields` prices but that need more than a table lookup:
 # the value is a dict, an offset, or a bare presence flag.  Handled in
 # `_card_yields`; listed here so the coverage test can see them as priced.
@@ -891,9 +915,28 @@ _unpriced(
 #    military hand reaches the evaluator through `hand_mil_value` (a sum of
 #    age+1), i.e. every military card of an age is interchangeable.  That is
 #    a real, separate blind spot -- see docs/CARD_BLINDNESS.md.
+#
+#    Since lane B this is no longer true of every military card:
+#    `hand_mil_potential` gives the military hand the same treatment, and
+#    territories are priced from their `immediateEffects`/`permanentEffects`
+#    through `_TERR_TO_FEATURE`.  The keys below are the ones it still does
+#    not reach.
+_unpriced(
+    # A tactic's whole value is `tacticBonus x armies you can form`, which is
+    # a board query, not a card constant -- and the engine never reads these
+    # two keys at all: `_army_value` uses the card's TOP-LEVEL `strength` /
+    # `obsoleteStrength`, of which these are a duplicate spelling.  Tactics
+    # are priced by `engine/effects.py:tactic_outlook` off the same top-level
+    # fields the engine uses, surfaced as `tactic_gain` / `tactic_short`.
+    # `tests/test_card_pricing.py` asserts the two spellings agree on every
+    # tactic, so the duplicate cannot rot into a disagreement.
+    "tactic bonus: board-scaled, and a duplicate spelling of the top-level "
+    "strength the engine actually reads (see tactic_outlook)",
+    "tacticBonus", "tacticBonusObsolete",
+)
 _unpriced(
     "military hand: never reaches _card_yields (hand_potential is civil-only)",
-    "tacticBonus", "tacticBonusObsolete", "defenseBonus", "colonizationBonus",
+    "defenseBonus", "colonizationBonus",
     "destroyUrbanBuildings", "opponentDecreasesPopulation", "stealColony",
     "takeFromOpponent", "victorTakesYellowTokens", "victorTakesScienceUpTo",
     "victorTakesCulture", "decreasePopulation",
@@ -921,6 +964,29 @@ _Y_GAIN = 0     # priced straight through w[k]
 _Y_COST = 1     # priced through max(0, w[k]) -- see the docstring below
 _Y_RATE = 2     # the newly-visible short-spelling culture/science, scaled by
 #                 w["card_rate_credit"] so the fix can be A/B'd against itself
+_Y_UNIT = 3     # a military unit's per-worker strength, scaled by
+#                 w["unit_strength_credit"] -- same A/B-against-itself trick
+_Y_TERR = 4     # a territory's immediate/permanent effects, scaled by
+#                 w["territory_credit"]
+
+# What kind is scaled by which weight, and what that weight defaults to when
+# the vector does not carry it.  One table so `card_potential` stays a single
+# `dict.get` per kind and adding the next credit cannot forget the default.
+# The fallbacks MUST equal the `DEFAULT_WEIGHTS` entries of the same name --
+# `tests/test_card_pricing.py` asserts it.  `card_potential` is called both
+# with a vector `load_weights` has filled in from `DEFAULT_WEIGHTS` and, in
+# tools and tests, with a raw weight dict straight out of a champion file; if
+# the two disagree the SAME vector prices the same card differently depending
+# on how it was loaded, which is a silent divergence of exactly the kind this
+# file keeps producing.
+#
+# `_Y_RATE` is deliberately absent: `card_potential` resolves
+# `card_rate_credit` once and threads it through `_sum_yields` as an argument,
+# because the board-pricing paths call `_sum_yields` several times per card.
+_CREDIT_OF = {
+    _Y_UNIT: ("unit_strength_credit", 0.0),
+    _Y_TERR: ("territory_credit", 1.0),
+}
 
 
 @_lru_cache(maxsize=None)
@@ -937,17 +1003,45 @@ def _card_yields(name):
     `_Y_RATE` marks the two effect keys this function used to drop silently,
     `culture` and `science` (docs/CARD_BLINDNESS.md).  They are separated only
     so `card_rate_credit` can switch them off and recover the exact pre-fix
-    pricing for the A/B; they are ordinary gains otherwise.
+    pricing for the A/B; they are ordinary gains otherwise.  `_Y_UNIT` and
+    `_Y_TERR` are the same device for the two blind spots below.
     """
     db = C.db()
     card = db.by_name.get(name)
     if card is None:
         return ()
+    typ = card["type"]
     out = []
     for k, amt in (card.get("production") or {}).items():
         fk = _PROD_TO_FEATURE.get(k)
         if fk and isinstance(amt, (int, float)) and amt is not True:
             out.append((fk, float(amt), _Y_GAIN))
+    # A military unit spells its per-worker yield as a TOP-LEVEL `strength`
+    # rather than `production: {"strength": n}`, so the loop above never saw
+    # it and the loop below never will either.  That is not a judgement call
+    # about what a unit is worth: `engine/effects.py:_tech_prog` puts a unit
+    # card's top-level `strength` into exactly the slot it puts a farm's
+    # `production.food` into, once per worker standing on the technology.
+    #
+    # The consequence was worse than the culture/science omission, because
+    # `_card_yields` DOES read a unit's `techCost` and `buildCost` below: all
+    # ten unit cards priced out as PURE COST, strictly negative under every
+    # trained vector (Swordsmen -1.66, Air Forces -4.40 under the 2p
+    # champion).  `row_pressure` skips any card whose `card_potential` is
+    # <= 0, so no unit card in the civil row was ever visible to
+    # `row_urgency`/`row_bargain_forgone` at all, and holding one in hand
+    # LOWERED `hand_potential`.  See docs/CARD_BLINDNESS.md.
+    #
+    # Gated on `_UNIT_TO_FEATURE` rather than written straight in, for the
+    # same reason `_EFF_SPECIAL` is: `tools/card_blindness.py --legacy` has to
+    # be able to switch every later pass back off and still reproduce
+    # master's census exactly, or the baseline every result is measured
+    # against quietly rewrites itself.
+    if typ in C.UNIT_TYPES:
+        fk = _UNIT_TO_FEATURE.get("strength")
+        st = card.get("strength") or 0
+        if fk and isinstance(st, (int, float)) and st is not True and st:
+            out.append((fk, float(st), _Y_UNIT))
     eff = card.get("effects") or {}
     for k, amt in eff.items():
         if amt is True or amt is False or not isinstance(amt, (int, float)):
@@ -973,13 +1067,33 @@ def _card_yields(name):
             out.append(("wonder_stages_per_action", float(wsp) - 1.0, _Y_GAIN))
     if "freeCivilAction" in _EFF_SPECIAL and eff.get("freeCivilAction") is not None:
         out.append(("free_civil_action", 1.0, _Y_GAIN))
+    # A territory keeps its entire value in `immediateEffects` (one-shot) and
+    # `permanentEffects` (ongoing) -- two blocks this function never opened,
+    # which is why the census reported all 12 territories as "zero visible
+    # gain" with ZERO dropped keys: there was nothing in `production` or
+    # `effects` to drop.  Their `effects` block is literally `{}`.
+    #
+    # This is not a new opinion about what a territory is worth.  It is the
+    # SAME pricing the auction path already uses: `deferred_credit` prices the
+    # high bid by pushing these two blocks through `_YIELD_TO_FEATURE`, so
+    # once you hold the high bid the evaluator can see the card and before
+    # that it cannot.  `_TERR_TO_FEATURE` closes that asymmetry.
+    if typ == "territory":
+        for block in ("immediateEffects", "permanentEffects"):
+            for k, amt in (card.get(block) or {}).items():
+                if amt is True or amt is False or \
+                        not isinstance(amt, (int, float)):
+                    continue
+                fk = _TERR_TO_FEATURE.get(k)
+                if fk:
+                    out.append((fk, float(amt), _Y_TERR))
     tc = card.get("techCost") or 0
     if tc:
         out.append(("science", -float(tc), _Y_COST))
     bc = card.get("buildCost") or 0
     if bc:
         out.append(("resource_stock", -float(bc), _Y_COST))
-    if card["type"] == "wonder":
+    if typ == "wonder":
         out.append(("wonders", 1.0, _Y_GAIN))
         stages = card.get("stages") or []
         if stages:
@@ -1020,6 +1134,11 @@ def _card_choices(name):
 
 def _sum_yields(triples, w, credit):
     total = 0.0
+    # `_Y_RATE`'s credit is the `credit` argument, resolved once by the
+    # caller.  The other credited kinds resolve from `_CREDIT_OF` and are
+    # memoized here so a card carrying several of them still costs one
+    # `dict.get` per kind.
+    credits = {}
     for k, amt, kind in triples:
         wk = w.get(k, 0.0)
         if kind == _Y_COST:
@@ -1027,6 +1146,12 @@ def _sum_yields(triples, w, credit):
                 wk = 0.0
         elif kind == _Y_RATE:
             amt *= credit
+        elif kind != _Y_GAIN:
+            c = credits.get(kind)
+            if c is None:
+                ck, cdef = _CREDIT_OF[kind]
+                c = credits[kind] = w.get(ck, cdef)
+            amt *= c
         if wk and amt:
             total += wk * amt
     return total
@@ -1078,6 +1203,70 @@ def hand_potential(state, idx, w):
     total = 0.0
     for n in hand:
         total += card_potential(n, w, state, idx)
+    return total
+
+
+def tactic_terms(state, idx):
+    """(tactic_gain, tactic_short) -- the two halves of the tactic deadlock.
+
+    See `engine/effects.py:tactic_outlook` for what the deadlock is.  Briefly:
+    playing a tactic you have no army for is +0 strength for a military action
+    and a card, and building the unit that would complete an army is +printed
+    strength only because the tactic is not in play yet, so a 1-ply search
+    does neither and the champion ends every game holding a tactic with zero
+    units to fill it (docs/CARD_BLINDNESS_MILITARY.md section 4).
+
+    * `tactic_gain` -- army strength the best REACHABLE tactic (in hand, or
+      copyable from `state.available_tactics`) would add over the one in play.
+      Exactly 0 once that tactic is in play, so a positive weight prices
+      getting there rather than pricing tactics.
+    * `tactic_short` -- unit workers still owed before it forms one more army.
+      `tactic_gain` alone is a step function, flat at zero for the first two
+      of Heavy Cavalry's three cavalry; this is the gradient.
+
+    NOT in `features()`, and the reason is cost, not taste: it is 81us against
+    that function's 433us, i.e. +19% on the hottest path in the project, for a
+    pair of terms that default to 0.0.  `evaluate` gates it on the two weights
+    the way it already gates `hand_potential` and `row_pressure`, so a vector
+    that does not use it pays nothing at all.
+    """
+    p = state.players[idx]
+    if not state.has_military:
+        return 0.0, 0.0
+    type_of = C.db().type_by_name
+    cands = [n for n in p.hand_military if type_of.get(n) == "tactic"]
+    cands.extend(state.available_tactics or ())
+    if p.tactic:
+        cands.append(p.tactic)
+    if not cands:
+        return 0.0, 0.0
+    best_army, short = effects.tactic_outlook(state, p, cands)
+    gain = float(max(0, best_army - effects.army_strength(state, p)))
+    return gain, float(short)
+
+
+def hand_mil_potential(state, idx, w):
+    """Summed `card_potential` over the MILITARY hand.
+
+    The sibling `hand_potential` never had, and the reason the census could
+    report 12 territories as invisible: `hand_potential` walks `hand_civil`
+    only, so `_card_yields` was never called for a territory, tactic, war,
+    aggression, pact or bonus card.  The military hand reached the evaluator
+    through `hand_mil_value` alone -- `sum(age_level + 1)` -- under which a
+    Vast Territory, a Fighting Band and an Aggression of the same age are the
+    same card.
+
+    Scaled by its own weight, defaulting to 0.0, so adding it is inert: with
+    no weight on it nothing calls `card_potential` on a military card and the
+    evaluation is bit-identical.  It is the hook the other military card types
+    need, not just territories.
+    """
+    hand = state.players[idx].hand_military
+    if not hand:
+        return 0.0
+    total = 0.0
+    for n in hand:
+        total += card_potential(n, w)
     return total
 
 
@@ -1300,6 +1489,15 @@ BASE_WEIGHTS = {
     "strength_deficit": -0.6,
     "strength_lead": 0.3,
     "tactic_level": 0.5,
+    # --- the tactic deadlock (docs/CARD_BLINDNESS.md, lane B).  Both 0.0, so
+    # adding them is inert for every trained vector; see
+    # `engine/effects.py:tactic_outlook` for what they mean and why one is
+    # not enough.  `tactic_short` is NOT given a negative prior even though
+    # "fewer units owed is better" reads obvious: a negative default puts it
+    # in hillclimb_league's NONPOS set, and the sign is genuinely arguable
+    # (owing units to a big Age III tactic is a position, not only a debt).
+    "tactic_gain": 0.0,
+    "tactic_short": 0.0,
     "colonies": 2.0,
     "pacts": 0.5,
     # a pact that forbids attacks between the parties (§5.4.2) buys safety no
@@ -1393,6 +1591,47 @@ BASE_WEIGHTS = {
     # rather than a hard-coded mapping precisely so that 0.0 recovers the
     # pre-fix pricing exactly and the two can be duelled in one process.
     "card_rate_credit": 1.0,
+    # --- the two credits added with the military-card lane, same device and
+    # the same reason: 0.0 recovers the pre-fix pricing exactly, so each fix
+    # can be duelled against itself in one process on the same deal.
+    #
+    # `unit_strength_credit` is 0.0, unlike `card_rate_credit`, and the reason
+    # is measured rather than cautious.  TWO facts, both in
+    # docs/CARD_BLINDNESS.md:
+    #
+    # 1. At 1.0 it is a NO-OP for every trained vector.  `champion_2p` vs
+    #    itself with the credit flipped is 60 games byte-identical -- same win
+    #    rate, same cultures, mirrored seat by seat -- because over 2264 plies
+    #    of its own self-play it held a unit card in its civil hand ONCE.  A
+    #    unit was legally takeable at 30% of plies and it took one.  So 1.0
+    #    would move three of the eight fingerprint digests -- weighted narrow
+    #    5eff41eb -> beba1c96, weighted wide d03e0964 -> da252e5d, plan narrow
+    #    c534ac3d -> b896b53a, with both greedy arms, both quiescent arms and
+    #    plan wide unchanged -- to buy behaviour nobody can measure.
+    #
+    # 2. 1.0 is not privileged the way it is for `card_rate_credit`.  There,
+    #    1.0 is exactly what the engine does with the key.  Here the board
+    #    expresses a point of strength through FOUR features -- `strength`,
+    #    `strength_rel`, and `strength_lead` or `strength_deficit` -- and
+    #    `card_potential` looks up only the first, so 1.0 is between a 2.3x
+    #    (strength + strength_rel, both unconditional) and a 7x (when behind)
+    #    under-count of the truth.  There is no defensible constant here, only
+    #    a weight, and the league has a gradient for it: `hillclimb.mutate`
+    #    perturbs by `gauss(0, s) * (abs(w) + 0.15)`, so a 0.0 weight moves on
+    #    the first generation that scatters onto it.
+    #
+    # What is NOT deferred is the mapping itself: `_card_yields` now reports a
+    # unit's strength, so the information exists and `tools/card_blindness.py`
+    # no longer counts the ten unit cards as blind.  Only how much of it to
+    # believe is left to the trainer.
+    "unit_strength_credit": 0.0,
+    # `territory_credit` is 1.0 but costs nothing until `hand_mil_potential`
+    # is non-zero, because nothing calls `card_potential` on a military card
+    # otherwise.  It is a separate knob from `hand_mil_potential` so that
+    # "how much of a territory's printed effect to believe" -- it is seeded
+    # into an auction anyone can win, not played -- stays separable from
+    # "how much the military hand matters at all".
+    "territory_credit": 1.0,
     # cards
     "hand_civil": 0.3,
     "hand_value": 0.25,
@@ -1404,6 +1643,11 @@ BASE_WEIGHTS = {
     "hand_potential": 0.125,
     "hand_military": 0.3,
     "hand_mil_value": 0.15,
+    # scale on the identity-aware MILITARY hand term (see
+    # `hand_mil_potential`).  0.0, and that is what makes the territory
+    # pricing above inert: at 0.0 `card_potential` is never called on a
+    # military card at all.
+    "hand_mil_potential": 0.0,
     # rivals
     "rival_culture": -0.35,
     "rival_mean_culture": -0.1,
@@ -1498,6 +1742,20 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
     # entirely when its scale is 0, which is the default -- so a champion
     # trained before these existed evaluates exactly as it did, and pays
     # nothing for them either.
+    hmp = get("hand_mil_potential")
+    if hmp:
+        total += hmp * hand_mil_potential(state, idx, w)
+    # The tactic deadlock terms.  Linear features, unlike the three above, but
+    # gated here for the same reason those are: `tactic_terms` is +19% on
+    # `features()` and both weights default to 0.0.
+    tg = get("tactic_gain")
+    ts = get("tactic_short")
+    if tg or ts:
+        gain, short = tactic_terms(state, idx)
+        if tg:
+            total += tg * gain
+        if ts:
+            total += ts * short
     rhp = get("rival_hand_potential")
     if rhp:
         total += rhp * rival_hand_potential(state, idx, w)

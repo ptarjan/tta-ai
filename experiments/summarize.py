@@ -43,7 +43,8 @@ GROUPS = {
     "row": ("row_urgency", "row_bargain_forgone"),
     "military": ("strength", "strength_rel", "strength_deficit",
                  "strength_lead", "tactic_level", "colonies", "pacts",
-                 "pact_blocks_attack", "auction_committed", "auction_bid"),
+                 "pact_blocks_attack", "auction_committed", "auction_bid",
+                 "tactic_gain", "tactic_short"),
     "tech": ("tech_levels", "gov_level", "best_farm", "best_mine", "best_lab",
              "best_temple", "best_theater", "best_library", "best_arena",
              "best_unit", "num_techs", "special_techs"),
@@ -56,7 +57,7 @@ GROUPS = {
     # able to move them together.
     "priced": ("hand_limit", "colonize_bonus", "build_discount",
                "free_civil_action", "resource_discount",
-               "card_rate_credit"),
+               "card_rate_credit", "unit_strength_credit", "territory_credit"),
     # board-aware card pricing (engine/bots/board_yields.py): what a leader
     # or a government is worth on THIS board, by swapping it in and diffing
     # `effects.compute`.  Its own group for the same reason as "priced" --
@@ -64,7 +65,7 @@ GROUPS = {
     "board": ("urban_limit", "gov_action_cost", "pop_food_discount",
               "no_aggression", "restricted_resources", "card_board_credit"),
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
-              "hand_potential"),
+              "hand_potential", "hand_mil_potential"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
                "rival_science_rate", "rival_strength", "rival_free_ca",
                "rival_hand_civil", "rival_wonders", "rival_hand_potential"),

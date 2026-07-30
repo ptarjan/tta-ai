@@ -813,6 +813,77 @@ def army_strength_units(state, p, units):
                                  avail.get("air", 0))
 
 
+def tactic_outlook(state, p, names):
+    """(best_strength, units_short) over the tactics `p` could switch to.
+
+    Answers the two questions `army_strength` cannot, because it only ever
+    looks at the tactic already in play:
+
+    * **best_strength** -- the army strength `p` would have if it played the
+      best tactic it has access to right now.  `army_strength(state, p)`
+      subtracted from this is the strength sitting unclaimed on the table.
+    * **units_short** -- how many more unit workers that same tactic needs
+      before it forms ONE MORE army.  0 when the next army is already there.
+
+    Why both.  A tactic is worthless without units and units are worth much
+    more with a tactic, and the 1-ply search cannot see either half from the
+    other side: playing a tactic with no army for it is +0 strength for a
+    military action and a card, and building the unit that would complete an
+    army is +printed-strength only, because the tactic is not in play yet.
+    So the bot does not play the tactic (no army) and does not build the unit
+    (no tactic).  `best_strength` breaks the deadlock in the play direction --
+    it goes up the moment the units exist -- and `units_short` is the gradient
+    that gets you there, since `best_strength` alone is a step function that
+    is flat at 0 for the first two of the three cavalry.
+
+    Candidates are the caller's business (`weighted.tactic_terms` passes the
+    tactics in hand plus `state.available_tactics`, i.e. everything reachable
+    with one military action or two).  The chosen candidate maximizes
+    `(strength, -shortfall, printed bonus)` so that with nothing formable yet
+    the shortfall reported is the nearest tactic's, not an arbitrary one's.
+    """
+    db = _DB
+    type_of = db.type_by_name
+    level_of = db.level_by_name
+    unit_types = C.UNIT_TYPES
+    counts = []
+    for n, t in p.techs.items():
+        w = t.workers
+        if not w:
+            continue
+        typ = type_of[n]
+        if typ in unit_types:
+            counts.append((typ, level_of[n], w))
+    best = None
+    for name in names:
+        card = db.by_name.get(name)
+        if card is None:
+            continue
+        comp = card.get("composition") or []
+        if not comp:
+            continue
+        lv = level_of[name]
+        avail = {}
+        fresh = {}
+        for typ, ulv, w in counts:
+            avail[typ] = avail.get(typ, 0) + w
+            if ulv >= lv - 1:
+                fresh[typ] = fresh.get(typ, 0) + w
+        val = _army_strength_counts(p, card, comp, lv, avail, fresh,
+                                    avail.get("air", 0))
+        need = _tactic_need(comp)
+        armies = min((avail.get(t, 0) // c for t, c in need.items()),
+                     default=0)
+        short = sum(max(0, c * (armies + 1) - avail.get(t, 0))
+                    for t, c in need.items())
+        key = (val, -short, card.get("strength") or 0)
+        if best is None or key > best[0]:
+            best = (key, val, short)
+    if best is None:
+        return 0, 0
+    return best[1], best[2]
+
+
 _TACTIC_NEED = {}     # id(composition list) -> (comp, need dict)
 
 

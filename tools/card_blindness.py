@@ -58,6 +58,12 @@ def use_legacy_maps():
         W._EFF_TO_FEATURE.pop(k, None)
     W._EFF_SPECIAL.clear()
     W._EFF_CHOICE.clear()
+    # the military-card pass: a unit's top-level `strength` and a territory's
+    # immediateEffects/permanentEffects, neither of which lives in a block
+    # this module's `_mapped` walks -- which is exactly why the census called
+    # all 22 of them "zero dropped keys, zero visible gain".
+    W._UNIT_TO_FEATURE.clear()
+    W._TERR_TO_FEATURE.clear()
     W._card_yields.cache_clear()
     W._card_choices.cache_clear()
 
