@@ -63,7 +63,7 @@ about a bonus card; it just had no entry and returned `()`.
 So the blindness was a leftover write-off, not a limitation.  A comment is
 not a test, which is the general lesson: the file's own coverage tests
 (`test_no_stale_entries_in_the_unpriced_set`,
-`test_no_key_is_both_priced_and_unpriced`) can catch a key no card carries
+`test_a_key_is_not_claimed_both_priced_and_unpriced`) can catch a key no card carries
 and a key that is claimed twice, but nothing could catch a *reason* that had
 stopped being true.  The same staleness was in
 `tools/card_blindness.py:reachable`, whose docstring asserted military-deck
