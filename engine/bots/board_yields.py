@@ -32,9 +32,10 @@ asks `engine.effects.compute` what changed.**
     p.leader = old
     delta = after - effects.state_stats(state, p)
 
-Every one of `_apply_modifier`'s fifteen board-scaled keys is priced exactly,
-for free, and can never drift, because it *is* the rules.  Three further
-things fall out that no per-key handler gets right by construction:
+All thirteen of the `effects.MODIFIER_KEYS` that any leader carries are then
+priced exactly, for free, and can never drift, because it *is* the rules.
+Three further things fall out that no per-key handler gets right by
+construction:
 
 1. **Replacement.**  A leader replaces the leader you have.  Taking Einstein
    while you hold Michelangelo is worth Einstein *minus Michelangelo*, which
