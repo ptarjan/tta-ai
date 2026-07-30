@@ -77,6 +77,16 @@ cd "$(dirname "$0")/.."
 #     production vector, 0 here), and neither GreedyBot nor DEFAULT_WEIGHTS
 #     reaches Chaplin with two workers on its best theater.  Worth writing
 #     down as a COVERAGE hole: these 135 games cannot catch a bug in either.
+#
+# UNCHANGED by docs/CARD_BLINDNESS.md (2026-07-29), and that is the load-
+# bearing half of that change's attribution rather than a lucky no-op.  The
+# only behaviour-affecting hunk there is two entries added to
+# `_EFF_TO_FEATURE` in engine/bots/weighted.py, which is read by exactly one
+# function, `_card_yields`, reached from exactly one place, `card_potential`.
+# GreedyBot does not evaluate through weighted.py at all, so these two arms
+# CANNOT move for it -- and they did not, in both independent derivations,
+# while all SIX arms below moved.  If a future change to `_card_yields` ever
+# moves NARROW or WIDE, that is a bug in the change, not a digest to update.
 NARROW=0a6ed6ad
 WIDE=4a8c6ca6
 
@@ -106,8 +116,45 @@ WIDE=4a8c6ca6
 # Re-derived on `score-bugfix`, rebased onto master 9c8b6f5 (2026-07-27), alongside
 # NARROW/WIDE above; see the attribution note there.  These two moved for two
 # of the four fixes rather than one.
-WNARROW=302c546c
-WWIDE=4e40a58c
+#
+# ---------------------------------------------------------------------------
+# Re-derived on `wonder-identity` (2026-07-29, docs/CARD_BLINDNESS.md).  All
+# SIX of the arms below -- WNARROW, WWIDE, QNARROW, QWIDE, PNARROW, PWIDE --
+# moved, and NARROW/WIDE above did not.  Two-sided as 9.0 requires: computed
+# from scratch in the working worktree AND independently in a second detached
+# worktree of the parent commit with the same one-file patch applied, the two
+# required to agree.  They agreed on all eight arms.
+#
+#     arm       old         new
+#     NARROW    0a6ed6ad    0a6ed6ad   (unchanged -- GreedyBot)
+#     WIDE      4a8c6ca6    4a8c6ca6   (unchanged -- GreedyBot)
+#     WNARROW   302c546c    5eff41eb
+#     WWIDE     4e40a58c    d03e0964
+#     QNARROW   0e90a7e6    eff1bef5
+#     QWIDE     41f078e5    9e9695d4
+#     PNARROW   ad64a55b    c534ac3d
+#     PWIDE     441cd256    ee627d64
+#
+# Cause, and it is a ONE-LINE-PAIR cause: `_EFF_TO_FEATURE` in
+# engine/bots/weighted.py gained `"culture": "culture_rate"` and
+# `"science": "science_rate"`.  Those two keys are how ten cards spell their
+# per-turn culture (Eiffel Tower 4, Taj Mahal 3, St. Peter's 2, Kremlin 2,
+# Library of Alexandria, Universitas Carolina, Great Wall, Hanging Gardens,
+# Joan of Arc, Mahatma Gandhi) and two spell science, and `_card_yields` was
+# dropping every one of them on the floor.  `engine/effects.py:FLAT_KEYS`
+# already treats the short spelling as production, so this is the evaluator
+# catching up with the rules engine, not a new opinion.
+#
+# ATTRIBUTED, not assumed.  The rest of the change -- nine new weights, the
+# `_EFF_SPECIAL` table, the `_Y_GAIN/_Y_COST/_Y_RATE` kind flag, the finish-
+# discipline features -- landed in the PARENT commit and all eight arms were
+# derived on it and came back byte-identical to the eight values above-left.
+# So the six moves here are the two map entries and nothing else.  The whole
+# change is additionally switchable at runtime on the `card_rate_credit`
+# weight: setting it to 0.0 restores master's pricing exactly, which is what
+# docs/CARD_BLINDNESS.md section 5 A/Bs against.
+WNARROW=5eff41eb
+WWIDE=d03e0964
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -125,10 +172,15 @@ WWIDE=4e40a58c
 # commit, engine behaviour untouched) and independently in a second detached
 # checkout of the same commit, per 9.0's rule -- the two agreeing is the
 # proof, not either number alone.
-PNARROW=ad64a55b
-PWIDE=441cd256
-QNARROW=0e90a7e6
-QWIDE=41f078e5
+#
+# All four moved on `wonder-identity` (2026-07-29); see the table and the
+# attribution in the WNARROW/WWIDE block above.  PlanBot and QuiescentBot both
+# search under the same `evaluate`, so `card_potential` is on their hash path
+# exactly as it is on WeightedBot's.
+PNARROW=c534ac3d
+PWIDE=ee627d64
+QNARROW=eff1bef5
+QWIDE=9e9695d4
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

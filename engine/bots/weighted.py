@@ -1,10 +1,16 @@
 """WeightedBot: a 1-ply bot whose entire behaviour is a JSON weight dict.
 
-The evaluation is linear over ~57 features covering the real strategic
+The evaluation is linear over 71 features covering the real strategic
 levers of Through the Ages, plus 10 of those features duplicated with an
-"early" and a "late" copy scaled by how far the game has progressed
-(78 weights total).  Everything is JSON-serializable, so hill climbing
+"early" and a "late" copy scaled by how far the game has progressed, plus a
+handful of scales on non-linear terms priced through the weights themselves
+(`hand_potential`, `row_urgency`, `card_rate_credit`, ...) -- 99 weights
+total.  Everything is JSON-serializable, so hill climbing
 (experiments/hillclimb.py) can mutate, checkpoint and reload a bot.
+
+A weight absent from a loaded vector is filled in from `DEFAULT_WEIGHTS`, and
+almost every weight added since the champions were frozen defaults to 0.0 for
+exactly that reason: an old vector keeps playing the policy it was trained on.
 
 Feature groups
     economy      culture/science stock and rate, food/resource rate and
@@ -17,7 +23,9 @@ Feature groups
                  tactic level, colonies, pacts
     technology   summed tech levels, government level, best card level per
                  type (the "tech curve"), number of techs, special techs
-    wonders      completed wonders, blue steps invested, cost remaining
+    wonders      completed wonders, blue steps invested, cost remaining,
+                 and whether the one in progress can actually be finished
+                 in the resources and rounds left (docs/CARD_BLINDNESS.md)
     cards        civil/military hand size and summed card levels
     rivals       the best rival's culture, culture rate, science rate and
                  strength (leading is what wins, not absolute output)
@@ -725,6 +733,8 @@ _EFF_TO_FEATURE = {
     "militaryActions": "military_actions",
     "extraCivilActions": "civil_actions",
     "extraMilitaryActions": "military_actions",
+    "culture": "culture_rate",
+    "science": "science_rate",
     "cultureProduction": "culture_rate",
     "scienceProduction": "science_rate",
     "foodProduction": "food_rate",
