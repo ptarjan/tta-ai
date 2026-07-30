@@ -22,9 +22,13 @@ a per-fix attribution after. Section 9 has the table, and 9.2 records why the
 
 ## One-paragraph answer
 
-**Sixteen of the 23 types score exactly right, and nine real bugs came out of
-the other seven.** All nine are fixed, and a tenth defect in the *pricer* fell
-out of re-auditing `engine/bots/board_yields.py`. None is large: most are worth
+**Sixteen of the 23 types scored exactly right as found, nine real bugs came
+out of the other seven, and all nine are fixed — so 22 of 23 are exact now.**
+A tenth defect, in the *pricer*, fell out of re-auditing
+`engine/bots/board_yields.py`. The single type still not exact is **war**, and
+what is missing there is a player *choice* the engine does not offer (the
+victor of `War over Technology` may take blue technologies instead of
+science), not a number it gets wrong. None is large: most are worth
 1-6 culture in the positions that reach them, but four are *per turn* rather
 than one-off and one is *per army*. Every one of the nine is the shape this
 project has already shipped twice: **a value that lives in a field, or a card
@@ -363,16 +367,19 @@ does not offer.
 ## 4. The 23 types, one at a time
 
 Every row's tests are in `tests/test_score_audit.py` under the named class.
+**"As found" is the audit's verdict before the fixes; "now" is after them.**
+Post-fix the answer is **22 of 23 types exact**, and the one that is not is a
+missing player *choice* rather than a wrong number.
 
 | # | type | what the rules say | verdict |
 |---|---|---|---|
-| 55 | **event** | 15 Age III "Impact of" cards pay the end-game culture; the other 40 move culture/ratings during play | **14 of the 15 scoring events exact, 1 wrong** (3.1); of the other 40, **1 wrong** (3.5). All 15 checked by hand; ranking tie-breaks correct on **both** paths (current player mid-game, start player at game end, RULES_SPEC 5.3/12.5) |
+| 55 | **event** | 15 Age III "Impact of" cards pay the end-game culture; the other 40 move culture/ratings during play | as found **14 of the 15 scoring events exact, 1 wrong** (3.1) and **1 wrong** of the other 40 (3.5); **now exact**. All 15 checked by hand; ranking tie-breaks correct on **both** paths (current player mid-game, start player at game end, RULES_SPEC 5.3/12.5) |
 | 33 | **action** | yellow cards: a free civil action plus a printed gain | **exact**. `Endowment for the Arts` pays per richer civilization at the right per-player rate; the ordered-action-then-gains sequence is already ruled and tested |
-| 24 | **leader** | 24 distinct abilities, mostly name-dispatched | **21 exact, 3 wrong** (3.2 Bill Gates, 3.3 Michelangelo, 3.6 Churchill). Level arithmetic confirmed against the FAQ's Sid Meier example: Age A = level 0, so Newton on a lone Philosophy adds nothing |
-| 16 | **wonder** | stage costs, flat benefits, 4 Age III one-time bombs | **15 exact, 1 wrong** (3.3 / 3.7, St. Peter's on ruins and on colonies). All four bombs re-derived by hand: First Space Flight sums technology levels **including the government**, Fast Food Chains 2/1 per worker, Hollywood 2x theater+library culture, Internet culture+science+strength of urban buildings (happy excluded) |
+| 24 | **leader** | 24 distinct abilities, mostly name-dispatched | as found **20 exact, 4 wrong** (3.2 Bill Gates, 3.3 Michelangelo, 3.6 Churchill, 3.9 Leonardo/Newton/Einstein); **now exact**. Level arithmetic confirmed against the FAQ's Sid Meier example: Age A = level 0, so Newton on a lone Philosophy adds nothing |
+| 16 | **wonder** | stage costs, flat benefits, 4 Age III one-time bombs | as found **15 exact, 1 wrong** (3.3 / 3.7, St. Peter's on ruins and on colonies); **now exact**. All four bombs re-derived by hand: First Space Flight sums technology levels **including the government**, Fast Food Chains 2/1 per worker, Hollywood 2x theater+library culture, Internet culture+science+strength of urban buildings (happy excluded) |
 | 15 | **tactic** | one army per copy of the composition; `obsoleteStrength` for an army holding a unit more than one age older | **exact**, including Genghis Khan's infantry-as-cavalry. `tacticBonus` in `effects` duplicates the top-level `strength` the engine reads; now pinned equal |
 | 12 | **special-tech** | 4 icons, at most one per icon in play | **exact**. Build discounts, wonder stages, actions, strength, colonization all land; Masonry correctly leaves Age A alone. The one-per-icon rule is what makes `Impact of Variety` counting them by name correct |
-| 12 | **territory** | immediate bonus, then a permanent one | **exact** on its own terms (token grants applied once, not as production; rating symbols reach `Stats`; losing a colony takes the permanent bonus back) -- but see 3.7, where a colony's happy face is invisible to St. Peter's |
+| 12 | **territory** | immediate bonus, then a permanent one | **exact**, and now also visible to St. Peter's (3.7): token grants applied once rather than as production, rating symbols reach `Stats`, losing a colony takes the permanent bonus back |
 | 11 | **aggression** | culture/science/resource theft, capped by what the victim has | **exact**. A failed aggression (defense >= attack) moves nothing |
 | 10 | **pact** | per-turn rating changes on one or both parties, some sided A/B | **exact**, all ten. Includes the negative sides (Loss of Sovereignty -2 culture, Acceptance of Supremacy -1 resource) and the floor at 0 |
 | 8 | **government** | civil/military actions, urban limit, production, two prices | **exact** — this is tonight's fix, and all five fields are now pinned. Fundamentalism's -2 science floors at 0 rather than going negative |
@@ -385,10 +392,10 @@ Every row's tests are in `tests/test_score_audit.py` under the named class.
 | 3 | **theater** | 2/3/4 culture, 1 happy | **exact** |
 | 3 | **arena** | 2/3/4 happy, 1/2/3 strength | **exact** — the only urban building that makes strength, which is why the Internet has to count it |
 | 3 | **cavalry** | 2/3/5 strength per worker | **exact** |
-| 3 | **war** | spoils by strength advantage | **2 exact, 1 partial** (3.8). Draws move nothing; the **defender** can win and take the spoils |
+| 3 | **war** | spoils by strength advantage | **2 exact, 1 partial** (3.8) -- the ONLY type not exact after the fixes, and it is an unimplemented *choice* (the victor may take blue technologies instead of science), not a wrong number. Draws move nothing; the **defender** can win and take the spoils |
 | 3 | **bonus** | played from hand during a defense/colonization | **exact** — and, importantly, they contribute **nothing** while sitting in hand |
 | 2 | **artillery** | 3/5 strength per worker | **exact** |
-| 1 | **air** | 5 strength, and doubles one army's tactic bonus | **wrong** (3.4) |
+| 1 | **air** | 5 strength, and doubles one army's tactic bonus | as found **wrong** (3.4); **now exact** |
 
 ---
 
@@ -530,7 +537,22 @@ because unstaffed labs are common in ordinary 2p play, so those games do
 separate the two hypotheses. The corpus is decisive exactly where it has
 variation and silent exactly where it does not.
 
-## 7. What I could not verify
+## 7. What I could not verify, and one null to expect
+
+**If any of this is A/B'd for strength, expect an explained null, not a
+gain.** These are correctness fixes and only two of them touch the military
+channel at all — the air force's doubling (3.4) and `War over Technology`'s
+spoil (3.8, still unimplemented). The discard lane's A/B measured that channel
+directly and found it nearly absent from our games: **34 aggressions across
+600 games, of which zero were ever successfully defended.** A fix to how
+strength is computed cannot pay in a game where the defensive decision never
+decides anything, so the honest prediction for 3.4 is a null *with that
+mechanism named*, not a bare null — and 3.4 is additionally inert on all eight
+fingerprint arms (§9.1), because it needs two air units and a mixed-age army
+set at once. None of the nine touches defensive card selection or war spoils
+arithmetic.
+
+
 
 * **Nothing here is corpus-checked.** These are hand-derived positions. Where
   a claim of mine disagrees with `docs/SCORE_VALIDATION.md`'s corpus numbers,
