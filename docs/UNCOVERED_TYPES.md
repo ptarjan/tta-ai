@@ -23,12 +23,16 @@ Question 1 came back clean on all 39. Questions 2, 3 and 4 did not.
 
 | type | n | data | engine | pricing | measured take rate | verdict |
 |---|---|---|---|---|---|---|
-| special-tech | 12 | clean | clean | **broken (sign)** | **0.87%** | **BROKEN** |
+| special-tech | 12 | clean | clean | **all 12 net negative** | **0.87%** | **BROKEN** |
 | farm/mine | 8 | clean | clean | absolute-not-delta | 1.7 – 11.5% | healthy-with-caveats |
 | lab/temple/library/arena/theater | 16 | clean | clean | absolute-not-delta | 0 – 60.6% | healthy |
 | bonus | 3 | clean | **rule violation** | n/a by construction | no take decision exists | **BROKEN** (handed off) |
 
-Two real defects, both confirmed by measurement, neither previously known:
+"Pricing" above is the *net* sign of `card_potential`, not whether the keys are
+mapped. Every key on all 39 cards is mapped; the census that reports mapping was
+right about mapping and that is why it missed all three defects.
+
+Three real defects, all confirmed by measurement, none previously known:
 
 * **D1** — the end-of-turn military hand-limit discard is FIFO with no decision,
   in a step `docs/RULES_SPEC.md:188` explicitly calls "the only step requiring a
@@ -36,7 +40,18 @@ Two real defects, both confirmed by measurement, neither previously known:
   diagnosis is in section 4 and the fix is not in this change.*
 * **D2** — all 12 special technologies price at a strictly **negative** hand
   value, so the bot is actively repelled from a sixth of the civil deck. Six of
-  the twelve are taken zero times in 40 player-games. *Fixed here, in part.*
+  the twelve are taken zero times in 40 player-games. The cause turns out to be
+  a *sanctioned* deferral (every key is mapped; only the belief is deferred to
+  0.0 weights) whose cost had simply never been measured. Sections 2.3–2.7.
+* **D3** — `_card_yields` reduced `buildDiscount` by **summing** the per-age
+  entries, which are mutually exclusive. It scaled the three Construction techs
+  3 : 5 : 6 where the rules scale them 1 : 2 : 3 — the relative order wrong, not
+  just the magnitude. *Fixed here, section 2.5, proven inert.*
+
+A verdict of "BROKEN" below means broken **in effect**: measured behaviour that
+no player would recognise as play. It does not always mean somebody wrote a bug;
+D2's cause is a convention followed correctly, whose price nobody had put a
+number on until now.
 
 ---
 
@@ -200,21 +215,63 @@ is added: **price every card under `DEFAULT_WEIGHTS` and look at the sign.**
 Any card that comes out negative is a card the evaluator would rather not have,
 which for a civil card is never what the rules say (section 2.4).
 
-### 2.4 Fix A — `card_potential` is an OPTION, so it floors at zero *(rule fact)*
+### 2.4 The fix I proposed, tested, and did NOT land
 
-Developing a technology is never mandatory (`RULES_SPEC` 7.2: it is an action
-you choose to spend a civil action on). A card sitting in hand that is not worth
-developing is worth **zero**, not minus something — you simply never play it.
-A negative `card_potential` therefore models a compulsion that does not exist,
-and `hand_potential`, which is a sum of them, models a hand of bad cards as a
-liability when the rules make it merely an absence.
+The obvious repair is to floor `card_potential` at zero. The argument is sound
+as far as it goes: developing a technology is never mandatory (`RULES_SPEC` 7.2),
+so a card in hand that is not worth developing is worth **zero**, not minus
+something — you simply never play it. A negative `card_potential` models a
+compulsion the rules do not contain, and it is the exact mirror of the guard
+already present (`_Y_COST` clamps a negative *stock* weight so that paying a
+cost can never read as a gain).
 
-This is the mirror of the guard already in `card_potential`: `_Y_COST` clamps a
-negative *stock weight* so that "paying a cost" can never read as a gain. The
-opposite hazard — a gain the evaluator cannot yet price making the whole card
-read as a pure cost — had no guard. Now it does.
+**It is still the wrong fix, and the reason is worth more than the fix would
+have been: the negatives are load-bearing instrumentation.**
 
-Labelled **rule fact**. It introduces no constant.
+`tests/test_card_pricing.py::test_an_age_ii_cavalry_and_artillery_are_no_longer_the_same_card`
+asserts that turning `unit_strength_credit` from 0.0 to 1.0 makes Modern
+Infantry *more* valuable — that is how the military-card lane demonstrates its
+own fix works. Under a floor, measured rather than assumed:
+
+| card | credit 0.0 | credit 1.0 | floored 0.0 | floored 1.0 |
+|---|---|---|---|---|
+| Modern Infantry | −7.100 | −5.350 | 0.000 | 0.000 |
+| Air Forces | −8.100 | −6.350 | 0.000 | 0.000 |
+| Riflemen | −4.500 | −3.450 | 0.000 | 0.000 |
+
+A clamp makes a genuine pricing improvement **unmeasurable**. It would hide
+this audit's own subject matter rather than report it.
+
+Three further reasons it is the wrong shape, one per caller of
+`card_potential` — the enumeration is the answer, not the intuition:
+
+1. **`hand_potential`** (own civil hand, scale 0.125) — the floor helps here and
+   only here. But note what the un-floored version actually does: because
+   playing a card *removes* it from the hand, a negative `card_potential` means
+   the evaluator is **rewarded for developing a bad card** to clear the
+   liability, and punished for holding it. Both are backwards. This is real,
+   and it is an argument for pricing the gain, not for clamping the total.
+2. **`row_urgency` / `row_bargain_forgone`** — already skips any card whose
+   `card_potential` is `<= 0`. A floor is a **literal no-op** here: negative and
+   zero are treated identically. So the floor would not restore row visibility
+   to a single one of the 13 cards, which is half of what is wrong with them.
+3. **`rival_hand_potential`** — asks "how dangerous is the most dangerous rival
+   hand". A rival's unplayable card is not a threat, so a floor is defensible;
+   but the weight is 0.0 by default, so it is also moot.
+
+**The house pattern is to price the missing gain, not to clamp the total**, and
+the military-card lane got there first: `engine/bots/weighted.py` now maps a
+unit's `strength` and defers only *how much of it to believe* to
+`unit_strength_credit`. Its note is the standard to meet — 1.0 is privileged
+only when it is exactly what the engine does with the key, and where it is not,
+the value becomes a weight the league has a gradient for rather than a constant
+somebody picked.
+
+By that standard the 12 special techs are already in the **sanctioned** state:
+every key on all twelve is mapped, and only the belief is deferred. What this
+audit adds is the measurement of what the deferral costs — 0.87%, six cards
+never taken — and section 2.7's mechanical detector so the next deferral is a
+visible event.
 
 ### 2.5 Fix B — `buildDiscount` reduces by MAX, not sum *(rule fact)*
 
@@ -258,6 +315,33 @@ statement of the remaining gap:
   a wonder programme the bot does not currently run at all (see
   `docs/CARD_BLINDNESS.md` on wonders never being completed). Converting it
   would be pricing a path nothing walks.
+
+### 2.7 The rule, made mechanical — `tests/test_half_priced_cards.py`
+
+Section 2.3's rule is only useful if it survives this document. It is now a
+test. It computes, for every card, the gain contribution and the cost
+contribution under `DEFAULT_WEIGHTS` separately (through `_sum_yields`, so it
+cannot drift from what `card_potential` actually does) and reports every card
+whose cost is priced and whose gain contributes **exactly zero**.
+
+Today that set is **13 cards**, and it is written down rather than asserted
+empty, on the same terms as `DELIBERATELY_UNPRICED`:
+
+* the **10 military units**, waiting on `unit_strength_credit` — a deliberate,
+  argued deferral;
+* **Masonry, Architecture, Engineering**, waiting on `build_discount` and
+  `wonder_stages_per_action`.
+
+Adding a fourteenth is now a test failure that says, in the failure message,
+*"you have not made a card inert, you have made the bot refuse to take it"*.
+Each entry must name the 0.0 weight its value is waiting behind, and the test
+fails if that weight stops being 0.0 — so an entry cannot rot into a lie. A
+fourth case checks the set is a function of the weights and not a constant of
+the code: flipping `unit_strength_credit` to 1.0 must leave exactly the three
+Construction techs.
+
+This is the deliverable that outlives the audit. The measurement says the
+deferral is expensive; the test says the next one will at least be seen.
 
 ---
 
@@ -316,9 +400,22 @@ overstates both sides by roughly 3×, and the overstatement grows with age.
 This is mitigated, not silent: the board-side features `best_farm`, `best_mine`,
 `best_lab`, `best_temple`, `best_theater`, `best_library`, `best_arena` do move
 by the delta when the upgrade actually happens, and `hand_potential` carries a
-scale of only 0.125. It is the known cost of a name-only card evaluator and the
-fix is the same board-aware evaluator `docs/CARD_BLINDNESS.md` already names as
-the next piece of work. **Not fixed here; scoped and recorded.**
+scale of only 0.125.
+
+**The machine that fixes this now exists and does not yet cover these cards.**
+`engine/bots/board_yields.py` prices a card by swapping it onto the real board
+and diffing `effects.compute` — exactly the delta this section is asking for —
+but `SWAP_TYPES` is `{leader, government, wonder}`, the three single-slot card
+types where playing the card *replaces* what is there. A production technology
+is not single-slot, so it is out of scope by construction.
+
+It is nonetheless the same question: upgrading a worker from Irrigation to
+Selective Breeding replaces one card's contribution with another's, which is a
+swap in everything but the slot. Extending the swap diff to "the highest-level
+card of this type that already has workers" is the natural next step and would
+price all 24 of these cards by the engine's own arithmetic instead of by their
+printed numbers. **Not fixed here — it belongs to whoever owns `board_yields` —
+but scoped, and no longer waiting on a machine that had not been built.**
 
 ### 3.2 A production building's price omits the WORKER
 
@@ -406,6 +503,13 @@ here.
 
     nice -n 19 python3 tools/uncovered_census.py --players 2 --games 20 \
         --spec analysis/frozen/champion_2p.json --json out.json
+
+Provenance of every number in sections 2.1, 3 and 4: one run of that exact
+command, on master `6968256` plus this change. Nothing in the pricing path for
+these 39 cards moved between that commit and the rebase onto `7084a04` — the
+Construction fix is 0.0-weighted and `card_board_credit` defaults to 0.0 — so
+the rates stand, but a re-run is cheap and is the right first move if anything
+downstream disagrees.
 
 Note for whoever owns the full 236-card census: the number to reconcile against
 is `takes / offers`, not takes per game. A card that is rarely in the row and a
