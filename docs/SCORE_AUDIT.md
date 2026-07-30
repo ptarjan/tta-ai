@@ -26,33 +26,101 @@ lands its own.
 ## One-paragraph answer
 
 **Sixteen of the 23 types score exactly right, and nine real bugs came out of
-the other seven.** None is large: most are worth 1-6 culture in the positions
-that reach them, but four are *per turn* rather than one-off (Michelangelo and
-St. Peter's on a ruined wonder, St. Peter's on a colony, and an unstaffed lab
-paying Einstein) and one is *per army*. Every one of the nine is the same
-shape as the two bugs this project has already shipped: **a value that lives
-in a field, or a card clause, that no reader touches — or two readers of one
-rule that quietly disagree.** The verifications recorded in
-`docs/SCORE_VALIDATION.md` §6.1 (wonder rules and stage costs) and §3.3
-(Hollywood/Internet leader modifiers) **still hold at current master** and
-are now pinned by tests instead of by a corpus run. Tonight's government
-pricing fix is real: all eight governments' `civilActions` /
-`militaryActions` / `urbanBuildingLimit` / `peacefulCost` / `revolutionCost`
-now reach the engine, and `EveryFieldHasAReader.test_every_government_field_is_read`
-fails if any of the five stops being read.
+the other seven.** All nine are fixed, and a tenth defect in the *pricer* fell
+out of re-auditing `engine/bots/board_yields.py`. None is large: most are worth
+1-6 culture in the positions that reach them, but four are *per turn* rather
+than one-off and one is *per army*. Every one of the nine is the shape this
+project has already shipped twice: **a value that lives in a field, or a card
+clause, that no reader touches — or two readers of one rule that quietly
+disagree.**
 
-**All nine are fixed**, and a tenth defect in the *pricer* fell out of
-re-auditing `engine/bots/board_yields.py` (section 6.1). One of the nine —
-3.9, whether an unstaffed lab pays Einstein — was settled against BGO's own
-printed per-turn science on 150 human games, because the card wording alone
-had already been read two ways inside one file.
+## The finding that outlives the bugs: a corpus validates only what it varies
 
-Section 6.5 is the part worth reading even if you skip the rest: **the human
-corpus scored `Impact of Agriculture` 66/66 exact against a wrong
-implementation**, because at 2 players every pact is removed from the game and
-a pact is the only thing in the base game that puts food on your board from
-outside a farm. Five of the nine bugs sit inside the corpus's four documented
-blind spots.
+`docs/SCORE_VALIDATION.md` scored `Impact of Agriculture` **66/66 exact**
+against BGO. That card scores the wrong quantity (bug 3.1). Both statements
+are true, and the reconciliation is the most useful thing in this document:
+
+> **At 2 players every pact is removed from the game**, and the corpus is
+> **2p only**. A pact's food symbol is the *only* thing in the 2015 base game
+> that puts food on your board from outside a farm. So in every game in the
+> corpus, "the food your farms produce" and "your food rating" are
+> **identically equal** — and no quantity of that data could ever separate the
+> two hypotheses. The 66/66 is real. It is 66/66 over inputs that cannot tell
+> right from wrong.
+
+This generalises well past one card. **Five of the nine bugs sit inside the
+corpus's four documented blind spots** — pacts (structurally absent at 2p),
+Iconoclasm and leader replacement (gated *out* of clean rows), Ravages of Time
+(no flip was ever applied until a late name-resolution fix), armies and
+tactics (never modelled), and happy faces (never printed in the journal). The
+table is in §6.5. That is a finding about our validation method, not about the
+cards, and it does not impugn the corpus work, which found three real bugs and
+states all four limits out loud.
+
+The counter-example does as much work as the finding. **Bug 3.9 was
+*decided* by the corpus** — whether an unstaffed lab pays Einstein — because
+unstaffed labs are common in ordinary 2p play, so those games *do* separate
+the hypotheses, decisively (7303/7600 rows against 7275/7600).
+
+> **The corpus is decisive exactly where it has variation, and silent exactly
+> where it does not.** Before quoting a percentage from it, ask what inputs
+> produced it and whether they could have distinguished the alternative. A
+> card that names a *source* ("the food produced by their farms") rather than
+> a rating can only be validated by games that put the source and the rating
+> apart.
+
+## How a rules call gets made
+
+Bug 3.9 is the template, because the card wording alone had already been read
+two ways *inside one file*. Three independent sources agreeing, not one
+argued well:
+
+1. **The printed card** — all three leaders say the best lab or library
+   *produces* extra science, and in this game a building **is** a worker
+   standing on a technology card.
+2. **A published ruling on the identical phrase** — FAQ v1.5 p.9 resolves the
+   Transcontinental Railroad as "one worker on the best mine technology card
+   **that has workers**".
+3. **Measurement against BGO** — 150 human games, same replayer, only the
+   reading changed: **7303/7600** per-turn science rows exact staffed against
+   **7275/7600** unstaffed.
+
+And the fix is generalised rather than applied: `UnstaffedBuildingsProduceNothing`
+asserts the rule for **every** key in `effects._BUILDING_OUTPUT`, and
+`test_the_table_covers_every_building_output_key` fails if a new modifier key
+is added without being covered. A future key cannot reintroduce this bug
+quietly.
+
+## A caveat on the swap-diff technique, which three lanes now rely on
+
+`engine/bots/board_yields.py` prices a card by putting it on the board, calling
+the real rules engine, and diffing — so it "does not reimplement a single rule"
+and "can never drift". The diff is faithful: replacement is a delta, clamps are
+handled correctly (a diff of two clamped `compute` results *is* the marginal
+value), and Michelangelo prices at +6 culture/turn with two temples and 0 on an
+empty board.
+
+**But the guarantee is narrower than it looks, and it failed once already.**
+`card_potential` prices a swap card by the diff **alone**. Blue tokens are not
+a `Stats` field — `on_enter_play` puts them on `p.blue_total` — so `compute`
+cannot report them, and turning board pricing on **silently dropped Taj Mahal's
+blue token** that the static `_card_yields` did price. The pricing guardrail
+could not see it, because `blueTokens` is priced *somewhere*.
+
+> **A swap diff is exact over `Stats` and blind to everything else.** Anything a
+> card does that is not a per-turn rating — token grants, one-time culture,
+> boolean flags, triggers — is invisible to it by construction, and if the
+> static path priced that thing, replacing the static path *loses* it. Every
+> key a swap type carries needs a rider or a reason.
+
+The verifications recorded in `docs/SCORE_VALIDATION.md` §6.1 (wonder rules and
+stage costs) and §3.3 (Hollywood/Internet leader modifiers) **still hold at
+current master** and are now pinned by tests instead of by a corpus run.
+Tonight's government pricing fix is real: all eight governments' `civilActions`
+/ `militaryActions` / `urbanBuildingLimit` / `peacefulCost` / `revolutionCost`
+now reach the engine, and
+`EveryFieldHasAReader.test_every_government_field_is_read` fails if any of the
+five stops being read.
 
 ---
 

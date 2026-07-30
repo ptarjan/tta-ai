@@ -34,6 +34,32 @@ asks `engine.effects.compute` what changed.**
 
 All thirteen of the `effects.MODIFIER_KEYS` that any leader carries are then
 priced exactly, for free, and can never drift, because it *is* the rules.
+
+------------------------------------------------- what the diff CANNOT see
+
+**The guarantee is narrower than "it is the rules", and it has already failed
+once.**  A swap diff is exact over `Stats` and **blind to everything else**.
+`compute` builds the per-turn ratings; anything a card does that is not a
+rating -- a token grant, one-time culture, a boolean flag, a turn trigger --
+is invisible to it by construction.
+
+That would be merely incomplete, except that `weighted.card_potential` prices
+a swap card by the diff **ALONE** (it has to: otherwise the printed culture
+already inside the delta would be counted twice).  So for a swap type, the
+diff does not *supplement* the static `_card_yields` table, it **replaces**
+it -- and any key the static table priced that the diff cannot see is
+silently DROPPED the moment `card_board_credit` goes non-zero.
+
+That is exactly what happened to Taj Mahal's `blueTokens`: not a `Stats`
+field (`on_enter_play` puts it on `p.blue_total`), priced by
+`_EFF_TO_FEATURE -> blue_free` on the static path, and worth nothing here
+until `_blue_tokens` was added below.  `tests/test_card_pricing.py` could not
+catch it, because `blueTokens` *is* priced -- somewhere.  See
+docs/SCORE_AUDIT.md, "A caveat on the swap-diff technique".
+
+**So: every effect key a SWAP TYPE carries needs either a `Stats` field, a
+rider, or a written reason.**  `WONDER_RIDERS` and `RIDERS` are where the
+first two live; `BOARD_PRICED` at the bottom is where the reason goes.
 Three further things fall out that no per-key handler gets right by
 construction:
 

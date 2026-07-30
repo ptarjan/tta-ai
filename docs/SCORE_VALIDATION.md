@@ -153,6 +153,21 @@ including unverified reconstructions, for scale).
 Plus `effects.end_of_game_bonus` (Bill Gates): **411 / 420 exact**, with no
 cleanliness filter at all.
 
+> **Read the 100% rows with §8 in hand (added 2026-07-30, see
+> `docs/SCORE_AUDIT.md`).** A percentage here is over *the inputs this corpus
+> can produce*, and for one row that turns out to matter: **`Impact of
+> Agriculture` is 66/66 exact against an implementation that scores the wrong
+> quantity.** The card scores "the food produced by their farms"; the engine
+> scored the food *rating*. The two differ only when something puts food on
+> your board from outside a farm, the only such thing in the base game is a
+> pact's food symbol, **every pact is removed from the game at 2 players**,
+> and this corpus is 2p only — so the two quantities are identically equal in
+> all 2,525 positions here, and no amount of this data could have separated
+> them. Five of the nine bugs `SCORE_AUDIT.md` found sit inside the four
+> blind spots §8 already names. The corpus is decisive exactly where it has
+> variation: it *settled* the "does an unstaffed lab pay Newton?" question
+> (7303/7600 against 7275/7600) because unstaffed labs are common in 2p play.
+
 Reading the rows that are not 100%:
 
 * **Colonies (±3, symmetric)** and **Architecture / Variety / Competition
