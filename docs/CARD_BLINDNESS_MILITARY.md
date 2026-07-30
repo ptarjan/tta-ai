@@ -391,23 +391,29 @@ card constant. Same conclusion as units, arrived at from the other end.
 same file, one key — paired within each call by seat rotation, disjoint blocks
 of 100 games:
 
-| | n | win rate (paired) | culture margin | own culture |
+| | n | win rate | culture margin | own culture |
 |---|---|---|---|---|
-| `hand_mil_potential` 0.125 vs 0.0 | **800 games / 400 deals** | **50.56% ± 3.46pp** (z = +0.32) | **−0.15** | 146.7 vs 146.8 |
+| `hand_mil_potential` 0.125 vs 0.0 | **800 games / 400 deals** | **50.56% ± 1.89pp** (z = 0.58, p = 0.56) | **−0.15 ± 1.07** (z = −0.28) | 146.7 |
 
-Eight disjoint blocks of 100: 51.0, 55.0, 46.5, 49.0, 47.0, 52.5, 48.0, 55.5.
-Scattered either side of 50 with no block carrying anything. **A flat null.**
+Eight disjoint blocks of 100: 51.0, 55.0, 46.5, 49.0, 47.0, 52.5, 48.0, 55.5
+(chi2 = 11.62 on 7 df). Scattered either side of 50 with no block carrying
+anything. **A flat null**, on both the win rate and the dense margin signal.
 
-**MDE, and the CI is naive.** This uses the project's standard
-independent-samples formula on a paired design, which a stats lane has since
-shown is optimistic by up to sqrt(2); the corrected estimator was not on
-master when this was analysed. Treat the interval as a lower bound on the
-true width. SE on the win rate is `sqrt(0.25/n)`, so n = 800 gives 1.77pp and a
-minimum detectable effect at 80% power and α = 0.05 two-sided of **≈ 4.9pp**.
-Seat-rotation pairing makes the true SE smaller than that, so 4.9pp is
-conservative. An effect below ~5pp is not something this experiment can speak
-to, and given §5.2 measured the term changing **0.93% of decisions**, an
-effect above 5pp was never plausible. This is a bound, not a discovery.
+**MDE = 2.70pp**, clustered on the deal via `tools/ab_summary.py`
+(`experiments/paired_stats.py`), not the independent-samples formula.
+
+That correction is a *tightening* here, not the sqrt(2) widening I had
+assumed while writing this up. The within-deal correlation is
+rho = **−0.699**, strongly negative — these deals favour a *seat* rather than
+a strategy — so the naive interval was conservative. Naive: ±3.46pp on the
+win rate, ±2.88 on the margin. Corrected: **±1.89pp** and **±1.07**.
+
+So this is a **well-powered null, not an underpowered one**: effects above
+2.7pp are excluded, on both the win rate and the dense margin. Which was
+predictable — §5.2 measured the term changing 0.93% of decisions, so an
+effect that size was never on the table. It is a bound, not a discovery, and
+the top of this section says why the bound is uninteresting: the decision it
+informs happens 0.167 times a game.
 
 **And it is the wrong test, which Lane C established after I had started it.**
 `docs/CARD_BLINDNESS.md` §5.2: a fresh 0.0-default feature does nothing until
