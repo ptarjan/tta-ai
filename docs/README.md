@@ -44,8 +44,10 @@ The three documents at the top are the ones to read first.
 
 ## Card pricing and coverage
 
-*Five overlapping documents from one long investigation.  `OPEN_ITEMS.md` §2 is
-the consolidated list of what is still unpriced; use these for the reasoning.*
+*Six overlapping documents from one long investigation, plus
+`PLAY_RATE_AUDIT.md`, which asks the behavioural question the other six do not.
+`OPEN_ITEMS.md` §2 is the consolidated list of what is still unpriced; use
+these for the reasoning.*
 
 | doc | answers |
 |---|---|
@@ -56,6 +58,7 @@ the consolidated list of what is still unpriced; use these for the reasoning.*
 | `UNCOVERED_TYPES.md` | Special technologies, production buildings and bonus cards; and the general rule that a half-priced card is biased, not neutral. |
 | `COVERAGE_AUDIT.md` | The non-card axis: colonies, resign, farm-vs-mine degeneracy, and the dead-coordinate census of every evaluator feature. |
 | `MILITARY_SEAM.md` | The plumbing that stopped board-aware pricing reaching military cards at all. |
+| `PLAY_RATE_AUDIT.md` | The complement to all of the above: not *is the card priced* but **does the bot actually play it, and at what rate against a human?**  Per-card take/play rates for all 236 cards at 2p/3p/4p against the 1,011-game corpus, the ranked discrepancy table both ways, the never-played list, and the standing check (`tools/play_rate.py`, `tests/test_play_rate.py`) that makes a class priced-but-inert a test failure. |
 
 ## Rules conformance, scoring and combat
 
@@ -116,7 +119,7 @@ read it before quoting any frozen-champion number.
 ## Housekeeping
 
 * **61 documents on 2026-07-30, 54 after the consolidation** (53 topic docs plus
-  this index).  Nine were deleted and their live content migrated; one was
+  this index); 55 once `PLAY_RATE_AUDIT.md` landed later the same day.  Nine were deleted and their live content migrated; one was
   renamed (`UNATTENDED.md` -> `HAZARDS.md`) and one superseded in place
   (`OPEN_AFTER_THE_AUDIT.md` -> `OPEN_ITEMS.md`); five stale-wrong documents got
   dated correction banners

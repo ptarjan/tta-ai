@@ -161,59 +161,78 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    trained, the benefit side (`build_discount`, `wonder_stages_per_action`,
    `colonize_bonus`) is 0.0.  Take rate 0.87% (14/1,606 offers); 6 of 12 taken
    zero times in 40 games.
-3. **`cost.militaryActions` on 54 cards** — see §1.4.
-4. **`card_board_credit` = 0.0 and `gov_action_cost` = 0.0**: the entire
+3. **Every yellow production technology prices net negative, and the bot buys
+   none of them.**  Measured 2026-07-30 (`docs/PLAY_RATE_AUDIT.md` §5.1): labs
+   0.03 taken per seat-game against a human 1.62 at 2p and **exactly 0.00** at
+   3p and 4p, mines 0.05 against 1.18, farms 0.18 against 1.34; Alchemy,
+   Scientific Method and Coal are the only three cards in the game the bot
+   never touches at ANY table size.  Unlike item 1 this is **not** an inert
+   weight — `food_rate`, `resource_rate` and `science_rate` are all live — it
+   is a ratio: `culture_rate` is 31.68 on the 2p champion against
+   `science_rate` 0.25, so a culture card beats a science card by construction,
+   and `_PROD_TO_FEATURE` charges a lab's `techCost` through `science` (0.33)
+   at a higher weight than the `science_rate` (0.25) it buys.  Whether that is
+   a pricing bug or a real 2p optimum is unsettled and unowned.  It is the
+   largest non-inert behavioural discrepancy in the game.
+4. **`free_civil_action` is non-positive on every trained vector** (0.0 / −0.160
+   / −0.084 at 2p/3p/4p): the 18 action cards that grant a free civil action are
+   priced to be *disliked* for granting it.  Third instance of the
+   `unit_strength_credit` pattern, found by `docs/PLAY_RATE_AUDIT.md` §3.3.  No
+   isolated behavioural signature — action cards are the bot's least-broken type
+   — so it is ratcheted by `tests/test_play_rate.py` and not acted on.
+5. **`cost.militaryActions` on 54 cards** — see §1.4.
+6. **`card_board_credit` = 0.0 and `gov_action_cost` = 0.0**: the entire
    board-aware pricing machine for leaders, actions and governments is built and
    inert.  If anyone turns it on, **turn `card_board_government = 1.0` on
    first** — it is the only individually significant positive result (culture
    margin +1.85, z = 3.4).  The leader half is a confirmed null (z = −1.46,
    p = 0.15 after correct deal-clustering; the original z = −2.1 headline was
    withdrawn).
-5. **`wonder_potential` = 0.0 in every champion, frozen and live.**  A wonder
+7. **`wonder_potential` = 0.0 in every champion, frozen and live.**  A wonder
    physically cannot enter `hand_civil` (`actions.take_card` branches to
    `p.wonder`), so `hand_potential` — the one live card-identity channel — never
    sees it.  This plumbing fact is weight-independent and survives any reweight.
-6. **Five wonders still price 0.00** (Ocean Liners, First Space Flight, Fast Food
+8. **Five wonders still price 0.00** (Ocean Liners, First Space Flight, Fast Food
    Chains, Internet, Hollywood — text-effect / board-scaled).  Zero Age III
    wonder completions ever, across 260 seat-games.  Pyramids: taken 7x, finished
    0x, against humans building it in 499 of 692 games.
-7. **`copy_tactic` is a live, unassigned pathology** — the champion copies ~10.5
+9. **`copy_tactic` is a live, unassigned pathology** — the champion copies ~10.5
    tactics/game at 2 military actions each into zero armies, because the
    evaluator rewards avoiding the smaller-hand bookkeeping penalty over actually
    playing the tactic.  The bookkeeping-vs-value ratio was ~11:1 when first
    measured and **got worse on the live champion: 27.3:1, or 60.4:1 including
    `ma_left`.**
-8. **`tactic_gain` is a dead coordinate** (0 divergences across a 7x weight range
+10. **`tactic_gain` is a dead coordinate** (0 divergences across a 7x weight range
    in 967 decisions) because the champion always already holds a tactic and owns
    zero units.  Tactics are confounded with the unit defect — **re-measure after
    units are fixed, do not fix in parallel.**
-9. **`resign`**: engine-correct, but no feature reads `p.resigned`; 0 wins from 9
+11. **`resign`**: engine-correct, but no feature reads `p.resigned`; 0 wins from 9
    resignations in an 8-game probe.  The bot throws games over a rounding
    artefact in `lateness()`.  Needs a policy change plus an n>=200 A/B.
-10. **`row_urgency` carries the same hand-double-count bug** for leaders and
+12. **`row_urgency` carries the same hand-double-count bug** for leaders and
     governments in the *row* (not the hand) that §10 of
     `docs/CARD_PRICING_LEADERS.md` fixed for the hand.  Explicitly "the next
     thing to do in this area".
-11. **Production buildings** (24 cards) are not unpriced but are mis-shaped
+13. **Production buildings** (24 cards) are not unpriced but are mis-shaped
     twice: the upgrade path prices as an **absolute, not a delta** (Selective
     Breeding prices its full value even if you already have Irrigation), and the
     price **omits the worker cost** entirely, biasing every comparison against
     special techs which need no worker.  Both scoped to whoever owns
     `board_yields` next.  Professional Sports is never taken (0/127), undiagnosed.
-12. **Aristotle and Newton need a *measured* trigger rate before pricing**, not a
+14. **Aristotle and Newton need a *measured* trigger rate before pricing**, not a
     guessed one; `tools/take_census.py` is most of the machinery and the
     measurement has not been made.  Four leaders (Aristotle, Hammurabi,
     Christopher Columbus, Frederick Barbarossa) are deliberately flat-zero,
     guarded by `TestEveryLeaderIsPriced.STILL_FLAT`.
-13. **Three decisions nobody has made** (`docs/COVERAGE_AUDIT.md` §7): should
+15. **Three decisions nobody has made** (`docs/COVERAGE_AUDIT.md` §7): should
     `rival_culture_rate` / `rival_science_rate` / `rival_strength` be made live or
     deleted; should `wonder_remaining` be sign-locked or replaced; should
     `p.resigned` get any evaluator term at all.
-14. **The one clean rules-level engine defect** in the whole coverage census: the
+16. **The one clean rules-level engine defect** in the whole coverage census: the
     unit-sacrifice-for-colony choice is taken away from the player by the engine.
     Ranked more serious than any pricing gap.
-15. **Zero Age IV card takes at every player count** (260/260 seat-games).
-16. **`ca_left` is a genuine 1-ply pass-asymmetry artefact** (`end_turn` always
+17. **Zero Age IV card takes at every player count** (260/260 seat-games).
+18. **`ca_left` is a genuine 1-ply pass-asymmetry artefact** (`end_turn` always
     has the highest `ca_left` of any candidate, 165/165 measured, mean +2.95)
     that the `NONNEG` guard stops the search correcting.  Deliberately unchanged;
     needs an n>=200 A/B.
