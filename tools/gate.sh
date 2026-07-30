@@ -87,8 +87,71 @@ cd "$(dirname "$0")/.."
 # CANNOT move for it -- and they did not, in both independent derivations,
 # while all SIX arms below moved.  If a future change to `_card_yields` ever
 # moves NARROW or WIDE, that is a bug in the change, not a digest to update.
-NARROW=0a6ed6ad
-WIDE=4a8c6ca6
+# (Superseded: NARROW and WIDE DID move on `military-discard`, and correctly --
+# see the block below.  That change is not a `_card_yields` change.)
+
+# ---------------------------------------------------------------------------
+# Re-derived on `military-discard` (2026-07-30, commit 1c08790,
+# docs/MILITARY_DISCARD.md).  ALL EIGHT arms moved -- the first entry in this
+# file's history for which even the two GreedyBot arms move, and that is the
+# tell that this is a change to the RULES rather than to an evaluator.
+#
+#     arm       old         new
+#     NARROW    0a6ed6ad    bd0e9a62
+#     WIDE      4a8c6ca6    cf4f0a22
+#     WNARROW   5eff41eb    549e4a90
+#     WWIDE     d03e0964    0e03e3b7
+#     QNARROW   eff1bef5    b15d7b18
+#     QWIDE     9e9695d4    bf221746
+#     PNARROW   c534ac3d    d307c480
+#     PWIDE     ee627d64    4d71894c
+#
+# Cause, and it is one rule: RULES_SPEC 6.6 step 1, the end-of-turn military
+# discard, was `hand_military.pop(0)` -- FIFO, taken with no decision at all.
+# The rulebook makes it the player's choice and says it is the ONLY decision in
+# the end-of-turn sequence (sources/ubg_subsequent-rounds.txt:182, "Once you
+# have decided which military cards to discard, the rest of your turn is
+# automatic").  It is now a real `push_choice`.
+#
+# WHY ALL EIGHT, INCLUDING GREEDY.  Every previous entry in this file moved
+# only the arms whose bot searches under `weighted.evaluate`, because the cause
+# was always a change to what the evaluator could see.  This one changes the
+# MOVE STREAM: a decision that did not exist now appears in it, ~31 times per
+# 2p game (tools/discard_census.py).  `perf_check` hashes the full game log,
+# the final scores, the winners and the move count, so a bot that does not
+# evaluate at all -- RandomBot, GreedyBot -- still hashes differently, because
+# it is being asked a question it was never asked before and its answer is in
+# the log.  An arm that did NOT move here would be the surprising result.
+#
+# ATTRIBUTED, not assumed, three ways:
+#
+#   * BASELINE.  All ten arms re-derived from scratch on the PARENT commit
+#     (7b183fe) came back byte-identical to the eight old values above-left.
+#     Necessary rather than ceremonial: master moved 19 commits while this was
+#     being written, including an end-of-game scoring audit that touched
+#     engine/events.py, so "the constants in this file are still master's" was
+#     checked rather than believed.  (It also means that scoring audit moved no
+#     digest, which is worth knowing next door.)
+#   * TWO-SIDED.  Derived from scratch in the working clone AND independently
+#     in a second clone at the same commit, per docs/PYPY.md 9.0.  The two
+#     agreed on all eight.
+#   * REVERT CONTROL, by construction rather than by a third run.  The only
+#     files in 1c08790 on `perf_check`'s import path are engine/economy.py,
+#     engine/game.py and engine/interact.py; advisor/, analysis/, tests/,
+#     tools/ and docs/ are never imported by it.  Reverting those three files
+#     IS the parent tree, whose arms are the old values above -- the baseline
+#     run above therefore is the revert control.
+#
+# The two FASTCOPY_PARANOID arms agree with their plain counterparts
+# (bd0e9a62, cf4f0a22), so the new decision does not disturb fastcopy.
+#
+# Nothing here was re-derived to make a gate pass: the gate FAILED on 1c08790
+# by design, and these eight values are the result of computing the new
+# behaviour, not of reading it back off a failure message.  Two arms (QWIDE,
+# PWIDE) first came back with a BLANK digest -- that is a killed subprocess,
+# not a moved hash, and they were re-run rather than recorded.
+NARROW=bd0e9a62
+WIDE=cf4f0a22
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
@@ -153,8 +216,9 @@ WIDE=4a8c6ca6
 # change is additionally switchable at runtime on the `card_rate_credit`
 # weight: setting it to 0.0 restores master's pricing exactly, which is what
 # docs/CARD_BLINDNESS.md section 5 A/Bs against.
-WNARROW=5eff41eb
-WWIDE=d03e0964
+# Both moved again on `military-discard`; see the block above NARROW.
+WNARROW=549e4a90
+WWIDE=0e03e3b7
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -177,10 +241,11 @@ WWIDE=d03e0964
 # attribution in the WNARROW/WWIDE block above.  PlanBot and QuiescentBot both
 # search under the same `evaluate`, so `card_potential` is on their hash path
 # exactly as it is on WeightedBot's.
-PNARROW=c534ac3d
-PWIDE=ee627d64
-QNARROW=eff1bef5
-QWIDE=9e9695d4
+# All four moved again on `military-discard`; see the block above NARROW.
+PNARROW=d307c480
+PWIDE=4d71894c
+QNARROW=b15d7b18
+QWIDE=bf221746
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs
