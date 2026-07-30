@@ -6,6 +6,7 @@ decision is `win - ci > 0.5`, so a pooling bug is a silent promotion bug: it
 would either promote regressions or freeze the loop.  Torch-free, so it runs in
 tools/gate.sh on the Mac.
 """
+import math
 import os
 import re
 import subprocess
@@ -140,6 +141,59 @@ class TestPoolSummary(unittest.TestCase):
             for key in ("win=", "ci=", "neural=", "opp=", "margin=", "n=",
                         "errs="):
                 self.assertIn(key, out)
+
+
+class TestShardClusteredInterval(unittest.TestCase):
+    """The 2026-07-30 fix: `ci=` cannot see the shards, `ci_cluster=` can."""
+
+    # The neural loop's real anchor, loop2/anchor_seed_{0..5}.log.
+    ANCHOR = [0.3250, 0.3000, 0.3875, 0.5625, 0.4250, 0.5875]
+
+    def _pool_wins(self, wins, n=40):
+        with tempfile.TemporaryDirectory() as d:
+            ps = [_shard(d, f"s{i}.log", w, n) for i, w in enumerate(wins)]
+            return _pool(ps)
+
+    def test_anchor_overdispersion_is_detected_and_quantified(self):
+        r = self._pool_wins(self.ANCHOR)
+        self.assertAlmostEqual(float(r["win"]), 0.4313, places=4)
+        # what the project published
+        self.assertAlmostEqual(float(r["ci"]), 0.0627, places=4)
+        # what it should have published
+        self.assertAlmostEqual(float(r["ci_cluster"]), 0.1260, places=4)
+        self.assertAlmostEqual(float(r["chi2"]), 11.76, places=2)
+        self.assertEqual(int(r["df"]), 5)
+        self.assertEqual(int(r["overdispersed"]), 1)
+        # The whole point: nearly 2x optimistic.
+        self.assertGreater(float(r["ci_cluster"]) / float(r["ci"]), 1.9)
+
+    def test_legacy_ci_field_is_unchanged(self):
+        """A live loop parses `ci=`.  Its value must not move under it."""
+        r = self._pool_wins(self.ANCHOR)
+        n, wm = 240, 0.43125
+        # the field is printed to 4dp, which is the precision the loop parses
+        self.assertAlmostEqual(
+            float(r["ci"]), 1.96 * math.sqrt(wm * (1 - wm) / n), places=4)
+
+    def test_agreeing_shards_are_not_flagged(self):
+        r = self._pool_wins([0.50, 0.50, 0.50, 0.50, 0.50, 0.50])
+        self.assertEqual(int(r["overdispersed"]), 0)
+        # Perfect agreement => no between-shard variance to report.
+        self.assertAlmostEqual(float(r["ci_cluster"]), 0.0, places=9)
+        # ...while the independent-samples formula still claims +/-6.3pp.
+        self.assertGreater(float(r["ci"]), 0.06)
+
+    def test_single_shard_cannot_bound_itself(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = _pool([_shard(d, "a.log", 0.55, 200)])
+            self.assertEqual(int(r["shards"]), 1)
+            self.assertEqual(float(r["ci_cluster"]), float("inf"))
+
+    def test_no_shards_still_emits_the_new_fields_as_NA(self):
+        out = subprocess.run([sys.executable, SCRIPT, "/nope/missing.log"],
+                             capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(out.returncode, 3)
+        self.assertIn("ci_cluster=NA", out.stdout)
 
 
 if __name__ == "__main__":

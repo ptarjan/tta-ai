@@ -20,6 +20,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+from experiments import paired_stats  # noqa: E402  (needs the path insert)
+
 BUILTINS = ("random", "greedy", "default")
 
 #: docs/TRAINING_RUN.md:39-44 -- this file holds the pre-horizon-fix 4p
@@ -422,6 +424,14 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         moves.append(m)
     m, half = mean_ci(shares)
     null = 1.0 / num_players
+    # `ci` below is the LEGACY independent-samples half-width, kept byte-stable
+    # because the halted league arms and every historical log are calibrated to
+    # it.  It is wrong for this design: the task list above deals each seed
+    # `num_players` times with the seats swapped, so the independent unit is
+    # the deal, not the game.  `ci_paired` is the correct one -- prefer it, and
+    # see experiments/paired_stats.py for why the correction is not a blanket
+    # sqrt(2) (rho is usually negative here, so pairing usually TIGHTENS it).
+    pe = paired_stats.paired(per_game, num_players)
     return {
         "error_types": census(errors),
         "players": num_players,
@@ -441,13 +451,29 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "per_game": per_game,
         "per_game_margin": per_game_margin,
         "per_game_culture": per_game_culture,
+        # --- correct, deal-clustered interval (see paired_stats.py) ---
+        "ci_paired": pe.half,
+        "ci_naive": half,
+        "p_paired": pe.p_against(null),
+        "deals": pe.n_clusters,
+        "rho_deal": pe.rho,
+        "deff": pe.deff,
     }
 
 
 def fmt(res, name_a="A", name_b="B"):
+    # Headline the deal-clustered interval; keep the legacy one visible in
+    # brackets so this can still be reconciled against older logs.  Rows read
+    # back from pre-2026-07-30 jsonl have no `ci_paired`, hence the fallback.
+    half = res.get("ci_paired", res["ci"])
+    p = res.get("p_paired", res["p"])
+    legacy = ""
+    if "ci_paired" in res:
+        legacy = (f" [deals={res['deals']}, rho={res['rho_deal']:+.2f}; "
+                  f"legacy per-game ci {res['ci_naive']:.1%}]")
     return (f"{name_a} vs {name_b} @{res['players']}p: "
-            f"win rate {res['win_rate']:.1%} +/- {res['ci']:.1%} "
-            f"(null {res['null']:.1%}, p={res['p']:.4f}, n={res['games']}) "
+            f"win rate {res['win_rate']:.1%} +/- {half:.1%} "
+            f"(null {res['null']:.1%}, p={p:.4f}, n={res['games']}){legacy} "
             f"culture {res['culture_a']:.0f} vs {res['culture_b']:.0f}"
             + (f" [{res['errors']} engine errors: "
                f"{error_brief(res.get('error_types'))}]"

@@ -29,6 +29,7 @@ from engine import game
 from engine.bots.neural_net import NeuralValue
 from engine.bots.neural_bot import NeuralBot
 from experiments import arena
+from experiments import paired_stats
 
 
 def make_opponent(spec_str, seed):
@@ -102,6 +103,12 @@ def main():
 
     n = args.players
     shares, ca, cb, moves, errs = [], [], [], [], 0
+    # Task-ordered, with None where a game died.  `shares` drops failures,
+    # which silently re-indexes everything after the first error and makes the
+    # seat pairing unrecoverable; this list keeps position == task id so
+    # paired_stats can regroup games into deals.
+    per_game = []
+    per_game_margin = []
     t0 = time.time()
     for g in range(args.games):
         seat = g % n
@@ -125,6 +132,8 @@ def main():
             sc = game.scores(st)
         except Exception as e:
             errs += 1
+            per_game.append(None)
+            per_game_margin.append(None)
             if errs <= 3:
                 print("  engine error:", repr(e), flush=True)
             continue
@@ -132,6 +141,8 @@ def main():
         tied = [i for i, v in enumerate(sc) if v == best]
         share = (1.0 / len(tied)) if seat in tied else 0.0
         others = [sc[i] for i in range(n) if i != seat]
+        per_game.append(share)
+        per_game_margin.append(float(sc[seat] - sum(others) / len(others)))
         shares.append(share)
         ca.append(sc[seat])
         cb.append(sum(others) / len(others))
@@ -150,17 +161,39 @@ def main():
     mm, mh = arena.mean_ci(margins)
     null = 1.0 / n
     p = arena.p_value(m, half, null)
+    # The correct interval for this design.  The loop deals `seat = g % n`,
+    # `seed = seed0 + g // n`, so a 240-game 2p run is 120 deals played twice
+    # with the seats swapped -- `half` above is the independent-samples
+    # formula on a paired design.  See experiments/paired_stats.py.
+    pe = paired_stats.paired(per_game, n)
+    pm_est = paired_stats.paired(per_game_margin, n)
     print("\n==== RESULT ====")
     print(f"neural[{args.search}] vs {args.opponent} @ {n}p  n={len(shares)} "
           f"(det={args.determinize}, etb={args.end_turn_bias}, "
           f"width={args.width}, nodes={args.nodes})")
-    print(f"win rate     {m:.3f} +/- {half:.3f}  (null {null:.3f}, p={p:.4g})")
+    print(f"win rate     {m:.3f} +/- {pe.half:.3f}  (null {null:.3f}, "
+          f"p={pe.p_against(null):.4g})  [deal-clustered, "
+          f"{pe.n_clusters} deals, rho={pe.rho:+.2f}]")
+    print(f"  legacy per-game ci  +/- {half:.3f} (p={p:.4g})  "
+          f"-- independent-samples formula on a paired design, do not quote")
     print(f"neural cult  {cam:.1f} +/- {cah:.1f}")
     print(f"oppo cult    {cbm:.1f} +/- {cbh:.1f}")
-    print(f"margin       {mm:+.1f} +/- {mh:.1f}")
+    print(f"margin       {mm:+.1f} +/- {pm_est.half:.1f} "
+          f"(legacy +/- {mh:.1f})")
     print(f"moves/game   {sum(moves)/len(moves):.0f}   engine errors {errs}")
-    # machine-parseable line for the self-play loop orchestrator
-    print(f"SUMMARY win={m:.4f} ci={half:.4f} neural={cam:.1f} opp={cbm:.1f} "
+    # Machine-parseable line for the self-play loop orchestrator.
+    #
+    # `ci=` deliberately still carries the LEGACY per-game half-width.  A live
+    # neural loop parses this field into its promotion gate, and silently
+    # changing what it means would move a gate threshold under a running
+    # experiment -- which is a decision for a human, not for this line.
+    # `cip=` is the correct deal-clustered half-width; `rho=` is the
+    # within-deal correlation that explains the difference.  Switching the
+    # loop over is a one-token edit in neural_search_loop.sh once the run in
+    # flight has finished.  See docs/CARD_BLINDNESS.md Sec 10.
+    print(f"SUMMARY win={m:.4f} ci={half:.4f} cip={pe.half:.4f} "
+          f"rho={pe.rho:.4f} deals={pe.n_clusters} "
+          f"neural={cam:.1f} opp={cbm:.1f} "
           f"margin={mm:.1f} n={len(shares)} errs={errs}", flush=True)
 
 
