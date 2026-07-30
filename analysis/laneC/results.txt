@@ -1,0 +1,52 @@
+Lane C A/B, 2p paired, 8 blocks of 400 per arm, engine pinned at 664cdfc.
+on.json vs off.json = card_board_credit 1.0 vs 0.0, 1 of 105 weights differs.
+Run on the 28-core desktop at 12 workers.  MDE ~2.0pp.
+
+===== TTA_BOARD_TYPES=all
+block     n  win rate   margin
+    1   400     48.0%    -0.79
+    2   400     47.4%    -0.28
+    3   400     53.1%     4.12
+    4   400     45.9%    -2.42
+    5   400     52.4%     5.73
+    6   400     52.1%     0.69
+    7   400     50.7%    -1.06
+    8   400     50.0%     1.62
+
+pooled: 3200 games / 1600 deals   (errors 0)
+  win rate 49.95% +/- 1.68pp (null 50.0%, z = -0.1)
+  culture margin +0.95 +/- 1.31 (z = 1.4)
+  own culture 150.8 vs 149.8
+
+===== TTA_BOARD_TYPES=government
+block     n  win rate   margin
+    1   400     51.7%     2.33
+    2   400     51.9%     3.84
+    3   400     52.0%     2.10
+    4   400     50.1%     2.38
+    5   400     50.9%     1.74
+    6   400     51.6%     1.96
+    7   400     51.5%    -0.33
+    8   400     48.4%     0.84
+
+pooled: 3200 games / 1600 deals   (errors 0)
+  win rate 51.02% +/- 1.40pp (null 50.0%, z = 1.4)
+  culture margin +1.85 +/- 1.07 (z = 3.4)
+  own culture 149.4 vs 147.5
+
+===== TTA_BOARD_TYPES=leader
+block     n  win rate   margin
+    1   400     43.8%    -2.46
+    2   400     47.8%    -1.75
+    3   400     52.4%     3.58
+    4   400     46.2%    -1.38
+    5   400     53.8%     5.09
+    6   400     46.2%    -2.40
+    7   400     45.6%    -3.16
+    8   400     49.9%    -1.36
+
+pooled: 3200 games / 1600 deals   (errors 0)
+  win rate 48.20% +/- 1.69pp (null 50.0%, z = -2.1)
+  culture margin -0.48 +/- 1.33 (z = -0.7)
+  own culture 149.0 vs 149.5
+
