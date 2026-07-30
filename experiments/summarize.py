@@ -57,6 +57,12 @@ GROUPS = {
     "priced": ("hand_limit", "colonize_bonus", "build_discount",
                "free_civil_action", "resource_discount",
                "card_rate_credit"),
+    # board-aware card pricing (engine/bots/board_yields.py): what a leader
+    # or a government is worth on THIS board, by swapping it in and diffing
+    # `effects.compute`.  Its own group for the same reason as "priced" --
+    # one coherent change the climber should be able to move together.
+    "board": ("urban_limit", "gov_action_cost", "pop_food_discount",
+              "no_aggression", "restricted_resources", "card_board_credit"),
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
               "hand_potential"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",

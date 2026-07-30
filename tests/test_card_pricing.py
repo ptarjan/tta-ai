@@ -18,7 +18,7 @@ See docs/CARD_BLINDNESS.md for the census these numbers come from.
 import unittest
 
 from engine import cards as C
-from engine.bots import weighted as W
+from engine.bots import board_yields as BY, weighted as W
 
 
 def _blocks(card):
@@ -30,7 +30,8 @@ class TestEffectCoverage(unittest.TestCase):
 
     def test_every_effect_key_is_accounted_for(self):
         priced = (set(W._PROD_TO_FEATURE) | set(W._EFF_TO_FEATURE)
-                  | set(W._EFF_SPECIAL))
+                  | set(W._EFF_SPECIAL) | set(W._EFF_CHOICE)
+                  | set(BY.BOARD_PRICED))
         known = priced | set(W.DELIBERATELY_UNPRICED)
         missing = {}
         for name, card in C.db().by_name.items():
@@ -58,10 +59,29 @@ class TestEffectCoverage(unittest.TestCase):
             "DELIBERATELY_UNPRICED names key(s) no card carries; delete "
             "them so the set keeps meaning what it says")
 
+    def test_no_stale_entries_in_the_board_priced_set(self):
+        """Same rule for the board-aware side: a key nothing carries is rot."""
+        seen = set()
+        for card in C.db().by_name.values():
+            for _block, body in _blocks(card):
+                seen |= set(body)
+        self.assertEqual(sorted(set(BY.BOARD_PRICED) - seen), [])
+
     def test_unpriced_keys_all_carry_a_reason(self):
         for k, why in W.DELIBERATELY_UNPRICED.items():
             self.assertTrue(isinstance(why, str) and len(why) > 20,
                             f"{k!r} needs a real reason, got {why!r}")
+
+    def test_board_priced_keys_all_carry_a_reason(self):
+        """A key claimed as board-priced has to say WHERE it is priced, or
+        the set becomes a second, quieter place to hide a dropped key."""
+        for k, why in BY.BOARD_PRICED.items():
+            self.assertTrue(isinstance(why, str) and len(why) > 20,
+                            f"{k!r} needs a real reason, got {why!r}")
+
+    def test_a_key_is_not_claimed_both_priced_and_unpriced(self):
+        overlap = sorted(set(BY.BOARD_PRICED) & set(W.DELIBERATELY_UNPRICED))
+        self.assertEqual(overlap, [], "claimed in both directions")
 
     def test_every_priced_feature_key_has_a_weight(self):
         """A yield pointing at a key absent from DEFAULT_WEIGHTS is dead: it
@@ -69,11 +89,51 @@ class TestEffectCoverage(unittest.TestCase):
         `evaluate`'s `if wk:`, i.e. the same failure one level down."""
         targets = (set(W._PROD_TO_FEATURE.values())
                    | set(W._EFF_TO_FEATURE.values())
-                   | set(W._EFF_SPECIAL.values()))
+                   | set(W._EFF_SPECIAL.values())
+                   | {f for _a, f in BY._STATS_FEATURES}
+                   | {"hand_limit", "build_discount", "no_aggression",
+                      "gov_action_cost", "restricted_resources", "leader"})
         # `happy` is the deferred-credit map's spelling, resolved inside
         # `features()` into `happy_margin`; it is never a `_card_yields` key.
         absent = sorted(k for k in targets if k not in W.DEFAULT_WEIGHTS)
         self.assertEqual(absent, [])
+
+
+class TestTheCensusStillReproducesMaster(unittest.TestCase):
+    """`tools/card_blindness.py --legacy` is what the "master" column of
+    docs/CARD_BLINDNESS.md's census is generated from, so it has to keep
+    reproducing it: 171 cards with a dropped key, 168 with zero visible gain.
+
+    This caught a real bug rather than being written for tidiness.  Every
+    handler added since must be gated on its registry (`_EFF_SPECIAL`,
+    `_EFF_CHOICE`) so `use_legacy_maps` can switch it off; `_card_choices`
+    read the card data directly at first and `--legacy` therefore silently
+    stopped reproducing the "before" numbers, quietly rewriting the baseline
+    every later result is measured against."""
+
+    def test_legacy_reproduces_the_published_before_numbers(self):
+        from tools import card_blindness as cb
+        # `use_legacy_maps` mutates module-level registries in place, so this
+        # snapshots and restores them rather than reloading the module: a
+        # reload makes a SECOND weighted module while `engine.bots` keeps a
+        # reference to the first, and the two then disagree about what is
+        # priced -- which showed up as unrelated tests failing depending on
+        # the order they ran in.
+        save = (dict(W._EFF_TO_FEATURE), dict(W._EFF_SPECIAL),
+                dict(W._EFF_CHOICE))
+        try:
+            cb.use_legacy_maps()
+            types, dropped, zero, _k, _n, _c = cb.scan()
+            self.assertEqual(sum(types.values()), 236)
+            self.assertEqual(sum(dropped.values()), 171)
+            self.assertEqual(sum(zero.values()), 168)
+        finally:
+            for reg, kept in zip((W._EFF_TO_FEATURE, W._EFF_SPECIAL,
+                                  W._EFF_CHOICE), save):
+                reg.clear()
+                reg.update(kept)
+            W._card_yields.cache_clear()
+            W._card_choices.cache_clear()
 
 
 class TestTheCardsTheOmissionCost(unittest.TestCase):

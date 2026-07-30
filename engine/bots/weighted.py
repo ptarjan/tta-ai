@@ -1,11 +1,11 @@
 """WeightedBot: a 1-ply bot whose entire behaviour is a JSON weight dict.
 
-The evaluation is linear over 71 features covering the real strategic
+The evaluation is linear over 77 features covering the real strategic
 levers of Through the Ages, plus 10 of those features duplicated with an
 "early" and a "late" copy scaled by how far the game has progressed, plus a
 handful of scales on non-linear terms priced through the weights themselves
-(`hand_potential`, `row_urgency`, `card_rate_credit`, ...) -- 99 weights
-total.  Everything is JSON-serializable, so hill climbing
+(`hand_potential`, `row_urgency`, `card_rate_credit`, `card_board_credit`,
+...) -- 105 weights total.  Everything is JSON-serializable, so hill climbing
 (experiments/hillclimb.py) can mutate, checkpoint and reload a bot.
 
 A weight absent from a loaded vector is filled in from `DEFAULT_WEIGHTS`, and
@@ -26,6 +26,10 @@ Feature groups
     wonders      completed wonders, blue steps invested, cost remaining,
                  and whether the one in progress can actually be finished
                  in the resources and rounds left (docs/CARD_BLINDNESS.md)
+    board        what a leader or a government is worth on THIS board, by
+                 swapping it in and diffing `effects.compute` rather than
+                 reading numbers off the card (engine/bots/board_yields.py,
+                 docs/CARD_PRICING_LEADERS.md)
     cards        civil/military hand size and summed card levels
     rivals       the best rival's culture, culture rate, science rate and
                  strength (leading is what wins, not absolute output)
@@ -39,6 +43,7 @@ import random
 from functools import lru_cache as _lru_cache
 
 from .. import actions, cards as C, economy, effects, journal
+from . import board_yields as _BY
 from .fastcopy import copy_state
 from .trial import USE_JOURNAL, fresh_trial_rng
 
@@ -751,6 +756,19 @@ _EFF_TO_FEATURE = {
     "militaryHandLimit": "hand_limit",
     "colonizeBonus": "colonize_bonus",
     "resourceDiscount": "resource_discount",
+    # The four Patriotisms: "build or upgrade military units; pay N fewer
+    # resources", one shot, this turn.  Ring-fenced, so it is not worth N
+    # resources -- `restricted_resources` is a separate 0.0 weight rather
+    # than a discount on `resource_stock` precisely so the league can price
+    # the ring fence instead of a constant guessing at it.
+    "resourcesForMilitaryUnits": "restricted_resources",
+}
+
+# Keys offering a CHOICE of yields rather than a sum, handled by
+# `_card_choices`; listed here so the coverage test can see them as priced.
+_EFF_CHOICE = {
+    # Reserves I/II/III: "gain N food OR N resources"
+    "gainFoodOrResources": "food_stock|resource_stock",
 }
 
 # Effect keys `_card_yields` prices but that need more than a table lookup:
@@ -788,19 +806,20 @@ def _unpriced(reason, *keys):
 
 # 1. The coefficient is numeric but the YIELD is coefficient x a board count.
 #    `_card_yields` is `lru_cache`d on the card name alone and has no state,
-#    so it cannot evaluate any of these.  Pricing them needs a board-aware
-#    card evaluator, which is the obvious next piece of work.
+#    so it cannot evaluate any of these.
+#
+#    THIS BUCKET IS NEARLY EMPTY NOW.  `engine/bots/board_yields.py` prices
+#    the board-scaled keys by swapping the card in and asking
+#    `engine.effects.compute` what changed, so everything on a leader or a
+#    government moved to `board_yields.BOARD_PRICED`.  What is left is
+#    carried by wonders and by an event, where a swap is the wrong question:
+#    a wonder accumulates rather than replaces.
 _unpriced(
     "board-scaled: numeric coefficient times a board count _card_yields "
-    "cannot see",
-    "strengthPerInfantry", "strengthPerArtillery", "strengthPerMilitaryUnit",
-    "strengthPerUnitType", "strengthPerTempleOrGovernmentHappy",
-    "extraHappyPerHappySource", "culturePerTheater",
-    "culturePerHappyFromTemplesTheatersWonders", "culturePerLibraryTheaterPair",
-    "cultureFirstColony", "culturePerAdditionalColony", "sciencePerLab",
-    "culturePerCivilizationWithMoreCulture", "cultureIfTopTwoStrength",
+    "cannot see (a wonder is not a swap, so board_yields cannot diff it)",
+    "strengthPerInfantry", "strengthPerArtillery",
+    "extraHappyPerHappySource",
     "gainCulturePerLevelOfRemovedCard",
-    "resourcesForMilitaryUnitsPerStrongerCivilization",
 )
 
 # 2. The value is a formula in text, or a bare True meaning "read the card".
@@ -808,12 +827,21 @@ _unpriced(
 _unpriced(
     "text effect: the value is a formula or a bare flag, not a scalar",
     "onBuildCulture", "onBuildCulturePerTechLevelSum",
-    "sciencePerBestLabOrLibraryLevel", "doubleBestMine",
-    "freePopIncreasePerTurn", "resourcesPerLabEqualToLevel",
-    "culturePerLabEqualToLevel", "bestTheaterDoubleCulture",
-    "cultureOnLeaveEqualToLabResourceProduction",
+    "doubleBestMine",
+    "freePopIncreasePerTurn",
     "doublesTacticBonusOfOneArmy", "infantryCountsAsCavalryForTactics",
-    "libraryDiscountsIfTheater", "perTurnChoice",
+)
+
+# 2a. Bill Gates' second clause, which is neither production nor a trigger:
+#     "when Bill Gates leaves play or the game ends, gain culture equal to
+#     that extra resource production".  The resource production itself IS
+#     priced (`resourcesPerLabEqualToLevel`, through the swap diff); this is
+#     a one-off score at an unknown future time, worth the same number again
+#     but only once, and only if he is still there at the end.  Pricing it
+#     needs a model of when a leader gets replaced, which nothing here has.
+_unpriced(
+    "end-of-life payout: needs a model of when the leader leaves play",
+    "cultureOnLeaveEqualToLabResourceProduction",
 )
 
 # 3. A rule change with no scalar value: it makes something legal, illegal or
@@ -821,7 +849,7 @@ _unpriced(
 _unpriced(
     "rule change: alters what is legal, not what is produced",
     "noAttacksBetweenParties", "cancelledIfPartiesAttackEachOther",
-    "cannotPlayAggressionOrWar", "opponentsPayDoubleMilitaryActionsToAttackYou",
+    "opponentsPayDoubleMilitaryActionsToAttackYou",
     "wonderTakeNoExtraCivilActions", "revolutionUsesMilitaryActionsInstead",
     "oncePerGameTwoPoliticalActions", "removeAsPoliticalActionForYellowToken",
     "removeAsPoliticalActionFreeColonize", "peekTopEventCardInPolitics",
@@ -832,21 +860,29 @@ _unpriced(
     "colonyPermanentBonusTransfers", "colonyImmediateBonusApplies",
     "orTakesSpecialTechnologiesOfSameTotalScienceCost", "removeFromGame",
     "onReplacePutUnderCompletedWonderHappy",
+    "libraryDiscountsIfTheater",
 )
 
 # 4. A trigger: it pays out when some later action happens, so the amount on
 #    the card is a rate per event, not a yield.  Several of these are large
 #    (Einstein's 3 culture per technology, Newton's action refund); pricing
 #    them needs a model of how often the trigger fires.
+#
+#    These are the honest remainder of the leader work.  A swap diff cannot
+#    reach them, because `effects.compute` builds the production phase and a
+#    trigger is not in the production phase.  The measurement that would
+#    close this bucket -- how often each trigger actually fires per round in
+#    real games -- is a separate piece of work and is named as such in
+#    docs/CARD_PRICING_LEADERS.md rather than guessed at here.
 _unpriced(
-    "trigger: pays per future event, not on play",
+    "trigger: pays per future event, not on play; needs a measured "
+    "firing rate, not a guessed one",
     "scienceOnTechCardTake", "resourceOnTechDevelop", "cultureOnTechDevelop",
     "resourceOnMilitaryUnitBuildOrUpgrade", "cultureOnRevolution",
-    "leaderTakeCivilActionDiscount", "popIncreaseFoodDiscount",
+    "leaderTakeCivilActionDiscount",
     "comboFoodDiscount", "comboResourceDiscount",
     "theaterTechScienceDiscount", "theaterResourceDiscountIfLibrary",
-    "theaterScienceDiscountIfLibrary", "resourcesForMilitaryUnits",
-    "gainFoodOrResources",
+    "theaterScienceDiscountIfLibrary",
 )
 
 # 5. Military-hand cards.  `hand_potential` walks `hand_civil` ONLY, so
@@ -951,21 +987,86 @@ def _card_yields(name):
     return tuple(out)
 
 
-def card_potential(name, w):
-    """Eval-points a single card in hand would be worth if it were played."""
+@_lru_cache(maxsize=None)
+def _card_choices(name):
+    """Mutually exclusive alternatives on a card, as a tuple of triple-groups.
+
+    `_card_yields` sums everything it finds, which is right for a card that
+    gives you two things and wrong for a card that makes you pick one.  The
+    three Reserves are the whole of this today: "gain 2 food OR 2 resources".
+    Summing them would price Reserves (III) at four food AND four resources;
+    dropping the key, which is what happened until now, priced all three
+    Reserves at exactly nothing.  You get the better of the two, so the value
+    is a max over the group and only `card_potential` (which holds the
+    weights) can take it.
+    """
+    card = C.db().by_name.get(name)
+    if card is None:
+        return ()
+    eff = card.get("effects") or {}
+    # gated on `_EFF_CHOICE` membership rather than written straight in, for
+    # the same reason the `_EFF_SPECIAL` block in `_card_yields` is: it lets
+    # `tools/card_blindness.py --legacy` switch the whole set off and
+    # reproduce master's census exactly.
+    amt = (eff.get("gainFoodOrResources")
+           if "gainFoodOrResources" in _EFF_CHOICE else None)
+    if isinstance(amt, (int, float)) and amt is not True:
+        return ((
+            (("food_stock", float(amt), _Y_GAIN),),
+            (("resource_stock", float(amt), _Y_GAIN),),
+        ),)
+    return ()
+
+
+def _sum_yields(triples, w, credit):
     total = 0.0
-    credit = None
-    for k, amt, kind in _card_yields(name):
+    for k, amt, kind in triples:
         wk = w.get(k, 0.0)
         if kind == _Y_COST:
             if wk < 0.0:
                 wk = 0.0
         elif kind == _Y_RATE:
-            if credit is None:
-                credit = w.get("card_rate_credit", 1.0)
             amt *= credit
         if wk and amt:
             total += wk * amt
+    return total
+
+
+def card_potential(name, w, state=None, idx=None):
+    """Eval-points a single card in hand would be worth if it were played.
+
+    `state`/`idx` are optional and turn on board-aware pricing
+    (`engine/bots/board_yields.py`), which is what lets a leader be priced by
+    what it would actually do on THIS board instead of by the numbers printed
+    on it.  Board pricing is gated on `w["card_board_credit"]`, exactly as the
+    `effects.culture` fix is gated on `card_rate_credit`, so that 0.0 recovers
+    the old pricing byte-for-byte and the two can be duelled paired, in one
+    process, on the same deal.  Callers without a state (and the whole of
+    `analysis/`) keep the old signature and the old answer.
+    """
+    credit = w.get("card_rate_credit", 1.0)
+    board = w.get("card_board_credit", 0.0)
+    if not board:
+        # the exact pre-change answer, and the `if not board` is why: every
+        # branch below has to be behind the gate for the A/B to be paired.
+        # `_card_choices` is in here too even though it needs no board --
+        # it needs more than a table lookup, which is the same thing as far
+        # as "does this move a digest" is concerned.
+        return _sum_yields(_card_yields(name), w, credit)
+    on_board = state is not None and idx is not None
+    if on_board:
+        # A swap card is priced ONLY by the diff: `_card_yields` would count
+        # Gandhi's printed +2 culture a second time on top of the delta that
+        # already contains it.
+        swap = _BY.board_yields(name, state, idx)
+        if swap is not None:
+            return board * _sum_yields(swap, w, credit)
+    total = _sum_yields(_card_yields(name), w, credit)
+    for group in _card_choices(name):
+        total += board * max(_sum_yields(g, w, credit) for g in group)
+    if on_board:
+        total += board * _sum_yields(_BY.board_extra(name, state, idx), w,
+                                     credit)
     return total
 
 
@@ -976,7 +1077,7 @@ def hand_potential(state, idx, w):
         return 0.0
     total = 0.0
     for n in hand:
-        total += card_potential(n, w)
+        total += card_potential(n, w, state, idx)
     return total
 
 
@@ -1002,7 +1103,9 @@ def rival_hand_potential(state, idx, w, rivals=None):
             continue
         total = 0.0
         for n in q.hand_civil:
-            total += card_potential(n, w)
+            # priced on the RIVAL's board -- a leader that pays per theater is
+            # worth what it is worth to the player who would play it
+            total += card_potential(n, w, state, q.idx)
         if total > best:
             best = total
     return best
@@ -1111,7 +1214,7 @@ def row_pressure(state, idx, w, ctx=None):
             cursor = k + 1
         if not gated(state, p, i, mine, name):
             continue
-        val = card_potential(name, w)
+        val = card_potential(name, w, state, idx)
         if val <= 0.0:
             continue
         nxt = i - slide
@@ -1247,6 +1350,36 @@ BASE_WEIGHTS = {
     # state for them and `features()` never emits them.
     "free_civil_action": 0.0,
     "resource_discount": 0.0,
+    # --- board-aware card pricing (engine/bots/board_yields.py).  All 0.0,
+    # so the whole of it is inert until `card_board_credit` is turned up.
+    #
+    # `urban_limit` and `gov_action_cost` are the two the governments needed:
+    # a government's whole value is its top-level `civilActions` /
+    # `militaryActions` / `urbanBuildingLimit`, which live in no
+    # `production` or `effects` block and which `_card_yields` therefore
+    # never read -- all eight governments priced out as free and worthless
+    # at once.  `gov_action_cost` is the civil-action pool a revolution
+    # burns, which is board-aware (a 7-action Republic turn is a dearer
+    # thing to spend than a 4-action Despotism turn).
+    "urban_limit": 0.0,
+    "gov_action_cost": 0.0,
+    # Moses: `Stats.pop_food_discount`, food off every population increase.
+    "pop_food_discount": 0.0,
+    # Gandhi: `Stats.no_aggression`.  Deliberately unsigned -- it bundles a
+    # cost (he may never play an aggression or war) with a benefit
+    # (opponents pay double to attack him), and which dominates is exactly
+    # the sort of thing a league can measure and a prior cannot.
+    "no_aggression": 0.0,
+    # Patriotism / Wave of Nationalism / Military Build-Up / Churchill's
+    # military option: resources ring-fenced to building military units.
+    # Worth less than the same number of free resources by an amount only
+    # the policy's own appetite for units decides.
+    "restricted_resources": 0.0,
+    # How much of the board-aware pricing to believe, the exact analogue of
+    # `card_rate_credit` below and for the same reason: at 0.0 `card_
+    # potential` is byte-identical to the static-table answer, so the fix
+    # can be duelled against itself paired, in one process, on one deal.
+    "card_board_credit": 0.0,
     # How much of the short-spelling `effects.culture` / `effects.science`
     # (the two keys `_card_yields` used to drop on the floor) to believe when
     # pricing a card in hand.  1.0 = price them like any other per-turn

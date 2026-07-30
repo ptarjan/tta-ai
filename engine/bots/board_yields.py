@@ -1,0 +1,482 @@
+"""What a card is worth ON THIS BOARD, computed by asking the engine.
+
+`weighted._card_yields` prices a card by looking its `production`/`effects`
+keys up in a static table.  That works for a card whose whole content is a
+number and fails completely for a card whose value is written in prose --
+docs/CARD_BLINDNESS.md counts 149 of 236 cards with no visible gain at all,
+and **all 24 leaders** are in that set.
+
+Leaders are the extreme case.  Sixteen of the twenty-four are worth *nothing*
+to the evaluator beyond "it is a leader", because what they print is
+conditional or relative to your board:
+
+    Michelangelo    culture per happy face from temples/theaters/wonders
+    Napoleon        +2 strength per type of military unit you field
+    Sid Meier       each lab produces culture equal to its level
+    Shakespeare     2 culture per library/theater pair
+    ...
+
+The temptation is a table of hand-written handlers, one per key.  Do not do
+that.  `engine/effects.py:1197-1202` is the note left by the last person who
+did: Hollywood and Internet score off `_BUILDING_OUTPUT`, and before that fix
+the code "summed printed values with an ad-hoc Sid Meier special case, which
+under-scored every Chaplin, Shakespeare, Newton and Einstein completion."  Two
+implementations of one rule drift, and the evaluator's copy drifts silently.
+
+So this module does not reimplement a single rule.  **It swaps the card in and
+asks `engine.effects.compute` what changed.**
+
+    old = p.leader
+    p.leader = "Michelangelo"
+    after = effects.compute(state, p)      # the real rules engine
+    p.leader = old
+    delta = after - effects.state_stats(state, p)
+
+Every one of `_apply_modifier`'s fifteen board-scaled keys is priced exactly,
+for free, and can never drift, because it *is* the rules.  Three further
+things fall out that no per-key handler gets right by construction:
+
+1. **Replacement.**  A leader replaces the leader you have.  Taking Einstein
+   while you hold Michelangelo is worth Einstein *minus Michelangelo*, which
+   is a diff, not an absolute, and is sometimes negative.
+2. **Clamps.**  `compute` ends with `happy = max(0, min(8, happy))` and
+   `rating = max(0, rating)`.  A leader's ninth happy face is worth zero and
+   the diff says so.
+3. **Governments, for free.**  `compute` reads `p.government`'s *top-level*
+   `civilActions` / `militaryActions` / `urbanBuildingLimit`, which are not in
+   a `production` or `effects` block at all -- so `_card_yields` has never
+   read them, and **Republic's 7 civil actions against Despotism's 4 has been
+   invisible to the evaluator**.  Civil actions are the game's core currency
+   and this is the largest single source of them.
+
+------------------------------------------------------------------ the trap
+
+**Use `compute`, never `state_stats`, for the hypothetical.**
+
+`state_stats` is a per-mutation cache keyed on `p.idx`, validated against
+`stats_key(state, p)` and *only rebuilt when the entry is marked dirty*.
+Mutating `p.leader` and calling `state_stats` does not mark it dirty, so it
+returns the stats of the OLD leader and the diff comes out as exactly zero --
+a silent, total failure that no test of the mapping would catch.  `compute`
+bypasses the cache entirely and never writes to it, so the swap leaves the
+cache correct and valid for the real leader after we restore it.
+
+`tests/test_board_yields.py:TestTheComputeVsStateStatsTrap` fails if anyone
+switches these two calls around.
+
+------------------------------------------------------------ memoisation
+
+`compute` is hot -- roughly ten calls per generated move already -- and this
+adds one per swap-type card in hand or in the row per leaf.  The result is
+memoised on `(name, effects.stats_key(state, p))`.
+
+`stats_key` carries the documented invariant that it names every field
+`compute` reads, which is exactly the completeness this key needs, and it
+already includes `p.leader` and `p.government` so the *current* side of the
+diff is pinned too.  The docstring is not taken on trust:
+`tests/test_board_yields.py:TestStatsKeyIsACompleteMemoKey` plays self-play
+games, records every `(stats_key -> compute)` pair it sees, and fails if one
+key ever maps to two different `Stats`.  A key that missed a field would give
+silently stale valuations, which is a worse bug than the blindness this
+module exists to fix.
+"""
+from __future__ import annotations
+
+import os
+
+from .. import cards as C, effects
+
+__all__ = ["board_yields", "board_choices", "SWAP_TYPES", "BOARD_PRICED"]
+
+_DB = C.db()
+
+# Card types priced by swapping the card in and diffing `effects.compute`.
+# Both are single-slot: you have exactly one leader and exactly one
+# government, and playing the card replaces what is there.  That is what
+# makes a diff the right question to ask.  A wonder is not in this set --
+# wonders accumulate rather than replace, and take several turns to arrive.
+SWAP_TYPES = frozenset(("leader", "government"))
+
+# Experiment knob, in the style of TTA_PARANOID / FASTCOPY_PARANOID: restrict
+# board-aware pricing to a comma-separated subset of card types, so that the
+# leader half, the government half and the action half can each be A/B'd on
+# their own instead of only in aggregate.  Unset means all three, which is
+# the only setting any production path ever uses.  Read once at import,
+# because a per-call `os.environ` lookup in this hot a function is not free.
+#
+#     TTA_BOARD_TYPES=government python3 -m experiments.evaluate ...
+_ENABLED = frozenset(
+    t.strip() for t in os.environ.get("TTA_BOARD_TYPES", "").split(",")
+    if t.strip()) or frozenset(("leader", "government", "action"))
+
+# --------------------------------------------------------------- features
+#
+# `Stats` field -> evaluator feature.  Only fields whose delta means
+# something to the evaluator; the pact-derived ones (`tech_discount`,
+# `war_immune`, `food_as_resource`, `resource_as_food`) are Lane D's and no
+# leader or government carries them.
+_STATS_FEATURES = (
+    ("culture", "culture_rate"),
+    ("science", "science_rate"),
+    ("food", "food_rate"),
+    ("resources", "resource_rate"),
+    ("strength", "strength"),
+    ("happy", "happy_margin"),
+    ("civil_actions", "civil_actions"),
+    ("military_actions", "military_actions"),
+    ("colonize", "colonize_bonus"),
+    # new channels, 0.0 by default (see weighted.BASE_WEIGHTS)
+    ("urban_limit", "urban_limit"),
+    ("pop_food_discount", "pop_food_discount"),
+    ("wonder_stages", "wonder_stages_per_action"),
+)
+
+# the third slot of a yield triple, mirroring weighted._Y_GAIN / _Y_COST.
+# Imported by value rather than from weighted to keep this module free of a
+# circular import; `tests/test_board_yields.py` asserts they agree.
+_GAIN = 0
+_COST = 1
+
+
+def _swapped(state, p, field, name):
+    """`effects.compute` with `p.<field>` temporarily set to `name`.
+
+    See "the trap" in the module docstring: this MUST be `compute` and not
+    `state_stats`.  `try/finally` because a raise here would leave the player
+    holding a card they do not own.
+    """
+    old = getattr(p, field)
+    setattr(p, field, name)
+    try:
+        return effects.compute(state, p)
+    finally:
+        setattr(p, field, old)
+
+
+# (name, stats_key) -> yield triples.  `stats_key` names every field
+# `compute` reads, so it is a complete key for the diff; the test named in
+# the module docstring checks that empirically rather than trusting it.
+_DELTA_CACHE = {}
+_DELTA_CACHE_MAX = 200_000
+
+
+def _stats_delta(state, p, field, name):
+    key = (name, effects.stats_key(state, p))
+    hit = _DELTA_CACHE.get(key)
+    if hit is not None:
+        return hit
+    before = effects.state_stats(state, p)
+    after = _swapped(state, p, field, name)
+    out = []
+    for attr, feat in _STATS_FEATURES:
+        d = getattr(after, attr) - getattr(before, attr)
+        if d:
+            out.append((feat, float(d), _GAIN))
+    d = ((after.civil_hand_limit + after.military_hand_limit)
+         - (before.civil_hand_limit + before.military_hand_limit))
+    if d:
+        out.append(("hand_limit", float(d), _GAIN))
+    d = (sum(after.build_discount.values())
+         - sum(before.build_discount.values()))
+    if d:
+        out.append(("build_discount", float(d), _GAIN))
+    # Gandhi: `cannotPlayAggressionOrWar`.  A real cost (his owner may never
+    # play an aggression or a war again) bundled with a real benefit
+    # (`opponentsPayDoubleMilitaryActionsToAttackYou`, which is not in Stats).
+    # The net sign is genuinely unknown, which is why the weight defaults to
+    # 0.0 and the league decides rather than a prior deciding.
+    # Symmetric on purpose: replacing Gandhi LIFTS the restriction, and that
+    # is a real change in the other direction.  An asymmetric flag would make
+    # Gandhi a one-way ratchet the evaluator could never price its way out of.
+    d = int(after.no_aggression) - int(before.no_aggression)
+    if d:
+        out.append(("no_aggression", float(d), _GAIN))
+    out = tuple(out)
+    if len(_DELTA_CACHE) >= _DELTA_CACHE_MAX:
+        _DELTA_CACHE.clear()
+    _DELTA_CACHE[key] = out
+    return out
+
+
+# --------------------------------------------------------------- riders
+#
+# What the swap diff CANNOT see, card by card.  `compute` builds the
+# per-turn ratings, so anything that pays out on an event rather than in the
+# production phase is not in `Stats` and has to be priced here.  This is the
+# part that is a judgement rather than a derivation, so every entry says what
+# it is worth and why, and every feature it lands on defaults to 0.0.
+
+
+def _live_rivals(state, p):
+    return [q for q in state.players if q.idx != p.idx and not q.resigned]
+
+
+def _genghis(state, p):
+    """Genghis Khan: 3 culture at the end of your turn if you are one of the
+    two strongest civilizations, ties in your favour.
+
+    Not a `Stats` field -- it is a turn-end trigger -- but it is *exactly*
+    computable from the board, and it fires every turn it is true, so it is
+    honest per-turn culture production and belongs on `culture_rate` rather
+    than on a trigger weight.
+
+    Note what this says at 2 players: "one of the two strongest" out of two
+    civilizations is unconditionally true, so Genghis is a flat +3 culture a
+    turn there and a conditional elsewhere.  A static table cannot express
+    that difference and this is the whole reason the pricing is board-aware.
+    """
+    mine = effects.state_stats(state, p).strength
+    stronger = sum(1 for q in _live_rivals(state, p)
+                   if effects.state_stats(state, q).strength > mine)
+    return (("culture_rate", 3.0, _GAIN),) if stronger <= 1 else ()
+
+
+def _churchill(state, p):
+    """Winston Churchill: once each turn, 3 culture, or 3 restricted science
+    plus 3 restricted resources.
+
+    The culture option is unconditional, needs no board and no other card, and
+    is available every single turn -- so the floor on Churchill is a flat +3
+    culture production, which is more than any wonder in the game prints.  The
+    military option is priced as the same thing at a discount: it is 6 points
+    of raw material, but both halves are ring-fenced (science usable only on
+    military unit techs, resources only on military units), and a bot that
+    wants neither gets nothing, so it cannot be worth its face.  Taking the
+    culture option as the value of the card is the conservative read and the
+    one the engine's own `("churchill", "culture")` move makes available every
+    turn regardless of board state.
+    """
+    return (("culture_rate", 3.0, _GAIN),)
+
+
+# name -> rider function.  Only the leaders whose value is NOT in `Stats`
+# and IS computable; the rest stay in weighted.DELIBERATELY_UNPRICED with a
+# written reason, which is the honest place for them.
+RIDERS = {
+    "Genghis Khan": _genghis,
+    "Winston Churchill": _churchill,
+}
+
+
+def _rider_delta(state, p, name):
+    """Rider triples for taking `name`, MINUS the rider of the leader it
+    replaces.
+
+    The subtraction is the whole point and is easy to forget.  `Stats` is
+    diffed by `_stats_delta`, so the replacement is handled there; a rider
+    lives outside `Stats` and would otherwise be counted as a pure gain.
+    Taking Gandhi (+2 printed culture) while holding Churchill (+3 culture a
+    turn from his rider) is a LOSS of one culture a turn, and only a rider
+    that subtracts can say so.
+    """
+    out = []
+    new = RIDERS.get(name)
+    if new is not None:
+        out.extend(new(state, p))
+    cur = RIDERS.get(p.leader)
+    if cur is not None:
+        for feat, amt, kind in cur(state, p):
+            out.append((feat, -amt, kind))
+    return tuple(out)
+
+
+# ------------------------------------------------------- government costs
+
+
+def _government_cost(state, p, name, out):
+    """The science a government actually costs, and the actions it burns.
+
+    Two routes exist and the engine implements both:
+
+    * peaceful -- `effects.tech_cost` charges `peacefulCost` science (a
+      government is developed like a technology; `techCost` is `null` on
+      every government card, which is exactly why `_card_yields`, which reads
+      `techCost`, has priced all eight of them as FREE).
+    * revolution -- `actions._h_revolution` charges `revolutionCost` science
+      and empties the civil action pool for the turn (`p.civil_actions = 0`),
+      or the military pool under Robespierre.
+
+    `revolutionCost` is cheaper in science on every card in the deck
+    (Monarchy 2 vs 8, Democracy 9 vs 17), so it is the route that is priced,
+    and the action pool it burns is priced separately on `gov_action_cost` --
+    board-aware, because burning a 7-action Republic turn is not the same
+    price as burning a 4-action Despotism turn.  Splitting them rather than
+    summing them into one number is what lets the league discover the
+    exchange rate instead of being told it.
+    """
+    card = _DB.get(name)
+    sci = card.get("revolutionCost")
+    if sci is None:
+        sci = card.get("peacefulCost")
+    if sci:
+        out.append(("science", -float(sci), _COST))
+    burned = effects.state_stats(state, p).civil_actions
+    if burned:
+        out.append(("gov_action_cost", -float(burned), _GAIN))
+
+
+# ------------------------------------------------------------- entry point
+
+
+def board_yields(name, state, idx):
+    """(feature, amount, kind) triples for `name` on this board, or None.
+
+    None means "this card is not board-priced, use the static table".
+    """
+    card = _DB.by_name.get(name)
+    if card is None:
+        return None
+    typ = card["type"]
+    if typ not in SWAP_TYPES or typ not in _ENABLED:
+        return None
+    p = state.players[idx]
+    field = "leader" if typ == "leader" else "government"
+    out = list(_stats_delta(state, p, field, name))
+    if typ == "leader":
+        if not p.leader:
+            # the generic "it is a leader" term, which `_card_yields` gets
+            # from `features()`.  Not a gain when you already have one: a
+            # leader replaces a leader.
+            out.append(("leader", 1.0, _GAIN))
+        out.extend(_rider_delta(state, p, name))
+    else:
+        _government_cost(state, p, name, out)
+    return _merge(out)
+
+
+def _merge(triples):
+    """One triple per (feature, kind), summed.
+
+    `card_potential` sums whatever it is given, so merging changes no value.
+    It matters because a caller that builds a dict off this -- a test, a
+    census, anything of Lane A's -- would otherwise silently keep only the
+    last of two `culture_rate` entries.  The Gandhi-over-Churchill case
+    produces exactly that: +2 from the Stats diff and -3 from the rider.
+    """
+    merged = {}
+    order = []
+    for feat, amt, kind in triples:
+        k = (feat, kind)
+        if k not in merged:
+            order.append(k)
+        merged[k] = merged.get(k, 0.0) + amt
+    return tuple((f, merged[(f, kd)], kd) for f, kd in order
+                 if merged[(f, kd)])
+
+
+# ------------------------------------- board-scaled action cards (additive)
+#
+# Three action cards print a coefficient per player count and multiply it by
+# a count of rivals.  They are not swap cards -- nothing is replaced -- so
+# these triples are ADDED to the static ones rather than replacing them.
+
+
+def _per_player_count(val, state):
+    """`{"2p": 6, "3p": 3, "4p": 2}` -> the number for this table size."""
+    if not isinstance(val, dict):
+        return 0.0
+    return float(val.get(f"{len(state.players)}p") or 0)
+
+
+_EXTRA_KEYS = ("culturePerCivilizationWithMoreCulture",
+               "resourcesForMilitaryUnitsPerStrongerCivilization")
+
+#: the three cards `board_extra` has anything to say about, resolved once.
+#: `board_extra` is called for every non-swap card in the hand and the row on
+#: every leaf, so the common answer -- "nothing" -- has to be one set probe.
+_EXTRA_CARDS = frozenset(
+    n for n, c in _DB.by_name.items()
+    if any(k in (c.get("effects") or {}) for k in _EXTRA_KEYS))
+
+
+def board_extra(name, state, idx):
+    """Board-scaled triples to ADD to `weighted._card_yields(name)`."""
+    if name not in _EXTRA_CARDS:
+        return ()
+    card = _DB.by_name[name]
+    if card["type"] not in _ENABLED:
+        return ()
+    eff = card["effects"]
+    p = state.players[idx]
+    out = []
+    # Endowment for the Arts: "gain 2 culture for each civilization with more
+    # culture points than you (3 at 3p, 6 at 2p)".  A one-shot culture stock
+    # gain, so it lands on `culture`, not `culture_rate`.  At 2p the count is
+    # 0 or 1 and the card is worth 6 or nothing -- the single widest swing of
+    # any action card, and currently priced at zero either way.
+    per = eff.get("culturePerCivilizationWithMoreCulture")
+    if per is not None:
+        n = sum(1 for q in _live_rivals(state, p) if q.culture > p.culture)
+        if n:
+            out.append(("culture", _per_player_count(per, state) * n, _GAIN))
+    # Wave of Nationalism / Military Build-Up: resources off military units
+    # for each civilization stronger than you.  Ring-fenced to military units,
+    # hence `restricted_resources` rather than `resource_stock`: the bot that
+    # is not buying units gets nothing, and only the league knows how often
+    # that is.
+    per = eff.get("resourcesForMilitaryUnitsPerStrongerCivilization")
+    if per is not None:
+        mine = effects.state_stats(state, p).strength
+        n = sum(1 for q in _live_rivals(state, p)
+                if effects.state_stats(state, q).strength > mine)
+        if n:
+            out.append(("restricted_resources",
+                        _per_player_count(per, state) * n, _GAIN))
+    return tuple(out)
+
+
+def board_choices(name, state, idx):
+    """Mutually exclusive alternatives, as a tuple of triple-groups.
+
+    Nothing board-priced needs one yet; the hook exists because
+    `weighted.card_potential` resolves static choices (Reserves' "2 food OR 2
+    resources") the same way and the two must not diverge.
+    """
+    return ()
+
+
+# ------------------------------------------------------ the guardrail side
+#
+# Keys `tests/test_card_pricing.py` should count as PRICED even though they
+# are absent from the static tables, because `board_yields` prices them
+# through the engine.  Every one of these is carried only by leaders (see
+# `tools/card_blindness.py --cards leader`), so it is priced whenever
+# `card_board_credit` is non-zero and unpriced otherwise -- which is a
+# statement about a weight, not about a blind spot.
+BOARD_PRICED = {
+    # --- engine/effects.py:_apply_modifier, phase 3.  Priced exactly, by
+    # the engine's own code, via the leader swap diff.
+    "strengthPerMilitaryUnit": "leader swap diff: effects._apply_modifier",
+    "strengthPerUnitType": "leader swap diff: effects._apply_modifier",
+    "strengthPerTempleOrGovernmentHappy":
+        "leader swap diff: effects._apply_modifier",
+    "sciencePerBestLabOrLibraryLevel":
+        "leader swap diff: effects._apply_modifier",
+    "sciencePerLab": "leader swap diff: effects._apply_modifier",
+    "culturePerTheater": "leader swap diff: effects._apply_modifier",
+    "culturePerLabEqualToLevel": "leader swap diff: effects._apply_modifier",
+    "culturePerLibraryTheaterPair":
+        "leader swap diff: effects._apply_modifier",
+    "culturePerHappyFromTemplesTheatersWonders":
+        "leader swap diff: effects._apply_modifier",
+    "bestTheaterDoubleCulture": "leader swap diff: effects._apply_modifier",
+    "resourcesPerLabEqualToLevel":
+        "leader swap diff: effects._apply_modifier",
+    "cultureFirstColony": "leader swap diff: effects._apply_modifier",
+    "culturePerAdditionalColony": "leader swap diff: effects._apply_modifier",
+    # --- engine/effects.py:_apply_special
+    "popIncreaseFoodDiscount":
+        "leader swap diff: effects._apply_special -> Stats.pop_food_discount",
+    "cannotPlayAggressionOrWar":
+        "leader swap diff: effects._apply_special -> Stats.no_aggression",
+    # --- riders, priced above rather than by the engine
+    "cultureIfTopTwoStrength":
+        "board rider: _genghis, exact from rival strengths",
+    "perTurnChoice":
+        "board rider: _churchill, the unconditional 3-culture option",
+    # --- board-scaled action cards, priced additively by `board_extra`
+    "culturePerCivilizationWithMoreCulture":
+        "board_extra: rivals with more culture x the per-table coefficient",
+    "resourcesForMilitaryUnitsPerStrongerCivilization":
+        "board_extra: stronger rivals x the per-table coefficient",
+}
