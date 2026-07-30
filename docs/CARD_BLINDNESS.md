@@ -271,6 +271,12 @@ on the deal makes the true SE somewhat smaller than that, so 2.5pp is
 conservative. An effect below ~2.5pp is not something this experiment can
 speak to.
 
+> That last sentence was right, and §10 measures how right: the deal-clustered
+> SE here is **0.66pp**, not 0.88pp, for a true MDE of **1.86pp**. The habit of
+> calling the naive figure "conservative" and moving on is exactly what let the
+> same formula be wrong in the *other* direction elsewhere in the project
+> without anyone noticing.
+
 How large is the change in the quantity being fed to the search? Under the 2p
 champion's own weights, `card_potential` moves:
 
@@ -294,6 +300,14 @@ frozen 2p champion, against the identical vector without them.
 | | n | win rate (paired) | culture margin | own culture |
 |---|---|---|---|---|
 | `card_rate_credit` 1.0 vs 0.0 | **3200 games / 1600 deals** | **59.53% ± 1.30pp** (z = 14.4) | **+10.39 ± 1.15** (z = 17.8) | 150.8 vs 140.4 |
+
+Both intervals above are **deal-clustered** and were re-derived from the raw
+`per_game` arrays on 2026-07-30 during the audit in §10. They came through
+unchanged, to four significant figures, which is the good outcome and not the
+usual one — §10 lists the numbers elsewhere in this project that did move. For
+reference, the independent-samples formula on the same 3200 games would have
+reported **±1.69pp (z = 11.1)** on the win rate and **±1.54 (z = 13.2)** on the
+margin: *wider* than the truth, because the pairing is doing real work here.
 
 Eight independent blocks of 400 on disjoint deals, so the consistency is
 checkable rather than assumed:
@@ -422,8 +436,17 @@ through all three seats, null 33.3%:
 
 | block | 1 | 2 | 3 | **pooled** |
 |---|---|---|---|---|
-| win rate | 38.0% | 40.3% | 38.2% | **38.83% ± 3.18pp** (z = 3.4) |
+| win rate | 38.0% | 40.3% | 38.2% | **38.83% ± 2.53pp** (z = 4.28) |
 | own culture vs rival | 170 / 162 | 177 / 167 | 172 / 165 | **172.9 / 164.8** |
+
+> **Corrected 2026-07-30.** This row previously read **38.83% ± 3.18pp
+> (z = 3.4)**, which was the independent-samples interval over 900 *games*.
+> The 3p design deals each seed three times, rotating the challenger through
+> all three seats, so the independent unit is the 300 *deals*. Deal-clustered:
+> **±2.53pp, z = 4.28, p = 1.9e-05** (ρ = −0.18, block heterogeneity χ² = 0.68
+> on 2 df — the three blocks agree). The point estimate does not move and the
+> conclusion — it transfers — is unchanged and slightly better supported. See
+> §10.
 
 +5.5pp on a 33.3% null, all three blocks on the same side, and the same
 culture story as 2p (+8 own culture). It is a smaller effect relative to its
@@ -826,3 +849,194 @@ opponent wastes games; under-weighting a live one biases acceptance).
    assertion re-checks the arg list instead of you hand-typing it.
 5. Confirm each arm logs `0 opponents measured` on its startup pool line and
    then advances a generation.
+
+## 10. The unit of analysis: every interval in this project was computed on the wrong n
+
+Audited 2026-07-30, across the whole repo. This section is the reference for
+how to compute an interval on an arena result, and a record of what changed
+when the published numbers were recomputed. Nothing here is a re-run: the
+point estimates are untouched and every corrected figure comes from the same
+raw `per_game` arrays the originals came from.
+
+### 10.1 The defect
+
+`experiments/arena.duel` builds its task list as
+
+```python
+for g in range(games):
+    seat = g % num_players
+    seed = seed0 + g // num_players
+```
+
+so a 3200-game 2p run is **1600 deals each played twice with the seats
+swapped**. `experiments/neural_eval.py` deals identically. The games are not
+independent, and until this audit every interval in the repo divided by the
+number of *games*:
+
+* `experiments/arena.py:mean_ci` — `1.96*sqrt(var/n_games)`, inherited by
+  `hillclimb_league`, `roster_match`, `roster_report`, `proxy_check`,
+  `summarize`, `evaluate`, `champ_vs_drift`, `level_sweep`, and every
+  `tools/*_ab.py` that clones it.
+* `experiments/pool_summary.py:56` — `1.96*sqrt(p(1-p)/n_games)`, blunter
+  still, and the one feeding the neural loop's promotion gate.
+* `analysis/cardvalue_duel.py`, `analysis/passfix_duel.py`,
+  `experiments/human_strength.py` (whose header says "seat-rotated,
+  seed-paired" directly above a per-game SE), `tools/ab_summary.py` — which
+  was written *the same night as this audit* and had already inherited the
+  formula from `pool_summary`. That is four independent copies.
+
+Three places already had it right and are worth copying from:
+`exp_quiesce/analyse.py`, `tools/transfer_ab.py:by_deal`, `tools/wonder_ab.py`.
+
+### 10.2 The correction is not a factor of √2, and its sign is not obvious
+
+At P = 2, with `Y_k` the mean of deal `k`'s two seat-swapped games:
+
+```
+Var(Y_k)     = (p(1-p) + Cov(X_k0, X_k1)) / 2
+naive SE^2   = p(1-p) / (2K)
+correct SE^2 = (p(1-p) + Cov) / (2K)
+ratio        = sqrt(1 + rho),   rho = corr(X_k0, X_k1)
+```
+
+* **ρ > 0** — the deal favours a *strategy* whatever seat it sits in. The naive
+  interval is too narrow, by at most √2.
+* **ρ < 0** — the deal favours a *seat*, so the challenger tends to win one
+  game of the pair and lose the other. Swapping the seats cancels that
+  nuisance variance and the correct interval is **narrower**, → 0 at ρ = −1.
+
+**Measured, ρ is negative almost everywhere in this project** — −0.04 to −0.72
+across the eight datasets below — because the deal×seat interaction in Through
+the Ages is large. So the naive interval was usually *conservative*, and most
+of these results get **stronger**, not weaker. Anyone "fixing" this by
+multiplying by √2 would make every number in the project wrong in a new way.
+
+The demonstration that settles it needs no model. `exp_quiesce/ab.jsonl`'s
+`ctrl_2p` row is the same deterministic bot on both sides, n = 800, published
+at **±3.46pp** — when every deal splits 1-1 by construction and the true width
+is **exactly zero**. All 3.46pp of that interval was seat-assignment noise.
+`tests/test_paired_stats.py` asserts that case at zero, so the formula cannot
+come back.
+
+### 10.3 The second defect: shards that do not agree
+
+Runs are fanned out over disjoint `--seed0` blocks. Block means are
+independent by construction, so they are a check on the deal-level interval
+that assumes nothing about what happens inside a block. When the blocks
+scatter further than deal-level noise allows, the deals are demonstrably not
+exchangeable and the honest interval is the coarser, block-clustered one.
+`paired_stats.pooled` runs that χ² and escalates automatically.
+
+Cluster intervals use **t₍ₖ₋₁₎, not 1.96**. With six shards the variance
+estimate is itself noisy and t₅ = 2.571; treating it as 1.96 understates the
+interval by 31% before any of the rest of this is counted.
+
+### 10.4 What changed, number by number
+
+Point estimates are unchanged throughout. "Final" is deal-clustered unless the
+blocks failed the heterogeneity test, in which case it is block-clustered.
+
+| result | n | published | corrected | verdict |
+|---|---|---|---|---|
+| culture/science 2p (§5) | 3200 / 1600 deals | 59.53% ± 1.30pp, z = 14.4 | **59.53% ± 1.30pp, z = 14.4** | **unchanged** — was already deal-clustered; naive would have said ±1.69pp |
+| ... its culture margin | 3200 | +10.39 ± 1.15, z = 17.8 | **+10.39 ± 1.15, z = 17.8** | **unchanged** |
+| culture/science 3p (§5.2) | 900 / 300 deals | 38.83% ± 3.18pp, z = 3.4 | **38.83% ± 2.53pp, z = 4.28** | **stronger**, conclusion unchanged |
+| board-aware wonder pricing | 2000 / 1000 deals | 53.52% ± 2.17pp, z = 3.18 | **53.52% ± 1.77pp, z = 3.90** | **stronger**, conclusion unchanged |
+| Lane C, partial | 200 / 100 deals | 46.00% ± 7.30pp | **46.00% ± 7.39pp** | **wider** (ρ = +0.12, the one positive) — still a null |
+| Lane C, one block | 400 / 200 deals | 48.0% ± 4.95pp | **48.00% ± 4.98pp** | ~unchanged — still a null |
+| Lane C, governments | 3200 / 1600 deals | 51.02% ± 1.40pp, z = +1.4 | **51.02% ± 1.40pp, z = +1.42** | **unchanged** — already deal-clustered |
+| **Lane C, leaders** | 3200 / 1600 deals | 48.20% ± 1.69pp, **z = −2.1** | **48.20% ± 2.92pp, z = −1.46, p = 0.15** | **CONCLUSION CHANGES** — see §10.5 |
+| Lane D event seeding | 3200 / 1600 deals | 57.38% ± 1.70pp, z = 8.49 | **57.38% ± 0.91pp, z = 15.90** | **much stronger** |
+| ... its culture margin | 3200 | +6.52 ± 1.49, z = 8.59 | **+6.52 ± 0.34, z = 38.1** | **much stronger** |
+| **the anchor, post-fix** | 240 / 6 shards | 0.4313 ± 0.0627 | **0.4313 ± 0.1260** | **CONCLUSION CHANGES** — 2.01× optimistic, see §10.6 |
+| the anchor, pre-fix | 240 / 6 shards | 0.4396 ± 0.0628 | *not recoverable* | shard logs overwritten by the re-seed; no corrected interval is claimed |
+
+Three of these moved materially, and two of the three moved **in favour of the
+result**. The two that got worse are the two that were being used to make
+decisions — the leaders arm and the promotion gate — which is not a
+coincidence: a marginal number is exactly the kind that gets acted on before
+anyone checks the denominator.
+
+### 10.5 Lane C leaders: the one substantive retraction
+
+`docs/CARD_PRICING_LEADERS.md` §5.2 reports the leaders-only arm at
+**48.20% ± 1.69pp, z = −2.1**, and reads that as "leaders hurt slightly". The
+interval is correctly deal-clustered. The problem is one level up: the eight
+blocks are **over-dispersed**, χ² = 14.41 on 7 df against a critical value of
+14.07 (p ≈ 0.044). Per-block win rates are 43.8, 47.8, 52.4, 46.3, 53.8, 46.3,
+45.6, 49.9 — a spread of 3.49pp where deal-level noise predicts 2.44pp.
+
+Clustering on the block instead gives **48.20% ± 2.92pp, z = −1.46, p = 0.15**.
+The effect is **not significant** and should not be described as one.
+
+This is a borderline call and worth stating as such: the escalation trigger
+itself is only just tripped, and with eight blocks the heterogeneity test is
+not powerful. But that cuts the same way — a result whose significance depends
+on which of two defensible clusterings you pick is not a result. The culture
+margin on the same arm was already a null (−0.48 ± 1.33) and stays one
+(−0.48 ± 2.56). The governments half of that document is unaffected: it is
+already deal-clustered, the blocks agree (χ² = 2.59 on 7 df), and its margin
+result (+1.85 ± 1.07, z = 3.4) stands.
+
+### 10.6 The anchor, and why the neural loop's gate floor is too narrow
+
+`loop2/anchor_seed_{0..5}.log`, six shards of 40:
+
+```
+0.3250  0.3000  0.3875  0.5625  0.4250  0.5875     mean 0.4313
+```
+
+`pool_summary` reported **±6.27pp** from `1.96*sqrt(p(1-p)/240)`. Those shards
+have χ² = **11.76 on 5 df** (p ≈ 0.038) against a critical 11.07 — they do not
+agree, and a formula that pools over games cannot tell. Shard-clustered with
+t₅ = 2.571: **±12.60pp**. The published interval was optimistic by **2.01×**.
+
+Note this is *not* the seat-pairing defect. Seat pairing would have made the
+anchor tighter. Two independent bugs happened to sit on the same number.
+
+The substantive comparison survives: post-fix 0.4313 against pre-fix 0.4396 is
+a difference of −0.83pp, against a 95% CI of the difference of ±8.86pp naive or
+**±13.59pp** corrected. It was never a detectable difference and still is not.
+What does not survive is the claim about *resolving power*.
+
+**The gate floor.** `neural_search_loop.sh` sets
+
+```
+floor = incumbent - sqrt((cand_ci/1.96)^2 + (inc_ci/1.96)^2)
+```
+
+i.e. one standard error of the difference, and the comment reasons "at n = 240
+a side is se ≈ 0.032, so the band is ~0.045". With the shard-clustered SE of
+**0.0490** per side the band is **6.93pp, not 4.52pp**. The gate is currently
+about **1.5× tighter than the data supports**, which is the promotion-on-noise
+failure `docs/NEURAL_LOOP_NULL.md` documents at length.
+
+**This has deliberately not been changed.** `pool_summary` still emits `ci=`
+with the legacy value so a loop in flight sees byte-identical behaviour, and
+publishes `ci_cluster=`, `chi2=` and `overdispersed=` alongside. Moving a
+promotion threshold under a running experiment is a human's decision. When the
+run in flight finishes, the change is to read `ci_cluster` instead of `ci` —
+and to feed the loop the cluster **SE** directly rather than `ci_cluster/1.96`,
+since `ci_cluster` carries the t₅ factor and dividing it by 1.96 would
+double-count it (that path gives 9.09pp, which is too wide).
+
+### 10.7 How to compute an interval from now on
+
+```python
+from experiments import paired_stats as PS
+
+est = PS.paired(res["per_game"], res["players"])      # one duel
+est = PS.pooled([b["per_game"] for b in blocks], 2)   # several seed blocks
+print(est.fmt(), est.z_against(0.5), est.p_against(0.5))
+```
+
+`est.naive_half` carries the legacy number for reconciling against older
+reports, `est.rho` and `est.deff` say how much the pairing bought or cost, and
+`est.het_chi2` / `est.escalated` say whether the blocks agreed. There is also
+`PS.block_bootstrap` if you want a distribution-free cross-check; it agreed
+with the closed form to within 0.05pp on every dataset in §10.4.
+
+Or, for a whole `--out` jsonl: `python3 tools/ab_summary.py /tmp/ab_main.jsonl`.
+
+The one rule that would have prevented all of this: **the denominator is the
+thing the experiment randomises, and this arena randomises deals.**

@@ -12,9 +12,18 @@ the gap was worst.
 **Result in one line:** the pricing lands and is inert (all eight fingerprint
 digests unmoved); the census and the behavioural counter both move a long way
 (16 → 4 blind leaders; leaders taken 3.6 → 5.6 per game); and the win-rate A/B
-is **flat in aggregate but decomposes into two opposite signs** — governments
-help (culture margin +1.85, z = 3.4), leaders hurt slightly (−1.8pp, z = −2.1)
-— which is the reverse of what I predicted, in both directions (§5.2).
+is **flat in aggregate, with one half significant and one half not** —
+governments help (culture margin +1.85, z = 3.4), leaders are a **null**
+(−1.8pp, z = −1.46, p = 0.15 once the over-dispersed blocks are accounted for)
+— so the governments half is the reverse of what I predicted (§5.2).
+
+> This line originally read "decomposes into two opposite signs … leaders hurt
+> slightly (−1.8pp, z = −2.1)". The leaders half did not survive the
+> unit-of-analysis audit of 2026-07-30; see §5.2's correction box and
+> `docs/CARD_BLINDNESS.md` §10.5. I was wrong about governments, and about
+> leaders I was right for the wrong reason — I predicted "neutral-to-positive"
+> and the answer is "neutral", but the −2.1 I then reported as a real negative
+> was an artefact of clustering on the wrong unit.
 
 ## 0. One-paragraph answer
 
@@ -318,7 +327,32 @@ what makes the decomposition possible at all:
 |---|---|---|---|
 | everything on | 49.95% ± 1.68pp (z = −0.1) | +0.95 ± 1.31 (z = +1.4) | 150.8 vs 149.8 |
 | **governments only** | 51.02% ± 1.40pp (z = +1.4) | **+1.85 ± 1.07 (z = +3.4)** | 149.4 vs 147.5 |
-| **leaders only** | **48.20% ± 1.69pp (z = −2.1)** | −0.48 ± 1.33 (z = −0.7) | 149.0 vs 149.5 |
+| **leaders only** | 48.20% ± **2.92pp** (z = **−1.46**, p = 0.15) | −0.48 ± 2.56 (z = −0.4) | 149.0 vs 149.5 |
+
+> **Corrected 2026-07-30** (`docs/CARD_BLINDNESS.md` §10). The leaders row
+> previously read **48.20% ± 1.69pp (z = −2.1)** and was read as "leaders hurt
+> slightly". That interval is correctly clustered on the deal; the problem is
+> one level up. **The eight blocks are over-dispersed**: per-block win rates
+> 43.8, 47.8, 52.4, 46.3, 53.8, 46.3, 45.6, 49.9, a spread of 3.49pp where
+> deal-level noise predicts 2.44pp, χ² = 14.41 on 7 df against a critical
+> 14.07. Clustering on the block instead gives **z = −1.46, p = 0.15**.
+>
+> **The leaders effect is not statistically significant and this document
+> should not be read as showing that leaders hurt.** The honest summary of
+> §5.2 is now "governments help on the culture margin; leaders are a null with
+> an unstable point estimate", not "two opposite signs".
+>
+> This is a borderline call, stated as one: the escalation trigger is only just
+> tripped and a heterogeneity test on eight blocks is not powerful. But a
+> result whose significance depends on which of two defensible clusterings you
+> choose is not a result. If the leaders arm matters, it needs more blocks, not
+> a different formula.
+>
+> **The governments half is unaffected.** It was already deal-clustered, its
+> blocks agree (χ² = 2.59 on 7 df), and **+1.85 ± 1.07 (z = 3.4)** stands. The
+> "everything on" aggregate is likewise unchanged at 49.95% ± 1.68pp — but note
+> that its flatness can no longer be explained as two significant opposite
+> signs cancelling, since only one of the two is significant.
 
 The aggregate is a textbook flat null — 49.95% against a 50% null, z = −0.1,
 which is as close to nothing as 3200 paired games can report.

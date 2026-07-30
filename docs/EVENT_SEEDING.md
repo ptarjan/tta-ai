@@ -348,7 +348,27 @@ resolve anything above ~2.5pp.
 
 | | n | win rate | culture margin |
 |---|---|---|---|
-| `esm` 1.0 vs 0.0 | **3200 / 1600 deals** | **57.38% ± 1.70pp** (z = 8.49) | **+6.52 ± 1.49** (z = 8.59) |
+| `esm` 1.0 vs 0.0 | **3200 / 1600 deals** | **57.38% ± 0.91pp** (z = 15.90) | **+6.52 ± 0.34** (z = 38.1) |
+
+> **Corrected 2026-07-30** (`docs/CARD_BLINDNESS.md` §10). This row previously
+> read **57.38% ± 1.70pp (z = 8.49)** and **+6.52 ± 1.49 (z = 8.59)**, which
+> were independent-samples intervals over 3200 *games* in a design that plays
+> 1600 *deals* twice each. Deal-clustered, ρ = −0.72: **±0.91pp, z = 15.90**
+> on the win rate and **±0.34, z = 38.1** on the margin. The eight blocks agree
+> (χ² = 8.24 on 7 df). The point estimates do not move.
+>
+> The corrected win-rate figure is not new to this document — the seat audit
+> immediately below already derived it as "paired per-deal share sum
+> 1.1475 ± 0.0182, z = 15.90", which is the same number times two. The audit
+> was right and the headline table was wrong, in the same document. That is
+> the tell worth remembering: the paired statistic was computed *as a check*
+> and then not used as *the result*.
+>
+> The margin correction is the larger one and has a clean explanation. The raw
+> per-game culture margin has sd 42.9; the per-deal mean has sd 6.84, because
+> `per_game_margin` is antisymmetric at 2p and swapping the seats cancels the
+> deal's own culture swing almost exactly. A block bootstrap over deals agrees:
+> ±0.33.
 
 Eight blocks on disjoint deals:
 
