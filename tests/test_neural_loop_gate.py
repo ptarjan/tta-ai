@@ -260,5 +260,86 @@ class BothArmsAreRequiredAndLoggedSeparately(unittest.TestCase):
         self.assertIn('printf \'%s %s\\n\' "$cwin" "$cci" > "$ANCHORF"', block)
 
 
+class CommentRowsAreAnnotationsNotObservations(unittest.TestCase):
+    """Arm 5: a '#' row in curve.tsv is prose, and prose is not data.
+
+    Some events make the rows either side of them incomparable -- commit
+    96a5db2 repriced effects.culture/effects.science in weighted.py, which
+    changed how the FROZEN champion plays and so put every anchor score
+    measured after it on a different ruler from the ones before.  The record
+    of that has to live in the curve itself, or the next reader plots one
+    continuous line through a discontinuity and reads a trend that no
+    measurement supports.
+
+    A comment row only stays safe if it is inert in both places the loop
+    touches the file, so both are extracted and executed here rather than
+    pinned as text:
+
+      * the iteration counter counts observations, not lines -- otherwise
+        every marker punches a hole in the sequence and a missing iteration
+        number reads as a crash;
+      * the schema migration passes it through verbatim -- otherwise the
+        first migration pads the prose out to 13 tab-separated fields.
+    """
+
+    def awk(self, prog, text, argv=()):
+        r = subprocess.run(["awk"] + list(argv) + [prog],
+                           input=text, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def counter(self):
+        src = loop_src()
+        m = re.search(r"start_it=\$\(\( \$\(awk '([^']*)'", src)
+        self.assertIsNotNone(m, "could not find the start_it awk program")
+        return m.group(1)
+
+    def migration(self):
+        src = loop_src()
+        m = re.search(r"'(BEGIN\{FS=OFS=\"\\t\"; print hdr\}[^']*)'", src)
+        self.assertIsNotNone(m, "could not find the migration awk program")
+        return m.group(1)
+
+    HDR = "iter\tpromoted\twin\n"
+    ROWS = "1\t1\t0.71\n2\t0\t0.60\n3\t1\t0.55\n"
+    MARK = "# engine changed here; anchor re-seeded\n"
+
+    def next_iter(self, text):
+        return int(self.awk(self.counter(), text).strip()) + 1
+
+    def test_negative_control_the_old_line_count_miscounts_a_marked_curve(self):
+        # This is the bug the fix exists to prevent, stated as the old rule:
+        # NR-1 over a curve with one marker says the next iteration is 5 when
+        # only four have ever run.
+        old = self.awk("END{print NR-1}", self.HDR + self.ROWS + self.MARK)
+        self.assertEqual(int(old.strip()) + 1, 5)
+
+    def test_positive_control_the_shipped_counter_skips_the_marker(self):
+        self.assertEqual(self.next_iter(self.HDR + self.ROWS + self.MARK), 4)
+
+    def test_the_counter_is_unchanged_on_a_curve_with_no_markers(self):
+        # The fix must not move the numbering of the curves already on disk.
+        self.assertEqual(self.next_iter(self.HDR + self.ROWS), 4)
+
+    def test_an_empty_or_absent_curve_still_starts_at_one(self):
+        # awk over no input leaves n unset; the loop clamps, but the arithmetic
+        # must not blow up or come back positive.
+        self.assertLessEqual(self.next_iter(""), 1)
+
+    def test_markers_anywhere_in_the_file_are_all_skipped(self):
+        text = self.HDR + self.MARK + "1\t1\t0.71\n" + self.MARK + "2\t0\t0.60\n"
+        self.assertEqual(self.next_iter(text), 3)
+
+    def test_the_migration_leaves_a_marker_verbatim_instead_of_padding_it(self):
+        out = self.awk(self.migration(), self.HDR + "1\t1\n" + self.MARK,
+                       ("-v", "hdr=iter\tpromoted\twin", "-v", "n=3",
+                        "-v", "nul=-"))
+        lines = out.rstrip("\n").split("\n")
+        self.assertEqual(lines[-1], self.MARK.rstrip("\n"))
+        self.assertNotIn("\t-", lines[-1])
+        # and the real rows are still padded to the new width
+        self.assertEqual(lines[1], "1\t1\t-")
+
+
 if __name__ == "__main__":
     unittest.main()

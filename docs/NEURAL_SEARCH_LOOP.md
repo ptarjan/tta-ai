@@ -204,6 +204,33 @@ will at steady state**, and an early promotion should not be read as evidence
 the anchor is holding. The seeding run measures the incumbent at n=240
 precisely to shorten that window to one iteration.
 
+### 5.2 When the anchor stops being the same anchor
+
+Arm B works because `plan:champion_2p` cannot move. It moves anyway if the
+*evaluator* underneath it changes: the champion is a weight vector, and
+`engine/bots/weighted.py` decides what those weights are applied to. Commit
+`96a5db2` started pricing `effects.culture` and `effects.science`, keys the
+evaluator had been dropping outright. Same JSON, different player -- worth
++59.5% head-to-head at 2p.
+
+So an anchor score measured before such a change and one measured after are
+**not on the same ruler**, and averaging them or plotting them as one series
+invents a trend. Whenever the evaluator changes:
+
+1. Truncate `loop2/anchor_best.txt`. The loop re-seeds it automatically on its
+   next start -- that is the fail-open seeding path above, and it is the same
+   `anchor_run` at the same `REFN=240` that produced the number being replaced,
+   so the new baseline is comparable to the candidates it will gate.
+2. Write a comment row into `loop2/curve.tsv` recording what changed and what
+   the old baseline was. A line whose first character is `#` is an annotation:
+   it does not advance the iteration counter and the schema migration passes it
+   through verbatim (pinned by `tests/test_neural_loop_gate.py` arm 5). Do
+   **not** delete the pre-change rows -- they are valid measurements of a
+   different configuration, and the marker is what stops a reader from reading
+   across them.
+
+The same applies to the cached pool weights, for the same reason (`6968256`).
+
 ## 6. Kill conditions, pre-registered
 
 The old run had none, which is why it ran 38 hours past the point of being

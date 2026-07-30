@@ -283,6 +283,20 @@ anchor_run() {      # anchor_run CKPT PREFIX LABEL
 #                 the two promotion criteria, separately, so a blocked
 #                 promotion says which half blocked it.
 # Any of them may be '-' ($NULL): see fanout().
+#
+# COMMENT ROWS.  A line whose first character is '#' is an annotation, not an
+# observation.  It exists because some events break the comparability of the
+# rows either side of them and a reader who plots the column straight through
+# gets a lie: the one that forced this convention was commit 96a5db2, which
+# taught weighted.py to price effects.culture/effects.science.  That changed
+# how the FROZEN champion plays, so anchor scores measured before it and after
+# it are two different rulers, and splicing them into one series invents a
+# trend that no measurement supports.  Write the marker, re-seed, carry on.
+#
+# Two rules make a comment row safe, and both are enforced below:
+#   * it does not advance the iteration counter (see start_it);
+#   * the schema migration passes it through verbatim instead of padding it
+#     out to 13 fields, which would turn prose into data.
 CURVE_HDR=$(printf 'iter\tpromoted\twin\tci\tcand_cul\tbest_cul\tdisagree\tvs_planchamp\tts\tanchor_ci\tinc_anchor\tselfplay_ok\tanchor_ok')
 CURVE_NCOL=13
 if [ ! -f "$CURVE" ]; then
@@ -294,7 +308,7 @@ elif [ "$(head -1 "$CURVE" 2>/dev/null)" != "$CURVE_HDR" ]; then
   # plotting anchor_ci as a win rate.
   say "migrating $CURVE to the ${CURVE_NCOL}-column schema (old rows padded with '$NULL')"
   awk -v hdr="$CURVE_HDR" -v n="$CURVE_NCOL" -v nul="$NULL" \
-      'BEGIN{FS=OFS="\t"; print hdr} NR>1{for(i=NF+1;i<=n;i++)$i=nul; print}' \
+      'BEGIN{FS=OFS="\t"; print hdr} NR>1 && /^#/{print; next} NR>1{for(i=NF+1;i<=n;i++)$i=nul; print}' \
       "$CURVE" > "$CURVE.mig" && mv -f "$CURVE.mig" "$CURVE"
 fi
 
@@ -373,7 +387,12 @@ if [ ! -s "$ANCHORF" ]; then
   fi
 fi
 
-start_it=$(( $(awk 'END{print NR-1}' "$CURVE" 2>/dev/null || echo 0) + 1 ))
+# The next iteration number is "how many observations are on file, plus one".
+# Count OBSERVATIONS, not lines: comment rows (see the schema block above) are
+# annotations and must not consume an iteration number, or every marker anyone
+# ever writes silently punches a hole in the sequence -- iteration 11 missing
+# from a curve reads as a crashed iteration, not as a note someone left.
+start_it=$(( $(awk '/^#/{next} {n++} END{print n-1}' "$CURVE" 2>/dev/null || echo 0) + 1 ))
 [ "$start_it" -lt 1 ] && start_it=1
 for it in $(seq "$start_it" "$ITERS"); do
   say "== ITER $it  $(date) =="
