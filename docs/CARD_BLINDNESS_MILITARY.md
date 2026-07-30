@@ -398,7 +398,11 @@ of 100 games:
 Eight disjoint blocks of 100: 51.0, 55.0, 46.5, 49.0, 47.0, 52.5, 48.0, 55.5.
 Scattered either side of 50 with no block carrying anything. **A flat null.**
 
-**MDE.** SE on the win rate is `sqrt(0.25/n)`, so n = 800 gives 1.77pp and a
+**MDE, and the CI is naive.** This uses the project's standard
+independent-samples formula on a paired design, which a stats lane has since
+shown is optimistic by up to sqrt(2); the corrected estimator was not on
+master when this was analysed. Treat the interval as a lower bound on the
+true width. SE on the win rate is `sqrt(0.25/n)`, so n = 800 gives 1.77pp and a
 minimum detectable effect at 80% power and α = 0.05 two-sided of **≈ 4.9pp**.
 Seat-rotation pairing makes the true SE smaller than that, so 4.9pp is
 conservative. An effect below ~5pp is not something this experiment can speak
@@ -423,6 +427,57 @@ overlap by 78%, and it showed up immediately as two "independent" blocks
 returning identical win rates (53.5/53.5, 49.5/49.5). Those were not
 replications, they were near-duplicates. Blocks below are spaced by
 `games / players` = 50 and are genuinely disjoint.
+
+### 5.4 Tactics are a plumbing problem, not a pricing problem
+
+Checked after the wonder lane showed that repricing 8 wonders moved wonder
+completions by a measured zero, because a wonder never enters `hand_civil` and
+so reaches the policy only through a take-timing heuristic. The same question
+for tactics: **which term actually carries a tactic's value into the policy?**
+
+Two measurements. First, there is no card-pricing path at all — with
+`hand_mil_potential`, `territory_credit` and `card_board_credit` all switched
+ON, `card_potential` is **0.0 for all fifteen tactics**, and
+`_card_yields("Modern Army")` is the empty tuple. `tacticBonus` is a board
+query, so no table reaches it.
+
+Second, and this is the sharp one. Over **374 decisions where a `play_tactic`
+or `copy_tactic` move was legal**, how often each feature differs across the
+candidate moves, and its mean `|weight| × range` — a feature can only change a
+decision through that product:
+
+| feature | varies | mean \|w\|×range |
+|---|---|---|
+| `hand_military` (card **count**) | 94.9% | **0.464** |
+| `hand_mil_value` (sum of age+1) | 96.8% | **0.283** |
+| `tactic_level` (the tactic's **age**) | 44.1% | 0.267 |
+| `ma_left` | 100.0% | 0.080 |
+| `strength_rel` | 32.9% | 0.085 |
+| `strength_lead` | 20.9% | 0.078 |
+| **`strength`** (the armies it actually forms) | **32.9%** | **0.066** |
+
+The three identity-blind bookkeeping terms — how many cards are in the
+military hand, the sum of their age levels, and the tactic's own age —
+outweigh what the tactic is actually worth by about **11 to 1**. Pricing a
+tactic correctly cannot matter while that is true, and that is a statement
+about plumbing, not about the price.
+
+It also explains §4's strangest number mechanically. `copy_tactic` costs 2
+military actions but takes **no card out of hand**, so `hand_military` and
+`hand_mil_value` are unchanged while `tactic_level` rises: a clean +0.27
+against `ma_left` at 0.080. Playing a tactic *from hand* removes the card and
+gives up 0.464 + 0.283. **The evaluator therefore prefers copying to playing,
+and the champion copies 10.5 tactics a game.** It is paying two military
+actions a time to avoid the bookkeeping penalty for having a smaller hand.
+
+So the §5.2 null on `tactic_gain` should be read narrowly. `tactic_gain` and
+`tactic_short` are state features evaluated on every candidate, so unlike card
+pricing they are not blocked by the plumbing — their 0-of-967 is a genuine
+measurement of the feature. But it is a measurement taken on a board where the
+champion already holds a tactic and owns no units, so the best reachable
+tactic and the one in play are both worth zero. The feature is not wrong; the
+position it was built to detect never arises, because the plumbing above stops
+the bot ever getting units.
 
 ## 6. What is still broken, and what would actually fix it
 
