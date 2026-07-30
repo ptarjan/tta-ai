@@ -337,8 +337,60 @@ WWIDE=9010ec80
 # exactly as it is on WeightedBot's.
 # All four moved again on `military-discard`; see the block above NARROW.
 # All four moved again on `war-over-technology`; see the block above NARROW.
-PNARROW=32a99881
-PWIDE=f7a092a2
+#
+# ---------------------------------------------------------------------------
+# Re-derived on the drain flip (2026-07-30, docs/DRAIN_AB.md).  EXACTLY TWO of
+# the eight arms moved -- PNARROW and PWIDE -- and the other six did not.
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   f0b240da    f0b240da   (unchanged -- WeightedBot does not search)
+#     WWIDE     9010ec80    9010ec80   (unchanged)
+#     QNARROW   9ad67497    9ad67497   (unchanged -- see the note below)
+#     QWIDE     e83054f7    e83054f7   (unchanged)
+#     PNARROW   32a99881    089219c6
+#     PWIDE     f7a092a2    d911788e
+#
+# Two-sided as 9.0 requires: derived independently in /tmp/flip-a and
+# /tmp/flip-b, two separate clones of the same commit carrying the same
+# one-constant patch, and the two agreed byte-for-byte on all eight arms --
+# including the six that did not move, which is the half of the agreement that
+# is easy to forget to check.
+#
+# CLEAN-BASE CONTROL FIRST, and it passed: a full gate on the unflipped tree
+# of the parent 0335348 reproduced all eight committed constants exactly (GATE
+# PASS, 1027 tests).  So these two moves are attributable to the flip and not
+# to drift a re-derivation would have quietly absorbed.
+#
+# Cause, and it is ONE CONSTANT: `engine/bots/pending.py`'s `QUIET_PENDING`
+# went False -> True.  A pending decision that is MINE is now priced after
+# draining the pending stack, which is how each bot's own `_beam` already
+# prices every node it searches (`apply -> _quiesce -> score`).  The real
+# decision and the searched decision were being priced by different rules.
+#
+# WHY ONLY THE PLAN ARMS.  `wants_quiet` returns False unless `state.pending`
+# is non-empty, so the flag is unreachable except at a pending decision, and
+# only the two bots that route through `pending.fallback_pick` -- PlanBot and
+# NeuralPlanBot -- can reach it at all.  QuiescentBot searches under the same
+# `evaluate` but does not go through the shared short-circuit, which is why
+# QNARROW/QWIDE hold still here even though they moved on the last three
+# derivations.  GreedyBot and DEFAULT_WEIGHTS WeightedBot never reach it.
+#
+# NOT a strength claim.  This is a consistency fix and lands on that basis
+# (docs/DRAIN_AB.md 1): nothing in `weighted.features` reads `pend["atk"]` or
+# `pend["dfn"]`, so an undrained position cannot express whether a defence
+# succeeds, and 588 of 589 winnable defences need 2+ cards.  The A/B is
+# corroboration, and it is uneven -- decisive at 3p (4/4 blocks, z ~ 9.3 over
+# 600 games) and NOT independently established at 4p (one pure block, z =
+# 1.54).  Read docs/DRAIN_AB.md 2 before quoting a number from it; there are
+# two pools and they say different things.
+#
+# `DETERMINIZE` was deliberately left False in this commit so that these two
+# digest moves attribute to one constant.  It is the other half of the same
+# inconsistency and gets its own derivation.
+PNARROW=089219c6
+PWIDE=d911788e
 QNARROW=9ad67497
 QWIDE=e83054f7
 

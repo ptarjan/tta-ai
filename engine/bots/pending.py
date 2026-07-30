@@ -50,7 +50,25 @@ __all__ = ["QUIET_PENDING", "not_my_turn", "wants_quiet", "wants_determinize",
 #: flipped -- see `docs/AGGRESSION_RATE.md` 7 for the A/B and the behavioural
 #: counters.  Changing this moves `tools/gate.sh`'s PNARROW/PWIDE digests,
 #: which must be re-derived on two independent clean worktrees that agree.
-QUIET_PENDING = False
+#:
+#: FLIPPED 2026-07-30.  It lands as a CONSISTENCY FIX, not on the strength
+#: measurement: the beam already drains before scoring and the live decision
+#: did not.  The A/B (docs/DRAIN_AB.md) corroborates it and is uneven, so
+#: quote it from there rather than from here -- there are two pools and they
+#: say different things.  Six distinct blocks of 200 games against the frozen
+#: league references, every one favouring the drain; 3p is decisive (pure-qp
+#: pool 0.5217 own-win share against a 0.3333 null over 600 games, z = 9.26)
+#: and 4p is NOT independently established (one pure-qp block, 0.3000 against
+#: a 0.2500 null, z = 1.54, p ~ 0.12).
+#:
+#: The leak confound the note on `DETERMINIZE` below raises was the reason to
+#: doubt this, and it was answered rather than argued away: the same seed run
+#: as `qp=1` vs `qp=0` and as `qp=1,qd=1` vs plain returned the SAME numbers
+#: to every printed digit (0.5325 win, +26.01 margin).  Determinizing the
+#: pending root removes the peek; removing it changes nothing; so the win is
+#: not the peek.  That is a different instrument from the 1,346-pick census
+#: in `tools/pending_leak.py` and it agrees with it.
+QUIET_PENDING = True
 
 #: THE SECOND HALF OF THE SAME INCONSISTENCY, and a live difference between
 #: the two bots.  `pick`'s beam path prices candidates on a *determinized*
