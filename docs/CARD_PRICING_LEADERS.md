@@ -664,3 +664,89 @@ four configurations by checking whether a leader and a government are actually
 priced by the diff or by the static table, and fails if any reader of the
 environment comes back — a stale exported variable would silently make a
 measurement arm measure something other than its weight file says.
+
+### 10.3 Re-measuring the leaders arm: a null, and a control that lands exactly
+
+Same design as §5.2 and deliberately the same *seeds*: 8 blocks of 400 at 2p,
+paired on the deal, seeds 0/200/400/600/800/1000/1200/1600, 12 workers on the
+28-core desktop. Raw blocks in `analysis/handfix/`.
+
+Three arms, and the second one is the reason the first can be believed:
+
+| arm | win rate | culture margin |
+|---|---|---|
+| leaders only, **fixed** (`hand_swap_extra` 0.0) | 47.67% ± 1.67pp (z = −2.74, deal-clustered, χ² = 8.90/7 — blocks agree) | −1.07 ± 1.29 |
+| leaders only, **pre-fix control** (`hand_swap_extra` 1.0) | 48.20% ± 2.92pp (z = −1.46, escalated to block-clustered, χ² = 14.41/7) | −0.48 ± 2.56 |
+| **fixed vs pre-fix, head to head**, both board-on | **50.33% ± 1.09pp (z = 0.59, p = 0.55)** | +0.05 ± 0.77 |
+
+Intervals from `tools/ab_summary.py` (the corrected estimator that landed
+2026-07-30); `analysis/laneC/agg.py`'s legacy numbers are printed alongside
+them in `analysis/handfix/results.txt` so the arms reconcile against the older
+table.
+
+**The control arm reproduces §5.2's leaders row exactly** — 48.20% ± 1.69pp
+legacy, margin −0.48, own culture 149.0 vs 149.5, and *block for block*
+(43.8, 47.8, 52.4, 46.2, 53.8, 46.2, 45.6, 49.9). That is worth more than it
+looks:
+
+* it confirms `hand_swap_extra = 1.0` is the pre-fix pricing to the game, not
+  approximately — so the before/after is one binary, one engine, one seed set,
+  and the difference is the fix and nothing else;
+* it confirms none of the engine work that landed between `664cdfc` and here
+  (tactics, event seeding, the score audit, wonders becoming a swap type)
+  perturbs this measurement at all.
+
+**The answer to "does −1.8pp move": no.** The head-to-head duel is the direct
+test — the same vector with and only with the defect — and it is a **null with
+real power**: 50.33% ± 1.09pp against an MDE of 1.55pp. The fix is worth
+somewhere between −1.2pp and +1.5pp, and the tight interval comes from
+ρ = −0.60, i.e. the seat-swapped pairing doing exactly what
+`experiments/paired_stats.py` says it does.
+
+Two honest caveats on the first row:
+
+* The fixed arm reads z = −2.74 where the control reads z = −1.46, and it
+  would be easy to write that up as "the fix made it worse". **It is not a
+  difference in the point estimate** (47.67 vs 48.20, well inside either
+  interval) — it is a difference in *which clustering the escalation rule
+  picks*. The control's blocks are over-dispersed and get the coarser
+  interval; the fixed arm's blocks agree (χ² = 8.90 against a critical 14.07)
+  and keep the deal-level one. The head-to-head, which needs no such choice,
+  says the two vectors are the same strength.
+* The leaders arm being **below 50% at all** is untouched by this work and is
+  still unexplained. §5.2's second candidate — a leader's upside landing on
+  well-fitted weights while its restrictions land on 0.0 ones — is now the
+  live one, and `row_urgency`'s copy of the double-count (§10.1) is the other.
+
+**Cost at the shipped default: not measurable.** The collapse adds one type
+lookup and one weight lookup per card in the hand, and the per-type credit
+adds one more inside `card_potential`. Timed on the idle desktop, the 33-game
+WeightedBot fingerprint workload (`engine.perf_check hash --weighted`, which
+runs at `DEFAULT_WEIGHTS`, i.e. board pricing off) took 12.86s / 12.27s on
+master and 12.41s / 12.37s here — a difference smaller than the spread of the
+repeats. §8's "at the shipped default the cost is exactly zero" is no longer
+quite literal, but it is still below what can be measured.
+
+**The behaviour does move, so the null is not a trivial one.** 40 games of 2p
+self-play under each vector (`tools/take_census.py --type leader`):
+
+| | leaders taken/game | governments taken/game |
+|---|---|---|
+| pre-fix | 5.50 | 1.75 |
+| fixed | **5.00** | **1.60** |
+
+A bot that no longer believes a second leader in hand is worth a second
+replacement takes ~9% fewer of them, which is the predicted direction. It just
+does not win more or fewer games for it.
+
+**The government half is unharmed, which matters because it is the half §5.2
+recommends turning on.** Governments collapse in the hand too (they are the
+other single-slot class), so the arm was re-run: **51.05% ± 1.39pp
+(z = 1.47), culture margin +1.95 ± 1.07 (z = 3.59)**, against the published
+51.02% / +1.85 (z = 3.4). Unchanged within noise on the win rate and, on the
+margin, a shade stronger. The recommendation stands as written.
+
+**Shipped anyway, and the ordering in §10's preamble is why.** The pricing was
+wrong arithmetic; a hand holding a +3.60 leader was priced at −6.95. Correct
+modelling ships whether or not the win rate notices, and `hand_swap_extra`
+leaves the league a gradient to disagree on.
