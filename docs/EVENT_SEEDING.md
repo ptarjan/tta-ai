@@ -275,8 +275,10 @@ until the first Age III event is in play, which is most of the game.
 
 ## 5. Result
 
-*(A/B in progress at the time of writing; see §5.1 for the behavioural
-counter, which is complete.)*
+**+7.4pp of win rate and +6.5 culture of margin** to the frozen 2p champion
+over 3200 paired games, seat-audited and with the frozen-champion upside
+artifact checked and excluded. §5.3 is the headline; §5.1 is the behavioural
+counter that says the bot changed what it plants, not how often.
 
 ### 5.1 Behavioural counter
 
@@ -339,7 +341,83 @@ would be the garden of forking paths.
 
 ### 5.3 The powered paired A/B
 
-*To be filled from the run described in §8.*
+**Not a null.** `event_scoring_margin` = 1.0 against the identical vector at
+0.0, 8 disjoint blocks of 400, 3200 games / 1600 deals, `WeightedBot` 1-ply.
+**MDE 2.47pp** at 80% power and α = 0.05 two-sided, so the experiment can
+resolve anything above ~2.5pp.
+
+| | n | win rate | culture margin |
+|---|---|---|---|
+| `esm` 1.0 vs 0.0 | **3200 / 1600 deals** | **57.38% ± 1.70pp** (z = 8.49) | **+6.52 ± 1.49** (z = 8.59) |
+
+Eight blocks on disjoint deals:
+
+| block | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| win rate | 59.9% | 55.4% | 56.2% | 58.8% | 57.8% | 57.2% | 56.6% | 57.1% |
+| margin | +6.7 | +5.6 | +7.5 | +7.2 | +6.9 | +6.2 | +5.9 | +6.2 |
+
+Every block on the same side, spread 55.4–59.9, no block carrying the result.
+
+#### The seat audit, because a uniformly positive result deserves one
+
+Eight blocks with none below the null is also the signature of a systematic
+asymmetry, so this was checked rather than assumed. `arena.duel` sets
+`seat = g % num_players` and `seed = seed0 + g // num_players`, i.e. **each
+deal is played twice with the arms swapped between seats**, and the two games
+are adjacent in the task list. That makes the audit exact:
+
+| | win rate | z |
+|---|---|---|
+| challenger in seat 0 | 59.94% ± 2.39pp | 8.15 |
+| challenger in seat 1 | 54.81% ± 2.42pp | 3.90 |
+
+There **is** a seat effect — about 5pp — and it is not the result: both seats
+beat the null on their own, the weaker one still at z = 3.9.
+
+The statistic that removes seat entirely is the paired one. Summing the
+challenger's two shares within a deal gives 1.0 under the null whatever the
+seat advantage is:
+
+* **paired per-deal share sum: 1.1475 ± 0.0182, null 1.0, z = 15.90**, 1600
+  deals.
+* Non-parametrically: the challenger **swept both seats of 234 deals and was
+  swept in 12**, with 1318 split. A sign test on the 246 decided deals is
+  p < 10⁻⁴⁰. This uses no distributional assumption and no seat correction at
+  all.
+
+#### The frozen-champion upside artifact, checked not asserted
+
+A frozen-champion A/B systematically flatters a new feature that only ever
+adds value: the other 78 weights were fitted without it, so the bot collects
+the upside at full price and pays no downside. That is a real effect and it is
+the reason to be suspicious of a positive here.
+
+It does not apply to this feature, and the check is direct. `event_scoring_margin` is a
+**signed difference** — `owed[me] − owed[best rival]` — so at 2p it is exactly
+antisymmetric between the players. Measured over 244 non-zero observations in
+8 self-play games:
+
+| | share | mean |
+|---|---|---|
+| positive | 50.4% | +8.35 |
+| negative | 49.6% | −7.67 |
+
+Half the time the feature tells the bot a plant is *bad*, at the same
+magnitude, and a negative weight-times-feature is exactly as capable of
+losing an argmax as a positive one is of winning it. So the artifact is not
+available to explain this result. What the artifact argument does still
+correctly say is that **the champion was trained blind**, and the right
+comparison — a champion retrained with the feature against one retrained
+without — needs a league run and is not in this document.
+
+#### What this does not establish
+
+* **1-ply `WeightedBot`.** The league trains `plan:width=2`. Deeper search has
+  more chances to reach the endgame by rollout, so the effect could shrink.
+* **2p only.** No 3p transfer measured, for want of CPU, not for want of
+  interest.
+* **It does not price 40 of the 55 events.** See §6.
 
 ## 6. What is deliberately not priced, and why
 
