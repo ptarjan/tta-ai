@@ -183,7 +183,22 @@ beat_run() { low "$@" & beat_wait; }
 # destination: a reader then sees either the whole old file or the whole new
 # one, never a half-written one.
 install_ckpt() {   # install_ckpt SRC DST
-  local src=$1 dst=$2 tmp="${dst}.tmp.$$" i
+  # TWO `local` statements, deliberately.  `local` is a builtin: bash expands
+  # ALL of its argument words before the builtin assigns any of them, so
+  #
+  #     local src=$1 dst=$2 tmp="${dst}.tmp.$$"
+  #
+  # expands `${dst}` while dst is still unset, and under `set -u` (line 33)
+  # that is a FATAL error, not an empty string.  This function is only ever
+  # called on a promotion, so the driver died at the exact moment it succeeded:
+  # loop2/master.out, 2026-07-30 01:49, `line 176: dst: unbound variable`,
+  # after iteration 11 had passed BOTH arms of the gate.  No checkpoint was
+  # installed, no curve row was written, and the scheduled task restarted the
+  # iteration from scratch -- so a promotion looked exactly like an iteration
+  # that never finished.  Verified on the box's own bash 5.2.15 with both
+  # arguments present; tests/test_neural_loop_gate.py executes it.
+  local src=$1 dst=$2
+  local tmp="${dst}.tmp.$$" i
   cp "$src" "$tmp" || { rm -f "$tmp"; say "  WARNING: could not stage $src -> $tmp; $dst UNCHANGED"; return 1; }
   for i in 1 2 3; do
     mv -f "$tmp" "$dst" 2>/dev/null && return 0

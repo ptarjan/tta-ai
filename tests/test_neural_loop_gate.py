@@ -297,6 +297,69 @@ class AnchorGateRule(unittest.TestCase):
                             self.floor("0.4313", trap, trap))
 
 
+class PromotionActuallyInstallsTheCheckpoint(unittest.TestCase):
+    """The gate can pass and the promotion still not happen.
+
+    2026-07-30 01:49: iteration 11 passed BOTH arms and did not promote.  The
+    driver died inside install_ckpt on
+
+        local src=$1 dst=$2 tmp="${dst}.tmp.$$" i
+
+    `local` is a builtin, so bash expands ALL of its argument words before the
+    builtin assigns any of them: `${dst}` is expanded while dst is still
+    unset, and the script runs under `set -u`, where that is fatal rather than
+    empty.  Reproduced with both arguments present on the box's bash 5.2.15
+    and on bash 3.2.57.
+
+    install_ckpt is called ONLY on a promotion, so the failure was invisible
+    for as long as nothing promoted: a successful gate looked exactly like an
+    iteration that never finished, the checkpoint was never installed, no
+    curve row was written, and the scheduled task re-ran the iteration.  A
+    loop that cannot promote is the entire subject of docs/NEURAL_LOOP_NULL.md,
+    so this executes the function rather than reading it.
+    """
+
+    def _extract(self, name):
+        m = re.search(r"^%s\(\)\s*\{.*?^\}\s*$" % re.escape(name),
+                      loop_src(), re.M | re.S)
+        self.assertIsNotNone(m, "%s() not found" % name)
+        return m.group(0)
+
+    def _run(self, script):
+        return subprocess.run(["bash", "-c", script],
+                              capture_output=True, text=True)
+
+    def test_install_ckpt_survives_set_u_and_installs_the_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "cand.pt")
+            dst = os.path.join(d, "best.pt")
+            with open(src, "w") as f:
+                f.write("payload")
+            r = self._run("set -u\nsay() { echo \"$@\"; }\n%s\n"
+                          "install_ckpt %s %s\n"
+                          % (self._extract("install_ckpt"), src, dst))
+            self.assertEqual(r.returncode, 0,
+                             "install_ckpt failed under set -u: %s" % r.stderr)
+            self.assertNotIn("unbound variable", r.stderr)
+            with open(dst) as f:
+                self.assertEqual(f.read(), "payload")
+
+    def test_negative_control_the_one_local_form_really_is_fatal(self):
+        """The matched negative.  If a future bash stops treating this as an
+        error the test above would pass for the wrong reason, so pin the
+        behaviour that makes the two-statement form necessary."""
+        r = self._run('set -u; f(){ local a=$1 b=$2 c="${b}.x"; echo "$c"; }; '
+                      'f 1 2')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("unbound variable", r.stderr)
+
+    def test_the_declaration_is_split_across_two_statements(self):
+        body = self._extract("install_ckpt")
+        self.assertIn("local src=$1 dst=$2\n", body)
+        self.assertIn('local tmp="${dst}.tmp.$$" i', body)
+
+
 class BothArmsAreRequiredAndLoggedSeparately(unittest.TestCase):
     """Arm 5: promotion needs both criteria, and the log says which blocked."""
 
