@@ -203,6 +203,31 @@ def upgrade_cost_net(state, p, lo, hi):
     return cost
 
 
+def tech_cost_net(state, p, name):
+    """Science cost after the per-turn military-tech discount pool.
+
+    The twin of `build_cost_net`: Winston Churchill's military option grants
+    3 science "usable only to develop military unit technologies", so it is a
+    pool spent against unit techs rather than science in hand
+    (docs/SCORE_AUDIT.md 3.6).
+    """
+    cost = effects.tech_cost(state, p, name)
+    if cost is None:
+        return None
+    if is_unit(name):
+        cost = max(0, cost - p.mil_sci_discount)
+    return cost
+
+
+def _spend_mil_sci_discount(p, name, raw):
+    """Consume as much of the science pool as this development uses."""
+    if not is_unit(name) or p.mil_sci_discount <= 0:
+        return raw
+    used = min(p.mil_sci_discount, raw)
+    p.mil_sci_discount -= used
+    return raw - used
+
+
 def _spend_mil_discount(p, name, raw):
     """Consume as much of the discount pool as this build/upgrade uses."""
     if not is_unit(name) or p.mil_discount <= 0:
@@ -480,7 +505,7 @@ def _action_moves(state, p):
             if ca >= 1:
                 moves.append(("play_leader", name))
         elif typ == "government":
-            if ca >= 1 and p.science >= (effects.tech_cost(state, p, name) or 0):
+            if ca >= 1 and p.science >= (tech_cost_net(state, p, name) or 0):
                 moves.append(("develop", name))
             if _can_revolt(state, p, name):
                 moves.append(("revolution", name))
@@ -493,7 +518,7 @@ def _action_moves(state, p):
                     and _action_card_playable(state, p, name):
                 moves.append(("play_action", name))
         elif typ in C.WORKER_TYPES or typ == "special-tech":
-            if ca >= 1 and p.science >= (effects.tech_cost(state, p, name) or 0):
+            if ca >= 1 and p.science >= (tech_cost_net(state, p, name) or 0):
                 moves.append(("develop", name))
 
     # tactics
@@ -586,7 +611,7 @@ def free_action_moves(state, p, kind, discount=0, revolt_ok=False):
             card = db.get(name)
             if card["type"] not in C.DEVELOPABLE_TYPES:
                 continue
-            if p.science >= (effects.tech_cost(state, p, name) or 0):
+            if p.science >= (tech_cost_net(state, p, name) or 0):
                 out.append(("develop", name))
             # RB p.15: Breakthrough may also pay for a revolution
             if revolt_ok and card["type"] == "government" \
@@ -805,6 +830,7 @@ def _h_develop(state, p, move, rng, free=False):
     name = move[1]
     card = db.get(name)
     cost = effects.tech_cost(state, p, name) or 0
+    cost = _spend_mil_sci_discount(p, name, cost)
     if not free:
         pay_ca(state, p, 1)
     p.science -= cost
@@ -879,12 +905,21 @@ def _h_revolution(state, p, move, rng):
 
 
 def _h_churchill(state, p, move, rng):
+    """"Once each turn, choose one: gain 3 culture points; OR gain 3 science
+    points usable only to develop military unit technologies and 3 resources
+    usable only to build or upgrade military units."
+
+    Both halves of the military option are RING-FENCED.  Granting plain
+    science and plain resources made the option strictly stronger than the
+    printed card (docs/SCORE_AUDIT.md 3.6); they are pools, exactly as the
+    yellow action cards' `resourcesForMilitaryUnits` already was.
+    """
     p.churchill_used = True
     if move[1] == "culture":
         p.culture += 3
     else:
-        p.science += 3
-        effects.gain_resources(p, 3)
+        p.mil_sci_discount += 3
+        p.mil_discount += 3
 
 
 def _h_play_tactic(state, p, move, rng):

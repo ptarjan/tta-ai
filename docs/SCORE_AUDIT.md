@@ -5,46 +5,66 @@ narrow and end-of-game shaped: *when the game ends, does each card contribute
 exactly the culture, science, strength, happiness, food, resources and
 civil/military actions the printed rules say it should?*
 
-New file: `tests/test_score_audit.py` — **167 tests, one section per card
+New file: `tests/test_score_audit.py` — **176 tests, one section per card
 type**, every expected number derived from the printed card by hand in its
-own docstring. `bash tools/gate.sh` is GATE PASS; **no engine file is
-touched, so all eight fingerprint digests are unmoved on purpose** (same
-discipline as `docs/SCORE_VALIDATION.md`, which also handed its findings over
-rather than fixing them in the same breath).
+own docstring, never copied out of the engine.
+
+This landed in two commits on purpose. The **first** added the tests with the
+nine bugs asserted as `@unittest.expectedFailure` and touched no engine file,
+so every fingerprint digest was provably unmoved and each bug was shown to
+fail *for the right reason* before anything was changed. The **second** fixes
+them.
+
+**The fixes are live and the fingerprint constants in `tools/gate.sh` are
+NOT updated by that second commit.** Section 9 says exactly why, and it is
+not a property of these fixes: the parent commit's own constants were
+already stale when this was measured, and the box could not produce a
+reliable hash while five lanes hashed on six cores and one of them ran a
+global `pkill`. The constants need one clean window, after the lane ahead
+lands its own.
 
 ## One-paragraph answer
 
-**Sixteen of the 23 types score exactly right, and eight real bugs came out
-of the other seven.** None is large: most are worth 1-6 culture in the
-positions that reach them, and three of them (Michelangelo and St. Peter's on
-a ruined wonder, St. Peter's on a colony, and the air force) are *per turn*
-and *per army* rather than one-off. Every one of the eight is the same shape
-as the two bugs this project has already shipped: **a value that lives in a field, or a card
-clause, that no reader touches.** The verifications recorded in
+**Sixteen of the 23 types score exactly right, and nine real bugs came out of
+the other seven.** None is large: most are worth 1-6 culture in the positions
+that reach them, but four are *per turn* rather than one-off (Michelangelo and
+St. Peter's on a ruined wonder, St. Peter's on a colony, and an unstaffed lab
+paying Einstein) and one is *per army*. Every one of the nine is the same
+shape as the two bugs this project has already shipped: **a value that lives
+in a field, or a card clause, that no reader touches — or two readers of one
+rule that quietly disagree.** The verifications recorded in
 `docs/SCORE_VALIDATION.md` §6.1 (wonder rules and stage costs) and §3.3
-(Hollywood/Internet leader modifiers) **still hold at master `6968256`** and
+(Hollywood/Internet leader modifiers) **still hold at current master** and
 are now pinned by tests instead of by a corpus run. Tonight's government
 pricing fix is real: all eight governments' `civilActions` /
 `militaryActions` / `urbanBuildingLimit` / `peacefulCost` / `revolutionCost`
 now reach the engine, and `EveryFieldHasAReader.test_every_government_field_is_read`
 fails if any of the five stops being read.
 
-The eight bugs are asserted as tests **with the rules answer**, marked
-`@unittest.expectedFailure`. Python reports an unexpected success as a suite
-failure, so each one goes red the moment it is fixed and the decorator has to
-come off deliberately. No test in this file asserts a wrong answer.
+**All nine are fixed**, and a tenth defect in the *pricer* fell out of
+re-auditing `engine/bots/board_yields.py` (section 6.1). One of the nine —
+3.9, whether an unstaffed lab pays Einstein — was settled against BGO's own
+printed per-turn science on 150 human games, because the card wording alone
+had already been read two ways inside one file.
+
+Section 6.5 is the part worth reading even if you skip the rest: **the human
+corpus scored `Impact of Agriculture` 66/66 exact against a wrong
+implementation**, because at 2 players every pact is removed from the game and
+a pact is the only thing in the base game that puts food on your board from
+outside a farm. Five of the nine bugs sit inside the corpus's four documented
+blind spots.
 
 ---
 
 ## 1. The two things that were verified before, re-checked at current master
 
-| claim | where it came from | status at `6968256` |
+| claim | where it came from | status at current master |
 |---|---|---|
 | all 16 wonders, all 53 stage costs, exact | SCORE_VALIDATION §6.1, 18,307 human stage lines | **holds** — `Wonder.*`, and the costs are still read from `data/cards_wonders_leaders.json` |
 | `Impact of Wonders` 5/4/3/2 by age, exact | SCORE_VALIDATION §6.1, 565/565 rows | **holds** — `test_impact_of_wonders_pays_by_age` |
 | Hollywood/Internet score **effective** building output, not printed | SCORE_VALIDATION §3.3, fixed in SCORE_BUGFIX | **holds** — `test_hollywood_uses_effective_output_not_printed`, `test_internet_matches_the_FAQ_sid_meier_example` (the FAQ's own 8-science/6-culture Sid Meier example) |
 | Chaplin doubles one theater, not a card | SCORE_BUGFIX | **holds** — `test_chaplin_doubles_ONE_theater_not_the_card` |
-| `Impact of Industry` scores mines, not the resource rating | SCORE_BUGFIX §3.1 | **holds** — and see bug 3.1 below, which is the *same card clause on the farm side*, still unfixed |
+| `Impact of Industry` scores mines, not the resource rating | SCORE_BUGFIX §3.1 | **holds** — and see bug 3.1 below, which is the *same card clause on the farm side*, and was NOT fixed with it |
 | `Impact of Population` counts unused workers | SCORE_BUGFIX §3.2 | **holds** — `test_impact_of_population` |
 
 ## 2. The field-coverage sweep
@@ -89,7 +109,7 @@ has.
 
 ---
 
-## 3. The eight bugs
+## 3. The nine bugs
 
 Ordered by how much I would trust the finding, most-certain first.
 
@@ -217,6 +237,52 @@ Tests: `Leader.test_st_peters_counts_a_COLONY_as_a_happy_source` (5 vs 6),
 with `test_st_peters_does_count_the_government_and_leader_cards` pinning the
 reading it is judged against.
 
+### 3.9 "Your best lab or library" counted an **unstaffed** one
+
+Found by another lane, ruled here. `_building_modifier` and `_apply_modifier`
+each held two cards of identical shape that disagreed:
+
+    "bestTheaterDoubleCulture"        -> best_card(..., require_workers=True)
+    "sciencePerBestLabOrLibraryLevel" -> best_card(...)      # no worker needed
+
+The second is **Leonardo da Vinci, Isaac Newton and Albert Einstein**. As it
+stood, a player who developed Computers and never put a worker on it still
+collected +3 science a turn.
+
+**They cannot both be right, and the staffed reading wins on three
+independent grounds:**
+
+1. **The printed card.** All three say the best lab or library *produces*
+   extra science. In Through the Ages a building **is** a worker standing on
+   a technology card; a card with no worker is a technology, not a lab, and
+   produces nothing. The closest thing to a printed ruling on this exact
+   phrase is FAQ v1.5 p.9 on the Transcontinental Railroad, quoted in our own
+   card data: it doubles "one worker on the best mine technology card **that
+   has workers**".
+2. **The engine's own reading everywhere else.** Every other per-building
+   leader multiplies by `t.workers` — Sid Meier, Bill Gates, J. S. Bach,
+   Shakespeare's pairs, Michelangelo's happy faces, Napoleon's unit types.
+   This one key was the only exception, in both of its two copies.
+3. **BGO, measured.** `tools/bgo_rescore.py` on 150 human games, same
+   replayer, only the reading changed:
+
+   | reading | per-turn science rows exact vs BGO | all five rates exact |
+   |---|---|---|
+   | unstaffed lab counts (old) | 7275 / 7600 (95.7%) | 5713 (75.2%) |
+   | **staffed only (new)** | **7303 / 7600 (96.1%)** | **5734 (75.4%)** |
+
+   28 science rows and 21 whole-turn rows move the right way and nothing else
+   in the tree changed. *Limit:* this is a net, not a monotone check — the
+   aggregate cannot rule out some rows moving the other way — so the corpus
+   is corroboration for a reading that the card and the FAQ already decide.
+
+Fixed at **both** call sites. Generalised rather than patched: the new
+`UnstaffedBuildingsProduceNothing` class asserts the rule for **every** key in
+`effects._BUILDING_OUTPUT`, and `test_the_table_covers_every_building_output_key`
+fails if a new modifier key is added without being covered. The coordinator's
+instinct that "two of the same shape means there are probably more" was right
+to check and, this time, the other six were already correct.
+
 ### 3.8 `War over Technology`'s alternative spoil is unimplemented
 
 *"The victor takes science equal to the strength advantage, **or takes
@@ -288,41 +354,116 @@ The brief's warning, tested directly:
 
 ---
 
-## 6. Two things the brief asked for that are **not in this tree**
+## 6. `board_yields.py` and `final_event_culture`, re-checked on the real tree
 
-Both were named as landed; neither exists at master `6968256`, and
-`git cat-file -t 66e4344` is "not a valid object name":
+Both exist on master (my first clone was pinned 19 commits behind). Both were
+re-audited.
 
-* **`engine/bots/board_yields.py`** and the swap-in diff of `66e4344`. There
-  is no such file and no such commit. The replacement-semantics question the
-  brief asks (does the diff faithfully represent swapping leader A for leader
-  B, including the engine's clamps?) is worth asking *of that code when it
-  lands*, because `compute` clamps six ratings at 0 and happiness at 8 — a
-  diff of two clamped `compute` results is **not** the card's contribution
-  whenever either side is at a clamp. That is a live trap for a diffing
-  pricer, and it is the first thing to test on that file.
-* **`final_event_culture(state)`** does not exist. The two implementations it
-  is meant to unify *do* both exist and **do agree today**:
-  `events.scoring_culture` is the single body, called by `_apply_player_block`
-  (the real payout) and by `evaluate_final_events` (the end-of-game sweep).
-  The divergence risk is in the **ranking** half, which is duplicated: the
-  `rankingCulture` block is spelled out twice, once in each caller, with the
-  tie-break start index differing (revealer vs `start_player`) — correctly,
-  per RULES_SPEC 5.3 and 12.5, but by two copies of the code rather than one.
-  Both copies are now pinned by tests
-  (`test_a_mid_game_ranking_reveal_breaks_ties_toward_the_CURRENT_player`,
-  `test_the_END_OF_GAME_ranking_breaks_ties_toward_the_START_player`), which
-  is the divergence test the brief asked for, on the code that actually
-  exists.
+### 6.1 The swap diff is faithful — with one hole, now closed
 
-`effects.culture` and `effects.science` (priced in `96a5db2`) are the short
+`engine/bots/board_yields.py` prices a leader, government or wonder by putting
+the card on the board, calling `engine.effects.compute`, and diffing. The
+failure mode is not a wrong formula but a wrong *diff*, so that is what was
+checked:
+
+* **Replacement is a delta, not an absolute.** `_swapped` sets `p.leader` to
+  the candidate, so taking Einstein while holding Michelangelo prices as
+  Einstein *minus* Michelangelo, and `_rider_delta` explicitly subtracts the
+  outgoing leader's rider too. Wonders append instead of replacing, which is
+  right: a wonder accumulates.
+* **Clamps are handled correctly, and the module's reasoning is the right
+  one.** A diff of two clamped `compute` results *is* the marginal value: a
+  ninth happy face is genuinely worth zero, and the diff says zero. This was
+  my main suspicion going in and it is unfounded.
+* **Board interaction is exactly what it claims.** Michelangelo prices at
+  `culture_rate +6` with two Organized Religion temples on the board and at
+  nothing on an empty one. That is the whole justification for the module and
+  it holds.
+* **The trap is real and is guarded.** `state_stats` is a cache that a raw
+  attribute write does not dirty, so the hypothetical must use `compute`. The
+  module says so and a test enforces it.
+
+**The hole: the diff silently dropped Taj Mahal's blue token.** `card_potential`
+prices a swap card by the diff **alone** — deliberately, so a wonder's printed
+culture is not counted twice — but blue tokens are not a `Stats` field
+(`effects.on_enter_play` puts them on `p.blue_total`), so `compute` cannot
+report them. The static `_card_yields` *does* price `blueTokens`
+(`_EFF_TO_FEATURE` -> `blue_free`). So turning board pricing on moved Taj Mahal
+from "3 culture + 1 blue token" to "3 culture", and the pricing guardrail could
+not see it because `blueTokens` is priced *somewhere*.
+
+Fixed with a `blueTokens` wonder rider, keyed by effect key so the next card
+printing one is priced the day it lands. One card today; the class is "a key
+one path prices and the other cannot see", which is the same class as the
+eight above.
+
+### 6.2 The shared-source-of-truth holds, and its test genuinely bites
+
+`events.final_event_awards` is the single implementation; `evaluate_final_events`
+applies its steps and `final_event_culture` sums them. That is the right shape,
+and the divergence tests are not decorative — **negative control**: perturbing
+`evaluate_final_events` by +1 culture per award fails
+`test_payout_is_exactly_the_awards` and `test_forecast_equals_payout`, 2 of 9.
+So the arrangement is defended rather than merely documented.
+
+**One gap, now filled.** The forecast is a raw sum; the payout clamps a
+player's running culture at zero after *each* award. `test_forecast_equals_payout`
+skips every row where that clamp could have fired (`if b + f >= 0`), so the
+divergence itself was never asserted on a position that produces it — and a
+skipped case is not a checked case. `ForecastVersusPayout` now constructs it
+(1 culture banked, 7 discontent workers, `Impact of Happiness` pending): the
+forecast says −14, the payout pays −1 and stops at zero. The gap is
+deliberate and documented in `final_event_awards`; it is now also *pinned*, so
+closing or widening it is a decision somebody makes on purpose.
+
+My `rankingCulture` finding from the first pass stands and is unaffected: the
+ranking award is spelled out in both callers with different tie-break start
+indices — correctly (current player mid-game per RULES_SPEC 5.3, start player
+at game end per 12.5.2), but by two copies. Both are now pinned by tests.
+
+`effects.culture` / `effects.science` (priced in `96a5db2`) are the short
 spelling of per-turn production that `FLAT_KEYS` maps to `culture`/`science`;
 the ten wonders and two leaders that use it are covered by
 `Wonder.test_flat_benefits` and `Leader.test_flat_rating_leaders`, so the
-pricer's map and the rules engine's map are now checked against the same
-cards.
+pricer's map and the rules engine's map are checked against the same cards.
 
----
+## 6.5 What the human corpus could not have caught
+
+`docs/SCORE_VALIDATION.md` reports `Impact of Agriculture` as **66/66 exact**
+against BGO. Bug 3.1 says that card scores the wrong quantity. Both are true,
+and the reason is the important part:
+
+**At 2 players every pact is removed from the game** (RULES_SPEC 13; our own
+card data gives all ten pacts `"2p": 0`), and the corpus is **2p only**
+(SCORE_VALIDATION 8). A pact's food symbol is the *only* thing in the 2015 base
+game that puts food on your board from outside a farm. So no quantity of 2p
+human games could ever separate "the food your farms produce" from "your food
+rating" — the two are identically equal in every game in the corpus. The 66/66
+is real, and it is 66/66 *on inputs that cannot distinguish the hypotheses*.
+
+That is worth stating in general, because **five of the nine bugs sit inside
+the corpus's four documented blind spots**:
+
+| bug | blind spot | SCORE_VALIDATION's own words |
+|---|---|---|
+| 3.1 Agriculture | pacts, structurally absent at 2p | "2p only" (8) |
+| 3.2 Bill Gates on leave | Iconoclasm / leader replacement | games touching Iconoclasm are gated OUT of clean rows (1) |
+| 3.3 ruined wonders | Ravages of Time | "**no Ravages of Time flip was ever applied**" until the name-resolution fix (1) |
+| 3.4 air force | armies and tactics | "the replayer models no tactics and therefore no armies" (2) |
+| 3.7 St. Peter's + colony | happy faces | "happy faces are the one input the journal never prints" (8) |
+
+None of this impugns the corpus work, which found and fixed three real bugs and
+says all four of these limits out loud. The lesson is narrower and worth
+writing down: **a corpus validates a formula only over the inputs it can
+produce, and a 100% row is a statement about those inputs, not about the
+formula.** Where a card names a *source* ("the food produced by their farms")
+rather than a rating, the corpus can only check it if some game in the corpus
+puts that rating and that source apart. For Agriculture, none could.
+
+The counter-example is instructive: bug 3.9 was decided *by* the corpus,
+because unstaffed labs are common in ordinary 2p play, so those games do
+separate the two hypotheses. The corpus is decisive exactly where it has
+variation and silent exactly where it does not.
 
 ## 7. What I could not verify
 
@@ -345,11 +486,13 @@ cards.
 ## 8. Reproducing
 
 ```
-python3 -m unittest tests.test_score_audit -v      # 167 tests
+python3 -m unittest tests.test_score_audit -v      # 176 tests
 bash tools/gate.sh                                 # GATE PASS, digests unmoved
 ```
 
-To see the eight bugs fail with the rules answer rather than being skipped:
+The nine bugs are fixed, so they no longer fail.  To see them fail as they
+did before the fix, check out the first of the two commits (the tests-only
+one) and run:
 
 ```
 python3 - <<'PY'
@@ -362,3 +505,73 @@ import _xf
 unittest.main(module=_xf, argv=['x'], exit=False)
 PY
 ```
+
+## 9. Which fixes are live, and the digests they moved
+
+Nine rules fixes and one pricer fix. **They are live, not inert** — a ruined
+wonder no longer feeds Michelangelo, an unstaffed lab no longer pays Einstein,
+Immigration affects every tied player, and Churchill's military option is
+ring-fenced. Fingerprint digests move, which is correct and expected.
+
+**The constants are NOT updated in this commit, and that is deliberate.**
+Two things made a trustworthy derivation impossible in this window, and
+neither is a property of the change:
+
+1. **The parent commit's own constants are already stale.** A clean checkout
+   of `1c08790` ("The military discard is the player's choice, not FIFO"),
+   with no changes of mine, hashes `narrow` to **`bd0e9a62`** against the
+   `NARROW=0a6ed6ad` written in that same commit's `tools/gate.sh`. That
+   lane's change is live and its constants had not landed yet when this was
+   measured. Deriving on top of an unrecorded base would bake somebody
+   else's movement into my numbers and attribute it to these fixes.
+2. **The box could not produce a reliable measurement.** Five other lanes
+   were hashing concurrently on six cores, and at least one runs
+   `pkill -f "engine.perf_check"` **globally**, which kills every lane's
+   hasher and not only its own. Three of my runs died that way, each
+   appearing as the `check_fp` FAIL with a *blank* "got" field that
+   `tools/gate.sh` warns about. A `narrow` arm that takes 11 seconds
+   unloaded took over five minutes, and a blank is indistinguishable at a
+   glance from a moved hash — which is exactly how a wrong constant gets
+   written down.
+
+**A digest is never re-derived to make a gate pass.** The honest state is
+therefore: the fixes and their tests are complete and green (899 tests, ruff
+clean, rebased onto `1c08790`), and the eight constants need one clean window
+after the discard lane's own constants land. The measurements taken before
+the box saturated, recorded so the next derivation has something to check
+itself against rather than starting cold:
+
+| arm | in `gate.sh` at `1c08790` | clean `1c08790`, measured | with these fixes |
+|---|---|---|---|
+| NARROW | 0a6ed6ad | **bd0e9a62** (stale constant, not mine) | cd0971ed |
+
+The earlier, discarded derivation on base `f6ff7db` — before the discard lane
+landed — produced `67c07c2a / 5c4b711b / b65375e7 / 167aa6fe / 336d7810 /
+4c96e60c` for NARROW / WIDE / WWIDE / QNARROW / QWIDE / PNARROW, with `narrow`
+and `wide` each confirmed twice (plain and `FASTCOPY_PARANOID=1`,
+byte-identical). Those are **not** the values to write down — they are on the
+wrong base — but they do establish that every arm moves, and that the movement
+is deterministic rather than an artefact of load.
+
+### 9.1 Attribution: which fix moved which arm
+
+Not completed, for the same reason. The instrument is written and works
+(`/tmp/attrib.py` in-session: revert one fix at a time from the all-fixed
+tree, re-hash `narrow` and `weighted narrow`, report SAME or MOVED); it needs
+roughly ten quiet minutes. What can be said without it, from the shape of the
+changes:
+
+* **9 (unstaffed labs) and 5 (plural targets) are the likely movers for every
+  bot.** Unstaffed labs are ubiquitous — you develop a technology a turn
+  before you can staff it — and Leonardo/Newton/Einstein are common; Immigration
+  and Civil Unrest are ordinary Age I/II events and ties are frequent.
+* **6 (Churchill) can only move a bot that plays Churchill**, and his military
+  option is now genuinely weaker, so the choice between his two options
+  changes.
+* **1 (Agriculture) cannot move a 2p arm at all**, because 2p has no pacts, so
+  farm food and the food rating are identically equal there.
+* **10 (Taj Mahal's blue token) cannot move any arm today**, because
+  `card_board_credit` defaults to 0.0 and GreedyBot does not evaluate through
+  `weighted.py` at all.
+
+Those are predictions, not measurements, and they are labelled as such.

@@ -230,7 +230,15 @@ def _building_modifier(p, key, val):
         return sum(db.level_of(n) * t.workers for n, t in p.techs.items()
                    if db.type_of(n) == "lab")
     elif key == "sciencePerBestLabOrLibraryLevel":
-        b = best_card(p, {"lab", "library"})
+        # Leonardo / Newton / Einstein: "your best lab or library PRODUCES
+        # extra science".  An unstaffed technology card is not a building and
+        # produces nothing, so the best lab is the best STAFFED one -- the
+        # same reading `bestTheaterDoubleCulture` and `doubleBestMine` below
+        # already used (FAQ v1.5 p.9: "one worker on the best mine technology
+        # card that has workers").  Measured against BGO on 150 human games:
+        # 7303/7600 per-turn science rows exact with this reading against
+        # 7275/7600 without it (docs/SCORE_AUDIT.md 3.9).
+        b = best_card(p, {"lab", "library"}, require_workers=True)
         if b:
             return db.level_of(b)
     elif key == "culturePerLibraryTheaterPair":
@@ -246,6 +254,19 @@ def _building_modifier(p, key, val):
 def mine_resources(p):
     """Resources produced BY THIS PLAYER'S MINES (Impact of Industry)."""
     return building_output(p, frozenset({"mine"}), ("resources",))
+
+
+def farm_food(p):
+    """Food produced BY THIS PLAYER'S FARMS (Impact of Agriculture).
+
+    The twin of `mine_resources`, and it exists for the same reason: the card
+    scores "the food produced by their farms", not the food RATING, which also
+    carries a pact's food symbol (`International Trade Agreement`, side B).
+    `docs/SCORE_VALIDATION.md` 3.1 found and fixed that on the mine side and
+    left it standing here -- and the human corpus could not catch it, because
+    the replayer models no pacts.  See docs/SCORE_AUDIT.md 3.1.
+    """
+    return building_output(p, frozenset({"farm"}), ("food",))
 
 
 # Effect keys that need bespoke handling in `_apply_special` (everything
@@ -480,7 +501,10 @@ def _apply_modifier(s, p, key, val):
             (db.get(p.government).get("production") or {}).get("happy", 0))
         s.strength += val * happy
     elif key == "sciencePerBestLabOrLibraryLevel":
-        b = best_card(p, {"lab", "library"})
+        # see `_building_modifier`: the best lab or library is the best
+        # STAFFED one (docs/SCORE_AUDIT.md 3.9).  These two branches are
+        # deliberately the same arithmetic and must not drift apart.
+        b = best_card(p, {"lab", "library"}, require_workers=True)
         if b:
             s.science += db.level_of(b)
     elif key == "culturePerTheater":
@@ -502,6 +526,12 @@ def _apply_modifier(s, p, key, val):
     elif key == "culturePerHappyFromTemplesTheatersWonders":
         happy = _happy_from(p, {"temple", "theater"})
         for w in p.completed_wonders:
+            # a wonder flipped by Ravages of Time is ruins: "its effects no
+            # longer apply", so it provides no happy face for Michelangelo to
+            # be paid for.  `compute` phase 2 and `_output_modifiers` already
+            # filter it; this reader did not (docs/SCORE_AUDIT.md 3.3).
+            if w in p.flipped_wonders:
+                continue
             happy += (db.get(w).get("effects") or {}).get("happy", 0)
         s.culture += val * max(0, happy)
     elif key == "culturePerLibraryTheaterPair":
@@ -732,19 +762,34 @@ def _happy_from(p, types):
 
 
 def _happy_source_count(p):
-    """Number of cards/buildings providing happy faces (St. Peter's)."""
+    """Number of cards/buildings providing happy faces (St. Peter's).
+
+    "every building/CARD providing happy faces provides one additional happy
+    face" -- so the government card, the leader card and a colony card all
+    count, not only buildings.  Two of those three were already counted; the
+    colony was not (docs/SCORE_AUDIT.md 3.7).  A wonder ruined by Ravages of
+    Time provides no happy face and is therefore not a source (3.3).
+    """
     db = _DB
     n = 0
     for name, t in p.techs.items():
         if (db.get(name).get("production") or {}).get("happy", 0) > 0:
             n += t.workers
     for w in p.completed_wonders:
+        if w in p.flipped_wonders:
+            continue
         if (db.get(w).get("effects") or {}).get("happy", 0) > 0:
             n += 1
     if p.leader and (db.get(p.leader).get("effects") or {}).get("happy", 0) > 0:
         n += 1
     if (db.get(p.government).get("production") or {}).get("happy", 0) > 0:
         n += 1
+    for col in p.colonies:
+        if col not in _BY_NAME:
+            continue
+        perm = _BY_NAME[col].get("permanentEffects") or {}
+        if (perm.get("happiness", 0) or perm.get("happy", 0)) > 0:
+            n += 1
     return n
 
 
@@ -947,11 +992,16 @@ def _army_value(card, total_armies, fresh_armies, air):
     if old_val is None:
         old_val = val
     total = fresh_armies * val + outdated_armies * old_val
-    # an air force doubles the tactical bonus of one army (§10.5).
+    # an air force doubles the tactical bonus of one army (§10.5), and each
+    # air unit may be assigned to at most one army.  DOUBLING AN OUTDATED
+    # ARMY IS WORTH `obsoleteStrength`, not `strength`: with one fresh and
+    # one outdated army, two air units are worth val + old_val, not 2 * val.
     # Counted from `units`, so a colonization force only benefits from the
     # air units actually sacrificed into it (§11.3).
     if air:
-        total += min(air, total_armies) * (val if fresh_armies else old_val)
+        assigned = min(air, total_armies)
+        on_fresh = min(assigned, fresh_armies)
+        total += on_fresh * val + (assigned - on_fresh) * old_val
     return total
 
 
@@ -1214,6 +1264,12 @@ def on_leave_play(state, p, name):
         p.blue_total = max(0, p.blue_total - eff["blueTokens"])
     if "yellowTokens" in eff:
         p.yellow_bank = max(0, p.yellow_bank - eff["yellowTokens"])
+    if "cultureOnLeaveEqualToLabResourceProduction" in eff:
+        # Bill Gates: "when Bill Gates is removed from the game OR the game
+        # ends".  `end_of_game_bonus` implements the second half; this is the
+        # first, and without it replacing him (or Iconoclasm discarding him)
+        # threw the whole bonus away (docs/SCORE_AUDIT.md 3.2).
+        p.culture += _lab_level_workers(p)
     invalidate(state, p)
 
 
@@ -1297,12 +1353,20 @@ def _one_time_culture(state, p, name):
     return 0
 
 
+def _lab_level_workers(p):
+    """Sum of (lab level x workers) -- Bill Gates' extra resource production.
+
+    One implementation, because the card pays it twice: once per turn as
+    resources (`resourcesPerLabEqualToLevel`) and once as culture when he
+    leaves play or the game ends.
+    """
+    db = _DB
+    return sum(db.level_of(n) * t.workers for n, t in p.techs.items()
+               if db.type_of(n) == "lab")
+
+
 def end_of_game_bonus(state, p):
     """Bill Gates and friends (§12.5.3)."""
-    db = _DB
-    bonus = 0
     if p.leader == "Bill Gates":
-        for n, t in p.techs.items():
-            if db.type_of(n) == "lab":
-                bonus += db.level_of(n) * t.workers
-    return bonus
+        return _lab_level_workers(p)
+    return 0

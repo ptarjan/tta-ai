@@ -182,15 +182,32 @@ def resolve_event(state, name, rng, revealer_idx):
     if "target" in eff and "decreasePopulation" in eff:
         _conditional_target(state, eff, order, rng)
 
-    for key, stat, best in (("strongestPlayer", "strength", True),
-                            ("weakestPlayer", "strength", False),
-                            ("playerWithMostCulture", "culture", True),
-                            ("playerWithLeastCulture", "culture", False),
-                            ("playersWithMostHappyFaces", "happy", True),
-                            ("playersWithMostDiscontentWorkers",
-                             "discontent", True)):
+    # `all_tied` marks the two cards printed PLURAL.  RULES_SPEC 5.3
+    # [CoL p.7]: "'All civilizations' with most/least: all tied civs
+    # affected, no tie-break" -- against the four singular keys, which name
+    # one player and ARE tie-broken by turn order.  See docs/SCORE_AUDIT.md
+    # 3.5, including why the maximum has to be non-zero: "the players with
+    # the most discontent workers" is nobody when nobody has one, which is
+    # what `Civil Unrest`'s own data note says, and the same reading applies
+    # to `Immigration`'s happy faces.
+    for key, stat, best, all_tied in (
+            ("strongestPlayer", "strength", True, False),
+            ("weakestPlayer", "strength", False, False),
+            ("playerWithMostCulture", "culture", True, False),
+            ("playerWithLeastCulture", "culture", False, False),
+            ("playersWithMostHappyFaces", "happy", True, True),
+            ("playersWithMostDiscontentWorkers", "discontent", True, True)):
         if key in eff and isinstance(eff[key], dict):
-            targets = _rank(state, order, stat, best)[:1]
+            ranked = _rank(state, order, stat, best)
+            if not all_tied:
+                targets = ranked[:1]
+            else:
+                # every target is chosen BEFORE any block is applied: the
+                # blocks move population, which moves discontent.
+                top = _stat_value(state, ranked[0], stat) if ranked else 0
+                targets = ([q for q in ranked
+                            if _stat_value(state, q, stat) == top]
+                           if top > 0 else [])
             for q in targets:
                 _apply_player_block(state, q, eff[key], order, rng)
 
@@ -396,7 +413,11 @@ def scoring_culture(state, p, block, order):
             # which also carries Bill Gates' labs and colony symbols.
             total += int(v or 0) * effects.mine_resources(p)
         elif key == "culturePerFoodProducedByFarms":
-            total += int(v or 0) * s.food
+            # "the food produced by their FARMS" -- not the food rating,
+            # which also carries a pact's food symbol.  The exact twin of
+            # `culturePerResourceProducedByMines` above; see
+            # docs/SCORE_AUDIT.md 3.1 for why the corpus could not see it.
+            total += int(v or 0) * effects.farm_food(p)
             bonus = _num(block.get("bonusIfProductionExceedsConsumption"))
             if bonus and s.food > economy.consumption(p.yellow_bank):
                 total += int(bonus)

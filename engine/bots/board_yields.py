@@ -476,6 +476,22 @@ def _free_pop_increase(state, p, name):
             ("food_rate", FREE_POP_UTIL * food, _GAIN))
 
 
+def _blue_tokens(state, p, name):
+    """Taj Mahal's `blueTokens: 1`, which the swap diff structurally cannot see.
+
+    Blue tokens are not a `Stats` field -- `effects.on_enter_play` adds them
+    to `p.blue_total` -- so `compute` never reports them and the diff comes
+    back without them.  That matters because `card_potential` prices a swap
+    card by the diff ALONE: the static `_card_yields` DOES price
+    `blueTokens` (`_EFF_TO_FEATURE` -> `blue_free`), so turning board pricing
+    on silently DROPPED it.  A key that one path prices and another does not
+    is the whole failure mode this module was built to end
+    (docs/SCORE_AUDIT.md 6).
+    """
+    n = (_DB.get(name).get("effects") or {}).get("blueTokens") or 0
+    return (("blue_free", float(n), _GAIN),) if n else ()
+
+
 #: effects key -> rider, for wonders.  Keyed by KEY rather than by card name
 #: (unlike `RIDERS`) so the next card printing the same thing is priced the
 #: day it lands.  No subtraction here: wonders accumulate, so there is no
@@ -484,6 +500,7 @@ WONDER_RIDERS = {
     "onBuildCulture": _on_build_culture,
     "onBuildCulturePerTechLevelSum": _on_build_culture,
     "freePopIncreasePerTurn": _free_pop_increase,
+    "blueTokens": _blue_tokens,
 }
 
 
@@ -681,6 +698,9 @@ BOARD_PRICED = {
     "freePopIncreasePerTurn":
         "wonder rider: a free pop increase per turn, priced as the civil "
         "action and food it refunds at the measured rate (FREE_POP_UTIL)",
+    "blueTokens":
+        "wonder rider: not a Stats field, so the swap diff cannot see it and "
+        "the static table's `blue_free` would be dropped (SCORE_AUDIT 6)",
     # --- riders, priced above rather than by the engine
     "cultureIfTopTwoStrength":
         "board rider: _genghis, exact from rival strengths",

@@ -16,10 +16,10 @@ Two rules for everything below, both learned the hard way (see
    an accident.  `HardcodedConstantsMatchTheData` and `EveryFieldHasAReader`
    at the bottom exist to make that shape loud instead of silent.
 
-Tests for behaviour the audit found WRONG are marked `@unittest.expectedFailure`
-with the rules answer asserted, so the suite goes red the moment someone fixes
-them (unittest reports an unexpected success as a failure) and the decorator
-has to be removed deliberately.
+The eight bugs the audit found are FIXED, and the tests that found them now
+assert the rules answer directly.  They ran as `@unittest.expectedFailure`
+for exactly one commit, which is how each one was shown to fail for the right
+reason before the fix rather than for an accident of the position.
 """
 from __future__ import annotations
 
@@ -223,10 +223,8 @@ class AirForce(unittest.TestCase):
     def test_air_cannot_double_an_army_that_does_not_exist(self):
         st, p = position({"Air Forces": 2}, tactic="Mechanized Army")
         self.assertEqual(effects.army_strength(st, p), 0)
-
-    @unittest.expectedFailure
     def test_a_second_air_force_doubles_the_OUTDATED_armys_smaller_bonus(self):
-        """BUG (audit 3.4).  Mechanized Army is Age III, so a unit of Age I
+        """FIXED (audit 3.4).  Mechanized Army is Age III, so a unit of Age I
         is outdated: 1 fresh army (10) + 1 outdated army (5) = 15.  Two air
         units double one army each -- the fresh one (+10) and the outdated
         one (+5) -- so 30.  The engine prices BOTH doublings at the fresh
@@ -578,6 +576,30 @@ class Leader(unittest.TestCase):
             st, p = position({"Computers": 1, "Philosophy": 1}, leader=name)
             self.assertEqual(stats(st, p).science, 5 + 1 + 3, name)
 
+    def test_an_UNSTAFFED_lab_produces_nothing_for_newton(self):
+        """FIXED (audit 3.9).  "Your best lab or library PRODUCES extra
+        science."  A building is a worker standing on a technology card; a
+        card with no worker on it is a technology, not a lab, and produces
+        nothing for a leader to add to.
+
+        Decided three ways, all agreeing:
+          * the engine's own reading of the same phrase everywhere else --
+            Chaplin's best theater and the Railroad's best mine both pass
+            `require_workers=True`, the latter on FAQ v1.5 p.9's "one worker
+            on the best mine technology card THAT HAS WORKERS";
+          * every other per-building leader (Sid Meier, Bill Gates, Bach,
+            Shakespeare) multiplies by `t.workers`;
+          * BGO itself: on 150 human games this reading agrees with BGO's own
+            printed per-turn science on 7303/7600 rows against 7275/7600 for
+            the other one (docs/SCORE_AUDIT.md 3.9).
+        """
+        for name in ("Leonardo da Vinci", "Isaac Newton", "Albert Einstein"):
+            st, p = position({"Computers": 0, "Philosophy": 1}, leader=name)
+            # only Philosophy is staffed, and Philosophy is Age A = level 0
+            self.assertEqual(stats(st, p).science, 1, name)
+            st, p = position({"Computers": 1}, leader=name)
+            self.assertEqual(stats(st, p).science, 5 + 3, name)
+
     def test_an_age_A_lab_has_level_zero(self):
         """Age A cards carry no level number: Philosophy is level 0, so
         Newton adds nothing at all."""
@@ -619,10 +641,8 @@ class Leader(unittest.TestCase):
         st, p = position({"Organized Religion": 1, "Drama": 1},
                          leader="Michelangelo", wonders=["Hanging Gardens"])
         self.assertEqual(stats(st, p).culture, (1 + 2 + 1) + 6)
-
-    @unittest.expectedFailure
     def test_michelangelo_does_not_pay_for_a_RUINED_wonders_happy_faces(self):
-        """BUG (audit 3.3).  A wonder flipped by Ravages of Time provides no
+        """FIXED (audit 3.3).  A wonder flipped by Ravages of Time provides no
         happy faces at all -- `compute` skips its effects and pays 2 culture
         of ruins instead.  Michelangelo should therefore see only the temple's
         1 happy face: 1 (temple culture) + 2 (ruins) + 1 (Michelangelo) = 4.
@@ -632,10 +652,8 @@ class Leader(unittest.TestCase):
                          wonders=["Hanging Gardens"],
                          flipped=["Hanging Gardens"])
         self.assertEqual(stats(st, p).culture, 4)
-
-    @unittest.expectedFailure
     def test_st_peters_does_not_count_a_RUINED_wonder_as_a_happy_source(self):
-        """BUG (audit 3.3), the same inconsistency on the other card.  A
+        """FIXED (audit 3.3), the same inconsistency on the other card.  A
         ruined Hanging Gardens provides no happy faces, so it is not a happy
         source: the answer is the same 4 as without it."""
         # St. Peter's alone over one Religion temple: 1 (temple) + 1 (wonder)
@@ -647,10 +665,8 @@ class Leader(unittest.TestCase):
                          wonders=["St. Peter's Basilica", "Hanging Gardens"],
                          flipped=["Hanging Gardens"])
         self.assertEqual(stats(st, p).happy, 4)
-
-    @unittest.expectedFailure
     def test_st_peters_counts_a_COLONY_as_a_happy_source(self):
-        """BUG (audit 3.8).  "every building/CARD providing happy faces
+        """FIXED (audit 3.7).  "every building/CARD providing happy faces
         provides one additional happy face" -- and `_happy_source_count`
         already reads that as "card", not "building", because it counts the
         government card and the leader card, neither of which is a building.
@@ -701,10 +717,8 @@ class Leader(unittest.TestCase):
         for name in ("Sid Meier", "Charlie Chaplin", None):
             st, p = position({"Computers": 2}, leader=name)
             self.assertEqual(effects.end_of_game_bonus(st, p), 0, str(name))
-
-    @unittest.expectedFailure
     def test_bill_gates_also_pays_when_he_LEAVES_play(self):
-        """BUG (audit 3.2).  "...removed from the game OR the game ends".
+        """FIXED (audit 3.2).  "...removed from the game OR the game ends".
         Replacing Bill Gates with another leader must pay the culture; the
         engine pays only at game end, so the whole bonus is lost.
         """
@@ -1127,10 +1141,8 @@ class ScoringEvents(unittest.TestCase):
     def test_impact_of_agriculture_with_no_farms_at_all(self):
         st, p = position(bank=1)          # consumption 4, production 0
         self.assertEqual(impact(st, p, "Impact of Agriculture"), 0)
-
-    @unittest.expectedFailure
     def test_impact_of_agriculture_scores_FARMS_not_the_food_rating(self):
-        """BUG (audit 3.1), and it is `Impact of Industry` (SCORE_VALIDATION
+        """FIXED (audit 3.1).  It is `Impact of Industry` (SCORE_VALIDATION
         3.1) again on the other card.  The card scores "the food produced by
         their farms"; the engine scores `s.food`, the whole rating, which also
         carries a pact's food symbol.  Two Agriculture workers = 2 farm food,
@@ -1395,6 +1407,60 @@ class NonScoringEvents(unittest.TestCase):
         self.assertEqual(p.food, 6)
 
 
+class ForecastVersusPayout(unittest.TestCase):
+    """The one place `final_event_culture` and `evaluate_final_events` differ.
+
+    `tests/test_event_scoring.py` pins that they agree, but its game-driven
+    comparison SKIPS every row where the payout's per-award zero clamp could
+    have fired (`if b + f >= 0`), so the divergence itself was never asserted
+    on a position that produces it.  A skipped case is not a checked case.
+
+    The divergence is deliberate and documented in `final_event_awards`: the
+    payout clamps a player's running culture at zero after EACH award, the
+    forecast sums the raw awards.  This constructs the position and states
+    the size of the gap, so that closing it (or widening it) is a decision
+    somebody makes on purpose.
+    """
+
+    def near_zero_with_a_negative_board(self):
+        """1 culture, 7 discontent workers, `Impact of Happiness` pending:
+        2 x 0 happy faces - 2 x 7 discontent = -14 owed against 1 banked."""
+        st, p = position({"Religion": 0}, bank=1)
+        for q in st.players:
+            q.culture = 1
+            q.yellow_bank = 1
+        st.current_events = ["Impact of Happiness"]
+        st.future_events = []
+        effects.invalidate(st)
+        return st, p
+
+    def test_the_forecast_is_the_raw_sum(self):
+        st, p = self.near_zero_with_a_negative_board()
+        self.assertEqual(economy.discontent(st, p), 7)
+        self.assertEqual(events.final_event_culture(st)[0], -14)
+
+    def test_the_payout_clamps_at_zero_and_the_two_therefore_differ(self):
+        st, p = self.near_zero_with_a_negative_board()
+        forecast = events.final_event_culture(st)[0]
+        events.evaluate_final_events(st)
+        self.assertEqual(p.culture, 0)          # clamped, not -13
+        self.assertEqual(forecast, -14)
+        # the gap the bot's forecast carries on this board
+        self.assertEqual(forecast - (0 - 1), -13)
+
+    def test_they_agree_whenever_no_clamp_fires(self):
+        st, p = position({"Coal": 2})
+        for q in st.players:
+            q.culture = 100
+        st.current_events = ["Impact of Industry"]
+        st.future_events = []
+        effects.invalidate(st)
+        forecast = events.final_event_culture(st)[0]
+        before = p.culture
+        events.evaluate_final_events(st)
+        self.assertEqual(forecast, p.culture - before)
+
+
 class PluralTargets(unittest.TestCase):
     """RULES_SPEC 5.3 [CoL p.7]: `"All civilizations" with most/least: ALL
     tied civs affected, no tie-break.`
@@ -1423,20 +1489,16 @@ class PluralTargets(unittest.TestCase):
             q.culture = 10
         events.resolve_event(st, "National Pride", None, 0)
         self.assertEqual([q.culture for q in st.players], [15, 10, 10])
-
-    @unittest.expectedFailure
     def test_immigration_grows_EVERY_player_tied_on_happy_faces(self):
-        """BUG (audit 3.5).  All three are tied on 2 happy faces, so all three
+        """FIXED (audit 3.5).  All three are tied on 2 happy faces, so all three
         increase population; the engine picks one by turn order."""
         st = self.three_tied_on_happiness()
         self.assertEqual({effects.state_stats(st, q).happy for q in st.players},
                          {2})
         events.resolve_event(st, "Immigration", None, 0)
         self.assertEqual([q.workers_free for q in st.players], [1, 1, 1])
-
-    @unittest.expectedFailure
     def test_civil_unrest_taxes_EVERY_player_tied_on_discontent(self):
-        """BUG (audit 3.5), the same wording on the other card."""
+        """FIXED (audit 3.5), the same wording on the other card."""
         st = game.new_game(3, seed=5)
         for q in st.players:
             q.techs = {}
@@ -1585,6 +1647,67 @@ class HardcodedConstantsMatchTheData(unittest.TestCase):
                          ["foodProduction", "resourceProduction",
                           "scienceProduction", "cultureProduction"])
         self.assertEqual(sorted(eff["ignore"]), ["consumption", "corruption"])
+
+
+class UnstaffedBuildingsProduceNothing(unittest.TestCase):
+    """The generalisation of audit 3.9, across the whole modifier family.
+
+    `sciencePerBestLabOrLibraryLevel` and `bestTheaterDoubleCulture` are the
+    same shape -- "your best X produces ..." -- and they disagreed about
+    whether an unstaffed X counts.  Two readers of one rule that disagree is
+    the bug class this whole file is about, so rather than fixing the one
+    case, this pins the rule for EVERY key in `effects._BUILDING_OUTPUT`:
+    a technology card with no worker on it is not a building and contributes
+    nothing.
+
+    A new modifier key added without a `t.workers` guard fails here.
+    """
+
+    #: modifier key -> (leader or wonder carrying it, cards it reads)
+    CASES = {
+        "bestTheaterDoubleCulture": ("Charlie Chaplin", {"Movies": 0}),
+        "culturePerTheater": ("J. S. Bach", {"Movies": 0}),
+        "culturePerLabEqualToLevel": ("Sid Meier", {"Computers": 0}),
+        "sciencePerLab": ("Sid Meier", {"Computers": 0}),
+        "resourcesPerLabEqualToLevel": ("Bill Gates", {"Computers": 0}),
+        "sciencePerBestLabOrLibraryLevel": ("Isaac Newton", {"Computers": 0}),
+        "culturePerLibraryTheaterPair": ("William Shakespeare",
+                                         {"Movies": 0, "Multimedia": 0}),
+    }
+
+    def test_every_case_is_a_real_modifier_key(self):
+        for key, (holder, _) in self.CASES.items():
+            self.assertIn(key, effects._BUILDING_OUTPUT, key)
+            self.assertIn(key, _DB.get(holder)["effects"], holder)
+
+    def test_the_table_covers_every_building_output_key(self):
+        """A new key must be added here, or this fails."""
+        covered = set(self.CASES) | {"doubleBestMine"}   # wonder, below
+        self.assertEqual(sorted(set(effects._BUILDING_OUTPUT) - covered), [])
+
+    def test_an_unstaffed_building_earns_no_modifier(self):
+        for key, (holder, techs) in self.CASES.items():
+            bare_st, bare_p = position(techs, leader=None)
+            st, p = position(techs, leader=holder)
+            bare = stats(bare_st, bare_p)
+            got = stats(st, p)
+            for attr in ("culture", "science", "resources"):
+                # the leader's own printed flat production is allowed to
+                # differ; the MODIFIER is not, and none of these five leaders
+                # prints flat culture/science/resources
+                self.assertEqual(getattr(got, attr), getattr(bare, attr),
+                                 f"{key} via {holder}: {attr}")
+
+    def test_the_railroad_does_not_double_an_unstaffed_mine(self):
+        st, p = position({"Oil": 0, "Bronze": 1},
+                         wonders=["Transcontinental Railroad"])
+        # only Bronze is staffed, so the best STAFFED mine is Bronze (1)
+        self.assertEqual(stats(st, p).resources, 1 + 1)
+
+    def test_a_staffed_building_does_earn_it(self):
+        """The negative control: the guard above must not be vacuous."""
+        st, p = position({"Computers": 1}, leader="Isaac Newton")
+        self.assertEqual(stats(st, p).science, 5 + 3)
 
 
 class EveryFieldHasAReader(unittest.TestCase):

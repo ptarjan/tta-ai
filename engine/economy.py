@@ -202,6 +202,7 @@ def end_of_turn(state, p, rng):
     p.politics_done = False
     p.taken_this_turn = []
     p.mil_discount = 0                   # §3.11 action-card discounts expire
+    p.mil_sci_discount = 0               # Churchill's ring-fenced science
     return True
 
 

@@ -115,6 +115,12 @@ class PlayerState:
     # resource discount pool for military unit builds/upgrades this turn
     # (Patriotism / Wave of Nationalism / Military Build-Up, §3.11)
     mil_discount: int = 0
+    # science discount pool for military UNIT technologies this turn.  The
+    # exact twin of `mil_discount`, and it exists for the same reason:
+    # Winston Churchill's military option is "3 science usable only to
+    # develop military unit technologies", which is not 3 science
+    # (docs/SCORE_AUDIT.md 3.6).
+    mil_sci_discount: int = 0
     # one-time event discount, e.g. {"build": {"resources": 1}} (§ Civil Life)
     one_time_discount: dict = field(default_factory=dict)
     # war bookkeeping: (war_name, attacker_idx, defender_idx)
