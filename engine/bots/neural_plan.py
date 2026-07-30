@@ -45,6 +45,7 @@ from __future__ import annotations
 import random
 
 from .. import actions
+from . import pending
 from .fastcopy import copy_state
 from .neural_encode import encode
 from .plan import determinize as _determinize
@@ -75,10 +76,24 @@ class NeuralPlanBot:
     #: determinizations averaged over
     SAMPLES = 1
     WAR_LOOKAHEAD = True
+    #: drain a pending decision of MINE before pricing candidates, exactly as
+    #: `_beam` already does for every node it scores.  `None` means "the shared
+    #: default in `engine.bots.pending`", which is where it lives so that this
+    #: class and `PlanBot` -- which is where this short-circuit was copied FROM
+    #: -- cannot answer the question differently.  Do not put a bool here.
+    QUIET_PENDING = None
+    #: re-shuffle the unseen decks before pricing a non-ordinary-turn decision.
+    #: True here and False on `PlanBot`: this class has always determinized on
+    #: this path and PlanBot never has, which is the drift that made "the same
+    #: short-circuit, copied out" not actually the same.  This one is right --
+    #: `tools/pending_leak.py` measures what the other one leaks -- so it is
+    #: pinned True here rather than changed to match.
+    PENDING_DETERMINIZE = True
 
     def __init__(self, value, seed=None, rng=None, name=None, width=None,
                  samples=None, determinize=True, war_lookahead=None,
-                 max_nodes=None, drain_weights=None, allow_resign=False):
+                 max_nodes=None, drain_weights=None, allow_resign=False,
+                 quiet_pending=None):
         self.value = value
         self.rng = rng or random.Random(seed)
         self.width = self.WIDTH if width is None else width
@@ -89,6 +104,8 @@ class NeuralPlanBot:
             self.WAR_LOOKAHEAD = war_lookahead
         if max_nodes is not None:
             self.MAX_NODES = max_nodes
+        if quiet_pending is not None:
+            self.QUIET_PENDING = quiet_pending
         self.drain_weights = dict(drain_weights or DEFAULT_WEIGHTS)
         if name:
             self.name = name
@@ -159,12 +176,24 @@ class NeuralPlanBot:
 
         # Not my ordinary turn: there is no turn to plan, so fall back to the
         # 1-ply neural pick at a common horizon of "now" (this is exactly what
-        # NeuralBot does, and what PlanBot._one_ply does for the linear bot).
-        if state.pending or state.current != me:
-            root = copy_state(state)
+        # NeuralBot does, and what PlanBot._one_ply does for the linear bot)
+        # -- and when the pending decision is MINE, drain it first, because
+        # `_beam` below already quiesces every node it scores.  The policy is
+        # `engine.bots.pending`, shared with PlanBot so that the two cannot
+        # answer this differently again; only the scorer here is ours.
+        if pending.not_my_turn(state, me):
+            # `PENDING_DETERMINIZE` is True on this class, so `prepare_root`
+            # does what the three lines here used to do; `self.determinize`
+            # still gates it, as it gates the beam's own determinization.
+            root = state
             if self.determinize:
-                _determinize(root, self.rng)
-            return self._one_ply_neural(root, moves, me)
+                root = pending.prepare_root(self, state, copy_state,
+                                            _determinize, self.rng)
+            return pending.fallback_pick(
+                self, state,
+                plain=lambda: self._one_ply_neural(root, moves, me),
+                quiet=lambda: self._one_ply_neural(root, moves, me,
+                                                   quiet=True))
 
         totals, seen = {}, {}
         drng = random.Random((state.seed or 0) * 7919 + state.turn * 31 + me)
@@ -188,12 +217,22 @@ class NeuralPlanBot:
                 bi, bv = i, v
         return moves[bi]
 
-    def _one_ply_neural(self, state, moves, me):
+    def _one_ply_neural(self, state, moves, me, quiet=False):
+        """One ply, batched.  ``quiet`` drains the pending stack per candidate.
+
+        ``quiet=True`` is the neural mirror of ``PlanBot._one_ply_quiet``: it
+        calls the same ``_quiesce`` this class already runs on every node of
+        its own beam (see ``_beam``), so a real decision is priced the way a
+        searched one is.  See `engine.bots.pending` for why that matters and
+        what skipping it measured.
+        """
         states, valid = [], []
         for mv in moves:
             t = copy_state(state)
             try:
                 actions.apply(t, mv, _TRIAL)
+                if quiet:
+                    self._quiesce(t)
             except Exception:
                 continue
             states.append(t)

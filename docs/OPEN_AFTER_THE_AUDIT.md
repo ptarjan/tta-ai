@@ -59,7 +59,29 @@ first `defend` always looks like pure cost.
 
 The fix takes held-off defences 0 -> 332 over 200 games at 4p, with every
 attempt winnable.  Default is `False` pending a strength A/B at 3p/4p.
-`neural_plan.py:163` has the same short-circuit copied out and is untouched.
+
+**UPDATED 2026-07-30, and the item is bigger than it looked.**  See
+`docs/AGGRESSION_RATE.md` 8-11.
+
+* Not mainly about defence: the short-circuit never tested the pending *kind*,
+  and **auctions** are 71.6% of the decisions the drain moves (455 seen, 326
+  moved at 3p) against defence's 37.8%.  The bot was pricing a colony/pact bid
+  on a position where the bid had not resolved.  That is the same defect
+  `docs/CARD_CENSUS.md` 10 reached from the territory end.
+* **Do not flip `QUIET_PENDING` as shipped.**  Neither pending path
+  determinizes, so a trial `apply` draws the REAL next deck card, and the drain
+  adds `apply` calls: master leaks on 24.0% of candidate evaluations at 3p and
+  the drained arm on 34.7% (`tools/pending_leak.py`).  The first paired block
+  (53.28% +/- 5.89pp vs a 33.3% null) is contaminated by that.  The leak-neutral
+  contrast is `qp=1,qd=1` vs master.
+* **The determinization leak is its own, older defect** and probably the larger
+  prize: it is live in every league game today with no flag.  Scoped and costed
+  in `docs/AGGRESSION_RATE.md` 9; not started.
+* `neural_plan.py:163`'s copy is **fixed**, by sharing one implementation
+  (`engine/bots/pending.py`) with a divergence test, not by patching the copy.
+  The copy was not faithful: it already determinized where `PlanBot` did not.
+* Flipping the default moves **two** digests, `PNARROW`/`PWIDE` -- not eight,
+  and not "plan and quiescent"; verified by recomputing all three narrow arms.
 
 ## 6. War over Technology's alternative spoil is unimplemented
 

@@ -338,7 +338,9 @@ def make_bot(spec, seed):
                                         else None),
                              determinize=bool(int(opts.get("det", 1))),
                              war_lookahead=(None if "war" not in opts
-                                            else bool(int(opts["war"]))))
+                                            else bool(int(opts["war"]))),
+                             quiet_pending=(None if "qp" not in opts
+                                            else bool(int(opts["qp"]))))
     if isinstance(spec, tuple) and spec and spec[0] == "plan":
         from engine.bots.plan import PlanBot
         _, inner, opts = spec
@@ -350,7 +352,9 @@ def make_bot(spec, seed):
                        war_lookahead=(None if "war" not in opts
                                       else bool(opts["war"])),
                        quiet_pending=(None if "qp" not in opts
-                                      else bool(opts["qp"])))
+                                      else bool(opts["qp"])),
+                       pending_determinize=(None if "qd" not in opts
+                                            else bool(opts["qd"])))
     if isinstance(spec, tuple) and spec and spec[0] == "quiescent":
         from engine.bots.quiescent import QuiescentBot
         _, inner, opts = spec

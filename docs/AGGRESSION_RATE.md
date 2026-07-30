@@ -187,14 +187,27 @@ within noise, as expected, since the attacker already quiesced.
   default moves gate digests and wants its own before/after table and
   attribution, the way `docs/MILITARY_DISCARD.md` §5 did. **It should be
   flipped**; it was not flipped here because doing it at the end of a session
-  while master is moving would land eight moved digests on other lanes without
-  a strength A/B behind them.
+  while master is moving would land moved digests on other lanes without a
+  strength A/B behind them. §8-§11 are that follow-up; read §9 before flipping
+  anything, because the flip as written above is **not** the thing to land.
 
-  To flip: set `QUIET_PENDING = True`, re-derive the `plan`/`quiescent` arms of
-  `tools/gate.sh` with attribution, and duel it paired first:
+  To flip: set `pending.QUIET_PENDING = True` and re-derive **`PNARROW` and
+  `PWIDE`** (`tools/gate.sh:304-305`). That is **two** arms, not eight and not
+  "plan and quiescent" — an earlier draft of this section said both of those
+  and both were wrong. Verified by setting the default `True` and recomputing:
+  `PNARROW` 85c06781 → e3016dc2, `QNARROW` ad62a4e5 → **ad62a4e5**, `WNARROW`
+  f0b240da → **f0b240da**. `QuiescentBot` and `WeightedBot` are different
+  classes and never route through `PlanBot.pick`. (The "eight digests" figure
+  belongs to the nine scoring fixes, `6efe8ba`.) Duel it paired first:
 
-      python3 -m tools.aggression_census --spec plan:analysis/frozen/champion_4p.json,width=2,qp=1 \
+      python3 -m tools.aggression_census \
+          --spec plan:analysis/frozen/champion_4p_gen350_99key.json,width=2,qp=1 \
           --players 4 --games 200 --workers 10
+
+  — and note the vector: an earlier draft of this file used
+  `analysis/frozen/champion_4p.json`, which is now
+  `champion_4p.DEGENERATE.json` and which `arena._degenerate_match` refuses
+  under any name.
 
 ## 6. Ruled out, with the evidence, so nobody re-runs these
 
@@ -247,3 +260,197 @@ within noise, as expected, since the attacker already quiesced.
   lane must not disturb it — and not measured. Fixing `PlanBot` alone leaves
   the duplicate in place, which is the argument for doing them together rather
   than for doing neither.
+
+  **Fixed in §10 by sharing one implementation rather than patching the copy —
+  and the copy turned out not to be faithful: it already disagreed about
+  determinization (§9).**
+
+## 8. The bigger half: this was never mainly about defence, it was about AUCTIONS
+
+§5 found the defect by counting defences, because a defence has a countable
+outcome ("0 of 1,104 winnable ones held off"). That framing understated it.
+`PlanBot.pick`'s short-circuit never tested the *kind* of the pending decision —
+it fired on `state.pending`, and `engine/interact.py` pushes three kinds onto
+that stack:
+
+    "defense"   the defender's card-by-card answer to an aggression
+    "auction"   a colony or pact bid, resolved round-robin
+    "choice"    everything else, carrying a `tag` (which military card to
+                discard, which sacrifice, which branch of an event, ...)
+
+So **every** nested decision the bot owns was priced on a position with its own
+resolution still hanging, while the identical position inside the bot's own beam
+was priced after `_quiesce`. `tools/pending_divergence.py` measures the extent:
+it plays real games with the drain on and, at every real decision of its own
+where the stack is non-empty, prices the candidates both ways and records
+whether the two disagree. 3p, `champion_3p_gen1255_99key`, `width=2`, 24 games:
+
+| kind / choice tag | seen | drain moved the pick | rate |
+|---|---:|---:|---:|
+| **auction** (colony/pact bids) | 455 | 326 | **71.6%** |
+| **defense** | 82 | 31 | **37.8%** |
+| choice:discard_military | 1728 | 104 | 6.0% |
+| choice:take_row | 6 | 1 | 16.7% |
+| 11 other choice tags (`food_or_res`, `free_civil`, `pact_offer`, `raid`, `lose_pop`, `lose_colony`, `free_build`, `gain_block`, `destroy_own`, `infiltrate`, `annex`) | 356 | 0 | 0.0% |
+| **all own pending decisions** | **2,627** (109.46/game) | **462** | **17.6%** |
+
+**Auctions are the dominant surface, at nearly twice defence's rate on five
+times the volume.** The mechanism is the same defect stated in its worst form:
+an `auction` pend resolves round-robin, so an undrained position after
+`("bid", n)` shows the money committed and *not* who won the territory. The bot
+was choosing what to pay without the position it scored ever showing whether it
+won the colony. `_quiesce` resolves the rest of the bidding, so the drained
+position shows the outcome — which is what `_child` has always seen inside the
+beam.
+
+This is the same defect `docs/CARD_CENSUS.md` §10 reached from the other end
+when it ranked **territories** its number-one suspect: the census saw
+territories mispriced and looked for a missing feature, and the missing thing
+was not a feature but the position the feature was read on. Two lanes, opposite
+directions, one defect. Do not treat them as separate problems.
+
+`choice:discard_military` deserves its own line: 1,728 occurrences, the largest
+single volume, and only 6.0% moved. That is the shape you expect from a decision
+whose consequence is mostly visible immediately (a card leaves the hand), which
+is a useful control — the drain is not just perturbing picks at random, it moves
+them where the outcome is deferred and leaves them alone where it is not.
+
+## 9. The deck peek at the pending path: real, older, and INERT on picks
+
+This section was written twice. The first version said the drain's win rate was
+confounded by an information leak. **That was wrong, and the way it was wrong is
+worth keeping**, because the check that produced the retraction is the same
+check that produced the finding.
+
+**The suspicion.** The first paired block of `qp=1` vs `qp=0` at 3p came back at
+**53.28% ± 5.89pp against a 33.3% null** (culture margin +25.59 ± 5.84,
+z = 6.76, n = 200, deal-clustered K = 66, rho = −0.154). That is far too large
+for a defence fix. `pick`'s beam path prices candidates on a **determinized**
+root, because `fastcopy.copy_state` copies both draw decks verbatim and a trial
+`apply` that draws therefore draws the **real next card** (`tools/infoleak.py`:
+94.9% of `end_turn` candidates at 2p). The pending short-circuit does not
+determinize at all — and the drain *adds* `apply` calls, so it should add
+peeking. `tools/pending_leak.py` confirms the mechanism exists, per candidate
+evaluation at the bot's own pending decisions:
+
+| | 3p (1,805 evals) | 4p (3,917 evals) |
+|---|---:|---:|
+| master's `apply` consumed real deck cards | 24.0% | 19.1% |
+| the drain consumed real deck cards | 34.7% | 32.0% |
+| master's `apply` changed the visible row | 25.5% | 20.2% |
+| the drain changed the visible row | 40.3% | 26.8% |
+
+**The retraction.** Counting card consumption is not measuring exploitation, and
+the conduction rule applies to a confound exactly as it applies to a treatment:
+*show that the lever moves something before you attribute a result to it.*
+`PENDING_DETERMINIZE` (`qd`) removes the peek — verified directly: the root is a
+copy, the real deck is untouched, the copy's order really changes, the multiset
+is preserved. Then `tools/pending_divergence.py --lever det` asks the only
+question that matters, at every one of the bot's own pending decisions: does
+removing the peek change the pick?
+
+    3p, champion_3p_gen1255_99key, 12 games:
+    own pending decisions 1346 (112.17/game) -- LEVER CHANGED PICK 0 (0.0%)
+
+**Zero, on every kind.** A `qp=1` vs `qp=1,qd=1` duel on identical deals is
+byte-identical in win rate, per-game shares and culture margin. So the peek
+cannot be the cause of anything, and §5.2's result stands as a result about
+play.
+
+**Why zero, and why that is not a fluke.** The drain resolves the *same*
+pending stack for every candidate move, so it draws the same cards in the same
+order whichever candidate is being priced. The peeked cards enter every
+candidate's score as the same additive term, and an argmax over candidates is
+invariant to a common offset. The peek is **common-mode**. It would stop
+cancelling only where candidates differ in how many cards the drain consumes;
+that is rare enough not to appear in 1,346 decisions.
+
+**It is still a defect and should still be closed.** The bot reads the true next
+deck card on 24% of its candidate evaluations at 3p today, with no flag, in the
+same family as the `end_turn` row leak this repo has fixed twice. The argument
+for closing it is correctness, not strength: a common-mode leak is one
+refactor away from being a differential one, and the next person to make
+candidates draw different amounts inherits a live exploit with no test failing.
+`qd` exists, is shared through `pending.prepare_root`, and is on for
+`NeuralPlanBot` already. **The measured cost of turning it on for `PlanBot` is
+zero decisions changed**, which is the cheapest correctness fix in this
+document — but it is not free to *land*, because it moves `PNARROW`/`PWIDE` and
+restarts the league arms, so it ships with the drain rather than on its own.
+
+**What this episode is evidence for.** Two spectacular numbers tonight turned
+out to be instruments rather than results. This one turned out to be a result,
+and the only reason that is known is that it was attacked as hard as the other
+two. Attack the confound with the same conduction test you would apply to the
+treatment; "there is a mechanism by which this could be fake" is a hypothesis,
+not a finding.
+
+## 10. The duplicate, fixed by sharing (`engine/bots/pending.py`)
+
+`neural_plan.py:163` had `plan.py`'s short-circuit copied out, which is the
+fifth instance in one session of one rule living in two places (the build
+discount, the hand double-count, the population cost, the `rankingCulture`
+block). It is fixed by extracting the policy, not by patching the copy.
+
+**The copy was not even faithful, which is the argument in miniature.**
+`NeuralPlanBot`'s pending path always determinized; `PlanBot`'s never has. The
+two bots disagreed about the *leak* as well as the drain, and nobody knew,
+because there was no single place where the answer lived.
+
+`engine/bots/pending.py` owns three things and no scoring:
+
+* `not_my_turn(state, me)` — the predicate both bots had written out.
+* `wants_quiet(bot, state)` / `QUIET_PENDING` — the drain, defaulting in ONE
+  place. Both classes carry `QUIET_PENDING = None`, meaning "ask the module",
+  so the two cannot be flipped apart.
+* `wants_determinize(bot, state)` / `prepare_root(...)` — the root preparation
+  from §9. The two classes differ here **on purpose** (`PlanBot` `False` =
+  master's leak, `NeuralPlanBot` `True` = correct), so the value is pinned by a
+  test with the reason attached rather than left to drift.
+* `fallback_pick(bot, state, plain, quiet)` — takes the two scorers as bound
+  zero-argument callables, so the evaluator-specific half (PlanBot's serial
+  linear dot product and its journalled variant; NeuralPlanBot's one batched
+  encode per ply) stays in each bot.
+
+`tests/test_pending_fallback_is_shared.py` (15 tests) pins the three ways they
+could drift apart again: **re-inlining** (the shared counters stop moving),
+**a second default** (a bool on either class fails), and **a different drain**
+(with the drain on, every position either bot prices at a real pending decision
+must have an empty pending stack; with it off at least one must not — the
+control that stops the first assertion from passing vacuously). The counters are
+tracked state, not a regex over source, so a bot that reimplements the branch
+*identically* still fails: the point is that there is one implementation.
+
+Verified the test can go red: re-inlining the neural copy by hand fails 2 of the
+15 with `NeuralPlanBot: {'calls': 0, 'quiet': 0}`.
+
+`NeuralPlanBot` gained the drain it was missing (`_one_ply_neural(..., quiet=)`,
+calling the same `_quiesce` its own `_beam` already runs on every node), and
+`arena.make_bot` threads `qp`/`qd` into the `nplan:` spec, so the neural arm is
+measurable by the same lever. **Nothing here changes behaviour:** with the
+shipped defaults `python3 -m engine.perf_check hash --plan` is **85c06781**,
+i.e. `PNARROW` unchanged, and the full suite is 993 tests OK.
+
+## 11. The measurement that decides the flip (in flight)
+
+Pre-registered before any block landed, because the number in §9 is what
+happens when you decide after looking.
+
+* **ON** = `plan:REF,width=2,qp=1,qd=1` — price a pending decision exactly the
+  way this bot's own beam prices one: determinize, apply, quiesce, score.
+* **OFF** = `plan:REF,width=2` — master, byte-for-byte.
+* `REF` = `champion_3p_gen1255_99key` / `champion_4p_gen350_99key`, the live
+  league references. Conduction table run on both first (Gate 1 open on
+  `hand_potential`, `rival_hand_potential`, `row_pressure` for each), and a
+  behavioural conduction probe run before any A/B: `aggression_census` at 4p,
+  30 games, identical deals, aggressions held off **0 → 26**, defence cards
+  played **88 → 40**, attempted defences that were reachable **4/41 → 26/26**.
+  A lever that moves those is not going to return an arithmetic identity.
+* 6 blocks × 200 games at each of 3p and 4p, `arena.duel` seat-rotated so both
+  arms see the same deals; pooled with `tools/ab_summary.py`
+  (`experiments/paired_stats.pooled`, deal-clustered, t not z).
+* **Caveat to read with the result:** this is ONE drained seat against
+  undrained opponents. The league trains self-play, where every seat would
+  drain; that is a different question and the census in §5.2/§11 answers it
+  behaviourally, not on strength.
+
+Result: **pending** — this section is the placeholder the number lands in.

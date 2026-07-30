@@ -66,6 +66,7 @@ from __future__ import annotations
 import random
 
 from .. import actions, journal
+from . import pending
 from .fastcopy import copy_state
 from .quiescent import war_value
 from .trial import USE_JOURNAL
@@ -137,14 +138,24 @@ class PlanBot:
     #: ...and when that pending decision is MINE, drain the stack before
     #: scoring, exactly as `_child` already does for every node inside the
     #: beam.  See `_one_ply_quiet` for what this is for and what it costs.
-    #: `plan:FILE,width=2,qp=1` turns it on; the default False is today's
-    #: behaviour byte-for-byte, so the two can be duelled paired in one
-    #: process on the same deal (the `card_rate_credit` convention).
-    QUIET_PENDING = False
+    #: `plan:FILE,width=2,qp=1` turns it on per-instance.
+    #:
+    #: `None` means "the shared default in `engine.bots.pending`", which is
+    #: where it lives so that this class and `NeuralPlanBot` -- which had this
+    #: short-circuit copied out -- cannot answer the question differently.
+    #: Do not put a bool here.
+    QUIET_PENDING = None
+    #: re-shuffle the unseen decks before pricing a non-ordinary-turn decision,
+    #: as `pick`'s beam path already does and as `NeuralPlanBot`'s pending path
+    #: already does.  `False` here is master's behaviour and a measured
+    #: information leak (`tools/pending_leak.py`); `plan:FILE,qd=1` turns it on.
+    #: See `engine.bots.pending.DETERMINIZE`.
+    PENDING_DETERMINIZE = False
 
     def __init__(self, weights=None, rng=None, seed=None, name=None,
                  width=None, samples=None, determinize=True,
-                 war_lookahead=None, quiet_pending=None):
+                 war_lookahead=None, quiet_pending=None,
+                 pending_determinize=None):
         self.weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
         self.rng = rng or random.Random(seed)
         self.width = self.WIDTH if width is None else width
@@ -154,6 +165,8 @@ class PlanBot:
             self.WAR_LOOKAHEAD = war_lookahead
         if quiet_pending is not None:
             self.QUIET_PENDING = quiet_pending
+        if pending_determinize is not None:
+            self.PENDING_DETERMINIZE = pending_determinize
         self.nodes = 0
         self.searches = 0
         self.wars_priced = 0
@@ -181,10 +194,16 @@ class PlanBot:
         # Not my ordinary turn (someone else's pending decision, or mine but
         # nested inside another player's turn): there is no turn to plan, so
         # score the candidates one ply deep at a common horizon of "now".
-        if state.pending or state.current != me:
-            if self.QUIET_PENDING and state.pending:
-                return self._one_ply_quiet(state, moves, me, w, ctx)
-            return self._one_ply(state, moves, me, w, ctx)
+        # ...and when the pending decision is mine, drain it first.  The
+        # policy is `engine.bots.pending`, shared with `NeuralPlanBot`; only
+        # the two scorers below are this class's own.
+        if pending.not_my_turn(state, me):
+            root = pending.prepare_root(self, state, copy_state, determinize,
+                                        self.rng)
+            return pending.fallback_pick(
+                self, state,
+                plain=lambda: self._one_ply(root, moves, me, w, ctx),
+                quiet=lambda: self._one_ply_quiet(root, moves, me, w, ctx))
 
         totals = {mv: 0.0 for mv in moves}
         seen = {mv: 0 for mv in moves}

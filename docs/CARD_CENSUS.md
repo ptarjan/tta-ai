@@ -817,3 +817,33 @@ The concrete ask that follows: `tools/card_census.py check` should be run
 against `analysis/census/baseline.json` **after** any of these weights is
 turned up, and §3.2's wonder table is the specific thing that should move.
 If it does not, the fix is inert for the same reason the last one was.
+
+## 10. The territory suspect and the defence drain are ONE defect (2026-07-30)
+
+§4.1 ranked **territory** its number-one confirmed-broken suspect and §2.3
+described war and aggression as "priced by resolution, and the resolution is not
+in the trial". Both are the same defect, and the defence lane found it from the
+other end — see `docs/AGGRESSION_RATE.md` §8.
+
+The census looked for a missing *feature* (`hand_mil_potential = 0.0`, a severed
+pipe). The missing thing is not only a feature: it is the **position** the
+feature is read on. `PlanBot.pick` short-circuits on `state.pending` to a 1-ply
+pick with no `_quiesce`, while `_child` drains every node inside the beam — so
+at a real decision the bot prices a *half-resolved* position. A territory is
+acquired through an `auction` pend resolved round-robin, so an undrained
+position after `("bid", n)` shows the money committed and **not whether the
+territory was won**. The bot chose what to pay without ever scoring a position
+that said whether it got the colony.
+
+`tools/pending_divergence.py` at 3p, 24 games, `champion_3p_gen1255_99key`:
+auctions are **71.6%** of the decisions the drain moves (455 seen, 326 moved) —
+against defence's 37.8% and `discard_military`'s 6.0%. Territory pricing
+therefore cannot be evaluated on this engine until the drain question is
+settled: **a territory-credit A/B run today is measuring a weight applied to a
+position that does not yet contain the outcome.** §4.3 ("if you fix one thing")
+should be read with that in front of it.
+
+Consequence for this document's numbers: the census counts and the plumbing map
+stand — they are about which features exist and fire. The *ranking* of territory
+as a pricing defect is confounded, because part of what looked like a mispriced
+card is a mispriced position.
