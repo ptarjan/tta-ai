@@ -307,8 +307,11 @@ production the short way" can both be true, and appear to be.
   not in this document.
 * **It is not evidence that the tier-list question matters.** See §6.
 * **It does not show the mechanism is wonders.** The change reprices ten
-  cards, six of them wonders and two of them leaders, and this experiment
-  cannot attribute the 9.5pp among them.
+  cards, eight of them wonders and two of them leaders, and this experiment
+  cannot attribute the 9.5pp among them. **§5.3 closes this and the answer is
+  no: it is the two leaders, and wonders completed is a null.** §5.3 also
+  corrects "six wonders" to eight, and corrects the reading of the +10 culture
+  figure above — that is a duel margin, and own-culture production is +2.58.
 
 ### 5.1 Finish discipline: a null, and the reason is more interesting than the null
 
@@ -404,6 +407,232 @@ culture a turn" is a fact about the card that is true at every player count.
 (`experiments/arena.py:DEGENERATE_CHAMPION_PATH`), so an A/B on it would be
 hard to interpret and I did not run one.
 
+### 5.3 The mechanism is not wonders, and the reason is a plumbing bug
+
+§5 says explicitly that it cannot attribute the 9.5pp among the ten repriced
+cards. This section closes that gap. **It is not the wonders.** Wonders
+completed is a clean null; the entire take-side response is two leaders; and
+the reason is structural, not a fact about wonders being weak.
+
+Measured at commit `6968256`, 2p, frozen champion, engine read-only, three
+runs, 12,800 games, zero engine errors.
+
+**The measurement stack validates against §5.** The probe reproduces the
+published headline independently — **59.08% win rate and 151.0 vs 140.9
+culture, against §5's 59.53% and 150.8 vs 140.4**, on the same generator but a
+separately written harness. That agreement is worth a line of its own: it
+means the wonder counts below come out of an apparatus that demonstrably
+measures the same thing §5 measured.
+
+#### The premise was wrong: eight wonders were repriced, not six
+
+§1's table is right about what each wonder gained, but "six wonders newly
+gained pricing" undercounts it, because four of the wonders that already had a
+`happy_margin` or `blue_free` term *also* gained `culture_rate`. The checkable
+version is the `card_potential` delta under the frozen champion's own weights:
+
+| wonder | credit1 | credit0 | delta | group |
+|---|---|---|---|---|
+| Eiffel Tower | 27.45 | 3.95 | **+23.50** | repriced |
+| Taj Mahal | 21.95 | 4.32 | **+17.63** | repriced |
+| Universitas Carolina | 18.14 | 3.89 | **+14.25** | repriced (from nothing) |
+| St. Peter's Basilica | 17.12 | 5.37 | **+11.75** | repriced |
+| Kremlin | 15.61 | 3.86 | **+11.75** | repriced |
+| Library of Alexandria | 14.81 | 4.74 | **+10.06** | repriced (from nothing) |
+| Great Wall | 10.96 | 5.09 | **+5.88** | repriced |
+| Hanging Gardens | 13.02 | 7.14 | **+5.88** | repriced |
+| Pyramids | 6.11 | 6.11 | 0.00 | priced, unchanged |
+| Colossus | 5.04 | 5.04 | 0.00 | priced, unchanged |
+| Transcontinental Railroad | 3.64 | 3.64 | 0.00 | priced, unchanged |
+| Ocean Liners | 3.03 | 3.03 | 0.00 | still unpriced |
+| Internet | 2.47 | 2.47 | 0.00 | still unpriced |
+| Hollywood | 1.90 | 1.90 | 0.00 | still unpriced |
+| First Space Flight | 1.90 | 1.90 | 0.00 | still unpriced |
+| Fast Food Chains | 1.90 | 1.90 | 0.00 | still unpriced |
+
+A clean 8/8 split, and a better-balanced test than 6-vs-5. The two repriced
+non-wonders are Mahatma Gandhi (+11.75) and Joan of Arc (+5.88); those ten
+cards are the whole treatment.
+
+#### Two designs, because the duel confounds contention
+
+* **DUEL**, 3200 games: both arms at the same table, seat-rotated — the regime
+  §5 measured in. The two arms *compete for the same wonder row*, so if one
+  takes fewer wonders the other mechanically gets more, which inflates any
+  difference.
+* **MIRROR**, 3200 deals x 2 arms = 6400 games / 12,800 seat-games: every seat
+  runs one arm, the two arms run on identical deals and bot seeds. No
+  cross-arm contention. This is the honest behavioural number.
+
+#### Wonders completed: a null
+
+| design | credit1 | credit0 | diff (95% CI) | p | MDE @80% |
+|---|---|---|---|---|---|
+| duel | 0.1022 | 0.1156 | −0.0134 [−0.0290, +0.0021] | 0.090 | 0.0222 (19% rel) |
+| mirror | 0.0997 | 0.1047 | −0.0050 [−0.0112, +0.0012] | 0.117 | **0.0089 (8.5% rel)** |
+
+Distribution, mirror, 6400 seat-games per arm:
+
+| wonders completed | credit1 | credit0 |
+|---|---|---|
+| 0 | 5765 (90.08%) | 5732 (89.56%) |
+| 1 | 632 (9.88%) | 666 (10.41%) |
+| 2 | 3 (0.05%) | 2 (0.03%) |
+| 3+ | 0 | 0 |
+
+**I could have detected an 8.5% relative change and did not see one.** The
+point estimate is slightly *negative* in both designs.
+
+#### Repriced vs unrepriced: both flat, and the unpriced set falls harder
+
+Mirror, completions per seat-game:
+
+| group | credit1 | credit0 | diff | p | rel |
+|---|---|---|---|---|---|
+| newly priced (6) | 0.0803 | 0.0850 | −0.0047 | 0.105 | −5.5% |
+| from nothing (2) | 0.0159 | 0.0156 | +0.0003 | 0.806 | +2.0% |
+| **all 8 repriced** | 0.0963 | 0.1006 | −0.0044 | 0.160 | −4.3% |
+| still unpriced (5) | 0.0005 | 0.0003 | +0.0002 | 0.655 | 3 vs 2 events |
+| priced, unchanged (3) | 0.0030 | 0.0037 | −0.0008 | 0.132 | −20.8% |
+| **all 8 unrepriced** | 0.0034 | 0.0041 | −0.0006 | 0.317 | −15.4% |
+
+Starts tell the same story with more counts: repriced −10.7% (p<1e-4),
+unrepriced −16.4% (p=0.022). **The unpriced set — which by construction the
+fix cannot have touched — falls *more*, not less.** That is the opposite of
+the causal prediction. Not one of the eight repriced wonders rises in either
+design; every one is flat or negative. Per-wonder tables are in the artifacts
+listed in §7.
+
+#### What actually moved: two leaders
+
+All-takes duel, 3200 games:
+
+| metric | credit1 | credit0 | diff | p |
+|---|---|---|---|---|
+| takes of the 10 repriced cards | 0.9022 | 0.2653 | **+0.6369** | <1e-4 |
+| take wonder | 0.1419 | 0.1862 | **−0.0444** | <1e-4 |
+| take leader | 1.8422 | 1.4103 | **+0.4319** | <1e-4 |
+| leaders played | 1.8319 | 1.4059 | +0.4259 | <1e-4 |
+| total card takes | 14.8159 | 15.6934 | −0.8775 | <1e-4 |
+
+The top two movers in the entire 236-card database are the two repriced
+leaders:
+
+| card | credit1 | credit0 | diff | p | ratio |
+|---|---|---|---|---|---|
+| **Joan of Arc** | 0.6356 | 0.1081 | +0.5275 | <1e-4 | **5.9x** |
+| **Mahatma Gandhi** | 0.1434 | 0.0069 | +0.1366 | <1e-4 | **21x** |
+
+Both are played at the rate they are taken. Every other card class *falls* —
+action −0.42, lab −0.13, farm −0.11, arena −0.11, theater −0.10, library
+−0.10, temple −0.10, mine −0.08, government −0.06 — so the bot takes fewer
+cards overall and spends the freed actions on two leaders.
+
+#### Why: a wonder cannot reach the policy the way a leader can
+
+This is the part worth keeping, and it is a fact about the **plumbing**, not
+about wonders being weak.
+
+`actions.take_card` does not put a wonder in your hand:
+
+```python
+if card["type"] == "wonder":
+    p.wonder = WonderInProgress(name)
+else:
+    journal.touch(p.hand_civil).append(name)
+```
+
+So a wonder never enters `hand_civil`, and `hand_potential` — which sums
+`card_potential` over the civil hand and is a **live evaluator term** the
+1-ply search optimises at every single decision (`hand_value` = 0.306,
+`hand_civil` = 1.31) — never sees a wonder at all. A wonder's
+`card_potential` reaches the policy through exactly one channel:
+`row_urgency`, a take-*timing* heuristic that asks whether a card is worth
+grabbing before it slides. A leader gets both channels.
+
+**That is why repricing Eiffel Tower by +23.50 moved nothing and repricing
+Joan of Arc by +5.88 moved the policy 5.9x.** The size of the reprice is
+irrelevant when the term it lands in is not one the search can act on.
+
+This reframes the question this document started from. "The bot does not build
+wonders — are wonders modelled wrong?" The answer is no: §6.1 of
+`docs/SCORE_VALIDATION.md` verified the rules exact, and §1 here has now given
+the evaluator the printed numbers. The bot still does not build them, because
+**a correctly priced wonder has almost no path into the decision.** It is a
+plumbing bug, not a pricing bug, and fixing it means giving wonder-in-progress
+its own evaluator term — something the search can actually optimise — not
+another row in a lookup table.
+
+#### Own culture: +2.58, not +10
+
+Stated plainly because it is easy to misread §5 and I want to make it
+impossible. §5's **+10.39 is a duel margin against a weakened opponent**, not
+production. In the mirror, where both arms play the same field, credit1's own
+culture is **146.47 vs 143.88, +2.58 [+1.53, +3.64]**, p<1e-4. Real, in the
+same direction, and a quarter the size. The margin is inflated because the
+credit0 arm is *also* being made worse by facing a stronger opponent —
+`docs/LEAGUE_OBJECTIVE.md`'s point that a stolen point moves the margin twice
+and a produced point once.
+
+#### The one real wonder change: finish discipline, from a general term
+
+| design | metric | credit1 | credit0 | diff | p |
+|---|---|---|---|---|---|
+| duel | started | 0.1419 | 0.1862 | −0.0444 | <1e-4 |
+| duel | started, not finished | 0.0397 | 0.0706 | **−44%** | <1e-4 |
+| mirror | started | 0.1497 | 0.1697 | −0.0200 | <1e-4 |
+| mirror | started, not finished | 0.0500 | 0.0650 | **−23%** | <1e-4 |
+
+Pooled finish rate, bootstrap CI over units: duel 327/454 = 72.0% vs 370/596 =
+62.1%, **+9.95pp [+3.8, +16.0]**; mirror 638/958 = 66.6% vs 670/1086 = 61.7%,
+**+4.90pp [+1.6, +8.3]**. Civil actions sunk into wonder stages fall from
+0.351 to 0.300 (duel) and 0.317 to 0.302 (mirror).
+
+The bot starts fewer wonder programmes and finishes a larger share of the ones
+it starts. **That is exactly what §5.1's three purpose-built
+finish-discipline features were for, and §5.1 records all three as a flat null
+with `wonder_overrun` a dead coordinate that never once won an argmax in 1200
+games.** A general correction — pricing the row honestly — delivered what
+three special-purpose terms could not. The lesson is about feature design: a
+term that fires on 3.7% of decisions with a range of 0.24 cannot compete with
+fixing the number every decision reads.
+
+#### Caveats
+
+* **The CI may be optimistic by up to √2.** Another lane found this project
+  computes confidence intervals with the independent-samples formula on paired
+  designs (between-shard χ² 11.76 on 5 df where independence predicts 5). The
+  mirror design is paired on the deal, so the same criticism applies here. A
+  corrected estimator is landing separately; rather than block on it, here is
+  what changes if every SE is widened by √2. **Every headline null is
+  unaffected — they are already non-significant, and widening only strengthens
+  a null.** The MDE on wonders completed inflates from 0.0089 to **0.0126**
+  (8.5% → 12% relative), which does not change the conclusion. Of the
+  secondary results, these survive: `started` (mirror p 1e-4→0.0008),
+  `unfinished` (1e-4→0.0027), `inprog_end` (0.0016→0.0254),
+  `started_repriced8` (1e-4→0.0019), own culture (1e-4→0.0007). These four
+  would **cross 0.05 and should be treated as unresolved**: duel
+  `ca_on_stages` (0.024→0.112), duel `started_new6` (0.017→0.092), mirror
+  `started_unrepriced8` (0.022→0.106), mirror `started_unpriced5`
+  (0.010→0.069).
+* **Wonders are civil-deck, so the `tools/card_blindness.py` military-deck gap
+  another lane found does not touch these counts.** All 16 wonders are
+  `deck: civil` and all 16 are present; the counts here come from live engine
+  state (`p.completed_wonders`, `p.wonder`) and recorded moves, not from the
+  census tool.
+* **The rules were re-verified at `6968256`,** not assumed from
+  `docs/SCORE_VALIDATION.md` §6.1: all 16 wonders and all 53 stages match the
+  data file exactly, the take surcharge is `+1 CA per completed + destroyed`
+  with the Michelangelo exemption, `Impact of Wonders` scores 5/4/3/2 by age
+  as printed, and `tests.test_card_pricing` + `tests.test_scoring_bugfix` pass
+  (40 tests). `96a5db2` touched no engine rules file.
+* **The obvious trap in instrumenting this.** The first version of the probe
+  monkeypatched `actions.take_card` and reported **57 wonder takes per game**.
+  The 1-ply search applies every candidate move to a *copy* of the state, so
+  an engine-level patch counts hypothetical moves. The real number is ~0.15.
+  Anything that counts engine calls has to filter to the real state or, as
+  here, record only the move the bot actually chose.
+
 ## 6. What is still broken after this
 
 * **The 37 cards with 0 dropped keys and 0 visible gain** — territories,
@@ -422,6 +651,14 @@ hard to interpret and I did not run one.
   evaluator — one that takes `(name, state, idx, w)` rather than `(name, w)` —
   is what closes buckets 1 and 4, and it is the single highest-value follow-up
   this census suggests.
+* **A wonder has almost no path into the decision, however well it is priced.**
+  §5.3 is the evidence: a wonder never enters `hand_civil`, so `hand_potential`
+  — the live term the search optimises every decision — cannot see it, and its
+  only channel is the `row_urgency` take-timing heuristic. Repricing Eiffel
+  Tower by +23.50 moved nothing; repricing Joan of Arc by +5.88 moved the
+  policy 5.9x. **Pricing wonders better cannot help until wonder-in-progress
+  has an evaluator term the search can act on.** This is a bigger lever than
+  any remaining entry in the lookup table.
 * **The tier-list question is untouched.** This change gives the evaluator the
   *printed* value of a wonder. It says nothing about the tournament ordering,
   and `docs/STRENGTH_CHECK.md`'s BookBot v2 result (+2.1%, p=0.098 at 2p,
@@ -467,6 +704,23 @@ done
 # why the scan is null: the dead-coordinate census
 python3 tools/feature_variance.py --players 2 --games 6 \
   --champ analysis/cardblind/champ2p_credit1.json --out /tmp/fv2.json
+
+# section 5.3: the wonder-mechanism probe (12,800 games, ~50 min at nice 19).
+# Two designs because the duel confounds contention for the wonder row; the
+# mirror is the honest behavioural number.  The probe records only the move
+# the bot CHOSE -- patching engine/actions.py instead counts the 1-ply
+# search's candidate moves and reports 57 wonder takes a game.
+nice -n 19 python3 tools/wonder_mechanism.py --mode duel \
+  --a analysis/cardblind/champ2p_credit1.json \
+  --b analysis/cardblind/champ2p_credit0.json --deals 1600 --out /tmp/duel.jsonl
+nice -n 19 python3 tools/wonder_mechanism.py --mode mirror \
+  --a analysis/cardblind/champ2p_credit1.json --deals 3200 \
+  --tag m_credit1 --out /tmp/mirror.jsonl
+nice -n 19 python3 tools/wonder_mechanism.py --mode mirror \
+  --a analysis/cardblind/champ2p_credit0.json --deals 3200 \
+  --tag m_credit0 --out /tmp/mirror.jsonl
+nice -n 19 python3 tools/wonder_mechanism.py --report \
+  --duel /tmp/duel.jsonl --mirror /tmp/mirror.jsonl
 
 # the gate.  GATE PASS on this branch; NARROW/WIDE unchanged from master,
 # the six evaluator arms re-derived two-sidedly (see tools/gate.sh).
