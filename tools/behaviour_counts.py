@@ -38,8 +38,16 @@ from experiments.arena import (                            # noqa: E402
 # at 1 ply and was missing from the original tuple; `take` is here because
 # docs/WASTED_ACTIONS.md section 6 shows it is the move the evaluation is least
 # able to price, so it is the control for "did the bot just get busier".
+# `play_tactic` / `copy_tactic` / `build_unit` are the behavioural counters
+# for the military-card lane of docs/CARD_BLINDNESS.md: a tactic is worthless
+# without the units to fill it and the units are worth much less without the
+# tactic, so "did the pricing change make it play tactics" and "did it make it
+# build units" have to be read together or neither means anything.
+# `build_unit` is synthesised from `("build", name)` because a build move is a
+# unit build or a building build depending only on the card.
 KINDS = ("offer_pact", "war", "aggression", "bid", "play_action",
-         "cancel_pact", "prepare_event", "take")
+         "cancel_pact", "prepare_event", "take",
+         "play_tactic", "copy_tactic", "build_unit")
 
 #: move kinds that spend a CIVIL action -- same table as analysis/wasted_actions
 _CIVIL_KINDS = {"take", "pop", "wonder_step", "play_leader", "develop",
@@ -91,6 +99,11 @@ class _Counting:
             k = mv[0]
             if k in KINDS:
                 self.counts[k] = self.counts.get(k, 0) + 1
+            if k == "build":
+                from engine import actions
+                if actions.is_unit(mv[1]):
+                    self.counts["build_unit"] = \
+                        self.counts.get("build_unit", 0) + 1
             if k == "play_action":
                 # only the 18 of 33 action cards that ORDER a free action
                 # enqueue a pending decision; the rest gain immediately and
@@ -119,8 +132,10 @@ class _Counting:
 
 
 def run(spec, players, games, seed0):
+    from engine import cards as C
+    is_unit_name = C.db().is_unit_name
     tot = {k: 0 for k in KINDS + ("action_ordered", "action_immediate")}
-    colonies = pacts = 0
+    colonies = pacts = with_tactic = unit_workers = 0
     turns = ca_left_turns = ca_wasted = civil_spent = 0
     for g in range(games):
         bots = [_Counting(make_bot(spec, 1000 + i)) for i in range(players)]
@@ -136,11 +151,21 @@ def run(spec, players, games, seed0):
         for p in st.players:
             colonies += len(getattr(p, "colonies", ()) or ())
             pacts += len(getattr(p, "pacts", ()) or ())
+            if getattr(p, "tactic", None):
+                with_tactic += 1
+            for tname, t in p.techs.items():
+                if is_unit_name.get(tname):
+                    unit_workers += t.workers
     n = float(games)
     out = {k: round(tot[k] / n, 3)
            for k in KINDS + ("action_ordered", "action_immediate")}
     out["colonies_held_end"] = round(colonies / n, 3)
     out["pacts_live_end"] = round(pacts / n, 3)
+    # the military-card lane's outcome counters, as opposed to its move
+    # counters above: a tactic in play at the end, and unit workers standing
+    # on the board to fill it.
+    out["with_tactic_end"] = round(with_tactic / n, 3)
+    out["unit_workers_end"] = round(unit_workers / n, 3)
     t = float(max(turns, 1))
     out["turns_per_game"] = round(turns / n, 2)
     out["ca_unspent_turn_rate"] = round(ca_left_turns / t, 4)
