@@ -38,7 +38,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from engine import cards as C                              # noqa: E402
-from engine import economy, game                           # noqa: E402
+from engine import game                                    # noqa: E402
 from experiments.arena import (                            # noqa: E402
     load_spec, make_bot, refuse_if_degenerate_champion)
 
@@ -46,13 +46,61 @@ MY_TYPES = ("special-tech", "farm", "mine", "lab", "temple", "library",
             "arena", "theater", "bonus")
 
 
-class _Watch:
-    """Wraps a bot; counts offers and chosen moves per card name."""
+def _defence_of(name):
+    """A military card's DEFENCE contribution (RULES_SPEC 125): the printed
+    `defenseBonus` for a bonus card, +1 for any other card discarded face
+    down."""
+    card = C.db().by_name.get(name)
+    eff = (card.get("effects") or {}) if card else {}
+    b = eff.get("defenseBonus")
+    return b if isinstance(b, int) else 1
 
-    def __init__(self, bot, offers, takes, plays, builds, upgr_from, upgr_to):
+
+class _Watch:
+    """Wraps a bot; counts offers and chosen moves per card name.
+
+    EVERYTHING here is counted at the moment a move is CHOSEN by the real bot,
+    never inside the engine.  That is not a style preference, it is the
+    correctness condition: the searching bots apply and roll back thousands of
+    speculative moves per decision, so an instrument that hooks an engine
+    function counts the search as well as the game.  An earlier version of the
+    discard probe below wrapped `economy.end_of_turn` and reported 129 discards
+    per 2p game; the true figure is ~30.7 (independently measured by the lane
+    that owns the discard bug), and the whole of the difference was rollouts.
+    """
+
+    def __init__(self, bot, offers, takes, plays, builds, upgr_from, upgr_to,
+                 stats=None, db=None):
         self.bot = bot
         self.offers, self.takes, self.plays = offers, takes, plays
         self.builds, self.upgr_from, self.upgr_to = builds, upgr_from, upgr_to
+        self.stats, self.db = stats, db
+
+    def _note_discard(self, state):
+        """What the hand-limit rule is about to destroy, at a REAL end_turn.
+
+        Read off the state at the moment ``end_turn`` is chosen -- before it is
+        applied -- so the hand and the limit are the ones the rule will see.
+        """
+        from engine import effects
+        if self.stats is None:
+            return
+        p = state.players[state.decider()]
+        s = effects.state_stats(state, p)
+        limit = s.military_actions + s.military_hand_limit
+        hand = list(p.hand_military)
+        excess = len(hand) - limit
+        if excess <= 0:
+            return
+        doomed = hand[:excess]                    # economy.py pops from the left
+        self.stats["turns_over_limit"] += 1
+        self.stats["discarded"] += excess
+        for n in doomed:
+            if self.db.type_of(n) == "bonus":
+                self.stats["bonus_discarded"] += 1
+        best = max(hand, key=_defence_of)
+        if best in doomed and _defence_of(best) > 1:
+            self.stats["best_defence_discarded"] += 1
 
     def _note(self, state, moves, mv):
         # `("take", idx)` is a ROW SLOT, not a card name (engine/actions.py:376)
@@ -78,6 +126,8 @@ class _Watch:
             elif k == "upgrade":
                 self.upgr_from[mv[1]] += 1
                 self.upgr_to[mv[2]] += 1
+            elif k == "end_turn":
+                self._note_discard(state)
         return mv
 
     def __call__(self, state):
@@ -98,51 +148,22 @@ def run(spec, players, games, seed0):
     workers_end = collections.Counter()
     in_play_end = collections.Counter()
 
-    # --- the discard probe (docs/UNCOVERED_TYPES.md D1).  Read-only: it
-    # inspects the hand and the limit exactly as `economy.end_of_turn` is about
-    # to, records what FIFO is going to destroy, and then calls the real thing
-    # unchanged.  It does not alter play, so the counts below belong to the
-    # same games the take rates do.
-    stats = {"discarded": 0, "best_defence_discarded": 0, "bonus_discarded": 0}
+    # --- the discard probe (docs/UNCOVERED_TYPES.md D1), counted at the real
+    # `end_turn` decision rather than inside the engine.  See `_Watch`.
+    stats = {"discarded": 0, "best_defence_discarded": 0,
+             "bonus_discarded": 0, "turns_over_limit": 0}
 
-    def _defence_of(name):
-        card = db.by_name.get(name)
-        eff = (card.get("effects") or {}) if card else {}
-        b = eff.get("defenseBonus")
-        return b if isinstance(b, int) else 1
-
-    orig_eot = economy.end_of_turn
-
-    def patched_eot(state, p, rng):
-        s = economy.effects.state_stats(state, p)
-        limit = s.military_actions + s.military_hand_limit
-        before = list(p.hand_military)
-        excess = max(0, len(before) - limit)
-        if excess:
-            best = max(before, key=_defence_of)
-            doomed = before[:excess]
-            stats["discarded"] += excess
-            for n in doomed:
-                if db.type_of(n) == "bonus":
-                    stats["bonus_discarded"] += 1
-            if best in doomed and _defence_of(best) > 1:
-                stats["best_defence_discarded"] += 1
-        return orig_eot(state, p, rng)
-
-    economy.end_of_turn = patched_eot
-    try:
-        for g in range(games):
-            bots = [_Watch(make_bot(spec, 1000 + i), offers, takes, plays,
-                           builds, upgr_from, upgr_to) for i in range(players)]
-            st = game.play_game(bots, num_players=players,
-                                seed=(seed0 + g) * 7919 + 17, move_cap=20000)
-            for p in st.players:
-                for n, t in p.techs.items():
-                    if n in mine:
-                        in_play_end[n] += 1
-                        workers_end[n] += t.workers
-    finally:
-        economy.end_of_turn = orig_eot
+    for g in range(games):
+        bots = [_Watch(make_bot(spec, 1000 + i), offers, takes, plays,
+                       builds, upgr_from, upgr_to, stats, db)
+                for i in range(players)]
+        st = game.play_game(bots, num_players=players,
+                            seed=(seed0 + g) * 7919 + 17, move_cap=20000)
+        for p in st.players:
+            for n, t in p.techs.items():
+                if n in mine:
+                    in_play_end[n] += 1
+                    workers_end[n] += t.workers
 
     rows = []
     for name, typ in sorted(mine.items(), key=lambda kv: (kv[1], kv[0])):
@@ -176,10 +197,13 @@ def main(argv=None):
     g = float(a.games)
     d = out["discard"]
     print(f"# {a.players}p x{a.games} games  spec={a.spec}")
+    over = d["turns_over_limit"] or 1
     print(f"# hand-limit discards: {d['discarded']} "
-          f"({d['discarded']/g:.2f}/game), of which bonus cards "
-          f"{d['bonus_discarded']}; games' best defence card pitched "
-          f"{d['best_defence_discarded']} times")
+          f"({d['discarded']/g:.2f}/game) over {d['turns_over_limit']} "
+          f"player-turns above the limit; bonus cards among them "
+          f"{d['bonus_discarded']}; best defence card in the doomed prefix "
+          f"{d['best_defence_discarded']} times "
+          f"({100.0*d['best_defence_discarded']/over:.1f}% of those turns)")
     print(f"{'card':26s} {'type':13s} {'offers':>7s} {'takes':>6s} "
           f"{'rate':>6s} {'dev':>5s} {'built':>6s} {'upIn':>5s} "
           f"{'upOut':>6s} {'endW':>5s}")

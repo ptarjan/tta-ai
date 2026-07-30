@@ -36,7 +36,9 @@ Three real defects, all confirmed by measurement, none previously known:
 
 * **D1** — the end-of-turn military hand-limit discard is FIFO with no decision,
   in a step `docs/RULES_SPEC.md:188` explicitly calls "the only step requiring a
-  decision". It fires ~129 times per 2p game. *Handed to a dedicated lane; the
+  decision". It discards ~31–37 cards per 2p game, and on a third of the turns
+  it fires it destroys the best defence card in hand when a worse one was
+  available. *Handed to a dedicated lane; the
   diagnosis is in section 4 and the fix is not in this change.*
 * **D2** — all 12 special technologies price at a strictly **negative** hand
   value, so the bot is actively repelled from a sixth of the civil deck. Six of
@@ -207,13 +209,14 @@ This has now bitten twice in one night, in opposite directions:
   never taken (special techs, 0.87%);
 * **governments** — cost at 0.0, benefit trained ⇒ the card reads as too cheap.
 
-The test for it is mechanical and should be run whenever a zero-default weight
-is added: **price every card under `DEFAULT_WEIGHTS` and look at the sign.**
+The check is mechanical, and it no longer has to be remembered — it is
+`tests/test_half_priced_cards.py`, which runs on every gate. See section 2.7.
 
-    python3 -c "..."  # see tools/uncovered_census.py's docstring
-
-Any card that comes out negative is a card the evaluator would rather not have,
-which for a civil card is never what the rules say (section 2.4).
+The reason a negative matters more than it looks: `row_pressure` skips any card
+whose `card_potential` is `<= 0`, so such a card is not merely unattractive in
+hand, it is **invisible in the row**. The evaluator cannot want it and cannot
+notice it being swept away. That is two channels, not one, and it is why a
+half-priced card behaves so much worse than an unpriced one.
 
 ### 2.4 The fix I proposed, tested, and did NOT land
 
@@ -477,14 +480,31 @@ sequence: *"Discard excess military cards — down to military action total (red
 tokens), face down. **Only step requiring a decision.**"* The engine makes no
 decision.
 
-Measured over 20 2p games: **2,581 discards, 129 per game, ~3.2 per
-player-turn.** The hand limit is `military_actions` (2 under Despotism) and the
-draw is up to 3 per turn, so the entire military hand churns every single turn
-and *which three of five to keep* is settled by `pop(0)`. 582 of the discards
-were bonus cards. In **488 (19%)** the single highest-defence card in hand was
-inside the FIFO-doomed prefix while a strictly worse card was available to pitch
-instead — about 12 times per player-game the bot throws away its best defence
-for nothing.
+Measured over 20 2p games: **743 discards, 37.2 per game, across 395
+player-turns that were over the limit.** The hand limit is `military_actions`
+(2 under Despotism) and the draw is up to 3 per turn, so the military hand
+overflows on most turns and *which cards to keep* is settled by `pop(0)`. 158 of
+the discards were bonus cards. On **132 of the 395 over-limit turns (33%)** the
+single highest-defence card in hand was inside the FIFO-doomed prefix while a
+strictly worse card was available to pitch instead.
+
+> **CORRECTION, and it is the most useful thing in this section.** The first
+> version of this document said **129 discards per game**. That was an
+> instrument bug, not a measurement. The probe wrapped `economy.end_of_turn`,
+> and the searching bots apply and roll back thousands of speculative moves per
+> decision — so it counted the *search* as well as the game, inflating the
+> figure ~3.5×. `tools/uncovered_census.py` now counts at the moment
+> `("end_turn",)` is **chosen** by the real bot, which fires exactly once per
+> real player-turn. The take rates in sections 2.1 and 3 are unaffected and
+> re-ran byte-identical (still 14 takes / 1,606 offers, still the same six
+> cards never taken), because they were always counted at the decision.
+>
+> The lane that owns D1 re-measured the premise independently rather than
+> inheriting it from me and got **30.7 per game**, and replicated the harm
+> ratio at **20.7%** against my 19%. Both corrections are theirs and both are
+> right; a ratio survives the inflation because it cancels, a rate does not.
+> An audit whose whole subject is instruments that measured the wrong thing
+> has no business hiding that its own instrument did too.
 
 The correct machinery already exists and is simply never called:
 `interact.py:386 _q_discard_military` / `push_choice("discard_military")`, and
