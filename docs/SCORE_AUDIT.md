@@ -15,13 +15,10 @@ so every fingerprint digest was provably unmoved and each bug was shown to
 fail *for the right reason* before anything was changed. The **second** fixes
 them.
 
-**The fixes are live and the fingerprint constants in `tools/gate.sh` are
-NOT updated by that second commit.** Section 9 says exactly why, and it is
-not a property of these fixes: the parent commit's own constants were
-already stale when this was measured, and the box could not produce a
-reliable hash while five lanes hashed on six cores and one of them ran a
-global `pkill`. The constants need one clean window, after the lane ahead
-lands its own.
+**The fixes are live: all eight fingerprint arms moved**, derived twice
+independently and agreeing byte for byte, with a clean-base control first and
+a per-fix attribution after. Section 9 has the table, and 9.2 records why the
+*first* derivation was thrown away rather than written down.
 
 ## One-paragraph answer
 
@@ -576,70 +573,84 @@ PY
 
 ## 9. Which fixes are live, and the digests they moved
 
-Nine rules fixes and one pricer fix. **They are live, not inert** — a ruined
-wonder no longer feeds Michelangelo, an unstaffed lab no longer pays Einstein,
-Immigration affects every tied player, and Churchill's military option is
-ring-fenced. Fingerprint digests move, which is correct and expected.
+Nine rules fixes and one pricer fix. **All eight fingerprint arms moved**,
+which is correct: these are rule violations, and correct modelling ships
+whether or not it is convenient.
 
-**The constants are NOT updated in this commit, and that is deliberate.**
-Two things made a trustworthy derivation impossible in this window, and
-neither is a property of the change:
+Derived on base `efa37b5`, in a quiet window the coordinator cleared after an
+earlier attempt was abandoned rather than trusted (see the note at the end).
 
-1. **The parent commit's own constants are already stale.** A clean checkout
-   of `1c08790` ("The military discard is the player's choice, not FIFO"),
-   with no changes of mine, hashes `narrow` to **`bd0e9a62`** against the
-   `NARROW=0a6ed6ad` written in that same commit's `tools/gate.sh`. That
-   lane's change is live and its constants had not landed yet when this was
-   measured. Deriving on top of an unrecorded base would bake somebody
-   else's movement into my numbers and attribute it to these fixes.
-2. **The box could not produce a reliable measurement.** Five other lanes
-   were hashing concurrently on six cores, and at least one runs
-   `pkill -f "engine.perf_check"` **globally**, which kills every lane's
-   hasher and not only its own. Three of my runs died that way, each
-   appearing as the `check_fp` FAIL with a *blank* "got" field that
-   `tools/gate.sh` warns about. A `narrow` arm that takes 11 seconds
-   unloaded took over five minutes, and a blank is indistinguishable at a
-   glance from a moved hash — which is exactly how a wrong constant gets
-   written down.
+| arm | old | new |
+|---|---|---|
+| NARROW | bd0e9a62 | **cd0971ed** |
+| WIDE | cf4f0a22 | **77c81e82** |
+| WNARROW | 549e4a90 | **f0b240da** |
+| WWIDE | 0e03e3b7 | **9010ec80** |
+| QNARROW | b15d7b18 | **ad62a4e5** |
+| QWIDE | bf221746 | **caf7cdd7** |
+| PNARROW | d307c480 | **85c06781** |
+| PWIDE | 4d71894c | **12b1dce0** |
 
-**A digest is never re-derived to make a gate pass.** The honest state is
-therefore: the fixes and their tests are complete and green (899 tests, ruff
-clean, rebased onto `1c08790`), and the eight constants need one clean window
-after the discard lane's own constants land. The measurements taken before
-the box saturated, recorded so the next derivation has something to check
-itself against rather than starting cold:
-
-| arm | in `gate.sh` at `1c08790` | clean `1c08790`, measured | with these fixes |
-|---|---|---|---|
-| NARROW | 0a6ed6ad | **bd0e9a62** (stale constant, not mine) | cd0971ed |
-
-The earlier, discarded derivation on base `f6ff7db` — before the discard lane
-landed — produced `67c07c2a / 5c4b711b / b65375e7 / 167aa6fe / 336d7810 /
-4c96e60c` for NARROW / WIDE / WWIDE / QNARROW / QWIDE / PNARROW, with `narrow`
-and `wide` each confirmed twice (plain and `FASTCOPY_PARANOID=1`,
-byte-identical). Those are **not** the values to write down — they are on the
-wrong base — but they do establish that every arm moves, and that the movement
-is deterministic rather than an artefact of load.
+**Two-sided, and then some.** Derivation 1 (working worktree) and derivation
+2 (an independent clone of `efa37b5` with the same patch) agreed on **all
+eight arms, byte for byte**. Before either, a clean checkout of `efa37b5` was
+hashed as a control and reproduced the OLD column exactly — so the base was
+known-good before anything of mine was measured against it, which is the step
+that was missing when master's own constants were briefly stale. The
+attribution run then reproduced *both* endpoints a third time
+(`cd0971ed` / `bd0e9a62`).
 
 ### 9.1 Attribution: which fix moved which arm
 
-Not completed, for the same reason. The instrument is written and works
-(`/tmp/attrib.py` in-session: revert one fix at a time from the all-fixed
-tree, re-hash `narrow` and `weighted narrow`, report SAME or MOVED); it needs
-roughly ten quiet minutes. What can be said without it, from the shape of the
-changes:
+Each fix reverted on its own from the all-fixed tree, `narrow` and
+`weighted narrow` re-hashed. Measured, not reasoned:
 
-* **9 (unstaffed labs) and 5 (plural targets) are the likely movers for every
-  bot.** Unstaffed labs are ubiquitous — you develop a technology a turn
-  before you can staff it — and Leonardo/Newton/Einstein are common; Immigration
-  and Civil Unrest are ordinary Age I/II events and ties are frequent.
-* **6 (Churchill) can only move a bot that plays Churchill**, and his military
-  option is now genuinely weaker, so the choice between his two options
-  changes.
-* **1 (Agriculture) cannot move a 2p arm at all**, because 2p has no pacts, so
-  farm food and the food rating are identically equal there.
-* **10 (Taj Mahal's blue token) cannot move any arm today**, because
-  `card_board_credit` defaults to 0.0 and GreedyBot does not evaluate through
-  `weighted.py` at all.
+| fix | GreedyBot (`narrow`) | WeightedBot (`weighted narrow`) |
+|---|---|---|
+| 3.5 plural targets | **LIVE** | **LIVE** |
+| 3.9 unstaffed best lab | **LIVE** | **LIVE** |
+| 3.3 ruined wonder → Michelangelo | **LIVE** | inert |
+| 3.6 Churchill ring-fenced | **LIVE** | inert |
+| 3.1 Agriculture scores farms | inert | **LIVE** |
+| 3.2 Bill Gates on leave | inert | inert |
+| 3.3 ruined wonder → St. Peter's | inert | inert |
+| 3.7 St. Peter's + colony | inert | inert |
+| 3.4 air force doubling | inert | inert |
+| 6.1 Taj Mahal blue token | inert | inert |
 
-Those are predictions, not measurements, and they are labelled as such.
+**The measurement corrected me twice, which is the whole argument for
+attributing rather than reasoning.**
+
+* I predicted **3.1 (Agriculture) could not move any arm**, because 2p has no
+  pacts and farm food therefore equals the food rating. It moves
+  `weighted narrow` — because the fingerprint plays **4p**, where pacts
+  exist. My reasoning was right and my conclusion was wrong because I forgot
+  which games the arm plays.
+* I predicted **3.3 (ruined wonders) would be rare**. It is live for
+  GreedyBot: Ravages of Time plus Michelangelo does occur inside 33 games.
+
+The four inert fixes are inert for stated reasons, not by luck: Bill Gates
+leaving play needs a bot that replaces an Age III leader; the air force needs
+two air units *and* a mixed-age army set; and the Taj Mahal rider cannot move
+anything today because `card_board_credit` defaults to 0.0 and GreedyBot does
+not evaluate through `weighted.py` at all. **Inert is a statement about
+coverage, not about correctness** — these 135 games cannot catch a
+regression in any of the four, which is worth knowing before someone
+"simplifies" one of them.
+
+### 9.2 Why the first derivation was thrown away
+
+Recorded because the failure mode is subtle and cost hours. The first attempt
+produced a `check_fp` FAIL with a **blank** "got" field. That is a *killed
+subprocess*, not a moved hash — two lanes were running an unscoped
+`pkill -f "engine.perf_check"`, which kills every lane's hasher, and a
+`narrow` arm that takes 11 seconds unloaded was taking over five minutes.
+Worse, the base itself was mid-flight: a clean checkout of the then-current
+master hashed `narrow` to `bd0e9a62` against the `NARROW=0a6ed6ad` recorded
+in its own `gate.sh`, so any constant derived on top would have silently
+absorbed another lane's movement.
+
+Both runs were discarded and the work waited for a quiet window. **A digest is
+never re-derived to make a gate pass, and a digest derived on a saturated box
+next to an unrecorded base is not a measurement.**
+

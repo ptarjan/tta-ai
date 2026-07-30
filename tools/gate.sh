@@ -150,8 +150,67 @@ cd "$(dirname "$0")/.."
 # behaviour, not of reading it back off a failure message.  Two arms (QWIDE,
 # PWIDE) first came back with a BLANK digest -- that is a killed subprocess,
 # not a moved hash, and they were re-run rather than recorded.
-NARROW=bd0e9a62
-WIDE=cf4f0a22
+# ---------------------------------------------------------------------------
+# Re-derived on `scoring-fixes`, rebased onto master efa37b5 (2026-07-30,
+# docs/SCORE_AUDIT.md).  ALL EIGHT arms moved.  Cause: nine rules fixes to
+# end-of-game scoring, every one a rule violation rather than a tuning
+# choice, so they ship regardless of measured strength.
+#
+#     arm       old         new
+#     NARROW    bd0e9a62    cd0971ed
+#     WIDE      cf4f0a22    77c81e82
+#     WNARROW   549e4a90    f0b240da
+#     WWIDE     0e03e3b7    9010ec80
+#     QNARROW   b15d7b18    ad62a4e5
+#     QWIDE     bf221746    caf7cdd7
+#     PNARROW   d307c480    85c06781
+#     PWIDE     4d71894c    12b1dce0
+#
+# Two-sided as 9.0 requires, and then some.  Derivation 1 in the working
+# worktree and derivation 2 in an independent clone of efa37b5 with the same
+# patch applied AGREED ON ALL EIGHT ARMS, byte for byte.  A clean checkout of
+# efa37b5 was hashed first as a control and reproduced the OLD column above
+# exactly (NARROW bd0e9a62, WNARROW 549e4a90), so the base was known-good
+# before anything of mine was measured against it.  The attribution run below
+# independently reproduced BOTH endpoints a third time.
+#
+# ATTRIBUTED, not assumed.  Each fix was reverted on its own from the
+# all-fixed tree and `narrow` + `weighted narrow` re-hashed
+# (docs/SCORE_AUDIT.md 9.1):
+#
+#   LIVE for GreedyBot AND WeightedBot:
+#     * `Impact of Happiness`/`Immigration`'s "the PLAYERS with the most X"
+#       now affecting every tied player (RULES_SPEC 5.3 [CoL p.7]), and
+#     * "your best lab or library" no longer counting an UNSTAFFED card,
+#       which is Leonardo/Newton/Einstein and is the single widest-reaching
+#       fix in the set.
+#   LIVE for GreedyBot only:
+#     * a wonder ruined by Ravages of Time no longer feeding Michelangelo,
+#     * Winston Churchill's military option being ring-fenced.
+#   LIVE for WeightedBot only:
+#     * `Impact of Agriculture` scoring farms instead of the food rating.
+#       Note this one is live only because the fingerprint plays 4p: at 2
+#       players every pact is removed from the game and a pact's food symbol
+#       is the only thing that can separate farm food from the food rating.
+#       I predicted this fix could not move any arm and the measurement
+#       corrected me, which is the argument for attributing rather than
+#       reasoning.
+#   INERT for both (measured, not assumed):
+#     * Bill Gates paying culture when he LEAVES play,
+#     * St. Peter's ignoring a ruined wonder, and ignoring a colony,
+#     * the air force doubling an outdated army at the fresh rate,
+#     * Taj Mahal's blue token in board_yields (it cannot move an arm today:
+#       `card_board_credit` defaults to 0.0 and GreedyBot does not evaluate
+#       through weighted.py at all).
+#
+# A note for the next person to read a `check_fp` FAIL here: during the first
+# attempt at this derivation, two other lanes were running an unscoped
+# `pkill -f "engine.perf_check"`, which kills EVERY lane's hasher.  Three runs
+# died that way and each appeared as a FAIL with a *blank* "got" field.  That
+# is a killed subprocess, not a moved hash.  Those runs were discarded and the
+# whole derivation was redone in a quiet window rather than written down.
+NARROW=cd0971ed
+WIDE=77c81e82
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
@@ -217,8 +276,8 @@ WIDE=cf4f0a22
 # weight: setting it to 0.0 restores master's pricing exactly, which is what
 # docs/CARD_BLINDNESS.md section 5 A/Bs against.
 # Both moved again on `military-discard`; see the block above NARROW.
-WNARROW=549e4a90
-WWIDE=0e03e3b7
+WNARROW=f0b240da
+WWIDE=9010ec80
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -242,10 +301,10 @@ WWIDE=0e03e3b7
 # search under the same `evaluate`, so `card_potential` is on their hash path
 # exactly as it is on WeightedBot's.
 # All four moved again on `military-discard`; see the block above NARROW.
-PNARROW=d307c480
-PWIDE=4d71894c
-QNARROW=b15d7b18
-QWIDE=bf221746
+PNARROW=85c06781
+PWIDE=12b1dce0
+QNARROW=ad62a4e5
+QWIDE=caf7cdd7
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs
