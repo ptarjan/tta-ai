@@ -135,7 +135,6 @@ def run(spec, deals, seed0, players):
             # the EVALUATOR arm is every seat except `seat`; report from its
             # point of view, so >0.5 means choosing beats FIFO.
             others = [sc[i] for i in range(players) if i != seat]
-            best_other = max(others)
             top = max(sc)
             winners = [i for i in range(players) if sc[i] == top]
             share = sum(1 for i in winners if i != seat) / len(winners)
@@ -147,7 +146,6 @@ def run(spec, deals, seed0, players):
             dfn["fifo_held"] += held[seat]
             dfn["eval_faced"] += sum(faced) - faced[seat]
             dfn["eval_held"] += sum(held) - held[seat]
-            del best_other
     return win, marg, own, cf, ce, dfn
 
 

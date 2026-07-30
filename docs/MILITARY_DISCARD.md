@@ -148,6 +148,72 @@ stream of every game that has a military deck, so the game log — which is what
 evaluate through `weighted.py`. See `tools/gate.sh` for the before/after table
 and the attribution.
 
-## 6. Result
+## 6. Result: a well-powered null on strength, and a decisive one on behaviour
 
-See `tools/discard_ab.py`.
+`tools/discard_ab.py`. Both arms run the **same fixed engine** and the same
+weight vector (`analysis/frozen/champion_2p.json`); arm B answers every
+`discard_military` choice the way the old engine did — pitch the oldest card in
+hand. So the duel isolates the *policy*, not the plumbing, and it is a single
+in-process head-to-head rather than two builds compared across runs. 600 games
+/ 300 deals, 6 disjoint seed blocks, the FIFO arm played in each seat in turn.
+
+### 6.1 Strength
+
+Pooled over the six blocks with `experiments.paired_stats` (block-clustered,
+K=6, so the critical value is `t₅ = 2.571`, not 1.96):
+
+| | estimate | z vs null | p |
+|---|---|---|---|
+| win share | **50.83% ± 3.74pp** | +0.57 | 0.57 |
+| culture margin | **+0.88 ± 1.85** | +1.21 | 0.23 |
+
+A null, leaning very slightly positive. Block SE on the win rate is 1.45pp, so
+this excludes effects larger than about **4pp** at 80% power: it is a
+well-powered null for a large effect, not an underpowered shrug.
+
+### 6.2 Behaviour — and this is not a null at all
+
+| counter (evaluator arm, 6 blocks) | value |
+|---|---|
+| discard decisions faced | 7018 |
+| chose differently from FIFO | **4364 (62.2%)** |
+| kept a better defender than FIFO would have | **2409** |
+| pitched a better defender than FIFO would have | **8** |
+| defence points discarded | 9497, against 17159 under FIFO — **44.7% less** |
+
+The policy does exactly what the rule is for, on nearly two thirds of all
+firings, with a 300:1 asymmetry in the right direction. The eight
+counter-examples are not a bug: the evaluator is free to prefer a card for
+reasons other than defence, and eight times in seven thousand it did.
+
+### 6.3 Why the strength result is flat, and it is not the rule's fault
+
+| | over 600 games |
+|---|---|
+| aggressions played, both arms | **34 — 0.057 per game** |
+| aggressions successfully defended | **0** |
+
+**The defence channel these bots would be paid through is essentially
+absent.** The frozen 2p champion attacks about once every eighteen games, and
+in 600 games not one aggression was ever held off. Keeping your best defensive
+card cannot be worth measurable culture in a population that neither attacks
+nor successfully defends, so a flat A/B here is a statement about the
+*population*, not about the rule or the policy. §4.2's question — does this
+interact with the machinery that prices defence at leaf nodes — has an
+empirical answer at 2p: it cannot, because that machinery almost never runs.
+
+Per Paul's standing rule, correct modelling lands regardless of measured
+strength, and this is a rules violation. But the result is not "shelve it and
+hope": the behavioural counters show the fix is live and pointed the right way,
+and §6.4 says what would actually test it.
+
+### 6.4 What this does not measure
+
+* **2p only.** Aggression is rarer at 2p than at 3p/4p and pacts do not exist
+  there at all. The obvious follow-up is the same A/B at 3p, where the defence
+  channel is more likely to be live. Not run here.
+* **One weight vector.** The frozen 2p champion. A vector that valued strength
+  more would attack more and could pay differently.
+* **Not a retrained champion.** This is the frozen vector playing under a
+  corrected rule, not a champion trained with the decision available. A trainer
+  that can now *keep* a defender might learn to use one.
