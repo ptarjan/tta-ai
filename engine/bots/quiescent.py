@@ -264,8 +264,15 @@ def war_value(state, idx, weights, ctx):
     between them -- see docs/TRANSFER_TEST.md and docs/PLAN_WAR_LOOKAHEAD.md.
     ``state`` is never mutated; the resolution happens on a scratch copy, so a
     caller may score the same position with and without it.
+
+    ``events.resolve_war`` is no longer total: ``War over Technology`` leaves
+    the victor a decision (steal blue technologies instead of science, Code
+    of Laws p.3), so ``interact.settle_war_spoils`` takes the spoils as
+    science before scoring.  That prices this lookahead exactly as it was
+    priced before the choice existed, and it is a LOWER bound rather than a
+    guess -- see that function.
     """
-    from .. import events
+    from .. import events, interact
     if USE_JOURNAL:
         # Same resolution, on the state itself, undone afterwards.  The
         # "never mutated" promise in the docstring is kept by the rollback
@@ -275,6 +282,7 @@ def war_value(state, idx, weights, ctx):
         j = journal.begin(state)
         try:
             events.resolve_war(state, state.players[idx], None)
+            interact.settle_war_spoils(state, None)
             return evaluate(state, idx, weights, ctx)
         except Exception:
             return None
@@ -283,6 +291,7 @@ def war_value(state, idx, weights, ctx):
     scratch = copy_state(state)
     try:
         events.resolve_war(scratch, scratch.players[idx], None)
+        interact.settle_war_spoils(scratch, None)
         return evaluate(scratch, idx, weights, ctx)
     except Exception:
         return None

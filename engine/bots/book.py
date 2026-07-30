@@ -816,6 +816,38 @@ class BookBot:
         if tag == "infiltrate":
             return pick(lambda o: 1.0 if o == "leader" else 0.5)
 
+        if tag == "war_tech":
+            # War over Technology: spend the strength advantage on science or
+            # on the loser's blue cards.  Both sides of the choice are paid
+            # for out of ONE budget, so they are compared PER SCIENCE POINT
+            # -- science is the numeraire at 1.0 a point, and a card costing
+            # `techCost` has to beat `techCost` science.  The card's own
+            # value is the book's existing `SPECIAL_RANK` table via
+            # `_card_value`, so this preference cannot drift away from what
+            # the book pays for the same card at the row.
+            #
+            # A steal that does NOT upgrade an icon the book already fills is
+            # scored at denial value only: Code of Laws p.3 keeps the higher
+            # level card in play and DISCARDS the other, so taking a card
+            # sideways or downwards puts nothing in our play area -- it only
+            # takes it out of theirs.
+            def spoil_score(o):
+                if o == "science":
+                    return 1.0
+                card = db.get(o) if o in db.by_name else None
+                if card is None:
+                    return 0.0
+                cost = max(1, card.get("techCost") or 1)
+                icon = A.special_icon(card)
+                mine = max((db.level_of(n) for n in p.techs
+                            if db.type_of(n) == "special-tech"
+                            and A.special_icon(db.get(n)) == icon),
+                           default=-1)
+                if db.level_of(o) <= mine:
+                    return 0.35          # denial only; it is discarded
+                return _card_value(state, p, ctx, o) / cost
+            return pick(spoil_score)
+
         if tag == "pact_offer":
             # accept a pact unless it props up the culture leader.
             # The key is "owner", not "from": `actions._h_offer_pact` builds

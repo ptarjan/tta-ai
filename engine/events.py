@@ -667,12 +667,30 @@ def resolve_war(state, attacker, rng):
         loser.yellow_bank -= take
         effects.grant_yellow(victor, take)
     elif kind == "technology":
-        take = min(adv, loser.science)
-        loser.science -= take
-        victor.science += take
+        pass                    # a DECISION -- offered below, after the emit
     elif kind == "culture":
         take = min(5 + adv, loser.culture)
         loser.culture -= take
         victor.culture += take
     effects.invalidate(state)
     state.emit(f"war {name}: P{victor.idx} beat P{loser.idx} by {adv}")
+    if kind == "technology":
+        # The victor picks science or blue technologies, and may mix them
+        # (Code of Laws p.3, FAQ p.8).  Offered AFTER the emit so the log
+        # reads "who beat whom by how much" and then what was taken, and
+        # after `invalidate` so the steal recomputes off a settled board.
+        # `interact` may leave a `choice` on the pending stack: this is the
+        # start of a turn, so nothing else is outstanding and the victor --
+        # who need not be the player to move -- answers first.
+        #
+        # Gated on the CARD's own effect key rather than on the spoils kind,
+        # so the alternative spoil is a property of the data like every other
+        # effect.  A war card that pays science with no such clause still
+        # takes the science with no decision.
+        from . import interact
+        eff = (_DB.get(name).get("effects") or {}) if name in _DB.by_name \
+            else {}
+        if eff.get("orTakesSpecialTechnologiesOfSameTotalScienceCost"):
+            interact.war_tech_spoils(state, victor, loser, adv, rng)
+        else:
+            interact.take_war_science(state, victor, loser, adv)

@@ -273,6 +273,170 @@ def _c_infiltrate(state, p, opt, ctx, rng):
     effects.invalidate(state, victim)
 
 
+# ------------------------------------------- War over Technology spoils
+
+#: Index of the "take the rest as science" option inside a `war_tech`
+#: choice.  It is FIRST on purpose: every argmax in this project breaks a tie
+#: to the lowest index, and index 0 being "science" makes the blind fallback
+#: exactly the behaviour the engine had before the choice existed.
+#: `settle_war_spoils` depends on this too.
+WAR_TECH_SCIENCE = 0
+
+
+def war_tech_options(state, victor, loser, budget):
+    """Blue technologies the victor of a War over Technology may steal now.
+
+    The card (2015 digital edition text, `data/cards_military_actions.json`):
+    *"The victor takes science equal to the strength advantage, or takes
+    special (blue) technologies of the same total cost."*  The rules that
+    decide WHICH ones are on offer are all in the Code of Laws p.3
+    ("Resolve a War") and the official FAQ p.8:
+
+    * *"the victor takes the card from the defeated civilization's PLAY
+      AREA"* -- so only cards the loser has in play, not in hand and not
+      from the card row.
+    * *"A player cannot steal a special technology that is the same as one
+      he or she already has in play or in hand."*  FAQ p.8 restates it:
+      *"you are not allowed to choose a Technology card which you currently
+      have in play or in your hand."*
+    * FAQ p.8, *"As long as you win enough Science points you can always
+      choose to take some or all of them in blue Special Technologies"* --
+      the steal is paid for out of the strength advantage at the card's
+      cost, so a technology the remaining advantage cannot cover is not on
+      offer.
+    * PRINTED cost, not `effects.tech_cost`: Code of Laws p.4, *"If the
+      effect refers to the cost of a card, use the cost printed on the card,
+      ignoring any modifiers."*
+
+    Most expensive first, then by name: a total order, and the option that
+    spends the most of the advantage leads.
+    """
+    out = []
+    for name in loser.techs:
+        if _TYPE_BY_NAME.get(name) != "special-tech":
+            continue
+        if name in victor.techs or name in victor.hand_civil:
+            continue
+        cost = _BY_NAME[name].get("techCost") or 0
+        if cost > budget:
+            continue
+        out.append((cost, name))
+    return [n for _cost, n in sorted(out, key=lambda cn: (-cn[0], cn[1]))]
+
+
+def war_tech_spoils(state, victor, loser, budget, rng=None):
+    """§5.7: hand the victor of a War over Technology its spoils decision.
+
+    Called by `events.resolve_war`.  Mixing is explicitly legal -- FAQ p.8's
+    "some or all", and the digital edition's own logs do it constantly (a
+    26-vs-14 win taking Code of Laws 6 + Cartography 4 + 2 science = 12) --
+    so this offers ONE steal at a time and re-offers with the advantage
+    reduced by what the card cost, until the victor takes the remainder as
+    science or there is nothing left it may steal.
+    """
+    _offer_war_tech(state, victor, loser, int(budget), rng)
+
+
+def _offer_war_tech(state, victor, loser, budget, rng):
+    opts = war_tech_options(state, victor, loser, budget)
+    if not opts:
+        # Nothing stealable: there is no decision, so do not manufacture one.
+        take_war_science(state, victor, loser, budget)
+        return
+    push_choice(state, victor.idx, "war_tech", ["science"] + opts,
+                {"victim": loser.idx, "budget": budget}, auto=False)
+
+
+def _c_war_tech(state, p, opt, ctx, rng):
+    loser = state.players[ctx["victim"]]
+    budget = int(ctx["budget"])
+    if opt == "science":
+        take_war_science(state, p, loser, budget)
+        return
+    cost = _BY_NAME[opt].get("techCost") or 0
+    _steal_special_tech(state, p, loser, opt)
+    state.emit(f"war spoils: P{p.idx} steals {opt} from P{loser.idx}")
+    _offer_war_tech(state, p, loser, budget - cost, rng)
+
+
+def take_war_science(state, victor, loser, budget):
+    """The other half of the card, and the cap FAQ p.8 puts on it.
+
+    *"The attacker cannot take more Science points than the loser has to
+    lose"* -- so `min(budget, loser.science)`, exactly as the engine has
+    always done.  The FAQ's parenthesis, that the loser's losable total also
+    counts the cost of stealable blue cards, is not an extra term here: it is
+    already true, because those cards were spendable out of the same budget
+    a moment ago.
+    """
+    take = min(budget, loser.science)
+    if take <= 0:
+        return
+    loser.science -= take
+    victor.science += take
+    state.emit(f"war spoils: P{victor.idx} takes {take} science "
+               f"from P{loser.idx}")
+
+
+def _steal_special_tech(state, victor, loser, name):
+    """Move one blue technology from the loser's play area into the victor's.
+
+    Code of Laws p.3: *"the victor takes the card from the defeated
+    civilization's play area and puts it into his or her own play area"*,
+    and *"If you steal a special technology of the same type as one that you
+    have in play, you keep the higher level card in play and discard the
+    other."*  That second sentence is precisely §7.6's one-per-icon rule,
+    which `actions.put_special_in_play` already implements for the develop
+    path -- so the steal routes through it instead of restating it, and a
+    stolen card that loses the comparison is discarded while the loser has
+    still lost it.
+
+    It is NOT a develop: no science is paid and `effects.on_develop`
+    (Leonardo / Newton / Einstein) does not fire, because nobody played the
+    card.  `effects.on_enter_play` / `on_leave_play` DO fire on both sides,
+    because the card really does leave one play area and enter the other.
+    """
+    from . import actions
+    effects.on_leave_play(state, loser, name)
+    del journal.touch(loser.techs)[name]
+    actions.put_special_in_play(state, victor, name)
+    effects.invalidate(state, loser)
+
+
+def settle_war_spoils(state, rng=None):
+    """Take any outstanding War over Technology spoils as SCIENCE.
+
+    For LOOKAHEAD callers only (`bots/quiescent.war_value`, and PlanBot
+    through it): they resolve a declared war on a scratch state and score the
+    position immediately, so a decision left hanging would price the war at
+    nothing at all.  Science is the option the card names first and the only
+    one the engine had before this choice existed, so a war is priced at its
+    science value -- a LOWER bound on the spoils, since a victor only ever
+    steals when its own evaluator prefers the cards to the science.
+
+    Deliberately not a search: `war_value` runs on every candidate move of
+    every beam node.
+
+    KNOWN, PERMANENT, ONE-SIDED BIAS -- write it down rather than rediscover
+    it.  Every search that prices a declared `War over Technology` now sees
+    the SCIENCE branch and never the steal, so it sees the floor of the card
+    and never its ceiling.  The bots will therefore keep under-declaring that
+    war in exactly the positions where the choice was worth implementing:
+    the ones where the loser has a fat blue technology to take.  A lower
+    bound beats the zero it replaces, so this ships -- but anyone measuring
+    the choice and finding nothing has measured THIS, not the choice.  The
+    fix, when someone wants it, is to price the best affordable option from
+    `war_tech_options` instead of the remainder, at the cost of a card
+    valuation inside a function that runs on every beam node.
+
+    Called from `bots/quiescent.war_value` (and PlanBot through it) and from
+    `bots/neural_plan._leaf_enc`.  Those are all three of the sites that
+    resolve a war on a scratch state; a fourth would need this too.
+    """
+    while state.pending and state.pending[-1].get("tag") == "war_tech":
+        apply_pending(state, ("choose", WAR_TECH_SCIENCE), rng)
+
+
 def _c_pact_offer(state, p, opt, ctx, rng):
     """§5.9: the partner accepts or refuses; refusal returns it to hand."""
     owner = state.players[ctx["owner"]]
@@ -366,6 +530,7 @@ _CHOICE = {
     "infiltrate": _c_infiltrate,
     "pact_offer": _c_pact_offer,
     "take_row": _c_take_row,
+    "war_tech": _c_war_tech,
 }
 
 
@@ -463,6 +628,18 @@ def _q_end_of_turn(state, p, item, rng):
     game._resume_end_turn(state, p, rng)
 
 
+def _q_auto_skip_politics(state, p, item, rng):
+    """Resume the start-of-turn "is passing the only political option?" test
+    once a War over Technology's spoils decision has been answered.
+
+    See `game.start_turn` for why it has to wait: the spoils can change the
+    current player's military actions.
+    """
+    from . import game
+    if state.phase == "politics" and not p.politics_done:
+        game._auto_skip_politics(state, rng)
+
+
 def _q_discard_military(state, p, item, rng):
     for _ in range(int(item.get("n", 1))):
         opts = discard_options(p.hand_military)
@@ -537,6 +714,7 @@ _QUEUE_ITEMS = {
     "flip_wonder": _q_flip_wonder,
     "discard_military": _q_discard_military,
     "end_of_turn": _q_end_of_turn,
+    "auto_skip_politics": _q_auto_skip_politics,
     "raid": _q_raid,
     "annex": _q_annex,
     "infiltrate": _q_infiltrate,

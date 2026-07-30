@@ -20,6 +20,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import actions, cards as C, effects, events, game, interact  # noqa: E402
+from engine.state import TechCard  # noqa: E402
 
 actions.STRICT = True
 
@@ -292,6 +293,213 @@ class TestWarResolution(unittest.TestCase):
         events.resolve_war(st, p0, None)
         self.assertEqual((p0.science, p1.science), (4, 0))
 
+    # -- War over Technology's alternative spoil (the victor's choice) ------
+    #
+    # [card] 'The victor takes science equal to the strength advantage, or
+    # takes special (blue) technologies of the same total cost.'
+    # [CoL p.3] 'If the victor steals a special technology, the victor takes
+    # the card from the defeated civilization's play area and puts it into
+    # his or her own play area.  A player cannot steal a special technology
+    # that is the same as one he or she already has in play or in hand.  If
+    # you steal a special technology of the same type as one that you have in
+    # play, you keep the higher level card in play and discard the other.'
+    # [FAQ p.8] 'As long as you win enough Science points you can always
+    # choose to take some or all of them in blue Special Technologies.'
+
+    def _tech_war(self, adv=10, blues=(), mine=(), hand=()):
+        st, p0, p1 = self._declared("War over Technology")
+        for n in blues:
+            p1.techs[n] = TechCard(n)
+        for n in mine:
+            p0.techs[n] = TechCard(n)
+        p0.hand_civil = list(hand)
+        p0.science, p1.science = 0, 30
+        effects.invalidate(st)
+        # Some blue technologies print strength of their own (Cartography +1,
+        # Warfare +1, Strategy +3), so the advantage is set AFTER they are in
+        # play and read off the engine rather than assumed.
+        p1.techs["Warriors"].workers = 1
+        effects.invalidate(st, p1)
+        d = effects.state_stats(st, p1).strength
+        p0.techs["Warriors"].workers = 0
+        effects.invalidate(st, p0)
+        p0.techs["Warriors"].workers = (
+            d + adv - effects.state_stats(st, p0).strength)
+        effects.invalidate(st, p0)
+        assert (effects.state_stats(st, p0).strength
+                - effects.state_stats(st, p1).strength) == adv
+        return st, p0, p1
+
+    def _opts(self, st):
+        return list(st.pending[-1]["options"])
+
+    def _choose(self, st, opt):
+        i = self._opts(st).index(opt)
+        interact.apply_pending(st, ("choose", i))
+
+    def test_no_decision_when_the_loser_has_no_blue_technology(self):
+        """A war the victor cannot spend on cards must not manufacture a
+        decision -- `push_choice` is never reached."""
+        st, p0, p1 = self._tech_war(adv=7)
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.pending, [])
+        self.assertEqual((p0.science, p1.science), (7, 23))
+
+    def test_the_victor_is_offered_science_or_the_loser_s_blue_cards(self):
+        st, p0, p1 = self._tech_war(adv=10, blues=("Code of Laws",
+                                                   "Cartography"))
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.decider(), p0.idx)
+        # science first (the pre-choice behaviour is the index-0 fallback),
+        # then the technologies most expensive first
+        self.assertEqual(self._opts(st),
+                         ["science", "Code of Laws", "Cartography"])
+
+    def test_taking_the_science_is_exactly_the_old_behaviour(self):
+        st, p0, p1 = self._tech_war(adv=10, blues=("Code of Laws",))
+        events.resolve_war(st, p0, None)
+        self._choose(st, "science")
+        self.assertEqual((p0.science, p1.science), (10, 20))
+        self.assertIn("Code of Laws", p1.techs)
+        self.assertEqual(st.pending, [])
+
+    def test_stealing_moves_the_card_between_the_play_areas(self):
+        # [CoL p.3] out of the defeated civilization's play area, into the
+        # victor's -- and its effect comes with it (+1 civil action).
+        st, p0, p1 = self._tech_war(adv=10, blues=("Code of Laws",))
+        ca_before = effects.state_stats(st, p0).civil_actions
+        events.resolve_war(st, p0, None)
+        self._choose(st, "Code of Laws")
+        self.assertIn("Code of Laws", p0.techs)
+        self.assertNotIn("Code of Laws", p1.techs)
+        self.assertEqual(effects.state_stats(st, p0).civil_actions,
+                         ca_before + 1)
+
+    def test_the_victor_may_mix_cards_and_science(self):
+        # [FAQ p.8] 'some or all of them'.  The digital edition's own log for
+        # a 26-vs-14 win: Code of Laws (6) + Cartography (4) + 2 science.
+        st, p0, p1 = self._tech_war(adv=12, blues=("Code of Laws",
+                                                   "Cartography"))
+        events.resolve_war(st, p0, None)
+        self._choose(st, "Code of Laws")               # 6 of 12
+        self._choose(st, "Cartography")                # 4 of the last 6
+        self.assertEqual(st.pending, [])               # nothing left to steal
+        self.assertEqual((p0.science, p1.science), (2, 28))
+        self.assertEqual(set(p0.techs) & {"Code of Laws", "Cartography"},
+                         {"Code of Laws", "Cartography"})
+
+    def test_a_card_the_advantage_cannot_pay_for_is_not_offered(self):
+        # [FAQ p.8] 'as long as you win enough Science points'.  Code of Laws
+        # costs 6; an advantage of 5 cannot reach it.
+        st, p0, p1 = self._tech_war(adv=5, blues=("Code of Laws",))
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.pending, [])
+        self.assertEqual(p0.science, 5)
+        self.assertIn("Code of Laws", p1.techs)
+
+    def test_the_budget_shrinks_by_the_printed_cost(self):
+        # Cartography is 4, so a 9 advantage leaves 5 -- not enough for the
+        # 6-cost Code of Laws, which drops out of the second offer.
+        st, p0, p1 = self._tech_war(adv=9, blues=("Code of Laws",
+                                                  "Cartography"))
+        events.resolve_war(st, p0, None)
+        self._choose(st, "Cartography")
+        self.assertEqual(st.pending, [])
+        self.assertEqual(p0.science, 5)
+        self.assertIn("Code of Laws", p1.techs)
+
+    def test_cannot_steal_a_card_already_in_play_or_in_hand(self):
+        # [CoL p.3] / [FAQ p.8] the two-part exclusion.
+        st, p0, p1 = self._tech_war(adv=12, blues=("Code of Laws",
+                                                   "Cartography"),
+                                    mine=("Code of Laws",),
+                                    hand=("Cartography",))
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.pending, [])               # nothing on offer
+        self.assertEqual(p0.science, 12)
+
+    def test_stealing_the_same_icon_keeps_the_higher_level_card(self):
+        # [CoL p.3] 'you keep the higher level card in play and discard the
+        # other'.  Navigation (II) replaces Cartography (I).
+        st, p0, p1 = self._tech_war(adv=12, blues=("Navigation",),
+                                    mine=("Cartography",))
+        events.resolve_war(st, p0, None)
+        self._choose(st, "Navigation")
+        self.assertIn("Navigation", p0.techs)
+        self.assertNotIn("Cartography", p0.techs)      # discarded
+        self.assertNotIn("Navigation", p1.techs)       # the loser lost it
+
+    def test_stealing_a_lower_level_card_is_pure_denial(self):
+        # The other half of the same sentence: the stolen card loses the
+        # comparison and is discarded, but the loser has still lost it.
+        st, p0, p1 = self._tech_war(adv=12, blues=("Cartography",),
+                                    mine=("Navigation",))
+        events.resolve_war(st, p0, None)
+        self.assertIn("Cartography", self._opts(st))
+        self._choose(st, "Cartography")
+        self.assertNotIn("Cartography", p0.techs)      # discarded
+        self.assertNotIn("Cartography", p1.techs)      # and gone from theirs
+        self.assertIn("Navigation", p0.techs)
+
+    def test_the_science_half_is_still_capped_by_what_the_loser_holds(self):
+        # [FAQ p.8] 'cannot take more Science points than the loser has'.
+        st, p0, p1 = self._tech_war(adv=12, blues=("Code of Laws",))
+        p1.science = 3
+        events.resolve_war(st, p0, None)
+        self._choose(st, "Code of Laws")
+        self.assertEqual((p0.science, p1.science), (3, 0))
+
+    def test_the_defender_can_win_and_choose(self):
+        # [FAQ p.16] 'Either player can win a War' -- and then it is the
+        # DEFENDER holding the decision, not the player to move.
+        st, p0, p1 = self._declared("War over Technology")
+        set_strength(st, p0, 1)
+        set_strength(st, p1, 11)
+        p0.techs["Code of Laws"] = TechCard("Code of Laws")
+        p0.science, p1.science = 30, 0
+        effects.invalidate(st)
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.decider(), p1.idx)
+        self._choose(st, "Code of Laws")
+        self.assertIn("Code of Laws", p1.techs)
+
+    def test_only_blue_special_technologies_are_stealable(self):
+        # Brown/grey/red technologies stay put -- the card says "special
+        # (blue) technologies".
+        st, p0, p1 = self._tech_war(adv=12, blues=("Bronze", "Philosophy"))
+        events.resolve_war(st, p0, None)
+        self.assertEqual(st.pending, [])
+        self.assertEqual(p0.science, 12)
+
+    def test_the_turn_does_not_advance_while_the_choice_is_outstanding(self):
+        # The decision arrives inside the start-of-turn sequence, so the
+        # politics phase must wait for it (and the auto-skip test with it,
+        # because a stolen Warfare/Strategy changes the military actions the
+        # test reads).
+        st, p0, p1 = self._tech_war(adv=12, blues=("Strategy",))
+        st.current = 0
+        st.round = 4
+        p0.hand_military = []
+        game.start_turn(st)
+        self.assertTrue(st.pending)
+        self.assertEqual(actions.legal_moves(st),
+                         interact.pending_moves(st))
+        self._choose(st, "Strategy")
+        self.assertEqual(st.pending, [])
+        self.assertIn("Strategy", p0.techs)
+
+    def test_the_effect_key_gates_the_offer(self):
+        # The alternative spoil is a property of the CARD DATA
+        # (`orTakesSpecialTechnologiesOfSameTotalScienceCost`), not of the
+        # spoils kind, so a war paying science without that clause takes it
+        # with no decision at all.
+        eff = C.db().get("War over Technology")["effects"]
+        self.assertTrue(eff["orTakesSpecialTechnologiesOfSameTotalScienceCost"])
+        for other in ("War over Territory", "War over Culture"):
+            self.assertNotIn(
+                "orTakesSpecialTechnologiesOfSameTotalScienceCost",
+                C.db().get(other).get("effects") or {})
+
     def test_no_defence_decision_is_offered_in_a_war(self):
         # [CoL p.3] 'Neither side can use military bonus cards to augment
         # their strength in a war.'
@@ -405,6 +613,99 @@ class TestWarResolution(unittest.TestCase):
         game._advance_age(st, __import__("random").Random(0))
         self.assertIsNotNone(p0.war_declared_by_me)
         self.assertEqual(effects.pacts_for(st, 0), [])
+
+
+# ------------------------- who answers the new decision, and with what -----
+
+class TestWarOverTechnologyPolicies(unittest.TestCase):
+    """Every bot needs a policy for the spoils choice.
+
+    Four of the five need no new code and this class is the proof: they score
+    ``("choose", i)`` by cloning, applying and asking the evaluator they
+    already use, so their policy is DERIVED from their own valuation and
+    cannot drift from it.  BookBot -- which does no lookahead at all -- gets a
+    preference, and it is built out of the tables the book already has.
+    """
+
+    def _position(self, players=3, blues=("Code of Laws",), adv=12):
+        st = st_military(players=players)
+        p0, p1 = st.me(), st.players[1]
+        p0.hand_military = ["War over Technology"]
+        p0.military_actions = 2
+        declare_war(st, "War over Technology", 1)
+        for n in blues:
+            p1.techs[n] = TechCard(n)
+        p0.science, p1.science = 0, 30
+        effects.invalidate(st)
+        p1.techs["Warriors"].workers = 1
+        effects.invalidate(st, p1)
+        d = effects.state_stats(st, p1).strength
+        p0.techs["Warriors"].workers = 0
+        effects.invalidate(st, p0)
+        p0.techs["Warriors"].workers = (
+            d + adv - effects.state_stats(st, p0).strength)
+        effects.invalidate(st, p0)
+        events.resolve_war(st, p0, None)
+        assert st.pending, "the choice is not live in this position"
+        return st, p0, p1
+
+    def test_the_choice_reaches_the_move_generator(self):
+        st, p0, _p1 = self._position()
+        moves = actions.legal_moves(st)
+        self.assertEqual(moves, [("choose", 0), ("choose", 1)])
+        self.assertEqual(st.decider(), p0.idx)
+
+    def test_the_evaluator_bots_answer_it_without_new_code(self):
+        from engine.bots.weighted import DEFAULT_WEIGHTS, WeightedBot
+        from engine.bots.quiescent import QuiescentBot
+        for bot in (WeightedBot(DEFAULT_WEIGHTS, seed=3),
+                    QuiescentBot(DEFAULT_WEIGHTS, seed=3, levels=1)):
+            with self.subTest(bot=type(bot).__name__):
+                st, _p0, _p1 = self._position()
+                mv = bot.pick(st, actions.legal_moves(st))
+                self.assertIn(mv, actions.legal_moves(st))
+
+    def test_the_evaluator_can_see_the_difference_between_the_options(self):
+        """The conduction check for the new lever.
+
+        A decision the evaluator scores identically either way is not a
+        decision, it is noise in the move stream.  Stealing `Code of Laws`
+        buys a civil action and 30 science does not, so the two branches must
+        NOT evaluate equal.
+        """
+        from engine.bots.fastcopy import copy_state
+        from engine.bots.weighted import (DEFAULT_WEIGHTS, evaluate,
+                                          rival_context)
+        st, p0, _p1 = self._position()
+        ctx = rival_context(st, p0.idx)
+        vals = []
+        for i in range(len(st.pending[-1]["options"])):
+            trial = copy_state(st)
+            interact.apply_pending(trial, ("choose", i))
+            while trial.pending and trial.pending[-1]["tag"] == "war_tech":
+                interact.apply_pending(trial, ("choose", 0))
+            vals.append(evaluate(trial, p0.idx, DEFAULT_WEIGHTS, ctx))
+        self.assertNotAlmostEqual(vals[0], vals[1], places=6)
+
+    def test_bookbot_prefers_a_technology_that_upgrades_an_icon(self):
+        # Code of Laws costs 6 and is rank 9 in the book's own table, so it
+        # beats 6 science comfortably.
+        from engine.bots.book import BookBot
+        st, _p0, _p1 = self._position(blues=("Code of Laws",))
+        mv = BookBot(seed=1).choose(st, actions.legal_moves(st))
+        self.assertEqual(st.pending[-1]["options"][mv[1]], "Code of Laws")
+
+    def test_bookbot_takes_the_science_over_a_card_it_cannot_use(self):
+        # [CoL p.3] a stolen card of the same icon and no higher level is
+        # discarded, so it buys nothing but denial -- and the book prices
+        # denial below a point of science.
+        from engine.bots.book import BookBot
+        from engine.bots.weighted import DEFAULT_WEIGHTS   # noqa: F401
+        st, p0, _p1 = self._position(blues=("Cartography",))
+        p0.techs["Navigation"] = TechCard("Navigation")    # out-levels it
+        effects.invalidate(st, p0)
+        mv = BookBot(seed=1).choose(st, actions.legal_moves(st))
+        self.assertEqual(st.pending[-1]["options"][mv[1]], "science")
 
 
 # ------------------------------------------------------------- aggressions

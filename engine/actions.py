@@ -846,6 +846,21 @@ def _h_develop(state, p, move, rng, free=False):
     state.emit(f"developed {name} for {cost} science")
 
 
+def put_special_in_play(state, p, name):
+    """Put a blue technology into `p`'s play area under §7.6's one-per-icon
+    rule, without paying for it.
+
+    THE single implementation of that placement.  Developing one is one way
+    in (`_develop_special`, below, which is this function); stealing one with
+    `War over Technology` is the other, and Code of Laws p.3 states the same
+    rule for it -- *"If you steal a special technology of the same type as
+    one that you have in play, you keep the higher level card in play and
+    discard the other."*  `engine/interact._steal_special_tech` calls this
+    rather than restating it.
+    """
+    _develop_special(state, p, name)
+
+
 def _develop_special(state, p, name):
     db = _DB
     icon = special_icon(db.get(name))

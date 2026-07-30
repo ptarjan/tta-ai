@@ -241,7 +241,22 @@ def start_turn(state, rng=None):
         state.phase = "actions"
     elif state.round > 1 and state.has_military and not state.game_over:
         state.phase = "politics"
-        _auto_skip_politics(state, rng)
+        if state.pending:
+            # `resolve_war` above can leave a War over Technology's spoils
+            # decision outstanding (§5.7), and stealing a blue technology can
+            # hand the CURRENT player military actions -- Warfare +1,
+            # Strategy +2, Military Theory +3 -- which is exactly what
+            # `_auto_skip_politics` reads to decide whether passing is the
+            # only political option.  Answering that question before the
+            # spoils are taken would deny the victor a politics phase it is
+            # owed, so the test is deferred behind the decision.  Nothing
+            # else can be pending here: measured across the fingerprint's 33
+            # games, `state.pending` was empty on all 3737 arrivals.
+            from . import interact
+            interact.enqueue(state, {"player": state.current,
+                                     "tag": "auto_skip_politics"})
+        else:
+            _auto_skip_politics(state, rng)
     else:
         state.phase = "actions"
 

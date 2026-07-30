@@ -128,14 +128,19 @@ class NeuralPlanBot:
         """Encoding the net should score for position ``t`` from ``me``'s view.
 
         Substitutes the war-resolved position when I hold a declared war, the
-        neural mirror of ``quiescent.war_value``.
+        neural mirror of ``quiescent.war_value`` -- including its settlement
+        of ``War over Technology``'s spoils choice, without which the net
+        would be handed a position where the war has been fought and has paid
+        NOTHING (the decision would still be sitting on ``scratch.pending``).
+        Same lower-bound caveat as there; see ``interact.settle_war_spoils``.
         """
         if (self.WAR_LOOKAHEAD and not t.game_over
                 and t.players[me].war_declared_by_me is not None):
-            from .. import events
+            from .. import events, interact
             scratch = copy_state(t)
             try:
                 events.resolve_war(scratch, scratch.players[me], None)
+                interact.settle_war_spoils(scratch, None)
                 self.wars_priced += 1
                 t = scratch
             except Exception:

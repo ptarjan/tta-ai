@@ -1747,9 +1747,6 @@ class EveryFieldHasAReader(unittest.TestCase):
         "chosenBy", "duration", "ignore", "statistics", "note", "order",
         "ignoreConsumption", "ignoreCorruption", "requiresAvailableWorker",
         "colonyImmediateBonusApplies", "colonyPermanentBonusTransfers",
-        # KNOWN UNIMPLEMENTED (docs/SCORE_AUDIT.md 3.7): the victor of a War
-        # over Technology may take blue technologies instead of science.
-        "orTakesSpecialTechnologiesOfSameTotalScienceCost",
         # KNOWN UNIMPLEMENTED (docs/SCORE_AUDIT.md 3.2): Bill Gates pays his
         # culture at game end but not when he is removed from play.
         "cultureOnLeaveEqualToLabResourceProduction",

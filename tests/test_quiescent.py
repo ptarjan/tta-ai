@@ -132,6 +132,48 @@ class TestQuiescent(unittest.TestCase):
         self.assertEqual(st.players[0].war_declared_by_me, (war, 0, 1))
         self.assertIsInstance(plain, float)
 
+    def test_war_over_technology_is_priced_at_its_science_value(self):
+        """`resolve_war` is no longer total: `War over Technology` leaves the
+        victor a decision (Code of Laws p.3).  A lookahead that scored the
+        position with that decision outstanding would price the war at ZERO,
+        so `war_value` settles it -- as science, deliberately, which is a
+        lower bound and is exactly how the war was priced before the choice
+        existed.
+        """
+        from engine import effects, events, interact
+        from engine.bots import quiescent as Q
+        from engine.bots.weighted import DEFAULT_WEIGHTS, evaluate, rival_context
+        from engine.state import TechCard
+
+        st = game.new_game(2, seed=77)
+        p, q = st.players[0], st.players[1]
+        p.war_declared_by_me = ("War over Technology", 0, 1)
+        q.wars_declared_on_me = [("War over Technology", 0, 1)]
+        q.techs["Code of Laws"] = TechCard("Code of Laws")   # stealable
+        q.science = 30
+        p.techs["Warriors"].workers = 12                     # a big advantage
+        effects.invalidate(st)
+        ctx = rival_context(st, 0)
+
+        # the choice really is live in this position
+        probe = copy_state(st)
+        events.resolve_war(probe, probe.players[0], None)
+        self.assertTrue(probe.pending)
+        self.assertEqual(probe.pending[-1]["tag"], "war_tech")
+        self.assertEqual(probe.players[0].science, 0)        # nothing yet
+
+        looked = Q.war_value(st, 0, DEFAULT_WEIGHTS, ctx)
+        self.assertIsNotNone(looked)
+        interact.settle_war_spoils(probe, None)
+        self.assertEqual(probe.pending, [])
+        self.assertGreater(probe.players[0].science, 0)      # spoils landed
+        self.assertAlmostEqual(looked,
+                               evaluate(probe, 0, DEFAULT_WEIGHTS, ctx),
+                               places=9)
+        # and the position it was asked about is untouched
+        self.assertEqual(st.players[0].science, 0)
+        self.assertIn("Code of Laws", st.players[1].techs)
+
 
 if __name__ == "__main__":
     unittest.main()
