@@ -92,11 +92,28 @@ __all__ = ["board_yields", "board_choices", "SWAP_TYPES", "BOARD_PRICED"]
 _DB = C.db()
 
 # Card types priced by swapping the card in and diffing `effects.compute`.
-# Both are single-slot: you have exactly one leader and exactly one
-# government, and playing the card replaces what is there.  That is what
-# makes a diff the right question to ask.  A wonder is not in this set --
-# wonders accumulate rather than replace, and take several turns to arrive.
-SWAP_TYPES = frozenset(("leader", "government"))
+# Leader and government are single-slot: you have exactly one of each, and
+# playing the card replaces what is there, which is what makes a diff the
+# right question.
+#
+# WONDERS were excluded when this module landed, on the reasoning that "a
+# wonder accumulates rather than replaces".  That is true and it is an
+# argument for the diff being SIMPLER here, not for it being wrong: append
+# the wonder to `p.completed_wonders`, compute, restore, and the delta is a
+# pure gain with nothing to net off.  Doing it buys the same exactness for
+# Great Wall (`strengthPerInfantry`, `strengthPerArtillery`), St. Peter's
+# Basilica (`extraHappyPerHappySource`) and Transcontinental Railroad
+# (`doubleBestMine`) that the leader swap bought for Michelangelo -- clamps
+# included, so St. Peter's ninth happy face is correctly worth nothing.
+#
+# Two consequences worth knowing.  A wonder is not free, so `_wonder_cost`
+# adds back the stage resources and the generic `wonders` term that
+# `_card_yields` supplies for the static path (exactly as `_government_cost`
+# adds back a government's science).  And a wonder's printed `culture` moves
+# from `_Y_RATE` to `_GAIN`, so `card_rate_credit` no longer gates it when
+# board pricing is on -- the same trade this module already accepted for
+# Gandhi's printed +2.
+SWAP_TYPES = frozenset(("leader", "government", "wonder"))
 
 # Experiment knob, in the style of TTA_PARANOID / FASTCOPY_PARANOID: restrict
 # board-aware pricing to a comma-separated subset of card types, so that the
@@ -106,9 +123,10 @@ SWAP_TYPES = frozenset(("leader", "government"))
 # because a per-call `os.environ` lookup in this hot a function is not free.
 #
 #     TTA_BOARD_TYPES=government python3 -m experiments.evaluate ...
+#     TTA_BOARD_TYPES=wonder     python3 -m experiments.evaluate ...
 _ENABLED = frozenset(
     t.strip() for t in os.environ.get("TTA_BOARD_TYPES", "").split(",")
-    if t.strip()) or frozenset(("leader", "government", "action"))
+    if t.strip()) or frozenset(("leader", "government", "action", "wonder"))
 
 # --------------------------------------------------------------- features
 #
@@ -140,14 +158,20 @@ _COST = 1
 
 
 def _swapped(state, p, field, name):
-    """`effects.compute` with `p.<field>` temporarily set to `name`.
+    """`effects.compute` with `p.<field>` temporarily holding `name`.
 
     See "the trap" in the module docstring: this MUST be `compute` and not
     `state_stats`.  `try/finally` because a raise here would leave the player
     holding a card they do not own.
+
+    `completed_wonders` is a LIST and is appended to rather than replaced --
+    a wonder adds to what you have.  The list is rebound to a new object
+    rather than mutated in place, so a journal that is watching the original
+    list never sees a write and `finally` restores by identity.
     """
     old = getattr(p, field)
-    setattr(p, field, name)
+    setattr(p, field, list(old) + [name] if field == "completed_wonders"
+            else name)
     try:
         return effects.compute(state, p)
     finally:
@@ -316,6 +340,137 @@ def _government_cost(state, p, name, out):
         out.append(("gov_action_cost", -float(burned), _GAIN))
 
 
+# ----------------------------------------------------------- wonder riders
+#
+# The two things a `compute` diff structurally CANNOT see on a wonder,
+# because neither is a `Stats` field.
+
+
+def _on_build_culture(state, p, name):
+    """The four Age III wonders: one-time culture scored on completion.
+
+    `effects.compute` builds per-turn ratings.  `onBuildCulture` and
+    `onBuildCulturePerTechLevelSum` are paid by `effects.on_wonder_complete`,
+    once, at the moment the last stage goes down -- so they are not in
+    `Stats` and no swap diff will ever find them.  That is why Hollywood,
+    Internet, Fast Food Chains and First Space Flight were still worth
+    nothing after the leader work: they are the residue the diff leaves.
+
+    This does not reimplement the formulas.  It calls
+    `effects.wonder_completion_culture`, which is the function
+    `on_wonder_complete` itself calls to pay them out, so there is exactly
+    one implementation and `tests/test_card_pricing.py:TestOneImplementation`
+    fails if that stops being true.  (The `onBuildCulture` *value* in the
+    card data -- `"2*workers(farm,mine)+..."` -- is an English gloss that
+    nothing parses; `_one_time_culture` dispatches on card name.  There was
+    never a formula parser to reuse and there is still only one evaluator.)
+
+    Lands on `culture`, the STOCK feature, because it is paid once.  Culture
+    is the score, so this is the one card class the evaluator can be exactly
+    right about rather than approximately right.
+
+    Two errors of opposite sign are left standing, deliberately, and both are
+    named here rather than hidden: the amount is measured on TODAY'S board
+    and a wonder takes many turns to build, which UNDERSTATES it; and it is
+    credited in full without discounting the chance the wonder is never
+    finished, which OVERSTATES it.  `wonder_overrun` already exists to price
+    non-completion and this is not a second opinion about that.
+    """
+    got = effects.wonder_completion_culture(state, p, name)
+    return (("culture", float(got), _GAIN),) if got else ()
+
+
+#: Fraction of player-turns on which a population increase happens at all.
+#: MEASURED, not chosen -- `tools/free_pop_rate.py`, 2p self-play under
+#: `analysis/frozen/champion_2p.json`, 410 player-turns:
+#:
+#:     U_paid  0.132   turns the bot pays a civil action + food for one anyway
+#:     want    0.654   turns on which a FREE one would improve its evaluation
+#:     gain    0.646   mean eval points a free one is worth, measured directly
+#:
+#: and the refund model this drives -- U_paid x (1 civil action + pop_cost
+#: food), priced through the champion's own weights -- comes to 0.51-0.98
+#: points per turn across pop_cost 2..5, which BRACKETS the 0.646 measured
+#: end-to-end.  That bracket is what makes 0.13 a measurement.
+FREE_POP_UTIL = 0.13
+
+
+def _free_pop_increase(state, p, name):
+    """Ocean Liners, whose entire card is `freePopIncreasePerTurn: True`.
+
+    "Once per turn you may increase population without spending a civil
+    action or food."  `effects._apply_special` turns it into
+    `Stats.free_pop_per_turn = True` -- a BOOLEAN, not a rating -- so the
+    swap diff sees a flag flip and has no number to report.  There is no
+    number on the card either.  The value has to be constructed.
+
+    The marginal value is exactly the two things the action would otherwise
+    have cost: one civil action, and the current food price of a population
+    increase.  Both are already features with fitted weights and both are
+    already PER-TURN quantities in this evaluator, so pricing it as "+U civil
+    actions per turn, +U x pop_cost food per turn" puts it in the same units
+    as `culture_rate` with no new weight.  Multiplying only this one card by
+    turns-remaining would make it incommensurable with every other rate in
+    the vector, all of which are implicitly "per turn for the rest of the
+    game"; that is why there is no turns-left factor.
+
+    `U` is the fraction of turns you would have taken the increase anyway.
+    On the other turns the effect is a free worker rather than a refund,
+    which is a different and generally smaller quantity, so scaling by
+    `U_paid` rather than by the 0.654 "would want it" rate is the
+    conservative read -- and over-pricing a wonder is the specific bias
+    docs/SCORE_VALIDATION.md 6.2 measured as costly.  This under-claims.
+
+    The board-aware part is a hard gate rather than a scaling:
+    `economy.pop_cost_base` returns None when the yellow bank is empty, and a
+    player with no tokens left cannot increase population at all.  For them
+    Ocean Liners is worth exactly nothing, and a static table would still be
+    offering them four stages of resources for it.
+    """
+    from .. import economy
+    base = economy.pop_cost_base(p.yellow_bank)
+    if base is None:
+        return ()
+    food = max(0, base - effects.state_stats(state, p).pop_food_discount)
+    return (("civil_actions", FREE_POP_UTIL, _GAIN),
+            ("food_rate", FREE_POP_UTIL * food, _GAIN))
+
+
+#: effects key -> rider, for wonders.  Keyed by KEY rather than by card name
+#: (unlike `RIDERS`) so the next card printing the same thing is priced the
+#: day it lands.  No subtraction here: wonders accumulate, so there is no
+#: incumbent whose rider has to be netted off.
+WONDER_RIDERS = {
+    "onBuildCulture": _on_build_culture,
+    "onBuildCulturePerTechLevelSum": _on_build_culture,
+    "freePopIncreasePerTurn": _free_pop_increase,
+}
+
+
+def _wonder_rider_delta(state, p, name):
+    eff = _DB.get(name).get("effects") or {}
+    out = []
+    for k in eff:
+        fn = WONDER_RIDERS.get(k)
+        if fn is not None:
+            out.extend(fn(state, p, name))
+    return tuple(out)
+
+
+def _wonder_cost(state, p, name, out):
+    """What a wonder costs, which the swap diff does not charge for.
+
+    Exactly what `weighted._card_yields` puts on a wonder, restated here
+    because `card_potential` prices a swap card by the diff ALONE (otherwise
+    the printed culture would be counted twice).  Drop this and every wonder
+    becomes free.
+    """
+    out.append(("wonders", 1.0, _GAIN))
+    stages = _DB.get(name).get("stages") or []
+    if stages:
+        out.append(("resource_stock", -float(sum(stages)), _COST))
+
+
 # ------------------------------------------------------------- entry point
 
 
@@ -331,9 +486,13 @@ def board_yields(name, state, idx):
     if typ not in SWAP_TYPES or typ not in _ENABLED:
         return None
     p = state.players[idx]
-    field = "leader" if typ == "leader" else "government"
+    field = {"leader": "leader", "government": "government",
+             "wonder": "completed_wonders"}[typ]
     out = list(_stats_delta(state, p, field, name))
-    if typ == "leader":
+    if typ == "wonder":
+        _wonder_cost(state, p, name, out)
+        out.extend(_wonder_rider_delta(state, p, name))
+    elif typ == "leader":
         if not p.leader:
             # the generic "it is a leader" term, which `_card_yields` gets
             # from `features()`.  Not a gain when you already have one: a
@@ -470,6 +629,20 @@ BOARD_PRICED = {
         "leader swap diff: effects._apply_special -> Stats.pop_food_discount",
     "cannotPlayAggressionOrWar":
         "leader swap diff: effects._apply_special -> Stats.no_aggression",
+    # --- wonders, priced by the wonder swap diff (Lane A).  Every one of
+    # these is `effects._apply_modifier` arithmetic the engine already does.
+    "strengthPerInfantry": "wonder swap diff: effects._apply_modifier",
+    "strengthPerArtillery": "wonder swap diff: effects._apply_modifier",
+    "extraHappyPerHappySource": "wonder swap diff: effects._apply_modifier",
+    "doubleBestMine": "wonder swap diff: effects._apply_modifier",
+    # --- wonder riders: not Stats fields, so no diff can see them
+    "onBuildCulture":
+        "wonder rider: effects.wonder_completion_culture, the scorer itself",
+    "onBuildCulturePerTechLevelSum":
+        "wonder rider: effects.wonder_completion_culture, the scorer itself",
+    "freePopIncreasePerTurn":
+        "wonder rider: a free pop increase per turn, priced as the civil "
+        "action and food it refunds at the measured rate (FREE_POP_UTIL)",
     # --- riders, priced above rather than by the engine
     "cultureIfTopTwoStrength":
         "board rider: _genghis, exact from rival strengths",

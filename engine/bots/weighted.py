@@ -840,9 +840,7 @@ def _unpriced(reason, *keys):
 #    a wonder accumulates rather than replaces.
 _unpriced(
     "board-scaled: numeric coefficient times a board count _card_yields "
-    "cannot see (a wonder is not a swap, so board_yields cannot diff it)",
-    "strengthPerInfantry", "strengthPerArtillery",
-    "extraHappyPerHappySource",
+    "cannot see, on a card no swap diff reaches",
     "gainCulturePerLevelOfRemovedCard",
 )
 
@@ -850,9 +848,6 @@ _unpriced(
 #    There is no number to multiply a weight by at all.
 _unpriced(
     "text effect: the value is a formula or a bare flag, not a scalar",
-    "onBuildCulture", "onBuildCulturePerTechLevelSum",
-    "doubleBestMine",
-    "freePopIncreasePerTurn",
     "doublesTacticBonusOfOneArmy", "infantryCountsAsCavalryForTactics",
 )
 
@@ -954,6 +949,35 @@ _unpriced(
     "playersWithMostDiscontentWorkers", "target", "condition", "duration",
     "lastRoundSubstitute", "onAttackBetweenParties", "gain", "lose", "A", "B",
 )
+
+# ------------------------------------------- the gap one level down: VALUES
+#
+# `DELIBERATELY_UNPRICED` is keyed by effect KEY, and that is not fine enough
+# for a key that is a number on most cards and a sentence on a few.  Those are
+# the invisible ones: the key is mapped, the coverage test is green, and
+# `_card_yields` drops the card anyway because `isinstance(amt, (int, float))`
+# is False.  `gainResources` is exactly that shape and nothing could see it
+# until `tests/test_card_pricing.py` grew the value-level check that found it.
+#
+# Keyed by (card name, key), so writing one off does not write off the
+# numeric spellings of the same key on other cards.
+UNPRICED_VALUES = {}
+
+
+def _unpriced_value(reason, *pairs):
+    for pair in pairs:
+        UNPRICED_VALUES[pair] = reason
+
+
+_unpriced_value(
+    "prose amount: 'half of each destroyed building's printed build cost, "
+    "rounded up' depends on what the aggression destroys, which is chosen "
+    "when it resolves and is not a property of the card",
+    ("Aggression: Raid (I)", "gainResources"),
+    ("Aggression: Raid (II)", "gainResources"),
+    ("Aggression: Raid (III)", "gainResources"),
+)
+
 
 # 7. Prose.
 _unpriced("prose: a rules clarification for human readers", "note")

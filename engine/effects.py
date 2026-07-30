@@ -1247,18 +1247,35 @@ def on_build_unit(state, p, name):
         gain_resources(p, 1)
 
 
-def on_wonder_complete(state, p, name):
-    """Age III wonders score a one-time culture bonus (§9.2)."""
+def wonder_completion_culture(state, p, name):
+    """Culture an Age III wonder would score if completed NOW, without paying it.
+
+    THE SINGLE IMPLEMENTATION.  `on_wonder_complete` below pays this out for
+    real and `engine/bots/board_yields.py:_on_build_culture` asks it what a
+    wonder in hand would be worth, so the scorer and the evaluator cannot
+    disagree about Hollywood.  That is not a stylistic preference: lines
+    1197-1202 of this file are the note left by the last person who kept two
+    implementations of one rule, and the evaluator's copy is the one that
+    drifts silently.  `tests/test_card_pricing.py:TestOneImplementation`
+    fails if `on_wonder_complete` ever stops routing through here.
+
+    Pure: reads `p`, returns a number, touches nothing.
+    """
     db = _DB
     card = db.get(name)
     eff = card.get("effects") or {}
-    gained = 0
     if eff.get("onBuildCulturePerTechLevelSum"):
         gained = sum(db.level_of(n) for n in p.techs
                      if _is_technology(db.get(n)))
-        gained += db.level_of(p.government)
-    elif "onBuildCulture" in eff:
-        gained = _one_time_culture(state, p, name)
+        return gained + db.level_of(p.government)
+    if "onBuildCulture" in eff:
+        return _one_time_culture(state, p, name)
+    return 0
+
+
+def on_wonder_complete(state, p, name):
+    """Age III wonders score a one-time culture bonus (§9.2)."""
+    gained = wonder_completion_culture(state, p, name)
     p.culture += gained
     return gained
 

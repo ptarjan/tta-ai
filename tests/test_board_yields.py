@@ -162,9 +162,12 @@ class TestTheTripleShapeAgrees(unittest.TestCase):
 
     def test_the_type_knob_defaults_to_everything(self):
         """`TTA_BOARD_TYPES` exists to decompose the A/B.  Unset must mean
-        all three, or a measurement arm silently becomes a production one."""
+        every board-priced type, or a measurement arm silently becomes a
+        production one.  `wonder` joined the list when Lane A made wonders a
+        swap type; anything added here must be added there in the same
+        commit, which is what this assertion is for."""
         self.assertEqual(sorted(BY._ENABLED),
-                         ["action", "government", "leader"])
+                         ["action", "government", "leader", "wonder"])
 
 
 class TestGovernmentsWereInvisible(unittest.TestCase):

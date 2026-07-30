@@ -721,3 +721,246 @@ class TestLaneBWeightsAreInert(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _numeric(v):
+    return isinstance(v, (int, float)) and v is not True and v is not False
+
+
+class TestNonNumericValuesAreNotDroppedSilently(unittest.TestCase):
+    """The NEXT class of blindness after the `culture`/`science` omission.
+
+    `_card_yields` skips any effect value that is `True`, `False` or a string:
+
+        if amt is True or amt is False or not isinstance(amt, (int, float)):
+            continue
+
+    That line is correct -- there is no number to multiply a weight by -- and
+    it is also exactly how a card can be MAPPED and still priced at nothing.
+    Ocean Liners (`freePopIncreasePerTurn: True`), Transcontinental Railroad
+    (`doubleBestMine: True`) and the three `onBuildCulture` wonders all sat in
+    that hole while the coverage test above was green, because that test only
+    ever asks whether the KEY is known, never whether the VALUE survives the
+    trip.
+
+    So: every boolean and every string value must be reachable by something
+    that can cope with it -- `board_yields`, an `_EFF_SPECIAL` entry, or an
+    explicit write-off.  A bare `_EFF_TO_FEATURE` mapping is NOT enough and
+    this test says so.
+    """
+
+    def test_every_boolean_or_string_value_has_a_non_table_home(self):
+        table_only = set(W._PROD_TO_FEATURE) | set(W._EFF_TO_FEATURE)
+        can_cope = (set(BY.BOARD_PRICED) | set(W._EFF_SPECIAL)
+                    | set(W.DELIBERATELY_UNPRICED))
+        dropped = {}
+        for name, card in C.db().by_name.items():
+            for block, body in _blocks(card):
+                for k, v in body.items():
+                    if _numeric(v) or isinstance(v, dict):
+                        continue
+                    if k in can_cope or (name, k) in W.UNPRICED_VALUES:
+                        continue
+                    why = ("mapped into a table that only reads numbers"
+                           if k in table_only else "not accounted for at all")
+                    dropped.setdefault(k, []).append((name, block, v, why))
+        self.assertEqual(
+            dropped, {},
+            "effect key(s) whose value is a bool or a string and which "
+            "nothing can price: an `_EFF_TO_FEATURE` entry is not enough, "
+            "because `_card_yields` drops non-numeric values.  Price it in "
+            "engine/bots/board_yields.py, give it an `_EFF_SPECIAL` entry, "
+            "or add a DELIBERATELY_UNPRICED / UNPRICED_VALUES reason:\n"
+            + repr(dropped))
+
+    def test_unpriced_values_carry_a_reason_and_are_not_stale(self):
+        by_name = C.db().by_name
+        stale = []
+        for (name, k), why in W.UNPRICED_VALUES.items():
+            self.assertTrue(isinstance(why, str) and len(why) > 20,
+                            f"{(name, k)!r} needs a real reason")
+            card = by_name.get(name)
+            v = None if card is None else dict(
+                (card.get("effects") or {}),
+                **(card.get("production") or {})).get(k)
+            if v is None or _numeric(v):
+                stale.append((name, k))
+        self.assertEqual(sorted(stale), [],
+                         "written off as prose but no longer prose")
+
+    def test_the_drop_that_motivates_this_is_still_real(self):
+        """Negative control: if `_card_yields` ever copes with non-numeric
+        values on its own, this class is measuring nothing."""
+        self.assertEqual(
+            [y for y in W._card_yields("Ocean Liners")
+             if y[0] not in ("resource_stock", "wonders")], [],
+            "the static table now prices Ocean Liners; this class was "
+            "written on the premise that it cannot")
+
+
+class TestOneImplementation(unittest.TestCase):
+    """The scorer and the evaluator must never be two implementations.
+
+    `engine/effects.py:1197-1202` is the note left by the last person who let
+    that happen. `board_yields._on_build_culture` prices Hollywood by calling
+    `effects.wonder_completion_culture`, and `effects.on_wonder_complete`
+    pays it out by calling the same function. Shared source of truth without
+    a divergence test decays back into two implementations the first time
+    somebody optimises one side, so this is that test.
+    """
+
+    def _rich(self, seed=5):
+        from engine import game as G
+        from engine.state import TechCard
+        st = G.new_game(2, seed)
+        p = st.players[0]
+        for n, wk in (("Warriors", 2), ("Legions", 2), ("Bronze", 2),
+                      ("Iron", 1), ("Agriculture", 2), ("Philosophy", 2),
+                      ("Religion", 1), ("Drama", 2), ("Printing Press", 1)):
+            if n in C.db().by_name:
+                p.techs[n] = TechCard(n, workers=wk)
+        p.workers_free = 2
+        return st, p
+
+    AGE_III = ("Fast Food Chains", "Hollywood", "Internet",
+               "First Space Flight")
+
+    def test_the_payout_is_exactly_what_the_forecast_said(self):
+        """Play the wonder for real and check `p.culture` moved by exactly
+        the number the bot was quoted a moment earlier."""
+        from engine import effects
+        for name in self.AGE_III:
+            st, p = self._rich()
+            quoted = sum(a for f, a, _k in BY.board_yields(name, st, 0)
+                         if f == "culture")
+            before = p.culture
+            paid = effects.on_wonder_complete(st, p, name)
+            self.assertEqual(p.culture - before, paid, name)
+            self.assertEqual(float(paid), quoted,
+                             f"{name}: the bot was quoted {quoted} culture "
+                             f"and the scorer paid {paid} -- the forecast and "
+                             "the payout have diverged")
+            self.assertGreater(paid, 0, f"{name}: board too poor to test")
+
+    def test_on_wonder_complete_still_routes_through_the_shared_function(self):
+        """The structural half: monkeypatch the shared function and the real
+        payout must change with it.  A copy-paste of the formula back into
+        `on_wonder_complete` would pass the numeric test above on the day it
+        was written and drift afterwards; this fails immediately."""
+        from engine import effects
+        st, p = self._rich()
+        was = effects.wonder_completion_culture
+        effects.wonder_completion_culture = lambda s, pl, n: 4242
+        try:
+            paid = effects.on_wonder_complete(st, p, "Hollywood")
+        finally:
+            effects.wonder_completion_culture = was
+        self.assertEqual(
+            paid, 4242,
+            "engine.effects.on_wonder_complete no longer calls "
+            "wonder_completion_culture -- there are two implementations of "
+            "the Age III wonder formulas again")
+
+
+class TestWondersAreBoardPriced(unittest.TestCase):
+    """Lane A: wonders go through the same swap diff as leaders.
+
+    They were excluded when `board_yields` landed, on the reasoning that a
+    wonder accumulates rather than replaces.  True, and it makes the diff
+    simpler rather than wrong: append to `completed_wonders`, compute,
+    restore, and the delta is a pure gain.
+    """
+
+    W1 = dict(W.DEFAULT_WEIGHTS, card_board_credit=1.0)
+    RATINGS = {"culture_rate": "culture", "science_rate": "science",
+               "food_rate": "food", "resource_rate": "resources",
+               "strength": "strength", "happy_margin": "happy"}
+    #: the one wonder whose value is IMPUTED, not mirrored: a free population
+    #: increase is a bool in `Stats`, not a rating, so there is no engine
+    #: number to check the rider against.
+    NOT_A_RATING = frozenset({"Ocean Liners"})
+
+    def _rich(self, seed=5):
+        return TestOneImplementation._rich(self, seed)
+
+    def test_no_wonder_is_blind_on_a_board_that_feeds_it(self):
+        """The census headline. Five wonders had zero visible gain under the
+        static table -- all four Age III ones and Ocean Liners."""
+        st, _p = self._rich()
+        blind = [n for n, c in C.db().by_name.items() if c["type"] == "wonder"
+                 and not [t for t in BY.board_yields(n, st, 0)
+                          if t[2] != BY._COST and t[0] != "wonders"]]
+        self.assertEqual(blind, [])
+
+    def test_the_claim_equals_what_the_engine_does_with_the_card(self):
+        """For every wonder, the board yields on the six ratings must equal
+        the delta `effects.compute` reports when that wonder is actually put
+        into play on the same board.  This is what makes the swap diff
+        provable rather than merely plausible."""
+        from engine import effects
+        for name, card in C.db().by_name.items():
+            if card["type"] != "wonder" or name in self.NOT_A_RATING:
+                continue
+            st, p = self._rich()
+            # ask FIRST: the swap diff answers "what if I had this", so a
+            # board that already holds the wonder answers "nothing".
+            claimed = dict.fromkeys(self.RATINGS, 0.0)
+            for k, amt, _kind in BY.board_yields(name, st, 0):
+                if k in claimed:
+                    claimed[k] += amt
+            before = effects.compute(st, p)
+            p.completed_wonders.append(name)
+            effects.invalidate(st, p)
+            after = effects.compute(st, p)
+            for feat, attr in self.RATINGS.items():
+                self.assertEqual(
+                    claimed[feat],
+                    float(getattr(after, attr) - getattr(before, attr)),
+                    f"{name}/{feat}: evaluator and engine have diverged")
+
+    def test_a_wonder_is_not_free(self):
+        """`card_potential` prices a swap card by the diff ALONE, so the
+        stage cost has to be added back or every wonder becomes free."""
+        st, _p = self._rich()
+        for name, card in C.db().by_name.items():
+            if card["type"] != "wonder":
+                continue
+            ys = dict(((f, k), a) for f, a, k in BY.board_yields(name, st, 0))
+            self.assertEqual(ys.get(("wonders", BY._GAIN)), 1.0, name)
+            self.assertEqual(ys.get(("resource_stock", BY._COST)),
+                             -float(sum(card["stages"])), name)
+
+    def test_ocean_liners_is_worthless_with_an_empty_yellow_bank(self):
+        """The board fact a table cannot express: a free population increase
+        is worth nothing to a player with no population left to increase."""
+        st, p = self._rich()
+        rider = [t for t in BY.board_yields("Ocean Liners", st, 0)
+                 if t[0] in ("civil_actions", "food_rate")]
+        self.assertTrue(rider)
+        p.yellow_bank = 0
+        self.assertEqual(
+            [t for t in BY.board_yields("Ocean Liners", st, 0)
+             if t[0] in ("civil_actions", "food_rate")], [])
+
+    def test_the_swap_leaves_the_board_untouched(self):
+        """`completed_wonders` is rebound, not mutated: a journal watching
+        the original list must never see a write."""
+        from engine import statediff
+        from engine.bots.fastcopy import copy_state
+        st, p = self._rich()
+        original = p.completed_wonders
+        before = copy_state(st, keep_log=True)
+        for n, c in C.db().by_name.items():
+            if c["type"] == "wonder":
+                BY.board_yields(n, st, 0)
+        self.assertIs(p.completed_wonders, original)
+        self.assertEqual(statediff.diff(before, st), [])
+
+    def test_the_credit_weight_switches_it_off(self):
+        st, _p = self._rich()
+        for name in ("Fast Food Chains", "Ocean Liners", "Great Wall"):
+            self.assertEqual(W.card_potential(name, W.DEFAULT_WEIGHTS, st, 0),
+                             W.card_potential(name, W.DEFAULT_WEIGHTS), name)
+            self.assertNotEqual(W.card_potential(name, self.W1, st, 0),
+                                W.card_potential(name, W.DEFAULT_WEIGHTS),
+                                name)
