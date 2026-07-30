@@ -11,9 +11,10 @@ the gap was worst.
 
 **Result in one line:** the pricing lands and is inert (all eight fingerprint
 digests unmoved); the census and the behavioural counter both move a long way
-(16 → 4 blind leaders; leaders taken 3.6 → 5.6 per game); the **win-rate A/B
-is under-powered and found no positive effect**, and §5.2 says so plainly
-rather than dressing it up.
+(16 → 4 blind leaders; leaders taken 3.6 → 5.6 per game); and the win-rate A/B
+is **flat in aggregate but decomposes into two opposite signs** — governments
+help (culture margin +1.85, z = 3.4), leaders hurt slightly (−1.8pp, z = −2.1)
+— which is the reverse of what I predicted, in both directions (§5.2).
 
 ## 0. One-paragraph answer
 
@@ -300,87 +301,80 @@ The negatives are not a bug and are worth being explicit about: once you hold
 a leader, a *worse* leader correctly prices below zero. That suppresses
 downgrades while leaving upgrades (the +10.64 rows) firmly attractive.
 
-### 5.2 Win rate: no positive effect found, on the evidence so far
-
-**Under-powered and not a positive result.** This has to be stated plainly
-rather than buried, and the honest summary is that the win-rate arm did not
-finish at the intended size.
+### 5.2 Win rate: a flat aggregate that decomposes into two opposite signs
 
 Method as in `docs/CARD_BLINDNESS.md` §4: `experiments.evaluate` at 2 players
 plays each deal twice with the seats swapped, so the comparison is paired on
 the deal; both arms are `analysis/frozen/champion_2p.json` differing in
-`card_board_credit` alone (verified: exactly 1 of 105 weights differs).
+`card_board_credit` alone (verified: exactly 1 of 105 weights differs). Each
+arm is 8 disjoint blocks of 400, n = 3200 games / 1600 deals, SE ≈ 0.7pp on
+the paired win rate, **MDE ≈ 2.0pp**. Run on the desktop pinned at `664cdfc`,
+12 workers.
 
-| n | win rate (paired) | culture margin | own culture |
+`TTA_BOARD_TYPES` restricts board pricing to a subset of card types, which is
+what makes the decomposition possible at all:
+
+| arm | win rate (paired) | culture margin | own culture |
 |---|---|---|---|
-| **200 games / 100 deals** | **46.00% ± 7.30pp** (z = −1.1) | −0.66 ± 4.91 | 149.6 vs 150.2 |
+| everything on | 49.95% ± 1.68pp (z = −0.1) | +0.95 ± 1.31 (z = +1.4) | 150.8 vs 149.8 |
+| **governments only** | 51.02% ± 1.40pp (z = +1.4) | **+1.85 ± 1.07 (z = +3.4)** | 149.4 vs 147.5 |
+| **leaders only** | **48.20% ± 1.69pp (z = −2.1)** | −0.48 ± 1.33 (z = −0.7) | 149.0 vs 149.5 |
 
-**MDE.** At n = 200 the SE is ~3.7pp, so the minimum detectable effect at 80%
-power and α = 0.05 is roughly **10pp**. This arm can therefore only speak to
-effects of about that size. What it does say is worth saying: it **rules out a
-`96a5db2`-scale win** (that change was +9.5pp), because an effect that large
-would have shown here. It says nothing at all about anything smaller, and the
-point estimate being below 50% is not evidence of harm at this n.
+The aggregate is a textbook flat null — 49.95% against a 50% null, z = −0.1,
+which is as close to nothing as 3200 paired games can report.
 
-The intended design was 8 blocks of 400 (n = 3200, MDE ≈ 2.5pp). It was not
-achievable: four lanes were sharing six cores, load average sat between 20 and
-35 for the whole run, and a single 200-game block took ~20 minutes against the
-~5 minutes it costs on a quiet box. Part of that is contention and part is
-real — see the cost note in §8: the on-arm calls `effects.compute` once per
-swap-type card in hand and row per leaf, so it is genuinely slower than the
-off-arm, and the memo does not help much because `stats_key` includes worker
-counts and so changes nearly every move.
+**The aggregate is flat because the two halves point in opposite directions
+and roughly cancel.** That is the whole reason to decompose, and an aggregate
+null would have hidden it completely.
 
-**There is also a structural reason to expect less here than `96a5db2` got,
-and I should have seen it before running rather than after.** That change
-routed newly-visible value onto `culture_rate`, an *existing* weight the
-champion had already fitted at 5.876 — so the new information arrived
-pre-priced. This change routes value onto six **new** features that all
-default to 0.0, which means the on-arm evaluator is not simply better
-informed, it is **asymmetrically** informed:
+#### I predicted this backwards, in both directions
 
-| what the on-arm now sees | priced at |
-|---|---|
-| a government's civil/military actions, culture, strength | existing weights, full value |
-| a leader's culture/science/strength/happy deltas | existing weights, full value |
-| a revolution's science cost | existing weight, full value |
-| **a revolution's burned civil-action pool** (`gov_action_cost`) | **0.0 — free** |
-| **a government's urban building slots** (`urban_limit`) | **0.0 — free** |
-| **Gandhi's aggression ban** (`no_aggression`) | **0.0 — free** |
-| **Moses' food discount** (`pop_food_discount`) | **0.0 — free** |
-| **ring-fenced military resources** (`restricted_resources`) | **0.0 — free** |
+Before running, and on the record: *"governments negative, leaders
+neutral-to-positive"*. The reasoning was that `gov_action_cost` defaults to
+0.0, so the on-arm prices a revolution's science but not the civil-action pool
+it burns, and the behavioural counter showed governments taken **doubling**
+(1.1 → 2.1 per game) — a bot revolting twice as often while blind to the cost
+of revolting looked like an obvious way to lose.
 
-Every single one of the 0.0 entries is a *cost or a restriction*. So switching
-the credit on hands the frozen champion the upsides of these cards at full
-price and the downsides at zero, and the behavioural counter is exactly what
-that predicts: it takes more leaders and twice as many governments. A null or
-a small negative is the natural consequence, and it is a fact about shipping
-new features at 0.0 to a frozen vector, not about whether the pricing is
-correct.
+**That mechanism is refuted.** Governments are the half that *helps*: the
+culture margin is +1.85 with z = 3.4, which is the only individually
+significant effect in the whole experiment. So the doubled revolution rate is
+apparently closer to correct play than the frozen champion's, even with the
+action cost unpriced — which is a much more interesting statement about the
+game than my prediction was, and it makes the §1 finding stand on its own two
+feet: **the evaluator not being able to see Republic's 7 civil actions was
+costing something real and measurable.**
 
-That is an argument for the league rather than against the change: the climber
-can move those five weights and the frozen champion cannot. It is also an
-argument that a one-shot flip of `card_board_credit` to 1.0 would be the wrong
-way to adopt this.
+Leaders are the half that hurts, by −1.8pp, marginally (z = −2.1, p ≈ 0.04,
+and one arm out of two at that threshold is roughly what you expect by
+chance). It is small, it is not the "markedly worse" that would indicate a
+broken implementation, and the culture margin does not corroborate it
+(z = −0.7). But it is the direction that warrants a look rather than a shrug,
+and the two candidates worth checking first are both in §8 already:
 
-**What I would run next, in this order**, and why:
+1. **`hand_potential` double-counts leaders.** Every leader in hand is priced
+   as replacing the *current* leader, but only one of them can be. That
+   over-count was harmless when the bot held ~0 leaders in hand and is not
+   harmless now that it takes 55% more of them. This is the strongest
+   candidate and it is a defect in the *hand term*, not in the pricing.
+2. **A leader's upside lands on well-fitted weights and its restrictions land
+   on 0.0 ones**, per the asymmetry table below.
 
-1. **The two decomposition arms**, which is what `TTA_BOARD_TYPES` was built
-   for, and which I would now run *before* spending more on the aggregate. The
-   aggregate mixes two changes that could easily have opposite signs.
-2. Specifically, **suspect the governments**. `gov_action_cost` defaults to
-   0.0, so in the on-arm a revolution's science is priced but the entire civil
-   action pool it burns is priced at nothing — and the behavioural counter in
-   §6 shows governments taken **doubling**, 1.1 → 2.1 per game. A bot revolting
-   twice as often while blind to the cost of revolting is a specific,
-   plausible mechanism for a negative contribution, and it is a mispricing in
-   *this change*, not a fact about the game.
-3. Only then a larger aggregate arm, on a quiet box.
+Neither is a reason to unship rule-faithful pricing, and neither is settled by
+this experiment.
 
-This is why the change ships **inert**. Nothing above justifies flipping
-`card_board_credit` to 1.0, and the 0.0 default means the pricing is available
-to be measured and to be found by the league without anybody betting on it
-first.
+#### What this means for shipping
+
+`card_board_credit` stays at **0.0**, which is what is committed. Concretely:
+
+* Nothing needs to change before a league restart — the shipped engine is
+  byte-identical to master in behaviour, so the arms can be restarted on it
+  safely.
+* If anyone turns this on, **turn the government half on first**. It is the
+  half with a positive, individually significant signal, and
+  `TTA_BOARD_TYPES=government` already expresses exactly that configuration.
+  Making it a weight rather than an env knob is the obvious follow-up.
+* The leader half should wait on the `hand_potential` double-count.
 
 ## 6. Does the bot actually take these cards?
 
