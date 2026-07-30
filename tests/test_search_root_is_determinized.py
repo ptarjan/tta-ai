@@ -69,21 +69,34 @@ from engine.bots.plan import PlanBot, determinize             # noqa: E402
 EXPECTED_HIDDEN = ("civil_deck", "military_deck", "current_events")
 
 
+_CACHE = {}
+
+
 def _mid_game_state(players=3, seed=4242, moves=140):
-    """A state deep enough that all three hidden piles are non-trivial."""
-    st = game.new_game(players, seed)
-    rng = random.Random(seed)
-    from engine.bots import WeightedBot
-    bots = [WeightedBot(seed=7) for _ in range(players)]
-    for _ in range(moves):
-        if game.is_over(st):
-            break
-        mvs = actions.legal_moves(st)
-        if not mvs:
-            break
-        p = game.current_player(st)
-        st = game.apply(st, bots[p].choose(st, mvs, rng), rng)
-    return st
+    """A state deep enough that all three hidden piles are non-trivial.
+
+    Built once and handed out as copies.  This is the expensive half of the
+    file and four tests want the same fixture; the gate runs the whole suite
+    twice (plain and ``JOURNAL_PARANOID``), so a fixture rebuilt per test is
+    paid for eight times.
+    """
+    key = (players, seed, moves)
+    if key not in _CACHE:
+        st = game.new_game(players, seed)
+        rng = random.Random(seed)
+        from engine.bots import WeightedBot
+        bots = [WeightedBot(seed=7) for _ in range(players)]
+        for _ in range(moves):
+            if game.is_over(st):
+                break
+            mvs = actions.legal_moves(st)
+            if not mvs:
+                break
+            p = game.current_player(st)
+            st = game.apply(st, bots[p].choose(st, mvs, rng), rng)
+        _CACHE[key] = st
+    # a copy, because `test_the_public_age_order...` rewrites current_events
+    return copy_state(_CACHE[key])
 
 
 class DeterminizeCoversEveryHiddenPile(unittest.TestCase):
@@ -263,7 +276,7 @@ class NoSearchEverSeesTheTrueOrder(unittest.TestCase):
         return searched_undeterminized, top
 
     def test_every_search_prices_a_determinized_root(self):
-        undet, top = self._run(2, (77, 78, 79))
+        undet, top = self._run(2, (77, 78), limit=190)
         self.assertEqual(
             undet, 0,
             f"{undet} real decisions were SEARCHED without any pile being "

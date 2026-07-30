@@ -389,8 +389,91 @@ WWIDE=9010ec80
 # `DETERMINIZE` was deliberately left False in this commit so that these two
 # digest moves attribute to one constant.  It is the other half of the same
 # inconsistency and gets its own derivation.
-PNARROW=089219c6
-PWIDE=d911788e
+#
+# ---------------------------------------------------------------------------
+# Re-derived on the determinization fix (2026-07-30, docs/AGGRESSION_RATE.md
+# 9a).  EXACTLY TWO of the eight arms moved -- PNARROW and PWIDE -- and the
+# other six did not.
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   f0b240da    f0b240da   (unchanged -- WeightedBot)
+#     WWIDE     9010ec80    9010ec80   (unchanged)
+#     QNARROW   9ad67497    9ad67497   (unchanged -- QuiescentBot)
+#     QWIDE     e83054f7    e83054f7   (unchanged)
+#     PNARROW   089219c6    3e428ad2
+#     PWIDE     d911788e    fc990004
+#
+# CAUSE, AND IT IS ONE OF THE TWO THINGS IN THAT COMMIT, NOT BOTH.  The commit
+# does two things: (1) `plan.determinize` now shuffles `current_events` as
+# well as the two draw decks, and (2) `pending.DETERMINIZE` goes False -> True
+# with both bots' `PENDING_DETERMINIZE` set to None.  Only (1) moves a digest.
+#
+# ATTRIBUTED, not assumed -- each cause was applied ALONE to a clean clone of
+# the parent and both plan arms re-hashed:
+#
+#     tree                        PNARROW     PWIDE
+#     parent (master 1fbf128)     089219c6    d911788e
+#     (2) pending flip ONLY       089219c6    d911788e   <- INERT, byte-exact
+#     (1) event shuffle ONLY      3e428ad2    fc990004   <- the whole move
+#     both (what shipped)         3e428ad2    fc990004
+#
+# The pending flip reproducing the parent BYTE-FOR-BYTE on both arms is the
+# strong form of "measured zero", and it agrees with the independent
+# behavioural census: `tools/pending_divergence.py --lever det` at 3p changed
+# the pick on 0 of 1328 of the bot's own pending decisions (a re-run of the
+# 0/1346 in docs/AGGRESSION_RATE.md 9).  Two instruments, same answer.
+#
+# WHY ONLY THE PLAN ARMS, for cause (1).  `plan.determinize` is called from
+# `PlanBot.pick`, `NeuralPlanBot.pick`, `NeuralBot.pick` and
+# `pending.prepare_root`.  GreedyBot does not call it; WeightedBot does not
+# call it; QuiescentBot does not call it.  So NARROW/WIDE, WNARROW/WWIDE and
+# QNARROW/QWIDE CANNOT move for this change, and they did not, in both
+# independent derivations.  If a future change to `determinize` ever moves one
+# of those six, that is a bug in the change, not a digest to update.
+#
+# (Read that list again for what it costs elsewhere: WeightedBot and
+# QuiescentBot do not determinize AT ALL, so they still draw the true next
+# card on 100% of trial draws.  That is a live defect, it is measured at 0 of
+# 2138 move changes today, and it is written down in
+# docs/AGGRESSION_RATE.md 9a.1 rather than fixed here -- fixing it would move
+# four of the six arms above and belongs in its own derivation.)
+#
+# WHAT (1) ACTUALLY CHANGES.  `events.reveal_current_event` pops
+# `current_events` at the top of every turn, and nothing was ever shuffling
+# that pile, so every `end_turn` the beam expanded revealed the REAL next
+# event inside a search that believed it had determinized.
+# `tools/infoleak.py --true-card` (the mode added in the same commit, because
+# the old mode counts candidates that DRAW and therefore returns the same
+# number leaking or not) puts it at 100.0% of event draws before and 38.3%
+# after, against a ~33% chance floor for a 3-card pile.  Behaviourally it
+# moves 78 of 3448 beam picks at 3p (2.3%) -- unlike cause (2), this one is
+# NOT inert, which is why it and it alone moves these two digests.
+#
+# CLEAN-BASE CONTROL FIRST, and it passed: a full gate on unmodified master
+# 1fbf128 reproduced all eight committed constants exactly (GATE PASS, 1027
+# tests).  So the base was known-good and these two moves are attributable to
+# this commit rather than to drift a re-derivation would have absorbed.
+#
+# TWO-SIDED as 9.0 requires: derived independently in /tmp/det-work and
+# /tmp/det-work-b, two separate clones carrying the same commit, and the two
+# agreed byte-for-byte on ALL EIGHT arms -- including the six that did not
+# move, which is the half of the agreement that is easy to forget to check.
+#
+# Test count goes 1027 -> 1035, and the +8 is accounted for exactly:
+# +7 from the new tests/test_search_root_is_determinized.py, and +1 from
+# splitting `test_the_determinize_difference_is_pinned_not_accidental` (which
+# pinned the two bots' values as DIFFERENT, and had to go when they stopped
+# being different) into a "neither class carries its own default" test and a
+# "the bot-wide det=0 switch reaches this path too" test.
+#
+# Nothing here was re-derived to make the gate pass.  The gate FAILED on this
+# tree by design, twice, in two clones, and these two values are the output of
+# computing the new behaviour plus a per-cause attribution that predicted them
+# before the full-tree run reported them.
+PNARROW=3e428ad2
+PWIDE=fc990004
 QNARROW=9ad67497
 QWIDE=e83054f7
 

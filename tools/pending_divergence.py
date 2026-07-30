@@ -189,7 +189,12 @@ def report(total, players, games, lever="drain"):
     moved = {k[1]: v for k, v in total.items() if k[0] == "moved"}
     ns, nm = sum(seen.values()), sum(moved.values())
     print(f"--- pending divergence [{lever}]: {players}p, {games} games ---")
-    print(f"own pending decisions {ns:8d}   {ns / max(games, 1):8.2f} / game")
+    # the `ev` lever fires at ORDINARY turns, where there is no pending stack
+    # at all, so calling its denominator "pending decisions" would be a lie in
+    # the one place a reader looks first
+    label = ("own beam decisions   " if lever == "ev"
+             else "own pending decisions")
+    print(f"{label} {ns:8d}   {ns / max(games, 1):8.2f} / game")
     print(f"  LEVER CHANGED pick  {nm:8d}   {nm / max(ns, 1):8.1%} of them")
     print(f"{'kind / choice tag':38s} {'seen':>8s} {'moved':>8s} {'rate':>7s}")
     for k in sorted(seen, key=lambda k: -moved.get(k, 0)):

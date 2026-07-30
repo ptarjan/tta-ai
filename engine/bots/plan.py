@@ -120,6 +120,17 @@ def _rng():
 #: asserts the COMPLEMENT: every other list/dict field of `GameState` is
 #: identical across `determinize`, which is what stops a future "just shuffle
 #: everything" from re-dealing the visible card row.
+#:
+#: WHY ``future_events`` IS NOT HERE, since it is the obvious fourth candidate.
+#: Nothing ever pops it.  `events._recycle_future_events` is the only reader,
+#: and it *already* shuffles the list before promoting it to
+#: ``current_events``, so its order is not information -- re-ordering it here
+#: would be re-ordering something the engine is about to re-order anyway, at
+#: the cost of rng draws.  Its *contents* are hidden (a seeded event is placed
+#: face down), and so are the rivals' hands; sampling those is a strictly
+#: bigger job than this function does -- it permutes what is unseen, it does
+#: not re-deal it -- and it is written down as an open item in
+#: `docs/AGGRESSION_RATE.md` 9a rather than half-done here.
 HIDDEN_ORDER = ("civil_deck", "military_deck", "current_events")
 
 

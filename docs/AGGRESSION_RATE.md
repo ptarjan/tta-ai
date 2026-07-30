@@ -454,6 +454,41 @@ further on: an instrument that returns the same number whether or not the
 defect is present is not evidence about the defect. Check that the measurement
 *can* move before quoting it as a measurement.
 
+### 9a.1 What is still open, written down rather than half-done
+
+**`WeightedBot` and `QuiescentBot` do not determinize at all.** Neither calls
+`plan.determinize`, so every trial draw they make reads the true next card —
+`tools/infoleak.py --true-card` puts all three piles at 100.0% for them. That
+matters more than it used to, because `docs/BOT_ARCHITECTURE.md` line 1085
+states a hard precondition — *"M2 must not ship without M1's determinization…
+Today it is inert; after M2 it is a cheat"* — and M2 **has** shipped, as
+`weighted.hand_mil_potential`, which prices `hand_military` by card identity
+and carries 0.01079 on the live 3p champion. So a trial `end_turn` in those two
+bots draws the real next military card and then prices it by name.
+
+The precondition is satisfied for `PlanBot`/`NeuralPlanBot`/`NeuralBot`, which
+is what M1 refers to and which do determinize. It is violated for the two that
+do not.
+
+**Measured, before anyone panics.** `tools/leak_impact.py` at 3p, 6 games, K=8,
+with the live `champion_3p.json`: the honest determinization changed
+`WeightedBot`'s chosen move on **0 of 2138** decisions, and the `end_turn` eval
+delta was **−0.004 ± 0.038**, against a within-decision spread across
+determinizations of 0.015. The cheat is *latent*, not active: at
+`hand_mil_potential = 0.01079` the identity term is far smaller than the
+sampling noise it would have to beat. It becomes active if that weight grows,
+and hill climbing is free to grow it. (Caveat on that number: `leak_impact.py`
+has its own local `determinize` that shuffles the two decks only, so it does
+not measure the event component at all. It is a lower bound.)
+
+**Hidden *contents*, as opposed to hidden order, are not sampled anywhere.**
+`determinize` permutes piles; it does not re-deal them. The rivals'
+`hand_civil`/`hand_military` and the face-down `future_events` are unknown in
+their membership, not merely in their order, and no bot models that. Today
+`weighted.features` reads only public rival aggregates, so nothing reads the
+identities — which is the same "inert but one refactor from live" shape as
+everything else in this section.
+
 ## 10. The duplicate, fixed by sharing (`engine/bots/pending.py`)
 
 `neural_plan.py:163` had `plan.py`'s short-circuit copied out, which is the
