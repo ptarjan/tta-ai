@@ -494,7 +494,7 @@ class TestTopLevelFieldsAreAccountedFor(unittest.TestCase):
         """A write-off's REASON can go stale where the write-off itself
         cannot, and nothing here could see it -- that is exactly how
         `defenseBonus` sat behind "never reaches _card_yields" for a lane
-        after `hand_mil_potential` made it reachable (docs/MILITARY_SEAM.md).
+        after `hand_mil_potential` made it reachable (docs/COMBAT_AUDIT.md).
 
         `cost`'s reason is a factual claim about the card set: every card
         with a NON-ZERO military-action cost is a type whose gain is priced

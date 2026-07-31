@@ -58,11 +58,9 @@ these for the reasoning.*
 | **[`YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)** | The other half of that fix, and the one that closes [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md)'s largest non-inert hole: `card_potential` read `w[k]` where `evaluate` reads `w[k] + (1−L)w[k_early] + L·w[k_late]`, and `tech_levels` was mapped to nothing at all on every technology card.  `feature_marginal` + `board_yields.tech_upgrade` price all fifteen technology types by one board query.  Labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 → 0.85 — **and the blue over-play is cured by the same change** (theatres 2.23 → 0.82).  A/B **+20.5pp at 2p and +8.3pp at 3p on `DEFAULT_WEIGHTS`**, and a −37.8pp **regression** on the live 2p champion that reverses to +13.0pp when one stale weight group is reset — read §4 before trusting `champion_2p.json`. |
 | **[`MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md)** | The other side of the same coin: not *is the card priced* but **is this number a rule, a measurement or a guess?**  Three fitted constants in the evaluator replaced by quantities the state already knows — the deal rate (fitted at 0.29 takes/round, actually **1.88**, leaving the horizon **1.80 rounds long**), the lateness gauge (now the exact civil-supply fraction, bounded [0,1] by construction), and the flat rival take probability (now read off each rival's open board, with one prior left as a fittable weight).  Plus the standing check (`tests/test_model_constants.py`) that fails when any module-scope constant in `engine/` or `experiments/` is not classified as rule-derived / numerical guard / measured / fitted prior / training policy / enum-or-sentinel. |
 | **[`ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md)** | The third and largest instance of the same sentence: **sixteen of the thirty-three yellow action cards priced at exactly 0.000**, because `free_civil_action`, `resource_discount` and `restricted_resources` are weights `features()` never emits — so `evaluate` never pays for them and no game can produce a gradient on them — and because Reserves' "food OR resources" choice was multiplied by `card_board_credit`, 0.0 on every champion.  Per-card take rates split cleanly along that line and nothing else.  `weighted.action_value` prices all thirty-three through `feature_marginal` on the live coordinates instead.  Takes 7.30 → 9.00 per seat-game at 2p against a human 12.98 and 5.83 → 7.53 at 3p against 10.25, with the three board-scaled cards' holes closed outright.  Gated by `action_board_credit`, 1.0 — and read §5 for the modelling error the first A/B caught: pricing the ordered free action at a whole civil action lands the take rate exactly on the human number and costs 17pp of win rate, because **playing** the card costs the action it grants. |
-| **[`GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md)** | The fourth instance, and the last civil type left on the static table: a government prints **two** science costs (`peacefulCost` / `revolutionCost`) and keeps its civil actions, military actions and urban limit in top-level fields, so `_card_yields` — which reads `techCost`, `production` and `effects` — saw **none of it**.  Five of the seven takeable governments were unreachable: three priced at exactly 0.000 and two strictly negative.  `weighted.gov_value` prices the swap diff plus the `tech_levels` / `gov_level` delta at `feature_marginal` and charges the cheaper of the two routes RULES_SPEC 8.2/8.3 offers, the revolution branch gated on the engine's own `_can_revolt` — which also settles [`OPEN_ITEMS.md`](OPEN_ITEMS.md) §9.1 from the rules: the burn lands on `ca_left`.  Government takes 1.05 → 1.63 per seat-game at 2p against a human 1.37, and seats ending the game still on Despotism fall from 10 of 40 to 1 of 40.  Gated by `gov_board_credit`, 1.0. |
 | **[`COORDINATE_REGISTRY.md`](COORDINATE_REGISTRY.md)** | The generalisation of the three above, and the guard that makes them a closed bug class: **a coordinate that exists in one registry and is missing from another is silently dead, and the tree is green.**  Four registries — `features()`, `DEFAULT_WEIGHTS` plus every weight vector on disk, `card_potential`, and `neural_encode.encode()` — with the bijection asserted in **both** directions, because the missing direction is always where the bug hides.  `tests/test_coordinate_registry.py` (50 tests, ~8s, no game batches) plus a frozen `KNOWN_DEAD` ratchet that fails when something new joins **and** when a listed entry stops being dead, so the list can only shrink.  It found two new instances on its first run: `gov_action_cost` (a revolution's burnt civil actions priced through a coordinate `evaluate` never pays, beside the `civil_actions` that is the same quantity) and `state.current_events_age` (declared, never written, and five permanently frozen neural inputs). |
 | [`UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md) | Special technologies, production buildings and bonus cards; and the general rule that a half-priced card is biased, not neutral. |
 | [`COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md) | The non-card axis: colonies, resign, farm-vs-mine degeneracy, and the dead-coordinate census of every evaluator feature. |
-| [`MILITARY_SEAM.md`](MILITARY_SEAM.md) | The plumbing that stopped board-aware pricing reaching military cards at all. |
 | [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) | The complement to all of the above: not *is the card priced* but **does the bot actually play it, and at what rate against a human?**  Per-card take/play rates for all 236 cards at 2p/3p/4p against the 1,011-game corpus, the ranked discrepancy table both ways, the never-played list, and the standing check (`tools/play_rate.py`, `tests/test_play_rate.py`) that makes a class priced-but-inert a test failure. |
 
 ## Rules conformance, scoring and combat
@@ -70,11 +68,8 @@ these for the reasoning.*
 | doc | answers |
 |---|---|
 | [`SCORE_AUDIT.md`](SCORE_AUDIT.md) | Do all 23 card types score exactly?  Nine bugs found and fixed; the "a corpus validates only what it varies" finding.  §10 (merged from the former `SCORE_VALIDATION.md`): engine scoring replayed against 1,011 human games — the method, the corpus-wide agreement rates, and what the corpus cannot decide.  §11 (merged from the former `SCORE_BUGFIX.md`): the first four scoring fixes (Industry, Population, Hollywood/Internet, Chaplin) and their measurement. |
-| [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) | Wars, aggressions and pacts checked against the printed rules.  Three bugs fixed, three gaps, and the most granular rules-to-code mapping in the repo. |
-| [`WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) | The victor's choice between science and blue technologies — full rules citations, the implementation, and the permanent lower-bias it leaves in search. |
-| [`MILITARY_DISCARD.md`](MILITARY_DISCARD.md) | Turning the end-of-turn excess-card discard from a hardcoded FIFO into a real decision. |
+| [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) | Wars, aggressions and pacts checked against the printed rules.  Three bugs fixed, three gaps, and the most granular rules-to-code mapping in the repo.  §1 (merged from the former `MILITARY_SEAM.md`): the plumbing that stopped board-aware pricing reaching military cards at all.  §2 (merged from the former `MILITARY_DISCARD.md`): turning the end-of-turn excess-card discard from a hardcoded FIFO into a real decision.  §3 (merged from the former `WAR_OVER_TECHNOLOGY.md`): the victor's choice between science and blue technologies — full rules citations, the implementation, and the permanent lower-bias it leaves in search.  §4 (merged from the former `PACTS_DIAGNOSIS.md`): why the bot never offers pacts and almost never colonizes — a bot blind spot, not an engine bug. |
 | [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) | *How often does the bot actually fight?*  Corrects the "aggressions are rare" reading as a 1-ply artefact, and fixes defences that were never won.  Appendix (merged from the former `AGGRESSION_FIX.md`): the refutation of "4p auctions never start because events are not seeded", and the payoff-lands-in-the-defender's-decision mechanism. |
-| [`PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) | Why the bot never offers pacts and almost never colonizes — a bot blind spot, not an engine bug. |
 
 ## Training, league and strength
 
@@ -132,7 +127,7 @@ read it before quoting any frozen-champion number.
   the former `AGGRESSION_FIX.md` into [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) (as an
   appendix, headings and all — its own §A/§B numbering was untouched so every
   existing `§A`/`§B` citation still resolves, just against the new filename),
-  and the former `DRAIN_AB.md` into [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md) §8 (renumbered
+  and the former `DRAIN_AB.md` into [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md#8-the-drain-ab-why-quiet_pending-was-flipped-to-true-merged-from-the-former-drain_abmd-2026-07-31) §8 (renumbered
   1-4 -> 8.1-8.4 to avoid colliding with `DEEPER_SEARCH.md`'s own §1-§7; every
   citing line, in docs and in code (`engine/bots/pending.py`, `tools/gate.sh`),
   was updated in the same commit). Cross-references elsewhere that named
@@ -154,9 +149,23 @@ read it before quoting any frozen-champion number.
   culture margin) it is a training-loop and weight-search narrative about the
   culture-rate objective, not a scoring-correctness document like the other
   three.
-* Still worth doing: the military/combat cluster (`COMBAT_AUDIT.md`,
-  `MILITARY_SEAM.md`, `MILITARY_DISCARD.md`, `WAR_OVER_TECHNOLOGY.md`,
-  `PACTS_DIAGNOSIS.md`) and the eight-document card-pricing cluster
+* **The military/combat cluster merged into `COMBAT_AUDIT.md` on 2026-07-31.**
+  `COMBAT_AUDIT.md` itself has no numbered headings (`Method`, `Bugs found`,
+  `BUG 1`/`2`/`3`, `Verdict`, ...), so the four incoming docs got fresh top-level
+  numbers: the former `MILITARY_SEAM.md` is §1 (its own §1-§5 renumbered
+  §1.1-§1.5), the former `MILITARY_DISCARD.md` is §2 (§1-§6 renumbered
+  §2.1-§2.6), the former `WAR_OVER_TECHNOLOGY.md` is §3 (§1-§8 renumbered
+  §3.1-§3.8), and the former `PACTS_DIAGNOSIS.md` is §4 (it had no numbered
+  headings of its own, so nothing to renumber). Cross-references between the
+  merged docs (`MILITARY_SEAM.md` and `WAR_OVER_TECHNOLOGY.md` each cite
+  `MILITARY_DISCARD.md` by name) were repointed at §2. Every citing line, in
+  docs (`AGGRESSION_RATE.md`, `HEURISTICS.md`, `BOT_ARCHITECTURE.md`,
+  `DEEPER_SEARCH.md`, `UNIT_TECH_PRICING.md`, `UNCOVERED_TYPES.md`,
+  `OPEN_ITEMS.md`, `SCORE_AUDIT.md`, `PLAY_RATE_AUDIT.md`) and in code
+  (`engine/bots/weighted.py`, `engine/bots/quiescent.py`, `engine/PROGRESS.md`,
+  `tools/gate.sh`, and half a dozen census/probe tools), was updated in the
+  same commit.
+* Still worth doing: the eight-document card-pricing cluster
   (`CARD_BLINDNESS.md` and its seven satellites) — same shape, same
   section-number-cited-from-code caveat, larger scale.
 * Open work goes in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).  Traps go in [`HAZARDS.md`](HAZARDS.md).  Neither is a

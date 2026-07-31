@@ -87,7 +87,7 @@ class _Watch:
         `fifo_would_lose_best` is now a COUNTERFACTUAL, not a measurement of
         what happens.  `engine/economy.py` used to `pop(0)` and make no
         decision at all, which is the defect this counter was built to size
-        (docs/UNCOVERED_TYPES.md D1, docs/MILITARY_DISCARD.md).  The player now
+        (docs/UNCOVERED_TYPES.md D1, docs/COMBAT_AUDIT.md).  The player now
         chooses, so this number no longer describes play -- it describes the
         size of the hole that was there, and it is kept so the fix stays
         attributable rather than becoming folklore.

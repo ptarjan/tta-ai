@@ -34,7 +34,7 @@ Under a vector that carries a non-zero `hand_mil_potential` it IS called for
 all 109 (the live 3p league champion carries 0.01079), so the split below is
 a statement about a VECTOR and not about the code.  See
 `tools/conduction_table.py`, which prints which consumers a given vector
-leaves open, and docs/MILITARY_SEAM.md.
+leaves open, and docs/COMBAT_AUDIT.md.
 
 The first version of this tool pooled them with the civil cards, which
 over-reported the blind spot by 109 cards and sent a whole work stream after

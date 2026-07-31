@@ -214,7 +214,7 @@ and `GreedyBot`, and all four changes are confined to
 `engine/bots/weighted.py`. `GreedyBot`'s own behaviour last changed at 5575110
 (lazy trial-rng reseed), which was verified digest-preserving at the time.
 `WeightedBot` behaviour *has* changed a great deal and is deliberately not
-under any fingerprint; see docs/PACTS_DIAGNOSIS.md for the measured effect.
+under any fingerprint; see docs/COMBAT_AUDIT.md for the measured effect.
 
 ## Baseline (commit fce7db8)
 

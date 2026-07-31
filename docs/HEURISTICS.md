@@ -278,7 +278,7 @@ Source files, if you want to check the work: `experiments/behaviour_{2,3,4}p.jso
 games per count measuring culture lost to starvation and uprisings — the source
 for trap #2), `experiments/analyze_weights.py` (which prices the tuning moved
 and how far), [`docs/RULES_SPEC.md`](RULES_SPEC.md) (the rules; every table in *Quick reference*
-is straight from the rulebook, nothing learned) and [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)
+is straight from the rulebook, nothing learned) and [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)
 (why the AI never offers a pact, declares war or colonises — see caveat 3).
 
 **Confidence tags.** Each claim is tagged:
@@ -299,7 +299,7 @@ is straight from the rulebook, nothing learned) and [`docs/PACTS_DIAGNOSIS.md`](
 - **[not evidence]** — the AI's behaviour here is *forced* by a limitation of the
   AI, not learned from playing. It is a fact about the software, not about the
   game, and must not be read as advice in either direction. See caveat 3 below
-  and [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md).
+  and [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md).
 
 **Four honest caveats you should carry through the whole document.**
 
@@ -328,7 +328,7 @@ is straight from the rulebook, nothing learned) and [`docs/PACTS_DIAGNOSIS.md`](
    simply passing, by a fixed amount, in every position it will ever face**. It
    cannot pick them, at any price. Measured: it was legal to offer a pact in
    **16% of political decisions across 240 games, and it was chosen zero times**
-   ([`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). Knock-on effect: because no game outcome ever
+   ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). Knock-on effect: because no game outcome ever
    depended on the prices for pacts, colonies, aggressions and war, those prices
    were never tuned at all — the 3-player colony price is still, bit for bit, our
    original hand guess, and the 4-player one has wandered to −0.96 at random.
@@ -505,7 +505,7 @@ banks culture early, stops investing, and gets overtaken around round 15.
    position it will ever face.**
 
    That is not a preference that training could overcome. It is arithmetic. The
-   evidence is in [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md): offering a pact was **legal in 16%
+   evidence is in [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md): offering a pact was **legal in 16%
    of political decisions across 240 games and chosen exactly zero times**, and
    the one worked example scores offering a pact at **−1.10445** against passing,
    with every other number on the board identical. Because no game the AI ever
@@ -830,7 +830,7 @@ in **100% of 120 games** — not a median, the whole distribution sits on round 
 [rules, §13] against opponents that have never once attacked in 240 games at
 those two counts — and, more to the point, *cannot*: an aggression is
 a move the AI cannot see the point of (caveat 3;
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). Sitting at 0.06 strength through Age I is defensible
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). Sitting at 0.06 strength through Age I is defensible
 only because nobody in its world was able to punish it. Against a human who will
 Plunder you for 1 military action, disbanding your only unit is throwing three
 food and three resources at them. Read #3 as *"the starting warrior is worth less
@@ -1156,7 +1156,7 @@ or pass — and the AIs have only ever done two of them. Preparing an event
 is the *only* political move that pays you immediately, on your own board, with
 nobody else's answer required; pacts, aggressions and wars all pay off through
 another player's response, and the AI cannot see that far (caveat 3;
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). So "passes on 87% of its turns" means *"had no event
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). So "passes on 87% of its turns" means *"had no event
 worth preparing"*, not *"looked at the political options and declined them"* —
 the political options were never really on the table. A human sitting in that
 seat has three more buyers for a military card than this AI does.
@@ -1365,7 +1365,7 @@ above are there for completeness, not as findings: declaring a war and playing a
 aggression are both invisible to an AI that only looks at its own board before
 anyone answers, so those cells were guaranteed to be ~0 before a single game was
 played (caveat 3;
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). The handful of aggressions that do occur happen
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). The handful of aggressions that do occur happen
 *late* — at 4p the median first aggression is **round 18.5** (p25 17, p75 20),
 i.e. in Age III — but that is a median over ten games of a move the AI never
 deliberately selects. **[not evidence]** on the fighting columns; the strength
@@ -1883,7 +1883,7 @@ treat its style with suspicion rather than copying it.
 
 The army does not get used — **zero wars in 120 games** and 0.03 aggressions per
 game — but be careful what you conclude from that. *No* AI at *any* count
-can choose an aggression or a war (caveat 3; [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)), so those
+can choose an aggression or a war (caveat 3; [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)), so those
 zeroes were fixed before the games were played and are **[not evidence]** that
 the army was wasted. Nor could it ever pay off defensively in a world where
 nobody attacks. What *is* measurable is the price: roughly two-thirds of the
@@ -1934,7 +1934,7 @@ section — but the ~10 missing preparations are real culture left on the table.
 They also have a knock-on: territories only reach the board by being seeded with
 `prepare_event`, so a 4-player AI that never prepares never even sees a colony
 auction, which is why 4p colony bids are rarer still
-[[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)].)
+[[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)].)
 
 What to take from 4p and what to leave: **take** the action discipline, the
 urban-heavy worker split (65% urban by Age III), and the round-1 wonder
@@ -1959,7 +1959,7 @@ Percentages are the share of games in which it happens at all. Where the share
 is under ~25%, the median is a median over a handful of games — treat it as
 **[thin]**. The aggression row is worse than thin: it is three or four games'
 worth of a move the AI cannot deliberately select at all (caveat 3;
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). Ignore it — it says nothing about when *you* should
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). Ignore it — it says nothing about when *you* should
 attack. **[not evidence]**
 
 ### Where the counts actually agree
@@ -1984,7 +1984,7 @@ finding, and it is not one:
    inside the victim's defence choice, which happens after the AI has already
    finished judging the move, so attacking always scores worse than passing. No
    version of it ever tried, none ever could, and nothing ever taught it whether
-   an army is worth having (caveat 3; [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)). A true
+   an army is worth having (caveat 3; [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). A true
    description of these games and **worthless as advice** — it is not evidence that an army is a
    wasted investment at a human table. **[not evidence]**
 
@@ -2354,7 +2354,7 @@ AIs never went there.
 **The AI never signs a pact, never declares war, never plays an aggression and
 almost never colonises. This is not because those things are weak. It is because
 the AI is incapable of choosing them.** Full working in
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md); the short version:
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md); the short version:
 
 The AI picks its move by trying each one and looking at **its own board
 immediately afterwards, before anybody else responds**. But offering a pact,

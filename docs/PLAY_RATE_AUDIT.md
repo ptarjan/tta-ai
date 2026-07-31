@@ -366,7 +366,7 @@ that buys no science and no resources is not a strategy the corpus supports.
 `War over Culture` at 0.57 / 1.01 / 1.06 against a human 0.16 / 0.11 / 0.11,
 and `War over Technology` / `War over Territory` at zero on the bot side at
 2p. The bot declares the one war it can evaluate and never the two it cannot.
-[`docs/WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#4-colonies--alive-everywhere-thin-at-2p) §4 own this;
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#4-colonies--alive-everywhere-thin-at-2p) §4 own this;
 nothing new is claimed here beyond the card identities.
 
 ### 5.3 Tactics — class (c)
@@ -387,7 +387,7 @@ weighting question, not a blind spot.
   face down in the corpus, so no rate exists to compare against.
 * **Pacts (10 cards).** BGO prints `accepts pact offer` and never the card
   name. The bot's aggregate is 0.00 / 1.03 / 1.50 offers a seat-game, and the
-  2p zero is the rulebook, not a gap. [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) owns this.
+  2p zero is the rulebook, not a gap. [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) owns this.
 * **Colonization use of a Military Bonus card.** `interact.force_value`
   assembles the sacrifice; it is not a bot decision, so there is nothing to
   count on the bot side (§3.2).

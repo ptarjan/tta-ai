@@ -39,7 +39,7 @@ Three real defects, all confirmed by measurement, none previously known:
   requiring a decision". It destroyed the best defence card in hand, when a
   worse one was available, on ~40% of the turns it fired. *Found here, routed to
   a dedicated lane, and **FIXED on master in `1c08790`** with
-  [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md). Diagnosis in section 4.*
+  [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md). Diagnosis in section 4.*
 * **D2** — all 12 special technologies price at a strictly **negative** hand
   value, so the bot is actively repelled from a sixth of the civil deck. Six of
   the twelve are taken zero times in 40 player-games. The cause turns out to be
@@ -467,7 +467,7 @@ colonisation auto-uses the whole pool). The third is **D1**.
 ### D1 — the hand-limit discard made no decision *(routed; FIXED on master)*
 
 > **Resolved.** `1c08790` — "The military discard is the player's choice, not
-> FIFO (§6.6 step 1)" — landed the fix, with [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md). The
+> FIFO (§6.6 step 1)" — landed the fix, with [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md). The
 > `pop(0)` below is gone; `economy.end_of_turn` now suspends and pushes the
 > player's discard decision through `interact.discard_excess_military`, and
 > returns `False` so the caller resumes it. This section is kept as the

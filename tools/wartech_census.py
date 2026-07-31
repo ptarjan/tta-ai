@@ -1,6 +1,6 @@
 """How often can `War over Technology` actually offer its choice?
 
-This is the CONDUCTION measurement for docs/WAR_OVER_TECHNOLOGY.md, and it is
+This is the CONDUCTION measurement for docs/COMBAT_AUDIT.md, and it is
 meant to be run BEFORE spending games on an A/B rather than as an explanation
 afterwards.  The lever is a decision that only exists in a narrow conjunction:
 

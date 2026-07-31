@@ -1,6 +1,6 @@
 # Aggressions are not rare; defences are never won (2026-07-30)
 
-[`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md#63-why-the-strength-result-is-flat-and-it-is-not-the-rules-fault) §6.3 reported **34 aggressions across 600 games —
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md#263-why-the-strength-result-is-flat-and-it-is-not-the-rules-fault) §2.6.3 reported **34 aggressions across 600 games —
 0.057 per game — and not one ever successfully defended**, and read it as a
 statement about the population: the channel the military-discard rule would be
 paid through is essentially absent, so a flat A/B on strength says nothing
@@ -185,7 +185,7 @@ within noise, as expected, since the attacker already quiesced.
   convention, so the two can be duelled paired in one process on the same deal.
   Turning it on changes `PlanBot` and `plan:` is a gated arm, so flipping the
   default moves gate digests and wants its own before/after table and
-  attribution, the way [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md#5-digests) §5 did. **It should be
+  attribution, the way [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md#25-digests) §2.5 did. **It should be
   flipped**; it was not flipped here because doing it at the end of a session
   while master is moving would land moved digests on other lanes without a
   strength A/B behind them. §8-§11 are that follow-up; read §9 before flipping
@@ -591,7 +591,7 @@ Date: 2026-07-26
 Owner: aggression-fix agent (`engine/bots/`, colony/military paths of
 `engine/actions.py`, this file)
 
-Follow-up to [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md).
+Follow-up to [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md).
 Two open items from the post-fix measurement:
 
 * **A.** colony bids at 4p went 0.02 -> 0.01 (essentially never), with the

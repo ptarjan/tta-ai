@@ -1,4 +1,4 @@
-"""Is CHOOSING the military discard worth anything? (docs/MILITARY_DISCARD.md)
+"""Is CHOOSING the military discard worth anything? (docs/COMBAT_AUDIT.md)
 
 RULES_SPEC §6.6 step 1 used to be `hand_military.pop(0)` -- FIFO, no decision,
 a rules violation: the rulebook makes this the player's choice and says it is

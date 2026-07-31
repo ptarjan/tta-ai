@@ -279,7 +279,7 @@ KNOWN_DEAD = {
         "0.0 on every live champion, so nothing calls card_potential on a "
         "military card at all -- which is what makes `territory_credit` and "
         "`bonus_card_credit` cost nothing, and what hides the four invisible "
-        "military classes below (docs/MILITARY_SEAM.md)",
+        "military classes below (docs/COMBAT_AUDIT.md)",
         "docs/OPEN_ITEMS.md: price the military hand"),
     "hand_swap_extra": (
         ("inert-live",),

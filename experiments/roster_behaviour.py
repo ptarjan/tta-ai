@@ -7,7 +7,7 @@ to choose a training pool.  Two bots with the same win rate are different
 training partners if one declares wars and the other never fights: an opponent
 pool that never attacks cannot teach a learner to defend.  So this script
 records, for every entrant, the *rate* at which it plays each of the move
-kinds a 1-ply search is known to undervalue (see ``docs/PACTS_DIAGNOSIS.md``):
+kinds a 1-ply search is known to undervalue (see ``docs/COMBAT_AUDIT.md``):
 pact offers, wars, aggressions and colony bids.
 
 It also times the bots.  The pool is meant for a long training run, where a

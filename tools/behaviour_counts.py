@@ -2,7 +2,7 @@
 
 `experiments/behaviour.py` reports wars and aggressions but has no counter for
 pact offers or colony bids, which are two of the four move classes
-docs/PACTS_DIAGNOSIS.md identifies as strictly dominated at 1 ply.  This
+docs/COMBAT_AUDIT.md identifies as strictly dominated at 1 ply.  This
 counts all four, plus what they actually produced (pacts signed, colonies
 taken), by wrapping every bot at the table and tallying the moves it picks.
 

@@ -145,7 +145,7 @@ what a hill climb answers better than an argument.
 ### 3.4 The seam the brief warned about does not block this
 
 `hand_mil_potential` calling `card_potential` without a state was real and is
-**already fixed** ([`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md#1-hand_mil_potential-never-passed-the-board) §1 — the arguments are forwarded).
+**already fixed** ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md#11-hand_mil_potential-never-passed-the-board) §1.1 — the arguments are forwarded).
 It would not have blocked this fix in any case: **unit technologies are CIVIL
 cards.**  They arrive in the civil row and go to `hand_civil`, so they reach
 `card_potential` through `row_pressure`, `hand_potential` and

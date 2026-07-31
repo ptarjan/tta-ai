@@ -17,7 +17,7 @@ A/B unnecessary.
    base rate first.  Reported as the share of the bot's own decisions at which
    ``unit_workers == 0``.
 
-2. The pact accept branch (ARCHAEOLOGY item 12e; `docs/PACTS_DIAGNOSIS.md`
+2. The pact accept branch (ARCHAEOLOGY item 12e; `docs/COMBAT_AUDIT.md`
    fix #3, "verify the accept branch isn't being systematically refused").
    `engine/interact._c_pact_offer` is the only place an offer is resolved, so
    counting its `opt` gives the accept/refuse split directly.  A systematic

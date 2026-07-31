@@ -144,7 +144,7 @@ it.
 INHERITED and re-verified by reading the code: `apply()` returns with
 `state.pending` non-empty for `offer_pact`, aggressions, colony `bid` and
 action cards, so the trial state shows the whole cost and none of the gain.
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) proves it by exact arithmetic (the `offer_pact` delta
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) proves it by exact arithmetic (the `offer_pact` delta
 is exactly -1.10445 and *no other feature moves*), which makes those moves
 strictly dominated under **any** weight vector. That is not a tuning problem.
 

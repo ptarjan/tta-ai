@@ -86,7 +86,7 @@ PHASE_KEYS = (
 
 
 # A pact you have OFFERED is not a pact: the partner may refuse.  Credit it
-# at this fraction of a live pact (docs/PACTS_DIAGNOSIS.md fix #2) -- without
+# at this fraction of a live pact (docs/COMBAT_AUDIT.md fix #2) -- without
 # it a 1-ply search sees only the card leaving your hand, so `offer_pact` is
 # strictly dominated by `pol_pass` in every position and can never be picked.
 # FITTED PRIOR, and it is NOT converted to a weight the way `rival_take_share`
@@ -224,7 +224,7 @@ def deferred_credit(state, idx):
 
     Two moves spend something now and pay off only inside *another* player's
     decision, so applying them to a trial state shows the cost and none of
-    the gain (docs/PACTS_DIAGNOSIS.md):
+    the gain (docs/COMBAT_AUDIT.md):
 
     * ``offer_pact`` -- the pact object is created in the partner's response,
       so the mover sees only a card leaving its hand.  Credited at
@@ -853,7 +853,7 @@ def features(state, idx, ctx=None, w=None):
                         "noAttacksBetweenParties"):
                     blocks_attack += 1.0
     # deferred payoffs: an offered pact and a live high bid are both real
-    # positions the trial state cannot show (docs/PACTS_DIAGNOSIS.md)
+    # positions the trial state cannot show (docs/COMBAT_AUDIT.md)
     pact_offers = auction_committed = auction_bid = 0.0
     gains = _NO_GAINS
     if state.pending:
@@ -1348,7 +1348,7 @@ _unpriced(
 #    in this same file -- a territory is priced through `_TERR_TO_FEATURE`
 #    from inside `_card_yields`, reached by exactly that route.  So the two
 #    keys were not unreachable, only unmapped; they are mapped now, in
-#    `_BONUS_TO_FEATURE`, and see docs/MILITARY_SEAM.md.
+#    `_BONUS_TO_FEATURE`, and see docs/COMBAT_AUDIT.md.
 _unpriced(
     # A tactic's whole value is `tacticBonus x armies you can form`, which is
     # a board query, not a card constant -- and the engine never reads these
@@ -3092,7 +3092,7 @@ BASE_WEIGHTS = {
     # military card, and 0.0 recovers the pre-change pricing exactly for an
     # A/B.  Note this is NOT inert for the live 3p champion, which carries
     # `hand_mil_potential = 0.01079` -- that vector is the one place in the
-    # league where this change conducts at all (docs/MILITARY_SEAM.md).
+    # league where this change conducts at all (docs/COMBAT_AUDIT.md).
     "bonus_card_credit": 1.0,
     # cards
     "hand_civil": 0.3,
@@ -3279,7 +3279,7 @@ class WeightedBot:
         # Score for whoever actually owns the move. On a pending decision that
         # is NOT the turn player -- pact accept/refuse is always one of these,
         # and 10/16 auction decisions were measured to be -- `state.current`
-        # made us maximise a RIVAL's position (docs/PACTS_DIAGNOSIS.md).
+        # made us maximise a RIVAL's position (docs/COMBAT_AUDIT.md).
         idx = state.decider()
         try:
             ctx = rival_context(state, idx)

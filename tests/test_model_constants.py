@@ -119,7 +119,7 @@ CLASSIFIED = {
         "fitted prior", "shrinkage weight in pseudo-replenishes; see above"),
     # ------------------------------------------------------- fitted priors
     ("engine/bots/weighted.py", "PACT_OFFER_CREDIT"): (
-        "fitted prior", "docs/PACTS_DIAGNOSIS.md fix 2; docs/OPEN_ITEMS.md"),
+        "fitted prior", "docs/COMBAT_AUDIT.md fix 2; docs/OPEN_ITEMS.md"),
     ("engine/bots/weighted.py", "RIVAL_TAKE_SHARE"): (
         "fitted prior",
         "the default for the `rival_take_share` WEIGHT; everything else in "

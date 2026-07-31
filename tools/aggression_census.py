@@ -1,6 +1,6 @@
 """Where does an aggression die: never drawn, never offered, or never chosen?
 
-`docs/MILITARY_DISCARD.md` §6.3 reported **34 aggressions in 600 games (0.057
+`docs/COMBAT_AUDIT.md` §2.6.3 reported **34 aggressions in 600 games (0.057
 per game) and 0 ever successfully defended**, and concluded the defence
 channel the discard rule would be paid through is absent.  That measurement
 ran `tools/discard_ab.py --spec <bare path>`, and `arena.make_bot`'s

@@ -20,7 +20,7 @@ class of TTA moves does NOT satisfy that:
 
 In every one of those rows the trial state shows **the entire cost and none of
 the gain**, so the move is strictly dominated by passing under *any* weight
-vector.  docs/PACTS_DIAGNOSIS.md proves this for pacts and colony bids; the
+vector.  docs/COMBAT_AUDIT.md proves this for pacts and colony bids; the
 same argument covers aggressions and action cards.  It is not a weighting
 problem and no weight can fix it -- hill climbing cannot select for a move it
 can never rank first.

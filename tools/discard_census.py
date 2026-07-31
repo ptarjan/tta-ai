@@ -1,6 +1,6 @@
 """How hot is §6.6 step 1, and how often did FIFO pitch the best defender?
 
-The size claim in docs/MILITARY_DISCARD.md §2, measured rather than inherited.
+The size claim in docs/COMBAT_AUDIT.md §2.2, measured rather than inherited.
 Plays self-play games, answers every `discard_military` decision the way the
 pre-fix engine did (oldest card first), and records at each firing:
 

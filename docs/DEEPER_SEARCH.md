@@ -13,7 +13,7 @@ measurement — see section 4.0.
 
 ## 1. The defect this is aimed at
 
-[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) proves it for pacts and colony bids; the argument
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) proves it for pacts and colony bids; the argument
 generalises. `WeightedBot.pick` scores a candidate by
 
 ```python
@@ -406,7 +406,7 @@ Pact offers *fall* (6.4 → 2.9 at 3p, 16.7 → 4.8 at 4p) and colony bids *fall
 (3.7 → 2.6, 6.0 → 4.0) — while pacts live at the end are flat and colonies
 actually held **rise** (1.71 → 1.97, 2.73 → 3.02). The 1-ply bot is not
 failing to offer pacts and bid: `weighted.deferred_credit` (commit 166867d)
-already fixed that with a hand-priced constant, and [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)
+already fixed that with a hand-priced constant, and [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)
 recorded the fix working. What a flat hand-priced credit cannot do is tell a
 *good* offer from a bad one, so it produces a lot of them. Quiescence plays the
 auction out and the partner's accept/refuse out, so it makes **fewer and better

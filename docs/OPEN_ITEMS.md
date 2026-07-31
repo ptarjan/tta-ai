@@ -66,7 +66,7 @@ inert, so the defence increment those cards carry is still effectively unpriced.
 cards have a real nonzero champion weight today and only `defenseBonus` is
 priced-but-inert everywhere.  Full derivation, conduction table, and where the
 3p effect shows up (the end-of-turn military discard,
-`engine/interact.py:_discard_military`) is [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md).
+`engine/interact.py:_discard_military`) is [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md).
 
 ### 1.4 `cost.militaryActions` is read by no bot code
 
@@ -78,7 +78,7 @@ War over Territory (2 MA) are the same card to every pricing path.
 three live champions, e.g. 3.47652 at 3p) is a different thing: it prices a
 card's *grant* of military actions, not a war card's cost to play.
 
-[`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md) records the reason this is deliberately still unpriced:
+[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) records the reason this is deliberately still unpriced:
 pricing the cost alone, without also pricing what the card buys, would reproduce
 the project's worst historical pricing defect — unit cards scoring strictly
 negative.
@@ -440,7 +440,7 @@ and each is now labelled as a prior in the source and pinned by
   it already is.  Deliberately left labelled rather than half-plumbed.  If a
   lane ever threads `w` into `features()` for another reason, convert this at
   the same time.  Nothing has ever measured whether 0.5 is right; the only
-  evidence is [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) fix #2, which establishes that it must
+  evidence is [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) fix #2, which establishes that it must
   be **non-zero** (at 0.0 `offer_pact` is strictly dominated by `pol_pass`) and
   says nothing about the value.
 * **`_TAKE_PRIOR = {2: 0.30, 3: 0.35, 4: 0.40}` is fitted** and is the last
@@ -719,7 +719,7 @@ The single most important entry is #22.*
     **setup-time**, so a mid-game resignation in a 3p game can silently make pacts
     illegal for the survivors.  Low impact (~0.07 resignations/game), zero test
     coverage.  Found independently by [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) (Bug 2) and
-    [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md).
+    [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md).
 12. Small unactioned follow-ups: re-test `wonder_remaining` in isolation;
     re-check the ~1.2-abandoned-wonders/game waste statistic; ablate the 4p
     `hand_military = 0.908` weight (it makes the champion opt out of events,
