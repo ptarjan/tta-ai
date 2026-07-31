@@ -191,6 +191,19 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   the vector under test.
 * **"Inert" is a statement about coverage, not correctness.**  A change that
   moves no digest means those 135 games cannot catch a regression in it.
+* **A weight the climb never has to PAY for is unconstrained, and it will
+  drift.**  A feature the evaluator can read but can never spend anything to
+  increase is fitted on a free lunch: nothing punishes a wrong value, so noise
+  carries it wherever it likes.  The archived 3p champion reached `strength`
+  3.42 and `strength_rel_early` 7.35 — one soldier valued at roughly one
+  culture *per turn* — purely because for the whole of this project's history
+  no card in the game could sell it a soldier.  The moment
+  `weighted.strength_marginal` made it pay its own stated price, that vector
+  bought 4.16 unit technologies a game and lost at **14.6% against a 33.3%
+  null**.  Before opening a new channel onto an existing weight, ask what has
+  ever constrained that weight; if the answer is "nothing", expect the first
+  measurement to be a regression *of the weight*, and check it against
+  `DEFAULT_WEIGHTS`.  `docs/UNIT_TECH_PRICING.md` §5.2.
 * **A card whose cost is priced while its gain sits at 0.0 is biased, not
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases

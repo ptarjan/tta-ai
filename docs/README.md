@@ -55,7 +55,7 @@ these for the reasoning.*
 | `CARD_BLINDNESS.md` | The originating finding (`_card_yields` silently dropped culture/science), the fix, and a project-wide audit of confidence-interval methodology. |
 | `CARD_PRICING_LEADERS.md` | Board-aware pricing for leaders, actions and governments by diffing the rules engine rather than copying it. |
 | `CARD_BLINDNESS_MILITARY.md` | Territories, units and tactics — why units price *negative* and why no per-card table can fix it. |
-| **`UNIT_TECH_PRICING.md`** | The fix for that: a unit technology priced by a board query (the engine's own upgrade cost against a `compute` strength diff, valued at d(`evaluate`)/d(strength)).  Unit takes 0.20 → 1.06 at 2p and 0.08 → 4.16 at 3p; A/B null at 2p. |
+| **`UNIT_TECH_PRICING.md`** | The fix for that: a unit technology priced by a board query (the engine's own upgrade cost against a `compute` strength diff, valued at d(`evaluate`)/d(strength)).  Unit takes 0.20 → 1.06 at 2p and 0.08 → 4.16 at 3p; A/B null at 2p and on the defaults at 3p, and a 14.6% **regression** on the archived 3p champion that is attributed to an unconstrained `strength` weight — read §5 before warm-starting anything from that archive. |
 | `UNCOVERED_TYPES.md` | Special technologies, production buildings and bonus cards; and the general rule that a half-priced card is biased, not neutral. |
 | `COVERAGE_AUDIT.md` | The non-card axis: colonies, resign, farm-vs-mine degeneracy, and the dead-coordinate census of every evaluator feature. |
 | `MILITARY_SEAM.md` | The plumbing that stopped board-aware pricing reaching military cards at all. |

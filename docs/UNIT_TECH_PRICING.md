@@ -219,31 +219,83 @@ Yellow (farms/mines) falls at both counts.  It was already near zero and this
 did not touch it: that hole is `docs/UNCOVERED_TYPES.md` §0's absolute-not-
 delta pricing and is a different lane.
 
-## 5. Strength: the A/B, and it is a null at 2p
+## 5. Strength: two nulls and one severe regression, and the regression is the
+## most interesting number in this document
 
-`experiments.evaluate`, the fix against **itself** — the identical champion
-vector with `unit_tech_credit` 1.0 against 0.0, so the two arms differ in
-exactly one number and are paired on the deal.  Seat-balanced.
+`experiments.evaluate`, the fix against **itself** — the identical vector with
+`unit_tech_credit` 1.0 against 0.0, so the two arms differ in exactly one number
+and are paired on the deal.  Seat-balanced.
 
-| | games | deals | win rate | paired CI | p | culture margin |
-|---|---|---|---|---|---|---|
-| 2p, live champion | 300 | 150 | **49.83%** | ±3.92pp | 0.93 | **−1.29** |
-| 3p, archived champion | see below | | | | | |
+| vector | games | deals | win rate | paired CI | null | p | culture margin |
+|---|---|---|---|---|---|---|---|
+| 2p, **live** champion (gen 72) | 300 | 150 | 49.83% | ±3.92pp | 50% | 0.93 | −1.3 |
+| 3p, **archived** champion (gen 1314) | 240 | 80 | **14.58%** | ±4.84pp | 33.3% | **1.3e−14** | **−37.8** |
+| 3p, `DEFAULT_WEIGHTS` | 180 | 60 | 34.72% | ±5.03pp | 33.3% | 0.58 | +4.0 |
 
-**A null at 2p, and it is a real null rather than an underpowered one.**  The
-paired design has `rho_deal` = −0.52 and a design effect of 0.48, i.e. pairing
-halved the variance, and ±3.9pp on a 50% null over 300 games would have found a
-3.5-point effect.  There is not one.  Culture margin −1.29 on a mean of 185, so
-the score cost visible in the mirror census (−3.2%) is symmetric: **both** arms
-lose it, which is what a mirror census cannot distinguish and this can.
+### 5.1 2p: a real null, not an underpowered one
 
-The repo's standing policy is that modelling something correctly is worth
-committing whether or not it strengthens the bot, and this is that case at 2p:
-the bot now has a channel through which buying army can ever be right, priced
-off its own objective, and it costs nothing measurable to have it.  What it
-buys is not in this table — it is that the league can now *train* on the
-question, which for the whole of this project's history it structurally could
-not.
+`rho_deal` = −0.52 and a design effect of 0.48 — pairing halved the variance —
+and ±3.9pp over 300 games would have found a 3.5-point effect.  There is not
+one.  Culture margin −1.3 on a mean of 185, so the −3.2% the mirror census
+showed is **symmetric**: both arms lose it.  That is exactly the distinction a
+mirror census cannot make and a duel can.
+
+### 5.2 3p on the archived champion: a large, unambiguous regression
+
+**14.6% against a 33.3% null is the worst A/B result this lane has produced and
+it is not noise.**  It has to be read together with what that vector believes:
+
+    strength            3.4191        resource_stock   2.7188
+    strength_rel_early  7.3498        science          0.1897
+    strength_lead       0.4682        culture_rate     9.7921
+
+`strength_marginal` on that vector is up to **11 eval points per point of
+army**, against 9.79 for a whole point of culture *per turn*.  It thinks one
+soldier is worth about one culture rate.  Handed that opinion, the fix buys
+**4.16 unit technologies a seat-game** (§4) and the culture collapses 134 → 97.
+
+The fix is transmitting the vector's own stated price faithfully.  The price is
+nonsense — and the reason it is nonsense is the defect itself:
+
+> **`strength` and `strength_rel_early` were unconstrained coordinates.**  On
+> every vector this league has trained, the only ways to gain army were things
+> you were taking anyway (a wonder, a leader, a tactic) or things nothing
+> priced.  **Nothing in the evaluator ever made the climb pay for a point of
+> strength**, so the weight on it could drift as high as noise carried it
+> without ever costing a game.  `strength_marginal` is the first term in this
+> project that charges the evaluator its own stated price for army, and the
+> first thing it did was expose that the price was fitted on a free lunch.
+
+So the regression is a *measurement of a stale champion*, not of the change —
+which is a claim that has to be testable, and the third row is the test.
+
+### 5.3 3p on `DEFAULT_WEIGHTS`: null, and this is the row that matters
+operationally
+
+34.7% ± 5.0pp against 33.3%, p = 0.58, margin **+4.0 culture** — if anything
+mildly positive.  `DEFAULT_WEIGHTS` carries `strength` 0.35 and
+`strength_rel_early` −0.1, so `strength_marginal` is ~0.9 there rather than
+~11, and the fix buys army at a sane rate.
+
+**This is the vector the live 3p arm actually starts from.**
+`experiments/league_state/champion_3p.json` is gen 0 and byte-identical to
+`DEFAULT_WEIGHTS` (`SYSTEM_COVERAGE.md`'s method note), as is `champion_4p`.
+So nothing in the league today is in the regime of §5.2, and the arm that is
+live and trained — 2p — is the clean null of §5.1.
+
+### 5.4 What to do about it, stated plainly
+
+* **Do not warm-start a 3p or 4p league arm from `archive_prequiescent_
+  20260730`** without re-fitting `strength` / `strength_rel_early` first.  That
+  vector plus this change is a 14.6% player.
+* `unit_tech_credit` is a weight, so **any champion file can opt out with
+  `"unit_tech_credit": 0.0`**, which recovers the old pricing byte for byte —
+  a zero-risk escape hatch that needs no code change.
+* The standing policy is that correct modelling is worth committing whether or
+  not it strengthens the bot.  On that basis this lands: two nulls, one
+  regression that is attributable to a stale weight and is reproducible in the
+  other direction on the defaults.  It is not being landed as an improvement,
+  and §7 keeps the 3p question open.
 
 ## 6. Fingerprints
 
@@ -270,7 +322,8 @@ short version:
   provably inert on its own.
 
 Nothing was re-derived to make the gate pass: it failed by design in both
-clones and the committed constants are the computed values.
+clones and the committed constants are the computed values.  `bash
+tools/gate.sh` on the pushed tree then reported **GATE PASS** on all eight.
 
 Test count 1040 → 1053.  +12 from `tests/test_unit_pricing.py`, +1 from
 splitting `test_zero_credit_is_the_static_answer_for_every_card` in
@@ -301,9 +354,17 @@ which is trivially true when there is no credit.
    `strength_marginal` exists to fix.  Routing the swap diff through it too is
    a one-line change with a much wider blast radius and belongs in its own
    commit with its own measurement.
-3. **The 3p score cost.**  −14% mirror score at 3p is large enough to want its
-   own look, on the *live* 3p arm rather than the archived one, once the league
-   has trained past gen 0.
+3. **The 3p regression on the archived champion (§5.2) is not closed, it is
+   only attributed.**  The attribution is strong — the same A/B on
+   `DEFAULT_WEIGHTS` is a null in the other direction — but nobody has yet
+   re-fitted `strength` / `strength_rel_early` on a vector that has to pay for
+   them, and until somebody does, "the weight was stale" is an inference from
+   two rows rather than a demonstration.  The cheap version is to take the
+   archived 3p champion, scale its military group down, and re-run §5.2.
+4. **Every other feature that was never paid for is suspect for the same
+   reason.**  The mechanism in §5.2 is general: a coordinate the evaluator can
+   read but never has to buy is unconstrained, and it will drift.  `strength`
+   was one because no card priced it.  Worth a sweep.
 4. **Tactics remain confounded with this.**  `SYSTEM_COVERAGE.md` §9 asked for
    tactics to be re-measured after the unit hole, not in parallel with it.
    Tactics played moved 1.05 → 0.88 at 2p and 0.85 → 1.02 at 3p; that is now
