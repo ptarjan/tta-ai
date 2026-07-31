@@ -351,8 +351,48 @@ WIDE=f223cea1
 # every pre-change constant first.  Nothing here was re-derived to make the
 # gate pass; the gate FAILED by design in both clones and these are the
 # computed values.
-WNARROW=dc1e3bbe
-WWIDE=f401b342
+#
+# ---- ALL technology board pricing (docs/YELLOW_TECH_PRICING.md) ------------
+#
+# The same SIX arms moved again, for the same structural reason and with the
+# same two that held: NARROW/WIDE are GreedyBot, which never calls
+# `weighted.card_potential`.
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   dc1e3bbe    16dc9a1a
+#     WWIDE     f401b342    a1b74078
+#     QNARROW   02f63fe7    2f59c5c0
+#     QWIDE     2f1f774e    23b8d66e
+#     PNARROW   b17d2aa1    15bd49fc
+#     PWIDE     d2240d3c    c8fe5d3a
+#
+# Cause: `DEFAULT_WEIGHTS` gained `tech_board_credit` at 1.0, which routes
+# EVERY technology's price -- the eleven farm/mine/lab/urban/special types,
+# and the `tech_levels` half of the four red ones -- through
+# `weighted.tech_value`.  That prices a card by an `effects.compute` upgrade
+# diff plus the technology levels it buys, each valued at
+# `weighted.feature_marginal` (d(evaluate)/d(feature), phase multipliers
+# included) instead of at the bare `w[k]` the static `_card_yields` table
+# used.  Every technology in the row and in the civil hand therefore prices
+# differently under DEFAULT_WEIGHTS, and all three searching bots see it.
+#
+# ATTRIBUTED, not assumed, and to ONE constant: a third clone of this exact
+# tree with `"tech_board_credit": 1.0` changed to `0.0` and nothing else
+# touched reproduces all EIGHT pre-change digests byte for byte.  So the six
+# moves are that credit and nothing else in the change -- `feature_marginal`,
+# `tech_upgrade`, `_delta_triples`, `_upgradable_onto` and `_is_levelled_tech`
+# are provably inert on their own.
+#
+# Two-sided as docs/PYPY.md 9.0 requires: derived from scratch in /tmp/gateA
+# and independently in /tmp/gateB, two separate copies of the same tree, and
+# the two agreed on all eight arms -- including the two that did not move.  A
+# clean-base control on the parent commit (c0525c4, /tmp/base) reproduced all
+# eight pre-change constants first.  Nothing here was re-derived to make the
+# gate pass.
+WNARROW=16dc9a1a
+WWIDE=a1b74078
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -520,10 +560,17 @@ WWIDE=f401b342
 # in tests/test_board_yields.py, which had to grow a sibling once units
 # stopped being gated on `card_board_credit` and started being gated on
 # `unit_tech_credit`.
-PNARROW=b17d2aa1
-PWIDE=d2240d3c
-QNARROW=02f63fe7
-QWIDE=2f1f774e
+#
+# All four moved once more on the whole-technology board pricing; the table,
+# the cause and the one-constant attribution are in the block above WNARROW.
+# Test count goes 1053 -> 1070: +16 from the new tests/test_yellow_pricing.py
+# and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
+# in tests/test_board_yields.py a second time, which needed a third sibling
+# once the non-red technologies started being gated on `tech_board_credit`.
+PNARROW=15bd49fc
+PWIDE=c8fe5d3a
+QNARROW=2f59c5c0
+QWIDE=23b8d66e
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

@@ -112,8 +112,8 @@ from __future__ import annotations
 from .. import actions as A, cards as C, economy, effects
 from ..state import TechCard
 
-__all__ = ["board_yields", "board_choices", "unit_upgrade", "SWAP_TYPES",
-           "SINGLE_SLOT", "BOARD_PRICED"]
+__all__ = ["board_yields", "board_choices", "unit_upgrade", "tech_upgrade",
+           "SWAP_TYPES", "SINGLE_SLOT", "BOARD_PRICED", "LEVELLED_TYPES"]
 
 _DB = C.db()
 
@@ -249,13 +249,15 @@ def _pop_cost(stats, p):
     return _POP_SENTINEL if got is None else float(got)
 
 
-def _stats_delta(state, p, field, name):
-    key = (name, effects.stats_key(state, p))
-    hit = _DELTA_CACHE.get(key)
-    if hit is not None:
-        return hit
-    before = effects.state_stats(state, p)
-    after = _swapped(state, p, field, name)
+def _delta_triples(before, after, p):
+    """Yield triples for the difference between two `Stats` of one player.
+
+    Factored out of `_stats_delta` so the swap diff (a leader / government /
+    wonder replacing what you have) and the technology diff (`tech_upgrade`,
+    below) read the SAME fields through the SAME feature names.  Two copies of
+    this list is precisely how `_PROD_TO_FEATURE` and `_YIELD_TO_FEATURE`
+    drifted apart, which is the bug class this module keeps paying for.
+    """
     out = []
     for attr, feat in _STATS_FEATURES:
         d = getattr(after, attr) - getattr(before, attr)
@@ -285,7 +287,17 @@ def _stats_delta(state, p, field, name):
     d = int(after.no_aggression) - int(before.no_aggression)
     if d:
         out.append(("no_aggression", float(d), _GAIN))
-    out = tuple(out)
+    return tuple(out)
+
+
+def _stats_delta(state, p, field, name):
+    key = (name, effects.stats_key(state, p))
+    hit = _DELTA_CACHE.get(key)
+    if hit is not None:
+        return hit
+    before = effects.state_stats(state, p)
+    after = _swapped(state, p, field, name)
+    out = _delta_triples(before, after, p)
     if len(_DELTA_CACHE) >= _DELTA_CACHE_MAX:
         _DELTA_CACHE.clear()
     _DELTA_CACHE[key] = out
@@ -666,6 +678,186 @@ def unit_upgrade(name, state, idx):
     if len(_UNIT_CACHE) >= _UNIT_CACHE_MAX:
         _UNIT_CACHE.clear()
     _UNIT_CACHE[key] = out
+    return out
+
+
+# --------------------------------------------- EVERY technology, not just red
+#
+# `unit_upgrade` above answers "what does developing this unit technology buy
+# me" for the four red types.  `tech_upgrade` asks the same question of the
+# other eleven -- farm, mine, lab, temple, library, theater, arena and the
+# special technologies -- and of the red ones too, so there is one answer and
+# not two.  docs/YELLOW_TECH_PRICING.md is the measurement; the short version
+# is that the static table in `weighted._card_yields` priced every yellow
+# production technology strictly NEGATIVE on the live 2p champion (Iron -6.72,
+# Alchemy -11.19, Computers -20.41) and `row_pressure` skips anything <= 0, so
+# the yellow half of the card row was invisible for exactly the mechanical
+# reason the red half was.
+#
+# THREE THINGS THE STATIC TABLE CANNOT SAY, all of them derivations:
+#
+#   1. **Developing a technology raises `tech_levels`, and nothing priced it.**
+#      `weighted.features` adds a technology's age level into `tech_levels` for
+#      every worker type AND for `special-tech`; the live 2p champion weights
+#      that feature at 5.84 with an early/late pair of 3.39 / 0.92, i.e. up to
+#      **9.23 eval points per level**, which is more than everything else on a
+#      yellow card put together.  `_card_yields` maps nothing to it.  Same for
+#      `num_techs` and the `best_*` family.  These are the DEVELOP half and
+#      they are paid on any technology, staffed or not.
+#   2. **The move is an upgrade, not a fresh build.**  Identical to the
+#      argument above `unit_upgrade`, with one correction that matters here:
+#      `engine/actions.py:_action_moves` only offers `("upgrade", lo, hi)`
+#      between cards of the SAME type and strictly increasing level, so the
+#      workers eligible to move onto a farm are the workers on your older
+#      farms and nothing else.
+#   3. **A rate is not worth `w[rate]`.**  `culture_rate`, `science_rate`,
+#      `food_rate`, `resource_rate` and `tech_levels` are all in
+#      `weighted.PHASE_KEYS`, so `evaluate` prices them at
+#      `w[k] + (1-L)*w[k_early] + L*w[k_late]` while `card_potential` looked up
+#      the bare `w[k]`.  On the live 2p champion that is 0.25 against 5.29
+#      early for `science_rate` -- a factor of twenty-one, and the same shape
+#      as the factor of fifteen `strength_marginal` was written for.
+#      `weighted.feature_marginal` is the one place that arithmetic lives now.
+#
+# The one modelling statement is the same one `unit_upgrade` makes, for the
+# same reason: the trade is linear in the number of workers moved, so its
+# optimum is at an endpoint -- all of them or none.  `weighted.tech_value`
+# takes that max; this function reports the all-of-them end.
+
+_TECH_CACHE = {}
+_TECH_CACHE_MAX = 200_000
+
+# The types whose development adds to `weighted.features()`' `tech_levels`.
+# Read straight off that loop: every worker type, plus `special-tech`.  A
+# government also carries a level, but a government is priced by the swap diff
+# above and its level delta is a different question (see
+# docs/OPEN_ITEMS.md).
+LEVELLED_TYPES = frozenset(C.WORKER_TYPES | {"special-tech"})
+
+# type -> the `best_*` feature it feeds.  The four unit types share
+# `best_unit`, exactly as `weighted.features` computes it.
+_BEST_FEATURE = {t: "best_" + t for t in
+                 ("farm", "mine", "lab", "temple", "theater", "library",
+                  "arena")}
+_BEST_FEATURE.update({t: "best_unit" for t in C.UNIT_TYPES})
+
+
+def _upgradable_onto(p, name):
+    """[(tech, workers)] this player could LEGALLY upgrade onto `name`.
+
+    Same type, strictly lower level, at least one worker standing on it --
+    which is `engine/actions.py:_tableau`'s `higher` relation read backwards.
+    """
+    type_of = _DB.type_by_name
+    level_of = _DB.level_by_name
+    typ = type_of.get(name)
+    lv = level_of.get(name, 0)
+    return [(n, t.workers) for n, t in p.techs.items()
+            if t.workers and type_of.get(n) == typ and level_of.get(n, 0) < lv]
+
+
+def _with_tech(state, p, name, moved):
+    """`effects.compute` with `name` developed and `moved` workers moved onto
+    it, off the technologies they are standing on.
+
+    The same `try/finally` discipline as `_swapped` and `_with_unit`, and the
+    same reason: a raise here would leave the player holding a technology they
+    never developed.  `p.techs` is REBOUND to a new dict rather than mutated,
+    so a journal watching the original mapping never sees a write.
+    """
+    old = p.techs
+    new = dict(old)
+    total = 0
+    for n, k in moved:
+        t = new[n]
+        new[n] = TechCard(n, workers=t.workers - k, stored=t.stored)
+        total += k
+    new[name] = TechCard(name, workers=total)
+    p.techs = new
+    try:
+        return effects.compute(state, p)
+    finally:
+        p.techs = old
+
+
+def tech_upgrade(name, state, idx):
+    """(staff triples, develop triples, science cost, resource cost).
+
+    "Develop `name`, then move every worker that could legally upgrade onto
+    it."  The two triple groups are separated because the two halves of the
+    plan are decided separately and the caller has to be able to take the
+    argmax over the second one:
+
+    * **develop** -- `tech_levels`, `num_techs`, `best_*` (and `special_techs`
+      for a special technology).  Paid the moment the card is developed,
+      whether or not anybody staffs it.
+    * **staff** -- the `effects.compute` diff of moving the workers, which is
+      where the production rate, the strength and the happiness live.
+      Optional, and its resource cost is `resource cost`.
+
+    `((), (), 0.0, 0.0)` for a card that is not a technology, or one the player
+    has already developed (it cannot be developed twice, so the card is dead
+    in hand and worth exactly nothing -- not a cost and not a gain).
+
+    Memoised on `(name, effects.stats_key(state, p))` for the same reason
+    `_stats_delta` and `unit_upgrade` are, and on the same key.
+    """
+    typ = _DB.type_by_name.get(name)
+    if typ not in LEVELLED_TYPES:
+        return (), (), 0.0, 0.0
+    p = state.players[idx]
+    if name in p.techs:
+        return (), (), 0.0, 0.0
+    key = (name, effects.stats_key(state, p))
+    hit = _TECH_CACHE.get(key)
+    if hit is not None:
+        return hit
+    level_of = _DB.level_by_name
+    type_of = _DB.type_by_name
+    lv = level_of.get(name, 0)
+    dev = [("tech_levels", float(lv), _GAIN), ("num_techs", 1.0, _GAIN)]
+    if typ == "special-tech":
+        dev.append(("special_techs", 1.0, _GAIN))
+    feat = _BEST_FEATURE.get(typ)
+    if feat is not None:
+        # `best_unit` is the max over all four red types; every other
+        # `best_*` is the max over its own type.  `weighted.features`, exactly.
+        fam = C.UNIT_TYPES if typ in C.UNIT_TYPES else (typ,)
+        cur = max((level_of.get(n, 0) for n in p.techs
+                   if type_of.get(n) in fam), default=0)
+        if lv > cur:
+            dev.append((feat, float(lv - cur), _GAIN))
+
+    if typ in C.UNIT_TYPES:
+        # The red half is `unit_upgrade`, unchanged and deliberately so: it is
+        # the shape docs/UNIT_TECH_PRICING.md measured and landed, and
+        # re-deriving it here would silently re-open a settled A/B.  The one
+        # known defect in it -- it pools workers across all four unit types,
+        # where the engine only offers a same-type upgrade -- is recorded in
+        # docs/OPEN_ITEMS.md rather than fixed inside this commit, so this
+        # lane's digest attribution stays a single constant.
+        gained, sci, res = unit_upgrade(name, state, idx)
+        staff = (("strength", gained, _GAIN),) if gained else ()
+    else:
+        sci = float(effects.tech_cost(state, p, name) or 0)
+        held = _upgradable_onto(p, name)
+        if held:
+            before = effects.state_stats(state, p)
+            after = _with_tech(state, p, name, held)
+            staff = _delta_triples(before, after, p)
+            res = float(sum(k * A.upgrade_cost(state, p, lo, name)
+                            for lo, k in held))
+        else:
+            # Nobody to move.  Developing the technology is legal and buys no
+            # production at all until a building is built on it, and building
+            # one is its own decision with its own price -- so the staffing
+            # half is empty, which is the honest answer rather than a floor.
+            # `unit_upgrade` takes the identical position.
+            staff, res = (), 0.0
+    out = (staff, tuple(dev), float(sci), float(res))
+    if len(_TECH_CACHE) >= _TECH_CACHE_MAX:
+        _TECH_CACHE.clear()
+    _TECH_CACHE[key] = out
     return out
 
 

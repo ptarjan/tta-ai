@@ -122,16 +122,26 @@ class DeterminizeCoversEveryHiddenPile(unittest.TestCase):
                     len(set(before)), 1,
                     f"{fld} has <2 distinct entries in the fixture, so this "
                     f"test cannot see a permutation; deepen _mid_game_state")
+                # 48 seeds and a bar of 11, NOT 24 and a bar of 12.  A pile
+                # holding k entries is left in its true order by a correct
+                # shuffle with probability 1/k!, so the shortest pile in the
+                # fixture -- `current_events` reaches k = 2 -- puts the
+                # EXPECTED count at exactly half the seeds and a bar of "more
+                # than half" is a coin flip.  It came up tails the first time
+                # a pricing change re-rolled the fixture
+                # (docs/YELLOW_TECH_PRICING.md).  A pile nobody shuffles
+                # still scores 0, which is what this is really looking for,
+                # and 11/48 is ~3.7 sd below the k = 2 expectation.
                 moved = 0
-                for s in range(24):
+                for s in range(48):
                     root = copy_state(st)
                     determinize(root, random.Random(s))
                     if list(getattr(root, fld)) != before:
                         moved += 1
                 self.assertGreater(
-                    moved, 12,
+                    moved, 11,
                     f"determinize left {fld} in its true order on "
-                    f"{24 - moved}/24 seeds.  A pile nobody shuffles is read "
+                    f"{48 - moved}/48 seeds.  A pile nobody shuffles is read "
                     f"by every trial apply that draws from it.")
 
     def test_nothing_a_player_can_see_is_touched(self):

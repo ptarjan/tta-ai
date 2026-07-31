@@ -161,8 +161,19 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    trained, the benefit side (`build_discount`, `wonder_stages_per_action`,
    `colonize_bonus`) is 0.0.  Take rate 0.87% (14/1,606 offers); 6 of 12 taken
    zero times in 40 games.
-3. **Every yellow production technology prices net negative, and the bot buys
-   none of them.**  Measured 2026-07-30 (`docs/PLAY_RATE_AUDIT.md` §5.1): labs
+3. ~~**Every yellow production technology prices net negative, and the bot buys
+   none of them.**~~ **CLOSED 2026-07-30 by `docs/YELLOW_TECH_PRICING.md`** —
+   labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 →
+   0.85, farms 0.07 → 0.87, and the blue over-play fell out with it (theatres
+   2.23 → 0.82 against 0.65).  The diagnosis below is kept because it is what
+   the audit believed and it was **wrong in an instructive way**: the binding
+   cause was not the `culture_rate` / `science_rate` ratio but that
+   `card_potential` read `w[k]` where `evaluate` reads
+   `w[k] + (1−L)w[k_early] + L·w[k_late]` (`science_rate` 0.25 against 5.29
+   early), and that `tech_levels` — worth up to 9.23 eval points per level —
+   was mapped to nothing at all on every technology card in the game.  The
+   original text:
+   Measured 2026-07-30 (`docs/PLAY_RATE_AUDIT.md` §5.1): labs
    0.03 taken per seat-game against a human 1.62 at 2p and **exactly 0.00** at
    3p and 4p, mines 0.05 against 1.18, farms 0.18 against 1.34; Alchemy,
    Scientific Method and Coal are the only three cards in the game the bot
@@ -213,12 +224,13 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     governments in the *row* (not the hand) that §10 of
     `docs/CARD_PRICING_LEADERS.md` fixed for the hand.  Explicitly "the next
     thing to do in this area".
-13. **Production buildings** (24 cards) are not unpriced but are mis-shaped
-    twice: the upgrade path prices as an **absolute, not a delta** (Selective
-    Breeding prices its full value even if you already have Irrigation), and the
-    price **omits the worker cost** entirely, biasing every comparison against
-    special techs which need no worker.  Both scoped to whoever owns
-    `board_yields` next.  Professional Sports is never taken (0/127), undiagnosed.
+13. ~~**Production buildings** (24 cards) are mis-shaped twice: absolute instead
+    of delta, and the worker cost omitted.~~  **The delta half is CLOSED**
+    2026-07-30 (`docs/YELLOW_TECH_PRICING.md`): `board_yields.tech_upgrade`
+    prices every worker technology as the upgrade diff off what the player
+    already has, using `actions.upgrade_cost` and an `effects.compute` diff.
+    The worker-cost half becomes item 21 below, correctly restated.
+    Professional Sports is never taken (0/127), undiagnosed.
 14. **Aristotle and Newton need a *measured* trigger rate before pricing**, not a
     guessed one; `tools/take_census.py` is most of the machinery and the
     measurement has not been made.  Four leaders (Aristotle, Hammurabi,
@@ -236,6 +248,59 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     has the highest `ca_left` of any candidate, 165/165 measured, mean +2.95)
     that the `NONNEG` guard stops the search correcting.  Deliberately unchanged;
     needs an n>=200 A/B.
+
+19. **`tech_levels` on the live 2p champion is a stale, over-fitted
+    coordinate, and it is the single most important open item in this
+    section.**  `docs/YELLOW_TECH_PRICING.md` §4.2: with the technology price
+    on, that champion goes **12.2% against a 50% null**; reset only its
+    `tech_levels` group to the defaults (5.84/3.39/0.92 → 1.0/0.5/−0.4) and the
+    same paired A/B is **63.0%**.  The mechanism is the general one
+    `docs/UNIT_TECH_PRICING.md` §5.2 named for `strength`: a coordinate the
+    evaluator can read but never has to buy is unconstrained and will drift.
+    Two things follow.  (a) The live 2p arm should either carry
+    `"tech_board_credit": 0.0` or have that group re-fitted before it is
+    trusted — 0.0 recovers the parent commit's pricing byte for byte and needs
+    no code change.  (b) **Every other coordinate that no card price has ever
+    charged for is suspect for the same reason.**  `strength` was one,
+    `tech_levels` was the second; `num_techs`, `special_techs`, `workers`,
+    `prod_workers`, `urban_workers` and the whole `best_*` family have never
+    been paid for at take time either.  A sweep is overdue.
+20. **`unit_upgrade` pools workers across all four red types.**  It moves every
+    unit worker onto the candidate technology and charges `actions.upgrade_cost`
+    from each, but `engine/actions.py:_action_moves` only offers an upgrade
+    between cards of the **same** type — a Warriors worker cannot become a
+    Cannon.  So the red price is optimistic for cavalry, artillery and air
+    whenever the player holds only infantry, which is most of the game.  Found
+    2026-07-30 while generalising it (`docs/YELLOW_TECH_PRICING.md` §6.1) and
+    deliberately left alone so this lane's digest moves had one cause;
+    `tech_upgrade`'s non-red half is already same-type-only.
+21. **Nothing prices the "build one fresh" plan.**  Both `unit_upgrade` and
+    `tech_upgrade` answer "develop it and upgrade what I have", so a player with
+    no laboratory worker sees a laboratory priced at its levels minus its
+    science and the +3 culture a *new* theatre would produce is priced at
+    nothing.  Honest for a one-ply appraisal — building is its own decision,
+    needs a free worker and has its own price — but it systematically
+    under-prices the first building of a type.  This is the correctly-shaped
+    replacement for the old item 13.
+22. **A government's level is unpriced on both sides.**  `features()` adds
+    `meta[p.government][1]` into `tech_levels`, and neither `_card_yields` nor
+    the swap diff emits it, so a government card is missing exactly the term
+    `docs/YELLOW_TECH_PRICING.md` added to every other technology.  `gov_level`
+    has the same hole.  Governments are already over-played, so this plausibly
+    cuts the other way.
+23. **`happy_margin` is priced through its clamp linearly.**  `features()`
+    computes `min(3, margin)` and `max(0, −margin)`; `board_yields._delta_triples`
+    maps `Stats.happy` straight onto `happy_margin`, so a temple's happy face is
+    worth the same to a player at margin 0 and one at margin 3.  Inherited from
+    the leader swap diff and widened to the five urban types by
+    `tech_upgrade`.  `weighted.feature_marginal` is now the one place that
+    would learn it — the `strength_deficit`/`strength_lead` treatment, one
+    feature over.
+24. **Action cards are now the largest single card-type deficit in the game**:
+    2.72 per seat-game at 2p against a human 12.98 after the technology
+    reprice (8.62 before).  Nothing in that change touched their price, so the
+    whole movement is relative — they lost the row competition to technologies.
+    `free_civil_action` (item 4) is a live sub-cause and is still 0.0.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search (`docs/CARD_CENSUS.md` tier B) — the

@@ -434,18 +434,19 @@ class TestTheCreditGateIsExact(unittest.TestCase):
     def test_zero_credit_is_the_static_answer_for_every_card(self):
         """...for every card `card_board_credit` gates.
 
-        A unit technology is board-priced on `unit_tech_credit` instead and
-        is deliberately NOT gated here -- `card_board_credit` is 0.0 on the
-        3p and 4p champions, so hanging the unit fix off it would leave two of
-        the three league arms with the defect (weighted.card_potential).  The
-        next test asserts the same byte-for-byte property against the gate
-        units actually use.
+        A TECHNOLOGY is board-priced on `unit_tech_credit` /
+        `tech_board_credit` instead and is deliberately NOT gated here --
+        `card_board_credit` is 0.0 on the 3p and 4p champions, so hanging the
+        technology fix off it would leave two of the three league arms with
+        the defect (weighted.card_potential).  The next two tests assert the
+        same byte-for-byte property against the gates technologies actually
+        use.
         """
         st = _played()
         w = dict(W.DEFAULT_WEIGHTS)
         self.assertEqual(w["card_board_credit"], 0.0)
         for name in C.db().by_name:
-            if W._is_unit(name):
+            if W._is_unit(name) or W._is_levelled_tech(name):
                 continue
             self.assertEqual(W.card_potential(name, w, st, 0),
                              W.card_potential(name, w),
@@ -457,6 +458,25 @@ class TestTheCreditGateIsExact(unittest.TestCase):
         units = [n for n in C.db().by_name if W._is_unit(n)]
         self.assertEqual(len(units), 10)
         for name in units:
+            self.assertEqual(W.card_potential(name, w, st, 0),
+                             W.card_potential(name, w),
+                             name)
+
+    def test_zero_tech_credit_is_the_static_answer_for_every_non_unit_tech(
+            self):
+        """`tech_board_credit` = 0.0, the yellow lane's escape hatch.
+
+        The red half is not asserted here because `tech_board_credit` = 0.0
+        does NOT send a unit back to the static table -- it drops the develop
+        half and leaves docs/UNIT_TECH_PRICING.md's board price standing,
+        which is the parent commit's answer and is what the test above pins.
+        """
+        st = _played()
+        w = dict(W.DEFAULT_WEIGHTS, tech_board_credit=0.0)
+        techs = [n for n in C.db().by_name
+                 if W._is_levelled_tech(n) and not W._is_unit(n)]
+        self.assertEqual(len(techs), 36)
+        for name in techs:
             self.assertEqual(W.card_potential(name, w, st, 0),
                              W.card_potential(name, w),
                              name)

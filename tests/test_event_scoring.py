@@ -132,14 +132,26 @@ class TestNoDoubleCount(unittest.TestCase):
         `_apply_player_block` runs `scoring_culture` when the card comes up,
         so counting `past_events` in the forecast would promise culture the
         player has already been given.
+
+        A SAMPLING test, and it says so: `_play` is self-play, so any pricing
+        change re-rolls the move stream and a single seed can stop revealing
+        an Age III event without the property having moved at all.  Seed 3
+        did exactly that when docs/YELLOW_TECH_PRICING.md landed.  So scan
+        seeds for one that actually reveals one, and fail only if NO seed
+        does -- which would mean the fixture, not the property, is broken.
         """
         db = C.db()
-        st = _play(2, seed=3)
-        pending = {n for n, _ in events.pending_final_events(st)}
-        age3_past = {n for n in st.past_events
-                     if n in db.by_name and db.age_of(n) == "III"}
-        self.assertTrue(age3_past, "seed 3 revealed no Age III event")
-        self.assertFalse(pending & age3_past)
+        checked = 0
+        for seed in range(12):
+            st = _play(2, seed=seed)
+            pending = {n for n, _ in events.pending_final_events(st)}
+            age3_past = {n for n in st.past_events
+                         if n in db.by_name and db.age_of(n) == "III"}
+            if not age3_past:
+                continue
+            checked += 1
+            self.assertFalse(pending & age3_past)
+        self.assertTrue(checked, "no seed in 0..11 revealed an Age III event")
 
 
 class TestFeatureIsWired(unittest.TestCase):

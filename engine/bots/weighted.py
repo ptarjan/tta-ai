@@ -465,6 +465,51 @@ def strength_marginal(state, idx, w, ctx=None):
     return total
 
 
+_PHASE_SET = frozenset(PHASE_KEYS)
+
+
+def feature_marginal(key, state, idx, w, late=None, ctx=None):
+    """What ONE unit of `features()[key]` is worth to `evaluate` on THIS board.
+
+    `strength_marginal`, generalised -- and generalising it is the whole of
+    this lane's diagnosis.  `evaluate` prices a `PHASE_KEYS` feature at
+
+        w[k] + (1 - L) * w[k_early] + L * w[k_late]
+
+    and `card_potential` looked up the bare `w[k]`, so it read a card's yield
+    through a number the evaluator does not use.  On the live 2p champion
+    (gen 72) the two differ by more than an order of magnitude:
+
+        feature        w[k]     marginal early   marginal late
+        science_rate   0.250    5.291            -0.009
+        tech_levels    5.841    9.230             6.759
+        culture_rate  31.678   31.292            33.169
+
+    -- so a laboratory's two science was priced at 0.50 where `evaluate` pays
+    10.58 for it early, and its two levels of technology were priced at
+    nothing at all where `evaluate` pays 18.46.  That is why every yellow
+    production technology came out strictly negative and `row_pressure`'s
+    `if val <= 0.0: continue` then made the whole colour invisible
+    (docs/YELLOW_TECH_PRICING.md).
+
+    `strength` is delegated rather than special-cased twice: the board
+    expresses a point of army through four features and `strength_marginal` is
+    the one place that sums them.  Every other key is linear in exactly one
+    feature, so its marginal IS its weight, plus the phase pair when it has
+    one.  `late` is threaded in by callers that price several triples off one
+    board, because `lateness` is not free.
+    """
+    if key == "strength":
+        return strength_marginal(state, idx, w, ctx)
+    m = w.get(key, 0.0)
+    if key in _PHASE_SET:
+        if late is None:
+            late = lateness(state)
+        m += (1.0 - late) * w.get(key + "_early", 0.0)
+        m += late * w.get(key + "_late", 0.0)
+    return m
+
+
 # ------------------------------------------------------- the game horizon
 #
 # `lateness()` scales every early/late phase weight, and what those weights are
@@ -1528,19 +1573,48 @@ def _is_unit(name):
     return C.db().type_by_name.get(name) in C.UNIT_TYPES
 
 
-def unit_tech_value(name, state, idx, w):
-    """Eval-points developing this unit technology is worth ON THIS BOARD.
+@_lru_cache(maxsize=None)
+def _is_levelled_tech(name):
+    """True for a card whose development raises `tech_levels` (see
+    `board_yields.LEVELLED_TYPES`) -- every worker type plus `special-tech`."""
+    return C.db().type_by_name.get(name) in _BY.LEVELLED_TYPES
 
-    THE DEFECT THIS REPLACES, and it is the top-ranked hole in
-    docs/SYSTEM_COVERAGE.md: the bot takes 0.15 / 0.06 / 0.45 unit cards per
-    seat-game against a human 3.84 / 2.79 / 3.43, i.e. it fights the entire
-    game with Age A Warriors.  The static table prices every unit card
+
+def tech_value(name, state, idx, w, dev_credit=1.0):
+    """Eval-points developing this technology is worth ON THIS BOARD.
+
+    ONE function for all fifteen technology types, red included.  It began as
+    `unit_tech_value` and the generalisation is the point: adding
+    `tech_levels` to the red cards alone would be the same asymmetry
+    docs/UNIT_TECH_PRICING.md section 7.1 refused to create, pointing the
+    other way.
+
+    THE DEFECT THIS REPLACES, in two instalments.
+
+    RED (docs/UNIT_TECH_PRICING.md): the bot took 0.15 / 0.06 / 0.45 unit
+    cards per seat-game against a human 3.84 / 2.79 / 3.43, i.e. it fought the
+    entire game with Age A Warriors.  The static table prices every unit card
     strictly NEGATIVE -- Warriors -3.46 to Air Forces -16.07 on the live 2p
     champion -- because it charges `techCost` through `science` and
     `buildCost` through `resource_stock`, both trained, and returns the
     strength through `unit_strength_credit`, which is 0.0 on every champion in
     the league.  Cost priced, gain not: the standing hazard of
     docs/HAZARDS.md and `tests/test_half_priced_cards.py`.
+
+    YELLOW AND THE REST (docs/YELLOW_TECH_PRICING.md): the same static table
+    prices every farm, mine and laboratory strictly negative too -- Irrigation
+    -4.02, Iron -6.72, Alchemy -11.19, Computers -20.41 on the same vector --
+    and the bot took laboratories 0.03 times a seat-game at 2p against a human
+    1.62, mines 0.05 against 1.18, and Alchemy, Scientific Method and Coal
+    exactly ZERO times at any table size.  The cause is NOT a dead credit this
+    time, it is two half-priced gains:
+
+      * `tech_levels` was mapped to nothing at all, on every technology card.
+        It is worth up to 9.23 eval points per level on the live 2p champion,
+        which is more than the rest of a yellow card put together.
+      * a production rate was priced at the bare `w[k]` where `evaluate` pays
+        `w[k] + (1-L)w[k_early] + L*w[k_late]`.  See `feature_marginal`; for
+        `science_rate` on that vector the two are 0.25 and 5.29.
 
     `row_pressure` additionally skips any card whose `card_potential` is <= 0
     ("the sweep destroying a card I do not want is not a loss"), so on top of
@@ -1556,40 +1630,55 @@ def unit_tech_value(name, state, idx, w):
     walk.  docs/CARD_BLINDNESS_MILITARY.md section 5.2 measured exactly that:
     0 divergences in 967 decisions at 1.0, one at 3.0.
 
-    THE SHAPE, three corrections, all of them derivations rather than tastes:
+    THE SHAPE, four corrections, all of them derivations rather than tastes:
 
     1. **The move is an upgrade, not a fresh build.**  Every player starts
-       with a Warriors worker, so the resources actually at stake are
-       `actions.upgrade_cost`, not `buildCost` -- 3 rather than 5 for Riflemen
-       -- and the strength actually at stake is the difference, on every
-       worker moved.  `board_yields.unit_upgrade` gets both from the engine.
-    2. **A point of strength is worth `strength_marginal`, not
-       `w["strength"]`.**  See that function.  On the live 2p champion the two
-       are 0.19 and ~3.0, a factor of fifteen, and the difference is entirely
-       `strength_rel`'s early/late multipliers -- which is not a credit
-       anybody could have guessed, it is a derivative of the objective.
-    3. **You develop the technology and then decide how many workers to
+       with a Warriors worker, an Agriculture farm and a Bronze mine, so the
+       resources actually at stake are `actions.upgrade_cost`, not
+       `buildCost` -- 3 rather than 5 for Riflemen, 3 rather than 5 for Iron
+       -- and the yield actually at stake is the difference, on every worker
+       moved.  `board_yields.unit_upgrade` / `tech_upgrade` get both from the
+       engine.
+    2. **A unit of any feature is worth `feature_marginal`, not `w[key]`.**
+       See that function.  For `strength` on the live 2p champion the two are
+       0.19 and ~3.0, a factor of fifteen; for `science_rate` they are 0.25
+       and 5.29, a factor of twenty-one.  Neither is a credit anybody could
+       have guessed, they are derivatives of the objective.
+    3. **Developing a technology buys `tech_levels`, `num_techs` and a
+       `best_*` step whether or not anybody staffs it.**  That is the
+       `develop` half of `tech_upgrade` and it is why a laboratory can be
+       worth taking on a board with no laboratory worker to upgrade.
+    4. **You develop the technology and then decide how many workers to
        move.**  Linear in that count, so the optimum is an endpoint: either
        all of them or none.  `max(0, ...)` is that argmax, not a floor put
        there to keep the number positive -- and the science is charged
-       OUTSIDE it, so a technology nobody will staff still reads as the pure
-       cost it is.
+       OUTSIDE it, so a technology nobody will staff still reads as its
+       develop value minus the pure science cost.
 
     Costs are clamped with `max(0.0, w)` for the same reason `_Y_COST` is: a
     hill climb is free to drive a stock weight negative (the 4p champion
     reached `science` = -6.09) and paying a cost must never read as a gain.
 
-    Scaled by `unit_tech_credit`, whose 0.0 recovers the static table exactly
-    -- see `card_potential` -- so this can be duelled against itself in one
-    process on the same deal, like every credit before it.
+    `dev_credit` scales correction 3 only, and it is `tech_board_credit` --
+    the ONE constant that has to move to recover the parent commit's pricing
+    byte for byte on every card in the game (see `card_potential`).  A red
+    card is additionally scaled by `unit_tech_credit`, unchanged, so
+    docs/UNIT_TECH_PRICING.md's escape hatch still works exactly as written.
     """
-    gained, sci, res = _BY.unit_upgrade(name, state, idx)
-    if not (gained or sci or res):
+    staff, dev, sci, res = _BY.tech_upgrade(name, state, idx)
+    if not (staff or dev or sci or res):
         return 0.0
-    net = (gained * strength_marginal(state, idx, w)
-           - res * max(0.0, w.get("resource_stock", 0.0)))
+    late = lateness(state)
+    net = -res * max(0.0, w.get("resource_stock", 0.0))
+    for k, amt, _kind in staff:
+        net += amt * feature_marginal(k, state, idx, w, late)
     if net < 0.0:
         net = 0.0
+    if dev_credit:
+        gain = 0.0
+        for k, amt, _kind in dev:
+            gain += amt * feature_marginal(k, state, idx, w, late)
+        net += dev_credit * gain
     return net - sci * max(0.0, w.get("science", 0.0))
 
 
@@ -1606,17 +1695,31 @@ def card_potential(name, w, state=None, idx=None):
     without a state (and the whole of `analysis/`) keep the old signature and
     the old answer.
     """
-    # A unit technology is board-priced on its OWN credit, not on
+    # A TECHNOLOGY is board-priced on its OWN credit, not on
     # `card_board_credit`.  Deliberately: `card_board_credit` is 0.361 on the
     # live 2p champion and 0.0 on both the 3p and the 4p ones, so hanging the
-    # unit fix off it would leave two of the three league arms with the defect
-    # it exists to fix.  `unit_tech_credit` defaults to 1.0 and is absent from
-    # every champion file, so `load_weights` fills it in from `DEFAULT_WEIGHTS`
-    # and the fix is live on all three at once (docs/UNIT_TECH_PRICING.md).
-    if state is not None and idx is not None and _is_unit(name):
-        uc = w.get("unit_tech_credit", 1.0)
-        if uc:
-            return uc * unit_tech_value(name, state, idx, w)
+    # technology fix off it would leave two of the three league arms with the
+    # defect it exists to fix.  `tech_board_credit` and `unit_tech_credit`
+    # default to 1.0 and are absent from every champion file, so `load_weights`
+    # fills them in from `DEFAULT_WEIGHTS` and the fix is live on all three
+    # arms at once (docs/UNIT_TECH_PRICING.md, docs/YELLOW_TECH_PRICING.md).
+    #
+    # THE OPT-OUT, and it is one constant: `tech_board_credit` = 0.0 sends
+    # every non-red technology back down to the static table and drops the
+    # `develop` half off the red ones, which is the parent commit's pricing
+    # byte for byte on all 236 cards.  `unit_tech_credit` = 0.0 continues to
+    # mean exactly what docs/UNIT_TECH_PRICING.md says it means: the red cards
+    # fall through to the static table, `tech_board_credit` or not, because a
+    # vector that has switched the board query off for units must not have it
+    # switched half on.
+    if state is not None and idx is not None:
+        tb = w.get("tech_board_credit", 1.0)
+        if _is_unit(name):
+            uc = w.get("unit_tech_credit", 1.0)
+            if uc:
+                return uc * tech_value(name, state, idx, w, tb)
+        elif tb and _is_levelled_tech(name):
+            return tb * tech_value(name, state, idx, w)
     credit = w.get("card_rate_credit", 1.0)
     base = w.get("card_board_credit", 0.0)
     key = _board_credit_key(name)
@@ -2316,6 +2419,24 @@ BASE_WEIGHTS = {
     # much of a plan's value survives contact with the search is exactly the
     # kind of question a hill climb answers better than an argument does.
     "unit_tech_credit": 1.0,
+    # How much of the BOARD-derived price to believe for EVERY OTHER
+    # technology -- farm, mine, lab, temple, library, theater, arena and the
+    # special technologies -- and, on a unit card too, how much of the
+    # `tech_levels` / `num_techs` / `best_*` half that developing ANY
+    # technology buys (`tech_value`, docs/YELLOW_TECH_PRICING.md).
+    #
+    # 1.0 for the same reason `unit_tech_credit` is 1.0 and it is not a guess
+    # either: at 1.0 the number is "the eval points `evaluate` itself assigns
+    # to the technology levels and the production this development buys, minus
+    # the eval points it assigns to the resources and science it costs".
+    # `feature_marginal` reads every one of those off the objective.
+    #
+    # 0.0 is the ONE constant that recovers the parent commit's pricing byte
+    # for byte on all 236 cards: the non-red technologies fall back to the
+    # static table and the red ones lose the develop half, which is exactly
+    # what `unit_tech_value` computed before this. That is what makes this
+    # change A/B-able against itself in one process on the same deal.
+    "tech_board_credit": 1.0,
     # `territory_credit` is 1.0 but costs nothing until `hand_mil_potential`
     # is non-zero, because nothing calls `card_potential` on a military card
     # otherwise.  It is a separate knob from `hand_mil_potential` so that
