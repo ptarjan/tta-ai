@@ -9,7 +9,8 @@ A/B unnecessary.
    adds a STEP feature ``1.0 if unit_workers else 0.0`` because §11.3 requires
    sacrificing a military unit, so `interact.start_auction` drops zero-unit
    players from a colony auction before they get a decision.  Its whole
-   justification is `docs/AGGRESSION_FIX.md:56-60`, which measured the then
+   justification is `docs/AGGRESSION_RATE.md` appendix A ("The real cause: the
+   2p and 4p champions own no military units"), which measured the then
    2p and 4p champions at 0.00 and 0.07 units per player -- i.e. sitting on the
    wrong side of that cliff.  A binary feature that is 1.0 on ~every position
    carries almost no information and cannot be worth an A/B, so measure the

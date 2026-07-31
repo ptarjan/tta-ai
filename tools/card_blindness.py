@@ -46,7 +46,8 @@ Military-deck cards are not unpriced; they are priced somewhere else, and
 the census cannot see that either:
 
   * aggressions -- `QuiescentBot` drains the defender's `defense` pending
-    with real picks and scores the quiet position (docs/AGGRESSION_FIX.md)
+    with real picks and scores the quiet position (docs/AGGRESSION_RATE.md,
+    appendix B)
   * wars        -- `quiescent.war_value` calls the engine's `resolve_war`
   * pacts       -- `weighted.deferred_credit`, and `count 2p: 0` besides
   * Age III scoring events -- `weighted.event_scoring_margin`, which calls

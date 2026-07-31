@@ -66,8 +66,8 @@ PLAYER-COUNT PARAMETERIZATION
 -----------------------------
 "in four player, you are either going to win with him or finish fourth" --
 the variance of this line rises with the table size, and the Michelangelo
-bonus is keyed accordingly.  Note also that ``docs/AGGRESSION_FIX.md``
-records that no territory is ever auctioned at 4p in our engine's games, so
+bonus is keyed accordingly.  Note also that ``docs/AGGRESSION_RATE.md``
+(appendix A) records that no territory is ever auctioned at 4p in our engine's games, so
 nothing in this plan is allowed to depend on colonies; it does not.
 """
 from __future__ import annotations

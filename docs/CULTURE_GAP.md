@@ -97,7 +97,7 @@ single scalar over the max. So:
 
 ### 2b. Attacks are priced at exactly the cost of the card leaving hand
 
-[`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) section B diagnosed this on 2026-07-26 and ends with
+[`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) section B diagnosed this on 2026-07-26 and ends with
 "**Fix (same shape as the pact/colony fix). See the next section for the
 implementation and the A/B result.**" — *there is no next section.* The
 document trails off, and `git log` shows one commit (`8d24aff`, the diagnosis).
@@ -155,7 +155,7 @@ champion's `hand_military` weight is **0.224** with `hand_mil_value` and
 is not small — it is identically zero.
 
 **Verdict on Q1: the war channel is a feature-space hole, exactly as
-[`AGGRESSION_FIX.md`](AGGRESSION_FIX.md) said and never fixed. No amount of hill climbing can find
+[`AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) said and never fixed. No amount of hill climbing can find
 a weight that makes `war` attractive, because the vector has no coordinate that
 moves when a war is declared.** But see section 4 — closing it is not by
 itself sufficient, and may not even be worth much.
@@ -415,7 +415,7 @@ number.
 |---|---|---|---|---|
 | 1 | **Make `guard_weights` two-sided**: clamp any weight whose sign is opposite its `DEFAULT_WEIGHTS` sign, not just those with a positive default. | **high** — exact, non-noisy evidence (§2c) | **low** — measured null at n=48 (§4) | ~3 lines |
 | 2 | **Make rate features scale with turns remaining**: either replace `lateness()`'s 4-step age proxy with a continuous rounds-remaining fraction, or add `culture_rate × rounds_left` as its own feature. | medium-high — matches the measured rate curves (§4) and the Age III/IV saturation is plainly wrong | **medium-high** — this is the axis the champion actually loses on | small feature change + full re-measure |
-| 3 | **Close the war/aggression representation hole** (finish [`AGGRESSION_FIX.md`](AGGRESSION_FIX.md) B): deferred credit for a pending `defense`, and features for `war_declared_by_me` / `wars_declared_on_me` priced by the spoils formula. | **high** — the hole is proven and exact (§2b) | **low-medium** — the forced-attack oracle gained nothing (§4), but it bounds a crude policy only | medium; new features + climb restart |
+| 3 | **Close the war/aggression representation hole** (finish [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) appendix B): deferred credit for a pending `defense`, and features for `war_declared_by_me` / `wars_declared_on_me` priced by the spoils formula. | **high** — the hole is proven and exact (§2b) | **low-medium** — the forced-attack oracle gained nothing (§4), but it bounds a crude policy only | medium; new features + climb restart |
 | 4 | **Per-rival targeting**: `rival_culture` is a single max. Nothing distinguishes "the leader is 80 ahead" from "two rivals are tied 5 ahead". A `culture_lead_over_me` / `runaway_leader` feature would let the climb learn a threshold. | medium | medium | medium |
 | 5 | **Break the 2p military trap**: `strength_lead` is capped at 6 with weight 6.392 that the bot can never earn because `unit_workers`=0.000 and `strength`=0.118. Either uncap, or credit the *first* unit worker specially. | medium | low-medium (2p only) | small |
 | 6 | **Do nothing to 4p; let it run.** It is the least-converged arm with the highest accept rate (§5). | high | n/a | free |

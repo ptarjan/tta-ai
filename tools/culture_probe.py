@@ -7,7 +7,7 @@ Per decision of every seat we record:
   * what the seat actually chose;
   * for the champion seat only, the 1-ply eval of the chosen move, of
     ``pol_pass``, and of the best attack -- the same probe
-    docs/AGGRESSION_FIX.md B used, but against a culture opponent and with
+    docs/AGGRESSION_RATE.md appendix B used, but against a culture opponent and with
     the CURRENT champion weights.
 
 Usage:

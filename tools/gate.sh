@@ -531,7 +531,7 @@ WWIDE=f4d6a545
 # All four moved again on `war-over-technology`; see the block above NARROW.
 #
 # ---------------------------------------------------------------------------
-# Re-derived on the drain flip (2026-07-30, docs/DRAIN_AB.md).  EXACTLY TWO of
+# Re-derived on the drain flip (2026-07-30, docs/DEEPER_SEARCH.md §8).  EXACTLY TWO of
 # the eight arms moved -- PNARROW and PWIDE -- and the other six did not.
 #
 #     arm       old         new
@@ -570,12 +570,12 @@ WWIDE=f4d6a545
 # derivations.  GreedyBot and DEFAULT_WEIGHTS WeightedBot never reach it.
 #
 # NOT a strength claim.  This is a consistency fix and lands on that basis
-# (docs/DRAIN_AB.md 1): nothing in `weighted.features` reads `pend["atk"]` or
+# (docs/DEEPER_SEARCH.md §8): nothing in `weighted.features` reads `pend["atk"]` or
 # `pend["dfn"]`, so an undrained position cannot express whether a defence
 # succeeds, and 588 of 589 winnable defences need 2+ cards.  The A/B is
 # corroboration, and it is uneven -- decisive at 3p (4/4 blocks, z ~ 9.3 over
 # 600 games) and NOT independently established at 4p (one pure block, z =
-# 1.54).  Read docs/DRAIN_AB.md 2 before quoting a number from it; there are
+# 1.54).  Read docs/DEEPER_SEARCH.md §8.2 before quoting a number from it; there are
 # two pools and they say different things.
 #
 # `DETERMINIZE` was deliberately left False in this commit so that these two

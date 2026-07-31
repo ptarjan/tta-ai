@@ -53,7 +53,7 @@ __all__ = ["QUIET_PENDING", "not_my_turn", "wants_quiet", "wants_determinize",
 #:
 #: FLIPPED 2026-07-30.  It lands as a CONSISTENCY FIX, not on the strength
 #: measurement: the beam already drains before scoring and the live decision
-#: did not.  The A/B (docs/DRAIN_AB.md) corroborates it and is uneven, so
+#: did not.  The A/B (docs/DEEPER_SEARCH.md §8) corroborates it and is uneven, so
 #: quote it from there rather than from here -- there are two pools and they
 #: say different things.  Six distinct blocks of 200 games against the frozen
 #: league references, every one favouring the drain; 3p is decisive (pure-qp

@@ -87,7 +87,7 @@ negative.
 
 `QUIET_PENDING = True`.  It landed as a **consistency fix**, not on a strength
 measurement — the beam already drains before scoring and the live decision did
-not.  Read the A/B in [`docs/DRAIN_AB.md`](DRAIN_AB.md) rather than from a summary, because it
+not.  Read the A/B in [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#8-the-drain-ab-why-quiet_pending-was-flipped-to-true-merged-from-the-former-drain_abmd-2026-07-31) §8 rather than from a summary, because it
 is uneven: 3p is decisive (pure-`qp` pool 0.5217 own-win share against a 0.3333
 null over 600 games, z = 9.26) and **4p is NOT independently established** (one
 pure-`qp` block, 0.3000 against a 0.2500 null, z = 1.54, p ~ 0.12).  Do not quote
@@ -773,7 +773,7 @@ The single most important entry is #22.*
   2026-07-30): re-run the book-bot benchmark against an AI trained *after* the
   `7d40f53` military-card-count fix — the 62.9%/37.1% result predates it;
   reconcile the two disagreeing colony-auction-chokepoint measurements
-  ([`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md)'s "auctions open but find no bidders" against a later
+  ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#a-4-player-colony-auctions-hypothesis-refuted)'s "auctions open but find no bidders" against a later
   12-game check's "no territory ever reaches auction at all"); re-run the 4p
   build order at 60 games instead of 20; rebuild the per-card priority lists now
   the `end_turn` scoring work has landed; the bot has never been tested against a

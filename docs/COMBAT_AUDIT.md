@@ -330,9 +330,9 @@ ma_weight × cost` under *every possible weight vector*. Zero wars is not a
 training failure, it is arithmetic. [`docs/CULTURE_GAP.md`](CULTURE_GAP.md):143-155 measures the
 gap at 0.224–0.225 points, exactly the 4p champion's `hand_military` weight.
 
-**On [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) section B.** It ends at "See the next section for
-the implementation and the A/B result." and there is no next section; the file
-has exactly one commit (`8d24aff`, the diagnosis). Nothing in it was silently
+**On the former `AGGRESSION_FIX.md`'s section B (now [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) appendix B).** It ends at "See the next section for
+the implementation and the A/B result." and there was no next section in the
+original file; it had exactly one commit (`8d24aff`, the diagnosis). Nothing in it was silently
 assumed done in `weighted.py` — `deferred_credit` (`weighted.py:121-173`) still
 handles only `pact_offer` and `auction`, exactly as [`docs/CULTURE_GAP.md`](CULTURE_GAP.md)
 states. But the tree is not empty either: `engine/bots/quiescent.py` exists,

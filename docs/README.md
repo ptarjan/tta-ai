@@ -32,11 +32,10 @@ The three documents at the top are the ones to read first.
 | doc | answers |
 |---|---|
 | [`BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) | *Why is the bot shaped like this?*  Engine cost census, why MCTS is ruled out, why the trained linear bot is weak, and the PlanBot beam that fixes it.  The long-lived architecture doc. |
-| [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md) | Quiescence: resolving the pending-decision stack before scoring.  Budgets, costs, why `LEVELS=1` and not 2, and why QuiescentBot cannot be the training challenger. |
+| [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md) | Quiescence: resolving the pending-decision stack before scoring.  Budgets, costs, why `LEVELS=1` and not 2, why QuiescentBot cannot be the training challenger, and (§8, merged from the former `DRAIN_AB.md`) the measurement behind `QUIET_PENDING = True`. |
 | [`INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) | *What can the evaluator actually see?*  Field-by-field measurement of the six information gaps, and the row-leak fix. |
 | [`EVENT_SEEDING.md`](EVENT_SEEDING.md) | Pricing the event/aggression/pact lane, and the `event_scoring_margin` feature. |
 | [`WASTED_ACTIONS.md`](WASTED_ACTIONS.md) | Why the bot wastes civil actions, why the obvious fix makes it worse, and the `hand_potential` term that actually worked. |
-| [`DRAIN_AB.md`](DRAIN_AB.md) | The measurement behind `QUIET_PENDING = True`. |
 | [`PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) | Giving the beam a war lookahead, and what it did and did not fix. |
 | [`NEURAL_EVAL.md`](NEURAL_EVAL.md) | The value net and `NeuralBot`: why Monte-Carlo regression was the wrong objective and pairwise ranking was better. |
 | [`NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) | The v1 self-play loop: 74 iterations, 41 hours, zero promotions, and the precise diagnosis.  A durable negative result — read it before proposing another loop. |
@@ -75,8 +74,7 @@ these for the reasoning.*
 | [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) | Wars, aggressions and pacts checked against the printed rules.  Three bugs fixed, three gaps, and the most granular rules-to-code mapping in the repo. |
 | [`WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) | The victor's choice between science and blue technologies — full rules citations, the implementation, and the permanent lower-bias it leaves in search. |
 | [`MILITARY_DISCARD.md`](MILITARY_DISCARD.md) | Turning the end-of-turn excess-card discard from a hardcoded FIFO into a real decision. |
-| [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) | *How often does the bot actually fight?*  Corrects the "aggressions are rare" reading as a 1-ply artefact, and fixes defences that were never won. |
-| [`AGGRESSION_FIX.md`](AGGRESSION_FIX.md) | Superseded on its rates; kept for the refutation of "4p auctions never start because events are not seeded". |
+| [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) | *How often does the bot actually fight?*  Corrects the "aggressions are rare" reading as a 1-ply artefact, and fixes defences that were never won.  Appendix (merged from the former `AGGRESSION_FIX.md`): the refutation of "4p auctions never start because events are not seeded", and the payoff-lands-in-the-defender's-decision mechanism. |
 | [`PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) | Why the bot never offers pacts and almost never colonizes — a bot blind spot, not an engine bug. |
 
 ## Training, league and strength
@@ -130,13 +128,38 @@ read it before quoting any frozen-champion number.
   dated correction banners
   rather than deletion, because the wrong conclusions in them were the kind
   somebody would otherwise re-reach.
+* **56 topic docs on 2026-07-31** (57 with this index). Two more one-question
+  write-ups whose fix had landed were folded into their topic doc and deleted:
+  the former `AGGRESSION_FIX.md` into [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) (as an
+  appendix, headings and all — its own §A/§B numbering was untouched so every
+  existing `§A`/`§B` citation still resolves, just against the new filename),
+  and the former `DRAIN_AB.md` into [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md) §8 (renumbered
+  1-4 -> 8.1-8.4 to avoid colliding with `DEEPER_SEARCH.md`'s own §1-§7; every
+  citing line, in docs and in code (`engine/bots/pending.py`, `tools/gate.sh`),
+  was updated in the same commit). Cross-references elsewhere that named
+  either file by number (`AGGRESSION_FIX §B`, `docs/DRAIN_AB.md 1/2`) were
+  repointed at the new file and section, not deleted.
+* **The bigger merges were considered and deliberately not done.** The
+  card-pricing cluster (`CARD_BLINDNESS.md`, `CARD_BLINDNESS_MILITARY.md`,
+  `CARD_PRICING_LEADERS.md`, `CARD_CENSUS.md`, `UNIT_TECH_PRICING.md`,
+  `YELLOW_TECH_PRICING.md`, `ACTION_CARD_PRICING.md`, `MODEL_CONSTANTS.md`),
+  the military/combat cluster (`COMBAT_AUDIT.md`, `WAR_OVER_TECHNOLOGY.md`,
+  `MILITARY_DISCARD.md`, `MILITARY_SEAM.md`, `PACTS_DIAGNOSIS.md`), and the
+  scoring cluster (`SCORE_AUDIT.md`, `SCORE_VALIDATION.md`, `SCORE_BUGFIX.md`)
+  all have the same shape: every one of them is cited from **code** (52
+  comments into `CARD_BLINDNESS.md` alone; `tests/test_score_audit.py`,
+  `tests/test_scoring_bugfix.py`, `tools/gate.sh` for the scoring cluster) by
+  filename **and section number**, and every candidate target doc already has
+  its own numbered `##`/`###` headings that a naive merge would collide with
+  (e.g. `SCORE_AUDIT.md` and `SCORE_VALIDATION.md` already both have their own,
+  *different*, §3.1/§3.2). Doing this safely means renumbering, then finding
+  and updating every citing line in both docs and code — the same mechanics as
+  the two merges above, just at roughly 10x the citation count and with the
+  added risk that two docs' §3.1 mean two different bugs. Left as-is rather
+  than merged carelessly; still worth doing as a dedicated pass.
 * Open work goes in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).  Traps go in [`HAZARDS.md`](HAZARDS.md).  Neither is a
   place for narrative.
 * If you delete a document, `grep -rn '<NAME>.md'` across the whole repo first —
   code comments cite these files heavily (over fifty comments point into
   [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) alone), and a dangling citation is exactly the debris this
   index exists to prevent.
-* Still worth doing, and deliberately not done in this pass because the section
-  numbers are cited from code: merging `SCORE_*` into one scoring document, the
-  eight-document military/combat cluster into one, and the five card-pricing
-  documents into one organised by card type rather than by investigation lane.

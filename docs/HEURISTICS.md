@@ -343,7 +343,7 @@ is straight from the rulebook, nothing learned) and [`docs/PACTS_DIAGNOSIS.md`](
    nobody able to bid, because our 4-player AI owns no military units and the
    rules require sacrificing one to colonise [rules, §11.3]. The measurements
    disagree about which of those two chokepoints dominates
-   ([`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) finds auctions starting and dying for lack of
+   ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#a-4-player-colony-auctions-hypothesis-refuted) finds auctions starting and dying for lack of
    bidders; a later 12-game check found no territory ever reaching auction at
    all) — but they agree completely on the consequence, and it is the consequence
    that matters to you: **every 4-player number in this document comes from games
@@ -2418,7 +2418,7 @@ from the one these AIs played.
   an auction does open, nobody can bid: the rules require sacrificing at least
   one military unit to colonise [rules, §11.3] and our 4-player AI has none in
   play **92.5%** of the time. Our two measurements disagree on which chokepoint
-  dominates ([`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) sees auctions opening and dying for lack of
+  dominates ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#a-4-player-colony-auctions-hypothesis-refuted) sees auctions opening and dying for lack of
   bidders; a later 12-game check saw no territory reach auction at all) but agree
   on the outcome. **So every 4-player figure in this document — the build order,
   the priority lists, the final culture, the technology counts — was produced in a

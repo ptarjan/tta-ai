@@ -282,7 +282,7 @@ Three consequences, and they are architectural rather than cosmetic:
 
 1. **The leak is harmless today only because the evaluator is blind.** Any
    improvement to military-card valuation — which is the obvious next eval fix,
-   and the one that AGGRESSION_FIX §B and CULTURE_GAP §2b both need — turns the
+   and the one that [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B and [`CULTURE_GAP.md`](CULTURE_GAP.md#2b-attacks-are-priced-at-exactly-the-cost-of-the-card-leaving-hand) §2b both need — turns the
    leak live on the same day. The two must be fixed together.
 2. **Any deeper search makes it worse.** Depth draws more cards. A search that
    plays two rounds ahead is reading two rounds of the real deck. **Any
@@ -396,7 +396,7 @@ Ranked by the evidence, most-supported first:
    (+20 pts, n=400), unfixed for military cards (MEASURED above), and unfixed
    for the *row* (the bot cannot see what it could take next turn at all).
 2. **The evaluation has no representation of conflict.** No feature reads
-   `war_declared_by_me` / `wars_declared_on_me` (AGGRESSION_FIX §B), so wars are
+   `war_declared_by_me` / `wars_declared_on_me` ([`AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B), so wars are
    a structural zero: 0.00 wars per game in 360 games. Every aggression scores
    exactly `hand_military` below `pol_pass` — the cost of the card leaving hand,
    and nothing else.
@@ -546,7 +546,7 @@ game by kind (both bots on the identical champion weights):
 | mean final culture | **200.3** | 145.1 |
 
 Read that top row. **The champion attacks 0.00 times per game; PlanBot attacks
-1.67.** [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B and [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#2b-attacks-are-priced-at-exactly-the-cost-of-the-card-leaving-hand) §2b both proved
+1.67.** [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B and [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#2b-attacks-are-priced-at-exactly-the-cost-of-the-card-leaving-hand) §2b both proved
 that aggressions are *strictly dominated* under any weight vector at 1 ply,
 because the trial state holds the whole cost and none of the gain. PlanBot
 resolves the defender's pending decision before scoring, so the gain is visible,
@@ -1057,7 +1057,7 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 |---|---|---|---|---|
 | **M1** | **PlanBot** — turn-level beam, one horizon, determinized (has been since `PlanBot` was written; scoped to `PlanBot`/`NeuralPlanBot`/`NeuralBot` — see note below) | §2.4 items 3, 4 | **DONE at 2p: 88.6% +/- 3.1%, n=400, mirror control exactly 0.500.** Remaining: 3p/4p, and a beam-width/cost curve | built; ~16x CPU |
 | **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) — SHIPPED, as `weighted.hand_mil_potential` (0.01079 on `champion_3p`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | shipped |
-| **M3** | **War / aggression features** — write [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
+| **M3** | **War / aggression features** — write [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
 | **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
 | **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | **first-order**: self-play is the only training data at scale, so games/cpu-s *is* the training budget (§5) | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |

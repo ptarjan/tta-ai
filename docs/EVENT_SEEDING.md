@@ -84,7 +84,7 @@ if effects.defense_strength(state, p, q) >= effects.attack_strength(state, p, q)
 and `_h_aggression` pushes a `kind="defense"` pending decision for the
 defender. A 1-ply `WeightedBot` scoring that trial state sees the spent
 military action and the lost card and none of the loot — the failure
-[`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) documents. `QuiescentBot` fixes it structurally by
+[`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) documents. `QuiescentBot` fixes it structurally by
 draining the pending stack with real picks and scoring the quiet position, and
 `weighted.features` only applies `deferred_credit` `if state.pending`, so a
 candidate that reached quiescence is scored with the hand-priced credit
@@ -140,7 +140,7 @@ pile is revealed and resolved. `weighted.py` has no reference to
 `future_events`, `current_events`, `past_events` or `seeded_by`, and
 [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) independently confirms that deleting all three
 "moves no feature". So the plant is a small guaranteed gain and therefore the
-*default* politics move — [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) shows
+*default* politics move — [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) shows
 `('prepare_event', 'Rebellion')` beating every attack in its probe for exactly
 this reason.
 
