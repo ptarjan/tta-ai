@@ -340,8 +340,114 @@ cd "$(dirname "$0")/.."
 # so the prediction was that every arm holds across the rebase, and it did.
 #
 # Test count 1180 -> 1198: +18 from tests/test_government_pricing.py.
-NARROW=ca255af3
-WIDE=f223cea1
+# ---------------------------------------------------------------------------
+# Re-derived on the colonization-choice branch (2026-07-31,
+# docs/OPEN_ITEMS.md §2 item 16).  ALL EIGHT arms moved -- only the second
+# entry in this file's history for which even the two GreedyBot controls move,
+# and, exactly as in the military-discard entry above, that is the tell that
+# this is a change to the RULES rather than to an evaluator.
+#
+#     arm       old         new
+#     NARROW    ca255af3    8526f445
+#     WIDE      f223cea1    50b55624
+#     WNARROW   f82746d4    49a0a944
+#     WWIDE     5c8e3505    e7887e23
+#     QNARROW   b24a738b    dd2af7b6
+#     QWIDE     23e36e12    32a4e8d5
+#     PNARROW   5cd3554a    b23c0afd
+#     PWIDE     05f77e2f    8966dd49
+#
+# Cause, and it is one rule: RULES_SPEC 11.3, the colonization sacrifice.
+# `interact._build_force` chose WHICH units and WHICH military bonus cards the
+# auction winner gave up -- weakest unit, then bonus cards cheapest-first, then
+# more units -- while the rule fixes only the floor (">= 1 unit mandatory, even
+# if other bonuses would cover the bid" ... "the colonization value (bottom
+# half) of ANY NUMBER of military bonus cards played") and §11.2 only the total
+# ("forming a force >= their final bid").  It is now a real `colonize` pending
+# decision: `("send_unit", tech)` / `("send_bonus", card)` / `("send_done",)`.
+#
+# WHY THE GREEDY ARMS MOVE, which is the same argument as the military-discard
+# entry above and is the tell that this is a RULES change rather than an
+# evaluator change: the MOVE STREAM gains decisions that did not exist.
+# `perf_check` hashes the full game log, the final scores, the winners and the
+# move count, so RandomBot and GreedyBot hash differently even though neither
+# evaluates through `weighted.py` -- they are being asked a question they were
+# never asked before and their answers are in the log.
+#
+# COUNTED, per bot, on the narrow fingerprint's own bot/seed shape: RandomBot
+# is offered the new decision 18 times in its 24 games (19 `send_unit`, 9
+# `send_bonus`, 6 `send_done`), and GreedyBot is offered it far less often --
+# most colonizations have a single legal completion and auto-resolve without
+# any decision at all.  So the RandomBot half of this fingerprint is where most
+# of the movement lives, which is worth knowing before anybody reads a moved
+# GreedyBot arm as "GreedyBot plays colonies differently now".
+#
+# PER-CASE, for narrow: 16 of the 33 cases moved (10 random, 6 greedy).  One
+# greedy case was traced line by line -- `2p greedy seed=0` differs from the
+# base in EXACTLY ONE line of a 47-turn log, "colonized Historic Territory (I)
+# with force 1" -> "force 2", with byte-identical final scores [73, 66].  The
+# bid moved because a winning `bid_pass` no longer completes the colonization
+# inside `apply`; that is docs/OPEN_ITEMS.md §2 item 28, opened by this lane,
+# and it is a pricing hole rather than a rules error.
+#
+# TWO-SIDED as docs/HAZARDS.md 9.0 requires.  This branch was derived TWICE
+# over, because master moved under it mid-derivation and 9.0 says never to
+# carry a digest across a base change:
+#
+#   * on the FIRST base (457c7f2) all eight were derived twice in independent
+#     clones and agreed byte for byte;
+#   * master then landed the unit-upgrade and government-price lanes, which
+#     move the six evaluator arms, so all eight were derived AGAIN on the new
+#     base (30eb7e2) -- and NARROW/WIDE came back 8526f445 / 50b55624 for a
+#     THIRD time, on a different base, which is exactly what they should do:
+#     GreedyBot does not evaluate through weighted.py or board_yields.py, so
+#     the two lanes that moved under me cannot touch its arms and only this
+#     change can;
+#   * the six evaluator arms carry new values on the new base and were
+#     re-derived in a third independent clone that agreed.
+#
+# Agreement is the proof; no single number here is.
+#
+# ATTRIBUTED, not assumed:
+#
+#   * CLEAN-BASE CONTROL FIRST, twice.  All eight arms re-derived from
+#     scratch on the parent commit in an independent clone reproduced the
+#     eight constants committed in this file at the time, byte for byte --
+#     first on 457c7f2 and again on 30eb7e2 after the rebase.  Necessary
+#     rather than ceremonial: master moved under this branch SIX times while
+#     it was being written, including a `lateness()` hoist in
+#     engine/bots/weighted.py and two pricing lanes, so "the constants in this
+#     file are still master's" was checked rather than believed.  (It also
+#     means that hoist moved no digest, which is worth knowing next door.)
+#   * REVERT CONTROL BY CONSTRUCTION.  Four commits are on this branch and
+#     only ONE touches a file on `perf_check`'s import path:
+#     engine/interact.py, engine/bots/book.py and advisor/advisor.py in
+#     "Give the colonization sacrifice back to the player".  The other three
+#     touch engine/bots/neural_encode.py, docs/ and tests/ only.
+#     `neural_encode` is imported by exactly two modules, `neural_bot.py` and
+#     `neural_plan.py`, and NEITHER is played by any arm in this file -- so the
+#     discard-pile encoding CANNOT move a digest here, structurally.  docs/ and
+#     tests/ are never imported by `perf_check` at all.  Reverting the one
+#     engine commit therefore IS the parent tree, whose arms are the old column
+#     above, and the clean-base run is that revert control.
+#
+# Test count 1198 -> 1220: +18 from the new
+# tests/test_colony_sacrifice_choice.py and +4 from
+# tests/test_neural_encode.py:TestDiscardPilesAreEncoded.  No test was
+# deleted; three existing colonization tests were rewritten to DRIVE the new
+# decision rather than to assert that the engine had already made it.
+#
+# Nothing was re-derived to make the gate pass.  The gate FAILED by design on
+# this branch and these values are the result of computing the new behaviour.
+# Two runs came back BLANK during this derivation -- that is a killed
+# subprocess (another lane running an unscoped `pkill`, exactly as the
+# scoring-fixes entry above warns), not a moved hash, and they were re-run
+# rather than recorded.  For the same reason the arms here were run ONE AT A
+# TIME by a small driver that appends each digest as it lands, so a kill costs
+# one arm rather than a whole derivation.
+# ---------------------------------------------------------------------------
+NARROW=8526f445
+WIDE=50b55624
 
 # The greedy fingerprint above plays GreedyBot ONLY, which is exactly why four
 # master rebases left it untouched (9.0/9.6) -- and exactly why it can never
@@ -599,8 +705,8 @@ WIDE=f223cea1
 # change escaping its gate, not a digest to update.
 # Test count 1087 -> 1093: +6 from
 # tests/test_board_yields.py:TestOceanLinersIsPricedByTheBoardNotByARate.
-WNARROW=f82746d4
-WWIDE=5c8e3505
+WNARROW=49a0a944
+WWIDE=e7887e23
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -833,10 +939,10 @@ WWIDE=5c8e3505
 # and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
 # in tests/test_board_yields.py a third time, which needed a fourth sibling
 # once the action cards started being gated on `action_board_credit`.
-PNARROW=5cd3554a
-PWIDE=05f77e2f
-QNARROW=b24a738b
-QWIDE=23e36e12
+PNARROW=b23c0afd
+PWIDE=8966dd49
+QNARROW=dd2af7b6
+QWIDE=32a4e8d5
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs
