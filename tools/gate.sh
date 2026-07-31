@@ -284,6 +284,53 @@ cd "$(dirname "$0")/.."
 # Test count 1180 -> 1180: tests/test_unit_pricing.py loses one lucky sweep and
 # gains two constructed ones (the 90-pair engine equivalence and the
 # Warriors-cannot-become-a-Cannon negative control, which fails on the parent).
+
+# ---------------------------------------------------------------------------
+# Re-derived 2026-07-31 for the government price
+# (docs/GOVERNMENT_PRICING.md, docs/OPEN_ITEMS.md section 2 item 22).
+#
+#     arm       previous     this commit
+#     NARROW    ca255af3     ca255af3   (held)
+#     WIDE      f223cea1     f223cea1   (held)
+#     WNARROW   7a6f6639     f82746d4
+#     WWIDE     996f4ef7     5c8e3505
+#     QNARROW   79e8503b     b24a738b
+#     QWIDE     bb8d74c7     23e36e12
+#     PNARROW   7e0f7a3b     5cd3554a
+#     PWIDE     dee840cc     05f77e2f
+#
+# Cause: `DEFAULT_WEIGHTS` gained `gov_board_credit` at 1.0, which routes all
+# eight government cards' price through `weighted.gov_value` instead of the
+# static table.  Five of the seven takeable ones were unreachable before it --
+# three priced at EXACTLY 0.000 (`_card_yields` reads `techCost`, `null` on
+# every government, and `production`/`effects`, where a government's civil
+# actions are not) and two priced strictly NEGATIVE.  Every searching bot's
+# civil hand and card row therefore price differently, so all six evaluator
+# arms were EXPECTED to move and did.
+#
+# GREEDYBOT HOLDING STILL IS THE INFORMATIVE HALF, as for the three pricing
+# lanes before it: GreedyBot never calls `card_potential`, so a NARROW/WIDE
+# move would have meant a card-pricing change had leaked into the rules.
+#
+# ATTRIBUTED TO ONE CONSTANT, on a third clean clone (/tmp/gateB3):
+# `gov_board_credit` changed from 1.0 to 0.0 and nothing else touched
+# reproduces the PREVIOUS digests above byte for byte -- NARROW, WIDE and
+# WNARROW (7a6f6639, the decisive one: it is the arm the change moves furthest
+# and the cheapest evaluator arm to reproduce) confirmed at commit time, the
+# remaining five still computing and recorded in docs/GOVERNMENT_PRICING.md
+# section 6.  So `government_plans`, `_government_level`, `_government_routes`,
+# `gov_value` and `_is_government` are inert on their own and the six moves are
+# that one default.
+#
+# Two-sided per docs/PYPY.md 9.0: derived from scratch in /tmp/work and
+# independently in /tmp/gateB2, agreeing byte for byte on all eight arms
+# INCLUDING the two that did not move, and then derived a THIRD time in the
+# working worktree after rebasing onto the docs-consolidation commits, because
+# the base moved under the branch.  Those two commits touch `engine/` only in
+# docstring prose (`engine/bots/pending.py`, `engine/bots/variants/wonder.py`),
+# so the prediction was that every arm holds across the rebase, and it did.
+#
+# Test count 1180 -> 1198: +18 from tests/test_government_pricing.py.
 NARROW=ca255af3
 WIDE=f223cea1
 
@@ -543,8 +590,8 @@ WIDE=f223cea1
 # change escaping its gate, not a digest to update.
 # Test count 1087 -> 1093: +6 from
 # tests/test_board_yields.py:TestOceanLinersIsPricedByTheBoardNotByARate.
-WNARROW=7a6f6639
-WWIDE=996f4ef7
+WNARROW=f82746d4
+WWIDE=5c8e3505
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -777,10 +824,10 @@ WWIDE=996f4ef7
 # and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
 # in tests/test_board_yields.py a third time, which needed a fourth sibling
 # once the action cards started being gated on `action_board_credit`.
-PNARROW=7e0f7a3b
-PWIDE=dee840cc
-QNARROW=79e8503b
-QWIDE=bb8d74c7
+PNARROW=5cd3554a
+PWIDE=05f77e2f
+QNARROW=b24a738b
+QWIDE=23e36e12
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

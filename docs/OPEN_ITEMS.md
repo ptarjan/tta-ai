@@ -208,6 +208,12 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    margin +1.85, z = 3.4).  The leader half is a confirmed null (z = −1.46,
    p = 0.15 after correct deal-clustering; the original z = −2.1 headline was
    withdrawn).
+   **The government third of this is answered as of 2026-07-31** and only the
+   leader and action thirds are still inert: `gov_board_credit` (1.0 by
+   default) routes a government through `weighted.gov_value` *before* the
+   `card_board_credit` machinery, so the advice above no longer applies to
+   `card_board_government` — that knob is now what a vector with
+   `gov_board_credit` = 0.0 falls back to.  `docs/GOVERNMENT_PRICING.md`.
 7. **`wonder_potential` = 0.0 in every champion, frozen and live.**  A wonder
    physically cannot enter `hand_civil` (`actions.take_card` branches to
    `p.wonder`), so `hand_potential` — the one live card-identity channel — never
@@ -316,12 +322,32 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     needs a free worker and has its own price — but it systematically
     under-prices the first building of a type.  This is the correctly-shaped
     replacement for the old item 13.
-22. **A government's level is unpriced on both sides.**  `features()` adds
+22. ~~**A government's level is unpriced on both sides.**  `features()` adds
     `meta[p.government][1]` into `tech_levels`, and neither `_card_yields` nor
     the swap diff emits it, so a government card is missing exactly the term
     [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) added to every other technology.  `gov_level`
     has the same hole.  Governments are already over-played, so this plausibly
-    cuts the other way.
+    cuts the other way.~~
+    **CLOSED 2026-07-31 by `docs/GOVERNMENT_PRICING.md`**, and the hole was
+    deeper than this item knew.  `_card_yields` reads `techCost`, which is
+    `null` on all eight government cards — they print `peacefulCost` and
+    `revolutionCost` — and reads `production` / `effects`, where a government's
+    civil actions, military actions and urban limit are *not*: those are
+    top-level fields only `effects.compute` reads.  So **five of the seven
+    takeable governments were unreachable on the live path**: Monarchy,
+    Constitutional Monarchy and Republic priced at **exactly 0.000**, and
+    Communism (−1.20) and Fundamentalism (−6.25) priced NEGATIVE, i.e. inside
+    `row_pressure`'s `val <= 0.0` skip.  `weighted.gov_value` now prices the
+    swap diff plus both level terms at `feature_marginal` and charges the
+    cheaper of the two routes RULES_SPEC 8.2/8.3 offers, the revolution branch
+    gated on the engine's own `_can_revolt`.
+    **The last sentence above was wrong, and it is reported rather than tuned
+    against**: takes went 1.05 → 1.63 per seat-game at 2p against a human 1.37,
+    changes 0.98 → 1.50 against 1.11, and the three cards that priced at 0.000
+    had been taken *exactly zero times* in 40 seat-games.  Seats ending the
+    game still on Despotism fell from **10 of 40 to 1 of 40**.  Pricing a
+    government correctly made the bot play MORE of them, and play a far more
+    human spread of them.
 23. **`happy_margin` is priced through its clamp linearly.**  `features()`
     computes `min(3, margin)` and `max(0, −margin)`; `board_yields._delta_triples`
     maps `Stats.happy` straight onto `happy_margin`, so a temple's happy face is
@@ -848,6 +874,21 @@ entry, and the test fails if you close it without.  Full explanation in
   `p.civil_actions`, the actions REMAINING this turn, which `features()` calls
   `ca_left` (weight 0.05) — a 40x difference in what the card is worth.
   Decide that before writing the patch.
+  **ANSWERED 2026-07-31 from the rules** (`docs/GOVERNMENT_PRICING.md` §3), and
+  the 40x turned out to be a false choice: RULES_SPEC 8.3.1 requires every
+  civil action to be available before a revolution is legal at all, so at the
+  only moment the move exists the remainder **equals** the allotment — they are
+  the same number.  What differs is which coordinate `evaluate` watches move,
+  and `_h_revolution` sets `p.civil_actions = 0`, which `features()` emits as
+  **`ca_left`**; `civil_actions` does not fall, it *rises* by the new
+  government's own total, and the swap diff already prices that, so charging
+  the burn there would have charged the gain side.  The live path
+  (`weighted.gov_value`) charges `ca_left`, checked by applying the move and
+  diffing `features()`.  **The `gov_action_cost` entry stays in `KNOWN_DEAD`**
+  and this bullet stays open for that reason: the legacy `card_board_credit`
+  path still spends it, exactly as `_card_yields` still spends
+  `free_civil_action`, and the coordinate cannot be deleted while champion
+  files carry it.  What is closed is the *question*, not the coordinate.
 * **Retire the static action table.**  `free_civil_action`, `resource_discount`
   and `restricted_resources` are dead only on the *static* path now — the live
   board path stopped using them in `5ab4943` — but `_card_yields` still emits

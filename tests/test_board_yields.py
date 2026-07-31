@@ -174,6 +174,15 @@ class TestTheTypeKnobIsAWeightNow(unittest.TestCase):
     anything measurable today.
     """
 
+    #: The government half of this knob is now reached only with
+    #: `gov_board_credit` = 0.0 -- `card_potential` sends a government to
+    #: `gov_value` first (docs/GOVERNMENT_PRICING.md).  These tests are about
+    #: the KNOB, so they switch the newer gate off rather than being deleted:
+    #: the knob is still what a vector with `gov_board_credit` 0.0 uses, and
+    #: `test_the_shipped_default_prices_nothing_on_the_board` would otherwise
+    #: stop covering the leader half too.
+    GOV_OFF = {"gov_board_credit": 0.0}
+
     def _priced_as_diff(self, name, w, st):
         """Is `name` being priced by the swap diff, or off the static table?
 
@@ -186,7 +195,7 @@ class TestTheTypeKnobIsAWeightNow(unittest.TestCase):
 
     def test_the_shipped_default_prices_nothing_on_the_board(self):
         st = _played()
-        w = dict(W.DEFAULT_WEIGHTS)
+        w = dict(W.DEFAULT_WEIGHTS, **self.GOV_OFF)
         for name in ("Michelangelo", "Republic"):
             self.assertFalse(self._priced_as_diff(name, w, st), name)
 
@@ -200,7 +209,7 @@ class TestTheTypeKnobIsAWeightNow(unittest.TestCase):
     def test_a_negative_offset_reproduces_the_old_leader_only_arm(self):
         st = _played()
         w = _w(card_board_government=-1.0, card_board_action=-1.0,
-               card_board_wonder=-1.0)
+               card_board_wonder=-1.0, **self.GOV_OFF)
         self.assertTrue(self._priced_as_diff("Michelangelo", w, st))
         self.assertFalse(self._priced_as_diff("Republic", w, st))
         self.assertFalse(self._priced_as_diff("St. Peter's Basilica", w, st))
@@ -447,7 +456,7 @@ class TestTheCreditGateIsExact(unittest.TestCase):
         self.assertEqual(w["card_board_credit"], 0.0)
         for name in C.db().by_name:
             if W._is_unit(name) or W._is_levelled_tech(name) \
-                    or W._is_action(name):
+                    or W._is_action(name) or W._is_government(name):
                 continue
             self.assertEqual(W.card_potential(name, w, st, 0),
                              W.card_potential(name, w),

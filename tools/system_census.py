@@ -243,6 +243,13 @@ def run(spec, players, ngames, seed0, out):
                 p = st.players[r.idx]
                 for k, v in r.c.items():
                     tot[k] += v
+                # WHICH route to a new government (RULES_SPEC 8.2 vs 8.3).
+                # `gov_path` recorded both from the day it was written and
+                # nothing ever aggregated it, so "government changes" could be
+                # counted but the peaceful/revolution split could not.
+                for kind, _rnd, _nm in r.gov_path:
+                    tot["gov_revolution" if kind == "rev"
+                        else "gov_peaceful"] += 1
                 for b, cc in r.names.items():
                     names[b].update(cc)
                 comp = list(getattr(p, "completed_wonders", ()) or ())

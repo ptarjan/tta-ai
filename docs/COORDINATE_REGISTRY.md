@@ -297,7 +297,7 @@ opposite reason to the one the check is about.
 
 ---
 
-## 7. The current KNOWN_DEAD list — 38 entries
+## 7. The current KNOWN_DEAD list — 41 entries
 
 **Seven entries were deleted on 2026-07-31** by the same-type `unit_upgrade` fix
 (`docs/UNIT_TECH_PRICING.md` §8): `best_arena` and the six `discontent` /
@@ -305,7 +305,12 @@ opposite reason to the one the check is about.
 re-priced policy builds an arena and goes discontent in the six corpus games.
 That is the ratchet working — and it is also a warning worth reading twice:
 **every corpus-pinned entry is only as stable as the six games that generate
-it**, so any pricing change can flip one in either direction.
+it**, so any pricing change can flip one in either direction.  The government
+reprice (`docs/GOVERNMENT_PRICING.md`), landed an hour later, **re-listed three
+of them**: `hand_limit` (295 non-zero states before, 0 after — `Library of
+Alexandria` is the only card in the game that grants one) and the two
+`uprising` encoding slices, which the one-ply-in-40 encoding sample stopped
+catching.  `docs/OPEN_ITEMS.md` §9.5 is the standing item.
 
 ### Spent by `card_potential`, emitted by no feature (5)
 
@@ -335,8 +340,9 @@ military card at all, which is what makes `territory_credit` and
 `bonus_card_credit` cost nothing and what hides the four invisible military
 classes below.  `unit_strength_credit` is the named historical case.
 
-### Emitted but never non-zero (1)
+### Emitted but never non-zero (2)
 
+`hand_limit` — corpus-fragile, see the note in the header of this section.
 `wonder_overrun` — the feature never fires, so its 0.0 weight is doubly dead;
 `docs/MODEL_CONSTANTS.md` §6.1 already leans on that to argue the deal-rate fix
 is inert.
@@ -371,7 +377,11 @@ prices the military hand, four of the game's card types are invisible to it.
 | `destroyed_wonders` | already in OPEN_ITEMS: read by the take surcharge, never incremented |
 | `hidden_civil`, `hidden_military` | **deliberate** — app-harness only, documented at `state.py`.  Listed so they are a stated exception rather than an unexamined zero |
 
-### Constant encoding slices (8)
+### Constant encoding slices (10)
+
+`me.uprising`, `rival.uprising` — the flag fires on 3 of 2004 corpus states and
+the encoding samples one ply in 40, so the *feature* is live and the *slice* is
+not.  Corpus-fragile; deleted and re-listed inside one session.
 
 `global.current_events_age`, `global.scoring_events` — the two dead fields
 above, seen from the other registry.

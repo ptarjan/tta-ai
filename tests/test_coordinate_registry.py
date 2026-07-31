@@ -87,7 +87,7 @@ import os
 import random
 import unittest
 
-from engine import actions as A, cards as C, game as G, state as S
+from engine import actions as A, cards as C, effects, game as G, state as S
 from engine import bots as B
 from engine.bots import book
 from engine.bots import neural_encode as NE
@@ -161,6 +161,7 @@ PARAMETERS = {
     "unit_tech_credit": ("pricing", "credit on unit tech_value()"),
     "tech_board_credit": ("pricing", "credit on tech_value()"),
     "action_board_credit": ("pricing", "credit on action_value()"),
+    "gov_board_credit": ("pricing", "credit on gov_value()"),
     "restricted_resource_credit": (
         "pricing", "credit on the ring-fenced resource pseudo-feature"),
     "free_action_credit": ("pricing", "credit on the ordered action in action_value()"),
@@ -294,6 +295,15 @@ KNOWN_DEAD = {
         "a board -- so today it is dead by construction rather than neglect",
         "docs/UNIT_TECH_PRICING.md; retire with the static table"),
     # -------------------------------------------- emitted, never non-zero yet
+    "hand_limit": (
+        ("never-nonzero",),
+        "`Library of Alexandria` is the ONLY card in the game that grants a "
+        "hand limit, and the bot completes 0.05 wonders per seat-game -- so "
+        "this coordinate is one wonder completion in one of the six corpus "
+        "games away from being live, and the government reprice re-rolled it "
+        "away (295 of 2033 states before, 0 of 2004 after).  CORPUS-FRAGILE, "
+        "not structurally dead",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
     # ------------------------------------------------ whole classes invisible
     "class:tactic": (
         ("invisible-class",),
@@ -414,6 +424,20 @@ KNOWN_DEAD = {
         "the same padding marker in the rival blocks, and the same reason: "
         "it is 1.0 wherever this check is allowed to look",
         "none -- structural, see docs/COORDINATE_REGISTRY.md on padding"),
+    "encode:me.uprising": (
+        ("constant-encoding",),
+        "the `discontent > workers_free` flag fires on 3 of 2004 corpus "
+        "states, and `_note_encoding` samples one ply in 40 -- so the feature "
+        "is live (it is NOT in the always-zero list) and the ENCODING sample "
+        "misses it.  Deleted on 2026-07-31 when the same-type `unit_upgrade` "
+        "fix made it fire inside the sample and re-listed in the same session "
+        "when the government reprice moved it back out, which is the "
+        "corpus-fragility warning in section 7 in its purest form",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
+    "encode:rival.uprising": (
+        ("constant-encoding",),
+        "the same flag one seat over, and sampled out for the same reason",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
     "encode:rival.seeded_events_n": (
         ("constant-encoding",),
         "DELIBERATE and it is the information-legality guarantee, not a bug: "
@@ -947,6 +971,44 @@ class Corpus:
             self._conduction(st, base, keys, ctx)
         finally:
             st.players[0].hand_civil = hand
+        self._probe_wonder_and_tactic(st, base, keys, ctx)
+
+    def _probe_wonder_and_tactic(self, st, base, keys, ctx):
+        """The third shape, and it exists for the same reason the stacked hand
+        does: two coordinates only conduct through a board the corpus reaches
+        by luck rather than by construction.
+
+        `wonder_potential` multiplies `card_potential` on `p.wonder`, and a
+        wonder is the rarest thing this policy takes (0.05 per seat-game);
+        `tactic_gain` is zero unless a REACHABLE tactic would add army
+        strength, which needs unit workers and a tactic at once.  Both
+        conducted here until 2026-07-31 purely because the six games happened
+        to produce those boards, and a pricing change that re-rolled self-play
+        made them read as dead coordinates -- a probe reporting the policy
+        rather than the code, which is exactly the failure `hand_swap_extra`
+        already forced this function to fix once.
+        """
+        p = st.players[0]
+        if all(k in self.conducts for k in keys):
+            return
+        db = C.db()
+        wonder = next(c["name"] for c in db.cards if c["type"] == "wonder")
+        tactic = next(c["name"] for c in db.cards if c["type"] == "tactic")
+        old_w, old_m = p.wonder, p.hand_military
+        old_units = {n: t.workers for n, t in p.techs.items()}
+        p.wonder = S.WonderInProgress(wonder, 0)
+        p.hand_military = list(old_m) + [tactic]
+        for n, t in p.techs.items():
+            if db.type_by_name.get(n) in C.UNIT_TYPES:
+                t.workers += 4
+        effects.invalidate(st, p)
+        try:
+            self._conduction(st, base, keys, ctx)
+        finally:
+            p.wonder, p.hand_military = old_w, old_m
+            for n, t in p.techs.items():
+                t.workers = old_units[n]
+            effects.invalidate(st, p)
 
     def _conduction(self, st, base, keys, ctx):
         """Which coordinates can move `evaluate` at all, on this board.

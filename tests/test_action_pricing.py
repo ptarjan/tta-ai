@@ -268,7 +268,8 @@ class TestTheOptOut(unittest.TestCase):
     def test_zero_credit_is_the_static_answer_for_every_card(self):
         st = _played()
         w = _w(action_board_credit=0.0, tech_board_credit=0.0,
-               unit_tech_credit=0.0, card_board_credit=0.0)
+               unit_tech_credit=0.0, gov_board_credit=0.0,
+               card_board_credit=0.0)
         for n in ALL_CARDS:
             self.assertAlmostEqual(W.card_potential(n, w, st, 0),
                                    W.card_potential(n, w), places=9, msg=n)

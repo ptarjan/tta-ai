@@ -113,6 +113,7 @@ from .. import actions as A, cards as C, economy, effects
 from ..state import TechCard
 
 __all__ = ["board_yields", "board_choices", "unit_upgrade", "tech_upgrade",
+           "government_plans",
            "SWAP_TYPES", "SINGLE_SLOT", "BOARD_PRICED", "LEVELLED_TYPES"]
 
 _DB = C.db()
@@ -419,6 +420,164 @@ def _government_cost(state, p, name, out):
     burned = effects.state_stats(state, p).civil_actions
     if burned:
         out.append(("gov_action_cost", -float(burned), _GAIN))
+
+
+# ------------------------------------------------- a government's own level
+#
+# `weighted.features()` reads a government's age level TWICE -- once into
+# `tech_levels`, alongside every worker technology and every special
+# technology, and once on its own as `gov_level` (weight 2.0 in
+# `DEFAULT_WEIGHTS`, and the third-largest single coordinate on the archived
+# 3p champion).  Neither `_card_yields` nor the swap diff above has ever
+# emitted either of them, so a government card was missing exactly the term
+# docs/YELLOW_TECH_PRICING.md added to every other technology in the game.
+# docs/OPEN_ITEMS.md section 2 item 22.
+#
+# It is a DIFFERENCE, not the printed level, and that is the rules and not a
+# choice: RULES_SPEC 8.1, "new government always replaces the old regardless
+# of level", so `features()` stops counting the old one the moment the new one
+# lands.  Same shape as every other quantity on a swap card.
+
+
+def _government_level(p, name):
+    """The `tech_levels` / `gov_level` delta of replacing the government."""
+    level_of = _DB.level_by_name
+    d = float(level_of.get(name, 0) - level_of.get(p.government, 0))
+    if not d:
+        return ()
+    return (("tech_levels", d, _GAIN), ("gov_level", d, _GAIN))
+
+
+# ------------------------------------------- the two routes to a government
+#
+# RULES_SPEC 8.2 and 8.3: a government is the only card in the game with two
+# printed prices and two different moves to play it, and `_action_moves`
+# generates both -- `("develop", name)` gated on `p.science >= tech_cost_net`
+# and `("revolution", name)` gated on `_can_revolt`.  They are not variations
+# of one price:
+#
+#     Monarchy    peaceful  8 science, 1 civil action
+#                 revolution 2 science, EVERY civil action you have left
+#
+# so which one is cheaper is a board question -- it depends on how big the
+# civil-action pool a revolution would burn is, which is the government you
+# are leaving.  `_government_cost` above answers it by always charging the
+# revolution's science and pricing the burn through `gov_action_cost`, a
+# coordinate `features()` does not emit (docs/COORDINATE_REGISTRY.md, and
+# docs/OPEN_ITEMS.md section 9.1 left it open on the grounds that the
+# allotment and the remainder differ by 40x in weight).
+#
+# THE RULES SETTLE THAT QUESTION, which is why it is answered here rather
+# than left open.  RULES_SPEC 8.3.1 requires ALL civil actions to be available
+# before a revolution is legal, so at the only moment the move exists the
+# remainder EQUALS the allotment and the 40x is not a choice between two
+# numbers -- they are the same number.  What differs is which coordinate
+# `evaluate` sees it move: `actions._h_revolution` sets `p.civil_actions = 0`,
+# which is `features()`' `ca_left`, while `civil_actions` (the allotment)
+# does not fall at all -- it RISES, by the new government's own total, and
+# the `Stats` diff above already prices that.  So the burn is `ca_left` and
+# charging it to `civil_actions` would be charging the gain side.
+#
+# Everything below is `actions._h_develop`/`_set_government` and
+# `actions._h_revolution` read line by line, not re-derived:
+#
+#   * both routes re-base the pools onto the new government (`max(0, new
+#     total - already spent)`), so the actions the new government adds are
+#     available the same turn -- a one-turn `ca_left`/`ma_left` gain equal to
+#     the allotment delta, on top of the per-turn `civil_actions` rate;
+#   * a revolution zeroes the paying pool INSTEAD, and only that pool:
+#     RULES_SPEC 8.3.4, "military actions are unaffected";
+#   * Isaac Newton hands one civil action back (CoL p.12), Maximilien
+#     Robespierre pays with the military pool and takes 3 culture.
+#
+# Two of the four RULES_SPEC 8.3.5 exceptions are deliberately NOT priced and
+# the reason is written down rather than left to be discovered:
+#
+#   * **Breakthrough** orders a revolution out of its own free civil action,
+#     and `actions.apply_free_action` runs the SAME `_h_revolution`, which
+#     empties the pool anyway -- so the price here is already the engine's
+#     answer for that route too.  If that handler is ever changed to spare
+#     the pool, this function inherits the fix.
+#   * **Development of Civilization** is not in the base-game card database
+#     at all (2015 base game only; the event exists in Code of Laws), so
+#     there is nothing to price.
+
+
+def _government_routes(state, p, name, gained):
+    """The cost triples of each LEGAL route to `name`, cheapest chosen later.
+
+    `gained` is the swap diff, read for the allotment deltas rather than
+    recomputing them.  Returns a tuple of routes; the caller holds the
+    weights, so the caller takes the cheaper one -- the same division of
+    labour `board_choices` uses for a card that makes you pick.
+    """
+    card = _DB.get(name)
+    delta = dict((k, a) for k, a, _kind in gained)
+    d_ca = delta.get("civil_actions", 0.0)
+    d_ma = delta.get("military_actions", 0.0)
+
+    # ---- peaceful change (RULES_SPEC 8.2): one civil action and the HIGHER
+    # science cost, which is what `effects.tech_cost` returns for a
+    # government (`peacefulCost`, net of `tech_discount`).
+    peaceful = [("ca_left", -1.0, _COST)]
+    sci = effects.tech_cost(state, p, name) or 0
+    if sci:
+        peaceful.append(("science", -float(sci), _COST))
+    if d_ca:
+        peaceful.append(("ca_left", d_ca, _GAIN))
+    if d_ma:
+        peaceful.append(("ma_left", d_ma, _GAIN))
+    routes = [tuple(peaceful)]
+
+    # ---- revolution (RULES_SPEC 8.3), and ONLY when the engine would offer
+    # it: `_can_revolt` is called rather than restated.  When it is illegal
+    # the peaceful route is the price, which is the conservative direction.
+    if A._can_revolt(state, p, name):
+        rev = [("science", -float(card["revolutionCost"]), _COST)]
+        if p.leader == "Maximilien Robespierre":
+            if p.military_actions:
+                rev.append(("ma_left", -float(p.military_actions), _COST))
+            if d_ca:
+                rev.append(("ca_left", d_ca, _GAIN))
+            rev.append(("culture", 3.0, _GAIN))
+        else:
+            left = float(p.civil_actions)
+            if p.leader == "Isaac Newton":
+                left = max(0.0, left - 1.0)
+            if left:
+                rev.append(("ca_left", -left, _COST))
+            if d_ma:
+                rev.append(("ma_left", d_ma, _GAIN))
+        routes.append(tuple(rev))
+    return tuple(routes)
+
+
+def government_plans(name, state, idx):
+    """(gain triples, cost routes) for putting `name` in play as government.
+
+    The gains are everything true of the new government however you get to it
+    -- the `effects.compute` diff plus the two level terms -- and each route
+    is what one legal way of getting there SPENDS.  `((), ())` for a card that
+    is not a government, or for the government already in play (it cannot be
+    played onto itself, so the card is dead in hand and worth exactly
+    nothing: not a cost and not a gain).
+
+    NOT memoised, deliberately, and this is the one place in this module where
+    that is the right answer.  The expensive half is the `effects.compute`
+    diff, and `_stats_delta` already caches that on `stats_key`; the routes
+    are arithmetic over `p.science` and the two action pools, and **none of
+    those three fields is in `stats_key`** (it names what `compute` reads, not
+    what the rules charge).  A second cache on that key would hand out a
+    revolution price from before the pool was spent.
+    """
+    if _DB.type_by_name.get(name) != "government":
+        return (), ()
+    p = state.players[idx]
+    if p.government == name:
+        return (), ()
+    gained = _merge(list(_stats_delta(state, p, "government", name))
+                    + list(_government_level(p, name)))
+    return gained, _government_routes(state, p, name, gained)
 
 
 # ----------------------------------------------------------- wonder riders
@@ -950,6 +1109,11 @@ def board_yields(name, state, idx):
             out.append(("leader", 1.0, _GAIN))
         out.extend(_rider_delta(state, p, name))
     else:
+        # the two level terms `features()` reads and this diff never emitted
+        # (docs/OPEN_ITEMS.md section 2 item 22).  One implementation, shared
+        # with `government_plans` below, so the legacy static-credit path and
+        # the live path cannot disagree about what a government is worth.
+        out.extend(_government_level(p, name))
         _government_cost(state, p, name, out)
     return _merge(out)
 

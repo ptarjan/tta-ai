@@ -1746,6 +1746,11 @@ def _is_action(name):
     return C.db().type_by_name.get(name) == "action"
 
 
+@_lru_cache(maxsize=None)
+def _is_government(name):
+    return C.db().type_by_name.get(name) == "government"
+
+
 # ------------------------------------------------ the two ring-fenced yields
 #
 # `_EFF_TO_FEATURE` sends two effect keys to weights that are NOT features:
@@ -2019,6 +2024,84 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     return net - sci * max(0.0, w.get("science", 0.0))
 
 
+def gov_value(name, state, idx, w, late=None):
+    """Eval-points putting this government in play would be worth ON THIS
+    BOARD, by the cheaper of the two routes the rules offer.
+
+    `tech_value`'s and `action_value`'s sibling, for the last civil type still
+    on the static table, and the diagnosis is the same one a third time: a
+    card is worth what `evaluate` pays for what it does, and the static table
+    kept pricing governments through coordinates `evaluate` does not use --
+    or, here, through nothing at all.  `_card_yields` reads `techCost`, which
+    is `null` on all eight government cards (they print `peacefulCost` and
+    `revolutionCost` instead), and reads `production`/`effects`, where a
+    government's civil actions, military actions and urban limit are NOT --
+    they are top-level fields `effects.compute` reads.  So on the static path
+    Monarchy, Republic and Constitutional Monarchy price at **exactly
+    0.000**: no cost, no gain, nothing.  The same shape as the sixteen action
+    cards docs/ACTION_CARD_PRICING.md found, one type over.
+
+    THREE THINGS THIS PRICES THAT NOTHING PRICED, all of them derivations:
+
+    1. **The level.**  `features()` reads a government's age level twice, into
+       `tech_levels` and again as `gov_level` (2.0 in `DEFAULT_WEIGHTS`), and
+       neither the static table nor the swap diff emitted either -- the one
+       term docs/YELLOW_TECH_PRICING.md added to every other technology in the
+       game and did not add here.  docs/OPEN_ITEMS.md section 2 item 22.
+    2. **Everything `compute` sees**, through the swap diff: the civil-action
+       total above all, which is the game's core currency and the largest
+       single source of it.  A DIFFERENCE, because a government replaces a
+       government (RULES_SPEC 8.1).
+    3. **Both routes, gated on the board.**  RULES_SPEC 8.2 and 8.3 are two
+       different moves at two different prices -- Monarchy is 8 science and
+       one civil action peacefully, or 2 science and your whole turn's civil
+       actions by revolution -- and `_action_moves` generates both.  Which is
+       cheaper is a board question (how many actions the pool holds is the
+       government you are leaving), so it is asked rather than assumed:
+       `board_yields.government_plans` returns one cost route per LEGAL move
+       and this function takes the cheaper, which is a `max` over negative
+       triples.  Nothing here fits a rate for "how often a revolution is
+       worth it"; the answer is read off the board every time.
+
+    THE BURN LANDS ON `ca_left`, AND THAT SETTLES docs/OPEN_ITEMS.md section
+    9.1.  That item left open whether a revolution destroys the per-turn
+    ALLOTMENT (`civil_actions`, 2.0) or the REMAINDER (`ca_left`, 0.05), a
+    40x difference.  RULES_SPEC 8.3.1 requires every civil action to be
+    available for the move to be legal at all, so the two quantities are the
+    same NUMBER whenever the question can be asked; what differs is which
+    coordinate `evaluate` watches move, and `_h_revolution` sets
+    `p.civil_actions = 0` -- `ca_left`.  `civil_actions` does not fall, it
+    RISES by the new government's own total, and item 2 above already prices
+    that.  The dead `gov_action_cost` coordinate is left exactly where it is,
+    on the legacy `card_board_credit` path, for the same reason `5ab4943`
+    left `free_civil_action` on the static one.
+
+    Costs are clamped with `max(0.0, w)` for the same reason `_Y_COST` and
+    `tech_value` are: a hill climb is free to drive a stock weight negative
+    and paying a cost must never read as a gain.
+    """
+    gains, routes = _BY.government_plans(name, state, idx)
+    if not routes:
+        return 0.0
+    # `late` is an optional pre-computed `lateness(state, w)` -- the same
+    # call `tech_value` takes, hoisted out of the per-card loops by the same
+    # commit, so a caller pricing a whole hand computes it once.
+    if late is None:
+        late = lateness(state, w)
+    total = 0.0
+    for k, amt, _kind in gains:
+        total += amt * feature_marginal(k, state, idx, w, late)
+    best = None
+    for route in routes:
+        cost = 0.0
+        for k, amt, kind in route:
+            m = feature_marginal(k, state, idx, w, late)
+            cost += amt * (max(0.0, m) if kind == _BY._COST else m)
+        if best is None or cost > best:
+            best = cost           # costs are negative: the cheapest is the max
+    return total + best
+
+
 def card_potential(name, w, state=None, idx=None, late_tech=None,
                     late_action=None):
     """Eval-points a single card in hand would be worth if it were played.
@@ -2065,6 +2148,17 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
                 return uc * tech_value(name, state, idx, w, tb, late_tech)
         elif tb and _is_levelled_tech(name):
             return tb * tech_value(name, state, idx, w, late=late_tech)
+        elif _is_government(name):
+            # Same device, same reason, one type over.  `gov_board_credit`
+            # defaults to 1.0 and is absent from every champion file, so
+            # `load_weights` fills it in and the fix is live on all three
+            # league arms at once; 0.0 sends every government back down to the
+            # static table (and to `card_board_credit` + `card_board_government`
+            # if a vector ever turns those on), which is the parent commit's
+            # pricing byte for byte.  See `gov_value`.
+            gb = w.get("gov_board_credit", 1.0)
+            if gb:
+                return gb * gov_value(name, state, idx, w, late_tech)
         elif _is_action(name):
             # Same device, same reason, one type over: `action_board_credit`
             # defaults to 1.0 and is absent from every champion file, so
@@ -2947,6 +3041,23 @@ BASE_WEIGHTS = {
     # fills it from here and the fix is live on all three arms at once --
     # deliberately, because the defect it fixes is present on all three.
     "action_board_credit": 1.0,
+    # The fourth of the same family, for GOVERNMENTS (`gov_value`,
+    # docs/GOVERNMENT_PRICING.md).  1.0 on the same terms: at 1.0 the number is
+    # "the eval points `evaluate` itself assigns to the civil actions, the
+    # military actions, the urban limit and the two levels this government
+    # buys, minus the eval points it assigns to the science and the actions
+    # the cheaper of the two legal routes to it costs".  Every term is read
+    # off the objective by `feature_marginal` and off the board by
+    # `board_yields.government_plans`; there is no free constant in it, and in
+    # particular no fitted rate for how often a revolution is the right route
+    # -- that is asked of the board, per card, every time.
+    #
+    # 0.0 is the one constant that sends every government back to the static
+    # table, i.e. the parent commit's pricing byte for byte, which is what
+    # makes the change A/B-able against itself in one process on the same
+    # deal.  It is absent from every champion file, so `load_weights` fills it
+    # from here and the fix is live on all three arms at once.
+    "gov_board_credit": 1.0,
     # How much of a real resource a resource ring-fenced to military units is
     # worth (`_RESTRICTED_TO_FEATURE`).  1.0 is the UPPER bound -- a resource
     # you may only spend one way is worth at most one you may spend any way,
