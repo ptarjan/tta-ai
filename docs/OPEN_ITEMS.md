@@ -437,6 +437,27 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     Until then the bot cannot open a second arm of its army at all, which is
     also the most likely reason air takes measure **0.00** per seat-game
     against a human 0.65.
+29. **Winning a colony auction is now priced without the colony**, and this one
+    is the direct consequence of closing item 16, opened by the same lane on
+    2026-07-31 rather than left for somebody to rediscover.  `deferred_credit`
+    has an `auction` branch that credits the high bidder with a share of the
+    territory's effects, precisely because a `bid` mutates only the auction
+    dict and would otherwise score exactly like `bid_pass`.  Since the
+    sacrifice became a decision, the *winning* `bid_pass` no longer completes
+    the colonization inside `apply`: when the force is a real choice it leaves
+    a `colonize` pending instead, so the one-ply trial state shows **neither**
+    the sacrifice nor the colony, and `deferred_credit`'s `auction` branch has
+    already stopped matching (the top of the stack is `colonize`, not
+    `auction`).  The fix is identified and small — a `colonize` sibling to that
+    branch, at share 1.0 rather than `1/(1+rivals)` because the winner is
+    already decided — and it is deliberately NOT in the item-16 change so that
+    lane's digest moves had one cause.  Note it helps `WeightedBot`,
+    `QuiescentBot` and `PlanBot` only; `GreedyBot` has no `deferred_credit` and
+    never did.  Observed effect where it was traced: `2p greedy seed=0` in the
+    narrow fingerprint bids 2 instead of 1 for the same territory and
+    sacrifices the same single strength-2 unit, so the boards and the final
+    scores are **identical** and only the log line moves.  That is one case,
+    not a bound.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) tier B) — the

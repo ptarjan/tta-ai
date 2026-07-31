@@ -234,6 +234,17 @@ def deferred_credit(state, idx):
       strict-`>` tie-break always took the pass at index 0.  Credited at
       1/(1+rivals still in) of the territory's own effects.
 
+    THERE IS A THIRD ONE NOW AND IT IS NOT HANDLED HERE: docs/OPEN_ITEMS.md
+    §2 item 29.  Since RULES_SPEC 11.3's sacrifice became a real decision
+    (`interact.colonize`), the *winning* ``bid_pass`` no longer finishes the
+    colonization inside `apply` whenever the force is a genuine choice -- it
+    leaves a ``colonize`` pending, so the trial state shows neither the
+    sacrifice nor the colony, and the ``auction`` branch below has already
+    stopped matching because the top of the stack is no longer an auction.
+    The fix is a ``colonize`` sibling to that branch at share 1.0 (the winner
+    is decided, so it is not a share at all).  Left out deliberately so the
+    rules change that created it had one cause in `tools/gate.sh`.
+
     Returns ``(pact_offers, auction_committed, auction_bid, blocks_attack,
     gains)``, where `gains` maps feature keys to deferred amounts.
     """
