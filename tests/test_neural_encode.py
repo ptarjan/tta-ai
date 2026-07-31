@@ -85,5 +85,58 @@ class TestNeuralEncode(unittest.TestCase):
         self.assertEqual(before, after)
 
 
+class TestDiscardPilesAreEncoded(unittest.TestCase):
+    """Card counting is legal (Paul, 2026-07-31): both discard piles are
+    public, so the encoder reads them.  `docs/INFORMATION_AUDIT.md` GAP 5."""
+
+    def _advanced(self, plies=140):
+        import random
+        from engine.bots import WeightedBot
+        bots = [WeightedBot(seed=1), WeightedBot(seed=2)]
+        st = game.new_game(2, seed=7)
+        rng = random.Random(0)
+        for _ in range(plies):
+            if st.game_over:
+                break
+            moves = actions.legal_moves(st)
+            if not moves:
+                break
+            actions.apply(st, bots[st.decider()].pick(st, moves), rng)
+        return st
+
+    def test_the_block_is_the_right_size_and_in_range(self):
+        st = self._advanced()
+        block = E._discard_block(st)
+        self.assertEqual(len(block), 2 * len(E.C.AGES))
+        for x in block:
+            self.assertGreaterEqual(x, 0.0)
+            self.assertLessEqual(x, 1.0)
+
+    def test_emptying_the_civil_discard_changes_the_encoding(self):
+        """The negative control for the whole exposure: if this passes with
+        the piles blanked, nothing is actually reading them."""
+        st = self._advanced()
+        self.assertTrue(st.civil_discard, "no civil sweep happened at all")
+        before = E.encode(st, 0)
+        st.civil_discard = {}
+        self.assertNotEqual(E.encode(st, 0), before)
+
+    def test_emptying_the_military_discard_changes_the_encoding(self):
+        st = self._advanced()
+        self.assertTrue(st.discarded_military, "nothing was ever discarded")
+        before = E.encode(st, 0)
+        st.discarded_military = {}
+        self.assertNotEqual(E.encode(st, 0), before)
+
+    def test_both_players_see_the_same_piles(self):
+        """Public means public: it is not a per-viewpoint field."""
+        st = self._advanced()
+        self.assertEqual(E._discard_block(st), E._discard_block(st))
+        a, b = E.encode(st, 0), E.encode(st, 1)
+        tail = 2 * len(E.C.AGES)
+        head = E._GLOBAL_DIM - tail
+        self.assertEqual(a[head:E._GLOBAL_DIM], b[head:E._GLOBAL_DIM])
+
+
 if __name__ == "__main__":
     unittest.main()

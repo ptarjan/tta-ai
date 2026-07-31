@@ -25,10 +25,27 @@ The encoding is faithful to what a player can actually SEE at the table
   the order of the current-events deck.
 * **Global**: ages (civil/military/current-events), round, turn, an exact/est
   `rounds_left`, lateness L, player count, phase, last-round / scoring flags.
+* **Both discard piles**, per age: the share of each age's civil deck already
+  swept off the row (`state.civil_discard`) and the size of each age's
+  military discard (`state.discarded_military`).  See the ruling below.
+
+THE STANDING PRINCIPLE (Paul, 2026-07-31): **"Card counting is legal.  All
+public info can be used."**  Do not re-litigate this per field.  The test for
+any new field is one question: *could a human sitting at the table with the
+physical 2015 base game see it?*  If yes, it may be encoded, and remembering
+it across the whole game is a skill the game rewards rather than a cheat
+(docs/EXPERT_STRATEGY.md; docs/INFORMATION_AUDIT.md "Information legality").
+If no, it stays out.  That is the whole rule -- it does not license reading
+anything a player cannot see, and the list below is unchanged by it.
 
 Deliberately NOT encoded (would be cheating or is unknowable):
   * civil_deck / military_deck ORDER (hidden; only counts feed `rounds_left`).
-  * rival military-hand CONTENTS (count only).
+  * rival military-hand CONTENTS (count only).  This one is load-bearing:
+    `docs/OPEN_ITEMS.md` GAP 6 calls it a loaded gun, because the moment
+    military-card identity is priced the `end_turn` military draw becomes a
+    live unmasked leak, and it must ship with rival-hand re-dealing in
+    `plan.determinize`.  The card-counting ruling does NOT reach it -- a hand
+    is not public.
   * other players' event seeds and the current-events order.
   * happy faces of rivals beyond what their public board implies.
 
@@ -275,10 +292,39 @@ def _global_block(state, idx):
         row_occ / 13.0,
     ]
     g += phase
+    g += _discard_block(state)
     return g
 
 
-_GLOBAL_DIM = 3 * len(C.AGES) + 3 + 9 + 3
+def _discard_block(state):
+    """Both discard piles, per age -- the card-counting primitive.
+
+    Legal under the 2026-07-31 ruling in this module's docstring: every civil
+    card in this pile was face up in the card row in front of every player
+    before it was swept (RULES_SPEC 1.10 step 1), and the military pile is the
+    other public pile.  A per-age SIZE is deliberately all that is exposed
+    here: combined with the row, the hands and the tableaux the net already
+    sees, it is exactly what makes `unseen(age) = deck - row - hands -
+    tableaux - discard` learnable, which is the whole point of the record
+    (docs/INFORMATION_AUDIT.md GAP 5).  Per-card identity would be a much
+    larger vector for information the count already summarises.
+
+    Normalised by the age's own civil deck size so the scale is
+    player-count-independent; the military divisor is a flat constant because
+    `db.military_deck` is empty whenever `has_military` is false.
+    """
+    db = C.db()
+    n = state.num_players
+    out = []
+    for age in C.AGES:
+        civil = len(state.civil_discard.get(age) or ())
+        size = len(db.civil_deck(age, n)) or 1
+        out.append(min(civil / size, 1.0))
+        out.append(len(state.discarded_military.get(age) or ()) / 20.0)
+    return out
+
+
+_GLOBAL_DIM = 3 * len(C.AGES) + 3 + 9 + 3 + 2 * len(C.AGES)
 
 
 # ---- the card row ---------------------------------------------------------
