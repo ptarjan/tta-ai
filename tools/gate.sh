@@ -244,6 +244,46 @@ cd "$(dirname "$0")/.."
 # its arms cannot see the change at all.  That is consistent with the war
 # lane's own census, which found zero war declarations in 52 default-weight
 # games, and it is a measurement of how rare the card is, not of its value.
+
+# ---------------------------------------------------------------------------
+# Re-derived 2026-07-31 for the same-type `unit_upgrade` fix
+# (docs/UNIT_TECH_PRICING.md section 8, docs/OPEN_ITEMS.md section 2 item 20).
+#
+#     arm       parent d15cb5b   this commit
+#     NARROW    ca255af3         ca255af3   (held)
+#     WIDE      f223cea1         f223cea1   (held)
+#     WNARROW   ba77b499         7a6f6639
+#     WWIDE     f4d6a545         996f4ef7
+#     QNARROW   4ab439b2         79e8503b
+#     QWIDE     5d05f578         bb8d74c7
+#     PNARROW   0a637b40         7e0f7a3b
+#     PWIDE     ccc96764         dee840cc
+#
+# Cause, and it is one hunk in one function: `board_yields.unit_upgrade` moved
+# every unit worker on the board onto the candidate technology, while
+# `engine/actions.py:_action_moves` only ever offers `("upgrade", lo, hi)`
+# between cards of the SAME type (`_tableau`'s `higher` is built out of
+# `by_type[type_of[n]]`).  It now calls `_upgradable_onto` / `_with_tech`, the
+# helpers `tech_upgrade`'s non-red half already used.  Every searching bot
+# prices the four red types through `card_potential -> tech_value ->
+# unit_upgrade`, so all six evaluator arms were EXPECTED to move and did.
+#
+# GREEDYBOT HOLDING STILL IS THE INFORMATIVE HALF.  GreedyBot never calls
+# `card_potential`, so a NARROW/WIDE move would have meant a card-pricing
+# change had leaked into the rules.  It did not.  There is no constant to
+# attribute to here -- the change adds no weight and no default -- so the
+# attribution is structural: one function, on a path the two control arms do
+# not execute.
+#
+# Two-sided per docs/PYPY.md 9.0: derived from scratch in the working worktree
+# and independently in /tmp/gateA2, a separate clone of the same tree, which
+# agreed byte for byte on all eight arms INCLUDING the two that did not move.
+# A clean-base control on the parent commit (/tmp/base) reproduced all eight of
+# ITS committed constants first.  Nothing was re-derived to make the gate pass.
+#
+# Test count 1180 -> 1180: tests/test_unit_pricing.py loses one lucky sweep and
+# gains two constructed ones (the 90-pair engine equivalence and the
+# Warriors-cannot-become-a-Cannon negative control, which fails on the parent).
 NARROW=ca255af3
 WIDE=f223cea1
 
@@ -503,8 +543,8 @@ WIDE=f223cea1
 # change escaping its gate, not a digest to update.
 # Test count 1087 -> 1093: +6 from
 # tests/test_board_yields.py:TestOceanLinersIsPricedByTheBoardNotByARate.
-WNARROW=ba77b499
-WWIDE=f4d6a545
+WNARROW=7a6f6639
+WWIDE=996f4ef7
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -737,10 +777,10 @@ WWIDE=f4d6a545
 # and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
 # in tests/test_board_yields.py a third time, which needed a fourth sibling
 # once the action cards started being gated on `action_board_credit`.
-PNARROW=0a637b40
-PWIDE=ccc96764
-QNARROW=4ab439b2
-QWIDE=5d05f578
+PNARROW=7e0f7a3b
+PWIDE=dee840cc
+QNARROW=79e8503b
+QWIDE=bb8d74c7
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

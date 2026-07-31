@@ -287,7 +287,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     other coordinate's range, which is exactly the shape unconstrained drift
     takes.  Neither has been shown to be wrong — that is what the sweep is
     for — but they are where it should start.
-20. **`unit_upgrade` pools workers across all four red types.**  It moves every
+20. ~~**`unit_upgrade` pools workers across all four red types.**  It moves every
     unit worker onto the candidate technology and charges `actions.upgrade_cost`
     from each, but `engine/actions.py:_action_moves` only offers an upgrade
     between cards of the **same** type — a Warriors worker cannot become a
@@ -295,7 +295,19 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     whenever the player holds only infantry, which is most of the game.  Found
     2026-07-30 while generalising it ([`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) §6.1) and
     deliberately left alone so this lane's digest moves had one cause;
-    `tech_upgrade`'s non-red half is already same-type-only.
+    `tech_upgrade`'s non-red half is already same-type-only.~~
+    **CLOSED 2026-07-31 by `docs/UNIT_TECH_PRICING.md` §8.**  The legality claim
+    was re-verified against `_tableau` before anything was changed, and the size
+    of the error measured: on a board with four Warriors workers,
+    `unit_upgrade("Cavalrymen")` read **`(8.0, 6.0, 12.0)`** — eight strength
+    for a move the engine never generates.  `unit_upgrade` now shares
+    `_upgradable_onto` and `_with_tech` with `tech_upgrade` rather than keeping
+    a second opinion about what an upgrade is.  Take rates per seat-game at 2p
+    on `DEFAULT_WEIGHTS` went cavalry 0.35 → 0.15, artillery 0.23 → 0.10, air
+    0.08 → **0.00**, infantry 0.40 → 0.48 (human 1.22 / 0.85 / 0.65 / 1.12) —
+    the three the old price was inventing upgrades for fell, the one that has
+    real upgrades rose, and **the residual is item 21 below**, which the fix
+    promotes from a footnote to the binding constraint on the red lane.
 21. **Nothing prices the "build one fresh" plan.**  Both `unit_upgrade` and
     `tech_upgrade` answer "develop it and upgrade what I have", so a player with
     no laboratory worker sees a laboratory priced at its levels minus its
@@ -357,6 +369,23 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     hypothesis and it is item 19's sweep in another guise: `civil_actions` is
     a coordinate no card price had ever charged for until this change.
     Unowned.
+28. **Three red cards can NEVER have an upgrade to ride, and item 21 is now
+    load-bearing for them.**  Opened 2026-07-31 by the fix to item 20.  Knights,
+    Cannon and Air Forces are the lowest card of their own type in the whole
+    deck, so `_upgradable_onto` is empty for them on every board that will ever
+    exist and their entire price is the develop half (`tech_levels`,
+    `num_techs`, `best_unit`) against their science.  Under `DEFAULT_WEIGHTS`
+    Knights lands at **−0.28** on a fresh 2p board, i.e. inside
+    `row_pressure`'s `val <= 0.0` skip, and Air Forces at +0.07; at
+    `tech_levels` 3.0 all three are positive, so it is a weights judgement and
+    not a sign lock (`tests/test_unit_pricing.py` asserts exactly that
+    distinction, and all four red *types* still price positive, so no class is
+    invisible).  The real answer is item 21 — the only route to a first
+    cavalry, artillery or air unit is to BUILD one fresh, which needs a free
+    worker, a military action and resources, and nothing prices any of it.
+    Until then the bot cannot open a second arm of its army at all, which is
+    also the most likely reason air takes measure **0.00** per seat-game
+    against a human 0.65.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md) tier B) — the
@@ -883,14 +912,46 @@ exactly 0.0 on every corpus state, so neither half can wake the other.  Worth a
 separate look — a feature that never fires is a bug in the feature, not in the
 weight.
 
-### 9.5 Things the bot never does, so nothing can price them
+### 9.5 Things the bot never does, so nothing can price them — and how fragile
+### that sentence turned out to be
 
-* **The bot never builds an arena.**  `best_arena` is exactly 0.0 on every
+The original entries, both **overturned within a day** by a single pricing
+change, which is the finding that matters here:
+
+* ~~**The bot never builds an arena.**  `best_arena` is exactly 0.0 on every
   corpus state in the linear evaluator *and* constant in the neural encoding —
-  two independent instruments over two independent representations agreeing.
-* **Self-play never reaches discontent.**  `discontent` and the `uprising` flag
-  are constant zeros in the encoding for every seat.  The unhappiness channel is
-  four encoding slots and one whole feature group that no game exercises.
+  two independent instruments over two independent representations agreeing.~~
+* ~~**Self-play never reaches discontent.**  `discontent` and the `uprising`
+  flag are constant zeros in the encoding for every seat.~~
+
+**The corpus is six deterministic self-play games, and any pricing change
+re-rolls all of it.**  Measured over the two commits of 2026-07-31
+(`docs/UNIT_TECH_PRICING.md` §8, `docs/GOVERNMENT_PRICING.md`), non-zero states
+out of ~2000:
+
+| coordinate | parent | after the red fix | after the government fix |
+|---|---|---|---|
+| `best_arena` | 0 | — | **314** |
+| `discontent` | 2 | — | **19** |
+| `uprising` | 2 | (in the encoding sample) | 3 (**out of** the sample again) |
+| `hand_limit` | 295 | — | **0** |
+
+Two of those flips crossed the `KNOWN_DEAD` ratchet in *both* directions inside
+one session: seven entries were deleted by the first commit and three re-listed
+by the second.  `hand_limit` is the clearest case — `Library of Alexandria` is
+the only card in the game that grants a hand limit and the bot completes 0.05
+wonders per seat-game, so the whole coordinate is one wonder completion in one
+of six games away from being live.
+
+**The open question is the corpus, not the coordinates.**  A ratchet whose
+entries flip on any pricing change reports this week's policy, not the code, and
+each flip costs a lane an edit it learns nothing from.  Two candidate fixes,
+neither done: widen `CORPUS_SEEDS` until the rare shapes appear reliably (and
+accept the runtime), or do for the deadness judgements what
+`_probe_wonder_and_tactic` now does for the conduction probe — reach the rare
+shape **by construction** rather than by luck.  The second is cheaper and is
+the pattern that has already had to be applied twice (`hand_swap_extra`, then
+`wonder_potential` / `tactic_gain`).
 
 ### 9.6 The encoder's constant inputs
 

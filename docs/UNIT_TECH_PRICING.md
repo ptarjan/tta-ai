@@ -369,3 +369,120 @@ which is trivially true when there is no credit.
    tactics to be re-measured after the unit hole, not in parallel with it.
    Tactics played moved 1.05 → 0.88 at 2p and 0.85 → 1.02 at 3p; that is now
    measurable and was not before.
+
+## 8. A Warriors worker cannot become a Cannon (2026-07-31)
+
+Closes `docs/OPEN_ITEMS.md` §2 item 20, opened by `docs/YELLOW_TECH_PRICING.md`
+§6.1 and deliberately left alone there so that lane's digest moves had one
+cause.
+
+### 8.1 The defect, verified against the engine before anything changed
+
+`unit_upgrade` answered "develop this and move **every unit worker I have**
+onto it".  `engine/actions.py:_action_moves` offers `("upgrade", lo, hi)` only
+out of `_tableau`'s `higher` relation, and `higher[n]` is built from
+`by_type[type_of[n]]` — **same type, strictly higher level**.  A Warriors
+worker can never become a Cannon.  So the red price was optimistic for
+cavalry, artillery and air on every board where the player held only infantry,
+which is most of the game.
+
+Measured on the parent tree (`d15cb5b`), a 2p board with four Warriors
+workers, `unit_upgrade("Cavalrymen")`: **`(8.0, 6.0, 12.0)`** — eight strength
+bought and `upgrade_cost` charged four times, for a move the engine never
+generates.  After: `(0.0, 6.0, 0.0)`, the science and nothing else.
+`tests/test_unit_pricing.py:test_a_warriors_worker_cannot_become_a_cannon` is
+that number as a test, and it fails on the parent tree.
+
+### 8.2 What changed
+
+`unit_upgrade` now calls `_upgradable_onto` and `_with_tech` — **the same two
+helpers `tech_upgrade`'s non-red half has used since it landed**, moved up the
+file rather than copied — so both halves of the module mean the same thing by
+"upgrade".  `_unit_workers` and `_with_unit`, the two functions that expressed
+the pooled version, are deleted.  There is no new weight and no new constant:
+this is a legality rule the price was contradicting.
+
+### 8.3 What it did — take rates, 2p, `default` (WeightedBot on
+### `DEFAULT_WEIGHTS`), 20 games / 40 seat-games, same seeds
+
+Descriptive, not a strength claim; n = 40 seat-games is below
+`docs/HAZARDS.md` §1's n≥200 bar and is reported as counts, not as evidence
+about win rate.
+
+| takes per seat-game | human 2p | before | after |
+|---|---|---|---|
+| infantry | 1.120 | 0.400 | **0.475** |
+| cavalry | 1.222 | 0.350 | **0.150** |
+| artillery | 0.846 | 0.225 | **0.100** |
+| air | 0.653 | 0.075 | **0.000** |
+| **all red** | 3.841 | 1.050 | **0.725** |
+
+The direction is the derivation's: infantry (the only line the starting
+Warriors can actually upgrade into) goes **up**, and cavalry, artillery and air
+— the three the old price was inventing upgrades for — fall.  The bot moves
+*further* from the human rate on those three, and that is the correct
+consequence of a correct price: what remains is `docs/OPEN_ITEMS.md` §2 item
+21, "nothing prices the build one fresh plan", which is now the binding
+constraint on the red lane rather than a footnote.
+
+### 8.4 The invisibility check, with numbers
+
+`row_pressure` skips any card whose `card_potential` is `<= 0.0`, so a price
+that falls has to be checked against zero and not just against itself.  On a
+fresh 2p board under `DEFAULT_WEIGHTS`, four workers on the highest card of
+each card's own type:
+
+| card | type | price |
+|---|---|---|
+| Swordsmen / Riflemen / Modern Infantry | infantry | +2.83 / +5.16 / +10.29 |
+| Cavalrymen / Tanks | cavalry | +1.15 / +3.38 |
+| Rockets | artillery | +3.88 |
+| **Knights** | cavalry | **−0.28** |
+| **Cannon** | artillery | +1.15 |
+| **Air Forces** | air | +0.07 |
+
+**All four red types still price strictly positive**, so no class went
+invisible, and `tests/test_coordinate_registry.py:NoCardClassIsInvisible`
+agrees over its 6-game corpus.  But **Knights is now negative under
+`DEFAULT_WEIGHTS` on a fresh board**, and that is worth stating plainly rather
+than burying: Knights, Cannon and Air Forces are the lowest card of their own
+type in the deck, so **no board can ever offer an upgrade onto them** and their
+whole price is the develop half (`tech_levels`, `num_techs`, `best_unit`)
+against their science.  Under `DEFAULT_WEIGHTS` one technology level is worth
+1.5 eval points and Knights costs 5 science at 0.5, so it lands just under
+zero; at `tech_levels` 3.0 (the live 2p champion carries 5.84) all three are
+positive.  It is a weights judgement, not a sign lock, and the test asserts
+exactly that distinction.  The gateway cards are the sharpest instance of item
+21 in the game and are recorded there.
+
+### 8.5 Fingerprints
+
+Six arms moved, two held.  **NARROW and WIDE are GreedyBot, which never calls
+`card_potential`** — they are the control, and they held.
+
+| arm | parent `d15cb5b` | this commit |
+|---|---|---|
+| NARROW (greedy) | ca255af3 | ca255af3 |
+| WIDE (greedy) | f223cea1 | f223cea1 |
+| WNARROW | ba77b499 | **7a6f6639** |
+| WWIDE | f4d6a545 | **996f4ef7** |
+| QNARROW | 4ab439b2 | **79e8503b** |
+| QWIDE | 5d05f578 | **bb8d74c7** |
+| PNARROW | 0a637b40 | **7e0f7a3b** |
+| PWIDE | ccc96764 | **dee840cc** |
+
+Attribution is the change itself: it is a single hunk in one function, on the
+path `card_potential -> tech_value -> unit_upgrade`, which every evaluator bot
+reaches and GreedyBot does not.
+
+### 8.6 The ratchet moved, and that is a warning as much as a result
+
+`tests/test_coordinate_registry.py` landed the day before this change with a
+`KNOWN_DEAD` list that can only shrink.  Re-pricing the red cards re-rolled the
+six deterministic corpus games and **seven entries stopped being dead**:
+`best_arena` (the bot now builds one) and the six `discontent` / `uprising` /
+`best_arena` encoding slices.  They are deleted, per that file's rule.
+
+The lesson is in `docs/OPEN_ITEMS.md` §9.5: those entries are pinned to six
+games, and *any* pricing change re-rolls them.  `best_arena` went 0 → 314
+non-zero states of ~2000 on this change alone.

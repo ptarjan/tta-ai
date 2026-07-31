@@ -37,6 +37,7 @@ import unittest
 from engine import actions as A, cards as C, effects, game as G
 from engine.bots import weighted as W
 from engine.bots import board_yields as BY
+from engine.state import TechCard
 
 
 #: read off the card database, deliberately NOT off `weighted._is_unit` --
@@ -60,6 +61,29 @@ def _played(seed=5, plies=40):
             break
         A.apply(st, bot.pick(st, A.legal_moves(st)), rng)
     return st
+
+
+def _action_board(seed=5):
+    """A played 2p board stopped at a state where the acting player really is
+    choosing an action -- no pending choice, and the engine offers moves other
+    than a take.
+
+    Constructed rather than assumed: `_played(seed, plies=30)` lands wherever
+    self-play lands, which moves whenever any pricing changes, and round 1 is
+    take-only by RULES_SPEC 1.9.
+    """
+    st = G.new_game(2, seed)
+    rng = random.Random(seed)
+    bot = W.WeightedBot(seed=seed)
+    for _ in range(200):
+        if st.game_over:
+            break
+        if not st.pending and st.round > 1 and \
+                any(m[0] == "build" or m[0] == "develop"
+                    for m in A.legal_moves(st)):
+            return st, st.current
+        A.apply(st, bot.pick(st, A.legal_moves(st)), rng)
+    raise AssertionError("no action-phase board found")
 
 
 class TestTheDefect(unittest.TestCase):
@@ -111,31 +135,159 @@ class TestTheFix(unittest.TestCase):
         docs/CARD_BLINDNESS_MILITARY.md section 5.1 is the measurement that no
         setting of `unit_strength_credit` flips the sign either.
 
-        The board chosen is a player with four unit workers, i.e. four
-        upgrades riding on one `develop`.  That is not a contrived position --
-        it is the position a player who has been buying army all game is in,
-        and it is exactly the one the static table cannot distinguish from a
-        player with none.  What is asserted is that the sign is REACHABLE, not
-        that any particular board takes the card.
+        Each card is asked on a board where the engine would actually offer
+        the upgrade: four workers standing on the lower-level card of its OWN
+        type, because `("upgrade", lo, hi)` is same-type-only (`_action_moves`
+        via `_tableau`'s `higher`).  Until 2026-07-31 this test stacked four
+        Warriors and asked all ten, which passed for the wrong reason -- the
+        price pooled infantry workers onto the Cannon.  What is asserted is
+        that the sign is REACHABLE, not that any particular board takes the
+        card.
+
+        THE GATEWAY CARDS.  Knights, Cannon and Air Forces are the lowest card
+        of their own type in the whole deck, so no board can ever offer an
+        upgrade onto them -- the only route to a cavalry unit is to BUILD one
+        fresh, which is docs/OPEN_ITEMS.md section 2 item 21 and is priced at
+        nothing today.  They are therefore checked one property weaker: the
+        sign must not be structurally locked (a vector that values a
+        technology level flips them), which is the thing
+        `unit_strength_credit` could never do.
         """
-        st = G.new_game(2, 1)
-        p = st.players[0]
-        p.techs["Warriors"].workers = 4
-        effects.invalidate(st, p)
         w = _w()
-        priced = {n: W.card_potential(n, w, st, 0) for n in UNITS}
+        db = C.db()
+        type_of, level_of = db.type_by_name, db.level_by_name
+        priced = {}
+        gateway = []
+        for name in UNITS:
+            st = G.new_game(2, 1)
+            p = st.players[0]
+            lower = [n for n in UNITS
+                     if type_of[n] == type_of[name]
+                     and level_of[n] < level_of[name]]
+            if lower:
+                # the highest one below it: the position of a player who has
+                # been buying that arm of the army all game
+                lo = max(lower, key=lambda n: level_of[n])
+                if lo not in p.techs:
+                    p.techs[lo] = TechCard(lo)
+                p.techs[lo].workers = 4
+                effects.invalidate(st, p)
+            elif name not in p.techs:
+                gateway.append(name)
+            priced[name] = W.card_potential(name, w, st, 0)
         # Warriors is in `game.START_TECHS`, so it is already developed and
         # the card is dead in hand: exactly 0.0, neither cost nor gain.
         self.assertEqual(priced["Warriors"], 0.0)
-        rest = [n for n in UNITS if n != "Warriors"]
-        self.assertTrue(all(priced[n] > 0.0 for n in rest),
+        self.assertEqual(sorted(gateway), ["Air Forces", "Cannon", "Knights"])
+        staffable = [n for n in UNITS
+                     if n != "Warriors" and n not in gateway]
+        self.assertTrue(all(priced[n] > 0.0 for n in staffable),
                         "still sign-locked: %r" % priced)
-        # ...and the same nine cards on the same board under the static table
+        # every one of the four red TYPES reaches a positive price, which is
+        # the property `row_pressure`'s `val <= 0.0` skip is about
+        best = {}
+        for name in UNITS:
+            typ = type_of[name]
+            best[typ] = max(best.get(typ, -1e9), priced[name])
+        self.assertEqual(sorted(best), sorted(C.UNIT_TYPES))
+        self.assertTrue(all(v > 0.0 for v in best.values()), best)
+        # the gateway three are a weights judgement, not a sign lock: one
+        # technology level is worth 1.5 eval points on DEFAULT_WEIGHTS and
+        # 9.23 on the live 2p champion, and at the higher number they are
+        # positive with nothing else changed
+        rich = _w(tech_levels=3.0)
+        for name in gateway:
+            self.assertGreater(W.card_potential(name, rich,
+                                                G.new_game(2, 1), 0), 0.0,
+                               name)
+        # ...and the same nine cards on the same boards under the static table
         # are every one of them negative.  This is the paired half: it is the
         # BOARD that was missing, not the weights.
         off = dict(w, unit_tech_credit=0.0)
-        self.assertTrue(all(W.card_potential(n, off, st, 0) < 0.0
-                            for n in rest))
+        for name in [n for n in UNITS if n != "Warriors"]:
+            st = G.new_game(2, 1)
+            self.assertLess(W.card_potential(name, off, st, 0), 0.0, name)
+
+    def test_a_warriors_worker_cannot_become_a_cannon(self):
+        """THE NEGATIVE CONTROL for the same-type fix, and it fails on the
+        parent tree (`d15cb5b`), where four Warriors bought a Cannon 8
+        strength and were charged `upgrade_cost` four times for a move
+        `engine/actions.py:_action_moves` never generates.
+
+        The rule is checked against the ENGINE rather than restated: whatever
+        `legal_moves` offers on this board is what may be priced.  (Round 1 is
+        take-only by RULES_SPEC 1.9, hence a played board, and an upgrade
+        target has to be DEVELOPED before the engine will offer it, hence the
+        two explicit `TechCard`s.)
+        """
+        st, idx = _action_board(5)
+        p = st.players[idx]
+        for name in ("Swordsmen", "Knights"):
+            if name not in p.techs:
+                p.techs[name] = TechCard(name)
+            p.techs[name].workers = 0
+        p.techs["Warriors"].workers = 4
+        p.science = 99
+        p.resources = 99
+        p.military_actions = max(p.military_actions, 2)
+        effects.invalidate(st, p)
+        pairs = {(m[1], m[2]) for m in A.legal_moves(st) if m[0] == "upgrade"}
+        self.assertIn(("Warriors", "Swordsmen"), pairs)
+        self.assertNotIn(("Warriors", "Knights"), pairs)
+        self.assertFalse([1 for lo, hi in pairs
+                          if C.db().type_by_name[lo]
+                          != C.db().type_by_name[hi]])
+        # so the cavalry card one level up from the Knights this player holds
+        # -- with no cavalry WORKER to move -- has no staffing half at all:
+        # science only, no strength bought and no resources spent.  On the
+        # parent tree the four Warriors are pooled onto it and it reads
+        # `(8.0, 6.0, 12.0)`.
+        gained, sci, res = BY.unit_upgrade("Cavalrymen", st, idx)
+        self.assertEqual((gained, res), (0.0, 0.0))
+        self.assertGreater(sci, 0.0)
+        # ...while the infantry card those workers CAN legally reach does
+        gained, _sci, res = BY.unit_upgrade("Riflemen", st, idx)
+        self.assertGreater(gained, 0.0)
+        self.assertGreater(res, 0.0)
+
+    def test_the_price_charges_exactly_the_pairs_the_engine_offers(self):
+        """The same claim as an EQUIVALENCE over all 90 ordered pairs of unit
+        technologies, constructed rather than waited for.
+
+        A sweep over played boards was tried first and is not good enough: it
+        only sees the pairs this week's policy happens to develop, so a
+        pricing change elsewhere re-rolls it (docs/HAZARDS.md, "four sampling
+        tests re-rolled").  Here every pair is built.
+        """
+        db = C.db()
+        seen = 0
+        for lo in UNITS:
+            for hi in UNITS:
+                if lo == hi:
+                    continue
+                st, idx = _action_board(5)
+                p = st.players[idx]
+                for n in list(p.techs):
+                    if db.type_by_name[n] in C.UNIT_TYPES:
+                        p.techs[n].workers = 0
+                for n in (lo, hi):
+                    if n not in p.techs:
+                        p.techs[n] = TechCard(n)
+                p.techs[lo].workers = 2
+                p.techs[hi].workers = 0
+                p.science = 99
+                p.resources = 99
+                p.military_actions = max(p.military_actions, 2)
+                effects.invalidate(st, p)
+                offered = ((lo, hi) in
+                           {(m[1], m[2]) for m in A.legal_moves(st)
+                            if m[0] == "upgrade"})
+                charged = lo in dict(BY._upgradable_onto(p, hi))
+                self.assertEqual(offered, charged,
+                                 "%s -> %s: engine %s, price %s"
+                                 % (lo, hi, offered, charged))
+                seen += 1
+        self.assertEqual(seen, len(UNITS) * (len(UNITS) - 1))
 
     def test_the_price_is_a_board_query_not_a_table(self):
         """The same card, two boards, two prices -- and the direction is the

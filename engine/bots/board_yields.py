@@ -663,27 +663,53 @@ def _wonder_cost(state, p, name, out):
 #     army re-forming under `army_strength`, the rating clamp at zero;
 #   * the resources are `actions.upgrade_cost`, the function the engine
 #     charges the player with;
-#   * the science is `effects.tech_cost`, likewise.
+#   * the science is `effects.tech_cost`, likewise;
+#   * WHICH workers may move is `_upgradable_onto`, which is
+#     `engine/actions.py:_tableau`'s `higher` relation read backwards.
 #
-# The one modelling statement is "move ALL of them or none", and it is not a
-# guess: the trade is linear in the number of workers moved, so its optimum is
-# at an endpoint.  `weighted.unit_tech_value` takes that max; this function
-# reports the all-of-them end of it.
+# The one modelling statement is "move ALL of the eligible ones or none", and
+# it is not a guess: the trade is linear in the number of workers moved, so its
+# optimum is at an endpoint.  `weighted.tech_value` takes that max; this
+# function reports the all-of-them end of it.
+#
+# THE ELIGIBILITY RULE IS THE ENGINE'S, AND IT USED NOT TO BE.  Until
+# 2026-07-31 this function pooled every unit worker on the board regardless of
+# type -- it moved the Warriors onto the Cannon -- while
+# `engine/actions.py:_action_moves` only ever offers `("upgrade", lo, hi)`
+# between cards of the SAME type and strictly increasing level (`_tableau`
+# builds `higher[n]` out of `by_type[type_of[n]]`, so a Warriors worker can
+# never become a Cannon).  The price was therefore optimistic for cavalry,
+# artillery and air on every board where the player held only infantry, which
+# is most of the game.  docs/OPEN_ITEMS.md section 2 item 20; the non-red half
+# of `tech_upgrade` was same-type-only from the day it landed and this is the
+# red half being made to agree with it, sharing the same two helpers rather
+# than keeping a second opinion about what an upgrade is.
 
 
 _UNIT_CACHE = {}
 _UNIT_CACHE_MAX = 200_000
 
 
-def _unit_workers(p):
-    """[(tech name, workers)] for every unit technology carrying a worker."""
+def _upgradable_onto(p, name):
+    """[(tech, workers)] this player could LEGALLY upgrade onto `name`.
+
+    Same type, strictly lower level, at least one worker standing on it --
+    which is `engine/actions.py:_tableau`'s `higher` relation read backwards.
+
+    Shared by `unit_upgrade` and `tech_upgrade`: one statement of what the
+    engine offers, for all fifteen technology types.
+    """
     type_of = _DB.type_by_name
+    level_of = _DB.level_by_name
+    typ = type_of.get(name)
+    lv = level_of.get(name, 0)
     return [(n, t.workers) for n, t in p.techs.items()
-            if t.workers and type_of.get(n) in C.UNIT_TYPES]
+            if t.workers and type_of.get(n) == typ and level_of.get(n, 0) < lv]
 
 
-def _with_unit(state, p, name, workers):
-    """`effects.compute` with `name` developed and `workers` workers on it.
+def _with_tech(state, p, name, moved):
+    """`effects.compute` with `name` developed and `moved` workers moved onto
+    it, off the technologies they are standing on.
 
     The same `try/finally` discipline as `_swapped`, and the same reason: a
     raise here would leave the player holding a technology they never
@@ -691,14 +717,13 @@ def _with_unit(state, p, name, workers):
     journal watching the original mapping never sees a write.
     """
     old = p.techs
-    type_of = _DB.type_by_name
-    new = {}
-    for n, t in old.items():
-        if t.workers and type_of.get(n) in C.UNIT_TYPES:
-            new[n] = TechCard(n, workers=0, stored=t.stored)
-        else:
-            new[n] = t
-    new[name] = TechCard(name, workers=workers)
+    new = dict(old)
+    total = 0
+    for n, k in moved:
+        t = new[n]
+        new[n] = TechCard(n, workers=t.workers - k, stored=t.stored)
+        total += k
+    new[name] = TechCard(name, workers=total)
     p.techs = new
     try:
         return effects.compute(state, p)
@@ -709,10 +734,11 @@ def _with_unit(state, p, name, workers):
 def unit_upgrade(name, state, idx):
     """(strength gained, science cost, resource cost) for a unit technology.
 
-    "Develop `name`, then move every unit worker I have onto it."  Returns
-    `(0.0, 0.0, 0.0)` for a card that is not a unit technology, or one the
-    player has already developed (it cannot be developed twice, so the card is
-    dead in hand and worth exactly nothing -- not a cost, and not a gain).
+    "Develop `name`, then move every worker that could LEGALLY upgrade onto
+    it" -- same type, strictly lower level, exactly as the engine offers.
+    Returns `(0.0, 0.0, 0.0)` for a card that is not a unit technology, or one
+    the player has already developed (it cannot be developed twice, so the card
+    is dead in hand and worth exactly nothing -- not a cost, and not a gain).
 
     Memoised on `(name, effects.stats_key(state, p))` for the same reason
     `_stats_delta` is, and on the same key: `stats_key` carries the invariant
@@ -729,19 +755,22 @@ def unit_upgrade(name, state, idx):
     if hit is not None:
         return hit
     sci = effects.tech_cost(state, p, name) or 0
-    held = _unit_workers(p)
-    workers = sum(n for _, n in held)
-    if workers:
+    held = _upgradable_onto(p, name)
+    if held:
         before = effects.state_stats(state, p)
-        after = _with_unit(state, p, name, workers)
+        after = _with_tech(state, p, name, held)
         gained = float(after.strength - before.strength)
         res = float(sum(k * A.upgrade_cost(state, p, lo, name)
                         for lo, k in held))
     else:
-        # Nobody to move.  Developing the technology is legal and buys no
-        # strength at all until a unit is built, and building one is its own
-        # decision with its own price -- so this is a science cost and
-        # nothing else, which is the honest answer rather than a floor.
+        # Nobody eligible to move -- no worker of this type on a lower level.
+        # Developing the technology is legal and buys no strength at all until
+        # a unit is built, and building one is its own decision with its own
+        # price -- so this is a science cost and nothing else, which is the
+        # honest answer rather than a floor.  It is also why an artillery card
+        # reads thin to a player who has never developed artillery: that is
+        # docs/OPEN_ITEMS.md section 2 item 21 ("nothing prices the build one
+        # fresh plan"), not this function being wrong.
         gained = res = 0.0
     out = (gained, float(sci), res)
     if len(_UNIT_CACHE) >= _UNIT_CACHE_MAX:
@@ -811,44 +840,6 @@ _BEST_FEATURE = {t: "best_" + t for t in
 _BEST_FEATURE.update({t: "best_unit" for t in C.UNIT_TYPES})
 
 
-def _upgradable_onto(p, name):
-    """[(tech, workers)] this player could LEGALLY upgrade onto `name`.
-
-    Same type, strictly lower level, at least one worker standing on it --
-    which is `engine/actions.py:_tableau`'s `higher` relation read backwards.
-    """
-    type_of = _DB.type_by_name
-    level_of = _DB.level_by_name
-    typ = type_of.get(name)
-    lv = level_of.get(name, 0)
-    return [(n, t.workers) for n, t in p.techs.items()
-            if t.workers and type_of.get(n) == typ and level_of.get(n, 0) < lv]
-
-
-def _with_tech(state, p, name, moved):
-    """`effects.compute` with `name` developed and `moved` workers moved onto
-    it, off the technologies they are standing on.
-
-    The same `try/finally` discipline as `_swapped` and `_with_unit`, and the
-    same reason: a raise here would leave the player holding a technology they
-    never developed.  `p.techs` is REBOUND to a new dict rather than mutated,
-    so a journal watching the original mapping never sees a write.
-    """
-    old = p.techs
-    new = dict(old)
-    total = 0
-    for n, k in moved:
-        t = new[n]
-        new[n] = TechCard(n, workers=t.workers - k, stored=t.stored)
-        total += k
-    new[name] = TechCard(name, workers=total)
-    p.techs = new
-    try:
-        return effects.compute(state, p)
-    finally:
-        p.techs = old
-
-
 def tech_upgrade(name, state, idx):
     """(staff triples, develop triples, science cost, resource cost).
 
@@ -898,13 +889,13 @@ def tech_upgrade(name, state, idx):
             dev.append((feat, float(lv - cur), _GAIN))
 
     if typ in C.UNIT_TYPES:
-        # The red half is `unit_upgrade`, unchanged and deliberately so: it is
-        # the shape docs/UNIT_TECH_PRICING.md measured and landed, and
-        # re-deriving it here would silently re-open a settled A/B.  The one
-        # known defect in it -- it pools workers across all four unit types,
-        # where the engine only offers a same-type upgrade -- is recorded in
-        # docs/OPEN_ITEMS.md rather than fixed inside this commit, so this
-        # lane's digest attribution stays a single constant.
+        # The red half is `unit_upgrade`, called and not re-derived: it is the
+        # shape docs/UNIT_TECH_PRICING.md measured and landed, and a second
+        # opinion here would silently re-open a settled A/B.  Since 2026-07-31
+        # it shares `_upgradable_onto` and `_with_tech` with the branch below,
+        # so both halves of this function mean the same thing by
+        # "upgrade" -- same type, strictly lower level, which is what
+        # `engine/actions.py:_action_moves` offers.
         gained, sci, res = unit_upgrade(name, state, idx)
         staff = (("strength", gained, _GAIN),) if gained else ()
     else:

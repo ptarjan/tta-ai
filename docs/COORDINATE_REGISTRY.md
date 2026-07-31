@@ -297,7 +297,15 @@ opposite reason to the one the check is about.
 
 ---
 
-## 7. The current KNOWN_DEAD list — 45 entries
+## 7. The current KNOWN_DEAD list — 38 entries
+
+**Seven entries were deleted on 2026-07-31** by the same-type `unit_upgrade` fix
+(`docs/UNIT_TECH_PRICING.md` §8): `best_arena` and the six `discontent` /
+`uprising` / `best_arena` encoding slices below stopped being dead because the
+re-priced policy builds an arena and goes discontent in the six corpus games.
+That is the ratchet working — and it is also a warning worth reading twice:
+**every corpus-pinned entry is only as stable as the six games that generate
+it**, so any pricing change can flip one in either direction.
 
 ### Spent by `card_potential`, emitted by no feature (5)
 
@@ -327,9 +335,8 @@ military card at all, which is what makes `territory_credit` and
 `bonus_card_credit` cost nothing and what hides the four invisible military
 classes below.  `unit_strength_credit` is the named historical case.
 
-### Emitted but never non-zero (2)
+### Emitted but never non-zero (1)
 
-`best_arena` — the bot builds no arena in any corpus game at any player count.
 `wonder_overrun` — the feature never fires, so its 0.0 weight is doubly dead;
 `docs/MODEL_CONSTANTS.md` §6.1 already leans on that to argue the deal-rate fix
 is inert.
@@ -364,19 +371,13 @@ prices the military hand, four of the game's card types are invisible to it.
 | `destroyed_wonders` | already in OPEN_ITEMS: read by the take surcharge, never incremented |
 | `hidden_civil`, `hidden_military` | **deliberate** — app-harness only, documented at `state.py`.  Listed so they are a stated exception rather than an unexamined zero |
 
-### Constant encoding slices (14)
+### Constant encoding slices (8)
 
 `global.current_events_age`, `global.scoring_events` — the two dead fields
 above, seen from the other registry.
 `row.cost_ladder` — `_ROW_COST[i]/3.0` is a positional constant, so 13 inputs
 are compile-time constants the net absorbs into its bias.
 `me.present`, `rival.present` — the padding markers, §4.
-`me.discontent`, `rival.discontent`, `me.uprising`, `rival.uprising` — the bot
-never goes discontent in any corpus game, so the whole unhappiness channel is a
-column of zeros in *both* representations.
-`me.best_arena`, `rival.best_arena` — **the cross-registry confirmation**: two
-independent instruments over two independent representations agree the bot never
-builds an arena.
 `rival.seeded_events_n`, `rival.seeded_events_level`, `rival.hand_military_vec`
 — **deliberate**, and they are the information-legality guarantee, not a bug.
 

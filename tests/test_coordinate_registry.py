@@ -294,13 +294,6 @@ KNOWN_DEAD = {
         "a board -- so today it is dead by construction rather than neglect",
         "docs/UNIT_TECH_PRICING.md; retire with the static table"),
     # -------------------------------------------- emitted, never non-zero yet
-    "best_arena": (
-        ("never-nonzero",),
-        "the bot builds no arena in any of the six corpus games at any player "
-        "count, so the coordinate has no gradient from this policy at all.  "
-        "Corpus-pinned and deterministic: if a change makes the bot build one, "
-        "this entry must be deleted",
-        "docs/OPEN_ITEMS.md: the bot never builds an arena"),
     # ------------------------------------------------ whole classes invisible
     "class:tactic": (
         ("invisible-class",),
@@ -421,37 +414,6 @@ KNOWN_DEAD = {
         "the same padding marker in the rival blocks, and the same reason: "
         "it is 1.0 wherever this check is allowed to look",
         "none -- structural, see docs/COORDINATE_REGISTRY.md on padding"),
-    "encode:me.discontent": (
-        ("constant-encoding",),
-        "the bot never goes discontent in any of the six corpus games, at any "
-        "player count, so the whole unhappiness channel is a column of zeros "
-        "in the encoding exactly as it is in features()",
-        "docs/OPEN_ITEMS.md: self-play never reaches discontent"),
-    "encode:rival.discontent": (
-        ("constant-encoding",),
-        "the same channel one seat over; the rivals are the same policy",
-        "docs/OPEN_ITEMS.md: self-play never reaches discontent"),
-    "encode:me.uprising": (
-        ("constant-encoding",),
-        "the `discontent > workers_free` flag, which cannot fire while "
-        "discontent is always zero.  Two slices, one cause",
-        "docs/OPEN_ITEMS.md: self-play never reaches discontent"),
-    "encode:rival.uprising": (
-        ("constant-encoding",),
-        "the same flag one seat over, and dead for the same reason: the "
-        "rivals are running the same policy",
-        "docs/OPEN_ITEMS.md: self-play never reaches discontent"),
-    "encode:me.best_arena": (
-        ("constant-encoding",),
-        "THE CROSS-REGISTRY CONFIRMATION.  `best_arena` is 0.0 on every corpus "
-        "state in the linear evaluator AND constant here, found by two "
-        "independent instruments over two independent representations -- the "
-        "bot simply never builds an arena",
-        "docs/OPEN_ITEMS.md: the bot never builds an arena"),
-    "encode:rival.best_arena": (
-        ("constant-encoding",),
-        "the same coordinate one seat over, for the same reason",
-        "docs/OPEN_ITEMS.md: the bot never builds an arena"),
     "encode:rival.seeded_events_n": (
         ("constant-encoding",),
         "DELIBERATE and it is the information-legality guarantee, not a bug: "
@@ -495,7 +457,15 @@ KNOWN_ZERO_CARDS = frozenset((
     # the starting government: likewise
     "Despotism",
     # genuinely negative on this board and that is a judgement, not blindness
-    "Code of Laws", "Sid Meier",
+    "Code of Laws",
+    # 11 science for three technology levels and a `special_techs` step, with
+    # no staffing half at all (a special technology carries no worker), so it
+    # is the develop half against `w["science"]` and loses on this corpus.
+    # Swapped in for `Sid Meier` when the same-type `unit_upgrade` fix
+    # re-rolled the corpus -- neither card is priced by that change, both sit
+    # within an eval point of zero, and which of the two is on the wrong side
+    # of it is a property of the six games, not of the pricing.
+    "Military Theory",
 ))
 
 # --------------------------------------------------------------------------
