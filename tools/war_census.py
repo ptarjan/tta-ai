@@ -94,11 +94,40 @@ TACTIC_KINDS = ("copy_tactic", "play_tactic")
 RATE_TYPES = {"farm", "mine", "lab", "temple", "library", "arena", "theater"}
 
 _OUT = None   # set by main(); the JSONL sink every recorder writes to
+_WRITTEN = 0  # bytes this process has emitted
+_CAPPED = False
+
+#: THE CENSUS HAS TO SHARE A DISK WITH THE RUN IT IS MEASURING.  Left
+#: uncapped it writes ~1 MB/minute per climber worker; the league runs for
+#: days on a volume that was 96% full when this was written, so an instrument
+#: with no ceiling is a way to kill the training run it exists to explain.
+#:
+#: The cap is PER PROCESS, and that is the whole trick: the league relaunches
+#: its climbers every hour, so every hour opens fresh pids with a fresh
+#: budget.  Coverage is spread across the whole run instead of stopping dead
+#: after the first hour, and the directory total stays bounded by the second
+#: ceiling below, which is checked when a sink is opened.
+_MAX_BYTES = int(float(os.environ.get("TTA_WAR_CENSUS_MAX_MB", "4")) * 1e6)
+_MAX_DIR_BYTES = int(
+    float(os.environ.get("TTA_WAR_CENSUS_MAX_DIR_MB", "500")) * 1e6)
 
 
 def _emit(rec):
-    if _OUT is not None:
-        _OUT.write(json.dumps(rec) + "\n")
+    global _WRITTEN, _CAPPED
+    if _OUT is None or _CAPPED:
+        return
+    line = json.dumps(rec) + "\n"
+    if _WRITTEN + len(line) > _MAX_BYTES:
+        _CAPPED = True
+        # NO SILENT CAPS.  A truncated sample that does not say it is
+        # truncated reads exactly like a complete one, and every rate computed
+        # from it is then quietly a rate over "the first N minutes of an hour".
+        _OUT.write(json.dumps({
+            "kind": "census_capped", "pid": os.getpid(),
+            "bytes": _WRITTEN, "max_bytes": _MAX_BYTES}) + "\n")
+        return
+    _WRITTEN += len(line)
+    _OUT.write(line)
 
 
 def _row_alternatives(state, idx, w):
@@ -267,11 +296,22 @@ def open_sink_for_process(dest):
     records behind -- arms are restarted routinely and losing the tail of
     every run to buffering would quietly bias the sample toward whatever
     happens early in a game.
+
+    Returns None, and records nothing for this process, once the directory as
+    a whole reaches `_MAX_DIR_BYTES`.  Deleting the directory is the resume:
+    the next hourly relaunch opens fresh sinks with no other action needed.
     """
     global _OUT
     if _OUT is not None:
         return _OUT
     os.makedirs(dest, exist_ok=True)
+    try:
+        used = sum(os.path.getsize(os.path.join(dest, f))
+                   for f in os.listdir(dest) if f.endswith(".jsonl"))
+    except OSError:
+        used = 0
+    if used > _MAX_DIR_BYTES:
+        return None
     _OUT = open(os.path.join(dest, "census-%d.jsonl" % os.getpid()),
                 "a", buffering=1)
     return _OUT
