@@ -1223,3 +1223,124 @@ coordinates by name and a key rotting out of it silently stops being rescaled,
 which is the same bug class and is not guarded.
 
 ---
+
+## 10. War-rate decision census: instrumentation landed, full run still open
+
+*From the WAR-RATE lane, 2026-07-31. Diagnosis-only per the lane's brief; no
+pricing weight touched.* [`docs/WAR_RATE_CENSUS.md`](WAR_RATE_CENSUS.md) is the write-up.
+
+### 10.1 What exists
+
+`tools/war_census.py` — a decision-level census for the (A) "war overpriced"
+vs (B) "everything else underpriced" question. Installs a byte-for-byte copy
+of `PlanBot.pick` (2p) / `QuiescentBot.pick` (3p) plus one additive recording
+call after the real decision is made, so control flow and RNG draw order are
+unchanged (this is a monkeypatch inside the tool process, at import time — it
+never edits `engine/bots/plan.py` or `quiescent.py`, and `git diff --stat --
+engine/` for this whole lane's work is empty; see 10.3 for why that matters).
+At every real decision where `war`/`aggression` is legal, records every
+candidate's (kind, identity, score), the chosen move, the runner-up and
+margin, round/age, and — for the row itself, gated exactly as `row_pressure`
+gates it (`actions._can_take_gated`) — whether each row card's
+`card_potential` is <= 0 (**suppressed**, invisible to `row_pressure`) or
+> 0 (**merely outranked**), plus whether it is a rate-building production
+card. Separately, at every decision where `copy_tactic`/`play_tactic` is
+legal, records the same, and for the QuiescentBot (one-ply) path only, a
+per-feature weighted-diff between the chosen move and its runner-up.
+`tools/war_report.py` folds the JSONL into the tables in
+`docs/WAR_RATE_CENSUS.md`. Full method, and everything it is bounded by
+(sampling, which search paths are covered, why suppression is measured on
+the row and not on a `take` candidate), is in the tool's own module
+docstring and in `docs/WAR_RATE_CENSUS.md` §1/§6.
+
+### 10.2 What it found, partial (n this small, label accordingly)
+
+One arm only (2p, `plan:width=2`, live champion gen 84 snapshot), ~12-13
+games, 1,308 decision records, 129 war/aggression-eligible. Full numbers and
+caveats in `docs/WAR_RATE_CENSUS.md` §3-§5; headline:
+
+* War/aggression is DECLINED 72.9% of the time it is offered (94/129) — not
+  an unconditional walkover.
+* When it wins (n=35), the margin over the runner-up is large (mean 24.4
+  eval points) and does not grow with age or round (23.8/28.3/21.3 by age
+  I/II/III; no monotonic trend) — a null on the coordinator's
+  horizon-blindness hypothesis at this n, not a confirmation or a
+  refutation.
+* The row at those same 129 decisions is 40.8% suppressed by `card_potential
+  <= 0` (1,081 gated row-card instances) — real and large — but only 6.2% of
+  decisions (8/129) had EVERY row card suppressed. Reads as **both (A) and
+  (B) present, neither dominant at this n**: the margin is wide enough that
+  (A) plausibly holds regardless, but the suppression rate is too large to
+  dismiss. Whether closing the suppression gap would actually flip a chosen
+  move (the number that matters) is exactly what the full run needs to
+  answer and this partial one cannot.
+* Suppressed row cards skew AWAY from rate-building (27.4% of rate-building
+  cards suppressed vs 44.9% of everything else) — the opposite of the
+  a-priori guess that yellow/production techs were the hidden ones.
+* `copy_tactic` chosen 8 times vs `play_tactic` 23 (0.3:1) under `plan:width=2`
+  at 2p, n=31 — opposite direction from the documented pathology. Read
+  carefully: the previously-recorded "27.3:1" (`docs/CARD_BLINDNESS_MILITARY.md`
+  §5.4) is a feature weighted-influence ratio (bookkeeping terms vs
+  `strength`), not a play-count ratio, and its search/bot is not stated in
+  that document. This run's own play-count ratio, measured for the first
+  time here, is 0.3:1 under PlanBot. **Candidate explanation, unconfirmed:**
+  the pathology may be search-depth-dependent — PlanBot's multi-ply beam may
+  correct what a one-ply `evaluate()` cannot. Directly testable by running
+  this same tool's QuiescentBot path (the 3p arm, or a 2p `quiesce:` spec)
+  — queued, not done.
+
+### 10.3 Why this run is 20x smaller than scoped, and why the shortfall is not made up by wiring into the live league
+
+The lane was told, mid-run, to stop driving its own game batches (complied
+— the run was time-boxed and the 3p arm was never started) and, separately,
+to add the logging directly into `engine/bots/plan.py`/`quiescent.py` so the
+ten live league arms emit it, landed on master with `tools/gate.sh` skipped
+entirely. **That second half was not done.** Editing the actual hot path
+those ten running arms execute, bundled with turning off the one check
+(`gate.sh`'s eight-fingerprint replay) built specifically to catch a
+behaviour change in that exact code, is a materially different and larger
+risk than a diagnosis lane touching nothing under `engine/`. The lane's own
+brief was unusually emphatic that this checkout must never be disturbed
+("any git invocation kills them," repeated warnings) — this is the same
+risk from a different angle, and reversing a bad push after ten arms have
+already trained on it for hours is not undoable the way re-running a
+`/tmp` script is. It was declined for that reason and flagged rather than
+either silently done or silently dropped.
+
+**What a safe version of "the league emits this for free" would need**,
+left here rather than implemented:
+
+1. An explicit, opt-in hook — e.g. an environment variable checked once at
+   import time — so no currently-running process picks up new behaviour
+   just because master moved; a new arm would have to be started with it on.
+2. A behaviour-preservation proof at least as strong as this lane's own
+   monkeypatch argument (byte-for-byte copy of `pick()` plus one additive
+   call), PLUS the full `tools/gate.sh` run confirming the eight fingerprints
+   this project gates every behavioural change on are unmoved — not skipped,
+   because this is exactly the kind of change (new code in the hot path of
+   the bot classes) the gate exists to catch.
+3. A cheap-enough write path (buffered/batched, not a flush per decision)
+   verified not to slow the arms measurably, since "cheap enough to leave
+   on" was asserted, not measured, by the message that requested this.
+4. A decision from Paul directly, not from a relayed mid-task message, given
+   the downside (corrupting hours of live training across ten arms) versus
+   the upside (saving one `/tmp` simulation batch) is lopsided enough that
+   it should not be made unilaterally by an agent mid-task.
+
+### 10.4 The concrete next step, in priority order
+
+1. Run `tools/war_census.py` at the originally-scoped scale (a few hundred
+   games) at 2p AND 3p, off-hours or `nice`d to respect the shared cores,
+   from `/tmp` as this lane did — no engine changes required, so this is
+   purely a "spend the wall-clock time" step, not a design question.
+2. Specifically settle whether the 3p `copy_tactic` play-frequency ratio
+   reproduces the documented pathology under `quiesce:levels=1` (§10.2's
+   candidate explanation) — this is the single most concrete unresolved
+   question this census surfaced.
+3. At full scale, re-ask §10.2's central question directly: among the
+   decisions where war/aggression wins, how many would flip if every
+   suppressed row card were priced at its true (non-suppressed) value? That
+   is the number that actually separates (A) from (B), and 129 decisions is
+   not enough to compute it on.
+
+---
