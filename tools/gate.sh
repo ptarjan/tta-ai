@@ -322,6 +322,15 @@ cd "$(dirname "$0")/.."
 # `gov_value` and `_is_government` are inert on their own and the six moves are
 # that one default.
 #
+# COMPLETED 2026-07-31 after the lane ended: the attribution stood at 7 of 8,
+# PWIDE having been killed mid-rebase and never re-run.  Re-run from scratch on
+# a fresh clone (/tmp/govattr) of the pushed master with `gov_board_credit`
+# 1.0 -> 0.0 as the only edit: PWIDE came back dee840cc, matching the previous
+# digest above.  The attribution is now 8 of 8 -- every arm that moved, and
+# both that held, is accounted for by that one constant.  Nothing was
+# re-derived to make anything pass; the expected value was written down before
+# the run and the run agreed with it.
+#
 # Two-sided per docs/PYPY.md 9.0: derived from scratch in /tmp/work and
 # independently in /tmp/gateB2, agreeing byte for byte on all eight arms
 # INCLUDING the two that did not move, and then derived a THIRD time in the
