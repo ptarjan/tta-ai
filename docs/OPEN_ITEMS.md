@@ -256,9 +256,33 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     `rival_culture_rate` / `rival_science_rate` / `rival_strength` be made live or
     deleted; should `wonder_remaining` be sign-locked or replaced; should
     `p.resigned` get any evaluator term at all.
-16. **The one clean rules-level engine defect** in the whole coverage census: the
+16. ~~**The one clean rules-level engine defect** in the whole coverage census: the
     unit-sacrifice-for-colony choice is taken away from the player by the engine.
-    Ranked more serious than any pricing gap.
+    Ranked more serious than any pricing gap.~~  **CLOSED 2026-07-31.**  The
+    diagnosis was exactly right: `interact._build_force` picked the winner's
+    force by a fixed rule (weakest unit, then bonus cards cheapest-first, then
+    more units), while RULES_SPEC 11.3 fixes only the floor — *">= 1 unit
+    mandatory, even if other bonuses would cover the bid"* and *"the
+    colonization value (bottom half) of ANY NUMBER of military bonus cards
+    played"* — and 11.2 only the total.  It is now a `colonize` pending
+    decision (`send_unit` / `send_bonus` / `send_done`) on the same
+    `state.pending` plumbing as `auction`, `defense` and `choice`, so
+    `state.decider()` correctly gives it to the auction winner even when that
+    is not the current player (§11.6).  Single-move prefixes auto-resolve, as
+    `push_choice(auto=True)` does, so nobody is asked a question with one
+    answer.
+    **The half of this that was NOT in the diagnosis, and is the reusable
+    lesson:** a new decision whose cost only lands on the terminating move is
+    unanswerable by a 1-ply bot.  Written the obvious way — `send_unit`
+    appends a name to the pend dict, `send_done` pays for everything —
+    GreedyBot sacrificed its whole five-unit army for a force of 3, because
+    committing was free in the trial state and sending was expensive, so it
+    procrastinated until the pool ran out.  Fixed in the engine, not per bot:
+    each commitment is paid the moment it is made.  Same shape as the
+    `bid`-scores-exactly-like-`bid_pass` bug that `weighted.deferred_credit`
+    papers over, and it is worth asking whether that one could be fixed the
+    same honest way.  Pinned by
+    `tests/test_colony_sacrifice_choice.py::test_nobody_wastes_the_whole_army`.
 17. **Zero Age IV card takes at every player count** (260/260 seat-games).
 18. **`ca_left` is a genuine 1-ply pass-asymmetry artefact** (`end_turn` always
     has the highest `ca_left` of any candidate, 165/165 measured, mean +2.95)
@@ -491,9 +515,23 @@ and each is now labelled as a prior in the source and pinned by
   under `plan:width=2` (the search the league actually trains) is **unmeasured**;
   so is 3p transfer; so is whether it should feed the neural encoder's existing
   `seeded_n` / `seeded_lv`.
-* **GAP 5 (no civil-discard record)** — UNSTARTED.  `engine/game.py:117-118`
+* ~~**GAP 5 (no civil-discard record)** — UNSTARTED.  `engine/game.py:117-118`
   destroys swept civil cards silently and no `civil_discard` field exists, so
-  card counting is impossible.
+  card counting is impossible.~~  **CLOSED 2026-07-31**, in two halves.  The
+  RECORD landed in `c2a4246`: `state.civil_discard`, age → [names], shaped to
+  mirror `state.discarded_military`, written in `_replenish` where the sweep
+  used to write `None` over the slot.  The EXPOSURE was gated on the legality
+  question two bullets down and landed once that was settled — the encoder's
+  `_discard_block` now reads BOTH piles, per age (the share of that age's
+  civil deck already swept, and the size of that age's military discard), so
+  `unseen(age) = deck − row − hands − tableaux − discard` is learnable.
+  `ENCODING_DIM` 1897 → 1907, which stales any existing neural checkpoint —
+  loudly, since `neural_net.load` rebuilds from the checkpoint's own `in_dim`.
+  Still open, deliberately: **no `weighted.py` evaluator term prices it.**
+  That is a pricing job, not this lane's, and `docs/HAZARDS.md` is explicit
+  that a weight the climb never has to pay for is unconstrained and will
+  drift.  Recording plus encoding is what makes the pricing *possible*; it is
+  not the pricing.
 * **GAP 6 (military hand identity)** — UNSTARTED, and a **loaded gun**: the
   moment military-card identity is priced, the `end_turn` military draw becomes a
   live unmasked information leak.  It must ship together with rival-hand
@@ -507,8 +545,17 @@ and each is now labelled as a prior in the source and pinned by
   merely read more?  Never ablation-tested.  The one exception (de-leaking the
   row terms was strength-neutral) says nothing about whether the row terms are
   worth their weights.
-* **Is the military discard pile legible in the physical game?**  Unverified from
-  the rules text.  Treat `state.discarded_military` as hidden until settled.
+* ~~**Is the military discard pile legible in the physical game?**  Unverified from
+  the rules text.  Treat `state.discarded_military` as hidden until settled.~~
+  **CLOSED 2026-07-31 by a ruling from Paul**, verbatim: *"Card counting is
+  legal.  All public info can be used."*  Both discard piles are public and
+  both are now encoded.  The principle is written down as project law in
+  `docs/INFORMATION_AUDIT.md` §0c and inside
+  `engine/bots/neural_encode.py`'s docstring, which is the source of truth for
+  information legality; the test for any future field is *could a human at the
+  table with the physical 2015 base game see it?*  **It does not reach GAP 6.**
+  A hand is not public: rival military-hand contents stay hidden, and the
+  loaded-gun warning below stands unchanged.
 * A known, deliberately-left-open hole in the row-leak fix: the forward-only
   cursor is an upper bound, not an identity — it cannot distinguish a genuinely
   new card from one reusing the name of a card a *rival took* (as opposed to one

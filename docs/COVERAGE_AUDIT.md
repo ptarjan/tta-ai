@@ -244,7 +244,7 @@ dedicated feature is a dead coordinate.**
 | 11.2 pass = out permanently; last remaining bidder wins and must colonise | `_auction_move`, `interact.py:524` | yes |
 | 11.2 no bids → territory to past events | `interact.py:535` | yes |
 | 11.3 force = printed unit strength + armies formed **by the sacrificed units** + ship icons in play + bonus cards | `force_value`, `interact.py:488` | yes |
-| 11.3 ≥ 1 unit mandatory | `_build_force`, `interact.py:565` | yes |
+| 11.3 ≥ 1 unit mandatory | `_colonize_moves` withholds `send_done` until the force holds a unit | yes |
 | 11.3 strength-*rating* modifiers excluded | uses `army_strength_units`, never `s.strength` | yes (already tested) |
 | 11.4 sacrificed tokens go to the **yellow bank**, not the worker pool | `interact.py:552` | yes (already tested) |
 | 11.5 permanent effects first, then the immediate one | `gain_colony`, `interact.py:577` | yes |
@@ -255,12 +255,19 @@ dedicated feature is a dead coordinate.**
 | 5.2 preparing a territory scores culture equal to its level | `_h_prepare_event`, `actions.py:965` | yes |
 
 Six of these had no test; they do now (`TestColonyEffects`,
-`TestColonyForceRules`). One soft spot, not a rules violation: **which** units
+`TestColonyForceRules`). ~~One soft spot, not a rules violation: **which** units
 the winner sacrifices is chosen by a fixed heuristic (`_build_force`, cheapest
 unit first, bonus cards before extra units) rather than being a decision the
 bot makes. Any force ≥ the bid is legal, so this conforms; it does mean the bot
 cannot trade off "lose a Warriors" against "lose a Knights", and that sub-choice
-is invisible to the search.
+is invisible to the search.~~ **FIXED 2026-07-31** (`docs/OPEN_ITEMS.md` §2
+item 16, which ranked this above every pricing gap and was right to). The
+sacrifice is now a `colonize` pending decision — `send_unit` / `send_bonus` /
+`send_done` — so "lose a Warriors vs lose a Knights" is a move the search
+sees and prices. The soft-spot framing above under-read it: calling a fixed
+heuristic "not a rules violation" because the *result* is legal misses that
+the rule being implemented is a **choice**, and an engine that takes a choice
+is not conforming to it. `tests/test_colony_sacrifice_choice.py`.
 
 ### 3.2 Is it deferred-credit'ed? Yes, already
 

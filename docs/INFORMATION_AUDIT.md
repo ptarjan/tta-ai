@@ -48,6 +48,48 @@ either direction.
 
 ---
 
+## 0c. Information legality — the standing rule (PROJECT LAW)
+
+**Ruling from Paul, 2026-07-31, verbatim:**
+
+> "Card counting is legal. All public info can be used."
+
+That is the whole rule, and it is not to be re-litigated field by field. The
+test for any new field is one question:
+
+> **Could a human sitting at the table with the physical 2015 base game see
+> it?**
+
+If yes, an evaluator or encoder may read it, and *remembering* it across a
+whole game is a skill the game rewards rather than a cheat — which is exactly
+what the project owner said the game is about in the epigraph at the top of
+this document. If no, it stays hidden.
+
+**What this settled.** Two items had been parked on it and are now closed
+(`docs/OPEN_ITEMS.md` §3): the civil discard pile (GAP 5 — the record shipped
+in `c2a4246` and was deliberately left unexposed pending exactly this ruling)
+and §9's "whether the military *discard pile* is public in the physical game",
+which had `state.discarded_military` marked hidden-until-settled. Both piles
+are public and both are now encoded (`neural_encode._discard_block`).
+
+**What this does NOT license.** The boundary is *public*, not *derivable*:
+
+* **Rival hand contents, civil or military, are hidden.** A hand is not on the
+  table. GAP 6 stays exactly as it is, loaded gun and all: the moment
+  military-card identity is priced, the `end_turn` military draw becomes a live
+  unmasked leak, and it must ship together with rival-hand re-dealing in
+  `plan.determinize`. (The civil hand is a separate case and is already public
+  by the open-civil-cards convention, RULES_SPEC 2.6.)
+* **Deck ORDER — civil, military, or events — is hidden.** Only sizes are
+  readable. Other players' event seeds and the order of the current-events deck
+  stay out.
+
+The source of truth for the per-field verdicts is the "Deliberately NOT
+encoded" list in `engine/bots/neural_encode.py`'s docstring, which now carries
+this principle inline. Keep the two in step; do not fork a third copy.
+
+---
+
 ## 0a. Headline result — the 2026-07-27 measurement, 60 keys (HISTORICAL)
 
 *Kept as measured. `features()` returned a 60-key dict; `DEFAULT_WEIGHTS` was 78
@@ -465,6 +507,9 @@ of the live 3p and 4p league arms. See §0b.
   (`engine/game.py:117-118`) and there is no `civil_discard` anywhere (grep:
   zero hits in `engine/`). *The engine throws away public information a human at
   the table can see.* Closing that is a one-line change plus a state field.
+  **FIXED — see GAP 5 in §7's table.** `state.civil_discard` (age → [names],
+  shaped to mirror `discarded_military`) is written in `_replenish` where the
+  `None` used to go, and §0c settled that the pile is legal to read.
 * **Does anything do so?** Only in the crudest possible form: `rounds_left`
   (`engine/bots/weighted.py:264-276`) uses `len(state.civil_deck)` plus a
   precomputed tail of *future*-age deck sizes (`_tail`,
@@ -1206,7 +1251,7 @@ requires a new search architecture.
 | GAP 2 — take now vs let it slide | 2 | **SHIPPED as code, fitted only at 3p.** `row_pressure` (`weighted.py:718-777`) implements the exact slide plus the legality gate; scales are 0.0 in DEFAULT, all frozen champions and the 2p arm, +0.106/+1.516 at 3p, ~0.002/0.024 at 4p | §0b.1-2 |
 | GAP 3 — opponent hands and boards invisible | 3 | **PARTIALLY SHIPPED.** 4 of the 6 proposed terms exist (`rival_free_ca`, `rival_hand_civil`, `rival_wonders`, `rival_hand_potential`). `rival_best_tech_level` and `rival_happy_margin` were not built; nor was the desire model — `RIVAL_TAKE_P` is one flat 0.25 | §0b.3, §5 |
 | GAP 4 — politics/event deck invisible | 4 | **UNSTARTED.** 0/24 positions, 0/35 evaluations, all seven weight vectors | §0b.4, §4.1 |
-| GAP 5 — no civil discard record | 5 | **UNSTARTED.** No `civil_discard` field; deck composition moves nothing, 0/24 | §0b.4, §4 |
+| GAP 5 — no civil discard record | 5 | **CLOSED 2026-07-31.** `state.civil_discard` records the sweep (`c2a4246`); both piles encoded per age by `neural_encode._discard_block` once §0c ruled them public. No `weighted.py` term prices it yet — deliberately | §0b.4, §0c, §4 |
 | GAP 6 — military hand identity | 6 | **UNSTARTED.** `hand_mil_value` is still a level sum | §3 |
 
 **Re-ranked remaining work**, by expected value per unit of cost, given what is
@@ -1490,12 +1535,17 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
 
 ## 9. Things I could not verify
 
-* Whether the military *discard pile* is public in the physical game.
+* ~~Whether the military *discard pile* is public in the physical game.
   [`docs/RULES_SPEC.md`](RULES_SPEC.md):188 says excess military cards are discarded "face down"
   and [`docs/RULES_SPEC.md`](RULES_SPEC.md):125 says defence cards are discarded face down, which
   suggests the pile is *not* legible; but the spec does not say so explicitly.
   `state.discarded_military` should therefore be treated as hidden until this is
-  settled, which affects how a military card-counter may use it.
+  settled, which affects how a military card-counter may use it.~~
+  **RESOLVED 2026-07-31 by ruling — §0c.** "Card counting is legal. All public
+  info can be used." Both piles are public and both are encoded. The
+  face-down reading above was a reasonable inference and it was wrong; note
+  that it only ever concerned how a card is *placed*, never whether the pile
+  may be inspected, which is the question that actually mattered.
 * The size of the event-order leak (§6, item 2). `tools/infoleak.py` does not
   instrument event reveals, so this is unmeasured rather than measured-small.
   **Still true on 2026-07-29** — the tool is unchanged.

@@ -240,12 +240,15 @@ food and population rather than culture/science/resources.  Colonies at 2p are
 (0.01 bids/game, 2026-07-26) is **stale**: 4p is now 2.35 bids/seat and 1.19
 colonies/seat.
 
-One rules gap, and it is **(a)**: *the bot never chooses what to sacrifice.*
+~~One rules gap, and it is **(a)**: *the bot never chooses what to sacrifice.*
 `interact._build_force` picks the payment greedily ("bonus cards before units",
 cheapest unit first) with no decision exposed to the policy, where §11.3 makes
 the sacrifice the colonising player's choice.  It is a small edge — the greedy
 choice is usually right — but it is a rule the engine takes away from the
-player, so it belongs in category (a), not (b).
+player, so it belongs in category (a), not (b).~~  **FIXED 2026-07-31** — the
+sacrifice is a `colonize` pending decision (`send_unit` / `send_bonus` /
+`send_done`) and `BookBot._colonize` carries the old greedy as an explicit
+policy.  `docs/OPEN_ITEMS.md` §2 item 16.
 
 Label otherwise: **(c)** at 3p/4p, **(c)** at 2p with the food/population
 territories being the ones declined.
