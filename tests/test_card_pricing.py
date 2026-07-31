@@ -725,9 +725,10 @@ class TestTheMilitaryHandPassesTheBoardThrough(unittest.TestCase):
         seen = []
         real = W.card_potential
 
-        def spy(name, w, state=None, idx=None):
+        def spy(name, w, state=None, idx=None, late_tech=None,
+                late_action=None):
             seen.append((name, state is not None, idx is not None))
-            return real(name, w, state, idx)
+            return real(name, w, state, idx, late_tech, late_action)
 
         st = self._state()
         p = next((q for q in st.players if q.hand_military), None)
