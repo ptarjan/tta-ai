@@ -8,10 +8,10 @@ every digest at its master value.
 **Timing caveat, and it is a real one.** Every number below was measured on the
 engine as of `e9cb000`. While this branch ran, master gained
 `4037c17 Fix four scoring bugs against the BGO corpus; all four gate digests
-move`. `docs/SCORE_VALIDATION.md` §3 sizes those bugs at single-digit culture
+move`. [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#3-three-engine-bugs-all-small-none-of-them-the-score-gap) §3 sizes those bugs at single-digit culture
 per position, so nothing here changes sign or ordering — the smallest gap this
 document leans on is 39 points — but the **absolute** culture figures in §3
-predate the fix and will shift by a few points if re-run. `docs/HUMAN_BASELINE.md`'s
+predate the fix and will shift by a few points if re-run. [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s
 159.5 human reference is a journal fact and is unaffected.
 
 The brief was the AlphaGo recipe: supervised learning from human moves first,
@@ -129,7 +129,7 @@ tests whether that skew is the explanation for §3 (it is not).
 
 ### 1.4 Can the drift be cheaply reduced? Partly, and not the part that matters
 
-`docs/SCORE_VALIDATION.md` §1 records `bgo_rescore`'s per-turn agreement as
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#1-method-replay-the-journal-ask-our-engine-diff-against-bgo) §1 records `bgo_rescore`'s per-turn agreement as
 99.1% on turns 1-5 decaying to 58.1% at turn 16+, and calls that replayer drift.
 This replayer resyncs all four stocks from BGO every single turn, which bounds
 the *stock* half of the drift to one turn. Like for like (their buckets are
@@ -209,7 +209,7 @@ ordinary scales. That linearisation is approximate — the shipped file prices
 them through the *fitted* `w` — and it is the one place where the model in
 `bgo_fit.py` is not exactly the model in `weighted.py`. Without it the evaluator
 is completely card-identity-blind and every take in a tier is byte-identical
-(`docs/WASTED_ACTIONS.md` §4).
+([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#4-the-yellow-card-question-specifically) §4).
 
 **Split by GAME, never by position.** 547 training games, 136 held-out games,
 26,991 examples at the whole-table gate. A dev slice is carved out of the
@@ -241,7 +241,7 @@ Three things worth keeping:
 * **our champion is a worse human-move predictor than the untuned default**
   (0.174 vs 0.190) and the 1-ply lineage vector is worse still (0.142) — 200+
   generations of margin-gated hill climbing moved our policy *away* from human
-  play, which is the same finding `docs/HUMAN_BASELINE.md` reaches from
+  play, which is the same finding [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) reaches from
   behaviour statistics, now measured move by move;
 * the champion's and P's log-losses (15.8, 14.7) are catastrophic next to the
   clone's 1.98 — they are not merely wrong about the top move, they are
@@ -268,7 +268,7 @@ tell one card in the row from another** beyond the `hand_potential`
 linearisation, and behaviour cloning cannot invent one — this is a feature gap,
 not a fitting gap, and it caps top-1 at roughly 0.36 whatever you do. That is
 the single highest-value thing to fix if anyone wants a better human model:
-`docs/WASTED_ACTIONS.md` §4 predicted it and this measures it.
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#4-the-yellow-card-question-specifically) §4 predicted it and this measures it.
 
 By round, held out: 0.436 (r1-4), 0.332 (r5-8), 0.269 (r9-12), 0.310 (r13-16),
 0.315 (r17-20) — it degrades but does not collapse outside the opening.
@@ -278,7 +278,7 @@ By round, held out: 0.436 (r1-4), 0.332 (r5-8), 0.269 (r9-12), 0.310 (r13-16),
 ## 3. Stage 3: does the cloned vector play better? No. It plays far worse.
 
 `tools/bgo_botmatch.py --players 2 --games 60 --seed 7000`, 2p mirror, the same
-protocol and seeds as `docs/SCORE_VALIDATION.md` §5 — which this run reproduces
+protocol and seeds as [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5 — which this run reproduces
 exactly on the two reference vectors (Q at 1 ply 110.48 here vs 110.5 there;
 P at 1 ply 139.80 vs 139.8), so the harness is measuring what it claims to.
 
@@ -301,7 +301,7 @@ penalty toward `DEFAULT_WEIGHTS` (§4.2); `l2 -> 0` is the pure clone.
 
 ### 3.1 Under the ship policy the ordering is different, and the clone beats the champion
 
-`docs/TRANSFER_TEST.md` is the standing warning that a conclusion drawn under
+[`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) is the standing warning that a conclusion drawn under
 one search need not hold under another, so all three searches were run. 2p
 mirror, same seeds; the clone row is n=60, the two reference rows n=30 (PlanBot
 is expensive and the box was carrying three live league arms).
@@ -320,7 +320,7 @@ Two things here are worth more than the rest of this document.
   69.0), having lost to it by 30.3 ± 5.0 margin at 1 ply and by 70.0 ± 4.1
   under quiescence. Head to head under PlanBot the sign flips too, though at
   n=20 deals that row is a null on its own (+16.5 ± 9.7; see the table below).
-  This is `docs/TRANSFER_TEST.md`'s interaction again, from a third vector
+  This is [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)'s interaction again, from a third vector
   family: *which vector is better is a question about the search.*
 * **The 1-ply lineage vector under PlanBot scores 189.0, above the human 159.5**,
   and its CI is clear of the human one. As far as this repo has measured,
@@ -333,7 +333,7 @@ produced. Five axes have overlapping CIs with the human corpus — wonders
 started (2.76 vs 2.78), government changes (1.07 vs 1.14), round of first
 government (11.3 vs 11.8), **civil cards taken (34.6 vs 34.3)** and age II/III
 takes — and the 3-CA rate is 3.08% against a human 4.51% and the champion's
-29.5%. `docs/HUMAN_BASELINE.md` finding 2 ("a smaller civil-action budget spent
+29.5%. [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) finding 2 ("a smaller civil-action budget spent
 impatiently") is, on this vector under this search, simply gone.
 
 Other searches on the cloned vector:
@@ -347,7 +347,7 @@ Other searches on the cloned vector:
 Note also that at 1 ply the clone's own culture (104.6 [97.3,112.2]) and the
 champion's (110.5 [104.8,116.5]) barely differ — the champion's 30.3-point
 head-to-head margin over it is *transfer*, not production, which is the same
-mechanism `docs/TWOP_PROFILE.md` §9 and `docs/TRANSFER_TEST.md` §5 describe.
+mechanism [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#9-what-this-does-and-does-not-support) §9 and [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#5-why-the-two-vectors-are-different-animals) §5 describe.
 
 Head to head, `tools/transfer_ab.py`, n over deals, ± one SE. `duel` rotates the
 challenger through both seats on the same seed, so the deal is the independent
@@ -364,7 +364,7 @@ unit:
 this is "not distinguishable from even", not "the clone is better". What *is*
 unambiguous is the **interaction**: the same two vectors, on the same engine,
 differ by 86.5 ± 10.6 margin points between the quiescence row and the PlanBot
-row — eight standard errors. This is `docs/TRANSFER_TEST.md`'s finding
+row — eight standard errors. This is [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)'s finding
 reproduced on a third vector family, and it is the reason no `--init` is
 proposed here without naming the search first (§6).
 
@@ -382,7 +382,7 @@ not a noise result: 9 SE from the null on the paired difference.
 
 ### 3.2 The one thing the clone does that nothing else we have does
 
-The wonder gap is `docs/HUMAN_BASELINE.md`'s largest and most consistent
+The wonder gap is [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s largest and most consistent
 finding — 6.9x fewer wonders, 4.6x fewer stages, holding at 3p and 4p, and
 untouched by everything tried since. **The clone closes it completely.**
 
@@ -400,11 +400,11 @@ and takes 27 civil cards against a human 34.3 and our champion's 25.4.
 And it scores 10.
 
 **At 1 ply this is direct evidence against the story that the wonder deficit and
-the impatience deficit are the score gap.** `docs/SCORE_VALIDATION.md` §6.2 reached
+the impatience deficit are the score gap.** [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 reached
 the same place by forcing wonders on a strong bot and finding it cost 34.3 ± 7.0
 margin. This reaches it from the opposite direction: a bot that arrives at human
 wonder counts *by choice*, because it was fitted to human move choices, scores
-7-13. Two independent methods, same answer. `docs/HUMAN_BASELINE.md` findings 1
+7-13. Two independent methods, same answer. [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) findings 1
 and 2 are real descriptions and are **not** the mechanism of finding 5.
 
 Where the clone is still nothing like a human: it never declares a war
@@ -420,7 +420,7 @@ fixable hole, not a discovery.
 
 ### 4.1 It is not a bug in the pipeline
 
-The harness reproduces `docs/SCORE_VALIDATION.md` §5 to a decimal on two
+The harness reproduces [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5 to a decimal on two
 reference vectors, 0 engine errors in every run, games run 21.5 rounds (not
 short), and the clone's *behaviour* is human on the axes it was fitted on.
 The vector does what it was asked to do.
@@ -493,9 +493,9 @@ No effect on either. The skew is real and it is not the explanation.
 
 ## 5. What this says about the gate metric
 
-The brief asked for a read on `docs/TRANSFER_TEST.md` §8.3(c) — gate the league
+The brief asked for a read on [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) §8.3(c) — gate the league
 on own culture rather than margin. **That decision was taken while this branch
-was running**: `docs/LEAGUE_OBJECTIVE.md` switched the accept criterion to own
+was running**: [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md) switched the accept criterion to own
 final culture with win share as a tiebreak. So this is corroboration, not a
 recommendation, and it is worth recording because it is independent of the
 1,632-game rescoring that gated that change.
@@ -506,7 +506,7 @@ clone 108.3 [98.6,118.2], champion 69.0 [59.2,77.8] — 39 points apart with
 clear CIs. Margin head to head: the champion beats the clone by 30.3 ± 5.0 at
 1 ply and 70.0 ± 4.1 under quiescence. At 1 ply the two produce almost the same
 own culture (104.6 vs 110.5, overlapping) and **the champion's entire margin
-over the clone is transfer, not production** — which is `docs/LEAGUE_OBJECTIVE.md`
+over the clone is transfer, not production** — which is [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)
 §1's arithmetic showing up in a pair of vectors neither of us designed for the
 purpose.
 
@@ -526,7 +526,7 @@ metric was changed.**
 
 1. **Do not warm-start a league arm from the pure clone.** It loses to `book` by
    44.0 ± 4.9 margin at a 15.6% win share. A hill climber starting there is
-   starting below the pool, and `docs/HAZARDS.md`'s trap 5 is the reminder
+   starting below the pool, and [`docs/HAZARDS.md`](HAZARDS.md)'s trap 5 is the reminder
    that a bad `--init` is worth many wasted generations. Stage 4 of the brief
    was conditional on stages 1-3 landing; stage 3 landed only under one of the
    three searches, so **no `--init` file is committed and no training was
@@ -537,24 +537,24 @@ metric was changed.**
    * it beats the live champion by 39.3 culture in a PlanBot mirror and loses
      to it by 30.3 ± 5.0 margin at 1 ply, so the gate for warm-starting it is
      **which search the arm trains under**. Under a `plan:width=1` arm
-     (`docs/TRANSFER_TEST.md` §8.3a) this is a candidate; under the current
+     ([`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) §8.3a) this is a candidate; under the current
      `quiescent:levels=1` arms it is not, and the −70.0 ± 4.1 head-to-head
      under exactly that policy is why.
    * a pre-registered kill condition is worth having either way: if a warm
      start from it has not passed the champion on the arm's own gate metric
      within ~20 generations, it is not a better basin, it is a worse one with
      a nicer profile.
-2. **The wonder finding is the asset, and it plugs into `docs/HUMAN_BOTS.md`.**
+2. **The wonder finding is the asset, and it plugs into [`docs/HUMAN_BOTS.md`](HUMAN_BOTS.md).**
    We now have a vector that reaches human wonder counts *by choice* rather
    than by being forced (`tools/wonder_ab.py`), and it costs four minutes to
-   reproduce from the emitted data. `docs/HUMAN_BOTS.md` built the human tier
+   reproduce from the emitted data. [`docs/HUMAN_BOTS.md`](HUMAN_BOTS.md) built the human tier
    of the pool by fitting hand-written archetypes' knobs to corpus statistics;
    this is the same target reached from the opposite direction — a vector
    fitted to human *moves*, whose statistics then come out human — and it
    would drop into that tier as a pool opponent with no new machinery, forcing
    the champion to beat something that builds three wonders a game. It is also
    the right vector for pricing a *competent* wonder policy, which
-   `docs/SCORE_VALIDATION.md` §6.3 names as the obvious follow-up and which the
+   [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#63-what-this-does-and-does-not-license) §6.3 names as the obvious follow-up and which the
    crude forcing override could not test.
 3. **The take feature gap is the highest-value fix for any future human model.**
    35% of human decisions are takes and the evaluator is at chance on them.
@@ -569,7 +569,7 @@ metric was changed.**
    constrains it up to the directions in which candidate positions differ. The
    fixable version is to fit the same vector against **game outcome** on the
    same reconstructed corpus (the journals carry every player's final score),
-   i.e. a value-regression rather than a policy-clone. `docs/BGO_CORPUS.md`
+   i.e. a value-regression rather than a policy-clone. [`docs/BGO_CORPUS.md`](BGO_CORPUS.md)
    already names that dataset and this branch now provides the replay that
    makes per-turn positions available. That is the experiment this one implies.
 5. **The colony hole is worth 30 minutes.** Auctions dirty their turn, so the
@@ -626,7 +626,7 @@ Everything ran `nice -n 19` alongside three live league arms (five workers) on a
   unknown direction and is the weakest joint in the whole pipeline.
 * **The military hand is imputed too.** Identities are unknown, so `hand_mil_value`
   is approximately right (the age is right) and no better.
-* **Happy faces are unverifiable** — as `docs/SCORE_VALIDATION.md` §8 says, the
+* **Happy faces are unverifiable** — as [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#8-limits) §8 says, the
   journal never prints them, so the gate cannot check that half of the tableau.
 * **The four non-linear terms are linearised** (§2.1). The shipped weight file
   prices them through the fitted `w`, not through `DEFAULT_WEIGHTS`, so a

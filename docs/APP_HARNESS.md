@@ -2,7 +2,7 @@
 
 Everything else we measure is our own bots playing our own bots. This is the
 only path to an **external** number, and there is no automated version of it:
-`docs/EXTERNAL_AIS.md` §1 established that the official app has no log export,
+[`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#1-the-official-cge-digital-app-steam--ios--android) §1 established that the official app has no log export,
 no API, no mod hooks and no readable saves. A human at the keyboard is the
 entire interface.
 
@@ -40,7 +40,7 @@ and the override rate is the product.
 ## 2. What you type, and what you must not
 
 The expensive part of a human-in-the-loop game is transcription.
-`docs/INFORMATION_AUDIT.md` measured that the evaluator is blind to most of
+[`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) measured that the evaluator is blind to most of
 what a conscientious operator would type in. So the harness does not have a
 hardcoded input list — it **derives** one by perturbing the live position and
 watching whether the bot's decision moves (`harness/fields.py`).
@@ -63,7 +63,7 @@ watching whether the bot's decision moves (`harness/fields.py`).
 | rival military hand size, military actions, free workers, yellow bank, happiness | **inert** |
 | current events, future events, deck contents, military discards | **inert** |
 
-That table is the entire saving. §6d of `EXTERNAL_AIS.md` priced opponent turns
+That table is the entire saving. §6d of [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md) priced opponent turns
 at "4–8 patch fields × 2 opponents × ~18 rounds, 20–30 s per opponent turn,
 **12–18 min/game**". Most of those fields are still in the second table.
 
@@ -91,7 +91,7 @@ culture / culture-per-turn / science-per-turn / strength / civil actions /
 civil cards in hand / completed wonders. Every one of them is public at the
 table: the panel prints the first four, action tokens and completed wonders sit
 face up in the player's area, and civil cards are only ever taken from the open
-row in full view (`docs/RULES_SPEC.md` §2.6). **Nothing here asks you to look
+row in full view ([`docs/RULES_SPEC.md`](RULES_SPEC.md) §2.6). **Nothing here asks you to look
 into a hidden zone.** If a future field does, that is a bug in the harness or a
 cheating feature in the evaluator — not something to type.
 

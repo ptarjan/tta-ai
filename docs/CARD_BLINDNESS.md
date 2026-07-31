@@ -42,7 +42,7 @@ python3 -m tools.card_blindness --legacy    # master
 python3 -m tools.card_blindness             # this branch
 ```
 
-> **CORRECTION, 2026-07-29 (docs/EVENT_SEEDING.md).** The table below
+> **CORRECTION, 2026-07-29 ([`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md)).** The table below
 > originally pooled both decks, and that **over-reported the blind spot by
 > 109 cards.** `_card_yields` is reached only through `card_potential` ←
 > `hand_potential`, and `hand_potential` walks `p.hand_civil` ONLY, so it is
@@ -69,14 +69,14 @@ python3 -m tools.card_blindness             # this branch
 
 The "now" column moves as each lane lands; regenerate rather than trust it —
 `python3 -m tools.card_blindness` and `--legacy` for the master column. With
-`--board` (the board-aware evaluator of `docs/CARD_PRICING_LEADERS.md`
+`--board` (the board-aware evaluator of [`docs/CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md)
 counted too) the totals are **125 dropped / 129 zero-gain**.
 
 **Military deck — `_card_yields` is never asked.** These rows are recorded for
 completeness. They are *not* a measure of how well the bot values these cards,
 because the tool cannot see where they are actually priced.
 
-> **CORRECTION, 2026-07-30 (docs/MILITARY_SEAM.md).** "Never asked" is true of
+> **CORRECTION, 2026-07-30 ([`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md)).** "Never asked" is true of
 > `DEFAULT_WEIGHTS` and no longer true in general. `hand_mil_potential` walks
 > `p.hand_military` and calls `card_potential` → `_card_yields` on every card
 > in it, so any vector carrying a non-zero `hand_mil_potential` **does** ask —
@@ -93,7 +93,7 @@ because the tool cannot see where they are actually priced.
 | territory | 12 | 0 | 12 | `deferred_credit`'s auction branch |
 | aggression | 11 | 11 | 10 | quiescence: the defender's `defense` pending is drained and the quiet position scored |
 | pact | 10 | 10 | 10 | `deferred_credit`; and `count 2p: 0`, so absent from 2p entirely |
-| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. docs/MILITARY_SEAM.md |
+| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md) |
 | war | 3 | 3 | 3 | `quiescent.war_value` → the engine's own `events.resolve_war` |
 | **SUBTOTAL** | **109** | **97** | **108** | |
 
@@ -197,7 +197,7 @@ land:
 The first three are the finish-discipline term. They are 0.0 with no wonder in
 progress and drop back to 0.0 the instant it completes, so a negative weight
 on any of them prices **starting** (and stalling), and finishing is what
-removes the penalty. That is the shape `docs/HEURISTICS.md` asks for — "start
+removes the penalty. That is the shape [`docs/HEURISTICS.md`](HEURISTICS.md) asks for — "start
 a wonder by round 12 or do not start it" — expressed as something the league
 can tune rather than a hard rule. They are deliberately **not** given a
 negative prior despite the evidence pointing that way (0 for 58 on the three
@@ -248,7 +248,7 @@ This is the honest inventory:
    is no number to multiply a weight by. This is what keeps the four Age III
    wonders and Ocean Liners at zero.
 3. **rule change** (20 keys) — makes something legal, illegal or cheaper.
-   Gandhi's aggression immunity is here, and `docs/HEURISTICS.md` already
+   Gandhi's aggression immunity is here, and [`docs/HEURISTICS.md`](HEURISTICS.md) already
    flags that the bot cannot value it.
 4. **trigger** (14 keys) — pays out per future event, so the printed number is
    a rate, not a yield. Einstein's 3 culture per technology and Newton's civil
@@ -259,7 +259,7 @@ This is the honest inventory:
    or bonus card. Mapping `tacticBonus` today would change nothing. See §6.
    *(Superseded for two of the twelve: `hand_mil_potential` does call it, so
    `defenseBonus`/`colonizationBonus` were mapped rather than written off —
-   docs/MILITARY_SEAM.md. `tacticBonus` stays unpriced, but for the sharper
+   [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md). `tacticBonus` stays unpriced, but for the sharper
    reason recorded in `DELIBERATELY_UNPRICED`: it is a duplicate spelling of
    the top-level `strength` the engine actually reads.)*
 6. **addressing** (19 keys) — `allPlayers`, `weakestPlayer` and friends name
@@ -335,7 +335,7 @@ Every block is on the same side and the spread (57.1–62.3) is what 400 games
 of binomial noise looks like. No single block is carrying the result.
 
 I went into this expecting a null and said so in advance, for a specific and
-good reason: `docs/SCORE_VALIDATION.md` §6.2 measured that *forcing* wonders
+good reason: [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 measured that *forcing* wonders
 on the strongest vector cost **34.3 ± 7.0 margin**, which is a real warning
 that wonders may be correctly avoided in the suppressive equilibrium these
 bots play. That warning is not contradicted here, and the reason is worth
@@ -443,7 +443,7 @@ All three are left at 0.0.
 
 ### 5.2 3p: does it transfer?
 
-`docs/STRENGTH_CHECK.md` is explicit that the tournament-derived 2p result did
+[`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) is explicit that the tournament-derived 2p result did
 not transfer to 3p, so this was worth checking rather than assuming.
 
 **It transfers.** Same two weight files, 3 blocks of 300, challenger rotated
@@ -485,7 +485,7 @@ the reason is structural, not a fact about wonders being weak.
 Measured at commit `6968256`, 2p, frozen champion, engine read-only, three
 runs, 12,800 games, zero engine errors.
 
-> **CORRECTION (see `analysis/frozen/README.md`). The wonder null below is an
+> **CORRECTION (see [`analysis/frozen/README.md`](../analysis/frozen/README.md)). The wonder null below is an
 > arithmetic identity, not a measurement.** This section is right that the
 > mechanism is plumbing and right that it is not the wonders — but it reached
 > that by the wrong route, and the quantitative null cannot be quoted.
@@ -667,7 +667,7 @@ doubly irrelevant when the term is switched off.
 
 This reframes the question this document started from. "The bot does not build
 wonders — are wonders modelled wrong?" The answer is no: §6.1 of
-`docs/SCORE_VALIDATION.md` verified the rules exact, and §1 here has now given
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) verified the rules exact, and §1 here has now given
 the evaluator the printed numbers. The bot still does not build them, because
 **a correctly priced wonder has almost no path into the decision.** It is a
 plumbing bug, not a pricing bug, and fixing it means giving wonder-in-progress
@@ -688,7 +688,7 @@ production. In the mirror, where both arms play the same field, credit1's own
 culture is **146.47 vs 143.88, +2.58 [+1.53, +3.64]**, p<1e-4. Real, in the
 same direction, and a quarter the size. The margin is inflated because the
 credit0 arm is *also* being made worse by facing a stronger opponent —
-`docs/LEAGUE_OBJECTIVE.md`'s point that a stolen point moves the margin twice
+[`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)'s point that a stolen point moves the margin twice
 and a produced point once.
 
 #### The one real wonder change: finish discipline, from a general term
@@ -738,7 +738,7 @@ fixing the number every decision reads.
   state (`p.completed_wonders`, `p.wonder`) and recorded moves, not from the
   census tool.
 * **The rules were re-verified at `6968256`,** not assumed from
-  `docs/SCORE_VALIDATION.md` §6.1: all 16 wonders and all 53 stages match the
+  [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#61-the-wonder-rules-and-data-are-right) §6.1: all 16 wonders and all 53 stages match the
   data file exactly, the take surcharge is `+1 CA per completed + destroyed`
   with the Michelangelo exemption, `Impact of Wonders` scores 5/4/3/2 by age
   as printed, and `tests.test_card_pricing` + `tests.test_scoring_bugfix` pass
@@ -814,7 +814,7 @@ frozen champion is gen 220 of an older 78-key climb; the live one is gen 54 of
 a 99-key one, and 21 of those 99 keys — the entire card-row block — did not
 exist when the snapshot was cut. The baseline behaviour differs accordingly:
 the frozen bot completes 0.10 wonders a game and the live one 0.65 before any
-treatment is applied. See `analysis/frozen/README.md`.
+treatment is applied. See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 
 **Reproduce:**
 
@@ -840,7 +840,7 @@ numbers back.
 ## 6. What is still broken after this
 
 * **The 37 cards with 0 dropped keys and 0 visible gain** — territories,
-  units and tactics — are taken up in `docs/CARD_BLINDNESS_MILITARY.md`. Short
+  units and tactics — are taken up in [`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md). Short
   version: none of them keeps its value in `production`/`effects`, so neither
   the census above nor the guardrail below could see them, and the ten unit
   cards were priced *negative* rather than at zero.
@@ -865,7 +865,7 @@ numbers back.
   any remaining entry in the lookup table.
 * **The tier-list question is untouched.** This change gives the evaluator the
   *printed* value of a wonder. It says nothing about the tournament ordering,
-  and `docs/STRENGTH_CHECK.md`'s BookBot v2 result (+2.1%, p=0.098 at 2p,
+  and [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)'s BookBot v2 result (+2.1%, p=0.098 at 2p,
   slightly negative at 3p) remains the best evidence that hand-coded tier
   knowledge is worth little here.
 * **3p and 4p are not measured.** Everything in §5 is 2p.
@@ -1134,7 +1134,7 @@ anyone checks the denominator.
 
 ### 10.5 Lane C leaders: the one substantive retraction
 
-`docs/CARD_PRICING_LEADERS.md` §5.2 reports the leaders-only arm at
+[`docs/CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md#52-win-rate-a-flat-aggregate-that-decomposes-into-two-opposite-signs) §5.2 reports the leaders-only arm at
 **48.20% ± 1.69pp, z = −2.1**, and reads that as "leaders hurt slightly". The
 interval is correctly deal-clustered. The problem is one level up: the eight
 blocks are **over-dispersed**, χ² = 14.41 on 7 df against a critical value of
@@ -1184,7 +1184,7 @@ i.e. one standard error of the difference, and the comment reasons "at n = 240
 a side is se ≈ 0.032, so the band is ~0.045". With the shard-clustered SE of
 **0.0490** per side the band is **6.93pp, not 4.52pp**. The gate is currently
 about **1.5× tighter than the data supports**, which is the promotion-on-noise
-failure `docs/NEURAL_LOOP_NULL.md` documents at length.
+failure [`docs/NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) documents at length.
 
 **This was deliberately not changed by the audit.** `pool_summary` kept
 emitting `ci=` with the legacy value so a loop in flight saw byte-identical

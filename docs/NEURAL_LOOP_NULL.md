@@ -138,7 +138,7 @@ def _child_enc(state, mv, seat):
 No determinization. `tools/infoleak.py` measured, on `WeightedBot` at 2p, that
 94.9% of `end_turn` candidates draw a card -- a draw count, not by itself proof
 of a leak, since it does not change whether the root was determinized
-(docs/AGGRESSION_RATE.md §9a). But `_child_enc` above never determinizes
+([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a). But `_child_enc` above never determinizes
 either, so for it the two coincide the same way they do for `WeightedBot`: a
 draw here really is the *real* next civil card. So the anchor taught the net
 to price `end_turn` -- the single most-evaluated move in the game -- off a
@@ -165,7 +165,7 @@ of the observed 0.44, and why it never once looked like noise around 0.5.
 **Does:** self-play policy iteration with a 1-ply argmax as both the behaviour
 policy *and* the improvement operator cannot improve a value net at this game.
 It is the same trap the 1-ply linear hillclimb hit, and the same category error
-`docs/BEHAVIOUR_CLONE.md` 6.4 names: an objective that does not contain new
+[`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md) 6.4 names: an objective that does not contain new
 information about the outcome cannot produce a better evaluator.
 
 **Does not:** say anything about whether a neural evaluator can be good here.
@@ -173,22 +173,22 @@ Every number above is about the *loop*, not the *net*.
 
 ## 5. What replaced it
 
-`docs/NEURAL_SEARCH_LOOP.md`. Three changes, each aimed at one finding above:
+[`docs/NEURAL_SEARCH_LOOP.md`](NEURAL_SEARCH_LOOP.md). Three changes, each aimed at one finding above:
 
 1. **The improvement operator is now a search.**
    `engine/bots/neural_plan.py` (`NeuralPlanBot`) runs PlanBot's whole-turn beam
    with the value net as the leaf, and `experiments/neural_gen_plan.py` labels
    ranking pairs with **the beam's** root choice, not the net's argmax. On
    identical linear weights that beam beats the 1-ply bot 88.6% +/- 3.1
-   (`docs/BOT_ARCHITECTURE.md` 3), so the label is genuinely stronger than the
+   ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) 3), so the label is genuinely stronger than the
    model. The generator prints `DISAGREE=`, the fraction of decisions where the
    beam overrules the 1-ply argmax; it is the loop's health meter and a run
    whose `DISAGREE` decays to zero has gone vacuous again and must stop.
 2. **The value rows are the states the leaf evaluator is actually served** --
    quiet, end-of-turn, determinized, war-substituted -- targeted at the final
-   culture margin, per `docs/BOT_ARCHITECTURE.md` 3b ("PlanBot evaluates only at
+   culture margin, per [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) 3b ("PlanBot evaluates only at
    turn boundaries ... the fitted vector and PlanBot are a matched pair by
-   construction") and `docs/BEHAVIOUR_CLONE.md` 6.4 ("the objective has to
+   construction") and [`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md) 6.4 ("the objective has to
    contain the outcome").
 3. **The metrics were replaced.** Validation is a random ROW split, not the
    alphabetically-first shards, so it is the same distribution as training;

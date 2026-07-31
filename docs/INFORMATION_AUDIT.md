@@ -8,8 +8,8 @@ carries a `file:line`. Anything I could not verify says so.
 > renamed `analysis/frozen/champion_4p.DEGENERATE.json`, and its twin
 > `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
 > informative weights** of `experiments/champion_4p.json` bit-for-bit,
-> including `science = −6.08883`. That is the vector `docs/TRAINING_RUN.md`
-> says never to warm-start from and that `docs/CULTURE_GAP.md` §8f measured at
+> including `science = −6.08883`. That is the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md)
+> says never to warm-start from and that [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8f-are-existing-champions-invalidated-yes--3p-and-4p-decisively) §8f measured at
 > **20.1% against a 25% null** — a bot that loses to random seating.
 > `refuse_if_degenerate_champion` was supposed to catch it and did not: it
 > tested exact content, and the frozen copy is six generations later and
@@ -20,7 +20,7 @@ carries a `file:line`. Anything I could not verify says so.
 > place so they stay auditable.** They describe a known-degenerate bot. Do not
 > quote them as facts about 4p play, and do not quote them as facts about the
 > engine. The 2p and 3p numbers in this document are unaffected by *this*
-> issue. See `analysis/frozen/README.md`.
+> issue. See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 
 
 This audit was prompted by the project owner's description of the real skill of
@@ -100,9 +100,9 @@ whose frozen 3p champion weight is **-0.0974**
 scored as a *gain* of 0.195. This is the mechanism behind an already-measured
 behaviour that nobody had explained: the 3p champion takes **56.9% of its cards
 from cost band 3 at 2.33 CA/card** while the 2p champion takes 88.4% from band 1
-at 1.15 CA/card (`docs/HEURISTICS.md`), against a human
+at 1.15 CA/card ([`docs/HEURISTICS.md`](HEURISTICS.md)), against a human
 tournament baseline of **76% of Age I picks at 1 CA and 2.5% at 3 CA**
-(`docs/EXPERT_STRATEGY.md:688`).
+([`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):688).
 
 ---
 
@@ -290,10 +290,10 @@ weight-vector-dependent.
 | 3 | Where a card will slide to next turn | Derivable (exact sweep constant) `engine/game.py:41,104-121,219-220` | **YES** — `row_pressure` computes `nxt = i - live*SWEEP[live]` exactly (`weighted.py:751,765`) |
 | 4 | Whether a card will be swept before I act again | Derivable, same source | **YES** — `row_urgency` is exactly this sum |
 | 5 | Whether an opponent can/wants to take a given row card | Derivable (their CA, hand limit, techs, wonder-in-progress, leader ages) | **Legality YES, desire NO** — `_RivalView` + `_can_take_gated` per rival (`weighted.py:176-233,773-775`), then a single flat `RIVAL_TAKE_P = 0.25`. No desire model |
-| 6 | Opponents' civil cards in hand (PUBLIC, `docs/RULES_SPEC.md:71`) | YES `engine/state.py:60` | ~~NO~~ → **YES in `evaluate()`**: `rival_hand_potential` (`weighted.py:667-692`). Live 4p scale **+1.329**, live 3p -0.020. `features()`: **NO**, 0/33 |
+| 6 | Opponents' civil cards in hand (PUBLIC, [`docs/RULES_SPEC.md`](RULES_SPEC.md):71) | YES `engine/state.py:60` | ~~NO~~ → **YES in `evaluate()`**: `rival_hand_potential` (`weighted.py:667-692`). Live 4p scale **+1.329**, live 3p -0.020. `features()`: **NO**, 0/33 |
 | 7 | Opponents' civil hand *size* | YES same field | ~~NO~~ → **YES**, `rival_hand_civil` (`weighted.py:459`), and it uses `hand_size` so the app harness's `hidden_civil` counts too |
 | 8 | Opponents' military hand *size* (public) | YES `engine/state.py:61` | **NO** — still own hand only |
-| 9 | Opponents' military hand *contents* (HIDDEN by rules) | YES, truthfully — no info-set abstraction | **NO** by features or eval, re-verified 0/35 positions x 7 weight vectors; **YES** by QuiescentBot's defence resolution `docs/DEEPER_SEARCH.md:507-512` |
+| 9 | Opponents' military hand *contents* (HIDDEN by rules) | YES, truthfully — no info-set abstraction | **NO** by features or eval, re-verified 0/35 positions x 7 weight vectors; **YES** by QuiescentBot's defence resolution [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md):507-512 |
 | 10 | Age I/II/III deck composition (fixed, public) | YES `engine/cards.py:155-175` | **NO** — still only a **count**, via `rounds_left` → `lateness` (`weighted.py:305-317`). Composition: 0/24 positions, all 7 vectors |
 | 11 | Which civil cards have already been seen (row/hands/boards) | Partially — **swept row cards are destroyed with no record** `engine/game.py:117-120` | **NO** |
 | 12 | Which military cards have been discarded | YES `engine/state.py:132`, `engine/economy.py:186-197` | **NO** (0/24) |
@@ -316,8 +316,8 @@ weight-vector-dependent.
   `ROW_COST = (1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)` — **slots 0-4 cost 1 CA,
   slots 5-8 cost 2 CA, slots 9-12 cost 3 CA**, with the same thing spelled as a
   function at `engine/actions.py:39-45` and the hot path using the tuple at
-  `engine/actions.py:133`. This matches `docs/HEURISTICS.md:2178-2188` and
-  `docs/RULES_SPEC.md appendix item 11`, and is player-count independent. Verified from
+  `engine/actions.py:133`. This matches [`docs/HEURISTICS.md`](HEURISTICS.md):2178-2188 and
+  [`docs/RULES_SPEC.md`](RULES_SPEC.md) appendix item 11, and is player-count independent. Verified from
   code, not from memory.
 * Surcharges on top of the slot cost, `engine/actions.py:79-89`: a **wonder**
   costs +1 CA per completed *or destroyed* wonder you own (waived for
@@ -359,8 +359,8 @@ expensive, i.e. they are new copies dealt to the right.)
 Read that table as: **at 2p, a card sitting at 3 CA is 91.6% likely to still be
 there next turn at 1 CA.** Paying 3 CA buys you a ~8% insurance policy for
 2 civil actions. That is precisely the expert claim in
-`docs/EXPERT_STRATEGY.md:546` ("let cards slide deliberately") and
-`docs/EXPERT_STRATEGY.md:550`, now measured against this engine. 3p is the same
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):546 ("let cards slide deliberately") and
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):550, now measured against this engine. 3p is the same
 shape (slot 9 survives 85.4%, lands at 1 CA 88% of the time) because
 `3 * SWEEP[3] == 2 * SWEEP[2] == 6`.
 
@@ -386,7 +386,7 @@ of the live 3p and 4p league arms. See §0b.
     bot **does** read the slot cost, subtracts `cost * 3.0` (v1) or a convex
     `V2_PRICE_LADDER` (v2), refuses leaders at 3 CA before Age III, and refuses
     Taj Mahal / Great Wall above 1 CA. BookBot is the bot that *beats* the
-    trained WeightedBot 62.9% ± 4.7% (`docs/BOT_ARCHITECTURE.md:195-199`).
+    trained WeightedBot 62.9% ± 4.7% ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):195-199).
   * `engine/bots/variants/base.py:518-527` — the rule-bot variants gate takes on
     a per-age `max_take_cost` table.
 * So the two families that read row cost are the rule bots; the *learned*
@@ -403,12 +403,12 @@ of the live 3p and 4p league arms. See §0b.
 * The engine keeps two separate lists per player: `hand_civil` and
   `hand_military` (`engine/state.py:60-61`). It does **not** mark either as
   hidden. There is no information-set abstraction anywhere in the engine — this
-  was already established in `docs/BOT_ARCHITECTURE.md:208-213`.
-* **The rules make `hand_civil` public**: `docs/RULES_SPEC.md:71` — "2.6 Cards
+  was already established in [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):208-213.
+* **The rules make `hand_civil` public**: [`docs/RULES_SPEC.md`](RULES_SPEC.md):71 — "2.6 Cards
   taken are public knowledge (open civil cards convention) [RB p.7]". So reading
   `state.players[j].hand_civil` is **not cheating**; it is free, legal, complete
   information that the engine already stores exactly.
-* Military cards are drawn hidden (`docs/RULES_SPEC.md:196`); only the *count* is
+* Military cards are drawn hidden ([`docs/RULES_SPEC.md`](RULES_SPEC.md):196); only the *count* is
   public, which `plan.determinize` correctly identifies
   (`engine/bots/plan.py:83-88`).
 * Recoverability of the public part does not even require a log — the field is
@@ -426,7 +426,7 @@ of the live 3p and 4p league arms. See §0b.
   the evaluation at 12/12 under both the live 3p and live 4p champions;
   *replacing* the contents with different cards moves `features()` at **0/33**
   and the evaluation at 9/12 (3p) and 8/12 (4p).
-* **The legality of that is verified, not assumed.** `docs/RULES_SPEC.md:71`
+* **The legality of that is verified, not assumed.** [`docs/RULES_SPEC.md`](RULES_SPEC.md):71
   reads verbatim: *"2.6 Cards taken are public knowledge (open civil cards
   convention) [RB p.7]."* Reading `q.hand_civil` is therefore free public
   information, not a cheat. The docstring on `rival_hand_potential` cites this
@@ -439,9 +439,9 @@ of the live 3p and 4p league arms. See §0b.
   — self. `engine/bots/neural_encode.py:230` is explicit about the same rule
   (*"military hand contents: mine only; rival gets a zero-vector"*), and
   `book.py:216` reads only the acting bot's own hand. Military cards are drawn
-  hidden (`docs/RULES_SPEC.md:196`); only the count is public.
+  hidden ([`docs/RULES_SPEC.md`](RULES_SPEC.md):196); only the count is public.
 * The one place opponent military hands *are* read is QuiescentBot resolving a
-  defender's `defense` decision — `docs/DEEPER_SEARCH.md:507-512` states this
+  defender's `defense` decision — [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md):507-512 states this
   openly and calls it indefensible for play against a human. Still true: the
   defender's legal `defense` moves are enumerated from its real hand inside the
   search. That is a *search* cheat, not an evaluator cheat, and it is the only
@@ -460,7 +460,7 @@ of the live 3p and 4p league arms. See §0b.
   cleanly: `state.discarded_military` is a per-age list
   (`engine/state.py:132`, written in `engine/economy.py:186`) and it is
   reshuffled into a fresh deck when the deck empties (`engine/economy.py:191-197`
-  = `docs/RULES_SPEC.md:196`). For the **civil** deck, **no**: `_replenish`
+  = [`docs/RULES_SPEC.md`](RULES_SPEC.md):196). For the **civil** deck, **no**: `_replenish`
   destroys swept cards by writing `None` over the slot
   (`engine/game.py:117-118`) and there is no `civil_discard` anywhere (grep:
   zero hits in `engine/`). *The engine throws away public information a human at
@@ -488,7 +488,7 @@ This is the biggest single blind spot in the audit.
 * "Prepare an event" is `engine/actions.py:986-995`: the card leaves
   `hand_military`, you score its age level in culture, it is appended to
   `state.future_events`, **and `state.seeded_by[name] = p.idx` records who put
-  it there**. Rules: `docs/RULES_SPEC.md:117` — face down, so *you* know what you
+  it there**. Rules: [`docs/RULES_SPEC.md`](RULES_SPEC.md):117 — face down, so *you* know what you
   seeded and nobody else does.
 * When the current-events deck empties, `future_events` is shuffled, sorted so
   earlier ages resolve first, and becomes the new `current_events`
@@ -565,7 +565,7 @@ construction**. Also still invisible: their happiness margin, and their
 government and leader except insofar as those roll up into the three rates.
 `q.wonder` is the sharpest omission — the engine already snapshots it for
 legality, and "they cannot take a wonder while one is unfinished" is the exact
-signal `docs/EXPERT_STRATEGY.md:546` says to play around.
+signal [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):546 says to play around.
 
 ---
 
@@ -588,7 +588,7 @@ Where determinization stands:
   therefore assumptions of perfect information waiting to become live:
   1. **Rival military hands are left at their true contents.** A correct
      determinization pools every rival's `hand_military` back into the deck and
-     re-deals to the same counts. `docs/BOT_ARCHITECTURE.md:1003` already flags
+     re-deals to the same counts. [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):1003 already flags
      this. It matters the moment anything prices rival military cards, or the
      moment quiescence resolves a rival `defense`.
   2. **`current_events` is left in its true order** and is *not* shuffled. A
@@ -601,7 +601,7 @@ Where determinization stands:
      correct view keeps `{n for n in future_events if seeded_by[n] == me}` and
      samples the rest from the unseen military multiset.
 * The known leak, already measured and already documented, is
-  `docs/BOT_ARCHITECTURE.md:208-278`: 5.46% of candidates draw from a real deck,
+  [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):208-278: 5.46% of candidates draw from a real deck,
   71.1% of decisions have at least one such candidate, `end_turn` is 94.9%
   leaky — but re-shuffling changed the chosen move 0 times in 3,957 decisions,
   because the evaluator is too blind to read what it peeked at. **Every gap
@@ -620,7 +620,7 @@ Where determinization stands:
   paragraph doesn't mention: `current_events` was never shuffled by
   `determinize` at all, so every `end_turn` a determinizing search expanded
   still revealed the true next event (100.0% true-card, 38.3% after the fix).
-  See `docs/AGGRESSION_RATE.md` §9a and `tools/infoleak.py --true-card`.
+  See [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a and `tools/infoleak.py --true-card`.
 
 ### 6.1 The gun is now loaded — measured 2026-07-29
 
@@ -765,7 +765,7 @@ with no rival aggregates at all. 1112 raises in a single 4p game.
 * What found it was a **file-level bisect** — revert `plan.py` alone and master's
   scores return; revert `weighted.py` alone and they do not.
 * What *caught* it in the first place was the **`plan wide` fingerprint arm**,
-  added one commit earlier for precisely the reason docs/PYPY.md 9.14 gives: a
+  added one commit earlier for precisely the reason [`docs/PYPY.md`](PYPY.md) 9.14 gives: a
   digest can only catch a change to a bot it actually plays. No other arm moved.
   It was also one decision away from being laundered: the honest-looking move
   when a fingerprint fails is to re-derive it and write "fingerprints moved, as
@@ -800,7 +800,7 @@ load-bearing control flow here: `effects.state_stats` initialises
 `_stats_cache` off a caught `AttributeError` (23,305 per 4p batch) and
 `actions.cost_of` probes card names with a caught `KeyError` (~15k). Including
 either would fail on every clean tree — a gate that cries wolf, which
-docs/PYPY.md 9.0 records as expensive here.
+[`docs/PYPY.md`](PYPY.md) 9.0 records as expensive here.
 
 Both layers were verified with the real bug re-introduced: `ruff` names
 `plan.py:432:45`, and the unit test fails with
@@ -846,7 +846,7 @@ military draw is a real *deal* of hidden information; the evaluator simply
 cannot read it.
 
 **The answer was already written down in this repo.**
-`docs/BOT_ARCHITECTURE.md:243-252` measured it directly and years-old-style
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):243-252 measured it directly and years-old-style
 plainly: four completely different determinized military hands, one identical
 `hand_mil_value 6` and one identical eval `37.517925`, because "`Crusades` and
 `Rats` are literally the same feature vector". 6.2 proposed a cause that an
@@ -943,7 +943,7 @@ search. Closing it exactly needs **provenance on the row slots** — names alone
 cannot tell a survivor from a duplicate of itself, and the two cheap proxies
 both fail: a deck-size delta miscounts once a dealt card is itself swept, and
 widening the mask over-masks public cards, which 6.2 records as being as much a
-bug as leaking (rival civil hands are public, RULES_SPEC.md:71).
+bug as leaking (rival civil hands are public, [`RULES_SPEC.md`](RULES_SPEC.md):71).
 
 #### Inert, as required
 
@@ -1163,7 +1163,7 @@ above (3p mirror 1,800 / book 1,200 / book2 1,200; 2p mirror 360 / book 480 /
 book2 480), plus 144 for the two validations and 900 for the discarded
 replication described below. All under `nice -n 10` alongside three live
 training arms and another agent. Wall clock is not quoted anywhere because
-docs/PYPY.md records ~9% between-run wall-clock sd on this box under load.
+[`docs/PYPY.md`](PYPY.md) records ~9% between-run wall-clock sd on this box under load.
 
 * `tools/deleak_ab.py` — committed, not a throwaway. `--placebo` and
   `--verify-prefix` are the two validations; `--report a.json b.json c.json`
@@ -1233,7 +1233,7 @@ now measured rather than what was predicted:
 4. **The seven missing public rival board fields (§0b.3).** Their wonder-in-
    progress flag first — it is already snapshotted into `_RivalView.wonder` for
    the legality gate, so scoring it is one line, and it is the exact "is this
-   wonder safe to let slide" signal in `docs/EXPERT_STRATEGY.md:546`. Then
+   wonder safe to let slide" signal in [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):546. Then
    `rival_happy_margin` and `rival_best_tech_level` from the original GAP 3.
 5. **GAP 5 — civil discard record**, which is the only prerequisite for any
    principled card counting. Nearly free (one state field), no immediate payoff.
@@ -1253,8 +1253,8 @@ the derivations. Read them with the status table above.*
 `ca_left` (`engine/bots/weighted.py:439`); its 3p champion weight is -0.0974, so
 paying 3 CA instead of 1 for the identical card *raises* the score by 0.195.
 Measured downstream behaviour: 56.9% band-3 picks and 2.33 CA/card at 3p
-(`docs/HEURISTICS.md`) against 76%-at-1-CA in human tournaments
-(`docs/EXPERT_STRATEGY.md:688`).
+([`docs/HEURISTICS.md`](HEURISTICS.md)) against 76%-at-1-CA in human tournaments
+([`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):688).
 
 **Proposal — 1 feature, ~10 lines.** Add to `features()`:
 
@@ -1270,7 +1270,7 @@ CA was spent. Weight it freely and let the trainer fit it. Crucially this is a
 *separate* channel from `ca_left`, so the trainer can price "a CA spent
 upgrading" and "a CA spent reaching into the row" differently, which is exactly
 the distinction the sources make
-(`docs/EXPERT_STRATEGY.md:550`: "CAs which you spend for grabbing from the card
+([`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):550: "CAs which you spend for grabbing from the card
 row increase in value as the game progresses, while it is the other way around
 for CAs you spend to upgrade workers").
 
@@ -1335,7 +1335,7 @@ computed once per decision, not once per candidate.
 |---|---|---|
 | they cannot take a wonder while one is unfinished | `p.wonder`, gate at `engine/actions.py:138` | wonders are safe to let slide |
 | wonder surcharge = completed + destroyed wonders | `engine/actions.py:84-86` | a 3-CA wonder may be 5 CA *for them* |
-| they cannot take a second leader of an age | `p.taken_leader_ages`, `engine/actions.py:147` | leaders are often safe to let slide — matches `docs/EXPERT_STRATEGY.md:546` verbatim |
+| they cannot take a second leader of an age | `p.taken_leader_ages`, `engine/actions.py:147` | leaders are often safe to let slide — matches [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):546 verbatim |
 | one-per-name: already in their hand or tableau | `engine/actions.py:155` | they literally cannot take it |
 | their civil hand is at the limit | `engine/actions.py:122,144` | they cannot take *anything* |
 | their remaining CA vs the slot cost | `p.civil_actions`, `spare_ca` `engine/actions.py:60-64` | can they reach that deep this turn |
@@ -1406,7 +1406,7 @@ change to `plan.determinize` is ~6 lines.
 row - every hand - every tableau - civil_discard` is exactly computable from
 public information, and the first feature to build on it is
 `p_better_card_coming` (is the last copy of a critical tech still in the deck? —
-`docs/EXPERT_STRATEGY.md:546`: "the last copy of some critical tech often just
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):546: "the last copy of some critical tech often just
 has to be taken that turn, even for three CA"). Low value on its own, but it is a
 prerequisite for any principled version of GAP 2's `P_survive` and it is nearly
 free. Note it also makes the state strictly larger, so check `tools/bench_copy.py`
@@ -1414,7 +1414,7 @@ and the `fastcopy` field lists.
 
 ### GAP 6 — Military hand identity (already documented, listed for completeness).
 
-`docs/BOT_ARCHITECTURE.md:241-257` measured four completely different military
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md):241-257 measured four completely different military
 hands producing a bit-identical evaluation, and identifies the fix as the
 military mirror of `hand_potential`. Not re-derived here; it is the same class of
 blindness and the same class of fix, and it is the one gap that turns the
@@ -1446,8 +1446,8 @@ to `/tmp`, not committed.
   rates would fall.**
 * **Not run:** any league/arena batch, any `experiments/` job, `pickstats`. The
   behavioural numbers quoted (2.33 CA/card at 3p, 88.4% band-1 at 2p, the human
-  tournament baseline) are cited from `docs/HEURISTICS.md` and
-  `docs/EXPERT_STRATEGY.md:688`, not re-measured.
+  tournament baseline) are cited from [`docs/HEURISTICS.md`](HEURISTICS.md) and
+  [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md):688, not re-measured.
 
 ### 8.1 The 2026-07-29 re-measurement
 
@@ -1491,8 +1491,8 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
 ## 9. Things I could not verify
 
 * Whether the military *discard pile* is public in the physical game.
-  `docs/RULES_SPEC.md:188` says excess military cards are discarded "face down"
-  and `docs/RULES_SPEC.md:125` says defence cards are discarded face down, which
+  [`docs/RULES_SPEC.md`](RULES_SPEC.md):188 says excess military cards are discarded "face down"
+  and [`docs/RULES_SPEC.md`](RULES_SPEC.md):125 says defence cards are discarded face down, which
   suggests the pile is *not* legible; but the spec does not say so explicitly.
   `state.discarded_military` should therefore be treated as hidden until this is
   settled, which affects how a military card-counter may use it.
@@ -1503,7 +1503,7 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
   measured it directly — 100.0% true-card on `current_events` before the fix
   (an identity, on the un-shuffled pile `plan.determinize` was missing) and
   38.3% after, moving 78 of 3,448 beam picks at 3p. See
-  `docs/AGGRESSION_RATE.md` §9a.
+  [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a.
 * Whether `rival_hand_potential` (GAP 3) is worth anything at 3p/4p. The civil
   `hand_potential` term itself was only validated at 2p
   (`engine/bots/weighted.py:673-677`). **Partial answer 2026-07-29:** the live

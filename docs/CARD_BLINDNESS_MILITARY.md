@@ -1,6 +1,6 @@
 # Territories, units and tactics: the 37 cards with no dropped keys (2026-07-29)
 
-A follow-up to `docs/CARD_BLINDNESS.md`, which fixed the cards whose printed
+A follow-up to [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md), which fixed the cards whose printed
 value was being **dropped** by `_card_yields`. This one is about the 37 cards
 the census reported as **zero visible gain with zero dropped keys** — 12
 territories, 10 military units, 15 tactics. Those two numbers look like a
@@ -164,7 +164,7 @@ currently an almost pure territory probe and a hook for lanes C/D.
 
 **It does not open an information leak**, and that is worth stating rather
 than assuming, because reading a hand across a turn boundary is exactly the
-`end_turn` leak of `docs/INFORMATION_AUDIT.md` §6. Two reasons, both already
+`end_turn` leak of [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md#6-the-information-set-question-question-5) §6. Two reasons, both already
 established there: it reads `state.players[idx].hand_military`, my own hand,
 never a rival's (§6 checks that every `hand_military` read in `weighted.py` is
 `p = state.players[idx]`); and §6.2 measured that `hand_mil_value` "varies in
@@ -206,7 +206,7 @@ weights that could change behaviour default to 0.0: `unit_strength_credit`,
 1.0 but is gated behind `hand_mil_potential`, so it costs nothing either.
 
 `unit_strength_credit` is the interesting one, because the precedent in
-`docs/CARD_BLINDNESS.md` §2.3 argued the opposite way for `card_rate_credit`
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#23-one-weight-that-is-not-00) §2.3 argued the opposite way for `card_rate_credit`
 (1.0, live, "0.0 would leave the champions playing blind"). Two measurements
 say units are not that case:
 
@@ -311,13 +311,13 @@ clean, specific statement of what a board-aware card evaluator would buy that
 a table cannot: *units are the card type whose value is dominated by a
 board-conditional term*, and no per-card table will ever price them.
 
-This is the §5.1 finding of `docs/CARD_BLINDNESS.md` — "giving a card a weight
+This is the §5.1 finding of [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) — "giving a card a weight
 does not help until the bot takes the card" — with the causal chain filled in
 rather than inferred from a variance census.
 
 ### 5.2 Which knobs can change a game at all — run this first
 
-`docs/CARD_BLINDNESS.md` §5.1 spent 1200 games finding out that
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#51-finish-discipline-a-null-and-the-reason-is-more-interesting-than-the-null) §5.1 spent 1200 games finding out that
 `wonder_overrun` never once won an argmax, and only noticed because three
 weights differing by a factor of eight produced *bit-identical* games. That is
 a deterministic fact about the evaluator and it costs seconds to measure
@@ -426,7 +426,7 @@ the top of this section says why the bound is uninteresting: the decision it
 informs happens 0.167 times a game.
 
 **And it is the wrong test, which Lane C established after I had started it.**
-`docs/CARD_BLINDNESS.md` §5.2: a fresh 0.0-default feature does nothing until
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#52-3p-does-it-transfer) §5.2: a fresh 0.0-default feature does nothing until
 the league learns its weight, so switching a credit on hands a *frozen* vector
 each card's upside at full price and its downside at zero. Every card in this
 lane is cost-bearing — a unit costs resources and a worker, a territory costs
@@ -454,8 +454,8 @@ for tactics: **which term actually carries a tactic's value into the policy?**
 > **Note on the premise (2026-07-30).** That "measured zero" was an arithmetic
 > identity, not a result: the take-timing heuristic is gated on `row_urgency`,
 > which is 0.0 in the frozen champion, so the wonder reprice could not have
-> moved anything. See `docs/CARD_BLINDNESS.md` §5.3 and
-> `analysis/frozen/README.md`. **This section's own finding does not depend on
+> moved anything. See [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#53-the-mechanism-is-not-wonders-and-the-reason-is-a-plumbing-bug) §5.3 and
+> [`analysis/frozen/README.md`](../analysis/frozen/README.md). **This section's own finding does not depend on
 > that premise and is unaffected** — every feature in the table below is a
 > plain `features()` term consumed by the ungated weight loop in `evaluate()`,
 > so nothing here was switched off. It was re-run against the live 2p league

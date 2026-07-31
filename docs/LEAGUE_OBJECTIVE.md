@@ -64,7 +64,7 @@ justification was that the operating band is "65 to 160" and that centring at
 |---|---|---|---|
 | candidate own-culture median | 108.8 | 122.1 | 134.4 |
 | champion own-culture median | 120.8 | 144.1 | 160.6 |
-| human corpus median (`docs/HUMAN_BASELINE.md`) | ~156-159 | ~176-180 | ~182-195 |
+| human corpus median ([`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)) | ~156-159 | ~176-180 | ~182-195 |
 
 The centre sat below where games were actually being decided at every player
 count, and further below at 3p/4p than at 2p. The marginal-value argument still
@@ -74,7 +74,7 @@ not a catastrophe.
 **But the fix is not a new number.** A constant fitted to the policy's observed
 scores steers the next policy, whose scores then move, and the constant is
 stale again. That is the same failure mode as the fitted table in
-`docs/UNIT_TECH_PRICING.md`: a number that cannot say "it depends". Re-fitting
+[`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md): a number that cannot say "it depends". Re-fitting
 buys one month.
 
 A differential does not need the parameter at all. The distinguished point of
@@ -337,14 +337,14 @@ Taking 20 off the leader really does close twice as much of the gap as making
 
 **What the previous revision was right about.** The margin-trained 2p champion
 scored 64.7 own culture against a human 159.5 and won by suppression;
-`docs/TWOP_PROFILE.md` measured 69% of its margin in the conflict move class,
+[`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md) measured 69% of its margin in the conflict move class,
 causally, by banning the move class rather than by accounting. Switching to own
 culture demonstrably fixed *that*. But that document's own §3 records the
 finding which undermines its diagnosis: **pure win share preferred the theft
 champion too, more strongly than margin did** (−0.1967 vs −0.1795). The literal
 objective kept it. So the degeneracy was not caused by margin mispricing
 *winning*; the theft champion genuinely won more under the training proxy, and
-the reason to prefer the producing vector lies in `docs/PLAN_WAR_LOOKAHEAD.md`
+the reason to prefer the producing vector lies in [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md)
 §3-4a — under the policy we would actually **ship** the two vectors are a
 head-to-head null while their own cultures are 213.4 and 127.8. The theft
 champion's edge is a property of `QuiescentBot.WAR_LOOKAHEAD`, i.e. of the
@@ -365,7 +365,7 @@ causal claim belongs to whoever opens that lane.
 ### 7a. How big is the exposure? Offline estimate, and it is not small
 
 The bot already declares wars at **6.6-7.9× the human rate at 3p/4p**
-(`docs/OPEN_ITEMS.md`, `docs/AGGRESSION_RATE.md`). So: of the archived rows
+([`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md)). So: of the archived rows
 where a candidate gained culture differential over its parent, where did the
 gain come from — own culture up, or the opponents' down?
 
@@ -405,14 +405,14 @@ pre-registered checks, for whoever reads those logs:
 
 1. **War/aggression declarations per seat-game**, via
    `tools/aggression_census.py`, against the human corpus rate recorded in
-   `docs/AGGRESSION_RATE.md`. **It is already at 6.6-7.9× human at 3p/4p. If it
+   [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md). **It is already at 6.6-7.9× human at 3p/4p. If it
    rises above that, this objective is feeding the pathology, and the lane to
    open is the evaluator's war pricing — not this objective.**
 2. **The `cult` column against the `lead` column** in the per-opponent report.
    Both are printed on every row precisely for this. Own culture flat or falling
    while the lead rises, sustained over generations, is suppression training.
    Own culture rising with it is production.
-3. **`cult` against the human baseline** (`docs/HUMAN_BASELINE.md`: 2p median
+3. **`cult` against the human baseline** ([`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md): 2p median
    ~159.5). The previous objective existed because this number read 64.7. If it
    heads back down, say so early and loudly.
 
@@ -484,7 +484,7 @@ never beats, saturated at 0.94-0.97 against `book`, and 2.8× noisier per game a
 ## 10. The pool (unchanged by this change, preserved from the previous revision)
 
 The 2026-07-27 rebalance is untouched here and is documented in
-`docs/LEAGUE_POOL.md`. Retained because the tier totals are still live:
+[`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md). Retained because the tier totals are still live:
 
 | tier | total | members (2p) | each | share |
 |---|---|---|---|---|

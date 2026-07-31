@@ -1,7 +1,7 @@
 # The military discard is a decision (2026-07-30)
 
 `engine/economy.py` end-of-turn step 1 was `hand_military.pop(0)` — first in,
-first out, no decision. `docs/RULES_SPEC.md` §6.6 step 1 says of that exact
+first out, no decision. [`docs/RULES_SPEC.md`](RULES_SPEC.md) §6.6 step 1 says of that exact
 step: *"Only step requiring a decision."* The engine was taking the decision
 away from the player and answering it with the worst rule of thumb available:
 throw away the oldest card.
@@ -104,7 +104,7 @@ BookBot's table was already correct for this decision (pitch events first at
 
 `weighted.evaluate` sees the military hand only through `hand_mil_value`, a sum
 of `age + 1` — every military card of an age is interchangeable to it. That is
-a documented blind spot (`docs/CARD_BLINDNESS.md` §3 item 5: `hand_potential`
+a documented blind spot ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#3-the-blind-spot-that-remains-written-down) §3 item 5: `hand_potential`
 walks `hand_civil` only, so `_card_yields` is never called for a tactic, war,
 aggression, territory or bonus card). Same-age options therefore **tie**, and
 every argmax in this project resolves a tie to the lowest index.

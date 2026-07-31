@@ -25,7 +25,7 @@ filename** (an earlier attempt produced a 131 KB HTML page named `.xls`):
 | 409053 | `sources/bgg_409053_player_card_counts.xls` | `d0 cf 11 e0` = **OLE2 / Excel 97-2003** | 144,896 (exactly BGG's advertised size) |
 
 Retrieval recipe (Cloudflare + a signed one-shot S3 URL): `tools/scrape_bgg_files.mjs`,
-explained in `docs/EXTERNAL_AIS.md` §5c.
+explained in [`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5c-bgg-file-section--login-now-works-one-legal-click-still-gates-the-file-bodies) §5c.
 
 **The Card Reference PDF has no text layer.** All 4 pages are single RGB images
 (1141×904 etc. at 118–144 ppi) with one embedded font used for nothing extractable —
@@ -308,7 +308,7 @@ this commit** — everything learned earlier about military tempo was fitted to 
 half its Age I tactics, so champions and league tables either side of `7d40f53` cannot be
 compared and a champion carried across the boundary carries weights tuned to a deck that
 no longer exists. The climbs were left running rather than killed; restarting them is the
-user's call. See `engine/PROGRESS.md` for the digest re-baseline and the same warning.
+user's call. See [`engine/PROGRESS.md`](../engine/PROGRESS.md) for the digest re-baseline and the same warning.
 
 Applying the fix also surfaced a latent engine bug (fixed in `5898006`, the commit before
 it): `effects.compute()` clamped only the happiness rating at zero, so Age III

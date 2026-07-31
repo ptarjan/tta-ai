@@ -3,7 +3,7 @@
 The 12 `special-tech` cards, the 24 production buildings (farm 4, mine 4, lab 4,
 temple 3, library 3, arena 3, theater 3) and the 3 military `bonus` cards.
 
-`docs/CARD_BLINDNESS.md` gave the 24 production buildings a clean bill of health
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) gave the 24 production buildings a clean bill of health
 on the strength of a census that counts *dropped keys*: "the evaluator prices a
 card correctly when the card is a bag of numbers ... every farm, mine, lab,
 temple, library, arena and theater ... is priced exactly right." That census
@@ -35,11 +35,11 @@ right about mapping and that is why it missed all three defects.
 Three real defects, all confirmed by measurement, none previously known:
 
 * **D1** — the end-of-turn military hand-limit discard was FIFO with no
-  decision, in a step `docs/RULES_SPEC.md:188` explicitly calls "the only step
+  decision, in a step [`docs/RULES_SPEC.md`](RULES_SPEC.md):188 explicitly calls "the only step
   requiring a decision". It destroyed the best defence card in hand, when a
   worse one was available, on ~40% of the turns it fired. *Found here, routed to
   a dedicated lane, and **FIXED on master in `1c08790`** with
-  `docs/MILITARY_DISCARD.md`. Diagnosis in section 4.*
+  [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md). Diagnosis in section 4.*
 * **D2** — all 12 special technologies price at a strictly **negative** hand
   value, so the bot is actively repelled from a sixth of the civil deck. Six of
   the twelve are taken zero times in 40 player-games. The cause turns out to be
@@ -316,7 +316,7 @@ statement of the remaining gap:
   it to the league.
 * `wonder_stages_per_action` is denominated in civil actions saved, but only on
   a wonder programme the bot does not currently run at all (see
-  `docs/CARD_BLINDNESS.md` on wonders never being completed). Converting it
+  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) on wonders never being completed). Converting it
   would be pricing a path nothing walks.
 
 ### 2.7 The rule, made mechanical — `tests/test_half_priced_cards.py`
@@ -467,7 +467,7 @@ colonisation auto-uses the whole pool). The third is **D1**.
 ### D1 — the hand-limit discard made no decision *(routed; FIXED on master)*
 
 > **Resolved.** `1c08790` — "The military discard is the player's choice, not
-> FIFO (§6.6 step 1)" — landed the fix, with `docs/MILITARY_DISCARD.md`. The
+> FIFO (§6.6 step 1)" — landed the fix, with [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md). The
 > `pop(0)` below is gone; `economy.end_of_turn` now suspends and pushes the
 > player's discard decision through `interact.discard_excess_military`, and
 > returns `False` so the caller resumes it. This section is kept as the
@@ -489,7 +489,7 @@ while len(p.hand_military) > limit:
     discard_military(state, name)
 ```
 
-`docs/RULES_SPEC.md:188`, describing this exact step of the end-of-turn
+[`docs/RULES_SPEC.md`](RULES_SPEC.md):188, describing this exact step of the end-of-turn
 sequence: *"Discard excess military cards — down to military action total (red
 tokens), face down. **Only step requiring a decision.**"* The engine makes no
 decision.

@@ -1,12 +1,12 @@
 # Sixteen of the thirty-three action cards are worth exactly nothing, because three of the coordinates they are priced in are not features
 
-*2026-07-30.  Companion to `docs/UNIT_TECH_PRICING.md` and
-`docs/YELLOW_TECH_PRICING.md`; same sentence, third colour:* **a card is worth
+*2026-07-30.  Companion to [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) and
+[`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md); same sentence, third colour:* **a card is worth
 what `evaluate` pays for what it does.**
 
 ## 0. The finding, and the numbers it is
 
-`docs/OPEN_ITEMS.md` item 24 ranked action cards the largest single card-type
+[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md) item 24 ranked action cards the largest single card-type
 deficit in the game: **2.72 taken per seat-game at 2p against a human 12.98**
 on the live 2p champion, **5.90 against 10.25** at 3p.  Measured again here on
 `DEFAULT_WEIGHTS` — the vector two of the three live league arms are gen 0 of —
@@ -25,7 +25,7 @@ spelled in coordinates `evaluate` never multiplies by anything**:
 game the league plays can produce a gradient on them.  They are not weights the
 trainer chose to leave at zero; they are weights the trainer has never had any
 information about.  `unit_strength_credit` and `tech_levels` were coordinates
-the evaluator *could* read but never had to *buy* (`docs/UNIT_TECH_PRICING.md`
+the evaluator *could* read but never had to *buy* ([`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md)
 §5.2); these are one step worse — the evaluator cannot read them at all.
 
 The consequence is arithmetic.  Thirteen of the thirty-three action cards carry
@@ -65,7 +65,7 @@ between the two halves of that table is the line between "is a feature" and
 
 ## 1. The classification, per card
 
-The house method (`docs/HAZARDS.md`): every play-rate outlier lands in exactly
+The house method ([`docs/HAZARDS.md`](HAZARDS.md)): every play-rate outlier lands in exactly
 one of four buckets.
 
 * **(a) the ENGINE cannot do it.**  **Empty.**  All thirty-three effects are
@@ -155,7 +155,7 @@ the bot's price for all three printings is zero.
 `w[k] + (1-L)w[k_early] + L·w[k_late]`; `card_potential` reads the bare `w[k]`.
 On the defaults that is 1.0 against a marginal of 0.6 in Age A rising to 2.5 in
 Age IV.  This is the **same** phase-blend mismatch `feature_marginal` was
-written for in `docs/YELLOW_TECH_PRICING.md`, still live on the one-shot gains
+written for in [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md), still live on the one-shot gains
 because that lane only routed technologies through it.  It is why Cultural
 Heritage is the one action card the bot *over*-takes.
 
@@ -355,9 +355,9 @@ Six of the eight `tools/gate.sh` arms moved and two did not.
 **The base moved under this lane and every arm was recomputed, not carried
 over.**  The whole set was first derived against `8b972ef` (e9cdc2d4 /
 0c5a4337 / ce0d22bf / 49b898e1 / 65d9a884 / b952c68e, with all eight verified
-the same way); the horizon lane (`docs/MODEL_CONSTANTS.md`) then landed
+the same way); the horizon lane ([`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md)) then landed
 underneath and moved all six evaluator arms on its own.  Re-using a digest
-across a base change is exactly the laundering `docs/PYPY.md` §9.0 forbids, so
+across a base change is exactly the laundering [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0 forbids, so
 the clean-base control, both derivations and the attribution were all re-run
 from scratch on `7bf483a`.  The discarded first set is recorded in
 `tools/gate.sh` so a reader can see it was discarded rather than reconciled.
@@ -368,7 +368,7 @@ from scratch on `7bf483a`.  The discarded first set is recorded in
 * **All six evaluator arms moved**, predicted before the run: `DEFAULT_WEIGHTS`
   carries `action_board_credit` at 1.0, so every action card in the row and in
   the civil hand prices differently for all three searching bots.
-* **Two-sided per `docs/PYPY.md` §9.0**: derived from scratch in
+* **Two-sided per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0**: derived from scratch in
   `/tmp/actionfix` and independently in `/tmp/actionfix2`, two separate clones
   of the same tree, which agreed byte for byte on **all eight** arms —
   including the two that did not move.  A clean-base control on the parent
@@ -393,7 +393,7 @@ test_swept_card_cannot_lend_its_name_to_a_dealt_card` builds its position from
 card is one the unmasked evaluator would have priced.  It dealt that card at
 slot 7, outside the sweep slide, where `row_pressure` scores it through
 `bargain` — and `bargain` multiplies by `rival_take_p`, which
-`docs/MODEL_CONSTANTS.md` had just turned into a per-rival board estimate that
+[`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md) had just turned into a per-rival board estimate that
 saturates at 1.0 (survive 0, bargain 0) whenever the one rival can afford the
 one card they can reach.  Any evaluator change moves the 40-ply tableau, so
 **the guard could stop guarding without anything failing**; this lane is what
@@ -426,7 +426,7 @@ tests that are trivially true when there is no credit.
    cause is somewhere else: 0.02 plays per seat-game at 2p against a human 1.33
    and **0.00** at 3p.  It orders a wonder stage and is illegal without a
    wonder in progress; the bot completes 1.73 wonders a game at 2p and **zero**
-   at 3p (`docs/OPEN_ITEMS.md` §1.1).  Re-measure it after the wonder hole is
+   at 3p ([`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#11-wonder_potentials-scale-has-no-trustworthy-evidence) §1.1).  Re-measure it after the wonder hole is
    closed, not before.
 3. **Frugality is under-played for a related reason** — 0.07 against a human
    0.83.  It orders "increase your population at full price", and how often the

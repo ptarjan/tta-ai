@@ -97,7 +97,7 @@ single scalar over the max. So:
 
 ### 2b. Attacks are priced at exactly the cost of the card leaving hand
 
-`docs/AGGRESSION_FIX.md` section B diagnosed this on 2026-07-26 and ends with
+[`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) section B diagnosed this on 2026-07-26 and ends with
 "**Fix (same shape as the pact/colony fix). See the next section for the
 implementation and the A/B result.**" — *there is no next section.* The
 document trails off, and `git log` shows one commit (`8d24aff`, the diagnosis).
@@ -155,7 +155,7 @@ champion's `hand_military` weight is **0.224** with `hand_mil_value` and
 is not small — it is identically zero.
 
 **Verdict on Q1: the war channel is a feature-space hole, exactly as
-`AGGRESSION_FIX.md` said and never fixed. No amount of hill climbing can find
+[`AGGRESSION_FIX.md`](AGGRESSION_FIX.md) said and never fixed. No amount of hill climbing can find
 a weight that makes `war` attractive, because the vector has no coordinate that
 moves when a war is declared.** But see section 4 — closing it is not by
 itself sufficient, and may not even be worth much.
@@ -225,7 +225,7 @@ strength_rel_early, tech_levels_late, uprising, wonder_progress_late,
 wonder_remaining, workers_late, yellow_bank`.
 
 (`end_turn_bias` is the one entry that would need an explicit exemption rather
-than a clamp — `weighted.py` and `docs/WASTED_ACTIONS.md` §6 measured five ways
+than a clamp — `weighted.py` and [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 measured five ways
 that it must stay negative and must not be "fixed", so a two-sided guard would
 be *protecting* it, not breaking it. `strength_deficit` and `discontent`
 likewise: a positive value there means "being behind is good", which is the
@@ -250,7 +250,7 @@ defender +4 strength       -> 9 culture moved the OTHER way       ("EITHER side 
 ```
 
 `events.resolve_war:587` is `take = min(5 + adv, loser.culture)`, matching
-`docs/RULES_SPEC.md` §5.8 "5 + advantage culture points (capped at what the
+[`docs/RULES_SPEC.md`](RULES_SPEC.md) §5.8 "5 + advantage culture points (capped at what the
 victim has; victim cannot go negative)" and `data/cards_military_actions.json`
 (`"victorTakesCulture": {"base": 5, "plus": "strengthAdvantage"}`, Age III,
 3 MA, 6 copies). `resolve_war` is called from `game.start_turn:221` at the
@@ -415,7 +415,7 @@ number.
 |---|---|---|---|---|
 | 1 | **Make `guard_weights` two-sided**: clamp any weight whose sign is opposite its `DEFAULT_WEIGHTS` sign, not just those with a positive default. | **high** — exact, non-noisy evidence (§2c) | **low** — measured null at n=48 (§4) | ~3 lines |
 | 2 | **Make rate features scale with turns remaining**: either replace `lateness()`'s 4-step age proxy with a continuous rounds-remaining fraction, or add `culture_rate × rounds_left` as its own feature. | medium-high — matches the measured rate curves (§4) and the Age III/IV saturation is plainly wrong | **medium-high** — this is the axis the champion actually loses on | small feature change + full re-measure |
-| 3 | **Close the war/aggression representation hole** (finish `AGGRESSION_FIX.md` B): deferred credit for a pending `defense`, and features for `war_declared_by_me` / `wars_declared_on_me` priced by the spoils formula. | **high** — the hole is proven and exact (§2b) | **low-medium** — the forced-attack oracle gained nothing (§4), but it bounds a crude policy only | medium; new features + climb restart |
+| 3 | **Close the war/aggression representation hole** (finish [`AGGRESSION_FIX.md`](AGGRESSION_FIX.md) B): deferred credit for a pending `defense`, and features for `war_declared_by_me` / `wars_declared_on_me` priced by the spoils formula. | **high** — the hole is proven and exact (§2b) | **low-medium** — the forced-attack oracle gained nothing (§4), but it bounds a crude policy only | medium; new features + climb restart |
 | 4 | **Per-rival targeting**: `rival_culture` is a single max. Nothing distinguishes "the leader is 80 ahead" from "two rivals are tied 5 ahead". A `culture_lead_over_me` / `runaway_leader` feature would let the climb learn a threshold. | medium | medium | medium |
 | 5 | **Break the 2p military trap**: `strength_lead` is capped at 6 with weight 6.392 that the bot can never earn because `unit_workers`=0.000 and `strength`=0.118. Either uncap, or credit the *first* unit worker specially. | medium | low-medium (2p only) | small |
 | 6 | **Do nothing to 4p; let it run.** It is the least-converged arm with the highest accept rate (§5). | high | n/a | free |
@@ -494,7 +494,7 @@ are **not** exempt here and should not be: those are value terms, a positive
 value really does read "being behind / being unhappy is good", and that is the
 same inversion class as `rival_culture`. `end_turn_bias` is likewise locked,
 and locking it is *protecting* it — driving it positive is the "pass MORE"
-regression measured at 11.0% in `docs/WASTED_ACTIONS.md` §6.
+regression measured at 11.0% in [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6.
 
 **Left alone on purpose:** the ten *positive*-default phase multipliers are
 still clamped one-sided, exactly as today. By the gauge argument those clamps
@@ -785,7 +785,7 @@ live run would throw away 106 and 62 generations of 3p and 4p training.
 
 If it must go in mid-run, the only safe route is to move
 `experiments/league_state/` aside for the 3p and 4p arms and restart them from
-`--init default`, per `docs/TRAINING_RUN.md`. The 2p arm is unaffected either
+`--init default`, per [`docs/TRAINING_RUN.md`](TRAINING_RUN.md). The 2p arm is unaffected either
 way (49.9% vs a 50.0% null) and could take the change in place.
 
 ### What I would look at next, in order
@@ -1069,7 +1069,7 @@ nohup experiments/run_league.sh 4 12 1 2 12 4 1.2816 \
 Supervisor PID **54418**, started 20:50:23 MDT, `TTA_JOURNAL=1` (set by
 `run_league.sh`). State dir is `/tmp/tta-probe/experiments/probe_state_4p`,
 which did not exist before launch — mandatory, because `--init` is ignored once
-a state dir holds a champion (`docs/TRAINING_RUN.md`). Log
+a state dir holds a champion ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)). Log
 `/tmp/tta-probe/experiments/logs/league_4p.log`. `experiments/league_state/` in
 the main checkout was read and never written.
 
@@ -1128,7 +1128,7 @@ handful of generations readable at all:
    **0.0** as of the 20:50 restart.)
 3. **Engine version.** The live arm's generations 1–49 ran on the pre-journal
    engine; it relaunched on the journal engine at 18:41
-   (`docs/TRAINING_RUN.md`). Per `docs/PYPY.md` 9.14 the journal branch's
+   ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)). Per [`docs/PYPY.md`](PYPY.md) 9.14 the journal branch's
    `perf_check` baselines were required to agree with master's, i.e. it is a
    bit-identical-play optimisation. **That is taken from the doc, not
    re-verified here.**
@@ -1990,7 +1990,7 @@ actually makes — **candidate against its own reference** — and §19 never ra
 So the axis §19 called perverse is one the gate was **right** to pay for: the
 inflated vector beats the vector it was inflated from, by +16.7 points against a
 25.0% null. For scale, that is the same size as the entire QuiescentBot search
-upgrade at 4p (`docs/DEEPER_SEARCH.md` 4.2: +16.7% ± 3.0%).
+upgrade at 4p ([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 4.2: +16.7% ± 3.0%).
 
 The gate was not buying margin it could not convert. It was buying strength,
 and the win-rate column that was supposed to prove otherwise was blind by

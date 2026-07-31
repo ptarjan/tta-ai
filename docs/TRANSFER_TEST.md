@@ -4,7 +4,7 @@ Date: 2026-07-27
 Branch: `transfer-test`. Tool: `tools/transfer_ab.py` (additive; this branch
 touches nothing in `engine/`).
 
-`docs/TRAINING_RUN.md` names this test — "play the quiescent-trained vector
+[`docs/TRAINING_RUN.md`](TRAINING_RUN.md) names this test — "play the quiescent-trained vector
 under PlanBot against the 1-ply-trained vector under PlanBot" — and says the
 answer "is unknown and must not be assumed". It had never been run. It has now.
 
@@ -74,7 +74,7 @@ pacts and colony bids are priced, but a war is still scored as pure cost.
 Head-to-head results can be intransitive, so the same question was asked
 without the two vectors ever meeting: each plays `book` on the **same deals**,
 and the difference is taken deal by deal. `book` is the pool opponent
-`docs/TWOP_PROFILE.md` uses; `default`/`greedy`/`random` are excluded on
+[`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md) uses; `default`/`greedy`/`random` are excluded on
 purpose.
 
 | search policy | n | Q vs book | P vs book | **paired Q − P** |
@@ -90,7 +90,7 @@ cannot discriminate, which is why margin is the reported signal.)
 the two cheap searches and **−32.5 ± 6.9 under PlanBot**. The flip is
 4.7 SE away from zero; this is not a null being dressed up.
 
-The Q vs book numbers also reproduce `docs/TWOP_PROFILE.md` §8 independently
+The Q vs book numbers also reproduce [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#8-the-strategy-is-a-property-of-the-search-not-of-the-weights-alone) §8 independently
 (that document: +65.2 at 1 ply, +85.5 under quiescence; here +69.5 and +82.1 on
 a different seed set and a slightly later gen), which is the harness check that
 these two runs are measuring what they claim to.
@@ -106,12 +106,12 @@ The margins hide the interesting half. Own culture against `book`:
 
 PlanBot is worth **+51.5** to P's own score and **−29.0** to Q's. It is not that
 PlanBot is a weaker search — 212.6 is squarely in line with
-`docs/BOT_ARCHITECTURE.md`'s 194.5 / 202.3 for PlanBot on that same 1-ply
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md)'s 194.5 / 202.3 for PlanBot on that same 1-ply
 lineage. It is that the two vectors want different searches.
 
 ### 4a. "PlanBot is the strongest policy we have" is vector-dependent
 
-`docs/BOT_ARCHITECTURE.md`'s headline — PlanBot beats the champion
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md)'s headline — PlanBot beats the champion
 **88.6% ± 3.1%** on identical weights — was measured on
 `experiments/champion_2p.json` gen 209 and, replicated, gen 344. **Both are
 members of the 1-ply lineage, i.e. P's family.** So the claim is established
@@ -127,7 +127,7 @@ two vectors — same weight file on both sides, only the search differs:
 On P, PlanBot is the large upgrade the architecture doc describes (and 0.770
 against `QuiescentBot` rather than against 1-ply is the right order of size —
 quiescence is itself worth +20.3 over 1 ply on trained weights,
-`docs/TWOP_PROFILE.md` §8). **On Q, PlanBot is not an upgrade at all**: win
+[`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#8-the-strategy-is-a-property-of-the-search-not-of-the-weights-alone) §8). **On Q, PlanBot is not an upgrade at all**: win
 share is 0.9 SE from the null and margin is 3.2 SE *below* it. The difference
 between the two rows is 0.310 ± 0.061 in win share and 61.6 ± 7.3 in margin.
 
@@ -140,22 +140,22 @@ question with one answer; it depends on which vector you are shipping.
 ## 5. Why the two vectors are different animals
 
 The scores in §2 and §4 are the whole story and they agree with
-`docs/TWOP_PROFILE.md` §4 and §9.
+[`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#4-where-the-points-come-from) §4 and §9.
 
 * **P is a production engine.** It scores 160 against `book` and lets `book`
   score 115-125. Its `culture_rate` weight is 33.91.
 * **Q is a suppression engine.** It scores 125-138 but holds `book` to 43-69.
-  Its `culture_rate` is 0.304. `docs/TWOP_PROFILE.md` measures where its points
+  Its `culture_rate` is 0.304. [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md) measures where its points
   come from: 62.0 ± 2.0 of its 85.5 margin is war and aggression *transfers*,
   and banning the conflict move class barely moves its own total (131.0 → 119.8)
   while nearly doubling `book`'s (45.5 → 93.8).
 
-That is exactly the asymmetry `docs/TWOP_PROFILE.md` §9 flagged as a risk and
+That is exactly the asymmetry [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#9-what-this-does-and-does-not-support) §9 flagged as a risk and
 this document now measures as realised: **the league gates on `margin_share`,
 and war/aggression transfers are zero-sum by construction, so stealing 25 points
 earns 50 points of margin while adding nothing to your own board.** Retargeting
 the trainer to `quiescent:levels=1` made that move class selectable for the
-first time (`docs/DEEPER_SEARCH.md` §4.0: `aggression` ranked first at 0 of 72
+first time ([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#40-first-the-defect-itself-measured-rather-than-argued) §4.0: `aggression` ranked first at 0 of 72
 decisions at 1 ply, 23 after quiescence), and the climber walked straight into
 the term the metric overpays for.
 
@@ -164,7 +164,7 @@ and it is genuinely better against `book` under the cheap searches. Under a
 search that cannot price a war it is a strategy with the payoff removed and the
 cost left in, and Q's own score falls to 53 (§2).
 
-## 6. Answering the question `docs/TRAINING_RUN.md` asked
+## 6. Answering the question [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) asked
 
 > If the quiescent-trained vector is not better *under PlanBot*, the proxy
 > failed and the retargeting bought nothing.
@@ -210,7 +210,7 @@ precisely the move class the proxy taught the climber to build a strategy around
   opponent, which is robust to that opponent being weak, but it is not
   evidence about a human or the official app AI.
 * **`plan:width=8` is one point on a curve.** `width=1` was not tested here.
-  `docs/BOT_ARCHITECTURE.md` measures `width=1` at 62.3% vs 85.1% for `width=8`
+  [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) measures `width=1` at 62.3% vs 85.1% for `width=8`
   on the 1-ply lineage; whether the flip in §3 is width-dependent is unknown.
 
 ## 8. What follows for the live 48h run
@@ -230,7 +230,7 @@ Stated as findings, not as instructions:
    lookahead so the two searches price the same move class, which makes the
    proxy honest and is a change to `engine/bots/plan.py` rather than to the
    trainer; (c) score the gate on own-culture rather than margin, so theft is
-   paid once, which `docs/TWOP_PROFILE.md` §9 already proposed.
+   paid once, which [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#9-what-this-does-and-does-not-support) §9 already proposed.
    (b) is the cheapest and is the one this document's §2 row 3 argues for
    directly: the gap between the two searches is a *single flag*.
 4. Nothing here says quiescence is a worse search than 1 ply, or that Q is a

@@ -1,7 +1,7 @@
 # The military pricing seam, and the write-off that outlived its reason
 
-2026-07-30.  Companion to docs/CARD_BLINDNESS.md (the civil-card census) and
-docs/CARD_BLINDNESS_MILITARY.md (what the military hand cannot see).
+2026-07-30.  Companion to [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) (the civil-card census) and
+[`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md) (what the military hand cannot see).
 
 Three things land here.  Only the first is plumbing; the other two are a
 stale write-off and a write-off that is *not* stale and now says so.
@@ -194,15 +194,15 @@ at 0.0 on every vector in the league.  `hillclimb.mutate` perturbs by
 scatters onto it; until then this half of the change is a channel, not an
 effect.  Anyone measuring it must open `defense_bonus` (and, at 2p/4p,
 `hand_mil_potential`) by hand, or they will measure an arithmetic identity --
-docs/CARD_BLINDNESS.md Sec 5.3's 12,800-game null, again.
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) Sec 5.3's 12,800-game null, again.
 
 ## 4b. Where the 3p conduction actually shows up
 
-A bonus card has **no move handler at all** (docs/CARD_CENSUS.md row 9): it is
+A bonus card has **no move handler at all** ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md) row 9): it is
 never "played", only spent inside the defence and colonization machinery.  So
 the only decision its price can reach is the one about *holding* it -- and
 there is exactly one: `engine/interact.py:_discard_military`, RULES_SPEC §6.6
-step 1, the end-of-turn military discard, which `docs/MILITARY_DISCARD.md`
+step 1, the end-of-turn military discard, which [`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md)
 turned from a `pop(0)` into a real `push_choice`.
 
 That function's own docstring names this change's precondition:

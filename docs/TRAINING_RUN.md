@@ -8,12 +8,12 @@ Terse operational note, not a write-up.
 line right below.** `1fbf128` switched the 3p and 4p challengers back to
 `plan:width=2`: QuiescentBot resolves a defender's `defense` decision by
 reading the defender's real hidden `hand_military`, which the shipped bot
-cannot do against a human, and the gating experiment `docs/DEEPER_SEARCH.md`
+cannot do against a human, and the gating experiment [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md)
 §6.2 asked for before promoting it to challenger was never run. 3p gen 1315
 and 4p gen 370 were discarded (backed up outside the repo) rather than
 carried forward, since every generation trained under that challenger had
 tuned weights to exploit hidden information the ship policy will not have.
-See `docs/DEEPER_SEARCH.md` §6.2 for the full arc.
+See [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#62-make-quiescentbot-the-trainers-challenger--conditional-go-not-yet-tried-then-reverted-2026-07-30) §6.2 for the full arc.
 
 ## 2026-07-29: the 2p arm now trains under PlanBot
 
@@ -43,7 +43,7 @@ don't:
 | human corpus reference | 159.5 [156.0, 163.0] | — |
 | **P**, the 1-ply lineage vector, mirror | **190.6 [185.5, 196.3]** | 162 |
 | **Q**, a league champion (gen 239), mirror | **61.4 [56.6, 65.9]** | 162 |
-| P against `book` (`docs/PLAN_WAR_LOOKAHEAD.md` §4a) | 213.4 | 100 |
+| P against `book` ([`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md#4a-absolute-own-culture-not-just-margins) §4a) | 213.4 | 100 |
 | the live 2p champion (gen 725) against `book` | **132.8** | 20 |
 
 The first two rows are a replication run on this box on post-scoring-fix
@@ -64,7 +64,7 @@ So the arm starts from
 
 verified key-by-key in place: all 82 of P's weights identical in the live
 `champion_2p.json`, the 7 newer features at `DEFAULT_WEIGHTS` (the same fill
-`docs/TRANSFER_TEST.md` §7 describes), `ladder_2p/gen00000.json` equal to the
+[`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 describes), `ladder_2p/gen00000.json` equal to the
 champion, gen 0.
 
 **`--init` is ignored once the state dir holds a champion**, so this needed a
@@ -98,7 +98,7 @@ at 2p on the champion**, not extrapolated from the 4p `DEFAULT_WEIGHTS` table
 further down this document — `--weights` was added for this and the difference
 is large: quiescent costs 0.732 cpu-s/game on the champion against 0.272 on the
 defaults, because cost rises with how much the vector attacks
-(`docs/DEEPER_SEARCH.md` 3.1) and this champion is a war bot.
+([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 3.1) and this champion is a war bot.
 
 | architecture | vs `book` | mirror | x quiescent, real mix | generations left in 46h |
 |---|---|---|---|---|
@@ -121,16 +121,16 @@ Why not the others:
   ~10% accept rate is ~9 accepts. That is not a climb.
 * **`width=4`** — ~145 generations, ~15 accepts. Too thin to justify against
   `width=2`'s ~200.
-* **`width=1`** — cheap, but `docs/BOT_ARCHITECTURE.md` describes it as
+* **`width=1`** — cheap, but [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) describes it as
   "everything except the multi-action search": no beam at all. It is not the
   shape we ship.
 * **`width=2`** is the cheapest configuration that is still a beam search.
 
 **This does not close the proxy gap, it narrows it** — from *quiescence vs
 PlanBot* to *a narrow beam vs a wide one*, and `width=2`'s strength has never
-been measured (`docs/BOT_ARCHITECTURE.md` has `width=1` at 62.3% and `width=8`
+been measured ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) has `width=1` at 62.3% and `width=8`
 at 85.1% against 1-ply, nothing between). The residual is exactly what
-`docs/PROXY_GUARDRAIL.md` measures.
+[`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) measures.
 
 Three flags come with the retarget, all in the 2p branch of
 `experiments/watchdog.sh`: `--full-check-every 25 --check-games 24
@@ -138,14 +138,14 @@ Three flags come with the retarget, all in the 2p branch of
 cycle plays four duels per weight; at ~10x the per-game cost the arm would
 otherwise spend more time checking than training. Ablation is off rather than
 merely rarer — single trained weights are not interpretable anyway
-(`docs/HAZARDS.md` trap 4) and this arm exists to climb.
+([`docs/HAZARDS.md`](HAZARDS.md) trap 4) and this arm exists to climb.
 
 ### Two other changes landed the same day
 
-* **`docs/LEAGUE_POOL.md`** — the pool now downweights opponents by their
+* **[`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md)** — the pool now downweights opponents by their
   measured win rate and deepens the self-ladder (`--past-k 6`, newest-biased).
   15 of the 2p arm's 18 opponents were between 87.5% and 100%.
-* **`docs/PROXY_GUARDRAIL.md`** — every few accepted champions, the new
+* **[`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md)** — every few accepted champions, the new
   champion is played under `plan:width=8` against the previously validated one
   and against `book`, and the result is appended to a time series that answers
   "is proxy progress producing real progress". Separate cron entry, `nice -n
@@ -156,7 +156,7 @@ merely rarer — single trained weights are not interpretable anyway
 **This run trains a different policy from every run before it.** The weight
 vector is identical in shape, but it is now scored by `QuiescentBot`
 (`--candidate-bot quiescent:levels=1`) instead of the 1-ply `WeightedBot`. See
-"why" below; see `docs/DEEPER_SEARCH.md` for the architecture.
+"why" below; see [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) for the architecture.
 
     experiments/run_league.sh <K> 12 <W> 2 12 4 1.2816 \
         --init default --weight-guard clamp --past-k 2 \
@@ -236,12 +236,12 @@ read this table as "PlanBot is too slow".
 
 For training it is not close. A hill-climber needs hundreds of generations;
 three at 4p is nothing. Even the `width=1` ablation — which
-`docs/BOT_ARCHITECTURE.md` scores at only 62.3% against 1-ply, versus 88.6% at
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) scores at only 62.3% against 1-ply, versus 88.6% at
 `width=8` — costs 9.1x, i.e. ~21 generations in 12h at 4p. There is no point on
 the PlanBot cost curve that trains.
 
 QuiescentBot at 2.0-2.7x scores +5.8/+9.5/+16.7 points over 1-ply at 2p/3p/4p
-(`docs/DEEPER_SEARCH.md` 4) and is the best strength-per-cpu-second available.
+([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 4) and is the best strength-per-cpu-second available.
 `LEVELS=1`, not 2: 2 is a measured regression because it models the rivals as
 quiescent when they are 1-ply.
 
@@ -255,7 +255,7 @@ The argument for expecting transfer is that both bots fix the SAME root cause �
 `apply()` stopping at a pending decision, which made whole move classes (pacts,
 aggressions, colony bids, action cards) look strictly dominated at 1 ply, so
 their weights got no gradient at all. Under quiescence those weight dimensions
-become live. `docs/DEEPER_SEARCH.md` 4.0 measures the mechanism directly:
+become live. [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 4.0 measures the mechanism directly:
 `aggression` is ranked first at **0** of 72 decisions at 1 ply and at **23**
 after quiescence.
 
@@ -267,17 +267,17 @@ better *under PlanBot*, the proxy failed and the retargeting bought nothing.
 
 ### Cost caveat, and a trap in the existing docs
 
-**`docs/BOT_ARCHITECTURE.md`'s "~16x current" for PlanBot is wrong under the
+**[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md)'s "~16x current" for PlanBot is wrong under the
 trainer's own flags — the real figure is 49-66x.** The 16x was computed against
 a `TTA_JOURNAL=0` 1-ply baseline (~0.47 cpu-s/game at 2p). `run_league.sh`
 exports `TTA_JOURNAL=1`, which speeds up `WeightedBot` by 1.2-1.5x and does
 nothing for the search bots (they hold several live trial states and must stay
 on `copy_state`), so the ratio against the baseline that actually runs is
-3-4x larger. This is the identical mistake `docs/DEEPER_SEARCH.md` 3.1 already
+3-4x larger. This is the identical mistake [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 3.1 already
 caught and corrected for QuiescentBot (1.2x claimed, 1.65-2.65x real); it was
 never applied to the PlanBot figure. Do not budget from the 16x.
 
-`docs/DEEPER_SEARCH.md` 3.1: quiescent cost rises with how much the vector
+[`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 3.1: quiescent cost rises with how much the vector
 attacks (4.05% of candidates went pending under the old champion, 9.76% under
 `DEFAULT_WEIGHTS`). The table above was measured on `DEFAULT_WEIGHTS`, so a
 *trained* quiescent champion will cost more than 2.7x, not less. Expect the
@@ -285,7 +285,7 @@ generation counts to come in under the estimates.
 
 ## The pre-registered observable
 
-This run is also a partial test of `docs/CULTURE_GAP.md`'s recorded prediction:
+This run is also a partial test of [`docs/CULTURE_GAP.md`](CULTURE_GAP.md)'s recorded prediction:
 that unless fixes #1 and #2 land, restarted arms re-inflate `culture_rate` and
 re-flatten the `*_early`/`*_late` phase multipliers within a few hundred
 generations.
@@ -334,7 +334,7 @@ Check with `python3 tools/drift_sim.py` for the null and
    **refuses to launch an arm** whose assembled command line is missing any of
    `--candidate-bot --objective --hall-dir --human-bots --pool-weights
    --past-k --saturation`. A dead arm is loud; a silently mis-configured one
-   is not. See `docs/HAZARDS.md` trap 5.
+   is not. See [`docs/HAZARDS.md`](HAZARDS.md) trap 5.
 
 ## Resuming
 

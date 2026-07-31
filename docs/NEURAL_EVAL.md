@@ -16,15 +16,15 @@ unblocked. See §Stage 1b.
 
 The bet (owner's instruction): replace the hand-crafted linear evaluator with a
 trained neural value net — the AlphaZero-shaped path, justified by our having a
-FAST, VALIDATED simulator (docs/SCORE_VALIDATION.md: scoring exact vs 1011 human
+FAST, VALIDATED simulator ([`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md): scoring exact vs 1011 human
 games) which is exactly what self-play needs. The linear evaluator has a proven
 ceiling — it is a linear function of ~89 features and cannot express nonlinear
 value, and it is BLIND to card identity in the row and in hands
-(docs/INFORMATION_AUDIT.md), which is most of the real skill of the game.
+([`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md)), which is most of the real skill of the game.
 
 ## The load-bearing prior warning (read before trusting any number here)
 
-`docs/BOT_ARCHITECTURE.md` §2.3b/§3b measured that a value function fit by
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md#23b-the-evaluation-does-not-predict-the-outcome--measured) §2.3b/§3b measured that a value function fit by
 **Monte-Carlo regression on outcomes**, dropped into the 1-ply greedy search,
 gets **monotonically worse as its prediction improves**: a ridge fit reached
 0.81 held-out ranking accuracy and won **0 of 400** against the champion, and a
@@ -59,7 +59,7 @@ the Mac (torch-less); 7 unit tests in `tests/test_neural_encode.py` cover shape,
 determinism, cross-player-count stability, and a **no-leak** check (shuffling
 the hidden civil-deck order must not change the encoding).
 
-Faithful to what a player can legally SEE (docs/INFORMATION_AUDIT.md):
+Faithful to what a player can legally SEE ([`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md)):
 
 * **Global** (30 dims): civil/military/current-event ages (one-hot), round,
   turn, an exact/estimated `rounds_left` and lateness L (reused from
@@ -84,7 +84,7 @@ Faithful to what a player can legally SEE (docs/INFORMATION_AUDIT.md):
 Deliberately NOT encoded (cheating or unknowable): civil/military deck ORDER
 (only counts, via `rounds_left`); rival military-hand contents; other players'
 event seeds. Because the encoder reads row card identity, the known `end_turn`
-information leak (docs/BOT_ARCHITECTURE.md §2.3 — an `end_turn` trial refills the
+information leak ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md#23-a-new-defect-the-search-reads-cards-the-player-cannot-know--measured) §2.3 — an `end_turn` trial refills the
 row from the REAL civil deck) becomes *live* for a neural bot; NeuralBot
 therefore **determinizes at the search root** (§below).
 
@@ -156,7 +156,7 @@ root-determinized. Duels are 2p, seat-rotated, **n=200 each** (1200 games total,
 | **BookBot** | 0.075 ± 0.037 | 50.4 | 136.2 | −85.8 ± 7.8 |
 | `default`, **determinize OFF** (leak on) | 0.312 ± 0.064 | 51.6 | 75.4 | −23.8 ± 5.4 |
 
-Reference points (2p, docs/SCORE_VALIDATION.md §5): human **159.5**, quiescent
+Reference points (2p, [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5): human **159.5**, quiescent
 champion **64.7**, 1-ply lineage vector **139.8**. NeuralBot's own culture is
 **~50-56** whatever it plays — the weakest of every named bot, below even the
 suppression champion's native 64.7.
@@ -220,7 +220,7 @@ with everything else identical, lifts NeuralBot's own culture by **~+40** (54 �
 even** (0.427, −7.2 ± 6.8), and **doubles** the win rate vs BookBot (0.075 →
 0.150). Determinize on/off is still identical (0.427 vs 0.410) — no
 information-leak dependence. This is a real, measured step and it is exactly the
-direction docs/BOT_ARCHITECTURE.md §3b predicted.
+direction [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md#3b-prototype-the-fitted-value-vector-and-its-first-duel--a-hard-null) §3b predicted.
 
 **But it still does NOT beat the trained champion** (0.095, −62.5). The champion
 is a suppression engine: against a book-style production bot it runs its own
@@ -258,7 +258,7 @@ gap, so the AlphaZero-shaped path is unblocked and worth it:
    previous best by head-to-head win rate. This is where the net can pass its
    BookBot teacher instead of imitating it.
 3. **Policy head + shallow search (Stage 3)** — PlanBot already shows whole-turn
-   beam search is worth ~+35 pts over 1-ply (docs/BOT_ARCHITECTURE.md §3);
+   beam search is worth ~+35 pts over 1-ply ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md#3-prototype-planbot) §3);
    NeuralBot's evaluator dropped into that beam is the natural combination.
 
 Everything for these is in place: encoder, net, batched GPU inference, two data

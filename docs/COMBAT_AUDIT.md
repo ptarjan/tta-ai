@@ -14,7 +14,7 @@ the 312-legal-0-taken result — see [Verdict](#verdict).
 ## Method
 
 Everything below is checked against the printed rules, not against
-`docs/RULES_SPEC.md`. Sources, all in `sources/`:
+[`docs/RULES_SPEC.md`](RULES_SPEC.md). Sources, all in `sources/`:
 
 * `[CoL p.N]` — `cge_code_of_laws.pdf`, the full rulebook. Pages 3–4 are the
   Start-of-Turn Sequence and the entire Politics Phase.
@@ -23,7 +23,7 @@ Everything below is checked against the printed rules, not against
   `data/cards_military_actions.json`, cross-checked against
   `sources/namu_military.txt`.
 
-`docs/RULES_SPEC.md` was then checked *against* those sources rather than
+[`docs/RULES_SPEC.md`](RULES_SPEC.md) was then checked *against* those sources rather than
 trusted. It holds up: §5.4–§5.11 and §13 are accurate. Two of the three bugs
 below are cases where the code failed to implement what the spec already said
 correctly (§5.6 "remove attack-ending pact"; §5.4.2 "exclude pact bonuses that
@@ -31,7 +31,7 @@ end if you attack"). The spec is not where the error was.
 
 Tests are in `tests/test_combat.py` — 55 tests that build positions by hand.
 That is deliberate: self-play cannot reach any of this (see
-[Reachability](#reachability)), so a self-play-driven test would have proved
+[Reachability](#reachability-engine-wrong-vs-bots-blind)), so a self-play-driven test would have proved
 nothing. Every test names the rule it checks.
 
 * Before the fixes: 4 of the 55 failed (commit `1b7f1c9`).
@@ -275,7 +275,7 @@ ever declared a war.~~ `resolve_war` now branches on the card's own
 `orTakesSpecialTechnologiesOfSameTotalScienceCost` key and offers the steal
 through `interact.war_tech_options`/`war_tech_spoils` on the existing
 pending-stack machinery. Every evaluator-driven bot gets the choice for free
-by construction; see `docs/WAR_OVER_TECHNOLOGY.md` for the full
+by construction; see [`docs/WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) for the full
 implementation and which bot needed new policy (BookBot).
 
 **GAP 2 — Plunder's food/resource split is chosen greedily, not by the
@@ -327,21 +327,21 @@ The decisive fact is structural, not statistical: `_h_war` writes exactly
 card, and **no feature in `weighted.features()` reads either war field**. So the
 evaluation delta of a war declaration is `-hand_military_weight −
 ma_weight × cost` under *every possible weight vector*. Zero wars is not a
-training failure, it is arithmetic. `docs/CULTURE_GAP.md:143-155` measures the
+training failure, it is arithmetic. [`docs/CULTURE_GAP.md`](CULTURE_GAP.md):143-155 measures the
 gap at 0.224–0.225 points, exactly the 4p champion's `hand_military` weight.
 
-**On `docs/AGGRESSION_FIX.md` section B.** It ends at "See the next section for
+**On [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) section B.** It ends at "See the next section for
 the implementation and the A/B result." and there is no next section; the file
 has exactly one commit (`8d24aff`, the diagnosis). Nothing in it was silently
 assumed done in `weighted.py` — `deferred_credit` (`weighted.py:121-173`) still
-handles only `pact_offer` and `auction`, exactly as `docs/CULTURE_GAP.md`
+handles only `pact_offer` and `auction`, exactly as [`docs/CULTURE_GAP.md`](CULTURE_GAP.md)
 states. But the tree is not empty either: `engine/bots/quiescent.py` exists,
 with quiescence for the aggression/pact/bid pendings and a `WAR_LOOKAHEAD`
 (`:231`, `:298-301`) that calls the engine's own `events.resolve_war` on a
 scratch copy (`_war_value`, `:201-214`). It is **opt-in only**
 (`arena.py`'s `quiesce:` prefix; `hillclimb_pool.py`'s `--with-quiescent`,
 default off), it is **not used by any of the three running trainers**, and its
-strength has **never been measured** (`docs/DEEPER_SEARCH.md` §4/§5/§6 all read
+strength has **never been measured** ([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#4-strength-ab) §4/§5/§6 all read
 "RESULTS PENDING"; branch `quiesce-ab` has no commits). So the fix was written
 as an alternate bot class and never gated in. That is worth knowing before
 anyone concludes the war channel is unfixable.

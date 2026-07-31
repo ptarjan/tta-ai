@@ -1,14 +1,14 @@
 # The bot builds one civilization and it is blue, because `card_potential` reads weights `evaluate` does not use
 
 2026-07-30.  Closes the largest **non-inert** discrepancy in
-`docs/PLAY_RATE_AUDIT.md` (§5.1, "why yellow is dead and blue is doubled") and
-open item 1 of `docs/UNIT_TECH_PRICING.md` ("`tech_levels` is unpriced on every
+[`docs/PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) (§5.1, "why yellow is dead and blue is doubled") and
+open item 1 of [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) ("`tech_levels` is unpriced on every
 technology card").  They are one problem and are fixed together.  Base game
 (2015), all three player counts.
 
 ## 0. The finding, and the numbers it is
 
-`docs/PLAY_RATE_AUDIT.md` measured, per seat-game, bot against human:
+[`docs/PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) measured, per seat-game, bot against human:
 
 | type | 2p h | 2p bot | 3p h | 3p bot |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ Four claims, each re-derived here rather than taken from the audit.
 | Scientific Method | lab | **−15.06** |
 | Computers | lab | **−20.41** |
 
-Reproduces `PLAY_RATE_AUDIT.md` §5.1 to the digit.  The same table gives
+Reproduces [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md#51-why-yellow-is-dead-and-blue-is-doubled--class-c-and-probably-wrong) §5.1 to the digit.  The same table gives
 Opera **+79.48**, Drama **+56.04**, Religion **+27.08**, Printing Press
 **+25.75** — the over-played half, and the ordering is the whole finding.
 
@@ -68,11 +68,11 @@ The counterfactual that isolates the bias: floor a yellow card's
 probe gives **12 in 295** and a median gap of **0.92**.  A twelvefold move, so
 the negative pricing is load-bearing; and 12/295 is 4.1%, so **a card worth
 exactly zero is still not a card worth taking**.  Identical shape to
-`docs/UNIT_TECH_PRICING.md` §1c (1/437 → 20/437), and it is why this is a
+[`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) §1c (1/437 → 20/437), and it is why this is a
 repricing and not a clamp.
 
 **(d) The cause is NOT the one the audit named — it is bigger.**
-`PLAY_RATE_AUDIT.md` attributed the collapse to the ratio `culture_rate` 31.68
+[`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) attributed the collapse to the ratio `culture_rate` 31.68
 against `science_rate` 0.25.  That ratio is real but it is not what `evaluate`
 uses.  `science_rate` is in `weighted.PHASE_KEYS`, so the evaluator prices it at
 `w[k] + (1−L)·w[k_early] + L·w[k_late]`, and `card_potential` looked up the
@@ -139,7 +139,7 @@ Two copies of that list is exactly how `_PROD_TO_FEATURE` and
 `_YIELD_TO_FEATURE` drifted apart.
 
 The red half delegates to `unit_upgrade`, unchanged, so
-`docs/UNIT_TECH_PRICING.md`'s measured result is not silently re-opened.
+[`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md)'s measured result is not silently re-opened.
 
 **2.3 `weighted.tech_value`** — `unit_tech_value`, generalised and renamed.
 Staffing is `max(0, Σ amount·feature_marginal − resources·w[resource_stock])`,
@@ -185,7 +185,7 @@ subsystem counts come out of one run.
 72).  3p is **`DEFAULT_WEIGHTS`**, which is byte-identical to the live
 `champion_3p.json` and `champion_4p.json` (both gen 0), and is therefore the
 configuration the league will actually train — deliberately NOT the archived
-pre-restart 3p vector `PLAY_RATE_AUDIT.md` censused, whose 0.00 laboratories
+pre-restart 3p vector [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) censused, whose 0.00 laboratories
 and 0.00 mines belong to that vector and not to the defaults.  30 games at 2p
 (60 seat-games), 20 at 3p (60 seat-games).
 
@@ -239,14 +239,14 @@ move (24.2 → 22.1 and 23.7 → 22.6 against a human 34.3 / 29.6), so this is a
 **substitution, not a widening**: the bot swapped roughly six action cards for
 five technologies.  An action card is priced by the static table and nothing in
 this change touched it, so the whole of the movement is relative — technologies
-got more expensive to pass up.  `docs/UNIT_TECH_PRICING.md` §7.1's guess that
+got more expensive to pass up.  [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) §7.1's guess that
 `tech_levels` was "the most likely single explanation for 23.5 civil cards vs a
 human 34.3" is **not** supported: pricing it moved the mix and left the count
 alone.
 
 Wonders, wars, aggressions and colonies are flat at both counts.  The 3p wonder
 column is 0.02 → 0.00 because `DEFAULT_WEIGHTS` already completes no wonders at
-3p; that is `docs/OPEN_ITEMS.md` §1.1's hole, not this one.
+3p; that is [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#11-wonder_potentials-scale-has-no-trustworthy-evidence) §1.1's hole, not this one.
 
 ## 4. Strength: a large win on the defaults, a severe regression on the live 2p
 ## champion, and the regression attributes to one stale weight
@@ -309,7 +309,7 @@ which is what says the problem is the *price* and not the plumbing.
 > this project that charges the evaluator its own stated price for a technology
 > level **at the moment the card is taken**, and the first thing it did was
 > expose that the price was fitted on a free lunch.  This is the second
-> instance of the mechanism `docs/UNIT_TECH_PRICING.md` §5.2 named, found by
+> instance of the mechanism [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2 named, found by
 > looking exactly where that section said to look.
 
 ### 4.3 What to do about it, stated plainly
@@ -332,7 +332,7 @@ which is what says the problem is the *price* and not the plumbing.
 ### 4.4 The archived 3p champion, reported separately
 
 `archive_prequiescent_20260730/ladder_3p/gen01314`, the vector
-`docs/UNIT_TECH_PRICING.md` §5.2 already warns against warm-starting from:
+[`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2 already warns against warm-starting from:
 **10.83% ± 4.18pp against a 33.3% null, culture margin −31.5**, n = 240.  It
 carries `tech_levels` 5.04 — the same over-fitted coordinate the live 2p
 champion has — so it is the same finding on a second stale vector and not an
@@ -361,7 +361,7 @@ Six of the eight `tools/gate.sh` arms moved and two did not.
   narrow and wide.  Expected and predicted before the run: `DEFAULT_WEIGHTS`
   carries `tech_board_credit` at 1.0, so every technology in the row and in the
   civil hand prices differently for all three searching bots.
-* **Two-sided** per `docs/PYPY.md` §9.0: derived from scratch in `/tmp/gateA`
+* **Two-sided** per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0: derived from scratch in `/tmp/gateA`
   and independently in `/tmp/gateB`, two separate copies of the same tree,
   which agreed byte for byte on all eight arms — **including the two that did
   not move**.  A clean-base control on the parent commit (`c0525c4`, in

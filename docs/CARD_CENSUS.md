@@ -1,6 +1,6 @@
 # Every card type, measured: what the bot plays and what can reach the policy (2026-07-30)
 
-`docs/CARD_BLINDNESS.md` asked what the evaluator can *see* on a card and
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) asked what the evaluator can *see* on a card and
 fixed a real omission. Then eight wonders were repriced and wonder
 completions moved by a measured **zero** (0.0997 → 0.1047, p=0.12, n=12,800
 seat-games). The pricing was right and it bought nothing, because a wonder's
@@ -38,7 +38,7 @@ and 112 by the time it landed, because sibling lanes are correctly adding
 pricing behind 0.0 defaults faster than anything turns one on. See §9. **By
 2026-07-30 it reached 118**, and the live `experiments/league_state/
 champion_{2,3,4}p.json` grew to 118 keys along with it — see the box above
-and `docs/OPEN_ITEMS.md` §3. This paragraph's "78 vs 112" gap is
+and [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#3-evaluator-information-gaps) §3. This paragraph's "78 vs 112" gap is
 about the *frozen* snapshots this census actually ran against, which are
 still 78-key and still accurate as described; it is not a current statement
 about the live evaluator.
@@ -65,10 +65,10 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 > **99** keys, and `experiments/league_state/champion_2p.json` has
 > **`row_urgency = −0.19109`**. The wire is connected on the live bot.
 >
-> Re-running `docs/CARD_BLINDNESS.md` §5.3's wonder A/B against the live 2p
+> Re-running [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#53-the-mechanism-is-not-wonders-and-the-reason-is-a-plumbing-bug) §5.3's wonder A/B against the live 2p
 > champion on the same 12,800 seat-games moves wonder completions
 > **+0.5731 (+88%, p<1e-4)**, against the −0.0050 null (MDE 0.0089) the frozen
-> vector produced. See §5.4 there and `analysis/frozen/README.md`.
+> vector produced. See §5.4 there and [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 >
 > **UPDATED 2026-07-30: the 99-key figure above is itself superseded.** The
 > live `experiments/league_state/champion_{2,3,4}p.json` now carry **118**
@@ -93,7 +93,7 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 >   no live reference, which is now fixed —
 >   `analysis/frozen/champion_3p_gen1255_99key.json` and
 >   `champion_4p_gen350_99key.json` are cut and carry `row_pressure` open, so
->   both can be redone. **Read the 3p caveat in `analysis/frozen/README.md`
+>   both can be redone. **Read the 3p caveat in [`analysis/frozen/README.md`](../analysis/frozen/README.md)
 >   first:** the 3p champion's `row_urgency` is `+0.16269`, the wrong sign for
 >   a post-move residual, and a seed-paired A/B (n=600) shows flipping it is
 >   worth `+0.0025 ± 0.0305` — a tight null. The weight is active on 35% of
@@ -101,14 +101,14 @@ champions (0.006 → 0.031 → 0.454) tracking the sign of that cost weight, and
 >   concordance is measured against an arbitrary sign.** That is a real
 >   caveat on any recomputed 3p concordance figure, not a blocker.
 > * **The 4p column is separately unreliable** — `analysis/frozen/champion_4p`
->   is the known-degenerate vector; see `analysis/frozen/README.md`.
+>   is the known-degenerate vector; see [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 > * **The ranking in §4 may reorder.** Wonders were ranked suspect #1 on the
 >   strength of a severed pipe. Territories (`hand_mil_potential = 0.0`) were
 >   still 0.0 in the live champions when this was written. **UPDATED
 >   2026-07-30:** `hand_mil_potential` is now nonzero on the live 3p champion
 >   (`0.01079`, confirmed by reading
 >   `experiments/league_state/champion_3p.json`), though still `0.0` at 2p
->   and 4p — see `docs/OPEN_ITEMS.md` §3. The pipe is no longer
+>   and 4p — see [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#3-evaluator-information-gaps) §3. The pipe is no longer
 >   uniformly severed across player counts, which weakens "the better
 >   candidate for a pure severed pipe" at 3p specifically; 2p and 4p are
 >   unaffected.
@@ -273,7 +273,7 @@ So the *entire* card-identity channel of the shipped policy is one untrained
 weight, `hand_potential` = 0.125, and everything that does not flow through
 it flows through a zero. That is the whole of §4 in one sentence, and it is
 why "the weight exists, defaulted to 0.0, so the trainer can decide what it
-is worth" — the reasoning `docs/CARD_BLINDNESS.md` §2.2 uses, correctly, for
+is worth" — the reasoning [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#22-nine-new-weights-all-defaulting-to-00) §2.2 uses, correctly, for
 a *new* channel — quietly stops being true once the champions that would do
 the deciding are frozen and the leagues warm-start from them.
 
@@ -356,7 +356,7 @@ Two flavours underneath that one gate, and they need different fixes:
   these; they need a mapping first.
 
 Note the pre-existing census got this backwards for half these cards.
-`docs/CARD_BLINDNESS.md` §3 bucket 5 wrote off `tacticBonus` and friends as
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#3-the-blind-spot-that-remains-written-down) §3 bucket 5 wrote off `tacticBonus` and friends as
 "military hand: never reaches `_card_yields`", which is true, and the summary
 table then reported all 55 events, 11 aggressions, 10 pacts and 3 wars as
 "zero visible gain" — a claim about a function it never called on them.
@@ -596,7 +596,7 @@ spend evaluator work on them.**
 
 **Healthy — priced, plumbed through a live term, and the score follows the
 value:** farm, mine, lab, temple, library, arena, theater (24 cards, the
-"bag of numbers" cards, exactly as `docs/CARD_BLINDNESS.md` predicted),
+"bag of numbers" cards, exactly as [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) predicted),
 special-tech (12), leader (24), action (33), pact (10). That is **11 types
 and 103 of 236 cards**, all reached by `hand_potential` at 0.125 or, for
 pacts, by `deferred_credit` into `features()`. Their probe controls are the reference
@@ -624,7 +624,7 @@ nothing. Three tests, applied in order:
 A type that passes all three and is still seldom played is a **bad card, or a
 correct avoidance**, and is reported as such. That is the honest answer for
 several of the specific low-take-rate *cards* inside otherwise healthy types,
-and `docs/SCORE_VALIDATION.md` §6.2 — forcing wonders cost 34.3 ± 7.0 margin
+and [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 — forcing wonders cost 34.3 ± 7.0 margin
 — is the standing reminder that low use is not automatically wrong. It is
 also why §4.0's search control comes before any of this: "seldom played" and
 "cannot see it" are both necessary, and neither is sufficient.
@@ -652,7 +652,7 @@ one-line changes that are already built and switched off:
 4. **event** — the largest type (55 cards) and the most work: `_card_yields`
    returns nothing for any of them, so plumbing alone changes nothing. Needs
    a mapping first, and the `allPlayers`/rank-block tree is exactly the
-   board-scaled and trigger-shaped pricing `docs/CARD_BLINDNESS.md` §3
+   board-scaled and trigger-shaped pricing [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#3-the-blind-spot-that-remains-written-down) §3
    already wrote off as hard. Lowest ratio of value to effort of the four.
 
 And one that is not on the list but should be somebody's: **`cost.militaryActions`
@@ -694,7 +694,7 @@ numbers only, and will not be told.
 
 `arena.refuse_if_degenerate_champion` compares weight files by **exact
 content**. `analysis/frozen/champion_4p.json` is **76 of 78 weights identical**
-to `experiments/champion_4p.json` — the vector `docs/TRAINING_RUN.md` says
+to `experiments/champion_4p.json` — the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) says
 never to warm-start from — differing only in `colonies` and `pacts`, and
 keeping the thing that makes it degenerate: **`science = -6.0888`**. It
 passes the guard silently. `tools/card_census.py` now warns on ≥95%
@@ -848,7 +848,7 @@ If it does not, the fix is inert for the same reason the last one was.
 §4.1 ranked **territory** its number-one confirmed-broken suspect and §2.3
 described war and aggression as "priced by resolution, and the resolution is not
 in the trial". Both are the same defect, and the defence lane found it from the
-other end — see `docs/AGGRESSION_RATE.md` §8.
+other end — see [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#8-the-bigger-half-this-was-never-mainly-about-defence-it-was-about-auctions) §8.
 
 The census looked for a missing *feature* (`hand_mil_potential = 0.0`, a severed
 pipe). The missing thing is not only a feature: it is the **position** the

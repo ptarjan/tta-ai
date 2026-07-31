@@ -3,12 +3,12 @@
 > **SUPERSEDED 2026-07-30 on its headline rates; kept for Part A and for the
 > mechanism.**  Every rate in this document ("aggressions 0.00 at 2p/3p, 0.11 at
 > 4p; wars 0.00 everywhere") is a **1-ply `WeightedBot` measurement**, and
-> `docs/AGGRESSION_RATE.md` shows that is an artefact of the evaluation horizon,
+> [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md) shows that is an artefact of the evaluation horizon,
 > not a fact about the game.  Under the search the league actually trains
 > (`plan:width=2`) the real rates are **0.303 / 0.870 / 3.997 aggressions per
 > game** and **~1.05 / 2.23 / 7.50 wars per game** at 2p/3p/4p.  Read rates from
-> `docs/AGGRESSION_RATE.md` and current behaviour from
-> `docs/SYSTEM_COVERAGE.md`.
+> [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md) and current behaviour from
+> [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md).
 >
 > What survives and is not restated anywhere else: **Part A's refutation** — the
 > "4p colony auctions never start because events are not seeded" hypothesis is
@@ -20,17 +20,17 @@
 > the door.  That is a training/weights problem, not an engine bug, and it is
 > self-reinforcing under a 1-ply search.  The mechanism diagnosis in Part B
 > (payoff lands in another player's decision, therefore invisible at 1 ply) is
-> also correct and is the seed of `docs/AGGRESSION_RATE.md`'s analysis.
+> also correct and is the seed of [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md)'s analysis.
 >
 > The dangling "see the next section for the implementation and the A/B result"
 > at the end of this file was never written here; it landed in
-> `docs/PLAN_WAR_LOOKAHEAD.md` and `docs/AGGRESSION_RATE.md`.
+> [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) and [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md).
 
 Date: 2026-07-26
 Owner: aggression-fix agent (`engine/bots/`, colony/military paths of
 `engine/actions.py`, this file)
 
-Follow-up to `docs/PACTS_DIAGNOSIS.md`.
+Follow-up to [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md).
 Two open items from the post-fix measurement:
 
 * **A.** colony bids at 4p went 0.02 -> 0.01 (essentially never), with the

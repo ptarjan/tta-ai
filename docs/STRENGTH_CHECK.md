@@ -2,7 +2,7 @@
 
 
 > **SUBJECT: the frozen gen-222 pre-league champion.  The headline win rates are
-> stale as a description of the current bot** (2026-07-30).  `docs/DEEPER_SEARCH.md`
+> stale as a description of the current bot** (2026-07-30).  [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md)
 > §7.3: the later gen-337 2p champion beats BookBot v2 72-78% and CultureBot
 > 52-58%.  But that is no longer an *external* test — BookBot and its variants
 > are now training-pool members, so it settles "training worked against what it
@@ -12,7 +12,7 @@
 > under-builds wonders, hoards unconverted military strength), which was
 > independently re-derived from the weight vector itself.  The 4p rows are
 > separately quarantined by the banner below.  Current strength lives in
-> `docs/SYSTEM_COVERAGE.md`.
+> [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md).
 
 **Status: 2p and 3p final. 4p and the hybrid ablation still running.**
 
@@ -21,8 +21,8 @@
 > renamed `analysis/frozen/champion_4p.DEGENERATE.json`, and its twin
 > `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
 > informative weights** of `experiments/champion_4p.json` bit-for-bit,
-> including `science = −6.08883`. That is the vector `docs/TRAINING_RUN.md`
-> says never to warm-start from and that `docs/CULTURE_GAP.md` §8f measured at
+> including `science = −6.08883`. That is the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md)
+> says never to warm-start from and that [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8f-are-existing-champions-invalidated-yes--3p-and-4p-decisively) §8f measured at
 > **20.1% against a 25% null** — a bot that loses to random seating.
 > `refuse_if_degenerate_champion` was supposed to catch it and did not: it
 > tested exact content, and the frozen copy is six generations later and
@@ -33,12 +33,12 @@
 > place so they stay auditable.** They describe a known-degenerate bot. Do not
 > quote them as facts about 4p play, and do not quote them as facts about the
 > engine. The 2p and 3p numbers in this document are unaffected by *this*
-> issue. See `analysis/frozen/README.md`.
+> issue. See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 
 
 ## Why this document exists
 
-A reader of `docs/HEURISTICS.md` said: *"It doesn't seem like the players are
+A reader of [`docs/HEURISTICS.md`](HEURISTICS.md) said: *"It doesn't seem like the players are
 that good if this is their strategy."*
 
 They have a point that our evidence could not answer. Every number in this
@@ -189,9 +189,9 @@ It is not a better bot in every respect, and the honest reading matters:
   end early, or where it gets pressured before its engine matures, that is how
   it loses.
 
-## Implications for `docs/HEURISTICS.md`
+## Implications for [`docs/HEURISTICS.md`](HEURISTICS.md)
 
-`docs/HEURISTICS.md` is a description of what the champion learned to do. Given
+[`docs/HEURISTICS.md`](HEURISTICS.md) is a description of what the champion learned to do. Given
 that the champion loses to a plain rule list, that document should be read as
 *"what our bot does"*, not as *"how to play Through the Ages"*. In particular
 any advice in it that amounts to taking culture early at the expense of growth,
@@ -200,7 +200,7 @@ measured here.
 
 ## Measured against two hard tournament numbers
 
-`docs/EXPERT_STRATEGY.md` summarises a study of 39 games across 3 International
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md) summarises a study of 39 games across 3 International
 Championships and 3 Intermezzo seasons, scoring cards by the civil actions
 strong humans actually spent on them
 ([BGG 2494200](https://boardgamegeek.com/thread/2494200)). Two of its numbers
@@ -275,7 +275,7 @@ shape of the evaluator, not in a handful of decisions.
 ## BookBot v2: rebuilt on the tournament tier list
 
 `BookBot(version=2)` replaces v1's opinion-derived card ranks with the
-empirical tournament ordering from `docs/EXPERT_STRATEGY.md`, adds a convex
+empirical tournament ordering from [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md), adds a convex
 card-row price ladder (76% of Age I picks at 1 CA), a never-take list
 (Theology, Stock Pile, Patriotism, Cultural Heritage, Frugality), and the
 conditional leader rules the sources insist on (Leonardo needs Alchemy or

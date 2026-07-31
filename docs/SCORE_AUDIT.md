@@ -38,7 +38,7 @@ disagree.**
 
 ## The finding that outlives the bugs: a corpus validates only what it varies
 
-`docs/SCORE_VALIDATION.md` scored `Impact of Agriculture` **66/66 exact**
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) scored `Impact of Agriculture` **66/66 exact**
 against BGO. That card scores the wrong quantity (bug 3.1). Both statements
 are true, and the reconciliation is the most useful thing in this document:
 
@@ -115,7 +115,7 @@ could not see it, because `blueTokens` is priced *somewhere*.
 > static path priced that thing, replacing the static path *loses* it. Every
 > key a swap type carries needs a rider or a reason.
 
-The verifications recorded in `docs/SCORE_VALIDATION.md` §6.1 (wonder rules and
+The verifications recorded in [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#61-the-wonder-rules-and-data-are-right) §6.1 (wonder rules and
 stage costs) and §3.3 (Hollywood/Internet leader modifiers) **still hold at
 current master** and are now pinned by tests instead of by a corpus run.
 Tonight's government pricing fix is real: all eight governments' `civilActions`
@@ -259,7 +259,7 @@ Test: `AirForce.test_a_second_air_force_doubles_the_OUTDATED_armys_smaller_bonus
 
 ### 3.5 "The **players** with the most X" affects only one player
 
-`docs/RULES_SPEC.md` §5.3, citing CoL p.7: *"'All civilizations' with
+[`docs/RULES_SPEC.md`](RULES_SPEC.md) §5.3, citing CoL p.7: *"'All civilizations' with
 most/least: **all tied civs affected, no tie-break**."* `resolve_event`
 handles `playersWithMostHappyFaces` (Immigration) and
 `playersWithMostDiscontentWorkers` (Civil Unrest) in the same loop as the six
@@ -371,7 +371,7 @@ Every row's tests are in `tests/test_score_audit.py` under the named class.
 **"As found" is the audit's verdict before the fixes; "now" is after them.**
 Post-fix the answer is **23 of 23 types exact**. The last holdout was war,
 where what was missing was a missing player *choice* rather than a wrong
-number; `a7a5ef1` implements it (docs/WAR_OVER_TECHNOLOGY.md).
+number; `a7a5ef1` implements it ([`docs/WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md)).
 
 | # | type | what the rules say | verdict |
 |---|---|---|---|
@@ -503,7 +503,7 @@ pricer's map and the rules engine's map are checked against the same cards.
 
 ## 6.5 What the human corpus could not have caught
 
-`docs/SCORE_VALIDATION.md` reports `Impact of Agriculture` as **66/66 exact**
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) reports `Impact of Agriculture` as **66/66 exact**
 against BGO. Bug 3.1 says that card scores the wrong quantity. Both are true,
 and the reason is the important part:
 
@@ -557,7 +557,7 @@ arithmetic.
 
 
 * **Nothing here is corpus-checked.** These are hand-derived positions. Where
-  a claim of mine disagrees with `docs/SCORE_VALIDATION.md`'s corpus numbers,
+  a claim of mine disagrees with [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md)'s corpus numbers,
   the corpus wins — except on 3.1, where the corpus provably *cannot* see the
   bug because the replayer models no pacts.
 * **`Impact of Happiness` remains open** for the reason SCORE_VALIDATION §8

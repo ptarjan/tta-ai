@@ -1,6 +1,6 @@
 # Opening audit: is the 4p "wonder first" opening real?
 
-**Question.** `docs/HEURISTICS.md` says 2p and 3p champions open round 1 by taking
+**Question.** [`docs/HEURISTICS.md`](HEURISTICS.md) says 2p and 3p champions open round 1 by taking
 an action card while the 4p champion takes a wonder. Is that real strategy, a
 reporting artefact of how we aggregate seats, or undertrained noise?
 
@@ -20,7 +20,7 @@ Three findings, in order of how much they should change your mind:
    round 1, so for a given seed seat 0 faces a bit-identical 13-card row at 2p,
    3p and 4p. Untrained `default` weights open identically (64% action / 36%
    leader, seat 0) at all three counts. The sweep-speed and competition
-   arguments printed in HEURISTICS.md are inert on round 1.
+   arguments printed in [`HEURISTICS.md`](HEURISTICS.md) are inert on round 1.
 2. **Cross-play proves it follows the weights, not the table.** Played *at two
    players*, the 4p weight vector still opens wonder-first 74% of the time.
    Played *at four players*, the 2p vector never does (0%). Player count changes
@@ -58,7 +58,7 @@ beat the incumbent; it says **nothing** about any individual weight in it. With
 individual weight moves in our champions have never been tested at all.
 
 So: **"the AI moved this weight, therefore it matters" is not a valid inference
-anywhere in HEURISTICS.md.** Any weight-derived claim in that document is at the
+anywhere in [`HEURISTICS.md`](HEURISTICS.md).** Any weight-derived claim in that document is at the
 same evidential level as this one — plausible, untested, and roughly as likely to
 be a hitchhiker — unless someone has ablated it the way §4 ablates
 `wonder_remaining`. That single-weight revert test is cheap (one variant file,
@@ -71,7 +71,7 @@ point: 2p **0.682** (null 0.50), 3p **0.771** (null 0.333), 4p **0.792** (null
 *strongest* of the three (3.2x), not the weakest. The 4p climb has had the same
 wall-clock time as the others and is still accepting mutations. The lower numbers
 in `experiments/baselines.jsonl` (4p 0.349) that suggest a broken climb are stale
-— see §5, including which HEURISTICS.md claims they have already contaminated.
+— see §5, including which [`HEURISTICS.md`](HEURISTICS.md) claims they have already contaminated.
 
 What *is* thin at 4p is the number of accepted steps — 8 in 138 generations — and
 each one moves 19 weights on a 48-game test. The climb is working; it is the
@@ -121,7 +121,7 @@ Two bugs:
 
 ### The real source is `experiments/behaviour.py`, and it averages all seats
 
-The 120/120 figure and the p10/p25/p75 language in HEURISTICS.md match the
+The 120/120 figure and the p10/p25/p75 language in [`HEURISTICS.md`](HEURISTICS.md) match the
 `milestone_distribution.take_wonder` block in `experiments/behaviour_4p.json`.
 `behaviour.py` builds its task list as
 
@@ -193,7 +193,7 @@ not this one, but it is visible here.)
 
 ## 3. The 4p confounds do not explain it — the round-1 board is identical
 
-The rules argument in HEURISTICS.md is that at 4p the row sweeps only 1 card per
+The rules argument in [`HEURISTICS.md`](HEURISTICS.md) is that at 4p the row sweeps only 1 card per
 turn (`engine/game.py:40  SWEEP = {2: 3, 3: 2, 4: 1}`) so cheap Age A wonders
 survive longer, and that more rivals means more competition per card.
 
@@ -232,7 +232,7 @@ The 4p weight vector opens wonder-first *at two players* just as strongly as it
 does at four. The 2p vector never opens wonder-first *at four players*. So the
 reported difference is a property of **that particular weight vector**, and
 nothing about playing against three opponents caused it or could have caused it.
-The rules rationale printed in HEURISTICS.md — sweep speed, cost bands,
+The rules rationale printed in [`HEURISTICS.md`](HEURISTICS.md) — sweep speed, cost bands,
 competition — is post-hoc: those mechanisms are all inert on round 1.
 
 ---
@@ -333,7 +333,7 @@ table where chance is 25% — better than 3x the null, and the largest margin of
 the three counts. On culture it doubles the default bot. **Hill climbing is
 working, and it is working best at 4p.**
 
-### `experiments/baselines.jsonl` is stale, and it has already contaminated HEURISTICS.md
+### `experiments/baselines.jsonl` is stale, and it has already contaminated [`HEURISTICS.md`](HEURISTICS.md)
 
 The file contains a block of much lower numbers for the same match-ups:
 
@@ -343,7 +343,7 @@ The file contains a block of much lower numbers for the same match-ups:
 | 3p champ vs default | 0.604 | **0.771** | 124.8 → 163.1 |
 | 4p champ vs default | 0.349 | **0.792** | 139.8 → **262.7** |
 
-`docs/HEURISTICS.md` (§"How strong is the thing giving you advice?") explains
+[`docs/HEURISTICS.md`](HEURISTICS.md) (§"How strong is the thing giving you advice?") explains
 those low numbers as seed noise:
 
 > A separate check run earlier the same morning **with different random seeds**
@@ -384,7 +384,7 @@ purely a stale champion was too strong at that count.
   champion advanced 218 → 220. `baselines.jsonl` rows carry no generation, so an
   older, weaker bot is certainly *part* of that block.
 
-**Concretely, these HEURISTICS.md claims need correcting** (that file is owned by
+**Concretely, these [`HEURISTICS.md`](HEURISTICS.md) claims need correcting** (that file is owned by
 another agent, so this is flagged here, not edited):
 
 1. The hedge *"clearly above its starting point at 2 and 3 players, **probably at

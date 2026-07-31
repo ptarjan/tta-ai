@@ -3,14 +3,14 @@
 
 > **SUBJECT: the gen-181 quiescent, margin-gated 2p champion.  That bot no longer
 > exists** (2026-07-30).  The gate metric it exploited was changed specifically to
-> kill this behaviour (`docs/LEAGUE_OBJECTIVE.md`, whose primary motivating
+> kill this behaviour ([`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md), whose primary motivating
 > evidence is this document), and the current live 2p champion declares 1.10
 > wars/game against this one's 1.48-1.98 and completes 1.53 wonders against this
-> one's 0.16-0.26 (`docs/SYSTEM_COVERAGE.md`).  Read the numbers here as "true of
+> one's 0.16-0.26 ([`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)).  Read the numbers here as "true of
 > that vector".  What is *not* superseded: the causal method (ban a move class and
 > re-measure), the finding that the win came from **suppression rather than
 > scoring**, the MilitaryBot decomposition, and this document's naming of the
-> zero-sum margin bug that `LEAGUE_OBJECTIVE.md` later fixed.
+> zero-sum margin bug that [`LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md) later fixed.
 
 Date: 2026-07-27
 Subject: `experiments/league_state/champion_2p.json` (gen 181), played the way
@@ -311,7 +311,7 @@ way, by farming the event deck: 13.71 ± 0.11 events prepared per game (vs 8.80
 under quiescence), 28.4 seeding culture + 49.1 in-play event culture + 25.8
 end-game Age III event culture = 103 of its 139 points.
 
-That is exactly the mechanism `docs/DEEPER_SEARCH.md` predicts. An aggression's
+That is exactly the mechanism [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) predicts. An aggression's
 payoff sits in `state.pending` and a war's resolves on the declarer's next
 turn, so at 1 ply the evaluator sees the cost and none of the loot and the move
 class is strictly dominated. Quiescence (plus `WAR_LOOKAHEAD`) resolves those

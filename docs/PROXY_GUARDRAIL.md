@@ -5,7 +5,7 @@ Date: 2026-07-29. Code: `experiments/proxy_check.py`,
 `tests/test_proxy_check.py`. Output: `experiments/logs/proxy_check.log` and
 `experiments/league_state/proxy_history_<K>p.jsonl`.
 
-Read `docs/TRANSFER_TEST.md` and `docs/PLAN_WAR_LOOKAHEAD.md` first. This
+Read [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) and [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) first. This
 document is the monitor those two findings imply and nobody had built.
 
 ---
@@ -18,12 +18,12 @@ proxy for what we care about: how the weight vector plays under the policy we
 would ship, `plan:width=8`. The two have already come apart once, and nothing
 in the loop noticed:
 
-* `docs/TRANSFER_TEST.md` — the quiescent-trained vector Q is **+36.3 ± 4.8**
+* [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) — the quiescent-trained vector Q is **+36.3 ± 4.8**
   margin better than the 1-ply-trained vector P under the training proxy, and
   **−32.5 ± 6.9 worse** under `plan:width=8`, against a common opponent. Head
   to head under PlanBot it lost at a **2.5% ± 1.1%** win share. The proxy did
   not merely mis-state the size of an improvement; it got the **sign** wrong.
-* `docs/PLAN_WAR_LOOKAHEAD.md` — giving PlanBot a war lookahead removed the
+* [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) — giving PlanBot a war lookahead removed the
   inversion (the same head to head is now **52.2% ± 3.7%**, **+1.4 ± 5.3**).
   It did **not** make the proxy predictive: the proxy still says +36.3 ± 4.8
   where the ship policy says a null. §6 of that document states it plainly —
@@ -35,16 +35,16 @@ champions, and there is no artefact anywhere that answers "did any of that
 reach the policy we would ship". This is that artefact.
 
 It matters more, not less, after the 2026-07-29 retarget of the 2p arm
-(`docs/TRAINING_RUN.md`): that arm now trains under `plan:width=2`, which
+([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)): that arm now trains under `plan:width=2`, which
 shrinks the proxy gap from *quiescence vs PlanBot* to *a narrow beam vs a wide
 one* — but shrinking a gap is not closing it, and `width=2`'s strength has
-never been measured (`docs/BOT_ARCHITECTURE.md` has `width=1` at 62.3% and
+never been measured ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) has `width=1` at 62.3% and
 `width=8` at 85.1% against 1-ply, and nothing in between).
 
 **The guardrail's very first reading is also the evidence that this was a real
 risk and not a hypothetical.** It measured the live 2p champion at **132.8**
 own culture against `book` under `plan:width=8`, next to
-`docs/PLAN_WAR_LOOKAHEAD.md` §4a's **127.8** for the frozen quiescent-trained
+[`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md#4a-absolute-own-culture-not-just-margins) §4a's **127.8** for the frozen quiescent-trained
 vector and **213.4** for the 1-ply lineage vector. 725 generations of proxy
 progress had produced a suppression engine holding `book` to 43.2, not a
 production one — and that single number is what the 2p arm's warm start was
@@ -66,10 +66,10 @@ arm:
    policy, reported as **own final culture**. A head-to-head chain is
    relative, and a chain drifts; own culture against a fixed external opponent
    is comparable across the whole series and against the numbers already
-   written down — human 2p median **159.5** (`docs/HUMAN_BASELINE.md`), and
+   written down — human 2p median **159.5** ([`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)), and
    under `plan:width=8` against `book`, **213.4** for the 1-ply lineage vector
    and **127.8** for the quiescent-trained one
-   (`docs/PLAN_WAR_LOOKAHEAD.md` §4a).
+   ([`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md#4a-absolute-own-culture-not-just-margins) §4a).
 
 It also records the proxy's own claim for the same interval: the number of
 accepts and the sum of their accepted edges. That number is positive by
@@ -103,21 +103,21 @@ whether the ship policy agrees.
 | verdict | rule | meaning |
 |---|---|---|
 | `confirms` | margin lower bound > **+5** | a real gain, resolved |
-| `INVERTED` | margin upper bound < **−5** | a real **loss**: the champion the proxy chose is worse under the ship policy than the one it replaced. `docs/TRANSFER_TEST.md`'s failure, live |
+| `INVERTED` | margin upper bound < **−5** | a real **loss**: the champion the proxy chose is worse under the ship policy than the one it replaced. [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)'s failure, live |
 | `flat` | half-width ≤ **15** and the CI covers the no-effect band | measured, and there is nothing there |
 | `inconclusive` | half-width > **15** | **not measured.** Not reassurance, not a divergence — an instrument problem |
 
 The statistic is the paired **culture margin**, not win share. Win share is a
 0/1 step with ~10x the paired variance, it saturates against `book` at
-0.94-0.97 under PlanBot (`docs/TRANSFER_TEST.md` §3), and every finding in
-`docs/TRANSFER_TEST.md` and `docs/PLAN_WAR_LOOKAHEAD.md` is quoted in margin
+0.94-0.97 under PlanBot ([`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#3-the-second-way-of-asking-both-vectors-against-a-common-opponent) §3), and every finding in
+[`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) and [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) is quoted in margin
 for exactly that reason. Win share is still printed, as a secondary.
 
 **`inconclusive` is the verdict that keeps this file honest, and the first
 version did not have it.** That version's first real reading — 2p, gen 657 →
 725, 5 accepts, 20 deals — came back at a win-share lower bound of **50.03%**
 against a 50% null and printed `confirms`. A coin flip that landed right,
-reported as reassurance: `docs/HAZARDS.md` trap 1 (an n=48 row read 50.0%
+reported as reassurance: [`docs/HAZARDS.md`](HAZARDS.md) trap 1 (an n=48 row read 50.0%
 where n=400 said 27.6%) committed by the very thing meant to catch it. Under
 the current rule that reading is `inconclusive`, which is what it always was.
 
@@ -157,7 +157,7 @@ Nothing automatic. The guardrail deliberately has **no** authority over the
 arms — it cannot stop, restart or reconfigure one, and it holds no lock any
 arm waits on. It reports.
 
-If it fires, the options are the ones `docs/TRANSFER_TEST.md` §8.3 already
+If it fires, the options are the ones [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) §8.3 already
 enumerated, and they are *decisions*, not fixes:
 
 1. **Retarget the arm's `--candidate-bot` closer to the ship policy**, as the
@@ -167,7 +167,7 @@ enumerated, and they are *decisions*, not fixes:
    understates the search bots badly (2p quiescent: 0.732 cpu-s/game on the
    champion against 0.272 on the defaults).
 2. **Fix the search asymmetry** that the proxy and the target disagree about,
-   which is what `docs/PLAN_WAR_LOOKAHEAD.md` did for wars. Cheapest when it
+   which is what [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) did for wars. Cheapest when it
    exists, and it is a change to a bot rather than to the trainer.
 3. **Fix the objective**, if the divergence is the metric overpaying for
    something the ship policy cannot cash — `margin_share` paying twice for a
@@ -176,7 +176,7 @@ enumerated, and they are *decisions*, not fixes:
 
 A `flat` run is *not* on its own evidence for any of the three. Check the
 achieved CI first: at 20 deals a 2p reading resolves a ~15-point win-share
-effect and no better, and `docs/TRANSFER_TEST.md` §7 makes the same point about
+effect and no better, and [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 makes the same point about
 n=50 deals. If the CI is wide, the honest reading is "not measured", and the
 lever is `--deals`, not the trainer.
 
@@ -190,7 +190,7 @@ lever is `--deals`, not the trainer.
 
 The deal counts fall with player count because a `plan:width=8` game gets much
 more expensive with it (measured at 2p on the 2p champion: 9.07 cpu-s/game
-against `book`, 15.83 in a mirror; `docs/TRAINING_RUN.md` has 4p at 17.4 and
+against `book`, 15.83 in a mirror; [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) has 4p at 17.4 and
 51.3) while the arms' generations get *slower*, so the ratio of guardrail cost
 to arm throughput stays in the same few percent.
 
@@ -249,10 +249,10 @@ for its first N accepts has a blind spot exactly where a retarget lands.
   of this and is the series to trust for absolute movement.
 * **The n is small on purpose.** A 2p reading is 40 games. It is a usable
   margin/culture instrument and a poor win-share instrument — the same
-  warning `docs/TRANSFER_TEST.md` §7 gives. `flat` frequently means "not
+  warning [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 gives. `flat` frequently means "not
   resolved", and the log prints the CI so you can see which.
 * **`book` is one opponent, and the pool is a monoculture** — every pool
-  opponent is a `BookBot` subclass (`docs/TWOP_PROFILE.md` §9). The anchor is
+  opponent is a `BookBot` subclass ([`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md#9-what-this-does-and-does-not-support) §9). The anchor is
   an anchor, not an absolute standard.
 * **It validates the vector, not the search.** If `plan:width=8` itself is not
   the right thing to ship, this guardrail will happily confirm progress toward
@@ -336,7 +336,7 @@ games, and it means §8.3-8.5 are not measuring an engine change.
 
 Both vectors under `plan:width=8`, seat-rotated on the same deals, zero engine
 errors. `blend` is the league's own accept objective
-(`docs/LEAGUE_OBJECTIVE.md`: `own_share` centred 100, scale 120, alpha 0.15 on
+([`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md): `own_share` centred 100, scale 120, alpha 0.15 on
 win share), scored per game for the challenger minus the defenders' mean and
 clustered by deal.
 
@@ -349,7 +349,7 @@ clustered by deal.
 game-clustered and **−7.6** deal-clustered, both below the file's own −5
 threshold. Own culture and win share move the *same* way — 70.9 against 86.9
 and 24.4% against a 33.3% null — so this is not a margin artefact dressed up as
-a regression, which is the specific failure `docs/LEAGUE_OBJECTIVE.md` §1 exists
+a regression, which is the specific failure [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#1-what-each-number-in-the-objective-is) §1 exists
 to prevent. The league's own `blend` objective agrees at −0.069 ± 0.039.
 
 ### 8.4 Bracketing it: not one bad accept
@@ -390,7 +390,7 @@ OLS on the 96 deal means: **−7.83 ± 1.88 culture per 100 generations**, i.e.
 it started from.** 918 generations of proxy progress — 151 accepted champions,
 every accept requiring a positive one-sided lower bound on the training metric
 — bought **−76.6 ± 17.8** culture against a fixed external opponent. The
-`book` column is the mechanism and it is `docs/TRANSFER_TEST.md` §5 verbatim:
+`book` column is the mechanism and it is [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#5-why-the-two-vectors-are-different-animals) §5 verbatim:
 the arm did not raise its own score, it learned to hold `book` down (130.2 →
 88), which `margin`-era intuitions read as progress and `own`/`blend` under
 the *ship* policy does not.
@@ -399,12 +399,12 @@ The weight vectors say the same thing in the open. Across 821 → 930 the
 movement is monotone and it is military: `strength_lead` 0.530 → 3.211,
 `strength` 4.76 → 7.53, `pact_blocks_attack` 0.239 → 1.216, while
 `culture_rate` peaks at 12.3 (gen 850) and falls back to 9.1. That is precisely
-the move class `docs/TRANSFER_TEST.md` §6 identifies as the one the proxy
+the move class [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#6-answering-the-question-docstraining_runmd-asked) §6 identifies as the one the proxy
 prices and the ship policy does not.
 
 **So the answer to "a bad accept, or an inverted proxy" is the second one, and
 for the whole run rather than the last 97 generations.** The 2026-07-29
-retarget of the 2p arm (`docs/TRAINING_RUN.md`) was made on exactly this
+retarget of the 2p arm ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)) was made on exactly this
 evidence shape at 2p; 3p is the same finding with a bigger effect and a longer
 lever arm.
 
@@ -422,7 +422,7 @@ This was checked directly rather than assumed:
 * `grep -niE "plan|width=8|transfer" experiments/logs/league_3p.log` returns
   **nothing**. The arm has never played a `plan` game in its life.
 * Nothing in `docs/` carries a 3p `plan:width=8` number.
-  `docs/TRANSFER_TEST.md` §7 and `docs/PLAN_WAR_LOOKAHEAD.md` both say in
+  [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 and [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) both say in
   terms that they are 2p only and that 3p/4p were deliberately not attempted.
 
 **The 3p arm ran 1 131 generations and 151 accepted champions with no transfer
@@ -432,7 +432,7 @@ found on its first look at this arm.
 
 ### 8.7 Against the human baseline — and why it is not head to head
 
-`docs/HUMAN_BASELINE.md`: the human **3p** median final culture is **180**
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md): the human **3p** median final culture is **180**
 [140-211] over n=133 games. (The 159.5 quoted throughout this file is the **2p**
 figure and should not be used for a 3p reading.)
 
@@ -456,7 +456,7 @@ second.
 
 `tools/arch_cost.py --players 3 --weights experiments/league_state/ladder_3p/
 gen00930.json`, i.e. measured **on the arm's own champion**, not on
-`DEFAULT_WEIGHTS` (`docs/TRAINING_RUN.md` warns the difference is large, and it
+`DEFAULT_WEIGHTS` ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md) warns the difference is large, and it
 is: quiescent costs 1.504 cpu-s/game in a mirror here against 0.357 on the
 defaults). cpu-seconds per game, `TTA_JOURNAL=1`, `workers=1`:
 
@@ -496,7 +496,7 @@ the arm's observed ~13% accept rate that is ~4 accepts per 12h against ~22.
   same at this resolution.
 * **This does not say `quiescent:levels=1` is a bad search**, or that gen 918
   is a bad vector. Under its own proxy the arm's full pool check has it winning
-  73-96% and scoring 147-190 own culture. `docs/TRANSFER_TEST.md` §8.4's
+  73-96% and scoring 147-190 own culture. [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) §8.4's
   sentence applies unchanged: it is the better vector under everything except
   the thing we would ship.
 
@@ -530,7 +530,7 @@ is exact.
   dead arm simply stops writing them, which is indistinguishable from a
   converged one.
 
-`docs/HAZARDS.md`'s standing warning is that silence from a monitor reads as
+[`docs/HAZARDS.md`](HAZARDS.md)'s standing warning is that silence from a monitor reads as
 good news. Here the arm's *own* log was the silent monitor. A one-line
 "n=0 on every opponent, `arena` reported N errors, first: `<repr>`" would have
 caught it in one generation. **This also means "3p has accepted nothing since

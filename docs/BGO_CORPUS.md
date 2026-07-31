@@ -7,7 +7,7 @@
 > * **The BGO finished-games index is not readable anonymously at all** — not
 >   just the journals.  Only aggregate counters and empty pagination shells are
 >   public; the per-game rows (list, board, journal) all require login.  This
->   corrects `docs/EXTERNAL_AIS.md` §5a, which assumed only journals were gated.
+>   corrects [`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a, which assumed only journals were gated.
 > * `robots.txt` permits `index.php`; nothing this project's scraper touches is
 >   disallowed.
 > * **The civil card row is never printed in the journals**, only the chosen
@@ -22,7 +22,7 @@
 > **The `## Results` section below is an empty placeholder.**  Read the real
 > yield from `sources/bgo/index.tsv`, not from this document.
 
-Owner of this doc: this pull only.  Do not edit `EXTERNAL_AIS.md` or the other
+Owner of this doc: this pull only.  Do not edit [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md) or the other
 audit docs from here — see their own owners.
 
 Goal: ~2,000 finished, 2015-edition ("A New Story of Civilization") Through the
@@ -58,7 +58,7 @@ Checked and answered no, in full, before any bulk fetch:
   commenter being told outright "it's already not a raw data" strongly
   indicate this is final-score/summary level, not move-by-move journals —
   the thing this corpus actually needs. It also predates (2018) the
-  `idJeu=4` vs `idJeu=10` discovery this project made in `EXTERNAL_AIS.md`
+  `idJeu=4` vs `idJeu=10` discovery this project made in [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md)
   §5a, so its edition mix is unverified and plausibly wrong.
 
 Conclusion: no clean substitute existed; proceeding with a direct, polite,
@@ -85,7 +85,7 @@ journals.
 
 The finished-games index (`index.php?cnt=14`, `idJeu=10` for the 2015
 edition) is paged 50 games/page across ~3,566 pages (≈178k games total, per
-`EXTERNAL_AIS.md` §5a, which established page 3566 as the last populated
+[`EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a, which established page 3566 as the last populated
 page by binary search). **Page 1 is the newest games; page 3566 is the
 oldest, back to the site's Aug 2010 start.** This run's `--max-index-page
 3566` covers that entire range — the full ~16-year, ~178k-game history BGO
@@ -155,7 +155,7 @@ expansion check:
   was removed from the exclusion list.
 - Either of the two leader renames the 2015 edition made
   (Rock'n'Roll Icon→Charlie Chaplin, Alex Randolph→Sid Meier, per
-  `docs/SOURCES.md`) appearing in the journal settles 2015-vs-2006 directly,
+  [`docs/SOURCES.md`](SOURCES.md)) appearing in the journal settles 2015-vs-2006 directly,
   whichever way it points.
 - **Only when the journal text alone gives neither signal** (common — these
   are a handful of the dozens of cards actually in play, so most games don't
@@ -166,7 +166,7 @@ expansion check:
   each game's own settings), so it's checked again for the same 40
   expansion-exclusive names, plus three government/tactics numeric
   signatures that changed between editions (`docs/BGO_CORPUS.md` /
-  `EXTERNAL_AIS.md` §5a): Monarchy `2(8)` (2015) vs `3(9)` (2006),
+  [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a): Monarchy `2(8)` (2015) vs `3(9)` (2006),
   Napoleonic Army `7(4)` vs `8(4)`, Mechanized Army `10(5)` (2015; 2006
   value not established). These are matched with regexes, not literal
   substrings — stripping HTML tags leaves inconsistent whitespace between a
@@ -201,7 +201,7 @@ BGO publishes no documented rank scale anywhere findable (checked the
 "Changes to the Rules" page — none list one). Levels actually observed on
 the live index: `Prince`, `Warlord`, `King`, `Emperor`. This run treats
 `Emperor` as the unambiguous top title and `Prince` as the pilot's own
-low-end anchor (`docs/EXTERNAL_AIS.md` §5a: "the `level` column,
+low-end anchor ([`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a: "the `level` column,
 Prince…Emperor"), and accepts **Emperor and King** as "higher-skill" — an
 inferred ordering, not a confirmed one. If this ordering is wrong (e.g. if
 "Warlord" actually outranks "King"), the practical effect is small: Emperor
@@ -279,7 +279,7 @@ for the affected games (page title still resolves correctly, e.g.
 identifiable finished games, not broken links).
 
 A binary search + spot checks across the page range (page 1 = newest, higher
-page number = older, per `EXTERNAL_AIS.md` §5a), sampling 1-5 games per page
+page number = older, per [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a), sampling 1-5 games per page
 and checking for any parseable journal rows:
 
 | Page | Approx. date | Journal present? |

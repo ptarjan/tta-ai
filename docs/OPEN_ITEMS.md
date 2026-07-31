@@ -4,7 +4,7 @@
 `docs/OPEN_AFTER_THE_AUDIT.md` (whose contents are §1 below) and
 `docs/ARCHAEOLOGY.md` (the 2026-07-26 lost-work dig, whose ranked shortlist is
 §6), both deleted 2026-07-30 in the documentation consolidation.  Standing
-hazards — the things that have already cost a bug — live in `docs/HAZARDS.md`,
+hazards — the things that have already cost a bug — live in [`docs/HAZARDS.md`](HAZARDS.md),
 not here.
 
 Every item says where it came from.  Items marked **(snapshot)** were true when
@@ -28,7 +28,7 @@ from **zero completions in 1000 seat-games** to 0.082/deal.
 At 0.5 it turns pathological — 2.69 started, 2.09 abandoned, finish rate 0.23 —
 so 0.125 is the top of the usable range.  **But the accompanying strength null
 (50.34% +/- 2.43pp, n=1600) was measured against the frozen 78-key champion
-missing `row_urgency`**, which `docs/CARD_CENSUS.md` §10 shows is a broken
+missing `row_urgency`**, which [`docs/CARD_CENSUS.md`](CARD_CENSUS.md#10-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §10 shows is a broken
 yardstick: the reprice changed `evaluate()` on 0 of 480 wonder-in-row states.
 The behavioural numbers survive; the strength conclusion does not.  Re-run
 against a live reference vector before quoting any of it.
@@ -41,7 +41,7 @@ The right answer is probably not a hand-set constant at all: leave the weight at
 Started-but-unfinished rose **0.032 -> 0.271 per deal** at `wonder_potential`
 0.125.  The finish *rate* improved (5% -> 37%), but the absolute count of
 abandoned programmes went the wrong way, against the standing 23-44% improvement
-recorded in `docs/CARD_BLINDNESS.md` §5.3.  Unresolved: is a bot that starts
+recorded in [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#53-the-mechanism-is-not-wonders-and-the-reason-is-a-plumbing-bug) §5.3.  Unresolved: is a bot that starts
 eight times as many wonders and finishes 37% of them better or worse than one
 that starts almost none?  The objective should answer this and nobody has asked
 it.
@@ -66,7 +66,7 @@ inert, so the defence increment those cards carry is still effectively unpriced.
 cards have a real nonzero champion weight today and only `defenseBonus` is
 priced-but-inert everywhere.  Full derivation, conduction table, and where the
 3p effect shows up (the end-of-turn military discard,
-`engine/interact.py:_discard_military`) is `docs/MILITARY_SEAM.md`.
+`engine/interact.py:_discard_military`) is [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md).
 
 ### 1.4 `cost.militaryActions` is read by no bot code
 
@@ -78,7 +78,7 @@ War over Territory (2 MA) are the same card to every pricing path.
 three live champions, e.g. 3.47652 at 3p) is a different thing: it prices a
 card's *grant* of military actions, not a war card's cost to play.
 
-`docs/MILITARY_SEAM.md` records the reason this is deliberately still unpriced:
+[`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md) records the reason this is deliberately still unpriced:
 pricing the cost alone, without also pricing what the card buys, would reproduce
 the project's worst historical pricing defect — unit cards scoring strictly
 negative.
@@ -87,7 +87,7 @@ negative.
 
 `QUIET_PENDING = True`.  It landed as a **consistency fix**, not on a strength
 measurement — the beam already drains before scoring and the live decision did
-not.  Read the A/B in `docs/DRAIN_AB.md` rather than from a summary, because it
+not.  Read the A/B in [`docs/DRAIN_AB.md`](DRAIN_AB.md) rather than from a summary, because it
 is uneven: 3p is decisive (pure-`qp` pool 0.5217 own-win share against a 0.3333
 null over 600 games, z = 9.26) and **4p is NOT independently established** (one
 pure-`qp` block, 0.3000 against a 0.2500 null, z = 1.54, p ~ 0.12).  Do not quote
@@ -102,7 +102,7 @@ held-off defences 0 -> 332 over 200 games at 4p.
 
 * Not mainly about defence: the short-circuit never tested the pending *kind*,
   and **auctions** are 71.6% of the decisions the drain moves (455 seen, 326
-  moved at 3p) against defence's 37.8%.  Same defect `docs/CARD_CENSUS.md` §10
+  moved at 3p) against defence's 37.8%.  Same defect [`docs/CARD_CENSUS.md`](CARD_CENSUS.md#10-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §10
   reached from the territory end.
 * The leak objection was answered, not argued away.  Neither pending path
   determinized, so a trial `apply` drew the real next deck card: master leaked on
@@ -127,7 +127,7 @@ arbitrary sign.**  Win rate and margin are unaffected.
 
 ### 1.7 The human corpus cannot validate what it cannot vary
 
-`docs/SCORE_AUDIT.md` §2.  At 2 players every pact is removed from the game and
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#2-the-field-coverage-sweep) §2.  At 2 players every pact is removed from the game and
 the corpus is 2p only, so "food your farms produce" and "your food rating" are
 identically equal in all 2,525 positions — which is how a broken card scored
 66/66 exact.  Five of the nine scoring bugs sit inside four documented blind
@@ -140,9 +140,9 @@ alternative.
 
 ## 2. Card pricing and coverage
 
-*From `docs/CARD_BLINDNESS.md`, `CARD_CENSUS.md`, `CARD_PRICING_LEADERS.md`,
-`CARD_BLINDNESS_MILITARY.md`, `COVERAGE_AUDIT.md`, `UNCOVERED_TYPES.md`,
-`SYSTEM_COVERAGE.md`.  Those documents are all still live; this is the index of
+*From [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md), [`CARD_CENSUS.md`](CARD_CENSUS.md), [`CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md),
+[`CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md), [`COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md), [`UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md),
+[`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md).  Those documents are all still live; this is the index of
 what they leave open.*
 
 Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
@@ -152,7 +152,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    merely unpriced, because `row_pressure` skips any card with
    `card_potential <= 0` and `hand_potential` sums the raw negative, so *holding*
    a unit card lowers the evaluation.  `unit_strength_credit` is the gate, 0.0.
-   `docs/SYSTEM_COVERAGE.md` measures the behavioural consequence at 26-47x
+   [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) measures the behavioural consequence at 26-47x
    under the human take rate and ranks it the top actionable hole in the system.
    Root cause is structural: the only term large enough to flip a unit card
    positive is `strength_deficit` (−0.736, conditional on being behind), a board
@@ -162,7 +162,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    `colonize_bonus`) is 0.0.  Take rate 0.87% (14/1,606 offers); 6 of 12 taken
    zero times in 40 games.
 3. ~~**Every yellow production technology prices net negative, and the bot buys
-   none of them.**~~ **CLOSED 2026-07-30 by `docs/YELLOW_TECH_PRICING.md`** —
+   none of them.**~~ **CLOSED 2026-07-30 by [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)** —
    labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 →
    0.85, farms 0.07 → 0.87, and the blue over-play fell out with it (theatres
    2.23 → 0.82 against 0.65).  The diagnosis below is kept because it is what
@@ -173,7 +173,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    early), and that `tech_levels` — worth up to 9.23 eval points per level —
    was mapped to nothing at all on every technology card in the game.  The
    original text:
-   Measured 2026-07-30 (`docs/PLAY_RATE_AUDIT.md` §5.1): labs
+   Measured 2026-07-30 ([`docs/PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md#51-why-yellow-is-dead-and-blue-is-doubled--class-c-and-probably-wrong) §5.1): labs
    0.03 taken per seat-game against a human 1.62 at 2p and **exactly 0.00** at
    3p and 4p, mines 0.05 against 1.18, farms 0.18 against 1.34; Alchemy,
    Scientific Method and Coal are the only three cards in the game the bot
@@ -188,7 +188,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 4. ~~**`free_civil_action` is non-positive on every trained vector** (0.0 /
    −0.160 / −0.084 at 2p/3p/4p): the 18 action cards that grant a free civil
    action are priced to be *disliked* for granting it.~~  **CLOSED 2026-07-30
-   by `docs/ACTION_CARD_PRICING.md`**, and the diagnosis above was *too kind*:
+   by [`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md)**, and the diagnosis above was *too kind*:
    the weight is not merely non-positive, it is **unreachable**.
    `free_civil_action`, `resource_discount` and `restricted_resources` are all
    three absent from `features()`, so `evaluate` never multiplies them by
@@ -231,11 +231,11 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    artefact in `lateness()`.  Needs a policy change plus an n>=200 A/B.
 12. **`row_urgency` carries the same hand-double-count bug** for leaders and
     governments in the *row* (not the hand) that §10 of
-    `docs/CARD_PRICING_LEADERS.md` fixed for the hand.  Explicitly "the next
+    [`docs/CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md) fixed for the hand.  Explicitly "the next
     thing to do in this area".
 13. ~~**Production buildings** (24 cards) are mis-shaped twice: absolute instead
     of delta, and the worker cost omitted.~~  **The delta half is CLOSED**
-    2026-07-30 (`docs/YELLOW_TECH_PRICING.md`): `board_yields.tech_upgrade`
+    2026-07-30 ([`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)): `board_yields.tech_upgrade`
     prices every worker technology as the upgrade diff off what the player
     already has, using `actions.upgrade_cost` and an `effects.compute` diff.
     The worker-cost half becomes item 21 below, correctly restated.
@@ -245,7 +245,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     measurement has not been made.  Four leaders (Aristotle, Hammurabi,
     Christopher Columbus, Frederick Barbarossa) are deliberately flat-zero,
     guarded by `TestEveryLeaderIsPriced.STILL_FLAT`.
-15. **Three decisions nobody has made** (`docs/COVERAGE_AUDIT.md` §7): should
+15. **Three decisions nobody has made** ([`docs/COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md#7-handoffs) §7): should
     `rival_culture_rate` / `rival_science_rate` / `rival_strength` be made live or
     deleted; should `wonder_remaining` be sign-locked or replaced; should
     `p.resigned` get any evaluator term at all.
@@ -260,11 +260,11 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 
 19. **`tech_levels` on the live 2p champion is a stale, over-fitted
     coordinate, and it is the single most important open item in this
-    section.**  `docs/YELLOW_TECH_PRICING.md` §4.2: with the technology price
+    section.**  [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md#42-the-live-2p-champion-a-severe-regression-attributed) §4.2: with the technology price
     on, that champion goes **12.2% against a 50% null**; reset only its
     `tech_levels` group to the defaults (5.84/3.39/0.92 → 1.0/0.5/−0.4) and the
     same paired A/B is **63.0%**.  The mechanism is the general one
-    `docs/UNIT_TECH_PRICING.md` §5.2 named for `strength`: a coordinate the
+    [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2 named for `strength`: a coordinate the
     evaluator can read but never has to buy is unconstrained and will drift.
     Two things follow.  (a) The live 2p arm should either carry
     `"tech_board_credit": 0.0` or have that group re-fitted before it is
@@ -280,7 +280,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     between cards of the **same** type — a Warriors worker cannot become a
     Cannon.  So the red price is optimistic for cavalry, artillery and air
     whenever the player holds only infantry, which is most of the game.  Found
-    2026-07-30 while generalising it (`docs/YELLOW_TECH_PRICING.md` §6.1) and
+    2026-07-30 while generalising it ([`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) §6.1) and
     deliberately left alone so this lane's digest moves had one cause;
     `tech_upgrade`'s non-red half is already same-type-only.
 21. **Nothing prices the "build one fresh" plan.**  Both `unit_upgrade` and
@@ -294,7 +294,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 22. **A government's level is unpriced on both sides.**  `features()` adds
     `meta[p.government][1]` into `tech_levels`, and neither `_card_yields` nor
     the swap diff emits it, so a government card is missing exactly the term
-    `docs/YELLOW_TECH_PRICING.md` added to every other technology.  `gov_level`
+    [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) added to every other technology.  `gov_level`
     has the same hole.  Governments are already over-played, so this plausibly
     cuts the other way.
 23. **`happy_margin` is priced through its clamp linearly.**  `features()`
@@ -308,7 +308,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 24. ~~**Action cards are now the largest single card-type deficit in the game**:
     2.72 per seat-game at 2p against a human 12.98 after the technology
     reprice (8.62 before).~~  **CLOSED 2026-07-30 by
-    `docs/ACTION_CARD_PRICING.md`.**  The cause was not the row competition:
+    [`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md).**  The cause was not the row competition:
     **sixteen of the thirty-three action cards priced at exactly 0.000**, in
     three separate multiplied-by-zero mechanisms, and the per-card take rates
     split along exactly that line — every card priced through a live trained
@@ -324,7 +324,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     compute for the urban and worker types — but `row_pressure` calls
     `card_potential` for every row card at every leaf, so it is a performance
     question as much as a modelling one.  The one bucket-(d) hole left in the
-    type (`docs/ACTION_CARD_PRICING.md` §6).
+    type ([`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md#6-open-and-deliberately-not-done-here) §6).
 26. **Engineering Genius is under-*played* for a reason that is not its price**:
     0.02 plays per seat-game at 2p against a human 1.33, and **0.00** at 3p.  It
     orders a wonder stage and is illegal without a wonder in progress; the bot
@@ -346,7 +346,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     Unowned.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
-are 1-ply artefacts repaired by search (`docs/CARD_CENSUS.md` tier B) — the
+are 1-ply artefacts repaired by search ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md) tier B) — the
 standing problem is now over-declaration, not blindness; Military Bonus cards
 have no move handler by design; pacts are absent at 2p by rule; flooring
 `card_potential` at 0 was tried and rejected (it would make the unit lane's own
@@ -356,12 +356,12 @@ demonstration unmeasurable and is a no-op for `row_pressure`'s `<= 0` skip).
 
 ## 3. Evaluator information gaps
 
-*From `docs/INFORMATION_AUDIT.md`, `docs/EVENT_SEEDING.md`,
-`docs/BOT_ARCHITECTURE.md`, `docs/MODEL_CONSTANTS.md`.*
+*From [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md), [`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md),
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md), [`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md).*
 
 ### 3.0 Fitted constants still standing after the 2026-07-30 sweep
 
-*From `docs/MODEL_CONSTANTS.md`.  Three were replaced; these are what is left,
+*From [`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md).  Three were replaced; these are what is left,
 and each is now labelled as a prior in the source and pinned by
 `tests/test_model_constants.py`.*
 
@@ -372,13 +372,13 @@ and each is now labelled as a prior in the source and pinned by
   it already is.  Deliberately left labelled rather than half-plumbed.  If a
   lane ever threads `w` into `features()` for another reason, convert this at
   the same time.  Nothing has ever measured whether 0.5 is right; the only
-  evidence is `docs/PACTS_DIAGNOSIS.md` fix #2, which establishes that it must
+  evidence is [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) fix #2, which establishes that it must
   be **non-zero** (at 0.0 `offer_pact` is strictly dominated by `pol_pass`) and
   says nothing about the value.
 * **`_TAKE_PRIOR = {2: 0.30, 3: 0.35, 4: 0.40}` is fitted** and is the last
   guess in the horizon.  It only bites in Age A and the first rounds of Age I
   (shrunk away with weight `_TAKE_PRIOR_W = 4.0` replenishes), and it is the
-  Age A column in `docs/MODEL_CONSTANTS.md` §1.4 where the new estimator is
+  Age A column in [`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md#14-error-against-ground-truth-under-two-card-appetites) §1.4 where the new estimator is
   worst.  The 3p and 4p entries are less well measured than the 2p one:
   `tools/deal_rate.py --players 3/4` has been run once, at 10 games.
 * **`rival_take_share` ships at its 0.5 prior and has never been climbed.**  It
@@ -406,7 +406,7 @@ and each is now labelled as a prior in the source and pinned by
 * ~~**`hillclimb_pool.CULTURE_CENTRE = 100.0` / `CULTURE_SCALE = 120.0` flatten
   the objective at 4p.**~~  **CLOSED 2026-07-30** — both constants are DELETED,
   not re-fitted: the objective no longer scores absolute own culture at all
-  (`docs/LEAGUE_OBJECTIVE.md`).  The 5.8x-mispricing finding drove the
+  ([`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)).  The 5.8x-mispricing finding drove the
   replacement scale to be **per player count**, which is the durable half of
   this item.  But the follow-on inference did **not** survive measurement: the
   human 4p final-SCORE tail (p90 298) does not imply a wide 4p LEAD
@@ -418,7 +418,7 @@ and each is now labelled as a prior in the source and pinned by
   distribution, not the final-score tail.
 
 * **GAP 4 (politics / event deck)** — partially opened by `event_scoring_margin`
-  (`docs/EVENT_SEEDING.md`), which ships at weight 0.0 by design.  Its effect
+  ([`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md)), which ships at weight 0.0 by design.  Its effect
   under `plan:width=2` (the search the league actually trains) is **unmeasured**;
   so is 3p transfer; so is whether it should feed the neural encoder's existing
   `seeded_n` / `seeded_lv`.
@@ -456,30 +456,30 @@ and each is now labelled as a prior in the source and pinned by
 
 ## 4. Training, league and objective
 
-*From `docs/LEAGUE_OBJECTIVE.md`, `LEAGUE_POOL.md`, `LEAGUE_TRAINING.md`,
-`TRAINING_RUN.md`, `PROXY_GUARDRAIL.md`, `FOURP_GAP.md`, `HUMAN_BOTS.md`,
-`BEHAVIOUR_CLONE.md`, `CULTURE_GAP.md`.*
+*From [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md), [`LEAGUE_POOL.md`](LEAGUE_POOL.md), [`LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md),
+[`TRAINING_RUN.md`](TRAINING_RUN.md), [`PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md), [`FOURP_GAP.md`](FOURP_GAP.md), [`HUMAN_BOTS.md`](HUMAN_BOTS.md),
+[`BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md), [`CULTURE_GAP.md`](CULTURE_GAP.md).*
 
 *Rewritten 2026-07-30: the objective is now the culture LEAD OVER THE BEST
 OPPONENT, centred on zero because zero is the win/lose boundary.
-`CULTURE_CENTRE` is deleted, not re-fitted.  See `docs/LEAGUE_OBJECTIVE.md`.*
+`CULTURE_CENTRE` is deleted, not re-fitted.  See [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md).*
 
 * **THE ONE TO WATCH AFTER RELAUNCH — war/aggression rate under a differential
   objective.**  The new objective pays for taking culture off the leader at
   twice the rate of producing it, which is *correct* for winning but feeds a
   pathology the bot already has: it declares wars at **6.6-7.9× the human rate
-  at 3p/4p** (`docs/AGGRESSION_RATE.md`).  Offline estimate on archived
+  at 3p/4p** ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md)).  Offline estimate on archived
   evaluations: **26-33% of culture-differential gains were "pure suppression"**
   (own culture flat or down while the lead rose) — rows the old objective did
   not reward and the new one rewards in full.  Deliberately **not** re-measured
   with fresh game batches; post-relaunch logs measure it under real training,
   which is the condition that matters.  **Run `tools/aggression_census.py`
-  against `docs/AGGRESSION_RATE.md`'s human rate on the first arm output.  If
+  against [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md)'s human rate on the first arm output.  If
   it exceeds 6.6-7.9× human, the lane to open is the EVALUATOR's war pricing,
   not the objective.**  Also watch the `cult` column against the `lead` column
   in the per-opponent report: own culture flat while the lead rises, sustained,
   is suppression training, and `cult` should be heading toward the human ~159.5
-  at 2p (`docs/HUMAN_BASELINE.md`), not away from it.
+  at 2p ([`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)), not away from it.
 * **Nothing shows the new objective TRAINS a better bot** — only that it *ranks*
   3,802 archived decisions in better agreement with win rate (+0.939/+0.933/
   +0.910 against +0.850/+0.861/+0.824) and that the machinery runs.
@@ -498,7 +498,7 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   at, not the one we are in.  Two live caveats: the 3p/4p corpus slices are
   thin (133 and 186 games), and the 2.5 multiplier is itself an inherited
   judgement, not independently justified.
-* **The objective's throughput did not improve** (`LEAGUE_OBJECTIVE.md` §6b is a
+* **The objective's throughput did not improve** ([`LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#6b-acceptreject-throughput--essentially-unchanged-this-is-a-null) §6b is a
   null): the "rejected a better-on-winning candidate" rate stays at 16-20% and
   4p gets slightly worse.  The conservatism is set by the confidence bound and
   the block size, not by the objective, so the lever is `--block`/`z`.
@@ -508,7 +508,7 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   argued and unit-tested, never measured on logs.
 * **`--objective own` and `--objective margin` are removed**, not deprecated
   (the arms relaunch clean).  Historical reproduction is `git checkout 8b972ef`.
-* **`LEAGUE_POOL.md`'s saturation thresholds (0.70 / 0.95 / 0.15) are eyeballed,
+* **[`LEAGUE_POOL.md`](LEAGUE_POOL.md)'s saturation thresholds (0.70 / 0.95 / 0.15) are eyeballed,
   not derived.**  The defensible part is the direction and the self-correction,
   not the knee.  Escape hatch is `--saturation 0,1,1`.
 * Win rate is not the metric the league accepts on (`blend` = culture lead +
@@ -528,7 +528,7 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   culture wins the game.  Colony bidding at 0.00 bids/player is a fixable data
   artefact (auctions dirty their turn, so almost no bid reaches the training
   data), not a modelling failure.
-* **`FOURP_GAP.md`'s best-supported mechanism is unconfirmed:** the 4p accept
+* **[`FOURP_GAP.md`](FOURP_GAP.md)'s best-supported mechanism is unconfirmed:** the 4p accept
   gate is 2.8x less sensitive per generation with nothing compensating
   (`--block 12 --subset 4` unchanged across player counts), consistent with the
   4p arm having the *highest* accept rate (21.4%) and the weakest vector.
@@ -538,7 +538,7 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
 * **The culture matchup was never re-measured after the fixes.**  No post-fix win
   rate against `var:culture` exists.  What closed was the investigation's
   premise, not the gap — see §5.
-* Unlanded proposals from `CULTURE_GAP.md`: decouple phase-multiplier mutation
+* Unlanded proposals from [`CULTURE_GAP.md`](CULTURE_GAP.md): decouple phase-multiplier mutation
   step size from the base weight's magnitude; add a restoring force to the
   geometric random walk (log-prior toward defaults, or bound weights to a sane
   multiple of default); run a `--ladder 5,20,35.574,60` sweep on `culture_rate`
@@ -553,9 +553,9 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
 
 ## 5. Search, neural and architecture
 
-*From `docs/BOT_ARCHITECTURE.md`, `DEEPER_SEARCH.md`, `NEURAL_SEARCH_LOOP.md`,
-`NEURAL_LOOP_NULL.md`, `NEURAL_EVAL.md`, `PLAN_WAR_LOOKAHEAD.md`,
-`TRANSFER_TEST.md`.*
+*From [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md), [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md), [`NEURAL_SEARCH_LOOP.md`](NEURAL_SEARCH_LOOP.md),
+[`NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md), [`NEURAL_EVAL.md`](NEURAL_EVAL.md), [`PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md),
+[`TRANSFER_TEST.md`](TRANSFER_TEST.md).*
 
 * **The neural line is not abandoned.**  v2 (`NeuralPlanBot`'s beam as the
   improvement operator) has 4 promotions in 21 iterations against v1's 0 in 74,
@@ -567,7 +567,7 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   the Mac Mini.
 * **A war declared in the last round never resolves in reality but
   `PlanBot._score` still prices it as if it will.**  Deliberately unguarded so
-  `docs/PLAN_WAR_LOOKAHEAD.md`'s measurements isolate "PlanBot prices wars"
+  [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md)'s measurements isolate "PlanBot prices wars"
   cleanly.  Flagged as the obvious next experiment and not free of risk.
 * `ctx` (rival aggregates) is inherited from the search root and not recomputed
   after a war resolves inside the lookahead — a known imprecision left in place
@@ -578,14 +578,14 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   and will keep under-declaring it exactly where the choice matters most.
   Anyone who measures the choice and finds nothing has measured this lower bound,
   not the choice.
-* `TRANSFER_TEST.md`'s option (a) "train under `plan:width=1`" is **not**
+* [`TRANSFER_TEST.md`](TRANSFER_TEST.md)'s option (a) "train under `plan:width=1`" is **not**
   retired by the war-lookahead fix (its option (c), "score the gate on own
   culture", was adopted 2026-07-27 and then reversed 2026-07-30 — see
-  `docs/LEAGUE_OBJECTIVE.md` §7).  The
+  [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#7-the-risk-this-objective-pays-for-dragging-opponents-down) §7).  The
   lookahead removed the *inversion* but not the miscalibration: the proxy still
   says Q is +36.3 better where the real search says P and Q are statistically
   indistinguishable.
-* **`PLAN_WAR_LOOKAHEAD.md` is 2p-only and `plan:width=8`-only**; `width=1` is
+* **[`PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) is 2p-only and `plan:width=8`-only**; `width=1` is
   untested and `book` is the only opponent.
 
 ---
@@ -606,7 +606,7 @@ The single most important entry is #22.*
    clean master with no real regression.  A 200-generation seat census found the
    live pool is ~69% WeightedBot / ~27% Book+Variant / ~2% GreedyBot / 0%
    QuiescentBot — the broken digest pair covered nearly everything the trainer
-   runs.  (Digests have moved several times since; see `HAZARDS.md`.)
+   runs.  (Digests have moved several times since; see [`HAZARDS.md`](HAZARDS.md).)
 3. Three tools (`tools/quiesce_bench.py`, `tools/no_credit_check.py`,
    `tools/behaviour_counts.py`) silently defaulted to the horizon-invalidated
    `experiments/champion_4p.json` and printed plausible numbers for a crippled
@@ -620,21 +620,21 @@ The single most important entry is #22.*
    below the n=200 bar, conflict unresolved.  `culture_rate_early/_late` are not
    yet covered by the 2p ablation cursor.
 5. "Trained weights compensate for a structural flaw, so fix the flaw" has
-   already been measured to backfire five separate ways — see `HAZARDS.md`.
+   already been measured to backfire five separate ways — see [`HAZARDS.md`](HAZARDS.md).
 6. A measured finding contradicts the weight guard's own premise: negating
    `science` or `culture` in `DEFAULT_WEIGHTS` measurably *helped* at 3p/4p, yet
    the guard clamps exactly that region.  Flagged "worth revisiting", never
    revisited, still running.  Counter-evidence is also real (`science = −6.089`
    collapsed 4p play), so the relationship is non-monotonic rather than simply
    wrong.
-7. `experiments/PROGRESS.md` makes advice-shaped claims purely from
-   weight-drift-from-default — the invalid inference `docs/OPENING_AUDIT.md`
+7. [`experiments/PROGRESS.md`](../experiments/PROGRESS.md) makes advice-shaped claims purely from
+   weight-drift-from-default — the invalid inference [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md)
    demolished using one of that table's own entries.  Also mechanically stale
    (78 vs actual weight count, obsolete horizon formula, pre-league framing).
    Never corrected.
 8. `experiments/baselines.jsonl` still carries no timestamp, generation or seed
    on any row — the exact mechanism by which a stale number became a published
-   claim in `docs/HEURISTICS.md`.  Fix never applied.  Do not quote it; re-run
+   claim in [`docs/HEURISTICS.md`](HEURISTICS.md).  Fix never applied.  Do not quote it; re-run
    `experiments/evaluate.py`.
 9. `analysis/opening_order.py`'s crash was fixed but its `card_type()` still
    returns `"?"` for every card (plain-dict cards, not objects) — now *worse*
@@ -642,7 +642,7 @@ The single most important entry is #22.*
 10. Three finished programmes have an explicit "re-run this" that was never
     executed: the post-`7d40f53` re-run of the BookBot-beats-champion benchmark
     (frozen weights already exist for it); two of three pre-retraining checks
-    from `docs/WASTED_ACTIONS.md` §11; and `docs/BOT_ROSTER.md`'s
+    from [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#11-what-to-do-before-the-retraining-run) §11; and [`docs/BOT_ROSTER.md`](BOT_ROSTER.md)'s
     reverse-direction 3p/4p cells plus `experiments/roster_behaviour.py`
     (written, committed, never executed — would settle the 4p colony-auction
     disagreement as a side effect).
@@ -650,8 +650,8 @@ The single most important entry is #22.*
     (`engine/actions.py:257-259`) checks a **live** player count where the rule is
     **setup-time**, so a mid-game resignation in a 3p game can silently make pacts
     illegal for the survivors.  Low impact (~0.07 resignations/game), zero test
-    coverage.  Found independently by `docs/COMBAT_AUDIT.md` (Bug 2) and
-    `docs/PACTS_DIAGNOSIS.md`.
+    coverage.  Found independently by [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) (Bug 2) and
+    [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md).
 12. Small unactioned follow-ups: re-test `wonder_remaining` in isolation;
     re-check the ~1.2-abandoned-wonders/game waste statistic; ablate the 4p
     `hand_military = 0.908` weight (it makes the champion opt out of events,
@@ -659,7 +659,7 @@ The single most important entry is #22.*
     sacrifice as a real decision instead of a hardcoded greedy pick; add features
     for the `defend` / `choose` move kinds (the pact-accept branch has never been
     checked for a systematic-refusal bug); raise `--check-games` from 48 to 100+.
-    *(12g, the phase-multiplier clamp asymmetry, was landed — `CULTURE_GAP.md`
+    *(12g, the phase-multiplier clamp asymmetry, was landed — [`CULTURE_GAP.md`](CULTURE_GAP.md)
     §21.)*
 13. Stale weight/feature counts (82 actual vs a quoted 78 / ~57) trace to one
     un-updated docstring in `weighted.py`, propagated into five documents.
@@ -669,7 +669,7 @@ The single most important entry is #22.*
     `engine/perf_check.py --kinds weighted`.
 15. Git history is clean — nothing recoverable in deleted files, dangling
     commits or stashes.
-16. `docs/HEURISTICS.md` describes three champions that no longer exist, and even
+16. [`docs/HEURISTICS.md`](HEURISTICS.md) describes three champions that no longer exist, and even
     the surviving 2p champion's live weights contradict its headline advice: 13
     weights clamped to exactly 0.0 (including `civil_actions`, `ca_left`,
     `uprising`, `leader`, each contradicting a specific headline claim) while the
@@ -677,7 +677,7 @@ The single most important entry is #22.*
     The cumulative cost of the 13 zero-clamped terms has never been measured.
 17. PyPy's own re-test trigger ("once bots stop copying a whole GameState per
     move") has been met by the journal rewrite.  *(Since acted on — see
-    `docs/PYPY.md`, and the correction at the top of that file.)*
+    [`docs/PYPY.md`](PYPY.md), and the correction at the top of that file.)*
 18. `experiments/summarize.py`'s hand-enumerated `GROUPS` table is missing the
     four most recently added features (`pact_blocks_attack`, `auction_committed`,
     `auction_bid`, `hand_potential`), silently binning them as `"?"` in every
@@ -690,9 +690,9 @@ The single most important entry is #22.*
 20. The project has no external anchor of any kind, and all three designed
     remedies (open-source TTA research, the human-in-the-loop harness, BGO
     scraping at scale) are essentially unimplemented.  *(Partly overtaken: the
-    BGO corpus landed — `docs/BGO_CORPUS.md`, `docs/HUMAN_BASELINE.md` — and the
+    BGO corpus landed — [`docs/BGO_CORPUS.md`](BGO_CORPUS.md), [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) — and the
     harness is built but has never been run for a measurement.)*
-21. `engine/PROGRESS.md` still lists as open a question (action-card gain
+21. [`engine/PROGRESS.md`](../engine/PROGRESS.md) still lists as open a question (action-card gain
     ordering) that is resolved and pinned by tests.  Also, two differently
     computed `hand_potential` win rates (69.6% and 72.5%) are both cited as "the"
     measurement; they are two different implementations and neither is wrong.
@@ -709,7 +709,7 @@ The single most important entry is #22.*
 
 ## 7. Engine and rules items still open
 
-* **Two live bugs found and deliberately not fixed** (`docs/EVENT_SEEDING.md`):
+* **Two live bugs found and deliberately not fixed** ([`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md)):
   `interact.py`'s `_c_pact_offer` does `owner.pacts = [{...}]` — assignment, not
   append — so accepting a pact silently destroys every other pact the owner
   held, reachable only at 3p/4p.  And `book.py`'s pact-offer response reads
@@ -741,18 +741,18 @@ The single most important entry is #22.*
   incremented.  `urbanLimitCategory`, `scoringEvent` and top-level `target` are
   dead or duplicate fields nothing reads.
 * Card-data provenance items are all closed — see the appendix of
-  `docs/RULES_SPEC.md`.
+  [`docs/RULES_SPEC.md`](RULES_SPEC.md).
 
 ---
 
 ## 8. Measurement and infrastructure
 
-* **`docs/BGO_CORPUS.md`'s `## Results` section is an empty placeholder.**  Read
+* **[`docs/BGO_CORPUS.md`](BGO_CORPUS.md)'s `## Results` section is an empty placeholder.**  Read
   the real yield from `sources/bgo/index.tsv`, not from that document.
 * The 40-name expansion-exclusion list used by the BGO scraper **has never been
   positively confirmed against a known expansion-enabled game** — no such game
   was found in-sample to test against.  Internally consistent, not validated.
-* **`docs/HUMAN_BASELINE.md`'s two proposed next steps are unimplemented:**
+* **[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s two proposed next steps are unimplemented:**
   hand-reconstruct one human position through `effects.end_of_game_bonus` to
   verify the scoring gap, and run a scripted wonder-first A/B to test whether
   wonders "really are weak" versus "invisible to the evaluator".
@@ -761,11 +761,11 @@ The single most important entry is #22.*
   usable games.  It is the only externally calibrated anchor available.  Standing
   cost saving: if the league settles the `ca` / `hc` / `w` weights near zero,
   delete them from `mirror.RIVAL_ASK_KEYS` and take ~4-10% per game back.
-* **`docs/DESKTOP_QUIET.md`'s two unverified items:** the arm-watchdog PID reap
+* **[`docs/DESKTOP_QUIET.md`](DESKTOP_QUIET.md)'s two unverified items:** the arm-watchdog PID reap
   has never been observed actually reaping (confirm on the next resume via
   `C:\Users\micro\tta_watchdog.log` showing `reaped previous driver tree`), and
   the 12-worker generation path has not been window-checked under real load.
-* **`docs/PYPY.md` §11.10's 3p/4p CPython-vs-PyPy verdict needs re-measuring.**
+* **[`docs/PYPY.md`](PYPY.md#1110-verdict-do-not-switch-the-league-optionally-switch-the-2p-arm) §11.10's 3p/4p CPython-vs-PyPy verdict needs re-measuring.**
   It computes the loss from `quiescent:levels=1` ratios (0.82x, 0.86x), but since
   `1fbf128` (2026-07-30) all three arms run `plan:width=2`, which §11.4 measured
   at **1.12-1.24x in PyPy's favour**.  Do not quote 0.82x/0.86x as current.
@@ -773,7 +773,7 @@ The single most important entry is #22.*
   2026-07-30): re-run the book-bot benchmark against an AI trained *after* the
   `7d40f53` military-card-count fix — the 62.9%/37.1% result predates it;
   reconcile the two disagreeing colony-auction-chokepoint measurements
-  (`docs/AGGRESSION_FIX.md`'s "auctions open but find no bidders" against a later
+  ([`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md)'s "auctions open but find no bidders" against a later
   12-game check's "no territory ever reaches auction at all"); re-run the 4p
   build order at 60 games instead of 20; rebuild the per-card priority lists now
   the `end_turn` scoring work has landed; the bot has never been tested against a

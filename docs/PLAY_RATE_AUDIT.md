@@ -1,8 +1,8 @@
 # Does the bot actually PLAY the cards? A per-card play-rate audit (2026-07-30)
 
-Four audits have now measured card **pricing** — `docs/CARD_BLINDNESS.md`,
-`docs/CARD_BLINDNESS_MILITARY.md`, `docs/CARD_CENSUS.md`,
-`docs/UNCOVERED_TYPES.md` — and `CARD_CENSUS.md` states the gap all four share
+Four audits have now measured card **pricing** — [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md),
+[`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md), [`docs/CARD_CENSUS.md`](CARD_CENSUS.md),
+[`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md) — and [`CARD_CENSUS.md`](CARD_CENSUS.md) states the gap all four share
 in its own words: *"the suite checks that a card is priced, never that its
 price is read."*
 
@@ -11,7 +11,7 @@ found blind, a feature was added, four tests in `tests/test_card_pricing.py`
 were written and pass, and the weight shipped at **0.0** — so
 `card_potential` multiplied the entire new channel by zero and the ten cards
 priced *exactly* as they had before the fix. Nothing failed for days while
-`docs/SYSTEM_COVERAGE.md` measured the bot taking military unit technology
+[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) measured the bot taking military unit technology
 0.06–0.45 times per seat-game against a human 2.79–3.84.
 
 This document asks the other question, for all 236 cards: **at what rate does
@@ -97,7 +97,7 @@ backs (`X puts <card> back in the row`) are matched against the most recent
 unmatched take and both are dropped, as `tools/bgo_parse.py` does it.
 
 Cross-check that the parser is measuring the right thing: it independently
-reproduces `docs/SYSTEM_COVERAGE.md`'s human unit-technology rate to the
+reproduces [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s human unit-technology rate to the
 digit — **3.84 / 2.79 / 3.43** per seat-game at 2p/3p/4p.
 
 ## 2. Headline: the bot builds one civilization and it is blue
@@ -137,7 +137,7 @@ almost entirely on one colour.
 
 The 3p and 4p columns add a second shape: **wonders collapse** (0.94 and 0.28
 against a human 2.58 and 2.65) and **wars run 8× over** (1.28 and 1.25 against
-0.16 and 0.15), both of which `docs/SYSTEM_COVERAGE.md` already reported at the
+0.16 and 0.15), both of which [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) already reported at the
 whole-subsystem level. This document adds the card identities under them.
 
 ## 3. The (b) findings — priced, but the price is never read
@@ -299,7 +299,7 @@ The over-plays cluster the same way the under-plays do: **blue urban buildings
 and the Age III culture wonders at 2p, wars and the cheapest Age I tactic
 everywhere.** `War over Culture` at 3.6× / 9.6× / 9.5× the human rate is the
 single largest over-play in the game and is the card-level restatement of
-`docs/SYSTEM_COVERAGE.md`'s "wars declared 2.2× / 6.6× / 7.9× over".
+[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s "wars declared 2.2× / 6.6× / 7.9× over".
 
 ## 5. Cards the bot never plays
 
@@ -358,7 +358,7 @@ different *cause*.
 
 Labelled **(c)**: the weights are live and the hill climb chose this. It is
 recorded here as the largest behavioural discrepancy in the game that is *not*
-an inert weight, and `docs/EXPERT_STRATEGY.md`'s framing says a civilization
+an inert weight, and [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md)'s framing says a civilization
 that buys no science and no resources is not a strategy the corpus supports.
 
 ### 5.2 Wars — class (c), already open
@@ -366,7 +366,7 @@ that buys no science and no resources is not a strategy the corpus supports.
 `War over Culture` at 0.57 / 1.01 / 1.06 against a human 0.16 / 0.11 / 0.11,
 and `War over Technology` / `War over Territory` at zero on the bot side at
 2p. The bot declares the one war it can evaluate and never the two it cannot.
-`docs/WAR_OVER_TECHNOLOGY.md` and `docs/SYSTEM_COVERAGE.md` §4 own this;
+[`docs/WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#4-colonies--alive-everywhere-thin-at-2p) §4 own this;
 nothing new is claimed here beyond the card identities.
 
 ### 5.3 Tactics — class (c)
@@ -387,7 +387,7 @@ weighting question, not a blind spot.
   face down in the corpus, so no rate exists to compare against.
 * **Pacts (10 cards).** BGO prints `accepts pact offer` and never the card
   name. The bot's aggregate is 0.00 / 1.03 / 1.50 offers a seat-game, and the
-  2p zero is the rulebook, not a gap. `docs/PACTS_DIAGNOSIS.md` owns this.
+  2p zero is the rulebook, not a gap. [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) owns this.
 * **Colonization use of a Military Bonus card.** `interact.force_value`
   assembles the sacrifice; it is not a bot decision, so there is nothing to
   count on the bot side (§3.2).

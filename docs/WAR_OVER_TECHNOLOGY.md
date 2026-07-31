@@ -1,6 +1,6 @@
 # The victor of a War over Technology chooses (2026-07-30)
 
-`docs/SCORE_AUDIT.md` §3.8 left one of the 23 card types short of exact, and
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#38-war-over-technologys-alternative-spoil-is-unimplemented) §3.8 left one of the 23 card types short of exact, and
 it was the only one where the shortfall was not a wrong number:
 
 > *"The victor takes science equal to the strength advantage, **or takes
@@ -177,7 +177,7 @@ new decision.
 
 No new suspend/resume mechanism was invented. `push_choice` + the deferred
 queue + idempotent re-entry is `economy.end_of_turn`'s pattern from
-`docs/MILITARY_DISCARD.md`, and it is reused rather than duplicated.
+[`docs/MILITARY_DISCARD.md`](MILITARY_DISCARD.md), and it is reused rather than duplicated.
 
 ---
 
@@ -302,7 +302,7 @@ Written down before any game was played, and reproduced here unedited:
 
 ## 8. Verdict
 
-`docs/SCORE_AUDIT.md`'s table goes from **22 of 23 exact** to **23 of 23**,
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md)'s table goes from **22 of 23 exact** to **23 of 23**,
 and the war row from "2 exact, 1 partial" to exact. This lands on correctness.
 It is a rule the engine was not implementing, the cost — a decision point in
 some wars — was accepted deliberately, and §5 and §7 say in advance what it is

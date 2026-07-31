@@ -33,7 +33,7 @@ the trained champion at every player count:
 > known-degenerate vector (`science = -6.08883`, measured at 20.1% against a
 > 25% null). `refuse_if_degenerate_champion` tested exact content and the
 > frozen copy differs on two keys, so it walked through. Do not quote the 4p
-> number. See `analysis/frozen/README.md`.
+> number. See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 
 Meanwhile the champion beat GreedyBot — the baseline it was trained against —
 by 88%. Both facts are true at once, and that is the whole lesson: **beating a
@@ -74,7 +74,7 @@ A pool entry is `(spec, weight, label)` plus a tier.
 |---|---|---|
 | `book` | `BookBot`, `BookBot` v2 | The external yardstick. Derived from published human strategy, not from our training loop, so beating it means something in absolute terms. This is the tier we currently **lose** to. |
 | `variant` | everything in `engine/bots/variants/` | Strategy archetypes (tempo, infrastructure, military, culture, science, wonder-heavy…) built by another agent. **Discovered dynamically** — see below. |
-| `quiescent` | `QuiescentBot` (`docs/DEEPER_SEARCH.md`) | Search-based opponent. Opt-in (`--with-quiescent`); it costs ~1.2× per game and its strength is not yet measured. |
+| `quiescent` | `QuiescentBot` ([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md)) | Search-based opponent. Opt-in (`--with-quiescent`); it costs ~1.2× per game and its strength is not yet measured. |
 | `mirror` | the candidate vs a table of its **parent** | Self-play. Kept — it is still a real signal — but demoted below every external bot. |
 | `past` | archived champions, including the legacy `experiments/league_*p/` ladders | The anti-**cycling** guard: without a historical ladder a new champion can beat the current one while losing to an older one, and the loop will happily walk in a circle forever. |
 | `floor` | `greedy`, `random`, `default` | Cheap floor checks. Weighted like it. |
@@ -223,7 +223,7 @@ opponent rather than the margin over the mean, and the constant is
 `LEAD_SCALE`.  The scale reasoning above is unchanged (it is a statement about
 dispersion, not about which opponent the differential is taken against) but
 the sd it is derived from was measured on the mean margin and has not been
-re-derived for the lead.  See `docs/LEAGUE_OBJECTIVE.md` §5.
+re-derived for the lead.  See [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#5-lead_scale-the-one-free-choice-measured-per-player-count) §5.
 
 ### The gate veto — the aggregate is not allowed to hide a loss
 
@@ -316,7 +316,7 @@ Running the guard over that champion finds **nine** inverted terms, not one:
 > vector looked like when the guard was designed.
 
 The 4p champion believes **civil actions and workers are bad**. That is
-exactly what `docs/STRENGTH_CHECK.md` measured it *doing* — "it under-buys
+exactly what [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) measured it *doing* — "it under-buys
 civil actions", "−4.5 workers by the endgame" — arrived at completely
 independently, from the weights instead of from the games.
 
@@ -334,7 +334,7 @@ weights** and leaves every legitimately negative term alone — `rival_*`, the
 > measured twice, five ways, and makes the bot much weaker (38.4%, 39.8%,
 > 29.8%, 11.0%, and 39.8% on top of `hand_potential`, against a 50% null —
 > see the comment on the weight in `engine/bots/weighted.py` and
-> `docs/WASTED_ACTIONS.md` §6). The guard does not touch it, nothing in this
+> [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). The guard does not touch it, nothing in this
 > loop rewards removing it, and nothing in this document should be read as
 > licence to "fix" it.
 
@@ -710,7 +710,7 @@ Option 2 shipped: gate tiers score on `margin_share(m) = 0.5·(1+tanh(m/120))`,
 everything else stays on win share. `--gate-metric winshare` reverts.
 **SUPERSEDED 2026-07-30** — the per-tier split is gone (a weighted mean over
 rows in different units is not a number) and every tier now scores on
-`lead_share`, the lead over the *best* opponent. `docs/LEAGUE_OBJECTIVE.md`.
+`lead_share`, the lead over the *best* opponent. [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md).
 The paragraphs below are kept as the record of why a dense culture signal was
 needed at all, which is unchanged.
 `arena.duel` did **not** already return what was needed — it returned only the
@@ -881,6 +881,6 @@ its own lineage, and losing to BookBot can no longer be averaged away.
 It does not by itself make the bot beat BookBot. The pool tells the truth
 about where the champion stands; closing the gap is the job of the engine
 fixes, the evaluator features and the strategy work in
-`docs/EXPERT_STRATEGY.md`. What changes is that from now on, progress reported
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md). What changes is that from now on, progress reported
 by the training loop is progress against opponents the training loop did not
 invent.

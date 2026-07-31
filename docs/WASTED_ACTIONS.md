@@ -8,8 +8,8 @@ action. Isn't taking or playing a yellow card almost always worth it?"*
 > renamed `analysis/frozen/champion_4p.DEGENERATE.json`, and its twin
 > `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
 > informative weights** of `experiments/champion_4p.json` bit-for-bit,
-> including `science = −6.08883`. That is the vector `docs/TRAINING_RUN.md`
-> says never to warm-start from and that `docs/CULTURE_GAP.md` §8f measured at
+> including `science = −6.08883`. That is the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md)
+> says never to warm-start from and that [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8f-are-existing-champions-invalidated-yes--3p-and-4p-decisively) §8f measured at
 > **20.1% against a 25% null** — a bot that loses to random seating.
 > `refuse_if_degenerate_champion` was supposed to catch it and did not: it
 > tested exact content, and the frozen copy is six generations later and
@@ -20,7 +20,7 @@ action. Isn't taking or playing a yellow card almost always worth it?"*
 > place so they stay auditable.** They describe a known-degenerate bot. Do not
 > quote them as facts about 4p play, and do not quote them as facts about the
 > engine. The 2p and 3p numbers in this document are unaffected by *this*
-> issue. See `analysis/frozen/README.md`.
+> issue. See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 
 
 **Verdict: BUG — and the player's instinct understates it.** At 2 players
@@ -128,7 +128,7 @@ turn.
 | III | 1664 | 7439 | **2.2%** | +11.82 | **97%** | 3.8% |
 | IV | 285 | 1363 | 2.5% | +26.28 | 95% | 5.3% |
 
-The Age III number quoted in `HEURISTICS.md` (57.6% of civil actions wasted
+The Age III number quoted in [`HEURISTICS.md`](HEURISTICS.md) (57.6% of civil actions wasted
 at 2p) is **97% avoidable**: a card was legal to take on 1611 of those 1664
 turns, and the hand was full on only 3.8% of them. Age I is the one age where
 "nothing to do" is a real story (hand full 96% of the time) — and Age I is

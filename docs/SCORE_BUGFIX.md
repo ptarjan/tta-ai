@@ -1,7 +1,7 @@
-# Fixing the scoring bugs `docs/SCORE_VALIDATION.md` found (2026-07-27)
+# Fixing the scoring bugs [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) found (2026-07-27)
 
 Branch: `score-bugfix`, merged to master. Acts on §3 of
-`docs/SCORE_VALIDATION.md`, which located three scoring bugs against the
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md), which located three scoring bugs against the
 1,011-game BGO human corpus and deliberately left them unfixed so the gate
 digests would stay put for that measurement.
 
@@ -25,7 +25,7 @@ because that is a culture *rating* bug rather than a scoring bug it has an
 independent oracle — BGO's printed per-turn culture, on 43,847 lines, which
 goes **91.9% → 92.9%** and drags all-five-rates agreement from 79.2% to 80.0%
 and turn-16+ agreement from 58.1% to **62.1%**. **The wonder A/B did not
-move.** `docs/SCORE_VALIDATION.md` §6.2 hoped that Bug 3 was suppressing
+move.** [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 hoped that Bug 3 was suppressing
 wonder payoffs; re-run on both vectors after the fix, forcing wonders still
 costs the production vector **−33.4 ± 6.9** margin (was −34.3 ± 7.0) and is
 still worth **+20.8 own culture and zero margin** to the quiescent champion
@@ -86,7 +86,7 @@ tested and **does not fit either**: 75/88 overall against the fix's 73/88,
 7/16 on the discontent rows against 5/16, and its residuals go positive
 (+2×9, +4×2). So neither reading is right on those 16 rows, our discontent
 estimate is the suspect, and happy faces are exactly the input
-`docs/SCORE_VALIDATION.md` §8 says the journal never prints. Same open
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#8-limits) §8 says the journal never prints. Same open
 question as `Impact of Happiness` (70.8%). The card says "content worker", so
 discontent stays subtracted.
 
@@ -145,7 +145,7 @@ line, so it is testable on 43,847 rows rather than on ~100 scoring events:
 | turns 16+, all five | 4,107 / 7,069 (58.1%) | **4,388 (62.1%)** |
 | final positions passing the cleanliness gate | 405 / 2,525 (16.0%) | **454 (18.0%)** |
 
-For scale, the largest replayer fix in `docs/SCORE_VALIDATION.md` (Ravages of
+For scale, the largest replayer fix in [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) (Ravages of
 Time) was worth 89.4% → 91.9% on the same row. This one is a third of that,
 and it is in the engine.
 
@@ -182,11 +182,11 @@ All rows, no cleanliness filter at all (fixed denominator):
 Nothing else in the fifteen-row `Impact of ...` table moved except by gaining
 rows: Agriculture, Balance, Government, Progress, Science and Wonders are
 still 100%, Technology 98.9%, and Happiness (70.8%) and Strength (64.3%)
-are still the two `docs/SCORE_VALIDATION.md` §8 lists as untestable.
+are still the two [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#8-limits) §8 lists as untestable.
 
 ### 2.1 A fourth oracle, added to `tools/bgo_rescore.py`
 
-`docs/SCORE_VALIDATION.md` §3.3's Hollywood/Internet table was computed ad
+[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#33-age-iii-wonder-completion-bonuses-ignore-leader-modifiers) §3.3's Hollywood/Internet table was computed ad
 hoc and not committed, so there was nothing to re-run. It is now part of the
 tool: every `"...; Wonder completed; <Colour> scores N culture"` line is BGO's
 own Age III one-time bonus on a tableau we can rebuild, so the seat is frozen
@@ -207,7 +207,7 @@ right on everything else; Internet on Einstein 11/11, Shakespeare 3/3, Newton
 
 ## 3. The wonder A/B: re-run, and it did not move
 
-This was the point of the exercise. `docs/SCORE_VALIDATION.md` §3.3 noted
+This was the point of the exercise. [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#33-age-iii-wonder-completion-bonuses-ignore-leader-modifiers) §3.3 noted
 that Bug 3's sign made wonders *worse* in our engine than in the real game,
 and §6.2 measured forcing wonders at −34.3 ± 7.0 margin for the production
 vector P and +20.8 own culture for the quiescent champion Q. Same command,
@@ -234,7 +234,7 @@ same frozen champion files, same seeds, after the fix:
 | 1.00 | 85.7 ± 6.7 | 81.4 ± 5.8 | **+4.3 ± 7.0** | +4.3 ± 7.0 | 1.9 |
 
 **Every P row moved by less than a fifth of its own standard error and every Q
-row is identical to one decimal place.** `docs/SCORE_VALIDATION.md` §6.3's
+row is identical to one decimal place.** [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#63-what-this-does-and-does-not-license) §6.3's
 conclusions stand unaltered: wonders are still bad value for the strongest
 vector we have, and still invisible-but-margin-neutral for the champion.
 
@@ -279,7 +279,7 @@ digests moved.
 `bash tools/gate.sh` on master before any change: **GATE PASS, 401 tests**,
 `NARROW 2fd656b3`, `WNARROW 7fc72fca`, `WIDE 1169007d`, `WWIDE 9dc0a5a6`.
 
-All four moved. Re-derived per `docs/PYPY.md` 9.0's rule — computed from
+All four moved. Re-derived per [`docs/PYPY.md`](PYPY.md) 9.0's rule — computed from
 scratch in the working worktree and independently in a second detached one,
 with the two required to agree — and **attributed rather than assumed**: each
 of the four fixes was reverted on its own and all four arms re-hashed.
@@ -329,7 +329,7 @@ constants, in the same place as every other cause note.
 * **`Impact of Happiness` (70.8%) and `Impact of Strength` (64.3%) are
   untouched and still open.** Nothing here looked at either. If a fifth
   scoring bug exists it is behind happy faces or behind tactics, exactly where
-  `docs/SCORE_VALIDATION.md` §8 said it would be.
+  [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#8-limits) §8 said it would be.
 * **`Impact of Colonies` is 86.2%** with symmetric ±3 residuals and
   Architecture / Variety / Competition sit at 92-93% with small mixed-sign
   ones. §2 of the previous document attributes these to the replayer (stolen

@@ -1,6 +1,6 @@
 # Pricing the cards whose value is a sentence (2026-07-29)
 
-Lane C of the follow-up to `docs/CARD_BLINDNESS.md`: **leaders (24), actions
+Lane C of the follow-up to [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md): **leaders (24), actions
 (33) and governments (8)**.
 
 That document ends by naming its own biggest gap — "a board-aware card
@@ -20,7 +20,7 @@ governments help (culture margin +1.85, z = 3.4), leaders are a **null**
 > This line originally read "decomposes into two opposite signs … leaders hurt
 > slightly (−1.8pp, z = −2.1)". The leaders half did not survive the
 > unit-of-analysis audit of 2026-07-30; see §5.2's correction box and
-> `docs/CARD_BLINDNESS.md` §10.5. I was wrong about governments, and about
+> [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#105-lane-c-leaders-the-one-substantive-retraction) §10.5. I was wrong about governments, and about
 > leaders I was right for the wrong reason — I predicted "neutral-to-positive"
 > and the answer is "neutral", but the −2.1 I then reported as a real negative
 > was an artefact of clustering on the wrong unit.
@@ -329,7 +329,7 @@ defaulting to 0.0 is in neither set and the climber may move it in either
 direction. `card_board_credit` is therefore not merely inert — **the league
 can switch this on by itself** if it is worth switching on, without anybody
 editing a constant. That is the same reasoning
-`docs/CARD_BLINDNESS.md` §2.2 gives for refusing to put a negative prior on
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#22-nine-new-weights-all-defaulting-to-00) §2.2 gives for refusing to put a negative prior on
 the finish-discipline terms.
 
 All eight fingerprint digests were checked and **none moved**:
@@ -383,7 +383,7 @@ downgrades while leaving upgrades (the +10.64 rows) firmly attractive.
 
 ### 5.2 Win rate: a flat aggregate that decomposes into two opposite signs
 
-Method as in `docs/CARD_BLINDNESS.md` §4: `experiments.evaluate` at 2 players
+Method as in [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#4-method-for-5) §4: `experiments.evaluate` at 2 players
 plays each deal twice with the seats swapped, so the comparison is paired on
 the deal; both arms are `analysis/frozen/champion_2p.json` differing in
 `card_board_credit` alone (verified: exactly 1 of 105 weights differs). Each
@@ -400,7 +400,7 @@ what makes the decomposition possible at all:
 | **governments only** | 51.02% ± 1.40pp (z = +1.4) | **+1.85 ± 1.07 (z = +3.4)** | 149.4 vs 147.5 |
 | **leaders only** | 48.20% ± **2.92pp** (z = **−1.46**, p = 0.15) | −0.48 ± 2.56 (z = −0.4) | 149.0 vs 149.5 |
 
-> **Corrected 2026-07-30** (`docs/CARD_BLINDNESS.md` §10). The leaders row
+> **Corrected 2026-07-30** ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#10-the-unit-of-analysis-every-interval-in-this-project-was-computed-on-the-wrong-n) §10). The leaders row
 > previously read **48.20% ± 1.69pp (z = −2.1)** and was read as "leaders hurt
 > slightly". That interval is correctly clustered on the deal; the problem is
 > one level up. **The eight blocks are over-dispersed**: per-block win rates
@@ -490,7 +490,7 @@ this experiment.
 
 ## 6. Does the bot actually take these cards?
 
-`docs/CARD_BLINDNESS.md` §5.1 names the trap that makes this question
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#51-finish-discipline-a-null-and-the-reason-is-more-interesting-than-the-null) §5.1 names the trap that makes this question
 mandatory rather than optional: **giving a card a weight does not help until
 the bot takes the card.** Three of the keys added there sit at exactly 0.000
 variance because the champion never takes Masonry or Library of Alexandria,

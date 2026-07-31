@@ -64,7 +64,7 @@ to clone at scale. Realistic ceiling: strong club human. Not superhuman.
 |---|---|---|
 | Game log / replay export | **No** | The single most-requested version of this: a Steam thread explicitly asking for a text dump of the play log for statistical analysis. CGE dev "Elwen" replied it was added to the *features wishlist*, no promise. Players kept bumping it through Oct 2024 with no implementation. [thread](https://steamcommunity.com/app/758370/discussions/0/1735468693689629960/) |
 | Documented API / SDK | **No** | None exists. Online play goes through CGE's own account service (`account.czechgames.com`); no public API, no docs, and no third-party client or reverse-engineering write-up exists that I could find. |
-| Modding hooks / scripting | **No** | The app has no mod support. The only user-modifiable surface anyone has exploited is **localization strings** — see `yashcherU/Through-the-Ages_ru` (a Russian translation shipped as a drop-in string archive), which is how we got the exact English action-card texts in `docs/SOURCES.md`. Strings only; no game logic, no state. |
+| Modding hooks / scripting | **No** | The app has no mod support. The only user-modifiable surface anyone has exploited is **localization strings** — see `yashcherU/Through-the-Ages_ru` (a Russian translation shipped as a drop-in string archive), which is how we got the exact English action-card texts in [`docs/SOURCES.md`](SOURCES.md). Strings only; no game logic, no state. |
 | Local save files | Only as opaque blobs | Local/pass-and-play games persist so you can resume, so *some* serialized state exists on disk (Steam userdata / app sandbox), but it is undocumented and there is zero public work on the format. Decoding it would be a from-scratch reverse-engineering project against a shipping binary, and it would only give you *saves*, not per-move logs. |
 | Network protocol sniffing | Technically possible, practically bad | TLS to CGE's servers; would need mitmproxy + cert pinning bypass on a rooted Android/emulator, then a protocol reverse-engineer, then a bot account. This is (a) a multi-week project, (b) a ToS violation, (c) it gets you *human* games, not AI games, since AI games are local. Not recommended. |
 | Screen scraping | Possible, expensive | The app *does* replay every opponent move visually before your turn (that is a shipped feature — you watch the AI's turn animate). So every AI decision is observable on screen. Turning that into data means OCR/CV against an animated Unity UI. Weeks of work for a brittle pipeline. |
@@ -399,7 +399,7 @@ Three independent confirmations that `idJeu=10` really is our edition:
 3. **The card values in a rendered 2015 game are the 2015 values.** Reading game
    #7523809's board view: `Monarchy 2(8)` (2006 was 3(9)), `Napoleonic Army 7(4)`
    (2006 was 8(4)), `Mechanized Army 10(5)`. These are precisely the numbers
-   `docs/SOURCES.md` records as changed in 2015. This is the decisive test and it
+   [`docs/SOURCES.md`](SOURCES.md) records as changed in 2015. This is the decisive test and it
    passes.
 
 So **§7 does not have to write the corpus off.** The mineable-at-scale data is the
@@ -591,9 +591,9 @@ any count from it must be filtered to base-game cards before comparison.
 
 **Nothing was silently changed.** No BGG-derived value has been written into
 `data/cards_civil.json` or `data/cards_military_actions.json`; the card data remains
-resolved from the two independent 2015-edition sources in `docs/SOURCES.md`. The rule
+resolved from the two independent 2015-edition sources in [`docs/SOURCES.md`](SOURCES.md). The rule
 stands: BGG is a *third opinion*, and any disagreement gets **both** values written into
-`docs/SOURCES.md` and flagged, not quietly applied.
+[`docs/SOURCES.md`](SOURCES.md) and flagged, not quietly applied.
 - Steam guide ["TTA strategy game and some basic knowledge"](https://steamcommunity.com/sharedfiles/filedetails/?id=1367549747)
   (translated Chinese guide) — Steam pages fetch fine.
 - [Stately Play "Strategy 101: Through the Ages, Resource Edition"](https://statelyplay.com/2017/09/25/strategy-101-through-the-ages-resource-edition/).
@@ -655,7 +655,7 @@ deliberately:
 | **1 — advised seat, coarse opponents** | full state snapshot + ranked candidate list + move played at every one of *our* decisions; opponents reported only as the cheap visible fields (card taken, culture, science, strength, new techs/wonders) | ~1.5–2× | Win rate and score margin of *our bot* vs the app AI; our bot's decisions in real (non-self-play) positions; override rate. **This is the tier to actually run.** |
 | **2 — full transcription** | every opponent action replayed through the engine as a real move, so the app AI's *policy* is captured | ~3×, and needs new code | Move-level agreement/disagreement with the app AI: the disagreement catalogue. Worth doing for a handful of games only. |
 
-Tier 2 needs a change the advisor deliberately does not have today: `advisor/README.md`
+Tier 2 needs a change the advisor deliberately does not have today: [`advisor/README.md`](../advisor/README.md)
 is explicit that "**Opponents' turns are *not* replayed as moves; you report the
 result**". Someone would have to add an opponent-move entry path that pushes rival
 actions through `engine.actions` — which also means resolving the hidden information the
@@ -825,7 +825,7 @@ app's Hard AI, using the existing advisor as the mirror.**
 
 Why that and not the newly-unblocked BGO corpus, which is bigger and cheaper per unit:
 
-- **We have no anchor at all right now.** Every number in `docs/HEURISTICS.md` and every
+- **We have no anchor at all right now.** Every number in [`docs/HEURISTICS.md`](HEURISTICS.md) and every
   champion in `experiments/` is measured against *ourselves*. A population that shares a
   blind spot cannot detect it, and no amount of extra self-play fixes that. §6 is the
   only option on this list that produces an *externally calibrated* verdict. BGO
@@ -875,7 +875,7 @@ could change the recommendation, so do it first.
 
 1. **§3** — pure research, no code. Cheapest remaining unknown and it gates §7.
 2. ~~**The BGG ToS click**~~ **DONE** — both files downloaded and cross-checked; see the
-   BGG section of `docs/SOURCES.md`. Civil side: **confirmation**, no change. Military
+   BGG section of [`docs/SOURCES.md`](SOURCES.md). Civil side: **confirmation**, no change. Military
    side: the `.xls`'s second sheet found a **real bug in our own data** (Age I tactics are
    1 copy where BGA, TTS and BGG all say 2). **Not applied — awaiting the user**, because
    it changes deck composition and the hill climb is live. That is now the top open item.

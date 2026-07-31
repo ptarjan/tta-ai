@@ -1,6 +1,6 @@
 # The search-backed loop: what replaced the Stage-2 null
 
-Read `docs/NEURAL_LOOP_NULL.md` first. In one line: the old loop's improvement
+Read [`docs/NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) first. In one line: the old loop's improvement
 operator was the identity, so 41 hours of compute re-measured a single no-op 74
 times. This document is the replacement, and the measurements that justify it.
 
@@ -24,7 +24,7 @@ Search-only A/B, **the same checkpoint on both sides**, 2p, seat-balanced,
 The null is 0.500 and the mirror control sits on it. Even width=1 -- which adds
 no lookahead at all, only the horizon equalisation and the quiescence -- is
 worth ~26 points. This reproduces, on a neural evaluator, the ladder
-`docs/BOT_ARCHITECTURE.md` 3 measured on linear weights (width=1 at 62.3%,
+[`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) 3 measured on linear weights (width=1 at 62.3%,
 width=8 at 85.1% against the same vector at 1 ply).
 
 ### The same checkpoint against external opponents, 1 ply vs beam
@@ -37,7 +37,7 @@ wrapped around an unchanged `checkpoints/best.pt`.
 | linear champion | 0.095 +/- 0.041 | **0.425 +/- 0.155** | 125.5 vs 133.4 |
 | BookBot | 0.150 +/- 0.050 | **0.550 +/- 0.156** | 112.2 vs 110.0 |
 
-The 1-ply column is from `docs/NEURAL_EVAL.md` (n=200); the beam column is n=40,
+The 1-ply column is from [`docs/NEURAL_EVAL.md`](NEURAL_EVAL.md) (n=200); the beam column is n=40,
 at the *cheap* width -- width=8 is stronger still. A net that lost to BookBot
 five times in six now splits with it, and one that won 1 game in 10 against the
 linear champion now takes four.
@@ -79,9 +79,9 @@ The old pipeline trained it on pre-move, mid-turn, non-determinized states.
   subclasses `PlanBot`, hooks `_score`, and records the champion's own scored
   positions.
 * The target is the mover's eventual **final culture margin** --
-  `docs/BEHAVIOUR_CLONE.md` 6.4: "the objective has to contain the outcome."
+  [`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md) 6.4: "the objective has to contain the outcome."
 
-This is `docs/BOT_ARCHITECTURE.md` 3b's own prescription, previously untested:
+This is [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) 3b's own prescription, previously untested:
 "PlanBot evaluates only at turn boundaries, which is exactly the distribution a
 boundary-only fit is trained on ... the fitted vector and PlanBot are a matched
 pair by construction."
@@ -90,7 +90,7 @@ It also fixes a leak the old anchor had. `neural_rankdata.py` applied candidate
 moves to the **real** state, with no determinization at all. `tools/infoleak.py`
 measured, on `WeightedBot` at 2p, that 94.9% of `end_turn` candidates draw a
 card -- a draw count, not proof of a leak by itself, since it is unaffected by
-whether the root is determinized (docs/AGGRESSION_RATE.md §9a). But
+whether the root is determinized ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a). But
 `neural_rankdata.py`'s undeterminized root makes the two coincide the same way
 they do for `WeightedBot`: a draw there really is the real next civil card.
 The BookBot anchor was therefore teaching the net to price the most-evaluated
@@ -100,7 +100,7 @@ Every child in both new generators is applied to a determinized copy.
 ## 4. Stage 0: bootstrap from the strongest bot on record
 
 `plan:champion_2p` scores 189.0 culture in a 2p mirror and 213.4 against BookBot
-(`docs/BEHAVIOUR_CLONE.md`, `docs/LEAGUE_OBJECTIVE.md`) against a human mean of
+([`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md), [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)) against a human mean of
 159.5 -- the only configuration in this repo that clears the human. The value
 net had never seen a single state that bot evaluates.
 
@@ -115,12 +115,12 @@ net whose 1-ply lineage the beam does not share. Stage 0 is skipped once
 
 | what | old | new | why |
 |---|---|---|---|
-| val split | first 15% of files, sorted | random **row** split | the sorted split silently made val a single data *source*; every reported number was a distribution-shift artefact (`NEURAL_LOOP_NULL.md` 3.2) |
+| val split | first 15% of files, sorted | random **row** split | the sorted split silently made val a single data *source*; every reported number was a distribution-shift artefact ([`NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) 3.2) |
 | checkpoint selection | `--select pair` | `--select last` | `pair` was an agreement-with-incumbent meter, so selecting on it picked epoch 1 every time |
 | epoch 0 | never printed | printed, plus a `VACUITY` line | the defect was invisible because nobody measured the untrained warm-start on its own targets |
 | vacuity guard | none | hard warning at pair_acc >= 0.95 | a target the model already satisfies must fail loudly, not silently burn 41 hours |
 | gate | 1-ply vs 1-ply | **beam vs beam** | gate the policy that actually ships |
-| yardstick | vs linear champion at 1 ply | vs `plan:champion,width=8` | compare at equal search, per `docs/TRANSFER_TEST.md` |
+| yardstick | vs linear champion at 1 ply | vs `plan:champion,width=8` | compare at equal search, per [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) |
 | yardstick cadence | promotion iterations only | **every iteration** | iterations 3, 6 and 8 have `-` in `vs_planchamp`; an anchor curve with holes in it cannot show a trend |
 | yardstick n | 72 | **240** | at n=72 the CI is +-0.11 and every anchor score ever recorded sits inside every other one's interval |
 | missing measurement | written as `win=0.0000` | written as `-`, never a number | a reference run that completed zero games was recorded as a 0-72 defeat (row 4 of `curve.tsv`) |
@@ -140,9 +140,9 @@ not move: 0.4028, 0.3472, 0.3680, 0.3958, all n=72, all inside each other's
 +-0.11 intervals, culture margin -16.2, -21.1, -18.7, -14.1. The loop was
 measuring its own reflection.
 
-This is the same treadmill `docs/CULTURE_GAP.md` describes for the weight hill
+This is the same treadmill [`docs/CULTURE_GAP.md`](CULTURE_GAP.md) describes for the weight hill
 climb, and it is *not* the v1 failure -- v1 never promoted at all
-(`docs/NEURAL_LOOP_NULL.md`). v2 promotes and gets stronger against itself. The
+([`docs/NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md)). v2 promotes and gets stronger against itself. The
 question this change answers is whether it is getting stronger against anything
 else.
 
@@ -152,8 +152,8 @@ against the champion:
 
 | stage | vs the champion | source |
 |---|---|---|
-| MC value regression, 1 ply | 0.070 +- 0.035 | `docs/NEURAL_EVAL.md` §results |
-| pairwise ranking, 1 ply | 0.095 +- 0.041 | `docs/NEURAL_EVAL.md` Stage 1b |
+| MC value regression, 1 ply | 0.070 +- 0.035 | [`docs/NEURAL_EVAL.md`](NEURAL_EVAL.md) §results |
+| pairwise ranking, 1 ply | 0.095 +- 0.041 | [`docs/NEURAL_EVAL.md`](NEURAL_EVAL.md) Stage 1b |
 | this loop, beam vs beam | ~0.40 +- 0.11 | `loop2/curve.tsv`, iterations 1-7 |
 
 0.095 -> ~0.40 is most of the distance from "not a contender" to "a contender",
@@ -181,7 +181,7 @@ the band is ~0.045, so a candidate has to give up about 4.5pp on the anchor
 before arm B blocks it -- wide enough to pass real progress, narrow enough that
 seven iterations of sideways drift do not all pass.
 
-This respects `NEURAL_LOOP_NULL.md` 5.3 ("the gate -- head-to-head play under
+This respects [`NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) 5.3 ("the gate -- head-to-head play under
 the search that will actually be deployed -- is the only promotion criterion").
 Arm B is also head-to-head play under the deployed search; it is a second
 opponent, not a second *kind* of evidence. No offline metric gates anything.

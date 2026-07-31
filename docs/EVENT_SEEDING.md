@@ -1,7 +1,7 @@
 # Events, aggressions, pacts and wars: what the evaluator can see (2026-07-29)
 
 This is the opponent-interactive lane of the card-pricing work that
-`docs/CARD_BLINDNESS.md` opened: **55 events, 11 aggressions, 10 pacts, 3
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) opened: **55 events, 11 aggressions, 10 pacts, 3
 wars.** The census in that document counts all 79 of them as "has a dropped
 key" and all 79 as "zero visible gain", and the brief for this work was to
 price them.
@@ -84,7 +84,7 @@ if effects.defense_strength(state, p, q) >= effects.attack_strength(state, p, q)
 and `_h_aggression` pushes a `kind="defense"` pending decision for the
 defender. A 1-ply `WeightedBot` scoring that trial state sees the spent
 military action and the lost card and none of the loot — the failure
-`docs/AGGRESSION_FIX.md` documents. `QuiescentBot` fixes it structurally by
+[`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) documents. `QuiescentBot` fixes it structurally by
 draining the pending stack with real picks and scoring the quiet position, and
 `weighted.features` only applies `deferred_credit` `if state.pending`, so a
 candidate that reached quiescence is scored with the hand-priced credit
@@ -94,7 +94,7 @@ board, against this defender's actual holdings.**
 **Wars (3).** `quiescent.war_value(state, idx, weights, ctx)` calls
 `events.resolve_war` on a scratch copy and returns the evaluation of the
 resolved position; `PlanBot._leaf` substitutes it whenever
-`war_declared_by_me is not None`. `docs/BOT_ARCHITECTURE.md` states the
+`war_declared_by_me is not None`. [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) states the
 principle directly: *"Do not hand-price wars. `events.resolve_war` is a pure
 deterministic function... Reuse that."*
 
@@ -138,9 +138,9 @@ events.reveal_current_event(state, rng)
 Three points of culture, one fewer military card, and the top of the current
 pile is revealed and resolved. `weighted.py` has no reference to
 `future_events`, `current_events`, `past_events` or `seeded_by`, and
-`docs/INFORMATION_AUDIT.md` independently confirms that deleting all three
+[`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) independently confirms that deleting all three
 "moves no feature". So the plant is a small guaranteed gain and therefore the
-*default* politics move — `docs/AGGRESSION_FIX.md` shows
+*default* politics move — [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md) shows
 `('prepare_event', 'Rebellion')` beating every attack in its probe for exactly
 this reason.
 
@@ -150,7 +150,7 @@ wonder by age, 2 per content worker above ten, a 10/0 ranking on strength
 rating — either when it is revealed or, if it never is, at game end via
 `events.evaluate_final_events`.
 
-`docs/RULES_SPEC.md` §12.5.2 states the strategic point in one sentence:
+[`docs/RULES_SPEC.md`](RULES_SPEC.md) §12.5.2 states the strategic point in one sentence:
 
 > After the last turn: evaluate ALL Age III events remaining in the current
 > AND future events decks... **Preparing an Age III event guarantees its
@@ -183,7 +183,7 @@ choosing at all. Nothing it can see distinguishes "Impact of Wonders" (when it
 has three wonders and the rival none) from "Impact of Science" (when the rival
 leads science): both are one Age III military card and three culture.
 
-**This is not the trap `docs/CARD_BLINDNESS.md` §5.1 warns about.** That
+**This is not the trap [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#51-finish-discipline-a-null-and-the-reason-is-more-interesting-than-the-null) §5.1 warns about.** That
 section's lesson is that giving a card a weight does nothing until the bot
 takes the card, and `wonder_stages_per_action`, `hand_limit` and
 `build_discount` are all dead because the champion never takes those cards.
@@ -210,7 +210,7 @@ through `_apply_player_block` and its culture is banked in `p.culture`.
 The point of the refactor is that **the forecast and the payout are the same
 code**. The fifteen scoring formulas are stated once, in the rules engine,
 where they already were. Restating them in the evaluator is precisely the
-failure mode `docs/CARD_BLINDNESS.md` is a document about, one level up:
+failure mode [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) is a document about, one level up:
 `tests/test_event_scoring.py` plays real games and asserts that the forecast
 equals the culture `evaluate_final_events` then adds.
 
@@ -326,7 +326,7 @@ bigger one by hand.
 **The 0.25 and 0.50 rows are bit-identical**, and that is worth reading
 carefully rather than as a coincidence: identical win rate, identical
 cultures, at weights differing by a factor of two. As
-`docs/CARD_BLINDNESS.md` §5.1 established for `wonder_overrun`, different
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#51-finish-discipline-a-null-and-the-reason-is-more-interesting-than-the-null) §5.1 established for `wonder_overrun`, different
 weights cannot produce identical games unless the term never changed a
 decision differently between them. So those two rows are **one experiment, not
 two independent samples**, and must not be pooled. The 1.00 row is a genuinely
@@ -350,7 +350,7 @@ resolve anything above ~2.5pp.
 |---|---|---|---|
 | `esm` 1.0 vs 0.0 | **3200 / 1600 deals** | **57.38% ± 0.91pp** (z = 15.90) | **+6.52 ± 0.34** (z = 38.1) |
 
-> **Corrected 2026-07-30** (`docs/CARD_BLINDNESS.md` §10). This row previously
+> **Corrected 2026-07-30** ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#10-the-unit-of-analysis-every-interval-in-this-project-was-computed-on-the-wrong-n) §10). This row previously
 > read **57.38% ± 1.70pp (z = 8.49)** and **+6.52 ± 1.49 (z = 8.59)**, which
 > were independent-samples intervals over 3200 *games* in a design that plays
 > 1600 *deals* twice each. Deal-clustered, ρ = −0.72: **±0.91pp, z = 15.90**
@@ -500,7 +500,7 @@ See §2. Not a gap.
 
 1. **Let the league tune the weight.** The feature ships at 0.0. Everything in
    §5 is the *frozen* champion handed better information, not a champion
-   trained with it — the same caveat `docs/CARD_BLINDNESS.md` §5 makes about
+   trained with it — the same caveat [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#5-result) §5 makes about
    itself. Note §9 of that document: changing the evaluator invalidates the
    cached pool weights, so `last_full_check` must be deleted from
    `state_2p.json` before an arm restarts on this.

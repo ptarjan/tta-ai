@@ -6,7 +6,7 @@ Nothing in `engine/` is touched by this branch; `bash tools/gate.sh` is green
 tests -q` is 393 tests OK (381 + the 12 new ones in
 `tests/test_bgo_rescore.py`).
 
-This answers proposals 1 and 2 of `docs/HUMAN_BASELINE.md`. That document's
+This answers proposals 1 and 2 of [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md). That document's
 own "What this cannot tell you" says the 84-vs-160 score comparison "is not a
 clean skill measurement… nothing here independently verifies that our
 end-of-game scoring matches BGO's." It does now.
@@ -34,7 +34,7 @@ build human numbers of them costs it 34.3 ± 7.0 margin.
 
 ## 1. Method: replay the journal, ask our engine, diff against BGO
 
-`docs/HUMAN_BASELINE.md` proposal 1 says "reconstruct one finished human
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) proposal 1 says "reconstruct one finished human
 position by hand". Hand-reconstructing one position tests one position, and a
 19-round game has ~40 actions per player, so the hand is at least as likely to
 be wrong as the engine. `tools/bgo_rescore.py` does it mechanically instead,
@@ -115,7 +115,7 @@ as reconstruction error accumulates is an engine that agrees.
 * Four replay bugs each looked like an engine bug first, and each is pinned by
   a case in `tests/test_bgo_rescore.py`: leader names truncated at the first
   word (`elects William Shakespeare Leonardo Da Vinci dies` → `William`, the
-  same failure `docs/HUMAN_BASELINE.md` records costing 39% of elections); an
+  same failure [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) records costing 39% of elections); an
   upgrade routing the worker through the unused pool and minting a yellow
   token per upgrade; `Warrior` (BGO's singular) not resolving to `Warriors`,
   923 lines in a 150-game sample, and invisible to a production check because
@@ -154,7 +154,7 @@ Plus `effects.end_of_game_bonus` (Bill Gates): **411 / 420 exact**, with no
 cleanliness filter at all.
 
 > **Read the 100% rows with §8 in hand (added 2026-07-30, see
-> `docs/SCORE_AUDIT.md`).** A percentage here is over *the inputs this corpus
+> [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md)).** A percentage here is over *the inputs this corpus
 > can produce*, and for one row that turns out to matter: **`Impact of
 > Agriculture` is 66/66 exact against an implementation that scores the wrong
 > quantity.** The card scores "the food produced by their farms"; the engine
@@ -163,7 +163,7 @@ cleanliness filter at all.
 > pact's food symbol, **every pact is removed from the game at 2 players**,
 > and this corpus is 2p only — so the two quantities are identically equal in
 > all 2,525 positions here, and no amount of this data could have separated
-> them. Five of the nine bugs `SCORE_AUDIT.md` found sit inside the four
+> them. Five of the nine bugs [`SCORE_AUDIT.md`](SCORE_AUDIT.md) found sit inside the four
 > blind spots §8 already names. The corpus is decisive exactly where it has
 > variation: it *settled* the "does an unstaffed lab pay Newton?" question
 > (7303/7600 against 7275/7600) because unstaffed labs are common in 2p play.
@@ -196,7 +196,7 @@ Reading the rows that are not 100%:
 Nothing was fixed on this branch — `tools/gate.sh` digests are unmoved on
 purpose. These are handed over as findings.
 
-> **All three are FIXED on master; see `docs/SCORE_BUGFIX.md`.** A fourth fell
+> **All three are FIXED on master; see [`docs/SCORE_BUGFIX.md`](SCORE_BUGFIX.md).** A fourth fell
 > out of fixing §3.3 (Charlie Chaplin was doubling every worker on the best
 > theater card instead of one building), and it is the only one of the four
 > that moves a rating rather than a score: fixing it took our agreement with
@@ -270,13 +270,13 @@ direction that matters for §5.
 
 All three together are worth single-digit culture per game to a typical
 position. They cannot make 84 into 160, and they do not change any conclusion
-in `docs/HUMAN_BASELINE.md` about behaviour.
+in [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) about behaviour.
 
 ---
 
 ## 4. Game length: our games are not short
 
-`docs/HUMAN_BASELINE.md` already reported this as "overlap"; it is confirmed
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) already reported this as "overlap"; it is confirmed
 on a bigger sample and it is *not* the direction a scoring bug would want.
 
 | | rounds |
@@ -300,9 +300,9 @@ explanatory work either way for the other three.
 
 ## 5. The score gap is a property of the vector, not of the engine
 
-This is the finding that reframes `docs/HUMAN_BASELINE.md` §"Bot vs human".
+This is the finding that reframes [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) §"Bot vs human".
 That document measured **one** policy: the quiescent champion at
-`quiesce:...,levels=1`. `docs/TRANSFER_TEST.md` had already established that
+`quiesce:...,levels=1`. [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) had already established that
 this vector is a *suppression* engine that scores 111-125 while holding its
 rival to 43-84, and that the 1-ply lineage vector is a *production* engine
 scoring 160-212. Nobody had run the human-corpus comparison on the second one.
@@ -334,13 +334,13 @@ Three things follow.
    whatever is suppressing wonders in our ecosystem is mostly not what is
    suppressing score.
 3. **So is the card-take profile.** 22-25 takes and 22-24% at 3 CA in all four
-   configurations, across a 75-point score range. `docs/HUMAN_BASELINE.md`
+   configurations, across a 75-point score range. [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)
    finding 2 ("a smaller civil-action budget spent impatiently") is real and
    universal in our bots — but this run gives no evidence that it is what
    costs the points, because it does not vary while score does.
 
 Two smaller notes: our reproduction of the quiescent champion's score is
-**64.7 [56.2, 72.6]** where `docs/HUMAN_BASELINE.md` reported **84.1
+**64.7 [56.2, 72.6]** where [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) reported **84.1
 [73.7, 95.2]** on n=40. Those CIs do not overlap. Different generation
 (231 vs 224) and different seeds; either the champion drifted downward on this
 axis in seven generations or one of the two samples is unlucky. It is flagged,
@@ -419,7 +419,7 @@ finding.**
   what it gains in culture it gives back in suppression: the *rival's* score
   rises by the same 16 points, because the actions went into wonders instead
   of into wars and aggressions. The league gates on `margin_share`
-  (`docs/TRANSFER_TEST.md` §5), which pays twice for a stolen point and once
+  ([`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#5-why-the-two-vectors-are-different-animals) §5), which pays twice for a stolen point and once
   for a produced one, so a change that is +21 own culture and 0 margin is
   invisible to the trainer by construction.
 
@@ -498,7 +498,7 @@ another agent's PlanBot experiments on a 6-core box.
   dose response in §6.2 is not clean (P's −10.8, −8.4, −6.1 are within noise
   of each other) and only the sign and the endpoints should be leaned on.
 * **2p only.** Nothing here was run at 3p or 4p.
-* **`docs/HUMAN_BASELINE.md`'s behavioural findings are untouched.** This
+* **[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s behavioural findings are untouched.** This
   document validates the *arithmetic* and reframes the *score* comparison. It
   does not dispute that our bots build 3-7x fewer wonders, take 10 fewer
   cards, pay 3 CA five times as often, or revolt four rounds early — every one

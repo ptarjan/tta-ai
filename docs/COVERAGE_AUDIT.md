@@ -14,7 +14,7 @@ Both turned out to be present, and a third category matters too: some things
 *should* be rare, and saying so is a real answer.
 
 The wars / aggressions / pacts / military-card / defence-strength cluster is
-another agent's (`docs/COMBAT_AUDIT.md`). Where the census touches it the
+another agent's ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)). Where the census touches it the
 numbers are reported and the analysis is handed off, not duplicated.
 
 ## What was built
@@ -314,13 +314,13 @@ real verdict and is used where it is the honest one.
 
 | mechanic | measurement | verdict |
 |---|---|---|
-| declaring a **war** | 0 taken out of 377 / 412 / 736 / 591 / 606 / 1513 legal decisions — a hard zero in all six cells | handed to `COMBAT_AUDIT.md` |
-| **aggressions** | 1–6 taken out of 300–1892 | handed to `COMBAT_AUDIT.md` |
-| **cancel a pact** | 0/1276 and 0/993 at 3p; 10/761 at 4p | handed to `COMBAT_AUDIT.md` |
+| declaring a **war** | 0 taken out of 377 / 412 / 736 / 591 / 606 / 1513 legal decisions — a hard zero in all six cells | handed to [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
+| **aggressions** | 1–6 taken out of 300–1892 | handed to [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
+| **cancel a pact** | 0/1276 and 0/993 at 3p; 10/761 at 4p | handed to [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
 | **resign** | 4p champion took it 14 times in 40 census games; in a 12-game probe 7 games contained a resignation and the resigning seat won **0 of 9**, scoring 0–25 against winners of 23–90 | **search-blind, actively harmful** — §4.1 |
 | **wonders** (finishing one) | 4p: 86 unfinished vs 13 completed over 40 games; `wonder_step` taken 103/1103. The bot passes over the best available wonder stage by a mean of **51.8 eval points** (4p, 221 samples); at 2p, where it does finish them, the gap is 22.0 and the take-rate is 26–32% | **search-blind** — §4.2 |
 | **building a farm** | 2p: **0 of 767** legal decisions, while `build:mine` on the *same* 767 decisions is 186. In 230 decisions where both were legal, the best mine outscored the best farm **230 times out of 230**, by a constant mean of 0.63 eval points | **search-blind** (linear tie-break degeneracy) — §4.3 |
-| **military unit technologies from the row** | `take:infantry` / `cavalry` / `artillery` 0.2–1% take-rate everywhere; `take:air` 0/428 and 0/483 | engine correct; search-blind, and overlaps `COMBAT_AUDIT.md` |
+| **military unit technologies from the row** | `take:infantry` / `cavalry` / `artillery` 0.2–1% take-rate everywhere; `take:air` 0/428 and 0/483 | engine correct; search-blind, and overlaps [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
 | **arenas** | `take:arena` 0/718 for the 2p champion, 3–5% elsewhere | champion-specific blind spot; `best_arena` `varying` 0.002 |
 | **labs** (2p champion only) | `take:lab` 4/1251 for the 2p champion against 100/613 for the 2p default bot — and `best_lab`, weighted **2.636**, measures `varying` = **0.000**: it never takes a lab, so the feature never moves, so the weight is free to be anything | **search-blind, self-reinforcing** |
 | **colonies** | see §3 | engine-correct; the `colonies` feature is a dead coordinate; the mechanic is starved at 2p |
@@ -396,7 +396,7 @@ in 40 games with a 32% `wonder_step` take-rate.
 **Verdict: engine-correct, search-blind.** A multi-stage investment whose whole
 payoff lands on the last step is invisible to a 1-ply linear evaluator unless
 `wonder_progress` happens to be tuned above `resource_stock`, and whether it is
-is an accident of each arm's trajectory. Hand-in-hand with `docs/DEEPER_SEARCH.md`.
+is an accident of each arm's trajectory. Hand-in-hand with [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md).
 
 ### 4.3 Farms
 
@@ -604,7 +604,7 @@ it off zero in the positive direction either.
 `NONNEG` rule is stopping the search from expressing the correction on this
 coordinate.** I have not changed the guard: whether `ca_left` should be allowed
 negative is a search-policy change that needs an n ≥ 200 A/B, and it belongs
-next to the `end_turn_bias` work in `docs/WASTED_ACTIONS.md` §6, whose
+next to the `end_turn_bias` work in [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6, whose
 DO-NOT-FIX warning I read and am not overriding. **Handed to the DEEPER_SEARCH
 agent**: this is the same 1-ply dominance they are measuring, and a deeper
 search is the fix that makes both hacks unnecessary.
@@ -644,12 +644,12 @@ each arm's own trajectory is not something 12 games can answer.
 
 ## 7. Handoffs
 
-* **wars / aggressions / pacts** → `docs/COMBAT_AUDIT.md`. From this census, for
+* **wars / aggressions / pacts** → [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md). From this census, for
   their use: `war` was declared **0 times** out of 377 / 412 / 736 / 591 / 606 /
   1513 decisions where it was legal, in every arm and for both the champions
   and the default weights. `aggression` 1–6 times out of 300–1892.
   `cancel_pact` 0/1276 and 0/993 at 3p. `offer_pact` is well used (26–65%).
-* **1-ply dominance / `end_turn_bias`** → `docs/DEEPER_SEARCH.md` agent, §6.2
+* **1-ply dominance / `end_turn_bias`** → [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) agent, §6.2
   above. Two concrete numbers for them: `end_turn_bias` flips **53.9%** of the
   2p champion's decisions, and the multi-stage wonder blindness in §4.2 is a
   textbook 1-ply failure — the whole payoff is on the last step.

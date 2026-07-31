@@ -60,7 +60,7 @@ analysis/     corpus analysis output
 The bots live in `engine/bots/`: `GreedyBot` (`__init__.py`), `WeightedBot`
 (`weighted.py`, the linear evaluator), `QuiescentBot` (`quiescent.py`),
 `PlanBot` (`plan.py`, the beam search), the book bots (`book.py`) and the
-neural family (`neural_*.py`). `docs/BOT_ROSTER.md` says what each is for.
+neural family (`neural_*.py`). [`docs/BOT_ROSTER.md`](docs/BOT_ROSTER.md) says what each is for.
 
 ---
 
@@ -110,7 +110,7 @@ moves means behaviour changed; a digest that moves *unexpectedly* is a bug the
 logs cannot show you after the fact. **Never re-derive a failing digest to make
 the gate pass.** Explain why it moved first, on a clean clone, attributing each
 moved arm to a specific cause. The derivation discipline is written down in
-`docs/PYPY.md` §9.0.
+[`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0.
 
 **Do not run any git command in a working checkout while league arms are
 running** — not `pull`, not `checkout`, not `stash`, not even `status`. It

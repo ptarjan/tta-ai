@@ -13,7 +13,7 @@ Two instruments, both new and both committed with this document:
   `interact.start_defense`).  Every tap checks `state is real` before
   recording, because the beam copies the state and calls the same functions on
   the copy; counting those would measure the search, not the game — the mistake
-  `docs/CARD_CENSUS.md` had to fix in its own discard probe (`22e6dd3`).  It
+  [`docs/CARD_CENSUS.md`](CARD_CENSUS.md) had to fix in its own discard probe (`22e6dd3`).  It
   records card **identity**, which is what "which wonder is never built" needs
   and what `tools/bgo_botmatch.py` does not carry.
 * `tools/system_report.py` — folds the blobs into the tables below.
@@ -136,7 +136,7 @@ the vectors actually run: `wonder_progress` = 2.430 (2p) / 2.643 (3p) / 0.0018
 worst — consistent.  But 3p carries a **higher** `wonder_progress` than 2p and
 completes **6.4× fewer** wonders, so `wonder_progress` alone does not predict
 the behaviour; `row_urgency` (−0.191 at 2p, **+0.160** at 3p — the wrong sign
-for a post-move residual, as `analysis/frozen/README.md` already flags) and
+for a post-move residual, as [`analysis/frozen/README.md`](../analysis/frozen/README.md) already flags) and
 `card_board_credit` (0.361 at 2p, 0.0 at 3p and 4p) differ too, and player
 count itself changes wonder competition.  **This census cannot attribute the
 2p/3p difference to any one weight and does not.**
@@ -194,12 +194,12 @@ the human rate, and at 4p the bot is *below* it.  **War is the outlier**:
 2.2× the human rate at 2p and **6.6–7.9×** at 3p/4p.  The bot wins 89% of the
 wars it declares, which humans also do, so the anomaly is purely the frequency.
 
-**Defence works now.**  `docs/AGGRESSION_RATE.md` §5 reported *"1,549 defences
+**Defence works now.**  [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#5-under-search-defence-is-reached--and-still-never-won-this-one-is-real) §5 reported *"1,549 defences
 faced, 1,104 winnable, and zero won"* and proposed `QUIET_PENDING` as the fix.
 That fix has since been flipped on — `engine/bots/pending.py:71` reads
 `QUIET_PENDING = True` — and the census measures the consequence: **48 of 69
 aggressions at 2p (70%) are held off by the defender.**  That section of
-`AGGRESSION_RATE.md` is stale; the zero is gone.
+[`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) is stale; the zero is gone.
 
 Which wars, by type:
 
@@ -272,7 +272,7 @@ lines against the same card database, with take-backs subtracted.
 **The bot plays essentially the entire game on its Age A production and Age A
 army.**  It takes 0.15 unit cards per seat-game at 2p against a human 3.84 —
 **26× under** — and 0.20 farm/mine cards against 2.52.  Both are near-zero, and
-both are the *same* defect: `docs/CARD_BLINDNESS_MILITARY.md` §1.1 shows every
+both are the *same* defect: [`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md#11-units-were-negative-not-zero) §1.1 shows every
 unit card prices to a strictly **negative** `card_potential` (−0.57 Warriors to
 −4.40 Air Forces) because `unit_strength_credit` is the gate and it is **0.0 on
 every vector this census ran** (2p live, 3p archived, 4p archived — checked).
@@ -281,7 +281,7 @@ unit in the row is invisible to the row terms as well.
 
 Label for red: **(b) UNPRICED, with the wrong sign** — the most actionable
 finding in this document.  Label for yellow: **(b)/(c)** — farms and mines are
-priced absolute-not-delta (`docs/UNCOVERED_TYPES.md` §0) and the bot substitutes
+priced absolute-not-delta ([`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md#0-summary) §0) and the bot substitutes
 blue urban buildings, which it takes 1.6× more than humans do.
 
 By age, and one exact zero:
@@ -322,7 +322,7 @@ fifteen "Impact of …" formulas are stated and the same function the evaluator
 forecasts with (`weighted.event_scoring_margin`).  Both halves are exercised.
 
 What *is* weak is the **choice** of which event to prepare, not the rate:
-`docs/CARD_CENSUS.md` §4.1 tier A #3 measures `flat` = 0.775–0.897 — at most
+[`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier A #3 measures `flat` = 0.775–0.897 — at most
 decisions every event in the hand scores identically, because `_card_yields`
 returns the empty tuple for all 55 event cards and `hand_mil_potential` is 0.0
 (2p, 4p) or 0.011 (3p).  Label **(b)**, and it is about ordering, not coverage.
@@ -382,7 +382,7 @@ Decisions per seat-game, 2p / 3p / 4p:
 | tactics copied | 0.08 | 1.29 | 1.42 | near-zero at 2p |
 
 * **Military discard is a live decision** and fires 21–29 times per seat-game.
-  The FIFO bug `docs/UNCOVERED_TYPES.md` D1 describes is fixed (`1c08790`); the
+  The FIFO bug [`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md) D1 describes is fixed (`1c08790`); the
   decision is now made by the policy at every one of those points.
 * **Defence** is covered in §3: it is reached, cards are spent, and the
   defender now wins.
@@ -391,7 +391,7 @@ Decisions per seat-game, 2p / 3p / 4p:
   it is therefore the only clean **(a)**.
 * **The three Military Bonus cards have no move handler at all.**  They are
   spendable only by the defence and colonisation machinery
-  (`docs/CARD_CENSUS.md` §4.1 tier C #9).  That is a rules-coverage question,
+  ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier C #9).  That is a rules-coverage question,
   not an evaluator one; the rulebook does not let you "play" one either, so it
   is (a)-by-design rather than a bug.
 * **Tactics are near-dead at 2p** (0.21 played, 0.08 copied per seat-game) and
@@ -409,7 +409,7 @@ Decisions per seat-game, 2p / 3p / 4p:
 Ordered by how confident the zero is.
 
 1. ~~**Buys unit technology.**~~  **FIXED 2026-07-30, see
-   `docs/UNIT_TECH_PRICING.md`.**  0.15 / 0.06 / 0.45 takes per seat-game
+   [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md).**  0.15 / 0.06 / 0.45 takes per seat-game
    against a human 3.84 / 2.79 / 3.43.  **(b)**, wrong sign: every unit priced
    to a negative `card_potential` because `unit_strength_credit` = 0.0 on all
    three vectors.  The diagnosis above is confirmed and was also found to be
@@ -455,7 +455,7 @@ And the opposite — **wildly above human**:
 
 ## Which existing documents this supersedes
 
-* **`docs/HUMAN_BASELINE.md` (2026-07-27) is materially stale on four axes.**
+* **[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) (2026-07-27) is materially stale on four axes.**
   It reports the 2p bot at 0.40 wonders completed, 1.91 stages and **84.1**
   final score against a human 156.  This census, on the current live 2p
   champion under `plan:width=2`, measures **1.53 / 5.50 / 199.8**.  The wonder
@@ -467,11 +467,11 @@ And the opposite — **wildly above human**:
   Wars "0.00 at all counts" is now 1.10–4.79 per game; aggressions "0.00" are
   1.73–2.46 per game; colony bids at 4p "0.01, still ~zero" are 2.35 per seat.
   Its pact conclusion holds.
-* **`docs/AGGRESSION_RATE.md` §5 (2026-07-30) is stale within the same day.**
+* **[`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#5-under-search-defence-is-reached--and-still-never-won-this-one-is-real) §5 (2026-07-30) is stale within the same day.**
   "1,549 defences faced … zero won" was measured with `QUIET_PENDING` off; the
   default is now `True` (`engine/bots/pending.py:71`) and 70% of 2p aggressions
   are held off.
-* **`docs/CARD_CENSUS.md` §4.1 tier A #1** ranked wonders as the archetypal
+* **[`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier A #1** ranked wonders as the archetypal
   severed pipe on the frozen 78-key champions.  On the live 2p vector the pipe
   conducts (1.53 completions/seat).  Its tier A #2 — units — is **confirmed
   intact and is now the top-ranked hole**: §5 above measures the behavioural

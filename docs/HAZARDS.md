@@ -9,7 +9,7 @@ own.  They are all here now.
 number from a dozen places in `tools/`, `tests/` and `experiments/`.  Do not
 renumber them.**  New hazards go in the later sections, which are unnumbered.
 
-Open work lives in `docs/OPEN_ITEMS.md`, not here.
+Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
 ---
 
@@ -28,13 +28,13 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
    champion's margin is threshold effects of that one hand-written family —
    `var:military` is held to 5.5% of turns at its required +3 lead and never gets
    to fight.  Beating the pool is not the same as playing well.  (Partly
-   addressed by the `hum:*` archetypes — `docs/HUMAN_BOTS.md` — whose logistic
+   addressed by the `hum:*` archetypes — [`docs/HUMAN_BOTS.md`](HUMAN_BOTS.md) — whose logistic
    gate degrades to x0.42 rather than `var:military`'s x0.18.)
 4. **Individual trained weights are not interpretable.**  Champion marginals are
    indistinguishable from a random walk (KS p=0.14-0.80) even though the same
    champion beats its own drift-siblings 0.94-0.99.  The improvement lives in
    joint structure, not in any single coordinate.  "`culture_rate_early` = 0.000"
-   is not a strategic statement.  Corollary, from `docs/OPENING_AUDIT.md`: **"the
+   is not a strategic statement.  Corollary, from [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md): **"the
    AI moved this weight, therefore it matters" is never a valid inference unless
    somebody ablated it.**  Mutations move ~19 weights at once and are accepted on
    one bundle-level test.
@@ -65,13 +65,13 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
 
 6. **A saturated pool is not a strong bot.**  Since 2026-07-29 the pool
    downweights opponents by their measured win rate and skips them in the
-   acceptance rotation (`docs/LEAGUE_POOL.md`).  Read the `[pool] informative
+   acceptance rotation ([`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md)).  Read the `[pool] informative
    ...` line: at 2p, 8 of 18 opponents are inert.  "The champion beats the pool"
    says less than it used to, not more.  If the `informative` line ever reads a
    small number **and** the `tier share` line moves, something is wrong — those
    two are independent by construction.
 7. **The training proxy is not known to track shipped strength.**
-   `docs/PROXY_GUARDRAIL.md` runs the check that says whether it does, from its
+   [`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) runs the check that says whether it does, from its
    own cron entry.  Before quoting any arm's progress as strength, run
    `python3 -m experiments.proxy_check --report` and
    `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.
@@ -120,9 +120,9 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   `experiments/frozen/champion_4p_strengthcheck.json` reproduce all 62
   informative weights of that vector bit-for-bit.  **Every 4p number measured
   against them is quarantined** — they are left in place in
-  `docs/BOT_ROSTER.md`, `docs/WASTED_ACTIONS.md`, `docs/STRENGTH_CHECK.md` and
-  `docs/INFORMATION_AUDIT.md` so they stay auditable, not because they are
-  facts.  See `analysis/frozen/README.md`.
+  [`docs/BOT_ROSTER.md`](BOT_ROSTER.md), [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md), [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) and
+  [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) so they stay auditable, not because they are
+  facts.  See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 * `experiments/league_state/` holds the **live** champion and ladder.
   `experiments/champion_{2,3,4}p.json` and `experiments/league_4p/` are stale
   snapshots from an earlier run.  Confusing them once produced a false "the 4p
@@ -145,7 +145,7 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   Removing it has been measured **five separate ways** and made the bot much
   weaker every time (down to 11.0% against a 50% null).  The phantom bonus acts
   as an accidental move-quality confidence filter.  There is a standing warning
-  in the code comment; `docs/WASTED_ACTIONS.md` §6 is the measurement.  Combining
+  in the code comment; [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 is the measurement.  Combining
   the card-valuation fix with same-horizon scoring is *worse* than the card fix
   alone (39.8% +/- 6.7% vs 69.6% +/- 4.5%).
 * **The ten phase multipliers are deliberately exempt from sign clamping**
@@ -203,7 +203,7 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   null**.  Before opening a new channel onto an existing weight, ask what has
   ever constrained that weight; if the answer is "nothing", expect the first
   measurement to be a regression *of the weight*, and check it against
-  `DEFAULT_WEIGHTS`.  `docs/UNIT_TECH_PRICING.md` §5.2.
+  `DEFAULT_WEIGHTS`.  [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2.
 * **A card whose cost is priced while its gain sits at 0.0 is biased, not
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases
@@ -214,7 +214,7 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   `card_potential` at zero — the bias removed, nothing added — moved "is this
   the best card on the row" only from 1 in 437 to 20 in 437.  A card worth
   exactly nothing is still not a card worth taking, so a fix that only removes
-  the sign will read as a null.  `docs/UNIT_TECH_PRICING.md` §1c.
+  the sign will read as a null.  [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) §1c.
 * **A swap diff is exact over `Stats` and blind to everything else**, and it
   *replaces* the static table rather than supplementing it — so any key the static
   path priced that the diff cannot see is silently dropped.  Taj Mahal's blue
@@ -232,7 +232,7 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   everything.  Anyone proposing a learned evaluator in this project should be made
   to run that exact duel before claiming anything.
 * **Uniformly-positive blocks are also the signature of a systematic asymmetry.**
-  `docs/EVENT_SEEDING.md` ran a seat-bias audit for exactly this reason and found
+  [`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md) ran a seat-bias audit for exactly this reason and found
   a real ~5pp seat effect.
 * **The 94.9%-of-`end_turn` figure is a draw count, not a leak measurement.**  It
   counts candidates whose trial `apply` draws a card, on `WeightedBot`, which
@@ -358,7 +358,7 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   untouched ref.  Recovering it took a full branch audit.
 * **If two refs have diverged, neither is necessarily a superset of the other.**
   A naive diff-based apply of the "ahead-looking" branch onto master would have
-  deleted 785 lines of `docs/EXPERT_STRATEGY.md`.  Method: `git log --cherry-mark
+  deleted 785 lines of [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md).  Method: `git log --cherry-mark
   --left-right A...B` to bucket by patch-id, then re-check every "unique" commit
   by comparing **blob hashes** of the files it touched — patch-id over-reports
   across a squash — and use `git diff --stat A B` for the authoritative
@@ -398,6 +398,6 @@ absolute epoch second) has passed.  To extend a run, rewrite the deadline file.
 Log: `experiments/logs/watchdog.log`.
 
 The BGO corpus scrape referenced by the old handoff note completed and now lives
-in `sources/bgo/` — see `docs/BGO_CORPUS.md`.  The "no external anchor" item it
-carried is answered by `docs/HUMAN_BASELINE.md` and `docs/SYSTEM_COVERAGE.md`;
-the remaining open pieces of it moved to `docs/OPEN_ITEMS.md` §8.
+in `sources/bgo/` — see [`docs/BGO_CORPUS.md`](BGO_CORPUS.md).  The "no external anchor" item it
+carried is answered by [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md);
+the remaining open pieces of it moved to [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#8-measurement-and-infrastructure) §8.

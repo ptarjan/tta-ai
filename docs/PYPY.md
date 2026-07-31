@@ -11,7 +11,7 @@
 > switch/no-switch call.
 >
 > **Every gate digest quoted in this file is stale** — they have moved at least
-> eight times.  Preserve the *method* (the 9.0 rule, `docs/HAZARDS.md`), never
+> eight times.  Preserve the *method* (the 9.0 rule, [`docs/HAZARDS.md`](HAZARDS.md)), never
 > the numbers; read live values out of `tools/gate.sh`.
 
 Working log, appended to continuously.
@@ -447,7 +447,7 @@ isolates exactly that one file — and repeated twice:
 Rep-to-rep spread is under 2%, so these are real. The 4p number is the one
 that matters: the hill climbs are 4p-heavy, and **greedy 4p went 0.99 ->
 1.32 games/cpu-s, a 33% throughput gain — one third more games per CPU-second
-for free.** In `engine/PROGRESS.md` terms the greedy 4p cell moved 1.01
+for free.** In [`engine/PROGRESS.md`](../engine/PROGRESS.md) terms the greedy 4p cell moved 1.01
 (c8a70a4) -> 1.32.
 
 Why 1.33x end-to-end and not 1.55x: Amdahl. If copy were 64% of runtime, a
@@ -1866,7 +1866,7 @@ WeightedBot feature prices against `lateness()`.
 feature-grouping fix, and the new standalone `tools/coverage_census.py` /
 `tools/feature_variance.py` — is additive or reporting-only and not on the
 `perf_check` hash path (confirmed by reading each diff, not by assumption).
-`engine/actions.py`'s two changes (docs/COVERAGE_AUDIT.md Secs 2.1-2.2), both
+`engine/actions.py`'s two changes ([`docs/COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md) Secs 2.1-2.2), both
 of which **either bot's evaluation goes through** since they are in shared
 action-generation/resolution code, not a bot file:
 
@@ -1960,7 +1960,7 @@ commits). Per 9.0/9.18's rule this was **not** waved through as "probably
 fine" — both sides were reset to `52a4cb6` and every arm was re-derived from
 scratch there too. `git diff 3439b0e..52a4cb6 --stat -- engine/` confirmed the
 same two files, same byte-for-byte `weighted.py` diff; the ten intervening
-commits touch only `docs/CULTURE_GAP.md` and standalone `tools/*.py` scripts
+commits touch only [`docs/CULTURE_GAP.md`](CULTURE_GAP.md) and standalone `tools/*.py` scripts
 never imported by `engine/perf_check.py`. Master was re-checked a third time
 immediately before the gate.sh/PYPY.md commit below and had not moved again.
 
@@ -1977,7 +1977,7 @@ exactly why WNARROW and WWIDE moved and NARROW/WIDE (GreedyBot, which has no
 `allow_resign` concept and was untouched by this commit) did not.
 
 This is judged a legitimate, intended behaviour change, not a regression:
-`docs/COVERAGE_AUDIT.md` independently established that resign is a
+[`docs/COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md) independently established that resign is a
 guaranteed loss no evaluation feature can see (nothing reads the resigned
 flag; 9/12 games resigned in one 4p probe, 0 wins) — a bot that stops
 resigning is strictly better, so the digests moving is the gate doing its
@@ -2067,7 +2067,7 @@ name: a baseline that was already stale the moment it landed.
 ### 9.20 Hop 4 — the scoring bugfix (`score-bugfix`), all four arms moved and
 ### the attribution is exact
 
-`docs/SCORE_BUGFIX.md` changed four things in `engine/`, deliberately, so this
+[`docs/SCORE_BUGFIX.md`](SCORE_BUGFIX.md) changed four things in `engine/`, deliberately, so this
 is not a rebase hop (though master did move under it, to `9c8b6f5`, and all
 four were re-confirmed after rebasing -- the new `engine/bots/human/` package
 is additive and off the `perf_check` path, and moved nothing): the gate was *expected* to fail and the job was to say
@@ -2415,7 +2415,7 @@ when to distrust the instrument. Both are permanent tests, not one-off probes:
 
 9.20's lesson is that the fingerprint covers *the code paths its bots execute*,
 and `perf_check`'s bots play `DEFAULT_WEIGHTS`. A trained champion attacks far
-more (docs/DEEPER_SEARCH.md 3.1), so it reaches wars, pacts and auctions at
+more ([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md) 3.1), so it reaches wars, pacts and auctions at
 quite different rates — exactly the move classes whose journalling is hardest.
 So the same games were played under `experiments/league_state/champion_{2,3,4}p
 .json`, journal off and on, hashing the **full game log, the final scores and

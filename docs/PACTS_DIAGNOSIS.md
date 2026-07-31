@@ -154,7 +154,7 @@ the rules are implemented — but it *is* a training-distribution bug: the
 78 weights were optimised in a world where politics is "pass or seed an
 event", so any weight relating to pacts, colonies, aggression defence or
 war is untrained noise, and the derived human-facing advice in
-`docs/HEURISTICS.md` cannot say anything about the political game.
+[`docs/HEURISTICS.md`](HEURISTICS.md) cannot say anything about the political game.
 
 ## Colonies
 
@@ -242,7 +242,7 @@ The 3p champion's `colonies` weight is bit-for-bit the hand-written
 default: thousands of hill-climb generations never once moved it, because
 no game outcome ever depended on it. The 4p champion's went *negative*,
 which is pure random drift on a feature that fires ~0.02 times per game.
-Any advice in `docs/HEURISTICS.md` derived from these two coefficients is
+Any advice in [`docs/HEURISTICS.md`](HEURISTICS.md) derived from these two coefficients is
 noise, and should be marked as such.
 
 ## Recommended fixes for colonies, ranked by risk
@@ -284,7 +284,7 @@ aggressions and pacts all at once. Worth an ablation: does forcing a lower
 
 Read `engine/actions.py:240-296`, `engine/actions.py:979-1003`,
 `engine/interact.py:217-228` and `engine/interact.py:464-586` against
-`docs/RULES_SPEC.md` §5.9, §5.10, §11.1-11.5. Everything matched:
+[`docs/RULES_SPEC.md`](RULES_SPEC.md) §5.9, §5.10, §11.1-11.5. Everything matched:
 
 * pacts are gated to 3+ players (`actions.py:258`), and 2p decks drop them
   at build time via the `2p` copy counts in

@@ -1,11 +1,11 @@
 # The bot never upgrades its army, and the reason is a table that cannot say "it depends"
 
-2026-07-30.  Closes the top-ranked hole in `docs/SYSTEM_COVERAGE.md` ("What the
+2026-07-30.  Closes the top-ranked hole in [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) ("What the
 bot never does", #1).  Base game (2015), all three player counts.
 
 ## 0. The finding, and the number it is
 
-`docs/SYSTEM_COVERAGE.md` §5 measured unit-technology takes per seat-game at
+[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#5-technology-by-colour--the-biggest-structural-hole-in-the-whole-census) §5 measured unit-technology takes per seat-game at
 
 | | 2p | 3p | 4p |
 |---|---|---|---|
@@ -13,7 +13,7 @@ bot never does", #1).  Base game (2015), all three player counts.
 | human (BGO corpus) | 3.84 | 2.79 | 3.43 |
 
 — 8× to 47× under.  The bot fights the whole game with its Age A Warriors, and
-`docs/CARD_BLINDNESS_MILITARY.md` §4 measured the downstream consequence:
+[`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md#4-what-the-bot-actually-does-with-military-cards) §4 measured the downstream consequence:
 across 30 games there were **five unit workers standing on the whole table**,
 while ~29 military actions a game went into playing and copying tactics that
 could form no army at all.
@@ -70,7 +70,7 @@ champion that buys 0.39 eval points per unit of credit against a cost of 6.51,
 so **the sign flips somewhere past 16** — and every step between 0 and 16
 changes no argmax at all.  `hillclimb.mutate` perturbs by `gauss(0, s) *
 (abs(w) + 0.15)`; from 0.0 that is a flat plateau sixteen units long walked in
-steps of ~0.15.  `docs/CARD_BLINDNESS_MILITARY.md` §5.2 measured the plateau
+steps of ~0.15.  [`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md#52-which-knobs-can-change-a-game-at-all--run-this-first) §5.2 measured the plateau
 directly: **0 argmax divergences in 967 decisions at credit 1.0, one at 3.0.**
 
 So this needed reshaping, not retuning.  `tests/test_unit_pricing.py:
@@ -104,7 +104,7 @@ computed exactly:
     strength_deficit  d/ds = -1 while behind, 0 ahead
     strength_lead     d/ds = +1 while ahead by < 6, 0 once capped
 
-`docs/CARD_BLINDNESS_MILITARY.md` §5.1 named this — "the board expresses one
+[`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md#51-units-a-null-and-the-reason-it-cannot-be-otherwise) §5.1 named this — "the board expresses one
 point of strength through four features and `card_potential` looks up only the
 first" — and reckoned the under-count at 2.3× to 7× on the *frozen* champion.
 On the **live 2p champion it is a factor of fifteen**, and the whole of the
@@ -145,7 +145,7 @@ what a hill climb answers better than an argument.
 ### 3.4 The seam the brief warned about does not block this
 
 `hand_mil_potential` calling `card_potential` without a state was real and is
-**already fixed** (`docs/MILITARY_SEAM.md` §1 — the arguments are forwarded).
+**already fixed** ([`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md#1-hand_mil_potential-never-passed-the-board) §1 — the arguments are forwarded).
 It would not have blocked this fix in any case: **unit technologies are CIVIL
 cards.**  They arrive in the civil row and go to `hand_civil`, so they reach
 `card_potential` through `row_pressure`, `hand_potential` and
@@ -177,7 +177,7 @@ Mirror table, `plan:width=2,det=1`, same seeds, same vectors, the only
 difference being `unit_tech_credit` 0.0 → 1.0.  2p is the **live** champion
 (gen 72); 3p is the **archived pre-restart** champion (gen 1314), because
 `champion_3p.json` is gen 0 and byte-identical to `DEFAULT_WEIGHTS` — censusing
-it would measure the defaults, exactly as `SYSTEM_COVERAGE.md` says.  40 games
+it would measure the defaults, exactly as [`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) says.  40 games
 at 2p, 28 at 3p.
 
 | per seat-game | 2p before | 2p after | 2p human | 3p before | 3p after | 3p human |
@@ -216,7 +216,7 @@ measurement (both seats play the same policy), which is what §5 is for, but it
 is a warning that at 3p the army is being bought out of the culture budget.
 
 Yellow (farms/mines) falls at both counts.  It was already near zero and this
-did not touch it: that hole is `docs/UNCOVERED_TYPES.md` §0's absolute-not-
+did not touch it: that hole is [`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md#0-summary) §0's absolute-not-
 delta pricing and is a different lane.
 
 ## 5. Strength: two nulls and one severe regression, and the regression is the
@@ -279,7 +279,7 @@ mildly positive.  `DEFAULT_WEIGHTS` carries `strength` 0.35 and
 
 **This is the vector the live 3p arm actually starts from.**
 `experiments/league_state/champion_3p.json` is gen 0 and byte-identical to
-`DEFAULT_WEIGHTS` (`SYSTEM_COVERAGE.md`'s method note), as is `champion_4p`.
+`DEFAULT_WEIGHTS` ([`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s method note), as is `champion_4p`.
 So nothing in the league today is in the regime of §5.2, and the arm that is
 live and trained — 2p — is the clean null of §5.1.
 
@@ -310,7 +310,7 @@ short version:
   narrow and wide.  Expected, and predicted before the run: `DEFAULT_WEIGHTS`
   carries `unit_tech_credit` at 1.0, so every unit card in the row and in the
   civil hand prices differently for all three searching bots.
-* **Two-sided** per `docs/PYPY.md` §9.0: derived from scratch in two separate
+* **Two-sided** per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0: derived from scratch in two separate
   clones of the same commit, which agreed byte for byte on all eight arms —
   including the two that did not move.  A clean-base control on the parent
   commit reproduced every pre-change constant first.
@@ -365,7 +365,7 @@ which is trivially true when there is no credit.
    reason.**  The mechanism in §5.2 is general: a coordinate the evaluator can
    read but never has to buy is unconstrained, and it will drift.  `strength`
    was one because no card priced it.  Worth a sweep.
-4. **Tactics remain confounded with this.**  `SYSTEM_COVERAGE.md` §9 asked for
+4. **Tactics remain confounded with this.**  [`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#9-the-one-off-systems) §9 asked for
    tactics to be re-measured after the unit hole, not in parallel with it.
    Tactics played moved 1.05 → 0.88 at 2p and 0.85 → 1.02 at 3p; that is now
    measurable and was not before.

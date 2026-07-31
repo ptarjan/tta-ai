@@ -11,11 +11,11 @@ useful part.
 
 ## Why
 
-`docs/HAZARDS.md` trap 3: **every pool opponent is a BookBot subclass**, and
-`docs/TWOP_PROFILE.md` measured the consequence — `var:military` needs a +3
+[`docs/HAZARDS.md`](HAZARDS.md) trap 3: **every pool opponent is a BookBot subclass**, and
+[`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md) measured the consequence — `var:military` needs a +3
 strength lead to fire, and the champion holds it under +3 on 94.5% of turns.
 The champion does not beat that bot, it switches it off. Then
-`docs/HUMAN_BASELINE.md` and `docs/SCORE_VALIDATION.md` established that the
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) established that the
 policy this produced is not one any human plays and scores less than half what
 humans score *on a scorer verified exact against BGO*.
 
@@ -89,12 +89,12 @@ Two things to be careful with:
   measurement that war is good. §4 measures the bots, which is the clean
   version of the question.
 * **`tier3_pct` is flat at 4.3-4.7% across every segment**, exactly as
-  `docs/HUMAN_BASELINE.md` found it flat across skill. It is a universal
+  [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) found it flat across skill. It is a universal
   convention of human play, not a style axis, so no archetype varies it.
 
 **`passive` was deliberately not built.** It is the losing tail (26% against a
 50% null). A bot fitted to it would be pool decoration, which is
-`docs/HAZARDS.md` trap 2.
+[`docs/HAZARDS.md`](HAZARDS.md) trap 2.
 
 ### Does skill predict style? Yes — and against the obvious direction
 
@@ -108,7 +108,7 @@ Segment mix within each BGO level, 2p rows:
 | Warlord (332) | 40.7% | 25.6% | 9.0% | 16.9% | 7.8% |
 
 Stronger players fight more and take more cards; weaker players build more
-wonders. Combined with `docs/HUMAN_BASELINE.md`'s finding that Emperor games
+wonders. Combined with [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s finding that Emperor games
 *score lower* than Prince games, there is no clean "imitate the top tier"
 target here, so every archetype is fitted to its **whole 2p segment**, not to
 an Emperor-only slice. The brief's instruction to prefer the higher-skill
@@ -119,7 +119,7 @@ subset was checked and not followed, for that reason.
 `engine/bots/human/` — `HumanBot(VariantBot)` plus four archetypes. Technique
 (a) from the brief: statistics-targeted, fitted with `tools/human_fit.py`
 against `tools/bgo_botmatch.py`'s output in the corpus schema. Technique (b),
-behaviour cloning, was **not attempted**: `docs/HUMAN_BASELINE.md` already
+behaviour cloning, was **not attempted**: [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) already
 records that the card row is never printed in the journals, so the state at
 the decision that matters most — which card did they pass up, and at what
 price — is not reconstructible. That is a fact about the corpus, not a
@@ -157,7 +157,7 @@ candidates, and it ends its turn. Measured at 2p:
 | HumanBuilderBot | 1.31 | 32% |
 
 1.68 x 19 rounds is ~32 wasted civil actions a game. This is the same trap
-`docs/HUMAN_BASELINE.md` names as trap 2 on the analysis side, appearing on
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) names as trap 2 on the analysis side, appearing on
 the policy side. `HumanBot` gates on the row tier (`cap_on_tier`).
 
 **(b) The family buys the wrong government.** BookBot revolts to the first
@@ -168,12 +168,12 @@ at a median round of 12. Over the back eight rounds that is 12-16 extra civil
 actions. `gov_min_age` makes the human bots wait; it moves first-government
 round from 9.5-10.4 to 12.4, matching the corpus 12.0.
 
-### Fidelity: the same table `docs/HUMAN_BASELINE.md` uses
+### Fidelity: the same table [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) uses
 
 All bot columns are a mirror table, n=72 games, seeds 900+ (a different block
 from the fit's, so this is a held-out measurement). The `champion` column is
 `quiesce:champion_2p.json,levels=1`, n=40, copied from the same measurement
-`docs/HUMAN_BASELINE.md` uses. Every human bot's own `TARGET` (its corpus
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) uses. Every human bot's own `TARGET` (its corpus
 segment mean) is the `tgt` column. **Bold = the bot; the point is the bold
 number's distance from the tgt beside it versus the champion's distance from
 it.**
@@ -226,7 +226,7 @@ everything (a priority-order promotion, a soft price ladder, a tier-based cap,
 `take_bias` up to 20). At 2p the row is dealt 145 cards a game across ~19
 rounds and both seats draw from it, and past ~28 takes the accept-worthy cards
 are simply not on offer when a civil action is free. Humans reach 34 partly
-via take-backs (`docs/HUMAN_BASELINE.md`: 6,786 of them, ~8% of takes,
+via take-backs ([`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md): 6,786 of them, ~8% of takes,
 reconsidered *with* full cost information) — an affordance the engine does not
 give a bot. So the ceiling here looks structural, not a knob left un-tuned,
 and it is called out rather than hidden. It still moves the family from the
@@ -235,7 +235,7 @@ champion's 22 toward the human 34, which is the direction that matters.
 ## 3. Are they real opponents?
 
 `experiments/human_strength.py`, seat-rotated and seed-paired like
-`docs/BOT_ROSTER.md`, null = 50%.
+[`docs/BOT_ROSTER.md`](BOT_ROSTER.md), null = 50%.
 
 | bot | vs book (n=120) | vs book2 (n=120) | vs champion (n=60) |
 |---|---|---|---|
@@ -249,17 +249,17 @@ Read this honestly:
 
 * **Three of the four beat both book bots convincingly** (60-75%, CIs clear of
   50%). They are above par, i.e. real gate opponents by the
-  `docs/BOT_ROSTER.md` standard, not floor filler. builder is the strongest.
+  [`docs/BOT_ROSTER.md`](BOT_ROSTER.md) standard, not floor filler. builder is the strongest.
 * **hum:warlord is a sparring partner, not a gate.** It only ties book (54%,
   CI touches 50%). Fitting it to human war rates costs it economy — it takes
   fewer cards, builds fewer wonders and scores 82 — exactly the "bought an
-  army it never converted" failure `docs/BOT_ROSTER.md` flags for the roster's
+  army it never converted" failure [`docs/BOT_ROSTER.md`](BOT_ROSTER.md) flags for the roster's
   own MilitaryBot. It earns its pool slot on **behaviour**, not strength: it
   is the only opponent in the pool that declares wars at a human rate without
   a threshold, which is the whole point.
 * **All four lose to the champion**, warlord almost totally (1.7%). This is
   the same shape as the existing roster: var:culture, the strongest variant in
-  `docs/BOT_ROSTER.md`, wins only 5% against this champion. The champion is
+  [`docs/BOT_ROSTER.md`](BOT_ROSTER.md), wins only 5% against this champion. The champion is
   strong; a pool opponent does not have to beat it to be worth training
   against — it has to be a *different, unexploitable* thing to beat, which §4
   is about. A margin of -55 to -81 culture against the champion is dense
@@ -283,7 +283,7 @@ suppression ratio is `trigger vs champion / trigger vs book`. n=30 games/cell.
 | hum:tempo | 0.027 | 0.028 | 0.009 | −5.3 | ×0.33 | 0.03 |
 | hum:wonder | 0.012 | 0.012 | 0.003 | −6.0 | ×0.22 | 0.03 |
 
-**The verdict, stated plainly.** `docs/TWOP_PROFILE.md`'s exploit reproduces
+**The verdict, stated plainly.** [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md)'s exploit reproduces
 exactly: `var:military` fires on 45-48% of its decisions against book and
 **7.9%** against the champion — a ×0.18 collapse — because the champion learns
 to hold it 3.5 points behind, and `var:military`'s gate is a hard step at +3
@@ -337,7 +337,7 @@ acceptance the way losing to book or a variant does.
   is load-bearing — like `--candidate-bot` and `--hall-dir`, the pool
   composition is **not** persisted in the state dir, so a relaunch that forgot
   the flag would keep training but against the old monoculture, with nothing
-  but the `[pool]` line to show it (`docs/HAZARDS.md` trap 5). A test pins
+  but the `[pool]` line to show it ([`docs/HAZARDS.md`](HAZARDS.md) trap 5). A test pins
   that the flag is in both files.
 
 The `[pool]` line this produces (verified from `build_pool`):

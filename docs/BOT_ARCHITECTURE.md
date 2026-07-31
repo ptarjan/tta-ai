@@ -12,10 +12,10 @@ need n>=400 and a 95% CI; anything smaller is called a lead, not a result.
 Measurement environment: Mac mini 8,1, i5-8500B, 6 physical cores, no SMT.
 CPython 3.14.6. All timings `time.process_time` under `nice -n 15`, because the
 2p training arm is live and wall clock is meaningless. `TTA_JOURNAL` **off** for
-every number here, so the copy path is the oracle (docs/PYPY.md 9.16).
+every number here, so the copy path is the oracle ([`docs/PYPY.md`](PYPY.md) 9.16).
 
 Archaeology of the 22 existing docs is **not** in this file; it has its own
-agent and its own document (`docs/OPEN_ITEMS.md §6`). Where I lean on an existing
+agent and its own document ([`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#6-the-2026-07-26-lost-work-dig) §6). Where I lean on an existing
 result I cite it with its n.
 
 ---
@@ -144,14 +144,14 @@ it.
 INHERITED and re-verified by reading the code: `apply()` returns with
 `state.pending` non-empty for `offer_pact`, aggressions, colony `bid` and
 action cards, so the trial state shows the whole cost and none of the gain.
-`docs/PACTS_DIAGNOSIS.md` proves it by exact arithmetic (the `offer_pact` delta
+[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) proves it by exact arithmetic (the `offer_pact` delta
 is exactly -1.10445 and *no other feature moves*), which makes those moves
 strictly dominated under **any** weight vector. That is not a tuning problem.
 
 `engine/bots/quiescent.py` already resolves the stack before evaluating, at a
-measured 1.16-1.29x cost (n=8 games/count, docs/DEEPER_SEARCH.md §3). Its
+measured 1.16-1.29x cost (n=8 games/count, [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#3-cost) §3). Its
 **strength was never measured** (§4/§5/§6 are still "RESULTS PENDING"; another
-agent is running that A/B now) and, per docs/PYPY.md 9.14, `QuiescentBot`
+agent is running that A/B now) and, per [`docs/PYPY.md`](PYPY.md) 9.14, `QuiescentBot`
 occupies **0% of league training seats**. So the fix exists and the trained
 champion has never seen it.
 
@@ -168,7 +168,7 @@ rival_science_rate  strength_rel  uprising
 
 Exact zeros do not arise from a multiplicative random walk; they are the
 signature of `guard_weights` clamping a search that keeps trying to push these
-*negative* (docs/CULTURE_GAP.md §12a measures the pile-up at Fisher p=0.012, and
+*negative* ([`docs/CULTURE_GAP.md`](CULTURE_GAP.md#12a-the-exactly-zero-values-are-the-weight-guards-fingerprint) §12a measures the pile-up at Fisher p=0.012, and
 §15's 300-run drift simulation shows the guard is necessary *and* sufficient for
 it). The brief's claim is confirmed and is if anything understated: it is not
 three weights, it is thirteen.
@@ -185,21 +185,21 @@ The other two are worse. `civil_actions` and `ca_left` are the *resource the
 game is metered in*, and both are pinned at zero. The mechanism is visible:
 under 1-ply greedy scoring, the CA count is an asset in the feature vector and
 every action spends one, so a positive `civil_actions` weight taxes every move
-the bot could make. Since acting is worth an enormous amount (docs/WASTED_ACTIONS.md
+the bot could make. Since acting is worth an enormous amount ([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md)
 §6 measures a pass-more-often bot at an **11.0% +/- 4.3% win rate, n=200**), the
 climb correctly learns to stop taxing action — by deleting the feature. The
 weight is not encoding strategy. It is cancelling a search artifact.
 
 `end_turn_bias` is the same thing in the open: -14.44 at gen 344 against a
--3.0 default, and docs/WASTED_ACTIONS.md §1 measures the artifact it fights at
+-3.0 default, and [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#1-the-mechanism-end_turn-is-scored-one-production-phase-ahead) §1 measures the artifact it fights at
 +12.6 evaluation points at 2p, rising to +26.3 in Age IV — a constant fighting a
 term that scales with the economy.
 
 **How much of the hill-climbing result is real?** Partly. The climb is
-demonstrably optimising *something*: `docs/OPENING_AUDIT.md` §5 measures trained
+demonstrably optimising *something*: [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md#5-is-the-hill-climb-working-at-all) §5 measures trained
 vectors well above their untrained start (n=96/cell, so a lead not a result).
-But `docs/BOT_ROSTER.md` (n=240/cell, 47,520 games) ranks the trained 2p
-champion **10th of 12** and at 1.02x par, and `docs/STRENGTH_CHECK.md` measures
+But [`docs/BOT_ROSTER.md`](BOT_ROSTER.md) (n=240/cell, 47,520 games) ranks the trained 2p
+champion **10th of 12** and at 1.02x par, and [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) measures
 a ~200-line rule-based BookBot beating it **62.9% +/- 4.7% (n=400)**. The
 honest summary is: **332+ generations of hill climbing have produced a bot that
 loses to a hand-written priority list, and a measurable fraction of its
@@ -248,7 +248,7 @@ determinized — and it was later mis-cited elsewhere in this repo (§0 bullet 5
 the M1/M2 notes below) as though it described `PlanBot`'s beam, which has
 determinized its root since it was written and for which this number is not
 evidence either way. `tools/infoleak.py --true-card`
-(docs/AGGRESSION_RATE.md §9a) is the instrument that actually distinguishes a
+([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a) is the instrument that actually distinguishes a
 leak from a draw, and it found the beam's real leak in `current_events`, a
 different pile than anything measured in this section.
 
@@ -274,7 +274,7 @@ Four completely different military hands, one identical evaluation.
 `features()` reduces the military hand to a count and a sum of age levels, so
 **`Crusades` and `Rats` are literally the same feature vector**. This is the
 exact mirror, on the military side, of the civil-hand card-identity blindness
-that docs/WASTED_ACTIONS.md §7 measured as worth **+20 points of win rate
+that [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#7-fixing-the-root-cause-instead--and-this-one-works) §7 measured as worth **+20 points of win rate
 (69.6% +/- 4.5%, n=400)** when fixed. The civil side was fixed
 (`hand_potential`); the military side was not.
 
@@ -340,7 +340,7 @@ Two readings, both blunt:
    culture margin is 0.29-0.35.
 
 **Two independent measurements landed the same night and agree.** While this was
-running, `docs/CULTURE_GAP.md` §17-18 (a different agent, a different method)
+running, [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#17-11s-fork-settled-the-shape-is-load-bearing-and-the-gate-cannot-see-it) §17-18 (a different agent, a different method)
 measured that (a) the trainer's accept test is **under-powered by ~5x in sigma**
 on the culture-rate horizon axis — a real 3.79 +/- 2.47 culture effect is 0.21
 sigma of the accept statistic at the trainer's own 48-game block, needing ~1050
@@ -377,7 +377,7 @@ discrimination than ranking two whole positions. If the evaluation cannot
 reliably rank two whole positions, its marginal preferences between
 nearly-identical positions are mostly noise, and searching harder on it
 amplifies the noise. That is not a theory: it is exactly what
-docs/WASTED_ACTIONS.md §6 measured five separate times, and §7 said so in
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 measured five separate times, and §7 said so in
 words — "what is broken is the bot's ability to tell one action from another".
 This measurement puts a number on it.
 
@@ -415,7 +415,7 @@ measured gain in this repo (`hand_potential`, +20 pts; BookBot's hand-written
 priority list, +12.9 pts over the champion) were both about **knowing what a
 card is worth**, not about looking further ahead. Every attempt so far to fix
 the horizon alone made the bot *worse* (five thresholds, two methods, n=200-400,
-docs/WASTED_ACTIONS.md §6). That is the strongest prior in this project and any
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). That is the strongest prior in this project and any
 search proposal has to survive it.
 
 ---
@@ -442,7 +442,7 @@ at one fixed horizon, on a determinized state. It attacks 2.4's items 3, 4 and
 Why this is not the `HorizonBot` that already failed at 29.8% (n=400): that bot
 rolled each *single* candidate forward through production but still chose one
 action at a time. It paid the whole cost of removing the flattery (which
-docs/WASTED_ACTIONS.md §6 shows was acting as a move-quality filter) and bought
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 shows was acting as a move-quality filter) and bought
 none of the lookahead. PlanBot only makes sense *with* the sequence search, and
 it inherits `hand_potential`, which did not exist when HorizonBot was measured.
 
@@ -484,7 +484,7 @@ win rate of **exactly 0.500**, mean culture identical to the decimal
 unbiased and the two weight loads were the same object; the effect above is not
 seating, not tie-handling and not a stale file.
 
-For scale: `docs/STRENGTH_CHECK.md` measured BookBot — the hand-written priority
+For scale: [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) measured BookBot — the hand-written priority
 list that has been beating this champion all along — at **155 mean culture**
 (n=400). PlanBot at **194.5** is well past that mark on the same metric, on the
 champion's own weights, with no strategy knowledge added at all.
@@ -511,7 +511,7 @@ multi-action lookahead adds ~23 more.** Neither alone explains the result, and
 in particular it is *not* just the removal of `end_turn_bias`.
 
 The `width=1` row is also a direct rematch of a previously-lost fight.
-`docs/WASTED_ACTIONS.md` §6 measured `HorizonBot` — same-horizon scoring, one
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 measured `HorizonBot` — same-horizon scoring, one
 action at a time — at **29.8% +/- 4.4% (n=400)**. The same idea now measures
 62.3%. What changed in between: `hand_potential` landed (so the evaluation can
 tell one card from another), pending decisions are resolved before scoring, the
@@ -546,12 +546,12 @@ game by kind (both bots on the identical champion weights):
 | mean final culture | **200.3** | 145.1 |
 
 Read that top row. **The champion attacks 0.00 times per game; PlanBot attacks
-1.67.** `docs/AGGRESSION_FIX.md` §B and `docs/CULTURE_GAP.md` §2b both proved
+1.67.** [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B and [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#2b-attacks-are-priced-at-exactly-the-cost-of-the-card-leaving-hand) §2b both proved
 that aggressions are *strictly dominated* under any weight vector at 1 ply,
 because the trial state holds the whole cost and none of the gain. PlanBot
 resolves the defender's pending decision before scoring, so the gain is visible,
 and the move becomes playable — **at the identical weights**. This is
-`docs/DEEPER_SEARCH.md` §5's never-run behaviour count, arriving from a
+[`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#5-behaviour-counts--the-mechanism-check) §5's never-run behaviour count, arriving from a
 different bot: the dominated move class is gone, and it is gone by playing the
 rules out rather than by hand-pricing anything. Colony bids move the same way
 (0.08 -> 0.50).
@@ -563,7 +563,7 @@ passes the politics phase far less often. It spends much less on tactic
 shuffling (`copy_tactic` 0.46 vs 6.92, `play_tactic` 1.67 vs 4.42) and slightly
 less on plain `build`, which is the trade: fewer units and tactic swaps, more
 economy and more wonders. Every one of those movements is in the direction
-`docs/STRENGTH_CHECK.md` said the champion was failing — "under-buys civil
+[`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) said the champion was failing — "under-buys civil
 actions, -0.9 wonders, buys military it never cashes" — arrived at
 independently. And the champion has to `defend` 0.71 times a game while PlanBot
 never does, because only one of them ever attacks.
@@ -676,7 +676,7 @@ different objective:
 * **TD(0)/TD(lambda) instead of Monte Carlo.** TD fits `V(s) ~ V(s')` along the
   trajectory, which buys *local* consistency — exactly the property needed to
   compare siblings — rather than only global calibration. This is the
-  Samuel/TD-Gammon recipe and it is precisely what `docs/EXTERNAL_AIS.md` §4d
+  Samuel/TD-Gammon recipe and it is precisely what [`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#4d-what-the-literature-says-we-should-do) §4d
   named as "arguably the single most actionable finding in this whole document"
   (Keldon's Race for the Galaxy bot). The measurement above is the ablation that
   shows the TD-versus-MC distinction is not pedantic here: it is the difference
@@ -689,7 +689,7 @@ different objective:
 
 **Cause that turned out NOT to be it.** My first reading of the 148.9 moves per
 game was that `end_turn_bias = 0.0` had left the +12.6-point `end_turn` flattery
-(docs/WASTED_ACTIONS.md §1) unopposed and the bot was simply passing. That was
+([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#1-the-mechanism-end_turn-is-scored-one-production-phase-ahead) §1) unopposed and the bot was simply passing. That was
 wrong, and it is recorded here *because* it was wrong: the short games were
 resignations, and once the ladder above restores the champion's own -14.44 the
 bot plays **longer** games than the champion (222 moves vs 216) and still scores
@@ -770,7 +770,7 @@ concentrates, so a realistic principal line is 6-10 plies. A 2p player-turn is
 2-7x less money.
 
 In a game whose payoffs land 5-15 turns out (a wonder started in round 12
-completes 59% of the time; started round 13+, 14% — docs/HEURISTICS.md, 235
+completes 59% of the time; started round 13+, 14% — [`docs/HEURISTICS.md`](HEURISTICS.md), 235
 builds over 120 games), one extra turn of depth is not where the value is. And
 at 3-4 players the scalar backup breaks: you need max^n or paranoid, and the
 opponent's reply has to be modelled by *its own* turn-level search, so the cost
@@ -793,7 +793,7 @@ the evaluator knows made the bot worse (five thresholds, two methods, n=200-400)
 current and becomes trainable. `legal_moves` is 60% of the forward model
 (MEASURED, cProfile) and recomputes every card's cost from scratch on every
 call, so an incremental generator plus the journal (1.44x measured on
-WeightedBot, docs/PYPY.md 9.15) plausibly gets 2.5-4x. 10x needs a compiled
+WeightedBot, [`docs/PYPY.md`](PYPY.md) 9.15) plausibly gets 2.5-4x. 10x needs a compiled
 core. **A 10x forward-model speedup is worth more than any algorithmic
 cleverness available here**, exactly as the brief suspected.
 
@@ -845,7 +845,7 @@ design):
   inference: the best accuracy-per-microsecond on tabular features. The risk is
   that a tree ensemble is piecewise constant, so near-identical candidate moves
   get **identical** scores and the search cannot rank them — which is precisely
-  the failure mode docs/WASTED_ACTIONS.md §7 diagnosed ("taking any card scores
+  the failure mode [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#7-fixing-the-root-cause-instead--and-this-one-works) §7 diagnosed ("taking any card scores
   ~0, and identical for every card in the row"). Use it only with a linear term
   added back for tie-breaking.
 
@@ -865,7 +865,7 @@ can see, (b) where it is called, and (c) how its coefficients are chosen.
 
 ## 5. The external anchor (Phase 4) — the cheapest credible option
 
-`docs/EXTERNAL_AIS.md` §7 recommends 10-15 logged games against the CGE app's
+[`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#7-ranking-and-recommendation) §7 recommends 10-15 logged games against the CGE app's
 Hard AI, costed at **12-18 hours of the user's time**. That is still the only
 way to get a *win rate* against a named external opponent, and its §6c power
 analysis is right that a win rate is the expensive statistic (33% -> 42% needs
@@ -879,7 +879,7 @@ There is a much cheaper anchor that nobody has costed, and it follows from
 
 Mean final culture per player is a population statistic of *how well the table
 plays*, and it needs no bot-versus-human matches at all. Our 2p champion scores
-~124 mean culture and BookBot ~155 (n=400, docs/STRENGTH_CHECK.md). If human 2p
+~124 mean culture and BookBot ~155 (n=400, [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)). If human 2p
 base-game finals average, say, 210, then both bots are far below competent human
 play and we know it for the cost of reading a few hundred game summaries. If
 they average 150, BookBot is already at human average.
@@ -888,19 +888,19 @@ This is worth doing because it answers the question the win-rate harness does
 *not*: **how strong are these bots on an absolute scale**, which is the question
 this project has never been able to answer.
 
-**Correction, landed while this was being written.** `docs/BGO_CORPUS.md`
+**Correction, landed while this was being written.** [`docs/BGO_CORPUS.md`](BGO_CORPUS.md)
 (commit `42cfdb7`) establishes that BGO's finished-games index is **not**
-readable without a login — `docs/EXTERNAL_AIS.md` §5a reached its "readable"
+readable without a login — [`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#5a-boardgaming-online-bgo--resolved-it-is-the-2015-edition-logs-are-complete-and-we-can-read-them) §5a reached its "readable"
 conclusion inside an authenticated session and that does not generalise. So BGO
 is not a free data source for either the anchor or the corpus; it is an
 account-and-consent source. That does not kill the anchor, it changes where the
 numbers should come from. In descending order of cheapness:
 
 1. **A published aggregate.** BGG threads already cited in
-   `docs/EXPERT_STRATEGY.md` reference a "30k-game data with skill-filtering"
+   [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md) reference a "30k-game data with skill-filtering"
    analysis. A published score distribution costs zero scraping, zero user time
    and zero credentials. This should be checked first.
-2. **The tournament corpus already in hand.** `docs/EXPERT_STRATEGY.md` is built
+2. **The tournament corpus already in hand.** [`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md) is built
    on 39 games from 3 Internationals and 3 Intermezzos, scored by civil actions
    spent per card. If those records carry final scores, the anchor is already
    sitting in the repo.
@@ -909,11 +909,11 @@ numbers should come from. In descending order of cheapness:
 
 There is also a weak anchor available immediately, from expert commentary
 rather than data, and it is worth stating because it points the same way:
-`docs/EXPERT_STRATEGY.md` records a competent Age III culture rate of **10-15
+[`docs/EXPERT_STRATEGY.md`](EXPERT_STRATEGY.md) records a competent Age III culture rate of **10-15
 per round** over ~6 rounds, Age III wonders at **20-35 culture each**, single
 events worth **20+**, and "it is very common to be down by **100 points** and
 still comfortably win". Against that, our 2p champion's **124** mean final
-culture and BookBot's **155** (n=400, docs/STRENGTH_CHECK.md) look like a
+culture and BookBot's **155** (n=400, [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)) look like a
 sub-competent table. That is INFERRED from prose, not measured, and it is
 exactly the kind of claim this project keeps getting burned by — but it is the
 only absolute reading available today and it is not flattering.
@@ -938,7 +938,7 @@ the user's evenings on.
 
 ### On the BGO corpus: a training corpus that does not exist
 
-The question put to me was whether `docs/EXTERNAL_AIS.md` §7 was wrong to rank
+The question put to me was whether [`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#7-ranking-and-recommendation) §7 was wrong to rank
 move-level BGO logs #6 ("defer") on the grounds that "the choice set is
 unrecoverable". The reasoning behind that objection **is** wrong in the way
 suggested: an unrecoverable choice set kills *imitation* learning, which needs
@@ -1029,7 +1029,7 @@ Written before the win rates landed, so it cannot be tuned to them.
   culture is higher than anything previously recorded here, and a deeper searcher
   is exactly the thing that finds a mispriced action. PlanBot only ever plays
   moves the harness's own `legal_moves` produced, so nothing illegal can happen,
-  but a *mispriced* legal action is not ruled out — and `docs/COMBAT_AUDIT.md`
+  but a *mispriced* legal action is not ruled out — and [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)
   found three real rules bugs on another branch the same night. The cheap check
   is a move-kind histogram against the champion (what is it doing *more* of?)
   followed by a rules read of whatever dominates. That should be run before the
@@ -1041,9 +1041,9 @@ Written before the win rates landed, so it cannot be tuned to them.
   so absolute microsecond figures may be 10-20% pessimistic. Ratios are safe.
 
 **What I did not verify.** I did not re-derive the archaeology (owned by
-`docs/OPEN_ITEMS.md §6`), the combat rules conformance (`docs/COMBAT_AUDIT.md`),
-the coverage census (`docs/COVERAGE_AUDIT.md`) or the QuiescentBot strength A/B
-(`docs/DEEPER_SEARCH.md` §4). Numbers taken from those and from the older docs
+[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#6-the-2026-07-26-lost-work-dig) §6), the combat rules conformance ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)),
+the coverage census ([`docs/COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md)) or the QuiescentBot strength A/B
+([`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#4-strength-ab) §4). Numbers taken from those and from the older docs
 are marked INHERITED with their n.
 
 ---
@@ -1057,7 +1057,7 @@ next one if it fails. Ordered by measured-evidence-per-hour, not by ambition.
 |---|---|---|---|---|
 | **M1** | **PlanBot** — turn-level beam, one horizon, determinized (has been since `PlanBot` was written; scoped to `PlanBot`/`NeuralPlanBot`/`NeuralBot` — see note below) | §2.4 items 3, 4 | **DONE at 2p: 88.6% +/- 3.1%, n=400, mirror control exactly 0.500.** Remaining: 3p/4p, and a beam-width/cost curve | built; ~16x CPU |
 | **M2** | **Military card identity** (`mil_potential`, the mirror of `hand_potential`) — SHIPPED, as `weighted.hand_mil_potential` (0.01079 on `champion_3p`) | §2.4 item 1 — the blindness MEASURED in §2.3 | n=400 A/B *and* behaviour counts (aggressions/game must leave 0) | shipped |
-| **M3** | **War / aggression features** — write `docs/AGGRESSION_FIX.md` §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
+| **M3** | **War / aggression features** — write [`docs/AGGRESSION_FIX.md`](AGGRESSION_FIX.md#b-aggressions-and-wars-confirmed-and-it-is-the-1-ply-horizon) §B's fix | §2.4 item 2 | behaviour counts + n=400 no-harm | ~1 day |
 | **M4** | **A better training objective than the hill climb** — TD(lambda) or pairwise ranking over sibling moves, NOT Monte-Carlo value regression (§3b measured that one at a 0.00 win rate) | §2.4 item 5 | fitted-vs-climbed n=400 *in the same bot*, with the lam->infinity control | pipeline built, objective needs replacing |
 | **M5** | **Engine throughput**: incremental `legal_moves` + land the journal | **first-order**: self-play is the only training data at scale, so games/cpu-s *is* the training budget (§5) | `tools/cost_census.py` re-run; target >=3x | ~2-3 days |
 | **M6** | **Nonlinear value head** (linear + crosses, then MLP) | expressiveness, once the inputs are right | holdout R2 *and* n=400 | after M2-M4 |
@@ -1070,7 +1070,7 @@ constructor default, and `experiments/arena.py` builds every `plan:`/`nplan:`
 spec with `det=1`. So "determinized" was never something M1 had to land —
 `PlanBot` has done it since it was written, and the same call reaches
 `NeuralPlanBot` and `NeuralBot`. It reaches only those three: `WeightedBot` and
-`QuiescentBot` never call `plan.determinize` (docs/AGGRESSION_RATE.md §9a.1,
+`QuiescentBot` never call `plan.determinize` ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a1-what-is-still-open-written-down-rather-than-half-done) §9a.1,
 and the hard constraint below). The row used to cite "the §2.3 leak" as
 something M1 fixes; that citation is dropped because the §2.3 number cannot
 tell whether the root was determinized at all (next paragraph).
@@ -1079,7 +1079,7 @@ tell whether the root was determinized at all (next paragraph).
 leak measurement: it counts candidates whose trial `apply` draws a card, which
 is identical whether or not the root was determinized, and `WeightedBot` never
 determinizes in the first place. `tools/infoleak.py --true-card`
-(docs/AGGRESSION_RATE.md §9a) is the instrument that can actually tell a leak
+([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a) is the instrument that can actually tell a leak
 from a draw, and it was run against the beam, not `WeightedBot`.
 
 ### M2 in detail — the military-card yield table
@@ -1107,7 +1107,7 @@ Three notes that matter for getting it right rather than merely done:
   priced rather than guessed.
 * **Gate on feasibility, not on hope.** An aggression I cannot win is worth
   nothing: it needs military actions *and* a strength edge over the target.
-  `docs/CULTURE_GAP.md` §4 measured a forced-attack oracle *losing* ground at 2p
+  [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#4-q2q4--two-counterfactuals-both-null-at-n48-read-this-before-ranking-fixes) §4 measured a forced-attack oracle *losing* ground at 2p
   precisely because the champion's strength (2.46) was below CultureBot's
   (3.35), so it forced wars it lost. Multiply the yield by a feasibility gate.
 * **Do not hand-price wars.** `events.resolve_war` is a pure deterministic
@@ -1116,7 +1116,7 @@ Three notes that matter for getting it right rather than merely done:
   it is the engine's own answer, not a constant.
 * **Clamp costs through `max(0, w)`,** exactly as `card_potential` learned to
   after the 4p `science = -6.09` inversion turned expensive cards into bargains
-  (docs/WASTED_ACTIONS.md §7). The same failure will happen here if a weight
+  ([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#7-fixing-the-root-cause-instead--and-this-one-works) §7). The same failure will happen here if a weight
   vector has an inverted military term, and seven of the champion's thirteen
   zeros are military/interaction terms.
 
@@ -1132,7 +1132,7 @@ hard constraints:
   military card and reads it by identity. M2 has shipped anyway, as
   `weighted.hand_mil_potential` (0.01079 on the live `champion_3p`): the cheat
   this bullet warned about is live in the repo today, in the two bots it was
-  never written to gate (docs/AGGRESSION_RATE.md §9a.1).
+  never written to gate ([`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a1-what-is-still-open-written-down-rather-than-half-done) §9a.1).
   The 94.9%-of-`end_turn`-candidates figure this bullet used to cite (§2.3) is
   not a leak measurement — it counts candidates that *draw*, a quantity
   determinization cannot move, and it is measured on `WeightedBot`, which
@@ -1162,7 +1162,7 @@ hard constraints:
   on** (§3b) and with an explicit control that recovers the reference vector.
 * **M4's output must not be seeded from the climbed vector.** Those 13 zeros and
   the -14.4 `end_turn_bias` are fitted to the artifacts M1 removes
-  (docs/WASTED_ACTIONS.md §11 makes the same argument about `hand_value_late`).
+  ([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#11-what-to-do-before-the-retraining-run) §11 makes the same argument about `hand_value_late`).
 * **M5 is the only stage that changes what is *possible*** rather than what is
   good, and the BGO correction (§5) promoted it: with a human corpus of a few
   hundred games rather than 178,000, self-play is the sole data source and every
@@ -1175,7 +1175,7 @@ hard constraints:
 ## 7. Is the goal reachable? A straight answer
 
 **"Beat the app AI handily": plausible, and it should be the working target.**
-`docs/EXTERNAL_AIS.md` §1 concludes — from community consensus, not
+[`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#1-the-official-cge-digital-app-steam--ios--android) §1 concludes — from community consensus, not
 measurement — that the CGE app's Hard AI is a weighting/scoring heuristic, i.e.
 **the same architectural class as `WeightedBot`**, with a ceiling around a strong
 club human. A bot that fixes the evaluation defects in §2.4 and searches a turn

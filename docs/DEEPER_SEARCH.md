@@ -13,7 +13,7 @@ measurement — see section 4.0.
 
 ## 1. The defect this is aimed at
 
-`docs/PACTS_DIAGNOSIS.md` proves it for pacts and colony bids; the argument
+[`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md) proves it for pacts and colony bids; the argument
 generalises. `WeightedBot.pick` scores a candidate by
 
 ```python
@@ -109,7 +109,7 @@ spoils the engine itself would award. It is optimistic — the defender gets a
 turn in between to build strength — and it is flagged separately
 (`WAR_LOOKAHEAD`) so the A/B can attribute its effect.
 
-### Why the undo stack (docs/PYPY.md §6) is not needed here
+### Why the undo stack ([`docs/PYPY.md`](PYPY.md#6-copy-on-write--undo-stack--full-design-writeup-and-gono-go) §6) is not needed here
 
 §6 recommends Design A, a journalling `apply` with rollback, for ~1.8x. The
 `journal-undo` branch has `engine/journal.py`, `engine/statediff.py`, the
@@ -178,7 +178,7 @@ Two separate effects, and both push the same way.
    `experiments/run_league.sh` now exports `TTA_JOURNAL=1`, which buys
    `WeightedBot` 1.2–1.5x here. `journal.install()` is lazy and
    `QuiescentBot` never calls `journal.begin` — it holds several live trial
-   states at once and must stay on `copy_state` (docs/PYPY.md 9.15) — so it
+   states at once and must stay on `copy_state` ([`docs/PYPY.md`](PYPY.md) 9.15) — so it
    gets none of it. **In the trainer's actual configuration the ratio is 1.65x
    at 2p and 2.65x at 4p, not 1.2x.** This is the honest number for any
    budgeting decision.
@@ -341,7 +341,7 @@ themselves quiescent. Use LEVELS=1.
 
 `tools/behaviour_counts.py`, extended here to count `play_action` (missing
 before), to split action cards into the 18 that order a free action and the 15
-that do not, and to record the `docs/WASTED_ACTIONS.md` civil-action numbers.
+that do not, and to record the [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md) civil-action numbers.
 **Mirror tables**: every seat runs the same bot, 120 games per cell, so these
 are "what this search does when everyone uses it", not "what it does against a
 field it out-searches".
@@ -406,7 +406,7 @@ Pact offers *fall* (6.4 → 2.9 at 3p, 16.7 → 4.8 at 4p) and colony bids *fall
 (3.7 → 2.6, 6.0 → 4.0) — while pacts live at the end are flat and colonies
 actually held **rise** (1.71 → 1.97, 2.73 → 3.02). The 1-ply bot is not
 failing to offer pacts and bid: `weighted.deferred_credit` (commit 166867d)
-already fixed that with a hand-priced constant, and `docs/PACTS_DIAGNOSIS.md`
+already fixed that with a hand-priced constant, and [`docs/PACTS_DIAGNOSIS.md`](PACTS_DIAGNOSIS.md)
 recorded the fix working. What a flat hand-priced credit cannot do is tell a
 *good* offer from a bad one, so it produces a lot of them. Quiescence plays the
 auction out and the partner's accept/refuse out, so it makes **fewer and better
@@ -422,7 +422,7 @@ Asked directly, because the live 2p champion has driven `civil_actions`,
 carries `end_turn_bias = −14.44` against a default of −3.0 — i.e. the trainer
 has spent a lot of its search budget building a bigger and bigger correction
 for `end_turn`'s production flattery (`engine/bots/weighted.py`, the DO-NOT-FIX
-block; `docs/WASTED_ACTIONS.md` §6). If quiescence removed that asymmetry the
+block; [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). If quiescence removed that asymmetry the
 correction should become unnecessary.
 
 | | 2p 1-ply | 2p quiescent | 3p 1-ply | 3p quiescent | 4p 1-ply | 4p quiescent |
@@ -452,7 +452,7 @@ The `end_turn_bias` hack must therefore stay, and the fact that the 2p champion
 has pushed it to −14.44 remains what it was: a trained weight doing the job of
 a missing search property. Note also that removing it has already been measured
 twice and made the bot *much* weaker (38.4% / 29.8% / 11.0% against a 50% null,
-`docs/WASTED_ACTIONS.md` §6), so the correction is load-bearing and is also
+[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6), so the correction is load-bearing and is also
 acting as a move-quality filter. Nothing here contradicts that; quiescence
 simply operates on a different axis.
 
@@ -520,7 +520,7 @@ The reservations, in order of seriousness:
 that has not been run: a league arm whose challenger *and* whose mirror
 opponent are both quiescent, run for long enough to produce a champion, and
 then compared with the existing 1-ply champion **on opponents held out of both
-pools**. Note that `docs/BOT_ROSTER.md` is not that comparison as it stands —
+pools**. Note that [`docs/BOT_ROSTER.md`](BOT_ROSTER.md) is not that comparison as it stands —
 `build_pool` puts `book`, `book2` and every variant into the training pool, so
 the roster measures in-distribution performance. A genuine hold-out needs at
 least one entrant excluded from training (`build_pool(exclude=...)` already
@@ -578,7 +578,7 @@ section 3.1, where the cost ratio itself turned out to be understated.
 
 `journal.install()` is lazy, and `QuiescentBot` never calls `journal.begin` —
 it holds several live trial states at once and must stay on the `copy_state`
-path (docs/PYPY.md 9.15). So with `TTA_JOURNAL=1`, which
+path ([`docs/PYPY.md`](PYPY.md) 9.15). So with `TTA_JOURNAL=1`, which
 `experiments/run_league.sh` now exports, **`WeightedBot` gets its 1.44x and
 `QuiescentBot` gets nothing**. Any cost ratio measured with the journal on is
 therefore biased against quiescence by roughly that factor; section 3's
@@ -653,10 +653,10 @@ Unknown on any human scale, and weaker than the repo's older documents claim
 in one direction and stronger in another. Both corrections matter, so both are
 given.
 
-**The old external verdict is stale.** `docs/STRENGTH_CHECK.md` reports
+**The old external verdict is stale.** [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) reports
 BookBot — a ~200-line hand-written priority list with no search, no evaluator
 and no learned weights — beating the trained champion 62.9% at 2p, and
-`docs/BOT_ROSTER.md` places the champion fifth of twelve. Both were measured
+[`docs/BOT_ROSTER.md`](BOT_ROSTER.md) places the champion fifth of twelve. Both were measured
 against the **frozen gen-222 snapshot**, before the league pool existed. The
 *current* 2p champion (gen 337) does not lose to those bots. Measured here,
 400 games each, 2p:
@@ -666,7 +666,7 @@ against the **frozen gen-222 snapshot**, before the league pool existed. The
 | champion, 1-ply | **72.1% ± 4.8%** | **51.6% ± 5.1%** |
 | champion, quiescent | **78.0% ± 4.2%** | **57.9% ± 4.8%** |
 
-So the league training in `docs/LEAGUE_TRAINING.md` did what it was for: the
+So the league training in [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) did what it was for: the
 2p champion went from losing to a rule list to beating it comfortably.
 
 **But this is no longer an external yardstick, and it should not be read as
@@ -675,7 +675,7 @@ variant *including* `culture` **into the training pool**. The champion was
 trained against these exact opponents. What the table above measures is that
 the training worked on its own distribution — a real and useful result, and
 emphatically not evidence about play against anything the pool does not
-contain. `docs/STRENGTH_CHECK.md`'s original point stands undamaged: we have
+contain. [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)'s original point stands undamaged: we have
 never measured this bot against anything outside its own training loop, and we
 have **no human benchmark at all**.
 
@@ -695,7 +695,7 @@ What can be said honestly, then:
   that never uses a whole third of the rulebook is not playing the game well,
   whatever its self-play win rate says.
 * The evaluation still cannot tell a good card from a bad one
-  (`docs/WASTED_ACTIONS.md` §6). That is a large, known, unfixed hole.
+  ([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). That is a large, known, unfixed hole.
 
 Quiescence's +5.8% / +9.5% / +16.7% is a real improvement, it replicates
 against opponents of a completely different design, and it opens a layer of the
@@ -707,7 +707,7 @@ step out of it.
 Ranked by expected value per unit of effort, most valuable first. Deeper
 classical search is deliberately last.
 
-1. **Fix the evaluation, not the search.** `docs/WASTED_ACTIONS.md` §6–7 has
+1. **Fix the evaluation, not the search.** [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6–7 has
    already localised the biggest single defect: `features()` reduces the entire
    civil hand to a count and a sum of age levels, so the evaluation **cannot
    tell a good card from a bad one**, and therefore cannot price `take` at all.
@@ -724,7 +724,7 @@ classical search is deliberately last.
    — the AlphaZero-family answer, and the only path to genuinely strong play.
    The blocker is not the model, it is throughput: a game costs 0.5–2 cpu-s in
    CPython today, so 10^5–10^6 self-play games is one to three CPU-months.
-   Realistically gated on `docs/PYPY.md` (the journal/undo work, ~1.8x, and
+   Realistically gated on [`docs/PYPY.md`](PYPY.md) (the journal/undo work, ~1.8x, and
    PyPy) or on an engine rewrite. Weeks, not days.
 3. **ISMCTS or determinized MCTS.** The textbook answer for a stochastic,
    imperfect-information, multiplayer game, and it dissolves the max^n problem

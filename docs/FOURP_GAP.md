@@ -2,7 +2,7 @@
 
 
 > **SUBJECT: a 4p lineage that has since been discarded** (2026-07-30).
-> `docs/TRAINING_RUN.md` threw away the 4p arm at gen 370 when reverting off
+> [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) threw away the 4p arm at gen 370 when reverting off
 > QuiescentBot, and the 4p arm restarted at gen 0 = `DEFAULT_WEIGHTS`.  None of
 > the specific `champion_4p` numbers here describe anything currently running.
 > What survives is the method and the general finding: the **matched-generation
@@ -10,7 +10,7 @@
 > 57.4% against the 4p arm's own vector at 27.6%, z = 9.5 paired) rules out "it
 > just needs more generations", and 4p is structurally noisier (per-game culture
 > margin sd 107.2 against 2p's 38.8, so equal resolution needs ~7.6x the games).
-> The still-unconfirmed mechanism is in `docs/OPEN_ITEMS.md` §4.
+> The still-unconfirmed mechanism is in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#4-training-league-and-objective) §4.
 
 Date: 2026-07-27. Diagnosis only — **nothing is fixed here.**
 
@@ -81,7 +81,7 @@ At 4p the per-game culture margin has a standard deviation of **91.4 points**
 points. **The 4p full-check columns cannot resolve anything smaller than a
 20-point move and must not be read generation-to-generation in either
 direction.** That is not a new class of error for this repo —
-`docs/CULTURE_GAP.md` §0 opens by correcting a brief that quoted a stale n=48
+[`docs/CULTURE_GAP.md`](CULTURE_GAP.md#0-first-the-briefs-numbers-are-one-fullcheck-stale) §0 opens by correcting a brief that quoted a stale n=48
 full check, and its §4 labels its own n=48 counterfactuals as nulls.
 
 The gate tier's *margin* column is the usable one and it tells a consistent,
@@ -180,7 +180,7 @@ logged in this run and the archived 1-ply run (704 opponent-checks):
 | +60 … +90 | 0.919 | 0.722 | 0.500 |
 
 A margin of +85 buys ~97% at 2p and ~50% at 4p, because at 4p you have to beat
-the *best* of three draws, not the mean of one. `docs/LEAGUE_TRAINING.md`
+the *best* of three draws, not the mean of one. [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md)
 already measured the extreme of this ("at 4p win share cannot tell that a bot
 with every weight set to zero is worse than the champion at all") and it is why
 the gate tier is scored on margin. So some of the apparent 2p-vs-4p
@@ -275,7 +275,7 @@ phase multiplier's own sign carries no information. The blended coefficient,
 however, **is** gauge-invariant, and no guard looks at it.
 
 Effective coefficient on the champion's own culture, by age (L values from the
-horizon calibration in `docs/CULTURE_GAP.md` §8b):
+horizon calibration in [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8b-choosing-the-constants-the-gauge-is-free-so-spend-it-on-calibration) §8b):
 
 | vector | Age A | Age I | Age II | Age III |
 |---|---|---|---|---|
@@ -339,10 +339,10 @@ weight-level lead), the defensible statement is about the *loop*, not the
 vector plays the same engine, the same 4-player rules and the same three
 BookBots and scores 57.9%. Whatever the engine does at 4p, it is not what is
 holding the 4p champion to 27.6%. (Spot-checked anyway: `engine/game.py`'s
-`SWEEP = {2: 3, 3: 2, 4: 1}` matches `docs/RULES_SPEC.md` §2 [RB p.6/8, CoL
+`SWEEP = {2: 3, 3: 2, 4: 1}` matches [`docs/RULES_SPEC.md`](RULES_SPEC.md#2-card-row-mechanics) §2 [RB p.6/8, CoL
 p.3]; `cards.civil_deck` / `military_deck` return 20/53/53/53 civil and
-10/45/50/45 military at 4p, matching `docs/RULES_SPEC.md appendix` items 2, 17 and
-18. `docs/CULTURE_GAP.md` §3 audited the war/aggression path at 4p in detail
+10/45/50/45 military at 4p, matching [`docs/RULES_SPEC.md`](RULES_SPEC.md) appendix items 2, 17 and
+18. [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#3-q3--engine-bug-check-no-bug-found-in-the-waraggression-path) §3 audited the war/aggression path at 4p in detail
 and found no engine bug; I did not re-derive it.)
 
 **Not the search architecture.** Both vectors in every comparison above were
@@ -357,7 +357,7 @@ shows up plainly the moment you point it at a non-saturated opponent, including
 at 2 players where the floor tier would still read ~100%.
 
 **Not, apparently, the specific defects the previous diagnosis found.** The
-gen-61 4p champion `docs/CULTURE_GAP.md` §2c dissected had `rival_culture` at
+gen-61 4p champion [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#2c-a-second-independent-defect-rival_culture-has-an-inverted-sign-at-4p) §2c dissected had `rival_culture` at
 +5.611 (an inverted sign worth −41 evaluation points on a 10-culture theft).
 The two-sided guard landed and the current 4p champion has `rival_culture` =
 0.000. The horizon fix (`e990920`) landed too. The gap survived both.
@@ -415,8 +415,8 @@ Why this one:
 
 Two things to be careful about, both explicit:
 
-1. **This is not the warm-start `docs/TRAINING_RUN.md` and
-   `docs/LEAGUE_TRAINING.md` forbid.** That prohibition is about
+1. **This is not the warm-start [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) and
+   [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) forbid.** That prohibition is about
    `experiments/champion_4p.json`, the pre-horizon-fix vector with
    `science = −6.089` that `arena.refuse_if_degenerate_champion` hard-refuses.
    `champion_2p.json` is the opposite: an externally validated vector at 97.5%
