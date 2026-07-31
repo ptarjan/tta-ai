@@ -215,8 +215,15 @@ deepest 4p opponent still produces a usable gradient. As the bot improves its
 margins move *toward* zero, i.e. toward the most linear part of the curve, so
 the constant does not need re-tuning as a run progresses.
 
-`--gate-metric winshare` restores the old behaviour, and `--margin-scale`
+`--objective winshare` restores the old behaviour, and `--lead-scale`
 overrides the constant.
+
+**2026-07-30:** the scored quantity is now the culture lead over the **best**
+opponent rather than the margin over the mean, and the constant is
+`LEAD_SCALE`.  The scale reasoning above is unchanged (it is a statement about
+dispersion, not about which opponent the differential is taken against) but
+the sd it is derived from was measured on the mean margin and has not been
+re-derived for the lead.  See `docs/LEAGUE_OBJECTIVE.md` §5.
 
 ### The gate veto — the aggregate is not allowed to hide a loss
 
@@ -701,6 +708,11 @@ Option 2 is the real fix and the only one that does not trade away information.
 
 Option 2 shipped: gate tiers score on `margin_share(m) = 0.5·(1+tanh(m/120))`,
 everything else stays on win share. `--gate-metric winshare` reverts.
+**SUPERSEDED 2026-07-30** — the per-tier split is gone (a weighted mean over
+rows in different units is not a number) and every tier now scores on
+`lead_share`, the lead over the *best* opponent. `docs/LEAGUE_OBJECTIVE.md`.
+The paragraphs below are kept as the record of why a dense culture signal was
+needed at all, which is unchanged.
 `arena.duel` did **not** already return what was needed — it returned only the
 run-mean `culture_a`/`culture_b`, and pairing has to happen per game, so
 `per_game_margin` was added.
