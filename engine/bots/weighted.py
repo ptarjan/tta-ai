@@ -1794,7 +1794,7 @@ def _yield_marginal(key, state, idx, w, late):
     return credit * max(0.0, feature_marginal(feat, state, idx, w, late))
 
 
-def action_value(name, state, idx, w):
+def action_value(name, state, idx, w, late=None):
     """Eval-points playing this yellow action card would be worth ON THIS BOARD.
 
     `tech_value`'s sibling, for the one civil type left on the static table,
@@ -1882,7 +1882,15 @@ def action_value(name, state, idx, w):
     if card is None:
         return 0.0
     eff = card.get("effects") or {}
-    late = lateness(state)
+    # `late` is threaded in by callers pricing several cards off one board
+    # (`_hand_total`, `hand_mil_potential`, `row_pressure`) so `lateness` is
+    # computed once per evaluation instead of once per card -- see the
+    # comment above those loops.  Must stay `lateness(state)`, NOT
+    # `lateness(state, w)`: this function has always ignored `w`'s
+    # `horizon_legacy` hatch here (unlike `tech_value`), and threading a
+    # `w`-derived value in would change that.
+    if late is None:
+        late = lateness(state)
     total = 0.0
     for k, amt in eff.items():
         if amt is True or amt is False or not isinstance(amt, (int, float)):
@@ -1903,7 +1911,7 @@ def action_value(name, state, idx, w):
     return total
 
 
-def tech_value(name, state, idx, w, dev_credit=1.0):
+def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     """Eval-points developing this technology is worth ON THIS BOARD.
 
     ONE function for all fifteen technology types, red included.  It began as
@@ -1991,7 +1999,13 @@ def tech_value(name, state, idx, w, dev_credit=1.0):
     staff, dev, sci, res = _BY.tech_upgrade(name, state, idx)
     if not (staff or dev or sci or res):
         return 0.0
-    late = lateness(state, w)
+    # `late` is threaded in by callers pricing several cards off one board
+    # (`_hand_total`, `hand_mil_potential`, `row_pressure`) so `lateness` is
+    # computed once per evaluation instead of once per card -- see the
+    # comment above those loops.  Must stay `lateness(state, w)` to match
+    # this function's own (unchanged) call.
+    if late is None:
+        late = lateness(state, w)
     net = -res * max(0.0, w.get("resource_stock", 0.0))
     for k, amt, _kind in staff:
         net += amt * feature_marginal(k, state, idx, w, late)
@@ -2005,7 +2019,8 @@ def tech_value(name, state, idx, w, dev_credit=1.0):
     return net - sci * max(0.0, w.get("science", 0.0))
 
 
-def card_potential(name, w, state=None, idx=None):
+def card_potential(name, w, state=None, idx=None, late_tech=None,
+                    late_action=None):
     """Eval-points a single card in hand would be worth if it were played.
 
     `state`/`idx` are optional and turn on board-aware pricing
@@ -2017,6 +2032,13 @@ def card_potential(name, w, state=None, idx=None):
     the two can be duelled paired, in one process, on the same deal.  Callers
     without a state (and the whole of `analysis/`) keep the old signature and
     the old answer.
+
+    `late_tech`/`late_action` are an optional pre-computed `lateness(state, w)`
+    / `lateness(state)` (note: two DIFFERENT calls -- see `tech_value` and
+    `action_value`), for a caller pricing several cards off the same board
+    (`_hand_total`, `hand_mil_potential`, `row_pressure`) so the board's
+    lateness is computed once per evaluation rather than once per card.  Both
+    default to None, which reproduces the old per-call computation exactly.
     """
     # A TECHNOLOGY is board-priced on its OWN credit, not on
     # `card_board_credit`.  Deliberately: `card_board_credit` is 0.361 on the
@@ -2040,9 +2062,9 @@ def card_potential(name, w, state=None, idx=None):
         if _is_unit(name):
             uc = w.get("unit_tech_credit", 1.0)
             if uc:
-                return uc * tech_value(name, state, idx, w, tb)
+                return uc * tech_value(name, state, idx, w, tb, late_tech)
         elif tb and _is_levelled_tech(name):
-            return tb * tech_value(name, state, idx, w)
+            return tb * tech_value(name, state, idx, w, late=late_tech)
         elif _is_action(name):
             # Same device, same reason, one type over: `action_board_credit`
             # defaults to 1.0 and is absent from every champion file, so
@@ -2052,7 +2074,7 @@ def card_potential(name, w, state=None, idx=None):
             # byte.  See `action_value`.
             ab = w.get("action_board_credit", 1.0)
             if ab:
-                return ab * action_value(name, state, idx, w)
+                return ab * action_value(name, state, idx, w, late_action)
     credit = w.get("card_rate_credit", 1.0)
     base = w.get("card_board_credit", 0.0)
     key = _board_credit_key(name)
@@ -2133,8 +2155,17 @@ def _hand_total(hand, state, idx, w):
     """
     total = 0.0
     slots = None
+    # Computed once for the whole hand rather than once per card: every card
+    # is priced on the SAME board, so `lateness(state, w)` /
+    # `lateness(state)` (the two different calls `tech_value` and
+    # `action_value` make) are each invariant across this loop.  Pure
+    # functions of `(state, w)` with no side effects and `state` not mutated
+    # between iterations, so this is exactly the value each call would have
+    # computed itself.
+    late_tech = lateness(state, w) if state is not None else None
+    late_action = lateness(state) if state is not None else None
     for n in hand:
-        v = card_potential(n, w, state, idx)
+        v = card_potential(n, w, state, idx, late_tech, late_action)
         slot = _swap_slot(n, w)
         if slot is None:
             total += v
@@ -2329,8 +2360,12 @@ def hand_mil_potential(state, idx, w):
     if not hand:
         return 0.0
     total = 0.0
+    # See `_hand_total`: one board, so `lateness` is invariant across the
+    # hand and only needs computing once.
+    late_tech = lateness(state, w)
+    late_action = lateness(state)
     for n in hand:
-        total += card_potential(n, w, state, idx)
+        total += card_potential(n, w, state, idx, late_tech, late_action)
     return total
 
 
@@ -2549,10 +2584,14 @@ def row_pressure(state, idx, w, ctx=None):
     share = w.get("rival_take_share", RIVAL_TAKE_SHARE)
     reach = None            # per-rival slot counts, built at most once
     urgency = bargain = 0.0
+    # See `_hand_total`: one board, so `lateness` is invariant across the
+    # row and only needs computing once.
+    late_tech = lateness(state, w)
+    late_action = lateness(state)
     for i, name in visible:
         if not gated(state, p, i, mine, name):
             continue
-        val = card_potential(name, w, state, idx)
+        val = card_potential(name, w, state, idx, late_tech, late_action)
         if val <= 0.0:
             continue
         nxt = i - slide
