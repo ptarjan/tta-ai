@@ -200,7 +200,12 @@ class TestColonyEffects(unittest.TestCase):
         actions.apply(st, ("bid_pass",))                  # P2 out
         self.assertEqual(st.decider(), 0)                 # back to P0, not P1
         actions.apply(st, ("bid_pass",))                  # P0 out -> P1 wins
-        self.assertFalse(st.pending)
+        # winning the auction does not end the decision: §11.3 hands the
+        # winner the choice of WHICH units make up the force it now owes
+        self.assertEqual(st.pending[-1]["kind"], "colonize")
+        self.assertEqual(st.decider(), 1)
+        while st.pending:
+            actions.apply(st, actions.legal_moves(st)[0])
         self.assertIn("Wealthy Territory (I)", st.players[1].colonies)
 
     def test_the_sacrificed_units_form_armies_for_the_force(self):
@@ -255,8 +260,23 @@ class TestColonyForceRules(unittest.TestCase):
         p.techs["Warriors"].workers = 2
         effects.invalidate(st, p)
         before = p.techs["Warriors"].workers
+        bonus = next(c["name"] for c in C.db().cards
+                     if c["type"] == "bonus" and c["age"] == "I")
+        p.hand_military = [bonus]                 # colonization value alone
         interact.colonize(st, p, "Vast Territory (I)", 1)
+        pend = st.pending[-1]
+        # the mandatory unit had only one possible identity, so it needed no
+        # decision; what is left to decide is whether to spend more
+        self.assertEqual(pend["kind"], "colonize")
+        self.assertEqual(pend["units"], ["Warriors"])
+        # and there is no route to `send_done` from a force holding no unit,
+        # even though the bonus card's colonization value would cover the bid
+        empty = dict(pend, units=[], bonuses=[bonus],
+                     pool=["Warriors", "Warriors"], bpool=[])
+        self.assertNotIn(("send_done",), interact._colonize_moves(st, empty))
+        actions.apply(st, ("send_done",))
         self.assertEqual(p.techs["Warriors"].workers, before - 1)
+        self.assertEqual(p.hand_military, [bonus])   # the card was not spent
 
 
 if __name__ == "__main__":

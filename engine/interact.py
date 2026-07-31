@@ -18,6 +18,9 @@ Decision kinds:
 ``choice``   options are JSON values; moves are ``("choose", i)``
 ``auction``  moves are ``("bid", n)`` / ``("bid_pass",)``
 ``defense``  moves are ``("defend", card)`` / ``("defend_done",)``
+``colonize`` moves are ``("send_unit", tech)`` / ``("send_bonus", card)`` /
+             ``("send_done",)`` -- the auction winner builds the force it
+             sacrifices (RULES_SPEC 11.3)
 """
 from __future__ import annotations
 
@@ -59,6 +62,8 @@ def pending_moves(state):
             for n in sorted(set(d.hand_military)):
                 out.append(("defend", n))
         return out
+    if kind == "colonize":
+        return _colonize_moves(state, pend)
     raise ValueError(f"unknown pending decision {pend!r}")
 
 
@@ -72,6 +77,8 @@ def apply_pending(state, move, rng=None):
         _auction_move(state, pend, move, rng)
     elif kind in ("defend", "defend_done"):
         _defense_move(state, pend, move, rng)
+    elif kind in ("send_unit", "send_bonus", "send_done"):
+        _colonize_move(state, pend, move, rng)
     else:
         raise ValueError(f"unknown pending move {move!r}")
     run_queue(state, rng)
@@ -808,33 +815,124 @@ def _auction_move(state, pend, move, rng):
 
 
 def colonize(state, p, name, bid, rng=None):
-    """Pay a force of at least `bid` and take the colony (§11.3-11.5)."""
-    units, bonuses = _build_force(state, p, bid)
-    for n in units:                       # §11.4 tokens go to the yellow bank
-        p.techs[n].workers -= 1
+    """The auction winner sacrifices a force of at least `bid` (§11.3-11.5).
+
+    RULES_SPEC 11.3 fixes only the FLOOR on the sacrifice -- "printed strength
+    of the sacrificed military units (>= 1 unit mandatory, even if other
+    bonuses would cover the bid)" plus armies, plus reusable ship icons, plus
+    "the colonization value (bottom half) of ANY NUMBER of military bonus cards
+    played" -- and §11.2 fixes only that the winner "MUST colonize (no backing
+    out), forming a force >= their final bid".  WHICH units and WHICH bonus
+    cards make up that force is the player's decision, and it is a real one:
+    a unit is permanent strength and a worker, a bonus card is a consumable
+    that is also worth +2/+4/+6 defence if kept, and the two are traded off
+    against each other every time.
+
+    This used to be `_build_force`, a fixed greedy rule inside the engine
+    (weakest unit, then bonus cards cheapest-first, then more units), so the
+    engine took the choice away from the player -- the one clean rules-level
+    defect in the coverage census.  It is now a pending decision like every
+    other (module docstring), resolved by `_colonize_move`.
+
+    Single-move prefixes are auto-resolved, exactly as `push_choice(auto=True)`
+    does for a one-option `choice`: while the force so far admits only ONE
+    legal continuation there is nothing to decide, so no decision is offered.
+    That is not a shortcut, it is the definition of "no choice" -- and it is
+    why the common shape (one unit type, no bonus cards) never reaches a bot.
+
+    EACH COMMITMENT IS PAID WHEN IT IS MADE, not in a lump at `send_done`.
+    That is a deliberate choice and it is what makes the decision answerable:
+    a bot prices a candidate move by applying it to a trial state one ply
+    deep, so a `send_unit` that only appended a name to a dict would cost
+    *nothing* an evaluator can see, while `send_done` carried the entire bill.
+    Every 1-ply bot then reads "commit another unit" as free and "send the
+    force" as expensive, and procrastinates until the pool is empty.  That is
+    not hypothetical: GreedyBot sacrificed its whole five-unit army for a
+    force of 3 the first time this was written the other way
+    (`tests/test_colony_sacrifice_choice.py::test_nobody_wastes_the_whole_army`
+    is that regression, pinned).  It is the same shape as the `bid`-scores-
+    exactly-like-`bid_pass` bug that `weighted.deferred_credit` exists to
+    paper over; here the honest fix was available, so the cost is real at the
+    moment it is incurred and no bot needs to know anything special.  The end
+    state is identical either way -- §11.4's tokens still land in the yellow
+    bank and §11.6's cards still reach the discard before any territory draw.
+    """
+    units, bonuses = unit_pool(p), bonus_pool(p)
+    if not units:
+        # Unreachable from an auction: `start_auction` only admits players
+        # with `max_force > 0` and §11.2 caps a bid at the bidder's own
+        # `max_force`.  Loud, because the alternative is pushing a decision
+        # with no legal moves, which hangs a bot instead of naming the bug.
+        raise ValueError(f"P{p.idx} must colonize {name} with no units")
+    pend = {"kind": "colonize", "player": p.idx, "card": name, "bid": bid,
+            "units": [], "bonuses": [], "pool": units, "bpool": bonuses}
+    journal.touch(state.pending).append(pend)
+    _colonize_auto(state, pend, rng)
+
+
+def _colonize_auto(state, pend, rng):
+    """Play out every step of the force that has only one legal answer."""
+    while state.pending and state.pending[-1] is pend:
+        moves = _colonize_moves(state, pend)
+        if len(moves) != 1:
+            return
+        _colonize_step(state, pend, moves[0], rng)
+
+
+def _colonize_moves(state, pend):
+    """§11.3 choices, ordered so a `moves[0]` bot reproduces the old greedy.
+
+    `unit_pool` is sorted weakest-first and `bonus_pool` cheapest-first, so
+    "the mandatory unit, then bonus cards, then more units, and stop as soon
+    as the bid is met" is exactly what the deleted `_build_force` did.
+    """
+    p = state.players[pend["player"]]
+    out = []
+    if pend["units"] and force_value(
+            state, p, pend["units"], pend["bonuses"]) >= pend["bid"]:
+        out.append(("send_done",))
+    units = [("send_unit", n) for n in _distinct(pend["pool"])]
+    if not pend["units"]:                 # §11.3: at least one unit, always
+        return out + units
+    return out + [("send_bonus", n) for n in _distinct(pend["bpool"])] + units
+
+
+def _distinct(names):
+    """Order-preserving de-duplication: two copies of one card are one move."""
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _colonize_move(state, pend, move, rng):
+    _colonize_step(state, pend, move, rng)
+    _colonize_auto(state, pend, rng)
+
+
+def _colonize_step(state, pend, move, rng):
+    """One commitment, paid immediately (see `colonize`), or the send."""
+    p = state.players[pend["player"]]
+    name = move[1] if len(move) > 1 else None
+    if move[0] == "send_unit":             # §11.4 token to the YELLOW BANK
+        journal.touch(pend["pool"]).remove(name)
+        journal.touch(pend["units"]).append(name)
+        p.techs[name].workers -= 1
         p.yellow_bank += 1
-    for n in bonuses:                     # §11.6 discarded before any draw
-        journal.touch(p.hand_military).remove(n)
-        economy.discard_military(state, n)
-    effects.invalidate(state, p)
-    state.emit(f"P{p.idx} colonized {name} with force {bid}")
-    gain_colony(state, p, name, rng)
-
-
-def _build_force(state, p, bid):
-    """Cheapest-ish sacrifice reaching `bid`: bonus cards before units."""
-    units = unit_pool(p)
-    bonuses = bonus_pool(p)
-    chosen_u = [units.pop(0)]             # §11.3 at least one unit
-    chosen_b = []
-    while force_value(state, p, chosen_u, chosen_b) < bid:
-        if bonuses:
-            chosen_b.append(bonuses.pop(0))
-        elif units:
-            chosen_u.append(units.pop(0))
-        else:
-            break
-    return chosen_u, chosen_b
+        effects.invalidate(state, p)
+        return
+    if move[0] == "send_bonus":            # §11.6 discarded before any draw
+        journal.touch(pend["bpool"]).remove(name)
+        journal.touch(pend["bonuses"]).append(name)
+        journal.touch(p.hand_military).remove(name)
+        economy.discard_military(state, name)
+        effects.invalidate(state, p)
+        return
+    journal.touch(state.pending).pop()
+    state.emit(f"P{p.idx} colonized {pend['card']} with force {pend['bid']}")
+    gain_colony(state, p, pend["card"], rng)
 
 
 def gain_colony(state, p, name, rng=None):

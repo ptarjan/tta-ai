@@ -731,6 +731,8 @@ class BookBot:
             return self._auction(state, p, ctx, pend, moves)
         if kind == "defense":
             return self._defense(state, p, ctx, pend, moves)
+        if kind == "colonize":
+            return self._colonize(state, p, ctx, pend, moves)
         return moves[0]
 
     def _choice(self, state, p, ctx, pend, moves):
@@ -904,6 +906,28 @@ class BookBot:
             if v > best_v:
                 best, best_v = mv, v
         return best if best is not None else ("defend_done",)
+
+    def _colonize(self, state, p, ctx, pend, moves):
+        """Build the colonization force out of the cheapest things you own.
+
+        RULES_SPEC 11.3 lets the winner choose; the ranking here is the one
+        the engine used to hard-code, made explicit as a POLICY so it can be
+        argued with: stop the moment the bid is met (every extra unit is
+        permanent strength thrown away); pay the mandatory unit with the
+        weakest unit; and close the remaining gap with bonus CARDS before
+        further units, because a card is a consumable and a unit is not.
+        `interact._colonize_moves` already emits the moves in that order --
+        weakest unit first, then cheapest bonus card -- so the choice is
+        `moves[0]`, but it is spelled out rather than inherited so a change
+        to that ordering cannot silently change this bot's policy.
+        """
+        if ("send_done",) in moves:
+            return ("send_done",)
+        bonuses = [m for m in moves if m[0] == "send_bonus"]
+        if bonuses:
+            return bonuses[0]
+        units = [m for m in moves if m[0] == "send_unit"]
+        return units[0] if units else moves[0]
 
 
 # --------------------------------------------------------------- the hybrid

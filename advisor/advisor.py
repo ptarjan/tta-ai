@@ -187,6 +187,12 @@ def _describe(state, move, board=None):
         return f"ADD '{move[1]}' to your defence"
     if kind == "defend_done":
         return "DEFENCE DONE (play no more military cards)"
+    if kind == "send_unit":
+        return f"SACRIFICE a '{move[1]}' unit to the colonization force"
+    if kind == "send_bonus":
+        return f"PLAY '{move[1]}' for its colonization value"
+    if kind == "send_done":
+        return "FORCE COMPLETE (send it and take the colony)"
     return " ".join(str(x) for x in move)
 
 
@@ -339,6 +345,7 @@ MOVE_ALIASES = {
     "agg": "aggression", "attack": "aggression",
     "war": "war", "pact": "offer_pact", "event": "prepare_event",
     "choose": "choose", "bid": "bid", "defend": "defend",
+    "send": "send_unit", "sacrifice": "send_unit", "ship": "send_bonus",
 }
 
 

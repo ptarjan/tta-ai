@@ -639,6 +639,11 @@ class TestColonization(unittest.TestCase):
         res = p0.resources
         interact.start_auction(st, "Wealthy Territory (I)", 0)
         actions.apply(st, ("bid", 1))
+        # two Warriors for a bid of 1: one covers it, and whether to throw a
+        # second one in as well is the §11.3 decision the winner now owns
+        self.assertEqual(st.pending[-1]["kind"], "colonize")
+        self.assertEqual(st.pending[-1]["units"], ["Warriors"])
+        actions.apply(st, ("send_done",))
         self.assertFalse(st.pending)
         self.assertIn("Wealthy Territory (I)", p0.colonies)
         self.assertEqual(p0.workers_free, free)          # NOT to the pool
