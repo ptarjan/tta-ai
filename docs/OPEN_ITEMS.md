@@ -283,7 +283,26 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     papers over, and it is worth asking whether that one could be fixed the
     same honest way.  Pinned by
     `tests/test_colony_sacrifice_choice.py::test_nobody_wastes_the_whole_army`.
-17. **Zero Age IV card takes at every player count** (260/260 seat-games).
+17. ~~**Zero Age IV card takes at every player count** (260/260 seat-games).~~
+    **CLOSED 2026-07-31 — NOT A DEFECT.  There are no Age IV cards.**  The
+    corpus holds 33 / 65 / 75 / 63 cards for ages A / I / II / III and
+    **zero** for IV, and `engine/game.py:_advance_age` sets
+    `state.civil_deck = []` and `state.military_deck = []` on entering IV.
+    Age IV is a real phase of the base game — it is the age the game ends in —
+    but no cards are dealt during it, so 260/260 seat-games taking none is
+    correct play against an empty deck, not blindness.  This item was measured
+    correctly and interpreted wrongly: a take rate of zero was read as a
+    pricing failure without checking that the denominator was zero too.
+    Guarded by `tests/test_age_iv_empty.py` so it cannot be re-raised, and so
+    that shipping an Age IV card without deck support fails a test.
+
+    The reason it was raisable at all is this section's recurring bug class,
+    *"in this list but not this one"*: `engine/cards.py` declares
+    `AGES = ["A", "I", "II", "III", "IV"]`, the card data supplies four of
+    those five, and until now **nothing failed when the two disagreed** — so
+    the audit had no way to distinguish "priced at zero" from "does not
+    exist".  Any future census that reports a zero rate should state its
+    denominator before it is believed.
 18. **`ca_left` is a genuine 1-ply pass-asymmetry artefact** (`end_turn` always
     has the highest `ca_left` of any candidate, 165/165 measured, mean +2.95)
     that the `NONNEG` guard stops the search correcting.  Deliberately unchanged;
