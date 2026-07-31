@@ -780,3 +780,118 @@ The single most important entry is #22.*
   human opponent.
 * **The `has-unit` branch** is 9 lines and still needs its 3p/4p A/B before it
   earns a merge.  See §6 item 1.
+
+
+## 9. The coordinate registry — dead coordinates the ratchet is holding
+
+*Opened 2026-07-30 by `tests/test_coordinate_registry.py`.  Every item here is
+an entry in that file's `KNOWN_DEAD` allow-list; closing one means DELETING its
+entry, and the test fails if you close it without.  Full explanation in
+`docs/COORDINATE_REGISTRY.md`.*
+
+### 9.1 Priced through a coordinate `evaluate` never pays
+
+* **`gov_action_cost` — FOUND BY THE NEW TEST, and it is the `free_civil_action`
+  bug still alive one card type over.**  `board_yields` prices the civil-action
+  pool a revolution burns at `gov_action_cost`; `features()` does not emit that
+  key, so `evaluate` never pays it — while it *does* emit `civil_actions`, which
+  is the same quantity in the same units.  The fix is the same one `5ab4943`
+  applied to action cards: price it at the marginal `evaluate` itself uses.
+  Not applied here because it moves the six evaluator fingerprint digests and
+  belongs in its own commit with its own attribution — **and because which
+  coordinate is right is not obvious and getting it wrong is worse than leaving
+  it listed.**  `_govern` reads `burned = state_stats(state, p).civil_actions`,
+  the full per-turn ALLOTMENT, which `features()` calls `civil_actions`
+  (weight 2.0); but what `actions._h_revolution` actually destroys is
+  `p.civil_actions`, the actions REMAINING this turn, which `features()` calls
+  `ca_left` (weight 0.05) — a 40x difference in what the card is worth.
+  Decide that before writing the patch.
+* **Retire the static action table.**  `free_civil_action`, `resource_discount`
+  and `restricted_resources` are dead only on the *static* path now — the live
+  board path stopped using them in `5ab4943` — but `_card_yields` still emits
+  them, so `action_board_credit = 0.0` or any caller with no board falls back
+  onto coordinates nothing can produce a gradient for.  Two of them are visibly
+  random-walking on the live champions as a result: `mutate` scatters onto them
+  and no game can pull them back.
+* **`defense_bonus`** has no board mirror by construction (a Military Bonus
+  card's defence is worth something *because* it is still in hand).  It is also
+  the only coordinate the three bonus cards have, which is why the whole `bonus`
+  class is invisible.  One defect, two symptoms.
+
+### 9.2 Four whole card classes are invisible to `row_pressure`
+
+`tactic` (15/15), `pact` (10/10), `aggression` (10/11) and `war` (3/3) price at
+**exactly 0.0 with every credit at 1.0**, so `row_pressure`'s `val <= 0.0` skip
+makes them unreachable.  `_card_yields` has no mapping for a tactic's strength
+table, a one-shot steal has no printed production, and `pacts` /
+`pact_blocks_attack` are *board* features nothing maps a pact in hand onto.
+
+It costs nothing **today** only because `hand_mil_potential` is 0.0 on every
+live champion — but that is the same "inert, so nobody noticed" that hid
+`unit_strength_credit`.  The moment the league prices the military hand, four of
+the game's card types are invisible to it.  Pricing the military hand is the
+single largest item on this list.
+
+### 9.3 Declared state fields the engine never writes
+
+Dead in **both** representations at once — the linear evaluator cannot see them
+and they are permanently-constant neural-net inputs.
+
+* **`state.current_events_age` — FOUND BY THE NEW TEST.**  Declared, written by
+  nothing, and read in exactly one place: `neural_encode`'s third age one-hot.
+  So five encoding slots are frozen on age `A` for the life of every game.  Same
+  shape as `scoring_events`, which was already recorded here.
+* **`PlayerState.caesar_double_politics_used` — FOUND BY THE NEW TEST.**
+  Referenced nowhere else in the repo, so Julius Caesar's once-per-turn double
+  politics is either unimplemented or implemented without its guard.  **Check
+  this against the rules before deleting the field** — it may be a missing rule
+  rather than a dead field.
+* **`PlayerState.used_leader_ability` — FOUND BY THE NEW TEST.**  The generic
+  once-per-game/turn leader flag; every leader that needs one carries its own
+  instead.  Probably safe to delete.
+* **`PlayerState.culture_rate_extra` / `science_rate_extra`.**  Both are *read*
+  by `effects.compute` (`s.culture += p.culture_rate_extra`) and written by
+  nothing, so event-granted per-turn culture and science are channels that exist
+  and are always zero.
+* `state.scoring_events` and `PlayerState.destroyed_wonders` were already
+  recorded in §7; they are now machine-checked.
+
+### 9.4 Coordinates the league has never climbed
+
+`wonder_stages_left`, `wonder_turns_to_finish`, `wonder_stages_per_action` and
+`wonder_overrun` are 0.0 on every committed vector; `build_discount`,
+`colonize_bonus`, `event_scoring_margin`, `hand_swap_extra` and
+`hand_mil_potential` are 0.0 on every live champion.  All were deliberately
+seeded at 0.0 so trained vectors were unchanged when they landed, and the league
+was then meant to price them.  It has not.
+
+`wonder_overrun` is doubly dead: the weight is 0.0 **and** the feature is
+exactly 0.0 on every corpus state, so neither half can wake the other.  Worth a
+separate look — a feature that never fires is a bug in the feature, not in the
+weight.
+
+### 9.5 Things the bot never does, so nothing can price them
+
+* **The bot never builds an arena.**  `best_arena` is exactly 0.0 on every
+  corpus state in the linear evaluator *and* constant in the neural encoding —
+  two independent instruments over two independent representations agreeing.
+* **Self-play never reaches discontent.**  `discontent` and the `uprising` flag
+  are constant zeros in the encoding for every seat.  The unhappiness channel is
+  four encoding slots and one whole feature group that no game exercises.
+
+### 9.6 The encoder's constant inputs
+
+`_ROW_COST[i] / 3.0` is a positional constant, so all 13 row-cost slots are
+compile-time constants the net absorbs into its bias.  Harmless, but they are 13
+inputs that can never carry a bit; the cost only becomes informative *relative
+to what is in the slot*.
+
+### 9.7 Not guarded, and stated so nobody assumes it is
+
+`docs/COORDINATE_REGISTRY.md` §10 lists what the invariant does **not** cover:
+name-based AST call graphs miss dispatch through variables; neural checkpoint
+files are a fifth registry nobody checks; `experiments/summarize.GROUPS` lists
+coordinates by name and a key rotting out of it silently stops being rescaled,
+which is the same bug class and is not guarded.
+
+---
