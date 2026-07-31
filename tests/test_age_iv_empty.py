@@ -2,14 +2,21 @@
 
 `engine/cards.py` declares five ages; the card corpus supplies four of them.
 That disagreement is legitimate -- the base game genuinely deals no cards in
-Age IV, which is simply the age the game ends in -- but until 2026-07-31
-nothing failed when the two lists diverged, and a census duly reported "zero
-Age IV card takes at every player count, 260/260 seat-games" as a pricing
-defect (OPEN_ITEMS 2.17).  The take rate was real.  The denominator was zero.
+Age IV, which is simply the age the game ends in -- but nothing failed when the
+two lists diverged, so "Age IV" could quietly mean a phase in one place and a
+(nonexistent) card cohort in another.
 
-These tests pin the invariant from both sides, so that:
+READ THIS BEFORE CITING THESE TESTS AGAINST OPEN_ITEMS 2.17.  On 2026-07-31
+that item -- "zero Age IV card takes, 260/260 seat-games" -- was briefly closed
+as a false defect on the strength of these assertions.  That was wrong.  The
+census counts takes made *during the Age IV phase*, and `_advance_age` empties
+the *deck*, not the *row*: leftover Age III cards stay on the row and taking
+one is legal.  Humans take 1.6-1.8 of them and the bot takes zero, so the item
+is open.  An empty deck does not imply an empty denominator.
 
-  * nobody re-raises an empty take rate as blindness, and
+What these tests do pin, and all they pin:
+
+  * Age IV is declared as an age and supplies no cards, from both sides; and
   * adding an Age IV card without teaching `_advance_age` to deal it fails
     here rather than silently producing a deck the engine throws away.
 """
