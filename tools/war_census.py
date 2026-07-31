@@ -247,143 +247,58 @@ def _record_decision(state, idx, w, moves, scored, chosen, feat_by_mv=None):
     _emit(rec)
 
 
-# --------------------------------------------------------- PlanBot (2p)
+# ---------------------------------------------------------------- plumbing
+#
+# There is no `pick()` monkeypatch here any more.  The recording call lives
+# inside the real `PlanBot.pick` / `QuiescentBot.pick`, behind
+# `engine.census.ENABLED`, so there is no hand-copy of the search to drift
+# out of sync with the search.  This module is now only the recorder plus a
+# driver.
 
-def _install_plan_hook():
-    """Replace ``PlanBot.pick`` with a byte-for-byte copy plus one recording
-    call.  See module docstring for the fidelity argument."""
-    orig = _plan.PlanBot.pick
-
-    def pick(self, state, moves):
-        if len(moves) == 1:
-            return moves[0]
-        me = state.decider()
-        w = self.weights
-        try:
-            ctx = rival_context(state, me)
-        except Exception:
-            ctx = dict(_plan._NO_CTX)
-        if _plan.pending.not_my_turn(state, me):
-            root = _plan.pending.prepare_root(
-                self, state, _plan.copy_state, _plan.determinize, self.rng)
-            return _plan.pending.fallback_pick(
-                self, state,
-                plain=lambda: self._one_ply(root, moves, me, w, ctx),
-                quiet=lambda: self._one_ply_quiet(root, moves, me, w, ctx))
-        totals = {mv: 0.0 for mv in moves}
-        seen = {mv: 0 for mv in moves}
-        drng = random.Random(state.seed * 7919 + state.turn * 31 + me)
-        for _s in range(self.samples):
-            root = _plan.copy_state(state)
-            if self.determinize:
-                _plan.determinize(root, drng)
-            best = self._beam(root, moves, me, w, ctx)
-            for mv, v in best.items():
-                totals[mv] += v
-                seen[mv] += 1
-        scored = [(totals[mv] / seen[mv], mv) for mv in moves if seen[mv]]
-        if not scored:
-            return moves[0]
-        chosen = max(scored, key=lambda t: t[0])[1]
-        _record_decision(state, me, w, moves,
-                          [(mv, v) for v, mv in scored], chosen)
-        return chosen
-
-    _plan.PlanBot.pick = pick
-    return orig
+record_decision = _record_decision
 
 
-# ------------------------------------------------------ QuiescentBot (3p)
+def open_sink_for_process(dest):
+    """Point the recorder at `<dest>/census-<pid>.jsonl`, append mode.
 
-def _install_quiescent_hook():
-    orig = _quies.QuiescentBot.pick
-
-    def pick(self, state, moves):
-        if len(moves) == 1:
-            return moves[0]
-        idx = state.decider()
-        try:
-            root_ctx = rival_context(state, idx)
-        except Exception:
-            root_ctx = _quies._NO_CTX
-        w = self.weights
-        end_bias = w.get("end_turn_bias", 0.0)
-        st = self.stats
-        st["decisions"] += 1
-        box = [self.MAX_NODES]
-        depth = self.MAX_DEPTH
-        levels = self.LEVELS
-        if _quies.USE_JOURNAL:
-            # Not instrumented (module docstring); behaviour is untouched.
-            return self._pick_journalled(state, moves, idx, root_ctx, w,
-                                         end_bias, box, depth, levels)
-        best, best_val = None, None
-        scored = []
-        feat_by_mv = {}
-        want_feat = bool({mv[0] for mv in moves} & set(TACTIC_KINDS))
-        for mv in moves:
-            st["candidates"] += 1
-            trial = _quies.copy_state(state)
-            try:
-                _quies.actions.apply(trial, mv, _quies._fresh(2 * levels + 1))
-            except Exception:
-                continue
-            ctx = root_ctx
-            if levels > 0 and trial.pending:
-                st["quiesced"] += 1
-                before = box[0]
-                quiet = _quies._resolve(trial, w, end_bias, levels - 1, box,
-                                        depth)
-                st["qnodes"] += before - box[0]
-                if not quiet:
-                    st["truncated"] += 1
-                try:
-                    ctx = rival_context(trial, idx, root_ctx.get("root_row"))
-                except Exception:
-                    ctx = root_ctx
-            try:
-                f = features(trial, idx, ctx, w) if want_feat else None
-                val = evaluate(trial, idx, w, ctx, f=f)
-            except Exception:
-                continue
-            if self.WAR_LOOKAHEAD and mv[0] == "war":
-                wv = _quies._war_value(trial, idx, w, ctx)
-                if wv is not None:
-                    val = wv
-                    # war_value resolves on ITS OWN scratch copy; `f` above no
-                    # longer corresponds to the returned score, so drop it
-                    # rather than record a mismatched feature diff.
-                    f = None
-            if mv[0] == "end_turn":
-                val += end_bias
-            scored.append((mv, val))
-            if f is not None:
-                feat_by_mv[mv] = f
-            if best_val is None or val > best_val:
-                best, best_val = mv, val
-        if best is None:
-            best = self.rng.choice(moves)
-        _record_decision(state, idx, w, moves, scored, best, feat_by_mv)
-        return best
-
-    _quies.QuiescentBot.pick = pick
-    return orig
+    Per-pid because the league runs its arms in parallel out of one tree; a
+    shared handle would interleave partial lines from different games into
+    unparseable JSON.  Line-buffered so a killed arm still leaves valid
+    records behind -- arms are restarted routinely and losing the tail of
+    every run to buffering would quietly bias the sample toward whatever
+    happens early in a game.
+    """
+    global _OUT
+    if _OUT is not None:
+        return _OUT
+    os.makedirs(dest, exist_ok=True)
+    _OUT = open(os.path.join(dest, "census-%d.jsonl" % os.getpid()),
+                "a", buffering=1)
+    return _OUT
 
 
 def run(spec_text, players, games, out_path, seed0=9000):
+    """Offline driver: same recorder, explicit sink, census forced on."""
     global _OUT
+    from engine import census
     from experiments import arena
     spec = arena.load_spec(spec_text)
-    _install_plan_hook()
-    _install_quiescent_hook()
+    census.ENABLED = True
+    census._loaded = True
+    census._impl = record_decision
     from engine import game
-    with open(out_path, "w") as fh:
-        _OUT = fh
-        for g in range(games):
-            seed = seed0 + g
-            bots = [arena.make_bot(spec, seed * 131 + i) for i in range(players)]
-            game.play_game(bots, num_players=players, seed=seed)
-    _OUT = None
+    try:
+        with open(out_path, "w") as fh:
+            _OUT = fh
+            for g in range(games):
+                seed = seed0 + g
+                bots = [arena.make_bot(spec, seed * 131 + i)
+                        for i in range(players)]
+                game.play_game(bots, num_players=players, seed=seed)
+    finally:
+        _OUT = None
+        census.ENABLED = False
+        census._impl = None
 
 
 def main(argv=None):

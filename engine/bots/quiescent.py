@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import random
 
-from .. import actions, journal
+from .. import actions, census, journal
 from .fastcopy import copy_state
 from .trial import USE_JOURNAL
 from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
@@ -362,6 +362,7 @@ class QuiescentBot:
             return self._pick_journalled(state, moves, idx, root_ctx, w,
                                          end_bias, box, depth, levels)
         best, best_val = None, None
+        cscored = [] if census.ENABLED else None
         for mv in moves:
             st["candidates"] += 1
             trial = copy_state(state)
@@ -392,10 +393,15 @@ class QuiescentBot:
                     val = wv
             if mv[0] == "end_turn":
                 val += end_bias
+            if cscored is not None:
+                cscored.append((mv, val))
             if best_val is None or val > best_val:
                 best, best_val = mv, val
         if best is None:
             return self.rng.choice(moves)
+        if cscored is not None:
+            # After the decision, return value discarded: cannot alter play.
+            census.record(state, idx, w, moves, cscored, best)
         return best
 
     def _pick_journalled(self, state, moves, idx, root_ctx, w, end_bias,

@@ -74,7 +74,7 @@ from __future__ import annotations
 
 import random
 
-from .. import actions, cards, journal
+from .. import actions, cards, census, journal
 from . import pending
 from .fastcopy import copy_state
 from .quiescent import war_value
@@ -291,7 +291,12 @@ class PlanBot:
         scored = [(totals[mv] / seen[mv], mv) for mv in moves if seen[mv]]
         if not scored:
             return moves[0]
-        return max(scored, key=lambda t: t[0])[1]
+        chosen = max(scored, key=lambda t: t[0])[1]
+        if census.ENABLED:
+            # After the decision, return value discarded: cannot alter play.
+            census.record(state, me, w, moves,
+                          [(mv, v) for v, mv in scored], chosen)
+        return chosen
 
     def _one_ply_quiet(self, state, moves, me, w, ctx):
         """`_one_ply`, but drain the pending stack before scoring.
