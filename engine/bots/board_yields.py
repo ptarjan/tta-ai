@@ -109,10 +109,11 @@ module exists to fix.
 """
 from __future__ import annotations
 
-from .. import cards as C, economy, effects
+from .. import actions as A, cards as C, economy, effects
+from ..state import TechCard
 
-__all__ = ["board_yields", "board_choices", "SWAP_TYPES", "SINGLE_SLOT",
-           "BOARD_PRICED"]
+__all__ = ["board_yields", "board_choices", "unit_upgrade", "SWAP_TYPES",
+           "SINGLE_SLOT", "BOARD_PRICED"]
 
 _DB = C.db()
 
@@ -552,6 +553,120 @@ def _wonder_cost(state, p, name, out):
     stages = _DB.get(name).get("stages") or []
     if stages:
         out.append(("resource_stock", -float(sum(stages)), _COST))
+
+
+# ------------------------------------------------- unit technologies
+#
+# A unit technology is NOT a swap card and is not priced by `board_yields`
+# below; it gets its own entry point because the question it answers is a
+# different one and the answer is not a `Stats` field of a card you play.
+#
+# WHY IT NEEDS THE BOARD AT ALL.  The static table in `weighted._card_yields`
+# prices a unit as "develop it and build ONE FRESH unit": full `techCost` in
+# science, full `buildCost` in resources, the printed per-worker `strength`
+# back.  That is internally consistent and it is not what the engine offers.
+# Every player starts the game with a Warriors worker (`game.START_TECHS`),
+# so the move that is actually on the table is `("upgrade", lo, hi)` -- it
+# costs the DIFFERENCE of the two build costs (`actions.upgrade_cost`) and it
+# pays the DIFFERENCE of the two strengths, on every worker you move.  Pricing
+# the fresh build instead over-charges the resources (5 for Riflemen where the
+# upgrade from Warriors costs 3) and mis-states the gain, and neither error is
+# expressible as a constant: both depend on what you already have developed
+# and on how many workers are standing on it.
+#
+# WHAT IS DERIVED AND WHAT IS CHOSEN.  Everything here is derived:
+#
+#   * the strength delta is an `effects.compute` diff, so it is exact and it
+#     picks up the things a per-card table cannot -- Great Wall's
+#     `strengthPerInfantry` when the upgrade changes the unit TYPE, the tactic
+#     army re-forming under `army_strength`, the rating clamp at zero;
+#   * the resources are `actions.upgrade_cost`, the function the engine
+#     charges the player with;
+#   * the science is `effects.tech_cost`, likewise.
+#
+# The one modelling statement is "move ALL of them or none", and it is not a
+# guess: the trade is linear in the number of workers moved, so its optimum is
+# at an endpoint.  `weighted.unit_tech_value` takes that max; this function
+# reports the all-of-them end of it.
+
+
+_UNIT_CACHE = {}
+_UNIT_CACHE_MAX = 200_000
+
+
+def _unit_workers(p):
+    """[(tech name, workers)] for every unit technology carrying a worker."""
+    type_of = _DB.type_by_name
+    return [(n, t.workers) for n, t in p.techs.items()
+            if t.workers and type_of.get(n) in C.UNIT_TYPES]
+
+
+def _with_unit(state, p, name, workers):
+    """`effects.compute` with `name` developed and `workers` workers on it.
+
+    The same `try/finally` discipline as `_swapped`, and the same reason: a
+    raise here would leave the player holding a technology they never
+    developed.  `p.techs` is REBOUND to a new dict rather than mutated, so a
+    journal watching the original mapping never sees a write.
+    """
+    old = p.techs
+    type_of = _DB.type_by_name
+    new = {}
+    for n, t in old.items():
+        if t.workers and type_of.get(n) in C.UNIT_TYPES:
+            new[n] = TechCard(n, workers=0, stored=t.stored)
+        else:
+            new[n] = t
+    new[name] = TechCard(name, workers=workers)
+    p.techs = new
+    try:
+        return effects.compute(state, p)
+    finally:
+        p.techs = old
+
+
+def unit_upgrade(name, state, idx):
+    """(strength gained, science cost, resource cost) for a unit technology.
+
+    "Develop `name`, then move every unit worker I have onto it."  Returns
+    `(0.0, 0.0, 0.0)` for a card that is not a unit technology, or one the
+    player has already developed (it cannot be developed twice, so the card is
+    dead in hand and worth exactly nothing -- not a cost, and not a gain).
+
+    Memoised on `(name, effects.stats_key(state, p))` for the same reason
+    `_stats_delta` is, and on the same key: `stats_key` carries the invariant
+    that it names every field `compute` reads, and it already includes the
+    per-technology worker counts this function moves.
+    """
+    if _DB.type_by_name.get(name) not in C.UNIT_TYPES:
+        return 0.0, 0.0, 0.0
+    p = state.players[idx]
+    if name in p.techs:
+        return 0.0, 0.0, 0.0
+    key = (name, effects.stats_key(state, p))
+    hit = _UNIT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    sci = effects.tech_cost(state, p, name) or 0
+    held = _unit_workers(p)
+    workers = sum(n for _, n in held)
+    if workers:
+        before = effects.state_stats(state, p)
+        after = _with_unit(state, p, name, workers)
+        gained = float(after.strength - before.strength)
+        res = float(sum(k * A.upgrade_cost(state, p, lo, name)
+                        for lo, k in held))
+    else:
+        # Nobody to move.  Developing the technology is legal and buys no
+        # strength at all until a unit is built, and building one is its own
+        # decision with its own price -- so this is a science cost and
+        # nothing else, which is the honest answer rather than a floor.
+        gained = res = 0.0
+    out = (gained, float(sci), res)
+    if len(_UNIT_CACHE) >= _UNIT_CACHE_MAX:
+        _UNIT_CACHE.clear()
+    _UNIT_CACHE[key] = out
+    return out
 
 
 # ------------------------------------------------------------- entry point

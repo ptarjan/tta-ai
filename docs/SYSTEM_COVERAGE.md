@@ -408,10 +408,17 @@ Decisions per seat-game, 2p / 3p / 4p:
 
 Ordered by how confident the zero is.
 
-1. **Buys unit technology.**  0.15 / 0.06 / 0.45 takes per seat-game against a
-   human 3.84 / 2.79 / 3.43.  **(b)**, wrong sign: every unit prices to a
-   negative `card_potential` because `unit_strength_credit` = 0.0 on all three
-   vectors.
+1. ~~**Buys unit technology.**~~  **FIXED 2026-07-30, see
+   `docs/UNIT_TECH_PRICING.md`.**  0.15 / 0.06 / 0.45 takes per seat-game
+   against a human 3.84 / 2.79 / 3.43.  **(b)**, wrong sign: every unit priced
+   to a negative `card_potential` because `unit_strength_credit` = 0.0 on all
+   three vectors.  The diagnosis above is confirmed and was also found to be
+   *incomplete*: removing the negative alone leaves a unit worth zero, and a
+   card worth zero is still not a card worth taking (that document §1c).  A
+   unit technology is now priced by a board query — the engine's own upgrade
+   cost against an `effects.compute` strength diff, valued at
+   d(`evaluate`)/d(strength) rather than at `w["strength"]`.  Re-censused on
+   the same instrument: **0.20 → 1.06 at 2p and 0.08 → 4.16 at 3p**.
 2. **Buys farms or mines.**  0.20 / 0.10 / 1.10 against a human 2.52 / 2.47 /
    2.72.  **(b)/(c)**.
 3. **Takes any card in Age IV.**  0.00 in 260 seat-games, all three counts,

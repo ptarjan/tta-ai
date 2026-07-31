@@ -432,10 +432,31 @@ class TestTheCreditGateIsExact(unittest.TestCase):
     byte-for-byte, or the A/B in docs/CARD_BLINDNESS.md is not paired."""
 
     def test_zero_credit_is_the_static_answer_for_every_card(self):
+        """...for every card `card_board_credit` gates.
+
+        A unit technology is board-priced on `unit_tech_credit` instead and
+        is deliberately NOT gated here -- `card_board_credit` is 0.0 on the
+        3p and 4p champions, so hanging the unit fix off it would leave two of
+        the three league arms with the defect (weighted.card_potential).  The
+        next test asserts the same byte-for-byte property against the gate
+        units actually use.
+        """
         st = _played()
         w = dict(W.DEFAULT_WEIGHTS)
         self.assertEqual(w["card_board_credit"], 0.0)
         for name in C.db().by_name:
+            if W._is_unit(name):
+                continue
+            self.assertEqual(W.card_potential(name, w, st, 0),
+                             W.card_potential(name, w),
+                             name)
+
+    def test_zero_unit_credit_is_the_static_answer_for_every_unit(self):
+        st = _played()
+        w = dict(W.DEFAULT_WEIGHTS, unit_tech_credit=0.0)
+        units = [n for n in C.db().by_name if W._is_unit(n)]
+        self.assertEqual(len(units), 10)
+        for name in units:
             self.assertEqual(W.card_potential(name, w, st, 0),
                              W.card_potential(name, w),
                              name)

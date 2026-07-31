@@ -311,8 +311,48 @@ WIDE=f223cea1
 # weight: setting it to 0.0 restores master's pricing exactly, which is what
 # docs/CARD_BLINDNESS.md section 5 A/Bs against.
 # Both moved again on `military-discard`; see the block above NARROW.
-WNARROW=f0b240da
-WWIDE=9010ec80
+#
+# ---- unit-technology board pricing (docs/UNIT_TECH_PRICING.md) -------------
+#
+# SIX of the eight arms moved -- every arm whose bot evaluates through
+# `weighted.card_potential`, and no other.  The two GreedyBot arms
+# (NARROW/WIDE) held still, which is the informative half: GreedyBot does not
+# call `card_potential` at all, so an arm of it moving would have meant the
+# change had leaked into the rules.
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   f0b240da    dc1e3bbe
+#     WWIDE     9010ec80    f401b342
+#     QNARROW   9ad67497    02f63fe7
+#     QWIDE     e83054f7    2f1f774e
+#     PNARROW   3e428ad2    b17d2aa1
+#     PWIDE     fc990004    d2240d3c
+#
+# Cause: `DEFAULT_WEIGHTS` gained `unit_tech_credit` at 1.0, which routes a
+# unit technology's price through `weighted.unit_tech_value` -- an
+# `effects.compute` upgrade diff valued at `strength_marginal` -- instead of
+# through the static `_card_yields` table that charged a fresh build and
+# credited a strength nobody believed.  Every unit card in the row and in the
+# civil hand therefore prices differently under DEFAULT_WEIGHTS, and all
+# three searching bots see it.
+#
+# ATTRIBUTED, not assumed, and to ONE constant: a third clone of this exact
+# tree with `"unit_tech_credit": 1.0` changed to `0.0` and nothing else
+# touched reproduces all EIGHT pre-change digests byte for byte.  So the six
+# moves are the credit and nothing else in the change -- the refactor itself
+# (the new module functions, `rival_strength`, `_is_unit`) is provably inert.
+#
+# Two-sided as docs/PYPY.md 9.0 requires: derived from scratch in /tmp/dig-a
+# and independently in /tmp/dig-b, two separate clones of the same commit, and
+# the two agreed on all eight arms -- including the two that did not move.  A
+# clean-base control on the parent commit (25740b1, /tmp/gate-base) reproduced
+# every pre-change constant first.  Nothing here was re-derived to make the
+# gate pass; the gate FAILED by design in both clones and these are the
+# computed values.
+WNARROW=dc1e3bbe
+WWIDE=f401b342
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -472,10 +512,18 @@ WWIDE=9010ec80
 # tree by design, twice, in two clones, and these two values are the output of
 # computing the new behaviour plus a per-cause attribution that predicted them
 # before the full-tree run reported them.
-PNARROW=3e428ad2
-PWIDE=fc990004
-QNARROW=9ad67497
-QWIDE=e83054f7
+#
+# All four moved again on the unit-technology board pricing; the table, the
+# cause and the one-constant attribution are in the block above WNARROW.
+# Test count goes 1040 -> 1053: +12 from the new tests/test_unit_pricing.py
+# and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
+# in tests/test_board_yields.py, which had to grow a sibling once units
+# stopped being gated on `card_board_credit` and started being gated on
+# `unit_tech_credit`.
+PNARROW=b17d2aa1
+PWIDE=d2240d3c
+QNARROW=02f63fe7
+QWIDE=2f1f774e
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

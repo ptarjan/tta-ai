@@ -195,7 +195,13 @@ Open work lives in `docs/OPEN_ITEMS.md`, not here.
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases
   it, and the direction depends on which side you just made visible.*
-  `tests/test_half_priced_cards.py`.
+  `tests/test_half_priced_cards.py`.  And the corollary that cost a second
+  measurement: **un-biasing it is not the same as pricing it.**  The ten unit
+  cards were the worst instance of this hazard on record, and flooring their
+  `card_potential` at zero — the bias removed, nothing added — moved "is this
+  the best card on the row" only from 1 in 437 to 20 in 437.  A card worth
+  exactly nothing is still not a card worth taking, so a fix that only removes
+  the sign will read as a null.  `docs/UNIT_TECH_PRICING.md` §1c.
 * **A swap diff is exact over `Stats` and blind to everything else**, and it
   *replaces* the static table rather than supplementing it — so any key the static
   path priced that the diff cannot see is silently dropped.  Taj Mahal's blue

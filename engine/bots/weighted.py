@@ -390,6 +390,81 @@ def rival_context(state, idx, root_row=None):
             else root_row}
 
 
+def rival_strength(state, idx):
+    """`rival_context(state, idx)["rival_strength"]`, on its own.
+
+    `card_potential` is not handed a `ctx` -- `hand_potential` and
+    `_hand_total` do not carry one -- and building a whole `rival_context`
+    per card priced would recompute every opponent's full statistics several
+    times per candidate move.  This is the one field of it `strength_marginal`
+    needs, off the cached `state_stats` rather than a bare `compute`.
+
+    A SECOND SPELLING OF ONE QUANTITY, so it is guarded like one:
+    `tests/test_unit_pricing.py:TestRivalStrengthAgrees` walks self-play
+    positions and fails if this and `rival_context` ever disagree -- the same
+    device `_SWEEP` and `game.SWEEP` are held together with.
+    """
+    best = 0
+    for q in state.players:
+        if q.idx == idx or q.resigned:
+            continue
+        s = effects.state_stats(state, q).strength
+        if s > best:
+            best = s
+    return best
+
+
+def strength_marginal(state, idx, w, ctx=None):
+    """What ONE point of strength is worth to `evaluate` on THIS board.
+
+    d(`evaluate`)/d(`features()["strength"]`), evaluated exactly -- not a
+    proxy for it and not a constant.  `card_potential` looks up `w["strength"]`
+    and stops, and docs/CARD_BLINDNESS_MILITARY.md section 5.1 measured what
+    that costs: the board expresses a point of strength through FOUR features
+    and the card sees one of them, so a unit's gain is under-counted by
+    between 2.3x and 7x, in a way that depends on the board and therefore
+    cannot be folded into a credit constant.
+
+    The four channels, each read straight off `features()`' own expression:
+
+        strength            d/ds = 1, always
+        strength_rel        = s - rival, so d/ds = 1, always -- and this is
+                              the one strength feature in `PHASE_KEYS`, so its
+                              early/late multipliers belong here too.  On the
+                              live 2p champion that is the whole story:
+                              `strength_rel` itself is 0.0 and
+                              `strength_rel_early`/`_late` are 3.37 / 2.36.
+        strength_deficit    = max(0, -rel), so d/ds = -1 while behind, 0 ahead
+        strength_lead       = min(6, max(0, rel)), so d/ds = +1 while ahead by
+                              less than six, 0 once the lead is capped
+
+    The two conditional channels are why this is a board query.  A unit card
+    is worth more when you are behind and worth nothing extra once your lead
+    is capped, and no per-card table can say that.
+
+    This is a LOCAL derivative and it is honest about being one: it does not
+    see the clamp at `s.strength = max(0, ...)` (a rating cannot go negative,
+    but a player at zero strength gains the full point anyway) and it treats
+    the deficit/lead kink at `rel == 0` as right-differentiable.  Both are
+    exact everywhere except at the kink itself.
+    """
+    if ctx is not None:
+        rival = ctx["rival_strength"]
+    else:
+        rival = rival_strength(state, idx)
+    p = state.players[idx]
+    rel = effects.state_stats(state, p).strength - rival
+    late = lateness(state)
+    total = w.get("strength", 0.0) + w.get("strength_rel", 0.0)
+    total += (1.0 - late) * w.get("strength_rel_early", 0.0)
+    total += late * w.get("strength_rel_late", 0.0)
+    if rel < 0:
+        total -= w.get("strength_deficit", 0.0)
+    elif rel < 6:
+        total += w.get("strength_lead", 0.0)
+    return total
+
+
 # ------------------------------------------------------- the game horizon
 #
 # `lateness()` scales every early/late phase weight, and what those weights are
@@ -1448,6 +1523,76 @@ def _swap_type(name):
     return typ if typ in _BY.SINGLE_SLOT else None
 
 
+@_lru_cache(maxsize=None)
+def _is_unit(name):
+    return C.db().type_by_name.get(name) in C.UNIT_TYPES
+
+
+def unit_tech_value(name, state, idx, w):
+    """Eval-points developing this unit technology is worth ON THIS BOARD.
+
+    THE DEFECT THIS REPLACES, and it is the top-ranked hole in
+    docs/SYSTEM_COVERAGE.md: the bot takes 0.15 / 0.06 / 0.45 unit cards per
+    seat-game against a human 3.84 / 2.79 / 3.43, i.e. it fights the entire
+    game with Age A Warriors.  The static table prices every unit card
+    strictly NEGATIVE -- Warriors -3.46 to Air Forces -16.07 on the live 2p
+    champion -- because it charges `techCost` through `science` and
+    `buildCost` through `resource_stock`, both trained, and returns the
+    strength through `unit_strength_credit`, which is 0.0 on every champion in
+    the league.  Cost priced, gain not: the standing hazard of
+    docs/HAZARDS.md and `tests/test_half_priced_cards.py`.
+
+    `row_pressure` additionally skips any card whose `card_potential` is <= 0
+    ("the sweep destroying a card I do not want is not a loss"), so on top of
+    being under-valued in the hand term a unit card is INVISIBLE to the two
+    row terms.  Both halves are measured in `tests/test_unit_pricing.py`.
+
+    Turning the old credit up cannot fix it, and that is the part worth being
+    precise about, because it is why this is a reshaping and not a retuning.
+    At `unit_strength_credit` 1.0 Swordsmen goes from -6.51 to -6.12 on the
+    live 2p champion; the sign flips only somewhere past 16, and every step in
+    between changes no argmax at all, so the climb faces a flat plateau
+    sixteen units long with a `mutate` step of ~0.15.  There is no gradient to
+    walk.  docs/CARD_BLINDNESS_MILITARY.md section 5.2 measured exactly that:
+    0 divergences in 967 decisions at 1.0, one at 3.0.
+
+    THE SHAPE, three corrections, all of them derivations rather than tastes:
+
+    1. **The move is an upgrade, not a fresh build.**  Every player starts
+       with a Warriors worker, so the resources actually at stake are
+       `actions.upgrade_cost`, not `buildCost` -- 3 rather than 5 for Riflemen
+       -- and the strength actually at stake is the difference, on every
+       worker moved.  `board_yields.unit_upgrade` gets both from the engine.
+    2. **A point of strength is worth `strength_marginal`, not
+       `w["strength"]`.**  See that function.  On the live 2p champion the two
+       are 0.19 and ~3.0, a factor of fifteen, and the difference is entirely
+       `strength_rel`'s early/late multipliers -- which is not a credit
+       anybody could have guessed, it is a derivative of the objective.
+    3. **You develop the technology and then decide how many workers to
+       move.**  Linear in that count, so the optimum is an endpoint: either
+       all of them or none.  `max(0, ...)` is that argmax, not a floor put
+       there to keep the number positive -- and the science is charged
+       OUTSIDE it, so a technology nobody will staff still reads as the pure
+       cost it is.
+
+    Costs are clamped with `max(0.0, w)` for the same reason `_Y_COST` is: a
+    hill climb is free to drive a stock weight negative (the 4p champion
+    reached `science` = -6.09) and paying a cost must never read as a gain.
+
+    Scaled by `unit_tech_credit`, whose 0.0 recovers the static table exactly
+    -- see `card_potential` -- so this can be duelled against itself in one
+    process on the same deal, like every credit before it.
+    """
+    gained, sci, res = _BY.unit_upgrade(name, state, idx)
+    if not (gained or sci or res):
+        return 0.0
+    net = (gained * strength_marginal(state, idx, w)
+           - res * max(0.0, w.get("resource_stock", 0.0)))
+    if net < 0.0:
+        net = 0.0
+    return net - sci * max(0.0, w.get("science", 0.0))
+
+
 def card_potential(name, w, state=None, idx=None):
     """Eval-points a single card in hand would be worth if it were played.
 
@@ -1461,6 +1606,17 @@ def card_potential(name, w, state=None, idx=None):
     without a state (and the whole of `analysis/`) keep the old signature and
     the old answer.
     """
+    # A unit technology is board-priced on its OWN credit, not on
+    # `card_board_credit`.  Deliberately: `card_board_credit` is 0.361 on the
+    # live 2p champion and 0.0 on both the 3p and the 4p ones, so hanging the
+    # unit fix off it would leave two of the three league arms with the defect
+    # it exists to fix.  `unit_tech_credit` defaults to 1.0 and is absent from
+    # every champion file, so `load_weights` fills it in from `DEFAULT_WEIGHTS`
+    # and the fix is live on all three at once (docs/UNIT_TECH_PRICING.md).
+    if state is not None and idx is not None and _is_unit(name):
+        uc = w.get("unit_tech_credit", 1.0)
+        if uc:
+            return uc * unit_tech_value(name, state, idx, w)
     credit = w.get("card_rate_credit", 1.0)
     base = w.get("card_board_credit", 0.0)
     key = _board_credit_key(name)
@@ -2134,7 +2290,32 @@ BASE_WEIGHTS = {
     # unit's strength, so the information exists and `tools/card_blindness.py`
     # no longer counts the ten unit cards as blind.  Only how much of it to
     # believe is left to the trainer.
+    # SUPERSEDED IN LIVE PLAY, and kept rather than deleted because it is
+    # still the whole of the STATELESS answer.  `card_potential(name, w)` with
+    # no board -- `analysis/`, `tools/card_blindness.py`, the pricing censuses
+    # -- cannot ask what an upgrade would cost or what a point of strength is
+    # worth here, so it falls back to this table and this credit.  Every
+    # caller that decides a move has a state, so the credit no longer gates
+    # any behaviour; `tests/test_half_priced_cards.py` still lists the ten
+    # units against it, which is now a statement about the static table and
+    # says so.
     "unit_strength_credit": 0.0,
+    # How much of the BOARD-derived unit price to believe (`unit_tech_value`).
+    #
+    # 1.0, and unlike `unit_strength_credit` above that is not a guess at a
+    # magnitude: at 1.0 the number is "the eval points `evaluate` itself
+    # assigns to the strength this upgrade buys, minus the eval points it
+    # assigns to the resources and science it costs", every term of it read
+    # off the objective and the engine.  There is no free constant left in it
+    # to be timid about.  0.0 recovers the static table byte for byte, which
+    # is what makes the change A/B-able against itself in one process.
+    #
+    # It is a WEIGHT and not a hard-coded 1.0 for the usual reason -- the
+    # league can move it -- but also for a specific one: the price is a
+    # one-ply appraisal of a three-move plan (take, develop, upgrade), and how
+    # much of a plan's value survives contact with the search is exactly the
+    # kind of question a hill climb answers better than an argument does.
+    "unit_tech_credit": 1.0,
     # `territory_credit` is 1.0 but costs nothing until `hand_mil_potential`
     # is non-zero, because nothing calls `card_potential` on a military card
     # otherwise.  It is a separate knob from `hand_mil_potential` so that
