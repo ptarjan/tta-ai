@@ -59,8 +59,16 @@ CONFIRM = 2        # consecutive polls required to change state (~30s)
 # NOTE: plain lowercase substrings matched against the full GPU-process path.
 # Use directory/name fragments that a GAME's path never contains -- games live
 # in their own dirs (World of Warcraft\Wow.exe, steamapps\common\<game>\...),
-# NOT under these launcher/desktop paths. Keep it generous: a false pause is
-# cheap (training relaunches), a missed game is not.
+# NOT under these launcher/desktop paths. Keep it generous, but note what a
+# false pause actually costs. The old comment here claimed it was cheap
+# "because training relaunches" -- that is only true for a process that EXITS.
+# On 2026-07-31 GoWSyncApp.exe, a Microsoft Store background sync app, held a
+# GPU context indefinitely after a WoW session ended; the pause it caused was
+# correct when written at 20:59 and then never cleared, and the desktop did
+# zero training iterations for 13.5 hours at 0% GPU utilization. A false pause
+# from a PERSISTENT process is unbounded, not cheap. When adding an entry,
+# prefer to add it: a missed game is still worse, but not by as much as this
+# comment used to imply.
 BENIGN = [
     "python",                        # OUR training (and any python)
     "\\windows\\", "dwm.exe", "explorer.exe",
@@ -76,7 +84,7 @@ BENIGN = [
     "msedge", "edgewebview",
     "steamwebhelper", "\\steam\\bin", "steamui", "\\steam\\steam.exe",
     "streamdeck", "elgato",
-    "wowhead",
+    "wowhead", "gowsyncapp",        # Store background sync app; holds a GPU ctx forever
     "\\battle.net\\", "battle.net.exe", "\\agent.exe",  # launcher/updater dir
     "windowsterminal", "openconsole", "conhost",
     "common files",
