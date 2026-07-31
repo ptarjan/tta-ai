@@ -738,3 +738,96 @@ class TestThePopCostFormulaHasOneImplementation(unittest.TestCase):
         self.assertEqual(economy.pop_food_cost(s, p.yellow_bank,
                                                p.one_time_discount),
                          economy.pop_cost(st, p))
+
+
+class TestOceanLinersIsPricedByTheBoardNotByARate(unittest.TestCase):
+    """`freePopIncreasePerTurn` has no number on the card, so one has to be
+    constructed -- and the constructed one used to be a single flat rate over
+    four things the board settles exactly.  docs/MODEL_CONSTANTS.md 9.
+
+    The card is worth one of two different things on any given turn: a REFUND
+    (a civil action and `pop_cost` food) when the player would have bought an
+    increase anyway, and a FREE WORKER when they would not.  Only the first
+    was priced.
+    """
+
+    NAME = "Ocean Liners"
+
+    def _state(self, bank=14, happy=None):
+        st = _played()
+        p = st.players[0]
+        p.yellow_bank = bank
+        effects.invalidate(st, p)
+        return st, p
+
+    def test_an_empty_yellow_bank_is_worth_exactly_nothing(self):
+        """The pre-existing hard gate, and it must survive: a player with no
+        tokens cannot increase population at all (RULES_SPEC 6.1)."""
+        st, p = self._state(bank=0)
+        self.assertEqual(BY._free_pop_increase(st, p, self.NAME), ())
+
+    def test_both_branches_are_priced(self):
+        """The refund AND the free worker.  Dropping the second is what made
+        the handler 0.65x of the replayed truth."""
+        st, p = self._state(bank=18)
+        p.happy_extra = 8                      # keep the happiness gate open
+        effects.invalidate(st, p)
+        keys = {k for k, _c, _kind in BY._free_pop_increase(st, p, self.NAME)}
+        self.assertEqual(keys, {"civil_actions", "food_rate", "free_workers"})
+
+    def test_the_two_branches_are_complements_and_add_no_constant(self):
+        st, p = self._state(bank=18)
+        p.happy_extra = 8
+        effects.invalidate(st, p)
+        got = dict((k, c) for k, c, _ in
+                   BY._free_pop_increase(st, p, self.NAME))
+        self.assertAlmostEqual(got["civil_actions"] + got["free_workers"], 1.0)
+        self.assertAlmostEqual(got["civil_actions"], BY.FREE_POP_UTIL)
+
+    def test_an_increase_that_would_cause_discontent_is_worth_nothing(self):
+        """THE new board gate, and it is arithmetic rather than a probability:
+        `economy.happy_required` is a step function of the yellow bank, so
+        whether the NEXT increase tips you into discontent is decidable from
+        the board.  Measured over 318 player-turns, on the 11.6% of turns
+        where it does the bot buys an increase on 2.7% of them (against 17.0%
+        overall) and the measured free-worker gain is 0.014 (against 0.297)."""
+        from engine import economy
+        st = _played()
+        p = st.players[0]
+        # find a bank size whose NEXT step needs more happy faces than a
+        # zero-happy board can supply, then strip the happiness
+        p.yellow_bank = 12
+        p.happy_extra = -99
+        effects.invalidate(st, p)
+        s = effects.state_stats(st, p)
+        self.assertLess(s.happy,
+                        economy.happy_required(p.yellow_bank - 1),
+                        "test setup: this board must be one short")
+        self.assertEqual(BY._free_pop_increase(st, p, self.NAME), ())
+
+    def test_the_same_board_with_the_happiness_is_priced(self):
+        """The gate must be the happiness and not something else about the
+        position -- same state, happiness restored, card priced again."""
+        st = _played()
+        p = st.players[0]
+        p.yellow_bank = 12
+        p.happy_extra = -99
+        effects.invalidate(st, p)
+        self.assertEqual(BY._free_pop_increase(st, p, self.NAME), ())
+        p.happy_extra = 8
+        effects.invalidate(st, p)
+        self.assertNotEqual(BY._free_pop_increase(st, p, self.NAME), ())
+
+    def test_it_is_not_gated_on_idle_workers(self):
+        """Measured, not assumed.  `workers_free > 0` predicts NOT paying
+        (U_paid 0.120 vs 0.187) but the measured value of the card on those
+        same turns goes the other way (gain 0.337 vs 0.283), so a gate there
+        would fit half the data and ignore the rest."""
+        st, p = self._state(bank=18)
+        p.happy_extra = 8
+        p.workers_free = 0
+        effects.invalidate(st, p)
+        none_idle = BY._free_pop_increase(st, p, self.NAME)
+        p.workers_free = 5
+        effects.invalidate(st, p)
+        self.assertEqual(BY._free_pop_increase(st, p, self.NAME), none_idle)

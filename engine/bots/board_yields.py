@@ -462,18 +462,64 @@ def _on_build_culture(state, p, name):
 
 
 #: Fraction of player-turns on which a population increase happens at all.
-#: MEASURED, not chosen -- `tools/free_pop_rate.py`, 2p self-play under
-#: `analysis/frozen/champion_2p.json`, 410 player-turns:
+#: MEASURED, not chosen -- `tools/free_pop_rate.py`.
 #:
-#:     U_paid  0.132   turns the bot pays a civil action + food for one anyway
-#:     want    0.654   turns on which a FREE one would improve its evaluation
-#:     gain    0.646   mean eval points a free one is worth, measured directly
+#: RE-MEASURED 2026-07-30, and it had gone stale for the same reason
+#: `CARDS_PER_ROUND` did (docs/MODEL_CONSTANTS.md).  The original 0.132 was
+#: taken under `analysis/frozen/champion_2p.json` BEFORE the unit-technology
+#: (d8a2172) and whole-technology (8b972ef) pricing fixes.  Those fixes made
+#: the bot take substantially more farms and mines, which is exactly what
+#: creates demand for another worker.  Like for like -- same frozen vector,
+#: same counting method, current code -- it has moved **0.132 -> 0.228**, so
+#: it is the CODE that moved it and not the weights.
 #:
-#: and the refund model this drives -- U_paid x (1 civil action + pop_cost
-#: food), priced through the champion's own weights -- comes to 0.51-0.98
-#: points per turn across pop_cost 2..5, which BRACKETS the 0.646 measured
-#: end-to-end.  That bracket is what makes 0.13 a measurement.
-FREE_POP_UTIL = 0.13
+#: The counting method was also wrong and is fixed in the same pass, which is
+#: why the shipped value is 0.17 rather than 0.23.  The old tool counted every
+#: `pop` MOVE and divided by probed player-TURNS, so a turn on which the bot
+#: bought two increases counted twice.  Ocean Liners refunds ONE increase per
+#: turn (`freePopIncreasePerTurn`), so the rate the handler needs is "turns on
+#: which at least one increase was bought", capped at one per turn.  Under the
+#: corrected count, on current code:
+#:
+#:     vector                        turns   U_paid   want   gain
+#:     champion_2p.json               316    0.174    0.636  0.651
+#:     DEFAULT_WEIGHTS today          318    0.170    0.594  0.297
+#:
+#: Both land on 0.17, which is what ships.  (0.132 vs 0.228 is the honest
+#: staleness comparison, because both used the old count; 0.17 is the honest
+#: value, because it uses the right one.)
+#:
+#: WHAT THE MODEL IS NOW, and the ground truth it is calibrated against.  The
+#: card is worth one of two different things on any given turn, and the two
+#: were being conflated:
+#:
+#:   * on a turn the player would have bought an increase ANYWAY, it refunds
+#:     exactly what that cost -- one civil action and `pop_cost` food;
+#:   * on a turn they would not have, it is a free worker instead, which is a
+#:     smaller quantity and which `free_workers` already prices.
+#:
+#: The old handler priced the first branch and dropped the second, and said so
+#: ("This under-claims").  It did: replaying self-play and taking the marginal
+#: value per position -- refund on the turns the bot actually paid, the
+#: measured free-worker gain on the rest, no constant anywhere in it -- the
+#: truth is 1.150 eval points/turn under DEFAULT_WEIGHTS where the old handler
+#: returned 0.743.  **0.65x, i.e. under-priced by half again**, which is the
+#: safe direction but is still wrong.  Both branches are now priced, the
+#: second through the existing `free_workers` weight at the complement
+#: `1 - FREE_POP_UTIL`, so the fix adds no new constant.
+#:
+#: Over-pricing a wonder is the specific bias docs/SCORE_VALIDATION.md 6.2
+#: measured as costly, so the calibration is deliberately left a shade UNDER
+#: rather than a shade over.  `tools/free_pop_rate.py` prints `handler/truth`:
+#:
+#:     vector                     before (0.13, one branch)   after (0.17, two)
+#:     DEFAULT_WEIGHTS                    0.65x                     0.99x
+#:     champion_2p.json                   0.53x                     0.97x
+#:
+#: `tests/test_board_yields.py` pins both gates and the two-branch shape; if a
+#: future change pushes that ratio above 1.00, that is the bias returning and
+#: the constant should come down, not the test.
+FREE_POP_UTIL = 0.17
 
 
 def _free_pop_increase(state, p, name):
@@ -495,24 +541,47 @@ def _free_pop_increase(state, p, name):
     the vector, all of which are implicitly "per turn for the rest of the
     game"; that is why there is no turns-left factor.
 
-    `U` is the fraction of turns you would have taken the increase anyway.
-    On the other turns the effect is a free worker rather than a refund,
-    which is a different and generally smaller quantity, so scaling by
-    `U_paid` rather than by the 0.654 "would want it" rate is the
-    conservative read -- and over-pricing a wonder is the specific bias
-    docs/SCORE_VALIDATION.md 6.2 measured as costly.  This under-claims.
+    `U` is the fraction of turns you would have taken the increase anyway, and
+    on those turns the card is a pure refund.  On the OTHER `1 - U` turns it
+    is a free worker instead -- a different and smaller quantity, but not an
+    unpriced one: `free_workers` is a live feature with a fitted weight, so
+    that branch goes through it rather than being dropped.  Dropping it was
+    the old handler's deliberate conservatism ("this under-claims"), and
+    `tools/free_pop_rate.py` measured how much: 0.65x of the replayed truth.
 
-    The board-aware part is a hard gate rather than a scaling:
-    `economy.pop_cost_base` returns None when the yellow bank is empty, and a
-    player with no tokens left cannot increase population at all.  For them
-    Ocean Liners is worth exactly nothing, and a static table would still be
-    offering them four stages of resources for it.
+    TWO BOARD GATES, both exact, both replacing a piece of what the flat rate
+    used to average over.  Neither is a scaling:
+
+    * `economy.pop_cost_base` returns None when the yellow bank is empty, and
+      a player with no tokens left cannot increase population at all.  For
+      them Ocean Liners is worth exactly nothing, and a static table would
+      still be offering them four stages of resources for it.
+    * `economy.happy_required` is a STEP FUNCTION of the yellow bank, so
+      whether the next increase tips you into discontent is not a probability
+      -- it is arithmetic on the board in front of you.  When it does, nobody
+      takes the increase and the card earns nothing that turn.  Measured over
+      318 player-turns: on the 11.6% of turns where the increase would make
+      the player unhappy, the bot pays for one on 2.7% of them (against 17.0%
+      overall) and the measured free-worker gain is 0.014 (against 0.297).
+      Both collapse, so the handler returns nothing rather than full price.
+
+    NOT gated on idle workers, and that is a measurement rather than an
+    oversight.  Having `workers_free > 0` does predict *not paying* (U_paid
+    0.120 against 0.187), which looks like a third gate -- but the measured
+    value of the card on those same turns goes the OTHER way (gain 0.337
+    against 0.283), because an idle worker is exactly what makes the next one
+    cheap to use.  The two effects cancel and a gate there would be fitting
+    the first half and ignoring the second.
     """
-    food = economy.pop_food_cost(effects.state_stats(state, p), p.yellow_bank)
+    s = effects.state_stats(state, p)
+    food = economy.pop_food_cost(s, p.yellow_bank)
     if food is None:
         return ()
+    if s.happy < economy.happy_required(max(0, p.yellow_bank - 1)):
+        return ()
     return (("civil_actions", FREE_POP_UTIL, _GAIN),
-            ("food_rate", FREE_POP_UTIL * food, _GAIN))
+            ("food_rate", FREE_POP_UTIL * food, _GAIN),
+            ("free_workers", 1.0 - FREE_POP_UTIL, _GAIN))
 
 
 def _blue_tokens(state, p, name):

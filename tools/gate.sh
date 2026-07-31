@@ -491,6 +491,18 @@ WIDE=f223cea1
 # new gauge stayed within 0.10 of the OLD age bucket, which was the
 # champion-compatibility constraint the honest gauge deliberately gives up),
 # and +3 in tests/test_row_features.py.
+# UNCHANGED by the Ocean Liners repricing (docs/MODEL_CONSTANTS.md 9), and
+# that no-op is a PREDICTION THAT WAS TESTED rather than a lucky result.
+# `board_yields._free_pop_increase` is a `WONDER_RIDERS` entry, reached only
+# from `card_potential`'s wonder branch, which is gated on
+# `card_board_credit + card_board_wonder` -- both 0.0 in DEFAULT_WEIGHTS.  The
+# fingerprint plays DEFAULT_WEIGHTS, so the handler is UNREACHABLE on all eight
+# arms and every one of them had to hold.  All eight did, in two independent
+# clones (/tmp/constfix and a fresh clone of 7bf483a with the same file set).
+# If a future change to `_free_pop_increase` ever moves an arm, that is the
+# change escaping its gate, not a digest to update.
+# Test count 1087 -> 1093: +6 from
+# tests/test_board_yields.py:TestOceanLinersIsPricedByTheBoardNotByARate.
 WNARROW=6d888d7c
 WWIDE=c52302c2
 

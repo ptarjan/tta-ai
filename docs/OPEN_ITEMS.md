@@ -341,6 +341,21 @@ and each is now labelled as a prior in the source and pinned by
 * **`rival_take_share` ships at its 0.5 prior and has never been climbed.**  It
   cannot move anything until `row_bargain_forgone` is non-zero, which is true
   only on the three archived champions and on no live arm.
+* **`FREE_POP_UTIL = 0.17` is still a prior, and the part that stays one is
+  the right part.**  Whether *this* player would have bought a population
+  increase *this* turn is a policy question, not a board fact.  Both branches
+  it splits are now priced and calibrated to 0.99x / 0.97x of a replayed
+  ground truth, but the calibration is 2p only, ~317 player-turns per vector,
+  and has never been checked at 3p or 4p.  Note also that the whole handler is
+  **unreachable under `DEFAULT_WEIGHTS`** (`card_board_credit` and
+  `card_board_wonder` are both 0.0), so nothing in the live league sees it yet
+  — the same priced-but-inert shape `tests/test_play_rate.py` exists to catch,
+  here by design rather than by accident.
+* **The "is there a job for the worker" board query was NOT built.**  The
+  happiness gate was, because `economy.happy_required` is a step function and
+  the answer is arithmetic.  Whether a new worker has anywhere useful to go
+  needs urban-limit and per-technology build-cost queries, which is the
+  expensive part of `card_potential`, and it was left rather than guessed.
 * **`tools/deal_rate.py`'s `hungry` policy does not actually take more cards
   than the defaults do** (both 1.88/round at 2p), so §1.4's robustness claim
   rests on a `shy`-vs-`default` contrast rather than a three-point sweep.  A

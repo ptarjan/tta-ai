@@ -108,8 +108,9 @@ CLASSIFIED = {
     # ------------------------------------------------------------ measured
     ("engine/bots/board_yields.py", "FREE_POP_UTIL"): (
         "measured",
-        "tools/free_pop_rate.py, 410 player-turns of 2p self-play; the "
-        "refund-model bracket 0.51-0.98 agrees (see the comment there)"),
+        "tools/free_pop_rate.py, 316-318 player-turns of 2p self-play on two "
+        "vectors, both landing on 0.17; calibrated against a per-position "
+        "replayed truth that contains no constant (docs/MODEL_CONSTANTS.md 9)"),
     ("engine/bots/weighted.py", "_TAKE_PRIOR"): (
         "fitted prior",
         "opening-rounds prior only; tools/deal_rate.py measures the live "

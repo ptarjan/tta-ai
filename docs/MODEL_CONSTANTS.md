@@ -1,10 +1,15 @@
 # The evaluator was planning against a policy that no longer exists
 
 2026-07-30.  Base game (2015), all three player counts.  Three constants in
-`engine/bots/weighted.py` were estimating quantities the game state already
-knows exactly, or that the bot can watch happen.  This replaces them, measures
-the replacement against ground truth, and reports the cost to the one trained
-vector that had something to lose.
+`engine/bots/weighted.py` — and a fourth in `engine/bots/board_yields.py`, §9 —
+were estimating quantities the game state already knows exactly, or that the
+bot can watch happen.  This replaces them and measures each replacement against
+ground truth reconstructed from replayed games.
+
+Two of the four had gone measurably **stale**, and both for the same reason:
+they were fitted under a policy that the card-pricing fixes `d8a2172` and
+`8b972ef` then deliberately changed.  A constant fitted to a policy is a
+constant with an expiry date on it, and nothing in the repo was checking.
 
 The owner's reading of the audit list, verbatim:
 
@@ -561,7 +566,94 @@ invalidate the trained vector, so nothing here touches it.**
 
 ---
 
-## 9. Open
+## 9. A fourth: `FREE_POP_UTIL`, the same pattern one module over
+
+`engine/bots/board_yields.py` prices Ocean Liners (Age II wonder, stages
+4/2/2/4), whose entire card is `freePopIncreasePerTurn: true` — "once per turn
+you may increase population without spending a civil action or food".  There is
+no number on the card, so one has to be constructed, and the constructed one
+was a single flat rate, `FREE_POP_UTIL = 0.13`.
+
+### 9.1 It was stale by 1.7x, for exactly the reason `CARDS_PER_ROUND` was
+
+0.132 was measured under `analysis/frozen/champion_2p.json` **before** the
+unit-technology (`d8a2172`) and whole-technology (`8b972ef`) pricing fixes.
+Those fixes made the bot take substantially more farms and mines, which is what
+creates demand for another worker.  Like for like — same frozen vector, same
+counting method, current code — it re-measures at **0.228**.  The code moved it,
+not the weights.
+
+### 9.2 The counting was also wrong, and that is why 0.17 ships and not 0.23
+
+The old tool counted every `pop` **move** and divided by probed player-**turns**,
+so a turn on which the bot bought two increases counted twice.  Ocean Liners
+refunds *one* increase per turn, so the rate the handler needs is "turns on
+which at least one was bought", capped at one.  Under the corrected count:
+
+| vector | turns | U_paid | want | gain |
+|---|---|---|---|---|
+| `champion_2p.json` | 316 | **0.174** | 0.636 | 0.651 |
+| `DEFAULT_WEIGHTS` today | 318 | **0.170** | 0.594 | 0.297 |
+
+Both land on 0.17.  (0.132 → 0.228 is the honest *staleness* comparison,
+because both sides used the old count; 0.17 is the honest *value*.)
+
+### 9.3 A ground truth with no constant in it
+
+The handler was being checked against `gain` — the measured eval delta of one
+free increase.  **That is the wrong target for half the card**, and comparing
+against it reports a 2.5x over-price that is not real.  The card is worth one of
+two different things on any given turn, and a replay knows which:
+
+```
+truth(turn) = refund(turn)   if the player bought an increase that turn
+              gain(turn)     if they did not
+```
+
+— refund being the civil action and the *actual* `pop_cost` food they now keep,
+priced through their own weights.  No constant anywhere in that, which is what
+makes it a ground truth rather than a second model.  Against it:
+
+| vector | before (0.13, one branch) | after (0.17, two branches) |
+|---|---|---|
+| `DEFAULT_WEIGHTS` | 0.65x | **0.99x** |
+| `champion_2p.json` | 0.53x | **0.97x** |
+
+So the old handler **under**-priced Ocean Liners by half again, exactly as its
+own comment claimed it did ("this under-claims").  Left a shade under 1.00
+deliberately: over-pricing a wonder is the bias `docs/SCORE_VALIDATION.md` §6.2
+measured as costly.
+
+### 9.4 What became a board query, and what did not
+
+**Added — the happiness gate, and it is arithmetic rather than a probability.**
+`economy.happy_required` is a step function of the yellow bank, so whether the
+*next* increase tips you into discontent is decidable from the board in front of
+you.  On the 11.6% of turns where it does, the bot buys an increase on 2.7% of
+them (against 17.0% overall) and the measured free-worker gain is 0.014 (against
+0.297).  Both collapse, so the handler now returns nothing there instead of full
+price.
+
+**Kept — the empty-bank gate.**  Pre-existing, correct, and pinned by a test: a
+player with no tokens cannot increase population at all, so the card is worth
+exactly zero to them.
+
+**Rejected — an idle-worker gate, and this one is a measurement rather than an
+oversight.**  `workers_free > 0` does predict *not paying* (U_paid 0.120 against
+0.187), which looks like a third gate.  But the measured value of the card on
+those same turns goes the **other** way (gain 0.337 against 0.283) — an idle
+worker is exactly what makes the next one cheap to use.  The two cancel, and
+gating there would have been fitting the first half and ignoring the second.
+
+**Still a prior — `U` itself.**  Whether *this* player would have bought an
+increase *this* turn is a policy question, not a board fact.  The two branches
+it splits are now both priced, and the second goes through the existing
+`free_workers` weight at the complement `1 - FREE_POP_UTIL`, so the fix adds no
+new constant.
+
+---
+
+## 10. Open
 
 * `PACT_OFFER_CREDIT` is a fitted prior that cannot become a weight without
   threading one into `features()`.  In `docs/OPEN_ITEMS.md`.
