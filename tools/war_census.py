@@ -102,19 +102,38 @@ _CAPPED = False
 #: days on a volume that was 96% full when this was written, so an instrument
 #: with no ceiling is a way to kill the training run it exists to explain.
 #:
-#: The cap is PER PROCESS, and that is the whole trick: the league relaunches
-#: its climbers every hour, so every hour opens fresh pids with a fresh
-#: budget.  Coverage is spread across the whole run instead of stopping dead
-#: after the first hour, and the directory total stays bounded by the second
-#: ceiling below, which is checked when a sink is opened.
-_MAX_BYTES = int(float(os.environ.get("TTA_WAR_CENSUS_MAX_MB", "4")) * 1e6)
+#: MEASURED, not assumed (2026-07-31, all three arms up): 61 sinks appeared in
+#: 68 minutes -- ~54/hour, NOT one per arm per hour.  The climber respawns its
+#: workers per block, every couple of minutes, so a per-process byte cap is
+#: nearly inert: it fires for almost nobody, and the directory total still
+#: climbs at ~83 MB/hour.  A 144-hour run therefore hits the directory ceiling
+#: in about six hours and records NOTHING for the remaining 138 -- exactly the
+#: "first hour only" failure the per-process cap was supposed to prevent.
+#:
+#: So the budget is spent by SAMPLING instead.  ~54 sinks/hour x 144 hours is
+#: ~7,800 sinks; `_MAX_DIR_BYTES` / 7,800 is ~64 KB each, and an unsampled sink
+#: runs ~1.37 MB, so a rate near 64/1370 keeps the whole run inside the ceiling.
+#: Sampling rather than truncating also removes a bias a byte cap cannot avoid:
+#: the first N records of a worker are its first N decisions, which are the
+#: OPENING of a game, so a truncated sink is a sample of Age A/I and says
+#: nothing about Age III.  The byte cap stays as a backstop for a worker that
+#: outlives its peers.
+_SAMPLE = float(os.environ.get("TTA_WAR_CENSUS_SAMPLE", "0.05"))
+_MAX_BYTES = int(float(os.environ.get("TTA_WAR_CENSUS_MAX_MB", "0.25")) * 1e6)
 _MAX_DIR_BYTES = int(
     float(os.environ.get("TTA_WAR_CENSUS_MAX_DIR_MB", "500")) * 1e6)
+
+#: Its OWN stream.  Drawing the sampling coin from the `random` module would
+#: advance the RNG the game itself draws from, and the one invariant of this
+#: instrument is that enabling it cannot change a game.
+_RNG = random.Random(os.getpid() * 2654435761 + 12345)
 
 
 def _emit(rec):
     global _WRITTEN, _CAPPED
     if _OUT is None or _CAPPED:
+        return
+    if _SAMPLE < 1.0 and _RNG.random() >= _SAMPLE:
         return
     line = json.dumps(rec) + "\n"
     if _WRITTEN + len(line) > _MAX_BYTES:
@@ -299,7 +318,12 @@ def open_sink_for_process(dest):
 
     Returns None, and records nothing for this process, once the directory as
     a whole reaches `_MAX_DIR_BYTES`.  Deleting the directory is the resume:
-    the next hourly relaunch opens fresh sinks with no other action needed.
+    the next relaunch opens fresh sinks with no other action needed.
+
+    Every sink opens with a `census_meta` record naming `_SAMPLE`, because a
+    5% sample with no header reads exactly like a full one and every COUNT
+    taken off it is then wrong by 20x.  Rates are unaffected (numerator and
+    denominator are sampled alike); counts must be divided by `sample`.
     """
     global _OUT
     if _OUT is not None:
@@ -314,6 +338,9 @@ def open_sink_for_process(dest):
         return None
     _OUT = open(os.path.join(dest, "census-%d.jsonl" % os.getpid()),
                 "a", buffering=1)
+    _OUT.write(json.dumps({
+        "kind": "census_meta", "pid": os.getpid(), "sample": _SAMPLE,
+        "max_bytes": _MAX_BYTES, "dir_used_at_open": used}) + "\n")
     return _OUT
 
 

@@ -14,6 +14,7 @@ diverged decision, any consumed RNG draw, any mutated state anywhere in the
 search shows up in them.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -37,8 +38,15 @@ def _with_census(spec_text, players, seed, dest):
     prev_enabled, prev_impl, prev_loaded = (
         census.ENABLED, census._impl, census._loaded)
     prev_out = wc._OUT
+    prev_sample = wc._SAMPLE
     try:
         wc._OUT = None
+        # Record EVERY decision, not the league's 5% sample.  Under sampling a
+        # short game can legitimately emit nothing, which would let the
+        # "recorded something" assertion below pass or fail by coin flip; at
+        # 1.0 the hot path is also exercised on every single decision, which is
+        # the path this test exists to prove inert.
+        wc._SAMPLE = 1.0
         wc.open_sink_for_process(dest)
         census.ENABLED = True
         census._loaded = True
@@ -48,6 +56,7 @@ def _with_census(spec_text, players, seed, dest):
         if wc._OUT is not None:
             wc._OUT.close()
         wc._OUT = prev_out
+        wc._SAMPLE = prev_sample
         census.ENABLED, census._impl, census._loaded = (
             prev_enabled, prev_impl, prev_loaded)
 
@@ -61,10 +70,22 @@ def _check(spec_text, players):
                 "census changed play: spec=%s seed=%d off=%r on=%r"
                 % (spec_text, seed, off, on))
         wrote = [f for f in os.listdir(d) if f.endswith(".jsonl")]
-        assert wrote, "census was on but recorded nothing -- inert for the "
-        "wrong reason, so the comparison above proves nothing"
-        assert any(os.path.getsize(os.path.join(d, f)) > 0 for f in wrote), (
-            "census sink exists but is empty; see above")
+        assert wrote, (
+            "census was on but opened no sink -- inert for the wrong reason, "
+            "so the comparison above proves nothing")
+        # DECISION records, not just the `census_meta` header.  Every sink now
+        # opens with that header, so "file is non-empty" would be satisfied by
+        # a census that recorded not one decision -- which is precisely the
+        # failure this assertion exists to catch.
+        decisions = 0
+        for f in wrote:
+            with open(os.path.join(d, f)) as fh:
+                for line in fh:
+                    if json.loads(line).get("kind") != "census_meta":
+                        decisions += 1
+        assert decisions, (
+            "census sink holds only its header: no decision was recorded, so "
+            "the identical scores above prove nothing; see above")
 
 
 def test_plan_bot_play_is_identical_with_census_on():
