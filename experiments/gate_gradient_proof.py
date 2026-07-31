@@ -92,7 +92,7 @@ def main(argv=None):
     ap.add_argument("--block", type=int, default=24)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--seed", type=int, default=20260726)
-    ap.add_argument("--scale", type=float, default=P.MARGIN_SCALE)
+    ap.add_argument("--scale", type=float, default=P.LEAD_SCALE)
     ap.add_argument("--veto-z", type=float, default=1.0)
     ap.add_argument("--out", default="")
     ap.add_argument("--which", choices=("all", "mutants", "sabotage"),
@@ -137,8 +137,8 @@ def main(argv=None):
                 if cw is not None and rw is not None:
                     ws.append(cw - rw)
                 if cm is not None and rm is not None:
-                    mg.append(P.margin_share(cm, args.scale)
-                              - P.margin_share(rm, args.scale))
+                    mg.append(P.lead_share(cm, args.scale)
+                              - P.lead_share(rm, args.scale))
             wm, wse = P.mean_se(ws)
             mm, mse = P.mean_se(mg)
             rows[e.label] = {

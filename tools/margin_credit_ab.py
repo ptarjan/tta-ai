@@ -3,7 +3,7 @@
 docs/CULTURE_GAP.md 19 measured a PERVERSE gradient in the trainer's own accept
 statistic: inflating `culture_rate` 5 -> 35.574 buys +0.011 of pool-weighted
 gate score and ZERO additional wins, because 5.5 of the 8.0 pool weight is
-scored on `margin_share(culture margin)` at opponents the bot loses to 100% of
+scored on `lead_share(culture differential)` at opponents the bot loses to 100% of
 the time.  19c fix #2 proposes capping that credit or scoring the tiers on
 margin RANK instead.
 
@@ -142,22 +142,22 @@ def _mean(xs):
 
 def _tanh(scale):
     def f(cand, ref):
-        return [P.margin_share(c, scale) - P.margin_share(r, scale)
+        return [P.lead_share(c, scale) - P.lead_share(r, scale)
                 for c, r in zip(cand, ref)]
     f.__name__ = f"tanh/{scale:g}"
     return f
 
 
-def _reach_cap(cap, scale=P.MARGIN_SCALE):
-    """`margin_share` on a margin floored at `-cap`.
+def _reach_cap(cap, scale=P.LEAD_SCALE):
+    """`lead_share` on a differential floored at `-cap`.
 
     Below `cap` culture points behind, all losses score the same: the game was
     not winnable and narrowing it further earns nothing.  This is 19c fix #2's
     "cap the margin credit" read literally.
     """
     def f(cand, ref):
-        return [P.margin_share(max(c, -cap), scale)
-                - P.margin_share(max(r, -cap), scale) for c, r in zip(cand, ref)]
+        return [P.lead_share(max(c, -cap), scale)
+                - P.lead_share(max(r, -cap), scale) for c, r in zip(cand, ref)]
     f.__name__ = f"cap@{cap:g}"
     return f
 
@@ -169,7 +169,7 @@ def _rank(cand, ref):
     them together, and score each game by its normalised rank.  This is the
     Mann-Whitney statistic: the paired mean is P(cand > ref) - 0.5, bounded,
     and invariant to ANY monotone transform of the margin scale (so the choice
-    of MARGIN_SCALE stops mattering).
+    of LEAD_SCALE stops mattering).
     """
     pooled = sorted(x for x in list(cand) + list(ref) if x is not None)
     n = len(pooled)

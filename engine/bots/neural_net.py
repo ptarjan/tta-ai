@@ -28,7 +28,7 @@ except ImportError:                     # pragma: no cover - Mac has no torch
     nn = object
     HAVE_TORCH = False
 
-#: NUMERICAL GUARD, and it is NOT `hillclimb_pool.MARGIN_SCALE`.  It used to
+#: NUMERICAL GUARD, and it is NOT `hillclimb_pool.LEAD_SCALE`.  It used to
 #: be called `MARGIN_SCALE`, which read as the same knob and is not: that one
 #: is the tanh SQUASH width of the league objective, a modelling choice about
 #: how much a decisive game is worth (120.0, and changing it changes what the

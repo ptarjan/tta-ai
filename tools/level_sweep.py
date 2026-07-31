@@ -71,8 +71,8 @@ def main():
     print(f"# DEFAULT_WEIGHTS with {a.key} set to each level; everything else "
           f"untouched (including {a.key}_early/_late).")
     print(f"# gate_score is the trainer's own accept statistic for that "
-          f"opponent: margin_share(culture margin) on margin tiers, win share "
-          f"otherwise.\n")
+          f"opponent: lead_share(culture lead over the best opponent), the "
+          f"same metric on every tier.\n")
 
     for lab in a.opponents.split(","):
         e = by[lab]

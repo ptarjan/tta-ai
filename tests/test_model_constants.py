@@ -104,7 +104,7 @@ CLASSIFIED = {
     ("engine/bots/neural_net.py", "MARGIN_NORM"): (
         "numerical guard",
         "linear normaliser on the value net's regression target; it cancels, "
-        "and it is NOT hillclimb_pool.MARGIN_SCALE"),
+        "and it is NOT hillclimb_pool.LEAD_SCALE"),
     # ------------------------------------------------------------ measured
     ("engine/bots/board_yields.py", "FREE_POP_UTIL"): (
         "measured",
@@ -179,14 +179,18 @@ CLASSIFIED = {
         "training policy", "pool saturation band; docs/LEAGUE_POOL.md"),
     ("experiments/hillclimb_pool.py", "SAT_FLOOR"): (
         "training policy", "pool saturation band; docs/LEAGUE_POOL.md"),
-    ("experiments/hillclimb_pool.py", "MARGIN_SCALE"): (
+    # 2026-07-30: MARGIN_SCALE became LEAD_SCALE, and CULTURE_SCALE /
+    # CULTURE_CENTRE were DELETED rather than re-fitted -- they described "what
+    # a typical game scores", which is the thing that went stale.  The objective
+    # is now centred on the win/lose boundary, which is rule-derived and needs
+    # no constant at all.  docs/LEAGUE_OBJECTIVE.md.
+    ("experiments/hillclimb_pool.py", "LEAD_SCALE"): (
         "training policy",
-        "tanh squash width of the league objective; docs/LEAGUE_OBJECTIVE.md. "
+        "tanh squash width of the league objective -- how much a blowout "
+        "counts relative to a close game, which no rule decides.  Set by the "
+        "rule 'about 2.5x the measured per-game dispersion' from "
+        "experiments/margin_calib.py; docs/LEAGUE_OBJECTIVE.md section 5.  "
         "OWNER'S CALL -- changing it invalidates the trained vector"),
-    ("experiments/hillclimb_pool.py", "CULTURE_SCALE"): (
-        "training policy", "docs/LEAGUE_OBJECTIVE.md. OWNER'S CALL"),
-    ("experiments/hillclimb_pool.py", "CULTURE_CENTRE"): (
-        "training policy", "docs/LEAGUE_OBJECTIVE.md. OWNER'S CALL"),
     ("experiments/hillclimb_pool.py", "DEFAULT_ALPHA"): (
         "training policy", "docs/LEAGUE_OBJECTIVE.md. OWNER'S CALL"),
     ("experiments/hillclimb_league.py", "HIGH_DEATH_RATE"): (
@@ -323,7 +327,7 @@ class ConstantsAreClassified(unittest.TestCase):
         from engine.bots import neural_net
         import experiments.hillclimb_pool as P
         self.assertFalse(hasattr(neural_net, "MARGIN_SCALE"))
-        self.assertNotEqual(neural_net.MARGIN_NORM, P.MARGIN_SCALE)
+        self.assertNotEqual(neural_net.MARGIN_NORM, P.LEAD_SCALE)
 
 
 class LatenessIsBounded(unittest.TestCase):

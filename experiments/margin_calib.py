@@ -1,9 +1,15 @@
-"""Calibrate the gate tier's culture-margin normalisation.
+"""Calibrate the league objective's culture-differential normalisation.
 
 Plays DEFAULT_WEIGHTS against every non-mirror pool opponent at a player
-count and dumps the per-game culture margins, so `MARGIN_SCALE` in
+count and dumps the per-game culture margins, so `LEAD_SCALE` in
 `experiments/hillclimb_pool.py` is chosen from the measured distribution
-instead of guessed.  Also reports the win-share distribution on the SAME
+instead of guessed.
+
+NOTE (2026-07-30): the objective now scores the lead over the BEST opponent,
+while this script still dumps `per_game_margin`, the margin over the MEAN.
+At 2p they are the same number.  At 3p/4p the lead is at least as dispersed,
+so a scale derived from this script is a lower bound there and should be
+re-derived from `per_game_lead` -- see docs/LEAGUE_OBJECTIVE.md section 5.  Also reports the win-share distribution on the SAME
 games, which is the before/after comparison the fix exists to justify:
 where win share is a flat 0.0 the margin is not.
 
