@@ -8,7 +8,7 @@ about the rule.
 
 Both halves of that sentence turn out to be true measurements of two
 completely different things. **The rate is a 1-ply artefact and search repairs
-it 7–9× at every player count** — [`docs/CARD_CENSUS.md`](CARD_CENSUS.md)'s conditional answer
+it 7–9× at every player count** — [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md)'s conditional answer
 is confirmed, not contradicted, and there is no bug in the aggression rate.
 **The zero is not an artefact.** Under the search the league actually trains,
 1,549 defences were faced across 2p/3p/4p, 1,104 of them were winnable by
@@ -37,7 +37,7 @@ The league does not train there. `tools/gate.sh:224` records that
 each with the previous as its denominator, counted only at **real** decisions —
 the wrapper sits outside the bot, so trial states inside the bot's own search
 are never counted. That separation is the whole point: it is what
-[`docs/CARD_CENSUS.md`](CARD_CENSUS.md) had to fix in its own probe (`22e6dd3`, "the discard
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) had to fix in its own probe (`22e6dd3`, "the discard
 probe was counting the search").
 
 1. **held** — a politics decision where the player holds an aggression card.
@@ -68,7 +68,7 @@ strength), **unattempted** (reachable and the policy played `defend_done`), and
 | wars declared, `plan:width=2` | 316 | 668 | 2,251 |
 
 Under the search the league trains, aggression is a routine part of the game —
-four per game at 4p. [`docs/CARD_CENSUS.md`](CARD_CENSUS.md)'s control was right and its demotion
+four per game at 4p. [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md)'s control was right and its demotion
 of war and aggression from the top of its list was right. **This is an
 all-clear on the rate**, now measured per game rather than per draw, at all
 three player counts rather than 2p only, and at n=300 rather than n=350.
@@ -303,7 +303,7 @@ won the colony. `_quiesce` resolves the rest of the bidding, so the drained
 position shows the outcome — which is what `_child` has always seen inside the
 beam.
 
-This is the same defect [`docs/CARD_CENSUS.md`](CARD_CENSUS.md#10-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §10 reached from the other end
+This is the same defect [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1210-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §12.10 reached from the other end
 when it ranked **territories** its number-one suspect: the census saw
 territories mispriced and looked for a missing feature, and the missing thing
 was not a feature but the position the feature was read on. Two lanes, opposite

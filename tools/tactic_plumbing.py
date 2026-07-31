@@ -19,7 +19,7 @@ only change a decision through that product (the measure
 What it found for the frozen 2p champion, over 374 such decisions: the card
 COUNT in the military hand (0.464), the sum of its age levels (0.283) and the
 tactic's own age (0.267) outweigh the army strength the tactic actually forms
-(0.066) by about 11 to 1.  See docs/CARD_BLINDNESS_MILITARY.md section 5.4.
+(0.066) by about 11 to 1.  See docs/CARD_BLINDNESS.md section 11.5.4.
 """
 from __future__ import annotations
 

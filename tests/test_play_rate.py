@@ -1,12 +1,12 @@
 """A card class must not be priced at zero on every vector that plays.
 
 The bug this exists to prevent, in one sentence: **the suite checked that a
-card was priced and never that its price was read.**  `docs/CARD_CENSUS.md`
+card was priced and never that its price was read.**  `docs/CARD_BLINDNESS.md`
 wrote that sentence about itself; `unit_strength_credit` is what it cost.
 
 The sequence was:
 
-1. `docs/CARD_BLINDNESS_MILITARY.md` found the ten military unit cards had
+1. `docs/CARD_BLINDNESS.md` found the ten military unit cards had
    "zero visible gain" and were priced as pure cost.
 2. `_UNIT_TO_FEATURE` + `_Y_UNIT` + `unit_strength_credit` were added, and
    `tests/test_card_pricing.py` grew four tests that all pass:
@@ -22,12 +22,12 @@ The sequence was:
    human rate of 2.79-3.84** -- it fought whole games with Age A Warriors.
 
 Four card audits ran without catching it (`CARD_BLINDNESS.md`,
-`CARD_BLINDNESS_MILITARY.md`, `CARD_CENSUS.md`, `UNCOVERED_TYPES.md`) because
+`CARD_BLINDNESS.md`, `CARD_BLINDNESS.md`, `UNCOVERED_TYPES.md`) because
 all four asked "is this card priced".  This file asks the other question, and
 asks it in two ways: a **cheap structural** one that always runs, and an
 **expensive behavioural** one behind `PLAY_RATE_CENSUS=1`.
 
-See `docs/PLAY_RATE_AUDIT.md` for the measurement the thresholds come from and
+See `docs/CARD_BLINDNESS.md` for the measurement the thresholds come from and
 `tools/play_rate.py` for the instrument.
 """
 from __future__ import annotations
@@ -111,7 +111,7 @@ def class_gates():
 #: happens roughly never: across 1,757 generations of the 2p/3p/4p arms
 #: (72 + 1,315 + 370), 216 of them accepted, `unit_strength_credit` was moved
 #: by an accepted mutation exactly ONCE, and that move made it negative.
-#: See docs/PLAY_RATE_AUDIT.md section 3.
+#: See docs/CARD_BLINDNESS.md section 17.3.
 #:
 #: The set is asserted EXACTLY, so both directions are visible events: adding
 #: a new zero-by-default class gate fails here, and fixing one fails here too
@@ -150,7 +150,7 @@ DEFAULT_ZERO_GATES = {
 #: build -- so a negative weight is not a preference, it is a sign error that
 #: makes the card look worse for carrying the good thing.
 #:
-#: Measured 2026-07-30 over the three vectors in docs/PLAY_RATE_AUDIT.md
+#: Measured 2026-07-30 over the three vectors in docs/CARD_BLINDNESS.md
 #: (2p champion gen 72 live; 3p ladder gen 1314 and 4p ladder gen 361, both
 #: the archived pre-restart champions):
 #:
@@ -277,14 +277,14 @@ class TestNoClassIsDeadOnEveryTrainedVector(unittest.TestCase):
             revived, set(),
             "%s is now positive on at least one trained vector.  Delete it "
             "from DEAD_ON_EVERY_TRAINED_VECTOR and record the play rate that "
-            "resulted in docs/PLAY_RATE_AUDIT.md." % sorted(revived))
+            "resulted in docs/CARD_BLINDNESS.md." % sorted(revived))
 
 
 #: Per-seat-game take rates the human corpus supports, by card type, at 2p.
 #: Source: `python3 tools/play_rate.py human` over the 1,011-game BGO corpus
 #: in `sources/bgo/journals.tar.gz` (692 2p games, 1,384 seat-games), summed
 #: over the type's base names -- the same numbers as the "by card type" block
-#: of docs/PLAY_RATE_AUDIT.md.
+#: of docs/CARD_BLINDNESS.md.
 #:
 #: The floor is **one eighth of the human rate**, which is a deliberately
 #: loose bar: the bot is not required to play like a human, only to be within

@@ -300,7 +300,7 @@ opposite reason to the one the check is about.
 ## 7. The current KNOWN_DEAD list — 41 entries
 
 **Seven entries were deleted on 2026-07-31** by the same-type `unit_upgrade` fix
-(`docs/UNIT_TECH_PRICING.md` §8): `best_arena` and the six `discontent` /
+(`docs/CARD_BLINDNESS.md` §14.8, the former `UNIT_TECH_PRICING.md`): `best_arena` and the six `discontent` /
 `uprising` / `best_arena` encoding slices below stopped being dead because the
 re-priced policy builds an arena and goes discontent in the six corpus games.
 That is the ratchet working — and it is also a warning worth reading twice:

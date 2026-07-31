@@ -132,7 +132,7 @@ class TestTheFix(unittest.TestCase):
     def test_every_unit_can_price_positive_on_some_board(self):
         """FAILS ON THE OLD CODE for all ten, on EVERY board and at every
         weight vector in the repo -- the static table has no board in it, and
-        docs/CARD_BLINDNESS_MILITARY.md section 5.1 is the measurement that no
+        docs/CARD_BLINDNESS.md section 11.5.1 is the measurement that no
         setting of `unit_strength_credit` flips the sign either.
 
         Each card is asked on a board where the engine would actually offer

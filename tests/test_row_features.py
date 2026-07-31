@@ -616,7 +616,7 @@ class RootRowOrder(unittest.TestCase):
         # depends on the tableau 40 plies of self-play happens to produce, so
         # at slot 7 THIS ASSERTION SILENTLY STOPS ASSERTING ANYTHING the first
         # time any lane changes the evaluator; it did exactly that on
-        # docs/ACTION_CARD_PRICING.md.  Slot 5 is still a suffix of the root
+        # docs/CARD_BLINDNESS.md.  Slot 5 is still a suffix of the root
         # row (the mask still has to skip it, which is the property under
         # test) and the quantity it moves is deterministic.
         st.card_row[5] = "Theology"

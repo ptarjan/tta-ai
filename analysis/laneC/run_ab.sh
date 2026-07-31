@@ -9,7 +9,7 @@
 # MDE: n = 3200 games gives SE ~= 0.88pp on the win rate, so the minimum
 # detectable effect at 80% power and alpha = 0.05 two-sided is ~= 2.5pp.
 # Pairing makes the true SE smaller than that, so 2.5pp is conservative.
-# NOTE the caveat in docs/CARD_PRICING_LEADERS.md 5.2: `agg.py`'s interval is
+# NOTE the caveat in docs/CARD_BLINDNESS.md 13.5.2: `agg.py`'s interval is
 # the independent-samples one on a paired design, and is optimistic.
 #
 # The arm is a WEIGHT configuration now, not `TTA_BOARD_TYPES` -- the type

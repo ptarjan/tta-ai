@@ -43,25 +43,19 @@ The three documents at the top are the ones to read first.
 
 ## Card pricing and coverage
 
-*Six overlapping documents from one long investigation, plus
-[`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md), which asks the behavioural question the other six do not.
-[`OPEN_ITEMS.md`](OPEN_ITEMS.md#2-card-pricing-and-coverage) §2 is the consolidated list of what is still unpriced; use
+*One document now, `CARD_BLINDNESS.md`, absorbing what used to be seven
+overlapping write-ups from one long investigation (see "Housekeeping" for the
+merge). [`OPEN_ITEMS.md`](OPEN_ITEMS.md#2-card-pricing-and-coverage) §2 is the consolidated list of what is still unpriced; use
 these for the reasoning.*
 
 | doc | answers |
 |---|---|
-| [`CARD_CENSUS.md`](CARD_CENSUS.md) | The instrument: does the bot play each of the 236 cards, and can a card's value reach the policy at all?  Severed-pipe detection across all 23 card types. |
-| [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) | The originating finding (`_card_yields` silently dropped culture/science), the fix, and a project-wide audit of confidence-interval methodology. |
-| [`CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md) | Board-aware pricing for leaders, actions and governments by diffing the rules engine rather than copying it. |
-| [`CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md) | Territories, units and tactics — why units price *negative* and why no per-card table can fix it. |
-| **[`UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md)** | The fix for that: a unit technology priced by a board query (the engine's own upgrade cost against a `compute` strength diff, valued at d(`evaluate`)/d(strength)).  Unit takes 0.20 → 1.06 at 2p and 0.08 → 4.16 at 3p; A/B null at 2p and on the defaults at 3p, and a 14.6% **regression** on the archived 3p champion that is attributed to an unconstrained `strength` weight — read §5 before warm-starting anything from that archive. |
-| **[`YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)** | The other half of that fix, and the one that closes [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md)'s largest non-inert hole: `card_potential` read `w[k]` where `evaluate` reads `w[k] + (1−L)w[k_early] + L·w[k_late]`, and `tech_levels` was mapped to nothing at all on every technology card.  `feature_marginal` + `board_yields.tech_upgrade` price all fifteen technology types by one board query.  Labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 → 0.85 — **and the blue over-play is cured by the same change** (theatres 2.23 → 0.82).  A/B **+20.5pp at 2p and +8.3pp at 3p on `DEFAULT_WEIGHTS`**, and a −37.8pp **regression** on the live 2p champion that reverses to +13.0pp when one stale weight group is reset — read §4 before trusting `champion_2p.json`. |
+| [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) | The originating finding (`_card_yields` silently dropped culture/science), the fix, and a project-wide audit of confidence-interval methodology.  §11 (merged from the former `CARD_BLINDNESS_MILITARY.md`): territories, units and tactics — why units price *negative* and why no per-card table can fix it.  §12 (merged from the former `CARD_CENSUS.md`): the instrument — does the bot play each of the 236 cards, and can a card's value reach the policy at all?  Severed-pipe detection across all 23 card types.  §13 (merged from the former `CARD_PRICING_LEADERS.md`): board-aware pricing for leaders, actions and governments by diffing the rules engine rather than copying it.  §14 (merged from the former `UNIT_TECH_PRICING.md`): a unit technology priced by a board query (the engine's own upgrade cost against a `compute` strength diff, valued at d(`evaluate`)/d(strength)).  Unit takes 0.20 → 1.06 at 2p and 0.08 → 4.16 at 3p; A/B null at 2p and on the defaults at 3p, and a 14.6% **regression** on the archived 3p champion attributed to an unconstrained `strength` weight — read §14.5 before warm-starting anything from that archive.  §15 (merged from the former `YELLOW_TECH_PRICING.md`): the other half of that fix — `card_potential` read `w[k]` where `evaluate` reads `w[k] + (1−L)w[k_early] + L·w[k_late]`, and `tech_levels` was mapped to nothing at all on every technology card.  `feature_marginal` + `board_yields.tech_upgrade` price all fifteen technology types by one board query.  Labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 → 0.85 — **and the blue over-play is cured by the same change** (theatres 2.23 → 0.82).  A/B **+20.5pp at 2p and +8.3pp at 3p on `DEFAULT_WEIGHTS`**, and a −37.8pp **regression** on the live 2p champion that reverses to +13.0pp when one stale weight group is reset — read §15.4 before trusting `champion_2p.json`.  §16 (merged from the former `ACTION_CARD_PRICING.md`): **sixteen of the thirty-three yellow action cards priced at exactly 0.000**, because `free_civil_action`, `resource_discount` and `restricted_resources` are weights `features()` never emits, and because Reserves' "food OR resources" choice was multiplied by `card_board_credit`, 0.0 on every champion.  `weighted.action_value` prices all thirty-three through `feature_marginal` instead.  Takes 7.30 → 9.00 per seat-game at 2p against a human 12.98 and 5.83 → 7.53 at 3p against 10.25 — read §16.5 for the modelling error the first A/B caught.  §17 (merged from the former `PLAY_RATE_AUDIT.md`): the behavioural complement to all of the above — not *is the card priced* but **does the bot actually play it, and at what rate against a human?**  Per-card take/play rates for all 236 cards at 2p/3p/4p against the 1,011-game corpus, the ranked discrepancy table both ways, the never-played list, and the standing check (`tools/play_rate.py`, `tests/test_play_rate.py`) that makes a class priced-but-inert a test failure. |
+| **[`GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md)** | The fourth instance, and the last civil type left on the static table: a government prints **two** science costs (`peacefulCost` / `revolutionCost`) and keeps its civil actions, military actions and urban limit in top-level fields, so `_card_yields` — which reads `techCost`, `production` and `effects` — saw **none of it**.  Five of the seven takeable governments were unreachable: three priced at exactly 0.000 and two strictly negative.  `weighted.gov_value` prices the swap diff plus the `tech_levels` / `gov_level` delta at `feature_marginal` and charges the cheaper of the two routes RULES_SPEC 8.2/8.3 offers, the revolution branch gated on the engine's own `_can_revolt` — which also settles [`OPEN_ITEMS.md`](OPEN_ITEMS.md) §9.1 from the rules: the burn lands on `ca_left`.  Government takes 1.05 → 1.63 per seat-game at 2p against a human 1.37, and seats ending the game still on Despotism fall from 10 of 40 to 1 of 40.  Gated by `gov_board_credit`, 1.0. |
 | **[`MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md)** | The other side of the same coin: not *is the card priced* but **is this number a rule, a measurement or a guess?**  Three fitted constants in the evaluator replaced by quantities the state already knows — the deal rate (fitted at 0.29 takes/round, actually **1.88**, leaving the horizon **1.80 rounds long**), the lateness gauge (now the exact civil-supply fraction, bounded [0,1] by construction), and the flat rival take probability (now read off each rival's open board, with one prior left as a fittable weight).  Plus the standing check (`tests/test_model_constants.py`) that fails when any module-scope constant in `engine/` or `experiments/` is not classified as rule-derived / numerical guard / measured / fitted prior / training policy / enum-or-sentinel. |
-| **[`ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md)** | The third and largest instance of the same sentence: **sixteen of the thirty-three yellow action cards priced at exactly 0.000**, because `free_civil_action`, `resource_discount` and `restricted_resources` are weights `features()` never emits — so `evaluate` never pays for them and no game can produce a gradient on them — and because Reserves' "food OR resources" choice was multiplied by `card_board_credit`, 0.0 on every champion.  Per-card take rates split cleanly along that line and nothing else.  `weighted.action_value` prices all thirty-three through `feature_marginal` on the live coordinates instead.  Takes 7.30 → 9.00 per seat-game at 2p against a human 12.98 and 5.83 → 7.53 at 3p against 10.25, with the three board-scaled cards' holes closed outright.  Gated by `action_board_credit`, 1.0 — and read §5 for the modelling error the first A/B caught: pricing the ordered free action at a whole civil action lands the take rate exactly on the human number and costs 17pp of win rate, because **playing** the card costs the action it grants. |
 | **[`COORDINATE_REGISTRY.md`](COORDINATE_REGISTRY.md)** | The generalisation of the three above, and the guard that makes them a closed bug class: **a coordinate that exists in one registry and is missing from another is silently dead, and the tree is green.**  Four registries — `features()`, `DEFAULT_WEIGHTS` plus every weight vector on disk, `card_potential`, and `neural_encode.encode()` — with the bijection asserted in **both** directions, because the missing direction is always where the bug hides.  `tests/test_coordinate_registry.py` (50 tests, ~8s, no game batches) plus a frozen `KNOWN_DEAD` ratchet that fails when something new joins **and** when a listed entry stops being dead, so the list can only shrink.  It found two new instances on its first run: `gov_action_cost` (a revolution's burnt civil actions priced through a coordinate `evaluate` never pays, beside the `civil_actions` that is the same quantity) and `state.current_events_age` (declared, never written, and five permanently frozen neural inputs). |
 | [`UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md) | Special technologies, production buildings and bonus cards; and the general rule that a half-priced card is biased, not neutral. |
 | [`COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md) | The non-card axis: colonies, resign, farm-vs-mine degeneracy, and the dead-coordinate census of every evaluator feature. |
-| [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) | The complement to all of the above: not *is the card priced* but **does the bot actually play it, and at what rate against a human?**  Per-card take/play rates for all 236 cards at 2p/3p/4p against the 1,011-game corpus, the ranked discrepancy table both ways, the never-played list, and the standing check (`tools/play_rate.py`, `tests/test_play_rate.py`) that makes a class priced-but-inert a test failure. |
 
 ## Rules conformance, scoring and combat
 
@@ -116,13 +110,16 @@ read it before quoting any frozen-champion number.
 ## Housekeeping
 
 * **61 documents on 2026-07-30, 54 after the consolidation** (53 topic docs plus
-  this index); 55 once [`PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md) landed later the same day.  Nine were deleted and their live content migrated; one was
+  this index); 55 once [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) landed later the same day.  Nine were deleted and their live content migrated; one was
   renamed (`UNATTENDED.md` -> [`HAZARDS.md`](HAZARDS.md)) and one superseded in place
   (`OPEN_AFTER_THE_AUDIT.md` -> [`OPEN_ITEMS.md`](OPEN_ITEMS.md)); five stale-wrong documents got
   dated correction banners
   rather than deletion, because the wrong conclusions in them were the kind
   somebody would otherwise re-reach.
-* **56 topic docs on 2026-07-31** (57 with this index). Two more one-question
+* **44 topic docs on 2026-07-31** (45 with this index), down from 56 (57 with
+  the index) earlier the same day: the scoring, military/combat and
+  card-pricing clusters below removed thirteen more files by merging their
+  live content into their topic doc. Two more one-question
   write-ups whose fix had landed were folded into their topic doc and deleted:
   the former `AGGRESSION_FIX.md` into [`AGGRESSION_RATE.md`](AGGRESSION_RATE.md) (as an
   appendix, headings and all — its own §A/§B numbering was untouched so every
@@ -160,14 +157,30 @@ read it before quoting any frozen-champion number.
   merged docs (`MILITARY_SEAM.md` and `WAR_OVER_TECHNOLOGY.md` each cite
   `MILITARY_DISCARD.md` by name) were repointed at §2. Every citing line, in
   docs (`AGGRESSION_RATE.md`, `HEURISTICS.md`, `BOT_ARCHITECTURE.md`,
-  `DEEPER_SEARCH.md`, `UNIT_TECH_PRICING.md`, `UNCOVERED_TYPES.md`,
-  `OPEN_ITEMS.md`, `SCORE_AUDIT.md`, `PLAY_RATE_AUDIT.md`) and in code
+  `DEEPER_SEARCH.md`, `CARD_BLINDNESS.md`, `UNCOVERED_TYPES.md`,
+  `OPEN_ITEMS.md`, `SCORE_AUDIT.md`) and in code
   (`engine/bots/weighted.py`, `engine/bots/quiescent.py`, `engine/PROGRESS.md`,
   `tools/gate.sh`, and half a dozen census/probe tools), was updated in the
   same commit.
-* Still worth doing: the eight-document card-pricing cluster
-  (`CARD_BLINDNESS.md` and its seven satellites) — same shape, same
-  section-number-cited-from-code caveat, larger scale.
+* **The card-pricing cluster merged into `CARD_BLINDNESS.md` on 2026-07-31.**
+  Seven satellite docs, each cited from code by filename and section number
+  (52 comments into `CARD_BLINDNESS.md` alone before this pass), became new
+  top-level sections §11-§17, each satellite's own numbering renumbered under
+  its new prefix to avoid colliding with `CARD_BLINDNESS.md`'s own §1-§10:
+  the former `CARD_BLINDNESS_MILITARY.md` is §11, `CARD_CENSUS.md` is §12,
+  `CARD_PRICING_LEADERS.md` is §13, `UNIT_TECH_PRICING.md` is §14,
+  `YELLOW_TECH_PRICING.md` is §15, `ACTION_CARD_PRICING.md` is §16, and
+  `PLAY_RATE_AUDIT.md` is §17. Every citing line, in docs and in code
+  (`engine/bots/weighted.py`, `engine/bots/board_yields.py`,
+  `engine/effects.py`, and a couple dozen tools/tests), was updated in the
+  same commit — including several two-line and mid-sentence cross-references
+  between the satellites themselves that a naive per-line regex would have
+  missed (e.g. "this is the §5.1 finding of `docs/CARD_BLINDNESS.md`", where
+  the filename follows rather than precedes the section number). `MODEL_CONSTANTS.md`
+  and `COORDINATE_REGISTRY.md` were deliberately left out of this merge —
+  they ask "is this a rule, a measurement or a guess" and "does a coordinate
+  reach every registry it needs", not "is this card priced", and stand fine
+  on their own.
 * Open work goes in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).  Traps go in [`HAZARDS.md`](HAZARDS.md).  Neither is a
   place for narrative.
 * If you delete a document, `grep -rn '<NAME>.md'` across the whole repo first —

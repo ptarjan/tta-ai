@@ -136,7 +136,7 @@ class TestNoDoubleCount(unittest.TestCase):
         A SAMPLING test, and it says so: `_play` is self-play, so any pricing
         change re-rolls the move stream and a single seed can stop revealing
         an Age III event without the property having moved at all.  Seed 3
-        did exactly that when docs/YELLOW_TECH_PRICING.md landed.  So scan
+        did exactly that when docs/CARD_BLINDNESS.md landed.  So scan
         seeds for one that actually reveals one, and fail only if NO seed
         does -- which would mean the fixture, not the property, is broken.
         """

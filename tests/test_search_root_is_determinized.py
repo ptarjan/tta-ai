@@ -129,7 +129,7 @@ class DeterminizeCoversEveryHiddenPile(unittest.TestCase):
                 # EXPECTED count at exactly half the seeds and a bar of "more
                 # than half" is a coin flip.  It came up tails the first time
                 # a pricing change re-rolled the fixture
-                # (docs/YELLOW_TECH_PRICING.md).  A pile nobody shuffles
+                # (docs/CARD_BLINDNESS.md).  A pile nobody shuffles
                 # still scores 0, which is what this is really looking for,
                 # and 11/48 is ~3.7 sd below the k = 2 expectation.
                 moved = 0

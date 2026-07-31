@@ -15,7 +15,7 @@ technique bgo_botmatch uses, so the two are directly comparable.
 Every seat runs the same spec (mirror).  All taps check `state is real` before
 recording, because the search copies the state and calls the same engine
 functions on the copy -- counting those would measure the search, not the game
-(the mistake `docs/CARD_CENSUS.md` had to fix in its discard probe).
+(the mistake `docs/CARD_BLINDNESS.md` had to fix in its discard probe).
 """
 from __future__ import annotations
 

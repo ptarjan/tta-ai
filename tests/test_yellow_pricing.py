@@ -2,7 +2,7 @@
 
 THE DEFECT, stated as the property that failed
 ----------------------------------------------
-`docs/PLAY_RATE_AUDIT.md` measured the bot taking **0.03 / 0.00** laboratories
+`docs/CARD_BLINDNESS.md` measured the bot taking **0.03 / 0.00** laboratories
 and **0.05 / 0.00** mines per seat-game at 2p/3p against a human **1.62 / 1.27**
 and **1.18 / 1.21**, and Alchemy, Scientific Method and Coal literally zero
 times at any table size.  Every yellow production technology prices strictly
@@ -273,7 +273,7 @@ class TestTheFix(unittest.TestCase):
         self.assertEqual(BY._upgradable_onto(p, "Bronze"), [])
 
     def test_the_develop_half_is_what_tech_board_credit_gates_on_a_unit(self):
-        """A unit card keeps docs/UNIT_TECH_PRICING.md's board price at
+        """A unit card keeps docs/CARD_BLINDNESS.md's board price at
         `tech_board_credit` = 0.0 and gains exactly the develop half at 1.0 --
         which is what makes ONE constant recover the parent commit's pricing
         on all 236 cards."""

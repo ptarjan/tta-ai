@@ -430,7 +430,8 @@ def _government_cost(state, p, name, out):
 # `DEFAULT_WEIGHTS`, and the third-largest single coordinate on the archived
 # 3p champion).  Neither `_card_yields` nor the swap diff above has ever
 # emitted either of them, so a government card was missing exactly the term
-# docs/YELLOW_TECH_PRICING.md added to every other technology in the game.
+# docs/CARD_BLINDNESS.md section 15 (the former docs/YELLOW_TECH_PRICING.md)
+# added to every other technology in the game.
 # docs/OPEN_ITEMS.md section 2 item 22.
 #
 # It is a DIFFERENCE, not the printed level, and that is the rules and not a
@@ -944,7 +945,7 @@ def unit_upgrade(name, state, idx):
 # me" for the four red types.  `tech_upgrade` asks the same question of the
 # other eleven -- farm, mine, lab, temple, library, theater, arena and the
 # special technologies -- and of the red ones too, so there is one answer and
-# not two.  docs/YELLOW_TECH_PRICING.md is the measurement; the short version
+# not two.  docs/CARD_BLINDNESS.md is the measurement; the short version
 # is that the static table in `weighted._card_yields` priced every yellow
 # production technology strictly NEGATIVE on the live 2p champion (Iron -6.72,
 # Alchemy -11.19, Computers -20.41) and `row_pressure` skips anything <= 0, so
@@ -1049,11 +1050,11 @@ def tech_upgrade(name, state, idx):
 
     if typ in C.UNIT_TYPES:
         # The red half is `unit_upgrade`, called and not re-derived: it is the
-        # shape docs/UNIT_TECH_PRICING.md measured and landed, and a second
-        # opinion here would silently re-open a settled A/B.  Since 2026-07-31
-        # it shares `_upgradable_onto` and `_with_tech` with the branch below,
-        # so both halves of this function mean the same thing by
-        # "upgrade" -- same type, strictly lower level, which is what
+        # shape docs/CARD_BLINDNESS.md section 14 measured and landed, and a
+        # second opinion here would silently re-open a settled A/B.  Since
+        # 2026-07-31 it shares `_upgradable_onto` and `_with_tech` with the
+        # branch below, so both halves of this function mean the same thing
+        # by "upgrade" -- same type, strictly lower level, which is what
         # `engine/actions.py:_action_moves` offers.
         gained, sci, res = unit_upgrade(name, state, idx)
         staff = (("strength", gained, _GAIN),) if gained else ()

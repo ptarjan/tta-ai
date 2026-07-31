@@ -82,7 +82,7 @@ class Derivation(unittest.TestCase):
         first hit: cheap when the property is healthy, and it fails only when
         the property is really gone rather than when the positions shifted.
 
-        It re-rolled again when docs/YELLOW_TECH_PRICING.md landed -- twelve
+        It re-rolled again when docs/CARD_BLINDNESS.md landed -- twelve
         `stop` values on one seed all came back INERT or SCORE -- so the grid
         now varies the SEED as well, which is the axis that actually changes
         which armies are near a clamp.
@@ -121,7 +121,7 @@ class Derivation(unittest.TestCase):
         neither -- so "reordering the alternatives" is a pre-existing property
         of the probe and "changing the advice" is the claim the operator doc
         actually rests on.  Asserting the stronger form made this a coin flip
-        that a re-rolled self-play fixture lost (docs/YELLOW_TECH_PRICING.md).
+        that a re-rolled self-play fixture lost (docs/CARD_BLINDNESS.md).
         """
         worst = F.INERT
         for stop in (5, 8, 11, 14, 17, 20, 23, None):

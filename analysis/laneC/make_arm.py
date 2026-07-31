@@ -1,7 +1,7 @@
 """Build the two weight vectors for one Lane C A/B arm.
 
 The arm used to be an environment variable (`TTA_BOARD_TYPES`); it is a weight
-configuration now (docs/CARD_PRICING_LEADERS.md 10.2), which is the whole
+configuration now (docs/CARD_BLINDNESS.md 13.10.2), which is the whole
 point -- a configuration only a human could set became one the league can fit.
 That makes "what did this arm actually run?" a question with a file for an
 answer instead of a shell variable, so this writes both vectors to disk.

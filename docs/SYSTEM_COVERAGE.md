@@ -13,7 +13,7 @@ Two instruments, both new and both committed with this document:
   `interact.start_defense`).  Every tap checks `state is real` before
   recording, because the beam copies the state and calls the same functions on
   the copy; counting those would measure the search, not the game — the mistake
-  [`docs/CARD_CENSUS.md`](CARD_CENSUS.md) had to fix in its own discard probe (`22e6dd3`).  It
+  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) had to fix in its own discard probe (`22e6dd3`).  It
   records card **identity**, which is what "which wonder is never built" needs
   and what `tools/bgo_botmatch.py` does not carry.
 * `tools/system_report.py` — folds the blobs into the tables below.
@@ -272,7 +272,7 @@ lines against the same card database, with take-backs subtracted.
 **The bot plays essentially the entire game on its Age A production and Age A
 army.**  It takes 0.15 unit cards per seat-game at 2p against a human 3.84 —
 **26× under** — and 0.20 farm/mine cards against 2.52.  Both are near-zero, and
-both are the *same* defect: [`docs/CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md#11-units-were-negative-not-zero) §1.1 shows every
+both are the *same* defect: [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1111-units-were-negative-not-zero) §11.1.1 shows every
 unit card prices to a strictly **negative** `card_potential` (−0.57 Warriors to
 −4.40 Air Forces) because `unit_strength_credit` is the gate and it is **0.0 on
 every vector this census ran** (2p live, 3p archived, 4p archived — checked).
@@ -322,7 +322,7 @@ fifteen "Impact of …" formulas are stated and the same function the evaluator
 forecasts with (`weighted.event_scoring_margin`).  Both halves are exercised.
 
 What *is* weak is the **choice** of which event to prepare, not the rate:
-[`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier A #3 measures `flat` = 0.775–0.897 — at most
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1241-the-ranking) §12.4.1 tier A #3 measures `flat` = 0.775–0.897 — at most
 decisions every event in the hand scores identically, because `_card_yields`
 returns the empty tuple for all 55 event cards and `hand_mil_potential` is 0.0
 (2p, 4p) or 0.011 (3p).  Label **(b)**, and it is about ordering, not coverage.
@@ -391,7 +391,7 @@ Decisions per seat-game, 2p / 3p / 4p:
   it is therefore the only clean **(a)**.
 * **The three Military Bonus cards have no move handler at all.**  They are
   spendable only by the defence and colonisation machinery
-  ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier C #9).  That is a rules-coverage question,
+  ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1241-the-ranking) §12.4.1 tier C #9).  That is a rules-coverage question,
   not an evaluator one; the rulebook does not let you "play" one either, so it
   is (a)-by-design rather than a bug.
 * **Tactics are near-dead at 2p** (0.21 played, 0.08 copied per seat-game) and
@@ -409,7 +409,7 @@ Decisions per seat-game, 2p / 3p / 4p:
 Ordered by how confident the zero is.
 
 1. ~~**Buys unit technology.**~~  **FIXED 2026-07-30, see
-   [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md).**  0.15 / 0.06 / 0.45 takes per seat-game
+   [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md).**  0.15 / 0.06 / 0.45 takes per seat-game
    against a human 3.84 / 2.79 / 3.43.  **(b)**, wrong sign: every unit priced
    to a negative `card_potential` because `unit_strength_credit` = 0.0 on all
    three vectors.  The diagnosis above is confirmed and was also found to be
@@ -471,7 +471,7 @@ And the opposite — **wildly above human**:
   "1,549 defences faced … zero won" was measured with `QUIET_PENDING` off; the
   default is now `True` (`engine/bots/pending.py:71`) and 70% of 2p aggressions
   are held off.
-* **[`docs/CARD_CENSUS.md`](CARD_CENSUS.md#41-the-ranking) §4.1 tier A #1** ranked wonders as the archetypal
+* **[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1241-the-ranking) §12.4.1 tier A #1** ranked wonders as the archetypal
   severed pipe on the frozen 78-key champions.  On the live 2p vector the pipe
   conducts (1.53 completions/seat).  Its tier A #2 — units — is **confirmed
   intact and is now the top-ranked hole**: §5 above measures the behavioural

@@ -17,7 +17,7 @@ The wonder defect is exactly a hole in that table.  Wonders were priced
 reaches the policy only through `row_urgency`, a take-timing heuristic, and
 never through `hand_potential`, which the search optimises at every decision.
 Correct pricing in a pipe that does not reach the policy is worth nothing.
-A census is how you notice; see docs/CARD_CENSUS.md for the plumbing map that
+A census is how you notice; see docs/CARD_BLINDNESS.md for the plumbing map that
 says *why* each hole is there.
 
 WHAT IS MEASURED
@@ -49,7 +49,7 @@ name, per player count:
 The `probe` subcommand answers the OTHER half -- whether the card's value can
 reach the policy at all -- by reproducing `WeightedBot.pick` exactly and
 asking whether the score of a candidate depends on which card it is.  See its
-section below, and docs/CARD_CENSUS.md section 1.2.
+section below, and docs/CARD_BLINDNESS.md section 12.1.2.
 
 USAGE
 

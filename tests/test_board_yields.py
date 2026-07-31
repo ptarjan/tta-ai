@@ -170,7 +170,7 @@ class TestTheTypeKnobIsAWeightNow(unittest.TestCase):
     `hillclimb_league` fit the government half rather than be told it.
 
     The arms the old variable expressed must still be expressible, exactly,
-    or the numbers in docs/CARD_PRICING_LEADERS.md stop being comparable to
+    or the numbers in docs/CARD_BLINDNESS.md stop being comparable to
     anything measurable today.
     """
 
@@ -464,7 +464,7 @@ class TestTheCreditGateIsExact(unittest.TestCase):
 
     def test_zero_action_credit_is_the_static_answer_for_every_action(self):
         """`action_board_credit` = 0.0, the action lane's escape hatch, for the
-        same reason and on the same terms (docs/ACTION_CARD_PRICING.md)."""
+        same reason and on the same terms (docs/CARD_BLINDNESS.md)."""
         st = _played()
         w = dict(W.DEFAULT_WEIGHTS, action_board_credit=0.0)
         acts = [n for n in C.db().by_name if W._is_action(n)]
@@ -490,7 +490,7 @@ class TestTheCreditGateIsExact(unittest.TestCase):
 
         The red half is not asserted here because `tech_board_credit` = 0.0
         does NOT send a unit back to the static table -- it drops the develop
-        half and leaves docs/UNIT_TECH_PRICING.md's board price standing,
+        half and leaves docs/CARD_BLINDNESS.md's board price standing,
         which is the parent commit's answer and is what the test above pins.
         """
         st = _played()

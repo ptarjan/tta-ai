@@ -293,7 +293,7 @@ KNOWN_DEAD = {
         "for days while four separate audits walked past it.  It now gates "
         "only the STATELESS unit table -- every caller that decides a move has "
         "a board -- so today it is dead by construction rather than neglect",
-        "docs/UNIT_TECH_PRICING.md; retire with the static table"),
+        "docs/CARD_BLINDNESS.md; retire with the static table"),
     # -------------------------------------------- emitted, never non-zero yet
     "hand_limit": (
         ("never-nonzero",),

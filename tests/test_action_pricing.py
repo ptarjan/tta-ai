@@ -2,13 +2,13 @@
 
 THE DEFECT, stated as the property that failed
 ----------------------------------------------
-`docs/YELLOW_TECH_PRICING.md` section 3 measured the bot taking **2.72** action
+`docs/CARD_BLINDNESS.md` section 15.3 measured the bot taking **2.72** action
 cards per seat-game at 2p against a human **12.98**, and **5.90** against
 **10.25** at 3p -- a 4.8x gap and the largest single card-type deficit left in
 the game (`docs/OPEN_ITEMS.md` item 24).
 
 The cause is one mechanism with three faces, and all three are the same
-sentence `docs/UNIT_TECH_PRICING.md` and `docs/YELLOW_TECH_PRICING.md` already
+sentence `docs/CARD_BLINDNESS.md` and `docs/CARD_BLINDNESS.md` already
 closed with: *a card is worth what `evaluate` pays for what it does.*
 
 1. **Three of the coordinates an action card's value is spelled in are not

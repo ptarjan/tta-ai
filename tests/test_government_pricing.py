@@ -6,7 +6,7 @@ THE DEFECT, stated as the property that failed
 `tech_levels` alongside every other technology in the game, and again on its
 own as `gov_level` (2.0 in `DEFAULT_WEIGHTS`) -- and neither `_card_yields`
 nor the swap diff in `board_yields` ever emitted either one.  A government was
-therefore missing exactly the term `docs/YELLOW_TECH_PRICING.md` added to
+therefore missing exactly the term `docs/CARD_BLINDNESS.md` §15 (the former `YELLOW_TECH_PRICING.md`) added to
 every other technology (`docs/OPEN_ITEMS.md` section 2 item 22).
 
 It was worse than that, and `TestTheDefect` below is the measurement rather
@@ -264,7 +264,7 @@ class TestTheFix(unittest.TestCase):
     def test_the_gains_are_priced_at_the_marginal_not_the_bare_weight(self):
         """`tech_levels` is in `PHASE_KEYS`, so `evaluate` pays
         `w[k] + (1-L)w[k_early] + L*w[k_late]` where the static table looked
-        up the bare `w[k]` -- the error `docs/YELLOW_TECH_PRICING.md` found."""
+        up the bare `w[k]` -- the error `docs/CARD_BLINDNESS.md` §15 (the former `docs/YELLOW_TECH_PRICING.md`) found."""
         st = G.new_game(2, 1)
         base = W.card_potential("Monarchy", _w(), st, 0)
         early = W.card_potential("Monarchy", _w(tech_levels_early=3.0), st, 0)

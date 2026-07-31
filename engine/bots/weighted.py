@@ -29,7 +29,7 @@ Feature groups
     board        what a leader or a government is worth on THIS board, by
                  swapping it in and diffing `effects.compute` rather than
                  reading numbers off the card (engine/bots/board_yields.py,
-                 docs/CARD_PRICING_LEADERS.md)
+                 docs/CARD_BLINDNESS.md)
     cards        civil/military hand size and summed card levels
     rivals       the best rival's culture, culture rate, science rate and
                  strength (leading is what wins, not absolute output)
@@ -438,7 +438,7 @@ def strength_marginal(state, idx, w, ctx=None):
 
     d(`evaluate`)/d(`features()["strength"]`), evaluated exactly -- not a
     proxy for it and not a constant.  `card_potential` looks up `w["strength"]`
-    and stops, and docs/CARD_BLINDNESS_MILITARY.md section 5.1 measured what
+    and stops, and docs/CARD_BLINDNESS.md section 11.5.1 measured what
     that costs: the board expresses a point of strength through FOUR features
     and the card sees one of them, so a unit's gain is under-counted by
     between 2.3x and 7x, in a way that depends on the board and therefore
@@ -509,7 +509,7 @@ def feature_marginal(key, state, idx, w, late=None, ctx=None):
     nothing at all where `evaluate` pays 18.46.  That is why every yellow
     production technology came out strictly negative and `row_pressure`'s
     `if val <= 0.0: continue` then made the whole colour invisible
-    (docs/YELLOW_TECH_PRICING.md).
+    (docs/CARD_BLINDNESS.md).
 
     `strength` is delegated rather than special-cased twice: the board
     expresses a point of army through four features and `strength_marginal` is
@@ -1019,7 +1019,7 @@ def features(state, idx, ctx=None, w=None):
         # card and, until this line, nothing priced them once it HELD one --
         # so a government's urban slots and Gandhi's aggression ban appeared
         # in the take decision and then evaporated from the board.  That is
-        # the mirror image of the blindness docs/CARD_PRICING_LEADERS.md was
+        # the mirror image of the blindness docs/CARD_BLINDNESS.md was
         # written about, and it is fixed the way the convention above says:
         # same key on both sides.
         #
@@ -1313,7 +1313,7 @@ _unpriced(
 #    trigger is not in the production phase.  The measurement that would
 #    close this bucket -- how often each trigger actually fires per round in
 #    real games -- is a separate piece of work and is named as such in
-#    docs/CARD_PRICING_LEADERS.md rather than guessed at here.
+#    docs/CARD_BLINDNESS.md rather than guessed at here.
 _unpriced(
     "trigger: pays per future event, not on play; needs a measured "
     "firing rate, not a guessed one",
@@ -1702,7 +1702,7 @@ def _sum_yields(triples, w, credit):
 #     the old `TTA_BOARD_TYPES=leader`, offsets being additive.
 #
 # All four default to 0.0 on top of a 0.0 credit, so the shipped evaluator
-# is byte-identical either way (docs/CARD_PRICING_LEADERS.md section 5).
+# is byte-identical either way (docs/CARD_BLINDNESS.md section 13.5).
 _BOARD_CREDIT_KEYS = {
     "leader": "card_board_leader",
     "government": "card_board_government",
@@ -1804,7 +1804,7 @@ def action_value(name, state, idx, w, late=None):
 
     `tech_value`'s sibling, for the one civil type left on the static table,
     and it is the same diagnosis one colour over.  Both documents this repeats
-    -- docs/UNIT_TECH_PRICING.md and docs/YELLOW_TECH_PRICING.md -- close with
+    -- docs/CARD_BLINDNESS.md and docs/CARD_BLINDNESS.md -- close with
     the same sentence: **a card is worth what `evaluate` pays for what it
     does**, and the static table kept pricing cards through coordinates
     `evaluate` does not use.  The action cards are the third and largest
@@ -1922,12 +1922,12 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     ONE function for all fifteen technology types, red included.  It began as
     `unit_tech_value` and the generalisation is the point: adding
     `tech_levels` to the red cards alone would be the same asymmetry
-    docs/UNIT_TECH_PRICING.md section 7.1 refused to create, pointing the
+    docs/CARD_BLINDNESS.md section 14.7.1 refused to create, pointing the
     other way.
 
     THE DEFECT THIS REPLACES, in two instalments.
 
-    RED (docs/UNIT_TECH_PRICING.md): the bot took 0.15 / 0.06 / 0.45 unit
+    RED (docs/CARD_BLINDNESS.md): the bot took 0.15 / 0.06 / 0.45 unit
     cards per seat-game against a human 3.84 / 2.79 / 3.43, i.e. it fought the
     entire game with Age A Warriors.  The static table prices every unit card
     strictly NEGATIVE -- Warriors -3.46 to Air Forces -16.07 on the live 2p
@@ -1937,7 +1937,7 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     the league.  Cost priced, gain not: the standing hazard of
     docs/HAZARDS.md and `tests/test_half_priced_cards.py`.
 
-    YELLOW AND THE REST (docs/YELLOW_TECH_PRICING.md): the same static table
+    YELLOW AND THE REST (docs/CARD_BLINDNESS.md): the same static table
     prices every farm, mine and laboratory strictly negative too -- Irrigation
     -4.02, Iron -6.72, Alchemy -11.19, Computers -20.41 on the same vector --
     and the bot took laboratories 0.03 times a seat-game at 2p against a human
@@ -1963,7 +1963,7 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     live 2p champion; the sign flips only somewhere past 16, and every step in
     between changes no argmax at all, so the climb faces a flat plateau
     sixteen units long with a `mutate` step of ~0.15.  There is no gradient to
-    walk.  docs/CARD_BLINDNESS_MILITARY.md section 5.2 measured exactly that:
+    walk.  docs/CARD_BLINDNESS.md section 11.5.2 measured exactly that:
     0 divergences in 967 decisions at 1.0, one at 3.0.
 
     THE SHAPE, four corrections, all of them derivations rather than tastes:
@@ -1999,7 +1999,7 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     the ONE constant that has to move to recover the parent commit's pricing
     byte for byte on every card in the game (see `card_potential`).  A red
     card is additionally scaled by `unit_tech_credit`, unchanged, so
-    docs/UNIT_TECH_PRICING.md's escape hatch still works exactly as written.
+    docs/CARD_BLINDNESS.md's escape hatch still works exactly as written.
     """
     staff, dev, sci, res = _BY.tech_upgrade(name, state, idx)
     if not (staff or dev or sci or res):
@@ -2039,15 +2039,15 @@ def gov_value(name, state, idx, w, late=None):
     they are top-level fields `effects.compute` reads.  So on the static path
     Monarchy, Republic and Constitutional Monarchy price at **exactly
     0.000**: no cost, no gain, nothing.  The same shape as the sixteen action
-    cards docs/ACTION_CARD_PRICING.md found, one type over.
+    cards docs/CARD_BLINDNESS.md section 16 (the former docs/ACTION_CARD_PRICING.md) found, one type over.
 
     THREE THINGS THIS PRICES THAT NOTHING PRICED, all of them derivations:
 
     1. **The level.**  `features()` reads a government's age level twice, into
        `tech_levels` and again as `gov_level` (2.0 in `DEFAULT_WEIGHTS`), and
        neither the static table nor the swap diff emitted either -- the one
-       term docs/YELLOW_TECH_PRICING.md added to every other technology in the
-       game and did not add here.  docs/OPEN_ITEMS.md section 2 item 22.
+       term docs/CARD_BLINDNESS.md section 15 (the former docs/YELLOW_TECH_PRICING.md)
+       added to every other technology in the game and did not add here.  docs/OPEN_ITEMS.md section 2 item 22.
     2. **Everything `compute` sees**, through the swap diff: the civil-action
        total above all, which is the game's core currency and the largest
        single source of it.  A DIFFERENCE, because a government replaces a
@@ -2130,13 +2130,13 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
     # defect it exists to fix.  `tech_board_credit` and `unit_tech_credit`
     # default to 1.0 and are absent from every champion file, so `load_weights`
     # fills them in from `DEFAULT_WEIGHTS` and the fix is live on all three
-    # arms at once (docs/UNIT_TECH_PRICING.md, docs/YELLOW_TECH_PRICING.md).
+    # arms at once (docs/CARD_BLINDNESS.md, docs/CARD_BLINDNESS.md).
     #
     # THE OPT-OUT, and it is one constant: `tech_board_credit` = 0.0 sends
     # every non-red technology back down to the static table and drops the
     # `develop` half off the red ones, which is the parent commit's pricing
     # byte for byte on all 236 cards.  `unit_tech_credit` = 0.0 continues to
-    # mean exactly what docs/UNIT_TECH_PRICING.md says it means: the red cards
+    # mean exactly what docs/CARD_BLINDNESS.md says it means: the red cards
     # fall through to the static table, `tech_board_credit` or not, because a
     # vector that has switched the board query off for units must not have it
     # switched half on.
@@ -2204,7 +2204,7 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
     # early return above never even reaches this loop.  `action_value` resolves
     # the choice with no credit on it at all, which is what closes it; this
     # line is what `action_board_credit` = 0.0 goes back to.  See
-    # docs/ACTION_CARD_PRICING.md section 2.2.
+    # docs/CARD_BLINDNESS.md section 16.2.2.
     for group in _card_choices(name):
         total += base * max(_sum_yields(g, w, credit) for g in group)
     if on_board and board:
@@ -2226,7 +2226,7 @@ def _hand_total(hand, state, idx, w):
     the truthful answer is +3.60, because Michelangelo is the one you would
     play and the other two you simply would not.  Harmless while the bot held
     ~0 leaders; not harmless once board pricing made it take 55% more of them
-    (docs/CARD_PRICING_LEADERS.md sections 5.2 and 8).
+    (docs/CARD_BLINDNESS.md sections 13.5.2 and 13.8).
 
     So each slot contributes the BEST card in the hand for it, plus
     `hand_swap_extra` times the rest.  The spares are not worthless -- you
@@ -2384,7 +2384,7 @@ def tactic_terms(state, idx):
     and a card, and building the unit that would complete an army is +printed
     strength only because the tactic is not in play yet, so a 1-ply search
     does neither and the champion ends every game holding a tactic with zero
-    units to fill it (docs/CARD_BLINDNESS_MILITARY.md section 4).
+    units to fill it (docs/CARD_BLINDNESS.md section 11.4).
 
     * `tactic_gain` -- army strength the best REACHABLE tactic (in hand, or
       copyable from `state.available_tactics`) would add over the one in play.
@@ -2921,7 +2921,7 @@ BASE_WEIGHTS = {
     # can also move on its own.  The government half is the one with the
     # measured positive (culture margin +1.85, z = 3.4, where the leader half
     # is a null once its blocks are clustered honestly -- 48.20%, z = -1.46,
-    # p = 0.15: docs/CARD_PRICING_LEADERS.md 5.2 and its 2026-07-30
+    # p = 0.15: docs/CARD_BLINDNESS.md 13.5.2 and its 2026-07-30
     # correction), and this is what lets the climber find that without being
     # told.
     "card_board_leader": 0.0,
@@ -3013,7 +3013,7 @@ BASE_WEIGHTS = {
     # technology -- farm, mine, lab, temple, library, theater, arena and the
     # special technologies -- and, on a unit card too, how much of the
     # `tech_levels` / `num_techs` / `best_*` half that developing ANY
-    # technology buys (`tech_value`, docs/YELLOW_TECH_PRICING.md).
+    # technology buys (`tech_value`, docs/CARD_BLINDNESS.md).
     #
     # 1.0 for the same reason `unit_tech_credit` is 1.0 and it is not a guess
     # either: at 1.0 the number is "the eval points `evaluate` itself assigns
@@ -3028,7 +3028,7 @@ BASE_WEIGHTS = {
     # change A/B-able against itself in one process on the same deal.
     "tech_board_credit": 1.0,
     # The third of the same family, for the yellow ACTION cards
-    # (`action_value`, docs/ACTION_CARD_PRICING.md).  1.0 on the same terms and
+    # (`action_value`, docs/CARD_BLINDNESS.md).  1.0 on the same terms and
     # for the same reason: at 1.0 the number is "the eval points `evaluate`
     # itself assigns to the gains, the free civil action and the resources
     # this card produces", every term read off the objective by
@@ -3077,7 +3077,7 @@ BASE_WEIGHTS = {
     # rate lands exactly on the human number and the paired A/B is 32.8%
     # against a 50% null, because the actions stop buying technologies.  Full
     # derivation and the arms in `action_value` point 2 and
-    # docs/ACTION_CARD_PRICING.md section 5.
+    # docs/CARD_BLINDNESS.md section 16.5.
     "free_action_credit": 0.0,
     # `territory_credit` is 1.0 but costs nothing until `hand_mil_potential`
     # is non-zero, because nothing calls `card_potential` on a military card

@@ -1,11 +1,11 @@
 # A government has two prices and the evaluator paid neither
 
-2026-07-31.  Closes [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md) §2 item 22 ("a government's level is
+2026-07-31.  Closes [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#2-card-pricing-and-coverage) §2 item 22 ("a government's level is
 unpriced on both sides") and §9.1's open question about which coordinate a
 revolution's civil actions come out of.  Base game (2015).
 
-The shape is the one [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) and
-[`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md) already used twice: **a card is worth what
+The shape is the one [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#15-the-bot-builds-one-civilization-and-it-is-blue-because-card_potential-reads-weights-evaluate-does-not-use-merged-from-the-former-yellow_tech_pricingmd-2026-07-31) §15 (the former `YELLOW_TECH_PRICING.md`) and
+§16 (the former `ACTION_CARD_PRICING.md`) already used twice: **a card is worth what
 `evaluate` pays for what it does**, and the static table kept pricing cards
 through coordinates `evaluate` does not use — or, here, through nothing at
 all.
@@ -31,7 +31,7 @@ the tests below cannot pass by the defect having quietly moved.
 government's age level twice — into `tech_levels`, alongside every other
 technology in the game, and again on its own as `gov_level` (2.0 in
 `DEFAULT_WEIGHTS`) — and neither `_card_yields` nor the `board_yields` swap
-diff emitted either.  That is exactly the term `YELLOW_TECH_PRICING` added to
+diff emitted either.  That is exactly the term the former `YELLOW_TECH_PRICING` (now `docs/CARD_BLINDNESS.md` §15) added to
 every *other* technology and skipped here.
 
 ## 2. What changed
@@ -71,7 +71,7 @@ route that does not exist.
 
 **2.3 `weighted.gov_value`** — prices the gains at `feature_marginal` (not the
 bare `w[k]`: `tech_levels` and `culture_rate` are `PHASE_KEYS` features, the
-factor-of-twenty-one error `YELLOW_TECH_PRICING` §1d found), takes the
+factor-of-twenty-one error `docs/CARD_BLINDNESS.md` §15.1d (the former `YELLOW_TECH_PRICING`) found), takes the
 **cheaper route** — a `max` over negative cost triples — and clamps every cost
 through `max(0, w)` so a negative stock weight can never turn a cost into a
 gain.
@@ -137,7 +137,7 @@ would fail `VectorFilesMatchTheRegistry`.
 `tools/play_rate.py bot --players 2 --games 20 --spec default` (WeightedBot on
 `DEFAULT_WEIGHTS`, 40 seat-games), before = the parent commit with the red fix
 already in, after = this one.  Human column is the 692-game 2p BGO corpus.
-Descriptive: n = 40 seat-games is below [`docs/HAZARDS.md`](HAZARDS.md) §1's n>=200 bar and
+Descriptive: n = 40 seat-games is below [`docs/HAZARDS.md`](HAZARDS.md#1-training-loop-traps-the-original-unattendedmd-numbering) §1's n>=200 bar and
 none of this is a strength claim.
 
 | takes per seat-game | human 2p | before | after |
@@ -161,7 +161,7 @@ fix the bot only ever changed government to Democracy or Theocracy — the two
 that print production the static table could see — and **10 of 40 seats ended
 the game still on Despotism**; after, that is **1 of 40**.
 
-[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md) §2 item 22 guessed that "governments are already
+[`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#2-card-pricing-and-coverage) §2 item 22 guessed that "governments are already
 over-played, so this plausibly cuts the other way".  **It does not.**  Takes go
 from 23% under the human rate to 19% over it, and changes from 12% under to
 35% over.  Reported, not tuned against: the price contains no free constant to

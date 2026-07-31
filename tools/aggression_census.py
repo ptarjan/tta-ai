@@ -5,7 +5,7 @@ per game) and 0 ever successfully defended**, and concluded the defence
 channel the discard rule would be paid through is absent.  That measurement
 ran `tools/discard_ab.py --spec <bare path>`, and `arena.make_bot`'s
 fallthrough turns a bare path into a **1-ply `WeightedBot`** -- so it is a
-1-ply number, and `docs/CARD_CENSUS.md` already showed that war and aggression
+1-ply number, and `docs/CARD_BLINDNESS.md` already showed that war and aggression
 are dead at 1 ply and partly repaired by search.  This tool asks the question
 the census left open: what happens **per game**, under the search, and at every
 player count -- and it splits the death into stages so a rate can be

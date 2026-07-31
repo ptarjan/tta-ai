@@ -247,7 +247,7 @@ cd "$(dirname "$0")/.."
 
 # ---------------------------------------------------------------------------
 # Re-derived 2026-07-31 for the same-type `unit_upgrade` fix
-# (docs/UNIT_TECH_PRICING.md section 8, docs/OPEN_ITEMS.md section 2 item 20).
+# (docs/CARD_BLINDNESS.md section 14.8, docs/OPEN_ITEMS.md section 2 item 20).
 #
 #     arm       parent d15cb5b   this commit
 #     NARROW    ca255af3         ca255af3   (held)
@@ -408,7 +408,7 @@ WIDE=f223cea1
 # docs/CARD_BLINDNESS.md section 5 A/Bs against.
 # Both moved again on `military-discard`; see the block above NARROW.
 #
-# ---- unit-technology board pricing (docs/UNIT_TECH_PRICING.md) -------------
+# ---- unit-technology board pricing (docs/CARD_BLINDNESS.md) -------------
 #
 # SIX of the eight arms moved -- every arm whose bot evaluates through
 # `weighted.card_potential`, and no other.  The two GreedyBot arms
@@ -448,7 +448,7 @@ WIDE=f223cea1
 # gate pass; the gate FAILED by design in both clones and these are the
 # computed values.
 #
-# ---- ALL technology board pricing (docs/YELLOW_TECH_PRICING.md) ------------
+# ---- ALL technology board pricing (docs/CARD_BLINDNESS.md) ------------
 #
 # The same SIX arms moved again, for the same structural reason and with the
 # same two that held: NARROW/WIDE are GreedyBot, which never calls
@@ -778,7 +778,7 @@ WWIDE=5c8e3505
 # All four moved again on the horizon rework; the table, the two causes and
 # the environment-hatch attribution are in the block above WNARROW.
 # SIX MOVED AGAIN and the two GreedyBot arms held still again, on the yellow
-# ACTION-card board pricing (docs/ACTION_CARD_PRICING.md).
+# ACTION-card board pricing (docs/CARD_BLINDNESS.md).
 #
 #     arm       old         new
 #     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)

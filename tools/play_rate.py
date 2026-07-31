@@ -1,7 +1,7 @@
 """Per-CARD play-rate census: not "is this card priced", but "is it played".
 
 `tools/card_census.py`, `tools/card_blindness.py` and `tools/uncovered_census.py`
-all answer *is this card PRICED by the evaluator* -- `docs/CARD_CENSUS.md` says
+all answer *is this card PRICED by the evaluator* -- `docs/CARD_BLINDNESS.md` says
 so in its own words: "the suite checks that a card is priced, never that its
 price is read".  `unit_strength_credit` is what that gap costs: the ten military
 unit cards were given a feature, the feature shipped, the weight sat at 0.0 on

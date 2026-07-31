@@ -74,7 +74,7 @@ not a catastrophe.
 **But the fix is not a new number.** A constant fitted to the policy's observed
 scores steers the next policy, whose scores then move, and the constant is
 stale again. That is the same failure mode as the fitted table in
-[`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md): a number that cannot say "it depends". Re-fitting
+[`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md): a number that cannot say "it depends". Re-fitting
 buys one month.
 
 A differential does not need the parameter at all. The distinguished point of

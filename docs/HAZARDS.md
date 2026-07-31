@@ -203,7 +203,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   null**.  Before opening a new channel onto an existing weight, ask what has
   ever constrained that weight; if the answer is "nothing", expect the first
   measurement to be a regression *of the weight*, and check it against
-  `DEFAULT_WEIGHTS`.  [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2.
+  `DEFAULT_WEIGHTS`.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1452-3p-on-the-archived-champion-a-large-unambiguous-regression) §14.5.2.
 * **A card whose cost is priced while its gain sits at 0.0 is biased, not
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases
@@ -214,7 +214,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `card_potential` at zero — the bias removed, nothing added — moved "is this
   the best card on the row" only from 1 in 437 to 20 in 437.  A card worth
   exactly nothing is still not a card worth taking, so a fix that only removes
-  the sign will read as a null.  [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md) §1c.
+  the sign will read as a null.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) §14.1c.
 * **A swap diff is exact over `Stats` and blind to everything else**, and it
   *replaces* the static table rather than supplementing it — so any key the static
   path priced that the diff cannot see is silently dropped.  Taj Mahal's blue

@@ -28,7 +28,7 @@ from **zero completions in 1000 seat-games** to 0.082/deal.
 At 0.5 it turns pathological — 2.69 started, 2.09 abandoned, finish rate 0.23 —
 so 0.125 is the top of the usable range.  **But the accompanying strength null
 (50.34% +/- 2.43pp, n=1600) was measured against the frozen 78-key champion
-missing `row_urgency`**, which [`docs/CARD_CENSUS.md`](CARD_CENSUS.md#10-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §10 shows is a broken
+missing `row_urgency`**, which [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1210-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §12.10 shows is a broken
 yardstick: the reprice changed `evaluate()` on 0 of 480 wonder-in-row states.
 The behavioural numbers survive; the strength conclusion does not.  Re-run
 against a live reference vector before quoting any of it.
@@ -102,7 +102,7 @@ held-off defences 0 -> 332 over 200 games at 4p.
 
 * Not mainly about defence: the short-circuit never tested the pending *kind*,
   and **auctions** are 71.6% of the decisions the drain moves (455 seen, 326
-  moved at 3p) against defence's 37.8%.  Same defect [`docs/CARD_CENSUS.md`](CARD_CENSUS.md#10-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §10
+  moved at 3p) against defence's 37.8%.  Same defect [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1210-the-territory-suspect-and-the-defence-drain-are-one-defect-2026-07-30) §12.10
   reached from the territory end.
 * The leak objection was answered, not argued away.  Neither pending path
   determinized, so a trial `apply` drew the real next deck card: master leaked on
@@ -140,8 +140,9 @@ alternative.
 
 ## 2. Card pricing and coverage
 
-*From [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md), [`CARD_CENSUS.md`](CARD_CENSUS.md), [`CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md),
-[`CARD_BLINDNESS_MILITARY.md`](CARD_BLINDNESS_MILITARY.md), [`COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md), [`UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md),
+*From [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) (which now also carries the former `CARD_CENSUS.md`,
+`CARD_PRICING_LEADERS.md` and `CARD_BLINDNESS_MILITARY.md` as §§11-13),
+[`COVERAGE_AUDIT.md`](COVERAGE_AUDIT.md), [`UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md),
 [`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md).  Those documents are all still live; this is the index of
 what they leave open.*
 
@@ -162,7 +163,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    `colonize_bonus`) is 0.0.  Take rate 0.87% (14/1,606 offers); 6 of 12 taken
    zero times in 40 games.
 3. ~~**Every yellow production technology prices net negative, and the bot buys
-   none of them.**~~ **CLOSED 2026-07-30 by [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)** —
+   none of them.**~~ **CLOSED 2026-07-30 by [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md)** —
    labs 0.02 → 1.77 per seat-game at 2p against a human 1.62, mines 0.03 →
    0.85, farms 0.07 → 0.87, and the blue over-play fell out with it (theatres
    2.23 → 0.82 against 0.65).  The diagnosis below is kept because it is what
@@ -173,7 +174,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    early), and that `tech_levels` — worth up to 9.23 eval points per level —
    was mapped to nothing at all on every technology card in the game.  The
    original text:
-   Measured 2026-07-30 ([`docs/PLAY_RATE_AUDIT.md`](PLAY_RATE_AUDIT.md#51-why-yellow-is-dead-and-blue-is-doubled--class-c-and-probably-wrong) §5.1): labs
+   Measured 2026-07-30 ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1751-why-yellow-is-dead-and-blue-is-doubled--class-c-and-probably-wrong) §17.5.1): labs
    0.03 taken per seat-game against a human 1.62 at 2p and **exactly 0.00** at
    3p and 4p, mines 0.05 against 1.18, farms 0.18 against 1.34; Alchemy,
    Scientific Method and Coal are the only three cards in the game the bot
@@ -188,7 +189,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 4. ~~**`free_civil_action` is non-positive on every trained vector** (0.0 /
    −0.160 / −0.084 at 2p/3p/4p): the 18 action cards that grant a free civil
    action are priced to be *disliked* for granting it.~~  **CLOSED 2026-07-30
-   by [`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md)**, and the diagnosis above was *too kind*:
+   by [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md)**, and the diagnosis above was *too kind*:
    the weight is not merely non-positive, it is **unreachable**.
    `free_civil_action`, `resource_discount` and `restricted_resources` are all
    three absent from `features()`, so `evaluate` never multiplies them by
@@ -237,11 +238,11 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    artefact in `lateness()`.  Needs a policy change plus an n>=200 A/B.
 12. **`row_urgency` carries the same hand-double-count bug** for leaders and
     governments in the *row* (not the hand) that §10 of
-    [`docs/CARD_PRICING_LEADERS.md`](CARD_PRICING_LEADERS.md) fixed for the hand.  Explicitly "the next
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) fixed for the hand.  Explicitly "the next
     thing to do in this area".
 13. ~~**Production buildings** (24 cards) are mis-shaped twice: absolute instead
     of delta, and the worker cost omitted.~~  **The delta half is CLOSED**
-    2026-07-30 ([`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md)): `board_yields.tech_upgrade`
+    2026-07-30 ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md)): `board_yields.tech_upgrade`
     prices every worker technology as the upgrade diff off what the player
     already has, using `actions.upgrade_cost` and an `effects.compute` diff.
     The worker-cost half becomes item 21 below, correctly restated.
@@ -266,11 +267,11 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 
 19. **`tech_levels` on the live 2p champion is a stale, over-fitted
     coordinate, and it is the single most important open item in this
-    section.**  [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md#42-the-live-2p-champion-a-severe-regression-attributed) §4.2: with the technology price
+    section.**  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1542-the-live-2p-champion-a-severe-regression-attributed) §15.4.2: with the technology price
     on, that champion goes **12.2% against a 50% null**; reset only its
     `tech_levels` group to the defaults (5.84/3.39/0.92 → 1.0/0.5/−0.4) and the
     same paired A/B is **63.0%**.  The mechanism is the general one
-    [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2 named for `strength`: a coordinate the
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1452-3p-on-the-archived-champion-a-large-unambiguous-regression) §14.5.2 named for `strength`: a coordinate the
     evaluator can read but never has to buy is unconstrained and will drift.
     Two things follow.  (a) **Settled 2026-07-31, no action needed.**  The live
     `experiments/league_state/champion_2p.json` (gen 73) was inspected directly
@@ -299,10 +300,10 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     between cards of the **same** type — a Warriors worker cannot become a
     Cannon.  So the red price is optimistic for cavalry, artillery and air
     whenever the player holds only infantry, which is most of the game.  Found
-    2026-07-30 while generalising it ([`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) §6.1) and
+    2026-07-30 while generalising it ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) §15.6.1) and
     deliberately left alone so this lane's digest moves had one cause;
     `tech_upgrade`'s non-red half is already same-type-only.~~
-    **CLOSED 2026-07-31 by `docs/UNIT_TECH_PRICING.md` §8.**  The legality claim
+    **CLOSED 2026-07-31 by `docs/CARD_BLINDNESS.md` §14.8 (the former `UNIT_TECH_PRICING.md`).**  The legality claim
     was re-verified against `_tableau` before anything was changed, and the size
     of the error measured: on a board with four Warriors workers,
     `unit_upgrade("Cavalrymen")` read **`(8.0, 6.0, 12.0)`** — eight strength
@@ -325,7 +326,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 22. ~~**A government's level is unpriced on both sides.**  `features()` adds
     `meta[p.government][1]` into `tech_levels`, and neither `_card_yields` nor
     the swap diff emits it, so a government card is missing exactly the term
-    [`docs/YELLOW_TECH_PRICING.md`](YELLOW_TECH_PRICING.md) added to every other technology.  `gov_level`
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) added to every other technology.  `gov_level`
     has the same hole.  Governments are already over-played, so this plausibly
     cuts the other way.~~
     **CLOSED 2026-07-31 by `docs/GOVERNMENT_PRICING.md`**, and the hole was
@@ -359,7 +360,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
 24. ~~**Action cards are now the largest single card-type deficit in the game**:
     2.72 per seat-game at 2p against a human 12.98 after the technology
     reprice (8.62 before).~~  **CLOSED 2026-07-30 by
-    [`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md).**  The cause was not the row competition:
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md).**  The cause was not the row competition:
     **sixteen of the thirty-three action cards priced at exactly 0.000**, in
     three separate multiplied-by-zero mechanisms, and the per-card take rates
     split along exactly that line — every card priced through a live trained
@@ -375,7 +376,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     compute for the urban and worker types — but `row_pressure` calls
     `card_potential` for every row card at every leaf, so it is a performance
     question as much as a modelling one.  The one bucket-(d) hole left in the
-    type ([`docs/ACTION_CARD_PRICING.md`](ACTION_CARD_PRICING.md#6-open-and-deliberately-not-done-here) §6).
+    type ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#166-open-and-deliberately-not-done-here) §16.6).
 26. **Engineering Genius is under-*played* for a reason that is not its price**:
     0.02 plays per seat-game at 2p against a human 1.33, and **0.00** at 3p.  It
     orders a wonder stage and is illegal without a wonder in progress; the bot
@@ -414,7 +415,7 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     against a human 0.65.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
-are 1-ply artefacts repaired by search ([`docs/CARD_CENSUS.md`](CARD_CENSUS.md) tier B) — the
+are 1-ply artefacts repaired by search ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) tier B) — the
 standing problem is now over-declaration, not blindness; Military Bonus cards
 have no move handler by design; pacts are absent at 2p by rule; flooring
 `card_potential` at 0 was tried and rejected (it would make the unit lane's own
@@ -967,7 +968,7 @@ change, which is the finding that matters here:
 
 **The corpus is six deterministic self-play games, and any pricing change
 re-rolls all of it.**  Measured over the two commits of 2026-07-31
-(`docs/UNIT_TECH_PRICING.md` §8, `docs/GOVERNMENT_PRICING.md`), non-zero states
+(`docs/CARD_BLINDNESS.md` §14.8, `docs/GOVERNMENT_PRICING.md`), non-zero states
 out of ~2000:
 
 | coordinate | parent | after the red fix | after the government fix |

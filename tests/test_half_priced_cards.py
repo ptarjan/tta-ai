@@ -22,7 +22,7 @@ The bug class has now been found twice in opposite directions:
   never taken once in 40 player-games (docs/UNCOVERED_TYPES.md section 2).
 * cost at 0.0, benefit trained -> the card reads as too cheap.  The
   governments, whose action counts are top-level fields `_card_yields` never
-  read (docs/CARD_PRICING_LEADERS.md, and `TOP_LEVEL_UNPRICED` in
+  read (docs/CARD_BLINDNESS.md, and `TOP_LEVEL_UNPRICED` in
   tests/test_card_pricing.py).
 
 WHY THIS IS A CENSUS AND NOT AN ASSERTION OF ZERO
