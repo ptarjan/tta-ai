@@ -20,6 +20,17 @@
 set -u
 cd "$(dirname "$0")/.."
 export TTA_JOURNAL=1        # docs/PYPY.md 9.14-9.16: 1.44x on WeightedBot
+# War-rate decision census (docs/WAR_RATE_CENSUS.md).  Records, at every real
+# decision where war/aggression or a tactic move is legal, what every
+# candidate scored and which row cards were priced <= 0 and therefore
+# invisible.  Proved inert by tests/test_census_inert.py (identical seeds,
+# identical final scores, census on vs off).  Unset this to switch it off.
+#
+# COVERAGE CAVEAT, and it is a real one: TTA_JOURNAL=1 above sends
+# QuiescentBot.pick straight into its journalled twin, which has no recording
+# call, so THE 3P ARM RECORDS NOTHING.  PlanBot.pick has no such branch, so
+# the 2p arm records normally.  See WAR_RATE_CENSUS.md section 7.
+export TTA_WAR_CENSUS=experiments/logs/census
 K=${1:-2}; H=${2:-8}; W=${3:-6}; L=${4:-2}; B=${5:-12}; S=${6:-4}; Z=${7:-1.2816}
 shift $(( $# > 7 ? 7 : $# ))
 mkdir -p experiments/logs

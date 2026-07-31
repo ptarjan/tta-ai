@@ -218,3 +218,33 @@ document**, not answered by it.
   and this run collected no QuiescentBot data.
 * **Nothing here is a strength (win-rate) measurement.** Every number is
   behavioural/positional, same convention as `docs/SYSTEM_COVERAGE.md`.
+
+
+## 7. Now collecting from the real league (2026-07-31), and where it is blind
+
+The instrument no longer monkeypatches a copy of `pick()`.  The recording
+call lives inside the real `PlanBot.pick` and `QuiescentBot.pick` behind
+`engine.census.ENABLED` (`TTA_WAR_CENSUS`, unset by default), and
+`experiments/run_league.sh` now exports it, so the league's own arms
+accumulate this data as they train instead of it needing a separate batch
+run.  Records land in `experiments/logs/census/census-<pid>.jsonl`, one file
+per arm process.  It takes effect at the next arm restart -- `run_league.sh`
+relaunches the climber every hour, so no running arm is disturbed.
+
+`tests/test_census_inert.py` is the proof it cannot change play: identical
+seeds with the census off and on must produce identical final scores, for
+both instrumented searches, and the sink must be non-empty so the test
+cannot pass by recording nothing.  This matters more than a normal test --
+the eight-fingerprint gate replay that used to guard this class of change is
+no longer run.
+
+**Where it is blind, stated plainly rather than discovered later.**
+`run_league.sh` exports `TTA_JOURNAL=1`, and `QuiescentBot.pick` returns into
+its journalled twin before reaching the recording call.  So **the 3p arm
+records nothing at all**; only the 2p `PlanBot` arm does.  That is exactly
+the half this document most needs (section 6: "no 3p data at all", and the
+pathology is documented as worse at 3p/4p), and it is the same "present in
+one path, absent from the other, and nothing fails when they disagree"
+shape this project keeps finding.  Instrumenting the journalled decision
+path is the next step; until it is done, do not read an absence of 3p
+records as an absence of 3p war decisions.
