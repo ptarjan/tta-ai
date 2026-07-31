@@ -410,24 +410,56 @@ and each is now labelled as a prior in the source and pinned by
 `TRAINING_RUN.md`, `PROXY_GUARDRAIL.md`, `FOURP_GAP.md`, `HUMAN_BOTS.md`,
 `BEHAVIOUR_CLONE.md`, `CULTURE_GAP.md`.*
 
-* **Nothing shows the new `blend` objective TRAINS a better bot** — only that it
-  ranks two known vectors correctly and that a short arm's decisions look sane.
-  Whether 44h of climbing on it produces a stronger policy is unmeasured.
-* `CULTURE_CENTRE` / `CULTURE_SCALE` are *reasoned*, not fitted or swept.  A
-  sweep costs one arm-day and has not been spent.
-* Own culture is blind to a candidate that raises its own score while raising the
-  table's more.  Flagged as the failure mode to watch for.
-* **The gate's margin metric may double-count theft.**  War moves culture from
-  victim to attacker, so `(mine − theirs)` counts a steal twice.  Under
-  investigation; do not change the metric without re-measuring — it would
-  invalidate every historical vector.
+*Rewritten 2026-07-30: the objective is now the culture LEAD OVER THE BEST
+OPPONENT, centred on zero because zero is the win/lose boundary.
+`CULTURE_CENTRE` is deleted, not re-fitted.  See `docs/LEAGUE_OBJECTIVE.md`.*
+
+* **THE ONE TO WATCH AFTER RELAUNCH — war/aggression rate under a differential
+  objective.**  The new objective pays for taking culture off the leader at
+  twice the rate of producing it, which is *correct* for winning but feeds a
+  pathology the bot already has: it declares wars at **6.6-7.9× the human rate
+  at 3p/4p** (`docs/AGGRESSION_RATE.md`).  Offline estimate on archived
+  evaluations: **26-33% of culture-differential gains were "pure suppression"**
+  (own culture flat or down while the lead rose) — rows the old objective did
+  not reward and the new one rewards in full.  Deliberately **not** re-measured
+  with fresh game batches; post-relaunch logs measure it under real training,
+  which is the condition that matters.  **Run `tools/aggression_census.py`
+  against `docs/AGGRESSION_RATE.md`'s human rate on the first arm output.  If
+  it exceeds 6.6-7.9× human, the lane to open is the EVALUATOR's war pricing,
+  not the objective.**  Also watch the `cult` column against the `lead` column
+  in the per-opponent report: own culture flat while the lead rises, sustained,
+  is suppression training, and `cult` should be heading toward the human ~159.5
+  at 2p (`docs/HUMAN_BASELINE.md`), not away from it.
+* **Nothing shows the new objective TRAINS a better bot** — only that it *ranks*
+  3,802 archived decisions in better agreement with win rate (+0.934/+0.934/
+  +0.904 against +0.850/+0.861/+0.824) and that the machinery runs.
+* **The per-game dispersion of the lead is not measured.**  It is a differential
+  of two noisy quantities and is expected to be noisier per game than own
+  culture was (0.419 for a margin against 0.218 for own culture, measured under
+  the old objective), and margin-over-BEST is noisier still than
+  margin-over-mean at 3p/4p.  That widens the accept CI.  **If the arms accept
+  noticeably less often after relaunch, this is the first thing to check and
+  `--block` is the dial.**
+* **`LEAD_SCALE = 120` is derived from a dispersion measured on the MEAN
+  margin**, not on the lead, and not re-derived since.  Re-derive with
+  `experiments/margin_calib.py` from the first post-relaunch logs.
+* **The objective's throughput did not improve** (`LEAGUE_OBJECTIVE.md` §6b is a
+  null): the "rejected a better-on-winning candidate" rate stays at 16-20% and
+  4p gets slightly worse.  The conservatism is set by the confidence bound and
+  the block size, not by the objective, so the lever is `--block`/`z`.
+* The 3p/4p half of that re-scoring is a **proxy** — the archives never recorded
+  the best opponent's culture, so margin-over-mean stands in for
+  lead-over-best.  The 2p column is exact.  The best-vs-mean decision itself is
+  argued and unit-tested, never measured on logs.
+* **`--objective own` and `--objective margin` are removed**, not deprecated
+  (the arms relaunch clean).  Historical reproduction is `git checkout 8b972ef`.
 * **`LEAGUE_POOL.md`'s saturation thresholds (0.70 / 0.95 / 0.15) are eyeballed,
   not derived.**  The defensible part is the direction and the self-correction,
   not the knee.  Escape hatch is `--saturation 0,1,1`.
-* Win rate is not the metric the league accepts on (`blend` = own culture +
+* Win rate is not the metric the league accepts on (`blend` = culture lead +
   win-share tiebreak), so an opponent can be saturated on win share while still
-  discriminating on own culture.  Using the check's own-culture column instead
-  was considered and not done, for backward compatibility with old arms.
+  discriminating on the lead.  Using the check's own culture/lead columns for
+  the saturation rule instead was considered and not done.
 * **Post-training exploitability of the `hum:*` archetypes was never measured** —
   only pre-training.  The take ceiling is structurally ~28 for every human bot
   against a human 33-40; four tuning knobs failed to move it and the leading
@@ -491,8 +523,10 @@ and each is now labelled as a prior in the source and pinned by
   and will keep under-declaring it exactly where the choice matters most.
   Anyone who measures the choice and finds nothing has measured this lower bound,
   not the choice.
-* `TRANSFER_TEST.md`'s options (a) "train under `plan:width=1`" and (c) "score
-  the gate on own culture" are **not** retired by the war-lookahead fix.  The
+* `TRANSFER_TEST.md`'s option (a) "train under `plan:width=1`" is **not**
+  retired by the war-lookahead fix (its option (c), "score the gate on own
+  culture", was adopted 2026-07-27 and then reversed 2026-07-30 — see
+  `docs/LEAGUE_OBJECTIVE.md` §7).  The
   lookahead removed the *inversion* but not the miscalibration: the proxy still
   says Q is +36.3 better where the real search says P and Q are statistically
   indistinguishable.

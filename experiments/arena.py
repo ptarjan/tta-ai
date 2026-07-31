@@ -392,7 +392,15 @@ def _init(a, b, num_players, move_cap):
 
 
 def _play(task):
-    """task = (game_index, seed, seat_of_A) -> (share_a, culture_a, culture_b, moves)"""
+    """task = (game_index, seed, seat_of_A)
+    -> (share_a, culture_a, mean_culture_others, best_culture_other, moves)
+
+    `best_culture_other` is `max` over the defender seats, not the mean.  It is
+    the quantity the WIN CONDITION is defined on: `share > 0` iff A's culture
+    is >= the best other seat's, so `culture_a - best_culture_other >= 0` and
+    "A won or tied" are the same statement about the same numbers, computed
+    three lines apart in this function.  See `duel`'s `per_game_lead`.
+    """
     from engine import game
     gi, seed, seat = task
     n = _W["n"]
@@ -425,12 +433,12 @@ def _play(task):
                      f":{tb.tb_lineno}")
             tb = tb.tb_next
         return (None, {"type": type(e).__name__, "repr": repr(e),
-                       "where": where, "seed": seed}, None, 0)
+                       "where": where, "seed": seed}, None, None, 0)
     best = max(sc)
     tied = [i for i, v in enumerate(sc) if v == best]
     share = (1.0 / len(tied)) if seat in tied else 0.0
     others = [sc[i] for i in range(n) if i != seat]
-    return (share, sc[seat], sum(others) / len(others), moves)
+    return (share, sc[seat], sum(others) / len(others), max(others), moves)
 
 
 # ----------------------------------------------------------------- stats
@@ -521,13 +529,19 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
     thing as no exception at all.
 
     `per_game_culture` is the same list again for **A's own final culture**,
-    which is the quantity you actually win Through the Ages on.  It is not
-    derivable from the other two: `per_game_margin` is a DIFFERENCE, and a
-    difference cannot tell "I scored 140, they scored 60" from "I scored 80,
-    they scored 0".  War and aggression move culture from the victim to the
-    attacker, so a stolen point moves the margin by two and a produced point
-    by one; `experiments/hillclimb_league.py --objective own|blend` scores on
-    this list instead, so theft is paid for exactly once (docs/LEAGUE_OBJECTIVE.md).
+    which is the quantity the human baseline is quoted in.  It is not
+    derivable from the others: a DIFFERENCE cannot tell "I scored 140, they
+    scored 60" from "I scored 80, they scored 0", so it is reported on every
+    row as a diagnostic whatever the objective is.
+
+    `per_game_lead` is **A's final culture minus the BEST defender's**, and it
+    is what `experiments/hillclimb_league.py` trains on
+    (docs/LEAGUE_OBJECTIVE.md).  Its sign is the game result exactly:
+    `per_game_lead[i] >= 0` iff `per_game[i] > 0`, because `_play` derives both
+    from the same `max` over the same score list.  Note this is NOT
+    `per_game_margin`: that one is A minus the *mean* of the defenders, whose
+    sign is not the win condition at 3p/4p (you can be above the mean and
+    third), and which moves when you beat up a player who is not contending.
     """
     tasks = []
     for g in range(games):
@@ -549,20 +563,23 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
                       initargs=(a, b, num_players, move_cap)) as pool:
             out = pool.map(_play, tasks, chunksize=chunk)
 
-    shares, ca, cb, moves, errors = [], [], [], [], []
+    shares, ca, cb, cbest, moves, errors = [], [], [], [], [], []
     per_game = []                      # task-ordered, None where the game died
-    per_game_margin = []               # ditto, culture_a - culture_b
+    per_game_margin = []               # ditto, culture_a - mean(defenders)
     per_game_culture = []              # ditto, culture_a on its own
-    for share, x, y, m in out:
+    per_game_lead = []                 # ditto, culture_a - max(defenders)
+    for share, x, y, zb, m in out:
         per_game.append(share)
         per_game_margin.append(None if share is None else float(x - y))
         per_game_culture.append(None if share is None else float(x))
+        per_game_lead.append(None if share is None else float(x - zb))
         if share is None:
             errors.append(x)
             continue
         shares.append(share)
         ca.append(x)
         cb.append(y)
+        cbest.append(zb)
         moves.append(m)
     m, half = mean_ci(shares)
     null = 1.0 / num_players
@@ -589,10 +606,13 @@ def duel(a, b, num_players, games, seed0=0, workers=None, move_cap=20000,
         "errors": len(errors),
         "error_sample": [e["repr"] for e in errors[:3]],
         "margin": ((sum(ca) / len(ca)) - (sum(cb) / len(cb))) if ca else 0.0,
+        "culture_best": (sum(cbest) / len(cbest)) if cbest else 0.0,
+        "lead": ((sum(ca) / len(ca)) - (sum(cbest) / len(cbest))) if ca else 0.0,
         "shares": shares,
         "per_game": per_game,
         "per_game_margin": per_game_margin,
         "per_game_culture": per_game_culture,
+        "per_game_lead": per_game_lead,
         # --- correct, deal-clustered interval (see paired_stats.py) ---
         "ci_paired": pe.half,
         "ci_naive": half,

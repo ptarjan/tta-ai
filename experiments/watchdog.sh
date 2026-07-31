@@ -103,11 +103,13 @@ if [ "$NOW" -ge "$DEADLINE" ]; then exit 0; fi
 REMAIN=$(( (DEADLINE - NOW + 3599) / 3600 ))
 [ "$REMAIN" -lt 1 ] && REMAIN=1
 
-# --objective blend    accept on (1-alpha)*own final culture + alpha*win share.
-#                      The old default was culture MARGIN, which pays twice for
-#                      a culture point stolen in a war and once for one
-#                      produced, and selected a champion that scores 64.7
-#                      against a human 159.5.  docs/LEAGUE_OBJECTIVE.md.
+# --objective blend    accept on (1-alpha)*lead_share + alpha*win share, where
+#                      the LEAD is own final culture minus the BEST opponent's.
+#                      Zero lead is exactly the win/lose boundary, so the curve
+#                      needs no fitted "typical score" centre -- the previous
+#                      default scored ABSOLUTE own culture squashed around an
+#                      assumed 100, which was measurably stale within a month.
+#                      docs/LEAGUE_OBJECTIVE.md.
 # --pool-weights       the tier totals: 32% of the training signal on fixed
 #                      external opponents (book / human archetypes / strategy
 #                      variants) and 68% on opponents that improve (mirror /

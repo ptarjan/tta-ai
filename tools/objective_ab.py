@@ -27,7 +27,7 @@ What it does
 ------------
 Builds the real pool, plays A and B against every opponent on **byte-identical
 seeds**, and then re-scores that one set of games under each objective
-(`winshare`, `margin`, `own`, `blend`) and each tier-weight preset.  Because
+(`winshare`, `lead`, `blend`) and each tier-weight preset.  Because
 the games are shared, the objectives are compared with zero sampling noise
 between them: any difference in the verdict is the objective, not the deal.
 
@@ -153,11 +153,9 @@ def main(argv=None):
                 tot = wmap.get(e.tier, 0.0)
                 if tot <= 0:
                     continue
-                # The legacy objective is the only one that scores different
-                # tiers differently; reproduce that exactly.
-                metric = ("margin" if (objective == "margin"
-                                       and e.tier in P.DEFAULT_MARGIN_TIERS)
-                          else ("winshare" if objective == "margin" else objective))
+                # One metric for every tier -- the per-tier override is gone
+                # (docs/LEAGUE_OBJECTIVE.md).
+                metric = objective
                 sa = P.score_series(rows[e.label]["a"], metric, params)
                 sb = P.score_series(rows[e.label]["b"], metric, params)
                 d = [x - y for x, y in zip(sa, sb)

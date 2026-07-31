@@ -5,15 +5,17 @@ base (32.2 at 2p, 35.6 at 4p, against a default of 5.0) is far outside what
 undirected drift produces, so something is selecting for it.  This measures the
 obvious suspect directly.
 
-The trainer does not score gate-tier opponents on win rate.  `hillclimb_pool`:
+The trainer does not score any opponent on win rate.  As of 2026-07-30
+`hillclimb_pool` scores every tier on
 
-    e.metric = "margin" if e.tier in self.margin_tiers else "winshare"
-    margin_share(m) = 0.5 * (1 + tanh(m / 120.0))
+    lead_share(m) = 0.5 * (1 + tanh(m / 120.0))       m = own culture - best
 
-so for the `book` and `variant` tiers -- 8 of the ~14 pool members, and the
-majority of the accept statistic -- the reward is a squashed **culture margin**,
-explicitly because those are "the ones it loses to ~100% of the time, where win
-share carries no information at all".
+(when this sweep was written the same squash was applied to the culture margin
+over the MEAN opponent, and only on the `book`/`variant` gate tiers; the
+conclusions below are about the culture-production lever and are unaffected by
+which opponent the differential is taken against).  The reward is a squashed
+**culture differential**, used because win share carries no information at all
+against opponents the champion loses to ~100% of the time.
 
 Culture margin is the game's real score margin, so that is a defensible design.
 But it means a candidate is paid for *losing by less*, and the single most

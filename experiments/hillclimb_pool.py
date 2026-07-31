@@ -224,11 +224,6 @@ def saturation_multiplier(win_rate, lo=SAT_LO, hi=SAT_HI, floor=SAT_FLOOR):
 #: is the mirror-only training loop this whole module exists to replace.
 DEFAULT_LADDER_TIERS = ("hall", "past")
 
-# Tiers scored on CULTURE MARGIN instead of win share.  See `margin_share`.
-# Only consulted by the LEGACY `--objective margin` mode; the own/blend
-# objectives apply one metric to the whole pool.
-DEFAULT_MARGIN_TIERS = ("book", "variant", "quiescent", "human")
-
 # Tier order used for display.
 TIER_ORDER = ("book", "human", "variant", "quiescent", "mirror", "past",
               "hall", "floor")
@@ -315,14 +310,15 @@ class PoolEntry:
     __slots__ = ("label", "spec", "tier", "weight", "metric", "win_rate",
                  "sat", "inert")
 
-    def __init__(self, label, spec, tier, weight=0.0, metric="winshare",
+    def __init__(self, label, spec, tier, weight=0.0, metric="blend",
                  win_rate=None):
         self.label = label
         self.spec = spec
         self.tier = tier
         self.weight = weight
-        # "winshare" or "margin" -- which per-game series this opponent is
-        # scored on.  Set by the owning Pool from its `margin_tiers`.
+        # Which per-game series this opponent is scored on -- one of
+        # `score_series`' metric names.  Set by the owning Pool, which applies
+        # the SAME one to every entry.
         self.metric = metric
         #: the champion's win rate against this opponent at the last FULL POOL
         #: CHECK, or None if it has never been measured.  Set by the owning
@@ -359,7 +355,7 @@ class Pool:
     """A weighted, tiered collection of opponents."""
 
     def __init__(self, entries, tier_weights=None, gate_tiers=DEFAULT_GATE_TIERS,
-                 margin_tiers=DEFAULT_MARGIN_TIERS, metric="winshare",
+                 metric="blend",
                  ladder_tiers=DEFAULT_LADDER_TIERS, win_rates=None,
                  sat_lo=SAT_LO, sat_hi=SAT_HI, sat_floor=SAT_FLOOR):
         self.entries = list(entries)
@@ -372,20 +368,13 @@ class Pool:
         # existed -- so a fresh state dir behaves identically to the old code.
         self.win_rates = dict(win_rates or {})
         self.sat_lo, self.sat_hi, self.sat_floor = sat_lo, sat_hi, sat_floor
-        # The pool-wide default metric.  `margin_tiers` overrides it per tier
-        # and exists only so the LEGACY objective (win share everywhere except
-        # a margin-scored gate) stays reproducible bit for bit.  Under the
-        # own/blend objectives `margin_tiers` is empty and every opponent is
-        # scored on the same thing, which is the point: the objective is a
-        # property of the RUN, not of which tier an opponent happens to sit in.
+        # The pool-wide metric.  ONE metric, applied to every opponent in
+        # every tier: the objective is a property of the RUN, not of which
+        # tier an opponent happens to sit in.  Until 2026-07-30 there was a
+        # `margin_tiers` set that scored the gate tiers on something different
+        # from everything else; it is gone, and so is the class of bug where
+        # an aggregate silently mixes two units.
         self.metric = metric
-        # Which tiers score on culture margin rather than win share.  Only the
-        # tiers where win share is DEGENERATE need it: the champion beats
-        # `floor`, plays `past` and `mirror` roughly evenly, and win share is
-        # both meaningful and the thing we actually care about there.  The
-        # gate tiers are the ones it loses to ~100% of the time, where win
-        # share carries no information at all.
-        self.margin_tiers = tuple(margin_tiers)
         self.renormalise()
 
     def renormalise(self):
@@ -408,7 +397,7 @@ class Pool:
         for e in self.entries:
             total = self.tier_weights.get(e.tier, 0.0)
             e.weight = total * e.sat / sums[e.tier] if sums[e.tier] else 0.0
-            e.metric = "margin" if e.tier in self.margin_tiers else self.metric
+            e.metric = self.metric
 
     def __len__(self):
         return len(self.entries)
@@ -766,7 +755,7 @@ def parse_tier_weights(s, base=None):
 def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
                with_quiescent=False, quiesce_opts=None, exclude=(),
                gate_tiers=DEFAULT_GATE_TIERS, hall_dirs=(),
-               margin_tiers=None, metric="winshare",
+               metric="blend",
                ladder_tiers=DEFAULT_LADDER_TIERS, human_bots=("all",),
                win_rates=None, sat_lo=SAT_LO, sat_hi=SAT_HI,
                sat_floor=SAT_FLOOR, past_recent=True, log=None):
@@ -775,15 +764,13 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
     Tiers whose weight is 0 are dropped entirely -- that is how you turn a
     tier off (``--pool-weights past=0``) without a second flag.
 
-    `margin_tiers` defaults to the legacy gate-tier list when `metric` is the
-    legacy ``winshare`` and to *nothing* otherwise.  A caller that asks for
-    ``own``/``blend`` means it for the whole pool; silently leaving the gate
-    tiers on margin would reproduce the exact bug this change exists to fix,
-    in the half of the pool that used to carry 69% of the weight.
+    `metric` applies to the WHOLE pool -- every tier, every opponent.  There
+    used to be a per-tier override here and removing it removes a class of
+    bug: an aggregate that mixes two different per-game units is meaningless,
+    and the tier weights that are supposed to apportion the decision stop
+    meaning anything.
     """
     log = log or (lambda *_a: None)
-    if margin_tiers is None:
-        margin_tiers = DEFAULT_MARGIN_TIERS if metric == "winshare" else ()
     tw = dict(tier_weights or DEFAULT_TIER_WEIGHTS)
     exclude = set(exclude or ())
     entries = []
@@ -830,7 +817,7 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
     # Under win share it was inert-by-construction (the champion beats all
     # three 97.9-100%, so candidate and reference both score 1.0 and every
     # paired diff is exactly 0.0 with se 0.0 -- docs/HAZARDS.md trap 2).
-    # Under `own`/`blend` it is NOT inert any more: a punching bag that never
+    # Under `lead`/`blend` it is NOT inert any more: a punching bag that never
     # competes for the card row and never attacks lets a candidate farm
     # culture in a way no real opponent does, so it would start actively
     # pulling the vector toward a policy tuned for an opponent that does not
@@ -840,7 +827,7 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
     add("random", "random", "floor")
     add("default", "default", "floor")
     pool = Pool(entries, tier_weights=tw, gate_tiers=gate_tiers,
-                margin_tiers=margin_tiers, metric=metric,
+                metric=metric,
                 ladder_tiers=ladder_tiers, win_rates=win_rates,
                 sat_lo=sat_lo, sat_hi=sat_hi, sat_floor=sat_floor)
     log("[pool] " + ", ".join(
@@ -884,27 +871,70 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
     return pool
 
 
-# ------------------------------------------------------- margin scoring
+# --------------------------------------------------------- lead scoring
 #
-# WHY.  Win share is a step function.  Against an opponent the champion never
-# beats it is 0.0 on every game, so the paired edge (candidate - champion) is
-# exactly 0.0 with se exactly 0.0, and that row can neither reward nor veto.
-# Measured on the clean DEFAULT_WEIGHTS start (docs/LEAGUE_TRAINING.md, "The
-# pool is too hard at the bottom"): 0-11% at 3p and 0-2.8% at 4p against the
-# whole gate tier, seven of eight gate rows a flat 0.0% at 4p.  The strongest
-# and highest-weighted half of the pool was invisible to the gradient
-# PRECISELY BECAUSE IT IS STRONG, and the accept decision fell back on
-# mirror/past/floor -- the weak-baseline problem the league exists to replace.
+# THE QUANTITY.  Every objective in this file scores one number per game, and
+# that number is now the CULTURE LEAD:
 #
-# Culture margin is dense: it exists on every game, and "lost by 8" is real
-# information that "lost by 40" is not.
+#     lead = A's final culture - the BEST defender's final culture
 #
-# THE NORMALISATION.  A margin cannot be averaged into the same aggregate as
-# a win share as-is -- it is measured in culture points, tens of them, and
-# would swamp every win-share tier and make the tier weights meaningless.  So
-# a margin is mapped onto a win-share-LIKE number in (0, 1):
+# `arena.duel` reports it as `per_game_lead`.  Three properties of it are
+# facts about Through the Ages rather than choices anyone made, and they are
+# the whole reason it replaced the previous objective:
 #
-#     margin_share(m) = 0.5 * (1 + tanh(m / MARGIN_SCALE))
+#   1. ITS SIGN IS THE GAME RESULT.  `lead >= 0` iff A won or tied, because
+#      `arena._play` computes the win share from `max(sc)` and the lead from
+#      `max(others)` -- the same maximum over the same list, three lines
+#      apart.  `LeadShare::test_zero_lead_is_exactly_the_win_boundary` pins it
+#      against the engine.
+#   2. IT NEEDS NO CENTRE.  The interesting point of the curve is lead 0, and
+#      lead 0 is given by the rules.  The previous objective scored A's
+#      ABSOLUTE own culture, which has no distinguished value, so it needed a
+#      `CULTURE_CENTRE` constant fitted to "roughly what a game scores".  That
+#      constant was set to 100 in July 2026 and was measurably stale by the
+#      end of the same month -- candidate own-culture medians had moved to
+#      108.8 / 122.1 / 134.4 at 2p/3p/4p and champion medians to
+#      120.8 / 144.1 / 160.6, against a human corpus at 156-195
+#      (docs/HUMAN_BASELINE.md).  A number fitted to yesterday's policy was
+#      steering today's, and it would have gone stale again every time the bot
+#      improved.  Re-fitting it would have bought one more month.  Deleting
+#      the quantity that needs it buys all of them.  There is no
+#      `CULTURE_CENTRE` in this file any more and
+#      `NoFittedCentre::test_the_objective_has_no_typical_score_constant`
+#      exists to keep it that way.
+#   3. IT PRICES A STOLEN CULTURE POINT AT EXACTLY WHAT IT IS WORTH FOR
+#      WINNING.  War and aggression MOVE culture, so taking 20 from the
+#      current leader moves the lead by 40 while producing 20 moves it by 20.
+#      That factor of two is not an accounting error -- taking 20 off the
+#      leader really does close twice as much of the gap as making 20.  See
+#      docs/LEAGUE_OBJECTIVE.md section 3 for the history here, which is not
+#      simple: an earlier margin objective was blamed for a degenerate
+#      champion and replaced by own culture on exactly this "theft is paid
+#      twice" argument.  The replacement was a thumb on the scale that
+#      compensated for a suspected mispricing elsewhere in the evaluator, and
+#      this file no longer does that.
+#
+# WHY NOT THE MEAN OF THE DEFENDERS.  `arena.duel` also reports
+# `per_game_margin`, A minus the MEAN of the other seats, and that is what the
+# pre-2026-07-30 margin mode scored.  At 2p the two are identical.  At 3p/4p
+# margin-over-mean is NOT the win condition and fails in a specific way: with
+# the leader on 180, A on 150 and a trailing seat on 60, A's margin over the
+# mean is +30 while A is losing, and A can raise it further by beating up the
+# seat on 60 -- which does nothing whatever for winning.  Margin over the BEST
+# seat is flat in that move by construction, because pounding a non-contender
+# does not move `max(others)`.  So the smoother of the two candidate signals
+# is also the one with the kingmaker pathology, and correctness and
+# trainability do not actually trade off here in the direction one expects.
+# The cost of choosing the max is that it is a maximum of noisy quantities and
+# is therefore noisier per game than the mean at 3p/4p; that cost is real,
+# unmeasured as of this writing, and recorded in docs/LEAGUE_OBJECTIVE.md.
+#
+# THE NORMALISATION.  A lead cannot be averaged into the same aggregate as a
+# win share as-is -- it is measured in culture points, tens of them, and would
+# swamp every win-share tier and make the tier weights meaningless.  So it is
+# mapped onto a win-share-LIKE number in (0, 1):
+#
+#     lead_share(m) = 0.5 * (1 + tanh(m / LEAD_SCALE))
 #
 # The properties that make this safe to mix with win share in one aggregate:
 #
@@ -913,136 +943,117 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
 #              `weighted_stats` can average them together untouched.  A tier
 #              weight therefore still buys the same share of the decision it
 #              bought before.
-#   null       equal play scores margin 0 -> 0.5, and the paired difference of
+#   null       equal play scores lead 0 -> 0.5, and the paired difference of
 #              two equal policies is 0 -- the same null the win-share pairing
 #              has.  `_aggregate`'s "the null is exactly 0 whatever the pool
 #              contains" guarantee is preserved.
-#   monotone   strictly increasing in m, so MORE CULTURE IS ALWAYS A BETTER
-#              SCORE.  There is no region where the gradient inverts; a
-#              deliberately-worse vector must score worse.
-#   bounded    saturating, not linear.  Margin has fat tails (blowouts past
-#              200 culture are measured below), and an unbounded linear score
-#              would let one lucky blowout dominate a weighted mean AND its
-#              SE, so a candidate could be accepted on a single outlier game.
-#              tanh bounds each game's influence exactly as win share does.
+#   symmetry   `lead_share(-m) == 1 - lead_share(m)` EXACTLY, for every m and
+#              every scale.  Losing by 30 is worth as much below the null as
+#              winning by 30 is above it.  This identity is also the machine
+#              check that no fitted centre has crept back in: any offset c
+#              other than 0 breaks it immediately.
+#   monotone   strictly increasing in m, so a bigger lead is always a better
+#              score.  There is no region where the gradient inverts.
+#   bounded    saturating, not linear.  Leads have fat tails (blowouts past
+#              200 culture are measured), and an unbounded linear score would
+#              let one lucky blowout dominate a weighted mean AND its SE, so a
+#              candidate could be accepted on a single outlier game.  tanh
+#              bounds each game's influence exactly as win share does.  This
+#              is the job the squash is really doing and it is the one thing
+#              here that must not be traded away.
 #
-# MARGIN_SCALE sets how many culture points count as "one decisive game", and
-# it is MEASURED, not guessed -- `experiments/margin_calib.py` dumps the
-# per-game margin distribution of DEFAULT_WEIGHTS against every gate opponent:
+# LEAD_SCALE is the one number in this objective that is a genuine CHOICE and
+# not a fact about the game.  It does not say "a typical score is X"; it says
+# "how much should a blowout count relative to a close game", which nobody can
+# read off the rules.  It is chosen from MEASURED DISPERSION rather than
+# picked: the rule is scale ~= 2.5x the per-game standard deviation of the
+# lead, which puts the observed operating band inside tanh's near-linear core
+# while still bounding the tail.  `experiments/margin_calib.py` dumps that
+# distribution; its last run measured a per-game sd of ~50 at 3p and ~45 at 4p
+# (against the mean of the defenders), so 2.5 x ~48 = 120.
 #
-#     3p   gate pooled n=192  mean -60.3  sd 49.6  p10 -129.5  p90 -1.5
-#     4p   gate per-opponent means -56 (var:military) .. -144 (var:culture),
-#          per-game extremes to -224
+# Getting it wrong re-creates the bug the whole dense-signal design exists to
+# fix.  Too small and the operating region sits in tanh's flat tail: at scale
+# 45 a 4p lead of -120 maps to -0.996, where a 15-point improvement moves the
+# score by 0.0004 and the gradient is dead again, just more quietly than
+# before.  Too large and it degenerates toward a linear score, where one
+# blowout carries an accept.  As the bot improves its leads move TOWARD zero,
+# i.e. toward the most linear part of the curve, so the constant does not
+# drift stale the way a fitted centre does -- that is the second thing
+# centring on the win boundary buys.
 #
-# Getting this constant wrong re-creates the bug it fixes.  The champion does
-# not sit near margin 0 -- it sits 60 (3p) to 120 (4p) culture points BEHIND.
-# A small scale would put the entire operating region deep in tanh's flat
-# tail: at scale 45 a 4p margin of -120 maps to -0.996, where a 15-point
-# improvement moves the score by 0.0004 and the gradient is dead again, just
-# more quietly than before.
-#
-# So the rule is: the scale must be large enough that the MEASURED operating
-# band sits in tanh's near-linear core.  120 is ~2.5x the measured per-game sd
-# (~50 at 3p, ~45 at 4p) and keeps the whole band inside |m/scale| <~ 1.8,
-# where tanh keeps a usable slope, while still bounding the -224 extreme at
-# -0.94 instead of letting it dominate.  As the bot improves its margins move
-# TOWARD zero, i.e. toward the most linear part of the curve, so the constant
-# does not need re-tuning as the run progresses.
-#
-# Larger = gentler and more linear, more outlier influence; smaller = closer
-# to a win/lose step function (as scale -> 0 it degenerates to the sign of the
-# margin, which is roughly the win-share behaviour we are replacing).
-# Overridable per run with --margin-scale.
-MARGIN_SCALE = 120.0
+# Two honesty notes on the 120.  (a) the sd it is derived from was measured on
+# margin-over-MEAN; margin-over-BEST is at least as dispersed at 3p/4p, so if
+# anything 120 errs slightly toward saturation there and should be re-derived
+# with `margin_calib.py` from the first post-relaunch logs.  (b) it is
+# overridable per run with `--lead-scale` and nothing downstream assumes 120.
+LEAD_SCALE = 120.0
 
 
-def margin_share(margin, scale=MARGIN_SCALE):
-    """Culture margin -> a win-share-like score in (0, 1).  See above."""
-    if margin is None:
+def lead_share(lead, scale=LEAD_SCALE):
+    """Culture lead over the best opponent -> a win-share-like (0, 1).
+
+    Centred on 0 BY CONSTRUCTION, not by a fitted constant: 0 is the win/lose
+    boundary, so `lead_share(0) == 0.5` is a statement about the rules.  See
+    the commentary above.
+    """
+    if lead is None:
         return None
-    return 0.5 * (1.0 + math.tanh(float(margin) / float(scale)))
+    return 0.5 * (1.0 + math.tanh(float(lead) / float(scale)))
 
-
-# -------------------------------------------------- own-culture scoring
-#
-# WHY THIS REPLACED MARGIN AS THE DEFAULT (docs/LEAGUE_OBJECTIVE.md).
-#
-# You win Through the Ages by having the most culture.  You do not win it by
-# having the biggest gap.  Those are the same objective in a two-player game
-# ONLY if culture is conserved -- and it is not: war and aggression MOVE
-# culture from the victim to the attacker.  A stolen point moves
-# (mine - theirs) by TWO; a produced point moves it by ONE.  So a margin gate
-# pays double for theft, and a hill climber will find that.
-#
-# It did.  docs/TWOP_PROFILE.md measures the resulting 2p champion: 69% of its
-# 85.5-point margin against `book` is the war/aggression move class, banning
-# that class barely moves its own score (131.0 -> 119.8) while nearly doubling
-# `book`'s (45.5 -> 93.8), and it is BEHIND on tech and wonders while doing it.
-# On the same engine, with scoring validated exact against 1,011 human BGO
-# journals (docs/SCORE_VALIDATION.md), final own culture reads:
-#
-#     humans                          159.5  [156.0, 163.0]
-#     the 1-ply vector we replaced    139.8  [131.6, 148.3]
-#     the margin-trained champion      64.7
-#
-# It holds its rival to 26 and scores 65.  It wins 97.9% of its pool and would
-# be crushed by a competent player.  Scoring on `per_game_culture` pays a
-# stolen point exactly once, which is what the rules do.
-#
-# THE SQUASH.  Same three requirements as `margin_share`: land in (0, 1) so a
-# paired edge lands in (-1, +1) and can be averaged in one aggregate with win
-# share; be strictly monotone in culture so more culture is always a better
-# score; be bounded so one blowout cannot carry an accept.  One difference:
-# a margin is centred on 0 by construction, whereas own culture is strictly
-# positive and lives around 40-200, so the squash has to be OFFSET or the
-# whole operating band sits on one side of the curve where the slope decays.
-#
-#     own_share(c) = 0.5 * (1 + tanh((c - CULTURE_CENTRE) / CULTURE_SCALE))
-#
-# CULTURE_CENTRE = 100 sits between where we are (65) and where humans are
-# (160); with CULTURE_SCALE = 120 the marginal value of one culture point is
-# 0.00383 at c=65 and 0.00327 at c=160, i.e. **flat to 17% across the entire
-# band we care about**.  Uncentred (the naive `tanh(c/120)`) the same ratio is
-# 3.1x, which would have priced a point of culture at a human score at a third
-# of a point at our current score -- a built-in bias against ever getting
-# there.  The 40-200 band maps to |u| <= 0.83, comfortably inside tanh's
-# near-linear core, while a 400-point outlier still saturates at 0.99.
-CULTURE_SCALE = 120.0
-CULTURE_CENTRE = 100.0
 
 #: Weight on the WIN-SHARE component of the `blend` objective; 1 - alpha goes
-#: on own culture.  See `score_series` and docs/LEAGUE_OBJECTIVE.md section 2.
+#: on the culture lead.
+#:
+#: WHY IT IS NOT ZERO, given that `lead_share` is already the win condition.
+#: The tanh deliberately BLURS the win/lose boundary in order to have a
+#: gradient at all: under it, losing by 1 scores 0.4958 and winning by 1
+#: scores 0.5042, a difference of 0.008, when the actual difference in payoff
+#: is the whole game.  A small win-share term puts back a fraction of the
+#: discontinuity that genuinely exists at lead 0 and that the squash removed.
+#: That is a different job from the one it had under the previous objective
+#: (where it was the ONLY term that knew about the opponents at all), and it
+#: is why the term survives the redesign rather than being deleted with the
+#: rest of it.
+#:
+#: WHY IT IS SMALL.  Per-game win share is a 0/1 step; paired against a
+#: reference on the same seeds it is 0 when both arms agree and +/-1 when they
+#: disagree, so its paired sd is several times a culture term's (measured
+#: 0.500 for win share against 0.419 for a culture margin, over the 1,632
+#: shared games of docs/LEAGUE_OBJECTIVE.md).  A large alpha therefore buys
+#: VARIANCE, not objective-alignment: it widens the accept CI and the climb
+#: stalls.
+#:
+#: WHY 0.15 SPECIFICALLY.  It is inherited unchanged, and deliberately so --
+#: there is no evidence for a different value, and re-picking a number without
+#: evidence is how the constant this redesign deleted got there.  A log
+#: analysis over 3,802 archived candidate evaluations found alpha 0 -> 0.15
+#: flips only 5-9% of accept/reject decisions and 0.15 -> 1.0 flips 16-19%, so
+#: the term is a tiebreak either way and the exact value is not load-bearing.
+#: `--objective-alpha 0` is pure lead, `1` is pure win share, one flag.
 DEFAULT_ALPHA = 0.15
-
-
-def own_share(culture, scale=CULTURE_SCALE, centre=CULTURE_CENTRE):
-    """Own final culture -> a win-share-like score in (0, 1).  See above."""
-    if culture is None:
-        return None
-    return 0.5 * (1.0 + math.tanh((float(culture) - centre) / float(scale)))
 
 
 class ScoreParams:
     """The constants a per-game score needs, carried as one object.
 
-    Threading five floats through `RefCache`, `_series`, `score_candidate` and
+    Threading floats through `RefCache`, `_series`, `score_candidate` and
     `ablate` individually is how a run ends up scoring the candidate on one
     objective and the reference on another.  One object, passed everywhere.
+
+    There are exactly two, and only one of them is a free choice; see
+    `LEAD_SCALE` and `DEFAULT_ALPHA`.  If a third ever appears here, ask what
+    fact about the game it encodes before adding it.
     """
 
-    __slots__ = ("margin_scale", "culture_scale", "culture_centre", "alpha")
+    __slots__ = ("lead_scale", "alpha")
 
-    def __init__(self, margin_scale=MARGIN_SCALE, culture_scale=CULTURE_SCALE,
-                 culture_centre=CULTURE_CENTRE, alpha=DEFAULT_ALPHA):
-        self.margin_scale = float(margin_scale)
-        self.culture_scale = float(culture_scale)
-        self.culture_centre = float(culture_centre)
+    def __init__(self, lead_scale=LEAD_SCALE, alpha=DEFAULT_ALPHA):
+        self.lead_scale = float(lead_scale)
         self.alpha = float(alpha)
 
     def __repr__(self):
-        return (f"ScoreParams(margin_scale={self.margin_scale:g}, "
-                f"culture_scale={self.culture_scale:g}, "
-                f"culture_centre={self.culture_centre:g}, "
+        return (f"ScoreParams(lead_scale={self.lead_scale:g}, "
                 f"alpha={self.alpha:g})")
 
 
@@ -1050,10 +1061,16 @@ DEFAULT_SCORE_PARAMS = ScoreParams()
 
 #: Metrics whose champion reference against a MIRROR opponent is known
 #: analytically and therefore costs no games.  See `RefCache.get`: a champion
-#: at a table of itself takes 1/players of the wins and a culture margin of
-#: exactly 0 by symmetry, but its own CULTURE is an ordinary unknown quantity
-#: that has to be played for.
-ANALYTIC_MIRROR_METRICS = ("winshare", "margin")
+#: at a table of itself takes 1/players of the wins by symmetry.
+#:
+#: The culture LEAD is deliberately NOT in this list and adding it would be a
+#: silent, expensive bug.  A mirror's *mean* margin is 0 by symmetry, which is
+#: what tempted the old code, but its mean lead is not: over a seat rotation
+#: of one policy the leads sum to `sum(sc) - sum(max over the others)`, which
+#: is strictly negative whenever the seats do not all tie (scores 10/5/3 give
+#: leads +5, -5, -7, summing to -7).  So under `lead`/`blend` the mirror
+#: reference is PLAYED like any other opponent.
+ANALYTIC_MIRROR_METRICS = ("winshare",)
 
 
 def score_series(res, metric, params=None):
@@ -1061,38 +1078,32 @@ def score_series(res, metric, params=None):
 
     `metric` is one of:
 
-      ``winshare``  the task-ordered per-game share list (the historical
-                    default; flat 0.0 against an opponent nobody beats, and
-                    saturated at 0.94-0.97 against `book` under PlanBot, so it
-                    cannot discriminate at either end);
-      ``margin``    the same games' culture margins through `margin_share`
-                    (the historical GATE metric -- kept so every vector
-                    selected under it stays reproducible, and because it is
-                    still the right thing when you genuinely want a
-                    differential);
-      ``own``       the same games' OWN final culture through `own_share`:
-                    dense, continuous, and the thing the rules score;
-      ``blend``     ``(1 - alpha) * own + alpha * winshare``.  Both components
-                    are already in (0, 1) with a paired null of exactly 0, so
-                    a convex combination of them is too.
+      ``winshare``  the task-ordered per-game share list.  Kept because it is
+                    the literal objective and useful to score against on
+                    demand, but unusable alone as a gradient: flat 0.0 against
+                    an opponent nobody beats, saturated at 0.94-0.97 against
+                    `book`, and 2.8x noisier per game at 4p than at 2p.
+      ``lead``      the same games' culture lead over the best defender
+                    through `lead_share`: dense, defined on every game, and
+                    zero exactly where the game is won or lost.
+      ``blend``     ``(1 - alpha) * lead + alpha * winshare``, the default.
+                    Both components are already in (0, 1) with a paired null
+                    of exactly 0, so a convex combination of them is too.
 
     Every branch is task-ordered and None-preserving, so a candidate series and
     a champion series played on the same seeds pair element by element.
     """
     p = params or DEFAULT_SCORE_PARAMS
-    if metric == "margin":
-        return [margin_share(m, p.margin_scale)
-                for m in res.get("per_game_margin") or []]
-    if metric == "own":
-        return [own_share(c, p.culture_scale, p.culture_centre)
-                for c in res.get("per_game_culture") or []]
+    if metric == "lead":
+        return [lead_share(m, p.lead_scale)
+                for m in res.get("per_game_lead") or []]
     if metric == "blend":
-        own = [own_share(c, p.culture_scale, p.culture_centre)
-               for c in res.get("per_game_culture") or []]
+        lead = [lead_share(m, p.lead_scale)
+                for m in res.get("per_game_lead") or []]
         win = res["per_game"]
         a = p.alpha
         return [None if (o is None or w is None) else (1.0 - a) * o + a * w
-                for o, w in zip(own, win)]
+                for o, w in zip(lead, win)]
     return res["per_game"]
 
 
