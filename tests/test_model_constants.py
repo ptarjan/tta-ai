@@ -82,6 +82,13 @@ CLASSIFIED = {
         "rule-derived", "a copy of actions.ROW_SIZE for the encoder"),
     ("engine/bots/neural_encode.py", "MAX_PLAYERS"): (
         "rule-derived", "Through the Ages is a 2-4 player game"),
+    ("engine/bots/neural_encode.py", "_CIVIL_DISCARD_SCALE"): (
+        "numerical guard",
+        "divisor that keeps the civil discard count in 0..1; the true "
+        "per-age deck size is player-count-dependent and reading it would "
+        "trip the hidden-deck guard, so the net learns the denominator"),
+    ("engine/bots/neural_encode.py", "_MIL_DISCARD_SCALE"): (
+        "numerical guard", "the same, on the military side"),
     ("engine/bots/book.py", "AGE_IDX"): (
         "rule-derived", "the five ages, in order"),
     # ------------------------------------------------------ numeric guards

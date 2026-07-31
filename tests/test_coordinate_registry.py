@@ -89,6 +89,7 @@ import unittest
 
 from engine import actions as A, cards as C, effects, game as G, state as S
 from engine import bots as B
+from engine.bots import board_yields as BY
 from engine.bots import book
 from engine.bots import neural_encode as NE
 from engine.bots import weighted as W
@@ -912,6 +913,27 @@ class Corpus:
         self.encode_states += 1
 
     def _run(self):
+        # `board_yields` memoises on `(card, effects.stats_key(state, p))` in
+        # three PROCESS-GLOBAL dicts.  Any test module that played a game
+        # before this one leaves entries in them, and `card_potential` then
+        # takes hits computed on somebody else's board -- so the corpus, and
+        # every verdict in this file derived from it, depended on which
+        # modules `unittest discover` happened to import first.  Observed for
+        # real: `Sid Meier` prices -0.4 when this module runs alone and above
+        # 0.0 when `test_board_yields` has run first, which flipped
+        # `test_the_individual_zero_cards_are_pinned` in the full suite only.
+        # A registry whose answers depend on process history is not a
+        # registry, so start from cold caches.
+        #
+        # NOTE FOR SOMEBODY ELSE: that those two answers DIFFER is itself a
+        # finding.  `stats_key` is documented as naming every field `compute`
+        # reads, and `test_board_yields.TestStatsKeyIsACompleteMemoKey` exists
+        # to prove it; if the key were complete, a warm cache could not change
+        # a valuation.  Clearing here makes this file honest; it does not
+        # explain the difference.
+        BY._DELTA_CACHE.clear()
+        BY._UNIT_CACHE.clear()
+        BY._TECH_CACHE.clear()
         names = [c["name"] for c in C.db().cards]
         credits_on = _credits_on()
         all_on = _all_on()
@@ -976,12 +998,19 @@ class Corpus:
         p = st.players[0]
         bank, free = p.yellow_bank, p.workers_free
         p.yellow_bank, p.workers_free = 0, 0
+        effects.invalidate(st, p)
         try:
             for k, v in W.features(st, 0, None, W.DEFAULT_WEIGHTS).items():
                 if v:
                     self.nonzero[k] += 1
         finally:
             p.yellow_bank, p.workers_free = bank, free
+            # MUST invalidate on the way back out as well: `effects.compute`
+            # is memoised per player, so a probe that restores the field and
+            # not the cache leaves every later observation reading the
+            # probe's board.  That is how a constructed probe silently
+            # becomes a corpus corruption.
+            effects.invalidate(st, p)
 
     def _probe_conduction(self, st, base, keys):
         """Conduction on the board as dealt, and on a stacked civil hand.
