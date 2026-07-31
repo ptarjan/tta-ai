@@ -266,14 +266,27 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     same paired A/B is **63.0%**.  The mechanism is the general one
     [`docs/UNIT_TECH_PRICING.md`](UNIT_TECH_PRICING.md#52-3p-on-the-archived-champion-a-large-unambiguous-regression) §5.2 named for `strength`: a coordinate the
     evaluator can read but never has to buy is unconstrained and will drift.
-    Two things follow.  (a) The live 2p arm should either carry
-    `"tech_board_credit": 0.0` or have that group re-fitted before it is
-    trusted — 0.0 recovers the parent commit's pricing byte for byte and needs
-    no code change.  (b) **Every other coordinate that no card price has ever
+    Two things follow.  (a) **Settled 2026-07-31, no action needed.**  The live
+    `experiments/league_state/champion_2p.json` (gen 73) was inspected directly
+    and already carries `tech_levels` 1.0 / 0.5 / −0.4 with
+    `tech_board_credit` 1.0 — i.e. it *is* the 63.0% configuration, not the
+    12.2% one.  The blown-up 5.33/5.84 pair survives only in an old
+    `weight_guard` range record inside `generations_2p.jsonl`; the last three
+    generations do not carry it.  3p is likewise at the defaults; 4p has
+    climbed its own group to 0.43/0.31/−0.14, moved but not runaway, and is
+    left alone.  The `"tech_board_credit": 0.0` workaround is therefore
+    unnecessary and was not applied — restarting the 2p arm does not begin
+    from a poisoned vector.  (b) **still open, and is now the whole of this
+    item: every other coordinate that no card price has ever
     charged for is suspect for the same reason.**  `strength` was one,
     `tech_levels` was the second; `num_techs`, `special_techs`, `workers`,
     `prod_workers`, `urban_workers` and the whole `best_*` family have never
-    been paid for at take time either.  A sweep is overdue.
+    been paid for at take time either.  A sweep is overdue.  Supporting
+    observation from the same 2026-07-31 inspection: the live 2p champion
+    carries `best_library` 9.40 and `culture_rate` 31.68, both far outside any
+    other coordinate's range, which is exactly the shape unconstrained drift
+    takes.  Neither has been shown to be wrong — that is what the sweep is
+    for — but they are where it should start.
 20. **`unit_upgrade` pools workers across all four red types.**  It moves every
     unit worker onto the candidate technology and charges `actions.upgrade_cost`
     from each, but `engine/actions.py:_action_moves` only offers an upgrade
