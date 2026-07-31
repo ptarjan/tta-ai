@@ -110,15 +110,25 @@ _CAPPED = False
 #: in about six hours and records NOTHING for the remaining 138 -- exactly the
 #: "first hour only" failure the per-process cap was supposed to prevent.
 #:
-#: So the budget is spent by SAMPLING instead.  ~54 sinks/hour x 144 hours is
-#: ~7,800 sinks; `_MAX_DIR_BYTES` / 7,800 is ~64 KB each, and an unsampled sink
-#: runs ~1.37 MB, so a rate near 64/1370 keeps the whole run inside the ceiling.
+#: So the budget is spent by SAMPLING instead, and the rate is arithmetic, not
+#: a round number.  Measured full-rate output is ~60 MB/hour across all three
+#: arms.  A worker inherits the climber's already-imported module, so a change
+#: here only reaches games at the next hourly climber relaunch -- which left
+#: ~130 MB of full-rate records banked before this took effect.  That leaves
+#: (500 - 130) MB for ~143 remaining hours, i.e. ~2.6 MB/hour, i.e. a rate
+#: under 2.6/60 = 0.043.  0.03 takes it with margin; 0.05 would have run the
+#: directory into its ceiling around hour 120 and gone silent for the rest --
+#: the same tail-loss the per-process cap already failed on once.
+#:
 #: Sampling rather than truncating also removes a bias a byte cap cannot avoid:
 #: the first N records of a worker are its first N decisions, which are the
 #: OPENING of a game, so a truncated sink is a sample of Age A/I and says
 #: nothing about Age III.  The byte cap stays as a backstop for a worker that
 #: outlives its peers.
-_SAMPLE = float(os.environ.get("TTA_WAR_CENSUS_SAMPLE", "0.05"))
+#:
+#: A file with NO `census_meta` record was written before sampling existed and
+#: is full-rate; readers must default to sample=1.0, not to this constant.
+_SAMPLE = float(os.environ.get("TTA_WAR_CENSUS_SAMPLE", "0.03"))
 _MAX_BYTES = int(float(os.environ.get("TTA_WAR_CENSUS_MAX_MB", "0.25")) * 1e6)
 _MAX_DIR_BYTES = int(
     float(os.environ.get("TTA_WAR_CENSUS_MAX_DIR_MB", "500")) * 1e6)
