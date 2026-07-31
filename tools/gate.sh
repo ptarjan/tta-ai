@@ -503,8 +503,8 @@ WIDE=f223cea1
 # change escaping its gate, not a digest to update.
 # Test count 1087 -> 1093: +6 from
 # tests/test_board_yields.py:TestOceanLinersIsPricedByTheBoardNotByARate.
-WNARROW=6d888d7c
-WWIDE=c52302c2
+WNARROW=ba77b499
+WWIDE=f4d6a545
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -681,10 +681,66 @@ WWIDE=c52302c2
 # once the non-red technologies started being gated on `tech_board_credit`.
 # All four moved again on the horizon rework; the table, the two causes and
 # the environment-hatch attribution are in the block above WNARROW.
-PNARROW=1b883d6f
-PWIDE=3922ebc4
-QNARROW=bbbb203a
-QWIDE=3df0155f
+# SIX MOVED AGAIN and the two GreedyBot arms held still again, on the yellow
+# ACTION-card board pricing (docs/ACTION_CARD_PRICING.md).
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   6d888d7c    ba77b499
+#     WWIDE     c52302c2    f4d6a545
+#     QNARROW   bbbb203a    4ab439b2
+#     QWIDE     3df0155f    5d05f578
+#     PNARROW   1b883d6f    0a637b40
+#     PWIDE     3922ebc4    ccc96764
+#
+# NOTE ON THE BASE.  This lane was derived once against 8b972ef, and the
+# horizon lane (docs/MODEL_CONSTANTS.md) landed underneath it and moved all
+# six evaluator arms.  Everything below was therefore RE-DERIVED from scratch
+# on the new base rather than carried over -- a digest re-used across a base
+# change is exactly the laundering docs/PYPY.md 9.0 forbids.  The first
+# derivation's numbers (e9cdc2d4 / 0c5a4337 / ce0d22bf / 49b898e1 / 65d9a884 /
+# b952c68e, against a 8b972ef base) are recorded here only so the reader can
+# see that they were discarded and not reconciled.
+#
+# Cause: `DEFAULT_WEIGHTS` gained `action_board_credit` at 1.0, which routes
+# all 33 yellow action cards' price through `weighted.action_value` instead of
+# the static table.  Sixteen of the 33 priced at EXACTLY 0.000 before it --
+# thirteen because `free_civil_action` and `resource_discount` are weights
+# `features()` never emits (so `evaluate` never pays for them and no game can
+# put a gradient on them; they are 0.0 on every champion in the pool), three
+# because `_card_choices` was multiplied by `card_board_credit`, also 0.0
+# everywhere.  Every searching bot's civil hand and card row therefore price
+# differently, so all six evaluator arms were EXPECTED to move and did.
+#
+# ATTRIBUTED TO ONE CONSTANT, on a third clean clone: `action_board_credit`
+# changed from 1.0 to 0.0 and nothing else touched reproduces **all eight**
+# pre-change digests byte for byte -- ca255af3 / f223cea1 / 6d888d7c /
+# c52302c2 / bbbb203a / 3df0155f / 1b883d6f / 3922ebc4.  So `action_value`,
+# `_yield_marginal`, `_RESTRICTED_TO_FEATURE`, `_is_action`,
+# `restricted_resource_credit` and `free_action_credit` are provably inert on
+# their own and the six moves are that one default.
+#
+# GREEDYBOT HOLDING STILL IS THE INFORMATIVE HALF, as it was for the two
+# technology lanes: GreedyBot never calls `card_potential`, so a NARROW/WIDE
+# move would have meant a card-pricing change had leaked into the rules.  It
+# did not.
+#
+# Two-sided per 9.0: derived from scratch in /tmp/actionfix and independently
+# in /tmp/actionfix2, two separate clones of the same tree, which agreed byte
+# for byte on all eight arms INCLUDING the two that did not move.  A clean-base
+# control on the parent commit (7bf483a, /tmp/actionctl2) reproduced all eight
+# of ITS committed constants first.  Nothing was re-derived to make the gate
+# pass; when the base moved, every arm was recomputed rather than rebased.
+#
+# Test count goes 1107 -> 1128: +20 from the new tests/test_action_pricing.py
+# and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
+# in tests/test_board_yields.py a third time, which needed a fourth sibling
+# once the action cards started being gated on `action_board_credit`.
+PNARROW=0a637b40
+PWIDE=ccc96764
+QNARROW=4ab439b2
+QWIDE=5d05f578
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

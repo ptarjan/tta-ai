@@ -438,16 +438,29 @@ class TestTheCreditGateIsExact(unittest.TestCase):
         `tech_board_credit` instead and is deliberately NOT gated here --
         `card_board_credit` is 0.0 on the 3p and 4p champions, so hanging the
         technology fix off it would leave two of the three league arms with
-        the defect (weighted.card_potential).  The next two tests assert the
-        same byte-for-byte property against the gates technologies actually
-        use.
+        the defect (weighted.card_potential).  The next three tests assert the
+        same byte-for-byte property against the gates technologies and action
+        cards actually use.
         """
         st = _played()
         w = dict(W.DEFAULT_WEIGHTS)
         self.assertEqual(w["card_board_credit"], 0.0)
         for name in C.db().by_name:
-            if W._is_unit(name) or W._is_levelled_tech(name):
+            if W._is_unit(name) or W._is_levelled_tech(name) \
+                    or W._is_action(name):
                 continue
+            self.assertEqual(W.card_potential(name, w, st, 0),
+                             W.card_potential(name, w),
+                             name)
+
+    def test_zero_action_credit_is_the_static_answer_for_every_action(self):
+        """`action_board_credit` = 0.0, the action lane's escape hatch, for the
+        same reason and on the same terms (docs/ACTION_CARD_PRICING.md)."""
+        st = _played()
+        w = dict(W.DEFAULT_WEIGHTS, action_board_credit=0.0)
+        acts = [n for n in C.db().by_name if W._is_action(n)]
+        self.assertEqual(len(acts), 33)
+        for name in acts:
             self.assertEqual(W.card_potential(name, w, st, 0),
                              W.card_potential(name, w),
                              name)

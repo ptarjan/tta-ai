@@ -185,12 +185,21 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
    at a higher weight than the `science_rate` (0.25) it buys.  Whether that is
    a pricing bug or a real 2p optimum is unsettled and unowned.  It is the
    largest non-inert behavioural discrepancy in the game.
-4. **`free_civil_action` is non-positive on every trained vector** (0.0 / −0.160
-   / −0.084 at 2p/3p/4p): the 18 action cards that grant a free civil action are
-   priced to be *disliked* for granting it.  Third instance of the
-   `unit_strength_credit` pattern, found by `docs/PLAY_RATE_AUDIT.md` §3.3.  No
-   isolated behavioural signature — action cards are the bot's least-broken type
-   — so it is ratcheted by `tests/test_play_rate.py` and not acted on.
+4. ~~**`free_civil_action` is non-positive on every trained vector** (0.0 /
+   −0.160 / −0.084 at 2p/3p/4p): the 18 action cards that grant a free civil
+   action are priced to be *disliked* for granting it.~~  **CLOSED 2026-07-30
+   by `docs/ACTION_CARD_PRICING.md`**, and the diagnosis above was *too kind*:
+   the weight is not merely non-positive, it is **unreachable**.
+   `free_civil_action`, `resource_discount` and `restricted_resources` are all
+   three absent from `features()`, so `evaluate` never multiplies them by
+   anything and no game the league plays can produce a gradient on them.
+   Thirteen action cards carry nothing else and priced at **exactly 0.000**.
+   `weighted.action_value` now prices a free civil action at
+   `feature_marginal("civil_actions")` and the two ring-fenced yields at the
+   `resource_stock` marginal — coordinates `evaluate` does pay for.  The three
+   old weights are kept as the stateless answer and are dead on the live path.
+   ("Action cards are the bot's least-broken type" was also wrong, and item 24
+   below is where that was already corrected.)
 5. **`cost.militaryActions` on 54 cards** — see §1.4.
 6. **`card_board_credit` = 0.0 and `gov_action_cost` = 0.0**: the entire
    board-aware pricing machine for leaders, actions and governments is built and
@@ -296,11 +305,45 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     `tech_upgrade`.  `weighted.feature_marginal` is now the one place that
     would learn it — the `strength_deficit`/`strength_lead` treatment, one
     feature over.
-24. **Action cards are now the largest single card-type deficit in the game**:
+24. ~~**Action cards are now the largest single card-type deficit in the game**:
     2.72 per seat-game at 2p against a human 12.98 after the technology
-    reprice (8.62 before).  Nothing in that change touched their price, so the
-    whole movement is relative — they lost the row competition to technologies.
-    `free_civil_action` (item 4) is a live sub-cause and is still 0.0.
+    reprice (8.62 before).~~  **CLOSED 2026-07-30 by
+    `docs/ACTION_CARD_PRICING.md`.**  The cause was not the row competition:
+    **sixteen of the thirty-three action cards priced at exactly 0.000**, in
+    three separate multiplied-by-zero mechanisms, and the per-card take rates
+    split along exactly that line — every card priced through a live trained
+    weight was at or above the human rate, every card priced at 0.000 was 3x to
+    15x under it.  Takes 7.30 → 9.00 per seat-game at 2p against a human 12.98
+    and 5.83 → 7.53 at 3p against 10.25; plays 4.85 → 5.82 and 3.88 → 4.62.
+    **About a quarter of the gap, not all of it** — the residual is item 27.
+    Three sub-items stay open, as items 25, 26 and 27.
+25. **Nothing prices WHICH action a `freeCivilAction` orders.**  Rich Land ("a
+    farm or a mine") and Urban Growth ("an urban building") are the same card to
+    `card_potential` apart from their discount.  The honest price is the best
+    legal free build's own delta, which `board_yields.tech_upgrade` can already
+    compute for the urban and worker types — but `row_pressure` calls
+    `card_potential` for every row card at every leaf, so it is a performance
+    question as much as a modelling one.  The one bucket-(d) hole left in the
+    type (`docs/ACTION_CARD_PRICING.md` §6).
+26. **Engineering Genius is under-*played* for a reason that is not its price**:
+    0.02 plays per seat-game at 2p against a human 1.33, and **0.00** at 3p.  It
+    orders a wonder stage and is illegal without a wonder in progress; the bot
+    completes 1.73 wonders a game at 2p and zero at 3p (§1.1).  Frugality is
+    0.07 against 0.83 for the analogous reason — it orders a population
+    increase.  **Re-measure both after the wonder hole is closed, not before.**
+27. **The residual action-card gap is a question about the REST of the
+    evaluator.**  After the fix the bot takes 9.00 a seat-game at 2p against a
+    human 12.98.  `free_action_credit` ships at **0.0** and that is derived,
+    not conservative: RB §3.11, playing a yellow card costs one civil action
+    and grants one, so the action economy is a wash and a `freeCivilAction`
+    card is worth its *discount*.  The A/B sweep is monotone in that credit
+    (1.0 → 32.8%, 0.5 → 41.3%, 0.0 → 47.7% against a 50% null), so buying the
+    remaining gap by turning it up is measurably wrong.  **Either humans
+    over-take these, or two to four resources is worth more against a civil
+    action than `w["civil_actions"]` = 2.0 says.**  The second is the live
+    hypothesis and it is item 19's sweep in another guise: `civil_actions` is
+    a coordinate no card price had ever charged for until this change.
+    Unowned.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search (`docs/CARD_CENSUS.md` tier B) — the

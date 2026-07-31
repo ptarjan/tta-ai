@@ -603,8 +603,23 @@ class RootRowOrder(unittest.TestCase):
         st.card_row[4] = None
         st.card_row[1] = "Alchemy"
         honest = W.row_pressure(st, 0, self.ROW_W, ctx)
-        # ...and the deck happens to deal a SECOND copy of the same name
-        st.card_row[7] = "Theology"
+        # ...and the deck happens to deal a SECOND copy of the same name.
+        #
+        # SLOT 5 AND NOT SLOT 7, and the reason is that a guard must not be
+        # able to go vacuous on somebody else's change.  Slot 5 is inside the
+        # slide, so an unmasked evaluator scores it through `urgency`, which is
+        # a plain sum of `card_potential`.  Slot 7 is outside it and scores
+        # through `bargain`, which multiplies by `rival_take_p` -- and that
+        # became a per-rival board estimate in docs/MODEL_CONSTANTS.md, so it
+        # saturates at 1.0 (survive = 0, bargain = 0) whenever the one rival
+        # can afford the one card they can reach.  Whether it saturates
+        # depends on the tableau 40 plies of self-play happens to produce, so
+        # at slot 7 THIS ASSERTION SILENTLY STOPS ASSERTING ANYTHING the first
+        # time any lane changes the evaluator; it did exactly that on
+        # docs/ACTION_CARD_PRICING.md.  Slot 5 is still a suffix of the root
+        # row (the mask still has to skip it, which is the property under
+        # test) and the quantity it moves is deterministic.
+        st.card_row[5] = "Theology"
         self.assertEqual(honest, W.row_pressure(st, 0, self.ROW_W, ctx))
         # Vacuity guard 1: the dealt card is one the unmasked evaluator would
         # have priced, so the equality above is a mask working, not a no-op.

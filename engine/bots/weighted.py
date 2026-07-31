@@ -1741,6 +1741,168 @@ def _is_levelled_tech(name):
     return C.db().type_by_name.get(name) in _BY.LEVELLED_TYPES
 
 
+@_lru_cache(maxsize=None)
+def _is_action(name):
+    return C.db().type_by_name.get(name) == "action"
+
+
+# ------------------------------------------------ the two ring-fenced yields
+#
+# `_EFF_TO_FEATURE` sends two effect keys to weights that are NOT features:
+# `resourceDiscount` -> `resource_discount` and `resourcesForMilitaryUnits` ->
+# `restricted_resources`.  `features()` emits neither, so `evaluate` never pays
+# for either, so no game the league ever plays can tell the trainer what they
+# are worth -- and both sit at 0.0 on every champion in the pool.  See
+# `action_value` for why that is the whole bug.
+#
+# What they are amounts OF is not in doubt: both are RESOURCES.  One is
+# resources you do not have to pay for a specific build; the other is resources
+# you may only spend on military units.  So `action_value` prices both through
+# `resource_stock`, the live trained coordinate `evaluate` does pay for, and the
+# only free parameter left is how much of a resource a ring-fenced one is:
+#
+#   * a `resourceDiscount` resource is worth a whole one.  You were going to
+#     make that build (the card is only playable if the ordered action is
+#     legal, `actions._action_card_playable`), and the discount comes straight
+#     off its cost.  Credit 1.0, and there is nothing to fit.
+#   * a `resourcesForMilitaryUnits` resource is worth AT MOST a whole one and
+#     is worth nothing to a player who builds no units this turn.  1.0 is the
+#     upper bound, deliberately: the honest number depends on the policy's own
+#     appetite for units, which `card_potential` cannot see, and
+#     `restricted_resource_credit` is a weight rather than a constant precisely
+#     so the league can measure the ring fence instead of a guess asserting it.
+#
+# Both are `max(0.0, ...)` on the resource weight for the same reason `_Y_COST`
+# and `tech_value` are: a hill climb may drive a stock weight negative and a
+# GAIN must never read as a loss because of it.
+_RESTRICTED_TO_FEATURE = {
+    "resource_discount": ("resource_stock", 1.0),
+    "restricted_resources": ("resource_stock", "restricted_resource_credit"),
+}
+
+
+def _yield_marginal(key, state, idx, w, late):
+    """`feature_marginal`, plus the two ring-fenced pseudo-features above."""
+    fenced = _RESTRICTED_TO_FEATURE.get(key)
+    if fenced is None:
+        return feature_marginal(key, state, idx, w, late)
+    feat, credit = fenced
+    if not isinstance(credit, float):
+        credit = w.get(credit, 1.0)
+    if not credit:
+        return 0.0
+    return credit * max(0.0, feature_marginal(feat, state, idx, w, late))
+
+
+def action_value(name, state, idx, w):
+    """Eval-points playing this yellow action card would be worth ON THIS BOARD.
+
+    `tech_value`'s sibling, for the one civil type left on the static table,
+    and it is the same diagnosis one colour over.  Both documents this repeats
+    -- docs/UNIT_TECH_PRICING.md and docs/YELLOW_TECH_PRICING.md -- close with
+    the same sentence: **a card is worth what `evaluate` pays for what it
+    does**, and the static table kept pricing cards through coordinates
+    `evaluate` does not use.  The action cards are the third and largest
+    instance, and they are the worst of the three because the coordinates
+    involved are not merely mis-scaled, they are UNREACHABLE:
+
+        weight                 a feature?   value on every champion in the pool
+        free_civil_action      no           0.0
+        resource_discount      no           0.0   (0.498 on the live 2p only)
+        restricted_resources   no           0.0   (0.155 on the live 2p only)
+
+    `features()` emits none of the three, so `evaluate` never multiplies them
+    by anything, so no game the league plays can produce a gradient on them.
+    They are not weights the trainer chose to leave at zero; they are weights
+    the trainer has never had any information about.  The measured consequence
+    is that **thirteen of the thirty-three action cards price at EXACTLY
+    0.000** on `DEFAULT_WEIGHTS` -- every Rich Land, Urban Growth, Engineering
+    Genius and Efficient Upgrade, whose entire printed value is a free civil
+    action plus a resource discount -- and three more (the Reserves) price at
+    0.000 for a different multiplied-by-zero reason (see `card_potential`).
+    Sixteen of thirty-three cards, worth nothing to the evaluator, in a type
+    the bot takes 2.72 times a seat-game against a human 12.98.
+
+    THE SHAPE, and every line of it is a derivation rather than a taste:
+
+    1. **A one-shot gain is worth `feature_marginal`, not `w[key]`.**  Same
+       correction `tech_value` makes, and it bites here through `culture`,
+       which is a `PHASE_KEYS` feature: `evaluate` pays
+       `w[k] + (1-L)w[k_early] + L*w[k_late]`, so Cultural Heritage's four
+       culture is worth 2.4 eval points in Age A and 10.0 in Age IV on the
+       defaults, where the static table says 4.0 in both.
+    2. **A free civil action is worth a civil action TIMES
+       `free_action_credit`, and that credit's default is 0.0 because the
+       action economy is a WASH.**  This is the one number in this function
+       that is not a pure derivation, and the first draft of it got the
+       derivation backwards, so it is written out:
+
+           RB 3.11 / `actions._h_play_action`: playing a yellow action card
+           costs ONE civil action (`pay_ca(state, p, 1)`) and grants ONE
+           ordered action.  Net zero.  Rich Land is "spend a civil action to
+           build a farm three resources cheaper", not "spend a civil action
+           and get one back".
+
+       Crediting the grant without charging the play therefore double-counts
+       an action the card never gives you.  Measured, at credit 1.0 on
+       `DEFAULT_WEIGHTS`: action takes land exactly on the human rate (7.35 ->
+       11.80 a seat-game against a human 12.98 at 2p) and the paired A/B is
+       **32.8% against a 50% null** -- because the same civil actions stop
+       buying technologies (11.9 -> 8.0 developed a game) and 5.5 action cards
+       a seat-game are taken and never played.  Right rate, wrong reason, and
+       the behaviour census would have called it a win on its own.
+
+       It is a weight and not a hard 0.0 because the wash is not quite exact
+       and the exceptions all point one way: Breakthrough's order may be spent
+       on a REVOLUTION, which normally costs the whole civil-action pool
+       (`actions._can_revolt`), and any ordered action is available on a turn
+       whose actions are already spent.  0.0 is the conservative end of that
+       range and the measured one; the league has a gradient from there.
+    3. **The two ring-fenced yields are resources.**  See
+       `_RESTRICTED_TO_FEATURE`.
+    4. **A choice is a max, and it is not board pricing.**  Reserves' "gain 2
+       food OR 2 resources" is resolved here rather than in the block
+       `card_board_credit` gates, which is where it was and where it was
+       multiplied by a zero -- see `card_potential`'s note.
+    5. **The three per-table-size cards are board-scaled and stay so.**
+       Endowment for the Arts, Wave of Nationalism and Military Build-Up
+       multiply a printed coefficient by a count of rivals; `board_yields.
+       board_extra` already computes exactly that from the live boards and is
+       called here rather than reimplemented, so there is one implementation
+       and it cannot drift.
+
+    NOT charged, deliberately: the civil action playing the card costs, for
+    the reason in point 2; and the card leaving the hand, which `hand_value`
+    already prices on the board side.
+
+    No information is added -- the effects are printed on the card, and
+    `board_extra` reads only public culture totals and public strengths.
+    """
+    card = C.db().by_name.get(name)
+    if card is None:
+        return 0.0
+    eff = card.get("effects") or {}
+    late = lateness(state)
+    total = 0.0
+    for k, amt in eff.items():
+        if amt is True or amt is False or not isinstance(amt, (int, float)):
+            continue
+        fk = _EFF_TO_FEATURE.get(k)
+        if fk:
+            total += amt * _yield_marginal(fk, state, idx, w, late)
+    for group in _card_choices(name):
+        total += max(sum(amt * _yield_marginal(fk, state, idx, w, late)
+                         for fk, amt, _kind in g) for g in group)
+    for fk, amt, _kind in _BY.board_extra(name, state, idx):
+        total += amt * _yield_marginal(fk, state, idx, w, late)
+    if eff.get("freeCivilAction"):
+        fc = w.get("free_action_credit", 0.0)
+        if fc:
+            total += fc * feature_marginal("civil_actions", state, idx, w,
+                                           late)
+    return total
+
+
 def tech_value(name, state, idx, w, dev_credit=1.0):
     """Eval-points developing this technology is worth ON THIS BOARD.
 
@@ -1881,6 +2043,16 @@ def card_potential(name, w, state=None, idx=None):
                 return uc * tech_value(name, state, idx, w, tb)
         elif tb and _is_levelled_tech(name):
             return tb * tech_value(name, state, idx, w)
+        elif _is_action(name):
+            # Same device, same reason, one type over: `action_board_credit`
+            # defaults to 1.0 and is absent from every champion file, so
+            # `load_weights` fills it in and the fix is live on all three
+            # league arms at once; 0.0 sends every action card back down to
+            # the static table, which is the parent commit's pricing byte for
+            # byte.  See `action_value`.
+            ab = w.get("action_board_credit", 1.0)
+            if ab:
+                return ab * action_value(name, state, idx, w)
     credit = w.get("card_rate_credit", 1.0)
     base = w.get("card_board_credit", 0.0)
     key = _board_credit_key(name)
@@ -1907,6 +2079,16 @@ def card_potential(name, w, state=None, idx=None):
     # it is not board-aware pricing at all (it needs no board), it is here
     # because it is more than a table lookup.  That is also what the type
     # knob did when it was an environment variable.
+    #
+    # AND THAT WAS A BUG, kept here only because this whole block is the
+    # opt-out.  The three Reserves are the entire population of
+    # `_card_choices`, they are action cards, and multiplying a choice that
+    # needs no board by `card_board_credit` -- 0.0 on every champion in the
+    # league -- priced "gain 4 food OR 4 resources" at exactly nothing.  The
+    # early return above never even reaches this loop.  `action_value` resolves
+    # the choice with no credit on it at all, which is what closes it; this
+    # line is what `action_board_credit` = 0.0 goes back to.  See
+    # docs/ACTION_CARD_PRICING.md section 2.2.
     for group in _card_choices(name):
         total += base * max(_sum_yields(g, w, credit) for g in group)
     if on_board and board:
@@ -2578,6 +2760,16 @@ BASE_WEIGHTS = {
     # military option: resources ring-fenced to building military units.
     # Worth less than the same number of free resources by an amount only
     # the policy's own appetite for units decides.
+    #
+    # SUPERSEDED on the live path by `restricted_resource_credit` below, and
+    # kept rather than deleted because it is still the STATIC answer:
+    # `card_potential(name, w)` with no board (`analysis/`,
+    # `tools/card_blindness.py`, the pricing censuses) has no `resource_stock`
+    # marginal to take a fraction of, and `action_board_credit` = 0.0 sends the
+    # live path back here too -- including `board_extra`'s half of it, which
+    # still emits this key.  Churchill's ring-fenced pair is NOT priced through
+    # here: `board_yields._churchill` deliberately prices him at his culture
+    # option, which is the conservative read.
     "restricted_resources": 0.0,
     # How much of the board-aware pricing to believe, the exact analogue of
     # `card_rate_credit` below and for the same reason: at 0.0 `card_
@@ -2702,6 +2894,41 @@ BASE_WEIGHTS = {
     # what `unit_tech_value` computed before this. That is what makes this
     # change A/B-able against itself in one process on the same deal.
     "tech_board_credit": 1.0,
+    # The third of the same family, for the yellow ACTION cards
+    # (`action_value`, docs/ACTION_CARD_PRICING.md).  1.0 on the same terms and
+    # for the same reason: at 1.0 the number is "the eval points `evaluate`
+    # itself assigns to the gains, the free civil action and the resources
+    # this card produces", every term read off the objective by
+    # `feature_marginal` and off the live boards by `board_yields.board_extra`.
+    #
+    # 0.0 is the one constant that sends every action card back to the static
+    # table, i.e. the parent commit's pricing byte for byte, which is what
+    # makes the change A/B-able against itself in one process on the same deal.
+    # It is absent from every champion file in the league, so `load_weights`
+    # fills it from here and the fix is live on all three arms at once --
+    # deliberately, because the defect it fixes is present on all three.
+    "action_board_credit": 1.0,
+    # How much of a real resource a resource ring-fenced to military units is
+    # worth (`_RESTRICTED_TO_FEATURE`).  1.0 is the UPPER bound -- a resource
+    # you may only spend one way is worth at most one you may spend any way,
+    # and worth nothing at all to a player who builds no units this turn -- and
+    # it is the bound rather than a fitted number because how often that is, is
+    # exactly what a league measures and an argument cannot.  A credit rather
+    # than the absolute `restricted_resources` price it replaces because an
+    # absolute one is unreachable: `features()` emits no such feature, so
+    # `evaluate` never pays for it, so no game can produce a gradient on it --
+    # which is why it is 0.0 on every champion in the pool.  See `action_value`.
+    "restricted_resource_credit": 1.0,
+    # How much of a civil action the ordered action on an 18-card block of
+    # yellow cards ("build or upgrade a farm or a mine", "develop a
+    # technology") is worth.  **0.0, and it is a measurement, not caution.**
+    # Playing the card costs one civil action and grants one, so the action
+    # economy is a wash and the card is worth its DISCOUNT; at 1.0 the take
+    # rate lands exactly on the human number and the paired A/B is 32.8%
+    # against a 50% null, because the actions stop buying technologies.  Full
+    # derivation and the arms in `action_value` point 2 and
+    # docs/ACTION_CARD_PRICING.md section 5.
+    "free_action_credit": 0.0,
     # `territory_credit` is 1.0 but costs nothing until `hand_mil_potential`
     # is non-zero, because nothing calls `card_potential` on a military card
     # otherwise.  It is a separate knob from `hand_mil_potential` so that
