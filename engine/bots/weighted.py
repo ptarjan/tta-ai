@@ -537,6 +537,16 @@ def feature_marginal(key, state, idx, w, late=None, ctx=None):
             late = lateness(state, w)
         m += (1.0 - late) * w.get(key + "_early", 0.0)
         m += late * w.get(key + "_late", 0.0)
+    # THE RATE HORIZON.  `evaluate` prices a rate at `blend * horizon`, so its
+    # marginal is too -- and because this function is the single definition of
+    # "what one unit of this feature is worth", every card-pricing site picks
+    # the horizon up for free and cannot disagree with `evaluate` about it.
+    # That is the whole reason the horizon lives on the PRICE rather than on
+    # the feature: there is exactly one place to put it.
+    if key in RATE_KEYS:
+        hz = rate_multiplier(state, w)
+        if hz != 1.0:
+            m *= hz
     return m
 
 
@@ -814,6 +824,112 @@ def lateness_by_age(state):
     return min(1.0, C.level(state.age_civil) / 3.0)
 
 
+# ----------------------------------------------------- the rate horizon
+#
+# THE HOLE THIS FILLS, stated as arithmetic rather than as a strategy opinion.
+#
+# `culture` is FROZEN at 1.0, so every weight in the vector is denominated in
+# culture points.  A feature whose value is a PER-TURN RATE is therefore worth
+# `rate x turns you will still collect it`, and that multiplier is a quantity
+# the state knows: `rounds_left`.  The evaluator does not use it.  Before this
+# change `rounds_left` was read by exactly ONE feature in the whole vector --
+# `wonder_overrun` -- and by nothing that prices a rate.  Every rate went
+# through
+#
+#     w[k] + (1 - L) * w[k_early] + L * w[k_late]
+#
+# which is an affine function of a [0, 1] SHAPE, not a multiplication by a
+# horizon.  The class of vectors CAN express a horizon that way (rounds-left is
+# roughly affine in `1 - L`), and the search demonstrably does not find it:
+# docs/CULTURE_GAP.md section 11 ablates `culture_rate_early`/`_late` at 2p to
+# an edge of exactly 0.0000 +/- 0.0000 -- deleting them changed not one game --
+# while `culture_rate` next to them is worth 0.11-0.18 win share.  The live 2p
+# champion (gen 84) carries `culture_rate` 31.678 with a phase pair of
+# (-0.386, +1.492), i.e. it prices +1 culture/turn at ~31-33 culture points at
+# EVERY moment of the game.  A 2p game is ~23 rounds, so 31.7 is above the
+# theoretical ceiling everywhere and roughly 30x the truth on the last turn.
+# That is the same mispricing docs/CULTURE_GAP.md section 23b declined to
+# retract, and it is uniform across rates, not a late-game special case:
+# `science_rate`, `food_rate` and `resource_rate` have exactly the same shape.
+#
+# WHAT IT MULTIPLIES BY, and why there is no new constant in it.  A rate is
+# scaled by `rounds_left / mean rounds_left`, and BOTH halves come off the
+# state:
+#
+#     total   = rounds_left + (round - 1)     <- rounds played + rounds to play
+#     ref     = (total + 1) / 2               <- mean of rounds-left over a game
+#     scale   = rounds_left / ref
+#
+# `rounds_left` is already exact once Age IV begins and is otherwise the exact
+# count of undealt civil cards over a deal rate MEASURED IN THIS GAME
+# (`take_rate`); see its docstring.  `ref` is the mean of `rounds_left` over
+# the rounds of one game: it decrements by one per round from `total` to 1, so
+# its mean is `(total + 1) / 2` -- arithmetic, not a fit.  `total` is estimated
+# afresh at every decision from the same live quantities, so a game that runs
+# long or short renormalises itself and there is no per-player-count table.
+#
+# WHY MEAN-NORMALISED RATHER THAN RAW `rounds_left`.  The choice of divisor is
+# pure GAUGE for the weight class -- any constant factor is absorbed by
+# rescaling `w[k]` -- so it is spent, exactly as docs/CULTURE_GAP.md section 8b
+# spent it, on disturbing an ALREADY-TRAINED vector as little as possible.
+# Mean-normalising leaves `w["culture_rate"]` meaning what it means today ("a
+# rate point at an average moment of the game") and changes only the SHAPE,
+# which is the entire content of the change.  A raw multiplier would have
+# confounded "the horizon is now visible" with "every rate weight just got
+# divided by twelve".
+#
+# THE CREDIT.  `rate_horizon` is a tunable weight, default 0.0, and 0.0
+# reproduces master byte-for-byte -- the gate digests do not move until a
+# vector asks for it.  1.0 is the full horizon.  Intermediate values are a
+# genuine blend and not a switch, which is what makes it a slope the league can
+# climb rather than a step it has to jump; `tools/rate_horizon_ab.py --ladder`
+# measures that it is one.
+#
+# The one-shot side of the trade needs no term at all, and that is the point:
+# a one-shot culture payoff (a completed Age III wonder, an Age III scoring
+# event) already lands on `culture`, whose weight is FROZEN at 1.0 and does not
+# move with the horizon.  Rates decaying toward zero IS the endgame preference
+# for one-shots.  There is deliberately no late-game branch anywhere in this.
+# The four rates the player COLLECTS.  `rival_culture_rate` and
+# `rival_science_rate` are deliberately NOT here: they are max-over-rivals
+# threat signals, the coordinate registry declares them inert across a
+# candidate set (`tests/test_coverage_tools.py:TestInertFeatures`), and
+# scaling them made them vary between candidates as a side effect -- a
+# behavioural change nobody asked for, which is exactly what this lane is
+# supposed to avoid smuggling in.  The argument that a rival's rate also
+# only pays for the turns remaining is sound and is docs/OPEN_ITEMS.md
+# item 2.31, not this change.
+RATE_KEYS = frozenset((
+    "culture_rate", "science_rate", "food_rate", "resource_rate",
+))
+
+
+def horizon_scale(state, n=None, w=None):
+    """`rounds_left`, normalised so an average-moment decision scores 1.0.
+
+    Mean ~1.0 over a game by construction; ~1.9 at the deal and ~0.09 on the
+    last turn.  Never negative, because `rounds_left` never is.
+    """
+    rl = rounds_left(state, n, w)
+    ref = 0.5 * (rl + max(0.0, state.round - 1.0) + 1.0)
+    return rl / ref if ref > 0.0 else 1.0
+
+
+def rate_multiplier(state, w, n=None):
+    """What `RATE_KEYS` features are multiplied by.  1.0 when the credit is off.
+
+    Blended so `rate_horizon` is a slope: 0.0 is master, 1.0 is the full
+    `rounds_left / mean` horizon.  Floored at 0.0 so a credit above 1.0 -- which
+    the league is free to propose -- can flatten a rate but never invert its
+    sign, the failure mode docs/CULTURE_GAP.md section 8b(i) measured when an
+    unclamped horizon drove `1 - L` negative.
+    """
+    c = w.get("rate_horizon", 0.0) if w is not None else 0.0
+    if not c:
+        return 1.0
+    return max(0.0, 1.0 + c * (horizon_scale(state, n, w) - 1.0))
+
+
 def features(state, idx, ctx=None, w=None):
     """The raw feature vector from player `idx`'s point of view.
 
@@ -949,7 +1065,7 @@ def features(state, idx, ctx=None, w=None):
     rel = strength - ctx["rival_strength"]
 
 
-    return {
+    f = {
         # --- economy
         "culture": p.culture + g("culture", 0.0),
         "culture_rate": s.culture + g("culture_rate", 0.0),
@@ -1063,6 +1179,15 @@ def features(state, idx, ctx=None, w=None):
         "rival_hand_civil": rival_hand_civil,
         "rival_wonders": rival_wonders,
     }
+    # NOTE: the rate horizon is deliberately NOT applied here.  `features()`
+    # reports the BOARD -- a civilisation producing 5 culture a turn produces
+    # 5 culture a turn however much game is left -- and the horizon is a
+    # property of what that is WORTH, so it lives in `evaluate` and in
+    # `feature_marginal`.  The first cut of this change scaled the feature
+    # instead and `tests/test_build_fresh.py` caught it: `board_yields` emits
+    # a card's PRINTED yield and asserts it against the real `features()`
+    # delta, an invariant that only holds while the two are in the same units.
+    return f
 
 
 # --------------------------------------------------- card identity in hand
@@ -2753,6 +2878,30 @@ def row_pressure(state, idx, w, ctx=None):
 # ------------------------------------------------------------ default weights
 
 BASE_WEIGHTS = {
+    # How much of the RATE HORIZON to believe: 0.0 prices every per-turn rate
+    # flat, exactly as this file did before, and 1.0 scales it by
+    # `rounds_left / mean rounds_left`.  See `rate_multiplier` for the
+    # derivation -- there is no fitted constant in it -- and
+    # docs/RATE_HORIZON.md for what it fixes.
+    #
+    # SHIPPED AT 1.0, AND 1.0 IS THE ONLY DEFENSIBLE VALUE.  At 1.0 the
+    # multiplier IS the derived horizon; any other value is a hedge with a
+    # fitted number in it, and docs/OPEN_ITEMS.md 3.0's constant taxonomy puts
+    # rule-derived above fitted.  The thing it replaces is not a smaller
+    # version of itself, it is a flat exchange rate that is wrong by 25x in
+    # Age IV on the live 2p champion (docs/RATE_HORIZON.md section 2).
+    #
+    # LIVE ON ALL THREE LEAGUE ARMS THE MOMENT THIS LANDS, deliberately and on
+    # the `tech_board_credit` / `gov_board_credit` / `action_board_credit`
+    # precedent: the key is absent from every champion file on disk, so
+    # `load_weights` fills it from here.  A default of 0.0 would have left the
+    # fix switched off in exactly the arms that need it, which is the mistake
+    # `card_board_credit` made and is still making for wonders
+    # (docs/OPEN_ITEMS.md item 2.29).  It is a weight, so the league may climb
+    # it away if it is wrong -- and `experiments/behaviour.py` now logs
+    # `rounds_left`, `rate_mult` and `culture_rate_priced` per age so the run
+    # output says whether it did.
+    "rate_horizon": 1.0,
     # economy
     "culture": 1.0,
     "culture_rate": 5.0,
@@ -3260,10 +3409,13 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
         f = features(state, idx, ctx, w)
     total = 0.0
     get = w.get
+    # `rate_multiplier` is 1.0 unless the vector asks for the horizon, and the
+    # `hz != 1.0` guards below keep this loop byte-identical when it is.
+    hz = rate_multiplier(state, w)
     for k, v in f.items():
         wk = get(k)
         if wk:
-            total += wk * v
+            total += wk * v * hz if (hz != 1.0 and k in RATE_KEYS) else wk * v
     # `horizon_age` is an A/B escape hatch, not a strategy weight: it restores
     # the pre-fix four-step age bucket for THIS weight vector only, so the old
     # and new horizons can be seated at the same table and duelled directly
@@ -3278,12 +3430,15 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
         v = f[k]
         if not v:
             continue
+        # the phase pair is part of the same price, so it carries the same
+        # horizon -- see `feature_marginal`, which sums exactly these three.
+        vv = v * hz if (hz != 1.0 and k in RATE_KEYS) else v
         we = get(k + "_early")
         if we:
-            total += we * early * v
+            total += we * early * vv
         wl = get(k + "_late")
         if wl:
-            total += wl * late * v
+            total += wl * late * vv
     # identity-aware hand term: what the cards actually in hand would be worth
     # if played.  Deliberately NOT folded into `features()` -- it is priced
     # through `w` itself, so it is not a linear feature and must not pick up

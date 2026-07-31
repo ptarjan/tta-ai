@@ -27,6 +27,36 @@ Two instruments, both new and both committed with this document:
 * **(c) DECLINED** — the bot prices it and picks something else.  This may be
   correct play; it is reported, not condemned.
 
+## How changes are validated on this project (standing rule, 2026-07-31)
+
+**Land it on master and read the real league runs. Do not validate with
+offline paired A/B batches, and do not replay the fingerprint arms.**  Both
+compete with the training league for the same six cores, and the owner has
+asked for this twice; it lives here now so the next lane is briefed by default
+rather than by prompt.
+
+Concretely:
+
+* **Ship changes enabled**, at the value you can best defend from the model,
+  not pinned at 0.0 pending an A/B.  The league is the judge.  A change whose
+  best-reasoned setting is "off" should not be landed at all.
+* **`tools/gate.sh` is not run.**  The digest gate's *job* — catching a change
+  that altered behaviour nobody intended to alter — still matters, so it is
+  replaced by **logging**, not dropped: a change must leave the normal run
+  output rich enough that an unintended behavioural shift is visible in it.
+  `experiments/behaviour.py` is that channel.  Its `by_age` block now carries
+  `rounds_left`, `rate_mult` and `culture_rate_priced` (what the vector pays
+  for one point of culture production, and the ratio to its own ceiling) and
+  takes-per-age **with their denominators** — decisions seen, decisions where a
+  take was legal, and the take rate given one was offered.
+* **Unit tests are cheap and are still expected.**  `python3.13 -m pytest`.
+  Tests are how the last two real bugs on this project were found; they are not
+  what the rule is about.
+* **Every rate reported anywhere must carry its denominator.**  A rate of zero
+  has two causes that look identical in a table — *never chosen* and *never
+  offered* — and `docs/OPEN_ITEMS.md` item 2.17 was closed on the wrong one of
+  them once already.
+
 ## Method
 
 | | 2p | 3p | 4p |
@@ -428,6 +458,49 @@ Decisions per seat-game, 2p / 3p / 4p:
   because they are printed on the player board.  The Age A *deck* cards
   (4 wonders, 6 leaders, 10 events, 8 action cards) are all in play and the bot
   takes 2.4/seat at 2p, **more** than humans.
+
+## 10. What the evaluator never reads: the horizon (added 2026-07-31)
+
+Not a subsystem the bot fails to touch — a quantity the *evaluation* fails to
+use — but it belongs in this census because §1's wonder verdict and §5's
+technology verdict both end at it, and because it is a coverage zero of exactly
+the kind this document exists to count.
+
+`weighted.rounds_left(state)` is the state's own estimate of how many rounds
+are left: exact once Age IV pins `final_round_end`, and before that the exact
+count of undealt civil cards over a deal rate **measured in the game being
+played**.  Before 2026-07-31 it was consumed by **exactly one feature in the
+118-key vector — `wonder_overrun`** — and by nothing that prices a rate.  Every
+per-turn rate (`culture_rate`, `science_rate`, `food_rate`, `resource_rate`)
+went through a flat weight plus a [0, 1] *shape*, `lateness`, so the exchange
+rate between "one culture per turn" and "one culture" was a constant the hill
+climb had to discover in units it was never given.
+
+`culture` is FROZEN at 1.0, so the ceiling on what `+1 culture/turn` can be
+worth **is** `rounds_left`.  Six 2p self-play games, per age
+([`docs/RATE_HORIZON.md`](RATE_HORIZON.md) §2):
+
+| age | ceiling (`rounds_left`) | `DEFAULT_WEIGHTS` pays | live champion_2p pays |
+|---|---|---|---|
+| A | 23.06 | 6.66 | **31.45** |
+| II | 10.97 | 4.72 | **32.36** |
+| IV | 1.32 | 3.00 | **33.17** |
+
+The default vector has a dynamic range of 2.2x against a true 17x.  The live 2p
+champion is above the ceiling at every age and moves the **wrong way** — it pays
+*more* for a rate as the horizon collapses, 33.2 culture points in Age IV for
+something worth at most 1.32.  That is the arithmetic behind three separate
+rows in this census: the Age IV take rate (§5, and it is a *weights* zero — see
+`docs/OPEN_ITEMS.md` item 2.17, where `DEFAULT_WEIGHTS` takes 2.00 per
+seat-game), the expensive wonders (§1), and part of the war over-declaration
+(§3), since a rate over-priced by 25x late makes every alternative to it look
+cheap.
+
+Label: **(b) UNPRICED**, and structurally so — nothing multiplied by the
+horizon.  `rate_horizon` now does, shipped **on** at 1.0 and live on all three
+league arms.  Its strength is deliberately **unmeasured** — see the validation
+rule at the top of this document — and is to be read off the league runs and
+off the new `by_age` logging.  [`docs/RATE_HORIZON.md`](RATE_HORIZON.md).
 
 ## What the bot never does
 

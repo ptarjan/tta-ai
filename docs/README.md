@@ -81,6 +81,7 @@ these for the reasoning.*
 | [`FOURP_GAP.md`](FOURP_GAP.md) | Why 4p training converged somewhere actively bad.  Lineage discarded; the matched-generation method survives. |
 | [`OPENING_AUDIT.md`](OPENING_AUDIT.md) | "4p champions open with a wonder" — real behaviour, but one hitchhiking weight, worth nothing.  The canonical demonstration that a moved weight is not evidence. |
 | [`CULTURE_GAP.md`](CULTURE_GAP.md) | The culture matchup, and where chasing it led: multiplicative mutation steps, a one-sided weight guard, and a weak gate bias.  **Self-corrects three times — read to §23 or you will take away the opposite of its conclusion.** |
+| [`RATE_HORIZON.md`](RATE_HORIZON.md) | A per-turn rate is worth `rate x turns remaining`, and until 2026-07-31 nothing multiplied by the turns: `rounds_left` was read by exactly ONE feature in the vector.  Also the first doc written under the land-it-and-read-the-league validation rule. |
 
 ## Humans: corpus, baselines, imitation
 

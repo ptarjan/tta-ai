@@ -28,11 +28,18 @@ from engine.bots.weighted import DEFAULT_WEIGHTS  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 GROUPS = {
+    # `rate_horizon` is a MODEL PARAMETER rather than a value term -- it is
+    # how much of `weighted.rate_multiplier` to believe, not a coefficient on
+    # a feature -- but it belongs in "economy" for the same reason
+    # `rival_take_share` belongs in "row": it multiplies the four rate
+    # features and nothing else, so a group rescale that moved `culture_rate`
+    # and `science_rate` without it would move the two halves of one model
+    # apart.  See docs/RATE_HORIZON.md.
     "economy": ("culture", "culture_rate", "science", "science_rate",
                 "food_rate", "resource_rate", "food_stock", "resource_stock",
                 "blue_free", "corruption_loss", "consumption", "pop_cost",
                 "yellow_bank", "free_workers", "workers", "prod_workers",
-                "urban_workers", "unit_workers"),
+                "urban_workers", "unit_workers", "rate_horizon"),
     "happiness": ("happy_margin", "discontent", "uprising"),
     "actions": ("civil_actions", "military_actions", "ca_left", "ma_left",
                 "take_cost_paid"),

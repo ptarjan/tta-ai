@@ -49,6 +49,28 @@ def play(n=2, seed=7, plies=60):
     return st
 
 
+def play_until_take(n=2, seed=7, min_plies=40, cap=400):
+    """`play`, but stopped at a position where seat 0 has a legal take.
+
+    `row_pressure` returns (0.0, 0.0) whenever nothing is takeable, so any
+    test about the row needs that precondition sought rather than assumed.
+    Raises rather than returning a useless state.
+    """
+    st = G.new_game(n, seed)
+    rng = random.Random(seed * 31 + 1)
+    bots = [WeightedBot(seed=seed * 7 + i) for i in range(n)]
+    for i in range(cap):
+        if st.game_over:
+            break
+        if i >= min_plies and st.current == 0 and not st.pending and \
+                any(m[0] == "take" for m in A.legal_moves(st)):
+            return st
+        A.apply(st, bots[st.decider()].pick(st, A.legal_moves(st)), rng)
+    raise AssertionError(
+        f"no position with a legal seat-0 take within {cap} plies "
+        f"({n}p seed={seed}) -- the fixture, not the assertion, is broken")
+
+
 def row_on(**over):
     """DEFAULT_WEIGHTS with the audit's new terms switched on."""
     w = dict(W.DEFAULT_WEIGHTS)
@@ -200,7 +222,13 @@ class RowPressure(unittest.TestCase):
         self.assertEqual(W._SWEEP, G.SWEEP)
 
     def test_deleting_the_row_now_moves_the_evaluation(self):
-        st = play(2, seed=7, plies=60)
+        # The fixture has to be a position where seat 0 could ACTUALLY take
+        # something: `row_pressure` is identically 0 when no take is legal, so
+        # a hardcoded ply count that happens to land in another seat's
+        # politics phase makes this test pass vacuously in one direction and
+        # fail spuriously in the other.  It landed on exactly that at ply 60
+        # when the rate horizon changed the policy (docs/RATE_HORIZON.md).
+        st = play_until_take(2, seed=7, min_plies=40)
         w = row_on()
         before = W.evaluate(st, 0, w, W.rival_context(st, 0))
         st2 = copy.deepcopy(st)

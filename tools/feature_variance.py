@@ -48,23 +48,30 @@ from engine.bots.fastcopy import copy_state                      # noqa: E402
 from engine.bots.trial import USE_JOURNAL, fresh_trial_rng       # noqa: E402
 
 
-def score_from(f, w, late, hand_pot):
+def score_from(f, w, late, hand_pot, hz=1.0):
     """`weighted.evaluate` recomputed from a cached feature vector.
 
     Kept in step with `evaluate` by `test_feature_variance.py`, which asserts
     the two agree to 1e-9 on real candidate states.
+
+    `hz` is `weighted.rate_multiplier` for the state the features came from --
+    the rate horizon is a property of the PRICE, so a cached feature vector
+    does not carry it and the caller has to hand it over with the vector.
     """
     total = 0.0
     get = w.get
     for k, v in f.items():
         wk = get(k)
         if wk:
-            total += wk * v
+            total += wk * v * hz if (hz != 1.0 and k in W.RATE_KEYS) \
+                else wk * v
     early = 1.0 - late
     for k in W.PHASE_KEYS:
         v = f[k]
         if not v:
             continue
+        if hz != 1.0 and k in W.RATE_KEYS:
+            v = v * hz
         we = get(k + "_early")
         if we:
             total += we * early * v
@@ -123,17 +130,18 @@ class Probe:
                     actions.apply(trial, mv, fresh_trial_rng())
                     f = W.features(trial, idx, ctx)
                     late = W.lateness(trial)
+                    hz = W.rate_multiplier(trial, w)
                     hp = W.hand_potential(trial, idx, w)
                 except Exception:                          # noqa: BLE001
                     continue
             rows.append((mv, f, late, hp,
-                         end_bias if mv[0] == "end_turn" else 0.0))
+                         end_bias if mv[0] == "end_turn" else 0.0, hz))
         if not rows:
             return self.rng.choice(moves)
         self.acc.note(rows, w)
         best, best_val = None, None
-        for mv, f, late, hp, bias in rows:
-            val = score_from(f, w, late, hp) + bias
+        for mv, f, late, hp, bias, hz in rows:
+            val = score_from(f, w, late, hp, hz) + bias
             if best_val is None or val > best_val:
                 best, best_val = mv, val
         return best
@@ -141,8 +149,8 @@ class Probe:
 
 def _argmax(rows, w):
     best, best_val = None, None
-    for mv, f, late, hp, bias in rows:
-        val = score_from(f, w, late, hp) + bias
+    for mv, f, late, hp, bias, hz in rows:
+        val = score_from(f, w, late, hp, hz) + bias
         if best_val is None or val > best_val:
             best, best_val = mv, val
     return best

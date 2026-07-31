@@ -72,6 +72,9 @@ EXPECTED_HIDDEN = ("civil_deck", "military_deck", "current_events")
 _CACHE = {}
 
 
+_MAX_PLIES = 400
+
+
 def _mid_game_state(players=3, seed=4242, moves=140):
     """A state deep enough that all three hidden piles are non-trivial.
 
@@ -86,15 +89,28 @@ def _mid_game_state(players=3, seed=4242, moves=140):
         rng = random.Random(seed)
         from engine.bots import WeightedBot
         bots = [WeightedBot(seed=7) for _ in range(players)]
-        for _ in range(moves):
+        # `moves` is a FLOOR, not a fixed depth.  A hardcoded ply count is a
+        # fixture that silently stops testing anything the moment the policy
+        # changes: `current_events` fell to a single distinct entry at ply 140
+        # when the rate horizon landed (docs/RATE_HORIZON.md), and the only
+        # symptom was this file's own "deepen _mid_game_state" assertion.  So
+        # walk past the floor until every pile the test permutes has at least
+        # two distinct entries, and stop at the first state that does.
+        best = None
+        for i in range(_MAX_PLIES):
             if game.is_over(st):
                 break
             mvs = actions.legal_moves(st)
             if not mvs:
                 break
-            p = game.current_player(st)
-            st = game.apply(st, bots[p].choose(st, mvs, rng), rng)
-        _CACHE[key] = st
+            cur = game.current_player(st)
+            st = game.apply(st, bots[cur].choose(st, mvs, rng), rng)
+            best = st
+            if i + 1 >= moves and all(
+                    len(set(getattr(st, fld))) > 1
+                    for fld in plan_mod.HIDDEN_ORDER):
+                break
+        _CACHE[key] = best if best is not None else st
     # a copy, because `test_the_public_age_order...` rewrites current_events
     return copy_state(_CACHE[key])
 

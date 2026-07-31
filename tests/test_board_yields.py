@@ -42,6 +42,11 @@ def _w(**over):
     return w
 
 
+def _LEADER_NAMES():
+    from engine import cards as C
+    return [c["name"] for c in C.db().cards if c.get("type") == "leader"]
+
+
 class TestTheComputeVsStateStatsTrap(unittest.TestCase):
     """`state_stats` is a cache keyed on `p.idx` and validated only when the
     entry is marked dirty.  Assigning `p.leader` does not mark it dirty, so
@@ -55,18 +60,33 @@ class TestTheComputeVsStateStatsTrap(unittest.TestCase):
     def test_state_stats_would_return_the_stale_answer(self):
         st = _played()
         p = st.players[0]
-        effects.state_stats(st, p)           # prime the cache
         old = p.leader
-        p.leader = "Winston Churchill"
+        # SEARCH for a leader whose effects show up in Stats on this board
+        # rather than naming one.  Whether any particular leader moves `Stats`
+        # depends on what the player has built, so a hardcoded name makes this
+        # test's precondition a hostage to the policy: "Winston Churchill" went
+        # silent here the day the rate horizon changed what `_played()` builds
+        # (docs/RATE_HORIZON.md).  The trap being reproduced is about the
+        # CACHE, not about any one leader.
+        checked = 0
         try:
-            stale = effects.state_stats(st, p)
-            fresh = effects.compute(st, p)
+            for name in _LEADER_NAMES():
+                if name == old:
+                    continue
+                p.leader = old
+                effects.state_stats(st, p)       # prime the cache
+                p.leader = name
+                stale = effects.state_stats(st, p)
+                fresh = effects.compute(st, p)
+                checked += 1
+                if stale.__dict__ != fresh.__dict__:
+                    return
         finally:
             p.leader = old
-        self.assertNotEqual(
-            stale.__dict__, fresh.__dict__,
-            "if these are ever equal this test has stopped testing "
-            "anything -- pick a leader whose effects show up in Stats")
+        self.fail(
+            f"none of {checked} leaders moved Stats on this board, so the "
+            "stale-cache trap cannot be reproduced -- the fixture is broken, "
+            "not the cache")
 
     def test_the_swap_restores_the_leader_and_leaves_the_cache_valid(self):
         st = _played()

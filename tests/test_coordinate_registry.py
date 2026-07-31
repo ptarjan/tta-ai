@@ -151,6 +151,12 @@ PARAMETERS = {
         "MODEL PARAMETER inside rival_take_p, not a value term; a weight so "
         "the league can fit it (docs/MODEL_CONSTANTS.md 3.4)"),
     "hand_swap_extra": ("evaluate", "the spare-slot fraction in _hand_total"),
+    "rate_horizon": (
+        "evaluate",
+        "MODEL PARAMETER inside weighted.rate_multiplier, not a value term: "
+        "how much of `rounds_left / mean rounds_left` to multiply the "
+        "RATE_KEYS features (and their card marginals) by.  A weight so the "
+        "league can fit it (docs/RATE_HORIZON.md)"),
     # credits: how much of a board-derived card price to believe
     "card_rate_credit": ("pricing", "credit on _Y_RATE yields"),
     "card_board_credit": ("pricing", "shared credit on board_yields"),
@@ -805,9 +811,19 @@ def _fields_the_encoder_reads():
 # the reachable-state corpus
 # ==========================================================================
 
-#: Deterministic and small: 6 self-play games, one per (player count, seed).
+#: Deterministic and small: 9 self-play games, three per player count.
 #: `CorpusIsNotVacuous` asserts what this actually covers.
-CORPUS_SEEDS = ((2, 1), (2, 2), (3, 1), (3, 2), (4, 1), (4, 2))
+#:
+#: Widened from 6 to 9 on 2026-07-31.  At 6 games the rate horizon
+#: (docs/RATE_HORIZON.md) made `me.discontent` and `rival.discontent`
+#: CONSTANT AT 0.0 on every corpus state, and the ratchet correctly flagged
+#: two newly-dead encoding slices.  Discontent is a live game mechanic the
+#: bot simply stopped reaching in six games, so the honest fix is a corpus
+#: that reaches it rather than a KNOWN_DEAD entry claiming it cannot exist.
+#: If a future change makes it constant again at nine, check whether the bot
+#: really never goes unhappy before widening this further.
+CORPUS_SEEDS = ((2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3),
+                (4, 1), (4, 2), (4, 3))
 PLY_CAP = 400
 #: how often the expensive per-card sweep runs; every ply is 236 cards x N.
 CARD_STRIDE = 40

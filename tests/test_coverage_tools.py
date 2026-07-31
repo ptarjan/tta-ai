@@ -63,10 +63,10 @@ class TestFeatureVarianceTool(unittest.TestCase):
                     try:
                         actions.apply(st, mv, fresh_trial_rng())
                         f = W.features(st, idx, ctx)
-                        got = fv.score_from(f, W.DEFAULT_WEIGHTS,
-                                            W.lateness(st),
-                                            W.hand_potential(
-                                                st, idx, W.DEFAULT_WEIGHTS))
+                        got = fv.score_from(
+                            f, W.DEFAULT_WEIGHTS, W.lateness(st),
+                            W.hand_potential(st, idx, W.DEFAULT_WEIGHTS),
+                            W.rate_multiplier(st, W.DEFAULT_WEIGHTS))
                         want = W.evaluate(st, idx, W.DEFAULT_WEIGHTS, ctx)
                     except Exception:                     # noqa: BLE001
                         continue

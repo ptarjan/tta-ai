@@ -54,7 +54,20 @@ class Recorder:
             "first": {},           # event -> round first seen
             "takes": {},           # "band1"/"band2"/"band3" -> count
             "take_types": {},      # card type -> count
-            "take_rows": [],       # [round, band, name, type] per taken card
+            "take_rows": [],       # [round, band, name, type, age] per card
+            # takes bucketed by the PHASE age they were made in, not by the
+            # card's own age.  Age IV is the interesting bucket and it is the
+            # one nothing recorded: `_advance_age` empties the DECKS and not
+            # the ROW, so leftover Age III cards stay takeable through the
+            # whole Age IV phase, and docs/OPEN_ITEMS.md item 2.17 reports the
+            # bot taking exactly zero of them against a human 1.6-1.8.
+            # `takes_offered_by_age` is the DENOMINATOR beside it, because a
+            # rate of zero has two causes that look identical in a table --
+            # never chosen and never offered -- and this one has already been
+            # mis-closed once on the wrong one.
+            "takes_by_age": {},        # phase age -> count taken
+            "takes_offered_by_age": {},   # phase age -> decisions with a legal take
+            "decisions_by_age": {},       # phase age -> decisions seen
             "moves": {},           # move kind -> count
             "builds": [],          # [round, kind] for build/upgrade/develop
             "snaps": [],           # one dict per completed turn
@@ -81,11 +94,24 @@ class Recorder:
         return mv
 
     def _note(self, state, mv):
+        from engine import actions as A
         from engine import cards as C
         db = C.db()
         p = state.players[self.idx]
         kind = mv[0]
         self.rec["moves"][kind] = self.rec["moves"].get(kind, 0) + 1
+
+        # The take DENOMINATOR, on the real state only (this recorder wraps the
+        # outer bot, so the beam's copies never reach it).  Counted on every
+        # ordinary decision so "the bot declines" and "the row had nothing"
+        # cannot be confused later.
+        age = state.age_civil
+        if not state.pending:
+            d = self.rec["decisions_by_age"]
+            d[age] = d.get(age, 0) + 1
+            if any(m[0] == "take" for m in A.legal_moves(state)):
+                o = self.rec["takes_offered_by_age"]
+                o[age] = o.get(age, 0) + 1
 
         if kind == "take":
             idx = mv[1]
@@ -95,7 +121,9 @@ class Recorder:
                 self.rec["takes"].get(f"band{band}", 0) + 1
             t = _card_type(db, name)
             self.rec["take_types"][t] = self.rec["take_types"].get(t, 0) + 1
-            self.rec["take_rows"].append([state.round, band, name, t])
+            self.rec["take_rows"].append([state.round, band, name, t, age])
+            self.rec["takes_by_age"][age] = \
+                self.rec["takes_by_age"].get(age, 0) + 1
             self._first(f"take_{t}", state)
         elif kind == "play_leader":
             self._first("leader", state)
@@ -133,6 +161,7 @@ class Recorder:
     def _snapshot(self, state):
         from engine import cards as C
         from engine import effects
+        from engine.bots import weighted as W
         p = state.players[self.idx]
         s = effects.state_stats(state, p)
         others = [q for q in state.players if q.idx != self.idx]
@@ -148,9 +177,36 @@ class Recorder:
             if name not in self._done_seen:
                 self._done_seen.add(name)
                 self.rec["wonders_done"].append([state.round, name])
+        # THE HORIZON, logged because this is now how it is validated.
+        #
+        # `rounds_left` is the state's own estimate of how much game is left
+        # and it is the CEILING on what a +1 per-turn rate can be worth, since
+        # `culture` is FROZEN at 1.0 (docs/RATE_HORIZON.md).  `rate_mult` is
+        # what `rate_horizon` actually multiplies the rate features by on this
+        # board, and `culture_rate_priced` is what the vector pays for one
+        # point of culture production HERE.  Logging all three per turn means
+        # the by-age table below answers, from a normal league run and with no
+        # re-running, both "is the horizon term on and doing anything" and
+        # "does the vector still price a rate above its own ceiling".
+        w = getattr(self.inner, "weights", None)
+        rl = mult = cr_priced = None
+        try:
+            rl = W.rounds_left(state)
+            mult = W.rate_multiplier(state, w)
+            if w is not None:
+                # only a weighted bot has a vector; a neural or book opponent
+                # has no `culture_rate` weight to price anything through, and
+                # that is a missing column rather than an error.
+                cr_priced = W.feature_marginal("culture_rate", state,
+                                               self.idx, w)
+        except Exception:                 # never let bookkeeping kill a game
+            pass
         self.rec["snaps"].append({
             "round": state.round,
             "age": C.AGE_LEVEL[state.age_civil],
+            "rounds_left": rl,
+            "rate_mult": mult,
+            "culture_rate_priced": cr_priced,
             "culture": p.culture,
             "culture_rate": s.culture,
             "science_rate": s.science,
@@ -371,9 +427,36 @@ def _summarize_group(recs, label):
         opp_units = _mean([x["opp_units"] for x in ss]) or 0.0
         w_tot = (_mean([x["w_prod"] + x["w_urban"] + x["w_units"] for x in ss])
                  or 1.0)
+        # takes made / offered in THIS phase age, summed over the same games.
+        # Both halves, always, so the zero-rate ambiguity cannot recur.
+        an = AGE_NAMES[a]
+        t_made = sum(r.get("takes_by_age", {}).get(an, 0) for r in recs)
+        t_offered = sum(r.get("takes_offered_by_age", {}).get(an, 0)
+                        for r in recs)
+        t_dec = sum(r.get("decisions_by_age", {}).get(an, 0) for r in recs)
         ages[AGE_NAMES[a]] = {
             "turns_sampled": len(ss),
             "median_round": _med([x["round"] for x in ss]),
+            # --- the horizon (docs/RATE_HORIZON.md).  `rounds_left` is the
+            # ceiling on what a +1 rate can be worth; `culture_rate_priced` is
+            # what this vector actually pays for one.  If the second exceeds
+            # the first the vector is paying above its own ceiling, which is
+            # the defect the term exists to fix and is readable straight off
+            # this table.
+            "rounds_left": m("rounds_left"),
+            "rate_mult": m("rate_mult"),
+            "culture_rate_priced": m("culture_rate_priced"),
+            "culture_rate_priced_over_ceiling": (
+                round(m("culture_rate_priced") / m("rounds_left"), 2)
+                if m("rounds_left") and m("culture_rate_priced") is not None
+                else None),
+            # --- takes in this phase age, WITH the denominator beside them
+            "takes_made": t_made,
+            "takes_per_game": round(t_made / n, 3),
+            "decisions": t_dec,
+            "decisions_with_a_legal_take": t_offered,
+            "take_rate_when_offered": (round(t_made / t_offered, 3)
+                                       if t_offered else None),
             "culture_rate": m("culture_rate"),
             "science_rate": m("science_rate"),
             "sci_per_culture": (round(m("science_rate") / m("culture_rate"), 2)
@@ -594,7 +677,7 @@ def _summarize_group(recs, label):
     # --- which specific cards, per cost band ------------------------------
     band_cards = {}
     for r in recs:
-        for rnd, band, name, t in r["take_rows"]:
+        for rnd, band, name, t, _age in r["take_rows"]:
             d = band_cards.setdefault(f"band{band}", {})
             e = d.setdefault(name, {"n": 0, "rounds": [], "type": t})
             e["n"] += 1
@@ -617,7 +700,7 @@ def _summarize_group(recs, label):
     # flat top-cards list across all bands
     flat = {}
     for r in recs:
-        for rnd, band, name, t in r["take_rows"]:
+        for rnd, band, name, t, _age in r["take_rows"]:
             e = flat.setdefault(name, {"n": 0, "type": t, "bands": {},
                                        "rounds": []})
             e["n"] += 1

@@ -55,6 +55,23 @@ def _each(st, idx, w, names):
     return [W.card_potential(n, w, st, idx) for n in names]
 
 
+def _with_the_best_leader_already_on_the_board(st, w):
+    """Put the STRONGEST of `LEADERS` on the board, so the rest are worse.
+
+    `max(vals) > sum(vals)` needs at least two leaders in hand that are worse
+    than the incumbent, and that is a fact about the position, not about the
+    pricing.  Searching a self-play game for such a position was tried and is
+    the wrong instrument: it depends on the policy (it broke when the rate
+    horizon landed, docs/RATE_HORIZON.md) and on nothing else in the suite
+    having warmed a cache, so it passed alone and failed in the full run.
+    Constructing the precondition is deterministic and states the claim
+    exactly.
+    """
+    vals = _each(st, 0, w, LEADERS)
+    st.players[0].leader = LEADERS[vals.index(max(vals))]
+    return st
+
+
 class TestTheDoubleCount(unittest.TestCase):
     """The bug, pinned as arithmetic rather than as a story.
 
@@ -94,16 +111,22 @@ class TestTheSlotCollapse(unittest.TestCase):
     """The fix: one leader slot, one government slot, priced once each."""
 
     def test_a_hand_of_leaders_is_worth_the_best_one(self):
-        st = _played()
         w = _w()                            # hand_swap_extra defaults to 0.0
+        # The collapse (`hand_potential == max`, not `sum`) is true on every
+        # board.  The DIRECTION of `max > sum` is not: it needs at least one
+        # leader in hand that is WORSE than the one already on the board, which
+        # is a property of the position and stopped holding at ply 60 when the
+        # rate horizon changed what the bot builds (docs/RATE_HORIZON.md).  So
+        # the position is sought rather than assumed, and the assertion is
+        # unchanged.
+        st = _with_the_best_leader_already_on_the_board(_played(), w)
         _hand(st, 0, LEADERS)
         vals = _each(st, 0, w, LEADERS)
         self.assertAlmostEqual(W.hand_potential(st, 0, w), max(vals),
                                places=9)
-        # the two answers must actually differ, or this asserts nothing.  The
-        # sum here is NEGATIVE and the max positive: two of the three leaders
-        # are worse than the one on the board, so the old pricing charged the
-        # bot for replacing it with them as well.
+        # the two answers must actually differ, or this asserts nothing: at
+        # least one of the leaders is worse than the one on the board, so the
+        # old pricing charged the bot for replacing it with that one as well.
         self.assertNotAlmostEqual(max(vals), sum(vals), places=6)
         self.assertGreater(max(vals), sum(vals))
 

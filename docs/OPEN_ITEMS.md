@@ -299,6 +299,33 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
       legal.  Humans take 1.6–1.8 of them.  The bot takes exactly zero.
 
     So the denominator is **not** zero and the finding survives.
+
+    **The denominator, now measured rather than argued** (2026-07-31,
+    `tools/age_iv_row.py`, new with this entry — it taps every Age IV decision
+    on a real state and records what was on the row, what `legal_moves`
+    emitted, and what was taken).  2p, 20 games, 40 seat-games,
+    `DEFAULT_WEIGHTS` under `WeightedBot`:
+
+    | | |
+    |---|---|
+    | Age IV decisions | 288 |
+    | ...with a non-empty row | **288 (100.0%)** |
+    | ...with at least one LEGAL take | 187 (64.9%) |
+    | mean cards on the row | 7.48 |
+    | legal takes offered | 1,091 |
+    | **takes made** | **80 = 2.00 per seat-game** (human 1.59) |
+
+    Two things follow, and the second is the one that matters.  The row is
+    non-empty on **every single** Age IV decision, so "never offered" is
+    conclusively dead.  And `DEFAULT_WEIGHTS` takes 2.00 per seat-game — *above*
+    the human rate — so **the exact zero is a property of the vector and the
+    search the census ran (`plan:width=2,det=1` on trained champions), not of
+    the engine and not of the evaluator's default configuration.**  That
+    reclassifies the item from a coverage hole to a pricing/weights one and it
+    should be re-censused on the live vectors before anything is built for it.
+    Bound: one player count, one bot (`WeightedBot`, not `PlanBot`), n=20 games;
+    it is a denominator measurement, not a replacement census.
+
     [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) §5 labels it **(c)**,
     probably-correct play — Age IV is one or two rounds long and the bot
     spends its civil actions elsewhere — but it is an exact zero, and exact
@@ -602,6 +629,58 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     `w["civil_actions"]` = 2.0 says, so the bot ends turns it should be
     spending.  Recorded as one item so the next lane does not re-derive it
     from a third colour.
+
+29. **Wonders are the one civil type that never got the
+    `*_board_credit`-defaults-to-1.0 treatment, and it is the whole of the
+    "expensive wonders are never built" story that is still a hole.**  Opened
+    2026-07-31 by the rate-horizon lane, which went looking for an unpriced
+    endgame-culture channel and found the channel already written.
+    `effects.wonder_completion_culture` is the single implementation of the
+    four Age III wonders' one-shot `onBuildCulture` bomb;
+    `board_yields._on_build_culture` prices it by calling *that same function*,
+    and `tests/test_card_pricing.py:TestOneImplementation` fails if they
+    diverge.  It is simply **unreachable on two of the three league arms**:
+    it is gated on `card_board_credit` (default **0.0**; 0.361 on the live 2p
+    champion, **0.0** on 3p and 4p) and surfaces through `wonder_potential`
+    (default **0.0**; 0.115 at 2p, **0.0** at 3p/4p).  Technologies, governments
+    and action cards each got their own credit defaulting to 1.0 precisely so
+    the fix would be live on all three arms at once (`tech_board_credit`,
+    `gov_board_credit`, `action_board_credit` — see the comment block in
+    `card_potential`); wonders were left behind the 0.0 shared credit.  The
+    completion rates track it exactly: **1.53 / 0.24 / 0.16** per seat-game at
+    2p / 3p / 4p.  The change is a `wonder_board_credit` on the same pattern,
+    but it is **not free** — item 1.1 measured `wonder_potential` 0.125 as
+    behaviourally large (completions 0.051 → 0.408) with a strength null taken
+    against a broken yardstick, and item 1.2 records that abandoned programmes
+    got absolutely worse.  Wants its own lane and its own A/B, not a
+    drive-by.
+30. **The rate horizon is applied to the rate features and to
+    `feature_marginal`, and NOT to the static `_sum_yields` table** — which
+    also still carries no phase blend.  Opened 2026-07-31 by
+    [`docs/RATE_HORIZON.md`](RATE_HORIZON.md) §7.  This is the same divergence
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) found and closed for
+    technologies, governments and action cards by routing them through
+    `feature_marginal`; the classes still on the static path are the ones with
+    no board handler, and they now diverge from `evaluate` in two ways rather
+    than one.  Neither widened nor narrowed by that change.  The fix is the
+    same fix: give the remaining classes a board handler, or make `_sum_yields`
+    take a state.
+31. **Only the four OWN rates were made horizon-aware; the argument applies
+    more widely and was deliberately not followed.**  Two sub-parts.
+    (a) `rival_culture_rate` and `rival_science_rate` are per-turn rates too and
+    the argument covers them, but including them made two coordinates that
+    `tests/test_coverage_tools.py:TestInertFeatures` declares inert across a
+    candidate set start varying — a behavioural change nobody asked for, riding
+    in under a different change — so they are out.  (b) The wider version:  An investment that costs now and pays a
+    rate later is worth taking only if its payback fits inside the remaining
+    horizon, and the cost side is priced flat: `wonder_remaining` is a pure cost
+    weight (−0.155 on the live 2p champion) with no horizon-discounted return
+    beside it, `science` and `resource_stock` costs are flat, and
+    `wonder_turns_to_finish` / `wonder_overrun` express payback only for
+    wonders and only as a penalty.  [`docs/RATE_HORIZON.md`](RATE_HORIZON.md)
+    ships the narrowest version that tests the hypothesis — the multiplier on
+    the six rate channels that already exist — because the wider version is a
+    different and much larger change.  Unowned.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) tier B) — the
