@@ -296,31 +296,41 @@ def _global_block(state, idx):
     return g
 
 
+#: Divisors for `_discard_block`.  Flat rather than "share of that age's own
+#: deck" on purpose: the per-age deck size depends on the player count, and
+#: reading it would mean calling `db.civil_deck`, which is (a) a real cost on a
+#: path the neural search runs once per node and (b) indistinguishable from
+#: reading the hidden deck ORDER to the guard in
+#: `tests/test_coordinate_registry.py::test_the_hidden_decks_are_not_read_at_all`.
+#: The scale is recoverable anyway -- `num_players` and both ages are already
+#: encoded next door, so a net can learn the per-age denominator itself.
+_CIVIL_DISCARD_SCALE = 30.0
+_MIL_DISCARD_SCALE = 20.0
+
+
 def _discard_block(state):
     """Both discard piles, per age -- the card-counting primitive.
 
-    Legal under the 2026-07-31 ruling in this module's docstring: every civil
+    Legal under the 2026-07-31 ruling in this module's docstring.  Every civil
     card in this pile was face up in the card row in front of every player
-    before it was swept (RULES_SPEC 1.10 step 1), and the military pile is the
-    other public pile.  A per-age SIZE is deliberately all that is exposed
-    here: combined with the row, the hands and the tableaux the net already
-    sees, it is exactly what makes `unseen(age) = deck - row - hands -
-    tableaux - discard` learnable, which is the whole point of the record
-    (docs/INFORMATION_AUDIT.md GAP 5).  Per-card identity would be a much
+    before it was swept (RULES_SPEC 1.10 step 1); the military pile is the
+    other public pile.
+
+    A per-age SIZE is deliberately all that is exposed.  Combined with the
+    row, the hands and the tableaux the encoder already reads, it is exactly
+    what makes `unseen(age) = deck - row - hands - tableaux - discard`
+    learnable, which is the whole point of the record
+    (docs/INFORMATION_AUDIT.md GAP 5).  Per-card identity would be a far
     larger vector for information the count already summarises.
 
-    Normalised by the age's own civil deck size so the scale is
-    player-count-independent; the military divisor is a flat constant because
-    `db.military_deck` is empty whenever `has_military` is false.
+    Laid out as two contiguous per-age runs, civil then military, so each is
+    one named slice in the coordinate registry rather than five interleaved
+    pairs.
     """
-    db = C.db()
-    n = state.num_players
-    out = []
-    for age in C.AGES:
-        civil = len(state.civil_discard.get(age) or ())
-        size = len(db.civil_deck(age, n)) or 1
-        out.append(min(civil / size, 1.0))
-        out.append(len(state.discarded_military.get(age) or ()) / 20.0)
+    out = [min(len(state.civil_discard.get(age) or ())
+               / _CIVIL_DISCARD_SCALE, 1.0) for age in C.AGES]
+    out += [min(len(state.discarded_military.get(age) or ())
+                / _MIL_DISCARD_SCALE, 1.0) for age in C.AGES]
     return out
 
 

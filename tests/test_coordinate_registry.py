@@ -581,6 +581,11 @@ GLOBAL_SLICES = (
     ("last_round", 1), ("scoring_events", 1),
     ("current_events", 1), ("future_events", 1), ("row_occupancy", 1),
     ("phase", 3),
+    # both discard piles, one entry per age.  Public information under the
+    # 2026-07-31 card-counting ruling (docs/INFORMATION_AUDIT.md 0c); these
+    # two left NOT_ENCODED when they landed, which is exactly the direction
+    # that list is allowed to move.
+    ("civil_discard", 5), ("discarded_military", 5),
 )
 
 #: the five `card_vec` blocks each player block carries, in order
@@ -706,9 +711,10 @@ NOT_ENCODED = {
     "taken_leader_ages": "which ages I have taken a leader in; same item",
     "war_declared_by_me": "war bookkeeping; docs/OPEN_ITEMS.md neural war state",
     "wars_declared_on_me": "war bookkeeping; same item",
-    # public records nothing in the rules reads back
-    "civil_discard": "a RECORD (INFORMATION_AUDIT GAP 5), not playable state",
-    "discarded_military": "the same record on the military side",
+    # public records nothing in the rules reads back.  `civil_discard` and
+    # `discarded_military` were both here until 2026-07-31 and are now
+    # ENCODED (`neural_encode._discard_block`): the card-counting ruling in
+    # docs/INFORMATION_AUDIT.md 0c settled that both piles are public.
     "available_tactics": "the common tactic area; docs/OPEN_ITEMS.md",
 }
 
@@ -928,6 +934,7 @@ class Corpus:
                     for k, v in f.items():
                         if v:
                             self.nonzero[k] += 1
+                self._probe_unhappy(st)
                 if ply % CARD_STRIDE == 0:
                     self.card_states += 1
                     for nm in names:
@@ -946,6 +953,35 @@ class Corpus:
             # corpus that stops one ply early reports all three dead.
             self._note_fields(st)
             self._note_encoding(st, players)
+
+    def _probe_unhappy(self, st):
+        """The anti-vacuity half of the FEATURE sweep, matching the one
+        `_probe_conduction` already does for weights.
+
+        `discontent` is `max(0, happy_required(yellow_bank) - happy)` and
+        `uprising` needs it to exceed `workers_free` on top.  A `WeightedBot`
+        that plays competently never lets either happen, so whether these two
+        fire at all was down to whether SOME seat in SOME corpus game got
+        itself into trouble -- which held until the 2026-07-31 colonization
+        change perturbed play, and then did not.  Two live, heavily-weighted
+        coordinates (-3.0 and -12.0 in DEFAULT_WEIGHTS) were about to be
+        declared dead because six games of decent play avoided the state they
+        describe.  So construct it: one seat, an EMPTIED yellow bank (RULES
+        6.3 counts the empty subsections, so 0 in the bank is the maximum
+        happiness requirement, 8) and no spare workers to absorb it.
+        Restored immediately; skipped once both have fired.
+        """
+        if self.nonzero["uprising"] and self.nonzero["discontent"]:
+            return
+        p = st.players[0]
+        bank, free = p.yellow_bank, p.workers_free
+        p.yellow_bank, p.workers_free = 0, 0
+        try:
+            for k, v in W.features(st, 0, None, W.DEFAULT_WEIGHTS).items():
+                if v:
+                    self.nonzero[k] += 1
+        finally:
+            p.yellow_bank, p.workers_free = bank, free
 
     def _probe_conduction(self, st, base, keys):
         """Conduction on the board as dealt, and on a stacked civil hand.
