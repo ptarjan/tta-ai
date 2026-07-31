@@ -979,6 +979,16 @@ class BookImprovedBot:
 #: Contested calls, exposed as parameters instead of being decided by fiat.
 #: docs/EXPERT_STRATEGY.md keeps a deliberately unresolved disagreements
 #: table; these are its entries.
+#:
+#: "TUNABLE" IS ABOUT THE PARAMETER, NOT ABOUT THIS TABLE.  The `tunables=`
+#: argument really is plumbed -- `BookBotV2`, `variants/base.py` and
+#: `human/base.py` all merge an override dict over these defaults -- but NO
+#: caller in the repo supplies one, so in practice every number below is a
+#: frozen literal and should be classified as a fitted prior (from the expert
+#: sources, cited per entry), not as a live knob somebody is fitting.  That is
+#: the intended state: BookBot is a deliberately hand-written external
+#: yardstick (docs/STRENGTH_CHECK.md), and hard-coded human opinion is the
+#: point of it.  If a lane ever wants to fit these, it is one dict away.
 V2_TUNABLES = {
     # "Library of Alexandria wins more than Pyramids" vs "Pyramids taken 20%
     # more often".  >1 favours the Pyramids' extra civil action.

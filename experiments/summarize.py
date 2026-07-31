@@ -40,7 +40,12 @@ GROUPS = {
     # destroy and what waiting would save (docs/INFORMATION_AUDIT.md gap 2).
     # Its own group so hillclimb's `rescale`/`group` operators can move row
     # pricing coherently instead of only ever scattering onto one of the two.
-    "row": ("row_urgency", "row_bargain_forgone"),
+    # `rival_take_share` is a MODEL PARAMETER rather than a value term (it is
+    # a probability input to `weighted.rival_take_p`, not a coefficient on a
+    # feature), but it belongs here: it only ever multiplies through
+    # `row_bargain_forgone`, so a group rescale that moves the bargain without
+    # it would move the two halves of one model apart.
+    "row": ("row_urgency", "row_bargain_forgone", "rival_take_share"),
     "military": ("strength", "strength_rel", "strength_deficit",
                  "strength_lead", "tactic_level", "colonies", "pacts",
                  "pact_blocks_attack", "auction_committed", "auction_bid",

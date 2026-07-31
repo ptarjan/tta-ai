@@ -125,6 +125,15 @@ DEFAULT_TIER_WEIGHTS = {
     "floor": 0.0,           # greedy / random / untrained default -- OFF, see below
 }
 
+#: NOT DEAD CODE, and NOT a rival opinion about the live pool: this is a
+#: REPRODUCTION FIXTURE.  `DEFAULT_TIER_WEIGHTS` above is what the running arms
+#: use -- verified against the live command lines, which pass it explicitly as
+#: `--pool-weights book=0.6,variant=0.6,human=0.6,mirror=1.0,past=1.2,hall=1.6,
+#: floor=0` -- and the 5x disagreement below is the 2026-07-27 rebalance
+#: documented above `DEFAULT_TIER_WEIGHTS`, not drift.  This table is read by
+#: `legacy_weight_string()` and by `tools/objective_ab.py`'s `legacy` arm, both
+#: of which exist to re-run a historical configuration on demand.
+#:
 #: The weights every champion before 2026-07-27 was selected under.  Pass
 #: `--pool-weights "$(python3 -c 'import experiments.hillclimb_pool as P;
 #: print(P.legacy_weight_string())')"` (or just the literal string below) to

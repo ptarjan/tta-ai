@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from engine.bots.neural_net import ValueNet, save_checkpoint, MARGIN_SCALE
+from engine.bots.neural_net import ValueNet, save_checkpoint, MARGIN_NORM
 
 
 def load_shards(patterns):
@@ -108,8 +108,8 @@ def main():
               else nn.MSELoss())
 
     # scaled targets
-    ytr = torch.tensor(Ytr / MARGIN_SCALE)
-    yva_scaled = Yva / MARGIN_SCALE
+    ytr = torch.tensor(Ytr / MARGIN_NORM)
+    yva_scaled = Yva / MARGIN_NORM
     Xtr_t = torch.tensor(Xtr)
     Xva_t = torch.tensor(Xva, device=device)
 
@@ -141,7 +141,7 @@ def main():
                 preds.append(net(Xva_t[i:i + 8192]).cpu())
             pv = torch.cat(preds).numpy()
         val_mse = float(((pv - yva_scaled) ** 2).mean())
-        val_mae_culture = float(np.abs(pv - yva_scaled).mean() * MARGIN_SCALE)
+        val_mae_culture = float(np.abs(pv - yva_scaled).mean() * MARGIN_NORM)
         racc = ranking_accuracy(pv, yva_scaled)
         best = racc > best_racc
         print(f"epoch {ep + 1:3d}  train_loss {tot / n:.4f}  "

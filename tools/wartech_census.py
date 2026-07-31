@@ -98,7 +98,7 @@ class TakeScience:
         if (pend and pend.get("kind") == "choice"
                 and pend.get("tag") == "war_tech"
                 and pend.get("player") == self.idx):
-            return ("choose", interact.WAR_TECH_SCIENCE)
+            return ("choose", interact.WAR_TECH_SCIENCE_IDX)
         return self.inner(state)
 
 

@@ -34,7 +34,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from engine.bots.neural_net import ValueNet, save_checkpoint, MARGIN_SCALE
+from engine.bots.neural_net import ValueNet, save_checkpoint, MARGIN_NORM
 
 
 def load(patterns):
@@ -144,11 +144,11 @@ def main():
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
 
     Xa_t, Xb_t = torch.tensor(Xa), torch.tensor(Xb)
-    Xv_t, yv_t = torch.tensor(Xv), torch.tensor(yv / MARGIN_SCALE)
+    Xv_t, yv_t = torch.tensor(Xv), torch.tensor(yv / MARGIN_NORM)
     Xa_vt = torch.tensor(Xa_v, device=device)
     Xb_vt = torch.tensor(Xb_v, device=device)
     Xv_vt = torch.tensor(Xv_v, device=device)
-    yv_vs = yv_v / MARGIN_SCALE
+    yv_vs = yv_v / MARGIN_NORM
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
 
@@ -162,7 +162,7 @@ def main():
             pa = (va > vb).float().mean().item()
             vp = torch.cat([net(Xv_vt[i:i + 8192]).cpu()
                             for i in range(0, len(Xv_vt), 8192)]).numpy()
-        return pa, float(np.abs(vp - yv_vs).mean() * MARGIN_SCALE)
+        return pa, float(np.abs(vp - yv_vs).mean() * MARGIN_NORM)
 
     # --- epoch 0: the vacuity check ----------------------------------------
     # docs/NEURAL_LOOP_NULL.md 3.1: the 41-hour null trained on ranking pairs

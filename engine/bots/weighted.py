@@ -39,6 +39,7 @@ applies every legal move to a fast copy of the state and keeps the best.
 """
 from __future__ import annotations
 
+import os
 import random
 from functools import lru_cache as _lru_cache
 
@@ -69,9 +70,11 @@ def _meta():
 
 _BEST_TYPES = ("farm", "mine", "lab", "temple", "theater", "library", "arena")
 
-# `wonder_turns_to_finish` is a ratio, so it blows up when resource production
-# is near zero.  20 turns is already past "never" for a 20-round game.
-_TURNS_CAP = 20.0
+# NUMERICAL GUARD, not a model claim.  `wonder_turns_to_finish` is a ratio, so
+# it blows up when resource production is near zero.  20 turns is already past
+# "never" for a 20-round game, so nothing inside the cap is being shaped by it;
+# it only stops an infinity reaching the linear evaluator.
+_TURNS_CAP = 20.0                   # NUMERICAL GUARD (divide-by-near-zero)
 
 # features that additionally get an early-game and a late-game copy
 PHASE_KEYS = (
@@ -86,7 +89,13 @@ PHASE_KEYS = (
 # at this fraction of a live pact (docs/PACTS_DIAGNOSIS.md fix #2) -- without
 # it a 1-ply search sees only the card leaving your hand, so `offer_pact` is
 # strictly dominated by `pol_pass` in every position and can never be picked.
-PACT_OFFER_CREDIT = 0.5
+# FITTED PRIOR, and it is NOT converted to a weight the way `rival_take_share`
+# is, because it is spent inside `_pending_terms`, which is called from
+# `features()` -- and `features()` has no weight vector.  Routing one there
+# means either a second signature on the hot path or a module-level global,
+# which is what this is already.  Left as a labelled prior and written down in
+# docs/OPEN_ITEMS.md instead of half-plumbed.
+PACT_OFFER_CREDIT = 0.5             # FITTED PRIOR (see docs/MODEL_CONSTANTS.md)
 
 
 # ------------------------------------------------- Age III scoring events
@@ -126,7 +135,11 @@ PACT_OFFER_CREDIT = 0.5
 # got.  It also means the feature is not only about planting -- with "Impact
 # of Wonders" in play, finishing a wonder raises it too, which is a second and
 # correct source of gradient.
-_SCORING_MARGIN_CAP = 60.0
+# NUMERICAL GUARD, not a model claim: the fifteen Age III scoring formulas are
+# unbounded above (Impact of Wonders on a five-wonder board, say), and one
+# outlier margin dominating a linear evaluator is a failure mode, not a
+# reading.  Nothing that fits inside +/-60 culture is shaped by this number.
+_SCORING_MARGIN_CAP = 60.0          # NUMERICAL GUARD (outlier clamp)
 
 
 def event_scoring_margin(state, idx):
@@ -276,9 +289,13 @@ class _RivalView:
     off a player, so the real legality rules are reused rather than restated.
     """
     __slots__ = ("idx", "wonder", "taken_leader_ages", "hand_civil",
-                 "techs", "government")
+                 "techs", "government", "hand_slack")
 
-    def __init__(self, q):
+    def __init__(self, q, hand_slack=0):
+        # how many more civil cards this rival's hand can hold (RULES_SPEC
+        # 2.5).  `hand_size`, not `len(hand_civil)`, so the app harness's
+        # `hidden_civil` count is included; read by `row_pressure`.
+        self.hand_slack = hand_slack
         self.idx = q.idx
         # `_can_take_gated` only ever asks `p.wonder is None`
         self.wonder = None if q.wonder is None else True
@@ -383,7 +400,9 @@ def rival_context(state, idx, root_row=None):
                 0 if q.leader == "Michelangelo"
                 else len(q.completed_wonders) + q.destroyed_wonders,
                 1 if q.leader == "Hammurabi" else 0)
-        views.append((_RivalView(q), gate))
+        views.append((_RivalView(q, max(0, s.civil_actions
+                                        + s.civil_hand_limit
+                                        - q.hand_size("civil"))), gate))
     return {"rival_culture_rate": best_rate, "rival_science_rate": best_sci,
             "rival_strength": best_str, "rival_views": tuple(views),
             "root_row": root_row_budget(state) if root_row is None
@@ -454,7 +473,7 @@ def strength_marginal(state, idx, w, ctx=None):
         rival = rival_strength(state, idx)
     p = state.players[idx]
     rel = effects.state_stats(state, p).strength - rival
-    late = lateness(state)
+    late = lateness(state, w)
     total = w.get("strength", 0.0) + w.get("strength_rel", 0.0)
     total += (1.0 - late) * w.get("strength_rel_early", 0.0)
     total += late * w.get("strength_rel_late", 0.0)
@@ -504,7 +523,7 @@ def feature_marginal(key, state, idx, w, late=None, ctx=None):
     m = w.get(key, 0.0)
     if key in _PHASE_SET:
         if late is None:
-            late = lateness(state)
+            late = lateness(state, w)
         m += (1.0 - late) * w.get(key + "_early", 0.0)
         m += late * w.get(key + "_late", 0.0)
     return m
@@ -540,22 +559,54 @@ def feature_marginal(key, state, idx, w, late=None, ctx=None):
 #     redealt per player-turn, which is exact; on top of that players take cards
 #     off the row, which is policy-dependent and is the part that is a guess.
 #
-# CARDS_PER_ROUND below is the measured total (game.SWEEP[n]*n is 6 / 6 / 4 of
-# it; the remainder is cards taken off the row).  Against ground truth over
-# those 46 games (2p/3p/4p, 1078 pre-Age-IV decisions) the resulting estimate
-# has a residual sd of 0.68 / 1.00 / 1.13 rounds and a bias under a quarter of
-# a round; the age bucket it replaces cannot do better than 2.7 rounds even if
-# you hand it the per-age mean.  It is at its best where it matters -- sd 0.86
-# rounds in Age III at 4p, and exact in Age IV -- and at its worst in Age A,
-# which is fine: Age A is two rounds long and no rate horizon is decided there.
-# It is calibrated on WeightedBot self-play; a much more card-hungry policy
-# would drain the row faster and this would then run long.
-CARDS_PER_ROUND = {2: 6.29, 3: 6.73, 4: 5.71}
-AGE_IV_ROUNDS = 2.0      # 12.3: Age IV is this round or the next, then it ends
+# THE DEAL RATE IS NOT A CONSTANT, AND THE STATE CAN MEASURE IT.  The old
+# `CARDS_PER_ROUND = {2: 6.29, 3: 6.73, 4: 5.71}` was ONE EXACT NUMBER PLUS ONE
+# FITTED ONE glued together:
+#
+#     cards dealt per round = n * SWEEP[n]        <- EXACT, RULES_SPEC 2.1
+#                           + cards players took  <- policy, 0-4 per round
+#
+# `n * SWEEP[n]` is 6 / 6 / 4, so the fitted remainder was only 0.29 / 0.73 /
+# 1.71 cards a round -- and it was fitted on WeightedBot self-play by a policy
+# that could not see the card row at all.  Its own comment conceded the failure
+# mode ("a much more card-hungry policy would drain the row faster and this
+# would then run long"), and that failure mode ARRIVED: `unit_tech_credit`
+# (d8a2172) and `tech_board_credit` (8b972ef) exist precisely to make the bot
+# take more cards, so a rate fitted to the card-blind policy is now being used
+# to plan against the card-hungry one.
+#
+# The take count is not hidden.  It is a difference of two exact public
+# quantities -- how many cards the supply started with and how many are still
+# undealt -- so the bot can MEASURE the rate in the game it is actually
+# playing.  `take_rate` below does that, and `_TAKE_PRIOR` is used only for the
+# first round or two, when there is no history yet.  See docs/MODEL_CONSTANTS.md.
+AGE_IV_ROUNDS = 2.0      # RULE-DERIVED, 12.3: Age IV is this round or the next
+
+# `game.SWEEP`, duplicated because `engine.game` imports `engine.actions` which
+# this module imports -- importing game here is a cycle.  RULE-DERIVED
+# (RULES_SPEC 2.1); `test_row_features.py` asserts the two are equal, so the
+# copy cannot rot.
+_SWEEP = {2: 3, 3: 2, 4: 1}
+
+# Row width, RULE-DERIVED (RULES_SPEC 2.1, `actions.ROW_SIZE`).  Spelled here
+# rather than imported so the supply arithmetic below reads as one block.
+_ROW = actions.ROW_SIZE
+
+# FITTED PRIOR, and the ONLY fitted number left in the horizon: cards taken off
+# the row per replenish before this game has produced any evidence of its own.
+# Measured over 240 self-play games (tools/deal_rate.py, docs/MODEL_CONSTANTS.md
+# section 2).  It is shrunk away within a couple of rounds -- `_TAKE_PRIOR_W` is
+# its weight in pseudo-replenishes -- so it moves the estimate only in Age A and
+# the first rounds of Age I, where nothing with a rate horizon is decided.
+_TAKE_PRIOR = {2: 0.30, 3: 0.35, 4: 0.40}
+_TAKE_PRIOR_W = 4.0
 
 # Cards left in the decks of every age AFTER the given one, by live player
 # count.  Built once; `C.db().civil_deck` is far too slow for the search loop.
 _TAIL = {}
+# Total civil cards in the whole game's supply (ages A/I/II/III), and the size
+# of the Age A deck on its own, by live player count.  Both exact card data.
+_SUPPLY = {}
 
 
 def _tail(n, age):
@@ -570,6 +621,17 @@ def _tail(n, age):
     return out
 
 
+def _supply(n):
+    """(total civil cards for `n` players, size of the Age A deck)."""
+    out = _SUPPLY.get(n)
+    if out is None:
+        db = C.db()
+        per = {a: len(db.civil_deck(a, n)) for a in C.AGES if a != "IV"}
+        out = (sum(per.values()), per["A"])
+        _SUPPLY[n] = out
+    return out
+
+
 def _live(state):
     """`game.live_count` without importing game (circular).  RULES_SPEC 13."""
     n = 0
@@ -579,61 +641,155 @@ def _live(state):
     return 2 if n < 2 else (4 if n > 4 else n)
 
 
-def rounds_left(state, n=None):
+def cards_unseen(state, n=None):
+    """Civil cards still to be dealt.  EXACT: the current deck plus every
+    later age's deck, whose sizes are fixed by the card data and `n`."""
+    if n is None:
+        n = _live(state)
+    return len(state.civil_deck) + _tail(n, state.age_civil)
+
+
+def _replenishes(state, n):
+    """How many times `game._replenish` has run.  EXACT.
+
+    `start_turn` replenishes at the top of every turn from round 2 on
+    (`engine/game.py`), and `state.turn` is a 1-based player-turn counter, so
+    this is the turn counter less the `num_players` turns of round 1.
+    """
+    return state.turn - state.num_players
+
+
+def take_rate(state, n=None):
+    """Cards players take off the row per replenish, MEASURED in this game.
+
+    Not a constant and not a guess after the first round: the supply started
+    with `_supply(n)[0]` cards, `cards_unseen` of them are still undealt, and
+    everything in between went somewhere the rules account for exactly --
+
+        consumed = the 13 dealt at setup
+                 + the Age A deck's leftovers, binned by the first replenish
+                   (2.1/1.10 -- `_replenish` empties `civil_deck` in Age A)
+                 + SWEEP[n] per replenish since
+                 + one per card a player TOOK
+
+    so the last term, the only policy-dependent one, is the other four
+    subtracted from `consumed`.  Every input is public: deck sizes are card
+    data, `civil_deck`'s length is a count and not an order (the encoder's
+    hidden-information rule, `neural_encode.py`), and the number of replenishes
+    is the turn counter.
+
+    Shrunk toward `_TAKE_PRIOR` with weight `_TAKE_PRIOR_W`, which is what
+    covers Age A and the opening rounds, where there is no history to measure.
+    """
+    if n is None:
+        n = _live(state)
+    r = _replenishes(state, n)
+    if r <= 0 or state.age_civil == "A":
+        return _TAKE_PRIOR[n]
+    total, age_a = _supply(n)
+    consumed = total - cards_unseen(state, n)
+    taken = consumed - age_a - r * _SWEEP[n]
+    if taken < 0.0:
+        taken = 0.0
+    return (taken + _TAKE_PRIOR_W * _TAKE_PRIOR[n]) / (r + _TAKE_PRIOR_W)
+
+
+# A/B hatches, not strategy switches.  Each restores one retired constant so
+# the old and new models can be duelled, and so `tools/gate.sh` can prove the
+# new plumbing INERT one cause at a time (docs/PYPY.md 9.0 steps 3 and 6):
+#
+#     TTA_LEGACY_DEAL_RATE=1  the fitted CARDS_PER_ROUND deal rate
+#     TTA_LEGACY_LATENESS=1   the fitted affine `rounds_left` -> L map
+#     TTA_LEGACY_ROW_TAKE=1   the flat RIVAL_TAKE_P = 0.25
+#
+# Read from the environment at import so a SUBPROCESS inherits them -- the
+# fingerprint hasher and the arena workers are separate processes, so a flag
+# only settable in this process could not gate either.  Same device as
+# `TTA_JOURNAL` and `FASTCOPY_PARANOID`.  Also settable at runtime by a test.
+#
+# `horizon_legacy` in a weight vector turns the first two on for THAT vector
+# only, which is what lets the two horizons be seated at the same table
+# (`tools/horizon_model_ab.py`); the flat-take hatch has no weight form because
+# `row_pressure` already reads `rival_take_share` off the vector.
+LEGACY_DEAL_RATE = bool(os.environ.get("TTA_LEGACY_DEAL_RATE"))
+LEGACY_LATENESS = bool(os.environ.get("TTA_LEGACY_LATENESS"))
+
+#: Superseded by `take_rate`; kept for `LEGACY_DEAL_RATE` and for the A/B.
+CARDS_PER_ROUND = {2: 6.29, 3: 6.73, 4: 5.71}     # FITTED PRIOR (retired)
+_L_ZERO = {2: 27.1, 3: 28.7, 4: 36.1}             # FITTED PRIOR (retired)
+_L_ONE = 5.0                                      # FITTED PRIOR (retired)
+
+
+def rounds_left(state, n=None, w=None):
     """Estimated rounds still to play, including the one in progress.
 
-    Exact once Age IV has begun; before that it is cards-still-to-deal divided
-    by the measured deal rate.  Never returns less than 1.0.
+    Exact once Age IV has begun.  Before that it is the EXACT number of cards
+    still to deal divided by the deal rate -- `n * SWEEP[n]` swept per round,
+    which is exact, plus `n * take_rate(state)` taken, which is measured off
+    this game rather than assumed.  Never returns less than 1.0.
     """
     fre = state.final_round_end
     if fre is not None:
         return max(1.0, float(fre - state.round + 1))
     if n is None:
         n = _live(state)
-    cards = len(state.civil_deck) + _tail(n, state.age_civil)
-    return cards / CARDS_PER_ROUND[n] + AGE_IV_ROUNDS
+    cards = cards_unseen(state, n)
+    if LEGACY_DEAL_RATE or (w is not None and w.get("horizon_legacy")):
+        return cards / CARDS_PER_ROUND[n] + AGE_IV_ROUNDS
+    per_round = n * (_SWEEP[n] + take_rate(state, n))
+    return max(1.0, cards / per_round + AGE_IV_ROUNDS)
 
 
-# The affine map from `rounds_left` to L.  The phase blend is
-# `w[k] + (1-L)*w[k_early] + L*w[k_late]`, so an AFFINE change of L is pure
-# GAUGE: adding c to both phase weights and subtracting c from the base is the
-# identical policy, and any (scale, offset) applied to L can be absorbed the
-# same way.  Only the NON-affine part of this change moves a decision -- and
-# that part is the whole fix, because no affine function of rounds_left can be
-# flat inside an age.
-#
-# The gauge is therefore free, and it is spent on not breaking the three
-# already-trained champions: these constants make the new L the least-squares
-# best linear-in-rounds_left approximation of the OLD age-bucket L, fitted per
-# player count on the same measured decisions (residual sd 0.10 in L; per-age
-# means land within 0.05 of the old 0 / 1/3 / 2/3 / 1 / 1).  Per player count
-# because a 4p game runs ~29 rounds against ~23 at 2p/3p, and each arm's
-# champion was trained against its own arm's schedule.  `_L_ONE` came out at
-# 5.0 / 5.2 / 5.1 independently and is rounded to a single 5.0: the old
-# schedule's "late" was, in effect, "about five rounds from the end".
-_L_ZERO = {2: 27.1, 3: 28.7, 4: 36.1}   # rounds left at which L = 0
-_L_ONE = 5.0                            # rounds left at which L = 1
+def lateness(state, w=None):
+    """How far through the game we are: 0.0 at the deal, 1.0 when the civil
+    supply is gone.  EXACT -- no rate, no fit, no player-count table.
 
+    WHAT IT IS.  `1 - cards_unseen / supply`: the fraction of the game's civil
+    cards that have already left the decks.  Both endpoints are rule-derived
+    rather than chosen.  0 is the deal, when nothing has been dealt yet; 1 is
+    the moment the Age III deck runs out, which is not a milestone somebody
+    picked but THE thing that ends the game (RULES_SPEC 12.2/12.3 -- Age IV
+    begins, `_set_last_round` fixes `final_round_end`, play stops).  Age IV
+    therefore sits at exactly 1.0 by construction, because `civil_deck` is
+    empty and `_tail` past Age III is zero.
 
-def lateness(state):
-    """0.0 with a whole game ahead, 1.0 with 5 or fewer rounds left, monotone
-    in estimated rounds remaining in between.
+    WHAT IT REPLACES.  An affine map `(z - rounds_left) / (z - 5)` with
+    `z = 27.1 / 28.7 / 36.1` per player count, least-squares fitted to
+    reproduce the OLD age-bucket gauge on 46 self-play games.  Three fitted
+    constants, a per-player-count table, and a dependence on the ESTIMATED
+    `rounds_left` -- to express a quantity the state knows exactly.  The two
+    agree closely in slope; they differ in where the gauge saturates, which is
+    the whole non-affine content of the change (see the paragraph below).
 
-    CLAMPED TO [0, 1], and that clamp is load-bearing.  The unclamped line
-    reaches ~1.1 with two rounds left, which makes `1 - L` negative and FLIPS
-    THE SIGN of every `_early` term.  Measured, n=400 head-to-head (see
-    docs/CULTURE_GAP.md section 8d): unclamped, the 4p champion drops to 19.9%
-    against a 25% null and the 3p champion to 13.6% against 33.3%.  The
-    mechanism on the 4p champion is exact -- its `culture_early` is 8.792, so
-    at `1 - L = -0.096` its own culture is priced at
-    `1.000 - 0.096*8.792 = 0.156` instead of the frozen 1.000, i.e. it stops
+    BOUNDED TO [0, 1] BY CONSTRUCTION, and the clamp is kept anyway because it
+    is load-bearing.  The old line reached ~1.1 with two rounds left, which
+    makes `1 - L` negative and FLIPS THE SIGN of every `_early` term.
+    Measured, n=400 head-to-head (docs/CULTURE_GAP.md section 8d): unclamped,
+    the 4p champion drops to 19.9% against a 25% null and the 3p champion to
+    13.6% against 33.3%.  The mechanism on the 4p champion is exact -- its
+    `culture_early` is 8.792, so at `1 - L = -0.096` its own culture is priced
+    at `1.000 - 0.096*8.792 = 0.156` instead of the frozen 1.000, i.e. it stops
     caring about the score in the last two rounds.  `1 - L` outside [0, 1] is
     an extrapolation beyond anything the search has ever been scored on, and
-    linear evaluators do not extrapolate.
+    linear evaluators do not extrapolate.  `tests/test_model_constants.py`
+    asserts the bound on adversarial states -- a supply larger than the game
+    holds, a negative round counter, a fabricated deck.
+
+    THE ONE BEHAVIOURAL DIFFERENCE, stated plainly.  The phase blend is
+    `w[k] + (1-L)*w[k_early] + L*w[k_late]`, so an AFFINE change of L is pure
+    GAUGE for the weight CLASS (it is absorbed by rescaling the phase pair),
+    though not for a FIXED already-trained vector.  The new gauge's slope in
+    rounds is within ~10% of the old one; what genuinely differs is that the
+    old one saturated at 1.0 about five rounds from the end and this one
+    reaches 1.0 only when the supply does.  docs/MODEL_CONSTANTS.md section 5
+    measures what that costs the trained 2p champion instead of assuming it.
     """
     n = _live(state)
-    z = _L_ZERO[n]
-    lv = (z - rounds_left(state, n)) / (z - _L_ONE)
+    if LEGACY_LATENESS or (w is not None and w.get("horizon_legacy")):
+        z = _L_ZERO[n]
+        lv = (z - rounds_left(state, n, w)) / (z - _L_ONE)
+    else:
+        lv = 1.0 - cards_unseen(state, n) / float(_supply(n)[0])
     if lv <= 0.0:
         return 0.0
     return lv if lv < 1.0 else 1.0
@@ -647,8 +803,12 @@ def lateness_by_age(state):
     return min(1.0, C.level(state.age_civil) / 3.0)
 
 
-def features(state, idx, ctx=None):
-    """The raw feature vector from player `idx`'s point of view."""
+def features(state, idx, ctx=None, w=None):
+    """The raw feature vector from player `idx`'s point of view.
+
+    `w` is threaded in ONLY so the `horizon_legacy` A/B hatch can be selected
+    per weight vector (see `lateness`); no feature is priced through it.
+    """
     meta = _meta()
     db = C.db()
     p = state.players[idx]
@@ -750,7 +910,8 @@ def features(state, idx, ctx=None):
                     _TURNS_CAP, owed / max(1.0, s.resources))
                 # ...and the part of that the game will not last long enough
                 # to pay.  This is the 0-for-58 detector.
-                overrun = max(0.0, turns_to_finish - rounds_left(state))
+                overrun = max(0.0, turns_to_finish
+                              - rounds_left(state, None, w))
 
     hand_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_civil)
     hand_mil_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_military)
@@ -1668,7 +1829,7 @@ def tech_value(name, state, idx, w, dev_credit=1.0):
     staff, dev, sci, res = _BY.tech_upgrade(name, state, idx)
     if not (staff or dev or sci or res):
         return 0.0
-    late = lateness(state)
+    late = lateness(state, w)
     net = -res * max(0.0, w.get("resource_stock", 0.0))
     for k, amt, _kind in staff:
         net += amt * feature_marginal(k, state, idx, w, late)
@@ -2024,25 +2185,98 @@ def rival_hand_potential(state, idx, w, rivals=None):
 
 # ------------------------------------------------- take now vs let it slide
 #
-# `game.SWEEP`, duplicated because `engine.game` imports `engine.actions`
-# which this module imports -- importing game here is a cycle.  `test_row_
-# features.py` asserts the two are equal, so the copy cannot rot.
-_SWEEP = {2: 3, 3: 2, 4: 1}
+# (`_SWEEP` now lives with the rest of the supply arithmetic, up in "the game
+# horizon" -- one copy, same rule.)
 
 # P(a rival who CAN legally take a card I also want actually takes it) before
-# my next turn.  One constant, deliberately: the alternative on offer was the
-# seven measured per-slot survival rates in docs/INFORMATION_AUDIT.md 2.1,
-# and that audit flags them itself as directional (n~210 per slot, and the
-# opponents generating them were themselves row-blind bots, so a field that
-# actually competed for cards would take more).  Baking seven numbers fitted
-# on blind play into the evaluator would be fitting the bug.  The legality
-# gate underneath -- can that rival reach that slot at all, is their hand
-# full, do they already hold the card, are they mid-wonder -- is EXACT, and
-# is where the signal the expert sources single out actually lives
-# (docs/EXPERT_STRATEGY.md:546: wonders and second leaders are safe to let
-# slide).  This constant only shapes how fast the bargain decays in the
-# number of rivals who could take it.
-RIVAL_TAKE_P = 0.25
+# my next turn.  This USED to be one flat 0.25 for every rival, every card and
+# every board, on the stated grounds that the alternative on offer was the
+# seven per-slot survival rates in docs/INFORMATION_AUDIT.md 2.1 and that
+# baking numbers fitted on row-blind opponents into the evaluator would be
+# fitting the bug.  That argument stands, and it is not an argument for a flat
+# constant: it is an argument against ONE PARTICULAR fitted table.
+#
+# What the flat prior threw away is public.  Every rival's board is open, so
+# `rival_context` already knows, per rival and exactly:
+#
+#   * how many civil actions they will have on their next turn (`gate[0]`),
+#   * whether their civil hand is already full (`gate[1]`; hand_civil is
+#     public by RULES_SPEC 2.6, the open civil cards convention),
+#   * what THIS card would cost THEM -- their wonder surcharge, Hammurabi's
+#     leader discount, Michelangelo's waiver (`gate[2..3]`), and
+#   * which OTHER row slots they could legally take, i.e. what else is
+#     competing for those civil actions (`_can_take_gated` over the row).
+#
+# `rival_take_p` below spends all four.  What stays a prior is the one thing
+# the rules genuinely hide -- what fraction of their civil actions a rival will
+# spend on the row rather than on building, upgrading or a wonder, which is
+# policy and intention, not state.  docs/INFORMATION_AUDIT.md section 3 is
+# explicit that hand CONTENTS are public but intentions are not, and this lane
+# stays inside that line.  So that one number is exposed as the WEIGHT
+# `rival_take_share` (in DEFAULT_WEIGHTS, so `hillclimb.mutate` can move it)
+# instead of as a bare constant, and its default is chosen to reproduce the old
+# flat 0.25 in the mean over real positions (docs/MODEL_CONSTANTS.md section 4).
+RIVAL_TAKE_SHARE = 0.5   # FITTED PRIOR, overridable per vector (see above)
+#: The retired flat prior.  Kept for `LEGACY_RIVAL_TAKE` and the A/B.
+RIVAL_TAKE_P = 0.25      # FITTED PRIOR (retired)
+#: A/B hatch: True restores the flat per-rival 0.25.  See the block on
+#: `LEGACY_DEAL_RATE` for why this is read from the environment.
+LEGACY_RIVAL_TAKE = bool(os.environ.get("TTA_LEGACY_ROW_TAKE"))
+
+
+def _rival_take_cost(name, i, gate):
+    """What row slot `i` costs THAT rival, in their civil actions.
+
+    `actions.take_cost` restated against the gate tuple rather than against a
+    live player, because a `_RivalView` is a snapshot and the surcharge and
+    the discount are already in the gate `rival_context` built (RULES_SPEC
+    2.3/2.5: +1 per completed or destroyed wonder, waived for Michelangelo;
+    -1 on a leader for Hammurabi; floored at 0).
+    """
+    cost = actions.ROW_COST[i] if i < 13 else actions.row_cost(i)
+    typ = actions._TYPE_BY_NAME[name]
+    if typ == "wonder":
+        cost += gate[2]
+    elif typ == "leader":
+        cost -= gate[3]
+    return cost if cost > 0 else 0
+
+
+def rival_take_p(cost, budget, reach, slack, share):
+    """P(this rival takes THIS card before my next turn), from their board.
+
+    Every argument but `share` is exact public state:
+
+    * `cost` -- civil actions the card costs *that rival*, their surcharges
+      and discounts included;
+    * `budget` -- civil actions they will have (`effects.compute().
+      civil_actions`);
+    * `reach` -- how many row slots they could legally take at all, i.e. how
+      many ways that budget can be spent on the row;
+    * `slack` -- how many more civil cards their hand can hold (0 when full,
+      in which case the answer is exactly 0 and no prior is consulted).
+
+    The model is a budget split: of `budget` civil actions, `share` go to the
+    row, buying `share*budget/cost` cards at this price, spread over the
+    `reach` slots that are competing for them, and capped by the hand.  It is
+    monotone the way the board says it should be -- more of their actions or
+    fewer competing cards raises it, a dearer slot or a fuller hand lowers it
+    -- and it collapses to 0 exactly when the legality gate says they cannot
+    take the card at all.
+    """
+    if reach <= 0 or slack <= 0:
+        return 0.0
+    if cost <= 0:
+        # free to them (Hammurabi on a 1-CA leader): only the hand limits it
+        takes = float(slack)
+    else:
+        takes = share * budget / cost
+        if takes > slack:
+            takes = float(slack)
+    p = takes / reach
+    if p <= 0.0:
+        return 0.0                      # a clamped-negative `share`
+    return 1.0 if p > 1.0 else p
 
 
 def row_pressure(state, idx, w, ctx=None):
@@ -2103,14 +2337,11 @@ def row_pressure(state, idx, w, ctx=None):
     # row and masks everything, because then every card present was dealt.
     root = ctx.get("root_row") if ctx else None
     cursor, n_root = 0, 0 if root is None else len(root)
-    p = state.players[idx]
-    n = _live(state)
-    slide = n * _SWEEP[n]
-    mine = actions._take_gate(state, p, budget=actions.ca_total(state, p))
-    views = ctx.get("rival_views", ()) if ctx else ()
-    cost_of = actions.ROW_COST
-    gated = actions._can_take_gated
-    urgency = bargain = 0.0
+    # The masking pass, hoisted out of the pricing pass so the SAME set of
+    # slots defines what a rival can reach.  Anything dealt after the decision
+    # began must be invisible to the rival model too, or the decay factor
+    # becomes a second copy of the `end_turn` leak the mask exists to close.
+    visible = []
     for i, name in enumerate(row):
         if name is None:
             continue
@@ -2123,6 +2354,20 @@ def row_pressure(state, idx, w, ctx=None):
                 # are always a suffix -- so is every slot to its right.
                 break
             cursor = k + 1
+        visible.append((i, name))
+    if not visible:
+        return 0.0, 0.0
+    p = state.players[idx]
+    n = _live(state)
+    slide = n * _SWEEP[n]
+    mine = actions._take_gate(state, p, budget=actions.ca_total(state, p))
+    views = ctx.get("rival_views", ()) if ctx else ()
+    cost_of = actions.ROW_COST
+    gated = actions._can_take_gated
+    share = w.get("rival_take_share", RIVAL_TAKE_SHARE)
+    reach = None            # per-rival slot counts, built at most once
+    urgency = bargain = 0.0
+    for i, name in visible:
         if not gated(state, p, i, mine, name):
             continue
         val = card_potential(name, w, state, idx)
@@ -2136,9 +2381,21 @@ def row_pressure(state, idx, w, ctx=None):
         if saving <= 0:
             continue
         survive = 1.0
-        for view, gate in views:
-            if gated(state, view, i, gate, name):
-                survive *= 1.0 - RIVAL_TAKE_P
+        if LEGACY_RIVAL_TAKE:
+            for view, gate in views:
+                if gated(state, view, i, gate, name):
+                    survive *= 1.0 - RIVAL_TAKE_P
+        else:
+            if reach is None:
+                reach = [sum(1 for j, nm in visible
+                             if gated(state, v, j, g, nm))
+                         for v, g in views]
+            for k, (view, gate) in enumerate(views):
+                if not gated(state, view, i, gate, name):
+                    continue
+                survive *= 1.0 - rival_take_p(
+                    _rival_take_cost(name, i, gate), gate[0], reach[k],
+                    view.hand_slack, share)
         bargain += saving * survive
     return urgency, bargain
 
@@ -2200,6 +2457,14 @@ BASE_WEIGHTS = {
     # and must not pick up the early/late phase multipliers.
     "row_urgency": 0.0,
     "row_bargain_forgone": 0.0,
+    # NOT a value term -- a MODEL PARAMETER, and the only fitted number left
+    # in `row_pressure`: the share of a rival's civil actions that goes on the
+    # row rather than on building.  Everything else in `rival_take_p` is read
+    # off their open board.  It lives in DEFAULT_WEIGHTS so `hillclimb.mutate`
+    # can fit it instead of it being a bare constant nobody can move, and it is
+    # positive so `guard_weights` keeps it out of negative-probability
+    # territory.  It multiplies nothing when `row_bargain_forgone` is 0.0.
+    "rival_take_share": 0.5,
     # public rival board/hand facts (GAP 3)
     "rival_free_ca": 0.0,
     "rival_hand_civil": 0.0,
@@ -2521,7 +2786,7 @@ DEFAULT_WEIGHTS.update(PHASE_WEIGHTS)
 def evaluate(state, idx, weights=None, ctx=None, f=None):
     w = weights if weights is not None else DEFAULT_WEIGHTS
     if f is None:
-        f = features(state, idx, ctx)
+        f = features(state, idx, ctx, w)
     total = 0.0
     get = w.get
     for k, v in f.items():
@@ -2536,7 +2801,7 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
     # and `guard_weights` never sees it; it exists only in hand-written A/B
     # weight files.  The extra `get` costs one dict lookup per evaluation
     # against the ~90 the loop above already does.
-    late = lateness_by_age(state) if get("horizon_age") else lateness(state)
+    late = lateness_by_age(state) if get("horizon_age") else lateness(state, w)
     early = 1.0 - late
     for k in PHASE_KEYS:
         v = f[k]

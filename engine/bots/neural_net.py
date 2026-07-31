@@ -10,7 +10,7 @@ Target
 ------
 The net predicts the eventual **final-culture margin** of player ``idx``
 (``my final culture - the best rival's final culture``), scaled by
-:data:`MARGIN_SCALE`.  Margin, not win/loss, because it is a dense label that
+:data:`MARGIN_NORM`.  Margin, not win/loss, because it is a dense label that
 exists on every state and separates "lost by 8" from "lost by 90"; the greedy
 policy that consumes it only needs the ARGMAX over sibling states, and margin
 preserves that ordering.  docs/NEURAL_EVAL.md records the caveat from
@@ -28,9 +28,17 @@ except ImportError:                     # pragma: no cover - Mac has no torch
     nn = object
     HAVE_TORCH = False
 
-#: final margins are ~[-250, 250]; /100 puts the regression target near unit
-#: scale without clipping.
-MARGIN_SCALE = 100.0
+#: NUMERICAL GUARD, and it is NOT `hillclimb_pool.MARGIN_SCALE`.  It used to
+#: be called `MARGIN_SCALE`, which read as the same knob and is not: that one
+#: is the tanh SQUASH width of the league objective, a modelling choice about
+#: how much a decisive game is worth (120.0, and changing it changes what the
+#: climb maximises).  This one is a plain LINEAR NORMALISER on the value net's
+#: regression target -- divide by it to train, multiply by it to read the
+#: prediction back in culture points -- so it cancels exactly and any value of
+#: the right order does the same job.  Final margins are ~[-250, 250]; /100
+#: puts the target near unit scale without clipping.  The checkpoint key stays
+#: spelled `margin_scale` because it is serialised data in existing files.
+MARGIN_NORM = 100.0
 
 
 if HAVE_TORCH:
@@ -81,7 +89,7 @@ if HAVE_TORCH:
             "in_dim": model.in_dim,
             "hidden": model.hidden,
             "blocks": model.blocks_n,
-            "margin_scale": MARGIN_SCALE,
+            "margin_scale": MARGIN_NORM,
             "meta": meta or {},
         }
         torch.save(obj, path)
@@ -100,7 +108,7 @@ class NeuralValue:
 
     ``value(encodings)`` takes a list of flat float lists (each length
     ``in_dim``) and returns a python list of predicted margins in CULTURE
-    units (i.e. already multiplied back by :data:`MARGIN_SCALE`).
+    units (i.e. already multiplied back by :data:`MARGIN_NORM`).
     """
 
     def __init__(self, model, device="cpu"):
@@ -121,7 +129,7 @@ class NeuralValue:
         with torch.no_grad():
             x = self._to_tensor(encodings)
             y = self.model(x)
-            return (y.float().cpu() * MARGIN_SCALE).tolist()
+            return (y.float().cpu() * MARGIN_NORM).tolist()
 
     def _to_tensor(self, encodings):
         """List-of-lists -> tensor via numpy.

@@ -241,8 +241,55 @@ class RowPressure(unittest.TestCase):
         st.card_row[9] = "Alchemy"         # 3 CA now, slot 3 (1 CA) next turn
         ctx = W.rival_context(st, 0)
         _, bargain = W.row_pressure(st, 0, W.DEFAULT_WEIGHTS, ctx)
-        # 2 CA saved, discounted by the one rival who could also take it
+        # 2 CA saved, discounted by the one rival who could also take it --
+        # and that discount is READ OFF THEIR BOARD now, not a flat 0.25.
+        # Everything in it is public: 4 civil actions on a Despotism opening,
+        # a 3 CA slot, and exactly one card in the row competing for them.
+        view, gate = ctx["rival_views"][0]
+        self.assertEqual(gate[0], 4)
+        p = W.rival_take_p(3, gate[0], 1, view.hand_slack,
+                           W.DEFAULT_WEIGHTS["rival_take_share"])
+        self.assertAlmostEqual(p, 0.5 * 4 / 3)
+        self.assertAlmostEqual(bargain, 2.0 * (1.0 - p))
+
+    def test_the_legacy_hatch_restores_the_flat_prior(self):
+        """`LEGACY_RIVAL_TAKE` is the A/B switch, and it reproduces the old
+        flat 0.25 exactly -- which is what makes the fingerprint attribution
+        in tools/gate.sh a one-cause claim rather than a guess."""
+        st = G.new_game(2, 29)
+        st.players[0].civil_actions = 6
+        st.card_row = [None] * 13
+        st.card_row[9] = "Alchemy"
+        ctx = W.rival_context(st, 0)
+        W.LEGACY_RIVAL_TAKE = True
+        try:
+            _, bargain = W.row_pressure(st, 0, W.DEFAULT_WEIGHTS, ctx)
+        finally:
+            W.LEGACY_RIVAL_TAKE = False
         self.assertAlmostEqual(bargain, 2.0 * (1.0 - W.RIVAL_TAKE_P))
+
+    def test_a_full_handed_rival_cannot_take_anything(self):
+        """The one input that makes the estimate exactly 0 rather than small:
+        a hand at the limit (RULES_SPEC 2.5) is a fact, not a probability."""
+        self.assertEqual(W.rival_take_p(1, 4, 5, 0, 0.5), 0.0)
+
+    def test_the_estimate_moves_the_way_the_board_says(self):
+        base = W.rival_take_p(2, 4, 6, 3, 0.5)
+        self.assertGreater(W.rival_take_p(2, 8, 6, 3, 0.5), base)  # more CA
+        self.assertLess(W.rival_take_p(3, 4, 6, 3, 0.5), base)     # dearer
+        self.assertLess(W.rival_take_p(2, 4, 12, 3, 0.5), base)    # more rivals'
+        self.assertLessEqual(W.rival_take_p(2, 4, 6, 1, 0.5), base)  # tighter hand
+        # and it is a probability whatever the board says
+        for cost in (0, 1, 3, 9):
+            for budget in (0, 1, 20):
+                for reach in (0, 1, 13):
+                    for slack in (0, 1, 9):
+                        for share in (-1.0, 0.0, 0.5, 5.0):
+                            v = W.rival_take_p(cost, budget, reach, slack,
+                                               share)
+                            self.assertTrue(0.0 <= v <= 1.0, (cost, budget,
+                                                              reach, slack,
+                                                              share, v))
 
     def test_taking_a_doomed_card_lowers_urgency(self):
         """Both terms are read off the POST-move state, which is how a 1-ply

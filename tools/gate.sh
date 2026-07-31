@@ -391,8 +391,108 @@ WIDE=f223cea1
 # clean-base control on the parent commit (c0525c4, /tmp/base) reproduced all
 # eight pre-change constants first.  Nothing here was re-derived to make the
 # gate pass.
-WNARROW=16dc9a1a
-WWIDE=a1b74078
+# ---- the horizon: a measured deal rate and an exact gauge -----------------
+#     (docs/MODEL_CONSTANTS.md)
+#
+# The same SIX arms moved, and the same two held.  NARROW/WIDE are GreedyBot,
+# which calls neither `rounds_left` nor `lateness` -- a GreedyBot arm moving
+# here would have meant the change had leaked out of the evaluator.
+#
+#     arm       old         new
+#     NARROW    ca255af3    ca255af3   (unchanged -- GreedyBot)
+#     WIDE      f223cea1    f223cea1   (unchanged -- GreedyBot)
+#     WNARROW   16dc9a1a    6d888d7c
+#     WWIDE     a1b74078    c52302c2
+#     QNARROW   2f59c5c0    bbbb203a
+#     QWIDE     23b8d66e    3df0155f
+#     PNARROW   15bd49fc    1b883d6f
+#     PWIDE     c8fe5d3a    3922ebc4
+#
+# Cause, and it is TWO causes in one commit, attributed separately below:
+#
+#   (1) `rounds_left` no longer divides by the fitted `CARDS_PER_ROUND`
+#       {2: 6.29, 3: 6.73, 4: 5.71}.  The sweep half of the deal rate is
+#       `n * SWEEP[n]` and is exact (RULES_SPEC 2.1); the take half is now
+#       MEASURED in the game being played, off two public counts.  The fitted
+#       constant assumed 0.29 takes/round at 2p where the current defaults
+#       take 1.88, which left the horizon 1.80 rounds LONG.
+#   (2) `lateness` is no longer the fitted affine map
+#       `(z - rounds_left)/(z - 5)` with `z = _L_ZERO[n]`.  It is
+#       `1 - cards_unseen/supply` -- the exact fraction of the civil card
+#       supply already dealt, with both endpoints rule-derived.
+#
+# The third constant in that commit, `RIVAL_TAKE_P = 0.25` -> a per-rival
+# estimate off the rival's open board, CANNOT move an arm and did not:
+# `row_bargain_forgone` defaults to 0.0 and `evaluate` skips `row_pressure`
+# entirely when both row weights are zero.  That is measured below, not
+# assumed.
+#
+# CLEAN-BASE CONTROL FIRST, and it passed: a full gate on the parent 8b972ef
+# in /tmp/constbase reproduced all eight committed constants exactly (GATE
+# PASS, 1070 tests).  So the base was known-good before anything of mine was
+# measured against it.
+#
+# TWO-SIDED as docs/PYPY.md 9.0 requires: derived from scratch in
+# /tmp/constfix and independently in /tmp/constgateB -- a second fresh clone
+# of 8b972ef with the same file set copied onto it -- and the two agreed
+# BYTE-FOR-BYTE on all eight arms, including the two that did not move.
+#
+# ATTRIBUTED, not assumed, and by ENVIRONMENT rather than by editing a third
+# clone.  `engine/bots/weighted.py` reads three A/B hatches from the
+# environment at import (`TTA_LEGACY_DEAL_RATE`, `TTA_LEGACY_LATENESS`,
+# `TTA_LEGACY_ROW_TAKE`), each restoring exactly one retired constant.  That
+# is a STRONGER control than a patched clone: the tree being hashed is
+# byte-identical to the tree being shipped, so nothing but the named cause can
+# differ.  From /tmp/constattr, on this exact tree:
+#
+#   tree / hatches set                NARROW    WNARROW   QNARROW   PNARROW
+#   parent 8b972ef                    ca255af3  16dc9a1a  2f59c5c0  15bd49fc
+#   all three hatches ON              ca255af3  16dc9a1a  2f59c5c0  15bd49fc
+#   ROW-TAKE hatch only               --        6d888d7c  bbbb203a  1b883d6f
+#   new rate + LEGACY gauge           ca255af3  7ed600d1  487b2aa5  c1d0caea
+#   new gauge + LEGACY rate           ca255af3  6d888d7c  bbbb203a  1b883d6f
+#   shipped (both new)                ca255af3  6d888d7c  bbbb203a  1b883d6f
+#
+# (WWIDE/QWIDE/PWIDE follow the narrow arms; the all-hatches-on row was run on
+# all eight and reproduced c8fe5d3a / a1b74078 / 23b8d66e too.)
+#
+# Four things fall straight out of that table, and the third is the one worth
+# reading twice.
+#
+#   * ALL THREE HATCHES ON REPRODUCES THE PARENT'S EIGHT.  That is the strong
+#     form of "everything else in this commit is inert": the renames, the
+#     comments, the new `rival_take_share` key in DEFAULT_WEIGHTS and the `w`
+#     threaded through `features()` are provably behaviour-free.
+#   * THE ROW-TAKE HATCH ALONE REPRODUCES THE SHIPPED DIGESTS.  So replacing
+#     `RIVAL_TAKE_P` moves nothing here, exactly as predicted from
+#     `row_bargain_forgone` defaulting to 0.0.  Measured, not assumed.
+#   * CAUSE (2), THE GAUGE, IS THE WHOLE MOVE.  New gauge + LEGACY deal rate
+#     already lands on the shipped digests, byte for byte, on all three arms.
+#   * CAUSE (1), THE DEAL RATE, IS INERT ON THESE ARMS -- AND NOT BECAUSE IT
+#     DOES NOTHING.  With the LEGACY gauge on it moves WNARROW to a third
+#     value (7ed600d1) that is neither the parent's nor the shipped one, so
+#     the plumbing is live.  It is inert in the SHIPPED combination for a
+#     structural reason that was checked in the source rather than inferred
+#     from the hash: the new `lateness` is `1 - cards_unseen/supply` and does
+#     not call `rounds_left` at all, and the only other consumer of
+#     `rounds_left` inside `evaluate` is the `wonder_overrun` feature, whose
+#     weight is 0.0 in DEFAULT_WEIGHTS.  The fingerprint plays DEFAULT_WEIGHTS.
+#     So under these weights `rounds_left` has NO path to the evaluation, and
+#     an arm moving for cause (1) would have meant one of those two statements
+#     was wrong.  A trained vector with a non-zero `wonder_overrun` WOULD see
+#     it, and so does `neural_encode`.
+#
+# Nothing here was re-derived to make the gate pass.  The gate FAILED on this
+# tree by design, in both clones, and these are the computed values.
+#
+# Test count goes 1070 -> 1087, accounted for exactly: +10 from the new
+# tests/test_model_constants.py, +4 net in tests/test_horizon.py (five new,
+# and `test_calibration_against_the_old_schedule` removed -- it asserted the
+# new gauge stayed within 0.10 of the OLD age bucket, which was the
+# champion-compatibility constraint the honest gauge deliberately gives up),
+# and +3 in tests/test_row_features.py.
+WNARROW=6d888d7c
+WWIDE=c52302c2
 
 # ...and the same argument one bot further on (docs/PYPY.md section 10).
 # `experiments/run_league.sh` trains `--candidate-bot plan:width=2` at 2p and
@@ -567,10 +667,12 @@ WWIDE=a1b74078
 # and +1 from splitting `test_zero_credit_is_the_static_answer_for_every_card`
 # in tests/test_board_yields.py a second time, which needed a third sibling
 # once the non-red technologies started being gated on `tech_board_credit`.
-PNARROW=15bd49fc
-PWIDE=c8fe5d3a
-QNARROW=2f59c5c0
-QWIDE=23b8d66e
+# All four moved again on the horizon rework; the table, the two causes and
+# the environment-hatch attribution are in the block above WNARROW.
+PNARROW=1b883d6f
+PWIDE=3922ebc4
+QNARROW=bbbb203a
+QWIDE=3df0155f
 
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs

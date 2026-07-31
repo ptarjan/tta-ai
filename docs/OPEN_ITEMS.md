@@ -314,7 +314,43 @@ demonstration unmeasurable and is a no-op for `row_pressure`'s `<= 0` skip).
 ## 3. Evaluator information gaps
 
 *From `docs/INFORMATION_AUDIT.md`, `docs/EVENT_SEEDING.md`,
-`docs/BOT_ARCHITECTURE.md`.*
+`docs/BOT_ARCHITECTURE.md`, `docs/MODEL_CONSTANTS.md`.*
+
+### 3.0 Fitted constants still standing after the 2026-07-30 sweep
+
+*From `docs/MODEL_CONSTANTS.md`.  Three were replaced; these are what is left,
+and each is now labelled as a prior in the source and pinned by
+`tests/test_model_constants.py`.*
+
+* **`PACT_OFFER_CREDIT = 0.5` is a fitted prior and could not cheaply become a
+  weight.**  It is spent inside `_pending_terms`, which is called from
+  `features()` — and `features()` has no weight vector.  Plumbing one in means
+  either a second signature on the hot path or a module global, which is what
+  it already is.  Deliberately left labelled rather than half-plumbed.  If a
+  lane ever threads `w` into `features()` for another reason, convert this at
+  the same time.  Nothing has ever measured whether 0.5 is right; the only
+  evidence is `docs/PACTS_DIAGNOSIS.md` fix #2, which establishes that it must
+  be **non-zero** (at 0.0 `offer_pact` is strictly dominated by `pol_pass`) and
+  says nothing about the value.
+* **`_TAKE_PRIOR = {2: 0.30, 3: 0.35, 4: 0.40}` is fitted** and is the last
+  guess in the horizon.  It only bites in Age A and the first rounds of Age I
+  (shrunk away with weight `_TAKE_PRIOR_W = 4.0` replenishes), and it is the
+  Age A column in `docs/MODEL_CONSTANTS.md` §1.4 where the new estimator is
+  worst.  The 3p and 4p entries are less well measured than the 2p one:
+  `tools/deal_rate.py --players 3/4` has been run once, at 10 games.
+* **`rival_take_share` ships at its 0.5 prior and has never been climbed.**  It
+  cannot move anything until `row_bargain_forgone` is non-zero, which is true
+  only on the three archived champions and on no live arm.
+* **`tools/deal_rate.py`'s `hungry` policy does not actually take more cards
+  than the defaults do** (both 1.88/round at 2p), so §1.4's robustness claim
+  rests on a `shy`-vs-`default` contrast rather than a three-point sweep.  A
+  genuinely hungrier lever would strengthen it.
+* **`hillclimb_pool.CULTURE_CENTRE = 100.0` / `CULTURE_SCALE = 120.0` flatten
+  the objective at 4p.**  Reported, not changed — it is the owner's call and
+  changing it mid-run invalidates the trained vector.  The BGO corpus mean
+  final culture is 159.5 / 176.3 / 194.6 at 2p / 3p / 4p with a 4p p90 of 298,
+  and `d(own_share)/dc` falls 5.8x from c=159.5 to c=298.  4p is the arm
+  furthest behind humans and the arm whose objective flattens soonest.
 
 * **GAP 4 (politics / event deck)** — partially opened by `event_scoring_margin`
   (`docs/EVENT_SEEDING.md`), which ships at weight 0.0 by design.  Its effect

@@ -57,9 +57,26 @@ class RandomBot:
 
 # ------------------------------------------------------------ evaluation
 
-# Weights over the feature vector below.  Culture is the score, everything
-# else is a proxy for future culture; the numbers are hand-set starting
-# values for the self-play hill climb (experiments/harness.py).
+# GreedyBot's weights.  FROZEN ON PURPOSE -- do not "sync" these with
+# `weighted.BASE_WEIGHTS`, which they deliberately disagree with (culture_rate
+# 6.0 here against 5.0 there, and a dozen keys that exist on one side only).
+#
+# The comment this replaces said they were "hand-set starting values for the
+# self-play hill climb (experiments/harness.py)", which has not been true for a
+# long time: the trainer is `experiments/hillclimb_league.py`, it starts from
+# `weighted.DEFAULT_WEIGHTS`, and nothing has warm-started from this table in
+# the life of the current league.  Read as a stale default, the obvious next
+# move is to make the two agree.  That would be a mistake.
+#
+# GreedyBot is the fingerprint CONTROL (docs/PYPY.md 9.0).  Two of the eight
+# gate arms, NARROW and WIDE, are GreedyBot and nothing else, and their whole
+# job is to hold still while evaluator changes move the other six -- a
+# GreedyBot arm moving is the signal that a change has leaked out of the
+# evaluator and into the rules.  A control whose weights drift with the thing
+# it is controlling for is not a control.  So these numbers are frozen, and
+# changing any of them is a deliberate act that moves NARROW and WIDE and needs
+# its own derivation.  (They are also `features(state, p)` keys in THIS module,
+# not `weighted.features` keys; the two vocabularies only overlap by accident.)
 WEIGHTS = {
     "culture": 1.0,
     "culture_rate": 6.0,

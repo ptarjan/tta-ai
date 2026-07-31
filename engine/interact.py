@@ -275,12 +275,16 @@ def _c_infiltrate(state, p, opt, ctx, rng):
 
 # ------------------------------------------- War over Technology spoils
 
+#: AN OPTION INDEX, NOT AN AMOUNT OF SCIENCE.  `WAR_TECH_SCIENCE_IDX = 0` reads
+#: like a rules value ("a war over technology pays zero science"), which is
+#: the opposite of what it says; the name carries `_IDX` for that reason.
+#:
 #: Index of the "take the rest as science" option inside a `war_tech`
 #: choice.  It is FIRST on purpose: every argmax in this project breaks a tie
 #: to the lowest index, and index 0 being "science" makes the blind fallback
 #: exactly the behaviour the engine had before the choice existed.
 #: `settle_war_spoils` depends on this too.
-WAR_TECH_SCIENCE = 0
+WAR_TECH_SCIENCE_IDX = 0
 
 
 def war_tech_options(state, victor, loser, budget):
@@ -434,7 +438,7 @@ def settle_war_spoils(state, rng=None):
     resolve a war on a scratch state; a fourth would need this too.
     """
     while state.pending and state.pending[-1].get("tag") == "war_tech":
-        apply_pending(state, ("choose", WAR_TECH_SCIENCE), rng)
+        apply_pending(state, ("choose", WAR_TECH_SCIENCE_IDX), rng)
 
 
 def _c_pact_offer(state, p, opt, ctx, rng):

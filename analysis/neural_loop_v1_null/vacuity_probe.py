@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, ".")
-from engine.bots.neural_net import load_checkpoint, MARGIN_SCALE
+from engine.bots.neural_net import load_checkpoint, MARGIN_NORM
 
 ck = sys.argv[1] if len(sys.argv) > 1 else "checkpoints/best.pt"
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -44,9 +44,9 @@ def score(files, label):
             for i in range(0, len(Xv), 8192):
                 vpred.append(net(torch.tensor(Xv[i:i + 8192], device=dev)).cpu().numpy())
         yvs.append(yv)
-    marg = np.concatenate(marg) * MARGIN_SCALE
+    marg = np.concatenate(marg) * MARGIN_NORM
     yvs = np.concatenate(yvs)
-    vpred = np.concatenate(vpred) * MARGIN_SCALE
+    vpred = np.concatenate(vpred) * MARGIN_NORM
     mae = float(np.abs(vpred - yvs).mean())
     print(f"\n== {label}: {len(files)} shards, {na} pairs, {len(yvs)} value rows")
     print(f"   pair_acc (incumbent, UNTRAINED) = {nc/na:.4f}")
