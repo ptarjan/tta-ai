@@ -6,7 +6,7 @@ resources and civil/military actions the printed 2015 base-game rules say it
 should?**
 
 Two rules for everything below, both learned the hard way (see
-`docs/SCORE_VALIDATION.md` 3.3 and the government pricing bug of
+`docs/SCORE_AUDIT.md` 10.3.3 and the government pricing bug of
 2026-07-29):
 
 1. **Every expected number is derived from the printed card, by hand, in the
@@ -404,7 +404,7 @@ class SpecialTech(unittest.TestCase):
 
 
 # =================================================================== wonder
-#   docs/SCORE_VALIDATION.md 6.1 verified all 16 wonders' 53 stage costs
+#   docs/SCORE_AUDIT.md 10.6.1 verified all 16 wonders' 53 stage costs
 #   against 18,307 human stage lines.  Re-checked here that the data the
 #   engine charges from is still that data, plus every wonder's benefit.
 
@@ -502,7 +502,7 @@ class Wonder(unittest.TestCase):
         self.assertEqual(self.one_time(st, p, "Hollywood"), 14)
 
     def test_hollywood_uses_effective_output_not_printed(self):
-        """docs/SCORE_VALIDATION.md 3.3: Chaplin doubles the best theater, so
+        """docs/SCORE_AUDIT.md 10.3.3: Chaplin doubles the best theater, so
         Movies produces 8, not 4 => 2 * (8 + 3) = 22."""
         st, p = position({"Movies": 1, "Multimedia": 1}, leader="Charlie Chaplin")
         self.assertEqual(self.one_time(st, p, "Hollywood"), 22)
@@ -612,7 +612,7 @@ class Leader(unittest.TestCase):
         self.assertEqual((s.science, s.culture), (8, 6))
 
     def test_chaplin_doubles_ONE_theater_not_the_card(self):
-        """docs/SCORE_BUGFIX.md: two workers on Movies produce 8; Chaplin
+        """docs/SCORE_AUDIT.md: two workers on Movies produce 8; Chaplin
         doubles the best THEATER (one building), so 8 + 4 = 12."""
         st, p = position({"Movies": 2}, leader="Charlie Chaplin")
         self.assertEqual(stats(st, p).culture, 12)
@@ -1142,8 +1142,8 @@ class ScoringEvents(unittest.TestCase):
         st, p = position(bank=1)          # consumption 4, production 0
         self.assertEqual(impact(st, p, "Impact of Agriculture"), 0)
     def test_impact_of_agriculture_scores_FARMS_not_the_food_rating(self):
-        """FIXED (audit 3.1).  It is `Impact of Industry` (SCORE_VALIDATION
-        3.1) again on the other card.  The card scores "the food produced by
+        """FIXED (audit 3.1).  It is `Impact of Industry` (docs/SCORE_AUDIT.md
+        §10.3.1, the former SCORE_VALIDATION) again on the other card.  The card scores "the food produced by
         their farms"; the engine scores `s.food`, the whole rating, which also
         carries a pact's food symbol.  Two Agriculture workers = 2 farm food,
         +4 for beating consumption = 6, whatever the pact adds.

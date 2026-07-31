@@ -1,7 +1,7 @@
 """Regression tests for tools/bgo_rescore.py.
 
 Every case below is a replay bug that first presented as an *engine* bug in
-`docs/SCORE_VALIDATION.md`: the reconstructed position was wrong, our scorer
+`docs/SCORE_AUDIT.md`: the reconstructed position was wrong, our scorer
 was asked about it, and the disagreement looked like a scoring error.  A
 replayer that silently loses a worker does not raise, it moves an Impact-of
 residual, which is exactly the failure mode `docs/HUMAN_BASELINE.md` warns

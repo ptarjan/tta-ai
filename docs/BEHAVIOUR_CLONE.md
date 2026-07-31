@@ -8,7 +8,7 @@ every digest at its master value.
 **Timing caveat, and it is a real one.** Every number below was measured on the
 engine as of `e9cb000`. While this branch ran, master gained
 `4037c17 Fix four scoring bugs against the BGO corpus; all four gate digests
-move`. [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#3-three-engine-bugs-all-small-none-of-them-the-score-gap) §3 sizes those bugs at single-digit culture
+move`. [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#103-three-engine-bugs-all-small-none-of-them-the-score-gap) §10.3 sizes those bugs at single-digit culture
 per position, so nothing here changes sign or ordering — the smallest gap this
 document leans on is 39 points — but the **absolute** culture figures in §3
 predate the fix and will shift by a few points if re-run. [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md)'s
@@ -129,7 +129,7 @@ tests whether that skew is the explanation for §3 (it is not).
 
 ### 1.4 Can the drift be cheaply reduced? Partly, and not the part that matters
 
-[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#1-method-replay-the-journal-ask-our-engine-diff-against-bgo) §1 records `bgo_rescore`'s per-turn agreement as
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#101-method-replay-the-journal-ask-our-engine-diff-against-bgo) §10.1 records `bgo_rescore`'s per-turn agreement as
 99.1% on turns 1-5 decaying to 58.1% at turn 16+, and calls that replayer drift.
 This replayer resyncs all four stocks from BGO every single turn, which bounds
 the *stock* half of the drift to one turn. Like for like (their buckets are
@@ -278,7 +278,7 @@ By round, held out: 0.436 (r1-4), 0.332 (r5-8), 0.269 (r9-12), 0.310 (r13-16),
 ## 3. Stage 3: does the cloned vector play better? No. It plays far worse.
 
 `tools/bgo_botmatch.py --players 2 --games 60 --seed 7000`, 2p mirror, the same
-protocol and seeds as [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5 — which this run reproduces
+protocol and seeds as [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#105-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §10.5 — which this run reproduces
 exactly on the two reference vectors (Q at 1 ply 110.48 here vs 110.5 there;
 P at 1 ply 139.80 vs 139.8), so the harness is measuring what it claims to.
 
@@ -297,7 +297,7 @@ penalty toward `DEFAULT_WEIGHTS` (§4.2); `l2 -> 0` is the pure clone.
 | `DEFAULT_WEIGHTS` | 0.190 | 102.6 [95.8,109.2] | 0.01 | 0.03 | 11.3 | 20.0 | 0.00 | 10.1 |
 | Q champion, 1 ply | 0.174 | 110.5 [104.8,116.5] | 0.28 | 1.49 | 25.4 | 22.0 | 0.00 | 8.3 |
 | P 1-ply lineage | 0.142 | **139.8** [131.6,148.3] | 0.76 | 3.12 | 22.9 | 23.2 | 0.00 | 8.8 |
-| Q champion, `quiesce:levels=1` | — | 64.7 (SCORE_VALIDATION) | 0.41 | 1.86 | 22.2 | 22.3 | 0.98 | — |
+| Q champion, `quiesce:levels=1` | — | 64.7 (docs/SCORE_AUDIT.md §10, the former SCORE_VALIDATION) | 0.41 | 1.86 | 22.2 | 22.3 | 0.98 | — |
 
 ### 3.1 Under the ship policy the ordering is different, and the clone beats the champion
 
@@ -400,7 +400,7 @@ and takes 27 civil cards against a human 34.3 and our champion's 25.4.
 And it scores 10.
 
 **At 1 ply this is direct evidence against the story that the wonder deficit and
-the impatience deficit are the score gap.** [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 reached
+the impatience deficit are the score gap.** [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2 reached
 the same place by forcing wonders on a strong bot and finding it cost 34.3 ± 7.0
 margin. This reaches it from the opposite direction: a bot that arrives at human
 wonder counts *by choice*, because it was fitted to human move choices, scores
@@ -420,7 +420,7 @@ fixable hole, not a discovery.
 
 ### 4.1 It is not a bug in the pipeline
 
-The harness reproduces [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5 to a decimal on two
+The harness reproduces [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#105-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §10.5 to a decimal on two
 reference vectors, 0 engine errors in every run, games run 21.5 rounds (not
 short), and the clone's *behaviour* is human on the axes it was fitted on.
 The vector does what it was asked to do.
@@ -554,7 +554,7 @@ metric was changed.**
    would drop into that tier as a pool opponent with no new machinery, forcing
    the champion to beat something that builds three wonders a game. It is also
    the right vector for pricing a *competent* wonder policy, which
-   [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#63-what-this-does-and-does-not-license) §6.3 names as the obvious follow-up and which the
+   [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1063-what-this-does-and-does-not-license) §10.6.3 names as the obvious follow-up and which the
    crude forcing override could not test.
 3. **The take feature gap is the highest-value fix for any future human model.**
    35% of human decisions are takes and the evaluator is at chance on them.
@@ -626,7 +626,7 @@ Everything ran `nice -n 19` alongside three live league arms (five workers) on a
   unknown direction and is the weakest joint in the whole pipeline.
 * **The military hand is imputed too.** Identities are unknown, so `hand_mil_value`
   is approximately right (the age is right) and no better.
-* **Happy faces are unverifiable** — as [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#8-limits) §8 says, the
+* **Happy faces are unverifiable** — as [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#108-limits) §10.8 says, the
   journal never prints them, so the gate cannot check that half of the tableau.
 * **The four non-linear terms are linearised** (§2.1). The shipped weight file
   prices them through the fitted `w`, not through `DEFAULT_WEIGHTS`, so a

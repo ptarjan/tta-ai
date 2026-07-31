@@ -624,7 +624,7 @@ nothing. Three tests, applied in order:
 A type that passes all three and is still seldom played is a **bad card, or a
 correct avoidance**, and is reported as such. That is the honest answer for
 several of the specific low-take-rate *cards* inside otherwise healthy types,
-and [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 — forcing wonders cost 34.3 ± 7.0 margin
+and [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2 — forcing wonders cost 34.3 ± 7.0 margin
 — is the standing reminder that low use is not automatically wrong. It is
 also why §4.0's search control comes before any of this: "seldom played" and
 "cannot see it" are both necessary, and neither is sufficient.

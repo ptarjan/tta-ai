@@ -69,9 +69,7 @@ these for the reasoning.*
 
 | doc | answers |
 |---|---|
-| [`SCORE_AUDIT.md`](SCORE_AUDIT.md) | Do all 23 card types score exactly?  Nine bugs found and fixed; the "a corpus validates only what it varies" finding. |
-| [`SCORE_VALIDATION.md`](SCORE_VALIDATION.md) | Engine scoring replayed against 1,011 human games — the method, the corpus-wide agreement rates, and what the corpus cannot decide. |
-| [`SCORE_BUGFIX.md`](SCORE_BUGFIX.md) | The first four scoring fixes (Industry, Population, Hollywood/Internet, Chaplin) and their measurement. |
+| [`SCORE_AUDIT.md`](SCORE_AUDIT.md) | Do all 23 card types score exactly?  Nine bugs found and fixed; the "a corpus validates only what it varies" finding.  §10 (merged from the former `SCORE_VALIDATION.md`): engine scoring replayed against 1,011 human games — the method, the corpus-wide agreement rates, and what the corpus cannot decide.  §11 (merged from the former `SCORE_BUGFIX.md`): the first four scoring fixes (Industry, Population, Hollywood/Internet, Chaplin) and their measurement. |
 | [`COMBAT_AUDIT.md`](COMBAT_AUDIT.md) | Wars, aggressions and pacts checked against the printed rules.  Three bugs fixed, three gaps, and the most granular rules-to-code mapping in the repo. |
 | [`WAR_OVER_TECHNOLOGY.md`](WAR_OVER_TECHNOLOGY.md) | The victor's choice between science and blue technologies — full rules citations, the implementation, and the permanent lower-bias it leaves in search. |
 | [`MILITARY_DISCARD.md`](MILITARY_DISCARD.md) | Turning the end-of-turn excess-card discard from a hardcoded FIFO into a real decision. |
@@ -140,24 +138,27 @@ read it before quoting any frozen-champion number.
   was updated in the same commit). Cross-references elsewhere that named
   either file by number (`AGGRESSION_FIX §B`, `docs/DRAIN_AB.md 1/2`) were
   repointed at the new file and section, not deleted.
-* **The bigger merges were considered and deliberately not done.** The
-  card-pricing cluster (`CARD_BLINDNESS.md`, `CARD_BLINDNESS_MILITARY.md`,
-  `CARD_PRICING_LEADERS.md`, `CARD_CENSUS.md`, `UNIT_TECH_PRICING.md`,
-  `YELLOW_TECH_PRICING.md`, `ACTION_CARD_PRICING.md`, `MODEL_CONSTANTS.md`),
-  the military/combat cluster (`COMBAT_AUDIT.md`, `WAR_OVER_TECHNOLOGY.md`,
-  `MILITARY_DISCARD.md`, `MILITARY_SEAM.md`, `PACTS_DIAGNOSIS.md`), and the
-  scoring cluster (`SCORE_AUDIT.md`, `SCORE_VALIDATION.md`, `SCORE_BUGFIX.md`)
-  all have the same shape: every one of them is cited from **code** (52
-  comments into `CARD_BLINDNESS.md` alone; `tests/test_score_audit.py`,
-  `tests/test_scoring_bugfix.py`, `tools/gate.sh` for the scoring cluster) by
-  filename **and section number**, and every candidate target doc already has
-  its own numbered `##`/`###` headings that a naive merge would collide with
-  (e.g. `SCORE_AUDIT.md` and `SCORE_VALIDATION.md` already both have their own,
-  *different*, §3.1/§3.2). Doing this safely means renumbering, then finding
-  and updating every citing line in both docs and code — the same mechanics as
-  the two merges above, just at roughly 10x the citation count and with the
-  added risk that two docs' §3.1 mean two different bugs. Left as-is rather
-  than merged carelessly; still worth doing as a dedicated pass.
+* **The scoring cluster merged into `SCORE_AUDIT.md` on 2026-07-31.** The
+  former `SCORE_VALIDATION.md` (which found the bugs, 2026-07-27) became §10,
+  its own §1-§8 renumbered §10.1-§10.8 to avoid colliding with
+  `SCORE_AUDIT.md`'s own §1-§9. The former `SCORE_BUGFIX.md` (which fixed
+  them, 2026-07-27) became §11, its own §1-§6 renumbered §11.1-§11.6.
+  Cross-references between the two merged docs (`SCORE_BUGFIX.md` cited
+  `SCORE_VALIDATION.md`'s own §2 and §3 by number, calling it "the previous
+  document") were repointed at the new §10.x/§11.x locations. Every citing
+  line, in docs and in code (`engine/effects.py`,
+  `engine/bots/board_yields.py`, `tools/gate.sh`, `tools/bgo_moves.py`,
+  `tools/free_pop_rate.py`, `tools/objective_ab.py`, and the test suite), was
+  updated in the same commit. [`CULTURE_GAP.md`](CULTURE_GAP.md) was evaluated for this
+  cluster and deliberately left out — despite the similar subject (scoring /
+  culture margin) it is a training-loop and weight-search narrative about the
+  culture-rate objective, not a scoring-correctness document like the other
+  three.
+* Still worth doing: the military/combat cluster (`COMBAT_AUDIT.md`,
+  `MILITARY_SEAM.md`, `MILITARY_DISCARD.md`, `WAR_OVER_TECHNOLOGY.md`,
+  `PACTS_DIAGNOSIS.md`) and the eight-document card-pricing cluster
+  (`CARD_BLINDNESS.md` and its seven satellites) — same shape, same
+  section-number-cited-from-code caveat, larger scale.
 * Open work goes in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).  Traps go in [`HAZARDS.md`](HAZARDS.md).  Neither is a
   place for narrative.
 * If you delete a document, `grep -rn '<NAME>.md'` across the whole repo first —

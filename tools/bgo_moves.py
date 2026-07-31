@@ -22,7 +22,7 @@ Three design decisions carry the fidelity, and all three are measurable:
     prints culture, science, food and resources -- both the per-turn production
     and the resulting stock -- on every `End turn` line.  `bgo_rescore` never
     reads the stock half, which is why its agreement decays from 99.1% on turn
-    1-5 to 58% by turn 16 (docs/SCORE_VALIDATION.md §1).  Resyncing bounds the
+    1-5 to 58% by turn 16 (docs/SCORE_AUDIT.md §10.1).  Resyncing bounds the
     drift to one turn: a turn is wrong only if something went wrong *in it*.
 
 3.  **The card row is imputed, and that is reported rather than hidden.**  The

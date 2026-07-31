@@ -2067,7 +2067,7 @@ name: a baseline that was already stale the moment it landed.
 ### 9.20 Hop 4 — the scoring bugfix (`score-bugfix`), all four arms moved and
 ### the attribution is exact
 
-[`docs/SCORE_BUGFIX.md`](SCORE_BUGFIX.md) changed four things in `engine/`, deliberately, so this
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md) changed four things in `engine/`, deliberately, so this
 is not a rebase hop (though master did move under it, to `9c8b6f5`, and all
 four were re-confirmed after rebasing -- the new `engine/bots/human/` package
 is additive and off the `perf_check` path, and moved nothing): the gate was *expected* to fail and the job was to say

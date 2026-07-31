@@ -15,7 +15,7 @@ useful part.
 [`docs/TWOP_PROFILE.md`](TWOP_PROFILE.md) measured the consequence — `var:military` needs a +3
 strength lead to fire, and the champion holds it under +3 on 94.5% of turns.
 The champion does not beat that bot, it switches it off. Then
-[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) established that the
+[`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md) established that the
 policy this produced is not one any human plays and scores less than half what
 humans score *on a scorer verified exact against BGO*.
 

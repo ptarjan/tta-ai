@@ -16,7 +16,7 @@ unblocked. See §Stage 1b.
 
 The bet (owner's instruction): replace the hand-crafted linear evaluator with a
 trained neural value net — the AlphaZero-shaped path, justified by our having a
-FAST, VALIDATED simulator ([`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md): scoring exact vs 1011 human
+FAST, VALIDATED simulator ([`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md): scoring exact vs 1011 human
 games) which is exactly what self-play needs. The linear evaluator has a proven
 ceiling — it is a linear function of ~89 features and cannot express nonlinear
 value, and it is BLIND to card identity in the row and in hands
@@ -156,7 +156,7 @@ root-determinized. Duels are 2p, seat-rotated, **n=200 each** (1200 games total,
 | **BookBot** | 0.075 ± 0.037 | 50.4 | 136.2 | −85.8 ± 7.8 |
 | `default`, **determinize OFF** (leak on) | 0.312 ± 0.064 | 51.6 | 75.4 | −23.8 ± 5.4 |
 
-Reference points (2p, [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#5-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §5): human **159.5**, quiescent
+Reference points (2p, [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#105-the-score-gap-is-a-property-of-the-vector-not-of-the-engine) §10.5): human **159.5**, quiescent
 champion **64.7**, 1-ply lineage vector **139.8**. NeuralBot's own culture is
 **~50-56** whatever it plays — the weakest of every named bot, below even the
 suppression champion's native 64.7.

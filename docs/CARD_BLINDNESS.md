@@ -76,7 +76,7 @@ counted too) the totals are **125 dropped / 129 zero-gain**.
 completeness. They are *not* a measure of how well the bot values these cards,
 because the tool cannot see where they are actually priced.
 
-> **CORRECTION, 2026-07-30 ([`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md)).** "Never asked" is true of
+> **CORRECTION, 2026-07-30 ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)).** "Never asked" is true of
 > `DEFAULT_WEIGHTS` and no longer true in general. `hand_mil_potential` walks
 > `p.hand_military` and calls `card_potential` → `_card_yields` on every card
 > in it, so any vector carrying a non-zero `hand_mil_potential` **does** ask —
@@ -93,7 +93,7 @@ because the tool cannot see where they are actually priced.
 | territory | 12 | 0 | 12 | `deferred_credit`'s auction branch |
 | aggression | 11 | 11 | 10 | quiescence: the defender's `defense` pending is drained and the quiet position scored |
 | pact | 10 | 10 | 10 | `deferred_credit`; and `count 2p: 0`, so absent from 2p entirely |
-| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md) |
+| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
 | war | 3 | 3 | 3 | `quiescent.war_value` → the engine's own `events.resolve_war` |
 | **SUBTOTAL** | **109** | **97** | **108** | |
 
@@ -259,7 +259,7 @@ This is the honest inventory:
    or bonus card. Mapping `tacticBonus` today would change nothing. See §6.
    *(Superseded for two of the twelve: `hand_mil_potential` does call it, so
    `defenseBonus`/`colonizationBonus` were mapped rather than written off —
-   [`docs/MILITARY_SEAM.md`](MILITARY_SEAM.md). `tacticBonus` stays unpriced, but for the sharper
+   [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md). `tacticBonus` stays unpriced, but for the sharper
    reason recorded in `DELIBERATELY_UNPRICED`: it is a duplicate spelling of
    the top-level `strength` the engine actually reads.)*
 6. **addressing** (19 keys) — `allPlayers`, `weakestPlayer` and friends name
@@ -335,7 +335,7 @@ Every block is on the same side and the spread (57.1–62.3) is what 400 games
 of binomial noise looks like. No single block is carrying the result.
 
 I went into this expecting a null and said so in advance, for a specific and
-good reason: [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2 measured that *forcing* wonders
+good reason: [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2 measured that *forcing* wonders
 on the strongest vector cost **34.3 ± 7.0 margin**, which is a real warning
 that wonders may be correctly avoided in the suppressive equilibrium these
 bots play. That warning is not contradicted here, and the reason is worth
@@ -667,7 +667,7 @@ doubly irrelevant when the term is switched off.
 
 This reframes the question this document started from. "The bot does not build
 wonders — are wonders modelled wrong?" The answer is no: §6.1 of
-[`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md) verified the rules exact, and §1 here has now given
+[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md) verified the rules exact, and §1 here has now given
 the evaluator the printed numbers. The bot still does not build them, because
 **a correctly priced wonder has almost no path into the decision.** It is a
 plumbing bug, not a pricing bug, and fixing it means giving wonder-in-progress
@@ -738,7 +738,7 @@ fixing the number every decision reads.
   state (`p.completed_wonders`, `p.wonder`) and recorded moves, not from the
   census tool.
 * **The rules were re-verified at `6968256`,** not assumed from
-  [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#61-the-wonder-rules-and-data-are-right) §6.1: all 16 wonders and all 53 stages match the
+  [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1061-the-wonder-rules-and-data-are-right) §10.6.1: all 16 wonders and all 53 stages match the
   data file exactly, the take surcharge is `+1 CA per completed + destroyed`
   with the Michelangelo exemption, `Impact of Wonders` scores 5/4/3/2 by age
   as printed, and `tests.test_card_pricing` + `tests.test_scoring_bugfix` pass

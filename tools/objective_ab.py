@@ -14,7 +14,7 @@ something good" (that takes the 45 hours) -- it is **"does the new objective
 rank two vectors we already know the answer for the right way round?"**
 
 We have exactly that pair, both measured against the 1,011-game human corpus
-on an engine whose scoring is validated exact (docs/SCORE_VALIDATION.md):
+on an engine whose scoring is validated exact (docs/SCORE_AUDIT.md):
 
     humans                                              159.5 final culture
     P, the 1-ply-lineage vector the league replaced      139.8

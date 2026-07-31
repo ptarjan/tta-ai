@@ -59,9 +59,9 @@ cd "$(dirname "$0")/.."
 # perturb `Impact of Industry` by +1 on a scratch worktree, confirm the gate
 # FAILs, restore, confirm it passes again.
 #
-# Cause: the four scoring fixes in docs/SCORE_BUGFIX.md.  ATTRIBUTED, not
+# Cause: the four scoring fixes in docs/SCORE_AUDIT.md.  ATTRIBUTED, not
 # assumed -- each of the four was reverted on its own and all four arms
-# re-hashed (docs/SCORE_BUGFIX.md 4):
+# re-hashed (docs/SCORE_AUDIT.md 11.4):
 #
 #   * NARROW and WIDE moved for exactly ONE of them, `Impact of Population`
 #     now counting unused workers (engine/events.py).  Reverting only that one
@@ -92,7 +92,7 @@ cd "$(dirname "$0")/.."
 
 # ---------------------------------------------------------------------------
 # Re-derived on `military-discard` (2026-07-30, commit 1c08790,
-# docs/MILITARY_DISCARD.md).  ALL EIGHT arms moved -- the first entry in this
+# docs/COMBAT_AUDIT.md).  ALL EIGHT arms moved -- the first entry in this
 # file's history for which even the two GreedyBot arms move, and that is the
 # tell that this is a change to the RULES rather than to an evaluator.
 #
@@ -211,7 +211,7 @@ cd "$(dirname "$0")/.."
 # whole derivation was redone in a quiet window rather than written down.
 # ---------------------------------------------------------------------------
 # Re-derived on `a7a5ef1` ("The victor of a War over Technology chooses",
-# 2026-07-30, docs/WAR_OVER_TECHNOLOGY.md).  SIX of the eight arms moved --
+# 2026-07-30, docs/COMBAT_AUDIT.md).  SIX of the eight arms moved --
 # NARROW, WIDE, QNARROW, QWIDE, PNARROW, PWIDE -- and WNARROW/WWIDE did not.
 #
 #     arm       old         new

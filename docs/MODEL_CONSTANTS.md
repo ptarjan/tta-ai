@@ -621,7 +621,7 @@ makes it a ground truth rather than a second model.  Against it:
 
 So the old handler **under**-priced Ocean Liners by half again, exactly as its
 own comment claimed it did ("this under-claims").  Left a shade under 1.00
-deliberately: over-pricing a wonder is the bias [`docs/SCORE_VALIDATION.md`](SCORE_VALIDATION.md#62-the-scripted-ab-forcing-wonders) §6.2
+deliberately: over-pricing a wonder is the bias [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2
 measured as costly.
 
 ### 9.4 What became a board query, and what did not

@@ -3,7 +3,7 @@
 Runs the PURE-PYTHON engine (no torch) so it can run anywhere; writes numpy
 shards for the GPU trainer.  This is the Stage-1 bootstrap data source
 (docs/NEURAL_EVAL.md): unlimited, free, and independent of the human-replay
-fidelity problem (docs/SCORE_VALIDATION.md) because the labels are the engine's
+fidelity problem (docs/SCORE_AUDIT.md) because the labels are the engine's
 own final scores.
 
 For every sampled state we emit one row PER active seat: the encoding from that

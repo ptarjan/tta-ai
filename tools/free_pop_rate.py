@@ -35,7 +35,7 @@ At `analysis/frozen/champion_2p.json`, 2p, 10 games / 410 player-turns:
 U_paid 0.132, want 0.654, gain 0.646 pts/turn, refund model 0.51-0.98 -- so
 the refund at U_paid brackets the measured value, and the far larger `want`
 is the headroom deliberately left on the table (see the handler's docstring:
-over-pricing a wonder is the specific bias docs/SCORE_VALIDATION.md 6.2
+over-pricing a wonder is the specific bias docs/SCORE_AUDIT.md 10.6.2
 warns about).
 """
 from __future__ import annotations
@@ -170,7 +170,7 @@ def main(argv=None):
     print(f"handler       {hv:.3f} eval pts/turn, at the real pop_cost")
     print(f"handler/truth {hv / truth if truth else float('inf'):.2f}x   "
           f"(1.00 = calibrated; >1 over-prices, the bias "
-          f"docs/SCORE_VALIDATION.md 6.2 measured as costly)")
+          f"docs/SCORE_AUDIT.md 10.6.2 measured as costly)")
 
     # ...and the same rates conditioned on the board facts the handler could
     # gate on, which is what turns a flat U into a query.

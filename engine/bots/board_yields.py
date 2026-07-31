@@ -667,7 +667,7 @@ def _on_build_culture(state, p, name):
 #: second through the existing `free_workers` weight at the complement
 #: `1 - FREE_POP_UTIL`, so the fix adds no new constant.
 #:
-#: Over-pricing a wonder is the specific bias docs/SCORE_VALIDATION.md 6.2
+#: Over-pricing a wonder is the specific bias docs/SCORE_AUDIT.md 10.6.2
 #: measured as costly, so the calibration is deliberately left a shade UNDER
 #: rather than a shade over.  `tools/free_pop_rate.py` prints `handler/truth`:
 #:

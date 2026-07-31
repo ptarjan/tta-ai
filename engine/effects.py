@@ -262,7 +262,7 @@ def farm_food(p):
     The twin of `mine_resources`, and it exists for the same reason: the card
     scores "the food produced by their farms", not the food RATING, which also
     carries a pact's food symbol (`International Trade Agreement`, side B).
-    `docs/SCORE_VALIDATION.md` 3.1 found and fixed that on the mine side and
+    `docs/SCORE_AUDIT.md` 10.3.1 found and fixed that on the mine side and
     left it standing here -- and the human corpus could not catch it, because
     the replayer models no pacts.  See docs/SCORE_AUDIT.md 3.1.
     """

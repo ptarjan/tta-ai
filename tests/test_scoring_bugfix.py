@@ -1,10 +1,10 @@
 """Four scoring bugs found against the 1,011-game BGO corpus, pinned.
 
-`docs/SCORE_VALIDATION.md` replayed every human journal into a real
+`docs/SCORE_AUDIT.md` replayed every human journal into a real
 `GameState` and diffed our scorer against BGO's own printed numbers.  Three
 of the fifteen `Impact of ...` rows and two of the four Age III wonder
 bonuses came out systematically wrong -- one sign, one size, one leader.
-`docs/SCORE_BUGFIX.md` records the corpus counts before and after.
+`docs/SCORE_AUDIT.md` records the corpus counts before and after.
 
 Every test below is written as a position, not as a call into the corpus
 tooling, so it keeps meaning if the journals are not on disk.  The corpus
@@ -120,7 +120,7 @@ class ImpactOfPopulation(unittest.TestCase):
     def test_discontent_workers_are_still_not_content(self):
         """Population is workers on cards + unused MINUS discontent.
 
-        Corpus caveat (`docs/SCORE_BUGFIX.md`): on the rows where our engine
+        Corpus caveat (`docs/SCORE_AUDIT.md`): on the rows where our engine
         says discontent > 0 we are still only 5/16 against BGO, and the
         alternative that ignores discontent entirely is 7/16 -- neither
         reading fits, and happy faces are the one input the journal never

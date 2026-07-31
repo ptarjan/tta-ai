@@ -7,7 +7,7 @@ null win rate is 1/players and error bars are normal-approx 95% CIs (same
 `mean_ci` as experiments/arena.py).
 
 Reports win share AND mean final culture with CIs -- culture is the dense
-statistic and is what docs/HUMAN_BASELINE.md / docs/SCORE_VALIDATION.md quote
+statistic and is what docs/HUMAN_BASELINE.md / docs/SCORE_AUDIT.md quote
 (human 159.5, quiescent champion 64.7, 1-ply lineage vector 139.8, all 2p).
 
 Usage (desktop):
