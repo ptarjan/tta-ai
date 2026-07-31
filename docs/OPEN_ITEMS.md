@@ -360,12 +360,19 @@ and each is now labelled as a prior in the source and pinned by
   than the defaults do** (both 1.88/round at 2p), so §1.4's robustness claim
   rests on a `shy`-vs-`default` contrast rather than a three-point sweep.  A
   genuinely hungrier lever would strengthen it.
-* **`hillclimb_pool.CULTURE_CENTRE = 100.0` / `CULTURE_SCALE = 120.0` flatten
-  the objective at 4p.**  Reported, not changed — it is the owner's call and
-  changing it mid-run invalidates the trained vector.  The BGO corpus mean
-  final culture is 159.5 / 176.3 / 194.6 at 2p / 3p / 4p with a 4p p90 of 298,
-  and `d(own_share)/dc` falls 5.8x from c=159.5 to c=298.  4p is the arm
-  furthest behind humans and the arm whose objective flattens soonest.
+* ~~**`hillclimb_pool.CULTURE_CENTRE = 100.0` / `CULTURE_SCALE = 120.0` flatten
+  the objective at 4p.**~~  **CLOSED 2026-07-30** — both constants are DELETED,
+  not re-fitted: the objective no longer scores absolute own culture at all
+  (`docs/LEAGUE_OBJECTIVE.md`).  The 5.8x-mispricing finding drove the
+  replacement scale to be **per player count**, which is the durable half of
+  this item.  But the follow-on inference did **not** survive measurement: the
+  human 4p final-SCORE tail (p90 298) does not imply a wide 4p LEAD
+  distribution.  Measured sd of the per-seat culture lead over the same corpus
+  is **2p 57.9 > 4p 53.6 > 3p 46.5** — not ordered by player count — so 4p gets
+  a *smaller* scale than 2p (135 vs 145).  Score level and gap size are
+  different quantities.  Whether the 4p arm nevertheless flattens is still
+  open; the evidence to look at is the post-relaunch per-game lead
+  distribution, not the final-score tail.
 
 * **GAP 4 (politics / event deck)** — partially opened by `event_scoring_margin`
   (`docs/EVENT_SEEDING.md`), which ships at weight 0.0 by design.  Its effect
@@ -431,8 +438,8 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   is suppression training, and `cult` should be heading toward the human ~159.5
   at 2p (`docs/HUMAN_BASELINE.md`), not away from it.
 * **Nothing shows the new objective TRAINS a better bot** — only that it *ranks*
-  3,802 archived decisions in better agreement with win rate (+0.934/+0.934/
-  +0.904 against +0.850/+0.861/+0.824) and that the machinery runs.
+  3,802 archived decisions in better agreement with win rate (+0.939/+0.933/
+  +0.910 against +0.850/+0.861/+0.824) and that the machinery runs.
 * **The per-game dispersion of the lead is not measured.**  It is a differential
   of two noisy quantities and is expected to be noisier per game than own
   culture was (0.419 for a margin against 0.218 for own culture, measured under
@@ -440,9 +447,14 @@ OPPONENT, centred on zero because zero is the win/lose boundary.
   margin-over-mean at 3p/4p.  That widens the accept CI.  **If the arms accept
   noticeably less often after relaunch, this is the first thing to check and
   `--block` is the dial.**
-* **`LEAD_SCALE = 120` is derived from a dispersion measured on the MEAN
-  margin**, not on the lead, and not re-derived since.  Re-derive with
-  `experiments/margin_calib.py` from the first post-relaunch logs.
+* **`LEAD_SCALE` is per player count (2p 145, 3p 115, 4p 135), derived as 2.5x
+  the sd of the per-seat culture lead over the 1,011-game HUMAN BGO corpus**
+  (`python3 tools/objective_relog.py --derive-scale`).  Deriving from an
+  external, fixed corpus is what stops it going stale the way CULTURE_CENTRE
+  did — but it means the scale is calibrated to the distribution we are aiming
+  at, not the one we are in.  Two live caveats: the 3p/4p corpus slices are
+  thin (133 and 186 games), and the 2.5 multiplier is itself an inherited
+  judgement, not independently justified.
 * **The objective's throughput did not improve** (`LEAGUE_OBJECTIVE.md` §6b is a
   null): the "rejected a better-on-winning candidate" rate stays at 16-20% and
   4p gets slightly worse.  The conservatism is set by the confidence bound and

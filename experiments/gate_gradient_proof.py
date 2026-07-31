@@ -92,12 +92,14 @@ def main(argv=None):
     ap.add_argument("--block", type=int, default=24)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--seed", type=int, default=20260726)
-    ap.add_argument("--scale", type=float, default=P.LEAD_SCALE)
+    ap.add_argument("--scale", type=float, default=None)
     ap.add_argument("--veto-z", type=float, default=1.0)
     ap.add_argument("--out", default="")
     ap.add_argument("--which", choices=("all", "mutants", "sabotage"),
                     default="all")
     args = ap.parse_args(argv)
+    if args.scale is None:
+        args.scale = P.lead_scale_for(args.players)
 
     champion = dict(DEFAULT_WEIGHTS)
     pool = P.build_pool(args.players, log=lambda *_a: None)

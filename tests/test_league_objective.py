@@ -42,7 +42,7 @@ class LeadShare(unittest.TestCase):
         above it.  This identity is also the structural check that no fitted
         centre exists: an offset c != 0 breaks it on the first sample.
         """
-        for scale in (30.0, 120.0, 500.0):
+        for scale in (30.0, 115.0, 145.0, 500.0):
             for m in (0.0, 0.5, 1.0, 7.0, 30.0, 119.0, 400.0, 1e5):
                 a = P.lead_share(m, scale)
                 b = P.lead_share(-m, scale)
@@ -106,6 +106,50 @@ class LeadShare(unittest.TestCase):
             for w, m in live:
                 self.assertEqual(m >= 0.0, w > 0.0,
                                  f"{players}p: lead {m} vs win share {w}")
+
+    def test_the_scale_is_per_player_count_and_matches_the_derivation(self):
+        """One scalar across 2p/3p/4p would re-create the deleted defect.
+
+        The scale sets where the curve saturates, i.e. where a culture point
+        stops being worth anything.  If the real dispersion differs by player
+        count, a single number prices a point differently in each arm for no
+        stated reason -- which is `CULTURE_CENTRE`'s failure one layer down.
+
+        The values are `2.5 x sd(lead)` over the 1,011-game human BGO corpus,
+        rounded to 5.  Re-derive with
+        `python3 tools/objective_relog.py --derive-scale`.
+        """
+        self.assertEqual(P.LEAD_SCALE, {2: 145.0, 3: 115.0, 4: 135.0})
+        for n, sd in ((2, 57.9), (3, 46.5), (4, 53.6)):
+            want = 2.5 * sd
+            got = P.lead_scale_for(n)
+            self.assertLess(abs(got - want), 3.0,
+                            f"{n}p scale {got} is not 2.5x the measured "
+                            f"corpus sd {sd} (={want:.1f}); re-run "
+                            f"tools/objective_relog.py --derive-scale")
+        # and the ordering is the measured one, not the intuitive one: 2p has
+        # the WIDEST lead dispersion, not 4p.  See the comment on LEAD_SCALE.
+        self.assertGreater(P.lead_scale_for(2), P.lead_scale_for(4))
+        self.assertGreater(P.lead_scale_for(4), P.lead_scale_for(3))
+
+    def test_the_scale_trades_gradient_at_the_boundary_against_blowouts(self):
+        """What a scale actually buys, and why the per-count split matters.
+
+        A NARROWER scale is steeper near lead 0 -- the slope there is exactly
+        `0.5 / scale` -- and flatter out in the tail.  A WIDER one is the
+        reverse.  So the scale is the dial between "resolve close games" and
+        "still notice a 250-point blowout", which is a judgement about the
+        dispersion of the games being scored, and the dispersion differs by
+        player count.  A single shared scale silently picks one arm's answer
+        for all three.
+        """
+        def slope(m, scale):
+            return P.lead_share(m + 0.5, scale) - P.lead_share(m - 0.5, scale)
+        narrow = P.lead_scale_for(3)          # 115, the tightest measured
+        wide = P.lead_scale_for(2)            # 145, the widest measured
+        self.assertGreater(slope(0.0, narrow), slope(0.0, wide))
+        self.assertAlmostEqual(slope(0.0, narrow), 0.5 / narrow, places=6)
+        self.assertGreater(slope(-250.0, wide), slope(-250.0, narrow))
 
     def test_the_scale_is_the_only_free_parameter(self):
         """`ScoreParams` carries two numbers: a scale and the blend weight.
@@ -173,7 +217,7 @@ class ScoreSeries(unittest.TestCase):
     def test_lead_uses_the_best_opponent_not_the_mean(self):
         """`per_game_margin` is present and deliberately NOT what is scored."""
         got = P.score_series(self.RES, "lead")
-        want = [0.5 * (1 + math.tanh(m / P.LEAD_SCALE))
+        want = [0.5 * (1 + math.tanh(m / P.FALLBACK_LEAD_SCALE))
                 if m is not None else None
                 for m in self.RES["per_game_lead"]]
         self.assertEqual(got, want)

@@ -965,32 +965,87 @@ def build_pool(players, ladder_dirs=(), tier_weights=None, past_k=6,
 # LEAD_SCALE is the one number in this objective that is a genuine CHOICE and
 # not a fact about the game.  It does not say "a typical score is X"; it says
 # "how much should a blowout count relative to a close game", which nobody can
-# read off the rules.  It is chosen from MEASURED DISPERSION rather than
-# picked: the rule is scale ~= 2.5x the per-game standard deviation of the
-# lead, which puts the observed operating band inside tanh's near-linear core
-# while still bounding the tail.  `experiments/margin_calib.py` dumps that
-# distribution; its last run measured a per-game sd of ~50 at 3p and ~45 at 4p
-# (against the mean of the defenders), so 2.5 x ~48 = 120.
+# read off the rules.
+#
+# IT IS PER PLAYER COUNT, and that is not decoration.  A single scalar across
+# 2p/3p/4p would re-create, one layer down, exactly the defect that deleting
+# CULTURE_CENTRE removes: the scale sets where the curve saturates, i.e. where
+# a culture point stops being worth anything, and if the real dispersion
+# differs by player count then one number prices a point differently in each
+# arm for no stated reason.  Under the previous objective that mispricing was
+# measured at 5.8x between 2p and 4p.
+#
+# THE DERIVATION, and why this one cannot go stale.  The scale is
+#
+#     LEAD_SCALE[n] ~= 2.5 x sd(lead) over HUMAN games at n players
+#
+# computed over the 1,011-game BGO corpus in `sources/bgo/index.tsv`, whose
+# `results` column carries every seat's final score.  For each seat in each
+# game the lead is `own score - max(other seats)` -- the exact quantity this
+# function squashes, not a proxy for it.  Re-derive in one command:
+#
+#     python3 tools/objective_relog.py --derive-scale
+#
+#     n   games  seat-games   sd(lead)   2.5 x sd   ->  LEAD_SCALE
+#     2p    692        1384       57.9      144.7          145
+#     3p    133         399       46.5      116.2          115
+#     4p    186         744       53.6      133.9          135
+#
+# **The corpus is EXTERNAL and FIXED.**  That is the whole reason to derive
+# from it rather than from our own logs.  A constant fitted to our policy's
+# observed scores steers the next policy, whose scores then move, and the
+# constant is stale -- which is the failure that CULTURE_CENTRE=100 actually
+# suffered.  Human dispersion is a property of competent play and of the game,
+# and it does not move when our bot improves.  It is the target distribution,
+# not a snapshot of where we happen to be.
+#
+# ONE RESULT WORTH READING, because it contradicts the obvious guess.  The
+# dispersion is NOT ordered by player count: 2p is the WIDEST (57.9), 3p the
+# narrowest (46.5), 4p in between (53.6).  The natural expectation -- 4p has
+# the longest right tail in final SCORE (human 4p p90 is 298 against a 2p mean
+# of 159.5), so it must need the largest scale -- does not survive contact with
+# the measurement.  Score level and lead dispersion are different quantities:
+# a table where everybody scores highly has big numbers and not necessarily
+# big GAPS.  At 2p the lead is symmetric by construction (two seats, equal and
+# opposite leads, mean exactly 0.0 as the derivation confirms); at 3p/4p most
+# seats trail the leader (mean lead -20.3 and -35.5) in a left-skewed
+# distribution that is tighter than 2p's.  Anyone tempted to raise the 4p
+# scale on a right-tail argument should re-run the derivation first.
 #
 # Getting it wrong re-creates the bug the whole dense-signal design exists to
 # fix.  Too small and the operating region sits in tanh's flat tail: at scale
 # 45 a 4p lead of -120 maps to -0.996, where a 15-point improvement moves the
 # score by 0.0004 and the gradient is dead again, just more quietly than
 # before.  Too large and it degenerates toward a linear score, where one
-# blowout carries an accept.  As the bot improves its leads move TOWARD zero,
-# i.e. toward the most linear part of the curve, so the constant does not
-# drift stale the way a fitted centre does -- that is the second thing
-# centring on the win boundary buys.
+# blowout carries an accept.  Checked against where we actually are: the
+# deepest per-opponent mean lead `margin_calib.py` has measured is about -144
+# at 4p, which at scale 135 is tanh(-1.07) -- comfortably inside the usable
+# slope, so the human-derived scale does not strand the current bot in the
+# flat tail.  And as the bot improves its leads move TOWARD zero, i.e. toward
+# the most linear part of the curve, so this constant does not drift stale the
+# way a fitted centre does -- that is the second thing centring on the win
+# boundary buys.
 #
-# Two honesty notes on the 120.  (a) the sd it is derived from was measured on
-# margin-over-MEAN; margin-over-BEST is at least as dispersed at 3p/4p, so if
-# anything 120 errs slightly toward saturation there and should be re-derived
-# with `margin_calib.py` from the first post-relaunch logs.  (b) it is
-# overridable per run with `--lead-scale` and nothing downstream assumes 120.
-LEAD_SCALE = 120.0
+# Three honesty notes.  (a) The 3p and 4p corpus slices are thin (133 and 186
+# games against 692 at 2p), so those two sds carry more sampling error than the
+# 2p one.  (b) sd is a symmetric statistic and the 3p/4p lead distributions are
+# left-skewed; sd is used because it is the statistic the "2.5x" rule is stated
+# in, not because the distribution is normal.  (c) It is overridable per run
+# with `--lead-scale` and nothing downstream assumes any particular value.
+LEAD_SCALE = {2: 145.0, 3: 115.0, 4: 135.0}
+
+#: Used only when a caller has no player count at all.  The mean of the three
+#: measured scales; there is no fourth player count in the base game, so
+#: reaching this is a caller bug rather than a supported configuration.
+FALLBACK_LEAD_SCALE = 130.0
 
 
-def lead_share(lead, scale=LEAD_SCALE):
+def lead_scale_for(players):
+    """The measured lead scale for a player count.  See `LEAD_SCALE`."""
+    return LEAD_SCALE.get(int(players), FALLBACK_LEAD_SCALE)
+
+
+def lead_share(lead, scale=FALLBACK_LEAD_SCALE):
     """Culture lead over the best opponent -> a win-share-like (0, 1).
 
     Centred on 0 BY CONSTRUCTION, not by a fitted constant: 0 is the win/lose
@@ -1048,7 +1103,7 @@ class ScoreParams:
 
     __slots__ = ("lead_scale", "alpha")
 
-    def __init__(self, lead_scale=LEAD_SCALE, alpha=DEFAULT_ALPHA):
+    def __init__(self, lead_scale=FALLBACK_LEAD_SCALE, alpha=DEFAULT_ALPHA):
         self.lead_scale = float(lead_scale)
         self.alpha = float(alpha)
 

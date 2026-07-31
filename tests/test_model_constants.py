@@ -184,13 +184,18 @@ CLASSIFIED = {
     # a typical game scores", which is the thing that went stale.  The objective
     # is now centred on the win/lose boundary, which is rule-derived and needs
     # no constant at all.  docs/LEAGUE_OBJECTIVE.md.
+    ("experiments/hillclimb_pool.py", "FALLBACK_LEAD_SCALE"): (
+        "numerical guard",
+        "only reached when a caller has no player count at all; the base game "
+        "has exactly three, so this is a caller bug, not a configuration"),
     ("experiments/hillclimb_pool.py", "LEAD_SCALE"): (
-        "training policy",
-        "tanh squash width of the league objective -- how much a blowout "
-        "counts relative to a close game, which no rule decides.  Set by the "
-        "rule 'about 2.5x the measured per-game dispersion' from "
-        "experiments/margin_calib.py; docs/LEAGUE_OBJECTIVE.md section 5.  "
-        "OWNER'S CALL -- changing it invalidates the trained vector"),
+        "measured",
+        "PER PLAYER COUNT (2p 145, 3p 115, 4p 135) = 2.5x the sd of the "
+        "per-seat culture lead over the 1,011-game human BGO corpus.  "
+        "Re-derive: python3 tools/objective_relog.py --derive-scale.  The "
+        "corpus is EXTERNAL and FIXED, so unlike the CULTURE_CENTRE it "
+        "replaced it cannot go stale as the bot improves.  "
+        "docs/LEAGUE_OBJECTIVE.md section 5"),
     ("experiments/hillclimb_pool.py", "DEFAULT_ALPHA"): (
         "training policy", "docs/LEAGUE_OBJECTIVE.md. OWNER'S CALL"),
     ("experiments/hillclimb_league.py", "HIGH_DEATH_RATE"): (
@@ -327,7 +332,7 @@ class ConstantsAreClassified(unittest.TestCase):
         from engine.bots import neural_net
         import experiments.hillclimb_pool as P
         self.assertFalse(hasattr(neural_net, "MARGIN_SCALE"))
-        self.assertNotEqual(neural_net.MARGIN_NORM, P.LEAD_SCALE)
+        self.assertNotIn(neural_net.MARGIN_NORM, set(P.LEAD_SCALE.values()))
 
 
 class LatenessIsBounded(unittest.TestCase):

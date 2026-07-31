@@ -148,7 +148,7 @@ def _tanh(scale):
     return f
 
 
-def _reach_cap(cap, scale=P.LEAD_SCALE):
+def _reach_cap(cap, scale=P.FALLBACK_LEAD_SCALE):
     """`lead_share` on a differential floored at `-cap`.
 
     Below `cap` culture points behind, all losses score the same: the game was

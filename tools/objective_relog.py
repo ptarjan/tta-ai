@@ -42,7 +42,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from experiments.hillclimb_pool import lead_share, DEFAULT_ALPHA  # noqa: E402
+from experiments.hillclimb_pool import (lead_share, lead_scale_for,  # noqa: E402
+                                        DEFAULT_ALPHA, LEAD_SCALE)
 
 TTA = os.environ.get("TTA_ROOT", "/Users/pt/tta-ai")
 
@@ -169,7 +170,9 @@ def evaluations(players):
                     continue
                 if {e.get("metric") for e in per.values()} != {"blend"}:
                     continue          # only the objective being replaced
-                out.append({"logged_edge": t.get("edge"), "logged_lo": t.get("lo"),
+                out.append({"logged_edge": t.get("edge"),
+                            "logged_lo": t.get("lo"),
+                            "scale": lead_scale_for(players),
                             "veto": t.get("veto") or [], "per": per})
     return out
 
@@ -195,7 +198,8 @@ def score(rec, alpha, kind):
             m, cm = e.get("margin"), e.get("champ_margin")
             if m is None or cm is None:
                 continue
-            cul = lead_share(m) - lead_share(cm)
+            sc = rec["scale"]
+            cul = lead_share(m, sc) - lead_share(cm, sc)
         pairs.append(((1.0 - alpha) * cul + alpha * (wr - cr), w))
     return pairs
 
@@ -206,7 +210,62 @@ def win_diff(rec):
     return None if a is None or b is None else a - b
 
 
+def derive_scale():
+    """Re-derive `hillclimb_pool.LEAD_SCALE` from the human BGO corpus.
+
+    For every seat of every completed human game, the culture lead is
+    `own final score - max(other seats' final scores)` -- the exact quantity
+    `lead_share` squashes, taken from `sources/bgo/index.tsv`'s `results`
+    column.  The rule is `scale ~= 2.5 x sd(lead)`, per player count.
+
+    The corpus is EXTERNAL and FIXED, which is the entire point: a scale
+    derived from our own logs would go stale every time the bot improved,
+    which is the failure that killed CULTURE_CENTRE.
+    """
+    import csv
+    import statistics
+    path = os.path.join(TTA, "sources", "bgo", "index.tsv")
+    leads = {}
+    games = {}
+    for r in csv.DictReader(open(path), delimiter="\t"):
+        try:
+            n = int(r["players"])
+        except (TypeError, ValueError):
+            continue
+        sc = []
+        for part in (r.get("results") or "").split("|"):
+            if ":" not in part:
+                continue
+            try:
+                sc.append(float(part.rsplit(":", 1)[1]))
+            except ValueError:
+                pass
+        if n < 2 or len(sc) != n:
+            continue                      # unfinished or unparsable
+        games[n] = games.get(n, 0) + 1
+        for seat in range(n):
+            best_other = max(sc[i] for i in range(n) if i != seat)
+            leads.setdefault(n, []).append(sc[seat] - best_other)
+
+    print("# LEAD_SCALE re-derived from the human BGO corpus "
+          "(external and fixed -- it does not move when our bot improves)")
+    print(f"# {'n':>3} {'games':>6} {'seats':>6} {'sd':>8} {'mean':>8} "
+          f"{'p10':>8} {'p90':>8} {'2.5*sd':>8} {'in code':>8}")
+    for n in sorted(leads):
+        v = sorted(leads[n])
+        sd = statistics.pstdev(v)
+        print(f"  {n}p {games[n]:6d} {len(v):6d} {sd:8.1f} "
+              f"{statistics.mean(v):+8.1f} {v[len(v) // 10]:+8.1f} "
+              f"{v[9 * len(v) // 10]:+8.1f} {2.5 * sd:8.1f} "
+              f"{lead_scale_for(n):8.1f}")
+    print("\n# The dispersion is NOT ordered by player count -- 2p is the")
+    print("# widest.  Score LEVEL and lead DISPERSION are different things.")
+    print(f"# LEAD_SCALE in code: {LEAD_SCALE}")
+
+
 def main():
+    if "--derive-scale" in sys.argv[1:]:
+        return derive_scale()
     a = DEFAULT_ALPHA
     print(f"# Archived league evaluations re-scored under the new objective")
     print(f"\nalpha = {a} for both objectives.  2p is EXACT (one defender, so "

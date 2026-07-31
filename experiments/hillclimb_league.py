@@ -876,7 +876,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         ablate_games=24, ablate_mode="zero", max_gens=0, legacy_ladders=True,
         hall_dirs=(), human_bots=("all",),
         weight_guard="clamp", objective="blend",
-        lead_scale=P.LEAD_SCALE, alpha=P.DEFAULT_ALPHA,
+        lead_scale=None, alpha=P.DEFAULT_ALPHA,
         candidate_bot=None, sat_lo=P.SAT_LO, sat_hi=P.SAT_HI,
         sat_floor=P.SAT_FLOOR, past_recent=True, stop_file=None, log=print):
     global CANDIDATE_ARCH
@@ -957,6 +957,11 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     # else on another; mixing units inside one weighted aggregate makes both
     # the aggregate and the tier weights meaningless, and that mode is gone.
     pool_metric = objective
+    # The lead scale is PER PLAYER COUNT and derived from human-corpus
+    # dispersion (see `P.LEAD_SCALE`).  `None` means "use the measured one for
+    # this arm", which is what every launcher passes; `--lead-scale` overrides.
+    if lead_scale is None:
+        lead_scale = P.lead_scale_for(players)
     params = P.ScoreParams(lead_scale=lead_scale, alpha=alpha)
 
     def win_rates():
@@ -1338,14 +1343,18 @@ def main(argv=None):
                          "tanh blurs the win/lose step that really exists at "
                          "lead 0, and this term puts a fraction of it back.  "
                          "0 == --objective lead, 1 == --objective winshare")
-    ap.add_argument("--lead-scale", type=float, default=P.LEAD_SCALE,
-                    help="culture points per unit of lead score (default "
-                         "%(default)g).  The ONE genuine choice in the "
-                         "objective: it sets how much a blowout counts "
-                         "relative to a close game, which no rule decides.  "
-                         "Derived from measured dispersion (~2.5x the "
-                         "per-game lead sd) rather than picked -- re-derive "
-                         "with experiments/margin_calib.py")
+    ap.add_argument("--lead-scale", type=float, default=None,
+                    help="culture points per unit of lead score.  The ONE "
+                         "genuine choice in the objective: it sets how much a "
+                         "blowout counts relative to a close game, which no "
+                         "rule decides.  Defaults to the value MEASURED FOR "
+                         "THIS PLAYER COUNT (2p 145, 3p 115, 4p 135) as 2.5x "
+                         "the sd of the per-seat culture lead over the 1,011 "
+                         "human BGO games -- an EXTERNAL, FIXED corpus, so it "
+                         "cannot go stale as the bot improves.  Re-derive with "
+                         "`python3 tools/objective_relog.py --derive-scale`; "
+                         "see hillclimb_pool.LEAD_SCALE and "
+                         "docs/LEAGUE_OBJECTIVE.md section 5")
     ap.add_argument("--with-quiescent", action="store_true",
                     help="add the QuiescentBot search opponent (~1.2x cost)")
     ap.add_argument("--candidate-bot", default="weighted",

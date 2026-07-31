@@ -21,7 +21,7 @@ win/lose boundary and that is a fact about Through the Ages rather than a number
 anyone has to fit. **Re-centring would have replaced a stale guess with a fresh
 guess. Switching to a differential deletes the parameter.** Re-scoring 3,802
 archived candidate evaluations offline, the new objective's ranking correlates
-with win rate at **+0.934 / +0.934 / +0.904** (2p/3p/4p) against the old
+with win rate at **+0.939 / +0.933 / +0.910** (2p/3p/4p) against the old
 objective's **+0.850 / +0.861 / +0.824**. It does **not** measurably improve
 accept/reject throughput (§6b is a null), and it carries a real risk that §7
 quantifies and does not soften.
@@ -34,7 +34,7 @@ The table the rest of this document exists to justify.
 |---|---|---|---|
 | the centre of the culture curve | **rule-derived** | **0** | `lead >= 0` iff you won or tied. `arena._play` computes the win share from `max(sc)` and the lead from `max(others)` — the same maximum over the same list, three lines apart. Pinned against the engine by `LeadShare::test_zero_lead_is_exactly_the_win_boundary`. |
 | which opponent the lead is against | **rule-derived** | the **best** one | "most culture at the table" is a statement about the maximum, not the mean. §4. |
-| `LEAD_SCALE` | **choice**, informed by measurement | 120.0 | How much a blowout counts relative to a close game. No rule decides it. Set by the rule "≈2.5× the measured per-game dispersion", from `experiments/margin_calib.py` (sd ≈ 50 at 3p, ≈ 45 at 4p). §5. |
+| `LEAD_SCALE` | **measured**, per player count | **{2: 145, 3: 115, 4: 135}** | How much a blowout counts relative to a close game. No rule decides it, so the *rule* is stated instead: 2.5× the sd of the per-seat culture lead over the 1,011-game human BGO corpus — external and fixed, so it cannot go stale as the bot improves. Re-derive: `python3 tools/objective_relog.py --derive-scale`. §5. |
 | `DEFAULT_ALPHA` | **choice**, unchanged | 0.15 | Weight on the win-share tiebreak. §3. |
 | ~~`CULTURE_CENTRE`~~ | **deleted** | — | Was 100.0, fitted to observed scores. This is the whole point. §2. |
 | ~~`CULTURE_SCALE`~~ | **deleted** | — | Only existed to scale a quantity that no longer exists. |
@@ -45,8 +45,10 @@ without someone noticing.
 
 ```
 lead          = own final culture - the BEST opponent's final culture
-lead_share(m) = 0.5 * (1 + tanh(m / LEAD_SCALE))            LEAD_SCALE = 120
+lead_share(m) = 0.5 * (1 + tanh(m / LEAD_SCALE[players]))
 score         = (1 - alpha) * lead_share + alpha * win_share    alpha = 0.15
+
+LEAD_SCALE = {2: 145.0, 3: 115.0, 4: 135.0}
 ```
 
 ## 2. Why the old centre had to go, and why re-fitting it was the wrong fix
@@ -150,38 +152,114 @@ on the watch list in §7b and in §9.
 over the best. The two side by side are how an operator reads "am I winning by
 out-scoring the leader or by flattening the table".
 
-## 5. `LEAD_SCALE` is the one genuine choice, and the code says so
+## 5. `LEAD_SCALE`: the one free choice, measured per player count
 
 A scale is not a factual claim. It answers "how much should a blowout count
-relative to a close game", which nobody can read off the rules. The comment in
-`hillclimb_pool.py` says exactly that, in those terms.
+relative to a close game", which nobody can read off the rules. What a scale
+*does* is trade gradient at the win boundary against gradient in blowouts: the
+slope at lead 0 is exactly `0.5 / scale`, so a narrower scale resolves close
+games better and a wider one still notices a 250-point rout.
+`test_the_scale_trades_gradient_at_the_boundary_against_blowouts` pins both
+halves. (That test caught a wrong claim during this work — the first version
+asserted the trade ran the other way at a lead of −100, which is near the
+crossover point where the two scales are nearly equal.)
 
-It is nevertheless **derived from measured dispersion rather than picked**. The
-rule: `scale ≈ 2.5 × the per-game sd of the lead`, which keeps the observed
-operating band inside tanh's near-linear core while still bounding the tail.
-`experiments/margin_calib.py`'s last run measured a per-game sd of ≈50 at 3p and
-≈45 at 4p, and 2.5 × 48 = 120.
+Since no rule fixes it, the **rule for choosing it** is stated instead, and the
+choice is **per player count**:
 
-Why the rule and not a smaller number: too small and the operating region sits
-in the flat tail — at scale 45 a 4p lead of −120 maps to −0.996, where a
+```
+LEAD_SCALE[n] ≈ 2.5 × sd(lead) over human games at n players
+```
+
+**Why per player count.** A single scalar across 2p/3p/4p re-creates, one layer
+down, exactly the defect that deleting `CULTURE_CENTRE` removes. The scale sets
+where the curve saturates, i.e. where a culture point stops being worth
+anything. If the real dispersion differs by player count, one number prices a
+culture point differently in each arm for no stated reason. Under the previous
+objective that mispricing was measured at **5.8× between 2p and 4p**.
+
+**The derivation, and why this one cannot go stale.** Computed over the
+1,011-game BGO corpus (`sources/bgo/index.tsv`, whose `results` column carries
+every seat's final score). For each seat of each game the lead is `own score −
+max(other seats)` — **the exact quantity `lead_share` squashes, not a proxy for
+it.** Re-derive in one command:
+
+```
+python3 tools/objective_relog.py --derive-scale
+```
+
+| n | games | seat-games | sd(lead) | mean | p10 | p90 | 2.5×sd | **in code** |
+|---|---|---|---|---|---|---|---|---|
+| 2p | 692 | 1384 | 57.9 | +0.0 | −69 | +69 | 144.7 | **145** |
+| 3p | 133 | 399 | 46.5 | −20.3 | −82 | +36 | 116.2 | **115** |
+| 4p | 186 | 744 | 53.6 | −35.5 | −103 | +29 | 133.9 | **135** |
+
+**The corpus is EXTERNAL and FIXED, and that is the whole reason to derive from
+it rather than from our own logs.** A constant fitted to our policy's observed
+scores steers the next policy, whose scores then move, and the constant is
+stale — which is the failure `CULTURE_CENTRE = 100` actually suffered. Human
+dispersion is a property of competent play and of the game; it does not move
+when our bot improves. It is the target distribution, not a snapshot of where
+we happen to be.
+
+### 5a. The measurement contradicts the obvious guess about 4p
+
+**The dispersion is not ordered by player count.** 2p is the *widest* (57.9), 3p
+the narrowest (46.5), 4p in between (53.6).
+
+The natural expectation is the opposite: 4p has by far the longest right tail in
+final *score* (human 4p p90 = 298 against a 2p mean of 159.5), and 4p is the arm
+furthest behind humans, so surely 4p needs the largest scale and is the one at
+most risk of flattening soonest. **That inference does not survive the
+measurement, because score level and lead dispersion are different quantities:**
+a table where everybody scores highly has big numbers and not necessarily big
+gaps.
+
+The mechanism is visible in the table. At 2p the lead is symmetric by
+construction — two seats, equal and opposite leads, mean exactly 0.0 — and both
+tails are live (p10 −69, p90 +69). At 3p/4p most seats trail the leader (mean
+lead −20.3 and −35.5) in a **left-skewed** distribution that is tighter overall:
+4p's p90 is only +29, because only one seat in four can be ahead at all.
+
+So 4p gets a *smaller* scale than 2p, not a larger one. **Anyone tempted to
+raise the 4p scale on a right-tail argument should re-run the derivation
+first.** I am not claiming the 4p arm has no flattening problem — it is the arm
+furthest behind and its accept CI is the widest — only that the *lead
+dispersion* does not support fixing it here. If 4p flattens, the evidence to
+look for is in the post-relaunch per-game lead distribution (§7b), not in the
+final-score tail.
+
+### 5b. The scale does not strand the current bot in the flat tail
+
+Checked, because too small a scale re-creates the bug the whole dense-signal
+design exists to fix. At scale 45 a 4p lead of −120 maps to −0.996, where a
 15-point improvement moves the score by 0.0004 and the gradient is dead again,
-just more quietly than before. Too large and it degenerates toward linear, where
-one blowout carries an accept. **Bounding one game's influence is the job the
-squash is really doing and it is the thing that must not be traded away**;
-`test_bounded_on_adversarial_inputs` and
+just more quietly than before. The deepest per-opponent mean lead
+`experiments/margin_calib.py` has measured is about −144 at 4p, which at scale
+135 is `tanh(−1.07)` — comfortably inside the usable slope. And as the bot
+improves its leads move **toward zero**, i.e. toward the most linear part of the
+curve, so unlike a fitted centre this constant does not drift stale. That is the
+second thing centring on the win boundary buys.
+
+**Bounding one game's influence is the job the squash is really doing and is the
+thing that must not be traded away**; `test_bounded_on_adversarial_inputs` and
 `test_blend_is_bounded_on_adversarial_series` hold the score in [0,1] against
 ±1e300 and ±inf.
 
-Two honesty notes on the 120:
+### 5c. Three honesty notes on these numbers
 
-1. The sd it is derived from was measured on margin-over-**mean**.
-   Margin-over-best is at least as dispersed at 3p/4p, so if anything 120 errs
-   toward saturation there. **Re-derive with `experiments/margin_calib.py` from
-   the first post-relaunch logs.**
-2. Unlike a fitted centre, it does not drift stale in a dangerous direction: as
-   the bot improves its leads move **toward zero**, i.e. toward the most linear
-   part of the curve. That is the second thing centring on the win boundary
-   buys.
+1. **The 3p and 4p corpus slices are thin** — 133 and 186 games against 692 at
+   2p — so those two sds carry more sampling error than the 2p one.
+2. **`sd` is a symmetric statistic and the 3p/4p lead distributions are
+   left-skewed.** It is used because it is the statistic the "2.5×" rule is
+   stated in, not because the distribution is normal. A skew-aware dispersion
+   measure would give different numbers and nobody has computed one.
+3. **The 2.5 multiplier is itself the judgement.** The corpus fixes the
+   dispersion; 2.5 is the choice of how many sd of lead should fit inside
+   tanh's near-linear core. It is inherited from the previous scale's
+   derivation and is not independently justified here.
+
+Overridable per run with `--lead-scale`, which then applies to that arm only.
 
 ## 6. Does it rank the decisions we actually faced better? Offline, n=3,802
 
@@ -210,9 +288,9 @@ Spearman against the candidate's win-rate difference from the champion:
 
 | | n | OLD (logged) | OLD (recomputed) | **NEW** | delta |
 |---|---|---|---|---|---|
-| 2p (exact) | 1116 | +0.850 | +0.843 | **+0.934** | **+0.091** |
-| 3p (proxy) | 1621 | +0.861 | +0.854 | **+0.934** | **+0.080** |
-| 4p (proxy) | 533 | +0.824 | +0.816 | **+0.904** | **+0.088** |
+| 2p (exact) | 1116 | +0.850 | +0.843 | **+0.939** | **+0.096** |
+| 3p (proxy) | 1621 | +0.861 | +0.854 | **+0.933** | **+0.079** |
+| 4p (proxy) | 533 | +0.824 | +0.816 | **+0.910** | **+0.094** |
 
 The "OLD (logged)" column reproduces the pre-existing read-only analysis
 exactly, which is the check that the harness is reading the right thing.
@@ -232,7 +310,7 @@ rate without raising false accepts. It does not, materially:
 | | accepted but WORSE on winning | | rejected but BETTER on winning | |
 |---|---|---|---|---|
 | | OLD | NEW | OLD | NEW |
-| 2p | 0.7% | **0.2%** | 20.8% | **20.1%** |
+| 2p | 0.7% | **0.2%** | 20.8% | **20.4%** |
 | 3p | 0.7% | 0.9% | 16.4% | **15.7%** |
 | 4p | 0.4% | 0.4% | 18.7% | 19.3% |
 
@@ -390,8 +468,12 @@ never beats, saturated at 0.94-0.97 against `book`, and 2.8× noisier per game a
 * **§7a is an estimate on the wrong population** and is partly a selection
   artefact, as its own noise control shows. It is sized to be alarming rather
   than precise.
-* **`LEAD_SCALE = 120` is derived from a dispersion measured on the *mean*
-  margin** and has not been re-derived for the lead.
+* **`LEAD_SCALE` is derived from HUMAN dispersion, not ours.** That is
+  deliberate (§5) and it means the scale is calibrated to the distribution we
+  are aiming at rather than the one we are in. If the bot's own lead
+  distribution turns out far wider than the corpus's, the operating band could
+  sit further into the tail than §5b's check suggests — that check used a
+  single measured extreme, not a distribution.
 * **The claim that the 2026-07-27 diagnosis was incomplete is an argument from
   that document's own §3**, not a fresh experiment. §7 states it with the
   evidence attached so a reader can disagree.
