@@ -66,7 +66,8 @@ GROUPS = {
                "card_rate_credit", "unit_strength_credit", "territory_credit",
                "bonus_card_credit", "unit_tech_credit",
                "tech_board_credit", "action_board_credit", "free_action_credit",
-               "gov_board_credit", "restricted_resource_credit"),
+               "gov_board_credit", "build_fresh_credit",
+               "restricted_resource_credit"),
     # board-aware card pricing (engine/bots/board_yields.py): what a leader
     # or a government is worth on THIS board, by swapping it in and diffing
     # `effects.compute`.  Its own group for the same reason as "priced" --

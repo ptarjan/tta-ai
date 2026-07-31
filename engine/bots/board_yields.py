@@ -928,9 +928,10 @@ def unit_upgrade(name, state, idx):
         # a unit is built, and building one is its own decision with its own
         # price -- so this is a science cost and nothing else, which is the
         # honest answer rather than a floor.  It is also why an artillery card
-        # reads thin to a player who has never developed artillery: that is
-        # docs/OPEN_ITEMS.md section 2 item 21 ("nothing prices the build one
-        # fresh plan"), not this function being wrong.
+        # reads thin to a player who has never developed artillery -- and that
+        # OTHER plan is `build_fresh` below, which `weighted.tech_value` takes
+        # the max against; this function is only ever the upgrade half of the
+        # argmax (docs/OPEN_ITEMS.md section 2 items 21 and 28).
         gained = res = 0.0
     out = (gained, float(sci), res)
     if len(_UNIT_CACHE) >= _UNIT_CACHE_MAX:
@@ -1068,16 +1069,204 @@ def tech_upgrade(name, state, idx):
             res = float(sum(k * A.upgrade_cost(state, p, lo, name)
                             for lo, k in held))
         else:
-            # Nobody to move.  Developing the technology is legal and buys no
-            # production at all until a building is built on it, and building
-            # one is its own decision with its own price -- so the staffing
-            # half is empty, which is the honest answer rather than a floor.
-            # `unit_upgrade` takes the identical position.
+            # Nobody to move.  Developing the technology is legal and buys
+            # no production at all until a building is built on it -- so the
+            # UPGRADE half is empty, which is the honest answer rather than a
+            # floor.  `unit_upgrade` takes the identical position, and the
+            # build is priced by `build_fresh` below rather than by pretending
+            # here that a fresh worker appears for free.
             staff, res = (), 0.0
     out = (staff, tuple(dev), float(sci), float(res))
     if len(_TECH_CACHE) >= _TECH_CACHE_MAX:
         _TECH_CACHE.clear()
     _TECH_CACHE[key] = out
+    return out
+
+
+# ------------------------------------------------- the OTHER staffing plan
+#
+# `tech_upgrade` above answers exactly one question -- "develop it and upgrade
+# the workers I already have" -- and for three cards in the deck the answer is
+# structurally always "nothing".  Knights, Cannon and Air Forces are the
+# LOWEST card of their own type in the whole base game, so `_upgradable_onto`
+# is empty for them on every board that will ever exist
+# (docs/OPEN_ITEMS.md section 2 item 28); the same is true of the FIRST
+# laboratory, the FIRST theatre and any other technology of a type the player
+# has never staffed.  For all of those the only route into play is
+# `("build", name)`, and nothing priced it: docs/OPEN_ITEMS.md section 2
+# item 21, "nothing prices the build one fresh plan".
+#
+# THE MOVE IS THE ENGINE'S, read off `engine/actions.py:_action_moves` rather
+# than described:
+#
+#     if p.workers_free > 0:                  <- the gate, and the whole
+#         cost = effects.build_cost(...)         reason this is a BOARD
+#         if cost is None: continue              question and not a table
+#         if typ in C.UNIT_TYPES:  needs a military action
+#         else:                    needs a civil action, and an urban type
+#                                  needs urban_workers[typ] < urban_limit
+#         moves.append(("build", name))
+#
+# and `do_build` is what it costs: `p.resources -= build_cost_net`,
+# `p.techs[name].workers += 1`, **`p.workers_free -= 1`**.
+#
+# FOUR FEATURES MOVE THAT NO `Stats` DIFF CAN SEE, which is why this needs its
+# own triples rather than `_delta_triples` alone.  `weighted.features` reads
+# `free_workers`, `workers`, `<class>_workers` and `uprising` straight off the
+# player, not off `Stats`, and an UPGRADE moves none of them (a worker steps
+# from one technology to another, so every one of those totals is unchanged).
+# A BUILD moves all four, and one of them is a cliff:
+#
+#     free_workers   -1   (0.4 in DEFAULT_WEIGHTS)
+#     workers        +1   (1.4)
+#     <class>_workers +1  (prod 0.3 / urban 0.5 / unit 0.1)
+#     uprising       0 or 1 -- `discontent > p.workers_free`, weighted -12.0
+#
+# The `uprising` term is the reason this cannot be a constant: staffing your
+# LAST free worker while you are in discontent is a catastrophe the rules
+# already describe (RULES_SPEC 6.3: "if discontent workers > unused workers,
+# skip the entire Production Phase" -- score, corruption, food and resources
+# all of it, and "unused workers do not reduce discontent workers; they only
+# prevent the uprising", which is exactly the worker this plan spends), and it is
+# exactly the case where "build one fresh" must NOT be priced as a gain.
+# `features()` computes it as a threshold on `p.workers_free`, so it is
+# recomputed here the same way, off the same two numbers.
+#
+# ONE WORKER, and that is a derivation rather than caution.  `unit_upgrade`
+# moves ALL eligible workers because the upgrade trade is LINEAR in the count
+# and a linear optimum is at an endpoint.  The build trade is not linear, in
+# three separate rule-level ways: `p.mil_discount` is a per-turn POOL that
+# `_spend_mil_discount` draws down, so the second unit of a turn costs more
+# than the first; `uprising` is a threshold and `happy_margin` is clamped at
+# 3, so the k-th worker is not worth the k-th part of k workers; and an urban
+# type is capped at `Stats.urban_limit`.  With the trade non-linear and
+# concave the endpoint argument does not license "all of them", so what is
+# priced is the FIRST build -- the cheapest complete plan that puts the
+# technology to work, and the exact one item 21 names.  It is a lower bound on
+# the plan, stated as one.
+#
+# WHAT IS DELIBERATELY NOT CHARGED: the action.  A build costs one military
+# action (unit) or one civil action (everything else) -- and so does an
+# upgrade, exactly one per worker moved, and `tech_upgrade`'s caller does not
+# charge that either.  Charging it on one of two competing plans and not on
+# the other would bias the argmax between them for no reason in the rules.
+# The omission is symmetric and is worth `w["ma_left"]` / `w["ca_left"]`,
+# 0.05 apiece in DEFAULT_WEIGHTS.  Nor is the plan gated on being AFFORDABLE
+# today: `unit_upgrade` charges `upgrade_cost` whether or not the treasury can
+# cover it, and a card whose price flickered with the resource pool would be
+# unlearnable.  The resources are a COST here, at the same
+# `resource_stock` marginal, not a legality test.
+
+_BUILD_CACHE = {}
+_BUILD_CACHE_MAX = 200_000
+
+# type -> the worker-count feature `weighted.features` adds it to.  Read off
+# that loop: unit types feed `unit_workers`, urban types `urban_workers`,
+# production types `prod_workers`.  A `special-tech` has no `buildCost` at all
+# and never reaches this table.
+_WORKER_CLASS = {}
+_WORKER_CLASS.update({t: "unit_workers" for t in C.UNIT_TYPES})
+_WORKER_CLASS.update({t: "urban_workers" for t in C.URBAN_TYPES})
+_WORKER_CLASS.update({t: "prod_workers" for t in C.PRODUCTION_TYPES})
+
+
+def _with_built(state, p, name, workers=1):
+    """`effects.compute` with `name` developed and `workers` fresh workers on
+    it.
+
+    The same `try/finally` discipline and the same rebind-don't-mutate rule as
+    `_with_tech`, one plan over: `p.techs` is replaced by a new dict so a
+    journal watching the original mapping never sees a write.  `p.workers_free`
+    is NOT touched -- `effects.compute` does not read it (`stats_key` names
+    every field it does, and that is not one of them); the free-worker side of
+    the trade is priced in `_build_triples`, which is where `features()` reads
+    it from too.
+    """
+    old = p.techs
+    new = dict(old)
+    new[name] = TechCard(name, workers=workers)
+    p.techs = new
+    try:
+        return effects.compute(state, p)
+    finally:
+        p.techs = old
+
+
+def _build_triples(p, typ, before, after, workers):
+    """The four features a build moves that a `Stats` diff cannot see.
+
+    `weighted.features` reads all four off the player rather than off `Stats`,
+    so they have to be emitted here or they are priced at nothing.  Every one
+    of them is that function's own arithmetic, repeated rather than
+    approximated -- including `uprising`, which is a THRESHOLD and therefore
+    the one term that can make this whole plan a loss.
+    """
+    out = [("free_workers", -float(workers), _GAIN),
+           ("workers", float(workers), _GAIN)]
+    cls = _WORKER_CLASS.get(typ)
+    if cls is not None:
+        out.append((cls, float(workers), _GAIN))
+    # `features()`: margin = s.happy - happy_required(yellow_bank);
+    #               discontent = max(0, -margin);
+    #               uprising = 1.0 if discontent > p.workers_free else 0.0
+    req = economy.happy_required(p.yellow_bank)
+    was = 1.0 if max(0, req - before.happy) > p.workers_free else 0.0
+    now = 1.0 if max(0, req - after.happy) > p.workers_free - workers else 0.0
+    if now != was:
+        out.append(("uprising", now - was, _GAIN))
+    return out
+
+
+def build_fresh(name, state, idx):
+    """(triples, resource cost) for "develop `name`, then BUILD one worker".
+
+    `((), 0.0)` whenever the engine would not offer the build: no free worker,
+    no `buildCost` on the card (every leader, government, wonder, action card
+    and special technology), or an urban type already at its `urban_limit`.
+    Those are `_action_moves`' own three tests, not a restatement of them.
+
+    Memoised like its two siblings, on a key that carries the three extra
+    player fields this plan reads and `effects.stats_key` does not:
+    `workers_free` (the gate, and one side of `uprising`'s threshold),
+    `yellow_bank` (the other side -- `economy.happy_required` reads it) and
+    `mil_discount` (the per-turn pool `actions.build_cost_net` spends against
+    a unit).  All three were found by a test rather than by inspection: two
+    boards differing only in `yellow_bank` collide on `effects.stats_key`,
+    which names every field `effects.compute` reads and nothing more.
+    """
+    typ = _DB.type_by_name.get(name)
+    if typ not in LEVELLED_TYPES:
+        return (), 0.0
+    p = state.players[idx]
+    if name in p.techs or p.workers_free <= 0:
+        return (), 0.0
+    res = A.build_cost_net(state, p, name)
+    if res is None:
+        return (), 0.0
+    key = (name, effects.stats_key(state, p), p.workers_free, p.yellow_bank,
+           p.mil_discount)
+    hit = _BUILD_CACHE.get(key)
+    if hit is not None:
+        return hit
+    before = effects.state_stats(state, p)
+    if typ in C.URBAN_TYPES:
+        # `_action_moves`: an urban build is illegal once this type already
+        # stands at the urban limit.  Counted over the type, exactly as it is
+        # there -- the limit is per urban TYPE, not per technology card.
+        type_of = _DB.type_by_name
+        have = sum(t.workers for n, t in p.techs.items()
+                   if type_of.get(n) == typ)
+        if have >= before.urban_limit:
+            out = ((), 0.0)
+            _BUILD_CACHE[key] = out
+            return out
+    after = _with_built(state, p, name)
+    out = (_merge(list(_delta_triples(before, after, p))
+                  + _build_triples(p, typ, before, after, 1)),
+           float(res))
+    if len(_BUILD_CACHE) >= _BUILD_CACHE_MAX:
+        _BUILD_CACHE.clear()
+    _BUILD_CACHE[key] = out
     return out
 
 

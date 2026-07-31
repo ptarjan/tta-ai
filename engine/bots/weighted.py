@@ -2027,6 +2027,30 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
         net += amt * feature_marginal(k, state, idx, w, late)
     if net < 0.0:
         net = 0.0
+    # ...and the OTHER staffing plan, which is the same argmax one branch
+    # wider.  `board_yields.build_fresh` answers "develop it and build ONE
+    # fresh worker on it" -- the only route into play for a technology of a
+    # type this player has never staffed, and the only route that will ever
+    # exist for Knights, Cannon and Air Forces, which are the lowest card of
+    # their own type in the deck (docs/OPEN_ITEMS.md section 2 items 21/28).
+    # A `max`, not a sum: the two plans compete for the same turn, and taking
+    # the better of them is a lower bound on doing both.  The develop half
+    # below is outside the max because it is paid on either plan.
+    # The fallback is 0.0 and not 1.0, unlike its four siblings, because the
+    # SHIPPED default is 0.0 (see `BASE_WEIGHTS`): "absent from the vector"
+    # and "present at the default" have to mean the same thing, or a caller
+    # passing a bare dict -- `analysis/`, an old on-disk vector read without
+    # `load_weights` -- would silently switch a measured-worse branch ON.
+    build_credit = w.get("build_fresh_credit", 0.0)
+    if build_credit:
+        b_triples, b_res = _BY.build_fresh(name, state, idx)
+        if b_triples:
+            b_net = -b_res * max(0.0, w.get("resource_stock", 0.0))
+            for k, amt, _kind in b_triples:
+                b_net += amt * feature_marginal(k, state, idx, w, late)
+            b_net *= build_credit
+            if b_net > net:
+                net = b_net
     if dev_credit:
         gain = 0.0
         for k, amt, _kind in dev:
@@ -3069,6 +3093,65 @@ BASE_WEIGHTS = {
     # deal.  It is absent from every champion file, so `load_weights` fills it
     # from here and the fix is live on all three arms at once.
     "gov_board_credit": 1.0,
+    # How much of the "develop it and BUILD one fresh worker on it" plan to
+    # believe (`tech_value` -> `board_yields.build_fresh`,
+    # docs/OPEN_ITEMS.md section 2 items 21 and 28).
+    #
+    # The fifth of the same family and the one that closes the last hole in
+    # it.  `tech_upgrade` prices only "develop it and upgrade what I already
+    # have", so a technology of a type this player has never staffed was
+    # priced at its levels minus its science and nothing else -- and for
+    # Knights, Cannon and Air Forces, the lowest card of their own type in the
+    # base game, NO board can ever offer an upgrade, so that was their whole
+    # price forever.  Air technologies were taken 0.00 times a seat-game.
+    #
+    # 1.0 on the same terms as its four siblings: at 1.0 the number is "the
+    # eval points `evaluate` itself assigns to the strength (or production, or
+    # happiness) one fresh worker on this technology produces and to the free
+    # worker it consumes, minus the eval points it assigns to the resources it
+    # costs".  Every term is read off the objective by `feature_marginal` and
+    # off the board by `board_yields.build_fresh`, whose legality gate is
+    # `engine/actions.py:_action_moves`' own.  There is no free constant in it.
+    #
+    # 0.0 is the one constant that recovers the parent commit's pricing byte
+    # for byte on all 236 cards -- `tech_value`'s argmax loses one branch and
+    # the remaining branch is unchanged -- which is what makes the change
+    # A/B-able against itself in one process on the same deal.
+    #
+    # AND IT SHIPS AT 0.0, WHICH ITS FOUR SIBLINGS DID NOT.  That is the
+    # measurement's decision and not a hedge.  Paired A/B, `experiments.
+    # evaluate`, 400 games / 200 deals at 2p, the credit against ITSELF at
+    # 0.0 with nothing else touched:
+    #
+    #     vector                        win rate      p        culture
+    #     DEFAULT_WEIGHTS   1.0         44.1 +/- 4.6  0.0125   105 vs 112
+    #     live 2p champion  1.0         44.5 +/- 4.8  0.0229   145 vs 156
+    #     DEFAULT_WEIGHTS   0.5         44.9 +/- 3.6  0.0055   112 vs 114
+    #
+    # Two independent vectors, the same ~5.5pp loss, both significant.  The
+    # champion is the informative one: it carries `workers` = 0.0 and
+    # `free_workers` = 0.005 where DEFAULT_WEIGHTS carries 1.4 and 0.4, so
+    # "the untrained worker priors are the cause" is ruled OUT -- the loss is
+    # the same with those priors trained to nothing.  `tech_board_credit`
+    # itself has been climbed to 0.334 on that vector, i.e. the league is
+    # already discounting board-derived technology prices, and this is one
+    # more of them.
+    #
+    # AND IT IS A SWITCH, NOT A LEVEL: 0.5 and 1.0 measure the same, because
+    # this credit multiplies ONE BRANCH OF A `max` and any epsilon > 0 already
+    # wins that max on every card whose upgrade plan is worth exactly nothing
+    # -- Knights, Cannon and Air Forces on every board, and any technology of
+    # a type the player has never staffed.  So "the league will find the
+    # level" is NOT available here; `hillclimb.mutate` perturbs by
+    # `gauss(0, s) * (abs(w) + 0.15)` and that 0.15 floor steps straight over
+    # the cliff.  Whoever re-opens this should expect to fix the PRICE, not to
+    # find a good value for the credit.  docs/OPEN_ITEMS.md section 2 item 31
+    # carries the two candidates that survived the champion control.  Every
+    # other caller of `build_fresh` (the tests, `tools/take_census.py` and
+    # `tools/card_census.py` with their own vectors) gets the price today by
+    # passing the credit.  The precedent for landing a measured-worse credit
+    # at 0.0 rather than tuning it is `free_action_credit` (item 27).
+    "build_fresh_credit": 0.0,
     # How much of a real resource a resource ring-fenced to military units is
     # worth (`_RESTRICTED_TO_FEATURE`).  1.0 is the UPPER bound -- a resource
     # you may only spend one way is worth at most one you may spend any way,

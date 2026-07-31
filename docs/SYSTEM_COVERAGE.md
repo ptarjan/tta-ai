@@ -287,6 +287,28 @@ finding in this document.  Label for yellow: **(b)/(c)** — farms and mines are
 priced absolute-not-delta ([`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md#0-summary) §0) and the bot substitutes
 blue urban buildings, which it takes 1.6× more than humans do.
 
+> **STALE AS OF 2026-07-31, AND THE MECHANISM ABOVE IS THE STALE PART.**  The
+> two paragraphs above name `unit_strength_credit` = 0.0 as the gate.  It is
+> no longer the gate on any of the three arms: `d8a2172` routes a unit
+> technology through `weighted.tech_value` on `unit_tech_credit` (1.0),
+> `8b972ef` does the same for the other eleven types on `tech_board_credit`
+> (1.0), and `e35d5f5` made the upgrade legality the engine's.  Read
+> [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#148-a-warriors-worker-cannot-become-a-cannon-2026-07-31) §14.8 and §14.9, not this paragraph, for what the red
+> lane's price is today.
+>
+> **The finding survives; only its cause has moved.**  Re-measured on
+> `1b63421` with `tools/take_census.py`, 100 games at 2p on `DEFAULT_WEIGHTS`,
+> red is **0.730** takes per seat-game against the same human 3.841 — five
+> times under, not twenty-six, and still the largest per-colour gap in this
+> table.  What binds now is [`OPEN_ITEMS.md`](OPEN_ITEMS.md) §2 item 21: the price answered
+> *"develop it and upgrade what I already have"* and nothing answered *"build
+> one fresh"*, which for Knights, Cannon and Air Forces is the only plan that
+> can ever exist.  §14.9 prices that plan and moves red to **0.845** *when its
+> credit is turned on* — and that credit ships at **0.0**, because turning it
+> on is a measured 5.5pp loss on two independent vectors (§14.9.6).  So the
+> shape is landed and the level is the league's.  The residual is real and is
+> recorded as items 21, 31 and 32 rather than closed.
+
 By age, and one exact zero:
 
 | takes /seat | bot 2p | h 2p | bot 3p | h 3p | bot 4p | h 4p |

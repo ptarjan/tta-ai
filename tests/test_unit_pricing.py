@@ -147,8 +147,11 @@ class TestTheFix(unittest.TestCase):
         THE GATEWAY CARDS.  Knights, Cannon and Air Forces are the lowest card
         of their own type in the whole deck, so no board can ever offer an
         upgrade onto them -- the only route to a cavalry unit is to BUILD one
-        fresh, which is docs/OPEN_ITEMS.md section 2 item 21 and is priced at
-        nothing today.  They are therefore checked one property weaker: the
+        fresh, which is docs/OPEN_ITEMS.md section 2 items 21 and 28.  That
+        plan is priced by `board_yields.build_fresh` since 2026-07-31, but
+        `build_fresh_credit` ships at 0.0, so `_w()` here is still the
+        upgrade-only price.  They are therefore checked one property weaker:
+        the
         sign must not be structurally locked (a vector that values a
         technology level flips them), which is the thing
         `unit_strength_credit` could never do.
@@ -291,12 +294,23 @@ class TestTheFix(unittest.TestCase):
 
     def test_the_price_is_a_board_query_not_a_table(self):
         """The same card, two boards, two prices -- and the direction is the
-        one the rules imply: more workers to move, more strength bought."""
+        one the rules imply: more workers to move, more strength bought.
+
+        SIX workers, not three, and the number is derived rather than tuned
+        up until it passed.  `tech_value` takes the better of two staffing
+        plans since `build_fresh_credit` landed; at the shipped default of 0.0
+        three workers is enough, but at 1.0 a fresh 2p board's one spare
+        worker makes "build one Swordsman" beat "upgrade my Warriors" until
+        the Warriors outnumber it -- 1 to 4 workers price identically, 6 puts
+        the upgrade plan back in front.  Six therefore asserts the same claim
+        at either setting of the credit, which is what a test of the UPGRADE
+        branch should do.
+        """
         w = _w()
         one = G.new_game(2, 1)
         many = G.new_game(2, 1)
         p = many.players[0]
-        p.techs["Warriors"].workers = 3
+        p.techs["Warriors"].workers = 6
         effects.invalidate(many, p)
         self.assertGreater(W.card_potential("Swordsmen", w, many, 0),
                            W.card_potential("Swordsmen", w, one, 0))

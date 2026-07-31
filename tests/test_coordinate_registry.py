@@ -163,6 +163,8 @@ PARAMETERS = {
     "tech_board_credit": ("pricing", "credit on tech_value()"),
     "action_board_credit": ("pricing", "credit on action_value()"),
     "gov_board_credit": ("pricing", "credit on gov_value()"),
+    "build_fresh_credit": (
+        "pricing", "credit on the build-one-fresh branch of tech_value()"),
     "restricted_resource_credit": (
         "pricing", "credit on the ring-fenced resource pseudo-feature"),
     "free_action_credit": ("pricing", "credit on the ordered action in action_value()"),

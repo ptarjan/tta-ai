@@ -944,6 +944,60 @@ PWIDE=8966dd49
 QNARROW=dd2af7b6
 QWIDE=32a4e8d5
 
+# ---------------------------------------------------------------------------
+# UNCHANGED by the build-one-fresh lane (2026-07-31,
+# docs/CARD_BLINDNESS.md 14.9, docs/OPEN_ITEMS.md section 2 items 21 and 28),
+# and that no-op is a PREDICTION THAT WAS WRITTEN DOWN BEFORE THE RUN rather
+# than a lucky result -- the same discipline the Ocean Liners entry above
+# used.
+#
+# The lane adds `board_yields.build_fresh` (a second staffing plan: "develop
+# it and BUILD one fresh worker", the only plan Knights, Cannon and Air Forces
+# can ever have) and a `max` over it in `weighted.tech_value`, gated on a new
+# `build_fresh_credit`.
+#
+# THAT CREDIT SHIPS AT 0.0.  Not timidity: paired 400-game A/Bs put it at
+# 44.1% +/- 4.6 (p = 0.0125) on DEFAULT_WEIGHTS and 44.5% +/- 4.8 (p = 0.0229)
+# on the live gen-83 2p champion, i.e. a measured ~5.5pp LOSS on two
+# independent vectors.  docs/CARD_BLINDNESS.md 14.9.6 has the table and the
+# control that rules out the untrained worker priors as the cause.
+#
+# So the prediction was: **all eight arms hold**, including the six that move
+# for every other card-pricing lane in this file.  At credit 0.0
+# `weighted.card_potential` never calls `build_fresh` at all -- pinned by
+# tests/test_build_fresh.py:test_credit_zero_makes_the_branch_unreachable,
+# which monkeypatches it to RAISE and then prices all 236 cards on a fresh
+# board and a played one -- and every arm in this file plays DEFAULT_WEIGHTS.
+# There is no path from the new code to any of the eight.
+#
+#     arm       committed    this lane
+#     NARROW    8526f445     8526f445   (held, as predicted)
+#     WIDE      50b55624     50b55624   (held)
+#     WNARROW   49a0a944     49a0a944   (held)
+#     WWIDE     e7887e23     e7887e23   (held)
+#     QNARROW   dd2af7b6     dd2af7b6   (held)
+#     QWIDE     32a4e8d5     32a4e8d5   (held)
+#     PNARROW   b23c0afd     b23c0afd   (held)
+#     PWIDE     8966dd49     8966dd49   (held)
+#
+# CLEAN-BASE CONTROL FIRST, and it passed: all eight arms derived from scratch
+# on the parent commit (1b63421) in an independent clone (/tmp/rl-base)
+# reproduced the eight constants in this file byte for byte, before anything
+# of this lane's was measured against them.  The gate on the lane's own tree
+# then reproduced the same eight -- which for a change of this shape IS the
+# attribution: a lane whose only reachable effect is behind a 0.0 constant
+# must move nothing, and it moved nothing.  If a future change to
+# `build_fresh` or `tech_value`'s argmax ever moves an arm while
+# `build_fresh_credit` is 0.0, that is the change escaping its gate and NOT a
+# digest to update.
+#
+# Test count 1220 -> 1238: +18 from the new tests/test_build_fresh.py.  No
+# test was deleted; two existing ones were amended and both amendments are
+# recorded in their docstrings (tests/test_unit_pricing.py's board-query test
+# now uses six workers so it asserts the same claim at either setting of the
+# credit, and tests/test_model_constants.py classifies the new cache bound).
+# ---------------------------------------------------------------------------
+
 fail=0
 # The interpreter under test.  `PY=pypy3 bash tools/gate.sh --journal` runs
 # every arm under PyPy and requires the SAME digests, which is the

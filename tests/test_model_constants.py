@@ -104,6 +104,8 @@ CLASSIFIED = {
         "enum-or-sentinel", "cache bound"),
     ("engine/bots/board_yields.py", "_TECH_CACHE_MAX"): (
         "enum-or-sentinel", "cache bound"),
+    ("engine/bots/board_yields.py", "_BUILD_CACHE_MAX"): (
+        "enum-or-sentinel", "cache bound"),
     ("engine/game.py", "MOVE_CAP"): (
         "numerical guard", "stops a pathological game running forever"),
     ("engine/statediff.py", "MAX_DIFFS"): (

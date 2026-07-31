@@ -4019,6 +4019,229 @@ The lesson is in `docs/OPEN_ITEMS.md` §9.5: those entries are pinned to six
 games, and *any* pricing change re-rolls them.  `best_arena` went 0 → 314
 non-zero states of ~2000 on this change alone.
 
+### 14.9. Nothing priced the "build one fresh" plan (2026-07-31)
+
+Closes `docs/OPEN_ITEMS.md` §2 item 28 and most of item 21, the residual §14.8
+promoted "from a footnote to the binding constraint on the red lane".
+
+#### 14.9.1 First, a correction to the brief
+
+[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#5-technology-by-colour--the-biggest-structural-hole-in-the-whole-census) §5 still names `unit_strength_credit` = 0.0 as
+the gate on the red lane and calls it "the most actionable finding in this
+document".  **That sentence is stale and the mechanism it names is gone.**
+`d8a2172` (§14) routes a unit technology through `weighted.tech_value` on
+`unit_tech_credit` = 1.0; `8b972ef` (§15) does the same for the other eleven
+types; `e35d5f5` and §14.8 made the upgrade legality the engine's own.
+Re-measured on `1b63421` — the tree this section starts from — with
+`tools/take_census.py`, 100 games at 2p on `DEFAULT_WEIGHTS`:
+
+| takes per seat-game | human 2p | `1b63421` |
+|---|---|---|
+| infantry | 1.120 | 0.425 |
+| cavalry | 1.222 | 0.155 |
+| artillery | 0.846 | 0.135 |
+| air | 0.653 | **0.015** |
+| **all red** | **3.841** | **0.730** |
+
+Five times under, not the twenty-six times §5 measured, and still the largest
+per-colour gap in that table.  §5 has been annotated rather than rewritten.
+
+#### 14.9.2 The defect, which is one sentence and one consequence
+
+`board_yields.tech_upgrade` answers exactly one question — *"develop it and
+upgrade the workers I already have"* — and `_upgradable_onto` is the engine's
+own relation: same type, strictly lower level, at least one worker standing on
+it.  **Knights, Cannon and Air Forces are the lowest card of their own type in
+the base game.**  There is no lower cavalry, artillery or air card to stand a
+worker on, so that set is empty for them on every board that will ever exist
+and their whole price is the develop half against their science, forever.  The
+same is true, board by board rather than forever, of the first laboratory, the
+first theatre and every other technology of a type the player has never
+staffed.
+
+Under `DEFAULT_WEIGHTS` on a fresh 2p board that put Knights at **−0.28** —
+inside `weighted.row_pressure`'s `if val <= 0.0: continue`, so the card was not
+merely under-valued, it was *invisible* to both row terms.
+
+#### 14.9.3 The fix: the other staffing plan, and it is the engine's
+
+`board_yields.build_fresh` answers *"develop it and BUILD one fresh worker on
+it"*.  Nothing in it is a restatement of a rule:
+
+* the gate is `engine/actions.py:_action_moves`' own `if p.workers_free > 0`,
+  plus `effects.build_cost is not None` and, for an urban type,
+  `urban_workers[typ] < Stats.urban_limit`;
+* the resource cost is `actions.build_cost_net`, the function that charges the
+  player, net of the per-turn `mil_discount` pool;
+* the gain is an `effects.compute` diff with the technology developed and one
+  worker on it, priced at `weighted.feature_marginal` — so Great Wall's
+  `strengthPerInfantry`, the tactic army re-forming and the rating clamp all
+  come free, exactly as they do for the upgrade plan.
+
+`weighted.tech_value` takes the **better of the two staffing plans**, a `max`
+and not a sum: they compete for the same turn, and the better of them is a
+lower bound on doing both.  The develop half (`tech_levels`, `num_techs`,
+`best_*`) stays outside the max because it is paid on either plan.
+
+**FOUR FEATURES MOVE THAT NO `Stats` DIFF CAN SEE**, and this is why the
+change needed its own triples rather than `_delta_triples` alone.
+`weighted.features` reads `free_workers`, `workers`, `<class>_workers` and
+`uprising` straight off the player.  An *upgrade* moves none of them — a
+worker steps from one technology to another and every total is unchanged — so
+no previous lane had to notice.  A *build* moves all four, and one of them is
+a cliff: `uprising` is `discontent > p.workers_free`, weighted **−12.0**, so
+staffing your last free worker while in discontent is a catastrophe the rules
+already describe — RULES_SPEC §6.3, *"if discontent workers > unused workers,
+skip the entire Production Phase"*, and *"unused workers do not reduce
+discontent workers; they only prevent the uprising"*, which is exactly the
+worker this plan spends.  That term is the reason this plan cannot be a
+constant.
+
+**ONE worker, and that is a derivation plus a measurement, not caution.**
+`unit_upgrade` moves *all* eligible workers because the upgrade trade is
+linear in the count and a linear optimum sits at an endpoint.  The build trade
+is not linear, in three rule-level ways: `mil_discount` is a per-turn pool
+`_spend_mil_discount` draws down, `uprising` is a threshold and `happy_margin`
+is clamped at 3, and an urban type is capped at `urban_limit`.  Measured, at
+2p under `DEFAULT_WEIGHTS` over 8 games (1,932 decisions), `p.workers_free` is
+**0 at 68%** of decisions, **1 at 27%** and **≥2 at 4.7%** — so a plan of two
+is legal on one board in twenty and "build one" is the whole plan on the rest.
+
+**Deliberately NOT charged: the action.**  A build costs one military action
+(unit) or one civil action (everything else) — and so does an upgrade, exactly
+one per worker moved, and `tech_value` does not charge that either.  Charging
+it on one of two competing plans and not the other would bias the argmax
+between them for no reason in the rules.  The omission is symmetric and is
+worth `ma_left` / `ca_left` = 0.05 apiece in `DEFAULT_WEIGHTS`.
+
+#### 14.9.4 What the tests caught that inspection did not
+
+`tests/test_build_fresh.py` (18 tests) plays each plan out for real and diffs
+`weighted.features()` against the price, which is the standard
+[`docs/GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md) set for the revolution burn.  It found two
+things:
+
+1. **A cache-key collision.**  `effects.stats_key` names every field
+   `effects.compute` reads *and nothing more*, so two boards differing only in
+   `yellow_bank` collide on it — and `yellow_bank` is exactly what
+   `economy.happy_required` reads, i.e. one side of the `uprising` threshold.
+   The key now carries `workers_free`, `yellow_bank` and `mil_discount`.
+2. **An inherited unpriced channel, now `docs/OPEN_ITEMS.md` §2 item 30.**
+   `blue_free` and `corruption_loss` are not `Stats` fields — they come from
+   `effects.blue_available`, which counts the blue tokens your food and
+   resource banks stand on, and a higher-level farm or mine holds more per
+   token.  Staffing one frees blue tokens and cuts corruption, and *nothing
+   prices it*: upgrading Bronze → Iron moves `blue_free` 8 → 13 and
+   `corruption_loss` 2 → 0 today, on the existing upgrade path.  Left alone so
+   this lane's digest moves have one cause; the ratchet in
+   `TestThePriceIsWhatFeaturesActuallyMove.UNPRICED` fails if a *new* channel
+   joins it.
+
+#### 14.9.5 What it did — take rates, 2p, paired, `DEFAULT_WEIGHTS`
+
+`tools/take_census.py`, **100 games / 200 seat-games** at 2p, the same seeds
+either side, the only difference being `build_fresh_credit` 0.0 → 1.0.
+Descriptive, not a strength claim — and note this is the credit **turned on**,
+which §14.9.6 then measures and decides against shipping.
+
+| takes per seat-game | human 2p | before | after |
+|---|---|---|---|
+| infantry | 1.120 | 0.425 | 0.340 |
+| cavalry | 1.222 | 0.155 | **0.280** |
+| artillery | 0.846 | 0.135 | 0.150 |
+| air | 0.653 | **0.015** | **0.075** |
+| **all red** | **3.841** | 0.730 | **0.845** |
+| yellow (farm/mine) | 2.520 | 2.690 | 2.460 |
+| blue (urban) | 3.710 | 4.440 | **4.970** |
+| green (special) | 3.080 | 0.345 | 0.285 |
+| action | 12.820 | 7.905 | 7.085 |
+| all civil cards | 34.300 | 19.950 | 19.195 |
+
+**Read this honestly: it is a real move and a small one.**  The three cards
+item 28 named are the ones that move — cavalry 1.8×, air 5× off an
+effective zero — and the direction is the derivation's, because those are
+exactly the types with no upgrade to ride.  Infantry falls, which is the same
+substitution §14.8 saw: infantry always had a plan and now competes with three
+types that also do.  Red as a whole is still **4.5× under** the human rate and
+that is stated, not explained away; the residual is item 21's two open halves
+(the free-worker pool is empty at 68% of decisions, and only one build is
+priced) plus the fact that the bot takes 19.2 civil cards a seat-game against
+a human 34.3 — a budget problem no per-card price can fix.
+
+**Blue goes the wrong way** — 4.44 → 4.97 against a human 3.71 — and it is
+reported rather than tuned against, for the reason
+[`docs/GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md) gives for the same surprise: there is no free
+constant in the price to tune.  A first theatre really does produce +3
+culture, which is the *example item 21 itself uses*, and pricing it correctly
+is not made wrong by the level being off.  The level is what the league
+trains — and §14.9.6 is the measurement that says so.
+
+#### 14.9.6 The credit ships at **0.0**, and that is the A/B's decision
+
+Its four siblings (`unit_tech_credit`, `tech_board_credit`,
+`action_board_credit`, `gov_board_credit`) all ship at 1.0.  This one does
+not, because it was measured and 1.0 is worse.  `experiments.evaluate`, the
+credit against **itself** at 0.0 with nothing else touched, paired on the deal
+(`hillclimb_league._series`, one `arena.duel` per arm on identical seeds),
+400 games / 200 deals at 2p:
+
+| vector | credit | win rate vs a 50% null | p | culture |
+|---|---|---|---|---|
+| `DEFAULT_WEIGHTS` | 1.0 | **44.1% ± 4.6** | 0.0125 | 105 vs 112 |
+| live 2p champion (gen 83) | 1.0 | **44.5% ± 4.8** | 0.0229 | 145 vs 156 |
+| `DEFAULT_WEIGHTS` | 0.5 | **44.9% ± 3.6** | 0.0055 | 112 vs 114 |
+
+Two independent vectors and two settings, the same ~5.5pp loss, all
+significant, all above [`docs/HAZARDS.md`](HAZARDS.md) §1's n ≥ 200 bar.
+
+**THE CHAMPION ROW IS THE INFORMATIVE ONE, and it kills the obvious
+explanation.**  The first guess was `docs/OPEN_ITEMS.md` §2 item 19(b): this
+is the first card price in the project that ever charged `workers`,
+`free_workers`, `<class>_workers` or `uprising`, and `DEFAULT_WEIGHTS` carries
+untrained priors for them — `workers` 1.4 against `free_workers` 0.4, i.e. a
+flat **+1.0 eval points for moving a token from the spare pile onto a card**,
+before any production at all.  That guess is wrong: the live gen-83 champion
+has already climbed `workers` to **0.0** and `free_workers` to **0.0046**, so
+that term is absent on it, and the loss is the same size.  Something else in
+the plan is over-valued and this lane did not find it.  Two candidates are
+recorded rather than asserted: `_hand_total` **sums** technology prices over
+the civil hand, so every buildable technology in hand credits the *same one*
+free worker (inherited from the upgrade plan, but larger here); and the plan
+is priced without any test that the player can afford it *by the time the
+worker is still free*, which the 68%-empty pool above makes a real risk.
+
+**THE SWEEP IS A STEP, NOT A SLOPE, AND THAT IS THE MOST USEFUL THING IN THIS
+TABLE.**  0.5 and 1.0 are the same number.  That is what a credit multiplying
+*one branch of a `max`* has to look like: on a card whose upgrade plan is
+worth exactly nothing — which is Knights, Cannon, Air Forces on every board,
+and any technology of a type the player has never staffed — *any* ε > 0 makes
+the build branch win the max, and scaling ε after that changes the price but
+not the argmax.  So `build_fresh_credit` is not a level knob the league can
+tune down gently; it is a switch with a cliff at zero, and
+`hillclimb.mutate`'s `gauss(0, s) * (abs(w) + 0.15)` will step it straight
+over that cliff on the first generation that scatters onto it.  Written down
+here because "the league will find the level" is the sentence this lane would
+otherwise have ended on, and for this coordinate it is not true.
+
+**So what actually lands is the shape and the measurement**, and the
+measurement is a finding rather than a disappointment: pricing a plan the
+rules plainly offer, from the engine's own move generator, with every triple
+pinned against `features()` itself, makes the bot *weaker* — which says
+something in the evaluator is wrong somewhere else.  `docs/OPEN_ITEMS.md` §2
+item 31 is that question with the two surviving candidates written down.  The
+precedent for landing it at 0.0 is `free_action_credit` (item 27): buying a
+take rate by turning a credit up is measurably wrong, so it is not turned up.
+Every non-league caller — the tests, `tools/take_census.py` with its own
+vector, `tools/card_census.py` — gets the price today by passing the credit.
+
+**The consequence for the eight fingerprint arms is a prediction, and it is
+the strong form of "provably inert":** at 0.0 `card_potential` never calls
+`build_fresh` at all (`tests/test_build_fresh.py:
+test_credit_zero_makes_the_branch_unreachable` monkeypatches it to raise and
+prices all 236 cards on two boards), the fingerprints play `DEFAULT_WEIGHTS`,
+so **all eight arms had to hold** — including the six that move for every
+other pricing lane.  See `tools/gate.sh`.
+
 ## 15. The bot builds one civilization and it is blue, because `card_potential` reads weights `evaluate` does not use (merged from the former `YELLOW_TECH_PRICING.md`, 2026-07-31)
 
 2026-07-30.  Closes the largest **non-inert** discrepancy in

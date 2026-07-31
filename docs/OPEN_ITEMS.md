@@ -372,14 +372,62 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     the three the old price was inventing upgrades for fell, the one that has
     real upgrades rose, and **the residual is item 21 below**, which the fix
     promotes from a footnote to the binding constraint on the red lane.
-21. **Nothing prices the "build one fresh" plan.**  Both `unit_upgrade` and
+21. ~~**Nothing prices the "build one fresh" plan.**  Both `unit_upgrade` and
     `tech_upgrade` answer "develop it and upgrade what I have", so a player with
     no laboratory worker sees a laboratory priced at its levels minus its
     science and the +3 culture a *new* theatre would produce is priced at
     nothing.  Honest for a one-ply appraisal — building is its own decision,
     needs a free worker and has its own price — but it systematically
     under-prices the first building of a type.  This is the correctly-shaped
-    replacement for the old item 13.
+    replacement for the old item 13.~~
+    **MOSTLY CLOSED 2026-07-31 by [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#149-nothing-priced-the-build-one-fresh-plan-2026-07-31) §14.9.**
+    `board_yields.build_fresh` prices "develop it and BUILD one fresh worker
+    on it" for all fifteen technology types and `weighted.tech_value` takes
+    the better of the two staffing plans, gated on `build_fresh_credit` —
+    which ships at **0.0**, for the reason two paragraphs down.
+    The gate, the urban limit and the resource cost are `_action_moves`' and
+    `do_build`'s own; the four features a build moves that no `Stats` diff can
+    see (`free_workers`, `workers`, `<class>_workers` and the `uprising`
+    threshold) are emitted explicitly and pinned against `features()` itself.
+    Knights goes −0.28 → +2.51 on a fresh 2p board, out of `row_pressure`'s
+    `val <= 0.0` skip; air takes go 0.015 → 0.075 per seat-game and all red
+    0.730 → 0.845 against a human 3.841.
+
+    **THE CREDIT SHIPS AT 0.0, WHICH ITS FOUR SIBLINGS DID NOT, AND THAT IS
+    THE MEASUREMENT'S DECISION.**  Paired 400-game A/Bs at 2p, the credit
+    against itself: **44.1% ± 4.6 (p = 0.0125)** on `DEFAULT_WEIGHTS` and
+    **44.5% ± 4.8 (p = 0.0229)** on the live gen-83 champion — two vectors,
+    the same ~5.5pp loss.  The champion row rules out the obvious cause: it
+    already carries `workers` = 0.0 and `free_workers` = 0.0046, so the
+    untrained worker priors are not what is over-valued, and **this lane did
+    not find what is**.  At 0.5 the same A/B is 44.9% ± 3.6 (p = 0.0055) —
+    the sweep is a STEP, not a slope, because the credit multiplies one branch
+    of a `max` and any ε > 0 already wins that max on every card whose upgrade
+    plan is worth nothing.  So this is not a knob the league can tune down
+    gently, and "the league will find the level" is NOT available here; see
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1496-the-credit-ships-at-00-and-that-is-the-abs-decision) §14.9.6 and item 31 below.
+
+    **TWO HALVES OF IT STAY OPEN, and they are stated here because the fix
+    could have hidden them.**
+
+    * **The plan is not priced when the free-worker pool is empty**, which is
+      **68%** of decisions at 2p under `DEFAULT_WEIGHTS` (measured: 1,318 of
+      1,932 over 8 games; 27% hold exactly one and 4.7% hold two or more).
+      The rules make that reachable — one civil action plus
+      `economy.pop_food_cost` food, RULES_SPEC §3 action 3 — so the honest
+      completion is a *third* plan, "increase population, then build", whose
+      costs (`food_stock`, `yellow_bank`, `consumption`, and the happy
+      requirement rising) are all features `evaluate` already reads.  Not
+      done here: it is a three-move plan inside a one-ply appraisal and it
+      deserves its own A/B rather than a free ride on this one.
+    * **Only ONE fresh worker is priced.**  That is nearly free at 2p (see the
+      histogram above: a plan of two is legal on 4.7% of boards) but it will
+      not be at 4p, and the trade is genuinely non-linear — `p.mil_discount`
+      is a per-turn pool `_spend_mil_discount` draws down, `uprising` is a
+      threshold and `happy_margin` is clamped at 3 — so the endpoint argument
+      that licenses "move ALL eligible workers" in `unit_upgrade` does not
+      license "build all of them" here.  Whoever generalises it has to price
+      each build separately, not multiply.
 22. ~~**A government's level is unpriced on both sides.**  `features()` adds
     `meta[p.government][1]` into `tech_levels`, and neither `_card_yields` nor
     the swap diff emits it, so a government card is missing exactly the term
@@ -453,8 +501,22 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     hypothesis and it is item 19's sweep in another guise: `civil_actions` is
     a coordinate no card price had ever charged for until this change.
     Unowned.
-28. **Three red cards can NEVER have an upgrade to ride, and item 21 is now
-    load-bearing for them.**  Opened 2026-07-31 by the fix to item 20.  Knights,
+28. ~~**Three red cards can NEVER have an upgrade to ride, and item 21 is now
+    load-bearing for them.**~~  **CLOSED 2026-07-31 by
+    [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#149-nothing-priced-the-build-one-fresh-plan-2026-07-31) §14.9**, by pricing the plan item 21 named.
+    The premise was right and is now a test rather than a claim
+    (`test_they_really_have_no_upgrade_on_any_board` stands every other card
+    of the type on the board and requires `_upgradable_onto` to stay empty).
+    `board_yields.build_fresh` gives all three the plan they always had in the
+    rules: on a fresh 2p board under `DEFAULT_WEIGHTS` Knights goes
+    **−0.28 → +2.51**, Cannon +1.15 → +4.28 and Air Forces +0.07 → +4.51, so
+    the one card that sat inside `row_pressure`'s `val <= 0.0` skip is out of
+    it.  Air takes per seat-game went **0.015 → 0.075** and cavalry
+    0.155 → 0.280 over 200 paired seat-games.  The three cards move and the
+    class is no longer structurally capped; the remaining distance to the
+    human 3.841 is item 21's two open halves and the bot's overall
+    civil-take budget, not this.  Original text follows.
+    Opened 2026-07-31 by the fix to item 20.  Knights,
     Cannon and Air Forces are the lowest card of their own type in the whole
     deck, so `_upgradable_onto` is empty for them on every board that will ever
     exist and their entire price is the develop half (`tech_levels`,
@@ -491,6 +553,55 @@ Ranked, most agreed-upon first.  Weight values are **(snapshot)** as of
     sacrifices the same single strength-2 unit, so the boards and the final
     scores are **identical** and only the log line moves.  That is one case,
     not a bound.
+30. **`blue_free` and `corruption_loss` are unpriced on EVERY technology
+    plan.**  Opened 2026-07-31 by the fix to items 21/28, by a test that
+    plays the plan out and diffs `weighted.features()` rather than by reading
+    the code.  Neither is a `Stats` field: `features()` computes them from
+    `effects.blue_available`, which is `p.blue_total` minus the blue tokens
+    your food and resource banks are standing on — and a higher-level farm or
+    mine holds MORE resources per token (`effects._denoms`), so staffing one
+    frees blue tokens and cuts `economy.corruption`.  `_delta_triples` cannot
+    see either, so **the existing upgrade path has the identical hole**:
+    upgrading Bronze → Iron moves `blue_free` 8 → 13 and `corruption_loss`
+    2 → 0 and both are priced at nothing (weights 0.15 and −0.9).  It is the
+    `tech_levels` shape one more time — a gain the evaluator reads and no card
+    price charges for, which is also item 19(b)'s sweep.  Deliberately not
+    fixed in the build-fresh lane so that lane's digest moves had one cause.
+    Pinned by `tests/test_build_fresh.py:TestThePriceIsWhatFeaturesActuallyMove
+    .UNPRICED`, which is a ratchet: a *new* unpriced channel fails it.
+31. **Why does the build-fresh plan LOSE 5.5pp when it is turned on?**
+    Opened 2026-07-31 by the lane that closed items 21 and 28, and it is the
+    unfinished half of them.  `build_fresh_credit` = 1.0 is a measured
+    regression on two independent vectors (44.1% and 44.5% against a 50%
+    null, 400 paired games each), so it ships at 0.0.  The price is
+    structurally what `evaluate` pays — every triple is pinned against
+    `features()` itself — so *something it charges or fails to charge is
+    wrong*, and the two candidates that survived the champion control are:
+    (a) `_hand_total` SUMS technology prices over the civil hand, so every
+    buildable technology in hand credits the same single free worker (the
+    upgrade plan has the same shape, but a build's worker is a scarcer
+    resource than a worker already on a card); (b) nothing tests that the
+    plan is still legal by the time it would be played — `p.workers_free` is
+    0 at 68% of decisions, so a card taken because a build was priced may
+    face an empty pool two moves later.  Neither is measured.  A third
+    possibility nobody has excluded is that the action a build costs, which
+    is deliberately uncharged for symmetry with the upgrade plan, is worth
+    much more than `ma_left`/`ca_left` = 0.05 — which is item 27's live
+    hypothesis in another guise.  Note also that the credit is a SWITCH and
+    not a level (0.5 and 1.0 measure the same), so a league that scatters onto
+    it steps straight onto the loss; anyone re-opening this should expect to
+    fix the price rather than to find a good value for the credit.
+32. **A per-card price cannot close the red gap on its own, and the number
+    that says so is the civil-take budget.**  After items 21/28 the bot takes
+    **19.2** civil cards a seat-game at 2p against a human **34.3**, and red
+    is 0.845 against 3.841.  Red's *share* of the takes is 4.4% against a
+    human 11.2%, so both the numerator and the denominator are short: even at
+    the human take budget and the current share, red would reach only ~1.5.
+    Item 27 is the same observation from the action-card side and reaches the
+    same live hypothesis — that a civil action is worth less than
+    `w["civil_actions"]` = 2.0 says, so the bot ends turns it should be
+    spending.  Recorded as one item so the next lane does not re-derive it
+    from a third colour.
 
 Deliberately **not** open, recorded so nobody reopens them: wars and aggressions
 are 1-ply artefacts repaired by search ([`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) tier B) — the
