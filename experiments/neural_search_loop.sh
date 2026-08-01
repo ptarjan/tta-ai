@@ -72,6 +72,27 @@ REFN=${REFN:-240}
 
 mkdir -p loop2 iterdata2 checkpoints teacherdata
 BEST=checkpoints/best_search.pt
+# THE TRAINING CHAIN, which is not the same object as $BEST and must not be.
+#
+# $BEST is the net that PLAYS: it generates the self-play data, it is the
+# opponent in gate arm A, and it only ever moves when a candidate beats it.
+# That gating is right and stays.
+#
+# $WORK is where TRAINING accumulates.  Until 2026-08-01 there was no such
+# thing -- every candidate was trained with `--init "$BEST"`, so with $BEST
+# frozen since it33 the loop ran fourteen iterations that each started from the
+# identical weights, trained on an overlapping 3-iteration window, and were
+# thrown away.  Fourteen independent draws from one point, not a hill climb.
+# The most a candidate could ever be ahead by was ONE iteration of training,
+# which is far below arm A's ~7.5pp resolution at n=168, so the gate could
+# never pass on merit no matter how much real signal the data contained: the
+# stall was structural, guaranteed by the init argument, and the pooled arm A
+# win rate over the whole streak read 0.5000 exactly as that predicts.
+#
+# So the chain carries forward across blocked iterations and only the PLAYING
+# net waits for the gate -- the standard gated-self-play arrangement, and the
+# thing this loop was already shaped like everywhere except this one line.
+WORK=checkpoints/work.pt
 LOG=loop2/master.log
 CURVE=loop2/curve.tsv
 PAUSE=~/tta-ai/PAUSE
@@ -398,7 +419,17 @@ if [ ! -f "$BEST" ]; then
   say "  STAGE 0 done -> $BEST"
 fi
 
-say "LOOP START $(date)  best=$BEST width=$WIDTH nodes=$NODES games=$GAMES gate=$GATE refn=$REFN"
+# Seed the training chain from the playing net.  Only when it is absent: on a
+# restart the chain is exactly the state worth keeping, and re-seeding it here
+# would silently restore the every-iteration-resets-to-BEST behaviour that made
+# the loop unable to accumulate in the first place -- invisibly, because a
+# restart looks like nothing happened.
+if [ ! -f "$WORK" ]; then
+  install_ckpt "$BEST" "$WORK"
+  say "  seeded training chain $WORK from $BEST"
+fi
+
+say "LOOP START $(date)  best=$BEST work=$WORK width=$WIDTH nodes=$NODES games=$GAMES gate=$GATE refn=$REFN"
 
 okword() { [ "${1:-0}" = 1 ] && printf 'PASS' || printf 'BLOCK'; }
 
@@ -489,7 +520,7 @@ for it in $(seq "$start_it" "$ITERS"); do
   # if it were this iteration's candidate
   rm -f checkpoints/cand.pt
   beat_run experiments/neural_train_rank.py --data $globs 'teacherdata/tg_*.npz' \
-      --init "$BEST" --epochs "$EPOCHS" --lr "$LR" --lam "$LAM" \
+      --init "$WORK" --epochs "$EPOCHS" --lr "$LR" --lam "$LAM" \
       --vweight "$VWEIGHT" --select last --val-split rows \
       --out checkpoints/cand.pt --device cuda \
       > "loop2/train_it${it}.log" 2>&1
@@ -616,9 +647,38 @@ for it in $(seq "$start_it" "$ITERS"); do
       say "  WARNING it$it  promoted but not re-seeding $ANCHORF (win=$cwin ci=$cci se=${cse:-<none>});"
       say "  WARNING it$it    the incumbent baseline still describes the PREVIOUS net"
     fi
+    install_ckpt checkpoints/cand.pt "$WORK"
     say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin"
   else
-    say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin  (A=$(okword "$selfplay_ok") B=$(okword "$anchor_ok"))"
+    # THE CHAIN ADVANCES ON A BLOCKED ITERATION.  That is the entire point of
+    # $WORK: a blocked gate means "not yet demonstrably better than the net that
+    # plays", which is not the same as "this iteration of training was worthless"
+    # and must not throw it away.  Only the PLAYING net waits for the gate.
+    #
+    # Unless the chain has gone measurably BAD, in which case it is walking away
+    # from $BEST rather than toward a promotion, and every further iteration
+    # compounds it.  The reset test is the promotion test with the inequality
+    # reversed -- promote when the interval clears 0.5 from above (win-ci>0.5),
+    # reset when it clears 0.5 from below (win+ci<0.5) -- so both directions
+    # demand the same strength of evidence and the wide middle, where the data
+    # cannot tell, is where the chain is simply left to keep learning.  A
+    # threshold picked by feel would have had to justify itself; this one is
+    # just arm A read the other way round.
+    if [ "$win" = "$NULL" ] || [ "$ci" = "$NULL" ]; then
+      # Arm A produced no measurement, so neither test can be evaluated.  The
+      # training itself still happened and is still built on $WORK, so carry it
+      # -- but say that it was carried unverified rather than let an unmeasured
+      # iteration look like a measured one.
+      install_ckpt checkpoints/cand.pt "$WORK"
+      chain="chain advanced UNVERIFIED (arm A had no data)"
+    elif [ "$(awk -v w="$win" -v c="$ci" 'BEGIN{print (w+c<0.5)?1:0}')" = 1 ]; then
+      install_ckpt "$BEST" "$WORK"
+      chain="chain RESET to $BEST (hi=$(awk -v w="$win" -v c="$ci" 'BEGIN{printf "%.4f", w+c}') < 0.5000: significantly worse)"
+    else
+      install_ckpt checkpoints/cand.pt "$WORK"
+      chain="chain advanced"
+    fi
+    say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin  (A=$(okword "$selfplay_ok") B=$(okword "$anchor_ok"))  $chain"
     # A STALLED LOOP LOOKS EXACTLY LIKE A WORKING ONE, LINE BY LINE.  Every
     # iteration prints a well-formed "kept best", the GPU stays busy, the
     # process list looks perfect, and nothing anywhere says the RUN has stopped
