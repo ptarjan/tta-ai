@@ -619,6 +619,48 @@ for it in $(seq "$start_it" "$ITERS"); do
     say "  PROMOTED it$it  win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin"
   else
     say "  kept best   it$it  cand win=$win ci=$ci cul=$ccul vs $bcul  anchor=$cwin  (A=$(okword "$selfplay_ok") B=$(okword "$anchor_ok"))"
+    # A STALLED LOOP LOOKS EXACTLY LIKE A WORKING ONE, LINE BY LINE.  Every
+    # iteration prints a well-formed "kept best", the GPU stays busy, the
+    # process list looks perfect, and nothing anywhere says the RUN has stopped
+    # moving.  That is precisely how docs/NEURAL_LOOP_NULL.md happened: 74
+    # iterations, zero promotions, discovered only because a human happened to
+    # read back through the log.  It happened again on 2026-07-31 (it33 -> it47,
+    # ~11 hours).  Twice is a failure mode, not an accident, so the loop reports
+    # its own stall instead of waiting to be caught.
+    #
+    # The streak LENGTH is not the interesting number -- arm A's POOLED win rate
+    # over it is.  A streak sitting at 0.50 is a converged net that the gate is
+    # correctly refusing to churn, and the answer is to stop the loop or change
+    # what it trains on.  A streak sitting near 0.57 with per-iteration CIs too
+    # wide to clear 0.5000 is a REAL improvement the gate cannot resolve at this
+    # game count, and the answer is the opposite: raise n.  Reporting only the
+    # streak would leave those two indistinguishable, which is the same
+    # never-chosen-vs-never-offered ambiguity a bare zero always has.
+    #
+    # Why 8.  Arm A runs ~168 games per iteration (6 shards x 28), so one
+    # iteration resolves a true effect of about +-7.5pp -- far coarser than a
+    # per-iteration gain at convergence, which is why no single iteration can
+    # ever pass on merit.  Pooled over 8 iterations that is n~1344 and a
+    # half-width near 2.7pp, the first streak length at which the pooled number
+    # can actually tell a converged loop from an under-powered one.  Shorter and
+    # the warning would fire with nothing to say.
+    # `m` counts separately from `n` because an iteration whose arm A returned
+    # NO DATA writes $NULL ('-') in this column: it is a real link in the
+    # no-promotion streak but contributes no win rate, and summing it as zero
+    # would drag the pooled number toward "converged" for a reason that has
+    # nothing to do with the net.  The two counts are both reported so a pooled
+    # rate over 3 of 11 iterations cannot be read as one over 11.
+    stall_warn_after=8
+    stall=$(awk -F'\t' -v w="$stall_warn_after" '
+      $2==1 {n=0; m=0; s=0; next}
+      $2==0 {n++; if ($3+0==$3 && $3!="") {m++; s+=$3}}
+      END {if (n>=w && m>0) printf "%d %d %.4f", n, m, s/m}' "$CURVE" 2>/dev/null)
+    if [ -n "$stall" ]; then
+      set -- $stall
+      say "  STALL it$it  $1 iterations without a promotion (through it$((it-1))); arm A pooled win=$3 over $2 of them"
+      say "  STALL it$it    ~0.50 => converged: the gate is right, change the training, not the threshold"
+      say "  STALL it$it    >0.53 => under-powered: real gain the per-iteration CI cannot resolve, raise the game count"
+    fi
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
