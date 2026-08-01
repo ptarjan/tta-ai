@@ -235,6 +235,19 @@ def _move_ident(state, idx, w, mv):
         return dict(info, kind=kind)
     if kind in ("war", "aggression"):
         return {"kind": kind, "name": mv[1], "target": mv[2]}
+    if kind == "offer_pact":
+        # ("offer_pact", name, partner, side) -- three fields distinguish one
+        # offer from another, and the census recorded NONE of them until
+        # 2026-08-01, so every pact logged as {"name": None} and the 61%
+        # exact-tie rate on this kind could not be attributed.  war and
+        # aggression carry the identical shape and were always identified;
+        # this is the "in one list but not the other" class again.
+        return {"kind": kind, "name": mv[1], "target": mv[2],
+                "side": mv[3] if len(mv) > 3 else ""}
+    if kind == "cancel_pact":
+        # ("cancel_pact", owner) -- no card name, the pact is identified by
+        # whose it is.
+        return {"kind": kind, "name": None, "target": mv[1]}
     if kind in ("copy_tactic", "play_tactic", "build", "develop",
                 "play_action", "play_leader", "destroy", "wonder_step",
                 "prepare_event"):
