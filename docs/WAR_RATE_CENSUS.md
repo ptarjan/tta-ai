@@ -238,13 +238,32 @@ cannot pass by recording nothing.  This matters more than a normal test --
 the eight-fingerprint gate replay that used to guard this class of change is
 no longer run.
 
-**Where it is blind, stated plainly rather than discovered later.**
-`run_league.sh` exports `TTA_JOURNAL=1`, and `QuiescentBot.pick` returns into
-its journalled twin before reaching the recording call.  So **the 3p arm
-records nothing at all**; only the 2p `PlanBot` arm does.  That is exactly
-the half this document most needs (section 6: "no 3p data at all", and the
-pathology is documented as worse at 3p/4p), and it is the same "present in
-one path, absent from the other, and nothing fails when they disagree"
-shape this project keeps finding.  Instrumenting the journalled decision
-path is the next step; until it is done, do not read an absence of 3p
-records as an absence of 3p war decisions.
+**Where it was blind (fixed 2026-08-02, `878acee`).**
+`run_league.sh` exports `TTA_JOURNAL=1`, and `QuiescentBot.pick` returned into
+its journalled twin before reaching the recording call, so any quiesce arm
+recorded nothing at all -- the same "present in one path, absent from the
+other, and nothing fails when they disagree" shape this project keeps
+finding.  `_pick_journalled` now records.  Recording is safe under the
+journal because a feature vector is plain floats: it holds no reference into
+the state that `rollback` is about to undo.
+
+**Where it is blind NOW, and this is the live limit.**  No arm in the league
+runs `QuiescentBot`.  Every arm is `--candidate-bot plan:width=2` with no
+`--with-quiescent`, verified 2026-08-02 across all seven climbers (2p x1,
+3p x3, 4p x3).  `PlanBot` correctly supplies no feature vector -- its score
+is a beam value averaged over samples of a multi-ply search, and there is no
+single vector behind it -- so **every row the league writes carries
+`feature_diff_chosen_vs_runnerup: null`**, by design and not by fault.
+Measured over 216 census files touched in the six hours after the fix:
+11,395 of 11,455 rows carry the key (the 60 without are from arm processes
+that started before it landed), 2,235 of them are exact score ties, and the
+diff is `null` on all of them.
+
+So the feature-diff instrument is wired end to end and has no data source.
+To make it produce a row, one of two things has to happen: run a quiesce arm
+(`--with-quiescent`, which changes the league's opponent pool), or record a
+ply-0 diff for `PlanBot` -- `features()` on the state after applying each
+candidate move, which is NOT the beam score's input and would have to be
+labelled as a different measurement, not as an explanation of the margin.
+Neither is done.  Do not read `null` as "the two moves were identical"; that
+answer is `{}`, and nothing has produced one yet.
