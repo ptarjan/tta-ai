@@ -817,7 +817,9 @@ def _h_play_leader(state, p, move, rng):
         old = p.leader
         effects.on_leave_play(state, p, old)
         if old == "Homer" and p.completed_wonders and p.homer_wonder is None:
-            p.homer_wonder = p.completed_wonders[0]
+            p.homer_wonder = p.completed_wonders[0]   # tucked, still face up
+        else:
+            economy.discard_civil(state, old)
         # replacing refunds one civil action (§9.1)
         p.civil_actions = min(ca_total(state, p), p.civil_actions + 1)
     p.leader = name
@@ -880,6 +882,8 @@ def _develop_special(state, p, name):
 def _set_government(state, p, name):
     spent_c = ca_total(state, p) - p.civil_actions
     spent_m = effects.state_stats(state, p).military_actions - p.military_actions
+    if p.government and p.government != name:
+        economy.discard_civil(state, p.government)   # the old one leaves play
     p.government = name
     effects.invalidate(state, p)
     s = effects.state_stats(state, p)
@@ -967,6 +971,7 @@ def _h_play_action(state, p, move, rng):
     revolt_ok = (p.civil_actions == ca_total(state, p))
     pay_ca(state, p, 1)
     journal.touch(p.hand_civil).remove(name)
+    economy.discard_civil(state, name)      # one-shot: played face up, spent
     eff = _DB.get(name).get("effects") or {}
     ordered = eff.get("freeCivilAction")
     if "extraCivilActions" in eff:

@@ -145,6 +145,20 @@ PARAMETERS = {
     "wonder_potential": ("evaluate", "scale on weighted.wonder_potential()"),
     "row_urgency": ("evaluate", "row_pressure()[0]"),
     "row_bargain_forgone": ("evaluate", "row_pressure()[1]"),
+    "rival_desire": (
+        "evaluate",
+        "shape parameter inside row_pressure()'s rival model, not a term: it "
+        "blends the uniform per-rival `reach` against _rival_desire()'s "
+        "value-weighted competition.  It emits no feature of its own for the "
+        "same reason `rival_take_share` does not -- it reweights a "
+        "probability, and the thing it reweights is already reported as "
+        "row_bargain_forgone"),
+    "row_last_copy": (
+        "evaluate",
+        "scale on row_last_copy(): the row value that will never be dealt "
+        "again, from engine.bots.counting.civil_outlook.  Priced through `w` "
+        "(it multiplies card_potential) and non-linear in it, so it lives in "
+        "evaluate for the same reason row_urgency does"),
     "tactic_gain": ("evaluate", "tactic_terms()[0], gated in evaluate"),
     "tactic_short": ("evaluate", "tactic_terms()[1], gated in evaluate"),
     "rival_take_share": (
@@ -448,6 +462,47 @@ KNOWN_DEAD = {
         "for every other file",
         "none -- deliberately frozen"),
 }
+
+#: Coordinates that reached a live champion file only when its arm last
+#: re-execed, and so have not been offered to the climber for a single
+#: generation yet.  `inert-live` reads `experiments/league_state/`, which the
+#: running league REWRITES: the moment a new key lands in DEFAULT_WEIGHTS the
+#: next arm to restart seeds it at its 0.0 default and carries it, and the
+#: ratchet -- correctly, by its own rule -- reports a coordinate that is 0.0 on
+#: every champion that carries it.  On 2026-08-02 the 3p champion was the only
+#: one re-execed since these fourteen landed, so it was the only carrier and
+#: all fourteen read dead.
+#:
+#: They are listed rather than exempted by a rule, because there IS no honest
+#: rule: "carried by only one champion" would go quiet again as soon as the
+#: other two arms restart, still at 0.0, which is the case the ratchet exists
+#: for.  Listing them is also self-cleaning -- the assertion is an equality, so
+#: the first one the league actually climbs turns the test red the other way
+#: and asks for its line back.  Do not add to this without checking the arm
+#: restart times against when the key landed.
+_NOT_YET_CLIMBED = ('attack_target_lead',
+                    'attack_target_weakness',
+                    'my_event_threat',
+                    'my_seeded_pending',
+                    'pact_partner_lead',
+                    'rival_building_wonder',
+                    'rival_colonies',
+                    'rival_food_stock',
+                    'rival_free_workers',
+                    'rival_mil_actions',
+                    'rival_resource_stock',
+                    'rival_science_stock',
+                    'rival_yellow_bank',
+                    'row_last_copy')
+for _k in _NOT_YET_CLIMBED:
+    KNOWN_DEAD[_k] = (
+        ("inert-live",),
+        "landed in DEFAULT_WEIGHTS on 2026-08-02 at a 0.0 default and reached "
+        "the 3p champion when that arm re-execed the same day; no generation "
+        "has priced it yet, so 0.0 here means UNTRIED, not measured-and-dead",
+        "delete this line once the league climbs it -- the equality assertion "
+        "in test_the_live_champions_leave_exactly_the_listed_ones_at_zero "
+        "will ask")
 
 #: Card types `card_potential` is never asked to price, so their pricing says
 #: nothing.  Events are seeded into the event deck rather than taken from the

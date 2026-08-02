@@ -187,7 +187,8 @@ def _pick(state, moves, idx, weights, end_bias, level, box, max_depth):
             # computed at this node are stale
             try:
                 ctx = rival_context(trial, idx,
-                                    root_ctx.get("root_row"))
+                                    root_ctx.get("root_row"),
+                                    root_ctx.get("root_counts"))
             except Exception:
                 ctx = root_ctx
         try:
@@ -232,7 +233,8 @@ def _pick_journalled(state, moves, idx, weights, end_bias, level, box,
                 _resolve(state, weights, end_bias, level - 1, box, max_depth)
                 try:
                     ctx = rival_context(state, idx,
-                                        root_ctx.get("root_row"))
+                                        root_ctx.get("root_row"),
+                                        root_ctx.get("root_counts"))
                 except Exception:
                     ctx = root_ctx
             try:
@@ -381,7 +383,8 @@ class QuiescentBot:
                     st["truncated"] += 1
                 try:
                     ctx = rival_context(trial, idx,
-                                        root_ctx.get("root_row"))
+                                        root_ctx.get("root_row"),
+                                        root_ctx.get("root_counts"))
                 except Exception:
                     ctx = root_ctx
             try:
@@ -468,7 +471,8 @@ class QuiescentBot:
                         st["truncated"] += 1
                     try:
                         ctx = rival_context(state, idx,
-                                            root_ctx.get("root_row"))
+                                            root_ctx.get("root_row"),
+                                            root_ctx.get("root_counts"))
                     except Exception:
                         ctx = root_ctx
                 try:

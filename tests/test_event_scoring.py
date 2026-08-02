@@ -23,11 +23,17 @@ from engine import cards as C, events, game
 from engine.bots import weighted as W
 from engine.bots.fastcopy import copy_state
 
+import corpus
+
 
 def _play(players=2, seed=7, bot="weighted"):
-    from engine.bots import make_bots
-    bots = make_bots(bot, players, seed=seed)
-    return game.play_game(bots, players, seed=seed)
+    """One played game, cached across the whole file (see tests/corpus.py).
+
+    Nine tests in here wanted the same finished game and each played it from
+    scratch, which was most of this file's half-minute per test.  The caller
+    still gets its own copy, so the tests that mutate what they are handed --
+    and several do -- cannot reach each other."""
+    return corpus.played(players, seed, bot)
 
 
 class TestForecastMatchesPayout(unittest.TestCase):
@@ -53,13 +59,125 @@ class TestForecastMatchesPayout(unittest.TestCase):
         self.assertGreater(checked, 0, "no games produced a comparison")
 
     def test_margin_is_a_difference_of_the_forecast(self):
+        """WHEN THE PILE HOLDS NOTHING HIDDEN, the feature is exactly the
+        engine's own forecast, differenced.
+
+        This test used to make that assertion on the raw finished game, and in
+        doing so it PINNED A LEAK: `event_scoring_margin` agreed with
+        `final_event_culture` only because both walked the whole face-down
+        politics pile by name, including the Age III events the *opponent* had
+        prepared (RULES_SPEC 5.3 puts them face down).  A test that asserts a
+        forecast equals an omniscient payout is a test that requires the
+        forecaster to be omniscient.
+
+        So the position is first made one with no hidden information in it --
+        every pending event is credited to me -- and only then are the two
+        required to agree.  The masking is the subject of
+        `TestForecastSeesOnlyWhatItMay` below; this test's job is to prove that
+        the arithmetic on top of the mask is still the engine's.
+        """
+        checked = 0
         for seed in range(4):
             st = _play(2, seed=seed)
             st.game_over = False          # the feature is gated on this
+            for name in list(st.current_events) + list(st.future_events):
+                st.seeded_by[name] = 0            # I prepared all of them
             owed = events.final_event_culture(st)
             got = W.event_scoring_margin(st, 0)
             want = owed[0] - owed[1]
             self.assertAlmostEqual(got, max(-60.0, min(60.0, float(want))))
+            checked += 1
+        self.assertGreater(checked, 0)
+
+
+class TestForecastSeesOnlyWhatItMay(unittest.TestCase):
+    """The feature must not read a card its opponent put face down.
+
+    The rule the project owner set is that anything a human at the table could
+    see is fair game and nothing else is.  A prepared event goes into the pile
+    FACE DOWN, so its name is not one of those things -- but the pile's height
+    is, and so is the printed composition of the Age III deck, which is why
+    `engine.bots.counting.event_pool` can still say something useful about it.
+    """
+
+    def test_swapping_a_rival_seed_for_another_impact_card_is_invisible(self):
+        """THE DIRECT TEST.  Replace the event my opponent hid with a
+        different one and my forecast must not move.
+
+        If it moves, I am reading the back of a card.  Substituting a card of
+        the same age keeps every public quantity identical -- the pile is the
+        same height, the same events have been revealed, the same cards are
+        discarded -- so any change in the number came from the name.
+        """
+        db = C.db()
+        moved = same = 0
+        for seed in range(8):
+            st = _play(2, seed=seed)
+            st.game_over = False
+            pile = list(st.current_events) + list(st.future_events)
+            theirs = [n for n in pile
+                      if st.seeded_by.get(n) == 1 and db.age_of(n) == "III"]
+            if not theirs:
+                continue
+            alt = [n for n in db.by_name
+                   if db.age_of(n) == "III" and db.type_of(n) == "event"
+                   and n not in pile and n not in st.past_events]
+            if not alt:
+                continue
+            base = W.event_scoring_margin(st, 0)
+            victim, replacement = theirs[0], alt[0]
+            for lst in (st.current_events, st.future_events):
+                if victim in lst:
+                    lst[lst.index(victim)] = replacement
+            st.seeded_by.pop(victim, None)
+            st.seeded_by[replacement] = 1
+            after = W.event_scoring_margin(st, 0)
+            same += 1
+            if abs(after - base) > 1e-9:
+                moved += 1
+        self.assertGreater(same, 0, "no game ever had a rival-seeded Age III "
+                                    "event, so this test proved nothing")
+        self.assertEqual(moved, 0, f"{moved}/{same} positions changed their "
+                         "forecast when a FACE-DOWN rival event was swapped "
+                         "for another -- the feature is reading hidden names")
+
+    def test_my_own_seed_is_still_seen(self):
+        """The other half: masking must not blind the bot to its OWN plan.
+
+        A mask that returns a constant would pass the test above and destroy
+        the feature, which is the "an instrument returning null everywhere has
+        two causes" failure.  Swapping a card *I* prepared has to move the
+        number, because I know exactly what I put there.
+        """
+        db = C.db()
+        moved = same = 0
+        for seed in range(8):
+            st = _play(2, seed=seed)
+            st.game_over = False
+            pile = list(st.current_events) + list(st.future_events)
+            mine = [n for n in pile
+                    if st.seeded_by.get(n) == 0 and db.age_of(n) == "III"]
+            alt = [n for n in db.by_name
+                   if db.age_of(n) == "III" and db.type_of(n) == "event"
+                   and n not in pile and n not in st.past_events]
+            if not mine or not alt:
+                continue
+            base = W.event_scoring_margin(st, 0)
+            for replacement in alt:
+                for lst in (st.current_events, st.future_events):
+                    if mine[0] in lst:
+                        lst[lst.index(mine[0])] = replacement
+                st.seeded_by.pop(mine[0], None)
+                st.seeded_by[replacement] = 0
+                same += 1
+                if abs(W.event_scoring_margin(st, 0) - base) > 1e-9:
+                    moved += 1
+                    break
+                mine[0] = replacement
+        self.assertGreater(same, 0, "no game gave me an Age III seed")
+        self.assertGreater(moved, 0, "swapping an event I prepared MYSELF "
+                           "never changed the forecast -- the mask is not a "
+                           "mask, it is an off switch")
 
 
 class TestSingleImplementation(unittest.TestCase):
@@ -163,6 +281,44 @@ class TestFeatureIsWired(unittest.TestCase):
         st.game_over = False
         f = W.features(st, 0, W.rival_context(st, 0))
         self.assertIn("event_scoring_margin", f)
+
+    def test_it_costs_nothing_when_it_is_not_priced(self):
+        """Zero weight must mean zero WORK, not just zero contribution.
+
+        This is the most expensive entry in `features` by a wide margin -- it
+        asks `events.final_event_awards` to evaluate fifteen scoring formulas --
+        and profiling caught it burning 22% of every board evaluation on a
+        weight vector that prices it at 0.0.  `evaluate` now asks `features`
+        for the priced entries only; this fails if that gate is ever removed or
+        stops covering this term.
+
+        The second half is the half that matters: a gate that skipped the term
+        even when it IS priced would be a silent strategy change, so a vector
+        that buys it must still pay for it.
+        """
+        st = corpus.positions(2, seed=7, every=200, limit=400)[-1]
+        st.game_over = False
+        calls = []
+        real = W.event_scoring_margin
+        W.event_scoring_margin = (
+            lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+        try:
+            W.evaluate(st, 0, W.DEFAULT_WEIGHTS, W.rival_context(st, 0))
+            self.assertEqual(calls, [], "event_scoring_margin was computed at "
+                             "its 0.0 default and the result discarded")
+            priced = dict(W.DEFAULT_WEIGHTS, event_scoring_margin=0.05)
+            W.evaluate(st, 0, priced, W.rival_context(st, 0))
+            self.assertTrue(calls, "a vector that PRICES the feature did not "
+                            "compute it -- the gate is not a speed switch, it "
+                            "is an off switch")
+            # instruments still get the whole vector, priced or not
+            calls.clear()
+            f = W.features(st, 0, W.rival_context(st, 0), W.DEFAULT_WEIGHTS)
+            self.assertTrue(calls, "features() skipped an unpriced entry, so "
+                            "every instrument reading it now sees a constant")
+            self.assertIn("event_scoring_margin", f)
+        finally:
+            W.event_scoring_margin = real
 
     def test_feature_moves_when_a_scoring_event_is_pending(self):
         """Guard against shipping a dead coordinate (CARD_BLINDNESS 5.1).

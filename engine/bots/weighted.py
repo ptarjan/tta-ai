@@ -45,6 +45,7 @@ from functools import lru_cache as _lru_cache
 
 from .. import actions, cards as C, economy, effects, journal
 from . import board_yields as _BY
+from . import counting
 from .fastcopy import copy_state
 from .trial import USE_JOURNAL, fresh_trial_rng
 
@@ -52,7 +53,8 @@ __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
            "card_potential", "hand_potential", "wonder_potential",
            "rival_hand_potential", "rival_board",
            "my_seeds", "my_seeded_pending", "my_event_threat",
-           "row_pressure", "load_weights", "save_weights"]
+           "row_pressure", "row_last_copy", "load_weights",
+           "save_weights"]
 
 # ---------------------------------------------------------------- metadata
 
@@ -143,13 +145,69 @@ PACT_OFFER_CREDIT = 0.5             # FITTED PRIOR (see docs/MODEL_CONSTANTS.md)
 _SCORING_MARGIN_CAP = 60.0          # NUMERICAL GUARD (outlier clamp)
 
 
-def event_scoring_margin(state, idx):
+def _scoring_weights(state, idx, ctx=None):
+    """event name -> how many copies of it I should expect to score, from what
+    I am ALLOWED to know.
+
+    Two sources, and the difference between them is the whole fix:
+
+    * **My own seeds, at weight 1.0.**  I prepared them, so I know exactly
+      which Age III events they are.  `my_seeds` explains why remembering that
+      is memory rather than a peek.
+    * **Everything else, at `p_in_pile`.**  I do NOT know what my opponents
+      put face down.  `counting.event_pool` works out which Impact cards are
+      still unaccounted for and how likely any one of them is to be sitting in
+      a pile slot I did not seed, from the printed deck composition, the
+      revealed events, the discard and the height of the stack -- all public.
+
+    THE BUG THIS REPLACES.  The old body called
+    `events.pending_final_events(state)` directly, which walks
+    `current_events + future_events` **by name**.  Those are face-down cards
+    (RULES_SPEC 5.3).  So every champion trained since the feature shipped has
+    been scoring the endgame off Age III events its opponents had hidden --
+    reading the back of a card, not counting them.  It went unnoticed because
+    docs/INFORMATION_AUDIT.md 0b sampled Age I/II positions, where this term is
+    structurally 0 and the leak is invisible; "a rate of zero has two causes"
+    applies to a leak measurement exactly as it does to a feature measurement.
+    """
+    db = C.db()
+    out = {}
+    for name in my_seeds(state, idx):
+        if db.age_of(name) == "III":
+            out[name] = out.get(name, 0.0) + 1.0
+    pool = ctx.get("event_pool") if ctx else None
+    if pool is None:
+        pool = counting.event_pool(state, idx)
+    unknown, p = pool
+    if p > 0.0:
+        for name, copies in unknown.items():
+            if db.age_of(name) != "III":
+                continue
+            if not (db.get(name).get("effects") or {}).get("allPlayers"):
+                continue
+            out[name] = out.get(name, 0.0) + p * copies
+    return out
+
+
+def event_scoring_margin(state, idx, ctx=None):
     """Final-scoring culture the pending Age III events owe me, less the best
     rival's, clamped to +/-`_SCORING_MARGIN_CAP`.
 
-    Calls the engine's own `events.final_event_culture`, so the fifteen
-    scoring formulas are never restated here and cannot drift from the rules;
-    `tests/test_event_scoring.py` pins the agreement.
+    Calls the engine's own `events.final_event_awards`, so the fifteen scoring
+    formulas are never restated here and cannot drift from the rules;
+    `tests/test_event_scoring.py` pins the agreement.  What HAS changed is
+    which events it asks about: `_scoring_weights` supplies my own seeds at
+    certainty and the rest at a counted probability, instead of the old body
+    reading the whole face-down pile.  The engine's own scorer still sees
+    everything -- it is allowed to -- so `evaluate_final_events` is untouched.
+
+    The awards are obtained by temporarily REBINDING `state.current_events` to
+    the candidate list and restoring it in a `finally`.  `final_event_awards`
+    only reads, the two attributes are rebound rather than mutated (so the
+    journal's list identities are undisturbed), and nothing can observe the
+    swap because it is restored before this function returns -- which is the
+    cheap way to ask "what would these events pay?" without a `copy_state` on
+    every single evaluation.
 
     Zero once `state.game_over`: `game._finish_game` has by then already paid
     these events into `p.culture`, and the decks still hold the names, so
@@ -157,17 +215,30 @@ def event_scoring_margin(state, idx):
     """
     if state.game_over or not state.has_military:
         return 0.0
-    from .. import events as _events
-    try:
-        if not _events.pending_final_events(state):
-            return 0.0
-        owed = _events.final_event_culture(state)
-    except Exception:                                      # noqa: BLE001
-        return 0.0
     rivals = [q.idx for q in state.players
               if q.idx != idx and not q.resigned]
     if not rivals:
         return 0.0
+    weights = _scoring_weights(state, idx, ctx)
+    if not weights:
+        return 0.0
+    from .. import events as _events
+    names = list(weights)
+    saved_c, saved_f = state.current_events, state.future_events
+    try:
+        state.current_events, state.future_events = names, ()
+        awards = _events.final_event_awards(state)
+    except Exception:                                      # noqa: BLE001
+        return 0.0
+    finally:
+        state.current_events, state.future_events = saved_c, saved_f
+    owed = [0.0] * len(state.players)
+    for name, steps in awards:
+        wt = weights.get(name, 0.0)
+        if not wt:
+            continue
+        for i, amount in steps:
+            owed[i] += wt * amount
     margin = owed[idx] - max(owed[i] for i in rivals)
     return max(-_SCORING_MARGIN_CAP, min(_SCORING_MARGIN_CAP, float(margin)))
 
@@ -732,7 +803,7 @@ def root_row_budget(state):
     return tuple(names)
 
 
-def rival_context(state, idx, root_row=None):
+def rival_context(state, idx, root_row=None, root_counts=None):
     """Rival aggregates that only change when *they* move.
 
     Computed once per decision at the root and reused for every candidate
@@ -751,7 +822,19 @@ def rival_context(state, idx, root_row=None):
     it the row budget would be recomputed from the trial's own row, which is
     precisely the leaked information the budget exists to hide, and the rebuild
     would silently re-open the leak for exactly the deep nodes that have one.
+
+    `root_counts` is the same argument, one zone over.  `engine.bots.counting`
+    reads the card row, the discard, the past events and the height of each
+    deck, and a trial `apply` refills the row and reveals events -- so counting
+    on a searched state would let the search see the very card it just drew.
+    Computed once here at the root, threaded down by the plan bots exactly as
+    `root_row` is, and every caller that rebuilds this context on a trial state
+    MUST pass both.  It is a pair `(civil_outlook, event_pool)`, built together
+    because the two are always wanted together and neither is worth a second
+    threading parameter.
     """
+    counts = root_counts if root_counts is not None else (
+        counting.civil_outlook(state, idx), counting.event_pool(state, idx))
     best_rate = best_sci = best_str = 0
     rates = {}
     views = []
@@ -780,7 +863,9 @@ def rival_context(state, idx, root_row=None):
             "rival_strength": best_str, "rival_views": tuple(views),
             "rival_rates": rates,
             "root_row": root_row_budget(state) if root_row is None
-            else root_row}
+            else root_row,
+            "root_counts": counts,
+            "civil_outlook": counts[0], "event_pool": counts[1]}
 
 
 def rival_strength(state, idx):
@@ -1293,11 +1378,28 @@ def rate_multiplier(state, w, n=None):
     return max(0.0, 1.0 + c * (horizon_scale(state, n, w) - 1.0))
 
 
-def features(state, idx, ctx=None, w=None):
+def features(state, idx, ctx=None, w=None, priced_only=False):
     """The raw feature vector from player `idx`'s point of view.
 
     `w` is threaded in ONLY so the `horizon_legacy` A/B hatch can be selected
     per weight vector (see `lateness`); no feature is priced through it.
+
+    `priced_only` is a SPEED switch and nothing else.  `evaluate` multiplies
+    every entry here by `w[k]` and skips the term entirely when that weight is
+    falsy, so any entry whose weight is 0.0 was computed and thrown away.  That
+    is free for the arithmetic-only entries and it was NOT free for
+    `event_scoring_margin`, which asks the engine to score fifteen final-event
+    formulas: profiling the coordinate-registry corpus put it at 24s of 109s --
+    22% of ALL evaluation time -- on a vector that prices it at 0.0.  This
+    repo already holds one term to that invariant (`row_last_copy`, see
+    tests/test_counting.py::test_the_default_weight_costs_nothing); this
+    extends it to the expensive one.
+
+    It is off by default so that every INSTRUMENT -- the coordinate registry,
+    the census, the harness -- keeps getting the complete vector including the
+    entries the current weights happen not to buy.  A dead-coordinate ratchet
+    that were fed the priced-only vector would report every unpriced
+    coordinate as dead, which is the ratchet reading its own switch.
     """
     meta = _meta()
     db = C.db()
@@ -1556,7 +1658,12 @@ def features(state, idx, ctx=None, w=None):
         # --- the Age III scoring events already in play (see the block above
         # `event_scoring_margin`).  0.0 whenever none are pending, which is
         # every position before the first Age III event is seeded.
-        "event_scoring_margin": event_scoring_margin(state, idx),
+        # Skipped when unpriced and only then -- see `priced_only` above.  The
+        # engine call behind this is the single most expensive entry in the
+        # dict by a wide margin.
+        "event_scoring_margin": (
+            0.0 if (priced_only and not (w or {}).get("event_scoring_margin"))
+            else event_scoring_margin(state, idx, ctx)),
         # --- rivals
         "rival_culture": rival_culture,
         "rival_mean_culture": rival_mean,
@@ -3148,6 +3255,43 @@ def rival_take_p(cost, budget, reach, slack, share):
     return 1.0 if p > 1.0 else p
 
 
+def _rival_desire(state, w, visible, views, gated, late_tech, late_action):
+    """Per rival, {slot -> (what they want THIS slot, what they want in all)}.
+
+    WHAT THIS CLOSES.  `rival_take_p` models a rival's CAPACITY exactly -- what
+    the row costs them, what their civil actions buy, how full their hand is --
+    and then spreads that capacity UNIFORMLY over every slot they could legally
+    take.  Uniform is wrong in the obvious direction: a rival with two civil
+    actions and a Philosophy in reach is not equally likely to spend them on
+    the Bronze next to it.  docs/INFORMATION_AUDIT.md called this out as "no
+    model of what an opponent WANTS from the row".
+
+    Their board is public, so it can be priced.  This runs the SAME
+    `card_potential` the bot prices its own row with, from the rival's seat --
+    which is the honest thing to run: it is a model of them built out of my own
+    judgement applied to their visible position, not a peek at their plan.
+    Intentions stay hidden; only the board is read.
+
+    Only slots that rival can legally take are counted, and only positive
+    values, so the shares are a genuine distribution over the cards they would
+    actually want.  Slots they cannot reach are absent, and `row_pressure`
+    falls back to the uniform `reach` for those.
+    """
+    out = []
+    for view, gate in views:
+        vals = {}
+        total = 0.0
+        for j, nm in visible:
+            if not gated(state, view, j, gate, nm):
+                continue
+            v = card_potential(nm, w, state, view.idx, late_tech, late_action)
+            if v > 0.0:
+                vals[j] = v
+                total += v
+        out.append({j: (v, total) for j, v in vals.items()})
+    return out
+
+
 def row_pressure(state, idx, w, ctx=None):
     """(row_urgency, row_bargain_forgone) for the civil row.
 
@@ -3234,7 +3378,12 @@ def row_pressure(state, idx, w, ctx=None):
     cost_of = actions.ROW_COST
     gated = actions._can_take_gated
     share = w.get("rival_take_share", RIVAL_TAKE_SHARE)
-    reach = None            # per-rival slot counts, built at most once
+    desire = w.get("rival_desire", 0.0)
+    if desire < 0.0:
+        desire = 0.0
+    elif desire > 1.0:
+        desire = 1.0
+    reach = want = None     # per-rival slot counts, built at most once
     urgency = bargain = 0.0
     # See `_hand_total`: one board, so `lateness` is invariant across the
     # row and only needs computing once.
@@ -3263,14 +3412,95 @@ def row_pressure(state, idx, w, ctx=None):
                 reach = [sum(1 for j, nm in visible
                              if gated(state, v, j, g, nm))
                          for v, g in views]
+                want = (_rival_desire(state, w, visible, views, gated,
+                                      late_tech, late_action)
+                        if desire > 0.0 else None)
             for k, (view, gate) in enumerate(views):
                 if not gated(state, view, i, gate, name):
                     continue
+                compete = reach[k]
+                if want is not None:
+                    mine_i, total_i = want[k].get(i, (0.0, 0.0))
+                    if mine_i > 0.0 and total_i > 0.0:
+                        # Effective competition: how many slots' worth of that
+                        # rival's appetite this one slot is up against.  Equal
+                        # to `reach` exactly when they want every reachable
+                        # slot the same amount, which is what the uniform model
+                        # assumed; larger when this card is one they do not
+                        # want, and as small as 1.0 when it is the only card on
+                        # the row that interests them.
+                        eff = total_i / mine_i
+                        if eff < 1.0:
+                            eff = 1.0
+                        compete = (1.0 - desire) * reach[k] + desire * eff
                 survive *= 1.0 - rival_take_p(
-                    _rival_take_cost(name, i, gate), gate[0], reach[k],
+                    _rival_take_cost(name, i, gate), gate[0], compete,
                     view.hand_slack, share)
         bargain += saving * survive
     return urgency, bargain
+
+
+def row_last_copy(state, idx, w, ctx=None):
+    """Value sitting in the row that, if I pass it up, I will never see again.
+
+    THE FEATURE THE AUDIT WAS ACTUALLY ASKED FOR, in the project owner's own
+    words: *"know that a second selective breeding is near the end or not and
+    it has to build another farm since it won't see it"*.  `row_urgency`
+    already knows a card is about to slide off the LEFT; it has never known
+    whether another copy is coming off the deck, so a last copy and a card
+    with three more behind it price identically.
+
+    Each takeable slot contributes `card_potential * P(no further copy)`, and
+    that probability is `max(0, 1 - outlook)` where `outlook` is
+    `counting.civil_outlook`'s expected number of further copies.  The clip is
+    the whole model and it has no fitted constant in it: at an outlook of 0
+    the deck provably holds no more (an age's deck is always dealt out in
+    full), so the probability is exactly 1; at an outlook of 1 or more another
+    copy is expected, so it is 0; in between it interpolates.
+
+    Deliberately NOT folded into `row_pressure`'s return.  That function's
+    2-tuple is depended on by ~40 call sites across the tests and tools, and
+    widening it to carry a third number would be a wide, silent change to code
+    that is currently pinning real properties.  The duplicated gating loop is
+    the cheaper mistake, and it is skipped entirely when the weight is 0.0.
+
+    The outlook comes from `ctx` -- see `rival_context`'s `root_counts`.  With
+    no ctx it is counted from `state`, which is correct at the search root and
+    is the same degraded path `row_pressure` documents for `root_row`.
+    """
+    row = state.card_row
+    if not row:
+        return 0.0
+    outlook = (ctx or {}).get("civil_outlook")
+    if outlook is None:
+        outlook = counting.civil_outlook(state, idx)
+    root = ctx.get("root_row") if ctx else None
+    cursor, n_root = 0, 0 if root is None else len(root)
+    p = state.players[idx]
+    mine = actions._take_gate(state, p, budget=actions.ca_total(state, p))
+    gated = actions._can_take_gated
+    late_tech = lateness(state, w)
+    late_action = lateness(state)
+    total = 0.0
+    for i, name in enumerate(row):
+        if name is None:
+            continue
+        if root is not None:
+            k = cursor
+            while k < n_root and root[k] != name:
+                k += 1
+            if k >= n_root:
+                break
+            cursor = k + 1
+        if not gated(state, p, i, mine, name):
+            continue
+        val = card_potential(name, w, state, idx, late_tech, late_action)
+        if val <= 0.0:
+            continue
+        gone = 1.0 - outlook.get(name, 0.0)
+        if gone > 0.0:
+            total += val * gone
+    return total
 
 
 # ------------------------------------------------------------ default weights
@@ -3354,6 +3584,15 @@ BASE_WEIGHTS = {
     # and must not pick up the early/late phase multipliers.
     "row_urgency": 0.0,
     "row_bargain_forgone": 0.0,
+    # `card_potential` of the row cards that will never be dealt again, from
+    # `counting.civil_outlook`.  See `row_last_copy`; 0.0 is inert.
+    "row_last_copy": 0.0,
+    # How much of the rival row model is DESIRE rather than uniform capacity.
+    # 0.0 spreads a rival's civil actions evenly over every slot they can
+    # reach, which is exactly what `row_pressure` did before and is therefore
+    # free and bit-identical; 1.0 spreads them in proportion to what the cards
+    # are worth on that rival's own board.  See `_rival_desire`.
+    "rival_desire": 0.0,
     # NOT a value term -- a MODEL PARAMETER, and the only fitted number left
     # in `row_pressure`: the share of a rival's civil actions that goes on the
     # row rather than on building.  Everything else in `rival_take_p` is read
@@ -3824,7 +4063,10 @@ DEFAULT_WEIGHTS.update(PHASE_WEIGHTS)
 def evaluate(state, idx, weights=None, ctx=None, f=None):
     w = weights if weights is not None else DEFAULT_WEIGHTS
     if f is None:
-        f = features(state, idx, ctx, w)
+        # priced_only: the loop below drops every term whose weight is falsy,
+        # so computing those terms is pure waste HERE (and only here -- see
+        # `features`, which still hands instruments the whole vector).
+        f = features(state, idx, ctx, w, priced_only=True)
     total = 0.0
     get = w.get
     # `rate_multiplier` is 1.0 unless the vector asks for the horizon, and the
@@ -3901,6 +4143,12 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
             total += ru * urgency
         if rb:
             total += rb * bargain
+    # Card counting, priced through `w` like everything else in this block and
+    # therefore eval-only.  Default 0.0, so a champion trained before the count
+    # existed evaluates bit-identically and pays nothing for it.
+    rlc = get("row_last_copy")
+    if rlc:
+        total += rlc * row_last_copy(state, idx, w, ctx)
     # The events I planted myself, priced through `w` and therefore eval-only
     # for the same reason `hand_potential` is.  Skipped entirely at scale 0.0,
     # which is the default -- so every existing champion evaluates

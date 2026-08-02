@@ -203,7 +203,13 @@ class LeagueGeneration(unittest.TestCase):
     def _run(self, hours=1.0):
         # hours=0 runs no generation at all, which is how the resume check
         # exercises the STARTUP refusal without paying for a block of games.
+        # max_blocks=1: `score_candidate` will play up to four blocks of games
+        # chasing significance, and NOTHING in this class reads the verdict --
+        # every assertion here is about whether the generation halted, what it
+        # logged and what it wrote.  Four blocks of real games cost 69s of a
+        # 2m38s suite to decide a question no assertion asks.
         return L.run(players=2, hours=hours, workers=1, lam=1, block=2,
+                     max_blocks=1,
                      subset=1, max_gens=1, state_dir=self.tmp,
                      full_check_every=0, ablate_every=0, legacy_ladders=False,
                      human_bots=("none",), objective="winshare",

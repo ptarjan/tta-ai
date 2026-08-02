@@ -273,9 +273,11 @@ def _c_infiltrate(state, p, opt, ctx, rng):
     if opt == "leader" and victim.leader:
         effects.on_leave_play(state, victim, victim.leader)
         p.culture += per * db.level_of(victim.leader)
+        economy.discard_civil(state, victim.leader)
         victim.leader = None
     elif opt == "wonder" and victim.wonder:
         p.culture += per * db.level_of(victim.wonder.name)
+        economy.discard_civil(state, victim.wonder.name)
         victim.wonder = None
     effects.invalidate(state, victim)
 

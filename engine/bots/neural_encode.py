@@ -312,9 +312,21 @@ def _discard_block(state):
     """Both discard piles, per age -- the card-counting primitive.
 
     Legal under the 2026-07-31 ruling in this module's docstring.  Every civil
-    card in this pile was face up in the card row in front of every player
-    before it was swept (RULES_SPEC 1.10 step 1); the military pile is the
-    other public pile.
+    card counted here left play IN THE OPEN -- swept off the row in front of
+    everybody (`civil_discard`, RULES_SPEC 1.10 step 1), or removed from a hand
+    or a board where everybody watched it go (`civil_removed`: antiquation
+    culls, a replaced or killed leader, a destroyed or antiquated wonder, a
+    spent one-shot action card, a superseded government).  The military pile is
+    the other public pile.
+
+    IT MUST BE THE UNION OF BOTH CIVIL RECORDS, and that is the correctness
+    point rather than a stylistic one: the subtraction below is only true of
+    every card out of play, so feeding it `civil_discard` alone would make the
+    encoder undercount by exactly the cards the six sites of `discard_civil`
+    write.  The two fields stay separate because their provenance is real
+    information -- `tools/card_census` distinguishes a swept card from a
+    destroyed one -- but nothing that computes "what is left" may read one
+    without the other.
 
     A per-age SIZE is deliberately all that is exposed.  Combined with the
     row, the hands and the tableaux the encoder already reads, it is exactly
@@ -327,7 +339,8 @@ def _discard_block(state):
     one named slice in the coordinate registry rather than five interleaved
     pairs.
     """
-    out = [min(len(state.civil_discard.get(age) or ())
+    out = [min((len(state.civil_discard.get(age) or ())
+                + len(state.civil_removed.get(age) or ()))
                / _CIVIL_DISCARD_SCALE, 1.0) for age in C.AGES]
     out += [min(len(state.discarded_military.get(age) or ())
                 / _MIL_DISCARD_SCALE, 1.0) for age in C.AGES]

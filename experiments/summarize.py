@@ -52,7 +52,15 @@ GROUPS = {
     # feature), but it belongs here: it only ever multiplies through
     # `row_bargain_forgone`, so a group rescale that moves the bargain without
     # it would move the two halves of one model apart.
-    "row": ("row_urgency", "row_bargain_forgone", "rival_take_share"),
+    "row": ("row_urgency", "row_bargain_forgone", "rival_take_share",
+            # `row_last_copy` is card counting, but it belongs HERE and not in
+            # a bucket of its own: it multiplies the same `card_potential` over
+            # the same gated row slots that `row_urgency` does, so it trades
+            # off against those two and a hill-climb has to move it with them.
+            "row_last_copy",
+            # `rival_desire` reshapes the same take-probability `rival_take_share`
+            # scales, so it trades off directly against it and belongs beside it.
+            "rival_desire"),
     "military": ("strength", "strength_rel", "strength_deficit",
                  "strength_lead", "tactic_level", "colonies", "pacts",
                  "pact_blocks_attack", "auction_committed", "auction_bid",

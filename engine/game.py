@@ -182,9 +182,28 @@ def _advance_age(state, rng):
 
 
 def _antiquate(state, ended_level):
-    """Remove cards of ages OLDER than the age that just ended (§12.2)."""
+    """Remove cards of ages OLDER than the age that just ended (§12.2).
+
+    The civil cards culled out of hands are RECORDED, by
+    `economy.discard_civil`, exactly as the military ones already go through
+    `economy.discard_military` below.  They used to vanish: the list
+    comprehension dropped them and nothing wrote them down, so an age's printed
+    card count stopped adding up the moment antiquation touched it, and
+    `engine.bots.counting` -- which subtracts what it has seen from what the
+    rulebook prints -- got a silent shortfall it could not distinguish from
+    cards still in a rival's hand.  That is the same "in this list but not this
+    one" shape GAP 5 was, one zone over, and it was found by the counting tests
+    rather than by reading.
+
+    A human at the table sees this happen: the cull is public and the cards go
+    to the discard face up.  Nothing in the rules or the turn loop reads
+    `civil_removed` -- it is a record, not state -- so this cannot change play.
+    """
     db = C.db()
     for p in state.players:
+        for n in p.hand_civil:
+            if db.level_of(n) < ended_level:
+                economy.discard_civil(state, n)
         p.hand_civil = [n for n in p.hand_civil
                         if db.level_of(n) >= ended_level]
         keep = []
@@ -196,8 +215,10 @@ def _antiquate(state, ended_level):
         p.hand_military = keep
         if p.leader and db.level_of(p.leader) < ended_level:
             effects.on_leave_play(state, p, p.leader)
+            economy.discard_civil(state, p.leader)
             p.leader = None
         if p.wonder and db.level_of(p.wonder.name) < ended_level:
+            economy.discard_civil(state, p.wonder.name)
             p.wonder = None                      # blue tokens return to bank
         # §12.2.2 antiquated pacts leave play (technologies, wonders,
         # colonies, tactics and declared wars stay)

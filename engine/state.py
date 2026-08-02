@@ -172,6 +172,18 @@ class GameState:
     # it is a record, not state -- so it cannot change play.  See
     # docs/INFORMATION_AUDIT.md GAP 5.
     civil_discard: dict = field(default_factory=dict)       # age -> [names]
+    # Civil cards that left play from a HAND or a BOARD rather than off the
+    # row: antiquation culls, a leader replaced or killed, a wonder destroyed
+    # or antiquated half-built, a one-shot action card spent, a government
+    # superseded.  Kept apart from `civil_discard` because the PROVENANCE is
+    # real information -- `tools/card_census` needs to know a card left the row
+    # by being swept -- and not to protect anything downstream: everything that
+    # computes "what is left" MUST read the union, and `counting._seen_civil`
+    # and `neural_encode._discard_block` both do.  Reading one without the
+    # other undercounts, silently, which is the whole bug class this field
+    # exists to close.  Both are records, not state: nothing in the rules or
+    # the turn loop reads either, so neither can change play.
+    civil_removed: dict = field(default_factory=dict)       # age -> [names]
     has_military: bool = False           # military data complete?
     last_round: bool = False
     final_round_end: int | None = None   # turn index after which game ends

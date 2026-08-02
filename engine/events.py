@@ -280,6 +280,7 @@ def _apply_extras(state, p, block, rng):
     if block.get("discardLeaderUnlessCurrentAge") and p.leader:
         if db.age_of(p.leader) != state.age_civil:
             effects.on_leave_play(state, p, p.leader)
+            economy.discard_civil(state, p.leader)
             p.leader = None
     if block.get("takeYellowTokensFromWeakest"):
         n = int(block["takeYellowTokensFromWeakest"])

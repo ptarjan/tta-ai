@@ -224,6 +224,30 @@ def discard_military(state, name):
                   .setdefault(age, [])).append(name)
 
 
+def discard_civil(state, name):
+    """Record a civil card leaving play into the face-up discard.
+
+    The military side has had `discard_military` since GAP 5; the civil side
+    grew the same need the moment `engine.bots.counting` started subtracting
+    what it has seen from what the rulebook prints.  A leader that is replaced,
+    an antiquated leader or half-built wonder, a wonder an opponent destroys, a
+    one-shot action card spent, a government superseded -- every one of those
+    happens in the open at the table, and every one of them used to be dropped
+    on the floor by the engine (`p.leader = None` and nothing else), so an
+    age's printed card count stopped adding up and the counter read the
+    shortfall as "still in a rival's hand".
+
+    It writes `state.civil_removed`, NOT `state.civil_discard`: that field
+    already means "swept off the row" to `neural_encode` and to
+    `tools/card_census`, and widening it would have changed a trained encoder's
+    input without anything failing.  Both are RECORDS, not state -- nothing in
+    the rules or the turn loop reads either -- so this cannot change play.
+    """
+    age = _DB.age_of(name) if name in _DB.by_name else state.age_civil
+    journal.touch(journal.touch(state.civil_removed)
+                  .setdefault(age, [])).append(name)
+
+
 def draw_military(state):
     if not state.military_deck:
         pile = state.discarded_military.get(state.age_military) or []

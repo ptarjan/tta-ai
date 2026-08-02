@@ -125,16 +125,128 @@ was *already* false when written: `event_scoring_margin` calls
 `future_events`. The 35 sampled positions were Age I/II, where that term is
 structurally 0, so the measurement could not see it.
 
-**And that is a live leak, unfixed.** `pending_final_events` includes Age III
-scoring events that *other* players seeded face down. Every trained champion
-reads them. Masking it to my own seeds plus a prior over the rest changes a
-load-bearing term's value on a running arm, so it is a separate change with
-its own before/after — filed, not done.
+**That leak is now CLOSED (§0e).** `event_scoring_margin` no longer calls
+`pending_final_events`; it asks `engine/bots/counting.event_pool` which Age III
+events are unaccounted for and how likely each is to be in the pile, and adds
+its own seeds at certainty.
 
-**Still open:** no civil card counting (GAP 5's discard record exists and
-nothing reads it, so "is the last copy of this tech gone" is unanswerable), no
-model of what an opponent *wants* from the row (still a flat
-`RIVAL_TAKE_P = 0.25`), no guess at what rivals seeded, and GAP 6.
+**Still open:** GAP 6 (rival military-hand identity), which must ship together
+with rival-hand re-dealing in `plan.determinize`.
+
+---
+
+## 0e. Card counting, and closing the endgame leak — 2026-08-02
+
+Four of the five items §0d left open are done. The fifth (GAP 6) is not, and
+is called out above rather than buried here.
+
+**The leak is closed and the closure is tested by substitution, not by
+inspection.** `tests/test_event_scoring.py:TestForecastSeesOnlyWhatItMay`
+replaces the Age III event an *opponent* prepared with a different Impact card
+and requires the forecast not to move — every public quantity is identical
+across the swap (same pile height, same revealed events, same discard), so any
+change could only have come from reading the name. Its partner test swaps an
+event *I* prepared and requires the forecast to move, which is what stops the
+mask from degenerating into an off switch.
+
+One test had to be rewritten rather than added, and that is the finding worth
+recording: `test_margin_is_a_difference_of_the_forecast` asserted the bot's
+forecast equalled `events.final_event_culture`, the engine's omniscient
+payout. **A test that requires a forecast to equal an omniscient number is a
+test that requires the forecaster to cheat**, and it had been passing happily
+since the feature shipped. It now first credits every pending event to me —
+making the position one with no hidden information in it — and only then
+demands agreement.
+
+**`engine/bots/counting.py` is the new module, and its whole design is the
+line between counting and cheating.** Deck COMPOSITION is printed in the
+rulebook, deck HEIGHT is a stack anybody can count, and everything already
+seen is face up; deck ORDER and deck CONTENTS are neither. Nothing in the
+module iterates `state.civil_deck` or `state.military_deck` — it only ever
+takes their `len()` — and `tests/test_counting.py` reverses the deck and
+swaps a rival's hidden hand to prove no number moves, while swapping a card in
+*my* hand must move one.
+
+**Callers must root-cache it, for the same reason `root_row_budget` exists.**
+Dealing refills the row and revealing an event moves a face-down card into
+`past_events`, so recounting on a searched state would let the search see the
+card it just drew. `rival_context` gained `root_counts`, threaded by the plan
+bots exactly as `root_row` is.
+
+**Counting found six engine bugs that reading had not**, and they are all one
+shape: a civil card left play *in the open* and the engine dropped it on the
+floor. `game._antiquate` culled out-of-age cards from hands with a list
+comprehension; a replaced leader was `p.leader = None` and nothing else; so
+were an antiquated leader, an antiquated half-built wonder, and a leader or
+wonder an opponent destroyed; a one-shot action card was pulled out of the hand
+and never written down; a superseded government was simply overwritten. Each
+one made an age's printed card count stop adding up, and **the counter cannot
+tell a destroyed card from one still in a rival's hand** — it reads both as
+"unaccounted for". The military side has had `economy.discard_military` since
+GAP 5; the civil side now has `economy.discard_civil`, and all six sites call
+it. This is GAP 5's own shape six times over: present in one list, absent from
+the other, and nothing failing when they disagree.
+
+Worth recording *how* they were found, because reading had already missed them
+twice. The test asserts an **invariant** — cards unaccounted for in a finished
+age must be no more than the cards the rivals are physically holding — rather
+than any particular number. The first repair (antiquation alone) still left the
+count short by ten, and the invariant caught its own incomplete fix. A test
+that checks a value would have been re-baselined and the remaining five sites
+would still be there.
+
+**The record is split in two, and the reason is provenance — not protecting a
+checkpoint.** `state.civil_discard` means "swept off the row (§2.1)"; the new
+`state.civil_removed` means "left play from a hand or a board". That
+distinction is genuinely observable at the table and `tools/card_census`
+depends on it, so collapsing them would lose information.
+
+The rule that goes with the split is the load-bearing part: **anything
+computing what is left must read the union.** I first wrote
+`neural_encode._discard_block` to keep reading `civil_discard` alone, on the
+grounds that widening a trained network's input was a cost worth avoiding. The
+project owner overruled it — *"Don't worry about training being changed. Being
+correct is the most important thing"* — and he was right on the merits, not
+just on priorities: that block's own docstring states its purpose as
+`unseen(age) = deck - row - hands - tableaux - discard`, and with the split
+that subtraction undercounts by exactly the cards the six `discard_civil` sites
+write. It was wrong, quietly, in the same way as everything else in this
+section. It now reads the union. The vector width is unchanged, so checkpoints
+still load; cached encodings are stale and will be rebuilt.
+
+Both fields remain records, not state; no rule and no turn-loop branch reads
+either, so none of this can change play.
+
+**`_seen_civil` also had to learn where a card can sit.** It counted the
+tableau and missed `p.government` (its own field, not a tech),
+`p.completed_wonders`, the wonder under construction, `p.leader`, and Homer
+tucked under a wonder — every one of them face up on the table. Missing a zone
+does not fail loudly, it just inflates "still in a rival's hand", which is
+precisely why the invariant is bounded by the rivals' actual hand sizes.
+
+**What the counting is used for.** `row_last_copy` prices the row value that
+will never be dealt again — `card_potential * max(0, 1 - outlook)`, where an
+outlook of 0 means the deck provably holds no more copies. That is the project
+owner's own example from the audit question: *"a second selective breeding is
+near the end or not and it has to build another farm since it won't see it"*.
+
+**The opponent-desire gap was mis-stated in §0d** and the correction matters:
+`RIVAL_TAKE_P = 0.25` was already retired in favour of `rival_take_p`, which
+models a rival's CAPACITY exactly (their cost, their civil actions, their hand
+limit). What was missing was not the flat constant but *desire* — capacity was
+spread uniformly over every slot a rival could reach, so a rival with two
+actions and a Philosophy in reach was held equally likely to spend them on the
+Bronze beside it. `_rival_desire` prices each reachable slot on that rival's
+own public board with the same `card_potential`, and `rival_desire` blends
+between uniform and value-weighted competition. At its 0.0 default the model
+is bit-identical to the uniform one and costs nothing; at 1.0 it moved the
+take probability in 35 of 43 sampled positions where the term was live.
+
+Every new key — `row_last_copy`, `rival_desire` — defaults to `0.0`, so the
+frozen champions evaluate unchanged and the running arms need no reset. The
+leak fix is the exception and deliberately so: `event_scoring_margin` is a
+trained coordinate whose *meaning* changed, because the old meaning was a
+cheat.
 
 ---
 
