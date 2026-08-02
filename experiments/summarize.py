@@ -88,12 +88,24 @@ GROUPS = {
     # prices one specific decision -- which event to seed -- and coupling it
     # to `military`'s strength terms under hillclimb's `rescale`/`group`
     # operators would move it for reasons that have nothing to do with it.
-    "events": ("event_scoring_margin",),
+    # `my_seeded_pending` / `my_event_threat` are the politics pile restricted
+    # to the events I seeded myself (docs/INFORMATION_AUDIT.md GAP 4).  They
+    # go HERE, in the one and only "events" bucket -- adding a second bucket
+    # under the same name silently overwrites this one, which is exactly what
+    # happened on the first cut of this change and is why
+    # `test_summarize_groups.py` now pins it.
+    "events": ("event_scoring_margin", "my_seeded_pending", "my_event_threat"),
     "cards": ("hand_civil", "hand_value", "hand_military", "hand_mil_value",
               "hand_potential", "hand_mil_potential", "hand_swap_extra"),
     "rivals": ("rival_culture", "rival_mean_culture", "rival_culture_rate",
                "rival_science_rate", "rival_strength", "rival_free_ca",
-               "rival_hand_civil", "rival_wonders", "rival_hand_potential"),
+               "rival_hand_civil", "rival_wonders", "rival_hand_potential",
+               "rival_science_stock", "rival_food_stock",
+               "rival_resource_stock", "rival_free_workers",
+               "rival_yellow_bank", "rival_colonies", "rival_mil_actions",
+               "rival_building_wonder"),
+    "targeting": ("attack_target_lead", "attack_target_weakness",
+                  "pact_partner_lead"),
     "search": ("end_turn_bias",),
 }
 

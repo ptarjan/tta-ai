@@ -159,9 +159,11 @@ class RivalConsistency(unittest.TestCase):
 def _read_the_panel(st, me):
     """Exactly what the operator types, for every rival, this round.
 
-    Returns {idx: ({forced key: value}, [completed wonder names])} -- the two
-    channels the harness really has: numbers off the player panel, and wonder
-    names transcribed as they are completed.
+    Returns {idx: ({forced key: value}, {name channel: names})} -- the two
+    kinds of channel the harness really has: numbers off the player panel, and
+    card NAMES transcribed as they are played (wonders completed, a wonder
+    started, a colony taken).  A name is a separate channel because it carries
+    printed effects a count cannot.
     """
     out = {}
     for q in st.players:
@@ -170,14 +172,27 @@ def _read_the_panel(st, me):
         s = effects.compute(st, q)
         out[q.idx] = ({"c": q.culture, "cr": s.culture, "sr": s.science,
                        "str": s.strength, "ca": q.civil_actions,
-                       "hc": q.hand_size("civil")},
-                      list(q.completed_wonders))
+                       "hc": q.hand_size("civil"),
+                       "s": q.science, "f": q.food, "r": q.resources,
+                       "fw": q.workers_free, "y": q.yellow_bank,
+                       "ma": q.military_actions},
+                      {"built+": list(q.completed_wonders),
+                       "colony+": list(q.colonies),
+                       "wonder": ([f"{q.wonder.name} {q.wonder.steps_built}"]
+                                  if q.wonder else [])})
     return out
 
 
 def _wreck(st, me):
     """Every rival board as a completely untranscribed opponent looks: no
-    workers, no score, no wonders, no government, no cards, no actions."""
+    workers, no score, no stocks, no wonders, no colonies, no government, no
+    cards, no actions.
+
+    Every field the reconstruction claims to restore must be destroyed HERE.
+    A field left standing makes the rebuild test pass for free -- which is how
+    the eight rival facts added by the information audit could have been
+    waved through without the operator ever being asked for them.
+    """
     for q in st.players:
         if q.idx == me:
             continue
@@ -185,10 +200,18 @@ def _wreck(st, me):
             t.workers = 0
         q.culture = 0
         q.completed_wonders = []
+        q.colonies = []
+        q.wonder = None
         q.government = "Despotism"
         q.hand_civil = []
         q.hidden_civil = 0
         q.civil_actions = 0
+        q.military_actions = 0
+        q.science = 0
+        q.food = 0
+        q.resources = 0
+        q.workers_free = 0
+        q.yellow_bank = 0
         effects.invalidate(st, q)
 
 
@@ -236,11 +259,12 @@ class ForcedRivalsAreExact(unittest.TestCase):
         panel = _read_the_panel(st, me)
         _wreck(st, me)
 
-        for idx, (vals, wonders) in panel.items():
-            # ...in the order the table happens: wonders are named as they are
-            # completed, the panel numbers are forced at the round check.
-            if wonders:
-                S.patch(board, f"p{idx} built+ " + ", ".join(wonders))
+        for idx, (vals, names) in panel.items():
+            # ...in the order the table happens: cards are named as they are
+            # played, the panel numbers are forced at the round check.
+            for verb, cards in names.items():
+                if cards:
+                    S.patch(board, f"p{idx} {verb} " + ", ".join(cards))
             for key in M.RIVAL_FORCE_KEYS:
                 S.patch(board, f"p{idx} {key}={vals[key]}")
 
@@ -270,7 +294,13 @@ class ForcedRivalsAreExact(unittest.TestCase):
         that is asked for but does not reach the feature is worse."""
         moves = {"c": "rival_culture", "cr": "rival_culture_rate",
                  "sr": "rival_science_rate", "str": "rival_strength",
-                 "ca": "rival_free_ca", "hc": "rival_hand_civil"}
+                 "ca": "rival_free_ca", "hc": "rival_hand_civil",
+                 "s": "rival_science_stock", "f": "rival_food_stock",
+                 "r": "rival_resource_stock", "fw": "rival_free_workers",
+                 "y": "rival_yellow_bank", "ma": "rival_mil_actions"}
+        self.assertEqual(sorted(moves), sorted(M.RIVAL_FORCE_KEYS),
+                         "a forced key with no entry here is unproven data "
+                         "entry -- add the feature it is supposed to move")
         for key, feat in moves.items():
             with self.subTest(key=key):
                 board = midgame()

@@ -50,7 +50,8 @@ from .trial import USE_JOURNAL, fresh_trial_rng
 
 __all__ = ["DEFAULT_WEIGHTS", "WeightedBot", "features", "evaluate",
            "card_potential", "hand_potential", "wonder_potential",
-           "rival_hand_potential",
+           "rival_hand_potential", "rival_board",
+           "my_seeds", "my_seeded_pending", "my_event_threat",
            "row_pressure", "load_weights", "save_weights"]
 
 # ---------------------------------------------------------------- metadata
@@ -169,6 +170,336 @@ def event_scoring_margin(state, idx):
         return 0.0
     margin = owed[idx] - max(owed[i] for i in rivals)
     return max(-_SCORING_MARGIN_CAP, min(_SCORING_MARGIN_CAP, float(margin)))
+
+
+#: Event effect-block key -> (feature key, sign).  Deliberately SEPARATE from
+#: `_YIELD_TO_FEATURE` below, and the reason is not tidiness: that map is for
+#: pact and colony blocks, where every key is a production RATE and the value
+#: carries its own sign.  Event blocks are one-shot STOCKS and spell the sign
+#: in the KEY (`loseScience` against `gainScience`), so folding the two
+#: together would silently price `loseScience` as a gain.
+#:
+#: The keys are exactly the branches of `events.apply_gains`, and
+#: `tests/test_event_outlook.py` asserts that -- an effect key the engine
+#: applies and this map has never heard of is precisely the "present in one
+#: list, absent from the other, and nothing fails when they disagree" shape
+#: this project keeps finding.
+_EVENT_YIELD = {
+    "science": ("science", 1), "gainScience": ("science", 1),
+    "loseScience": ("science", -1),
+    "culture": ("culture", 1), "gainCulture": ("culture", 1),
+    "loseCulture": ("culture", -1),
+    "food": ("food_stock", 1), "gainFood": ("food_stock", 1),
+    "produceFood": ("food_stock", 1),
+    "resources": ("resource_stock", 1),
+    "gainResources": ("resource_stock", 1),
+    "produceResources": ("resource_stock", 1),
+    # one block, either stock, owner's choice -- priced as food because the
+    # two share a weight sign and the choice is not knowable this far out.
+    "foodAndOrResources": ("food_stock", 1),
+    "population": ("free_workers", 1), "gainPopulation": ("free_workers", 1),
+    "increasePopulation": ("free_workers", 1),
+    "decreasePopulation": ("free_workers", -1),
+    "losePopulation": ("free_workers", -1),
+    "yellowTokens": ("yellow_bank", 1),
+    "blueTokens": ("blue_free", 1),
+    "strength": ("strength", 1),
+    "happiness": ("happy", 1), "happy": ("happy", 1),
+    "drawMilitaryCards": ("hand_military", 1),
+    # `loseAllStoredFood` carries no amount -- the amount is whatever I am
+    # holding -- so it is priced from the board in `_event_block_value`.
+    "loseAllStoredFood": (None, -1),
+}
+
+#: The ranked event targets, as `(effect key, ranking stat, best-first)`.
+#: Same six keys `events.resolve_event` dispatches on, in the same order.
+_EVENT_RANKED = (
+    ("strongestPlayer", "strength", True),
+    ("weakestPlayer", "strength", False),
+    ("playerWithMostCulture", "culture", True),
+    ("playerWithLeastCulture", "culture", False),
+    ("playersWithMostHappyFaces", "happy", True),
+    ("playersWithMostDiscontentWorkers", "discontent", True),
+)
+
+
+def _event_block_value(block, w, p, sign=1):
+    """One effect block, priced through the SAME weights as the real thing.
+
+    A pact paying +1 culture a turn is worth one `culture_rate`; an event
+    handing me 3 culture is worth three `culture`.  Nothing here invents a
+    per-event constant, which is what keeps `Good Harvest` and `Barbarians`
+    from being the same move (docs/INFORMATION_AUDIT.md section 4.1).
+    """
+    if not block:
+        return 0.0
+    total = 0.0
+    for key, raw in block.items():
+        hit = _EVENT_YIELD.get(key)
+        if hit is None:
+            continue
+        fk, ksign = hit
+        if fk is None:                       # loseAllStoredFood
+            total += sign * ksign * float(p.food) * w.get("food_stock", 0.0)
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue                         # a nested/dict payload, not a scalar
+        total += sign * ksign * v * w.get(fk, 0.0)
+    return total
+
+
+def my_seeds(state, idx):
+    """The names **I** put in the politics pile that have not resolved yet.
+
+    LEGALITY IS THE WHOLE DESIGN HERE, and it is why both terms built on this
+    shipped without a determinization change.  This reads `state.seeded_by`
+    and keeps only the names whose owner is `idx`.  Preparing an event places
+    it face DOWN (docs/RULES_SPEC.md 5.3), so the pile's contents are hidden
+    from everyone else -- but *you put it there*, so remembering your own
+    seeds is memory, not a peek, and it is the skill the project owner listed
+    first.  Nothing here reads a name somebody else seeded and nothing reads
+    pile ORDER, so there is no way for a deeper search to turn either term
+    into a leak.  That is a strictly stronger property than the row terms
+    have -- those needed `root_row_budget` -- and it is deliberate.
+    """
+    seeded = state.seeded_by
+    if not seeded:
+        return ()
+    return tuple(n for n in list(state.current_events)
+                 + list(state.future_events) if seeded.get(n) == idx)
+
+
+def my_seeded_pending(state, idx):
+    """Summed age level of my unresolved seeds: how much event I am owed.
+
+    A plain board count in printed units, so it belongs in `features()` --
+    unlike :func:`my_event_threat`, which is priced through `w`.
+    """
+    db = C.db()
+    return float(sum(C.level(db.get(n)["age"])
+                     for n in my_seeds(state, idx) if n in db.by_name))
+
+
+def my_event_threat(state, idx, w):
+    """Signed, DIFFERENCED value to me of the events I planted myself.
+
+    Priced against the board as it stands now, through the same weights as
+    the real thing -- so a `Good Harvest` I planted and a `Barbarians` I
+    planted stop being the same move, which docs/INFORMATION_AUDIT.md section
+    4.1 names as the consequence of this blind spot.
+
+    Differenced for the same reason `event_scoring_margin` is: a `Barbarians`
+    that hits the strongest player is good news when the strongest player is
+    somebody else.
+
+    Two bounds, stated rather than hidden:
+
+    * **`allPlayers` blocks are skipped.**  They hit me and every rival
+      alike, so their differential value is zero, which is what this term
+      measures.  It is NOT that they do not matter -- `increasePopulation` is
+      worth more to a full yellow bank -- it is that pricing that asymmetry
+      needs a per-rival board model this does not have.
+    * **The ranking is TODAY's.**  Whether I am still the strongest player
+      when the card actually turns up is unknowable; the board I can see is
+      the only honest estimate, and it is the one a human at the table uses.
+    """
+    mine = my_seeds(state, idx)
+    if not mine:
+        return 0.0
+
+    from .. import events as _events
+    db = C.db()
+    order = [q for q in state.players if not q.resigned]
+    pkey = f"{len(state.players)}p"
+    threat = 0.0
+
+    for name in mine:
+        if name not in db.by_name:
+            continue
+        eff = db.get(name).get("effects") or {}
+
+        for key, stat, best in _EVENT_RANKED:
+            block = eff.get(key)
+            if not isinstance(block, dict):
+                continue
+            try:
+                ranked = _events._rank(state, order, stat, best)
+            except Exception:                              # noqa: BLE001
+                continue
+            if not ranked:
+                continue
+            target = ranked[0]
+            v = _event_block_value(block, w, target)
+            # Mine to enjoy, or mine to have handed a rival.
+            threat += v if target.idx == idx else -v
+
+        for key, best in (("strongestPlayers", True),
+                          ("weakestPlayers", False)):
+            if key not in eff:
+                continue
+            count = (eff[key] or {}).get(pkey, 1)
+            block = eff.get("gain") if best else eff.get("lose")
+            sign = 1 if best else -1
+            if key == "weakestPlayers" and eff.get("gain"):
+                block, sign = eff["gain"], 1
+            try:
+                ranked = _events._rank(state, order, "strength", best)[:count]
+            except Exception:                              # noqa: BLE001
+                continue
+            for q in ranked:
+                v = _event_block_value(block, w, q, sign=sign)
+                threat += v if q.idx == idx else -v / max(1, len(order) - 1)
+
+    return threat
+
+
+def attack_targets(state, idx):
+    """Who I am currently attacking: rival indices, deduplicated.
+
+    Two places hold it and both are public the moment they are written -- an
+    aggression is declared openly and a war is a card on the table:
+
+    * `state.pending`, a `kind == "defense"` frame whose `attacker` is me
+      (`interact.start_defense`), which is where an aggression lives between
+      being declared and being resolved;
+    * `p.war_declared_by_me`, the `(name, attacker, defender)` triple
+      (`engine/state.py:128`).
+
+    Nothing read either before this.  `tools/target_blindness.py` measured the
+    consequence: holding the CARD fixed and varying only the TARGET, the
+    one-ply evaluator returned a bit-identical score for 74.3% of `war`
+    choices and 76.6% of `aggression` choices over 60 seeds x {3p, 4p}, with
+    `cancel_pact` at 0.0% as the control proving the measurement separates
+    targets when anything at all prices them.  Whichever opponent the bot
+    "chose", it chose by tie-break.
+    """
+    out = []
+    for pend in (state.pending or ()):
+        if pend.get("kind") == "defense" and pend.get("attacker") == idx:
+            d = pend.get("player")
+            if d is not None and d != idx:
+                out.append(d)
+    war = state.players[idx].war_declared_by_me
+    if war:
+        try:
+            d = war[2]
+        except (TypeError, IndexError):
+            d = None
+        if d is not None and d != idx:
+            out.append(d)
+    return sorted(set(out))
+
+
+def pact_partner_lead(state, idx):
+    """Culture lead of whoever I am offering a pact to, over my other rivals.
+
+    `deferred_credit` already prices the partner's SIDE of the deal, by
+    feeding their yields into the `rival_*` maxima (`4e64780`).  That moved
+    `offer_pact`'s measured target blindness off 100% but only to ~50%, and
+    the reason is structural rather than a missing weight: those terms are a
+    MAX over rivals, so lifting a rival who is not already the maximum moves
+    nothing at all.  Two different partners then score identically again.
+
+    This is the same shape of answer as :func:`attack_target_terms`: who they
+    ARE, not just what the deal pays them.  Handing the runaway leader an
+    alliance is a different move from handing it to last place even when the
+    printed effects are symmetric.
+    """
+    lead = 0.0
+    for pend in (state.pending or ()):
+        if pend.get("kind") != "choice" or pend.get("tag") != "pact_offer":
+            continue
+        if (pend.get("ctx") or {}).get("owner") != idx:
+            continue
+        partner = pend.get("player")
+        if partner is None or partner == idx:
+            continue
+        q = state.players[partner]
+        others = [r for r in state.players
+                  if r.idx not in (idx, partner) and not r.resigned]
+        base = (sum(r.culture for r in others) / len(others)) if others else \
+            float(q.culture)
+        lead += float(q.culture) - base
+    return lead
+
+
+def attack_target_terms(state, idx):
+    """`(lead, weakness)` -- WHO I picked, in the two ways it matters.
+
+    `lead` is the target's culture less the mean culture of my *other* rivals.
+    Positive means I am hitting the player who is ahead, which is the whole
+    point of an attack in a three- or four-player game and is the single
+    decision class 2p cannot exercise at all.
+
+    `weakness` is my strength less the target's.  Positive means I picked
+    someone I outgun, which is what makes the attack land rather than hand
+    them a defensive card's worth of tempo.
+
+    Both are plain board scalars in printed units, so they are `features()`
+    keys rather than eval-only terms -- no weight is consulted here.
+
+    **At 2p `lead` is structurally 0** (there are no "other rivals" to average
+    over) and that is correct rather than a gap: with one opponent there is no
+    target to choose.  `weakness` still reads at 2p, because "am I attacking
+    into strength" is a question at every player count.  Do not read a 2p zero
+    on `lead` as blindness; read it as the decision not existing.
+    """
+    targets = attack_targets(state, idx)
+    if not targets:
+        return 0.0, 0.0
+    me = state.players[idx]
+    my_strength = effects.compute(state, me).strength
+    lead = weakness = 0.0
+    for t in targets:
+        q = state.players[t]
+        others = [r for r in state.players
+                  if r.idx not in (idx, t) and not r.resigned]
+        base = (sum(r.culture for r in others) / len(others)) if others else \
+            float(q.culture)
+        lead += float(q.culture) - base
+        weakness += float(my_strength - effects.compute(state, q).strength)
+    return lead, weakness
+
+
+def rival_board(state, idx):
+    """The public rival board facts nothing scored, as a flat dict.
+
+    Every one of these is on the table in the physical 2015 base game -- the
+    stocks sit in front of their owner, the workers stand on the cards, the
+    colony and wonder cards are face up -- so all of it is legal under the
+    standing rule in docs/INFORMATION_AUDIT.md section 0c.  They were invisible
+    only because nobody had written the four lines.
+
+    `max` over rivals throughout, matching `rival_free_ca` and friends, so
+    each term means the same thing at 2p, 3p and 4p.  The exception is
+    `rival_building_wonder`, which is a COUNT: "somebody is mid-wonder" and
+    "everybody is mid-wonder" are different rows to play into, and a max over
+    a boolean would flatten them to the same 1.
+    """
+    rivals = [q for q in state.players if q.idx != idx and not q.resigned]
+    if not rivals:
+        return {"rival_science_stock": 0.0, "rival_food_stock": 0.0,
+                "rival_resource_stock": 0.0, "rival_free_workers": 0.0,
+                "rival_yellow_bank": 0.0, "rival_colonies": 0.0,
+                "rival_mil_actions": 0.0, "rival_building_wonder": 0.0}
+    return {
+        "rival_science_stock": float(max(q.science for q in rivals)),
+        "rival_food_stock": float(max(q.food for q in rivals)),
+        "rival_resource_stock": float(max(q.resources for q in rivals)),
+        "rival_free_workers": float(max(q.workers_free for q in rivals)),
+        "rival_yellow_bank": float(max(q.yellow_bank for q in rivals)),
+        "rival_colonies": float(max(len(q.colonies) for q in rivals)),
+        "rival_mil_actions": float(max(q.military_actions for q in rivals)),
+        # docs/EXPERT_STRATEGY.md:546 -- "they cannot take a wonder while one
+        # is unfinished" is the cheapest read in the game on whether a wonder
+        # in the row is safe to let slide, and the engine already snapshots
+        # `q.wonder` into `_RivalView` for the legality gate without ever
+        # scoring it.
+        "rival_building_wonder": float(sum(1 for q in rivals
+                                           if q.wonder is not None)),
+    }
 
 
 # Effect-block key -> feature key.  A *deferred* gain is priced with exactly
@@ -1091,6 +1422,8 @@ def features(state, idx, ctx=None, w=None):
     rival_free_ca = max((q.civil_actions for q in rivals), default=0)
     rival_hand_civil = max((q.hand_size("civil") for q in rivals), default=0)
     rival_wonders = max((len(q.completed_wonders) for q in rivals), default=0)
+    rboard = rival_board(state, idx)
+    atk_lead, atk_weakness = attack_target_terms(state, idx)
     if ctx is None:
         ctx = rival_context(state, idx)
     rival_culture_rate = ctx["rival_culture_rate"]
@@ -1233,7 +1566,17 @@ def features(state, idx, ctx=None, w=None):
         "rival_free_ca": rival_free_ca,
         "rival_hand_civil": rival_hand_civil,
         "rival_wonders": rival_wonders,
+        # --- the events I planted myself (GAP 4).  Legal by construction:
+        # `my_seeds` filters on `seeded_by == idx` and reads no pile order, so
+        # no determinization change ships with this.  The companion term
+        # `my_event_threat` is priced through `w` and so lives in `evaluate`.
+        "my_seeded_pending": my_seeded_pending(state, idx),
+        # --- WHICH opponent I am attacking (tools/target_blindness.py).
+        "attack_target_lead": atk_lead,
+        "attack_target_weakness": atk_weakness,
+        "pact_partner_lead": pact_partner_lead(state, idx),
     }
+    f.update(rboard)
     # NOTE: the rate horizon is deliberately NOT applied here.  `features()`
     # reports the BOARD -- a civilisation producing 5 culture a turn produces
     # 5 culture a turn however much game is left -- and the horizon is a
@@ -3024,6 +3367,26 @@ BASE_WEIGHTS = {
     "rival_hand_civil": 0.0,
     "rival_wonders": 0.0,
     "rival_hand_potential": 0.0,
+    # the seven public rival board facts that were invisible until now
+    # (docs/INFORMATION_AUDIT.md 0b.3), plus how many rivals are mid-wonder.
+    # All 0.0: a champion trained before them evaluates bit-identically.
+    "rival_science_stock": 0.0,
+    "rival_food_stock": 0.0,
+    "rival_resource_stock": 0.0,
+    "rival_free_workers": 0.0,
+    "rival_yellow_bank": 0.0,
+    "rival_colonies": 0.0,
+    "rival_mil_actions": 0.0,
+    "rival_building_wonder": 0.0,
+    # the politics pile, my own seeds only (GAP 4).  `my_seeded_pending` is a
+    # linear feature; `my_event_threat` is priced through `w` and is eval-only.
+    "my_seeded_pending": 0.0,
+    "my_event_threat": 0.0,
+    # WHICH opponent I am attacking.  Measured blind at 74-77% before this
+    # (tools/target_blindness.py); 0.0 so no existing champion moves.
+    "attack_target_lead": 0.0,
+    "attack_target_weakness": 0.0,
+    "pact_partner_lead": 0.0,
     # military
     "strength": 0.35,
     "strength_rel": 0.35,
@@ -3538,6 +3901,13 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
             total += ru * urgency
         if rb:
             total += rb * bargain
+    # The events I planted myself, priced through `w` and therefore eval-only
+    # for the same reason `hand_potential` is.  Skipped entirely at scale 0.0,
+    # which is the default -- so every existing champion evaluates
+    # bit-identically until a trainer fits this.
+    met = get("my_event_threat")
+    if met:
+        total += met * my_event_threat(state, idx, w)
     return total
 
 

@@ -57,7 +57,17 @@ class Operator:
             vals = {"c": q.culture, "cr": s.culture, "sr": s.science,
                     "str": s.strength, "ca": q.civil_actions,
                     "hc": q.hand_size("civil"),
-                    "w": len(q.completed_wonders)}
+                    "w": len(q.completed_wonders),
+                    "s": q.science, "f": q.food, "r": q.resources,
+                    "fw": q.workers_free, "y": q.yellow_bank,
+                    "ma": q.military_actions,
+                    "col": len(q.colonies),
+                    "wip": 1 if q.wonder else 0}
+            assert set(vals) == set(M.RIVAL_ASK_KEYS), (
+                "the perfect operator is not answering every asked field: "
+                f"{sorted(set(M.RIVAL_ASK_KEYS) ^ set(vals))}.  A field the "
+                "fake operator cannot supply is a field no session test ever "
+                "exercises.")
             for k, delta in self.rival_drift.get(
                     self.board.state.round, {}).items():
                 vals[k] += delta

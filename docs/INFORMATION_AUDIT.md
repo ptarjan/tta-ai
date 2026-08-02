@@ -90,6 +90,54 @@ this principle inline. Keep the two in step; do not fork a third copy.
 
 ---
 
+## 0d. Status 2026-08-02 — six gaps closed in one change
+
+Read this before §0a/§0b: several rows below are now stale, and one of them is
+stale in the *unflattering* direction.
+
+**Closed.** GAP 4 (the politics pile, my own seeds), the eight public rival
+board fields §0b.3 listed as invisible, and the attack/pact **target**
+blindness — a defect §0b never measured because its method diffs feature
+vectors on a *fixed* position and this one only shows up when you vary the
+target of a move. `tools/target_blindness.py` measured it and re-measured it
+after:
+
+| kind | blind before | blind after |
+|---|---|---|
+| `war` | 74.3% | **0.0%** |
+| `aggression` | 76.6% | **0.6%** |
+| `offer_pact` | 50.2% | **0.4%** |
+| `cancel_pact` | 0.0% | 0.0% (control) |
+
+Every new key defaults to `0.0`, so §0a's tables remain exactly true of
+`DEFAULT_WEIGHTS` and of every frozen champion until a trainer fits them.
+
+**The event terms need no determinization change**, and that is a stronger
+property than the row terms have. `my_seeds` filters on `seeded_by == idx` and
+reads no pile order, so there is nothing for a deeper search to peek at. Row
+terms needed `root_row_budget` (§6.2) precisely because they read a pile a
+trial `apply` refills.
+
+**§0b.4's "Event-derived: 0 of 89" is stale in BOTH directions.** It is now
+false because `my_seeded_pending` / `my_event_threat` read the pile — and it
+was *already* false when written: `event_scoring_margin` calls
+`events.pending_final_events`, which walks all of `current_events` +
+`future_events`. The 35 sampled positions were Age I/II, where that term is
+structurally 0, so the measurement could not see it.
+
+**And that is a live leak, unfixed.** `pending_final_events` includes Age III
+scoring events that *other* players seeded face down. Every trained champion
+reads them. Masking it to my own seeds plus a prior over the rest changes a
+load-bearing term's value on a running arm, so it is a separate change with
+its own before/after — filed, not done.
+
+**Still open:** no civil card counting (GAP 5's discard record exists and
+nothing reads it, so "is the last copy of this tech gone" is unanswerable), no
+model of what an opponent *wants* from the row (still a flat
+`RIVAL_TAKE_P = 0.25`), no guess at what rivals seeded, and GAP 6.
+
+---
+
 ## 0a. Headline result — the 2026-07-27 measurement, 60 keys (HISTORICAL)
 
 *Kept as measured. `features()` returned a 60-key dict; `DEFAULT_WEIGHTS` was 78

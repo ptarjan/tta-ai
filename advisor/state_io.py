@@ -113,6 +113,8 @@ def pool(kind="any"):
         names = [n for n in names if db.by_name[n]["deck"] == "military"]
     elif kind == "event":
         names = [n for n in names if db.type_of(n) in ("event", "territory")]
+    elif kind == "territory":
+        names = [n for n in names if db.type_of(n) == "territory"]
     _POOLS[kind] = names
     return names
 
@@ -399,6 +401,8 @@ def dumps(board):
                        f"{p.wonder.steps_built}")
         if p.completed_wonders:
             out.append(f"p{p.idx} built " + ", ".join(p.completed_wonders))
+        if p.colonies:
+            out.append(f"p{p.idx} colony " + ", ".join(p.colonies))
         if p.leader:
             out.append(f"p{p.idx} leader {p.leader}")
         if p.tactic:
@@ -581,6 +585,11 @@ def _load_player_line(board, idx, rest):
         p.completed_wonders = [resolve_card(t, "wonder")
                                for t in _split_strict(tail)]
         return
+    if head == "colony":
+        p.colonies = [resolve_card(t, "territory")
+                      for t in _split_strict(tail)]
+        effects.invalidate(st, p)
+        return
     if head == "leader":
         p.leader = None if tail.strip() in ("", EMPTY, "-") \
             else resolve_card(tail, "leader")
@@ -626,6 +635,7 @@ between-turn updates (one per line, blank line when done):
   p1 tech- Warriors     remove a technology
   p1 wonder Pyramids 2  wonder in progress + steps built
   p1 built+ Colossus    completed a wonder (by NAME -- there is no w= count)
+  p1 colony+ Vast Territory (I)   took a colony (by NAME; face up)
   p1 leader Caesar      played a leader ('-' clears)
   p1 tactic Legion      played a tactic
   p1 gov=Monarchy       changed government
@@ -750,6 +760,30 @@ def _patch_player(board, idx, rest):
                 p.wonder = None
         effects.invalidate(st, p)
         return f"p{idx} completed {tail}"
+    if head in ("colony+", "+colony", "colony"):
+        # Colonies sit FACE UP in a player's area, so this is transcription of
+        # public information, not a peek.  By name rather than by count for
+        # the same reason `built+` is: a territory carries printed effects a
+        # count cannot, and `weighted.rival_board` reading only `len()` today
+        # is a fact about the evaluator, not about what the mirror should
+        # store.  `-` clears, matching `wonder -`.
+        if tail in ("-", EMPTY, ""):
+            p.colonies = []
+            effects.invalidate(st, p)
+            return f"p{idx} has no colonies"
+        for tok in _split_cards(tail, "territory"):
+            name = resolve_card(tok, "territory")
+            if name not in p.colonies:
+                p.colonies.append(name)
+        effects.invalidate(st, p)
+        return f"p{idx} colonies " + ", ".join(p.colonies)
+    if head in ("colony-", "-colony"):
+        for tok in _split_cards(tail, "territory"):
+            name = resolve_card(tok, "territory", extra=list(p.colonies))
+            if name in p.colonies:
+                p.colonies.remove(name)
+        effects.invalidate(st, p)
+        return f"p{idx} colonies " + (", ".join(p.colonies) or "(none)")
     if head in ("wonder", "wonder+"):
         if tail in ("-", EMPTY, ""):
             p.wonder = None

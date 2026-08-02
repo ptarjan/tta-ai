@@ -90,6 +90,7 @@ import unittest
 from engine import actions as A, cards as C, effects, game as G, state as S
 from engine import bots as B
 from engine.bots import board_yields as BY
+from engine.bots import fastcopy
 from engine.bots import book
 from engine.bots import neural_encode as NE
 from engine.bots import weighted as W
@@ -151,6 +152,13 @@ PARAMETERS = {
         "MODEL PARAMETER inside rival_take_p, not a value term; a weight so "
         "the league can fit it (docs/MODEL_CONSTANTS.md 3.4)"),
     "hand_swap_extra": ("evaluate", "the spare-slot fraction in _hand_total"),
+    "my_event_threat": (
+        "evaluate",
+        "scale on weighted.my_event_threat(): what the events I SEEDED MYSELF "
+        "will pay out on the board as it stands, which is non-linear (it ranks "
+        "the players) and priced through `w`, so it lives in evaluate for the "
+        "same reason hand_potential does.  The linear half of the pair, "
+        "`my_seeded_pending`, IS emitted by features()"),
     "rate_horizon": (
         "evaluate",
         "MODEL PARAMETER inside weighted.rate_multiplier, not a value term: "
@@ -940,6 +948,7 @@ class Corpus:
                         if v:
                             self.nonzero[k] += 1
                 self._probe_unhappy(st)
+                self._probe_attack(st, players)
                 if ply % CARD_STRIDE == 0:
                     self.card_states += 1
                     for nm in names:
@@ -994,6 +1003,48 @@ class Corpus:
             # probe's board.  That is how a constructed probe silently
             # becomes a corpus corruption.
             effects.invalidate(st, p)
+
+    def _probe_attack(self, st, players):
+        """The same anti-vacuity construction as `_probe_unhappy`, for the
+        state that exists only WHILE an attack is in flight.
+
+        `attack_target_lead` / `attack_target_weakness` answer "which opponent
+        am I attacking", so they are non-zero only in a position that carries
+        a `defense` pending or a declared war.  Measured before adding this:
+        across three corpus-shaped games, 1279 states, those two features were
+        0.0 everywhere -- and the reason was NOT that they are broken.  The
+        `WeightedBot` on `DEFAULT_WEIGHTS` never plays an `aggression` or a
+        `war` at all in those games (`pol_pass` 66 times, `aggression` and
+        `war` zero; see docs/WAR_RATE_CENSUS.md), so the corpus never reaches
+        an attacked position.  At the same 97 plies where an attack was LEGAL,
+        applying one made `weighted.attack_targets` non-empty 97 times out of
+        97.
+
+        That is the "a rate of zero has two causes" rule paying off: the
+        honest reading of the zero was "the sampler never stands where the
+        term lives", and the fix is to stand there rather than to declare the
+        term dead.  Applied to a COPY -- `actions.apply` mutates, and a probe
+        that advanced the real game would corrupt every later observation.
+        Skipped once both have fired.
+        """
+        if self.nonzero["attack_target_lead"] \
+                and self.nonzero["attack_target_weakness"]:
+            return
+        idx = st.decider()
+        if idx is None:
+            return
+        mv = next((m for m in A.legal_moves(st)
+                   if m[0] in ("aggression", "war") and len(m) > 2), None)
+        if mv is None:
+            return
+        trial = fastcopy.copy_state(st)
+        try:
+            G.apply(trial, mv, random.Random(1))
+        except Exception:                                      # noqa: BLE001
+            return
+        for _k, v in W.features(trial, idx, None, W.DEFAULT_WEIGHTS).items():
+            if v:
+                self.nonzero[_k] += 1
 
     def _probe_conduction(self, st, base, keys):
         """Conduction on the board as dealt, and on a stacked civil hand.
@@ -1649,18 +1700,34 @@ class VectorFilesMatchTheRegistry(unittest.TestCase):
 
     def test_the_live_champions_carry_every_climbable_coordinate(self):
         """A live champion missing a key is a coordinate the league is not
-        climbing.  Reported as a count rather than pinned per key, because
-        `load_weights` back-fills and a brand new weight is legitimately absent
-        for one generation."""
+        climbing -- but a brand new weight is legitimately absent until the
+        climber next writes the file, so absence alone cannot be the failure.
+
+        What matters is WHICH keys are absent.  `load_weights` back-fills from
+        `DEFAULT_WEIGHTS`, so a missing key whose default is 0.0 is a silent
+        no-op: the champion evaluates bit-identically and picks the coordinate
+        up on its next accepted generation.  A missing key with a NON-ZERO
+        default is the real defect -- the champion is being fed a value it
+        never trained against, and it changes its play the moment it loads.
+
+        This replaces an earlier "at most 8 missing" count.  A count is the
+        wrong instrument twice over: it fails a legitimate change that adds
+        nine dark keys at once (the information-audit work added thirteen),
+        and it passes a single missing `culture` -- which would be a disaster
+        -- as comfortably inside the bound.
+        """
         live = [(rel, w) for rel, w in _vector_files()
                 if "league_state" in rel]
         if not live:
             self.skipTest("no live league state in this tree")
         for rel, weights in live:
             missing = sorted(set(W.DEFAULT_WEIGHTS) - set(weights))
-            self.assertLessEqual(
-                len(missing), 8,
-                f"{rel} is missing {len(missing)} coordinates: {missing}")
+            lit = sorted(k for k in missing if W.DEFAULT_WEIGHTS[k] != 0.0)
+            self.assertEqual(
+                lit, [], f"{rel} is missing {len(lit)} coordinate(s) whose "
+                f"default is NOT 0.0: {lit}.  load_weights will back-fill "
+                "them with a value this champion never trained against, so "
+                "its play changes on the next load.")
 
 
 class TheThreeWeightTablesAgreeOrSayWhyNot(unittest.TestCase):

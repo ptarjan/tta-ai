@@ -225,6 +225,18 @@ def _rival_wonders(state, seat):
         effects.invalidate(state, p)
 
 
+def _rival_colonies(state, seat):
+    for p in _rivals(state, seat):
+        p.colonies = list(p.colonies)[:-1]
+        effects.invalidate(state, p)
+
+
+def _rival_wonder_progress(state, seat):
+    for p in _rivals(state, seat):
+        p.wonder = None
+        effects.invalidate(state, p)
+
+
 def _rival_gov(state, seat):
     for p in _rivals(state, seat):
         p.government = "Despotism"
@@ -285,6 +297,14 @@ PROBES = [
     # a round for `mirror.RIVAL_CHECKS` to verify none was missed
     Probe("rival.wonders", "rival completed wonders", "p{i} built+ <wonder>",
           "rival", _rival_wonders, 2.5),
+    # colonies and a wonder-in-progress sit FACE UP in the player's area, so
+    # both are transcription of public information.  By name, with a count
+    # checked every round, for the same reason completed wonders are: the name
+    # carries printed effects the count cannot.
+    Probe("rival.colonies", "rival colonies", "p{i} colony+ <territory>",
+          "rival", _rival_colonies, 2.5),
+    Probe("rival.wonder_progress", "rival wonder under construction",
+          "p{i} wonder <wonder> <steps>", "rival", _rival_wonder_progress, 2.5),
     Probe("rival.government", "rival government", "p{i} gov=",
           "rival", _rival_gov, 2.0),
     Probe("rival.hand_civil_size", "rival civil hand size", "p{i} hc=",

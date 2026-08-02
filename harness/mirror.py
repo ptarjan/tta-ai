@@ -319,31 +319,59 @@ def round_check(board, reported, history=None, rivals=None):
 #   3. does the wreck-and-restore test below still pass through that path?
 # Only then does the name belong in this tuple.
 
+# The second time it fired was the information audit (docs/INFORMATION_AUDIT.md
+# 0b.3): eight public rival facts the evaluator could not see at all.  Each was
+# put through the three questions above before its name was added here --
+# every one is printed on the app's player panel or sits face up in the
+# player's area, `state_io` already had a patch verb for six of them and got
+# `colony+` for the seventh, and `_wreck` in the test now destroys all eight so
+# the rebuild proves something.
 RIVAL_FEATURE_KEYS = ("rival_culture", "rival_mean_culture",
                       "rival_culture_rate", "rival_science_rate",
                       "rival_strength", "rival_free_ca",
-                      "rival_hand_civil", "rival_wonders")
+                      "rival_hand_civil", "rival_wonders",
+                      "rival_science_stock", "rival_food_stock",
+                      "rival_resource_stock", "rival_free_workers",
+                      "rival_yellow_bank", "rival_colonies",
+                      "rival_mil_actions", "rival_building_wonder")
 
-# What the operator reads off one rival's panel, in prompt order.  All seven
-# are public information in Through the Ages: culture and the two rates are
-# printed on the panel, strength is printed on the panel, action tokens and
-# completed wonders sit face up in the player's area, and civil cards are only
-# ever taken from an open row in full view (RULES_SPEC.md 2.6).  Nothing here
-# asks the human to look at a hidden zone.
-RIVAL_ASK_KEYS = ("c", "cr", "sr", "str", "ca", "hc", "w")
+# What the operator reads off one rival's panel, in prompt order.  All of it is
+# public information in Through the Ages: culture and the two rates are printed
+# on the panel, strength is printed on the panel, the stocks (food, resources,
+# science) and the two action-token pools are printed on the panel, unused
+# workers and the yellow bank are tokens sitting on the board, colonies and
+# completed wonders and a wonder-in-progress sit face up in the player's area,
+# and civil cards are only ever taken from an open row in full view
+# (RULES_SPEC.md 2.6).  Nothing here asks the human to look at a hidden zone.
+#
+# ORDER IS API.  The positional form `p1 41/5/3/12/4/3/1` zips against this
+# tuple, so the eight added by the information audit go on the END -- an
+# operator (or a recorded transcript) using the old seven still parses
+# identically, and a short line simply leaves the tail unreported, which the
+# parser already treats as "not said this round".
+RIVAL_ASK_KEYS = ("c", "cr", "sr", "str", "ca", "hc", "w",
+                  "s", "f", "r", "fw", "y", "ma", "col", "wip")
 
 # ...of which these are pushed into the mirror as `state_io` patch lines.
-# `c/cr/sr/str` back-solve through `_force`; `ca` sets the civil-action
-# counter; `hc` sets the count of cards in hand we cannot name (which is what
-# `rival_hand_civil` reads -- see PlayerState.hand_size).
-RIVAL_FORCE_KEYS = ("c", "cr", "sr", "str", "ca", "hc")
+# `c/cr/sr/str` back-solve through `_force`; `ca`/`ma` set the action
+# counters; `hc` sets the count of cards in hand we cannot name (which is what
+# `rival_hand_civil` reads -- see PlayerState.hand_size); `s/f/r/fw/y` are
+# plain stocks in `state_io.SCALARS`.
+RIVAL_FORCE_KEYS = ("c", "cr", "sr", "str", "ca", "hc",
+                    "s", "f", "r", "fw", "y", "ma")
 
-# ...and this one is CHECKED instead.  A wonder's name carries its effects, so
-# the mirror learns wonders by name (`p1 built+ Colossus`) as they are built;
-# the count on the panel then verifies we did not miss one.
+# ...and these are CHECKED instead, because a NAME carries effects a count
+# cannot.  The mirror learns wonders and colonies by name (`p1 built+
+# Colossus`, `p1 colony+ Vast Territory (I)`, `p1 wonder Pyramids 2`) as they
+# happen; the counts then verify we did not miss one.  These are the only hard
+# checks on the rival side -- a forced value cannot disagree with itself.
 RIVAL_CHECKS = [
     Check("w", "completed wonders (face up in their area)",
           lambda st, q: len(q.completed_wonders)),
+    Check("col", "colonies (face up in their area)",
+          lambda st, q: len(q.colonies)),
+    Check("wip", "1 if a wonder is under construction, else 0",
+          lambda st, q: 1 if q.wonder else 0),
 ]
 RIVAL_CHECK_BY_KEY = {c.key: c for c in RIVAL_CHECKS}
 
@@ -361,6 +389,14 @@ RIVAL_PROBE_IDS = {
     "ca": "rival.civil_actions",
     "hc": "rival.hand_civil_size",
     "w": "rival.wonders",
+    "s": "rival.science",
+    "f": "rival.food",
+    "r": "rival.resources",
+    "fw": "rival.workers_free",
+    "y": "rival.yellow_bank",
+    "ma": "rival.military_actions",
+    "col": "rival.colonies",
+    "wip": "rival.wonder_progress",
 }
 
 # One line of operator-facing help per asked field, so `harness.play` and
@@ -373,6 +409,14 @@ RIVAL_LABELS = {
     "ca": "civil actions (their total -- between turns it is all of them)",
     "hc": "civil cards in hand",
     "w": "completed wonders",
+    "s": "science stock (the number, not the rate)",
+    "f": "food stock",
+    "r": "resource stock",
+    "fw": "unused (yellow) workers",
+    "y": "yellow tokens still in their bank",
+    "ma": "military actions (their total)",
+    "col": "colonies taken",
+    "wip": "1 if they are part-way through a wonder, else 0",
 }
 
 
