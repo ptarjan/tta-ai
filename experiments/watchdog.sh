@@ -292,7 +292,17 @@ launch() {   # players workers block extra...
 # there and remains the best vector under the quiescent proxy.
 pgrep -f "run_league.sh 2 " >/dev/null || \
     launch 2 1 12 --init experiments/archive_preplan/league_state_1ply_20260726/champion_2p.json
-pgrep -f "run_league.sh 3 " >/dev/null || launch 3 2 12 --init default
+# 3p: block 12 -> 24 on 2026-08-02.  This arm's accepted edges had collapsed to
+# +0.0011, +0.0016, +0.0072 -- three consecutive accepts inside the noise a
+# 12-game block can resolve at all, while the 2p arm on the same objective was
+# accepting +0.08 and +0.09.  An arm that can only see edges it cannot
+# distinguish from noise does not climb; it random-walks and calls it progress.
+# 24 is not a guess: it is what the 4p arm already uses, and for the same
+# stated reason (per-game spread rises with player count, FOURP_GAP), so this
+# makes 3p consistent with its neighbour rather than inventing a third number.
+# The cost is ~2x the games per generation; the alternative is generations that
+# buy nothing.
+pgrep -f "run_league.sh 3 " >/dev/null || launch 3 2 24 --init default
 # 4p: block 24 because its per-game spread is 2.8x the 2p spread (FOURP_GAP),
 # and warm-started from the 2p champion, which measured 57.4% vs the 4p arm's
 # 27.6% at 4p at matched generations.  --init is ignored once state exists, so
@@ -301,5 +311,24 @@ pgrep -f "run_league.sh 3 " >/dev/null || launch 3 2 12 --init default
 # names is now known to score 64.7 own culture: the 4p state dir has held a
 # champion since 07-26, so this flag has been inert for the whole run and
 # changing it would have changed nothing.  See docs/LEAGUE_OBJECTIVE.md 6.
+#
+# workers 2 -> 3 on 2026-08-02.  This is the only arm whose generations are
+# measured in HOURS: its last six accepts took 1052, 1090, 1829, 866, 9079 and
+# 15226 seconds, against ~2600-2900 s at 2p.  At 13 generations since its state
+# reset (2p is at 124) it is not a weaker learner, it has had a tenth of the
+# practice, and throughput is the binding constraint.
+#
+# The box is 6 cores and the three arms now ask for 1 + 2 + 3 = 6.  Measured
+# before the change: the five league processes were each getting ~80% of a
+# core, not 100%, with the shortfall going to an unrelated ROM-library scan and
+# the VM -- so the arms are `nice -n 19` and already yield.  Six asks on six
+# cores is the ceiling, not headroom; do not add a fourth arm without taking
+# these back.
+#
+# NOT taken from the 2p arm's single worker, even though 2p is the arm with
+# opponents at 83-95%.  2p is not converged: it is accepting +0.08 and +0.09
+# edges since being retargeted to PlanBot, and an arm that is still climbing is
+# the wrong place to harvest cores from.  The saturation machinery already
+# stops it wasting games on maxed-out opponents.
 pgrep -f "run_league.sh 4 " >/dev/null || \
-    launch 4 2 24 --init experiments/hall_of_fame/preinfo_2p_gen00188.json
+    launch 4 3 24 --init experiments/hall_of_fame/preinfo_2p_gen00188.json
