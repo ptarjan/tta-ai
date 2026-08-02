@@ -302,10 +302,21 @@ def _record_decision(state, idx, w, moves, scored, chosen, feat_by_mv=None):
     }
     if has_war:
         rec["row_alternatives"] = _row_alternatives(state, idx, w)
+    # ALWAYS emitted, `null` included.  An absent key would be indistinguishable
+    # from "the two vectors were equal", which is the single most interesting
+    # answer this field can give -- an exact score tie whose diff is `{}` means
+    # the evaluator literally cannot see the difference between the two moves,
+    # and one whose diff is `null` means nothing was measured because the
+    # scorer was a beam (see `engine.census.record`).  No silent caps.
+    rec["feature_diff_chosen_vs_runnerup"] = None
     if feat_by_mv:
         chosen_f = feat_by_mv.get(chosen)
         runnerup_f = feat_by_mv.get(runnerup) if runnerup is not None else None
         if chosen_f is not None and runnerup_f is not None:
+            # `weighted_diff` is w[k] * (chosen - runnerup) on the RAW feature,
+            # so it omits the `rate_multiplier` horizon `evaluate` applies to
+            # RATE_KEYS.  Off by that factor on rate keys; exact on the rest,
+            # and exactly zero on neither, which is all the tie question needs.
             diffs = {}
             keys = set(chosen_f) | set(runnerup_f)
             for k in keys:

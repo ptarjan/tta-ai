@@ -57,11 +57,27 @@ def _load():
         _impl = None
 
 
-def record(state, idx, w, moves, scored, chosen):
+def record(state, idx, w, moves, scored, chosen, feat_by_mv=None):
     """Record one decision.  No-op unless the census is switched on.
 
     `scored` is ``[(move, value), ...]`` -- note the order, which is the
     opposite of the ``(value, move)`` tuples `PlanBot.pick` sorts on.
+
+    `feat_by_mv` is ``{move: features_dict}`` and is how the recorder answers
+    "why did these two moves tie".  It is OPTIONAL because it is not always
+    meaningful: only a bot whose score IS the linear dot product over
+    `weighted.features` can supply one.  `QuiescentBot` can, and does.
+    `PlanBot` cannot -- its score is a beam value averaged over samples of a
+    multi-ply search, and there is no single feature vector behind it -- so it
+    passes nothing, and the recorder writes ``feature_diff_chosen_vs_runnerup:
+    null`` rather than silently omitting the key.  A reader must not read an
+    absent diff as "the moves were identical".
+
+    THE PARAMETER EXISTED HERE FIRST IN `tools.war_census`, unpassed by
+    anybody, from the day that recorder was written until 2026-08-02: the
+    diagnostic ran on every decision and produced zero rows, because the two
+    signatures disagreed and nothing failed when they did.  Same bug class as
+    the rest of this file's docstring.
     """
     if not ENABLED:
         return
@@ -70,6 +86,6 @@ def record(state, idx, w, moves, scored, chosen):
     if _impl is None:
         return
     try:
-        _impl(state, idx, w, moves, scored, chosen)
+        _impl(state, idx, w, moves, scored, chosen, feat_by_mv)
     except Exception:
         pass          # see THE ONE INVARIANT above

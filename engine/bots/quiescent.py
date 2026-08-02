@@ -88,7 +88,7 @@ import random
 from .. import actions, census, journal
 from .fastcopy import copy_state
 from .trial import USE_JOURNAL
-from .weighted import DEFAULT_WEIGHTS, evaluate, rival_context
+from .weighted import DEFAULT_WEIGHTS, evaluate, features, rival_context
 
 __all__ = ["QuiescentBot", "war_value"]
 
@@ -363,6 +363,7 @@ class QuiescentBot:
                                          end_bias, box, depth, levels)
         best, best_val = None, None
         cscored = [] if census.ENABLED else None
+        cfeat = {} if census.ENABLED else None
         for mv in moves:
             st["candidates"] += 1
             trial = copy_state(state)
@@ -384,24 +385,34 @@ class QuiescentBot:
                 except Exception:
                     ctx = root_ctx
             try:
-                val = evaluate(trial, idx, w, ctx)
+                # The vector is computed only when the census is on, and then
+                # handed to `evaluate` rather than recomputed by it, so the
+                # instrument costs one dict reference and never a second pass
+                # over `features()` -- and cannot disagree with the score it
+                # is supposed to explain, because it IS the score's input.
+                f = features(trial, idx, ctx, w) if cfeat is not None else None
+                val = evaluate(trial, idx, w, ctx, f)
             except Exception:
                 continue
             if self.WAR_LOOKAHEAD and mv[0] == "war":
                 wv = _war_value(trial, idx, w, ctx)
                 if wv is not None:
                     val = wv
+                    f = None    # a lookahead value, not this vector's product
             if mv[0] == "end_turn":
                 val += end_bias
+                f = None        # ditto: `end_turn_bias` is not in `features`
             if cscored is not None:
                 cscored.append((mv, val))
+                if f is not None:
+                    cfeat[mv] = f
             if best_val is None or val > best_val:
                 best, best_val = mv, val
         if best is None:
             return self.rng.choice(moves)
         if cscored is not None:
             # After the decision, return value discarded: cannot alter play.
-            census.record(state, idx, w, moves, cscored, best)
+            census.record(state, idx, w, moves, cscored, best, cfeat)
         return best
 
     def _pick_journalled(self, state, moves, idx, root_ctx, w, end_bias,
@@ -429,6 +440,15 @@ class QuiescentBot:
         st = self.stats
         begin, rollback = journal.begin, journal.rollback
         best, best_val = None, None
+        # THE CENSUS WAS ABSENT HERE UNTIL 2026-08-02, and this path is the one
+        # the league actually runs: `run_league.sh` exports `TTA_JOURNAL=1`, so
+        # every QuiescentBot arm took the branch with no `census.record` in it
+        # and contributed exactly zero rows.  The copy path above had the call;
+        # nothing checked that its journalled twin did too.  Recording is safe
+        # under the journal because a feature vector is plain floats -- it holds
+        # no reference into the state that `rollback` is about to undo.
+        cscored = [] if census.ENABLED else None
+        cfeat = {} if census.ENABLED else None
         for mv in moves:
             st["candidates"] += 1
             j = begin(state)
@@ -452,19 +472,30 @@ class QuiescentBot:
                     except Exception:
                         ctx = root_ctx
                 try:
-                    val = evaluate(state, idx, w, ctx)
+                    f = (features(state, idx, ctx, w)
+                         if cfeat is not None else None)
+                    val = evaluate(state, idx, w, ctx, f)
                 except Exception:
                     continue
                 if self.WAR_LOOKAHEAD and mv[0] == "war":
                     wv = _war_value(state, idx, w, ctx)
                     if wv is not None:
                         val = wv
+                        f = None
             finally:
                 rollback(j)
             if mv[0] == "end_turn":
                 val += end_bias
+                f = None
+            if cscored is not None:
+                cscored.append((mv, val))
+                if f is not None:
+                    cfeat[mv] = f
             if best_val is None or val > best_val:
                 best, best_val = mv, val
         if best is None:
             return self.rng.choice(moves)
+        if cscored is not None:
+            # After the decision, return value discarded: cannot alter play.
+            census.record(state, idx, w, moves, cscored, best, cfeat)
         return best
