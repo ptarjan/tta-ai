@@ -971,15 +971,20 @@ class Corpus:
         # A registry whose answers depend on process history is not a
         # registry, so start from cold caches.
         #
-        # NOTE FOR SOMEBODY ELSE: that those two answers DIFFER is itself a
-        # finding.  `stats_key` is documented as naming every field `compute`
-        # reads, and `test_board_yields.TestStatsKeyIsACompleteMemoKey` exists
-        # to prove it; if the key were complete, a warm cache could not change
-        # a valuation.  Clearing here makes this file honest; it does not
-        # explain the difference.
+        # THAT DIFFERENCE IS NOW EXPLAINED (2026-08-02).  It was not
+        # `stats_key` being incomplete -- it is complete for `effects.compute`,
+        # and `test_board_yields.TestStatsKeyIsACompleteMemoKey` still proves
+        # it.  These caches do not hold a `compute` result; they hold a PLAN,
+        # which is priced by the rules as well as the ratings, so the key has
+        # to name `yellow_bank`, `workers_free`, `mil_discount` and
+        # `one_time_discount` too.  It now does: `board_yields._plan_key`,
+        # guarded by `TestThePlanKeyIsComplete`.  The clearing below stays --
+        # a complete key makes a warm cache harmless, not free of eviction,
+        # and this file's whole job is to depend on nothing it did not build.
         BY._DELTA_CACHE.clear()
         BY._UNIT_CACHE.clear()
         BY._TECH_CACHE.clear()
+        BY._BUILD_CACHE.clear()      # the fourth one; missed when this was written
         names = [c["name"] for c in C.db().cards]
         credits_on = _credits_on()
         all_on = _all_on()
