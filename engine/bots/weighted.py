@@ -246,10 +246,13 @@ def deferred_credit(state, idx):
     rules change that created it had one cause in `tools/gate.sh`.
 
     Returns ``(pact_offers, auction_committed, auction_bid, blocks_attack,
-    gains)``, where `gains` maps feature keys to deferred amounts.
+    gains, partner_gains)``, where `gains` maps feature keys to deferred
+    amounts for `idx` and `partner_gains` maps a rival's index to the same
+    for the side of the pact THEY would take.
     """
     db = C.db()
     gains = {}
+    partner_gains = {}
     offers = committed = bid_cost = blocks_attack = 0.0
     for pend in state.pending:
         kind = pend.get("kind")
@@ -269,6 +272,27 @@ def deferred_credit(state, idx):
             for block in effects._pact_blocks(pact, idx):
                 _add_block(gains, block, PACT_OFFER_CREDIT, state, idx,
                            partner)
+            # THE OTHER HALF OF THE DEAL.  Pricing only my own side made
+            # every partner identical: measured on 257 live decisions
+            # (experiments/logs/census, 2026-08-01), 135 of the 144 exact
+            # score ties on `offer_pact` were the SAME card offered to a
+            # DIFFERENT opponent at a bit-identical score, so the bot chose
+            # its allies by tiebreak.  A pact handed to the runaway leader
+            # and the same pact handed to last place are not the same move
+            # -- `book.py` has known that since it was written.
+            #
+            # Differenced, not own-only, for exactly the reason
+            # `event_scoring_margin` is: a deal that pays me 8 and my rival
+            # 14 is a bad deal, and a feature that only sees the 8 rates it
+            # a good one.  No new coordinate: the partner's yields are fed
+            # into the `rival_*` maxima the evaluator already prices, so the
+            # weight the hill climb has already tuned for "a rival producing
+            # this much" is the one that charges for the gift.
+            if partner is not None and partner != idx:
+                pg = partner_gains.setdefault(partner, {})
+                for block in effects._pact_blocks(pact, partner):
+                    _add_block(pg, block, PACT_OFFER_CREDIT, state, partner,
+                               idx)
         elif kind == "auction" and pend.get("high") == idx:
             rivals = sum(1 for i in pend.get("active", ()) if i != idx)
             share = 1.0 / (1.0 + rivals)
@@ -282,7 +306,7 @@ def deferred_credit(state, idx):
                            state, idx, None)
                 _add_block(gains, card.get("immediateEffects"), share,
                            state, idx, None)
-    return offers, committed, bid_cost, blocks_attack, gains
+    return offers, committed, bid_cost, blocks_attack, gains, partner_gains
 
 
 class _RivalView:
@@ -398,6 +422,7 @@ def rival_context(state, idx, root_row=None):
     would silently re-open the leak for exactly the deep nodes that have one.
     """
     best_rate = best_sci = best_str = 0
+    rates = {}
     views = []
     for q in state.players:
         if q.idx == idx or q.resigned:
@@ -406,6 +431,12 @@ def rival_context(state, idx, root_row=None):
         best_rate = max(best_rate, s.culture)
         best_sci = max(best_sci, s.science)
         best_str = max(best_str, s.strength)
+        # PER-RIVAL, not just the max: `deferred_credit` needs to know what a
+        # SPECIFIC rival already produces to work out what offering them a
+        # pact would do to the maximum.  Free here -- `effects.compute` has
+        # already run -- and impossible to reconstruct downstream without
+        # paying for it again on every candidate.
+        rates[q.idx] = (s.culture, s.science, s.strength)
         gate = (s.civil_actions,
                 q.hand_size("civil") >= s.civil_actions + s.civil_hand_limit,
                 0 if q.leader == "Michelangelo"
@@ -416,6 +447,7 @@ def rival_context(state, idx, root_row=None):
                                         - q.hand_size("civil"))), gate))
     return {"rival_culture_rate": best_rate, "rival_science_rate": best_sci,
             "rival_strength": best_str, "rival_views": tuple(views),
+            "rival_rates": rates,
             "root_row": root_row_budget(state) if root_row is None
             else root_row}
 
@@ -982,10 +1014,10 @@ def features(state, idx, ctx=None, w=None):
     # deferred payoffs: an offered pact and a live high bid are both real
     # positions the trial state cannot show (docs/COMBAT_AUDIT.md)
     pact_offers = auction_committed = auction_bid = 0.0
-    gains = _NO_GAINS
+    gains = partner_gains = _NO_GAINS
     if state.pending:
-        pact_offers, auction_committed, auction_bid, pending_blocks, gains = \
-            deferred_credit(state, idx)
+        (pact_offers, auction_committed, auction_bid, pending_blocks,
+         gains, partner_gains) = deferred_credit(state, idx)
         blocks_attack += pending_blocks
     g = gains.get
 
@@ -1061,8 +1093,31 @@ def features(state, idx, ctx=None, w=None):
     rival_wonders = max((len(q.completed_wonders) for q in rivals), default=0)
     if ctx is None:
         ctx = rival_context(state, idx)
+    rival_culture_rate = ctx["rival_culture_rate"]
+    rival_science_rate = ctx["rival_science_rate"]
+    rival_str = ctx["rival_strength"]
+    if partner_gains:
+        # An offered pact raises the partner's OWN rates, so it can raise the
+        # max-over-rivals these three terms are -- and by how much depends on
+        # which rival was offered it.  Recomputed as a real max off
+        # `rival_rates` rather than added to the max: offering the trailing
+        # player a pact that leaves them still behind the leader costs
+        # nothing here, which is precisely the distinction that was missing.
+        # `.get`, because a `ctx` handed in by an older caller may predate
+        # the key; then this degrades to today's behaviour rather than
+        # raising inside an evaluator.
+        rates = ctx.get("rival_rates") or {}
+        for _pi, _pg in partner_gains.items():
+            base = rates.get(_pi)
+            if base is None:
+                continue
+            rival_culture_rate = max(rival_culture_rate,
+                                     base[0] + _pg.get("culture_rate", 0.0))
+            rival_science_rate = max(rival_science_rate,
+                                     base[1] + _pg.get("science_rate", 0.0))
+            rival_str = max(rival_str, base[2] + _pg.get("strength", 0.0))
     strength = s.strength + g("strength", 0.0)
-    rel = strength - ctx["rival_strength"]
+    rel = strength - rival_str
 
 
     f = {
@@ -1172,9 +1227,9 @@ def features(state, idx, ctx=None, w=None):
         # --- rivals
         "rival_culture": rival_culture,
         "rival_mean_culture": rival_mean,
-        "rival_culture_rate": ctx["rival_culture_rate"],
-        "rival_science_rate": ctx["rival_science_rate"],
-        "rival_strength": ctx["rival_strength"],
+        "rival_culture_rate": rival_culture_rate,
+        "rival_science_rate": rival_science_rate,
+        "rival_strength": rival_str,
         "rival_free_ca": rival_free_ca,
         "rival_hand_civil": rival_hand_civil,
         "rival_wonders": rival_wonders,

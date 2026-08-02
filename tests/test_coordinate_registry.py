@@ -205,7 +205,7 @@ PARAMETERS = {
 KNOWN_DEAD = {
     # ---------------------------------------------- spent, never earned back
     "free_civil_action": (
-        ("unpriced-feature", "inert-live"),
+        ("unpriced-feature",),
         "the STATIC table's spelling of a card's free civil action.  The live "
         "board path stopped using it in 5ab4943 -- action_value prices the "
         "free action at the civil_actions marginal evaluate itself uses -- but "
@@ -229,7 +229,7 @@ KNOWN_DEAD = {
         "same reason `resource_discount` is",
         "docs/OPEN_ITEMS.md: retire the static action table"),
     "defense_bonus": (
-        ("unpriced-feature", "inert-live"),
+        ("unpriced-feature",),
         "a Military Bonus card's defence half is worth something precisely "
         "BECAUSE it is still in hand, so there is genuinely no board state for "
         "features() to mirror.  The consequence is real anyway: it is the only "
@@ -268,41 +268,6 @@ KNOWN_DEAD = {
         "docs/MODEL_CONSTANTS.md 6.1 already leans on the weight being 0.0 to "
         "argue the deal-rate fix is inert",
         "docs/OPEN_ITEMS.md: wonder_overrun never fires"),
-    # -------------------------- 0.0 on every LIVE league champion (untracked)
-    "build_discount": (
-        ("inert-live",),
-        "an effect key that was being dropped on the floor and now has "
-        "somewhere to land; landed at 0.0 and the league has left it there",
-        "docs/OPEN_ITEMS.md: climb the effect-key weights"),
-    "colonize_bonus": (
-        ("inert-live",),
-        "the same, for a card's colonization bonus",
-        "docs/OPEN_ITEMS.md: climb the effect-key weights"),
-    "event_scoring_margin": (
-        ("inert-live",),
-        "0.0 by design so no digest moved when it landed, and the league has "
-        "not climbed it since (docs/EVENT_SEEDING.md holds the A/B)",
-        "docs/OPEN_ITEMS.md: let the league climb event_scoring_margin"),
-    "hand_mil_potential": (
-        ("inert-live",),
-        "0.0 on every live champion, so nothing calls card_potential on a "
-        "military card at all -- which is what makes `territory_credit` and "
-        "`bonus_card_credit` cost nothing, and what hides the four invisible "
-        "military classes below (docs/COMBAT_AUDIT.md)",
-        "docs/OPEN_ITEMS.md: price the military hand"),
-    "hand_swap_extra": (
-        ("inert-live",),
-        "the spare-single-slot fraction; 0.0 says a second leader in hand adds "
-        "nothing.  It conducts (the corpus proves it with a stacked hand), it "
-        "has simply never been climbed",
-        "docs/OPEN_ITEMS.md: climb hand_swap_extra"),
-    "unit_strength_credit": (
-        ("inert-live",),
-        "THE NAMED HISTORICAL CASE: priced and inert on all three champions "
-        "for days while four separate audits walked past it.  It now gates "
-        "only the STATELESS unit table -- every caller that decides a move has "
-        "a board -- so today it is dead by construction rather than neglect",
-        "docs/CARD_BLINDNESS.md; retire with the static table"),
     # -------------------------------------------- emitted, never non-zero yet
     "hand_limit": (
         ("never-nonzero",),

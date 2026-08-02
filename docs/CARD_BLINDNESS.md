@@ -5573,3 +5573,37 @@ day it shipped, without playing a single game.
 * The bot's colonization use of Military Bonus cards is unmeasurable through
   the bot's own move stream (§17.3.2). Instrumenting `interact.force_value` would
   close it.
+
+---
+
+## 18. 2026-08-02: the three §17.3 gates are no longer inert
+
+§17.3 named three coordinates that were 0.0 on every trained vector on disk,
+and `tests/test_play_rate.py::TestNoClassIsDeadOnEveryTrainedVector` pinned
+that fact so it could not quietly stay true. It has now fired in the
+direction the project wanted: on the live champions (2p gen 119, 3p gen 32,
+4p gen 12) all three are off zero.
+
+| coordinate | 2p g119 | 3p g32 | 4p g12 | was (2026-07-30) |
+|---|---|---|---|---|
+| `unit_strength_credit` | 0.15835 | 0.00000 | 0.00449 | 0.0 / 0.0 / −0.01713 |
+| `defense_bonus`        | 0.00000 | 0.00000 | 0.07136 | 0.0 / 0.0 / absent |
+| `free_civil_action`    | 0.12849 | 0.00078 | 0.04118 | 0.0 / −0.16007 / −0.08449 |
+
+Nothing was repriced by hand. The only input was generations: the 2p arm went
+54 → 119 and the 3p and 4p arms restarted and climbed. `unit_strength_credit`
+is THE named historical case of this document — priced, shipped at 0.0, and
+inert through four audits — and it is now the largest of the three. All three
+signs are positive, which is the direction §17.3 argued was the correct one:
+a card carrying the good thing should not look worse for carrying it.
+
+`DEAD_ON_EVERY_TRAINED_VECTOR` is therefore empty, and
+`KNOWN_DEAD`'s whole `inert-live` section is gone from
+`tests/test_coordinate_registry.py` along with `build_discount`,
+`colonize_bonus`, `event_scoring_margin`, `hand_mil_potential`,
+`hand_swap_extra` and `unit_strength_credit`. Both lists only shrink.
+
+What this does NOT establish is a play-rate change. These are weights, not
+behaviour; §17.4's discrepancy table has not been re-measured against a
+champion that carries them, and until it is, "the gate opened" is the whole
+claim. §17.7's open items all stand.

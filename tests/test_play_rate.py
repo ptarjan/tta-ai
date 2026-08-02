@@ -158,14 +158,22 @@ DEFAULT_ZERO_GATES = {
 #:   defense_bonus          0.0      0.0      (absent -> 0.0)
 #:   free_civil_action      0.0     -0.16007  -0.08449
 #:
+#: EMPTY SINCE 2026-08-02, and this is the whole point of the assertion: the
+#: league climbed all three off zero on its own once it was given generations
+#: to do it in.  Re-measured on the live champions (2p gen 119, 3p gen 32,
+#: 4p gen 12):
+#:
+#:   unit_strength_credit   0.15835  0.00000  0.00449
+#:   defense_bonus          0.00000  0.00000  0.07136
+#:   free_civil_action      0.12849  0.00078  0.04118
+#:
+#: The set only ever shrinks; a name goes back in only with a fresh
+#: measurement showing every trained vector at 0.0 again.
+#:
 #: This assertion only runs where those files exist; a fresh clone has no
 #: `experiments/league_state`, and the test says so rather than passing
 #: vacuously.
-DEAD_ON_EVERY_TRAINED_VECTOR = {
-    "unit_strength_credit",
-    "defense_bonus",
-    "free_civil_action",
-}
+DEAD_ON_EVERY_TRAINED_VECTOR = set()
 
 
 def trained_vectors():

@@ -34,7 +34,7 @@ from engine.bots import weighted                           # noqa: E402
 from experiments.arena import (                            # noqa: E402
     load_spec, make_bot, refuse_if_degenerate_champion)
 
-_ZERO = (0.0, 0.0, 0.0, 0.0, {})
+_ZERO = (0.0, 0.0, 0.0, 0.0, {}, {})
 
 
 def _no_credit(state, idx):
