@@ -95,17 +95,31 @@ switches these two calls around.
 
 `compute` is hot -- roughly ten calls per generated move already -- and this
 adds one per swap-type card in hand or in the row per leaf.  The result is
-memoised on `(name, effects.stats_key(state, p))`.
+memoised on `(name, _plan_key(state, p))`.
 
-`stats_key` carries the documented invariant that it names every field
-`compute` reads, which is exactly the completeness this key needs, and it
-already includes `p.leader` and `p.government` so the *current* side of the
-diff is pinned too.  The docstring is not taken on trust:
-`tests/test_board_yields.py:TestStatsKeyIsACompleteMemoKey` plays self-play
-games, records every `(stats_key -> compute)` pair it sees, and fails if one
-key ever maps to two different `Stats`.  A key that missed a field would give
-silently stale valuations, which is a worse bug than the blindness this
-module exists to fix.
+`_plan_key` is `effects.stats_key` PLUS four player fields, and the four are
+the whole point.  `stats_key` carries the invariant that it names every field
+`effects.compute` reads -- but these caches do not hold a `compute`, they hold
+a PLAN, and a plan reads the rules as well as the ratings: what a build costs,
+what a technology costs, whether a population increase is affordable, whether
+the free worker it spends tips the board into an uprising.  Those read
+`yellow_bank`, `workers_free`, `mil_discount` and `one_time_discount`, none of
+which `compute` looks at and so none of which `stats_key` names.
+
+Keyed on `stats_key` alone, two boards that differ only in (say) how much food
+is banked collide, and the second one is served the first one's card
+valuations.  The caches are module-level, so the collision is not even
+confined to one game: it reaches across every game the process has played.
+That is how this was found -- playing the same nine-game corpus one game per
+process moved card valuations that had no business moving.
+
+`build_fresh` learned this first and carried three of the four in a key of its
+own; the other three functions kept the bare `stats_key` and had the bug.  One
+shared key now, because "in this list but not that one" is the failure this
+whole module keeps paying for.  The invariant is not taken on trust:
+`tests/test_board_yields.py:TestStatsKeyIsACompleteMemoKey` checks the
+`compute` half, and `TestThePlanKeyIsComplete` checks all four cached plans by
+playing games and failing if one key ever maps to two different answers.
 """
 from __future__ import annotations
 
@@ -236,9 +250,38 @@ def _swapped(state, p, field, name):
         setattr(p, field, old)
 
 
-# (name, stats_key) -> yield triples.  `stats_key` names every field
-# `compute` reads, so it is a complete key for the diff; the test named in
-# the module docstring checks that empirically rather than trusting it.
+def _plan_key(state, p):
+    """The memo key every cached plan in this module uses.  See the
+    "memoisation" section of the module docstring for why it is not just
+    `effects.stats_key`.
+
+    The four extra fields, and who reads each:
+
+    * `yellow_bank`  -- `economy.pop_cost_base` (the `pop_cost` triple, whose
+                        delta does NOT cancel: the formula clamps at zero, so
+                        a discount is worth less when the bank is nearly out)
+                        and `economy.happy_required` (`uprising`'s threshold).
+    * `workers_free` -- the other side of that threshold, and the gate that
+                        decides whether a build is offered at all.
+    * `mil_discount` -- the per-turn pool `actions.build_cost_net` spends
+                        against a unit.
+    * `one_time_discount` -- read by BOTH `effects.build_cost` and
+                        `effects.tech_cost`, so it moves the price of a plan
+                        without moving a single rating.
+
+    Rendered as a sorted tuple rather than hashed loosely: it is a dict of
+    dicts, it is empty on the overwhelming majority of boards (the `or ()`
+    fast path), and a key that silently collapsed two different discounts
+    would be the exact bug this function exists to close.
+    """
+    otd = p.one_time_discount
+    return (effects.stats_key(state, p), p.yellow_bank, p.workers_free,
+            p.mil_discount,
+            tuple(sorted((k, tuple(sorted(v.items())) if isinstance(v, dict)
+                          else v) for k, v in otd.items())) if otd else ())
+
+
+# (name, _plan_key) -> yield triples.
 _DELTA_CACHE = {}
 _DELTA_CACHE_MAX = 200_000
 
@@ -292,7 +335,7 @@ def _delta_triples(before, after, p):
 
 
 def _stats_delta(state, p, field, name):
-    key = (name, effects.stats_key(state, p))
+    key = (name, _plan_key(state, p))
     hit = _DELTA_CACHE.get(key)
     if hit is not None:
         return hit
@@ -900,17 +943,19 @@ def unit_upgrade(name, state, idx):
     the player has already developed (it cannot be developed twice, so the card
     is dead in hand and worth exactly nothing -- not a cost, and not a gain).
 
-    Memoised on `(name, effects.stats_key(state, p))` for the same reason
-    `_stats_delta` is, and on the same key: `stats_key` carries the invariant
-    that it names every field `compute` reads, and it already includes the
-    per-technology worker counts this function moves.
+    Memoised on `(name, _plan_key(state, p))` for the same reason
+    `_stats_delta` is, and on the same key.  `stats_key` alone would NOT do:
+    the science cost here comes from `effects.tech_cost`, which reads
+    `p.one_time_discount`, and the resource cost from `A.upgrade_cost`, which
+    reads it again through `effects.build_cost` -- neither is a field
+    `effects.compute` looks at, so neither is in `stats_key`.
     """
     if _DB.type_by_name.get(name) not in C.UNIT_TYPES:
         return 0.0, 0.0, 0.0
     p = state.players[idx]
     if name in p.techs:
         return 0.0, 0.0, 0.0
-    key = (name, effects.stats_key(state, p))
+    key = (name, _plan_key(state, p))
     hit = _UNIT_CACHE.get(key)
     if hit is not None:
         return hit
@@ -1020,8 +1065,11 @@ def tech_upgrade(name, state, idx):
     has already developed (it cannot be developed twice, so the card is dead
     in hand and worth exactly nothing -- not a cost and not a gain).
 
-    Memoised on `(name, effects.stats_key(state, p))` for the same reason
-    `_stats_delta` and `unit_upgrade` are, and on the same key.
+    Memoised on `(name, _plan_key(state, p))` for the same reason
+    `_stats_delta` and `unit_upgrade` are, and on the same key -- the staff
+    half runs `_delta_triples`, which prices `pop_cost` off `p.yellow_bank`,
+    and the develop half pays `effects.tech_cost`, which reads
+    `p.one_time_discount`.
     """
     typ = _DB.type_by_name.get(name)
     if typ not in LEVELLED_TYPES:
@@ -1029,7 +1077,7 @@ def tech_upgrade(name, state, idx):
     p = state.players[idx]
     if name in p.techs:
         return (), (), 0.0, 0.0
-    key = (name, effects.stats_key(state, p))
+    key = (name, _plan_key(state, p))
     hit = _TECH_CACHE.get(key)
     if hit is not None:
         return hit
@@ -1225,14 +1273,12 @@ def build_fresh(name, state, idx):
     and special technology), or an urban type already at its `urban_limit`.
     Those are `_action_moves`' own three tests, not a restatement of them.
 
-    Memoised like its two siblings, on a key that carries the three extra
-    player fields this plan reads and `effects.stats_key` does not:
-    `workers_free` (the gate, and one side of `uprising`'s threshold),
-    `yellow_bank` (the other side -- `economy.happy_required` reads it) and
-    `mil_discount` (the per-turn pool `actions.build_cost_net` spends against
-    a unit).  All three were found by a test rather than by inspection: two
-    boards differing only in `yellow_bank` collide on `effects.stats_key`,
-    which names every field `effects.compute` reads and nothing more.
+    Memoised like its three siblings, on the shared `_plan_key`.  This
+    function is where the extra fields in that key were FOUND -- by a test,
+    not by inspection: two boards differing only in `yellow_bank` collide on
+    `effects.stats_key`, which names every field `effects.compute` reads and
+    nothing more.  It carried them in a key of its own until 2026-08-02, when
+    the same collision turned up in the other three and the key was shared.
     """
     typ = _DB.type_by_name.get(name)
     if typ not in LEVELLED_TYPES:
@@ -1243,8 +1289,7 @@ def build_fresh(name, state, idx):
     res = A.build_cost_net(state, p, name)
     if res is None:
         return (), 0.0
-    key = (name, effects.stats_key(state, p), p.workers_free, p.yellow_bank,
-           p.mil_discount)
+    key = (name, _plan_key(state, p))
     hit = _BUILD_CACHE.get(key)
     if hit is not None:
         return hit

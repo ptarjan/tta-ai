@@ -6,11 +6,15 @@ ways, so they are separate classes:
 * `TestTheComputeVsStateStatsTrap` -- the swap diff must call
   `effects.compute`, never `effects.state_stats`.  Getting this wrong makes
   every leader price at exactly zero, silently.
-* `TestStatsKeyIsACompleteMemoKey` -- the memo key is
-  `(name, effects.stats_key(state, p))`.  If `stats_key` omitted a field
-  `compute` reads, the cache would serve stale valuations, which is worse
-  than the blindness this module fixes.  Checked empirically against real
-  self-play rather than by reading the docstring.
+* `TestStatsKeyIsACompleteMemoKey` -- `effects.stats_key` must name every
+  field `effects.compute` reads.  Checked empirically against real self-play
+  rather than by reading the docstring.
+* `TestThePlanKeyIsComplete` -- the memo key the caches in this module
+  actually use, `(name, board_yields._plan_key(state, p))`.  A plan is priced
+  by the rules as well as by the ratings, so this key is strictly wider than
+  `stats_key`, and three of the four caches shipped without the extra fields
+  until 2026-08-02.  The caches are module-level, so the collision served one
+  game's card valuations to another game.
 * `TestEveryLeaderIsPriced` -- the point of the exercise: no leader may be
   worth nothing but its leader-ness on a board that contains the things it
   pays for.
@@ -158,6 +162,130 @@ class TestStatsKeyIsACompleteMemoKey(unittest.TestCase):
                                 "board_yields memo would serve stale card "
                                 f"valuations.  key={k!r}")
         self.assertGreater(len(seen), 900, "not enough coverage to mean much")
+
+
+class TestThePlanKeyIsComplete(unittest.TestCase):
+    """The other memo key, and the one that was actually wrong.
+
+    `TestStatsKeyIsACompleteMemoKey` above proves `effects.stats_key` is a
+    complete key for `effects.compute`.  That is a real property and it is not
+    the property these caches need: they do not hold a `compute`, they hold a
+    PLAN -- "swap this leader in", "develop this and staff it", "build a worker
+    onto this" -- and a plan is priced by the RULES as well as by the ratings.
+    What a build costs, what a technology costs, whether a population increase
+    is affordable, whether the free worker it spends tips the board into an
+    uprising: all four read player fields `compute` never looks at, so none of
+    them are in `stats_key`.
+
+    `build_fresh` found this out in 2026-07 and carried the extra fields in a
+    key of its own.  The other three kept the bare `stats_key` and kept the
+    bug, which is this repo's recurring shape -- in this list but not that one.
+
+    HOW IT SHOWED UP.  The caches are module-level, so a collision is not
+    confined to one game: it reaches every game the process has played.
+    Replaying the nine-game test corpus one game per process moved card
+    valuations that had no business moving (`Iron` 9.41 -> 8.91).  A cache that
+    gives different answers depending on what the process happened to evaluate
+    first is not a cache.
+
+    WHAT IS ASSERTED.  Not a list of fields -- a list would go stale the next
+    time somebody prices something new.  The invariant: the key determines the
+    answer.  Shrink `_plan_key` back to `stats_key` and the first test below
+    goes red, because the collisions come back.
+    """
+
+    #: One probe per cached function, chosen to touch every code path the four
+    #: caches have: a leader swap and a government swap (`_stats_delta`), a
+    #: unit technology (`unit_upgrade`, and `tech_upgrade`'s staff half), a
+    #: production and an urban technology (`build_fresh`, whose `uprising`
+    #: threshold is the term that reads `yellow_bank` and `workers_free`).
+    PROBES = ("Julius Caesar", "Michelangelo", "Theocracy", "Republic",
+              "Warriors", "Swordsmen", "Bronze", "Iron", "Philosophy",
+              "Religion")
+
+    @classmethod
+    def setUpClass(cls):
+        """One sweep, two questions -- playing the games twice to ask them
+        separately would double a 15-second test for nothing."""
+        cls.by_plan = {}      # (fn, name, _plan_key)  -> answer
+        cls.by_stats = {}     # (fn, name, stats_key)  -> answer
+        cls.collisions = 0    # keys that stats_key alone would have merged
+        for seed in (11, 12, 13):
+            for players in (2, 3):
+                st = G.new_game(players, seed)
+                rng = random.Random(seed)
+                bots = [WeightedBot(seed=seed + i) for i in range(players)]
+                for ply in range(150):
+                    if st.game_over:
+                        break
+                    A.apply(st,
+                            bots[st.decider()].pick(st, A.legal_moves(st)),
+                            rng)
+                    if ply % 5:
+                        continue
+                    for q in st.players:
+                        cls._sample(st, q)
+
+    @classmethod
+    def _plans(cls, st, q, name):
+        """Every cached answer for one card on one board, computed COLD.
+
+        The clear is the whole point: reading through a warm cache would ask
+        the cache what it already believes, which is a tautology and would
+        pass with the key that has the bug in it.
+        """
+        for c in (BY._DELTA_CACHE, BY._UNIT_CACHE, BY._TECH_CACHE,
+                  BY._BUILD_CACHE):
+            c.clear()
+        return (("leader", BY._stats_delta(st, q, "leader", name)),
+                ("government", BY._stats_delta(st, q, "government", name)),
+                ("unit_upgrade", BY.unit_upgrade(name, st, q.idx)),
+                ("tech_upgrade", BY.tech_upgrade(name, st, q.idx)),
+                ("build_fresh", BY.build_fresh(name, st, q.idx)))
+
+    @classmethod
+    def _sample(cls, st, q):
+        plan_k = BY._plan_key(st, q)
+        stats_k = effects.stats_key(st, q)
+        for name in cls.PROBES:
+            for fn, answer in cls._plans(st, q, name):
+                answer = repr(answer)
+                cls.by_plan.setdefault((fn, name, plan_k), answer)
+                prev = cls.by_stats.setdefault((fn, name, stats_k), answer)
+                if prev != answer:
+                    cls.collisions += 1
+                if cls.by_plan[(fn, name, plan_k)] != answer:
+                    raise AssertionError(
+                        "board_yields._plan_key is NOT a complete key for "
+                        f"{fn}({name!r}): two boards share a key and want "
+                        f"different answers.\n  first: {cls.by_plan[(fn, name, plan_k)]}"
+                        f"\n  now:   {answer}\n"
+                        "The cache is module-level, so this serves one game's "
+                        "card valuations to another game.  Add the field the "
+                        "plan reads to _plan_key.")
+
+    def test_one_plan_key_never_maps_to_two_different_plans(self):
+        """The invariant.  `setUpClass` raises at the first violation; this
+        also insists the sweep was wide enough for that to mean something."""
+        self.assertGreater(len(self.by_plan), 2000,
+                           "not enough distinct keys to mean much")
+
+    def test_the_bare_stats_key_would_still_collide(self):
+        """The positive control, and the test that would have been red.
+
+        Without it, `_plan_key` could quietly shrink back to `stats_key` and
+        the test above would keep passing IF the sweep happened not to hit a
+        colliding pair -- an instrument that cannot fail proves nothing.  This
+        one fails if the extra fields ever stop being load-bearing, which is a
+        real thing to be told: it would mean the pricing had changed.
+        """
+        self.assertGreater(
+            self.collisions, 0,
+            "no two boards in 6 games shared an effects.stats_key and wanted "
+            "different card valuations, so the extra fields in "
+            "board_yields._plan_key are no longer buying anything.  Either "
+            "the sweep stopped reaching real positions or the pricing "
+            "changed; find out which before deleting them.")
 
 
 class TestTheTripleShapeAgrees(unittest.TestCase):
