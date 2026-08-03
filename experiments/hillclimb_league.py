@@ -349,7 +349,7 @@ def append_jsonl(path, rec):
 
 
 DEFAULT_STATE_REC = {
-    "gen": 0, "sigma": 0.25, "since_accept": 0,
+    "gen": 0, "sigma": 0.25, "since_accept": 0, "recent": [], "hold_sigma": 0,
     "ablate_cursor": 0, "tested_since_check": [], "last_full_check": None,
 }
 
@@ -363,6 +363,26 @@ def load_state(pp):
         except Exception:
             pass
     return rec
+
+
+def resume_window(st, cap=12):
+    """The 1+lambda acceptance window, resumed across a climber restart.
+
+    This window is what the sigma controller adapts on, and it is real state.
+    It used to live only in memory -- but the supervisor restarts the climber
+    roughly once per generation, so the window never grew past length 1, the
+    controller's ``len(recent) >= 6`` guard was never satisfied in production,
+    and sigma could only ever ratchet UP via ``stall_kick``.  State files
+    written before the window was persisted have none; for those, reconstruct
+    the part ``since_accept`` already pins down -- the last ``since_accept``
+    generations were rejects, and the one before them was an accept.
+    """
+    recent = [bool(x) for x in (st.get("recent") or [])][-cap:]
+    if not recent:
+        since = int(st.get("since_accept") or 0)
+        if since:
+            recent = ([True] + [False] * since)[-cap:]
+    return recent
 
 
 def load_champion(pp, init, players, overrides=True, log=print):
@@ -934,8 +954,8 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
     sigma = max(float(st["sigma"]), sigma_floor)
     since_accept = int(st["since_accept"])
     tested_since_check = set(st.get("tested_since_check") or [])
-    hold_sigma = 0
-    recent = []
+    hold_sigma = int(st.get("hold_sigma") or 0)
+    recent = resume_window(st)
     rng = random.Random(seed * 7919 + players * 101 + gen)
     t_end = time.time() + hours * 3600
 
@@ -1198,6 +1218,7 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
         append_jsonl(pp["gens"], rec)
         st.update({"gen": gen, "sigma": round(sigma, 4),
                    "since_accept": since_accept,
+                   "recent": recent, "hold_sigma": hold_sigma,
                    "tested_since_check": sorted(tested_since_check)})
         write_json(pp["state"], st)
         save_weights(pp["champion"], champion, gen=gen, sigma=sigma,
