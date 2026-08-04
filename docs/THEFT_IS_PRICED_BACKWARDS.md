@@ -51,6 +51,27 @@ what the bots actually play).
    resource returns the token to the bank *and* buys the thing, so a stocked
    resource is worth at least a free token whatever either is worth.
 
+3. **Benefit gates**, `BENEFIT_GATES` (added later the same day): the nine
+   weights that scale a printed grant on exactly one card class may not be
+   negative. `hillclimb_league.NONNEG` is derived as `{k: DEFAULT[k] > 0}`, so
+   a credit whose default is exactly **0.0** — which is how every class credit
+   ships, switched off for the league to price — is in neither NONNEG nor
+   NONPOS and is guarded by nothing. Same shape as `resource_stock` above.
+   `tests/test_play_rate.py::TestBenefitGatesAreDerived` re-derives the set by
+   perturbing each weight and checking it raises `card_potential` for every
+   card in its class, so the written-down list cannot go stale.
+
+   Measured: `wonder_stages_per_action` was negative on **all three live
+   champions** (-0.13614 / -0.03634 / -0.04145). It gates Masonry,
+   Architecture and Engineering and nothing else — the three cards that make
+   wonders cheap in actions. So the wonders complaint had two coordinates
+   pointing the same way, not one: a negative net `wonder_progress` on 4p and
+   a negative markdown on the build techs everywhere.
+   `unit_strength_credit` (the failure `tests/test_play_rate.py` was written
+   for in the first place), `restricted_resources`, `free_civil_action`,
+   `hand_limit` and `build_discount` were negative on at least one trained
+   vector too.
+
 Repairs go to the **boundary**, not to the default — the smallest change that
 makes the vector expressible. The resource pair is repaired by *raising*
 `resource_stock`: `blue_free` was climbed (0.15 → 0.4220) and `resource_stock`

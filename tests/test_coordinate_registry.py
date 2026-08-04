@@ -502,6 +502,28 @@ for _k in _NOT_YET_CLIMBED:
         "in test_the_live_champions_leave_exactly_the_listed_ones_at_zero "
         "will ask")
 
+#: `rival_desire` is a SELECTOR, not a value term, and that is the whole
+#: difference.  It is clamped to [0, 1] and read once in `row_pressure`:
+#: `want = _rival_desire(...) if desire > 0.0 else None`, and `want is None`
+#: makes the rival model score competition by UNIFORM per-rival reach instead
+#: of by value-weighted desire.  Both branches are models the code runs.  So
+#: 0.0 here is an ANSWER -- "use the uniform model" -- where for a value term
+#: 0.0 means the coordinate was never priced at all, which is the thing this
+#: ratchet exists to catch.  Listing it does not weaken the ratchet, because
+#: the sibling selector in the same mutation group (`rival_take_share`, group
+#: `row`) has been moved off its 0.5 default on two of the three arms (2p to
+#: 0.0, 3p to 0.5734) -- the climber demonstrably reaches this group and has
+#: had every chance at this key.  Not-measured: whether the value-weighted
+#: branch is BETTER; nobody has run it at desire=1.0 against a champion.
+KNOWN_DEAD["rival_desire"] = (
+    ("inert-live",),
+    "a [0, 1] blend selector inside row_pressure()'s rival model, not a "
+    "priced term: 0.0 selects the uniform-reach competition model, which is "
+    "a branch the evaluator actually executes, so 0.0 is a chosen setting "
+    "rather than an unpriced coordinate",
+    "delete this line if the league ever climbs it, or run the desire=1.0 "
+    "branch against a champion and record which model is better")
+
 #: Card types `card_potential` is never asked to price, so their pricing says
 #: nothing.  Events are seeded into the event deck rather than taken from the
 #: civil row; `event_scoring_margin` is the coordinate that sees them.

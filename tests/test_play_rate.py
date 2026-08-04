@@ -173,7 +173,30 @@ DEFAULT_ZERO_GATES = {
 #: This assertion only runs where those files exist; a fresh clone has no
 #: `experiments/league_state`, and the test says so rather than passing
 #: vacuously.
-DEAD_ON_EVERY_TRAINED_VECTOR = set()
+#:
+#: `wonder_stages_per_action` went in on 2026-08-04, and the reason is a GUARD
+#: rather than a verdict -- read the entry before treating it as a write-off.
+#: It gates Masonry / Architecture / Engineering (nothing else), and it was
+#: NEGATIVE on all three live champions: -0.13614 / -0.03634 / -0.04145.  That
+#: is not "unpriced", it is priced BACKWARDS -- a standing markdown on the
+#: three cards that make wonders cheap in actions, sitting next to the
+#: negative net `wonder_progress` that `weighted.NET_NONNEG_PHASE` repairs
+#: (docs/THEFT_IS_PRICED_BACKWARDS.md).  `hillclimb_league.NONNEG` could not
+#: see it because NONNEG is derived from `DEFAULT[k] > 0` and this default is
+#: exactly 0.0, so the key is in neither NONNEG nor NONPOS.
+#:
+#: `weighted.BENEFIT_GATES` now pins all nine such gates at >= 0.  So from
+#: here on 0.0 is the GUARD'S FLOOR, not a measurement, and the honest state
+#: of this coordinate is "not yet priced" -- which is what this list means.
+#: `test_the_dead_set_has_not_gone_stale` asks for the line back the moment
+#: the league prices it above zero, and `TestBenefitGatesAreDerived` below
+#: stops the guarded set itself from going stale.
+#:
+#: NOT MEASURED: the bot's take rate for the three cards against the human
+#: rate.  Humans take them in 12% / 25% / 35% of 2p seats (1,384 seats,
+#: `tools/play_rate.py human`); the bot side needs a `play_rate.py bot` run
+#: and nobody has finished one on these champions.
+DEAD_ON_EVERY_TRAINED_VECTOR = {"wonder_stages_per_action"}
 
 
 def trained_vectors():
@@ -286,6 +309,65 @@ class TestNoClassIsDeadOnEveryTrainedVector(unittest.TestCase):
             "%s is now positive on at least one trained vector.  Delete it "
             "from DEAD_ON_EVERY_TRAINED_VECTOR and record the play rate that "
             "resulted in docs/CARD_BLINDNESS.md." % sorted(revived))
+
+
+class TestBenefitGatesAreDerived(unittest.TestCase):
+    """`weighted.BENEFIT_GATES` is a written-down list of a DERIVABLE fact, so
+    it can go stale the moment somebody adds a class credit.  This re-derives
+    it the way `class_gates` does and demands the two agree.
+
+    The derivation, stated as a rule: a weight whose only per-card channel is
+    one card class, whose default is exactly 0.0, and which raises
+    `card_potential` for EVERY card in that class, scales a printed grant --
+    and a grant is never a reason not to take the card.  `yellow_bank` is the
+    counter-example the rule has to survive: it also gates one class, but its
+    default is -0.1 because a drained bank is a cost, so the `== 0.0` clause is
+    doing real work rather than decorating the sentence.
+    """
+
+    def test_the_guarded_set_is_exactly_the_zero_default_grant_gates(self):
+        base = dict(W.DEFAULT_WEIGHTS)
+        derived = set()
+        for k, _types in class_gates().items():
+            if W.DEFAULT_WEIGHTS[k] != 0.0:
+                continue
+            w2 = dict(base)
+            w2[k] = base[k] + 1.0
+            deltas = [W.card_potential(n, w2) - W.card_potential(n, base)
+                      for n in _dealt()]
+            moved = [d for d in deltas if abs(d) > 1e-12]
+            if moved and all(d > 0.0 for d in moved):
+                derived.add(k)
+        self.assertEqual(
+            derived, set(W.BENEFIT_GATES),
+            "weighted.BENEFIT_GATES no longer matches the gates derived from "
+            "the card database.  A gate MISSING from BENEFIT_GATES is "
+            "unguarded and free to train negative -- which is how "
+            "wonder_stages_per_action reached -0.136 on the 2p champion.  A "
+            "gate listed but not derived is either renamed or no longer "
+            "confined to one class; check before deleting it.")
+
+    def test_the_guard_pins_a_negative_grant_at_zero(self):
+        """Behavioural, not a restatement of the list: a vector that prices a
+        printed grant negatively must not survive a load."""
+        w = dict(W.DEFAULT_WEIGHTS)
+        w["wonder_stages_per_action"] = -0.5
+        w["unit_strength_credit"] = -2.0
+        out, viol = W.dominance_repair(w)
+        self.assertEqual(out["wonder_stages_per_action"], 0.0)
+        self.assertEqual(out["unit_strength_credit"], 0.0)
+        self.assertEqual({v["weight"] for v in viol},
+                         {"wonder_stages_per_action", "unit_strength_credit"})
+
+    def test_a_positive_grant_is_left_alone(self):
+        """Negative control.  The guard pins a sign, it does not pin a value:
+        the league is free to price a grant as high as it likes."""
+        w = dict(W.DEFAULT_WEIGHTS)
+        w["wonder_stages_per_action"] = 4.25
+        out, viol = W.dominance_repair(w)
+        self.assertEqual(out["wonder_stages_per_action"], 4.25)
+        self.assertEqual([v for v in viol
+                          if v["weight"] == "wonder_stages_per_action"], [])
 
 
 #: Per-seat-game take rates the human corpus supports, by card type, at 2p.

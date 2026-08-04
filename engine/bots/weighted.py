@@ -4353,6 +4353,46 @@ NET_NONNEG_PHASE = ("culture", "wonder_progress")
 #: raising the dominant side.
 DOMINATES = (("resource_stock", "blue_free"),)
 
+#: Weights that scale a PRINTED BENEFIT on one card class and nothing else.
+#: None of them may be negative.
+#:
+#: THE HOLE.  `hillclimb_league.NONNEG` is derived as `{k: DEFAULT[k] > 0}`, so
+#: a term whose default is exactly **0.0** is in neither NONNEG nor NONPOS and
+#: is sign-guarded by nothing at all.  That is the same shape as
+#: `resource_stock` above -- 0.0 is not a sign violation, so nothing fires --
+#: and it is the shape of every class credit in the vector, because a credit is
+#: added switched off so the league can price it from scratch.
+#:
+#: WHY THE SIGN IS A RULE AND NOT AN OPINION.  Each of these is the ONLY
+#: per-card channel its class has (`tests/test_play_rate.class_gates` derives
+#: exactly that set by perturbation), and raising it raises `card_potential`
+#: for EVERY card in the class -- `+1.0 .. +3.0` for the three build techs,
+#: `+1.0 .. +5.0` for the Military Bonus cards, and so on.  The printed text is
+#: a grant in every case: more stages per action, a bigger hand, a discount, an
+#: extra civil action, more strength.  You are never compelled to use a grant,
+#: so under the rules a card that prints one is never worse than the same card
+#: without it.  A negative weight says the class's own printed benefit is a
+#: reason NOT to take the card.
+#:
+#: MEASURED, which is why this exists: `wonder_stages_per_action` is negative
+#: on ALL THREE live champions (-0.136 / -0.036 / -0.041).  Masonry,
+#: Architecture and Engineering are the only cards it touches, and they are the
+#: cards that make wonders cheap in actions -- so every champion has been
+#: carrying a standing markdown on the build techs, next to the negative net
+#: `wonder_progress` in NET_NONNEG_PHASE above.  Same complaint, two
+#: coordinates.  `unit_strength_credit` (the failure this whole test file was
+#: written for), `restricted_resources`, `free_civil_action`, `hand_limit` and
+#: `build_discount` are negative on at least one trained vector too.
+#:
+#: The repair is to 0.0, not upward: the rules say "not a cost", they do not
+#: say what it is worth.  Pricing it is the league's job, and
+#: `tests/test_play_rate.py::TestNoClassIsDeadOnEveryTrainedVector` is the
+#: ratchet that notices when it does.
+BENEFIT_GATES = ("build_discount", "card_board_credit", "defense_bonus",
+                 "free_civil_action", "hand_limit", "resource_discount",
+                 "restricted_resources", "unit_strength_credit",
+                 "wonder_stages_per_action")
+
 
 def dominance_repair(w):
     """Return ``(weights, violations)`` with the rule-level orderings restored.
@@ -4381,6 +4421,13 @@ def dominance_repair(w):
                          "default": DEFAULT_WEIGHTS.get(hi, 0.0),
                          "rule": f"{hi} >= {lo}"})
             out[hi] = b
+    for k in BENEFIT_GATES:
+        v = float(out.get(k, DEFAULT_WEIGHTS.get(k, 0.0)))
+        if v < -1e-12:
+            viol.append({"weight": k, "value": round(v, 4),
+                         "default": DEFAULT_WEIGHTS.get(k, 0.0),
+                         "rule": f"{k} >= 0 (scales a printed benefit)"})
+            out[k] = 0.0
     return out, viol
 
 
