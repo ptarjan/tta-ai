@@ -63,16 +63,24 @@ Every reachable defence in this sample needed **two or more cards**, and it
 abandoned half of them. Zero needed only one card — so the observed give-ups
 are exactly the multi-card case and nothing else.
 
-That shape is the same horizon failure that made wars a structural zero: the
+~~That shape is the same horizon failure that made wars a structural zero: the
 first defence card leaves the defence *pending*, so the state the bot scores
 after playing it shows the cost of the card and none of the benefit, and the
-second card is never reached. `docs/COMBAT_AUDIT.md` §2.6.3's "1,104 winnable,
-zero won" is the same number before search; search has moved it off zero
-(2 of 4 attempted here) without closing it.
+second card is never reached.~~
 
-**This is the open item, not the attack rate.** A bot that attacks at ~0.9/game
-and cannot defend a two-card defence is paying the aggression tax in both
-directions.
+**WRONG, corrected 2026-08-04 later the same day — see
+[`THEFT_IS_PRICED_BACKWARDS.md`](THEFT_IS_PRICED_BACKWARDS.md).** The horizon
+was fine. `QUIET_PENDING` drains the pending stack before scoring, so the bot
+plays the entire four-card defence out in its head, reaches the position where
+the aggression has failed, and scores it *below* surrender. It was not blind;
+it preferred to be robbed, because two weight inversions the sign guard cannot
+see made losing culture and losing resources score as gains. Guessing a
+mechanism that fits the shape is not the same as measuring it, and the
+instrument that settled it took four minutes to write.
+
+`docs/COMBAT_AUDIT.md` §2.6.3's "1,104 winnable, zero won" is the same number
+before search; search moved it off zero and `dominance_repair` is what stops
+the rest of the give-ups being paid for.
 
 ## 4. Not measured here
 

@@ -66,6 +66,7 @@ import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+from engine.bots import weighted  # noqa: E402
 from engine.bots.weighted import (DEFAULT_WEIGHTS, PHASE_KEYS,  # noqa: E402
                                   load_weights, save_weights)
 from experiments import arena  # noqa: E402
@@ -301,6 +302,18 @@ def guard_weights(w, mode="clamp"):
                          "default": DEFAULT_WEIGHTS[k]})
             if mode == "clamp":
                 out[k] = 0.0
+    # The per-key sign test above cannot see either of the two ways a vector
+    # has actually inverted itself in this league: a phase multiplier dragging
+    # a term's NET weight below zero (the multipliers are exempt here by
+    # design), and two terms ranked so that losing the better one is a gain.
+    # `weighted.dominance_repair` owns both, so `load_weights` and this guard
+    # cannot disagree about them -- and so the champion FILE ends up carrying
+    # the same vector the bots play.
+    repaired, dom = weighted.dominance_repair(out)
+    if dom:
+        viol.extend(dom)
+        if mode == "clamp":
+            out = repaired
     return out, viol
 
 

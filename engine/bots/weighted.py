@@ -4289,15 +4289,118 @@ class WeightedBot:
         return best
 
 
+# -------------------------------------------------------- dominance guard
+#
+# THE HOLE THIS CLOSES.  `hillclimb_league.guard_weights` catches a value term
+# whose SIGN is inverted, and it deliberately exempts the `_early`/`_late`
+# phase multipliers (see the EXEMPTION note there, which is right about what
+# it measured).  So nothing ever checked the NET weight a phase-multiplied
+# term is evaluated at, and nothing checked two terms against each other.
+# Both holes were open and the league walked through both:
+#
+#   champion_2p   culture 1.0 + culture_early -1.3113 = -0.31 early
+#                 -> losing 3 culture RAISED its own evaluation by +0.55
+#   champion_2p   resource_stock 0.0 < blue_free 0.4220
+#                 -> being plundered of 4 resources was worth +1.27
+#
+# Measured consequence, which is how this was found: at a defence it could
+# win by playing four cards, the 2p champion scored `("defend_done",)` ABOVE
+# the winning line and handed the aggression over.  The search was not blind
+# -- it played the whole defence out and saw the win.  It declined it.
+#
+# Both constraints below are RULE FACTS, not strategy:
+#
+# * CULTURE IS THE SCORE.  A civilization is never worse off for having more
+#   of it, at any point in the game.  No lateness may make its net weight
+#   negative.  The other phase-multiplied terms are deliberately NOT listed:
+#   more workers costs consumption, resource production really is close to
+#   worthless on the last turn, and a net-negative there is a strategic claim
+#   the league is entitled to make.  A net-negative on culture is a claim that
+#   losing the game is good.
+# * A RESOURCE IN STOCK DOMINATES THE BLUE TOKEN IT SITS ON.  Spending the
+#   resource hands that token back to the bank AND buys the thing it paid
+#   for, so a stocked resource is worth at least a free token whatever either
+#   is worth.  A vector that ranks them the other way is one where being
+#   robbed is a gain.
+#
+# WHICH SIDE IS REPAIRED, and why it is not symmetric: the pair is repaired by
+# RAISING `resource_stock` to `blue_free`, not by lowering `blue_free` to it.
+# `blue_free` was climbed (0.15 default -> 0.4220); `resource_stock` sat at
+# exactly 0.0, which is the signature of a coordinate the climb never moved
+# rather than one it measured.  Raising keeps what was learned and fixes only
+# the ordering.  The phase pair is repaired to the BOUNDARY (net 0), not to
+# the default multiplier, for the same reason: the smallest change that makes
+# the vector expressible.
+
+#: Terms whose net weight (`k` plus either phase multiplier) may not go
+#: negative, because a pure gain of them cannot hurt under the rules.
+#:
+#: `wonder_progress` is `sum(stages[:built])` -- resources ALREADY PAID into
+#: the wonder in progress.  Those resources have left `resource_stock`
+#: already, so at equal everything-else a civilization with stages built is
+#: strictly closer to the culture the wonder pays and never worse off.  The
+#: risk of a half-built wonder is real and is priced by four OTHER features
+#: (`wonder_remaining`, `wonder_stages_left`, `wonder_turns_to_finish`,
+#: `wonder_overrun`), which is where a negative weight belongs; a negative net
+#: on `wonder_progress` itself says the paid stages are the problem.
+#: champion_4p carries base 0.0 with both multipliers negative (net -0.165
+#: early, -0.213 late), i.e. a standing instruction not to build wonders.
+#: NOT MEASURED HERE: what that did to its wonder play rate.  The repair
+#: leaves the term at exactly neutral and lets the league price it upward.
+NET_NONNEG_PHASE = ("culture", "wonder_progress")
+
+#: ``(dominant, dominated)`` -- `w[dominant] >= w[dominated]`, repaired by
+#: raising the dominant side.
+DOMINATES = (("resource_stock", "blue_free"),)
+
+
+def dominance_repair(w):
+    """Return ``(weights, violations)`` with the rule-level orderings restored.
+
+    Pure and idempotent: repairing an already-legal vector returns it
+    unchanged with an empty violation list, so it is safe to apply on every
+    load and again in the trainer's guard.
+    """
+    out = dict(w)
+    viol = []
+    for k in NET_NONNEG_PHASE:
+        base = float(out.get(k, DEFAULT_WEIGHTS.get(k, 0.0)))
+        for suf in ("_early", "_late"):
+            mk = k + suf
+            m = float(out.get(mk, 0.0))
+            if base + m < -1e-12:
+                viol.append({"weight": mk, "value": round(m, 4),
+                             "default": DEFAULT_WEIGHTS.get(mk, 0.0),
+                             "rule": f"{k} + {mk} >= 0"})
+                out[mk] = -base
+    for hi, lo in DOMINATES:
+        a = float(out.get(hi, DEFAULT_WEIGHTS.get(hi, 0.0)))
+        b = float(out.get(lo, DEFAULT_WEIGHTS.get(lo, 0.0)))
+        if b > a + 1e-12:
+            viol.append({"weight": hi, "value": round(a, 4),
+                         "default": DEFAULT_WEIGHTS.get(hi, 0.0),
+                         "rule": f"{hi} >= {lo}"})
+            out[hi] = b
+    return out, viol
+
+
 # ------------------------------------------------------------------- io
 
 def load_weights(path):
+    """Load a weight vector, with the rule-level orderings enforced.
+
+    The repair is applied HERE and not only in the trainer because a champion
+    JSON is read by the arena, by every tool and by the live league alike; a
+    guard that only ran inside `hillclimb_league` would leave every one of
+    those playing the unrepaired vector.  `dominance_repair` is idempotent, so
+    a file the trainer has already written passes through untouched.
+    """
     import json
     with open(path) as fh:
         d = json.load(fh)
     w = dict(DEFAULT_WEIGHTS)
     w.update(d.get("weights", d))
-    return w
+    return dominance_repair(w)[0]
 
 
 def save_weights(path, weights, **extra):
