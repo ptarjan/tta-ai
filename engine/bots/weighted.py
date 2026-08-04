@@ -80,10 +80,65 @@ _BEST_TYPES = ("farm", "mine", "lab", "temple", "theater", "library", "arena")
 _TURNS_CAP = 20.0                   # NUMERICAL GUARD (divide-by-near-zero)
 
 # features that additionally get an early-game and a late-game copy
+#
+# SIX CAME OFF THIS TUPLE ON 2026-08-04, and the reason is that the thing they
+# were a proxy FOR now exists.  The phase pair is an affine shape in `lateness`
+# -- `w[k] + (1-L)*w[k_early] + L*w[k_late]` -- and the only honest reading of
+# it was ever "a rate is worth rate x turns you will still collect it".  That
+# is now modelled exactly by `rate_horizon` / `rate_multiplier` below, off the
+# state's own `rounds_left`, with no fitted constant in it.  The league agrees:
+# it climbed `rate_horizon` to 1.0 / 1.0 / 0.862 on the three live champions.
+# The replacement shipped; the thing it replaced never got deleted, so both
+# were running at once.  Two separate time models multiplying the same value.
+#
+#   * `culture_rate`, `science_rate`, `food_rate`, `resource_rate` -- the four
+#     RATE_KEYS.  `evaluate` already multiplies these by `hz`; the pair was a
+#     SECOND time shape stacked on top of the exact one.
+#   * `culture` -- not a rate at all.  It is the SCORE, and `culture` is the
+#     FROZEN numeraire every other weight is denominated in (see `hillclimb.
+#     FROZEN`).  The pair was not frozen, so it was a live rescale of the
+#     objective itself: a gauge freedom that lets the search shrink what a
+#     culture point is worth instead of finding a better move.  It used it --
+#     `culture_early` reached -1.3113 on the 2p champion, a NET -0.31, which is
+#     an instruction to shed the score (docs/THEFT_IS_PRICED_BACKWARDS.md).
+#   * `wonder_progress` -- `sum(stages[:built])`, a STOCK of resources already
+#     paid in.  Time enters it only through "can I still finish", which
+#     `wonder_turns_to_finish` and `wonder_overrun` own.  champion_4p had run
+#     it to a net -0.17 / -0.21: a standing instruction not to build wonders.
+#
+# THE FOUR THAT STAY are not oversights.  `workers` (each one eats food every
+# turn), `strength_rel`, `tech_levels` and `hand_value` all have a genuine
+# phase dependence that is NOT "a rate times the turns left", and a
+# net-negative on any of them is a strategic claim the league is entitled to
+# make.  `tests/test_theft_never_helps.py::PhaseKeysAreNotDoubleModelled` is
+# the ratchet: nothing in RATE_KEYS and nothing frozen may come back here.
+#
+# Stale `*_early` / `*_late` entries in an already-trained champion JSON are
+# harmless -- `evaluate` only iterates this tuple, so a retired key is simply
+# never read again.
 PHASE_KEYS = (
-    "culture", "culture_rate", "science_rate", "food_rate", "resource_rate",
-    "workers", "strength_rel", "tech_levels", "wonder_progress", "hand_value",
+    "workers", "strength_rel", "tech_levels", "hand_value",
 )
+
+#: Weights that USED to exist and were deliberately removed.  Named, not just
+#: deleted, for two reasons that are both bugs otherwise:
+#:
+#: 1. Every champion JSON on disk still carries them.  `load_weights` drops
+#:    them, so `evaluate` is unaffected -- but `hillclimb.mutate` iterates the
+#:    CHAMPION's keys, so without this the trainer would go on perturbing
+#:    twelve weights nothing reads, forever, and every generation would spend
+#:    part of its mutation budget on them.
+#: 2. `tests/test_coordinate_registry.py` flags any key in a vector file that
+#:    DEFAULT_WEIGHTS lacks.  That ratchet is for typos and orphans; a
+#:    deliberate retirement is neither, and listing 12 keys x 40 files
+#:    individually would bury the signal it exists to give.
+#:
+#: A name here is a promise that the key is GONE, not renamed.  Re-adding one
+#: means taking it out of this set in the same commit.
+RETIRED_KEYS = frozenset(
+    k + s for k in ("culture", "culture_rate", "science_rate", "food_rate",
+                    "resource_rate", "wonder_progress")
+    for s in ("_early", "_late"))
 
 # --------------------------------------------------------------- features
 
@@ -4041,18 +4096,19 @@ BASE_WEIGHTS = {
 
 # early/late multipliers: the contribution of PHASE_KEYS features is
 # w[k] + (1-L)*w[k_early] + L*w[k_late] with L = lateness(state).
-PHASE_WEIGHTS = {
-    "culture_early": -0.4, "culture_late": 1.5,
-    "culture_rate_early": 2.0, "culture_rate_late": -2.0,
-    "science_rate_early": 2.5, "science_rate_late": -2.5,
-    "food_rate_early": 0.6, "food_rate_late": -0.6,
-    "resource_rate_early": 0.5, "resource_rate_late": -0.4,
+# Derived from PHASE_KEYS rather than written out, so the two can never
+# disagree -- a pair for a key that is no longer phase-multiplied would be a
+# weight the trainer mutates, the guard checks and `evaluate` never reads,
+# which is this repo's oldest bug shape.  See the note on PHASE_KEYS for the
+# six pairs that were retired on 2026-08-04 and why.
+_PHASE_PRIOR = {
     "workers_early": 0.8, "workers_late": -0.6,
     "strength_rel_early": -0.1, "strength_rel_late": 0.5,
     "tech_levels_early": 0.5, "tech_levels_late": -0.4,
-    "wonder_progress_early": 0.3, "wonder_progress_late": -0.3,
     "hand_value_early": 0.2, "hand_value_late": -0.2,
 }
+PHASE_WEIGHTS = {k + s: _PHASE_PRIOR[k + s]
+                 for k in PHASE_KEYS for s in ("_early", "_late")}
 
 DEFAULT_WEIGHTS = dict(BASE_WEIGHTS)
 DEFAULT_WEIGHTS.update(PHASE_WEIGHTS)
@@ -4347,7 +4403,16 @@ class WeightedBot:
 #: early, -0.213 late), i.e. a standing instruction not to build wonders.
 #: NOT MEASURED HERE: what that did to its wonder play rate.  The repair
 #: leaves the term at exactly neutral and lets the league price it upward.
-NET_NONNEG_PHASE = ("culture", "wonder_progress")
+#:
+#: EMPTY SINCE 2026-08-04, and that is a STRONGER guarantee than the guard it
+#: replaces, not a retreat.  Both entries were here because a phase multiplier
+#: could drag a stock's net weight below zero; both stocks have since had their
+#: phase pair DELETED outright (see PHASE_KEYS), so there is no multiplier left
+#: to drag anything.  A clamp you cannot reach beats a clamp that fires.  The
+#: loop below is kept, and empty, because the next phase-multiplied stock -- if
+#: anyone adds one -- needs it, and because deleting it would delete the
+#: argument with it.
+NET_NONNEG_PHASE = ()
 
 #: ``(dominant, dominated)`` -- `w[dominant] >= w[dominated]`, repaired by
 #: raising the dominant side.
@@ -4441,12 +4506,20 @@ def load_weights(path):
     guard that only ran inside `hillclimb_league` would leave every one of
     those playing the unrepaired vector.  `dominance_repair` is idempotent, so
     a file the trainer has already written passes through untouched.
+
+    `RETIRED_KEYS` are dropped on the way in.  Every champion on disk predates
+    their removal and still carries them; `evaluate` would ignore them either
+    way, but `hillclimb.mutate` walks the loaded vector's OWN keys, so leaving
+    them in means the trainer spends part of every generation's mutation
+    budget perturbing weights nothing reads.
     """
     import json
     with open(path) as fh:
         d = json.load(fh)
     w = dict(DEFAULT_WEIGHTS)
     w.update(d.get("weights", d))
+    for k in RETIRED_KEYS:
+        w.pop(k, None)
     return dominance_repair(w)[0]
 
 

@@ -103,9 +103,21 @@ class GuardWeights(unittest.TestCase):
         """
         phase = [k + s for k in PHASE_KEYS for s in ("_early", "_late")]
         pos_phase = [k for k in phase if DEFAULT_WEIGHTS.get(k, 0.0) > 0]
-        # the ten the old guard still clamped -- assert we are actually
-        # exercising them, so this test cannot silently become vacuous
-        self.assertGreaterEqual(len(pos_phase), 10)
+        # The anti-vacuity clause.  It used to read `>= 10`, back when there
+        # were ten positive-default multipliers; six pairs were retired on
+        # 2026-08-04 (see the PHASE_KEYS note in weighted.py) and there are now
+        # four.  A hard count is the wrong shape for this -- it asserts a
+        # HISTORY, and it goes red for the one change that is not a regression.
+        # What the test needs is that it is exercising every multiplier that
+        # exists, which is an invariant and survives the tuple shrinking again.
+        self.assertEqual(
+            set(pos_phase),
+            {k for k, v in DEFAULT_WEIGHTS.items()
+             if v > 0 and k.rsplit("_", 1)[0] in PHASE_KEYS
+             and k.endswith(("_early", "_late"))},
+            "the positive-default phase multipliers and PHASE_KEYS disagree")
+        self.assertTrue(pos_phase, "no positive-default phase multiplier left "
+                                   "-- this test is now vacuous, delete it")
         for k in pos_phase:
             with self.subTest(weight=k):
                 self.assertNotIn(k, NONNEG)

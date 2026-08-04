@@ -420,20 +420,16 @@ KNOWN_DEAD = {
         "the same padding marker in the rival blocks, and the same reason: "
         "it is 1.0 wherever this check is allowed to look",
         "none -- structural, see docs/COORDINATE_REGISTRY.md on padding"),
-    "encode:me.uprising": (
-        ("constant-encoding",),
-        "the `discontent > workers_free` flag fires on 3 of 2004 corpus "
-        "states, and `_note_encoding` samples one ply in 40 -- so the feature "
-        "is live (it is NOT in the always-zero list) and the ENCODING sample "
-        "misses it.  Deleted on 2026-07-31 when the same-type `unit_upgrade` "
-        "fix made it fire inside the sample and re-listed in the same session "
-        "when the government reprice moved it back out, which is the "
-        "corpus-fragility warning in section 7 in its purest form",
-        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
-    "encode:rival.uprising": (
-        ("constant-encoding",),
-        "the same flag one seat over, and sampled out for the same reason",
-        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
+    # `encode:me.uprising` / `encode:rival.uprising` came OFF this list on
+    # 2026-08-04 (third time: deleted 2026-07-31, re-listed the same session
+    # after the government reprice, deleted again here).  Retiring the six
+    # phase pairs changed what `DEFAULT_WEIGHTS` bots do, the corpus re-rolled,
+    # and the `discontent > workers_free` flag now fires inside the one-ply-in-
+    # 40 encoding sample.  The flag was never dead -- it fires on 3 of 2004
+    # corpus states -- so what flaps is the SAMPLE, not the encoder, which is
+    # docs/OPEN_ITEMS.md section 9.5 and is a defect in this ratchet rather
+    # than in anything it watches.  Do not re-list them on the next reprice;
+    # fix 9.5.
     "encode:rival.seeded_events_n": (
         ("constant-encoding",),
         "DELIBERATE and it is the information-legality guarantee, not a bug: "
@@ -547,6 +543,15 @@ KNOWN_ZERO_CARDS = frozenset((
     # within an eval point of zero, and which of the two is on the wrong side
     # of it is a property of the six games, not of the pricing.
     "Military Theory",
+    # BACK on 2026-08-04, and this time the cause IS the pricing rather than
+    # the corpus: retiring `culture_late` (+1.5 in the defaults) removed the
+    # late-game premium on a culture point, and Sid Meier's whole payoff is
+    # culture.  Both leaders still sit within an eval point of zero, so the
+    # pair going in and out together is the same 9.5 fragility -- but the
+    # DIRECTION here was predictable from the change and is not noise.  A
+    # trained vector prices him off `culture` at its own weight; this list is
+    # about DEFAULT_WEIGHTS.
+    "Sid Meier",
 ))
 
 # --------------------------------------------------------------------------
@@ -1756,8 +1761,19 @@ class VectorFilesMatchTheRegistry(unittest.TestCase):
 
     @staticmethod
     def _stray(files):
+        """Keys in a vector file that `DEFAULT_WEIGHTS` does not have.
+
+        `W.RETIRED_KEYS` is excluded because this ratchet is for TYPOS and
+        ORPHANS -- a key that arrived by accident and is read by nothing.  A
+        deliberate retirement is neither: it is named in `weighted.py`, it is
+        dropped by `load_weights`, and every champion written before it was
+        retired legitimately still carries it.  Listing twelve retired keys
+        across forty files individually would bury the one signal this test
+        exists to give.
+        """
+        skip = set(W.DEFAULT_WEIGHTS) | set(W.RETIRED_KEYS)
         return {f"{k}@{rel}" for rel, weights in files
-                for k in set(weights) - set(W.DEFAULT_WEIGHTS)}
+                for k in set(weights) - skip}
 
     def test_no_committed_vector_carries_a_coordinate_that_does_not_exist(self):
         stray = self._stray(_vector_files(committed_only=True))

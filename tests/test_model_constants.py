@@ -143,7 +143,10 @@ CLASSIFIED = {
         "fitted prior", "RETIRED; kept for LEGACY_LATENESS and the A/B"),
     ("engine/bots/weighted.py", "BASE_WEIGHTS"): (
         "fitted prior", "the hill climb's starting vector"),
-    ("engine/bots/weighted.py", "PHASE_WEIGHTS"): (
+    # Renamed from PHASE_WEIGHTS on 2026-08-04: `PHASE_WEIGHTS` is now
+    # DERIVED from PHASE_KEYS by comprehension, so it is no longer a literal
+    # this scanner can see, and the priors it selects from moved here.
+    ("engine/bots/weighted.py", "_PHASE_PRIOR"): (
         "fitted prior", "the hill climb's starting phase pairs"),
     ("engine/bots/__init__.py", "WEIGHTS"): (
         "fitted prior",

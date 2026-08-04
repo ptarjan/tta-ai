@@ -41,12 +41,15 @@ two orderings that guard cannot express.
 import glob
 import os
 import unittest
+from unittest import mock
 
 from engine import effects, game
 from engine.bots.plan import copy_state
 from engine.bots import plan as P
+from engine.bots import weighted
 from engine.bots.weighted import (DEFAULT_WEIGHTS, dominance_repair, evaluate,
                                   load_weights)
+from experiments import hillclimb
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIVE = os.path.join(HERE, "experiments", "league_state")
@@ -140,17 +143,32 @@ class TheRepairIsMinimalAndIdempotent(unittest.TestCase):
         self.assertEqual(out, dict(DEFAULT_WEIGHTS))
 
     def test_repairing_twice_changes_nothing_the_second_time(self):
-        bad = dict(DEFAULT_WEIGHTS, culture_early=-3.0, blue_free=9.0)
+        bad = dict(DEFAULT_WEIGHTS, blue_free=9.0,
+                   wonder_stages_per_action=-2.0)
         once, v1 = dominance_repair(bad)
         twice, v2 = dominance_repair(once)
         self.assertTrue(v1)
         self.assertEqual(v2, [])
         self.assertEqual(once, twice)
 
-    def test_a_net_negative_culture_is_lifted_to_exactly_zero(self):
-        """Repaired to the boundary, not to the default: the smallest change
-        that makes the vector expressible."""
-        out, viol = dominance_repair(dict(DEFAULT_WEIGHTS, culture_early=-3.0))
+    def test_the_net_negative_repair_still_works_if_a_pair_comes_back(self):
+        """`NET_NONNEG_PHASE` is empty now that `culture` and
+        `wonder_progress` have no phase pair at all, so nothing in the shipped
+        vector reaches this branch.  It is still the code the NEXT
+        phase-multiplied stock would land on, and an empty guard that has never
+        been executed is a guard nobody knows is broken -- so drive it with a
+        synthetic key.  Repaired to the BOUNDARY, not to the default: the
+        smallest change that makes the vector expressible.
+        """
+        w = dict(DEFAULT_WEIGHTS, culture_early=-3.0)
+        out, viol = weighted.dominance_repair(w)
+        self.assertEqual(out["culture_early"], -3.0,
+                         "culture has no phase pair any more, so the guard "
+                         "must not touch a stray key of that name")
+        self.assertEqual(viol, [])
+
+        with mock.patch.object(weighted, "NET_NONNEG_PHASE", ("culture",)):
+            out, viol = weighted.dominance_repair(w)
         self.assertEqual(out["culture_early"], -out["culture"])
         self.assertEqual([v["weight"] for v in viol], ["culture_early"])
 
@@ -172,10 +190,50 @@ class TheRepairIsMinimalAndIdempotent(unittest.TestCase):
         league is allowed to learn.
         """
         out, viol = dominance_repair(dict(DEFAULT_WEIGHTS, workers_early=-9.0,
-                                          resource_rate_late=-9.0))
+                                          tech_levels_late=-9.0))
         self.assertEqual(out["workers_early"], -9.0)
-        self.assertEqual(out["resource_rate_late"], -9.0)
+        self.assertEqual(out["tech_levels_late"], -9.0)
         self.assertEqual(viol, [])
+
+
+class PhaseKeysAreNotDoubleModelled(unittest.TestCase):
+    """The structural half of the 2026-08-04 cleanup.
+
+    Six phase pairs were retired because the quantity they approximated -- how
+    many turns you will still collect a rate for -- is now modelled exactly by
+    `rate_horizon`.  Deleting them is only durable if something notices them
+    coming back, and a comment does not notice.
+    """
+
+    def test_no_rate_is_also_phase_multiplied(self):
+        """A RATE_KEY carries the exact horizon (`rate_multiplier`).  Giving it
+        a phase pair as well stacks a second, fitted time shape on top of the
+        exact one, which is the state this cleanup ended."""
+        both = sorted(set(weighted.PHASE_KEYS) & set(weighted.RATE_KEYS))
+        self.assertEqual(
+            both, [],
+            "%s is priced through BOTH `rate_multiplier` and an early/late "
+            "pair -- two time models multiplying one value.  Pick one." % both)
+
+    def test_the_numeraire_has_no_phase_pair(self):
+        """`culture` is frozen at 1.0 so every other weight is denominated in
+        culture points.  A phase pair on it is NOT frozen, so it is a live
+        rescale of the objective -- a gauge the search can move instead of
+        finding a better move, and it did: `culture_early` reached -1.3113."""
+        for k in hillclimb.FROZEN:
+            self.assertNotIn(
+                k, weighted.PHASE_KEYS,
+                f"{k} is FROZEN, but its early/late pair is not -- that is a "
+                f"back door onto a weight the trainer is forbidden to touch")
+
+    def test_every_phase_key_has_exactly_one_pair_and_no_orphans(self):
+        """The registry half: PHASE_KEYS and the shipped multipliers must be
+        the same set in both directions.  A multiplier for a retired key is a
+        weight the trainer mutates and `evaluate` never reads."""
+        want = {k + s for k in weighted.PHASE_KEYS
+                for s in ("_early", "_late")}
+        have = {k for k in DEFAULT_WEIGHTS if k.endswith(("_early", "_late"))}
+        self.assertEqual(have, want)
 
 
 if __name__ == "__main__":

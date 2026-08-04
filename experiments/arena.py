@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from experiments import paired_stats  # noqa: E402  (needs the path insert)
-from engine.bots.weighted import DEFAULT_WEIGHTS  # noqa: E402  (ditto)
+from engine.bots.weighted import DEFAULT_WEIGHTS, RETIRED_KEYS  # noqa: E402  (ditto)
 
 BUILTINS = ("random", "greedy", "default")
 
@@ -60,8 +60,18 @@ def _informative_keys(known, defaults):
     through untouched entries).  Restricting the comparison to the moved keys
     is what makes the match fraction a provenance signal instead of a
     similarity score.
+
+    `RETIRED_KEYS` are excluded, and the reason is a bug this actually caused.
+    A retired key has no entry in `DEFAULT_WEIGHTS`, so `defaults.get(k)` is
+    None and EVERY vector that still carries the fossil looks like it moved the
+    key deliberately.  Retiring the six phase pairs on 2026-08-04 promoted
+    twelve such fossils to "informative" at a stroke and pushed the live 3p
+    champion to a 2.99% match against the degenerate vector -- on keys where
+    both were merely still holding the OLD default.  A key nothing reads
+    cannot be evidence of descent.
     """
-    return [k for k, v in known.items() if v != defaults.get(k)]
+    return [k for k, v in known.items()
+            if v != defaults.get(k) and k not in RETIRED_KEYS]
 
 
 def _degenerate_match(mine, known):

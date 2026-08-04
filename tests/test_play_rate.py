@@ -192,10 +192,18 @@ DEFAULT_ZERO_GATES = {
 #: the league prices it above zero, and `TestBenefitGatesAreDerived` below
 #: stops the guarded set itself from going stale.
 #:
-#: NOT MEASURED: the bot's take rate for the three cards against the human
-#: rate.  Humans take them in 12% / 25% / 35% of 2p seats (1,384 seats,
-#: `tools/play_rate.py human`); the bot side needs a `play_rate.py bot` run
-#: and nobody has finished one on these champions.
+#: MEASURED 2026-08-04, and it says the backwards price cost real play.  Take
+#: rate per 2p seat, human corpus (1,384 seats) vs the 2p champion over 16
+#: games -- `tools/play_rate.py bot --players 2 --games 16` then `report`:
+#:
+#:     Masonry        human 0.123   bot 0.062    2.0x under
+#:     Architecture   human 0.253   bot 0.125    2.0x under
+#:     Engineering    human 0.353   bot 0.094    3.8x under
+#:
+#: n=32 seats on the bot side, so these are rates and not intervals; the
+#: DIRECTION is consistent across all three and matches the sign of the weight
+#: that produced them.  Re-measure after the league has priced the coordinate
+#: and put the result in docs/CARD_BLINDNESS.md.
 DEAD_ON_EVERY_TRAINED_VECTOR = {"wonder_stages_per_action"}
 
 

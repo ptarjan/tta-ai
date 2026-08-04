@@ -203,20 +203,47 @@ class TestItIsPricedInCoordinatesEvaluatePays(unittest.TestCase):
                                4.0 * base["resource_stock"], places=9)
         self.assertAlmostEqual(half, (full + none) / 2.0, places=9)
 
-    def test_a_one_shot_culture_gain_takes_the_phase_blend(self):
-        """`culture` is a `PHASE_KEYS` feature.  The static table reads the
-        bare weight; `evaluate` pays the blend, and so must the card."""
+    def test_a_one_shot_culture_gain_is_priced_the_same_at_every_moment(self):
+        """`culture` LOST its phase pair on 2026-08-04, and this test used to
+        assert the opposite -- that a board-aware culture price must differ
+        from the static one, which was true only while the pair existed.
+
+        Rewritten rather than deleted, because the property that replaced it is
+        worth more than the one it checked.  `culture` is FROZEN at 1.0 and is
+        the numeraire every other weight is denominated in; a phase pair on it
+        was a live rescale of the objective, which is the gauge the 2p champion
+        used to reach a NET -0.31 and start shedding its own score.  With the
+        pair gone a culture point is worth one culture point whenever you get
+        it, so the board-aware and static prices must now AGREE, and the
+        `feature_marginal` route must still be the one the card is priced
+        through.
+        """
         st = _played()
-        w = _w(culture_early=-0.4, culture_late=1.5)
+        w = _w()
         late = W.lateness(st)
         want = (w["science"] * 1.0
                 + 4.0 * W.feature_marginal("culture", st, 0, w, late))
         self.assertAlmostEqual(
             W.card_potential("Cultural Heritage (A)", w, st, 0), want,
             places=9)
-        self.assertNotAlmostEqual(
+        self.assertAlmostEqual(
             W.card_potential("Cultural Heritage (A)", w, st, 0),
-            W.card_potential("Cultural Heritage (A)", w), places=6)
+            W.card_potential("Cultural Heritage (A)", w), places=9)
+
+    def test_a_phase_multiplied_feature_still_takes_the_blend(self):
+        """The half of the old test that is still live: `feature_marginal` must
+        pay the early/late blend for a feature that STILL has one, or the
+        retirement above would have quietly disabled the mechanism for the four
+        keys that kept their pair."""
+        st = _played()
+        late = W.lateness(st)
+        self.assertTrue(W.PHASE_KEYS, "no phase-multiplied feature left")
+        k = W.PHASE_KEYS[0]
+        flat = W.feature_marginal(k, st, 0, _w(**{k + "_early": 0.0,
+                                                 k + "_late": 0.0}), late)
+        blended = W.feature_marginal(k, st, 0, _w(**{k + "_early": 7.0,
+                                                    k + "_late": 7.0}), late)
+        self.assertAlmostEqual(blended - flat, 7.0, places=9)
 
     def test_a_choice_is_a_max_and_needs_no_board_credit(self):
         """Reserves (III) is "gain 4 food OR 4 resources": the better of the
