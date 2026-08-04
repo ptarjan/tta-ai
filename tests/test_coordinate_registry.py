@@ -480,20 +480,18 @@ KNOWN_DEAD = {
 #: the first one the league actually climbs turns the test red the other way
 #: and asks for its line back.  Do not add to this without checking the arm
 #: restart times against when the key landed.
+#: Eight came off this list on 2026-08-04 -- attack_target_weakness,
+#: my_event_threat, my_seeded_pending, rival_building_wonder,
+#: rival_free_workers, rival_resource_stock, rival_science_stock and
+#: row_last_copy are all off 0.0 on a live champion now.  That is the
+#: equality assertion doing its job: the list only ever shrinks, and leaving
+#: climbed coordinates in it would let a genuinely dead one hide behind them.
 _NOT_YET_CLIMBED = ('attack_target_lead',
-                    'attack_target_weakness',
-                    'my_event_threat',
-                    'my_seeded_pending',
                     'pact_partner_lead',
-                    'rival_building_wonder',
                     'rival_colonies',
                     'rival_food_stock',
-                    'rival_free_workers',
                     'rival_mil_actions',
-                    'rival_resource_stock',
-                    'rival_science_stock',
-                    'rival_yellow_bank',
-                    'row_last_copy')
+                    'rival_yellow_bank')
 for _k in _NOT_YET_CLIMBED:
     KNOWN_DEAD[_k] = (
         ("inert-live",),
