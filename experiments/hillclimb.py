@@ -183,7 +183,20 @@ def mutate(w, rng, sigma, frac=0.25, op=None):
     moved = {}
 
     if op == "rescale":
-        g = rng.choice(GROUP_NAMES)
+        # `rescale` MULTIPLIES, so a group that is all 0.0 cannot be moved by
+        # it -- the "mutant" is the champion and the generation pays a full
+        # evaluation to discover it.  Half of the exact-tie candidates in the
+        # league logs were this.  Prefer a group with something to scale; if
+        # every group is dead, fall through to `scatter`, which ADDS (the
+        # `abs(out[k]) + 0.15` floor is what lifts a 0.0 coordinate off zero
+        # in the first place).
+        live = [g for g in GROUP_NAMES
+                if any(out.get(k) for k in GROUP_KEYS[g])]
+        if not live:
+            op = "scatter"
+        else:
+            g = rng.choice(live)
+    if op == "rescale":
         factor = math.exp(rng.gauss(0.0, max(0.20, sigma)))
         for k in GROUP_KEYS[g]:
             new = _clamp(out[k] * factor)

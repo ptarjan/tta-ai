@@ -559,6 +559,31 @@ class RefCache:
         return out
 
 
+def replays_champion_exactly(per):
+    """True when every paired game so far came out bit-identical.
+
+    A mutation that only moves weights no decision consults changes nothing,
+    so the candidate replays the champion's games exactly and every paired
+    diff is exactly 0.0.  Real candidates do not do this: one different
+    decision anywhere in a game moves the final culture, and floating-point
+    scores do not tie exactly across dozens of games by accident.
+
+    Stopping here cannot change a verdict.  All-zero diffs give mean 0.0 and
+    se 0.0, so `lo` is 0.0 (no accept), `m < 0.0` is false (no early reject)
+    and no gate opponent can veto -- the loop would have run the full ladder
+    and rejected with edge=+0.0000 regardless.  The only thing that changes
+    is the bill: 3p gen 46 spent 11.9 hours playing 768 games to print
+    edge=+0.0000 twice.
+    """
+    seen = 0
+    for d in per.values():
+        for x in d["diffs"]:
+            if x != 0.0:
+                return False
+            seen += 1
+    return seen > 0
+
+
 def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
                     veto_z, gate_tiers, log_games=None):
     """Play `cand` against `entries`, paired with the champion's reference.
@@ -583,6 +608,7 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
                      "gate": e.tier in gate_tiers} for e in entries}
     games = 0
     blocks = 0
+    inert = False
     for b in range(max_blocks):
         for e in entries:
             mine = _series(cand, e.resolve(cand, ref.champion),
@@ -619,6 +645,11 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
         if lo > 0.0 and blocks >= min_blocks:
             break
         if m < 0.0 and blocks >= 1:
+            break
+        # Checked LAST so it can only ever shorten a run the two tests above
+        # have already declined to end -- see `replays_champion_exactly`.
+        if replays_champion_exactly(per):
+            inert = True
             break
     m, se, lo = _aggregate(per, z)
 
@@ -661,7 +692,7 @@ def score_candidate(cand, entries, ref, z, min_blocks, max_blocks,
         # beats five weak bots and loses to BookBot".
         if d["gate"] and len(d["diffs"]) >= 2 and om + veto_z * ose < 0.0:
             veto.append(label)
-    return m, se, lo, out, games, veto
+    return m, se, lo, out, games, veto, inert
 
 
 def _aggregate(per, z):
@@ -1083,14 +1114,17 @@ def run(players=2, hours=1.0, workers=3, lam=2, block=12, min_blocks=1,
                     tried.append({"op": op, "moved": len(moved),
                                   "rejected_by_guard": viol})
                     continue
-            m, se, lo, per, games, veto = score_candidate(
+            m, se, lo, per, games, veto, inert = score_candidate(
                 mutant, entries, ref, accept_z, min_blocks, max_blocks,
                 veto_z, pool.gate_tiers)
             tried.append({"edge": round(m, 4), "lo": round(lo, 4),
                           "games": games, "moved": len(moved), "op": op,
-                          "veto": veto, "per_opponent": per})
+                          "veto": veto, "inert": inert, "per_opponent": per})
             log(f"[{players}p] gen {gen} cand {j} op={op} "
                 f"edge={m:+.4f} lo={lo:+.4f} games={games}"
+                # The game budget was CUT SHORT here, and an operator reading
+                # `games=96` must not read it as a full evaluation.
+                + (" INERT(no decision changed; stopped early)" if inert else "")
                 + (f" VETO={veto}" if veto else ""))
             log(format_table(per))
             if lo > 0.0 and not veto and (best is None or lo > best[2]):

@@ -530,7 +530,7 @@ class AcceptLoop(unittest.TestCase):
             L.arena.duel = real
 
     def test_a_candidate_that_leads_by_more_is_accepted(self):
-        m, se, lo, per, games, veto = self.score(+30.0, -10.0)
+        m, se, lo, per, games, veto, inert = self.score(+30.0, -10.0)
         self.assertGreater(m, 0.0)
         self.assertGreater(lo, 0.0, "a clearly better candidate must clear "
                                     "the accept bound")
@@ -541,7 +541,7 @@ class AcceptLoop(unittest.TestCase):
             self.assertEqual(r["champ_lead"], -10.0)
 
     def test_a_candidate_that_leads_by_less_is_rejected_and_vetoed(self):
-        m, se, lo, per, games, veto = self.score(-30.0, +10.0)
+        m, se, lo, per, games, veto, inert = self.score(-30.0, +10.0)
         self.assertLess(m, 0.0)
         self.assertLess(lo, 0.0)
         self.assertIn("book", veto, "a gate opponent it is clearly worse "
@@ -549,7 +549,7 @@ class AcceptLoop(unittest.TestCase):
 
     def test_an_identical_candidate_is_an_exact_null(self):
         """The invariant the whole paired design rests on."""
-        m, se, lo, per, games, veto = self.score(+17.0, +17.0)
+        m, se, lo, per, games, veto, inert = self.score(+17.0, +17.0)
         self.assertEqual(m, 0.0)
         self.assertEqual(veto, [])
         for r in per.values():
@@ -558,7 +558,7 @@ class AcceptLoop(unittest.TestCase):
     def test_the_aggregate_stays_inside_plus_or_minus_one(self):
         """Bounded scores mean a bounded paired edge, at any lead."""
         for cl, chl in ((1e6, -1e6), (-1e6, 1e6), (400.0, -400.0)):
-            m, _se, _lo, _per, _g, _v = self.score(cl, chl)
+            m, _se, _lo, _per, _g, _v, _i = self.score(cl, chl)
             self.assertTrue(-1.0 <= m <= 1.0, (cl, chl, m))
 
 
