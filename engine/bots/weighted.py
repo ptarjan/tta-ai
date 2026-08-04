@@ -987,7 +987,7 @@ def strength_marginal(state, idx, w, ctx=None):
         rival = rival_strength(state, idx)
     p = state.players[idx]
     rel = effects.state_stats(state, p).strength - rival
-    late = lateness(state, w)
+    late = lateness(state)
     total = w.get("strength", 0.0) + w.get("strength_rel", 0.0)
     total += (1.0 - late) * w.get("strength_rel_early", 0.0)
     total += late * w.get("strength_rel_late", 0.0)
@@ -1037,7 +1037,7 @@ def feature_marginal(key, state, idx, w, late=None, ctx=None):
     m = w.get(key, 0.0)
     if key in _PHASE_SET:
         if late is None:
-            late = lateness(state, w)
+            late = lateness(state)
         m += (1.0 - late) * w.get(key + "_early", 0.0)
         m += late * w.get(key + "_late", 0.0)
     # THE RATE HORIZON.  `evaluate` prices a rate at `blend * horizon`, so its
@@ -1118,7 +1118,8 @@ _ROW = actions.ROW_SIZE
 
 # FITTED PRIOR, and the ONLY fitted number left in the horizon: cards taken off
 # the row per replenish before this game has produced any evidence of its own.
-# Measured over 240 self-play games (tools/deal_rate.py, docs/MODEL_CONSTANTS.md
+# Measured over 240 self-play games (tools/deal_rate.py, deleted 2026-08-04;
+# docs/MODEL_CONSTANTS.md
 # section 2).  It is shrunk away within a couple of rounds -- `_TAKE_PRIOR_W` is
 # its weight in pseudo-replenishes -- so it moves the estimate only in Age A and
 # the first rounds of Age I, where nothing with a rate horizon is decided.
@@ -1218,33 +1219,25 @@ def take_rate(state, n=None):
     return (taken + _TAKE_PRIOR_W * _TAKE_PRIOR[n]) / (r + _TAKE_PRIOR_W)
 
 
-# A/B hatches, not strategy switches.  Each restores one retired constant so
-# the old and new models can be duelled, and so `tools/gate.sh` can prove the
-# new plumbing INERT one cause at a time (docs/PYPY.md 9.0 steps 3 and 6):
+# REMOVED 2026-08-04: the three A/B hatches (`TTA_LEGACY_DEAL_RATE`,
+# `TTA_LEGACY_LATENESS`, `TTA_LEGACY_ROW_TAKE`) and the `horizon_legacy` /
+# `horizon_age` weight-vector forms of them.  Each restored one retired fitted
+# constant so the old model and its replacement could be duelled.
 #
-#     TTA_LEGACY_DEAL_RATE=1  the fitted CARDS_PER_ROUND deal rate
-#     TTA_LEGACY_LATENESS=1   the fitted affine `rounds_left` -> L map
-#     TTA_LEGACY_ROW_TAKE=1   the flat RIVAL_TAKE_P = 0.25
+# They went because the method they served went: paired-arm A/B batches were
+# retired on 2026-07-31 in favour of landing on master and reading the real
+# league runs, and nothing has set any of the three since.  Verified before
+# deleting: no process in the crontab or the supervisor sets them, and no
+# weight vector on disk carries a non-zero `horizon_legacy` or `horizon_age`.
 #
-# Read from the environment at import so a SUBPROCESS inherits them -- the
-# fingerprint hasher and the arena workers are separate processes, so a flag
-# only settable in this process could not gate either.  Same device as
-# `TTA_JOURNAL` and `FASTCOPY_PARANOID`.  Also settable at runtime by a test.
-#
-# `horizon_legacy` in a weight vector turns the first two on for THAT vector
-# only, which is what lets the two horizons be seated at the same table
-# (`tools/horizon_model_ab.py`); the flat-take hatch has no weight form because
-# `row_pressure` already reads `rival_take_share` off the vector.
-LEGACY_DEAL_RATE = bool(os.environ.get("TTA_LEGACY_DEAL_RATE"))
-LEGACY_LATENESS = bool(os.environ.get("TTA_LEGACY_LATENESS"))
-
-#: Superseded by `take_rate`; kept for `LEGACY_DEAL_RATE` and for the A/B.
-CARDS_PER_ROUND = {2: 6.29, 3: 6.73, 4: 5.71}     # FITTED PRIOR (retired)
-_L_ZERO = {2: 27.1, 3: 28.7, 4: 36.1}             # FITTED PRIOR (retired)
-_L_ONE = 5.0                                      # FITTED PRIOR (retired)
+# The deletion is not cosmetic.  `lateness` took a `w` ONLY so the hatch could
+# be read off a vector, which forced two call spellings -- `lateness(state)`
+# and `lateness(state)` -- that returned the same number for every vector that
+# has ever existed but had to be threaded separately in case one day they did
+# not.  That is the `late_tech`/`late_action` pair, now a single `late`.
 
 
-def rounds_left(state, n=None, w=None):
+def rounds_left(state, n=None):
     """Estimated rounds still to play, including the one in progress.
 
     Exact once Age IV has begun.  Before that it is the EXACT number of cards
@@ -1258,13 +1251,11 @@ def rounds_left(state, n=None, w=None):
     if n is None:
         n = _live(state)
     cards = cards_unseen(state, n)
-    if LEGACY_DEAL_RATE or (w is not None and w.get("horizon_legacy")):
-        return cards / CARDS_PER_ROUND[n] + AGE_IV_ROUNDS
     per_round = n * (_SWEEP[n] + take_rate(state, n))
     return max(1.0, cards / per_round + AGE_IV_ROUNDS)
 
 
-def lateness(state, w=None):
+def lateness(state):
     """How far through the game we are: 0.0 at the deal, 1.0 when the civil
     supply is gone.  EXACT -- no rate, no fit, no player-count table.
 
@@ -1309,22 +1300,10 @@ def lateness(state, w=None):
     measures what that costs the trained 2p champion instead of assuming it.
     """
     n = _live(state)
-    if LEGACY_LATENESS or (w is not None and w.get("horizon_legacy")):
-        z = _L_ZERO[n]
-        lv = (z - rounds_left(state, n, w)) / (z - _L_ONE)
-    else:
-        lv = 1.0 - cards_unseen(state, n) / float(_supply(n)[0])
+    lv = 1.0 - cards_unseen(state, n) / float(_supply(n)[0])
     if lv <= 0.0:
         return 0.0
     return lv if lv < 1.0 else 1.0
-
-
-def lateness_by_age(state):
-    """The pre-fix schedule: 0.0 in Age A, 1.0 from Age III on.
-
-    Kept only so `horizon_age` in a weight file can select it for an A/B.
-    """
-    return min(1.0, C.level(state.age_civil) / 3.0)
 
 
 # ----------------------------------------------------- the rate horizon
@@ -1386,6 +1365,7 @@ def lateness_by_age(state):
 # vector asks for it.  1.0 is the full horizon.  Intermediate values are a
 # genuine blend and not a switch, which is what makes it a slope the league can
 # climb rather than a step it has to jump; `tools/rate_horizon_ab.py --ladder`
+# (deleted 2026-08-04)
 # measures that it is one.
 #
 # The one-shot side of the trade needs no term at all, and that is the point:
@@ -1413,7 +1393,7 @@ def horizon_scale(state, n=None, w=None):
     Mean ~1.0 over a game by construction; ~1.9 at the deal and ~0.09 on the
     last turn.  Never negative, because `rounds_left` never is.
     """
-    rl = rounds_left(state, n, w)
+    rl = rounds_left(state, n)
     ref = 0.5 * (rl + max(0.0, state.round - 1.0) + 1.0)
     return rl / ref if ref > 0.0 else 1.0
 
@@ -1435,9 +1415,6 @@ def rate_multiplier(state, w, n=None):
 
 def features(state, idx, ctx=None, w=None, priced_only=False):
     """The raw feature vector from player `idx`'s point of view.
-
-    `w` is threaded in ONLY so the `horizon_legacy` A/B hatch can be selected
-    per weight vector (see `lateness`); no feature is priced through it.
 
     `priced_only` is a SPEED switch and nothing else.  `evaluate` multiplies
     every entry here by `w[k]` and skips the term entirely when that weight is
@@ -1558,7 +1535,7 @@ def features(state, idx, ctx=None, w=None, priced_only=False):
                 # ...and the part of that the game will not last long enough
                 # to pay.  This is the 0-for-58 detector.
                 overrun = max(0.0, turns_to_finish
-                              - rounds_left(state, None, w))
+                              - rounds_left(state))
 
     hand_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_civil)
     hand_mil_value = sum(meta.get(n, ("?", 0))[1] + 1 for n in p.hand_military)
@@ -2586,10 +2563,7 @@ def action_value(name, state, idx, w, late=None):
     # `late` is threaded in by callers pricing several cards off one board
     # (`_hand_total`, `hand_mil_potential`, `row_pressure`) so `lateness` is
     # computed once per evaluation instead of once per card -- see the
-    # comment above those loops.  Must stay `lateness(state)`, NOT
-    # `lateness(state, w)`: this function has always ignored `w`'s
-    # `horizon_legacy` hatch here (unlike `tech_value`), and threading a
-    # `w`-derived value in would change that.
+    # comment above those loops.
     if late is None:
         late = lateness(state)
     total = 0.0
@@ -2703,10 +2677,9 @@ def tech_value(name, state, idx, w, dev_credit=1.0, late=None):
     # `late` is threaded in by callers pricing several cards off one board
     # (`_hand_total`, `hand_mil_potential`, `row_pressure`) so `lateness` is
     # computed once per evaluation instead of once per card -- see the
-    # comment above those loops.  Must stay `lateness(state, w)` to match
-    # this function's own (unchanged) call.
+    # comment above those loops.
     if late is None:
-        late = lateness(state, w)
+        late = lateness(state)
     net = -res * max(0.0, w.get("resource_stock", 0.0))
     for k, amt, _kind in staff:
         net += amt * feature_marginal(k, state, idx, w, late)
@@ -2803,11 +2776,11 @@ def gov_value(name, state, idx, w, late=None):
     gains, routes = _BY.government_plans(name, state, idx)
     if not routes:
         return 0.0
-    # `late` is an optional pre-computed `lateness(state, w)` -- the same
+    # `late` is an optional pre-computed `lateness(state)` -- the same
     # call `tech_value` takes, hoisted out of the per-card loops by the same
     # commit, so a caller pricing a whole hand computes it once.
     if late is None:
-        late = lateness(state, w)
+        late = lateness(state)
     total = 0.0
     for k, amt, _kind in gains:
         total += amt * feature_marginal(k, state, idx, w, late)
@@ -2822,8 +2795,7 @@ def gov_value(name, state, idx, w, late=None):
     return total + best
 
 
-def card_potential(name, w, state=None, idx=None, late_tech=None,
-                    late_action=None):
+def card_potential(name, w, state=None, idx=None, late=None):
     """Eval-points a single card in hand would be worth if it were played.
 
     `state`/`idx` are optional and turn on board-aware pricing
@@ -2836,8 +2808,9 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
     without a state (and the whole of `analysis/`) keep the old signature and
     the old answer.
 
-    `late_tech`/`late_action` are an optional pre-computed `lateness(state, w)`
-    / `lateness(state)` (note: two DIFFERENT calls -- see `tech_value` and
+    `late` is an optional pre-computed `lateness(state)`.  Until 2026-08-04
+    this was TWO parameters, because the `horizon_legacy` hatch made
+    `lateness(state, w)` and `lateness(state)` formally different (see
     `action_value`), for a caller pricing several cards off the same board
     (`_hand_total`, `hand_mil_potential`, `row_pressure`) so the board's
     lateness is computed once per evaluation rather than once per card.  Both
@@ -2865,9 +2838,9 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
         if _is_unit(name):
             uc = w.get("unit_tech_credit", 1.0)
             if uc:
-                return uc * tech_value(name, state, idx, w, tb, late_tech)
+                return uc * tech_value(name, state, idx, w, tb, late)
         elif tb and _is_levelled_tech(name):
-            return tb * tech_value(name, state, idx, w, late=late_tech)
+            return tb * tech_value(name, state, idx, w, late=late)
         elif _is_government(name):
             # Same device, same reason, one type over.  `gov_board_credit`
             # defaults to 1.0 and is absent from every champion file, so
@@ -2878,7 +2851,7 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
             # pricing byte for byte.  See `gov_value`.
             gb = w.get("gov_board_credit", 1.0)
             if gb:
-                return gb * gov_value(name, state, idx, w, late_tech)
+                return gb * gov_value(name, state, idx, w, late)
         elif _is_action(name):
             # Same device, same reason, one type over: `action_board_credit`
             # defaults to 1.0 and is absent from every champion file, so
@@ -2888,7 +2861,7 @@ def card_potential(name, w, state=None, idx=None, late_tech=None,
             # byte.  See `action_value`.
             ab = w.get("action_board_credit", 1.0)
             if ab:
-                return ab * action_value(name, state, idx, w, late_action)
+                return ab * action_value(name, state, idx, w, late)
     credit = w.get("card_rate_credit", 1.0)
     base = w.get("card_board_credit", 0.0)
     key = _board_credit_key(name)
@@ -2970,16 +2943,15 @@ def _hand_total(hand, state, idx, w):
     total = 0.0
     slots = None
     # Computed once for the whole hand rather than once per card: every card
-    # is priced on the SAME board, so `lateness(state, w)` /
+    # is priced on the SAME board, so `lateness(state)` /
     # `lateness(state)` (the two different calls `tech_value` and
     # `action_value` make) are each invariant across this loop.  Pure
     # functions of `(state, w)` with no side effects and `state` not mutated
     # between iterations, so this is exactly the value each call would have
     # computed itself.
-    late_tech = lateness(state, w) if state is not None else None
-    late_action = lateness(state) if state is not None else None
+    late = lateness(state) if state is not None else None
     for n in hand:
-        v = card_potential(n, w, state, idx, late_tech, late_action)
+        v = card_potential(n, w, state, idx, late)
         slot = _swap_slot(n, w)
         if slot is None:
             total += v
@@ -3176,10 +3148,9 @@ def hand_mil_potential(state, idx, w):
     total = 0.0
     # See `_hand_total`: one board, so `lateness` is invariant across the
     # hand and only needs computing once.
-    late_tech = lateness(state, w)
-    late_action = lateness(state)
+    late = lateness(state)
     for n in hand:
-        total += card_potential(n, w, state, idx, late_tech, late_action)
+        total += card_potential(n, w, state, idx, late)
     return total
 
 
@@ -3248,11 +3219,10 @@ def rival_hand_potential(state, idx, w, rivals=None):
 # instead of as a bare constant, and its default is chosen to reproduce the old
 # flat 0.25 in the mean over real positions (docs/MODEL_CONSTANTS.md section 4).
 RIVAL_TAKE_SHARE = 0.5   # FITTED PRIOR, overridable per vector (see above)
-#: The retired flat prior.  Kept for `LEGACY_RIVAL_TAKE` and the A/B.
-RIVAL_TAKE_P = 0.25      # FITTED PRIOR (retired)
-#: A/B hatch: True restores the flat per-rival 0.25.  See the block on
-#: `LEGACY_DEAL_RATE` for why this is read from the environment.
-LEGACY_RIVAL_TAKE = bool(os.environ.get("TTA_LEGACY_ROW_TAKE"))
+#: The flat per-rival 0.25 this replaced, and its `TTA_LEGACY_ROW_TAKE` hatch,
+#: were deleted on 2026-08-04 with the other two A/B hatches -- see the block
+#: above `rounds_left`.  `rival_take_share` is on the vector, so the trainer can
+#: move it and the retired flat prior needs no separate switch to be reachable.
 
 
 def _rival_take_cost(name, i, gate):
@@ -3310,7 +3280,7 @@ def rival_take_p(cost, budget, reach, slack, share):
     return 1.0 if p > 1.0 else p
 
 
-def _rival_desire(state, w, visible, views, gated, late_tech, late_action):
+def _rival_desire(state, w, visible, views, gated, late):
     """Per rival, {slot -> (what they want THIS slot, what they want in all)}.
 
     WHAT THIS CLOSES.  `rival_take_p` models a rival's CAPACITY exactly -- what
@@ -3339,7 +3309,7 @@ def _rival_desire(state, w, visible, views, gated, late_tech, late_action):
         for j, nm in visible:
             if not gated(state, view, j, gate, nm):
                 continue
-            v = card_potential(nm, w, state, view.idx, late_tech, late_action)
+            v = card_potential(nm, w, state, view.idx, late)
             if v > 0.0:
                 vals[j] = v
                 total += v
@@ -3442,12 +3412,11 @@ def row_pressure(state, idx, w, ctx=None):
     urgency = bargain = 0.0
     # See `_hand_total`: one board, so `lateness` is invariant across the
     # row and only needs computing once.
-    late_tech = lateness(state, w)
-    late_action = lateness(state)
+    late = lateness(state)
     for i, name in visible:
         if not gated(state, p, i, mine, name):
             continue
-        val = card_potential(name, w, state, idx, late_tech, late_action)
+        val = card_potential(name, w, state, idx, late)
         if val <= 0.0:
             continue
         nxt = i - slide
@@ -3458,39 +3427,34 @@ def row_pressure(state, idx, w, ctx=None):
         if saving <= 0:
             continue
         survive = 1.0
-        if LEGACY_RIVAL_TAKE:
-            for view, gate in views:
-                if gated(state, view, i, gate, name):
-                    survive *= 1.0 - RIVAL_TAKE_P
-        else:
-            if reach is None:
-                reach = [sum(1 for j, nm in visible
-                             if gated(state, v, j, g, nm))
-                         for v, g in views]
-                want = (_rival_desire(state, w, visible, views, gated,
-                                      late_tech, late_action)
-                        if desire > 0.0 else None)
-            for k, (view, gate) in enumerate(views):
-                if not gated(state, view, i, gate, name):
-                    continue
-                compete = reach[k]
-                if want is not None:
-                    mine_i, total_i = want[k].get(i, (0.0, 0.0))
-                    if mine_i > 0.0 and total_i > 0.0:
-                        # Effective competition: how many slots' worth of that
-                        # rival's appetite this one slot is up against.  Equal
-                        # to `reach` exactly when they want every reachable
-                        # slot the same amount, which is what the uniform model
-                        # assumed; larger when this card is one they do not
-                        # want, and as small as 1.0 when it is the only card on
-                        # the row that interests them.
-                        eff = total_i / mine_i
-                        if eff < 1.0:
-                            eff = 1.0
-                        compete = (1.0 - desire) * reach[k] + desire * eff
-                survive *= 1.0 - rival_take_p(
-                    _rival_take_cost(name, i, gate), gate[0], compete,
-                    view.hand_slack, share)
+        if reach is None:
+            reach = [sum(1 for j, nm in visible
+                         if gated(state, v, j, g, nm))
+                     for v, g in views]
+            want = (_rival_desire(state, w, visible, views, gated,
+                                  late)
+                    if desire > 0.0 else None)
+        for k, (view, gate) in enumerate(views):
+            if not gated(state, view, i, gate, name):
+                continue
+            compete = reach[k]
+            if want is not None:
+                mine_i, total_i = want[k].get(i, (0.0, 0.0))
+                if mine_i > 0.0 and total_i > 0.0:
+                    # Effective competition: how many slots' worth of that
+                    # rival's appetite this one slot is up against.  Equal
+                    # to `reach` exactly when they want every reachable
+                    # slot the same amount, which is what the uniform model
+                    # assumed; larger when this card is one they do not
+                    # want, and as small as 1.0 when it is the only card on
+                    # the row that interests them.
+                    eff = total_i / mine_i
+                    if eff < 1.0:
+                        eff = 1.0
+                    compete = (1.0 - desire) * reach[k] + desire * eff
+            survive *= 1.0 - rival_take_p(
+                _rival_take_cost(name, i, gate), gate[0], compete,
+                view.hand_slack, share)
         bargain += saving * survive
     return urgency, bargain
 
@@ -3534,8 +3498,7 @@ def row_last_copy(state, idx, w, ctx=None):
     p = state.players[idx]
     mine = actions._take_gate(state, p, budget=actions.ca_total(state, p))
     gated = actions._can_take_gated
-    late_tech = lateness(state, w)
-    late_action = lateness(state)
+    late = lateness(state)
     total = 0.0
     for i, name in enumerate(row):
         if name is None:
@@ -3549,7 +3512,7 @@ def row_last_copy(state, idx, w, ctx=None):
             cursor = k + 1
         if not gated(state, p, i, mine, name):
             continue
-        val = card_potential(name, w, state, idx, late_tech, late_action)
+        val = card_potential(name, w, state, idx, late)
         if val <= 0.0:
             continue
         gone = 1.0 - outlook.get(name, 0.0)
@@ -4132,15 +4095,7 @@ def evaluate(state, idx, weights=None, ctx=None, f=None):
         wk = get(k)
         if wk:
             total += wk * v * hz if (hz != 1.0 and k in RATE_KEYS) else wk * v
-    # `horizon_age` is an A/B escape hatch, not a strategy weight: it restores
-    # the pre-fix four-step age bucket for THIS weight vector only, so the old
-    # and new horizons can be seated at the same table and duelled directly
-    # (docs/CULTURE_GAP.md section 7).  Deliberately absent from
-    # DEFAULT_WEIGHTS, so the trainer never emits it, `mutate` never perturbs it
-    # and `guard_weights` never sees it; it exists only in hand-written A/B
-    # weight files.  The extra `get` costs one dict lookup per evaluation
-    # against the ~90 the loop above already does.
-    late = lateness_by_age(state) if get("horizon_age") else lateness(state, w)
+    late = lateness(state)
     early = 1.0 - late
     for k in PHASE_KEYS:
         v = f[k]

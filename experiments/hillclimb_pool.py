@@ -131,7 +131,8 @@ DEFAULT_TIER_WEIGHTS = {
 #: `--pool-weights book=0.6,variant=0.6,human=0.6,mirror=1.0,past=1.2,hall=1.6,
 #: floor=0` -- and the 5x disagreement below is the 2026-07-27 rebalance
 #: documented above `DEFAULT_TIER_WEIGHTS`, not drift.  This table is read by
-#: `legacy_weight_string()` and by `tools/objective_ab.py`'s `legacy` arm, both
+#: `legacy_weight_string()` and by `tools/objective_ab.py`'s `legacy` arm (that
+#: tool was deleted 2026-08-04 with the rest of the A/B drivers), both
 #: of which exist to re-run a historical configuration on demand.
 #:
 #: The weights every champion before 2026-07-27 was selected under.  Pass

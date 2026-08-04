@@ -42,6 +42,7 @@ See docs/MODEL_CONSTANTS.md.
 from __future__ import annotations
 
 import ast
+import importlib
 import os
 import unittest
 
@@ -122,7 +123,8 @@ CLASSIFIED = {
         "replayed truth that contains no constant (docs/MODEL_CONSTANTS.md 9)"),
     ("engine/bots/weighted.py", "_TAKE_PRIOR"): (
         "fitted prior",
-        "opening-rounds prior only; tools/deal_rate.py measures the live "
+        "opening-rounds prior only; tools/deal_rate.py (deleted 2026-08-04) "
+        "measured the live "
         "rate and docs/MODEL_CONSTANTS.md section 2 holds the numbers"),
     ("engine/bots/weighted.py", "_TAKE_PRIOR_W"): (
         "fitted prior", "shrinkage weight in pseudo-replenishes; see above"),
@@ -133,14 +135,12 @@ CLASSIFIED = {
         "fitted prior",
         "the default for the `rival_take_share` WEIGHT; everything else in "
         "rival_take_p is read off the rival's open board"),
-    ("engine/bots/weighted.py", "RIVAL_TAKE_P"): (
-        "fitted prior", "RETIRED; kept for LEGACY_RIVAL_TAKE and the A/B"),
-    ("engine/bots/weighted.py", "CARDS_PER_ROUND"): (
-        "fitted prior", "RETIRED; kept for LEGACY_DEAL_RATE and the A/B"),
-    ("engine/bots/weighted.py", "_L_ZERO"): (
-        "fitted prior", "RETIRED; kept for LEGACY_LATENESS and the A/B"),
-    ("engine/bots/weighted.py", "_L_ONE"): (
-        "fitted prior", "RETIRED; kept for LEGACY_LATENESS and the A/B"),
+    # RIVAL_TAKE_P, CARDS_PER_ROUND, _L_ZERO and _L_ONE were here until
+    # 2026-08-04, each carrying "RETIRED; kept for <hatch> and the A/B".  The
+    # hatches are gone and so are the constants.  The docstring above still
+    # names all four, deliberately: they are the worked example this whole
+    # allow-list exists for, and the story does not end at "retired" -- it
+    # ends at "deleted, once nothing had set the switch in a month".
     ("engine/bots/weighted.py", "BASE_WEIGHTS"): (
         "fitted prior", "the hill climb's starting vector"),
     # Renamed from PHASE_WEIGHTS on 2026-08-04: `PHASE_WEIGHTS` is now
@@ -374,34 +374,57 @@ class LatenessIsBounded(unittest.TestCase):
                             f"L={lv} at {st.age_civil}/{len(st.civil_deck)}"
                             f"/turn {st.turn}")
 
-    def test_the_legacy_gauge_is_bounded_too(self):
-        W.LEGACY_LATENESS = W.LEGACY_DEAL_RATE = True
-        try:
-            for st in self._adversarial():
-                self.assertTrue(0.0 <= W.lateness(st) <= 1.0)
-        finally:
-            W.LEGACY_LATENESS = W.LEGACY_DEAL_RATE = False
-
     def test_rounds_left_is_always_at_least_one_round(self):
         for st in self._adversarial():
             self.assertGreaterEqual(W.rounds_left(st), 1.0)
 
-    HATCH_VARS = ("TTA_LEGACY_DEAL_RATE", "TTA_LEGACY_LATENESS",
-                  "TTA_LEGACY_ROW_TAKE")
+    #: The three A/B hatches, DELETED on 2026-08-04.  This test used to assert
+    #: they shipped OFF; it now asserts they do not exist, which is the only
+    #: version of that promise a tree cannot break by accident.  The names stay
+    #: written down because the failure mode is someone reintroducing one under
+    #: the same name and quietly getting a different evaluator.
+    DELETED_HATCH_VARS = ("TTA_LEGACY_DEAL_RATE", "TTA_LEGACY_LATENESS",
+                          "TTA_LEGACY_ROW_TAKE")
+    DELETED_HATCH_ATTRS = ("LEGACY_DEAL_RATE", "LEGACY_LATENESS",
+                           "LEGACY_RIVAL_TAKE", "lateness_by_age",
+                           "RIVAL_TAKE_P", "CARDS_PER_ROUND",
+                           "_L_ZERO", "_L_ONE")
 
-    def test_the_hatches_are_off_in_the_shipped_module(self):
-        """They are A/B switches, not configuration.  A tree that ships with
-        one on is a tree whose fingerprint means something else."""
-        on = [v for v in self.HATCH_VARS if os.environ.get(v)]
-        if on:
-            self.skipTest(f"deliberately running a legacy arm: {on}")
-        self.assertFalse(W.LEGACY_DEAL_RATE)
-        self.assertFalse(W.LEGACY_LATENESS)
-        self.assertFalse(W.LEGACY_RIVAL_TAKE)
+    def test_the_hatches_no_longer_exist(self):
+        """A switch that changes the evaluator is not configuration.  While
+        these existed, a tree with one set in the environment ran a different
+        bot than the same tree without -- and nothing in a champion file or a
+        league log recorded which. """
+        for name in self.DELETED_HATCH_ATTRS:
+            self.assertFalse(hasattr(W, name),
+                             f"{name} is back; it was deleted on 2026-08-04")
+
+    def test_the_environment_cannot_change_the_evaluation(self):
+        """The stronger claim, and the reason the names above are not enough:
+        SETTING all three does nothing, so a stray export in a shell profile
+        or a cron line cannot silently reprice the bot."""
+        st = game.new_game(2, 17)
+        base = W.evaluate(st, 0, W.DEFAULT_WEIGHTS)
+        saved = {v: os.environ.get(v) for v in self.DELETED_HATCH_VARS}
+        try:
+            for v in self.DELETED_HATCH_VARS:
+                os.environ[v] = "1"
+            importlib.reload(W)
+            self.assertAlmostEqual(W.evaluate(st, 0, W.DEFAULT_WEIGHTS), base,
+                                   places=12)
+        finally:
+            for v, old in saved.items():
+                if old is None:
+                    os.environ.pop(v, None)
+                else:
+                    os.environ[v] = old
+            importlib.reload(W)
 
     def test_the_weight_hatch_is_not_part_of_the_trained_vector(self):
-        """Like `horizon_age`: an A/B key the trainer must never emit, never
-        perturb and never guard."""
+        """`horizon_legacy` / `horizon_age`: A/B keys the trainer must never
+        emit, never perturb and never guard.  Deleted with the env hatches;
+        asserted absent so a warm start from an old hand-written A/B file
+        cannot reintroduce one as a live weight."""
         self.assertNotIn("horizon_legacy", W.DEFAULT_WEIGHTS)
         self.assertNotIn("horizon_age", W.DEFAULT_WEIGHTS)
 

@@ -111,10 +111,15 @@ VECTOR_GLOBS = (
 #: `card_potential` through these two files only; everything else is a caller.
 PRICING_MODULES = ("engine/bots/weighted.py", "engine/bots/board_yields.py")
 
-#: A/B escape hatches, deliberately absent from `DEFAULT_WEIGHTS` so the trainer
-#: never emits them, `mutate` never perturbs them and `guard_weights` never sees
-#: them.  `tests/test_model_constants.py` asserts the same two by name.
-AB_HATCHES = frozenset(("horizon_age", "horizon_legacy"))
+#: EMPTY SINCE 2026-08-04.  This held the two A/B escape hatches (`horizon_age`,
+#: `horizon_legacy`), which were deliberately absent from `DEFAULT_WEIGHTS` so
+#: the trainer never emitted them.  Both were deleted with the rest of the A/B
+#: apparatus -- nothing set them and no vector on disk carried them.  Kept as an
+#: empty set rather than deleted because the four uses below are the ratchet
+#: that says "a key not in DEFAULT_WEIGHTS is an ORPHAN"; an empty exemption
+#: list makes that ratchet total, which is the point.  Re-populate ONLY if a
+#: hatch comes back, and expect `test_model_constants` to want it too.
+AB_HATCHES = frozenset()
 
 
 # --------------------------------------------------------------------------

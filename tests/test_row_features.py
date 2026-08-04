@@ -280,21 +280,12 @@ class RowPressure(unittest.TestCase):
         self.assertAlmostEqual(p, 0.5 * 4 / 3)
         self.assertAlmostEqual(bargain, 2.0 * (1.0 - p))
 
-    def test_the_legacy_hatch_restores_the_flat_prior(self):
-        """`LEGACY_RIVAL_TAKE` is the A/B switch, and it reproduces the old
-        flat 0.25 exactly -- which is what makes the fingerprint attribution
-        in tools/gate.sh a one-cause claim rather than a guess."""
-        st = G.new_game(2, 29)
-        st.players[0].civil_actions = 6
-        st.card_row = [None] * 13
-        st.card_row[9] = "Alchemy"
-        ctx = W.rival_context(st, 0)
-        W.LEGACY_RIVAL_TAKE = True
-        try:
-            _, bargain = W.row_pressure(st, 0, W.DEFAULT_WEIGHTS, ctx)
-        finally:
-            W.LEGACY_RIVAL_TAKE = False
-        self.assertAlmostEqual(bargain, 2.0 * (1.0 - W.RIVAL_TAKE_P))
+    # `test_the_legacy_hatch_restores_the_flat_prior` lived here until
+    # 2026-08-04.  It drove `LEGACY_RIVAL_TAKE` and asserted the old flat 0.25
+    # came back exactly.  Deleted with the hatch: the flat prior is reachable
+    # without a switch, because `rival_take_share` is on the vector and
+    # `rival_take_p` is a pure function of it -- which the test above already
+    # pins, on the same board, against a hand-computed number.
 
     def test_a_full_handed_rival_cannot_take_anything(self):
         """The one input that makes the estimate exactly 0 rather than small:

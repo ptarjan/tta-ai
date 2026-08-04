@@ -17,6 +17,18 @@ from engine import cards as C, game  # noqa: E402
 from engine.bots import weighted as W  # noqa: E402
 
 
+def _by_age(state):
+    """The RETIRED age-bucket gauge: 0.0 in Age A, 1.0 from Age III on.
+
+    Lived in `weighted.lateness_by_age` until 2026-08-04, kept only so the
+    `horizon_age` A/B hatch could select it.  The hatch went with the rest of
+    the A/B apparatus; the one line stays HERE because the tests below exist
+    to show the new gauge is not this one, and a defect you have deleted the
+    definition of is a defect you can no longer demonstrate.
+    """
+    return min(1.0, C.level(state.age_civil) / 3.0)
+
+
 def _state(n=4, age="II", deck=20, final=None, rnd=10):
     st = game.new_game(n, 17)
     st.age_civil = age
@@ -76,14 +88,14 @@ class Horizon(unittest.TestCase):
         self.assertGreater(W.lateness(age_iv), W.lateness(early_iii) + 0.15,
                            "Age IV must be priced later than early Age III")
         # ... and the function it replaces did NOT do this
-        self.assertEqual(W.lateness_by_age(early_iii),
-                         W.lateness_by_age(age_iv))
+        self.assertEqual(_by_age(early_iii),
+                         _by_age(age_iv))
 
     def test_lateness_varies_inside_a_single_age(self):
         wide = [W.lateness(_state(age="II", deck=d)) for d in (44, 30, 15, 0)]
         self.assertEqual(wide, sorted(wide))
         self.assertGreater(wide[-1] - wide[0], 0.15)
-        flat = {W.lateness_by_age(_state(age="II", deck=d))
+        flat = {_by_age(_state(age="II", deck=d))
                 for d in (44, 30, 15, 0)}
         self.assertEqual(len(flat), 1)
 
@@ -139,20 +151,12 @@ class Horizon(unittest.TestCase):
                 self.assertGreater(want, prev, f"{n}p age {age} went back")
                 prev = want
 
-    def test_the_legacy_hatch_restores_the_fitted_affine_gauge(self):
-        """`LEGACY_LATENESS` is the A/B switch and the fingerprint control:
-        with it on, `lateness` is the retired `(z - rounds_left)/(z - 5)` to
-        the bit, which is what makes the gate attribution a one-cause claim."""
-        st = _state(n=2, age="II", deck=22)
-        W.LEGACY_LATENESS = W.LEGACY_DEAL_RATE = True
-        try:
-            got = W.lateness(st)
-            z = W._L_ZERO[2]
-            want = (z - W.rounds_left(st, 2)) / (z - W._L_ONE)
-        finally:
-            W.LEGACY_LATENESS = W.LEGACY_DEAL_RATE = False
-        self.assertAlmostEqual(got, want, places=12)
-        self.assertNotAlmostEqual(got, W.lateness(st), places=3)
+    # `test_the_legacy_hatch_restores_the_fitted_affine_gauge` was here until
+    # 2026-08-04.  It drove `LEGACY_LATENESS` and checked the retired
+    # `(z - rounds_left)/(z - 5)` came back to the bit.  Deleted with the
+    # hatch: `test_the_gauge_is_the_exact_supply_fraction` above pins the
+    # gauge that ships to 12 places against a formula written out in the
+    # test, which is a stronger statement than "the switch still switches".
 
     # ------------------------------------------- the measured deal rate
 
@@ -193,23 +197,25 @@ class Horizon(unittest.TestCase):
                                  cards / float(n * W._SWEEP[n])
                                  + W.AGE_IV_ROUNDS + 1e-9)
 
-    # ---------------------------------------------------- the A/B hatch
+    # ------------------------------------- the horizon the evaluator uses
 
-    def test_horizon_age_escape_hatch_selects_the_old_schedule(self):
-        st = _state(age="III", deck=44)
-        w_new = dict(W.DEFAULT_WEIGHTS)
-        w_old = dict(W.DEFAULT_WEIGHTS, horizon_age=1.0)
-        self.assertNotEqual(W.evaluate(st, 0, w_new), W.evaluate(st, 0, w_old))
-        # and the hatch is NOT part of the trained vector
-        self.assertNotIn("horizon_age", W.DEFAULT_WEIGHTS)
+    def test_evaluate_uses_the_deck_gauge_and_nothing_else(self):
+        """Replaces the two `horizon_age` hatch tests deleted on 2026-08-04.
 
-    def test_the_hatch_is_inert_when_the_two_schedules_agree(self):
-        """No phase weights -> the horizon cannot change the evaluation."""
-        st = _state(age="III", deck=44)
-        flat = {k: v for k, v in W.DEFAULT_WEIGHTS.items()
-                if not (k.endswith("_early") or k.endswith("_late"))}
-        self.assertAlmostEqual(W.evaluate(st, 0, dict(flat)),
-                               W.evaluate(st, 0, dict(flat, horizon_age=1.0)))
+        Those asserted the hatch changed the evaluation and that it was absent
+        from the trained vector.  The direct statement is better: two boards in
+        the SAME age with different decks must not evaluate alike, which is the
+        original defect, and no key outside `DEFAULT_WEIGHTS` may move the
+        score -- a total claim where the old pair named one key.
+        """
+        full, drained = _state(age="III", deck=44), _state(age="III", deck=2)
+        w = dict(W.DEFAULT_WEIGHTS)
+        self.assertNotEqual(W.evaluate(full, 0, w), W.evaluate(drained, 0, w))
+        for stray in ("horizon_age", "horizon_legacy", "not_a_weight"):
+            self.assertNotIn(stray, W.DEFAULT_WEIGHTS)
+            self.assertAlmostEqual(W.evaluate(full, 0, w),
+                                   W.evaluate(full, 0, dict(w, **{stray: 1.0})),
+                                   msg=f"{stray} moved the evaluation")
 
     # -------------------------------------------------------- book-keeping
 

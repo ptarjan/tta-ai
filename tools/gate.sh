@@ -641,6 +641,13 @@ WIDE=50b55624
 #
 # ATTRIBUTED, not assumed, and by ENVIRONMENT rather than by editing a third
 # clone.  `engine/bots/weighted.py` reads three A/B hatches from the
+# NOTE 2026-08-04: all three hatches below were DELETED, along with the
+# constants they restored and the twelve paired-A/B drivers in tools/.  The
+# attribution recorded here still stands -- it is why the gauge shipped -- but
+# it is now HISTORY, not a procedure: the arms cannot be re-run without
+# reverting the deletion.  Paired A/B batches were themselves retired on
+# 2026-07-31 in favour of landing on master and reading the league runs.
+#
 # environment at import (`TTA_LEGACY_DEAL_RATE`, `TTA_LEGACY_LATENESS`,
 # `TTA_LEGACY_ROW_TAKE`), each restoring exactly one retired constant.  That
 # is a STRONGER control than a patched clone: the tree being hashed is
