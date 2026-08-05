@@ -357,7 +357,7 @@ fn on_build_unit(p: &mut PlayerState) {
 /// Culture an Age III wonder scores on completion (§9.2). Mirrors
 /// `engine/effects.py::wonder_completion_culture`; see this module's top doc
 /// comment for why `Hollywood`/`Internet` are not ported.
-fn wonder_completion_culture(p: &PlayerState, wonder: CardId) -> i32 {
+pub(crate) fn wonder_completion_culture(p: &PlayerState, wonder: CardId) -> i32 {
     let card = wonder.get();
     if card.special.contains(&Special::OnBuildCulturePerTechLevelSum) {
         let mut gained = 0i32;

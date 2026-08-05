@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 
 pub mod apply;
+pub mod bots;
 pub mod card_table;
 pub mod cards;
 pub mod combat;

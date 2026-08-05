@@ -295,12 +295,18 @@ fn utf8_width(first_byte: u8) -> usize {
     }
 }
 
-fn parse_json(s: &str) -> Result<Json, JsonError> {
+/// Parse a standalone JSON value. `pub` (rather than the private `fn` this
+/// started as) so `tests/board_yields.rs`, an integration test in its own
+/// crate, can parse `tools/dump_board_yields.py`'s dump files with the same
+/// reader -- `Result<_, FixtureError>` rather than the private `JsonError`
+/// so that visibility change did not also need to make `JsonError` itself
+/// `pub`.
+pub fn parse_json(s: &str) -> Result<Json, FixtureError> {
     let mut p = JsonParser::new(s);
-    let v = p.parse_value()?;
+    let v = p.parse_value().map_err(FixtureError::from)?;
     p.skip_ws();
     if p.pos != p.s.len() {
-        return Err(p.err("trailing data after JSON value"));
+        return Err(FixtureError::from(p.err("trailing data after JSON value")));
     }
     Ok(v)
 }

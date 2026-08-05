@@ -648,7 +648,7 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s:
 /// 2026-08-05 against `data/cards_civil.json`: every government that DOES
 /// print a `revolutionCost` prints a nonzero one, 1 through 9; only
 /// Despotism prints `null`).
-fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
+pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
     let card = id.get();
     if card.revolution_cost == 0 || (p.science as i32) < card.revolution_cost as i32 {
         return false;
