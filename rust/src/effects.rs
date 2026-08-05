@@ -689,12 +689,20 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | TheaterTechScienceDiscount(_)
         | WonderTakeNoExtraCivilActions => {}
 
+        // ------------------------------------- belongs to economy.rs ----
+        // Genghis Khan's "3 culture per turn if your strength is in the top
+        // two" is scored in the production phase (rule 6.6 step 3a), which
+        // `economy::end_of_turn` implements by dispatching on this variant.
+        // It sat in the combat group below until 2026-08-05; leaving it
+        // there invited whoever wrote combat.rs to implement it a second
+        // time at aggression-resolution, double-counting the 3 culture.
+        CultureIfTopTwoStrength(_) => {}
+
         // -------------------------------------- belongs to combat.rs ----
         // Aggression / war / tactic / colonization resolution.
         ColonizeDiscardUpTo2MilitaryCardsForBonus(_)
         | ColonyImmediateBonusApplies
         | ColonyPermanentBonusTransfers
-        | CultureIfTopTwoStrength(_)
         | DestroyUrbanBuildings
         | DoublesTacticBonusOfOneArmy
         // Aggression: Raid -- "half of each destroyed building's printed
