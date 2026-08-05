@@ -739,6 +739,15 @@ mod tests {
         assert!(p.hammurabi_used);
     }
 
+    /// The guard this asserts is a `debug_assert!`, which `--release` strips,
+    /// so in release the call simply does not panic and `should_panic` fails
+    /// the test rather than the code. Gated rather than promoted to a real
+    /// `assert!`: underfunding is an engine bug, not a game state, and the
+    /// release build is the one the league runs -- paying for that check on
+    /// every action spent, forever, to catch a bug the debug build already
+    /// catches, is the wrong trade. Found 2026-08-05 by the card-coverage
+    /// pass, which ran `cargo test --release` and hit this.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "paid more civil actions than available")]
     fn pay_ca_panics_if_underfunded() {
