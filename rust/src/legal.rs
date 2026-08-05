@@ -25,22 +25,21 @@
 //!    through `costs.py`/`effects.py`), so this needed no `costs.rs` change
 //!    and is ported in full, including the `free_action_moves`
 //!    `develop_technology` revolt sub-case (Breakthrough, RB p.15).
-//! 2. **Combat/pact resolution (a `combat.rs`) is not built yet.**
-//!    `effects.rs` has no `pacts_for`/`pact_forbids_attack`/
-//!    `attack_strength`/`defense_strength`/`war_forbidden`, and `Stats` has
-//!    no `war_immune`. This blocks `offer_pact`/`aggression`/`war` move
-//!    generation in [`politics_moves`] entirely (`Card` also has no "prints
-//!    distinct A/B sides" flag, which would additionally block `offer_pact`
-//!    even once combat.rs lands). `pol_pass`, `resign`, `prepare_event` and
-//!    `cancel_pact` need none of that infrastructure and are fully ported --
-//!    `cancel_pact` in particular works today because `PlayerState::pacts`
-//!    already exists, it is only the ATTACK-side queries that are missing.
-//!    `PlayerState` DOES now carry `war_declared_by_me`/`wars_declared_on_me`
-//!    (state.rs grew them so `apply.rs::h_war` could be ported), so the one
-//!    piece of `war` move generation that needed no combat math at all --
-//!    "you may not declare a second war while one is already open"
-//!    (`p.war_declared_by_me` truthy in Python's `_politics_moves`) -- is no
-//!    longer blocked on a missing field, only on `war_forbidden` above.
+//! 2. ~~**Combat/pact resolution (a `combat.rs`) is not built yet.**~~
+//!    **CLOSED 2026-08-05**: `combat.rs` now exists and carries
+//!    `pacts_for`/`pact_forbids_attack`/`attack_strength`/
+//!    `defense_strength`/`war_forbidden` (`Stats::war_immune` turned out to
+//!    already exist -- a pact port landed between this doc comment being
+//!    written and `combat.rs` -- `war_forbidden` just reads it). `offer_pact`/
+//!    `aggression`/`war` move generation in [`politics_moves`] is wired to
+//!    all of it below. `Card`'s "prints distinct A/B sides" flag turned out
+//!    to be unnecessary too: a pact card's `special` list already carries
+//!    `Special::A`/`Special::B` exactly when the printed data has separate
+//!    sides (verified against all ten base-game pact cards -- see
+//!    `combat.rs`'s top doc comment), so [`politics_moves`] tests for that
+//!    directly instead of a dedicated flag. This module's own `pacts_for`
+//!    (written when it was self-contained, before `combat.rs` existed) is
+//!    deleted in favour of [`combat::pacts_for`].
 //!
 //! Two gaps this module used to carry forward from `costs.rs` are now
 //! closed: this module used to derive a best-effort `taken_leader_ages`
@@ -59,15 +58,20 @@
 //! `engine/interact.py` (the decision-queue subsystem Python routes to for a
 //! mid-resolution choice -- a colonization auction, a defense commitment, an
 //! open `choice`) is not ported, and `state.rs` has no `pending` field at
-//! all, so there is nothing to branch on yet.
+//! all, so there is nothing to branch on yet. Note that this means a
+//! generated `Move::Aggression`/`Move::War`/`Move::OfferPact` is legal to
+//! SELECT but `apply.rs` still cannot fully resolve it yet -- see
+//! `apply.rs`'s and `combat.rs`'s own top doc comments for exactly which
+//! half of each is ported.
 
 use crate::card_table::FreeCivilActionValue;
 use crate::cards::{Age, Card, CardId, CardType, Special};
+use crate::combat;
 use crate::costs;
 use crate::economy;
 use crate::effects;
-use crate::moves::{ChurchillChoice, Move, MoveList};
-use crate::state::{GameState, Pact, Phase, PlayerState, Tableau, MAX_HAND, MAX_TABLEAU};
+use crate::moves::{ChurchillChoice, Move, MoveList, PactSide};
+use crate::state::{GameState, Phase, PlayerState, Tableau, MAX_HAND, MAX_TABLEAU};
 
 // --------------------------------------------------------------- helpers
 
@@ -138,18 +142,6 @@ fn pop_cost(state: &GameState, p: &PlayerState) -> Option<i32> {
     economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank, 0)
 }
 
-/// Every pact `idx` is party to, wherever it physically sits (§5.9). Mirrors
-/// `engine/effects.py::pacts_for`. Self-contained -- unlike
-/// `attack_strength`/`defense_strength`/`pact_forbids_attack`/
-/// `war_forbidden` (blocked, see this module's top doc comment),
-/// `PlayerState::pacts` already carries everything this needs.
-fn pacts_for(state: &GameState, idx: u8) -> impl Iterator<Item = &Pact> {
-    state.players[..state.num_players as usize]
-        .iter()
-        .flat_map(|q| q.pacts.as_slice().iter())
-        .filter(move |pact| pact.is_party(idx))
-}
-
 // ------------------------------------------------------- move generation
 
 /// The single source of truth for what a player may do right now. Mirrors
@@ -178,9 +170,9 @@ pub fn legal_moves(state: &GameState) -> MoveList {
     }
 }
 
-/// Mirrors `engine/actions.py::_politics_moves`. See this module's top doc
-/// comment (gap 3): `offer_pact`/`aggression`/`war` are not generated here,
-/// combat/pact resolution does not exist yet.
+/// Mirrors `engine/actions.py::_politics_moves`. `offer_pact`/`aggression`/
+/// `war` are fully wired now that `combat.rs` exists (this module's top doc
+/// comment, gap 2, closed 2026-08-05).
 fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
     let mut moves = MoveList::new();
     moves.push(Move::PolPass);
@@ -191,6 +183,7 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
     // the full base game (236 cards, asserted by `lib.rs`'s own test), so
     // this is always true for this engine and the early return never fires;
     // there is no `state.has_military` field to read here.
+    let s = effects::state_stats(state, p);
 
     // §5.11 resign: not in age IV. ("Never the last player standing" is
     // enforced by the resignation/game-over logic outside move generation in
@@ -198,33 +191,88 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
     if state.age_civil != Age::IV {
         moves.push(Move::Resign);
     }
-    for pact in pacts_for(state, p.idx) {
+    for pact in combat::pacts_for(state, p.idx) {
         moves.push(Move::CancelPact { owner: pact.owner });
     }
 
     let mut buf = [CardId::NONE; MAX_HAND];
     let n = sorted_unique_into(p.hand_military.as_slice(), &mut buf);
     for &id in &buf[..n] {
+        let card = id.get();
         match id.kind() {
             CardType::Event | CardType::Territory => {
                 moves.push(Move::PrepareEvent { card: id });
             }
             CardType::Pact => {
-                // BLOCKED: `Card` carries no "prints distinct A/B sides"
-                // flag (Python reads `card.get("sides")`), and even the
-                // single-side case needs `state.num_players < 3` (pacts are
-                // setup-removed at 2p) plus per-target enumeration -- see
-                // this module's top doc comment, gap 3.
+                // §13 / CoL p.2: pacts are setup-removed from the military
+                // decks at 2p (`engine/actions.py:305`), so nothing is ever
+                // legal to offer there -- not a runtime restriction on an
+                // individual card, a fact about how the game was dealt.
+                if state.num_players < 3 {
+                    continue;
+                }
+                // "Prints distinct A/B sides" (Python: `card.get("sides")`)
+                // is exactly "the special list carries BOTH `Special::A` and
+                // `Special::B`" -- see this module's top doc comment, gap 2,
+                // and `combat.rs`'s own doc comment for the data citation.
+                let has_a = card.special.iter().any(|sp| matches!(sp, Special::A(_)));
+                let has_b = card.special.iter().any(|sp| matches!(sp, Special::B(_)));
+                for q in state.players[..state.num_players as usize].iter() {
+                    if q.idx == p.idx || q.resigned {
+                        continue;
+                    }
+                    if has_a && has_b {
+                        moves.push(Move::OfferPact { card: id, target: q.idx, side: PactSide::A });
+                        moves.push(Move::OfferPact { card: id, target: q.idx, side: PactSide::B });
+                    } else {
+                        moves.push(Move::OfferPact { card: id, target: q.idx, side: PactSide::Unspecified });
+                    }
+                }
             }
             CardType::Aggression => {
-                // BLOCKED: needs `effects::attack_strength`/
-                // `defense_strength`/`pact_forbids_attack`, none of which
-                // exist yet. See this module's top doc comment, gap 3.
+                let cost = card.military_action_cost as i32;
+                if cost > p.military_actions as i32 || s.no_aggression {
+                    continue;
+                }
+                for q in state.players[..state.num_players as usize].iter() {
+                    if q.idx == p.idx || q.resigned {
+                        continue;
+                    }
+                    let mult = if leader_is(q, "Mahatma Gandhi") { 2 } else { 1 };
+                    if cost * mult > p.military_actions as i32 {
+                        continue;
+                    }
+                    if combat::pact_forbids_attack(state, p, q) {
+                        continue;
+                    }
+                    if combat::defense_strength(state, p, q) >= combat::attack_strength(state, p, q) {
+                        continue;
+                    }
+                    moves.push(Move::Aggression { card: id, target: q.idx });
+                }
             }
             CardType::War => {
-                // BLOCKED: needs `effects::war_forbidden`
-                // (`pact_forbids_attack` + `Stats::war_immune`, neither
-                // exists yet). See this module's top doc comment, gap 3.
+                let cost = card.military_action_cost as i32;
+                if cost > p.military_actions as i32
+                    || state.last_round
+                    || s.no_aggression
+                    || !p.war_declared_by_me.is_none()
+                {
+                    continue;
+                }
+                for q in state.players[..state.num_players as usize].iter() {
+                    if q.idx == p.idx || q.resigned {
+                        continue;
+                    }
+                    let mult = if leader_is(q, "Mahatma Gandhi") { 2 } else { 1 };
+                    if cost * mult > p.military_actions as i32 {
+                        continue;
+                    }
+                    if combat::war_forbidden(state, p, q) {
+                        continue;
+                    }
+                    moves.push(Move::War { card: id, target: q.idx });
+                }
             }
             _ => {}
         }
@@ -677,7 +725,7 @@ pub fn free_action_moves(
 mod tests {
     use super::*;
     use crate::cards::Age;
-    use crate::state::{CardList, GameState, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
+    use crate::state::{CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
@@ -789,8 +837,17 @@ mod tests {
     }
 
     fn one_player_state(p: PlayerState) -> GameState {
-        let filler = || blank_player(0, card("Despotism"));
-        let mut players = [filler(), filler(), filler(), filler()];
+        // Each filler needs ITS OWN `idx` (not a repeated 0): pact/aggression/
+        // war move generation reads `q.idx` off each rival directly (not the
+        // array position), and `q.idx == p.idx` is exactly how the acting
+        // player is skipped as their own rival -- four players sharing idx 0
+        // would make every filler indistinguishable from the actor itself.
+        let mut players = [
+            blank_player(0, card("Despotism")),
+            blank_player(1, card("Despotism")),
+            blank_player(2, card("Despotism")),
+            blank_player(3, card("Despotism")),
+        ];
         players[0] = p;
         blank_state(4, players)
     }
@@ -926,23 +983,158 @@ mod tests {
         assert!(moves.as_slice().contains(&Move::CancelPact { owner: 0 }));
     }
 
+    // ---------------------------------------------------------- offer_pact
+
     #[test]
-    fn politics_never_generates_aggression_war_or_offer_pact_yet() {
-        // Pin for the documented gap (combat.rs not built): even with a
-        // military-deck hand full of aggression/war/pact cards, none of
-        // those three move kinds is ever produced today.
+    fn politics_offer_pact_generates_both_sides_for_an_asymmetric_pact_card() {
+        // "Trade Routes Agreement" prints separate A/B blocks, no bothPlayers
+        // (data/cards_military_actions.json) -- both sides must be offered,
+        // to every OTHER non-resigned player.
         let mut p = blank_player(0, card("Despotism"));
-        for c in crate::cards::CARDS.iter().enumerate() {
-            let (i, card) = c;
-            if matches!(card.kind, CardType::Aggression | CardType::War | CardType::Pact) {
-                if p.hand_military.len() < 24 {
-                    p.hand_military.push(CardId(i as u16));
-                }
-            }
+        let pact = card("Trade Routes Agreement");
+        p.hand_military.push(pact);
+        let state = one_player_state(p); // 4 players, all non-resigned
+        let moves = politics_moves(&state, &state.players[0]);
+        for target in [1u8, 2, 3] {
+            assert!(moves.as_slice().contains(&Move::OfferPact { card: pact, target, side: crate::moves::PactSide::A }));
+            assert!(moves.as_slice().contains(&Move::OfferPact { card: pact, target, side: crate::moves::PactSide::B }));
         }
+        let offers = moves.as_slice().iter().filter(|m| matches!(m, Move::OfferPact { .. })).count();
+        assert_eq!(offers, 3 * 2, "3 rivals x 2 sides, no Unspecified-side offer for an asymmetric card");
+    }
+
+    #[test]
+    fn politics_offer_pact_generates_one_unspecified_side_for_a_symmetric_pact_card() {
+        // "Peace Treaty" prints only `bothPlayers` -- one offer per rival,
+        // side Unspecified (Python's `("offer_pact", name, q.idx, "")`).
+        let mut p = blank_player(0, card("Despotism"));
+        let pact = card("Peace Treaty");
+        p.hand_military.push(pact);
         let state = one_player_state(p);
         let moves = politics_moves(&state, &state.players[0]);
-        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. })));
+        for target in [1u8, 2, 3] {
+            assert!(moves.as_slice().contains(&Move::OfferPact {
+                card: pact,
+                target,
+                side: crate::moves::PactSide::Unspecified
+            }));
+        }
+        assert!(!moves.as_slice().iter().any(|m| matches!(
+            m,
+            Move::OfferPact { side: crate::moves::PactSide::A | crate::moves::PactSide::B, .. }
+        )));
+    }
+
+    #[test]
+    fn politics_offer_pact_not_generated_at_two_players() {
+        // §13 / CoL p.2: pacts are removed from the military decks entirely
+        // when set up for 2 players -- a card physically in hand (e.g. from
+        // a test fixture) must still not be offerable.
+        let mut p = blank_player(0, card("Despotism"));
+        let pact = card("Peace Treaty");
+        p.hand_military.push(pact);
+        let filler = blank_player(1, card("Despotism"));
+        let state = blank_state(2, [p, filler, blank_player(2, card("Despotism")), blank_player(3, card("Despotism"))]);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::OfferPact { .. })));
+    }
+
+    // --------------------------------------------------------- aggression
+
+    fn aggression_card_and_cost() -> (CardId, i32) {
+        let id = crate::cards::CARDS
+            .iter()
+            .position(|c| c.kind == CardType::Aggression)
+            .map(|i| CardId(i as u16))
+            .expect("at least one aggression card exists");
+        (id, id.get().military_action_cost as i32)
+    }
+
+    #[test]
+    fn politics_aggression_generated_when_attacker_is_strictly_stronger() {
+        let (agg, cost) = aggression_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(agg);
+        p.techs.insert(card("Warriors"), TechSlot { workers: 3, stored: 0 });
+        let state = one_player_state(p);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::Aggression { card: agg, target: 1 }));
+    }
+
+    #[test]
+    fn politics_aggression_not_generated_when_attacker_cannot_win() {
+        // No strength at all on either side: defense_strength (0) >=
+        // attack_strength (0) blocks the move -- an attack that cannot
+        // possibly succeed is not offered as a choice.
+        let (agg, cost) = aggression_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(agg);
+        let state = one_player_state(p);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+    }
+
+    #[test]
+    fn politics_aggression_not_generated_without_enough_military_actions() {
+        let (agg, cost) = aggression_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = (cost - 1).max(0) as i8;
+        p.hand_military.push(agg);
+        p.techs.insert(card("Warriors"), TechSlot { workers: 3, stored: 0 });
+        let state = one_player_state(p);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+    }
+
+    // ---------------------------------------------------------------- war
+
+    fn war_card_and_cost() -> (CardId, i32) {
+        let id = crate::cards::CARDS
+            .iter()
+            .position(|c| c.kind == CardType::War)
+            .map(|i| CardId(i as u16))
+            .expect("at least one war card exists");
+        (id, id.get().military_action_cost as i32)
+    }
+
+    #[test]
+    fn politics_war_generated_with_no_strength_check_at_all() {
+        // Unlike aggression, war has no attack/defense strength gate in
+        // Python's `_politics_moves` -- only `war_forbidden`. A player with
+        // ZERO strength may still declare war.
+        let (war, cost) = war_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(war);
+        let state = one_player_state(p);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::War { card: war, target: 1 }));
+    }
+
+    #[test]
+    fn politics_war_blocked_while_one_is_already_declared() {
+        let (war, cost) = war_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(war);
+        p.war_declared_by_me = war; // already at war with someone
+        let state = one_player_state(p);
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::War { .. })));
+    }
+
+    #[test]
+    fn politics_war_blocked_in_the_last_round() {
+        let (war, cost) = war_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(war);
+        let mut state = one_player_state(p);
+        state.last_round = true;
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::War { .. })));
     }
 
     // ------------------------------------------------------------ action_moves

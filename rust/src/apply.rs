@@ -35,8 +35,7 @@
 //!   free_action_moves`], and only panics, naming the card and the option
 //!   count, in the 2+ case -- see [`h_play_action`].
 //! - **`events.rs`.** [`Move::PrepareEvent`] (`events.reveal_current_event`)
-//!   and [`Move::Aggression`] (`events.start_aggression`) both call into it
-//!   directly. Panics in [`apply`].
+//!   calls into it directly. Panics in [`apply`].
 //! - **`game.rs`.** [`Move::EndTurn`] (`game.end_turn`) is the whole End-of-
 //!   Turn Sequence orchestrator and is not ported at all. `_h_resign`'s tail
 //!   call to `game.after_resign` (deciding whether resigning leaves a forced
@@ -49,9 +48,21 @@
 //! `combat.rs` dependency -- `_h_war` itself never resolves combat, it only
 //! records the declaration. `state.rs` grew both fields, so [`h_war`] is now
 //! fully ported, and so is the war-cleanup half of [`h_resign`] (§5.11:
-//! "wars against a resigned player score their declarer 7 culture"). Combat
-//! resolution proper (an attack actually reducing strength/population) still
-//! needs a `combat.rs` that does not exist -- nothing here claims otherwise.
+//! "wars against a resigned player score their declarer 7 culture"). War
+//! RESOLUTION (as opposed to declaration) now exists too -- `combat::
+//! resolve_war_outcome` / `apply_war_spoils` -- but nothing here calls it:
+//! Python fires it from `game.start_turn` (`game.rs`, not ported), not from
+//! `_h_war`, so it is combat.rs's function to exist and `game.rs`'s, once
+//! written, to call at the right point in the turn loop.
+//!
+//! [`Move::Aggression`] is now PARTIALLY ported: [`h_aggression`] calls
+//! `combat::start_aggression` (cost, discard, strength, doomed-pact
+//! cancellation -- everything `events.start_aggression` does before handing
+//! off to `interact.start_defense`) and then panics naming that hand-off
+//! specifically, rather than events.rs/combat.rs generically -- see
+//! `combat.rs`'s own top doc comment "Aggression: declaration ported,
+//! resolution blocked on `interact.rs`" for why a real defense total cannot
+//! exist without `state.pending`.
 //!
 //! `Card::stages` and `Card::revolution_cost` landed in `cards.rs` mid-port,
 //! ahead of `costs.rs` being updated to use them -- both are closed now:
@@ -107,6 +118,7 @@
 
 use crate::card_table::FreeCivilActionValue;
 use crate::cards::{CardEffects, CardId, CardType, Special};
+use crate::combat;
 use crate::costs;
 use crate::economy;
 use crate::effects;
@@ -180,9 +192,9 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::PrepareEvent { .. } => unimplemented!(
             "PrepareEvent needs events::reveal_current_event -- events.rs is not ported"
         ),
-        Move::Aggression { .. } => unimplemented!(
-            "Aggression needs events::start_aggression -- events.rs is not ported"
-        ),
+
+        // ---- declaration ported (combat.rs); resolution blocked on interact.rs ----
+        Move::Aggression { card, target } => h_aggression(state, idx, card, target),
 
         // ---- blocked on game.rs ----
         Move::EndTurn => unimplemented!("EndTurn needs game::end_turn -- game.rs is not ported"),
@@ -198,8 +210,11 @@ pub fn apply(state: &mut GameState, mv: Move) {
 // "belongs to actions.rs").
 
 /// Move `n` yellow tokens into `p`'s supply from a card or a rival. Mirrors
-/// `engine/effects.py::grant_yellow`.
-fn grant_yellow(p: &mut PlayerState, n: i32) {
+/// `engine/effects.py::grant_yellow`. `pub(crate)` (not private): `combat.rs`
+/// needs the exact same bookkeeping for a War over Territory's spoils
+/// (`combat::apply_war_spoils`), and this is the one existing copy rather
+/// than a second one drifting out of sync with it.
+pub(crate) fn grant_yellow(p: &mut PlayerState, n: i32) {
     if n > 0 {
         p.yellow_granted = p.yellow_granted.saturating_add(n as u8);
     }
@@ -315,22 +330,13 @@ fn workers_on_kind(p: &PlayerState, pred: impl Fn(CardType) -> bool) -> i32 {
 
 // --------------------------------------------------------------- pact helpers
 //
-// `engine/effects.py::cancel_attack_pacts` / `drop_pacts_of` operate on
-// `PlayerState.pacts` alone -- no `Stats` needed -- so they port cleanly
-// despite `effects.rs` not consuming pacts for `compute()` yet (see that
-// module's own KNOWN GAPS: that gap is about `compute()`, not about the
-// `pacts` field itself, which `state.rs` already carries).
-
-/// §5.4.3: a pact that ends the moment its parties attack each other is
-/// removed before the attack resolves.
-fn cancel_attack_pacts(state: &mut GameState, attacker: u8, defender: u8) {
-    for q in state.players.iter_mut() {
-        q.pacts.retain(|pact| {
-            let parties = pact.is_party(attacker) && pact.is_party(defender);
-            !(parties && pact.card.get().special.contains(&Special::CancelledIfPartiesAttackEachOther))
-        });
-    }
-}
+// `engine/effects.py::cancel_attack_pacts` moved to `combat::
+// cancel_attack_pacts` now that `combat.rs` exists -- this module used to
+// carry its own copy (written for `h_war` before `combat.rs` was ported),
+// which is exactly the "same fact, two registries" bug class DESIGN.md
+// warns about, so it is deleted here in favour of the one in `combat.rs`.
+// `drop_pacts_of` stays here: it is resignation bookkeeping, not combat
+// math (no strength/legality involved), and has no `combat.rs` equivalent.
 
 /// §5.11: remove every pact `idx` is party to (resignation).
 fn drop_pacts_of(state: &mut GameState, idx: u8) {
@@ -681,9 +687,13 @@ fn h_copy_tactic(state: &mut GameState, idx: u8, id: CardId) {
 }
 
 /// §5.6 / CoL p.4: reveal, pay, name the rival, drop the pact, record the
-/// declaration. Mirrors `engine/actions.py::_h_war`. NOT a `combat.rs`
-/// dependency -- this never resolves combat, only records that a war is
-/// open; see this module's top doc comment.
+/// declaration. Mirrors `engine/actions.py::_h_war`. Uses `combat::
+/// cancel_attack_pacts` for the pact-cancellation step, but otherwise still
+/// never resolves combat -- it only records that a war is open. Actual war
+/// RESOLUTION (`combat::resolve_war_outcome` / `apply_war_spoils`) fires at
+/// the start of the attacker's NEXT turn (`engine/game.py::start_turn`,
+/// `game.rs`, not ported), not from this handler; see this module's top doc
+/// comment.
 fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
     let mut cost = id.get().military_action_cost as i32;
     if leader_is(&state.players[target as usize], "Mahatma Gandhi") {
@@ -693,12 +703,33 @@ fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
     state.players[idx as usize].hand_military.remove_first(id);
     // CoL p.4 / FAQ p.11: a pact that ends if its parties attack each other
     // is removed before the war is recorded, and its strength never applies.
-    cancel_attack_pacts(state, idx, target);
+    combat::cancel_attack_pacts(state, idx, target);
     state.players[idx as usize].war_declared_by_me = id;
     state.players[idx as usize].war_target = target;
     state.players[target as usize].wars_declared_on_me[idx as usize] = id;
     state.players[idx as usize].politics_done = true;
     state.phase = crate::state::Phase::Actions;
+}
+
+/// §5.4: pay cost, discard, compute strength, cancel any doomed pact.
+/// Mirrors the part of `engine/actions.py::_h_aggression` that is portable
+/// today -- `combat::start_aggression` is the exact prefix of `engine/
+/// events.py::start_aggression` up to (not including) `interact.
+/// start_defense`, which needs `state.pending` (no such field exists, and
+/// this module may not add one). See `combat.rs`'s top doc comment
+/// "Aggression: declaration ported, resolution blocked on `interact.rs`"
+/// for the full reasoning; this handler only names the one remaining
+/// blocker.
+fn h_aggression(state: &mut GameState, idx: u8, card: CardId, target: u8) {
+    combat::start_aggression(state, idx, card, target);
+    unimplemented!(
+        "aggression({}) vs P{target}: interact::start_defense needs \
+         state.pending, which does not exist -- combat::start_aggression \
+         already paid the cost, discarded the card and cancelled any doomed \
+         pact, so resolving the defender's response is the only piece left \
+         once interact.rs is ported",
+        card.name()
+    );
 }
 
 /// Ports `engine/actions.py::_h_play_action`. See this module's top doc
@@ -1023,8 +1054,17 @@ mod tests {
     }
 
     fn one_player_state(p: PlayerState) -> GameState {
-        let filler = || blank_player(0, card("Despotism"));
-        let mut players = [filler(), filler(), filler(), filler()];
+        // Each filler needs its OWN `idx` (not a repeated 0) -- `combat.rs`
+        // functions this module now calls (`start_aggression`,
+        // `cancel_attack_pacts`) read `PlayerState::idx` for pact-party
+        // matching, and four players sharing idx 0 would make every filler
+        // indistinguishable from the actor for that purpose.
+        let mut players = [
+            blank_player(0, card("Despotism")),
+            blank_player(1, card("Despotism")),
+            blank_player(2, card("Despotism")),
+            blank_player(3, card("Despotism")),
+        ];
         players[0] = p;
         blank_state(4, players)
     }
@@ -1379,6 +1419,50 @@ mod tests {
         });
         h_war(&mut state, 0, card("War over Territory"), 1);
         assert!(state.players[0].pacts.is_empty(), "Military Alliance ends the moment its parties attack");
+    }
+
+    // -------------------------------------------------------------- aggression
+
+    #[test]
+    #[should_panic(expected = "interact::start_defense")]
+    fn h_aggression_pays_cost_discards_and_cancels_pacts_before_panicking() {
+        // `h_aggression` mutates state via `combat::start_aggression` (the
+        // portable prefix of `events.start_aggression`) and only THEN panics
+        // naming `interact::start_defense` -- matching the codebase's
+        // established "partial mutation before an unimplemented tail" shape
+        // (see `h_play_action`'s own top doc comment). `std::panic::
+        // catch_unwind` lets this test assert BOTH the panic message and the
+        // mutation that happened first.
+        let agg = crate::cards::CARDS
+            .iter()
+            .position(|c| c.kind == CardType::Aggression)
+            .map(|i| CardId(i as u16))
+            .expect("at least one aggression card exists");
+        let cost = agg.get().military_action_cost as i8;
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost + 2;
+        p.hand_military.push(agg);
+        p.pacts.push(Pact { card: card("Military Alliance"), owner: 0, partner: 1, a: 0, b: 1 });
+        let mut state = one_player_state(p);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            h_aggression(&mut state, 0, agg, 1);
+        }));
+        assert_eq!(state.players[0].military_actions, 2, "cost was paid before the panic");
+        assert!(!state.players[0].hand_military.contains(agg), "card left the hand before the panic");
+        assert!(
+            state.discarded_military[agg.get().age as usize].contains(agg),
+            "card was discarded before the panic"
+        );
+        assert!(state.players[0].pacts.is_empty(), "doomed pact was cancelled before the panic");
+        // Resume the ORIGINAL panic (not `.unwrap()`, which would panic with
+        // its own generic message and defeat `#[should_panic(expected = ..)]`
+        // below) so this test still proves the panic message names the real
+        // blocker.
+        match result {
+            Ok(()) => panic!("expected h_aggression to panic (interact.rs is not ported)"),
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     // ------------------------------------------------------------- play_action

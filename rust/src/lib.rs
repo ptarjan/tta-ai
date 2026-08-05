@@ -16,6 +16,7 @@
 pub mod apply;
 pub mod card_table;
 pub mod cards;
+pub mod combat;
 pub mod costs;
 pub mod legal;
 pub mod economy;
