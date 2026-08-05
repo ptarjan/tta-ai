@@ -340,7 +340,42 @@ def _politics_moves(state, p):
                 if effects.war_forbidden(state, p, q):           # §5.6
                     continue
                 moves.append(("war", name, q.idx))
+    moves.extend(_leader_politics_moves(state, p))
     return moves
+
+
+def _leader_politics_moves(state, p):
+    """The two leaders whose ability IS a political action (§5.0, 2015 text).
+
+    Both spend the leader himself, so both are name-dispatched here rather
+    than driven off the effect key: `engine/effects.py`'s header says that is
+    how a leader ability is implemented, and `tests/test_score_audit.py`'s
+    `NAME_DISPATCHED` list already carries these two keys.
+
+    * **Alexander the Great**, `removeAsPoliticalActionForYellowToken`: *"As a
+      political action, you may remove Alexander from the game to take 1
+      yellow token from the box into your yellow bank."*  Always available
+      while he is in play -- nothing can make it illegal.
+    * **Christopher Columbus**, `removeAsPoliticalActionFreeColonize`: *"As a
+      political action, you may remove Columbus from the game to colonize a
+      territory card from your hand without sacrificing any military units."*
+      One move PER TERRITORY, exactly as `prepare_event` is one move per card,
+      so which territory is colonized is chosen by choosing the move.  That is
+      the same kind of decision `interact.push_choice` would offer and it is
+      strictly better here: a 1-ply search prices each territory's own
+      `immediateEffects`/`permanentEffects`, where a bare `("columbus",)`
+      followed by a choice would price the whole ability at whatever the
+      *leader* is worth (nothing -- Columbus prints no production) and be
+      dominated by `pol_pass` before the choice was ever reached.
+    """
+    if p.leader == "Alexander the Great":
+        return [("remove_leader_yellow",)]
+    if p.leader == "Christopher Columbus":
+        db = _DB
+        return [("columbus_colonize", n)
+                for n in _sorted_unique(tuple(p.hand_military))
+                if n in db.by_name and db.type_of(n) == "territory"]
+    return []
 
 
 @_lru_cache(maxsize=4096)
@@ -1050,7 +1085,52 @@ def _h_end_turn(state, p, move, rng):
 
 # --- politics handlers
 
+def _end_politics(state, p):
+    """Close the politics phase after ONE political action -- or after two.
+
+    RULES_SPEC 5.0 [RB p.16, CoL p.4]: *"In the Politics Phase you may perform
+    AT MOST ONE political action (or skip)."*  Julius Caesar is the one card
+    that changes that number: *"Once per game, you may take two political
+    actions in your politics phase."*
+
+    So while Caesar is in play and his once-per-game is unspent, the FIRST
+    political action of the turn leaves the phase open instead of ending it,
+    and the player is offered the politics move list again.  Two flags rather
+    than one, because the ability is spent by TAKING the second action and not
+    by being offered it: `p.caesar_second_politics` says "the phase is still
+    open", and `p.caesar_double_politics_used` is written only when a second
+    action actually resolves.  Passing on the second (`_h_pol_pass`) clears the
+    per-turn flag and leaves the once-per-game intact, which is what "you MAY
+    take two" means.
+
+    This is deliberately NOT a "declare Caesar" move.  The ability's whole
+    value is the second action, and a declaration move mutates nothing an
+    evaluator can see: every 1-ply bot in this repo would score it exactly
+    equal to `pol_pass` and the strict-`>` tie-break would bury it forever --
+    the same failure `weighted.PACT_OFFER_CREDIT` exists to paper over for
+    `offer_pact`.  Offering the second action directly needs no bot to know
+    anything: each candidate second action is priced on its own merits.
+    """
+    if p.caesar_second_politics:
+        # This was action two.  Now the once-per-game is spent.
+        p.caesar_second_politics = False
+        p.caesar_double_politics_used = True
+    elif (p.leader == "Julius Caesar"
+            and not p.caesar_double_politics_used
+            and not p.resigned and not state.game_over):
+        p.caesar_second_politics = True
+        return                          # the phase stays open for action two
+    p.peeked_event = None               # Joan's look ends with the phase
+    p.politics_done = True
+    state.phase = "actions"
+
+
 def _h_pol_pass(state, p, move, rng):
+    # Passing is DECLINING the political action, so it never spends Caesar's
+    # once-per-game -- not as the first action of the phase (there was no
+    # second one) and not as the second (he was offered and turned down).
+    p.caesar_second_politics = False
+    p.peeked_event = None
     p.politics_done = True
     state.phase = "actions"
 
@@ -1063,14 +1143,65 @@ def _h_prepare_event(state, p, move, rng):
     journal.touch(state.future_events).append(name)
     journal.touch(state.seeded_by)[name] = p.idx
     events.reveal_current_event(state, rng)
-    p.politics_done = True
-    state.phase = "actions"
+    _end_politics(state, p)
+
+
+def _h_remove_leader_yellow(state, p, move, rng):
+    """Alexander the Great: remove him from the game for a yellow token.
+
+    *"As a political action, you may remove Alexander from the game to take 1
+    yellow token from the box into your yellow bank."*  `effects.grant_yellow`
+    is the box: it is the one function that creates a token from outside the
+    player's own supply, and it records the creation in `yellow_granted` so
+    §12.2.4's token accounting still balances.
+    """
+    remove_leader_from_game(state, p)
+    effects.grant_yellow(p, 1)
+    state.emit(f"P{p.idx} removed Alexander the Great for a yellow token")
+    _end_politics(state, p)
+
+
+def _h_columbus_colonize(state, p, move, rng):
+    """Christopher Columbus: remove him to colonize from hand, free.
+
+    *"As a political action, you may remove Columbus from the game to colonize
+    a territory card from your hand without sacrificing any military units."*
+    There is no auction (§11.1 starts one only when a territory is REVEALED as
+    the current event) and no force (§11.3's ">= 1 unit mandatory" is a floor
+    on a sacrifice this card explicitly does not make), so the territory goes
+    straight from the hand to the play area under §11.5.
+    """
+    from . import interact
+    name = move[1]
+    remove_leader_from_game(state, p)
+    interact.colonize_without_sacrifice(state, p, name, rng)
+    _end_politics(state, p)
+
+
+def remove_leader_from_game(state, p):
+    """Take the leader out of play for good, and record that he is gone.
+
+    "Remove from the game" and "discard" differ only in where the card goes,
+    and this engine has one destination for both: `economy.discard_civil`
+    writes `state.civil_removed`, whose whole job is to keep
+    `engine.bots.counting` able to subtract what it has seen from what the
+    rulebook printed.  A leader dropped on the floor instead would make an
+    age's card count stop adding up and the counter would read the shortfall
+    as "still in a rival's hand" -- the bug that field was created to close.
+    """
+    name = p.leader
+    if not name:
+        return None
+    effects.on_leave_play(state, p, name)
+    economy.discard_civil(state, name)
+    p.leader = None
+    effects.invalidate(state, p)
+    return name
 
 
 def _h_aggression(state, p, move, rng):
     from . import events
-    p.politics_done = True
-    state.phase = "actions"
+    _end_politics(state, p)
     events.start_aggression(state, p, move[1], state.players[move[2]], rng)
 
 
@@ -1084,8 +1215,7 @@ def _h_offer_pact(state, p, move, rng):
         ctx["a"], ctx["b"] = target, p.idx
     else:
         ctx["a"], ctx["b"] = p.idx, target
-    p.politics_done = True
-    state.phase = "actions"
+    _end_politics(state, p)
     interact.push_choice(state, target, "pact_offer", ["accept", "refuse"],
                          ctx, auto=False)
 
@@ -1096,8 +1226,7 @@ def _h_cancel_pact(state, p, move, rng):
     owner.pacts = [pact for pact in owner.pacts
                    if p.idx not in (pact["owner"], pact["partner"])]
     effects.invalidate(state)
-    p.politics_done = True
-    state.phase = "actions"
+    _end_politics(state, p)
     state.emit(f"P{p.idx} cancelled a pact")
 
 
@@ -1125,6 +1254,8 @@ def _h_resign(state, p, move, rng):
                                  if tuple(w)[0] != name]
         economy.discard_military(state, name)
         p.war_declared_by_me = None
+    p.caesar_second_politics = False
+    p.peeked_event = None
     p.politics_done = True
     effects.invalidate(state)
     state.emit(f"P{p.idx} resigned")
@@ -1147,8 +1278,7 @@ def _h_war(state, p, move, rng):
     effects.cancel_attack_pacts(state, p, state.players[target])
     p.war_declared_by_me = (name, p.idx, target)
     journal.touch(state.players[target].wars_declared_on_me).append((name, p.idx, target))
-    p.politics_done = True
-    state.phase = "actions"
+    _end_politics(state, p)
 
 
 _HANDLERS = {
@@ -1169,6 +1299,8 @@ _HANDLERS = {
     "end_turn": _h_end_turn,
     "pol_pass": _h_pol_pass,
     "prepare_event": _h_prepare_event,
+    "remove_leader_yellow": _h_remove_leader_yellow,
+    "columbus_colonize": _h_columbus_colonize,
     "aggression": _h_aggression,
     "war": _h_war,
     "offer_pact": _h_offer_pact,

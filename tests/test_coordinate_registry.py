@@ -350,12 +350,14 @@ KNOWN_DEAD = {
         "age one-hot, which is therefore frozen on 'A' for the life of every "
         "game.  Five encoding slots that can never carry information",
         "docs/OPEN_ITEMS.md: dead state fields"),
-    "caesar_double_politics_used": (
-        ("never-written",),
-        "FOUND BY THIS TEST.  Declared and referenced NOWHERE else in the "
-        "repo, so Julius Caesar's once-per-turn double politics is either "
-        "unimplemented or implemented without its guard",
-        "docs/OPEN_ITEMS.md: dead state fields"),
+    # `caesar_double_politics_used` WAS HERE and is not any more.  It was
+    # found by this test, checked against the rules as the entry asked, and
+    # turned out to be the missing rule rather than the dead field: Julius
+    # Caesar's "once per game, you may take two political actions in your
+    # politics phase" was declared on the card, written off in
+    # `weighted.DELIBERATELY_UNPRICED` as something "the rules engine
+    # expresses", and expressed by nothing.  `actions._end_politics` writes it
+    # now.  The list can only shrink; this is one of those.
     "used_leader_ability": (
         ("never-written",),
         "FOUND BY THIS TEST.  The generic once-per-game/turn leader flag, "
@@ -767,6 +769,14 @@ NOT_ENCODED = {
     "churchill_used": "leader once-per-turn flag; same item",
     "bach_upgrade_used": "leader once-per-turn flag; same item",
     "ocean_liners_used": "wonder once-per-turn flag; same item",
+    "caesar_double_politics_used": "leader once-per-GAME flag; same item",
+    "caesar_second_politics": "per-turn flag (Caesar's second political "
+                              "action is owed); same item",
+    "peeked_event": "INFORMATION: the event card Joan of Arc looked at.  It "
+                    "is hers and not the table's, and the player blocks share "
+                    "one set of encoding slots -- encoding it would put a "
+                    "face-down card into every rival's block, which is the net "
+                    "cheating rather than a missing channel",
     "skip_next_politics": "one-shot event flag; same item",
     "ca_penalty_next_turn": "one-shot event penalty; same item",
     "mil_discount": "one-turn ring-fenced resources; same item",

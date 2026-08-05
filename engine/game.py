@@ -255,6 +255,8 @@ def start_turn(state, rng=None):
     state.last_round = (state.final_round_end is not None
                         and state.round >= state.final_round_end)
     p.politics_done = False
+    p.caesar_second_politics = False    # Julius Caesar's second action
+    p.peeked_event = None               # Joan of Arc's look, set below
     p.taken_this_turn = []
     p.ca_spent_taking = 0
     if p.skip_next_politics:            # International Agreement (CoL p.12)
@@ -262,6 +264,11 @@ def start_turn(state, rng=None):
         state.phase = "actions"
     elif state.round > 1 and state.has_military and not state.game_over:
         state.phase = "politics"
+        # Joan of Arc: "WHEN YOU BEGIN your politics phase, you may look at
+        # the top card of the current events deck."  Here is where the phase
+        # begins, so here is where she looks -- and a turn with no politics
+        # phase (the branch above, or round 1) is a turn she does not.
+        events.peek_top_event(state, p)
         if state.pending:
             # `resolve_war` above can leave a War over Technology's spoils
             # decision outstanding (§5.7), and stealing a blue technology can
@@ -286,7 +293,9 @@ def _auto_skip_politics(state, rng):
     """Pass immediately when passing is the only political option."""
     from . import actions
     if len(actions._politics_moves(state, state.me())) == 1:
-        state.me().politics_done = True
+        p = state.me()
+        p.politics_done = True
+        p.peeked_event = None       # the phase is over; so is Joan's look
         state.phase = "actions"
 
 

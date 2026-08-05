@@ -488,7 +488,14 @@ class Replay:
         p.ocean_liners_used = False
         p.mil_discount = 0
         p.one_time_discount = {}
-        p.caesar_double_politics_used = False
+        # PER-TURN flags only.  `caesar_double_politics_used` used to be reset
+        # here and it is a once-per-GAME guard ("once per game, you may take
+        # two political actions"), so clearing it every turn would have let a
+        # replayed Caesar double his politics phase every round.  It was inert
+        # while the rule was unimplemented; it is not any more.  What resets
+        # per turn is the marker for the second action being owed.
+        p.caesar_second_politics = False
+        p.peeked_event = None
         gs.phase = "politics" if (gs.round > 1 and gs.has_military) else "actions"
         gs.last_round = (gs.final_round_end is not None
                          and gs.round >= gs.final_round_end)

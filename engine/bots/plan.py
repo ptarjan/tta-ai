@@ -174,12 +174,30 @@ def determinize(state, rng):
         rng.shuffle(state.military_deck)
     ev = state.current_events
     if len(ev) > 1:
+        # JOAN OF ARC HAS LOOKED AT THE TOP ONE.  "When you begin your politics
+        # phase, you may look at the top card of the current events deck" --
+        # `engine.events.peek_top_event` records what she saw in
+        # `p.peeked_event` for the duration of that phase.  Shuffling it away
+        # would destroy information the mover legitimately has, which is the
+        # same defect as re-dealing the card row and is what the COMPLEMENT
+        # half of `tests/test_search_root_is_determinized.py` guards against;
+        # it would also make the ability worth exactly nothing to the only
+        # bots that hide anything from themselves.
+        #
+        # Only for the seat that is about to move, only while what it wrote is
+        # still the true top card (once that card is revealed the note is
+        # stale, and a stale note must not pin a card it no longer names), and
+        # the rest of the pile stays as hidden as it was.
+        known = state.players[state.decider()].peeked_event
+        top = ev.pop() if known is not None and ev[-1] == known else None
         rng.shuffle(ev)
         # `list.sort` is stable, so this restores the age bands exactly as
         # `events._recycle_future_events` built them and permutes only within.
         # The key is character-for-character the engine's own.
         level_of = cards.db().level_of
         ev.sort(key=lambda n: -level_of(n))
+        if top is not None:
+            ev.append(top)
     return state
 
 

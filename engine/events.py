@@ -126,6 +126,42 @@ def _draw_military(state, p, n):
 
 # ------------------------------------------------------------ event decks
 
+def peek_top_event(state, p):
+    """Joan of Arc looks at the top of the current events deck (§5.2).
+
+    Card text (2015): *"When you begin your politics phase, you may look at
+    the top card of the current events deck."*  `reveal_current_event` pops
+    that pile from the END, so the "top card" is ``current_events[-1]`` -- the
+    card any `prepare_event` this turn will turn face up, which is the whole
+    point of looking.
+
+    IT IS TAKEN AUTOMATICALLY AND THAT IS NOT AN AUTO-PICK.  The rule's "may"
+    is a permission, not a decision: looking costs nothing, reveals nothing to
+    anybody else, and cannot be regretted, so declining is strictly dominated
+    in every position.  Every other "may" this project routes through
+    `interact.push_choice` has a price on the other side of it (a leader
+    removed from the game, a worker placed, a card discarded).  Manufacturing
+    a decision node here would put a branch in front of every bot on every
+    Joan turn whose two answers are "know more" and "know less".
+
+    Returns the name it wrote, so the caller can log it; `None` when the pile
+    is empty (the deck is recycled from `future_events` at reveal time, and
+    that recycle SHUFFLES, so there is genuinely no top card to look at yet).
+
+    The knowledge is scoped to the politics phase the card scopes it to:
+    `actions._end_politics` and `_h_pol_pass` clear it again, and
+    `economy.end_of_turn` clears it as a backstop.  Carrying it into the
+    action phase would be modelling a player's memory, which nothing else in
+    this engine does.
+    """
+    if p.leader != "Joan of Arc":
+        p.peeked_event = None
+        return None
+    name = state.current_events[-1] if state.current_events else None
+    p.peeked_event = name
+    return name
+
+
 def reveal_current_event(state, rng):
     """Reveal and resolve the top card of the current events deck (§5.2)."""
     from . import interact

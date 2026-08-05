@@ -200,6 +200,11 @@ def end_of_turn(state, p, rng):
     p.bach_upgrade_used = False
     p.ocean_liners_used = False
     p.politics_done = False
+    p.caesar_second_politics = False
+    # Backstop for Joan of Arc's look: `actions._end_politics` clears it when
+    # the phase closes, and a turn that never had a politics phase never set
+    # it, but a stale name here would be a lie about what this seat knows.
+    p.peeked_event = None
     p.taken_this_turn = []
     p.mil_discount = 0                   # §3.11 action-card discounts expire
     p.mil_sci_discount = 0               # Churchill's ring-fenced science

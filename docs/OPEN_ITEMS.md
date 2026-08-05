@@ -1216,11 +1216,20 @@ and they are permanently-constant neural-net inputs.
   nothing, and read in exactly one place: `neural_encode`'s third age one-hot.
   So five encoding slots are frozen on age `A` for the life of every game.  Same
   shape as `scoring_events`, which was already recorded here.
-* **`PlayerState.caesar_double_politics_used` — FOUND BY THE NEW TEST.**
+* ~~**`PlayerState.caesar_double_politics_used` — FOUND BY THE NEW TEST.**
   Referenced nowhere else in the repo, so Julius Caesar's once-per-turn double
   politics is either unimplemented or implemented without its guard.  **Check
   this against the rules before deleting the field** — it may be a missing rule
-  rather than a dead field.
+  rather than a dead field.~~  **CLOSED 2026-08-05, and it was the missing
+  rule.**  It was one of four base-game leader abilities that were declared on
+  the card, written off in `weighted.DELIBERATELY_UNPRICED` as rule changes
+  "the rules engine expresses", and expressed by nothing: Julius Caesar's two
+  political actions, Alexander the Great's remove-for-a-yellow-token,
+  Christopher Columbus' free colonization from hand, and Joan of Arc's look at
+  the top event. All four are in `engine/` now (`actions._end_politics`,
+  `actions._leader_politics_moves`, `interact.colonize_without_sacrifice`,
+  `events.peek_top_event`) and pinned by
+  `tests/test_leader_politics_abilities.py`.
 * **`PlayerState.used_leader_ability` — FOUND BY THE NEW TEST.**  The generic
   once-per-game/turn leader flag; every leader that needs one carries its own
   instead.  Probably safe to delete.

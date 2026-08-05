@@ -937,6 +937,30 @@ def _colonize_step(state, pend, move, rng):
     gain_colony(state, p, pend["card"], rng)
 
 
+def colonize_without_sacrifice(state, p, name, rng=None):
+    """Christopher Columbus's colonization: no auction, no bid, no force.
+
+    *"As a political action, you may remove Columbus from the game to colonize
+    a territory card from your hand without sacrificing any military units."*
+
+    A SEPARATE ENTRY POINT, not a `bid=0` call into `colonize`, and the reason
+    is that `colonize` is the implementation of §11.3 and §11.3 does not apply
+    here.  That function's contract is "the auction winner sacrifices a force
+    of at least `bid`", and the floor inside it -- ">= 1 unit mandatory, even
+    if other bonuses would cover the bid" -- is a rule, not an accident: it is
+    why `colonize` raises rather than colonizing when the pool is empty.
+    Passing 0 into it would still demand a unit, so a Columbus with no army
+    could not use his own ability, and a Columbus with one would be made to
+    throw a worker away that the card says he keeps.
+
+    Everything AFTER the force is shared: §11.5's permanent-then-immediate
+    order is `gain_colony`, called here exactly as `_colonize_step` calls it.
+    """
+    journal.touch(p.hand_military).remove(name)
+    state.emit(f"P{p.idx} colonized {name} with no sacrifice")
+    gain_colony(state, p, name, rng)
+
+
 def gain_colony(state, p, name, rng=None):
     """Permanent effects first, then the one-time effect (§11.5)."""
     from . import events

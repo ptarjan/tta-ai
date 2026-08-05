@@ -161,6 +161,12 @@ def _describe(state, move, board=None):
         return "PASS on politics (play no military card this turn)"
     if kind == "prepare_event":
         return f"PREPARE EVENT '{move[1]}' (into the future events deck)"
+    if kind == "remove_leader_yellow":
+        return ("REMOVE ALEXANDER from the game: take 1 yellow token from the "
+                "box into your yellow bank")
+    if kind == "columbus_colonize":
+        return (f"REMOVE COLUMBUS from the game: colonize '{move[1]}' from "
+                f"your hand, sacrificing nothing")
     if kind == "aggression":
         return f"AGGRESSION '{move[1]}' against {_who(board, move[2])}{tail}"
     if kind == "war":

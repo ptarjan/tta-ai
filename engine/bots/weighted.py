@@ -1959,6 +1959,21 @@ _unpriced(
 
 # 3. A rule change with no scalar value: it makes something legal, illegal or
 #    cheaper in a way only the rules engine can express.
+#
+#    "THE RULES ENGINE EXPRESSES THIS" IS A CLAIM ABOUT ANOTHER FILE, and for
+#    four of these keys it was false for the life of the list: nothing in
+#    `engine/` had ever heard of `oncePerGameTwoPoliticalActions`,
+#    `removeAsPoliticalActionForYellowToken`,
+#    `removeAsPoliticalActionFreeColonize` or `peekTopEventCardInPolitics`, so
+#    the write-off pointed at an implementation that did not exist and nothing
+#    failed.  They are expressed now -- `actions._end_politics`,
+#    `actions._leader_politics_moves`, `interact.colonize_without_sacrifice`
+#    and `events.peek_top_event` -- and they stay on this list because the
+#    reason above is now TRUE of them: a second political action, a leader
+#    traded for a token, a colonization with no force and a look at a
+#    face-down card are all rules, none of them a number `_card_yields` could
+#    multiply a weight by.  `tests/test_leader_politics_abilities.py` is what
+#    makes the claim checkable.
 _unpriced(
     "rule change: alters what is legal, not what is produced",
     "noAttacksBetweenParties", "cancelledIfPartiesAttackEachOther",

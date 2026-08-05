@@ -108,7 +108,25 @@ class PlayerState:
     churchill_used: bool = False
     bach_upgrade_used: bool = False
     ocean_liners_used: bool = False
+    # Julius Caesar, "once per game, you may take two political actions in
+    # your politics phase".  The first flag is the once-per-GAME guard (set
+    # only when the second action is actually taken); the second is the
+    # per-TURN marker that says "the phase is still open, and the action about
+    # to be taken is Caesar's second one".  Two flags because passing on the
+    # second action must not spend the ability: see `actions._end_politics`.
     caesar_double_politics_used: bool = False
+    caesar_second_politics: bool = False
+    # Joan of Arc, "when you begin your politics phase, you may look at the
+    # top card of the current events deck" -- the name of that card, for the
+    # duration of the politics phase that revealed it to her, or None.
+    #
+    # PRIVATE TO THIS SEAT.  It is exactly as visible to a rival's evaluator as
+    # `hand_civil` is, and the discipline is the same one: read it for your own
+    # index only.  `neural_encode` does not encode it at all (it is in
+    # `tests/test_coordinate_registry.NOT_ENCODED`), and `plan.determinize` is
+    # the one consumer -- it keeps the card Joan looked at on top of the pile
+    # it re-shuffles for everybody else.
+    peeked_event: str | None = None
     resigned: bool = False
     skip_next_politics: bool = False    # International Agreement (§ CoL p.12)
     ca_penalty_next_turn: int = 0       # Rebellion
