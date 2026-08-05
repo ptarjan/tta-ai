@@ -220,6 +220,12 @@ impl<const N: usize> CardList<N> {
         &self.items[..self.len as usize]
     }
 
+    /// Exists so decks (civil/military/event stacks) can be shuffled in place.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [CardId] {
+        &mut self.items[..self.len as usize]
+    }
+
     #[inline]
     pub fn push(&mut self, id: CardId) {
         debug_assert!((self.len as usize) < N, "CardList<{N}> overflow");

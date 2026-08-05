@@ -18,6 +18,7 @@ pub mod cards;
 pub mod economy;
 pub mod fixtures;
 pub mod moves;
+pub mod rng;
 pub mod state;
 
 pub use cards::{Age, Card, CardEffects, CardId, CardType, Special, CARDS, NUM_CARDS};
