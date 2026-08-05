@@ -509,6 +509,8 @@ pub fn parse_move(v: &Json) -> Result<Move, FixtureError> {
         "end_turn" => Move::EndTurn,
         "pol_pass" => Move::PolPass,
         "resign" => Move::Resign,
+        "remove_leader_yellow" => Move::RemoveLeaderYellow,
+        "columbus_colonize" => Move::ColumbusColonize { card: move_card(arr, tag, 1)? },
         other => {
             return Err(FixtureError::new(format!(
                 "unknown move tag {other:?} -- Move enum in moves.rs has no matching variant"
@@ -1444,6 +1446,8 @@ fn blank_player(idx: u8) -> PlayerState {
         ocean_liners_used: false,
         caesar_double_politics_used: false,
         skip_next_politics: false,
+        caesar_second_politics: false,
+        peeked_event: CardId::NONE,
         ca_penalty_next_turn: 0,
         mil_discount: 0,
         mil_sci_discount: 0,
@@ -1510,6 +1514,8 @@ fn load_player(v: &Json, idx: u8) -> Result<PlayerState, FixtureError> {
         ocean_liners_used: req_bool(v, "ocean_liners_used")?,
         caesar_double_politics_used: req_bool(v, "caesar_double_politics_used")?,
         skip_next_politics: req_bool(v, "skip_next_politics")?,
+        caesar_second_politics: req_bool(v, "caesar_second_politics")?,
+        peeked_event: card_id_opt(req(v, "peeked_event")?, &format!("{tag}.peeked_event"))?,
         ca_penalty_next_turn: req_num(v, "ca_penalty_next_turn")? as i8,
         mil_discount: req_num(v, "mil_discount")? as i16,
         mil_sci_discount: req_num(v, "mil_sci_discount")? as i16,
@@ -1816,6 +1822,8 @@ fn diff_player(out: &mut Vec<String>, i: usize, a: &PlayerState, b: &PlayerState
     f!(ocean_liners_used);
     f!(caesar_double_politics_used);
     f!(skip_next_politics);
+    f!(caesar_second_politics);
+    f!(peeked_event);
     f!(ca_penalty_next_turn);
     f!(mil_discount);
     f!(mil_sci_discount);
@@ -1927,6 +1935,9 @@ mod tests {
 
         let end_turn = parse_json(r#"["end_turn"]"#).unwrap();
         assert_eq!(parse_move(&end_turn).unwrap(), Move::EndTurn);
+
+        let remove_leader_yellow = parse_json(r#"["remove_leader_yellow"]"#).unwrap();
+        assert_eq!(parse_move(&remove_leader_yellow).unwrap(), Move::RemoveLeaderYellow);
 
         let bronze = CardId::by_name("Bronze").expect("Bronze must exist for this test to mean anything");
         let iron = CardId::by_name("Iron").expect("Iron must exist for this test to mean anything");

@@ -516,12 +516,6 @@ pub fn evaluate_final_events(state: &mut GameState) {
 
 /// Reveal and resolve the top card of the current events deck (§5.2).
 /// Mirrors `engine/events.py::reveal_current_event`.
-///
-/// Recycling (empty `current_events` -> `future_events` shuffled in) is
-/// SEPARATE from the deterministic per-`end_turn` shuffle stream the rest of
-/// this port derives (`game::rng_for`/`economy::deck_rng`) -- see
-/// [`events_rng`]'s own doc comment for why that is an accepted, already
-/// documented divergence (`game.rs`'s own KNOWN GAP 2), not a new one.
 pub fn reveal_current_event(state: &mut GameState) -> Option<CardId> {
     if state.current_events.is_empty() {
         recycle_future_events(state);
@@ -579,18 +573,28 @@ fn recycle_future_events(state: &mut GameState) {
 /// `economy::deck_rng`, the pattern this function copies) cannot follow it.
 /// So: same kind of derived, deterministic-but-Python-divergent stream as
 /// those two, with its own multiplier so it does not collide with either.
+/// The ONLY caller of `_recycle_future_events` in Python is `_h_prepare_event`
+/// (`engine/actions.py`), which -- since `engine/actions.py::_h_prepare_event`
+/// grew the same `_rng_for` backfill every OTHER political/turn handler
+/// already had (`engine/game.py::_rng_for`, `2026-08-05`) -- always shuffles
+/// through `_rng_for(state, rng)`: the caller-supplied stream if there is
+/// one, otherwise `Random(seed * 1000003 + turn * 97 + round)` freshly
+/// derived from the state right then. `tools/dump_fixtures.py` (the only
+/// place that still supplies one explicitly) passes exactly that same
+/// `_rng_for(state)` per `apply()` call now too, so there is only one real
+/// stream to match: `game::rng_for`, not a second one here.
+///
+/// A separate, arbitrary formula (`seed * 15485863 + round * 131 + turn`)
+/// used to live in this function, on the theory that the recycle-shuffle
+/// stream was independent of `game::rng_for`'s. It never was -- Python always
+/// re-derives (or reuses) the SAME object `_h_prepare_event` was called
+/// with -- but nothing could tell the two formulas apart while the fixtures
+/// still had the persistent-stream problem `game.rs`'s KNOWN GAP 2 documents
+/// (any recycle point diverged for THAT reason first). Fixed 2026-08-05 once
+/// the fixtures were regenerated through per-apply derived streams and this
+/// became the one remaining, checkable difference.
 fn events_rng(state: &GameState) -> crate::rng::PyRandom {
-    let seed = i64::try_from(state.seed)
-        .ok()
-        .and_then(|s| s.checked_mul(15_485_863)) // an arbitrary large prime
-        .and_then(|s| s.checked_add(state.round as i64 * 131))
-        .and_then(|s| s.checked_add(state.turn as i64))
-        .expect(
-            "game seed * 15485863 + round * 131 + turn overflows i64; Python's unbounded ints \
-             would seed a different MT19937 stream -- widen rng::PyRandom::new rather than \
-             wrapping",
-        );
-    crate::rng::PyRandom::new(seed)
+    crate::game::rng_for(state)
 }
 
 /// Points `state.current_events_age` at the next card to be revealed.
@@ -1324,6 +1328,8 @@ mod tests {
             ocean_liners_used: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,

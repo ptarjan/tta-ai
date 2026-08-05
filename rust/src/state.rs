@@ -473,7 +473,22 @@ pub struct PlayerState {
     pub bach_upgrade_used: bool,
     pub ocean_liners_used: bool,
     pub caesar_double_politics_used: bool,
+    /// Julius Caesar's once-per-game second political action: set while the
+    /// FIRST political action of a turn has left the politics phase open for
+    /// a second one (`apply::end_politics`, mirroring `engine/actions.py::
+    /// _end_politics`); cleared the moment that second action resolves (and
+    /// `caesar_double_politics_used` is set instead), or as a backstop at
+    /// end of turn (`economy::end_of_turn`) / on resignation (`apply::
+    /// h_resign`).
+    pub caesar_second_politics: bool,
     pub skip_next_politics: bool,
+    /// Joan of Arc: the name of the current-events card she looked at when
+    /// this politics phase began (`CardId::NONE` if she is not the leader,
+    /// or the deck was empty to look at). Bot-facing information only, no
+    /// rule effect of its own (`game::start_turn`, mirroring `engine/
+    /// events.py::peek_top_event`); cleared wherever `caesar_second_politics`
+    /// is (same three places).
+    pub peeked_event: CardId,
     /// Rebellion.
     pub ca_penalty_next_turn: i8,
     /// Resource discount pool for military unit builds/upgrades this turn

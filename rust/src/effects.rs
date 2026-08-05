@@ -1137,6 +1137,8 @@ mod tests {
             ocean_liners_used: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,

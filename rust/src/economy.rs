@@ -605,6 +605,12 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.bach_upgrade_used = false;
     p.ocean_liners_used = false;
     p.politics_done = false;
+    p.caesar_second_politics = false;
+    // Backstop for Joan of Arc's look: `apply::end_politics` clears it when
+    // the phase closes, and a turn that never had a politics phase never set
+    // it, but a stale name here would be a lie about what this seat knows.
+    // Mirrors `engine/economy.py::end_of_turn`'s own backstop comment.
+    p.peeked_event = CardId::NONE;
     p.taken_this_turn = CardList::new();
     // §3.11: action-card discount pools expire at end of turn.
     p.mil_discount = 0;
@@ -716,6 +722,8 @@ mod tests {
             ocean_liners_used: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,

@@ -193,16 +193,24 @@ def play_fixture(num_players, seed, max_plies, state_every, bot_name="greedy"):
     """Play one seeded self-play game. Returns `(header, plies, footer)`,
     each a JSON-serializable dict (`plies` a list of them).
 
-    Mirrors `engine.game.play_game`'s bot construction and rng derivation
-    (same `seed * 131 + i` per-player bot seed, same `seed ^ 0x5EED` apply
-    rng) so a fixture game is bit-for-bit the same game `play_game` would
-    produce -- `play_game` itself is not used because it does not expose the
-    legal-move list or the decider for each ply.
+    Mirrors `engine.game.play_game`'s bot construction (same `seed * 131 + i`
+    per-player bot seed). Unlike an earlier version of this script, `apply`'s
+    rng is NOT one persistent stream threaded through the whole game: that
+    made a fixture's mid-game shuffles depend on every prior shuffle call
+    ever made against that stream, a position no `GameState` snapshot can
+    recover (see `rust/src/game.rs`'s KNOWN GAPS block, gap 2, and commit
+    `b258b9a`). Instead each `apply` call gets its own rng freshly derived
+    from the state via `game._rng_for`, exactly as `game.end_turn` /
+    `game.start_turn` do and exactly as the documented default entry point
+    `actions.apply(state, mv)` now does (see `actions._h_prepare_event`'s own
+    `_rng_for` backfill) -- so a fixture recorded this way is reproducible
+    from a state snapshot alone, which is the whole point of a differential
+    fixture. `play_game` itself is still not used because it does not expose
+    the legal-move list or the decider for each ply.
     """
     bot_cls = _BOTS[bot_name]
     bots = [bot_cls(random.Random(seed * 131 + i)) for i in range(num_players)]
     state = game.new_game(num_players, seed=seed)
-    rng = random.Random(seed ^ 0x5EED)
 
     header = {
         "kind": "header",
@@ -221,7 +229,7 @@ def play_fixture(num_players, seed, max_plies, state_every, bot_name="greedy"):
         phase = state.phase
         legal = actions.legal_moves(state)
         chosen = _pick(bots[decider], state, legal)
-        actions.apply(state, chosen, rng)
+        actions.apply(state, chosen, game._rng_for(state))
 
         rec = {
             "kind": "ply",

@@ -1273,6 +1273,8 @@ def _h_pol_pass(state, p, move, rng):
 
 def _h_prepare_event(state, p, move, rng):
     from . import events
+    from . import game
+    rng = game._rng_for(state, rng)
     name = move[1]
     journal.touch(p.hand_military).remove(name)
     p.culture += _DB.level_of(name)

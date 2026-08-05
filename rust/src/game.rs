@@ -59,52 +59,45 @@
 //!    returns exactly what Python's `scores()` does; `moves_played` /
 //!    `move_cap_hit` are `play_game` bookkeeping and are this port's return
 //!    value instead (see [`Outcome`]).
-//! 2. **The checked-in differential fixtures cannot be matched at an age
-//!    transition, and the fault is not in this file.** `tools/
-//!    dump_fixtures.py` builds ONE `random.Random(seed ^ 0x5EED)` per game
-//!    and passes it to every `actions.apply` call (mirroring
-//!    `game.play_game`), so `_rng_for(state, rng)` hands `_advance_age` a
-//!    PERSISTENT stream whose position depends on everything drawn from it
-//!    earlier in the game. This port derives a fresh stream per `end_turn`
-//!    instead (see "Randomness" above), so every age transition in a fixture
-//!    comes out as a different permutation of the same multiset -- 14 of
-//!    them across the 9 files, and they are the only state divergences left.
-//!    Verified both directions on `2p_seed2` ply 1: this port's Age I deck is
-//!    exactly `Random(2 * 1000003 + 2 * 97 + 1)`'s shuffle, and the fixture's
-//!    is exactly `Random(2 ^ 0x5EED)`'s.
+//! 2. ~~**The checked-in differential fixtures cannot be matched at an age
+//!    transition.**~~ **CLOSED 2026-08-05.** The fault was never in this
+//!    file: `tools/dump_fixtures.py` used to build ONE `random.Random(seed ^
+//!    0x5EED)` per game and pass it to every `actions.apply` call (mirroring
+//!    `game.play_game`), so `_rng_for(state, rng)` handed `_advance_age` a
+//!    PERSISTENT stream whose position depended on everything drawn from it
+//!    earlier in the game, while this port derives a fresh stream per
+//!    `end_turn` (see "Randomness" above) -- an unrecoverable divergence at
+//!    every age transition, verified both directions on `2p_seed2` ply 1
+//!    against CPython.
 //!
-//!    A stateless port cannot follow that stream, and neither can a stateful
-//!    one, for two independent reasons:
-//!      * `tests/differential.rs` reloads the state from the fixture after
-//!        EVERY ply, and the fixtures do not record the generator's position,
-//!        so an rng carried in `GameState` would be reset every ply.
-//!      * `events._recycle_future_events` also draws from that same stream
-//!        (once per `prepare_event` that empties the current-events deck --
-//!        5 to 8 times in a typical fixture, before the Age II and Age III
-//!        transitions). Reproducing those draws needs `events.rs::
-//!        reveal_current_event`/`_recycle_future_events` (§5.2 event
-//!        revealing, NOT the §12.5.2 final scoring or §5.3/§5.4.6 gain-block
-//!        interpreter that exist in `events.rs` today -- still unported), and
-//!        the number of them that have already happened is NOT recoverable
-//!        from a state snapshot (a revealed territory goes to an auction
-//!        rather than to `past_events`, so nothing counts reveals).
-//!
-//!    The fix is to regenerate the fixtures through the entry point this port
-//!    actually implements -- one derived stream per apply -- which was
-//!    measured: 8 of the 9 games regenerated that way replay at
-//!    `state_divergences=0`. Two things block doing it in `tools/`:
+//!    Fixed by regenerating the fixtures through the entry point this port
+//!    actually implements -- `dump_fixtures.py` now derives `game._rng_for
+//!    (state)` fresh per `actions.apply` call too, matching this module
+//!    exactly, instead of threading one persistent stream. Two things blocked
+//!    doing that and are both fixed:
 //!      * `actions.apply(state, mv)` -- the literal rng=None default this
-//!        module's "Randomness" section names -- CRASHES. `apply` passes its
-//!        `rng` straight to the handlers without the `_rng_for` backfill
-//!        `game.start_turn`/`end_turn` do, so the first `prepare_event` dies
-//!        in `events._recycle_future_events` on `None.shuffle`. Only
-//!        `game.py`'s own entry points are None-safe. That is a Python bug,
-//!        not a porting question: `_h_prepare_event` needs the same
-//!        `_rng_for` backfill its siblings have.
-//!      * the fixtures are stale against today's `engine/`: regenerating
-//!        surfaces a `remove_leader_yellow` move tag `moves.rs` has no
-//!        variant for, and two `PlayerState` fields (`caesar_second_politics`,
-//!        `peeked_event`) that postdate the recording.
+//!        module's "Randomness" section names -- used to CRASH: `apply`
+//!        passed its `rng` straight to the handlers without the `_rng_for`
+//!        backfill `game.start_turn`/`end_turn` do, so the first
+//!        `prepare_event` died in `events._recycle_future_events` on
+//!        `None.shuffle`. Fixed in `engine/actions.py::_h_prepare_event`
+//!        (the same `_rng_for` backfill its siblings already had).
+//!      * the fixtures were stale against `engine/`'s leader abilities
+//!        (`ded32dd`): regenerating surfaced a `remove_leader_yellow` move
+//!        tag and a `columbus_colonize` move tag `moves.rs` had no variant
+//!        for (both added, with `apply.rs`/`legal.rs` support built on
+//!        already-existing primitives -- `apply::grant_yellow`,
+//!        `economy::discard_civil`, `interact::gain_colony`, no `events.rs`/
+//!        `combat.rs`/`interact.rs` LOGIC touched), and two `PlayerState`
+//!        fields (`caesar_second_politics`, `peeked_event`) that postdate the
+//!        recording (both added; see `apply::end_politics` and
+//!        `game::peek_top_event`, which also closes the "phase always ends
+//!        after one action, for every leader" simplification `apply.rs`'s
+//!        political handlers used to document -- Julius Caesar's once-per-
+//!        game second political action is real rule effect, not fixture
+//!        bookkeeping, and was a genuine, if rare, engine disagreement until
+//!        now: it fired exactly once across the 9 checked-in fixtures,
+//!        `4p_seed1.jsonl` ply 68).
 
 use crate::cards::{Age, CardId, CardType, Special, CARDS};
 use crate::combat;
@@ -130,6 +123,33 @@ const START_TECHS: [(&str, u8); 5] = [
     ("Philosophy", 1),
     ("Religion", 0),
 ];
+
+// Mirrors `apply.rs`/`legal.rs`/`costs.rs`/`combat.rs`'s own `leader_is`
+// (private in each -- see `apply.rs`'s "A note on leader identity" analogue).
+#[inline]
+fn leader_is(p: &PlayerState, name: &str) -> bool {
+    !p.leader.is_none() && p.leader.get().name == name
+}
+
+/// Joan of Arc: *"When you begin your politics phase, you may look at the
+/// top card of the current events deck."* Automatic, not a decision (`engine/
+/// events.py::peek_top_event`'s doc comment: the "may" is a permission with
+/// no cost and nothing to regret, not a branch worth a `MoveList` entry), and
+/// purely informational -- `peeked_event` has no rule effect of its own
+/// (`events.rs::reveal_current_event`'s doc comment). `current_events` is
+/// only ever popped from the end (`events::reveal_current_event`), so its
+/// last element is the "top" card. Mirrors `engine/events.py::
+/// peek_top_event` exactly, including writing `CardId::NONE` for a
+/// non-Joan leader (Python writes `None` unconditionally on that branch too,
+/// not just leaving the field alone).
+fn peek_top_event(state: &mut GameState, idx: u8) {
+    let top = if leader_is(&state.players[idx as usize], "Joan of Arc") {
+        state.current_events.as_slice().last().copied().unwrap_or(CardId::NONE)
+    } else {
+        CardId::NONE
+    };
+    state.players[idx as usize].peeked_event = top;
+}
 
 /// §2.1: civil cards swept off the left of the row at the start of a turn, by
 /// live player count. Python's `SWEEP = {2: 3, 3: 2, 4: 1}`.
@@ -163,7 +183,11 @@ fn next_age(a: Age) -> Option<Age> {
 /// big enough to overflow would draw a DIFFERENT MT19937 stream there than
 /// any `i64` could here. That is a silent divergence, so it is asserted.
 /// (`economy::deck_rng` makes the same call for the same reason.)
-fn rng_for(state: &GameState) -> PyRandom {
+///
+/// `pub(crate)`: `events::events_rng` calls this directly rather than
+/// keeping its own copy of the formula -- see that function's doc comment
+/// for why the two used to disagree and why that was ever an accepted gap.
+pub(crate) fn rng_for(state: &GameState) -> PyRandom {
     let s = i64::try_from(state.seed)
         .ok()
         .and_then(|s| s.checked_mul(1_000_003))
@@ -234,6 +258,8 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         ocean_liners_used: false,
         caesar_double_politics_used: false,
         skip_next_politics: false,
+        caesar_second_politics: false,
+        peeked_event: CardId::NONE,
         ca_penalty_next_turn: 0,
         mil_discount: 0,
         mil_sci_discount: 0,
@@ -626,6 +652,8 @@ fn start_turn(state: &mut GameState, rng: &mut PyRandom) {
     {
         let p = &mut state.players[idx as usize];
         p.politics_done = false;
+        p.caesar_second_politics = false;
+        p.peeked_event = CardId::NONE;
         p.taken_this_turn = CardList::new();
         p.ca_spent_taking = 0;
     }
@@ -640,6 +668,7 @@ fn start_turn(state: &mut GameState, rng: &mut PyRandom) {
         // -- the same non-field `legal.rs::politics_moves` and
         // `economy::end_of_turn` both document.
         state.phase = Phase::Politics;
+        peek_top_event(state, idx);
         if state.pending.is_empty() {
             auto_skip_politics(state);
         } else {

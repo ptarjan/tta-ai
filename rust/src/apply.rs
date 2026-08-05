@@ -138,6 +138,42 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
     !p.leader.is_none() && p.leader.get().name == name
 }
 
+/// Close the politics phase after ONE political action -- or after two.
+/// Mirrors `engine/actions.py::_end_politics`, and is now the single place
+/// every political handler in this file ends its phase, exactly as every
+/// `_h_*` handler in `actions.py` routes through `_end_politics` rather than
+/// setting `politics_done`/`phase` itself.
+///
+/// Julius Caesar, *"once per game, you may take two political actions in
+/// your politics phase"*: while he is `idx`'s leader and the once-per-game is
+/// unspent, the FIRST call of a turn leaves the phase open instead of
+/// closing it (`caesar_second_politics = true`, an early return -- `phase`
+/// stays `Politics`, `politics_done` stays `false`, so `legal_moves` offers
+/// the politics list again to the SAME player); the SECOND call spends the
+/// once-per-game and closes as normal. Passing on the second action
+/// (`h_pol_pass`, same as any other handler routing through here) still
+/// closes it, matching Python: declining action two never re-arms it.
+///
+/// Also clears Joan of Arc's `peeked_event` -- "the knowledge is scoped to
+/// the politics phase the card scopes it to" (`engine/events.py::
+/// peek_top_event`'s doc comment) -- which does not fire on Caesar's early
+/// return either, matching Python's `_end_politics` clearing it only on the
+/// branch that actually closes the phase.
+fn end_politics(state: &mut GameState, idx: u8) {
+    let game_over = state.game_over;
+    let p = &mut state.players[idx as usize];
+    if p.caesar_second_politics {
+        p.caesar_second_politics = false;
+        p.caesar_double_politics_used = true;
+    } else if leader_is(p, "Julius Caesar") && !p.caesar_double_politics_used && !p.resigned && !game_over {
+        p.caesar_second_politics = true;
+        return;
+    }
+    p.peeked_event = CardId::NONE;
+    p.politics_done = true;
+    state.phase = crate::state::Phase::Actions;
+}
+
 // ==================================================================== apply
 
 /// Apply `mv` to `state`, in place. Ports `engine/actions.py::apply`, minus
@@ -178,6 +214,8 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::Churchill { choice } => h_churchill(state, idx, choice),
 
         Move::OfferPact { card, target, side } => h_offer_pact(state, idx, card, target, side),
+        Move::RemoveLeaderYellow => h_remove_leader_yellow(state, idx),
+        Move::ColumbusColonize { card } => h_columbus_colonize(state, idx, card),
 
         // Responses to an open decision. Unreachable: the `state.pending`
         // branch at the top of this function has already taken them. Getting
@@ -723,8 +761,7 @@ fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
     state.players[idx as usize].war_declared_by_me = id;
     state.players[idx as usize].war_target = target;
     state.players[target as usize].wars_declared_on_me[idx as usize] = id;
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    end_politics(state, idx);
 }
 
 /// §5.4: pay cost, discard, compute strength, cancel any doomed pact.
@@ -740,9 +777,11 @@ fn h_aggression(state: &mut GameState, idx: u8, card: CardId, target: u8) {
     // Python's `_h_aggression` marks the politics action spent and advances
     // the phase BEFORE handing the defense decision over -- the attacker's
     // political action is finished either way, and the defender answering
-    // must not look like the attacker still owing a move.
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    // must not look like the attacker still owing a move. (When Caesar's
+    // second action is still open, `end_politics` leaves `phase` at
+    // `Politics` instead -- matching Python, which calls `_end_politics`
+    // here unconditionally too and lets that same early return apply.)
+    end_politics(state, idx);
     let atk = combat::start_aggression(state, idx, card, target);
     crate::interact::start_defense(state, idx, target, card, atk);
 }
@@ -761,8 +800,7 @@ fn h_offer_pact(state: &mut GameState, idx: u8, card: CardId, target: u8, side: 
         PactSide::B => (target, idx),
         PactSide::A | PactSide::Unspecified => (idx, target),
     };
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    end_politics(state, idx);
     let mut options = crate::state::OptionList::new();
     options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Accept));
     options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Refuse));
@@ -915,43 +953,74 @@ pub(crate) fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, di
 }
 
 fn h_pol_pass(state: &mut GameState, idx: u8) {
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    end_politics(state, idx);
 }
 
 /// §5.2: play an event/territory card from the hand into `future_events`,
 /// bank its age as culture, and reveal-and-resolve the current event.
 /// Mirrors `engine/actions.py::_h_prepare_event`.
 ///
-/// Two things Python's version does that this one does NOT, matching every
-/// OTHER political handler in this file already (`h_offer_pact`/`h_war`/
-/// `h_churchill`/`h_pol_pass`/`h_cancel_pact` above all just set
-/// `politics_done`/`phase` directly too) -- pre-existing, consistent
-/// simplifications across this whole module, not new gaps this handler
-/// introduces:
-///   * Julius Caesar's once-per-game second political action
-///     (`actions.py::_end_politics`) -- the phase always ends after one
-///     action here, for every leader.
-///   * `state.seeded_by[name] = p.idx` -- bot-evaluator bookkeeping only
-///     (`bots/weighted.py`/`bots/counting.py`/`bots/neural_encode.py` are
-///     its only readers; nothing in `engine/`'s own rules reads it, and
-///     `journal.py`'s `del ...[ev]` on a past event is the same bot-only
-///     concern in reverse). This port has no bot layer and `state.rs` --
-///     another worker's file -- has no field for it; `Joan of Arc`'s
-///     `p.peeked_event` clear is the same story, one field short.
+/// One thing Python's version does that this one does NOT, matching every
+/// OTHER political handler in this file (all of which route through
+/// `end_politics` rather than reproducing Python's `_h_*` in full):
+/// `state.seeded_by[name] = p.idx` -- bot-evaluator bookkeeping only
+/// (`bots/weighted.py`/`bots/counting.py`/`bots/neural_encode.py` are its
+/// only readers; nothing in `engine/`'s own rules reads it, and
+/// `journal.py`'s `del ...[ev]` on a past event is the same bot-only concern
+/// in reverse). This port has no bot layer and `state.rs` -- another
+/// worker's file -- has no field for it.
+///
+/// Julius Caesar's once-per-game second political action USED to be a second
+/// gap here (this handler always closed the phase, for every leader) --
+/// closed 2026-08-05 by routing through [`end_politics`], same as every
+/// other political handler.
 fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
     state.players[idx as usize].hand_military.remove_first(card);
     state.players[idx as usize].culture += card.level() as u16;
     state.future_events.push(card);
     events::reveal_current_event(state);
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    end_politics(state, idx);
 }
 
 fn h_cancel_pact(state: &mut GameState, idx: u8, owner: u8) {
     state.players[owner as usize].pacts.retain(|pact| !pact.is_party(idx));
-    state.players[idx as usize].politics_done = true;
-    state.phase = crate::state::Phase::Actions;
+    end_politics(state, idx);
+}
+
+/// Alexander the Great, as a political action: remove him from the game for
+/// 1 yellow token from the box. Mirrors `engine/actions.py::
+/// _h_remove_leader_yellow` + `remove_leader_from_game`.
+fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
+    let leader = state.players[idx as usize].leader;
+    if !leader.is_none() {
+        on_leave_play(&mut state.players[idx as usize], leader);
+        economy::discard_civil(state, leader);
+        state.players[idx as usize].leader = CardId::NONE;
+    }
+    grant_yellow(&mut state.players[idx as usize], 1);
+    end_politics(state, idx);
+}
+
+/// Christopher Columbus, as a political action: remove him from the game to
+/// colonize `card` (a territory from hand) with no military sacrifice.
+/// Mirrors `engine/actions.py::_h_columbus_colonize` +
+/// `remove_leader_from_game`; `interact::gain_colony` is the exact function
+/// the normal auction-won colonization path (`interact::apply_pending`'s
+/// `SendDone` arm) already calls for §11.5's permanent-then-immediate order,
+/// which is exactly what Columbus's ability skips STRAIGHT to (no auction, no
+/// bid, no force -- `engine/interact.py::colonize_without_sacrifice`'s own
+/// doc comment on why it is a separate entry point rather than a `bid=0`
+/// call into the auction).
+fn h_columbus_colonize(state: &mut GameState, idx: u8, card: CardId) {
+    let leader = state.players[idx as usize].leader;
+    if !leader.is_none() {
+        on_leave_play(&mut state.players[idx as usize], leader);
+        economy::discard_civil(state, leader);
+        state.players[idx as usize].leader = CardId::NONE;
+    }
+    state.players[idx as usize].hand_military.remove_first(card);
+    crate::interact::gain_colony(state, idx, card);
+    end_politics(state, idx);
 }
 
 /// Ports `engine/actions.py::_h_resign` up to (not including) `game.after_
@@ -1004,6 +1073,8 @@ fn h_resign(state: &mut GameState, idx: u8) {
         state.players[idx as usize].war_target = 0;
     }
 
+    state.players[idx as usize].caesar_second_politics = false;
+    state.players[idx as usize].peeked_event = CardId::NONE;
     state.players[idx as usize].politics_done = true;
 
     // §5.11: a resigning player's turn ends at once, and if that leaves one
@@ -1079,6 +1150,8 @@ mod tests {
             ocean_liners_used: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,

@@ -67,6 +67,16 @@ pub enum Move {
     CancelPact { owner: PlayerIdx },
     /// Politics phase: put an event into the future-events stack.
     PrepareEvent { card: CardId },
+    /// Alexander the Great, as a political action: remove him from the game
+    /// for 1 yellow token from the box (`engine/actions.py`
+    /// `("remove_leader_yellow",)`; his ability is always available while he
+    /// is in play, so this move carries no argument).
+    RemoveLeaderYellow,
+    /// Christopher Columbus, as a political action: remove him from the game
+    /// to colonize `card` (a territory from hand) with no military
+    /// sacrifice (`engine/actions.py` `("columbus_colonize", name)`). One
+    /// move per territory, exactly as `PrepareEvent` is one move per card.
+    ColumbusColonize { card: CardId },
 
     // ---- responses to a decision somebody else opened (engine::interact) ----
     /// Commit `n` military strength to a colonization auction.
@@ -119,13 +129,14 @@ impl Move {
             | War { card, .. }
             | OfferPact { card, .. }
             | PrepareEvent { card }
+            | ColumbusColonize { card }
             | Defend { card }
             | SendUnit { card }
             | SendBonus { card } => Some(card),
             Upgrade { from: _, to } => Some(to),
             Take { .. } | WonderStep { .. } | Pop | PopFree | CancelPact { .. } | Bid { .. }
             | BidPass | DefendDone | SendDone | Choose { .. } | Churchill { .. } | EndTurn
-            | PolPass | Resign => None,
+            | PolPass | Resign | RemoveLeaderYellow => None,
         }
     }
 

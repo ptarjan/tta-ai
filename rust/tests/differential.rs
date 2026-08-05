@@ -178,6 +178,8 @@ fn tag_of(m: &tta::moves::Move) -> &'static str {
         EndTurn => "end_turn",
         PolPass => "pol_pass",
         Resign => "resign",
+        RemoveLeaderYellow => "remove_leader_yellow",
+        ColumbusColonize { .. } => "columbus_colonize",
     }
 }
 
@@ -652,29 +654,39 @@ fn apply_matches_python_state_stream() {
 }
 
 /// Acceptance case for the `buildDiscount` gap that `BUILD_DISCOUNT_GAP_PLIES`
-/// used to excuse: `4p_seed123.jsonl` ply 414, decider 0, `Bread and
-/// Circuses` (arena, Age I, printed build cost 3). The live Python engine
-/// (`engine.effects.build_cost` on the same dumped state, checked directly)
-/// says 2, because Masonry's Age I `buildDiscount` of 1 is in play. Rust
-/// charged 3 until `costs.rs` read the pool.
+/// used to excuse (`costs.rs` charged printed cost, ignoring the discount
+/// pool entirely, until it read it): `Bread and Circuses` (arena, Age I,
+/// printed build cost 3) at a ply where Masonry's Age I `buildDiscount` of 1
+/// is in play.
+///
+/// Re-pinned 2026-08-05 against `4p_seed1.jsonl` ply 520 player 2 -- the
+/// fixtures were regenerated (RNG-derivation fix, `game.rs`'s KNOWN GAP 2),
+/// which replays every game differently from ply 1 on, so `4p_seed123.jsonl`
+/// ply 414 decider 0 (the previous pin) no longer has Masonry in play at all.
+/// The live Python engine (`engine.effects.build_cost` on the same dumped
+/// state, checked directly) says 1, not the naive `3 - buildDiscount = 2`:
+/// this player's `one_time_discount` stacks an extra resource off arenas on
+/// top of Masonry's, which is real game state this test does not need to
+/// name to pin -- it just needs Rust to agree with Python on the SAME dumped
+/// state, which is the whole point of the acceptance case.
 #[test]
-fn bread_and_circuses_costs_two_at_the_ply_the_allowlist_named() {
-    let path = fixtures_dir().join("4p_seed123.jsonl");
+fn bread_and_circuses_is_discounted_by_the_build_discount_pool() {
+    let path = fixtures_dir().join("4p_seed1.jsonl");
     let records = fixtures::read_fixture_file(&path).unwrap_or_else(|e| panic!("{e}"));
     let json = records
         .iter()
         .find_map(|r| match r {
-            Record::Ply(p) if p.ply == 414 => p.state.as_ref(),
+            Record::Ply(p) if p.ply == 520 => p.state.as_ref(),
             _ => None,
         })
-        .expect("ply 414 carries a state snapshot");
+        .expect("ply 520 carries a state snapshot");
     let state = GameState::from_json(json).unwrap_or_else(|e| panic!("{e}"));
     let card = CardId::by_name("Bread and Circuses").unwrap();
-    let p = &state.players[0];
+    let p = &state.players[2];
     assert_eq!(
         tta::effects::state_stats(&state, p).build_discount[1],
         1,
         "Masonry's Age I entry"
     );
-    assert_eq!(tta::costs::build_cost_for(&state, p, card), Some(2));
+    assert_eq!(tta::costs::build_cost_for(&state, p, card), Some(1));
 }

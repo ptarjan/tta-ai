@@ -283,6 +283,28 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
             _ => {}
         }
     }
+    // The two leaders whose ability IS a political action (§5.0, 2015 text),
+    // both name-dispatched (mirrors `engine/actions.py::
+    // _leader_politics_moves`'s own doc comment on why: both spend the
+    // leader himself, and neither is driven off `Card::special`). Appended
+    // last, exactly where Python's `_politics_moves` extends with them.
+    if leader_is(p, "Alexander the Great") {
+        // "As a political action, you may remove Alexander from the game to
+        // take 1 yellow token from the box into your yellow bank." Always
+        // available while he is in play -- nothing can make it illegal.
+        moves.push(Move::RemoveLeaderYellow);
+    } else if leader_is(p, "Christopher Columbus") {
+        // "As a political action, you may remove Columbus from the game to
+        // colonize a territory card from your hand without sacrificing any
+        // military units." One move PER TERRITORY (same `buf`/`n` the loop
+        // above already computed -- `p.hand_military`, sorted and
+        // deduplicated by name).
+        for &id in &buf[..n] {
+            if id.kind() == CardType::Territory {
+                moves.push(Move::ColumbusColonize { card: id });
+            }
+        }
+    }
     moves
 }
 
@@ -782,6 +804,8 @@ mod tests {
             ocean_liners_used: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
