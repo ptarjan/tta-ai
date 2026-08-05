@@ -15,6 +15,7 @@
 
 pub mod card_table;
 pub mod cards;
+pub mod costs;
 pub mod economy;
 pub mod effects;
 pub mod fixtures;

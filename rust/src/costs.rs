@@ -1,0 +1,1060 @@
+//! Costs and take-gating: what a civil action costs, what a card costs to
+//! build/upgrade/develop, and which row slots a player may reach into.
+//!
+//! Ports `engine/actions.py` lines 43-267 (`row_cost` through `is_unit`) --
+//! the cost-and-gate layer every move-generation and move-application
+//! function sits on. Two other workers consume this module: one for
+//! `legal_moves`/`_action_moves`/`_politics_moves`, one for `apply`/the
+//! `_h_*` handlers. Neither of those is ported here.
+//!
+//! ## KNOWN GAPS (type-layer, not oversights here -- see the port report)
+//!
+//! `engine/actions.py` leans on a few Python fields/values that the current
+//! Rust type layer (`cards.rs`, `card_table.rs`, `state.rs`, `effects.rs`)
+//! does not carry yet. This module is scoped to NOT touch any of those files
+//! (concurrent work is in flight on some of them), so each gap below is
+//! worked around explicitly and flagged rather than silently approximated:
+//!
+//! - **`Card` has no `stages` field.** A wonder's per-stage resource cost
+//!   (`data/cards_wonders_leaders.json` prints e.g. Pyramids
+//!   `"stages":[3,2,1]`) is not captured by `tools/gen_cards.py` at all.
+//!   [`wonder_stage_cost`] cannot be computed and panics loudly rather than
+//!   fabricating a number -- see its doc comment.
+//! - **`PlayerState` has no `taken_leader_ages` field.** Python reads
+//!   `p.taken_leader_ages` directly off the player for the "one leader per
+//!   age" rule; here it is a required parameter to [`take_gate`]/[`can_take`]
+//!   instead, so a caller cannot silently get "nothing taken" and generate an
+//!   illegal second-same-age leader take. Retire the parameter once
+//!   `state.rs` grows the field.
+//! - **`Card.science_cost` only ever captures `techCost`.** Every government
+//!   prints `techCost: null` and its real develop cost in `peacefulCost`
+//!   (`data/cards_civil.json`), which the generator never reads. [`tech_cost`]
+//!   therefore returns `None` for every government -- correct for Despotism
+//!   only (whose `peacefulCost` really is null), wrong for the other seven.
+//! - **`effects::Stats` has no `build_discount` / `tech_discount` fields**
+//!   (documented in `effects.rs`'s own KNOWN GAPS: "not needed by anything in
+//!   this port's scope (`build_cost` is not ported)" -- written before this
+//!   module existed). [`build_cost_for`]/[`tech_cost`] therefore cannot apply
+//!   the `buildDiscount`/`technologyScienceDiscount` pools; treated as zero.
+//! - **`PlayerState` has no `one_time_discount` field** (Python's
+//!   event-granted one-shot build/develop discount, `engine/events.py:307`).
+//!   Events are not ported, so this is always empty in practice today;
+//!   treated as zero here too, consistently.
+//!
+//! None of these affect the vast majority of build/develop/take costs in a
+//! pre-event, non-wonder-stage, non-peaceful-revolution game state, which is
+//! what this module's tests cover. All five are reported to the coordinator.
+//!
+//! ## A note on leader identity
+//!
+//! Four leaders (Hammurabi, Michelangelo, J. S. Bach, William Shakespeare)
+//! are checked by NAME in Python (`p.leader == "Hammurabi"`), because leader
+//! IDENTITY -- not an effect key -- is the rule: nothing in `data/*.json`
+//! tags "the Hammurabi CA/MA conversion" with a machine-readable key the way
+//! `Special` tags recurring one-offs. [`leader_is`] mirrors that with a
+//! `&'static str` compare against `Card.name`, not a `HashMap<String, _>` --
+//! DESIGN.md rule 1 is about lookup keys, and no name here is ever used as
+//! one, only compared against a literal.
+
+use crate::cards::{Card, CardId, CardType, Special};
+use crate::effects;
+use crate::state::{GameState, PlayerState, ROW_SIZE};
+
+// ------------------------------------------------------------- row cost
+
+/// Civil actions to take the card in row slot `idx` (0-based) (§2.3). The
+/// printed table is 1,1,1,1,1 / 2,2,2,2 / 3,3,3,3 across the 13 slots.
+pub fn row_cost(idx: usize) -> i32 {
+    if idx < 5 {
+        1
+    } else if idx < 9 {
+        2
+    } else {
+        3
+    }
+}
+
+// ------------------------------------------------------------- helpers
+
+/// Whether `p`'s active leader is the named leader. See this module's top
+/// doc "A note on leader identity" for why this is a name compare rather
+/// than a `Special` dispatch.
+#[inline]
+fn leader_is(p: &PlayerState, name: &str) -> bool {
+    !p.leader.is_none() && p.leader.get().name == name
+}
+
+/// Total civil actions per turn (before Hammurabi's MA-as-CA conversion).
+pub fn ca_total(state: &GameState, p: &PlayerState) -> i32 {
+    effects::state_stats(state, p).civil_actions
+}
+
+/// Cards a civil hand may hold (§2.5): base civil actions plus any
+/// `civilHandLimit` bonus. Two separate `Stats` fields added together here,
+/// exactly as `effects::compute` keeps them (they are never combined inside
+/// `compute` itself).
+pub fn civil_hand_limit(state: &GameState, p: &PlayerState) -> i32 {
+    let s = effects::state_stats(state, p);
+    s.civil_actions + s.civil_hand_limit
+}
+
+/// Civil actions available right now, counting Hammurabi's once-per-turn
+/// MA-as-CA conversion. Unlike Python's `spare_ca`, `state` is dropped from
+/// the signature: the Python body never reads it either (it only reads raw
+/// per-turn pools off `p`, not `effects.state_stats`).
+pub fn spare_ca(p: &PlayerState) -> i32 {
+    let extra = if leader_is(p, "Hammurabi") && !p.hammurabi_used && p.military_actions > 0 {
+        1
+    } else {
+        0
+    };
+    p.civil_actions as i32 + extra
+}
+
+/// Pay `n` civil actions, falling back to Hammurabi's MA-as-CA conversion
+/// once per turn if the civil-action pool alone is not enough. Mutates `p`.
+/// `state` is dropped for the same reason as [`spare_ca`].
+///
+/// Panics (debug builds only, matching Python's bare `assert`, which is
+/// itself only checked under normal non`-O` interpretation) if `n` civil
+/// actions were not actually available -- this is an internal invariant a
+/// caller must have checked via [`can_take`]/[`spare_ca`] first, not a
+/// legality gate of its own.
+pub fn pay_ca(p: &mut PlayerState, n: i32) {
+    let used = (p.civil_actions as i32).min(n);
+    p.civil_actions -= used as i8;
+    let mut remaining = n - used;
+    if remaining > 0
+        && leader_is(p, "Hammurabi")
+        && !p.hammurabi_used
+        && p.military_actions > 0
+    {
+        p.military_actions -= 1;
+        p.hammurabi_used = true;
+        remaining -= 1;
+    }
+    debug_assert_eq!(remaining, 0, "paid more civil actions than available");
+}
+
+/// Civil actions to take the card currently sitting in row slot `idx`
+/// (§2.3), including the wonder take-surcharge and Hammurabi's leader
+/// discount. Clamped at zero (`max(0, ...)` applied ONCE at the end, not per
+/// adjustment -- matching Python; see [`can_take_gated`] for why the clamp
+/// never actually binds on the leader branch with real card data).
+pub fn take_cost(state: &GameState, p: &PlayerState, idx: usize) -> i32 {
+    debug_assert!(idx < ROW_SIZE, "row slot {idx} out of range");
+    let id = state.card_row[idx];
+    debug_assert!(!id.is_none(), "take_cost: row slot {idx} is empty");
+    let card = id.get();
+    let mut cost = row_cost(idx);
+    if card.kind == CardType::Wonder {
+        if !leader_is(p, "Michelangelo") {
+            cost += p.completed_wonders.len() as i32 + p.destroyed_wonders as i32;
+        }
+    } else if card.kind == CardType::Leader && leader_is(p, "Hammurabi") {
+        cost -= 1;
+    }
+    cost.max(0)
+}
+
+/// Blue special-technology category (max one per icon in play, §7.6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpecialIcon {
+    Construction,
+    Exploration,
+    Warfare,
+    Law,
+    Other,
+}
+
+/// Which icon a card's printed effects carry. Mirrors Python's membership
+/// test ("is this KEY present in `effects`", not "is its value truthy").
+///
+/// `buildDiscount`'s value is a per-age dict in the source data, so
+/// `gen_cards.py` records its PRESENCE as `Special::BuildDiscount` (a bare
+/// unit variant -- see this module's top KNOWN GAPS) rather than a
+/// `CardEffects` field; checking `special` for it is therefore the accurate
+/// translation of Python's `"buildDiscount" in eff`, not an approximation.
+/// `colonizeBonus`/`militaryActions`/`civilActions` ARE flat `CardEffects`
+/// fields, so "key present" is approximated as "field nonzero" -- verified
+/// against `data/*.json` (2026-08-05): every special-tech that prints one of
+/// these three keys prints a nonzero value, so the two conditions coincide
+/// for every card that exists today.
+pub fn special_icon(card: &Card) -> SpecialIcon {
+    if card.special.contains(&Special::BuildDiscount) {
+        return SpecialIcon::Construction;
+    }
+    if card.effects.colonize_bonus != 0 {
+        return SpecialIcon::Exploration;
+    }
+    if card.effects.military_actions != 0 {
+        return SpecialIcon::Warfare;
+    }
+    if card.effects.civil_actions != 0 {
+        return SpecialIcon::Law;
+    }
+    SpecialIcon::Other
+}
+
+/// Total workers on technologies of the given type. Mirrors
+/// `engine/actions.py::urban_count` (the name is Python's; the function is
+/// not restricted to urban types -- it is a general per-type worker count).
+pub fn urban_count(p: &PlayerState, kind: CardType) -> i32 {
+    p.techs
+        .iter()
+        .filter(|(id, _)| id.kind() == kind)
+        .map(|(_, slot)| slot.workers as i32)
+        .sum()
+}
+
+// ------------------------------------------------------------- take gate
+
+/// Loop invariants of [`can_take`], computed once per move-generation pass
+/// (mirrors `engine/actions.py::_take_gate`): everything in §2.5 that does
+/// not depend on the row slot being tested.
+///
+/// `taken_leader_ages` is not read off `p` the way Python reads
+/// `p.taken_leader_ages` -- see this module's top KNOWN GAPS. It is a
+/// bitmask, bit `card.age as u8` set once a leader of that age has ever been
+/// taken (§ one leader per age); `Age` has 5 values (A..IV) so a `u8` has
+/// ample headroom.
+pub struct TakeGate {
+    pub have: i32,
+    pub hand_full: bool,
+    pub surcharge: i32,
+    pub leader_discount: i32,
+    pub taken_leader_ages: u8,
+}
+
+/// Build a [`TakeGate`]. `budget`, if given, overrides `spare_ca` the same
+/// way Python's `_take_gate(state, p, budget=None)` does.
+pub fn take_gate(
+    state: &GameState,
+    p: &PlayerState,
+    budget: Option<i32>,
+    taken_leader_ages: u8,
+) -> TakeGate {
+    let have = budget.unwrap_or_else(|| spare_ca(p));
+    let surcharge = if leader_is(p, "Michelangelo") {
+        0
+    } else {
+        p.completed_wonders.len() as i32 + p.destroyed_wonders as i32
+    };
+    let leader_discount = if leader_is(p, "Hammurabi") { 1 } else { 0 };
+    // `hand_size_civil`, not `hand_civil.len()`: §2.5 counts CARDS, and the
+    // app harness can hold a rival's hand as a bare count (`hidden_civil`)
+    // without names. Identical to `hand_civil.len()` in self-play.
+    let hand_full = p.hand_size_civil() as i32 >= civil_hand_limit(state, p);
+    TakeGate { have, hand_full, surcharge, leader_discount, taken_leader_ages }
+}
+
+/// §2.5 taking limits for one row slot, given a precomputed [`TakeGate`].
+/// `name` overrides reading `state.card_row[idx]` (used once move-gen wants
+/// to probe a card that is not actually sitting in the row).
+///
+/// Mirrors `engine/actions.py::_can_take_gated`.
+pub fn can_take_gated(
+    state: &GameState,
+    p: &PlayerState,
+    idx: usize,
+    gate: &TakeGate,
+    name: Option<CardId>,
+) -> bool {
+    let id = match name {
+        Some(id) => id,
+        None => {
+            let id = state.card_row[idx];
+            if id.is_none() {
+                return false;
+            }
+            id
+        }
+    };
+    let card = id.get();
+    // Cost is floored at 0 by `max(0, ...)` in Python's `take_cost`, but
+    // `_can_take_gated` computes its own local `cost` and never calls
+    // `take_cost` or clamps it. That clamp never binds here with real data:
+    // `row_cost` is >= 1 for every slot and `leader_discount` is at most 1,
+    // so the only place `cost` can be reduced (the leader branch below)
+    // bottoms out at exactly 0, never negative.
+    let mut cost = row_cost(idx);
+    if card.kind == CardType::Wonder {
+        cost += gate.surcharge;
+        if cost > gate.have {
+            return false;
+        }
+        return p.wonder.is_none();
+    }
+    if card.kind == CardType::Leader {
+        cost -= gate.leader_discount;
+    }
+    if cost > gate.have {
+        return false;
+    }
+    // Hand limit (§2.5) applies to everything that goes to hand -- wonders
+    // (handled above, always return before here) are the one exception.
+    if gate.hand_full {
+        return false;
+    }
+    if card.kind == CardType::Leader {
+        return gate.taken_leader_ages & (1 << (card.age as u8)) == 0;
+    }
+    // §2.5/§7.1: the one-per-name rule is about TECHNOLOGIES -- civil cards
+    // with a science cost. Yellow ACTION cards have none, are not
+    // technologies, and several exist in multiple copies in the same deck
+    // (all sharing one `CardId`, since identity is by name), so holding one
+    // must not block taking another.
+    if card.kind != CardType::Action
+        && (p.hand_civil.contains(id) || p.techs.has(id) || id == p.government)
+    {
+        return false;
+    }
+    true
+}
+
+/// §2.5 taking limits. `budget` overrides the civil-action check.
+///
+/// Mirrors `engine/actions.py::can_take`; see [`take_gate`] for
+/// `taken_leader_ages`.
+pub fn can_take(
+    state: &GameState,
+    p: &PlayerState,
+    idx: usize,
+    budget: Option<i32>,
+    taken_leader_ages: u8,
+) -> bool {
+    can_take_gated(state, p, idx, &take_gate(state, p, budget, taken_leader_ages), None)
+}
+
+// ------------------------------------------------------------- build/tech costs
+
+/// Resource cost to build a worker onto technology `id`, or `None` if `id`
+/// is not a buildable technology at all (mirrors `engine/effects.py::
+/// build_cost`'s `cost is None` branch: `Card.resource_cost` is 0 both when
+/// nothing is printed and -- unreachably for every card in today's data,
+/// see `lib.rs`'s own `every_card_has_a_known_type_and_age` test -- for a
+/// genuinely free build, so "0 means unbuildable" is exact here).
+///
+/// Ported into `costs.rs` rather than left in `effects.rs`/called through
+/// it: `build_cost` is explicitly out of `effects.rs`'s scope (see that
+/// module's KNOWN GAPS), and this module is not allowed to add it there.
+pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    // `state` is reserved: the per-age `buildDiscount` pool and event
+    // one-time discounts both need it and neither is representable yet --
+    // see this module's top KNOWN GAPS.
+    let _ = state;
+    let card = id.get();
+    if card.resource_cost == 0 {
+        return None;
+    }
+    let mut cost = card.resource_cost as i32;
+    if card.kind.is_urban() && leader_is(p, "William Shakespeare") {
+        let has_library = p.techs.iter().any(|(t, _)| t.kind() == CardType::Library);
+        let has_theater = p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater);
+        if card.kind == CardType::Theater && has_library {
+            cost -= 1;
+        } else if card.kind == CardType::Library && has_theater {
+            cost -= 1;
+        }
+    }
+    Some(cost.max(0))
+}
+
+/// Science cost to develop technology `id`, or `None` if `id` has no
+/// develop cost at all (mirrors `engine/effects.py::tech_cost`).
+///
+/// See this module's top KNOWN GAPS: governments always return `None` here
+/// (their real cost is `peacefulCost`, which the type layer does not carry),
+/// and the `technologyScienceDiscount` pool / event one-time discounts are
+/// not applied.
+pub fn tech_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    let _ = state; // reserved, see build_cost_for
+    let card = id.get();
+    if card.kind == CardType::Government {
+        return None;
+    }
+    if card.science_cost == 0 {
+        return None;
+    }
+    let mut cost = card.science_cost as i32;
+    if card.kind == CardType::Theater {
+        if leader_is(p, "J. S. Bach") {
+            cost -= 2;
+        }
+        if leader_is(p, "William Shakespeare")
+            && p.techs.iter().any(|(t, _)| t.kind() == CardType::Library)
+        {
+            cost -= 1;
+        }
+    } else if card.kind == CardType::Library
+        && leader_is(p, "William Shakespeare")
+        && p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater)
+    {
+        cost -= 1;
+    }
+    Some(cost.max(0))
+}
+
+/// `hi`'s build cost minus `lo`'s (§3.7 upgrading a production/urban card
+/// in place), floored at zero. Either leg missing a build cost (e.g. `lo` is
+/// the Age-A starting card with no printed `buildCost`) counts as zero,
+/// matching Python's `build_cost_for(...) or 0`.
+pub fn upgrade_cost(state: &GameState, p: &PlayerState, lo: CardId, hi: CardId) -> i32 {
+    let a = build_cost_for(state, p, lo).unwrap_or(0);
+    let b = build_cost_for(state, p, hi).unwrap_or(0);
+    (b - a).max(0)
+}
+
+/// Resource cost to build the next `k` stages of the wonder currently under
+/// construction (§ wonders).
+///
+/// **NOT PORTED.** `engine/actions.py::wonder_stage_cost` reads
+/// `db.get(p.wonder.name)["stages"]` -- the per-stage resource-cost list
+/// printed on every wonder (`data/cards_wonders_leaders.json`, e.g. Pyramids
+/// `"stages":[3,2,1]`). `cards::Card` has no `stages` field and
+/// `tools/gen_cards.py` never reads the `stages` key at all: confirmed by
+/// inspection 2026-08-05, not a port-time oversight. Fixing this needs a
+/// `cards.rs`/`card_table.rs`/`gen_cards.py` change (a `stages: &'static
+/// [u8]` field, sized like `count`), which is out of this module's scope --
+/// those files are off-limits here and other work may be in flight on them.
+/// Reported to the coordinator. This panics rather than fabricating a
+/// number: a caller silently getting `0` or `resource_cost` here would
+/// generate legal-looking wonder-build moves at the wrong price, which is
+/// exactly the failure mode DESIGN.md's "compile error, not silent" rule
+/// exists to prevent -- a runtime panic is the closest this can get to that
+/// without editing an off-limits file.
+pub fn wonder_stage_cost(_state: &GameState, _p: &PlayerState, _k: u8) -> i32 {
+    unimplemented!(
+        "wonder_stage_cost needs Card::stages, not yet in the type layer -- see costs.rs's doc comment"
+    )
+}
+
+/// Whether `id` is a military unit technology (infantry/cavalry/artillery/
+/// air). Mirrors `engine/actions.py::is_unit`; reuses `CardType::is_unit`
+/// rather than re-deriving `C.UNIT_TYPES`'s membership by hand.
+pub fn is_unit(id: CardId) -> bool {
+    id.kind().is_unit()
+}
+
+/// [`build_cost_for`] after the per-turn military-build discount pool
+/// (§3.11): `p.mil_discount`, spent by [`spend_mil_discount`] once the build
+/// actually happens.
+pub fn build_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    let cost = build_cost_for(state, p, id)?;
+    if is_unit(id) {
+        Some((cost - p.mil_discount as i32).max(0))
+    } else {
+        Some(cost)
+    }
+}
+
+/// [`upgrade_cost`] after `p.mil_discount`, gated on `lo`'s type (matching
+/// Python exactly -- the discount pool is checked against the FROM card,
+/// not the TO card, since an upgrade is priced as "how much MORE resource
+/// to reach `hi`", and that marginal cost is what the unit-build discount
+/// pool exists to reduce).
+pub fn upgrade_cost_net(state: &GameState, p: &PlayerState, lo: CardId, hi: CardId) -> i32 {
+    let cost = upgrade_cost(state, p, lo, hi);
+    if is_unit(lo) {
+        (cost - p.mil_discount as i32).max(0)
+    } else {
+        cost
+    }
+}
+
+/// [`tech_cost`] after the per-turn military-tech science discount pool
+/// (Winston Churchill's military option: 3 science usable only to develop
+/// military unit technologies, `docs/SCORE_AUDIT.md` 3.6).
+pub fn tech_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    let cost = tech_cost(state, p, id)?;
+    if is_unit(id) {
+        Some((cost - p.mil_sci_discount as i32).max(0))
+    } else {
+        Some(cost)
+    }
+}
+
+/// Consume as much of the military-tech science discount pool as this
+/// development uses; returns the science actually still owed. Mutates `p`
+/// -- unlike every cost function above, this is a SPEND, not a query, which
+/// is why it takes `&mut PlayerState` rather than `&PlayerState`.
+pub fn spend_mil_sci_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
+    if !is_unit(id) || p.mil_sci_discount <= 0 {
+        return raw;
+    }
+    let used = (p.mil_sci_discount as i32).min(raw);
+    p.mil_sci_discount -= used as i16;
+    raw - used
+}
+
+/// Consume as much of the military-build resource discount pool as this
+/// build/upgrade uses; returns the resources actually still owed. Mutates
+/// `p` -- see [`spend_mil_sci_discount`].
+pub fn spend_mil_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
+    if !is_unit(id) || p.mil_discount <= 0 {
+        return raw;
+    }
+    let used = (p.mil_discount as i32).min(raw);
+    p.mil_discount -= used as i16;
+    raw - used
+}
+
+// ============================================================== tests ====
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cards::Age;
+    use crate::state::{CardList, GameState, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS};
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    /// A player with nothing but a government. Mirrors `effects.rs`'s test
+    /// helper of the same shape (duplicated rather than shared: that one is
+    /// private to `effects.rs`'s own `#[cfg(test)]` module).
+    fn blank_player(idx: u8, government: CardId) -> PlayerState {
+        PlayerState {
+            idx,
+            techs: Tableau::new(),
+            government,
+            leader: CardId::NONE,
+            used_leader_ability: false,
+            wonder: CardId::NONE,
+            wonder_steps: 0,
+            completed_wonders: CardList::new(),
+            destroyed_wonders: 0,
+            homer_wonder: CardId::NONE,
+            tactic: CardId::NONE,
+            tactic_exclusive: false,
+            colonies: CardList::new(),
+            flipped_wonders: CardList::new(),
+            pacts: crate::state::PactList::new(),
+            hand_civil: CardList::new(),
+            hand_military: CardList::new(),
+            hidden_civil: 0,
+            hidden_military: 0,
+            yellow_bank: 0,
+            yellow_granted: 0,
+            workers_free: 0,
+            blue_total: 0,
+            food: 0,
+            resources: 0,
+            science: 0,
+            culture: 0,
+            culture_rate_extra: 0,
+            science_rate_extra: 0,
+            strength_extra: 0,
+            happy_extra: 0,
+            civil_actions: 0,
+            military_actions: 0,
+            politics_done: false,
+            tactic_action_used: false,
+            taken_this_turn: CardList::new(),
+            ca_spent_taking: 0,
+            hammurabi_used: false,
+            churchill_used: false,
+            bach_upgrade_used: false,
+            ocean_liners_used: false,
+            caesar_double_politics_used: false,
+            skip_next_politics: false,
+            ca_penalty_next_turn: 0,
+            mil_discount: 0,
+            mil_sci_discount: 0,
+            resigned: false,
+        }
+    }
+
+    fn blank_state(num_players: u8, players: [PlayerState; MAX_PLAYERS]) -> GameState {
+        GameState {
+            num_players,
+            seed: 0,
+            players,
+            current: 0,
+            turn: 1,
+            round: 1,
+            start_player: 0,
+            age_civil: Age::A,
+            age_military: Age::A,
+            civil_deck: CardList::new(),
+            military_deck: CardList::new(),
+            card_row: [CardId::NONE; ROW_SIZE],
+            future_events: CardList::new(),
+            current_events: CardList::new(),
+            past_events: CardList::new(),
+            current_events_age: Age::A,
+            scoring_events: CardList::new(),
+            available_tactics: CardList::new(),
+            civil_discard: [
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+            ],
+            civil_removed: [
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+            ],
+            discarded_military: [
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+            ],
+            last_round: false,
+            final_round_end: None,
+            game_over: false,
+            phase: Phase::Actions,
+            forced_winner: None,
+        }
+    }
+
+    fn one_player_state(p: PlayerState) -> GameState {
+        let filler = || blank_player(0, card("Despotism"));
+        let mut players = [filler(), filler(), filler(), filler()];
+        players[0] = p;
+        blank_state(4, players)
+    }
+
+    // ------------------------------------------------------------ row_cost
+
+    /// §2.3's printed board table: assert the actual values, not the
+    /// formula that happens to produce them.
+    #[test]
+    fn row_cost_matches_the_printed_board() {
+        let expected = [1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+        for (idx, &want) in expected.iter().enumerate() {
+            assert_eq!(row_cost(idx), want, "slot {idx}");
+        }
+    }
+
+    // ---------------------------------------------------------- ca_total
+
+    #[test]
+    fn ca_total_reads_government_civil_actions() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        assert_eq!(ca_total(&state, &state.players[0]), 4);
+    }
+
+    #[test]
+    fn civil_hand_limit_adds_civil_actions_and_the_bonus() {
+        let mut p = blank_player(0, card("Despotism"));
+        // Library of Alexandria: civilHandLimit +1, militaryHandLimit +1.
+        p.completed_wonders.push(card("Library of Alexandria"));
+        let state = one_player_state(p);
+        assert_eq!(civil_hand_limit(&state, &state.players[0]), 4 + 1);
+    }
+
+    // ------------------------------------------------------------ spare_ca
+
+    #[test]
+    fn spare_ca_is_just_the_pool_without_hammurabi() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 3;
+        p.military_actions = 2;
+        assert_eq!(spare_ca(&p), 3);
+    }
+
+    #[test]
+    fn spare_ca_adds_one_for_unused_hammurabi_conversion() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.civil_actions = 0;
+        p.military_actions = 1;
+        assert_eq!(spare_ca(&p), 1, "0 CA + Hammurabi's 1 MA-as-CA");
+    }
+
+    #[test]
+    fn spare_ca_ignores_hammurabi_once_used_or_out_of_ma() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.civil_actions = 0;
+        p.military_actions = 1;
+        p.hammurabi_used = true;
+        assert_eq!(spare_ca(&p), 0, "already used this turn");
+        p.hammurabi_used = false;
+        p.military_actions = 0;
+        assert_eq!(spare_ca(&p), 0, "no military action left to convert");
+    }
+
+    // -------------------------------------------------------------- pay_ca
+
+    #[test]
+    fn pay_ca_spends_the_civil_pool_first() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 3;
+        pay_ca(&mut p, 2);
+        assert_eq!(p.civil_actions, 1);
+        assert!(!p.hammurabi_used);
+    }
+
+    #[test]
+    fn pay_ca_falls_back_to_hammurabi_conversion() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.civil_actions = 1;
+        p.military_actions = 2;
+        pay_ca(&mut p, 2);
+        assert_eq!(p.civil_actions, 0);
+        assert_eq!(p.military_actions, 1);
+        assert!(p.hammurabi_used);
+    }
+
+    #[test]
+    #[should_panic(expected = "paid more civil actions than available")]
+    fn pay_ca_panics_if_underfunded() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        pay_ca(&mut p, 2);
+    }
+
+    // ----------------------------------------------------------- take_cost
+
+    #[test]
+    fn take_cost_is_bare_row_cost_with_no_leader_or_wonder() {
+        let p = blank_player(0, card("Despotism"));
+        let mut state = one_player_state(p);
+        state.card_row[6] = card("Bronze"); // a plain tech, slot cost 2
+        assert_eq!(take_cost(&state, &state.players[0], 6), 2);
+    }
+
+    #[test]
+    fn take_cost_wonder_adds_completed_and_destroyed_surcharge() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Pyramids"));
+        p.destroyed_wonders = 1;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus"); // wonder, slot cost 1
+        let p = &state.players[0];
+        assert_eq!(take_cost(&state, p, 0), 1 + 1 + 1);
+    }
+
+    #[test]
+    fn take_cost_michelangelo_waives_the_wonder_surcharge() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Michelangelo");
+        p.completed_wonders.push(card("Pyramids"));
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        let p = &state.players[0];
+        assert_eq!(take_cost(&state, p, 0), 1);
+    }
+
+    #[test]
+    fn take_cost_hammurabi_discounts_leaders_by_one_floored_at_zero() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Napoleon Bonaparte"); // leader, slot cost 1
+        let p = &state.players[0];
+        assert_eq!(take_cost(&state, p, 0), 0, "1 - 1 floored at 0, not -1");
+    }
+
+    // -------------------------------------------------------- special_icon
+
+    #[test]
+    fn special_icon_covers_every_category() {
+        assert_eq!(special_icon(card("Masonry").get()), SpecialIcon::Construction);
+        assert_eq!(special_icon(card("Cartography").get()), SpecialIcon::Exploration);
+        assert_eq!(special_icon(card("Warfare").get()), SpecialIcon::Warfare);
+        assert_eq!(special_icon(card("Code of Laws").get()), SpecialIcon::Law);
+        assert_eq!(special_icon(card("Bronze").get()), SpecialIcon::Other);
+    }
+
+    // -------------------------------------------------------- urban_count
+
+    #[test]
+    fn urban_count_sums_workers_of_one_type() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Bronze"), TechSlot { workers: 2, stored: 0 });
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 3, stored: 0 });
+        assert_eq!(urban_count(&p, CardType::Mine), 2);
+        assert_eq!(urban_count(&p, CardType::Farm), 3);
+        assert_eq!(urban_count(&p, CardType::Lab), 0);
+    }
+
+    // ------------------------------------------------------------ take gate
+
+    #[test]
+    fn can_take_respects_the_civil_action_budget() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        state.card_row[9] = card("Bronze"); // slot cost 3
+        let p = &state.players[0];
+        assert!(can_take(&state, p, 9, None, 0));
+        assert!(can_take(&state, p, 9, Some(3), 0));
+        assert!(!can_take(&state, p, 9, Some(2), 0), "budget one short");
+    }
+
+    #[test]
+    fn can_take_blocks_on_a_full_civil_hand() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        for _ in 0..4 {
+            p.hand_civil.push(card("Irrigation")); // fills to the 4 CA limit
+        }
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Selective Breeding");
+        let p = &state.players[0];
+        assert!(!can_take(&state, p, 0, None, 0), "hand at civil_hand_limit");
+    }
+
+    #[test]
+    fn can_take_blocks_a_second_copy_of_a_technology_but_not_an_action_card() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        p.hand_civil.push(card("Irrigation"));
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Irrigation");
+        // "Rich Land (A)" prints 2 physical copies in the Age A deck under
+        // ONE `CardId` (`_disambiguate` suffixes by AGE, not by copy) -- an
+        // action card, not a tech, so holding one must not block taking the
+        // other.
+        state.card_row[1] = card("Rich Land (A)");
+        state.players[0].hand_civil.push(card("Rich Land (A)"));
+        let p = &state.players[0];
+        assert!(!can_take(&state, p, 0, None, 0), "already holding an Irrigation");
+        assert!(can_take(&state, p, 1, None, 0), "action cards are exempt from one-per-name");
+    }
+
+    #[test]
+    fn can_take_wonder_requires_no_wonder_in_progress() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        assert!(can_take(&state, &state.players[0], 0, None, 0));
+        state.players[0].wonder = card("Pyramids");
+        assert!(!can_take(&state, &state.players[0], 0, None, 0), "already building a wonder");
+    }
+
+    #[test]
+    fn can_take_leader_respects_taken_leader_ages() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        let leader_slot = card("Napoleon Bonaparte");
+        state.card_row[0] = leader_slot;
+        let age_bit = 1u8 << (leader_slot.get().age as u8);
+        assert!(can_take(&state, &state.players[0], 0, None, 0));
+        assert!(
+            !can_take(&state, &state.players[0], 0, None, age_bit),
+            "that age's leader was already taken"
+        );
+    }
+
+    // ------------------------------------------------------- build_cost_for
+
+    #[test]
+    fn build_cost_for_reads_the_printed_resource_cost() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Irrigation")), Some(4));
+    }
+
+    #[test]
+    fn build_cost_for_none_when_unbuildable() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        // Governments print no buildCost at all.
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Monarchy")), None);
+    }
+
+    #[test]
+    fn build_cost_for_shakespeare_discounts_theater_with_a_library_present() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        p.techs.insert(card("Printing Press"), TechSlot { workers: 1, stored: 0 });
+        let state = one_player_state(p);
+        // Drama build cost 4, minus 1 for Shakespeare + a library in play.
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Drama")), Some(3));
+    }
+
+    #[test]
+    fn build_cost_for_shakespeare_needs_the_matching_building_present() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        let state = one_player_state(p);
+        // No library in play: full price.
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Drama")), Some(4));
+    }
+
+    // ----------------------------------------------------------- tech_cost
+
+    #[test]
+    fn tech_cost_reads_the_printed_science_cost() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        assert_eq!(tech_cost(&state, &state.players[0], card("Irrigation")), Some(3));
+    }
+
+    #[test]
+    fn tech_cost_is_none_for_every_government_a_known_gap() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        // Monarchy's real peaceful-revolution cost is 8 (peacefulCost in the
+        // data); this returns None because `Card` has no peacefulCost field
+        // -- see this module's top KNOWN GAPS. This test pins the gap so a
+        // silent behaviour change shows up here first.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), None);
+    }
+
+    #[test]
+    fn tech_cost_bach_discounts_theaters_by_two() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("J. S. Bach");
+        let state = one_player_state(p);
+        assert_eq!(tech_cost(&state, &state.players[0], card("Drama")), Some(3 - 2));
+    }
+
+    #[test]
+    fn tech_cost_shakespeare_cross_discounts_theater_and_library() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        p.techs.insert(card("Drama"), TechSlot { workers: 1, stored: 0 });
+        let state = one_player_state(p);
+        // Printing Press tech cost 3, minus 1 for Shakespeare + a theater in play.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Printing Press")), Some(2));
+    }
+
+    #[test]
+    fn tech_cost_none_when_unbuildable() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        // Age-A starting techs print no techCost (already on the board).
+        assert_eq!(tech_cost(&state, &state.players[0], card("Agriculture")), None);
+    }
+
+    // -------------------------------------------------------- upgrade_cost
+
+    #[test]
+    fn upgrade_cost_is_the_difference_floored_at_zero() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        // Agriculture's buildCost is 2, Irrigation's is 4: 4 - 2 = 2.
+        assert_eq!(upgrade_cost(&state, &state.players[0], card("Agriculture"), card("Irrigation")), 2);
+    }
+
+    #[test]
+    fn upgrade_cost_floors_at_zero_when_hi_is_cheaper_than_lo() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        assert_eq!(upgrade_cost(&state, &state.players[0], card("Irrigation"), card("Agriculture")), 0);
+    }
+
+    // ----------------------------------------------------- wonder_stage_cost
+
+    #[test]
+    #[should_panic(expected = "Card::stages")]
+    fn wonder_stage_cost_is_not_ported_yet() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.wonder = card("Pyramids");
+        let state = one_player_state(p);
+        wonder_stage_cost(&state, &state.players[0], 1);
+    }
+
+    // ------------------------------------------------------------- is_unit
+
+    #[test]
+    fn is_unit_true_for_units_false_for_everything_else() {
+        assert!(is_unit(card("Swordsmen")));
+        assert!(!is_unit(card("Bronze")));
+        assert!(!is_unit(card("Despotism")));
+    }
+
+    // ------------------------------------------------------- *_net discount
+
+    #[test]
+    fn build_cost_net_spends_the_military_discount_pool() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 2;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_net(&state, &state.players[0], card("Swordsmen")), Some(3 - 2));
+    }
+
+    #[test]
+    fn build_cost_net_floors_at_zero_when_discount_exceeds_cost() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 100;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_net(&state, &state.players[0], card("Swordsmen")), Some(0));
+    }
+
+    #[test]
+    fn build_cost_net_ignores_the_pool_for_non_units() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 100;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_net(&state, &state.players[0], card("Irrigation")), Some(4));
+    }
+
+    #[test]
+    fn upgrade_cost_net_is_gated_on_the_lo_cards_type() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 1;
+        let state = one_player_state(p);
+        // Warriors -> Swordsmen is a unit upgrade; the discount applies.
+        let base = upgrade_cost(&state, &state.players[0], card("Warriors"), card("Swordsmen"));
+        assert_eq!(
+            upgrade_cost_net(&state, &state.players[0], card("Warriors"), card("Swordsmen")),
+            (base - 1).max(0)
+        );
+    }
+
+    #[test]
+    fn tech_cost_net_spends_the_military_science_pool_and_floors_at_zero() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_sci_discount = 100;
+        let state = one_player_state(p);
+        assert_eq!(tech_cost_net(&state, &state.players[0], card("Swordsmen")), Some(0));
+    }
+
+    // -------------------------------------------------------- spend_* pools
+
+    #[test]
+    fn spend_mil_discount_consumes_only_what_is_used() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 5;
+        let owed = spend_mil_discount(&mut p, card("Swordsmen"), 3);
+        assert_eq!(owed, 0, "pool covers the whole cost");
+        assert_eq!(p.mil_discount, 2, "only 3 of the 5 spent");
+    }
+
+    #[test]
+    fn spend_mil_discount_partial_when_pool_is_smaller_than_the_cost() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 2;
+        let owed = spend_mil_discount(&mut p, card("Swordsmen"), 5);
+        assert_eq!(owed, 3);
+        assert_eq!(p.mil_discount, 0);
+    }
+
+    #[test]
+    fn spend_mil_discount_is_a_noop_for_non_units_or_empty_pool() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_discount = 5;
+        assert_eq!(spend_mil_discount(&mut p, card("Irrigation"), 4), 4, "not a unit");
+        assert_eq!(p.mil_discount, 5, "pool untouched");
+
+        let mut p2 = blank_player(0, card("Despotism"));
+        p2.mil_discount = 0;
+        assert_eq!(spend_mil_discount(&mut p2, card("Swordsmen"), 4), 4, "pool already empty");
+    }
+
+    #[test]
+    fn spend_mil_sci_discount_mirrors_spend_mil_discount() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.mil_sci_discount = 1;
+        let owed = spend_mil_sci_discount(&mut p, card("Swordsmen"), 4);
+        assert_eq!(owed, 3);
+        assert_eq!(p.mil_sci_discount, 0);
+    }
+}
