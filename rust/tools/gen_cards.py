@@ -245,30 +245,17 @@ PACT_BLOCK_FIELD_ORDER = (
 )
 
 #: The OTHER dict-valued `effects` keys in the base data still awaiting a
-#: real port (2026-08-05 census: 24 distinct dict-valued keys total, 4 of
-#: them the pact blocks above and 1 -- `takeFromOpponent` -- now handled
-#: below by `TAKE_FROM_OPPONENT_FIELDS`/`build_take_from_opponent`, since
-#: `combat.rs::finish_aggression` reads its per-card values directly). Each
+#: real port. Event targeting/resolution (`allPlayers` and its 12 siblings)
+#: is handled below now (`EVENT_BLOCK_DICT_KEYS`/`build_event_block` etc,
+#: 2026-08-05 events.rs pass) -- what is left here belongs to `combat.rs`
+#: (war spoils) or `actions.rs` (per-player-count action-card bonuses,
+#: Churchill's per-turn choice), neither in scope for that pass. Each
 #: remaining key still becomes a payload-less `Special` variant -- exactly
 #: what every dict-valued key silently did before this pass -- but doing so
 #: now requires being named here, with a reason, rather than falling through
 #: an `else` branch that could not tell "known, deferred" apart from "new key
 #: nobody has looked at yet".
 DEFERRED_DICT_EFFECT_KEYS = {
-    "allPlayers": "event targeting -- events.rs not ported",
-    "weakestPlayer": "event targeting -- events.rs not ported",
-    "weakestPlayers": "event targeting -- events.rs not ported",
-    "strongestPlayer": "event targeting -- events.rs not ported",
-    "strongestPlayers": "event targeting -- events.rs not ported",
-    "condition": "event targeting -- events.rs not ported",
-    "playersWithMostHappyFaces": "event targeting -- events.rs not ported",
-    "playerWithLeastCulture": "event targeting -- events.rs not ported",
-    "playersWithMostDiscontentWorkers": "event targeting -- events.rs not "
-        "ported",
-    "playerWithMostCulture": "event targeting -- events.rs not ported",
-    "lastRoundSubstitute": "event resolution -- events.rs not ported",
-    "gain": "event resolution -- events.rs not ported",
-    "lose": "event resolution -- events.rs not ported",
     "victorTakesYellowTokens": "war resolution -- combat.rs not ported",
     "victorTakesCulture": "war resolution -- combat.rs not ported",
     "resourcesForMilitaryUnitsPerStrongerCivilization":
@@ -755,6 +742,320 @@ def build_age_list(name, key, val):
     return "&[" + ", ".join(ages) + "]"
 
 
+# ------------------------------------------------------ event targeting -----
+#
+# `allPlayers` and its 12 siblings (§5.3, `engine/events.py::resolve_event`/
+# `_apply_player_block`/`_apply_extras`/`_queue_decisions`): the dict-valued
+# `effects` keys that name WHO an event targets and WHAT happens to them.
+# Every one of the 7 player-targeting keys (`allPlayers`, `weakestPlayer`,
+# `strongestPlayer`, `playerWithMostCulture`, `playerWithLeastCulture`,
+# `playersWithMostHappyFaces`, `playersWithMostDiscontentWorkers`) plus the
+# `gain`/`lose` blocks `strongestPlayers`/`weakestPlayers` apply shares ONE
+# payload shape, `cards::EventBlock` -- see that struct's own doc comment for
+# why one shape serves all nine.
+
+EVENT_BLOCK_DICT_KEYS = {
+    "allPlayers", "weakestPlayer", "strongestPlayer", "playerWithMostCulture",
+    "playerWithLeastCulture", "playersWithMostHappyFaces",
+    "playersWithMostDiscontentWorkers", "gain", "lose",
+}
+
+#: `effects.<targeting key>` sub-key -> `cards::EventBlock` field, for the
+#: plain int/bool-magnitude keys. `choose`/`freeBuild`/`flipCompletedWonder`/
+#: `oneTimeDiscount`/`extraProduction` (structured values) are handled
+#: separately in `build_event_block`, not through this map. Exhaustive
+#: against the live data (2026-08-05 census of every non-`scoringEvent`
+#: event card's targeting/`gain`/`lose` sub-dicts, 40 cards).
+EVENT_BLOCK_FIELDS = {
+    "science": "science",
+    "culture": "culture",
+    "food": "food",
+    "resources": "resources",
+    "foodAndOrResources": "food_and_or_resources",
+    "blueTokens": "blue_tokens",
+    "drawMilitaryCards": "draw_military_cards",
+    "decreasePopulation": "decrease_population",
+    "increasePopulation": "increase_population",
+    "takeYellowTokensFromWeakest": "take_yellow_tokens_from_weakest",
+    "civilActionsPerDiscontentWorker": "civil_actions_per_discontent_worker",
+    "optionalTakeCardsWithCivilActions": "optional_take_cards_with_civil_actions",
+    "culturePerDiscontentWorker": "culture_per_discontent_worker",
+    "destroyOwnBuilding": "destroy_own_building",
+    "loseColony": "lose_colony",
+    "discardMilitaryCards": "discard_military_cards",
+    "loseAllStoredFood": "lose_all_stored_food",
+    "produceFood": "produce_food",
+    "produceResources": "produce_resources",
+    "scienceEqualToScienceProduction": "science_equal_to_science_production",
+    "cultureEqualToCultureProduction": "culture_equal_to_culture_production",
+    "cultureEqualToScienceProduction": "culture_equal_to_science_production",
+    "discardLeaderUnlessCurrentAge": "discard_leader_unless_current_age",
+    "decreasePopulationByHalfDiscontentWorkersRoundedUp":
+        "decrease_population_by_half_discontent_workers_rounded_up",
+    "destroyOneUrbanBuildingOfEachOpponent":
+        "destroy_one_urban_building_of_each_opponent",
+    # `foodEqualToHappyFaces`'s own cap -- only ever printed alongside it, on
+    # the one base-game card that prints either ("Prosperity"), same pairing
+    # reasoning `FinalScoringBlock`'s own doc comment gives for
+    # `bonusIfProductionExceedsConsumption`.
+    "foodEqualToHappyFaces": "food_equal_to_happy_faces",
+    "max": "food_equal_to_happy_faces_max",
+}
+#: `EventBlock` fields (not JSON keys) whose value is a bool flag, not a
+#: magnitude -- Python's own dispatch ignores the printed value for these too
+#: (`_apply_extras`'s `if block.get("produceFood"):` etc never reads it past
+#: truthiness).
+EVENT_BLOCK_BOOL_FIELDS = {
+    "lose_all_stored_food", "produce_food", "produce_resources",
+    "extra_production", "science_equal_to_science_production",
+    "culture_equal_to_culture_production",
+    "culture_equal_to_science_production", "food_equal_to_happy_faces",
+    "discard_leader_unless_current_age",
+    "decrease_population_by_half_discontent_workers_rounded_up",
+    "destroy_one_urban_building_of_each_opponent",
+}
+#: Keys nested INSIDE a targeting/`gain`/`lose` dict that Python's own
+#: dispatch confirmed never reads the VALUE of (unlike `IGNORED_KEYS`, this
+#: is scoped to this one nesting level -- see `IGNORED_NESTED_EFFECT_KEYS`'s
+#: own doc comment for why a sibling scope is kept separate rather than
+#: merged). `ignoreConsumption`/`ignoreCorruption` (Good Harvest/New
+#: Deposits): `_apply_extras`'s `produceFood`/`produceResources` branches
+#: never test either flag. `ruinsCultureProduction` (Ravages of Time): not a
+#: single `.get(...)` call anywhere in `engine/`. `chosenBy` (Independence
+#: Declaration): prose restating that `_q_lose_colony` already lets the
+#: LOSING player choose which colony -- `interact.rs`'s existing
+#: `QueueItem::LoseColony` handler already does. `cost` (International
+#: Agreement): prose restating `optionalTakeCardsWithCivilActions`'s own
+#: hardcoded `p.skip_next_politics = True`.
+EVENT_BLOCK_IGNORED_KEYS = {
+    "ignoreConsumption", "ignoreCorruption", "ruinsCultureProduction",
+    "chosenBy", "cost",
+}
+#: `freeBuild.card` values that name a card TYPE rather than a printed card
+#: name (Development of Religion: `"card": "Temple"`, no such card is ever
+#: printed -- every base-game temple is named after its own age instead,
+#: "Religion"/"Theology"/"Organized Religion"). Scoped to the civil-row types
+#: a free build could plausibly ever name.
+FREE_BUILD_TYPE_NAMES = {
+    "Farm": "Farm", "Mine": "Mine", "Lab": "Lab", "Temple": "Temple",
+    "Library": "Library", "Arena": "Arena", "Theater": "Theater",
+    "Infantry": "Infantry", "Cavalry": "Cavalry", "Artillery": "Artillery",
+    "Air": "Air",
+}
+
+EVENT_BLOCK_FIELD_ORDER = (
+    "science", "culture", "food", "resources", "food_and_or_resources",
+    "blue_tokens", "lose_all_stored_food", "draw_military_cards",
+    "decrease_population", "increase_population", "produce_food",
+    "produce_resources", "extra_production",
+    "science_equal_to_science_production",
+    "culture_equal_to_culture_production",
+    "culture_equal_to_science_production", "food_equal_to_happy_faces",
+    "food_equal_to_happy_faces_max", "discard_leader_unless_current_age",
+    "take_yellow_tokens_from_weakest",
+    "decrease_population_by_half_discontent_workers_rounded_up",
+    "civil_actions_per_discontent_worker",
+    "one_time_discount_build_resources", "one_time_discount_develop_science",
+    "one_time_discount_pop_food", "destroy_one_urban_building_of_each_opponent",
+    "optional_take_cards_with_civil_actions", "culture_per_discontent_worker",
+    "choose_food", "choose_resources", "free_build_card", "free_build_age",
+    "free_build_kind", "free_build_cost", "destroy_own_building",
+    "lose_colony", "flip_completed_wonder_ages", "discard_military_cards",
+)
+
+
+def build_event_block(name, block, name_index):
+    """One event's targeting/`gain`/`lose` sub-dict -> an `EventBlock { ... }`
+    Rust literal (see cards.rs). Exhaustive against the live data: a sub-key
+    outside this vocabulary stops the build."""
+    values = {f: (False if f in EVENT_BLOCK_BOOL_FIELDS else 0)
+              for f in EVENT_BLOCK_FIELD_ORDER}
+    values["free_build_card"] = "CardId::NONE"
+    values["free_build_age"] = "None"
+    values["free_build_kind"] = "None"
+    values["flip_completed_wonder_ages"] = "&[]"
+
+    for k, v in block.items():
+        if k in IGNORED_KEYS or k in EVENT_BLOCK_IGNORED_KEYS:
+            continue
+        if k == "extraProduction":
+            if not isinstance(v, dict) or (set(v) - {"order"} - IGNORED_KEYS):
+                raise ValueError(
+                    f"{name}: effects.<block>.extraProduction has an "
+                    f"unexpected shape {v!r}")
+            values["extra_production"] = True
+            continue
+        if k == "oneTimeDiscount":
+            if not isinstance(v, dict):
+                raise ValueError(
+                    f"{name}: effects.<block>.oneTimeDiscount must be a dict")
+            sub_map = {
+                "increasePopulation": ("food", "one_time_discount_pop_food"),
+                "build": ("resources", "one_time_discount_build_resources"),
+                "developTechnology": ("science", "one_time_discount_develop_science"),
+            }
+            for sk, sv in v.items():
+                if sk in IGNORED_KEYS:
+                    continue
+                entry = sub_map.get(sk)
+                if entry is None:
+                    raise ValueError(
+                        f"{name}: effects.<block>.oneTimeDiscount.{sk} is "
+                        f"not recognized -- add it to gen_cards.py's "
+                        f"build_event_block sub_map and cards::EventBlock")
+                want_key, field = entry
+                if not isinstance(sv, dict) or set(sv) - {want_key}:
+                    raise ValueError(
+                        f"{name}: effects.<block>.oneTimeDiscount.{sk} = "
+                        f"{sv!r}, expected {{{want_key!r}: <int>}}")
+                values[field] = as_int(
+                    sv.get(want_key), f"{name}.oneTimeDiscount.{sk}.{want_key}")
+            continue
+        if k == "choose":
+            if not (isinstance(v, list) and len(v) == 2
+                    and set(v[0]) == {"food"} and set(v[1]) == {"resources"}):
+                raise ValueError(
+                    f"{name}: effects.<block>.choose must be exactly "
+                    f"[{{'food': N}}, {{'resources': M}}] (cards::EventBlock's "
+                    f"own doc comment narrows to this shape) -- got {v!r}")
+            values["choose_food"] = as_int(v[0]["food"], f"{name}.choose[0].food")
+            values["choose_resources"] = as_int(
+                v[1]["resources"], f"{name}.choose[1].resources")
+            continue
+        if k == "freeBuild":
+            if not isinstance(v, dict):
+                raise ValueError(f"{name}: effects.<block>.freeBuild must be a dict")
+            unknown = (set(v) - {"card", "age", "cost", "requiresAvailableWorker"}
+                       - IGNORED_KEYS)
+            if unknown:
+                raise ValueError(
+                    f"{name}: effects.<block>.freeBuild has unrecognized "
+                    f"key(s) {sorted(unknown)!r}")
+            if v.get("requiresAvailableWorker") is not True:
+                raise ValueError(
+                    f"{name}: effects.<block>.freeBuild.requiresAvailableWorker "
+                    f"is not True -- interact.rs's existing FreeBuild resolver "
+                    f"always requires one unconditionally; a card that omits "
+                    f"or falsifies this needs real handling, not a silent "
+                    f"assumption")
+            values["free_build_cost"] = as_int(v.get("cost"), f"{name}.freeBuild.cost")
+            age_str = v.get("age")
+            values["free_build_age"] = f"Some(Age::{AGES[age_str]})" if age_str else "None"
+            card_name = v.get("card")
+            if card_name is None:
+                raise ValueError(f"{name}: effects.<block>.freeBuild has no 'card'")
+            if card_name in name_index:
+                values["free_build_card"] = f"CardId({name_index[card_name]})"
+            elif card_name in FREE_BUILD_TYPE_NAMES:
+                values["free_build_kind"] = f"Some(CardType::{FREE_BUILD_TYPE_NAMES[card_name]})"
+            else:
+                raise ValueError(
+                    f"{name}: effects.<block>.freeBuild.card = {card_name!r} "
+                    f"is neither a printed card name nor a recognized card "
+                    f"type -- add it to FREE_BUILD_TYPE_NAMES in "
+                    f"gen_cards.py if it names a type")
+            continue
+        if k == "flipCompletedWonder":
+            if not isinstance(v, dict):
+                raise ValueError(
+                    f"{name}: effects.<block>.flipCompletedWonder must be a dict")
+            unknown = set(v) - {"ages"} - IGNORED_KEYS
+            if unknown:
+                raise ValueError(
+                    f"{name}: effects.<block>.flipCompletedWonder has "
+                    f"unrecognized key(s) {sorted(unknown)!r}")
+            ages = v.get("ages") or ["A", "I"]
+            values["flip_completed_wonder_ages"] = (
+                "&[" + ", ".join(f"Age::{AGES[a]}" for a in ages) + "]")
+            continue
+        field = EVENT_BLOCK_FIELDS.get(k)
+        if field is None:
+            raise ValueError(
+                f"{name}: effects.<block>.{k} is not a recognized event-block "
+                f"key -- add it to EVENT_BLOCK_FIELDS (with the "
+                f"cards::EventBlock field it feeds), EVENT_BLOCK_IGNORED_KEYS "
+                f"or IGNORED_KEYS in gen_cards.py")
+        if field in EVENT_BLOCK_BOOL_FIELDS:
+            if not isinstance(v, bool):
+                raise ValueError(
+                    f"{name}: effects.<block>.{k} expected a bool flag, got {v!r}")
+            values[field] = v
+        else:
+            values[field] = as_int(v, f"{name}.effects.<block>.{k}")
+
+    parts = []
+    for f in EVENT_BLOCK_FIELD_ORDER:
+        v = values[f]
+        parts.append(f"{f}: {rust_bool(v) if f in EVENT_BLOCK_BOOL_FIELDS else v}")
+    return "EventBlock { " + ", ".join(parts) + " }"
+
+
+def build_count_table(name, path, val):
+    """A per-player-count magnitude dict (`{"2p": 1, "3p": 2, "4p": 2}`) --
+    `strongestPlayers`/`weakestPlayers`'s own value, or `condition.
+    amongWeakest` -- -> a `[i16; 3]` Rust literal (index 0/1/2 = 2p/3p/4p).
+    All three player counts must be present, same strictness as
+    `FinalScoringBlock`'s own `rankingCulture` tables."""
+    if not isinstance(val, dict):
+        raise ValueError(f"{name}: {path} must be a per-player-count dict")
+    unknown = set(val) - {"2p", "3p", "4p"} - IGNORED_KEYS
+    if unknown:
+        raise ValueError(f"{name}: {path} has unrecognized key(s) {sorted(unknown)!r}")
+    out = []
+    for pkey in ("2p", "3p", "4p"):
+        if pkey not in val:
+            raise ValueError(f"{name}: {path} is missing {pkey!r}")
+        out.append(as_int(val[pkey], f"{name}.{path}.{pkey}"))
+    return "[" + ", ".join(str(x) for x in out) + "]"
+
+
+def build_condition(name, val):
+    """Barbarians' `condition` key -> a `[i16; 3]` `amongWeakest` table
+    (`cards::Special::Condition`). Exhaustive against the live data
+    (2026-08-05: one card)."""
+    if not isinstance(val, dict):
+        raise ValueError(f"{name}: effects.condition must be a dict")
+    unknown = set(val) - {"amongWeakest"} - IGNORED_KEYS
+    if unknown:
+        raise ValueError(
+            f"{name}: effects.condition has unrecognized key(s) {sorted(unknown)!r}")
+    among = val.get("amongWeakest")
+    if among is None:
+        raise ValueError(f"{name}: effects.condition has no 'amongWeakest'")
+    return build_count_table(name, "effects.condition.amongWeakest", among)
+
+
+def build_last_round_substitute(name, val, name_index):
+    """`lastRoundSubstitute` (Politics of Strength, the only base-game card)
+    -> a `LastRoundSubstituteBlock { ... }` Rust literal. Exhaustive against
+    the live data: this one card's substitute dict prints only
+    `strongestPlayer`/`weakestPlayer`, so those are the only two targeting
+    keys recognized here -- any other stops the build (see
+    `cards::LastRoundSubstituteBlock`'s own doc comment)."""
+    if not isinstance(val, dict):
+        raise ValueError(f"{name}: effects.lastRoundSubstitute must be a dict")
+    key_to_field = {"strongestPlayer": "strongest_player", "weakestPlayer": "weakest_player"}
+    parts = {"strongest_player": "EventBlock::EMPTY", "weakest_player": "EventBlock::EMPTY"}
+    for k, v in val.items():
+        if k in IGNORED_KEYS:
+            continue
+        field = key_to_field.get(k)
+        if field is None:
+            raise ValueError(
+                f"{name}: effects.lastRoundSubstitute.{k} is not a "
+                f"recognized targeting key -- add it to "
+                f"cards::LastRoundSubstituteBlock and gen_cards.py's "
+                f"build_last_round_substitute (only strongestPlayer/"
+                f"weakestPlayer are exhaustive against the live data)")
+        if not isinstance(v, dict):
+            raise ValueError(
+                f"{name}: effects.lastRoundSubstitute.{k} must be a dict")
+        parts[field] = build_event_block(name, v, name_index)
+    return ("LastRoundSubstituteBlock { "
+            f"strongest_player: {parts['strongest_player']}, "
+            f"weakest_player: {parts['weakest_player']} }}")
+
+
 def load_cards():
     cards = []
     for fn in PART_FILES:
@@ -784,6 +1085,13 @@ def load_cards():
 
 def main():
     cards = load_cards()
+    # Final printed name -> index into `cards`/`rows`/`CARDS` -- computed
+    # once, up front, since `build_event_block`'s `freeBuild.card` handling
+    # (a card referring to ANOTHER card by identity, a new pattern this
+    # generator has not needed before) must resolve a name to a `CardId`
+    # that is only meaningful once every card's final (possibly
+    # disambiguated) name and position are both fixed.
+    name_index = {c["name"]: i for i, c in enumerate(cards)}
 
     # variant name -> "int" | "unit" | "pact_block" | "age_array" |
     # "string_enum" (carries an `(i16)`, no payload, a `(PactBlock)`, an
@@ -847,27 +1155,28 @@ def main():
             if key == "allPlayers" and c.get("scoringEvent"):
                 # One of the 15 "Impact of ..." final-scoring events (see
                 # this file's "§12.5.2 final scoring events" section) -- a
-                # REAL `FinalScoringBlock` payload, in addition to (not
-                # instead of) the ordinary payload-less `AllPlayers` marker
-                # every other `allPlayers`-printing event card still gets,
-                # so nothing that already tests for `Special::AllPlayers`
-                # generically needs to change. Two variants from one source
-                # key, so this appends both directly rather than falling
-                # through to the single-append tail below.
-                for variant, shape, payload in (
-                    ("AllPlayers", "unit", None),
-                    ("FinalScoring", "final_scoring_block",
-                     build_final_scoring_block(name, val)),
-                ):
-                    prev = specials.get(variant)
-                    if prev is not None and prev != shape:
-                        raise ValueError(
-                            f"{name}: Special::{variant} used as both "
-                            f"{prev!r} and {shape!r} across cards (key "
-                            f"{key!r}) -- gen_cards.py cannot pick one shape "
-                            f"silently, give it bespoke handling")
-                    specials[variant] = shape
-                    mine.append((variant, payload))
+                # REAL `FinalScoringBlock` payload. UNLIKE the 9 ordinary
+                # `allPlayers`-printing event cards, this does NOT also get a
+                # `Special::AllPlayers(EventBlock)` entry: `SCORING_BLOCK_FIELDS`
+                # is exhaustive against all 15 of these cards' `allPlayers`
+                # blocks, so none of them ever prints an EventBlock-shaped
+                # key, and `Special::AllPlayers` cannot carry two different
+                # payload shapes across different cards anyway. `events.rs`
+                # derives "this card has an allPlayers key" from
+                # `Special::FinalScoring`'s own presence for these 15 instead
+                # -- see that module's top doc comment.
+                variant, shape, payload = (
+                    "FinalScoring", "final_scoring_block",
+                    build_final_scoring_block(name, val))
+                prev = specials.get(variant)
+                if prev is not None and prev != shape:
+                    raise ValueError(
+                        f"{name}: Special::{variant} used as both "
+                        f"{prev!r} and {shape!r} across cards (key "
+                        f"{key!r}) -- gen_cards.py cannot pick one shape "
+                        f"silently, give it bespoke handling")
+                specials[variant] = shape
+                mine.append((variant, payload))
                 continue
             field = EFFECT_FIELDS.get(key)
             if field is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -886,6 +1195,22 @@ def main():
                     variant = camel(key)
                     shape = "take_from_opponent_block"
                     payload = build_take_from_opponent(name, val)
+                elif key in EVENT_BLOCK_DICT_KEYS:
+                    variant = camel(key)
+                    shape = "event_block"
+                    payload = build_event_block(name, val, name_index)
+                elif key == "condition":
+                    variant = camel(key)
+                    shape = "count_table"
+                    payload = build_condition(name, val)
+                elif key in ("strongestPlayers", "weakestPlayers"):
+                    variant = camel(key)
+                    shape = "count_table"
+                    payload = build_count_table(name, f"effects.{key}", val)
+                elif key == "lastRoundSubstitute":
+                    variant = camel(key)
+                    shape = "last_round_substitute_block"
+                    payload = build_last_round_substitute(name, val, name_index)
                 elif key in DEFERRED_DICT_EFFECT_KEYS:
                     variant = camel(key)
                     shape = "unit"
@@ -1092,9 +1417,10 @@ def main():
     w("// the engine parses no JSON and has no dependencies, and a card-data")
     w("// change arrives as a reviewable diff rather than a runtime surprise.")
     w("")
-    w("use crate::cards::{Age, Card, CardEffects, CardType, Composition, "
-      "FinalScoringBlock, FinalScoringStat, ImmediateEffects, PactBlock, "
-      "Production, TakeFromOpponentBlock};")
+    w("use crate::cards::{Age, Card, CardEffects, CardId, CardType, "
+      "Composition, EventBlock, FinalScoringBlock, FinalScoringStat, "
+      "ImmediateEffects, LastRoundSubstituteBlock, PactBlock, Production, "
+      "TakeFromOpponentBlock};")
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
@@ -1128,9 +1454,13 @@ def main():
     w("/// one of the four pact blocks (§5.9); a `(TakeFromOpponentBlock)`")
     w("/// payload for `takeFromOpponent` (§5.4.6); a `(FinalScoringBlock)`")
     w("/// payload for `allPlayers` on one of the 15 `scoringEvent` Age III")
-    w("/// cards (§12.5.2 -- see `FinalScoring`, emitted ALONGSIDE the ordinary")
-    w("/// payload-less `AllPlayers` marker every `allPlayers`-printing event")
-    w("/// still gets, not instead of it); an `([i16; 5])` payload,")
+    w("/// cards (§12.5.2); an `(EventBlock)` payload for the 7 player-targeting")
+    w("/// keys plus `gain`/`lose` (§5.3 event resolution -- see")
+    w("/// `cards::EventBlock`'s own doc comment for why one shape serves all")
+    w("/// nine); a `([i16; 3])` payload, indexed by live player count minus 2,")
+    w("/// for `strongestPlayers`/`weakestPlayers`'s own per-count table and for")
+    w("/// `condition`'s `amongWeakest` table; a `(LastRoundSubstituteBlock)`")
+    w("/// payload for `lastRoundSubstitute`; an `([i16; 5])` payload,")
     w("/// indexed by `Age as u8`, when the printed value is a per-age magnitude")
     w("/// dict (`buildDiscount`); a `(&'static [Age])` payload for")
     w("/// `destroyUrbanBuildings`, one entry per raid; a `(<Key>Value)` payload")
@@ -1156,6 +1486,12 @@ def main():
             w(f"    {v}(TakeFromOpponentBlock),")
         elif shape == "final_scoring_block":
             w(f"    {v}(FinalScoringBlock),")
+        elif shape == "event_block":
+            w(f"    {v}(EventBlock),")
+        elif shape == "count_table":
+            w(f"    {v}([i16; 3]),")
+        elif shape == "last_round_substitute_block":
+            w(f"    {v}(LastRoundSubstituteBlock),")
         elif shape == "string_enum":
             w(f"    {v}({v}Value),")
         else:

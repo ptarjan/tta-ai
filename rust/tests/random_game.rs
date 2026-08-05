@@ -10,16 +10,25 @@
 //!
 //! ## The move filter
 //!
-//! `events.rs` is only partly ported -- `apply_gains` and §12.5.2 final
-//! scoring are in (commits `044fd92`, `3792e10`), but `resolve_event` and
-//! `_apply_player_block` are not, so revealing the current event is still
-//! blocked -- and several of `interact.rs`'s decision-driven halves are still
-//! `unimplemented!()`. A random player reaches all of them
-//! within a few turns, and `apply.rs`/`combat.rs` panic -- correctly and
-//! loudly -- when it does. [`blocked_on`] is the list of moves the driver may
-//! not choose yet, each naming the module it waits on; delete an arm when
-//! that module lands and the driver starts exercising it. Nothing else in
-//! this file changes.
+//! `events.rs` is now fully ported for event RESOLUTION (`apply_gains` and
+//! §12.5.2 final scoring landed in commits `044fd92`/`3792e10`;
+//! `reveal_current_event`/`resolve_event`/`_apply_player_block` landed
+//! 2026-08-05), so `Move::PrepareEvent` is no longer blocked here -- and
+//! since revealing a territory event now genuinely opens a colonization
+//! auction (`interact::start_auction`/`colonize`, both already fully wired,
+//! just previously unreachable from `apply.rs`), `Move::Bid`/`Move::BidPass`/
+//! `Move::SendUnit`/`Move::SendBonus`/`Move::SendDone` are unblocked too --
+//! see [`blocked_on`]'s own comment on the one arm that is left blocked for
+//! a genuinely different reason (`Move::Defend`/`Move::DefendDone`, gated on
+//! `Move::Aggression`, still `unimplemented!()`).
+//!
+//! Several of `interact.rs`'s OTHER decision-driven halves are still
+//! `unimplemented!()`, though. A random player reaches all of them within a
+//! few turns, and `apply.rs`/`combat.rs` panic -- correctly and loudly --
+//! when it does. [`blocked_on`] is the list of moves the driver may not
+//! choose yet, each naming the module it waits on; delete an arm when that
+//! module lands and the driver starts exercising it. Nothing else in this
+//! file changes.
 //!
 //! Every skip is attributable: if a position ever offers ONLY blocked moves,
 //! [`play_random`] returns [`Played::Blocked`] carrying the reasons, and the
@@ -77,9 +86,6 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
             Some("interact.rs: War over Technology spoils are a decision")
         }
 
-        // apply.rs `apply`: needs `events::reveal_current_event`.
-        Move::PrepareEvent { .. } => Some("events.rs: revealing the current event"),
-
         // apply.rs `h_play_action`. Three separate gaps, all on action cards:
         // a `freeCivilAction` order with 2+ legal ways to obey it is a real
         // choice; `gainFoodOrResources` is a real choice; and two cards print
@@ -104,27 +110,27 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
             Some("effects.rs: Hollywood/Internet completion culture needs building_output")
         }
 
-        // Responses to a decision nothing can have opened yet: `interact::
-        // start_auction`/`colonize` (territory colonization) are called from
-        // nowhere in `apply.rs`/`combat.rs` today, so `Pending::Auction` and
-        // `Pending::Colonize` never arise; listed so that the day auctions
-        // are wired up, the driver skips them loudly instead of panicking
-        // inside `apply`.
+        // A response to the aggression-defense decision specifically:
+        // `Move::Aggression` above is still blocked (the declaration is
+        // ported, `interact::start_defense`'s hand-off is skipped), so
+        // `Pending::Defense` never arises and these can never be legal.
+        // `Move::Bid`/`Move::BidPass`/`Move::SendUnit`/`Move::SendBonus`/
+        // `Move::SendDone` are NOT here any more: those belong to
+        // colonization (`interact::start_auction`/`colonize`), which
+        // `events::reveal_current_event` now genuinely opens when a
+        // territory event is revealed -- both were already fully wired,
+        // just unreachable before `Move::PrepareEvent` landed.
         //
-        // `Move::Choose` is NOT here: since `economy::end_of_turn` was
+        // `Move::Choose` is NOT here either: since `economy::end_of_turn` was
         // rewired onto `interact::discard_excess_military` (the shim this
         // file used to carry did the same thing by hand), a genuine
         // multi-card §6.6 step-1 discard is the one already-reachable
         // `Pending::Choice`, and `interact::resolve_choice`'s dispatch is
         // exhaustive over every `ChoiceKind` -- there is no unported
         // resolver behind it to fall into.
-        Move::Bid { .. }
-        | Move::BidPass
-        | Move::Defend { .. }
-        | Move::DefendDone
-        | Move::SendUnit { .. }
-        | Move::SendBonus { .. }
-        | Move::SendDone => Some("interact.rs: a response to an open decision"),
+        Move::Defend { .. } | Move::DefendDone => {
+            Some("interact.rs: a response to an open decision")
+        }
 
         // Not a missing module: resigning is a legal, fully-ported move that
         // ends the game early (§5.11), which would make "a game played to the

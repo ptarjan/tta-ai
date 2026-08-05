@@ -485,9 +485,8 @@ pub struct PlayerState {
     pub mil_sci_discount: i16,
     /// Event-granted cost discount (§ "Development of Civil Life", the one
     /// Age A event that prints `oneTimeDiscount`). See [`OneTimeDiscount`]
-    /// for the two things a reader needs to know about it: it is NEVER
-    /// consumed (a deliberately-mirrored Python defect), and nothing in this
-    /// port can set it yet.
+    /// for the one thing a reader needs to know about it: it is NEVER
+    /// consumed (a deliberately-mirrored Python defect).
     pub one_time_discount: OneTimeDiscount,
 
     pub resigned: bool,
@@ -502,26 +501,24 @@ pub struct PlayerState {
 /// growable allocation inside a `Clone`-as-memcpy `GameState` (DESIGN.md
 /// rule 3) bought with nothing.
 ///
-/// **Two warnings, both deliberate:**
+/// **One warning, deliberate:** *"One-time" is a lie, and this port mirrors
+/// the lie.* Python NEVER clears or decrements this (`grep -rn
+/// one_time_discount engine/`: one write in `events.py`, three reads in
+/// `effects.py`/`economy.py`, no clear), so once the event resolves the
+/// discount silently applies to EVERY build, EVERY develop and EVERY
+/// population increase for the rest of the game, for every player alive at
+/// the time. The real rule is that it applies to the next one of each. That
+/// is a genuine engine bug and it is being fixed on the Python side in its
+/// own change; fixing it HERE first would make Rust and Python diverge
+/// ply-for-ply and cost `tests/differential.rs` all its meaning. So: never
+/// consumed, on purpose, until the Python fix lands. (A third reading
+/// exists: `tools/bgo_moves.py:490` clears it every turn.)
 ///
-/// 1. *"One-time" is a lie, and this port mirrors the lie.* Python NEVER
-///    clears or decrements this (`grep -rn one_time_discount engine/`: one
-///    write in `events.py`, three reads in `effects.py`/`economy.py`, no
-///    clear), so once the event resolves the discount silently applies to
-///    EVERY build, EVERY develop and EVERY population increase for the rest
-///    of the game, for every player alive at the time. The real rule is that
-///    it applies to the next one of each. That is a genuine engine bug and
-///    it is being fixed on the Python side in its own change; fixing it HERE
-///    first would make Rust and Python diverge ply-for-ply and cost
-///    `tests/differential.rs` all its meaning. So: never consumed, on
-///    purpose, until the Python fix lands. (A third reading exists:
-///    `tools/bgo_moves.py:490` clears it every turn.)
-/// 2. *Nothing can set it yet.* `events.rs` is not ported, so the only
-///    writer does not exist in this crate; the field is populated solely by
-///    `fixtures.rs`'s loader, from a Python dump. It is wired into
-///    `costs.rs::build_cost_for`/`tech_cost` and the population-cost path
-///    anyway -- so that a replayed Python state prices identically -- not on
-///    speculation.
+/// `events::apply_extras` (Development of Civil Life's `allPlayers` block)
+/// is the only writer; `costs.rs::build_cost_for`/`tech_cost` and the
+/// population-cost path are the readers, wired up ahead of `events.rs`
+/// landing so that a Python-dumped fixture state (`fixtures.rs`'s loader)
+/// already priced identically before this field had a live writer.
 ///
 /// Each field is in the units of the thing discounted, and each is applied
 /// by a DIFFERENT rule (`build_resources` only to `URBAN_OR_PRODUCTION`

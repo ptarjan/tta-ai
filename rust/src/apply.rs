@@ -118,6 +118,7 @@ use crate::cards::{CardId, CardType, Special};
 use crate::combat;
 use crate::costs;
 use crate::economy;
+use crate::events;
 #[cfg(test)]
 use crate::legal;
 use crate::effects;
@@ -194,10 +195,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
              nothing opened one"
         ),
 
-        // ---- blocked on events.rs ----
-        Move::PrepareEvent { .. } => unimplemented!(
-            "PrepareEvent needs events::reveal_current_event -- events.rs is not ported"
-        ),
+        Move::PrepareEvent { card } => h_prepare_event(state, idx, card),
 
         // ---- combat.rs declaration + interact.rs defense decision ----
         Move::Aggression { card, target } => h_aggression(state, idx, card, target),
@@ -917,6 +915,35 @@ pub(crate) fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, di
 }
 
 fn h_pol_pass(state: &mut GameState, idx: u8) {
+    state.players[idx as usize].politics_done = true;
+    state.phase = crate::state::Phase::Actions;
+}
+
+/// §5.2: play an event/territory card from the hand into `future_events`,
+/// bank its age as culture, and reveal-and-resolve the current event.
+/// Mirrors `engine/actions.py::_h_prepare_event`.
+///
+/// Two things Python's version does that this one does NOT, matching every
+/// OTHER political handler in this file already (`h_offer_pact`/`h_war`/
+/// `h_churchill`/`h_pol_pass`/`h_cancel_pact` above all just set
+/// `politics_done`/`phase` directly too) -- pre-existing, consistent
+/// simplifications across this whole module, not new gaps this handler
+/// introduces:
+///   * Julius Caesar's once-per-game second political action
+///     (`actions.py::_end_politics`) -- the phase always ends after one
+///     action here, for every leader.
+///   * `state.seeded_by[name] = p.idx` -- bot-evaluator bookkeeping only
+///     (`bots/weighted.py`/`bots/counting.py`/`bots/neural_encode.py` are
+///     its only readers; nothing in `engine/`'s own rules reads it, and
+///     `journal.py`'s `del ...[ev]` on a past event is the same bot-only
+///     concern in reverse). This port has no bot layer and `state.rs` --
+///     another worker's file -- has no field for it; `Joan of Arc`'s
+///     `p.peeked_event` clear is the same story, one field short.
+fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
+    state.players[idx as usize].hand_military.remove_first(card);
+    state.players[idx as usize].culture += card.level() as u16;
+    state.future_events.push(card);
+    events::reveal_current_event(state);
     state.players[idx as usize].politics_done = true;
     state.phase = crate::state::Phase::Actions;
 }

@@ -887,8 +887,8 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // `IGNORED_NESTED_EFFECT_KEYS`: Python confirmed never reads either
         // value, only `target`'s PRESENCE on Barbarians, which `Condition`/
         // `DecreasePopulation` on that same card already carry.)
-        AllPlayers
-        | Condition
+        AllPlayers(_)
+        | Condition(_)
         | DecreasePopulation(_)
         // §12.5.2 final scoring (events::scoring_culture): a per-GAME payload
         // read once, at `finish_game`, directly off an Age III event card's
@@ -896,17 +896,17 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // and an event card is never in `p.techs`/`completed_wonders`/
         // `leader`/`government` either, so this arm never actually fires.
         | FinalScoring(_)
-        | Gain
-        | Lose
-        | LastRoundSubstitute
-        | PlayerWithLeastCulture
-        | PlayerWithMostCulture
-        | PlayersWithMostDiscontentWorkers
-        | PlayersWithMostHappyFaces
-        | StrongestPlayer
-        | StrongestPlayers
-        | WeakestPlayer
-        | WeakestPlayers => {}
+        | Gain(_)
+        | Lose(_)
+        | LastRoundSubstitute(_)
+        | PlayerWithLeastCulture(_)
+        | PlayerWithMostCulture(_)
+        | PlayersWithMostDiscontentWorkers(_)
+        | PlayersWithMostHappyFaces(_)
+        | StrongestPlayer(_)
+        | StrongestPlayers(_)
+        | WeakestPlayer(_)
+        | WeakestPlayers(_) => {}
 
         // --------------------------- handled elsewhere, not this match ----
         // Genghis Khan: `army_strength` above checks this directly on the

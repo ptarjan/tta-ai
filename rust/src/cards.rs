@@ -419,6 +419,183 @@ pub struct FinalScoringBlock {
     pub ranking_4p: [i16; 4],
 }
 
+/// One event's targeting-key block (§5.3): the nested dict `resolve_event`
+/// hands to `_apply_player_block` for `allPlayers`/`weakestPlayer`/
+/// `strongestPlayer`/`playerWithMostCulture`/`playerWithLeastCulture`/
+/// `playersWithMostHappyFaces`/`playersWithMostDiscontentWorkers`, and ALSO
+/// the narrower block `resolve_event` hands straight to `apply_gains` for
+/// the `gain`/`lose` keys beside `strongestPlayers`/`weakestPlayers` -- one
+/// struct for all nine call sites (`events.rs`'s `apply_player_block`/
+/// `apply_gains_block`), same reasoning `PactBlock`'s own doc comment gives:
+/// a dedicated struct rather than folding into `CardEffects`, because these
+/// fields are read by bespoke event-resolution functions only, never by
+/// `effects::compute`'s per-turn scan, and an event card is never in a
+/// player's tableau slots either. Not reused for the *other* seven
+/// `DEFERRED_DICT_EFFECT_KEYS` this pass leaves alone (`victorTakes*`,
+/// `resourcesForMilitaryUnitsPerStrongerCivilization`,
+/// `culturePerCivilizationWithMoreCulture`, `perTurnChoice`) -- those belong
+/// to `combat.rs`/`actions.rs`, out of this pass's scope.
+///
+/// Zero-default convention throughout, exactly like `FinalScoringBlock`/
+/// `TakeFromOpponentBlock`: `0`/`false`/`CardId::NONE`/`None`/an empty slice
+/// means the source card did not print that key. [`EMPTY`](Self::EMPTY) is
+/// the all-absent value (not `#[derive(Default)]`: `CardId`'s own `Default`
+/// is `CardId(0)`, a REAL card, which would make an unprinted `freeBuild`
+/// silently name the first card in the table -- see `CardId::NONE`'s own
+/// doc comment).
+///
+/// A handful of fields hold a primitive mirror of a `state.rs` queue-item
+/// payload (`choose_food`/`choose_resources` for `state::GainOption`,
+/// `free_build_*` for `state::FreeBuildSpec`, `one_time_discount_*` for
+/// `state::OneTimeDiscount`) rather than that payload type directly:
+/// `cards.rs` is the base data layer (this module's own top doc comment:
+/// "the Rust engine therefore has no dependencies") and does not import
+/// `state.rs`, so `events::apply_player_block` builds the real queue-item
+/// value from these primitives at the point of use instead.
+///
+/// Exhaustive against the live data (2026-08-05 census of every
+/// non-`scoringEvent` event card's `allPlayers`/`weakestPlayer`/.../`gain`/
+/// `lose` sub-dict, 40 cards): a sub-key outside this vocabulary stops the
+/// build (`gen_cards.py::build_event_block`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventBlock {
+    // ---- apply_gains-shape (events.py::apply_gains, one-shot, `sign`-scaled)
+    pub science: i16,
+    pub culture: i16,
+    pub food: i16,
+    pub resources: i16,
+    pub food_and_or_resources: i16,
+    pub blue_tokens: i16,
+    pub lose_all_stored_food: bool,
+    pub draw_military_cards: i16,
+    /// `decreasePopulation` NESTED inside a targeting dict (Pestilence/Reign
+    /// of Terror/Refugees) -- a DIFFERENT printing from the top-level
+    /// `decreasePopulation` Barbarians alone has, which stays
+    /// `Special::DecreasePopulation` (see that variant's own doc comment in
+    /// `card_table.rs`).
+    pub decrease_population: i16,
+    /// `increasePopulation` -- the PAID population increase (§6.1's normal
+    /// cost, `economy::increase_population`/`economy::pop_cost`), never the
+    /// free grant the unprinted bare `population`/`gainPopulation` keys
+    /// would be (`events.py:74-78`, still unreachable -- see `events.rs`'s
+    /// top doc comment).
+    pub increase_population: i16,
+
+    // ---- events.py::_apply_extras (312-375)
+    pub produce_food: bool,
+    pub produce_resources: bool,
+    pub extra_production: bool,
+    pub science_equal_to_science_production: bool,
+    pub culture_equal_to_culture_production: bool,
+    pub culture_equal_to_science_production: bool,
+    pub food_equal_to_happy_faces: bool,
+    pub food_equal_to_happy_faces_max: i16,
+    pub discard_leader_unless_current_age: bool,
+    pub take_yellow_tokens_from_weakest: i16,
+    pub decrease_population_by_half_discontent_workers_rounded_up: bool,
+    pub civil_actions_per_discontent_worker: i16,
+    /// `oneTimeDiscount` -- see `state::OneTimeDiscount`'s own doc comment
+    /// for the "never cleared" defect this mirrors on purpose.
+    pub one_time_discount_build_resources: i16,
+    pub one_time_discount_develop_science: i16,
+    pub one_time_discount_pop_food: i16,
+    pub destroy_one_urban_building_of_each_opponent: bool,
+    pub optional_take_cards_with_civil_actions: i16,
+    /// `culturePerDiscontentWorker` -- the one `scoring_culture` key an
+    /// ORDINARY (non-`scoringEvent`) card prints, Civil Unrest's own
+    /// `allPlayers` block (`events.py::_apply_player_block` calls
+    /// `scoring_culture` unconditionally on every block, not only on the 15
+    /// `scoringEvent` cards' -- see `events.rs`'s top doc comment). Not the
+    /// full 15-key `scoring_culture` vocabulary: `FinalScoringBlock` already
+    /// carries that, for the cards that print `scoringEvent: true`.
+    pub culture_per_discontent_worker: i16,
+
+    // ---- events.py::_queue_decisions (393-414)
+    /// `choose` -- the base game's one `choose` block is always exactly
+    /// `[{food: N}, {resources: M}]` (`state::GainOption`'s own doc comment
+    /// already narrows to this shape); `0, 0` means not printed.
+    pub choose_food: i16,
+    pub choose_resources: i16,
+    /// `freeBuild.card` -- a real card name (`CardId::by_name`) when the
+    /// spec names one exactly (`Development of Warfare`: "Warriors"),
+    /// `CardId::NONE` when it instead names a card TYPE (`Development of
+    /// Religion`: "Temple", captured in `free_build_kind` below).
+    pub free_build_card: CardId,
+    pub free_build_age: Option<Age>,
+    pub free_build_kind: Option<CardType>,
+    pub free_build_cost: i16,
+    pub destroy_own_building: i16,
+    pub lose_colony: i16,
+    /// `flipCompletedWonder.ages` -- same `&'static [Age]` shape as
+    /// `Special::DestroyUrbanBuildings`'s per-raid ages, for the same reason
+    /// (DESIGN.md rule 3: a fixed-size array/slice, not a map). Empty means
+    /// not printed.
+    pub flip_completed_wonder_ages: &'static [Age],
+    pub discard_military_cards: i16,
+}
+
+impl EventBlock {
+    /// The all-absent value: every targeting key `resolve_event` checks and
+    /// finds missing on a given card is this. See this struct's own doc
+    /// comment for why it is a hand-written const rather than
+    /// `#[derive(Default)]`.
+    pub const EMPTY: EventBlock = EventBlock {
+        science: 0,
+        culture: 0,
+        food: 0,
+        resources: 0,
+        food_and_or_resources: 0,
+        blue_tokens: 0,
+        lose_all_stored_food: false,
+        draw_military_cards: 0,
+        decrease_population: 0,
+        increase_population: 0,
+        produce_food: false,
+        produce_resources: false,
+        extra_production: false,
+        science_equal_to_science_production: false,
+        culture_equal_to_culture_production: false,
+        culture_equal_to_science_production: false,
+        food_equal_to_happy_faces: false,
+        food_equal_to_happy_faces_max: 0,
+        discard_leader_unless_current_age: false,
+        take_yellow_tokens_from_weakest: 0,
+        decrease_population_by_half_discontent_workers_rounded_up: false,
+        civil_actions_per_discontent_worker: 0,
+        one_time_discount_build_resources: 0,
+        one_time_discount_develop_science: 0,
+        one_time_discount_pop_food: 0,
+        destroy_one_urban_building_of_each_opponent: false,
+        optional_take_cards_with_civil_actions: 0,
+        culture_per_discontent_worker: 0,
+        choose_food: 0,
+        choose_resources: 0,
+        free_build_card: CardId::NONE,
+        free_build_age: None,
+        free_build_kind: None,
+        free_build_cost: 0,
+        destroy_own_building: 0,
+        lose_colony: 0,
+        flip_completed_wonder_ages: &[],
+        discard_military_cards: 0,
+    };
+}
+
+/// `lastRoundSubstitute` (Politics of Strength, the only base-game card that
+/// prints it): when `state.last_round`, `resolve_event` swaps its ENTIRE
+/// targeting set for this one instead (`events.py:228-229`), so this holds
+/// exactly the two targeting keys the one card that exists prints inside
+/// its substitute dict -- `strongestPlayer`/`weakestPlayer`, both plain
+/// culture blocks. Exhaustive against the live data (2026-08-05: one card):
+/// a substitute dict printing any OTHER targeting key stops the build
+/// (`gen_cards.py::build_last_round_substitute`) rather than silently
+/// dropping it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastRoundSubstituteBlock {
+    pub strongest_player: EventBlock,
+    pub weakest_player: EventBlock,
+}
+
 /// Printed per-worker production. A struct, not a single scalar, because one
 /// card routinely prints more than one field at once -- Religion is
 /// `{culture: 1, happy: 1}`, Printing Press is `{science: 1, culture: 1}` --
