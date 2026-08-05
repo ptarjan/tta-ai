@@ -77,6 +77,19 @@ pub enum Move {
     /// sacrifice (`engine/actions.py` `("columbus_colonize", name)`). One
     /// move per territory, exactly as `PrepareEvent` is one move per card.
     ColumbusColonize { card: CardId },
+    /// Frederick Barbarossa, as an action-phase action: spend 1 military
+    /// action to increase population AND build `card` (a unit technology) at
+    /// once, both halves discounted off the printed price (`engine/
+    /// actions.py` `("barbarossa", name)`). One move per unit technology,
+    /// for the same reason `ColumbusColonize` carries its territory: a bare
+    /// declaration would price at what the population half alone is worth.
+    Barbarossa { card: CardId },
+    /// J. S. Bach, once per turn as a civil action: upgrade `from` (any
+    /// staffed urban building) to `to` (a theater of the same or higher
+    /// level), paying the resource cost difference as normal (`engine/
+    /// actions.py` `("bach_theater", from_name, to_name)`). The only
+    /// cross-type upgrade in the game -- see `legal::bach_moves`.
+    BachTheater { from: CardId, to: CardId },
 
     // ---- responses to a decision somebody else opened (engine::interact) ----
     /// Commit `n` military strength to a colonization auction.
@@ -94,6 +107,11 @@ pub enum Move {
     SendUnit { card: CardId },
     /// Colonization (§11.3): commit one bonus card from the pool.
     SendBonus { card: CardId },
+    /// Colonization (§11.3): James Cook only -- discard one military card
+    /// (never a bonus card, see `interact::cook_pool`) from hand for +1
+    /// colony bonus, up to twice per colonization (`engine/interact.py`
+    /// `("send_discard", card_name)`).
+    SendDiscard { card: CardId },
     /// Stop committing units/bonuses to a colonization force.
     SendDone,
     /// Pick option `n` of an open `choice` decision. The option list is
@@ -130,10 +148,12 @@ impl Move {
             | OfferPact { card, .. }
             | PrepareEvent { card }
             | ColumbusColonize { card }
+            | Barbarossa { card }
             | Defend { card }
             | SendUnit { card }
-            | SendBonus { card } => Some(card),
-            Upgrade { from: _, to } => Some(to),
+            | SendBonus { card }
+            | SendDiscard { card } => Some(card),
+            Upgrade { from: _, to } | BachTheater { from: _, to } => Some(to),
             Take { .. } | WonderStep { .. } | Pop | PopFree | CancelPact { .. } | Bid { .. }
             | BidPass | DefendDone | SendDone | Choose { .. } | Churchill { .. } | EndTurn
             | PolPass | Resign | RemoveLeaderYellow => None,
@@ -157,6 +177,7 @@ impl Move {
                 | DefendDone
                 | SendUnit { .. }
                 | SendBonus { .. }
+                | SendDiscard { .. }
                 | SendDone
         )
     }

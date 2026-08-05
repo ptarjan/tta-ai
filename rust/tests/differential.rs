@@ -172,6 +172,7 @@ fn tag_of(m: &tta::moves::Move) -> &'static str {
         DefendDone => "defend_done",
         SendUnit { .. } => "send_unit",
         SendBonus { .. } => "send_bonus",
+        SendDiscard { .. } => "send_discard",
         SendDone => "send_done",
         Choose { .. } => "choose",
         Churchill { .. } => "churchill",
@@ -180,6 +181,8 @@ fn tag_of(m: &tta::moves::Move) -> &'static str {
         Resign => "resign",
         RemoveLeaderYellow => "remove_leader_yellow",
         ColumbusColonize { .. } => "columbus_colonize",
+        Barbarossa { .. } => "barbarossa",
+        BachTheater { .. } => "bach_theater",
     }
 }
 

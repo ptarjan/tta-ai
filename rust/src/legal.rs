@@ -407,6 +407,18 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         }
     }
 
+    // the two leaders whose ability IS an action-phase action (§3, §4).
+    // Mirrors `engine/actions.py::_action_moves`'s own `if p.leader ==
+    // "Frederick Barbarossa": ... elif p.leader == "J. S. Bach": ...` --
+    // an `elif`, i.e. mutually exclusive, exactly like this `if`/`else if`.
+    if leader_is(p, "Frederick Barbarossa") {
+        if have_ma {
+            barbarossa_moves(state, p, names, res, disc, &mut moves);
+        }
+    } else if leader_is(p, "J. S. Bach") && have_ca && !p.bach_upgrade_used {
+        bach_moves(state, p, names, res, &s, &mut moves);
+    }
+
     // destroy / disband (§3.6, §4.3)
     for id in names.iter().copied() {
         if p.techs.workers(id) == 0 {
@@ -505,6 +517,127 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     }
 
     moves
+}
+
+/// Frederick Barbarossa's and J. S. Bach's discounts, read off their OWN
+/// card rather than typed in as constants a second time (mirrors
+/// `engine/actions.py`'s module-level `COMBO_FOOD_DISCOUNT`/
+/// `COMBO_RESOURCE_DISCOUNT`, and the `HardcodedConstantsMatchTheData`
+/// contract `tests/test_score_audit.py` enforces on the Python side: an
+/// engine constant and the card printing it may not be two numbers).
+/// `(0, 0)` if `p`'s leader is not Barbarossa -- callers only reach this
+/// after `leader_is(p, "Frederick Barbarossa")`, so that fallback never
+/// actually fires; it exists so the function stays total.
+fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
+    let mut food = 0;
+    let mut resources = 0;
+    if !p.leader.is_none() {
+        for s in p.leader.get().special.iter() {
+            match s {
+                Special::ComboFoodDiscount(v) => food = *v as i32,
+                Special::ComboResourceDiscount(v) => resources = *v as i32,
+                _ => {}
+            }
+        }
+    }
+    (food, resources)
+}
+
+/// Frederick Barbarossa: one military action buys BOTH halves (§3.3+§4.1).
+/// Mirrors `engine/actions.py::_barbarossa_moves`.
+///
+/// *"By spending 1 military action, you may increase population and build a
+/// military unit all at once; the population increase costs 1 less food and
+/// the unit costs 1 less resource."*
+///
+/// UNLIMITED PER TURN, not once (docs/EXPERT_STRATEGY.md:138): the only limit
+/// is the military-action pool itself, spent by the `Build` half via
+/// `do_build` -- there is no once-per-turn flag to check here, and the
+/// caller only needs `have_ma` (mirroring Python's `if have_ma:` guard
+/// around this call in `_action_moves`).
+///
+/// ONE MOVE PER UNIT TECHNOLOGY the player has developed (regardless of
+/// whether it is currently staffed -- `p.workers_free` is NEVER checked: the
+/// population half of this very move supplies the worker the build needs),
+/// for the reason `ColumbusColonize` carries its territory: a bare
+/// declaration would price at what the population alone is worth and a
+/// 1-ply search would never pick it.
+///
+/// §3 (CoL p.5): "an action cannot be performed unless ALL required
+/// sub-steps/costs can be paid", so both halves are gated -- the discounted
+/// food AND the discounted resources -- and a Barbarossa who can only afford
+/// one half is offered neither.
+///
+/// `names` is already name-sorted (see [`action_moves`]'s tableau comment),
+/// so filtering it by `is_unit()` reproduces Python's `out.sort()` over
+/// `("barbarossa", name)` tuples for free.
+fn barbarossa_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, disc: i32, moves: &mut MoveList) {
+    let Some(pc) = pop_cost(state, p) else { return };
+    let (food_disc, res_disc) = barbarossa_discounts(p);
+    if (p.food as i32) < (pc - food_disc).max(0) {
+        return;
+    }
+    for id in names.iter().copied().filter(|id| id.kind().is_unit()) {
+        let cost = match costs::build_cost_for(state, p, id) {
+            Some(c) => c,
+            None => continue,
+        };
+        if res >= (cost - res_disc - disc).max(0) {
+            moves.push(Move::Barbarossa { card: id });
+        }
+    }
+}
+
+/// J. S. Bach: the only CROSS-TYPE upgrade in the game (§3.5 + card text).
+/// Mirrors `engine/actions.py::_bach_moves`.
+///
+/// *"Once per turn, as a civil action, you may upgrade one of your urban
+/// buildings to a theater of the same or higher level, paying the resource
+/// cost difference as normal."*
+///
+/// §3.5's upgrade action moves a worker "to the higher-level card of the SAME
+/// type", which is why [`action_moves`]'s own upgrade loop only ever compares
+/// same-kind cards; Bach is the one card that breaks that, so this is its own
+/// generator rather than a widening of that loop. Three consequences of the
+/// cross-type move the same-type loop never has to think about:
+///
+/// * **the level may be EQUAL** ("of the same or higher level"), so a
+///   level-2 temple may become a level-2 theater -- the same-type loop's
+///   strict `level() > lo.level()` would drop exactly that case, so this one
+///   uses `>=`;
+/// * **the urban limit is a REAL check.** §7.5 caps each urban TYPE at the
+///   government's number, and the same-type upgrade never has to check it
+///   because it keeps the type's count constant. This one does not: it adds
+///   a theater. A government with two theaters already at the cap cannot
+///   Bach a third;
+/// * **once per turn**, gated by the caller (`p.bach_upgrade_used`).
+///
+/// Theater-to-theater is deliberately NOT offered here (the `lo.kind() ==
+/// Theater` skip below): it is legal by the card's words -- a theater is an
+/// urban building -- but it is the plain `Upgrade` move at an identical
+/// civil action and an identical cost, so offering it here would be a
+/// strictly dominated duplicate that also burns the once-per-turn.
+fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s: &effects::Stats, moves: &mut MoveList) {
+    let has_theater = names.iter().any(|id| id.kind() == CardType::Theater);
+    if !has_theater || costs::urban_count(p, CardType::Theater) >= s.urban_limit {
+        return;
+    }
+    for lo in names.iter().copied().filter(|id| id.kind().is_urban()) {
+        if lo.kind() == CardType::Theater || p.techs.workers(lo) == 0 {
+            continue;
+        }
+        let lo_cost = costs::build_cost_for(state, p, lo).unwrap_or(0);
+        let lo_level = lo.level();
+        for hi in names.iter().copied().filter(|id| id.kind() == CardType::Theater) {
+            if hi.level() < lo_level {
+                continue;
+            }
+            let cost = (costs::build_cost_for(state, p, hi).unwrap_or(0) - lo_cost).max(0);
+            if res >= cost {
+                moves.push(Move::BachTheater { from: lo, to: hi });
+            }
+        }
+    }
 }
 
 /// §8.3 peaceful revolution -- and §8.3.4's Robespierre variant, which pays
@@ -1255,6 +1388,102 @@ mod tests {
         assert!(action_moves(&state, &state.players[0])
             .as_slice()
             .contains(&Move::Upgrade { from: card("Agriculture"), to: card("Irrigation") }));
+    }
+
+    // ---------------------------------------------------------- Barbarossa
+
+    #[test]
+    fn barbarossa_offers_a_discounted_combined_build_ignoring_workers_free() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Frederick Barbarossa");
+        p.military_actions = 1;
+        p.workers_free = 0; // the population half supplies its OWN worker
+        p.yellow_bank = 14; // pop_cost_base(14) == 3, minus his 1 food discount == 2
+        p.food = 2;
+        p.resources = 1; // Warriors costs 2, minus his 1 resource discount == 1
+        p.techs.insert(card("Warriors"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert!(action_moves(&state, &state.players[0])
+            .as_slice()
+            .contains(&Move::Barbarossa { card: card("Warriors") }));
+    }
+
+    #[test]
+    fn barbarossa_needs_both_halves_payable() {
+        let mut base = blank_player(0, card("Despotism"));
+        base.leader = card("Frederick Barbarossa");
+        base.military_actions = 1;
+        base.yellow_bank = 14;
+        base.resources = 1;
+        base.techs.insert(card("Warriors"), TechSlot { workers: 0, stored: 0 });
+
+        let mut short_food = base.clone();
+        short_food.food = 1; // needs 2 (3 - his discount of 1)
+        let state = one_player_state(short_food);
+        assert!(!action_moves(&state, &state.players[0])
+            .as_slice()
+            .contains(&Move::Barbarossa { card: card("Warriors") }));
+
+        let mut short_ma = base.clone();
+        short_ma.food = 2;
+        short_ma.military_actions = 0;
+        let state = one_player_state(short_ma);
+        assert!(!action_moves(&state, &state.players[0])
+            .as_slice()
+            .contains(&Move::Barbarossa { card: card("Warriors") }));
+    }
+
+    // ----------------------------------------------------------- Bach
+
+    #[test]
+    fn bach_offers_a_same_or_higher_level_cross_type_upgrade() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("J. S. Bach");
+        p.civil_actions = 4;
+        // Theology (Age I temple) and Drama (Age I theater) are the SAME
+        // level -- the equal-level case a strict `>` upgrade loop would drop.
+        p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+        p.resources = 10;
+        let state = one_player_state(p);
+        assert!(action_moves(&state, &state.players[0])
+            .as_slice()
+            .contains(&Move::BachTheater { from: card("Theology"), to: card("Drama") }));
+    }
+
+    #[test]
+    fn bach_never_offers_theater_to_theater_and_respects_once_per_turn_and_the_urban_limit() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("J. S. Bach");
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Drama"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Opera"), TechSlot { workers: 1, stored: 0 });
+        // Theater-to-theater is a dominated duplicate of the plain `Upgrade`
+        // move, not offered here at all.
+        let state = one_player_state(p.clone());
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().contains(&Move::BachTheater { from: card("Drama"), to: card("Opera") }));
+        // Despotism's urban_limit is 2 (`effects::Stats::urban_limit`'s
+        // default), and Drama+Opera already staff both theater slots, so
+        // even the legal Theology->Drama-or-Opera cross-type upgrade is
+        // blocked too -- the real, non-trivial urban-count check.
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::BachTheater { .. })));
+
+        // Once used this turn, nothing is offered even with room to spare.
+        let mut p2 = blank_player(0, card("Despotism"));
+        p2.leader = card("J. S. Bach");
+        p2.civil_actions = 4;
+        p2.resources = 10;
+        p2.bach_upgrade_used = true;
+        p2.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+        p2.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+        let state2 = one_player_state(p2);
+        assert!(!action_moves(&state2, &state2.players[0])
+            .as_slice()
+            .iter()
+            .any(|m| matches!(m, Move::BachTheater { .. })));
     }
 
     #[test]

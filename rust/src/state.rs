@@ -883,11 +883,17 @@ pub const MAX_FORCE: usize = MAX_HAND;
 
 /// The auction winner building the force it sacrifices (§11.3-11.5).
 ///
-/// Four lists, not two: `pool`/`bpool` are what is still AVAILABLE and
-/// `units`/`bonuses` are what has been COMMITTED, and both halves are read --
-/// `_colonize_moves` enumerates the pools, `force_value` scores the
-/// commitments. Each commitment is paid the moment it is made (see
-/// `interact::colonize`'s doc comment for why that is not an optimization).
+/// Six lists, not four: `pool`/`bpool`/`dpool` are what is still AVAILABLE
+/// and `units`/`bonuses`/`discards` are what has been COMMITTED, and both
+/// halves are read -- `interact::colonize_moves` enumerates the pools,
+/// `interact::force_value` scores the commitments. Each commitment is paid
+/// the moment it is made (see `interact::colonize`'s doc comment for why
+/// that is not an optimization).
+///
+/// `discards`/`dpool` are James Cook's addition (`engine/interact.py`'s
+/// `pend["discards"]`/`pend["dpool"]`, ded32dd): empty for every other
+/// leader, since `interact::cook_pool` only ever returns cards while Cook is
+/// in play.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Colonize {
     pub player: u8,
@@ -895,8 +901,10 @@ pub struct Colonize {
     pub bid: u8,
     pub units: CardList<MAX_FORCE>,
     pub bonuses: CardList<MAX_FORCE>,
+    pub discards: CardList<MAX_FORCE>,
     pub pool: CardList<MAX_FORCE>,
     pub bpool: CardList<MAX_FORCE>,
+    pub dpool: CardList<MAX_FORCE>,
 }
 
 /// One open decision. Python's `state.pending[-1]`, with its `"kind"` string

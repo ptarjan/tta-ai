@@ -503,6 +503,7 @@ pub fn parse_move(v: &Json) -> Result<Move, FixtureError> {
         "defend_done" => Move::DefendDone,
         "send_unit" => Move::SendUnit { card: move_card(arr, tag, 1)? },
         "send_bonus" => Move::SendBonus { card: move_card(arr, tag, 1)? },
+        "send_discard" => Move::SendDiscard { card: move_card(arr, tag, 1)? },
         "send_done" => Move::SendDone,
         "choose" => Move::Choose { n: move_u8(arr, tag, 1)? },
         "churchill" => Move::Churchill { choice: churchill_choice(arr, tag)? },
@@ -511,6 +512,8 @@ pub fn parse_move(v: &Json) -> Result<Move, FixtureError> {
         "resign" => Move::Resign,
         "remove_leader_yellow" => Move::RemoveLeaderYellow,
         "columbus_colonize" => Move::ColumbusColonize { card: move_card(arr, tag, 1)? },
+        "barbarossa" => Move::Barbarossa { card: move_card(arr, tag, 1)? },
+        "bach_theater" => Move::BachTheater { from: move_card(arr, tag, 1)?, to: move_card(arr, tag, 2)? },
         other => {
             return Err(FixtureError::new(format!(
                 "unknown move tag {other:?} -- Move enum in moves.rs has no matching variant"
@@ -837,8 +840,10 @@ fn parse_pending(v: &Json) -> Result<Pending, FixtureError> {
                 bid: pend_u8(v, "bid", tag)?,
                 units: card_list(v, "units", tag)?,
                 bonuses: card_list(v, "bonuses", tag)?,
+                discards: card_list(v, "discards", tag)?,
                 pool: card_list(v, "pool", tag)?,
                 bpool: card_list(v, "bpool", tag)?,
+                dpool: card_list(v, "dpool", tag)?,
             })
         }
         other => {
@@ -1943,6 +1948,18 @@ mod tests {
         let iron = CardId::by_name("Iron").expect("Iron must exist for this test to mean anything");
         let up = parse_json(r#"["upgrade", "Bronze", "Iron"]"#).unwrap();
         assert_eq!(parse_move(&up).unwrap(), Move::Upgrade { from: bronze, to: iron });
+
+        let warriors = CardId::by_name("Warriors").expect("Warriors must exist for this test to mean anything");
+        let barbarossa = parse_json(r#"["barbarossa", "Warriors"]"#).unwrap();
+        assert_eq!(parse_move(&barbarossa).unwrap(), Move::Barbarossa { card: warriors });
+
+        let theology = CardId::by_name("Theology").expect("Theology must exist for this test to mean anything");
+        let drama = CardId::by_name("Drama").expect("Drama must exist for this test to mean anything");
+        let bach = parse_json(r#"["bach_theater", "Theology", "Drama"]"#).unwrap();
+        assert_eq!(parse_move(&bach).unwrap(), Move::BachTheater { from: theology, to: drama });
+
+        let send_discard = parse_json(r#"["send_discard", "Warriors"]"#).unwrap();
+        assert_eq!(parse_move(&send_discard).unwrap(), Move::SendDiscard { card: warriors });
     }
 
     #[test]

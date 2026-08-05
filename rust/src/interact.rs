@@ -138,7 +138,9 @@ pub fn apply_pending(state: &mut GameState, mv: Move) {
         }
         Move::Bid { .. } | Move::BidPass => auction_move(state, mv),
         Move::Defend { .. } | Move::DefendDone => defense_move(state, mv),
-        Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDone => colonize_move(state, mv),
+        Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone => {
+            colonize_move(state, mv)
+        }
         other => panic!("{other:?} is not a response to an open decision"),
     }
     run_queue(state);
@@ -1021,8 +1023,91 @@ pub fn bonus_pool(p: &PlayerState) -> CardList<MAX_FORCE> {
     out
 }
 
-/// Colonization force of a concrete sacrifice (§11.3).
-pub fn force_value(state: &GameState, p: &PlayerState, units: &[CardId], bonuses: &[CardId]) -> i32 {
+/// Whether `p`'s active leader is the named leader. Duplicated from (not
+/// imported from) `legal.rs`/`apply.rs`/`costs.rs`'s own private copies --
+/// see `costs.rs`'s "A note on leader identity" for why this is a name
+/// compare against `Card.name` rather than a `Special` dispatch.
+#[inline]
+fn leader_is(p: &PlayerState, name: &str) -> bool {
+    !p.leader.is_none() && p.leader.get().name == name
+}
+
+/// James Cook may discard at most this many military cards per colonization.
+/// Mirrors `engine/interact.py::COOK_DISCARDS`. Deliberately NOT read off
+/// `Special::ColonizeDiscardUpTo2MilitaryCardsForBonus`'s payload -- that
+/// value is the +1 BONUS per discard (`colonizeDiscardUpTo2MilitaryCardsFor
+/// Bonus: 1` in the data), and the cap of two is a data wart: it is spelled
+/// inside the effect KEY's own name instead of carried beside it, so unlike
+/// the +1 it cannot be queried (`engine/interact.py`'s own comment on this,
+/// ded32dd). `costs.rs`/`effects.rs` have no test pinning this constant
+/// against the key the way `tests/test_leader_action_abilities.py` does on
+/// the Python side; there is nothing more machine-readable to pin it to here.
+const COOK_DISCARDS: i32 = 2;
+
+/// James Cook's `colonizeDiscardUpTo2MilitaryCardsForBonus` payload: the
+/// colony-force bonus per discard. `0` for anyone else -- callers only ever
+/// pass a non-empty `discards` slice while Cook is the leader (`cook_pool`
+/// is the only producer of `dpool`, and it is empty for every other leader).
+fn cook_bonus_per_discard(p: &PlayerState) -> i32 {
+    if p.leader.is_none() {
+        return 0;
+    }
+    p.leader
+        .get()
+        .special
+        .iter()
+        .find_map(|s| match s {
+            crate::cards::Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(v) => Some(*v as i32),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+/// The military cards James Cook may burn for +1 colonization force each.
+/// Mirrors `engine/interact.py::cook_pool`.
+///
+/// *"When colonizing, you may discard up to 2 military cards, gaining +1
+/// colony bonus for each card discarded."* ANY military card -- the card
+/// says "military cards", not "bonus cards", so a spent event, a tactic or a
+/// pact all qualify.
+///
+/// BONUS CARDS ARE EXCLUDED, and that is an ordering fact rather than a
+/// rule: §11.3 already lets ANY NUMBER of bonus cards into the force at
+/// their printed colonization value (1/2/3), unbounded and at least the flat
+/// +1 this pays, so spending one of Cook's two slots on a card that
+/// `send_bonus` pays at least as much for is weakly dominated in every
+/// position.
+///
+/// ONE ENTRY PER CARD, like [`unit_pool`]/[`bonus_pool`] and unlike
+/// [`discard_options`] (which de-duplicates for a menu): two copies of one
+/// card are two discards. [`colonize_moves`] de-duplicates the MOVES, which
+/// is the place that wants distinct names.
+///
+/// Ordered least-useful-first by [`defense_points`], for the reason written
+/// on [`discard_options`]: the evaluators cannot tell two same-age military
+/// cards apart, so the fallback has to be "burn the card that defends least".
+pub fn cook_pool(p: &PlayerState) -> CardList<MAX_FORCE> {
+    let mut out = CardList::<MAX_FORCE>::new();
+    if !leader_is(p, "James Cook") {
+        return out;
+    }
+    for &id in p.hand_military.as_slice() {
+        if id.kind() != CardType::Bonus {
+            out.push(id);
+        }
+    }
+    out.as_mut_slice().sort_by_key(|id| (defense_points(*id), id.name()));
+    out
+}
+
+/// Colonization force of a concrete sacrifice (§11.3, + James Cook).
+pub fn force_value(
+    state: &GameState,
+    p: &PlayerState,
+    units: &[CardId],
+    bonuses: &[CardId],
+    discards: &[CardId],
+) -> i32 {
     if units.is_empty() {
         return 0;
     }
@@ -1031,17 +1116,30 @@ pub fn force_value(state: &GameState, p: &PlayerState, units: &[CardId], bonuses
     total += effects::army_strength_units(p, units);
     total += effects::state_stats(state, p).colonize;
     total += bonuses.iter().map(|id| id.get().effects.colonization_bonus as i32).sum::<i32>();
+    total += cook_bonus_per_discard(p) * discards.len() as i32;
     total
 }
 
+/// How much force James Cook's discards could add at most (0 for anybody
+/// else). Mirrors `engine/interact.py::cook_ceiling`.
+fn cook_ceiling(p: &PlayerState) -> i32 {
+    let pool = cook_pool(p);
+    cook_bonus_per_discard(p) * (COOK_DISCARDS.min(pool.len() as i32))
+}
+
 /// Largest force this player could send -- the bidding ceiling (§11.2).
+///
+/// §11.2 caps a bid at "the maximum colonization force the bidder can
+/// actually send", so James Cook's two discards belong in it: they are
+/// force he can actually send, and leaving them out would let him win an
+/// auction and then be unable to bid the amount his own card was bought for.
 pub fn max_force(state: &GameState, p: &PlayerState) -> i32 {
     let units = unit_pool(p);
     if units.is_empty() {
         return 0;
     }
     let bonuses = bonus_pool(p);
-    force_value(state, p, units.as_slice(), bonuses.as_slice())
+    force_value(state, p, units.as_slice(), bonuses.as_slice(), &[]) + cook_ceiling(p)
 }
 
 /// A territory card revealed as the current event is auctioned (§11.1).
@@ -1131,9 +1229,9 @@ fn auction_move(state: &mut GameState, mv: Move) {
 /// (`tests/test_colony_sacrifice_choice.py`). The end state is identical
 /// either way.
 pub fn colonize(state: &mut GameState, player: u8, card: CardId, bid: u8) {
-    let (pool, bpool) = {
+    let (pool, bpool, dpool) = {
         let p = &state.players[player as usize];
-        (unit_pool(p), bonus_pool(p))
+        (unit_pool(p), bonus_pool(p), cook_pool(p))
     };
     assert!(
         !pool.is_empty(),
@@ -1148,8 +1246,10 @@ pub fn colonize(state: &mut GameState, player: u8, card: CardId, bid: u8) {
         bid,
         units: CardList::new(),
         bonuses: CardList::new(),
+        discards: CardList::new(),
         pool,
         bpool,
+        dpool,
     }));
     colonize_auto(state);
 }
@@ -1173,11 +1273,17 @@ fn colonize_auto(state: &mut GameState) {
 /// [`unit_pool`] is sorted weakest-first and [`bonus_pool`] cheapest-first, so
 /// "the mandatory unit, then bonus cards, then more units, and stop as soon as
 /// the bid is met" is exactly what the deleted `_build_force` did.
+///
+/// James Cook's discards join the list in the same place bonus cards do --
+/// after the mandatory unit and after the bonus cards, because §11.3's ">= 1
+/// unit" floor is a floor on the SACRIFICE and no card of any kind can stand
+/// in for it. Offered only while a discard slot remains (`COOK_DISCARDS`).
 fn colonize_moves(state: &GameState, c: &Colonize) -> MoveList {
     let p = &state.players[c.player as usize];
     let mut out = MoveList::new();
     if !c.units.is_empty()
-        && force_value(state, p, c.units.as_slice(), c.bonuses.as_slice()) >= c.bid as i32
+        && force_value(state, p, c.units.as_slice(), c.bonuses.as_slice(), c.discards.as_slice())
+            >= c.bid as i32
     {
         out.push(Move::SendDone);
     }
@@ -1194,6 +1300,13 @@ fn colonize_moves(state: &GameState, c: &Colonize) -> MoveList {
     let bn = distinct(c.bpool.as_slice(), &mut bbuf);
     for &id in &bbuf[..bn] {
         out.push(Move::SendBonus { card: id });
+    }
+    if (c.discards.len() as i32) < COOK_DISCARDS {
+        let mut dbuf = [CardId::NONE; MAX_FORCE];
+        let dn = distinct(c.dpool.as_slice(), &mut dbuf);
+        for &id in &dbuf[..dn] {
+            out.push(Move::SendDiscard { card: id });
+        }
     }
     for &id in &ubuf[..un] {
         out.push(Move::SendUnit { card: id });
@@ -1229,6 +1342,15 @@ fn colonize_step(state: &mut GameState, mv: Move) {
                 // §11.6: discarded before any territory draw.
                 c.bpool.remove_first(card);
                 c.bonuses.push(card);
+                let player = c.player;
+                state.players[player as usize].hand_military.remove_first(card);
+                economy::discard_military(state, card);
+                return;
+            }
+            Move::SendDiscard { card } => {
+                // James Cook, +1 colonization force per card discarded.
+                c.dpool.remove_first(card);
+                c.discards.push(card);
                 let player = c.player;
                 state.players[player as usize].hand_military.remove_first(card);
                 economy::discard_military(state, card);
@@ -1812,8 +1934,10 @@ mod tests {
             bid: 0,
             units: CardList::new(),
             bonuses: CardList::new(),
+            discards: CardList::new(),
             pool: unit_pool(p),
             bpool: bonus_pool(p),
+            dpool: cook_pool(p),
         };
         assert_eq!(colonize_moves(&state, &c).as_slice(), &[Move::SendUnit { card: warriors }]);
     }
@@ -1839,6 +1963,98 @@ mod tests {
         // The colony is not gained until `send_done`, so nothing else has
         // been paid out yet.
         assert!(state.players[0].colonies.is_empty());
+    }
+
+    // ------------------------------------------------------- James Cook
+
+    #[test]
+    fn cook_pool_excludes_bonus_cards_and_orders_by_defense_then_name() {
+        let mut state = blank_state(2);
+        state.players[0].leader = card("James Cook");
+        state.players[0].hand_military.push(card("Military Bonus (defense 2 / colonization 1)"));
+        state.players[0].hand_military.push(card("War over Territory"));
+        state.players[0].hand_military.push(card("Aggression: Raid (I)"));
+        let pool = cook_pool(&state.players[0]);
+        // The bonus card is excluded (`send_bonus` already pays at least as
+        // much, uncapped -- see `cook_pool`'s doc comment); every other
+        // military card defends at the flat +1 of a face-down card, so the
+        // tie is broken by name.
+        assert_eq!(pool.as_slice(), &[card("Aggression: Raid (I)"), card("War over Territory")]);
+    }
+
+    #[test]
+    fn cook_pool_is_empty_for_any_other_leader() {
+        let mut state = blank_state(2);
+        state.players[0].hand_military.push(card("War over Territory"));
+        assert!(cook_pool(&state.players[0]).is_empty());
+    }
+
+    /// §11.2 caps a bid at the force the bidder can ACTUALLY send, and James
+    /// Cook's discards are force he can actually send -- leaving them out of
+    /// `max_force` would let him win an auction and then be unable to bid
+    /// the amount his own card was bought for.
+    #[test]
+    fn max_force_includes_cooks_discard_ceiling() {
+        let mut state = blank_state(2);
+        let warriors = card("Warriors"); // strength 1, no other force source
+        state.players[0].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
+        let without_cook = max_force(&state, &state.players[0]);
+
+        state.players[0].leader = card("James Cook");
+        state.players[0].hand_military.push(card("Aggression: Raid (I)"));
+        state.players[0].hand_military.push(card("War over Territory"));
+        assert_eq!(
+            max_force(&state, &state.players[0]),
+            without_cook + 2,
+            "both discard slots, at +1 force each"
+        );
+    }
+
+    /// James Cook, *"when colonizing, you may discard up to 2 military
+    /// cards, gaining +1 colony bonus for each card discarded"* -- exercised
+    /// end to end through the public `colonize`/`apply_pending` entry
+    /// points, the same way `an_auction_ends_when_one_bidder_is_left_
+    /// holding_the_high_bid` exercises an auction.
+    #[test]
+    fn james_cook_may_discard_a_military_card_for_plus_one_colonization_force() {
+        let mut state = blank_state(2);
+        state.players[0].leader = card("James Cook");
+        let warriors = card("Warriors"); // strength 1
+        state.players[0].techs.insert(warriors, TechSlot { workers: 2, stored: 0 });
+        let raid = card("Aggression: Raid (I)");
+        let war = card("War over Territory");
+        state.players[0].hand_military.push(raid);
+        state.players[0].hand_military.push(war);
+        let terr = card("Developed Territory (I)");
+        colonize(&mut state, 0, terr, 2); // one Warriors alone (force 1) is short of a bid of 2
+        assert_eq!(state.decider(), 0, "the first unit was forced in, but the force is still short");
+        let moves = pending_moves(&state);
+        assert!(moves.as_slice().contains(&Move::SendDiscard { card: raid }));
+        assert!(moves.as_slice().contains(&Move::SendDiscard { card: war }));
+        assert!(!moves.as_slice().contains(&Move::SendDone), "1 strength does not meet a bid of 2 yet");
+
+        apply_pending(&mut state, Move::SendDiscard { card: raid });
+        assert_eq!(
+            state.players[0].hand_military.as_slice(),
+            &[war],
+            "the discarded card left the hand immediately"
+        );
+        // +1 force from the discard now meets the bid of 2 -- but a second
+        // Warriors and a second discard are still legal, so `colonize_auto`
+        // must not have resolved the decision on its own.
+        assert!(
+            pending_moves(&state).as_slice().contains(&Move::SendDone),
+            "the discard's +1 force now meets the bid"
+        );
+
+        apply_pending(&mut state, Move::SendDone);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.players[0].colonies.as_slice(), &[terr]);
+        assert_eq!(
+            state.discarded_military[Age::I as usize].as_slice(),
+            &[raid],
+            "the discard goes to the normal military discard pile, filed by its own age"
+        );
     }
 
     /// A one-unit force that already meets the bid has exactly one legal

@@ -138,6 +138,24 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
     !p.leader.is_none() && p.leader.get().name == name
 }
 
+/// Frederick Barbarossa's two discounts, read off his own card. Mirrors
+/// `legal.rs`'s `barbarossa_discounts` -- duplicated for the same reason
+/// `leader_is` is, above: `legal.rs`'s copy is private.
+fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
+    let mut food = 0;
+    let mut resources = 0;
+    if !p.leader.is_none() {
+        for s in p.leader.get().special.iter() {
+            match s {
+                Special::ComboFoodDiscount(v) => food = *v as i32,
+                Special::ComboResourceDiscount(v) => resources = *v as i32,
+                _ => {}
+            }
+        }
+    }
+    (food, resources)
+}
+
 /// Close the politics phase after ONE political action -- or after two.
 /// Mirrors `engine/actions.py::_end_politics`, and is now the single place
 /// every political handler in this file ends its phase, exactly as every
@@ -216,6 +234,8 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::OfferPact { card, target, side } => h_offer_pact(state, idx, card, target, side),
         Move::RemoveLeaderYellow => h_remove_leader_yellow(state, idx),
         Move::ColumbusColonize { card } => h_columbus_colonize(state, idx, card),
+        Move::Barbarossa { card } => h_barbarossa(state, idx, card),
+        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to),
 
         // Responses to an open decision. Unreachable: the `state.pending`
         // branch at the top of this function has already taken them. Getting
@@ -227,6 +247,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         | Move::DefendDone
         | Move::SendUnit { .. }
         | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
         | Move::SendDone
         | Move::Choose { .. } => panic!(
             "{mv:?} is a response to a decision, but `state.pending` is empty -- \
@@ -467,6 +488,47 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
 fn h_pop_free(state: &mut GameState, idx: u8) {
     economy::increase_population(&mut state.players[idx as usize], 0);
     state.players[idx as usize].ocean_liners_used = true;
+}
+
+/// Frederick Barbarossa's combined action: 1 military action buys BOTH
+/// halves. Mirrors `engine/actions.py::_h_barbarossa`.
+///
+/// The order is the card's: population first, then the build, so the worker
+/// the increase just produced is available for [`do_build`] to place. `
+/// do_build` pays the ONE military action the whole combination costs (it
+/// always pays one military action for a unit build) -- the population half
+/// costs NO civil action, matching `economy::increase_population` never
+/// touching one either.
+///
+/// The food cost is computed exactly as [`h_pop`] computes it (same
+/// `economy::pop_food_cost` call, same discount-pool reads) and then
+/// Barbarossa's own `comboFoodDiscount` is taken off, floored at 0 -- the
+/// legality check in `legal::barbarossa_moves` guarantees this can never go
+/// negative on food or come up short on the yellow bank.
+fn h_barbarossa(state: &mut GameState, idx: u8, unit: CardId) {
+    let (food_disc, res_disc) = barbarossa_discounts(&state.players[idx as usize]);
+    let pop_cost = {
+        let stats = effects::state_stats(state, &state.players[idx as usize]);
+        let p = &state.players[idx as usize];
+        economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank, p.one_time_discount.pop_food as i32)
+            .expect("h_barbarossa: called with an empty yellow bank (caller must check legality)")
+    };
+    let pay = (pop_cost - food_disc).max(0) as u16;
+    let ok = economy::increase_population(&mut state.players[idx as usize], pay);
+    debug_assert!(ok, "h_barbarossa: caller must ensure enough food (legality check)");
+    do_build(state, idx, unit, res_disc, false);
+}
+
+/// J. S. Bach: upgrade an urban building to a theater, 1 civil action, once
+/// a turn. Mirrors `engine/actions.py::_h_bach_theater`.
+///
+/// [`do_upgrade`] is the shared §3.5 implementation and already does the
+/// right thing for this cross-type move: the cost is the difference of the
+/// two build costs (floored at 0), the civil action is paid because a
+/// theater is not a unit, and the worker moves from one card to the other.
+fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId) {
+    state.players[idx as usize].bach_upgrade_used = true;
+    do_upgrade(state, idx, from, to, 0, false);
 }
 
 /// Ports `engine/actions.py::do_build`. `discount`/`free` exist for
@@ -1385,6 +1447,51 @@ mod tests {
         assert_eq!(state.players[0].resources, 10 - 2); // 4 - 2 = 2
         assert_eq!(state.players[0].techs.workers(card("Agriculture")), 0);
         assert_eq!(state.players[0].techs.workers(card("Irrigation")), 1);
+    }
+
+    // -------------------------------------------------------- Barbarossa
+
+    #[test]
+    fn h_barbarossa_grows_population_and_builds_a_unit_for_one_military_action() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Frederick Barbarossa");
+        p.military_actions = 2;
+        p.civil_actions = 4;
+        p.yellow_bank = 14; // pop_cost_base(14) == 3, minus his 1 food discount == 2
+        p.food = 2;
+        p.resources = 1; // Warriors costs 2, minus his 1 resource discount == 1
+        p.techs.insert(card("Warriors"), TechSlot { workers: 0, stored: 0 });
+        let mut state = one_player_state(p);
+        h_barbarossa(&mut state, 0, card("Warriors"));
+        let p = &state.players[0];
+        assert_eq!(p.food, 0, "paid the discounted population cost");
+        assert_eq!(p.yellow_bank, 13, "one token left the bank");
+        assert_eq!(p.resources, 0, "paid the discounted build cost");
+        assert_eq!(p.techs.workers(card("Warriors")), 1, "the new worker built the unit");
+        assert_eq!(p.military_actions, 1, "the ONE military action bought both halves");
+        assert_eq!(p.civil_actions, 4, "the population half costs no civil action");
+    }
+
+    // -------------------------------------------------------------- Bach
+
+    #[test]
+    fn h_bach_theater_upgrades_cross_type_pays_the_difference_and_marks_used_once() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("J. S. Bach");
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+        let mut state = one_player_state(p);
+        h_bach_theater(&mut state, 0, card("Theology"), card("Drama"));
+        let p = &state.players[0];
+        assert!(p.bach_upgrade_used, "at most once per turn");
+        assert_eq!(p.civil_actions, 3);
+        assert_eq!(p.techs.workers(card("Theology")), 0);
+        assert_eq!(p.techs.workers(card("Drama")), 1);
+        // Theology costs 5, Drama costs 4 -- the upgrade cost floors at 0
+        // rather than refunding the difference.
+        assert_eq!(p.resources, 10);
     }
 
     // ------------------------------------------------------------ develop
