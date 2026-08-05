@@ -4,13 +4,12 @@ read that file's module doc comment first for why a "filtered" mode exists.
 
 Two bot modes:
 
-  filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`, which is
-              now down to one move: a War over Technology declaration, whose
-              spoils are a choice `rust/src/combat.rs` does not yet offer.
-              This is the apples-to-apples number against the Rust bench:
-              both sides play the same restricted move space, so the
-              comparison is of engine speed, not of how much of the ruleset
-              is implemented.
+  filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`, which now
+              blocks nothing but `resign` (kept out on purpose -- it would
+              end the game early). This is the apples-to-apples number
+              against the Rust bench: both sides play the same restricted
+              move space, so the comparison is of engine speed, not of how
+              much of the ruleset is implemented.
 
   unfiltered  `engine.bots.RandomBot` -- the whole ported ruleset (Rust has
               no equivalent yet).  Reported separately, never blended into
@@ -52,19 +51,22 @@ from engine import actions
 
 def _blocked(move):
     tag = move[0]
-    # This list is now two entries long, and everything that came off it came
-    # off on 2026-08-05: `offer_pact`, `aggression` and `prepare_event`, plus
-    # the responses only they can open (`bid`/`bid_pass`/`defend`/
-    # `defend_done`/`send_unit`/`send_bonus`/`send_done`), when
-    # `interact::push_choice`/`start_defense` and
-    # `events::reveal_current_event` landed on the Rust side; `wonder_step`
-    # on Hollywood/Internet, when `effects::building_output` landed; and
-    # `play_action` on the `freeCivilAction`/`gainFoodOrResources`/
-    # per-player-count cards, all three of which `rust/src/apply.rs` now
-    # implements -- it has no `unimplemented!` left at all.
+    # This list is now ONE entry long, `resign`, which is not a gap: see
+    # `rust/tests/common/mod.rs::blocked_on`'s doc comment for why it stays
+    # excluded on purpose (it would end the game early). Everything else
+    # that used to be here came off on 2026-08-05: `offer_pact`,
+    # `aggression` and `prepare_event`, plus the responses only they can
+    # open (`bid`/`bid_pass`/`defend`/`defend_done`/`send_unit`/
+    # `send_bonus`/`send_done`), when `interact::push_choice`/
+    # `start_defense` and `events::reveal_current_event` landed on the Rust
+    # side; `wonder_step` on Hollywood/Internet, when `effects::
+    # building_output` landed; `play_action` on the `freeCivilAction`/
+    # `gainFoodOrResources`/per-player-count cards, when `rust/src/apply.rs`
+    # lost its last `unimplemented!`; and finally `war` on "War over
+    # Technology", once `interact::war_tech_spoils` offered its spoils
+    # choice through `ChoiceKind::WarTech` and `rust/tests/common/mod.rs`
+    # confirmed random play at 2/3/4p reaches and resolves it.
     if tag == "resign":
-        return True
-    if tag == "war" and move[1] == "War over Technology":
         return True
     return False
 
@@ -72,8 +74,8 @@ def _blocked(move):
 class FilteredRandomBot:
     """Uniform-random over the same restricted move space the Rust
     random-game test driver plays.  NOT `engine.bots.RandomBot`: that bot
-    excludes only `resign`, and so also plays War over Technology -- which
-    is exactly the extra work the Rust port does not do yet.
+    excludes nothing at all, and so also plays `resign`, which the Rust
+    driver holds out on purpose (`rust/tests/common/mod.rs::blocked_on`).
     """
     name = "filtered_random"
 

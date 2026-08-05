@@ -928,4 +928,40 @@ mod tests {
         assert_eq!(state.decider(), 0, "the VICTOR answers, whoever is to move");
         assert_eq!(crate::legal::legal_moves(&state).len(), 2, "science, or Cartography");
     }
+
+    /// Cross-checked directly against `tests/test_combat.py::
+    /// TestWar::test_the_victor_may_mix_cards_and_science` (confirmed passing
+    /// 2026-08-05, `python3.13 -m pytest tests/test_combat.py -k
+    /// victor_may_mix`), which is itself the FAQ p.8 example verbatim: *"As
+    /// long as you win enough Science points you can always choose to take
+    /// some or all of them in blue Special Technologies"* -- the digital
+    /// edition's own log for a 26-vs-14 win takes Code of Laws (cost 6) +
+    /// Cartography (cost 4) + 2 science out of a 12-point advantage. Same
+    /// setup here (advantage 12, loser holds both cards, loser starts with 30
+    /// science), same two steals in the same order, same result: (p0, p1)
+    /// science = (2, 28) and both cards end up in the victor's play area.
+    #[test]
+    fn apply_war_spoils_technology_the_victor_may_mix_cards_and_science() {
+        let p0 = blank_player(0, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 30;
+        p1.techs.insert(card("Code of Laws"), crate::state::TechSlot::default()); // techCost 6
+        p1.techs.insert(card("Cartography"), crate::state::TechSlot::default()); // techCost 4
+        let mut state = two_player_state(p0, p1);
+        let outcome = WarOutcome { victor: 0, loser: 1, advantage: 12, card: card("War over Technology") };
+        apply_war_spoils(&mut state, &outcome);
+
+        // Option 0 is science; the two cards are offered most-expensive
+        // first, so Code of Laws (6) is index 1 and Cartography (4) is index 2.
+        interact::apply_pending(&mut state, crate::moves::Move::Choose { n: 1 }); // Code of Laws: 6 of 12
+        assert!(state.players[0].techs.has(card("Code of Laws")));
+        assert!(!state.players[1].techs.has(card("Code of Laws")));
+
+        interact::apply_pending(&mut state, crate::moves::Move::Choose { n: 1 }); // Cartography: 4 of the last 6
+        assert!(state.players[0].techs.has(card("Cartography")));
+        assert!(!state.players[1].techs.has(card("Cartography")));
+
+        assert!(state.pending.is_empty(), "nothing left to steal");
+        assert_eq!((state.players[0].science, state.players[1].science), (2, 28));
+    }
 }

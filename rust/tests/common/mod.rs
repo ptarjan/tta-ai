@@ -93,13 +93,17 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
         // exhaustive over every `ChoiceKind` -- there is no unported resolver
         // behind it to fall into.
 
-        // combat.rs `apply_war_spoils` handles War over Territory and War
-        // over Culture. War over Technology's spoils are a CHOICE (science or
-        // blue technologies, and the victor may mix them). The panic lands a
-        // turn later, at resolution, so the DECLARATION is what to skip.
-        Move::War { card, .. } if card.get().base_name == "War over Technology" => {
-            Some("interact.rs: War over Technology spoils are a decision")
-        }
+        // `Move::War { .. } if card.get().base_name == "War over Technology"`
+        // was here: `combat.rs::apply_war_spoils` handled War over Territory
+        // and War over Culture, but Technology's spoils are a CHOICE (science
+        // or blue technologies, and the victor may mix them), and that choice
+        // was not yet offered through `interact.rs`. It is now --
+        // `interact::war_tech_spoils`/`war_tech_options`/`take_war_science`
+        // are fully ported and unit-tested (`interact.rs`, `combat.rs`), and
+        // `ChoiceKind::WarTech`'s resolver is wired into `resolve_choice`'s
+        // exhaustive dispatch. Removed 2026-08-05 after confirming random
+        // play at 2/3/4p reaches the declaration, opens the spoils choice and
+        // answers it.
 
         // `Move::PlayAction` was here, with an `action_card_is_blocked` helper
         // naming three gaps in `apply.rs::h_play_action`. All three are shut,
