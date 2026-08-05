@@ -288,7 +288,16 @@ fn named(name: &str) -> CardId {
 /// card printed 0 times at this player count (wonders, leaders, starting
 /// techs, and the 3+/4-player-only military cards) is simply absent -- §13's
 /// deck trimming is the same mechanism, not a separate filter.
-fn build_deck(age: Age, civil: bool, num_players: usize) -> CardList<MAX_DECK> {
+///
+/// `pub(crate)` (not private) so `bots::counting`'s composition lookups
+/// (`engine/bots/counting.py`'s `db.civil_deck`/`db.military_deck`) can call
+/// the SAME function that actually deals the game, rather than a second
+/// filter over `CARDS` that could drift from this one -- the "two registries"
+/// bug class DESIGN.md calls out, closed by construction for this fact.
+/// `num_players` must be `2..=4`; callers below that (a forced-win endgame
+/// with one player left, mirroring Python's `_live_count` being unclamped)
+/// must not call this -- see `bots::counting`'s own guard.
+pub(crate) fn build_deck(age: Age, civil: bool, num_players: usize) -> CardList<MAX_DECK> {
     let mut out = CardList::new();
     let slot = num_players - 2;
     for (i, c) in CARDS.iter().enumerate() {
@@ -349,6 +358,7 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         current_events: CardList::new(),
         past_events: CardList::new(),
         current_events_age: Age::A,
+        seeded_by: [crate::state::NOT_SEEDED; crate::cards::NUM_CARDS],
         scoring_events: CardList::new(),
         available_tactics: CardList::new(),
         civil_discard: std::array::from_fn(|_| CardList::new()),

@@ -8,3 +8,4 @@
 //! sit on top of it (`weighted.py`'s evaluator, the search itself) exist here.
 
 pub mod board_yields;
+pub mod counting;

@@ -15,6 +15,11 @@ pub const MAX_PLAYERS: usize = 4;
 /// §2.1 -- the civil card row is thirteen slots.
 pub const ROW_SIZE: usize = 13;
 
+/// `GameState::seeded_by`'s "nobody" sentinel -- the same convention
+/// `Tableau::ABSENT` uses (`u8::MAX`, never a real player index, which is
+/// 0..=3).
+pub const NOT_SEEDED: u8 = u8::MAX;
+
 /// Largest deck an age can hold, over all player counts. Measured from
 /// `data/*.json` on 2026-08-05: civil peaks at 53 (4p, Ages II and III),
 /// military at 50 (3p/4p, Age II). Sized with headroom and asserted on refill;
@@ -1230,6 +1235,23 @@ pub struct GameState {
     pub current_events: CardList<MAX_DECK>,
     pub past_events: CardList<MAX_DECK>,
     pub current_events_age: Age,
+    /// Event -> which player prepared it (`engine/state.py`'s `seeded_by`).
+    /// Bot-evaluator bookkeeping only -- nothing in this file, `legal.rs`,
+    /// `apply.rs`, `costs.rs`, `economy.rs` or `effects.rs` reads it, exactly
+    /// like Python's original (`apply.rs::h_prepare_event`'s doc comment used
+    /// to record this as a gap: "this port has no bot layer and `state.rs`
+    /// has no field for it" -- closed now that `bots::counting::event_pool`
+    /// is that reader). `[u8; NUM_CARDS]` rather than a map, dense/sparse
+    /// exactly like `Tableau::index` above: [`NOT_SEEDED`] ("nobody", the
+    /// overwhelming majority of entries) or a real player index. Write-once
+    /// in both engines -- `h_prepare_event` sets an entry and nothing ever
+    /// clears one (Python's `journal.py::touch` docstring shows a `del` as an
+    /// example of the *mechanism*, but no call site in `actions.py`/
+    /// `events.py` ever performs one on `seeded_by`) -- so a stale entry for
+    /// an event that has since resolved into `past_events` is harmless: every
+    /// reader only ever looks an entry up for a name still sitting in
+    /// `current_events`/`future_events`.
+    pub seeded_by: [u8; NUM_CARDS],
     pub scoring_events: CardList<8>,
     pub available_tactics: CardList<16>,
 

@@ -20,14 +20,14 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::cards::{Age, CardId, CardType};
+use crate::cards::{Age, CardId, CardType, NUM_CARDS};
 use crate::moves::{ChurchillChoice, Move, PactSide};
 use crate::state::{
     Auction, CardGains, CardList, Choice, ChoiceKind, ChoiceOption, Colonize, Defense,
     FreeBuildSpec, GainOption, GainOptions, GameState, Keyword, OneTimeDiscount, OptionList, Pact,
     PactList, Pending,
     PendingStack, Phase, PlayerState, Queue, QueueItem, Tableau, TechSlot, MAX_DECK, MAX_PLAYERS,
-    ROW_SIZE,
+    NOT_SEEDED, ROW_SIZE,
 };
 
 // ============================================================ json ======
@@ -618,9 +618,8 @@ pub fn fixture_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 // fixture from a known-good point rather than needing `game::new_game`
 // (`game.rs` is not ported -- see `apply.rs`'s top doc comment).
 //
-// Three Python `GameState` fields have NO home in `state.rs` and are
-// rejected rather than silently dropped if the dumped state actually needs
-// them:
+// One Python `GameState` field has NO home in `state.rs` and is rejected
+// rather than silently dropped if the dumped state actually needs it:
 //
 //   * `pending` / `queue` -- `interact.rs`'s decision queue. Not ported;
 //     `state.rs` has no field for it (apply.rs's top doc comment). Checked
@@ -629,23 +628,28 @@ pub fn fixture_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 //     loaded state look further along than it is: whose move is next, and
 //     what is legal, both depend on it) rather than every time.
 //
-// A second and third field are silently dropped even when non-empty,
-// deliberately NOT gated by `must_be_empty`:
+// Two more USED TO be silently dropped even when non-empty, deliberately not
+// gated by `must_be_empty` (the reasoning that made dropping them safe is
+// kept below, since a future field can be in the same position):
 //
-//   * `seeded_by` (event name -> which player prepared it) is read ONLY by
-//     the bots' own evaluation heuristics (`bots/weighted.py`,
-//     `bots/counting.py`, `bots/neural_encode.py` -- grepped 2026-08-05,
-//     nothing in `engine/actions.py`, `costs.py`, `economy.py` or
-//     `effects.py` touches it) -- never by `legal_moves`/`apply` or anything
-//     `costs.rs`/`economy.rs`/`effects.rs` port. This replay never calls a
-//     bot (it replays the fixture's already-`chosen` move), so it never
-//     needs this field. It is also the ONE dict that becomes permanently
-//     non-empty almost immediately (any `PrepareEvent` adds an entry that is
-//     never removed) -- gating on it the way `pending`/`queue` are gated
-//     would reject nearly every snapshot in the game after its opening
-//     plies, which was tried and measured: 327 of 327 later anchors failed
-//     to load. `must_be_empty` would be technically defensible but
-//     practically self-defeating here.
+//   * `seeded_by` (event name -> which player prepared it) used to be read
+//     ONLY by the bots' own evaluation heuristics (`bots/weighted.py`,
+//     `bots/counting.py`, `bots/neural_encode.py`), never by
+//     `legal_moves`/`apply` or anything `costs.rs`/`economy.rs`/`effects.rs`
+//     ports, so a replay that never calls a bot never needed it. It is
+//     LOADED now, by `seeded_by_field` below into `state::GameState::
+//     seeded_by` -- closed 2026-08-05 once `bots::counting::event_pool`
+//     became a real Rust reader (`rust/tests/counting.rs`'s differential
+//     test needs the SAME states this replay loads to carry real seed
+//     ownership, not an all-"nobody" array, or every position where a rival
+//     seeded an event would silently mismatch Python for a reason that has
+//     nothing to do with `counting.rs`). It was also the ONE dict that
+//     becomes permanently non-empty almost immediately (any `PrepareEvent`
+//     adds an entry that is never removed) -- gating it the way
+//     `pending`/`queue` are gated would have rejected nearly every snapshot
+//     in the game after its opening plies (measured: 327 of 327 later
+//     anchors failed to load), which is why loading it now rather than
+//     merely accepting it was the right fix, not `must_be_empty`.
 // `one_time_discount` used to be listed here as a third silently-dropped
 // field ("has no home on `PlayerState` at all"). It is LOADED now, by
 // `one_time_discount_field` below, into `state::OneTimeDiscount` -- and it
@@ -1583,6 +1587,28 @@ fn age_keyed_lists(v: &Json, key: &str) -> Result<[CardList<MAX_DECK>; 5], Fixtu
     Ok(out)
 }
 
+/// `state.seeded_by`: `{event_name: player_idx}`, sparse (most cards never
+/// appear). Unlike [`age_keyed_lists`] this is keyed by CARD NAME rather than
+/// `Age`, so each key resolves through `CardId::by_name` same as any other
+/// name in a fixture.
+fn seeded_by_field(v: &Json) -> Result<[u8; NUM_CARDS], FixtureError> {
+    let mut out = [NOT_SEEDED; NUM_CARDS];
+    let obj = match req(v, "seeded_by")? {
+        Json::Obj(fields) => fields,
+        other => return Err(FixtureError::new(format!("state.seeded_by: not an object, got {other:?}"))),
+    };
+    for (name, owner) in obj {
+        let id = CardId::by_name(name)
+            .ok_or_else(|| FixtureError::new(format!("state.seeded_by[{name:?}]: unknown card")))?;
+        let idx = owner
+            .as_f64()
+            .ok_or_else(|| FixtureError::new(format!("state.seeded_by[{name:?}]: not a number")))?
+            as u8;
+        out[id.0 as usize] = idx;
+    }
+    Ok(out)
+}
+
 fn opt_u16(v: &Json, key: &str) -> Result<Option<u16>, FixtureError> {
     match v.get(key) {
         None | Some(Json::Null) => Ok(None),
@@ -1664,6 +1690,7 @@ impl GameState {
             current_events: card_list(v, "current_events", "state")?,
             past_events: card_list(v, "past_events", "state")?,
             current_events_age: parse_age(&req_str(v, "current_events_age")?, "state.current_events_age")?,
+            seeded_by: seeded_by_field(v)?,
             scoring_events: card_list(v, "scoring_events", "state")?,
             available_tactics: card_list(v, "available_tactics", "state")?,
             civil_discard: age_keyed_lists(v, "civil_discard")?,
@@ -1735,6 +1762,7 @@ impl GameState {
         diff_cardlist(&mut out, "state.current_events", self.current_events.as_slice(), other.current_events.as_slice());
         diff_cardlist(&mut out, "state.past_events", self.past_events.as_slice(), other.past_events.as_slice());
         f!("state.current_events_age", self.current_events_age, other.current_events_age);
+        diff_seeded_by(&mut out, &self.seeded_by, &other.seeded_by);
         diff_cardlist(&mut out, "state.scoring_events", self.scoring_events.as_slice(), other.scoring_events.as_slice());
         diff_cardlist(
             &mut out,
@@ -1778,6 +1806,17 @@ impl GameState {
 fn diff_cardlist(out: &mut Vec<String>, path: &str, a: &[CardId], b: &[CardId]) {
     if a != b {
         out.push(format!("{path}: {a:?} != {b:?}"));
+    }
+}
+
+/// Names the individual cards that disagree, rather than dumping the whole
+/// 236-entry array on any single mismatch (`diff_cardlist`'s `{a:?} != {b:?}`
+/// would otherwise print a wall of `NOT_SEEDED`s around one real divergence).
+fn diff_seeded_by(out: &mut Vec<String>, a: &[u8; NUM_CARDS], b: &[u8; NUM_CARDS]) {
+    for i in 0..NUM_CARDS {
+        if a[i] != b[i] {
+            out.push(format!("state.seeded_by[{:?}]: {:?} != {:?}", CardId(i as u16), a[i], b[i]));
+        }
     }
 }
 

@@ -607,6 +607,7 @@ mod tests {
             current_events: CardList::new(),
             past_events: CardList::new(),
             current_events_age: crate::cards::Age::A,
+            seeded_by: [crate::state::NOT_SEEDED; crate::cards::NUM_CARDS],
             scoring_events: CardList::new(),
             available_tactics: CardList::new(),
             civil_discard: [CardList::new(), CardList::new(), CardList::new(), CardList::new(), CardList::new()],

@@ -1075,15 +1075,16 @@ fn h_pol_pass(state: &mut GameState, idx: u8) {
 /// bank its age as culture, and reveal-and-resolve the current event.
 /// Mirrors `engine/actions.py::_h_prepare_event`.
 ///
-/// One thing Python's version does that this one does NOT, matching every
-/// OTHER political handler in this file (all of which route through
-/// `end_politics` rather than reproducing Python's `_h_*` in full):
-/// `state.seeded_by[name] = p.idx` -- bot-evaluator bookkeeping only
+/// `state.seeded_by[card] = idx` -- bot-evaluator bookkeeping only
 /// (`bots/weighted.py`/`bots/counting.py`/`bots/neural_encode.py` are its
-/// only readers; nothing in `engine/`'s own rules reads it, and
-/// `journal.py`'s `del ...[ev]` on a past event is the same bot-only concern
-/// in reverse). This port has no bot layer and `state.rs` -- another
-/// worker's file -- has no field for it.
+/// only readers; nothing in `engine/`'s own rules reads it). USED TO BE a
+/// named gap here ("this port has no bot layer and `state.rs` has no field
+/// for it") -- closed 2026-08-05 once `bots::counting::event_pool` became
+/// that reader: `state.rs::GameState::seeded_by` now has a field for it, and
+/// this is its one and only writer, exactly as in Python (`journal.py`'s
+/// `del ...[ev]` docstring example is never actually called from
+/// `actions.py`/`events.py` -- grepped 2026-08-05 -- so "write-once, never
+/// cleared" is Python's real behaviour too, not a simplification).
 ///
 /// Julius Caesar's once-per-game second political action USED to be a second
 /// gap here (this handler always closed the phase, for every leader) --
@@ -1093,6 +1094,7 @@ fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
     state.players[idx as usize].hand_military.remove_first(card);
     state.players[idx as usize].culture += card.level() as u16;
     state.future_events.push(card);
+    state.seeded_by[card.0 as usize] = idx;
     events::reveal_current_event(state);
     end_politics(state, idx);
 }
@@ -1297,6 +1299,7 @@ mod tests {
             current_events: CardList::new(),
             past_events: CardList::new(),
             current_events_age: Age::A,
+            seeded_by: [crate::state::NOT_SEEDED; crate::cards::NUM_CARDS],
             scoring_events: CardList::new(),
             available_tactics: CardList::new(),
             civil_discard: [CardList::new(), CardList::new(), CardList::new(), CardList::new(), CardList::new()],
