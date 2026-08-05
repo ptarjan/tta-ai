@@ -486,10 +486,15 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // Pact mechanics (`engine/effects.py::_apply_pacts`, called from
         // `compute` itself). These genuinely belong in `state_stats` --
         // unlike the two groups above, this is a real gap, not an
-        // out-of-scope module. Blocked on `state.rs` growing a `pacts`
-        // field; see this module's top "KNOWN GAPS" doc comment.
-        A | B | BothPlayers | CancelledIfPartiesAttackEachOther | NoAttacksBetweenParties
-        | OnAttackBetweenParties => {}
+        // out-of-scope module. `state.rs` now has `pacts`/`Pact`/`PactList`
+        // and `A`/`B`/`BothPlayers`/`OnAttackBetweenParties` now carry a
+        // real `PactBlock` payload (gen_cards.py, 2026-08-05) -- the port
+        // itself is the next commit on top of this one; this arm is a
+        // type-layer-only placeholder so the crate keeps building in
+        // between (`(_)` discards the now-real payload deliberately, not
+        // silently: see this module's top "KNOWN GAPS").
+        A(_) | B(_) | BothPlayers(_) | CancelledIfPartiesAttackEachOther | NoAttacksBetweenParties
+        | OnAttackBetweenParties(_) => {}
     }
 }
 

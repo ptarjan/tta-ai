@@ -215,6 +215,86 @@ pub struct CardEffects {
     /// this key at all, so every government reported urban_limit as
     /// "missing" rather than its printed 2/3/3/3/3/4/4/4 -- see gen_cards.py.
     pub urban_building_limit: i16,
+
+    /// Per-turn food/resources. Absent from every ordinary card's `effects`
+    /// dict (farms/mines print through [`Production`] instead, and one-shot
+    /// gains are `gain_food`/`gain_resources` above) -- these two exist only
+    /// because a territory's `permanentEffects` and a pact's `A`/`B`/
+    /// `bothPlayers` block both print bare `food`/`resources` keys
+    /// (`engine/effects.py` `COLONY_PERMANENT_KEYS` / `FLAT_KEYS`'s
+    /// "aliases used by colony permanents and pact effects"). Nonzero only
+    /// on territory cards today; `PactBlock` carries its own copies for pact
+    /// blocks rather than reusing these (see `PactBlock`'s doc comment).
+    pub food: i16,
+    pub resources: i16,
+
+    /// Yellow tokens granted while entering play. Mirrors `blue_tokens`
+    /// above but for the other pool -- added for territory cards'
+    /// `permanentEffects.yellowTokens` (§11.5), which `compute()` never
+    /// reads (only `gain_colony`/`lose_colony`, combat.rs, do) but which
+    /// must not be silently dropped just because combat.rs isn't written
+    /// yet. Zero on every non-territory card in the base game today.
+    pub yellow_tokens: i16,
+}
+
+/// One-time gains a colonization territory card pays out the moment it is
+/// claimed (§11.5, `data/*.json` `immediateEffects`, `engine/interact.py`
+/// `gain_colony` -> `events.apply_gains`). Distinct from [`CardEffects`]
+/// deliberately: `CardEffects.food`/`resources` are ONGOING per-turn deltas
+/// (a colony's `permanentEffects`), where these are a ONE-SHOT amount paid
+/// once -- the two must never be added into the same field or a colony's
+/// permanent bonus and its welcome gift become the same number by accident.
+/// Not consumed anywhere in the port yet (combat.rs / colonization is not
+/// written), captured so `gen_cards.py` does not silently drop it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImmediateEffects {
+    pub food: i16,
+    pub resources: i16,
+    pub culture: i16,
+    pub science: i16,
+    pub population: i16,
+    pub draw_military_cards: i16,
+}
+
+/// The numeric grants inside ONE side of a pact card (§5.9): the `A`, `B`,
+/// `bothPlayers` or `onAttackBetweenParties` block in the printed data. A
+/// pact block prints a small, closed vocabulary that overlaps
+/// [`CardEffects`]'s (culture/food/resources/strength/militaryActions) plus
+/// five keys that exist ONLY for pacts (`engine/effects.py::Stats`'
+/// `tech_discount`/`war_immune`/`food_as_resource`/`resource_as_food`/
+/// `science_partners`, plus `attackerStrength` and
+/// `cultureProductionPerCompletedWonderOfTheOtherParty`, both read directly
+/// by bespoke pact functions rather than through the generic flat-field
+/// dispatch). A dedicated struct rather than reusing `CardEffects`: mixing
+/// the two would let a stray `CardEffects` field silently mean "add this to
+/// every stats recomputation" on a struct that is actually gated behind
+/// pact partnership, which is exactly the kind of same-fact-two-registries
+/// bug this project keeps a list of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PactBlock {
+    pub culture: i16,
+    pub food: i16,
+    pub resources: i16,
+    pub strength: i16,
+    pub military_actions: i16,
+    /// `technologyScienceDiscount`: science off every technology `p` develops.
+    pub tech_discount: i16,
+    /// `cannotBeDeclaredWarOnByAnyone`: magnitude ignored by Python too --
+    /// presence is the whole rule (`Stats.war_immune`).
+    pub war_immune: bool,
+    /// `mayUseFoodAsResource` / `mayUseResourceAsFood`: food/resources
+    /// spendable as the other pool, up to this many per turn.
+    pub food_as_resource: i16,
+    pub resource_as_food: i16,
+    /// `otherPartyPaysScience`: the OTHER party must pay 1 science for `p`'s
+    /// technology to be developed at all. Magnitude ignored by Python
+    /// (`Stats.science_partners` is a presence list, not an amount) --
+    /// `bool`, matching `war_immune` above.
+    pub other_party_pays_science: bool,
+    pub culture_per_wonder_of_other_party: i16,
+    /// `onAttackBetweenParties.attackerStrength`: bonus to the attacker's
+    /// strength ONLY when the two pact parties fight each other (§5.4.2).
+    pub attacker_strength: i16,
 }
 
 /// Printed per-worker production. A struct, not a single scalar, because one
@@ -280,6 +360,35 @@ pub struct Card {
     /// or three unrelated one-offs, and because events additionally carry their
     /// targeting this way until the events port gives targeting its own type.
     pub special: &'static [Special],
+
+    /// Wonders only (§9): resources to build each stage, in order --
+    /// Pyramids is `[3, 2, 1]`. Empty for every non-wonder. `&'static [u8]`
+    /// rather than a fixed array for the same reason `special` above is a
+    /// slice: every wonder in the base game has 2-5 stages and a
+    /// fixed-length array would need to be the max width, padded, for the
+    /// rest -- ambiguous with a real zero-cost stage, which never happens
+    /// but would be unrepresentable-vs-undetectable if it did.
+    pub stages: &'static [u8],
+    /// Governments only (§8.3): science cost to develop this government
+    /// peacefully, through the normal `develop` action. Zero (Despotism,
+    /// and every non-government card) means "not developable this way" --
+    /// distinct from `science_cost` above, which is populated from the
+    /// data's `techCost` key and is 0 for every government (a government's
+    /// `techCost` is always null: it is never taken like an ordinary
+    /// technology). See `revolution_cost` for the other price a government
+    /// has.
+    pub peaceful_cost: u8,
+    /// Governments only (§8.3.4): science cost to seize this government by
+    /// violent revolution instead, gated on every civil action this turn
+    /// still being unspent (`engine/actions.py::_can_revolt`). A DIFFERENT
+    /// number from `peaceful_cost` for the same government -- Paul has
+    /// ruled both paths must be representable at once, so this is its own
+    /// field, not a fallback for `peaceful_cost`.
+    pub revolution_cost: u8,
+    /// Territory (colonization) cards only (§11.5): the one-shot gain paid
+    /// out the moment this colony is claimed. See [`ImmediateEffects`]'s
+    /// doc comment for why this is not folded into `effects`.
+    pub immediate_effects: ImmediateEffects,
 }
 
 /// The units a tactic's army is made of (§10.2).
