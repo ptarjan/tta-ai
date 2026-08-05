@@ -14,30 +14,21 @@
 //! `uprising`, `draw_military`, `_end_of_turn_leader_bonus` and the
 //! [`end_of_turn`] orchestrator itself (§6.6).
 //!
-//! ## What is still missing, and why it is missing LOUDLY
-//!
 //! §6.6 step 1 -- "discard down to the military hand limit" -- is the ONLY
 //! decision the end-of-turn sequence asks the player to make (RB p.20, quoted
 //! in RULES_SPEC §6.6: "Once you have decided which military cards to
 //! discard, the rest of your turn is automatic"). Python routes it through
-//! `interact.push_choice`, which has two behaviours:
-//!
-//!   * one distinct card name in an over-limit hand -> `auto=True` resolves it
-//!     immediately WITHOUT opening a decision (there is nothing to choose
-//!     between, so §6.6 is satisfied);
-//!   * two or more distinct names -> a genuine choice, pushed onto
-//!     `state.pending`, and `end_of_turn` returns `False` with steps 2-5 NOT
-//!     run. The turn does not advance until the player answers.
-//!
-//! `GameState` has no `pending` field (`interact.rs` is not ported -- the gap
-//! `apply.rs` and `legal.rs` already document). The first behaviour is ported
-//! faithfully here and needs nothing. The second CANNOT be: there is nowhere
-//! to record the open decision, and both alternatives are silent divergences
-//! -- returning `false` without recording anything would make the caller
-//! either spin or skip production, and auto-picking option 0 would change
-//! which card a bot discards. So it panics, naming the gap, exactly as
-//! `apply.rs::h_play_action` panics on the equivalent genuine-tie case for an
-//! ordered free civil action. See [`discard_excess_military`].
+//! `interact.discard_excess_military`/`push_choice`; [`end_of_turn`] here
+//! calls [`crate::interact::discard_excess_military`] directly rather than
+//! carrying a second copy of the rule. (An earlier revision of this file DID
+//! carry a private copy, written before `state.pending`/`interact.rs`
+//! existed, which `unimplemented!()`d the genuine-choice case -- that copy is
+//! gone now that the real decision queue exists; see `interact.rs`'s own doc
+//! comment for why two implementations of one rule was the bug class
+//! DESIGN.md exists to close.) [`end_of_turn`] preserves Python's suspend
+//! contract exactly: it returns `false` when step 1 opened a real decision,
+//! with steps 2-5 NOT run -- the caller, `game::resume_end_turn`, queues the
+//! resume and hands off; it returns `true` when the sequence ran to the end.
 //!
 //! One field-level gap remains, and it is not this module's to close:
 //! `PlayerState` has no `one_time_discount` (events are not ported), so
@@ -46,6 +37,7 @@
 
 use crate::cards::{Age, CardId, CardType, Special};
 use crate::effects;
+use crate::interact;
 use crate::rng::{shuffle_cards, PyRandom};
 use crate::state::{CardList, GameState, PlayerState, Tableau, MAX_PLAYERS};
 
@@ -480,85 +472,12 @@ pub fn draw_military(state: &mut GameState) -> Option<CardId> {
 
 // ------------------------------------------------- end-of-turn sequence
 
-/// §6.6 step 1: discard down to the military hand limit.
-///
-/// Returns `true` when the sequence must SUSPEND on a real decision, `false`
-/// when the hand is legal (or was made legal without a decision). Idempotent
-/// -- it re-reads the limit every pass -- which is the whole resume mechanism
-/// on the Python side.
-///
-/// Ports `engine/interact.py::discard_excess_military`, which belongs to
-/// `interact.rs`; it lives here because `interact.rs` does not exist and this
-/// is its only caller. Move it when that module lands.
-///
-/// The limit is `military_actions + military_hand_limit` (§6.7), read off
-/// CARDS IN PLAY, not off the hand -- so it cannot move while the loop runs.
-/// The hand count is `hand_military.len()`, matching Python's
-/// `len(p.hand_military)`: `hidden_military` (cards known to be held but not
-/// identified, an app-harness concept) is deliberately NOT counted, since a
-/// card the engine cannot name is a card it cannot discard.
-///
-/// # Panics
-///
-/// When the hand is over the limit and holds two or more DISTINCT cards --
-/// the genuine choice that needs `interact.rs`'s decision queue. See this
-/// module's top doc comment for why this is a panic and not a quiet default.
-fn discard_excess_military(state: &mut GameState, idx: u8) -> bool {
-    loop {
-        let p = &state.players[idx as usize];
-        let s = effects::state_stats(state, p);
-        let limit = s.military_actions + s.military_hand_limit;
-        if p.hand_military.len() as i32 <= limit {
-            return false;
-        }
-        // Python: `opts = discard_options(p.hand_military)`, the DISTINCT
-        // card names. Its ordering (least defensively useful first) is
-        // `interact.rs`'s business and is only observable once there is more
-        // than one option -- which is exactly the case that panics below --
-        // so it is not duplicated here.
-        let mut distinct = 0usize;
-        let mut only = CardId::NONE;
-        for (i, &c) in p.hand_military.as_slice().iter().enumerate() {
-            if !p.hand_military.as_slice()[..i].contains(&c) {
-                distinct += 1;
-                if distinct == 1 {
-                    only = c;
-                } else {
-                    break;
-                }
-            }
-        }
-        if distinct == 0 {
-            // Python: `if not opts: return False`. Only reachable with an
-            // empty hand and a NEGATIVE limit, which no government prints;
-            // ported anyway because Python's guard is what stops the `while
-            // True` from spinning.
-            return false;
-        }
-        if distinct > 1 {
-            unimplemented!(
-                "end_of_turn step 1: player {idx} must choose which of {} military cards \
-                 to discard (hand {} > limit {limit}), and there is nowhere to record the \
-                 decision -- GameState has no `pending` field, interact.rs is not ported",
-                distinct,
-                p.hand_military.len(),
-            );
-        }
-        // One distinct name: Python's `push_choice(..., auto=True)` resolves
-        // it immediately and returns False, so the loop continues rather than
-        // suspending. `_c_discard_military` removes ONE copy and files it.
-        state.players[idx as usize].hand_military.remove_first(only);
-        discard_military(state, only);
-    }
-}
-
 /// §6.6, in exact order. Mutates `state.players[idx]` in place.
 ///
 /// Returns `false` when step 1 suspended on a discard decision and steps 2-5
-/// have NOT run; `true` when the sequence ran to the end. (Today the suspend
-/// path panics instead for anything but the no-choice case -- see
-/// [`discard_excess_military`] -- but the `bool` is Python's contract and the
-/// caller `game.rs` will need it, so it is not collapsed away.)
+/// have NOT run; `true` when the sequence ran to the end. Step 1 itself is
+/// [`crate::interact::discard_excess_military`] -- see the module doc
+/// comment above for why there is exactly one implementation of the rule.
 ///
 /// The order below is the rules text and is load-bearing in ways that are
 /// invisible if you get them wrong:
@@ -599,7 +518,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // invalidate here or at step 5.
 
     // ---- 1. discard excess military cards -----------------------------
-    if discard_excess_military(state, idx) {
+    if interact::discard_excess_military(state, idx) {
         return false;
     }
 
@@ -1461,16 +1380,34 @@ mod tests {
         );
     }
 
+    /// A genuine choice (two or more distinct over-limit card names) must
+    /// SUSPEND the sequence: `end_of_turn` returns `false`, nothing is
+    /// discarded yet, and steps 2-5 must not have run. This is the case the
+    /// deleted private copy of `discard_excess_military` used to
+    /// `unimplemented!()` on; routing through `interact::
+    /// discard_excess_military` instead is what makes it reachable at all.
     #[test]
-    #[should_panic(expected = "must choose which of")]
-    fn end_of_turn_over_the_limit_with_a_real_choice_is_a_named_gap() {
+    fn end_of_turn_over_the_limit_with_a_real_choice_suspends() {
         let mut st = duel();
         st.players[0].yellow_bank = 17;
         st.players[0].blue_total = 11;
-        st.players[0].hand_military.push(card("Military Bonus (defense 2 / colonization 1)"));
-        st.players[0].hand_military.push(card("Military Bonus (defense 4 / colonization 2)"));
-        st.players[0].hand_military.push(card("Military Bonus (defense 6 / colonization 3)"));
-        end_of_turn(&mut st, 0);
+        let a = card("Military Bonus (defense 2 / colonization 1)");
+        let b = card("Military Bonus (defense 4 / colonization 2)");
+        let c = card("Military Bonus (defense 6 / colonization 3)");
+        st.players[0].hand_military.push(a);
+        st.players[0].hand_military.push(b);
+        st.players[0].hand_military.push(c);
+
+        assert!(!end_of_turn(&mut st, 0), "a genuine choice must suspend the sequence");
+        assert!(!st.pending.is_empty(), "the discard decision must be recorded as pending");
+        assert_eq!(
+            st.players[0].hand_military.as_slice(),
+            &[a, b, c],
+            "nothing is discarded until the player answers"
+        );
+        // Step 5 resets `military_actions` from the government (2, under
+        // Despotism); still 0 here proves steps 2-5 did not run.
+        assert_eq!(st.players[0].military_actions, 0, "steps 2-5 must not have run");
     }
 
     #[test]

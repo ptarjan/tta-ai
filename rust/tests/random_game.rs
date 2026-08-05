@@ -20,9 +20,9 @@
 //!
 //! Every skip is attributable: if a position ever offers ONLY blocked moves,
 //! [`play_random`] returns [`Played::Blocked`] carrying the reasons, and the
-//! tests fail with them rather than with a stuck engine. There is exactly one
-//! shim, [`settle_military_discard`], and its doc comment says what has to
-//! land for it to be deleted.
+//! tests fail with them rather than with a stuck engine. There is no shim
+//! here: an earlier revision of this file carried one, [`resolve_pending`]'s
+//! doc comment says what it worked around and why it is gone.
 
 use tta::cards::{Age, CardId, Special, CARDS};
 use tta::game;
@@ -101,17 +101,27 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
             Some("effects.rs: Hollywood/Internet completion culture needs building_output")
         }
 
-        // Responses to a decision nothing can have opened yet. `legal.rs`
-        // does not generate them today; listed so that the day it does, the
-        // driver skips them loudly instead of panicking inside `apply`.
+        // Responses to a decision nothing can have opened yet: `interact::
+        // start_auction`/`colonize` (territory colonization) are called from
+        // nowhere in `apply.rs`/`combat.rs` today, so `Pending::Auction` and
+        // `Pending::Colonize` never arise; listed so that the day auctions
+        // are wired up, the driver skips them loudly instead of panicking
+        // inside `apply`.
+        //
+        // `Move::Choose` is NOT here: since `economy::end_of_turn` was
+        // rewired onto `interact::discard_excess_military` (the shim this
+        // file used to carry did the same thing by hand), a genuine
+        // multi-card §6.6 step-1 discard is the one already-reachable
+        // `Pending::Choice`, and `interact::resolve_choice`'s dispatch is
+        // exhaustive over every `ChoiceKind` -- there is no unported
+        // resolver behind it to fall into.
         Move::Bid { .. }
         | Move::BidPass
         | Move::Defend { .. }
         | Move::DefendDone
         | Move::SendUnit { .. }
         | Move::SendBonus { .. }
-        | Move::SendDone
-        | Move::Choose { .. } => Some("interact.rs: a response to an open decision"),
+        | Move::SendDone => Some("interact.rs: a response to an open decision"),
 
         // Not a missing module: resigning is a legal, fully-ported move that
         // ends the game early (§5.11), which would make "a game played to the
@@ -134,34 +144,6 @@ fn action_card_is_blocked(card: CardId) -> bool {
                 | Special::ResourcesForMilitaryUnitsPerStrongerCivilization
         )
     })
-}
-
-/// §6.6 step 1, settled just before the turn ends.
-///
-/// TEMPORARY, AND THE ONLY SHIM IN THIS FILE. There are two implementations
-/// of "discard down to the military hand limit" in the crate right now:
-/// `interact::discard_excess_military`, which opens a real decision the
-/// player answers, and `economy::discard_excess_military`, a private copy
-/// written before `state.pending` existed which `unimplemented!()`s the
-/// multi-option case. `economy::end_of_turn` calls the private one, so a
-/// random game panics within a few rounds. `interact.rs`'s own doc comment
-/// carries the request to economy.rs's owner to delete the copy and call the
-/// real one -- exactly the "two registries, nothing fails when they
-/// disagree" bug class DESIGN.md is about.
-///
-/// Until that lands, the driver runs the real implementation itself, right
-/// where §6.6 puts it (immediately before the rest of the end-of-turn
-/// sequence, so the player still had the cards for the whole of their turn),
-/// and answers the decision with a random legal option. `economy`'s copy then
-/// finds the hand already legal and no-ops. Delete this function and its one
-/// call site when economy.rs is rewired; nothing else changes.
-fn settle_military_discard(state: &mut GameState, rng: &mut Rng) {
-    while tta::interact::discard_excess_military(state, state.current) {
-        let options = tta::interact::pending_moves(state);
-        assert!(!options.is_empty(), "a pending discard with nothing to answer it");
-        let n = options.len();
-        game::step(state, options.as_slice()[rng.below(n)]);
-    }
 }
 
 /// How far a driven game got.
@@ -217,24 +199,40 @@ fn play_random(num_players: u8, seed: u64) -> (GameState, Played) {
         }
         let n = playable.len();
         let mv = playable[rng.below(n)];
-        if mv == Move::EndTurn {
-            settle_military_discard(&mut state, &mut rng);
-        }
         game::step(&mut state, mv);
         moves += 1;
     }
 }
 
-/// End turns (settling §6.6 step 1 as it goes) until the game is over or
-/// `max` turns have passed. Used by the tests that exercise the row/age
-/// machinery, which needs many more turns than a random game survives.
+/// Answer whatever is pending with a uniformly random legal response,
+/// looping until nothing is left open. §6.6 step 1's genuine-choice case
+/// suspends `Move::EndTurn` on a real `Pending::Choice` (`economy::
+/// end_of_turn` -> `interact::discard_excess_military`); `legal_moves`
+/// returns that decision's options while it is open, and answering it can
+/// itself re-suspend on a second discard decision, or -- once the hand is
+/// legal -- drain `state.queue`'s `EndOfTurn` continuation and actually
+/// complete the turn (`game::resume_end_turn`'s doc comment). Looping on
+/// `state.pending` rather than on a fixed number of rounds is what makes
+/// this correct either way.
+fn resolve_pending(state: &mut GameState, rng: &mut Rng) {
+    while !state.pending.is_empty() {
+        let options = tta::legal::legal_moves(state);
+        assert!(!options.is_empty(), "an open decision with nothing to answer it");
+        let n = options.len();
+        game::step(state, options.as_slice()[rng.below(n)]);
+    }
+}
+
+/// End turns until the game is over or `max` turns have passed. Used by the
+/// tests that exercise the row/age machinery, which needs many more turns
+/// than a random game survives.
 fn end_turns(state: &mut GameState, rng: &mut Rng, max: usize) {
     for _ in 0..max {
         if state.game_over {
             return;
         }
-        settle_military_discard(state, rng);
         game::step(state, Move::EndTurn);
+        resolve_pending(state, rng);
     }
 }
 
