@@ -100,23 +100,19 @@
 //!   cards is the 2+-legal-options case described above, not a missing place
 //!   to put the value.
 //!
-//! One thing is a genuine, self-contained gap in THIS module, not a missing
-//! dependency: [`wonder_completion_culture`] implements the two `onBuildCulture`
-//! cases that read only `p`'s own tableau (`Fast Food Chains`,
-//! `onBuildCulturePerTechLevelSum`), and panics naming `Hollywood`/`Internet`.
-//! Both score "the effective output of a specific set of buildings", which in
-//! Python is `effects.building_output` -- reusable by both `compute()` and
-//! this trigger because it is a public module-level function. `effects.rs`
-//! keeps its equivalent building-modifier arithmetic (`best_staffed`,
-//! `workers_on`, the `apply_special` match arms for `BestTheaterDoubleCulture`
-//! and friends) private to its own module, so producing a matching answer here
-//! would mean a SECOND copy of that arithmetic -- exactly the "present in this
+//! [`wonder_completion_culture`] implements all three `onBuildCulture` cases
+//! now, including `Hollywood`/`Internet`, which score "the effective output
+//! of a specific set of buildings" (§9.2) via `effects::building_output` --
+//! CLOSED 2026-08-05. `effects.rs` grew a public `building_output` that both
+//! `compute()` (through `mine_resources`/`farm_food`) and this trigger call,
+//! rather than this module carrying a second copy of the building-modifier
+//! arithmetic (`best_staffed`, `workers_on`, the `apply_special` match arms
+//! for `BestTheaterDoubleCulture` and friends stay private to `effects.rs`,
+//! reached only through that one function) -- exactly the "present in this
 //! registry, absent from that one, with nothing that fails when they
 //! disagree" bug class this whole rewrite exists to close (Python guards the
 //! single-source property here with `tests/test_card_pricing.py::
-//! TestOneImplementation`). Fixing this properly means `effects.rs` growing a
-//! public `building_output`-equivalent that both modules call; that is
-//! `effects.rs`'s file to change, not this one's.
+//! TestOneImplementation`).
 //!
 //! ## STRICT legality (not ported)
 //!
@@ -370,8 +366,7 @@ fn on_build_unit(p: &mut PlayerState) {
 // ---------------------------------------------------- wonder-completion culture
 
 /// Culture an Age III wonder scores on completion (§9.2). Mirrors
-/// `engine/effects.py::wonder_completion_culture`; see this module's top doc
-/// comment for why `Hollywood`/`Internet` are not ported.
+/// `engine/effects.py::wonder_completion_culture`.
 pub(crate) fn wonder_completion_culture(p: &PlayerState, wonder: CardId) -> i32 {
     let card = wonder.get();
     if card.special.contains(&Special::OnBuildCulturePerTechLevelSum) {
@@ -401,10 +396,21 @@ fn one_time_culture(p: &PlayerState, base_name: &str) -> i32 {
             let urban_or_unit_workers = workers_on_kind(p, |k| k.is_urban() || k.is_unit());
             2 * production_workers + urban_or_unit_workers
         }
-        "Hollywood" | "Internet" => unimplemented!(
-            "{base_name} needs effects::building_output (a public equivalent of \
-             effects.rs's private building-modifier arithmetic) -- see this \
-             module's top doc comment on why it is not duplicated here"
+        // Hollywood and the Internet score what the buildings ACTUALLY
+        // produce, not their printed production -- see `effects::
+        // building_output`'s doc comment for the full worked-example list
+        // (Chaplin, Shakespeare, Newton, Einstein, ...).
+        "Hollywood" => {
+            2 * effects::building_output(
+                p,
+                |k| matches!(k, CardType::Theater | CardType::Library),
+                &[effects::Attr::Culture],
+            )
+        }
+        "Internet" => effects::building_output(
+            p,
+            |k| k.is_urban(),
+            &[effects::Attr::Culture, effects::Attr::Science, effects::Attr::Strength],
         ),
         _ => 0,
     }
@@ -2186,11 +2192,49 @@ mod tests {
         assert_eq!(gained, 5);
     }
 
+    /// Hollywood: "twice the total culture production of your theaters and
+    /// libraries" (§9.2) -- including a modifier that reaches into that
+    /// production, not just the printed numbers. Shakespeare's
+    /// `CulturePerLibraryTheaterPair(2)` adds `2 * min(library workers,
+    /// theater workers)` on top of Drama's printed 2 culture and Printing
+    /// Press's printed 1: `(2 + 1 + 2*min(1,1)) * 2 == 10`.
     #[test]
-    #[should_panic(expected = "needs effects::building_output")]
-    fn wonder_completion_culture_hollywood_is_a_named_gap() {
-        let p = blank_player(0, card("Despotism"));
-        wonder_completion_culture(&p, card("Hollywood"));
+    fn wonder_completion_culture_hollywood_counts_modifiers() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        p.techs.insert(card("Drama"), TechSlot { workers: 1, stored: 0 }); // theater, culture 2
+        p.techs.insert(card("Printing Press"), TechSlot { workers: 1, stored: 0 }); // library, culture 1
+        let gained = wonder_completion_culture(&p, card("Hollywood"));
+        assert_eq!(gained, 10);
+    }
+
+    /// A Hollywood completion with no modifiers in play is just twice the
+    /// printed theater/library culture: `(2 + 1) * 2 == 6`.
+    #[test]
+    fn wonder_completion_culture_hollywood_printed_only() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Drama"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Printing Press"), TechSlot { workers: 1, stored: 0 });
+        let gained = wonder_completion_culture(&p, card("Hollywood"));
+        assert_eq!(gained, 6);
+    }
+
+    /// Internet: "the combined culture, science and strength your urban
+    /// buildings give" (§9.2), again the EFFECTIVE output. Leonardo da
+    /// Vinci's `SciencePerBestLabOrLibraryLevel` adds the best staffed
+    /// lab-or-library's level (1, from either Age-I card here) as science on
+    /// top of the printed sum: Alchemy's 2 science, Printing Press's 1
+    /// culture + 1 science, Bread and Circuses' 1 strength -- `2+1+1+1 == 5`
+    /// printed, `+1` from the leader, `== 6`.
+    #[test]
+    fn wonder_completion_culture_internet_counts_modifiers() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Leonardo da Vinci");
+        p.techs.insert(card("Alchemy"), TechSlot { workers: 1, stored: 0 }); // lab, science 2
+        p.techs.insert(card("Printing Press"), TechSlot { workers: 1, stored: 0 }); // library, culture 1 / science 1
+        p.techs.insert(card("Bread and Circuses"), TechSlot { workers: 1, stored: 0 }); // arena, strength 1
+        let gained = wonder_completion_culture(&p, card("Internet"));
+        assert_eq!(gained, 6);
     }
 
     // ----------------------------------------------------------- on_enter/leave

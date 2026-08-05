@@ -261,80 +261,195 @@ fn best_staffed(techs: &Tableau, pred: impl Fn(CardType) -> bool) -> Option<Card
     best.map(|(id, _)| id)
 }
 
-/// Whether `p` has `target` active from any of the five sources Python's
-/// `_output_modifiers` scans (`engine/effects.py:194-207`): the government,
-/// every tableau card regardless of type, every colony, a completed AND
-/// UNFLIPPED wonder, and the leader. Used by [`mine_resources`]/
-/// [`farm_food`] below to gate `doubleBestMine`, the one `_BUILDING_OUTPUT`
-/// modifier that touches either of them.
+/// One of the ratings [`building_output`] can sum. Mirrors the attribute
+/// strings (`"food"`, `"resources"`, `"science"`, `"culture"`, `"strength"`)
+/// Python's `building_output`/`_BUILDING_OUTPUT` key on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Attr {
+    Food,
+    Resources,
+    Science,
+    Culture,
+    Strength,
+}
+
+impl Attr {
+    fn of(self, prod: &Production) -> i32 {
+        match self {
+            Attr::Food => prod.food as i32,
+            Attr::Resources => prod.resources as i32,
+            Attr::Science => prod.science as i32,
+            Attr::Culture => prod.culture as i32,
+            Attr::Strength => prod.strength as i32,
+        }
+    }
+}
+
+/// Every `_BUILDING_OUTPUT`-eligible [`Special`] this player has in play,
+/// visited once each. Mirrors `engine/effects.py::_output_modifiers`' source
+/// list (`engine/effects.py:194-207`): the government, every tableau card
+/// regardless of type, every colony, a completed AND UNFLIPPED wonder, and
+/// the leader.
 ///
 /// `compute`'s own [`apply_special`] dispatch only reads `card.special` off
 /// a narrower set (government/`SpecialTech`/wonder/leader/colony) because
 /// that is everywhere a `Special` variant is actually printed in the base
 /// game today (confirmed 2026-08-05: no farm/mine/urban/unit card prints
 /// one) -- but Python's `_output_modifiers` does not assume that, and
-/// neither does this.
-fn has_special_active(p: &PlayerState, target: Special) -> bool {
-    if p.government.get().special.contains(&target) {
-        return true;
+/// neither does this. And unlike a bool-returning "is this active" check,
+/// this visits every match rather than stopping at the first:
+/// [`building_output`] needs the payload of e.g. `CulturePerTheater(v)`, not
+/// just whether one is present.
+fn for_each_output_special(p: &PlayerState, mut f: impl FnMut(Special)) {
+    let mut visit = |c: CardId| {
+        for &s in c.get().special {
+            f(s);
+        }
+    };
+    visit(p.government);
+    for (id, _) in p.techs.iter() {
+        visit(id);
     }
-    if p.techs.iter().any(|(id, _)| id.get().special.contains(&target)) {
-        return true;
+    for &c in p.colonies.as_slice() {
+        visit(c);
     }
-    if p.colonies.as_slice().iter().any(|&c| c.get().special.contains(&target)) {
-        return true;
+    for &w in p.completed_wonders.as_slice() {
+        if !p.flipped_wonders.contains(w) {
+            visit(w);
+        }
     }
-    if p.completed_wonders.as_slice().iter().any(|&w| {
-        !p.flipped_wonders.contains(w) && w.get().special.contains(&target)
-    }) {
-        return true;
+    if !p.leader.is_none() {
+        visit(p.leader);
     }
-    !p.leader.is_none() && p.leader.get().special.contains(&target)
+}
+
+/// Level x workers, summed over every staffed lab. The formula both
+/// `CulturePerLabEqualToLevel` (Sid Meier) and `ResourcesPerLabEqualToLevel`
+/// (Bill Gates) use, matching the identical arithmetic Python's
+/// `_building_modifier` repeats in both its own branches for the same two
+/// keys (and `compute`'s two `apply_special` arms below repeat again for the
+/// RATING versions of the same two cards -- see that match's doc comment on
+/// why this codebase, like Python, accepts that duplication rather than
+/// routing a scorer through the feed it mirrors).
+fn lab_level_workers(techs: &Tableau) -> i32 {
+    techs
+        .iter()
+        .filter(|(id, _)| id.kind() == CardType::Lab)
+        .map(|(id, slot)| id.level() as i32 * slot.workers as i32)
+        .sum()
+}
+
+/// What one `_BUILDING_OUTPUT`-eligible `special` contributes to a
+/// [`building_output`] call over `types`/`attrs`, or 0 if `special` is not
+/// one of the eight keys in that table, or is but doesn't clear the
+/// type/rating filter. Mirrors `_BUILDING_OUTPUT` (the table) and
+/// `_building_modifier` (the arithmetic) together: `mtypes`/`attr` here are
+/// literally that table's two columns, and `value` is what
+/// `_building_modifier` returns for the matching key.
+fn output_modifier_value(
+    p: &PlayerState,
+    special: Special,
+    types: &impl Fn(CardType) -> bool,
+    attrs: &[Attr],
+) -> i32 {
+    use Special::*;
+    let (mtypes, attr, value): (&[CardType], Attr, i32) = match special {
+        // Charlie Chaplin.
+        BestTheaterDoubleCulture => (
+            &[CardType::Theater],
+            Attr::Culture,
+            best_staffed(&p.techs, |k| k == CardType::Theater)
+                .map_or(0, |b| b.get().production.culture as i32),
+        ),
+        // J. S. Bach.
+        CulturePerTheater(v) => (
+            &[CardType::Theater],
+            Attr::Culture,
+            v as i32 * workers_on(&p.techs, |k| k == CardType::Theater),
+        ),
+        // Sid Meier.
+        CulturePerLabEqualToLevel => (&[CardType::Lab], Attr::Culture, lab_level_workers(&p.techs)),
+        // Bill Gates.
+        ResourcesPerLabEqualToLevel => (&[CardType::Lab], Attr::Resources, lab_level_workers(&p.techs)),
+        // Sid Meier again (his lab converts science TO culture, above).
+        SciencePerLab(v) => (
+            &[CardType::Lab],
+            Attr::Science,
+            v as i32 * workers_on(&p.techs, |k| k == CardType::Lab),
+        ),
+        // Leonardo / Newton / Einstein.
+        SciencePerBestLabOrLibraryLevel => (
+            &[CardType::Lab, CardType::Library],
+            Attr::Science,
+            best_staffed(&p.techs, |k| matches!(k, CardType::Lab | CardType::Library))
+                .map_or(0, |b| b.level() as i32),
+        ),
+        // William Shakespeare.
+        CulturePerLibraryTheaterPair(v) => {
+            let lib = workers_on(&p.techs, |k| k == CardType::Library);
+            let theater = workers_on(&p.techs, |k| k == CardType::Theater);
+            (&[CardType::Library, CardType::Theater], Attr::Culture, v as i32 * lib.min(theater))
+        }
+        // Transcontinental Railroad.
+        DoubleBestMine => (
+            &[CardType::Mine],
+            Attr::Resources,
+            best_staffed(&p.techs, |k| k == CardType::Mine)
+                .map_or(0, |b| b.get().production.resources as i32),
+        ),
+        _ => return 0,
+    };
+    // A modifier counts only if EVERY building type it reads is one the
+    // caller asked about (Shakespeare's pair straddles a library and a
+    // theater, so it counts for Hollywood but would not for a
+    // theaters-only card) AND the rating it produces is one being summed.
+    if attrs.contains(&attr) && mtypes.iter().all(|&t| types(t)) {
+        value
+    } else {
+        0
+    }
+}
+
+/// Effective output of `p`'s buildings of the type(s) matched by `types`,
+/// summed over `attrs`: printed per-worker production plus every in-play
+/// modifier that changes what THOSE buildings themselves produce (Chaplin
+/// doubling a theater, Sid Meier turning lab science into culture, Einstein/
+/// Newton/Leonardo adding science to the best lab or library, Shakespeare's
+/// library/theater pairs, Bach's theaters, the Transcontinental Railroad's
+/// doubled mine worker), and nothing else -- a rating from a source that is
+/// not one of those buildings (a colony, the government, Michelangelo's
+/// happy-face conversion) never counts. Mirrors `engine/effects.py::
+/// building_output` (see that function's module doc comment for the full
+/// worked-example list; `_BUILDING_OUTPUT` there is [`output_modifier_value`]
+/// here).
+pub fn building_output(p: &PlayerState, types: impl Fn(CardType) -> bool, attrs: &[Attr]) -> i32 {
+    let mut total = 0i32;
+    for (id, slot) in p.techs.iter() {
+        if slot.workers == 0 || !types(id.kind()) {
+            continue;
+        }
+        let prod = &id.get().production;
+        for &a in attrs {
+            total += a.of(prod) * slot.workers as i32;
+        }
+    }
+    for_each_output_special(p, |special| {
+        total += output_modifier_value(p, special, &types, attrs);
+    });
+    total
 }
 
 /// Resources produced BY THIS PLAYER'S MINES, ignoring every other source of
 /// resources (§12.5.2 "Impact of Industry"). Mirrors `engine/effects.py::
 /// mine_resources` -> `building_output(p, {"mine"}, ("resources",))`.
-///
-/// Python's `building_output` is fully general (it also powers Hollywood's
-/// theater/library culture and Internet's whole-urban-building sum, neither
-/// ported here); this is the narrow slice that mine scoring actually needs.
-/// Verified against `_BUILDING_OUTPUT`'s full key list (2026-08-05): the
-/// ONLY modifier whose types are a subset of `{mine}` is `doubleBestMine`
-/// (Transcontinental Railroad's "one of your best mines produces twice as
-/// many resources") -- every other modifier there touches theater/lab/
-/// library, never mine, so a general port would carry dead branches.
 pub fn mine_resources(p: &PlayerState) -> i32 {
-    let mut total = 0i32;
-    for (id, slot) in p.techs.iter() {
-        if id.kind() == CardType::Mine {
-            total += id.get().production.resources as i32 * slot.workers as i32;
-        }
-    }
-    // The bonus is the BEST staffed mine's own per-worker rate, added once
-    // more flat -- not doubled per worker -- matching `_building_modifier`'s
-    // `doubleBestMine` branch (FAQ v1.5 p.9: doubles one WORKER's output).
-    if has_special_active(p, Special::DoubleBestMine) {
-        if let Some(b) = best_staffed(&p.techs, |k| k == CardType::Mine) {
-            total += b.get().production.resources as i32;
-        }
-    }
-    total
+    building_output(p, |k| k == CardType::Mine, &[Attr::Resources])
 }
 
 /// Food produced BY THIS PLAYER'S FARMS (§12.5.2 "Impact of Agriculture").
-/// The twin of [`mine_resources`], and simpler: `_BUILDING_OUTPUT` has no
-/// entry whose types are a subset of `{farm}`, so nothing ever adds to this
-/// beyond the plain per-worker scan -- verified 2026-08-05 against the same
-/// key list. Mirrors `engine/effects.py::farm_food`.
+/// The twin of [`mine_resources`]. Mirrors `engine/effects.py::farm_food`.
 pub fn farm_food(p: &PlayerState) -> i32 {
-    let mut total = 0i32;
-    for (id, slot) in p.techs.iter() {
-        if id.kind() == CardType::Farm {
-            total += id.get().production.food as i32 * slot.workers as i32;
-        }
-    }
-    total
+    building_output(p, |k| k == CardType::Farm, &[Attr::Food])
 }
 
 /// Number of cards/buildings providing at least one happy face (St. Peter's

@@ -65,8 +65,7 @@ impl Rng {
 }
 
 /// Why the random driver may not play `mv` yet, or `None` if it may.
-pub fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
-    let me = state.me();
+pub fn blocked_on(mv: Move) -> Option<&'static str> {
     match mv {
         // `Move::OfferPact` and `Move::Aggression` were both here, on the
         // claim that the decision they hand to the other player was unported.
@@ -117,17 +116,6 @@ pub fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
         // engine is worse than one that skips a few playable cards.
         Move::PlayAction { card } if action_card_is_blocked(card) => {
             Some("interact.rs / card table: an action card's ordered choice")
-        }
-
-        // apply.rs `one_time_culture`: Hollywood and Internet score "the
-        // effective output of a specific set of buildings", which needs a
-        // public `effects::building_output`. Only the COMPLETING step panics;
-        // skipping every step of those two wonders is the cheap way to stay
-        // out of it.
-        Move::WonderStep { .. }
-            if matches!(me.wonder.get().base_name, "Hollywood" | "Internet") =>
-        {
-            Some("effects.rs: Hollywood/Internet completion culture needs building_output")
         }
 
         // Not a missing module: resigning is a legal, fully-ported move that
@@ -188,13 +176,13 @@ pub fn play_random(num_players: u8, seed: u64) -> (GameState, Played) {
             .as_slice()
             .iter()
             .copied()
-            .filter(|&m| blocked_on(&state, m).is_none())
+            .filter(|&m| blocked_on(m).is_none())
             .collect();
         if playable.is_empty() {
             let mut why: Vec<&'static str> = legal
                 .as_slice()
                 .iter()
-                .filter_map(|&m| blocked_on(&state, m))
+                .filter_map(|&m| blocked_on(m))
                 .collect();
             why.sort_unstable();
             why.dedup();

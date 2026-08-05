@@ -5,11 +5,11 @@ read that file's module doc comment first for why a "filtered" mode exists.
 Two bot modes:
 
   filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`: skips War
-              over Technology declarations, the two ordered-choice action
-              cards, and Hollywood/Internet wonder completion.  This is the
-              apples-to-apples number against the Rust bench: both sides
-              play the same restricted move space, so the comparison is of
-              engine speed, not of how much of the ruleset is implemented.
+              over Technology declarations and the two ordered-choice action
+              cards.  This is the apples-to-apples number against the Rust
+              bench: both sides play the same restricted move space, so the
+              comparison is of engine speed, not of how much of the ruleset
+              is implemented.
 
   unfiltered  `engine.bots.RandomBot` -- the whole ported ruleset (Rust has
               no equivalent yet).  Reported separately, never blended into
@@ -62,7 +62,7 @@ def _action_card_blocked(name):
     return any(k in eff for k in _BLOCKED_ACTION_EFFECT_KEYS)
 
 
-def _blocked(p, move):
+def _blocked(move):
     tag = move[0]
     # `offer_pact`, `aggression` and `prepare_event` were here, along with
     # the responses only they can open (`bid`/`bid_pass`/`defend`/
@@ -75,9 +75,6 @@ def _blocked(p, move):
     if tag == "war" and move[1] == "War over Technology":
         return True
     if tag == "play_action" and _action_card_blocked(move[1]):
-        return True
-    if tag == "wonder_step" and p.wonder is not None \
-            and p.wonder.name in ("Hollywood", "Internet"):
         return True
     return False
 
@@ -96,8 +93,7 @@ class FilteredRandomBot:
 
     def __call__(self, state):
         moves = actions.legal_moves(state)
-        p = state.players[state.decider()]
-        playable = [m for m in moves if not _blocked(p, m)]
+        playable = [m for m in moves if not _blocked(m)]
         if not playable:
             # Fail loudly rather than silently falling back to the full
             # move list -- that would quietly break the apples-to-apples
