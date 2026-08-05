@@ -16,24 +16,7 @@
 //! relay ["2 hops from a human" limit], so this doc comment is the durable
 //! record until it is re-reported)
 //!
-//! 1. ~~`rust/tools/gen_cards.py` silently drops WHICH action a yellow card
-//!    orders~~ **FIXED on the `card_table.rs` side, 2026-08-05, by the
-//!    worker porting `effects.rs`'s pact/colony/army-strength gaps**: every
-//!    string-valued `effects` key (`freeCivilAction`, `onBuildCulture`,
-//!    `gainResources`, `victorTakesScienceUpTo`) now generates a real
-//!    `<Key>Value` enum instead of collapsing to a bare `Special` variant --
-//!    `Special::FreeCivilAction` is `Special::FreeCivilAction(
-//!    FreeCivilActionValue)` now, one of six variants matching exactly the
-//!    six string values this gap originally described. **This module's OWN
-//!    side is not updated to match**: [`action_card_playable`] still
-//!    unconditionally returns `false` for these 18 cards, and this file's
-//!    own `FreeActionKind` (below) is a second, independently-named enum
-//!    for the identical six values -- both are this module's decision to
-//!    make (map `FreeCivilActionValue` onto `FreeActionKind`, or retire one
-//!    of them), not something the type-layer fix should have decided
-//!    unilaterally. [`free_action_moves`] itself is unaffected either way:
-//!    it already takes its `kind` as an explicit parameter.
-//! 2. ~~`Card` has no `revolutionCost` field~~ **FIXED under this module
+//! 1. ~~`Card` has no `revolutionCost` field~~ **FIXED under this module
 //!    while it was being written**: `cards.rs` grew `Card::revolution_cost`
 //!    (and `peaceful_cost`, `stages`, `immediate_effects`) mid-flight, ahead
 //!    of `costs.rs` being updated to use any of them. [`can_revolt`] reads
@@ -42,7 +25,7 @@
 //!    through `costs.py`/`effects.py`), so this needed no `costs.rs` change
 //!    and is ported in full, including the `free_action_moves`
 //!    `develop_technology` revolt sub-case (Breakthrough, RB p.15).
-//! 3. **Combat/pact resolution (a `combat.rs`) is not built yet.**
+//! 2. **Combat/pact resolution (a `combat.rs`) is not built yet.**
 //!    `effects.rs` has no `pacts_for`/`pact_forbids_attack`/
 //!    `attack_strength`/`defense_strength`/`war_forbidden`, and `Stats` has
 //!    no `war_immune`. This blocks `offer_pact`/`aggression`/`war` move
@@ -78,6 +61,7 @@
 //! open `choice`) is not ported, and `state.rs` has no `pending` field at
 //! all, so there is nothing to branch on yet.
 
+use crate::card_table::FreeCivilActionValue;
 use crate::cards::{Age, Card, CardId, CardType, Special};
 use crate::costs;
 use crate::economy;
@@ -469,22 +453,29 @@ fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
 
 /// §3.11: a yellow card that orders an action needs that action to be legal.
 ///
-/// **PARTIALLY BLOCKED** -- see this module's top doc comment (gap 1: the
-/// `card_table.rs` side is now FIXED, this module's side is not yet).
-/// Mirrors `engine/actions.py::_action_card_playable`. The 18 cards that
-/// print an ordered action (`Special::FreeCivilAction`, now carrying a real
-/// `FreeCivilActionValue` payload -- gen_cards.py, 2026-08-05) still always
-/// return `false` here: this module has its OWN `FreeActionKind` enum
-/// (below) that nothing yet maps the new payload onto, and
-/// `free_action_moves`'s decision-queue wiring is a separate, larger gap
-/// regardless. Cards with no ordered action are unaffected -- that branch
-/// only needs `card.effects`/`card.special`, all of which exist, and is
-/// ported in full via [`action_card_has_any_gain`].
+/// Mirrors `engine/actions.py::_action_card_playable`. For the 18 cards that
+/// print an ordered action (`Special::FreeCivilAction`, carrying a real
+/// `FreeCivilActionValue` payload -- gen_cards.py, 2026-08-05), this maps the
+/// payload onto [`FreeActionKind`] via [`free_action_kind_of`] and mirrors
+/// Python's `bool(free_action_moves(state, p, kind, ...))` exactly -- legality
+/// here never needs to know whether applying the move would additionally
+/// need `interact.rs`'s decision queue (that only matters to `apply.rs`,
+/// once it knows WHICH single move to run). Cards with no ordered action are
+/// unaffected -- that branch only needs `card.effects`/`card.special`, all of
+/// which exist, and is ported in full via [`action_card_has_any_gain`].
 fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
-    let _ = (state, p);
     let card = id.get();
-    if card.special.iter().any(|s| matches!(s, Special::FreeCivilAction(_))) {
-        return false;
+    if let Some(value) = card.special.iter().find_map(|s| match s {
+        Special::FreeCivilAction(v) => Some(*v),
+        _ => None,
+    }) {
+        let kind = free_action_kind_of(value);
+        // RB p.15: Breakthrough may spend its order on a revolution instead,
+        // which needs every civil action still unspent -- see
+        // `free_action_moves`'s `DevelopTechnology` arm.
+        let revolt_ok = p.civil_actions as i32 == costs::ca_total(state, p);
+        let discount = card.effects.resource_discount as i32;
+        return !free_action_moves(state, p, kind, discount, revolt_ok).is_empty();
     }
     action_card_has_any_gain(card)
 }
@@ -522,13 +513,13 @@ fn action_card_has_any_gain(card: &Card) -> bool {
 // ------------------------------------------------- ordered (free) actions
 
 /// The kind of ordered action a yellow action card grants (§3.11). Mirrors
-/// the six string values `data/*.json` prints under
-/// `effects.freeCivilAction` -- see this module's top doc comment (gap 1)
-/// for why nothing here can derive a `FreeActionKind` FROM a `CardId` yet.
-/// [`free_action_moves`] takes it as an explicit parameter instead, exactly
-/// as Python's `kind` argument does, so the function itself is fully
-/// portable even though nothing in this module can supply the argument for
-/// a real card today.
+/// the six string values `data/*.json` prints under `effects.freeCivilAction`
+/// -- a second, independently-named enum from `card_table.rs`'s
+/// `FreeCivilActionValue` (which mirrors the six JSON strings directly, the
+/// way every other generated `<Key>Value` enum does) rather than the SAME
+/// enum, because this one additionally has to be the argument shape
+/// `free_action_moves` matches on, which predates the payload existing at
+/// all. [`free_action_kind_of`] is the one place that maps between them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FreeActionKind {
     IncreasePopulation,
@@ -537,6 +528,29 @@ pub enum FreeActionKind {
     BuildOrUpgradeFarmOrMine,
     BuildOrUpgradeUrbanBuilding,
     UpgradeFarmMineOrUrbanBuilding,
+}
+
+/// Maps `card_table.rs`'s generated `FreeCivilActionValue` (what
+/// `Special::FreeCivilAction` carries) onto this module's own
+/// `FreeActionKind` (what [`free_action_moves`] matches on). THE one place
+/// that equivalence is asserted -- `apply.rs::h_play_action` calls this too
+/// rather than repeating the match, for the same reason `fixtures.rs::
+/// parse_move` is documented as the one place a Python move-tag string maps
+/// to a `Move` variant: two independently-maintained copies of "these two
+/// enums mean the same six things" is exactly the registry-drift bug class
+/// DESIGN.md's `Special` enum exists to close, and a hand-written `match`
+/// here is not exempt from that just because both enums are hand-written too.
+pub fn free_action_kind_of(v: FreeCivilActionValue) -> FreeActionKind {
+    use FreeCivilActionValue as V;
+    use FreeActionKind as K;
+    match v {
+        V::BuildOrUpgradeFarmOrMine => K::BuildOrUpgradeFarmOrMine,
+        V::BuildOrUpgradeUrbanBuilding => K::BuildOrUpgradeUrbanBuilding,
+        V::IncreasePopulation => K::IncreasePopulation,
+        V::BuildOneWonderStage => K::BuildOneWonderStage,
+        V::DevelopTechnology => K::DevelopTechnology,
+        V::UpgradeFarmMineOrUrbanBuilding => K::UpgradeFarmMineOrUrbanBuilding,
+    }
 }
 
 /// Whether `kind` accepts cards of type `k` for its build/upgrade half.
@@ -1128,15 +1142,29 @@ mod tests {
     fn play_action_needs_an_untaken_copy_and_ca_and_playability() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
-        // "Frugality (A)": ordered action (increase_population) + gainFood,
-        // but `Special::FreeCivilAction` is a bare variant (gap 1, this
-        // module's top doc comment) so this must always be blocked.
+        // "Frugality (A)": ordered action increase_population + gainFood.
+        // `p.yellow_bank` is 0 here (blank_player default), so
+        // `free_action_moves` has no legal `Move::Pop` to offer -- correctly
+        // NOT playable in THIS position, not blocked outright (see
+        // `play_action_playable_when_its_ordered_action_has_a_legal_move`
+        // below for the positive case).
         p.hand_civil.push(card("Frugality (A)"));
         let state = one_player_state(p);
         assert!(
             !action_moves(&state, &state.players[0]).as_slice().contains(&Move::PlayAction { card: card("Frugality (A)") }),
-            "ordered-action cards are blocked, see the port report"
+            "no legal ordered-action move in this position"
         );
+    }
+
+    #[test]
+    fn play_action_playable_when_its_ordered_action_has_a_legal_move() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 5; // prices increase_population at 5, affordable below
+        p.food = 5;
+        p.hand_civil.push(card("Frugality (A)"));
+        let state = one_player_state(p);
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::PlayAction { card: card("Frugality (A)") }));
     }
 
     #[test]
@@ -1214,11 +1242,88 @@ mod tests {
     }
 
     #[test]
-    fn action_card_playable_blocked_for_ordered_action_cards() {
-        let mut p = blank_player(0, card("Despotism"));
-        let state = one_player_state(p.clone());
+    fn action_card_playable_false_for_an_ordered_action_with_no_legal_move() {
+        // A blank player has no workers, no tableau and no resources: none
+        // of the six ordered-action kinds has anything to offer, so this
+        // must read as unplayable -- correctly, not because the kind is
+        // unrecognised (see the six `action_card_playable_true_for_*` tests
+        // below for the positive case of each kind).
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
         assert!(!action_card_playable(&state, &state.players[0], card("Rich Land (A)")));
-        let _ = &mut p;
+    }
+
+    #[test]
+    fn free_action_kind_of_maps_every_free_civil_action_value() {
+        // THE one place `FreeCivilActionValue` (card_table.rs, generated)
+        // maps onto `FreeActionKind` (this module, hand-written) -- assert
+        // the six pairings directly so a mismatch fails here, not as a
+        // mysterious "card X is never playable" symptom three modules away.
+        use crate::card_table::FreeCivilActionValue as V;
+        assert_eq!(free_action_kind_of(V::BuildOrUpgradeFarmOrMine), FreeActionKind::BuildOrUpgradeFarmOrMine);
+        assert_eq!(free_action_kind_of(V::BuildOrUpgradeUrbanBuilding), FreeActionKind::BuildOrUpgradeUrbanBuilding);
+        assert_eq!(free_action_kind_of(V::IncreasePopulation), FreeActionKind::IncreasePopulation);
+        assert_eq!(free_action_kind_of(V::BuildOneWonderStage), FreeActionKind::BuildOneWonderStage);
+        assert_eq!(free_action_kind_of(V::DevelopTechnology), FreeActionKind::DevelopTechnology);
+        assert_eq!(
+            free_action_kind_of(V::UpgradeFarmMineOrUrbanBuilding),
+            FreeActionKind::UpgradeFarmMineOrUrbanBuilding
+        );
+    }
+
+    #[test]
+    fn action_card_playable_true_for_build_or_upgrade_farm_or_mine() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.workers_free = 1;
+        p.resources = 1; // Bronze costs 2, Rich Land's resourceDiscount is 1
+        p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Rich Land (A)")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_build_or_upgrade_urban_building() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.workers_free = 1;
+        p.resources = 2; // Religion costs 3, Urban Growth's resourceDiscount is 1
+        p.techs.insert(card("Religion"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Urban Growth (A)")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_increase_population() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.yellow_bank = 5; // prices the increase at 5
+        p.food = 5;
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Frugality (A)")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_build_one_wonder_stage() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.wonder = card("Pyramids");
+        p.resources = 1; // first stage costs 3, Engineering Genius's discount is 2
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Engineering Genius (A)")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_develop_technology() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.hand_civil.push(card("Bronze")); // scienceCost 0: always developable
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Breakthrough (I)")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_upgrade_farm_mine_or_urban_building() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Efficient Upgrade (II)")));
     }
 
     // -------------------------------------------------------- free_action_moves

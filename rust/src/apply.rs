@@ -25,9 +25,15 @@
 //!   [`Move::DefendDone`], [`Move::SendUnit`], [`Move::SendBonus`],
 //!   [`Move::SendDone`], [`Move::Choose`]) panic in [`apply`] for the same
 //!   reason: nothing opened them, so they can never be legal today. So does
-//!   [`Move::OfferPact`] (Python: `interact.push_choice`) and the ordered-
-//!   action half of [`Move::PlayAction`] (Python: `interact.enqueue`) --
-//!   see [`h_play_action`].
+//!   [`Move::OfferPact`] (Python: `interact.push_choice`). [`Move::PlayAction`]
+//!   ordering a free civil action (`Special::FreeCivilAction`) is NOT
+//!   unconditionally in this list any more: Python's `push_choice(...,
+//!   auto=True)` resolves a single legal option immediately and no-ops on
+//!   zero, without ever pushing onto `state.pending` -- only a GENUINE tie
+//!   (2+ legal options for the ordered action) opens a real decision. 2026-
+//!   08-05: [`h_play_action`] now mirrors that directly via [`legal::
+//!   free_action_moves`], and only panics, naming the card and the option
+//!   count, in the 2+ case -- see [`h_play_action`].
 //! - **`events.rs`.** [`Move::PrepareEvent`] (`events.reveal_current_event`)
 //!   and [`Move::Aggression`] (`events.start_aggression`) both call into it
 //!   directly. Panics in [`apply`].
@@ -62,12 +68,12 @@
 //!   bare int/float value survives; a dict value degrades to a payload-less
 //!   `Special` variant -- see `EFFECT_FIELDS`/`_compile_effects` in
 //!   `gen_cards.py`). [`h_play_action`] panics naming this rather than
-//!   guessing a player count band. `Special::FreeCivilAction` USED to have
-//!   the same problem one level worse (the JSON value was a STRING naming
-//!   which ordered action to run, and `gen_cards.py` dropped it) -- fixed
-//!   2026-08-05: it now carries a `FreeCivilActionValue` payload naming one
-//!   of the six actions, so [`h_play_action`]'s remaining blocker is only
-//!   `interact.rs`'s decision queue, not a missing place in `card_table.rs`
+//!   guessing a player count band. `Special::FreeCivilAction` is unrelated to
+//!   this gap now: it carries a real `FreeCivilActionValue` payload (fixed
+//!   2026-08-05) naming one of the six ordered actions, [`legal::
+//!   free_action_kind_of`] maps that onto `legal::FreeActionKind`, and
+//!   [`h_play_action`] resolves it -- the only remaining blocker for THOSE 18
+//!   cards is the 2+-legal-options case described above, not a missing place
 //!   to put the value.
 //!
 //! One thing is a genuine, self-contained gap in THIS module, not a missing
@@ -99,10 +105,12 @@
 //! comment: "a caller must have checked ... first, not a legality gate of its
 //! own"). Add the assert back in [`apply`] once `legal.rs` exists.
 
-use crate::cards::{CardId, CardType, Special};
+use crate::card_table::FreeCivilActionValue;
+use crate::cards::{CardEffects, CardId, CardType, Special};
 use crate::costs;
 use crate::economy;
 use crate::effects;
+use crate::legal;
 use crate::moves::{ChurchillChoice, Move};
 use crate::state::{CardList, GameState, PlayerState, TechSlot, MAX_HAND, MAX_PLAYERS};
 
@@ -133,7 +141,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::Develop { card } => h_develop(state, idx, card, false),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, 0, false),
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, 0, false),
-        Move::Pop => h_pop(state, idx),
+        Move::Pop => h_pop(state, idx, false),
         Move::PopFree => h_pop_free(state, idx),
         Move::Revolution { card } => h_revolution(state, idx, card),
         Move::PlayLeader { card } => h_play_leader(state, idx, card),
@@ -376,14 +384,22 @@ fn take_card(state: &mut GameState, idx: u8, slot: usize) {
     }
 }
 
-fn h_pop(state: &mut GameState, idx: u8) {
+/// `free` exists for [`apply_free_civil_move`]'s benefit (an action card's
+/// ordered "pop" with no action cost, still at the real food cost -- Python's
+/// `apply_free_action` calls `economy.increase_population(state, p)` with its
+/// own `free` defaulting to `False`, only skipping `pay_ca`). Not `discount`:
+/// `free_action_moves`'s `IncreasePopulation` arm does not apply one either
+/// (see its own comment -- "at full price").
+fn h_pop(state: &mut GameState, idx: u8, free: bool) {
     let stats = effects::state_stats(state, &state.players[idx as usize]);
     let cost = {
         let p = &state.players[idx as usize];
         economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank, 0)
             .expect("h_pop: called with an empty yellow bank (caller must check legality)")
     };
-    costs::pay_ca(&mut state.players[idx as usize], 1);
+    if !free {
+        costs::pay_ca(&mut state.players[idx as usize], 1);
+    }
     let ok = economy::increase_population(&mut state.players[idx as usize], cost.max(0) as u16);
     debug_assert!(ok, "h_pop: caller must ensure enough food (legality check)");
 }
@@ -685,36 +701,31 @@ fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
     state.phase = crate::state::Phase::Actions;
 }
 
-/// Ports `engine/actions.py::_h_play_action` for every action card whose
-/// effects the type layer captures as flat, player-count-independent
-/// numbers. See this module's top doc comment for exactly which cards that
-/// covers today (`Patriotism`, `Cultural Heritage`, `Stock Pile`,
-/// `Revolutionary Idea`) and which panic (`Rich Land`, `Urban Growth`,
-/// `Frugality`, `Engineering Genius`, `Breakthrough`, `Efficient Upgrade` --
-/// all `freeCivilAction`; `Reserves` -- `gainFoodOrResources`; `Wave of
-/// Nationalism`, `Military Build-Up`, `Endowment for the Arts` -- per-
-/// player-count magnitudes).
+/// Ports `engine/actions.py::_h_play_action`. See this module's top doc
+/// comment for exactly which cards still panic (`Reserves` --
+/// `gainFoodOrResources`, always needs `interact::push_choice` per Python's
+/// `apply_card_gains`, `auto=False`; `Wave of Nationalism`, `Military
+/// Build-Up`, `Endowment for the Arts` -- per-player-count magnitudes; and,
+/// for the 18 `freeCivilAction` cards, only the case where their ordered
+/// action has 2+ legal options -- see [`resolve_free_civil_action`]).
 fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
+    // RB p.15: Breakthrough's `develop_technology` order may spend itself on
+    // a revolution instead, gated on every civil action THIS TURN still
+    // being unspent. Python's `_h_play_action` reads `revolt_ok` before its
+    // own `pay_ca` call below -- playing the card itself must not count as
+    // "a civil action spent" for this test -- so this has to be captured
+    // here, ahead of that payment, not recomputed later inside
+    // `resolve_free_civil_action` (which would otherwise always see the CA
+    // this card itself just cost and read `revolt_ok` as false).
+    let revolt_ok = {
+        let p = &state.players[idx as usize];
+        p.civil_actions as i32 == costs::ca_total(state, p)
+    };
     costs::pay_ca(&mut state.players[idx as usize], 1);
     state.players[idx as usize].hand_civil.remove_first(id);
     economy::discard_civil(state, id); // one-shot: played face up, spent
 
     let card = id.get();
-    // `FreeCivilAction` now carries a `FreeCivilActionValue` payload naming
-    // WHICH of the six ordered actions this card grants (gen_cards.py,
-    // 2026-08-05 -- it no longer drops the value, so `.contains` needed
-    // updating to a variant-only match). Still `unimplemented!()`: the
-    // remaining blocker this module's top doc comment describes --
-    // interact.rs's decision queue for choosing/resolving the ordered
-    // action -- is unrelated to that fix and is not addressed here.
-    if card.special.iter().any(|s| matches!(s, Special::FreeCivilAction(_))) {
-        unimplemented!(
-            "play_action({}): orders a free civil action -- blocked on \
-             interact.rs's decision queue for choosing/resolving it -- see \
-             this module's top doc comment",
-            card.name
-        );
-    }
     if card.special.contains(&Special::CulturePerCivilizationWithMoreCulture)
         || card.special.contains(&Special::ResourcesForMilitaryUnitsPerStrongerCivilization)
     {
@@ -741,20 +752,105 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
         // `data/*.json` finds neither key on any card), unlike `militaryActions`
         // (Patriotism), which IS captured as `CardEffects.military_actions`
         // and applied here exactly as Python's `_h_play_action` applies it --
-        // a one-shot grant, not the recurring government stat.
+        // a one-shot grant, not the recurring government stat. These, unlike
+        // the GAIN_KEYS below, apply unconditionally BEFORE the ordered
+        // action resolves -- Python applies them ahead of the `if ordered:`
+        // branch too.
         p.military_actions = p.military_actions.saturating_add(eff.military_actions as i8);
         p.mil_discount += eff.resources_for_military_units;
-        p.science += eff.gain_science as u16;
-        p.culture += eff.gain_culture as u16;
     }
+
+    // §3.11: the ordered action resolves FIRST, and only THEN the card's own
+    // gains -- Breakthrough's science and Frugality's food arrive too late to
+    // pay for the very action the card just ordered (`_h_play_action`'s FIFO
+    // `interact.enqueue` order: "free_civil" is pushed ahead of "card_gains").
+    // A card with no ordered action skips straight to the gains, matching
+    // Python's `else: apply_card_gains(...)` branch.
+    if let Some(value) = card.special.iter().find_map(|s| match s {
+        Special::FreeCivilAction(v) => Some(*v),
+        _ => None,
+    }) {
+        resolve_free_civil_action(state, idx, card.name, value, eff.resource_discount as i32, revolt_ok);
+    }
+    apply_action_card_gains(state, idx, &eff);
+}
+
+/// Resolve one action card's ordered free civil action (§3.11). Mirrors
+/// Python's `interact._q_free_civil` + `interact.push_choice(..., auto=True)`
+/// collapsed into one synchronous call, since there is no `state.pending`
+/// queue here to defer through: `push_choice` with `auto=True` (the default)
+/// resolves a single legal option immediately and no-ops on zero WITHOUT ever
+/// opening a real decision, so those two cases need nothing from
+/// `interact.rs` at all. Only a genuine tie -- 2+ legal options -- would open
+/// one, and that is the one case actually blocked here. `revolt_ok` is
+/// [`h_play_action`]'s pre-`pay_ca` snapshot -- see its own comment.
+fn resolve_free_civil_action(
+    state: &mut GameState,
+    idx: u8,
+    card_name: &'static str,
+    value: FreeCivilActionValue,
+    discount: i32,
+    revolt_ok: bool,
+) {
+    let kind = legal::free_action_kind_of(value);
+    let moves = legal::free_action_moves(state, &state.players[idx as usize], kind, discount, revolt_ok);
+    match moves.as_slice() {
+        [] => {} // `push_choice` with no options: the order fizzles, silently, same as Python
+        [only] => apply_free_civil_move(state, idx, *only, discount),
+        many => unimplemented!(
+            "play_action({card_name}): {} legal choices for its ordered action \
+             ({kind:?}) -- interact.rs's decision queue is not ported, so a \
+             genuine multi-way choice cannot be resolved here",
+            many.len()
+        ),
+    }
+}
+
+/// Apply the one move [`resolve_free_civil_action`] decided on, at no action
+/// cost and `discount` off its resource cost (mirrors `engine/actions.py::
+/// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop` /
+/// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` are the only shapes
+/// `free_action_moves`'s build/upgrade/pop/wonder-step arms ever produce;
+/// `Move::Develop` / `Move::Revolution` are the two `DevelopTechnology` can
+/// produce. No other `Move` variant is reachable from there.
+fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
+    match mv {
+        Move::Pop => h_pop(state, idx, true),
+        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
+        Move::Build { card } => do_build(state, idx, card, discount, true),
+        Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
+        Move::Develop { card } => h_develop(state, idx, card, true),
+        // §8.3.4: a revolution never spends a civil action to begin with
+        // (it empties a whole action pool instead), so `h_revolution` takes
+        // no `free` flag -- matching Python's `apply_free_action`, which
+        // calls `_h_revolution` exactly as the normal `Move::Revolution`
+        // handler does.
+        Move::Revolution { card } => h_revolution(state, idx, card),
+        other => unreachable!(
+            "free_action_moves produced a move apply_free_civil_move does not \
+             expect: {other:?}"
+        ),
+    }
+}
+
+/// The gain half of a yellow action card (§3.11). Mirrors
+/// `engine/actions.py::apply_card_gains` minus its `gainFoodOrResources`
+/// tail (always needs `interact::push_choice`, `auto=False` -- [`h_play_action`]
+/// panics on that key before this is ever called) and its `gainPopulation`
+/// loop (dead in the base game's data today -- confirmed 2026-08-05,
+/// `data/*.json` prints the key on no card at all -- and `CardEffects` has no
+/// field for it regardless, the same check `h_play_action` already made for
+/// `extraCivilActions`).
+fn apply_action_card_gains(state: &mut GameState, idx: u8, eff: &CardEffects) {
+    let p = &mut state.players[idx as usize];
+    p.science += eff.gain_science as u16;
+    p.culture += eff.gain_culture as u16;
     if eff.gain_food != 0 {
-        economy::gain_food(&mut state.players[idx as usize], eff.gain_food as u16);
+        economy::gain_food(p, eff.gain_food as u16);
     }
     if eff.gain_resources != 0 {
-        economy::gain_resources(&mut state.players[idx as usize], eff.gain_resources as u16);
+        economy::gain_resources(p, eff.gain_resources as u16);
     }
-    // `gainPopulation` is dead in the base game's data today (same check as
-    // `extraCivilActions` above) and has no `CardEffects` field regardless.
 }
 
 fn h_pol_pass(state: &mut GameState, idx: u8) {
@@ -827,7 +923,7 @@ fn h_resign(state: &mut GameState, idx: u8) {
 mod tests {
     use super::*;
     use crate::cards::Age;
-    use crate::state::{CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, MAX_PLAYERS, ROW_SIZE};
+    use crate::state::{CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
@@ -980,7 +1076,7 @@ mod tests {
         p.yellow_bank = 5; // pop_cost_base(5) == 5
         p.food = 10;
         let mut state = one_player_state(p);
-        h_pop(&mut state, 0);
+        h_pop(&mut state, 0, false);
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].food, 5);
         assert_eq!(state.players[0].yellow_bank, 4);
@@ -1325,13 +1421,181 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "orders a free civil action")]
-    fn h_play_action_free_civil_action_cards_are_a_named_gap() {
+    fn h_play_action_rich_land_with_no_legal_ordered_move_is_a_silent_no_op() {
+        // No workers_free and an empty tableau: `free_action_moves` returns
+        // no options, so this must resolve like Python's `push_choice` with
+        // an empty option list -- silently, no panic -- exactly as playing a
+        // card with no ordered action at all does.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.hand_civil.push(card("Rich Land (A)"));
         let mut state = one_player_state(p);
         h_play_action(&mut state, 0, card("Rich Land (A)"));
+        assert_eq!(state.players[0].civil_actions, 3, "only the card's own CA is spent");
+        assert!(!state.players[0].hand_civil.contains(card("Rich Land (A)")));
+    }
+
+    #[test]
+    fn h_play_action_rich_land_builds_a_mine_at_a_discount_and_no_action_cost() {
+        // "Rich Land (A)": build_or_upgrade_farm_or_mine, resourceDiscount 1.
+        // Bronze costs 2 resources; the free build pays only 2 - 1 = 1 and no
+        // separate civil action (only the 1 CA to play the card itself).
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.workers_free = 1;
+        p.resources = 1;
+        p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
+        p.hand_civil.push(card("Rich Land (A)"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Rich Land (A)"));
+        assert_eq!(state.players[0].techs.workers(card("Bronze")), 1);
+        assert_eq!(state.players[0].resources, 0);
+        assert_eq!(state.players[0].workers_free, 0);
+        assert_eq!(state.players[0].civil_actions, 3, "the build itself is free");
+    }
+
+    #[test]
+    fn h_play_action_efficient_upgrade_upgrades_at_a_discount() {
+        // "Efficient Upgrade (II)": upgrade_farm_mine_or_urban_building,
+        // resourceDiscount 3. Agriculture->Irrigation costs 4-2=2, floored to
+        // 0 by the discount.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        p.hand_civil.push(card("Efficient Upgrade (II)"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Efficient Upgrade (II)"));
+        assert_eq!(state.players[0].techs.workers(card("Agriculture")), 0);
+        assert_eq!(state.players[0].techs.workers(card("Irrigation")), 1);
+        assert_eq!(state.players[0].civil_actions, 3, "the upgrade itself is free");
+    }
+
+    #[test]
+    fn h_play_action_engineering_genius_builds_a_wonder_stage_at_a_discount() {
+        // "Engineering Genius (A)": build_one_wonder_stage, resourceDiscount
+        // 2. Pyramids' first stage costs 3, floored by the discount to 1.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.wonder = card("Pyramids");
+        p.resources = 1;
+        p.hand_civil.push(card("Engineering Genius (A)"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Engineering Genius (A)"));
+        assert_eq!(state.players[0].wonder_steps, 1);
+        assert_eq!(state.players[0].resources, 0);
+        assert_eq!(state.players[0].civil_actions, 3, "the wonder step itself is free");
+    }
+
+    #[test]
+    fn h_play_action_frugality_increases_population_before_its_own_gain_food_lands() {
+        // "Frugality (A)": increase_population "at full price" + gainFood 1.
+        // yellow_bank 5 prices the increase at 5 food; starting on exactly 5
+        // affords it (paid BEFORE the card's own +1 food arrives), leaving 0,
+        // then the card's own gain lands on top.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 5;
+        p.food = 5;
+        p.blue_total = 10; // gain_food needs blue tokens free to convert
+        p.hand_civil.push(card("Frugality (A)"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Frugality (A)"));
+        assert_eq!(state.players[0].workers_free, 1, "the ordered pop happened");
+        assert_eq!(state.players[0].yellow_bank, 4);
+        assert_eq!(state.players[0].food, 1, "0 left after the pop, +1 from the card's own gainFood");
+        assert_eq!(state.players[0].civil_actions, 3, "the pop itself is free");
+    }
+
+    #[test]
+    fn h_play_action_frugality_own_gain_food_arrives_too_late_to_pay_for_its_pop() {
+        // Same card, starting 1 food short of the pop cost: the card's own
+        // +1 food would cover the gap, but §3.11 resolves the ordered action
+        // BEFORE the card's own gains land (`_h_play_action`'s FIFO enqueue
+        // order), so the pop must NOT happen -- only the flat +1 food does.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 5; // prices the increase at 5
+        p.food = 4;
+        p.blue_total = 10; // gain_food needs blue tokens free to convert
+        p.hand_civil.push(card("Frugality (A)"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Frugality (A)"));
+        assert_eq!(state.players[0].workers_free, 0, "the ordered pop must not happen");
+        assert_eq!(state.players[0].yellow_bank, 5, "unchanged: no token moved");
+        assert_eq!(state.players[0].food, 5, "4 unspent + the card's own +1 gainFood");
+    }
+
+    #[test]
+    fn h_play_action_breakthrough_develops_a_technology_at_full_price() {
+        // "Breakthrough (I)": develop_technology "at full price" + gainScience
+        // 2. Bronze is a free develop (scienceCost 0), so this exercises the
+        // ordered `develop` arm end to end.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.hand_civil.push(card("Breakthrough (I)"));
+        p.hand_civil.push(card("Bronze"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        assert_eq!(state.players[0].techs.workers(card("Bronze")), 0, "developed, not built");
+        assert!(state.players[0].techs.has(card("Bronze")));
+        assert!(!state.players[0].hand_civil.contains(card("Bronze")));
+        assert_eq!(state.players[0].science, 2, "only the card's own gainScience -- Bronze cost 0");
+        assert_eq!(state.players[0].civil_actions, 3, "the develop itself is free");
+    }
+
+    #[test]
+    fn h_play_action_breakthrough_own_gain_science_arrives_too_late_to_pay_for_its_develop() {
+        // Irrigation costs 3 science; starting on 2 is short, and the card's
+        // own +2 science arrives AFTER the ordered action resolves (same
+        // FIFO rule as Frugality above), so the develop must not happen.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 2;
+        p.hand_civil.push(card("Breakthrough (I)"));
+        p.hand_civil.push(card("Irrigation"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        assert!(!state.players[0].techs.has(card("Irrigation")), "must not develop");
+        assert!(state.players[0].hand_civil.contains(card("Irrigation")), "stays in hand");
+        assert_eq!(state.players[0].science, 4, "2 unspent + the card's own +2 gainScience");
+    }
+
+    #[test]
+    #[should_panic(expected = "2 legal choices")]
+    fn h_play_action_breakthrough_panics_on_a_genuine_multi_way_choice() {
+        // Two developable, freely-affordable technologies in hand: Python
+        // would open a real `push_choice` decision here (`auto=True` only
+        // auto-resolves 0 or 1 options); `interact.rs` is not ported, so this
+        // is the one case that must be loud rather than silently picking one.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.hand_civil.push(card("Breakthrough (I)"));
+        p.hand_civil.push(card("Bronze"));
+        p.hand_civil.push(card("Agriculture"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+    }
+
+    #[test]
+    fn h_play_action_breakthrough_may_spend_its_order_on_a_revolution() {
+        // RB p.15: Breakthrough's order may pay for a revolution instead of a
+        // peaceful develop. Monarchy's peaceful cost (8) is unaffordable on 2
+        // science, but its revolutionCost (2) is -- and `revolt_ok` needs
+        // "every civil action THIS TURN still unspent" measured BEFORE
+        // playing Breakthrough spends one, not after (a regression test for
+        // that exact ordering: computing it post-`pay_ca` would read
+        // `civil_actions` as one short of `ca_total` and wrongly report no
+        // legal ordered-action move at all).
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4; // == ca_total(Despotism): revolt_ok must be true
+        p.science = 2;
+        p.hand_civil.push(card("Breakthrough (I)"));
+        p.hand_civil.push(card("Monarchy"));
+        let mut state = one_player_state(p);
+        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        assert_eq!(state.players[0].government, card("Monarchy"), "revolution happened");
+        assert_eq!(state.players[0].science, 2, "0 left after the revolution, +2 from the card's own gainScience");
     }
 
     #[test]
