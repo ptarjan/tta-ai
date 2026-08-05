@@ -202,6 +202,43 @@ pub struct CardEffects {
     pub civil_hand_limit: i16,
     pub military_hand_limit: i16,
     pub free_civil_action: i16,
+
+    /// Printed on governments only (§1.4): distinct urban buildings
+    /// (lab/temple/library/arena/theater) a player may have in play at once.
+    /// Zero for every non-government card. Added post-generation-audit: the
+    /// original generator only read a card's `effects` dict plus the printed
+    /// `strength`/`civilActions`/`militaryActions`, and silently never read
+    /// this key at all, so every government reported urban_limit as
+    /// "missing" rather than its printed 2/3/3/3/3/4/4/4 -- see gen_cards.py.
+    pub urban_building_limit: i16,
+}
+
+/// Printed per-worker production. A struct, not a single scalar, because one
+/// card routinely prints more than one field at once -- Religion is
+/// `{culture: 1, happy: 1}`, Printing Press is `{science: 1, culture: 1}` --
+/// and a scalar can only ever hold the last one written.
+///
+/// Distinct from [`CardEffects`]: this is generally scaled by the card's
+/// worker count (`effects.py` `_add_production` / `_tech_prog`), where
+/// `CardEffects` fields are flat, unscaled numbers. The same shape is reused
+/// for a government's production (`effects.py:423`) and, once colonies are
+/// ported, a colony's `permanent` block (`effects.py:457`) -- one struct
+/// wherever the source data prints a `production`-shaped dict, per
+/// `PRODUCTION_EFFECT_FIELDS` in `gen_cards.py`.
+///
+/// `food`/`resources` double as the blue-token denomination for §6.4 (farms
+/// store food, mines store resources); `science`/`culture`/`happy`/`strength`
+/// are urban buildings' printed output. A card prints from at most one of
+/// {food, resources} and at most two of {science, culture, happy, strength}
+/// in the base game today, but nothing here assumes that stays true.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Production {
+    pub food: i16,
+    pub resources: i16,
+    pub science: i16,
+    pub culture: i16,
+    pub happy: i16,
+    pub strength: i16,
 }
 
 /// One card's static data. Immutable for the process lifetime.
@@ -220,9 +257,9 @@ pub struct Card {
     /// Copies in the deck at 2 / 3 / 4 players. Zero means "not in the deck"
     /// (wonders, leaders and starting techs are dealt by another route).
     pub count: [u8; 3],
-    /// Food per turn (farms) or resources per turn (mines); the blue-token
-    /// denomination for §6.4. Zero for everything else.
-    pub production: u8,
+    /// Printed `production` dict verbatim (§ farms/mines/urban buildings).
+    /// Zero-valued (`Production::default()`) for everything else.
+    pub production: Production,
     pub effects: CardEffects,
     /// The card's unique rules. Empty for the majority whose whole behaviour is
     /// `effects`. A slice rather than one value because several cards carry two

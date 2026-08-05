@@ -89,6 +89,32 @@ EFFECT_FIELDS = {
     "civilHandLimit": "civil_hand_limit",
     "militaryHandLimit": "military_hand_limit",
     "freeCivilAction": "free_civil_action",
+    "urbanBuildingLimit": "urban_building_limit",
+}
+
+#: The six keys `production` dicts print, mapped onto `cards::Production`
+#: fields (the mapping is the identity today, but is spelled out so a JSON
+#: key rename is a one-line change here rather than an assumption baked into
+#: the loop below).  A card may print SEVERAL of these AT ONCE -- Religion is
+#: `{culture: 1, happy: 1}`, Printing Press is `{science: 1, culture: 1}` --
+#: which is exactly why `Card.production` is a struct and not the single
+#: scalar this generator used to emit.
+#:
+#: Found incomplete during the effects.rs port (2026-08-05): the original
+#: generator only ever read `prod.get("food") or prod.get("resources") or 0`,
+#: so every urban building -- Philosophy's science, Religion's culture and
+#: happy, every lab/temple/library/arena/theater in the game -- silently
+#: generated as production-less, and a card printing BOTH food and resources
+#: (never happens today, but nothing checked) would have silently kept only
+#: one.  `_unknown_production_keys` below is the regression test: it fails
+#: generation outright if `data/*.json` ever grows a 7th key.
+PRODUCTION_FIELDS = {
+    "food": "food",
+    "resources": "resources",
+    "culture": "culture",
+    "science": "science",
+    "happy": "happy",
+    "strength": "strength",
 }
 
 #: Keys carried for humans, not the engine.  Dropping these is the ONLY place
@@ -155,7 +181,12 @@ def load_cards():
 def main():
     cards = load_cards()
 
-    specials = set()
+    # variant name -> "int" (carries an `(i16)` payload) or "unit" (bare).
+    # A key that shows up as both across different cards is a modelling
+    # question this generator cannot resolve silently -- it must fail instead
+    # of picking one shape and hiding the other card's value (the exact bug
+    # class this whole generator exists to refuse).
+    specials = {}
     rows = []
     for c in cards:
         name = c["name"]
@@ -166,10 +197,11 @@ def main():
         age = AGES[c["age"]]
 
         fields = {v: 0 for v in EFFECT_FIELDS.values()}
-        mine = []
+        mine = []  # [(variant, payload_or_None), ...]
 
         # Top-level printed numbers that are effects in all but name.
-        for key in ("strength", "civilActions", "militaryActions"):
+        for key in ("strength", "civilActions", "militaryActions",
+                    "urbanBuildingLimit"):
             if key in c and c[key] is not None:
                 fields[EFFECT_FIELDS[key]] = as_int(c[key], f"{name}.{key}")
 
@@ -179,16 +211,48 @@ def main():
             field = EFFECT_FIELDS.get(key)
             if field is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
                 fields[field] = as_int(val, f"{name}.effects.{key}")
+                continue
+            # Either a one-off rule, or a recurring key whose value is a
+            # structure (event targeting).  Both are code, not data -- but a
+            # plain int/float (not bool) magnitude must not be thrown away:
+            # Sid Meier's sciencePerLab is -1 (a REDUCTION), Napoleon's
+            # strengthPerUnitType is 2, Shakespeare's culturePerLibraryTheaterPair
+            # is 2, James Cook's cultureFirstColony is 2 -- a bare unit variant
+            # would silently read all four as their Rust match arm's assumed
+            # 1, which for Sid Meier is not just imprecise, it is the wrong
+            # SIGN.  Bool-flag keys (`sciencePerBestLabOrLibraryLevel: true`
+            # and friends) carry no magnitude in Python either -- the matching
+            # `_apply_modifier` branch ignores `val` for those -- so they stay
+            # bare unit variants.
+            variant = camel(key)
+            if isinstance(val, bool):
+                shape = "unit"
+                payload = None
+            elif isinstance(val, (int, float)):
+                shape = "int"
+                payload = as_int(val, f"{name}.effects.{key}")
             else:
-                # Either a one-off rule, or a recurring key whose value is a
-                # structure (event targeting).  Both are code, not data.
-                variant = camel(key)
-                specials.add(variant)
-                mine.append(variant)
+                shape = "unit"
+                payload = None
+            prev = specials.get(variant)
+            if prev is not None and prev != shape:
+                raise ValueError(
+                    f"{name}: Special::{variant} used as both {prev!r} and "
+                    f"{shape!r} across cards (key {key!r}) -- gen_cards.py "
+                    f"cannot pick one shape silently, give it bespoke handling")
+            specials[variant] = shape
+            mine.append((variant, payload))
 
         prod = c.get("production") or {}
-        production = as_int(prod.get("food") or prod.get("resources") or 0,
-                            f"{name}.production")
+        unknown = set(prod) - set(PRODUCTION_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"{name}: production key(s) {sorted(unknown)!r} not in "
+                f"PRODUCTION_FIELDS -- add them to cards::Production and to "
+                f"PRODUCTION_FIELDS, do not let them fall on the floor "
+                f"(this is exactly the bug the urban buildings had)")
+        production = {field: as_int(prod.get(key), f"{name}.production.{key}")
+                     for key, field in PRODUCTION_FIELDS.items()}
 
         count = c["count"]
         rows.append({
@@ -206,6 +270,7 @@ def main():
 
     ordered = sorted(specials)
     eff_order = list(EFFECT_FIELDS.values())
+    prod_order = list(PRODUCTION_FIELDS.values())
 
     out = []
     w = out.append
@@ -216,7 +281,7 @@ def main():
     w("// the engine parses no JSON and has no dependencies, and a card-data")
     w("// change arrives as a reviewable diff rather than a runtime surprise.")
     w("")
-    w("use crate::cards::{Age, Card, CardEffects, CardType};")
+    w("use crate::cards::{Age, Card, CardEffects, CardType, Production};")
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
@@ -224,16 +289,30 @@ def main():
     w("/// not a recurring numeric field. The `match` over this in `effects.rs`")
     w("/// is exhaustive, so a card the engine cannot interpret is a COMPILE")
     w("/// ERROR -- which is the guarantee the Python name-dispatch cannot give.")
+    w("///")
+    w("/// A variant carries an `(i16)` payload when the printed effect has a")
+    w("/// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`")
+    w("/// / `_apply_special`); it stays a bare unit variant when Python ignores")
+    w("/// the JSON value too (a bool-flag key: presence is the whole rule).")
     w("#[derive(Clone, Copy, PartialEq, Eq, Debug)]")
     w("pub enum Special {")
     for v in ordered:
-        w(f"    {v},")
+        if specials[v] == "int":
+            w(f"    {v}(i16),")
+        else:
+            w(f"    {v},")
     w("}")
     w("")
     w("pub static CARDS: [Card; NUM_CARDS] = [")
     for r in rows:
         eff = ", ".join(f"{k}: {r['effects'][k]}" for k in eff_order)
-        sp = ", ".join(f"Special::{v}" for v in r["special"])
+        parts = []
+        for variant, payload in r["special"]:
+            if payload is None:
+                parts.append(f"Special::{variant}")
+            else:
+                parts.append(f"Special::{variant}({payload})")
+        sp = ", ".join(parts)
         w("    Card {")
         w(f"        name: {json.dumps(r['name'])},")
         w(f"        base_name: {json.dumps(r['base_name'])},")
@@ -242,7 +321,8 @@ def main():
         w(f"        science_cost: {r['science_cost']},")
         w(f"        resource_cost: {r['resource_cost']},")
         w(f"        count: [{', '.join(str(x) for x in r['count'])}],")
-        w(f"        production: {r['production']},")
+        prod = ", ".join(f"{k}: {r['production'][k]}" for k in prod_order)
+        w(f"        production: Production {{ {prod} }},")
         w(f"        effects: CardEffects {{ {eff} }},")
         w(f"        special: &[{sp}],")
         w("    },")
