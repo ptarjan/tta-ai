@@ -160,27 +160,24 @@ impl Move {
         }
     }
 
-    /// Whether this move spends a military action rather than a civil one.
-    #[inline]
-    pub fn is_military(self) -> bool {
-        use Move::*;
-        matches!(
-            self,
-            PlayTactic { .. }
-                | CopyTactic { .. }
-                | Aggression { .. }
-                | War { .. }
-                | OfferPact { .. }
-                | Bid { .. }
-                | BidPass
-                | Defend { .. }
-                | DefendDone
-                | SendUnit { .. }
-                | SendBonus { .. }
-                | SendDiscard { .. }
-                | SendDone
-        )
-    }
+    // There was an `is_military(self) -> bool` here. It had zero call sites and
+    // its list disagreed with its own docstring ("spends a military action
+    // rather than a civil one") in both directions:
+    //
+    //   * `Build`/`Upgrade`/`Destroy` of a UNIT each spend one military action
+    //     (`actions.do_build`, `do_upgrade`, `_h_destroy` -- all branch on
+    //     `is_unit(name)`), and none of the three were listed.
+    //   * `OfferPact` spends no military action at all; `_h_offer_pact` calls
+    //     `_end_politics`, so it costs the POLITICAL action, and it was listed.
+    //   * `Bid`/`BidPass`/`Defend`/`DefendDone`/`Send*` are sub-decisions
+    //     inside a resolution that has already been paid for. They spend
+    //     nothing, and they were listed.
+    //
+    // Deleted 2026-08-05 rather than corrected: with no caller there is no fact
+    // of the matter about which of "costs a military action" and "belongs to
+    // the military phase" it was meant to mean, and the bot port is about to
+    // want one of those. Whichever it is, derive it at the use site from the
+    // handlers named above, not from a list nothing checks.
 }
 
 /// A legal-move list. Fixed capacity for the same reason the state is: this is
