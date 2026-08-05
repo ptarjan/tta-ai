@@ -264,6 +264,20 @@ DEFERRED_DICT_EFFECT_KEYS = {
         "port's scope today -- see effects.rs's own KNOWN GAPS",
 }
 
+#: `effects`-dict keys whose VALUE Python confirms it never reads -- prose,
+#: not a rule -- despite the KEY sometimes mattering (Barbarians' `target` is
+#: checked for PRESENCE, `events.py:182`: `"target" in eff and
+#: "decreasePopulation" in eff`, alongside `condition`/`decreasePopulation`,
+#: both independently captured by their OWN Special variants on the same
+#: card, so nothing is lost by not modelling `target`'s text too). Verified
+#: against `engine/*.py` 2026-08-05: `duration` does not appear in a single
+#: `.get(...)` call anywhere in `engine/`. Scoped to the nested `effects`
+#: dict only (not `IGNORED_KEYS`): the TOP-LEVEL `target` key on aggression/
+#: war cards is a real, structured value combat.rs will need, and belongs in
+#: `DEFERRED_TOP_KEYS` instead -- conflating the two under one name would
+#: bury that distinction.
+IGNORED_NESTED_EFFECT_KEYS = {"target", "duration"}
+
 #: List-valued `effects` keys -- a target filter (age list) or a set of
 #: target types, never a magnitude. Same "must be named, not caught by an
 #: `else`" treatment as `DEFERRED_DICT_EFFECT_KEYS`, kept as its own set
@@ -337,6 +351,56 @@ IMMEDIATE_EFFECT_FIELD_ORDER = (
 #: is a slice, not bounded by this constant, but a card wider than every
 #: wonder seen so far is worth a human's eyes before silently accepting it.
 MAX_WONDER_STAGES = 5
+
+# --------------------------------------------------- string-valued keys -----
+#
+# A handful of `effects` keys print a STRING rather than a number. Some of
+# those strings are pure human prose Python never reads (see
+# `IGNORED_NESTED_EFFECT_KEYS` above). The rest are a real dispatch key --
+# `engine/actions.py:566-618`: `kind = eff.get("freeCivilAction")`, then
+# `kind == "increase_population"` / `"build_one_wonder_stage"` / etc reads
+# THE VALUE directly, and `_one_time_culture`/aggression-resolution/war-
+# resolution each hand-dispatch a DIFFERENT formula per card for
+# `onBuildCulture`/`gainResources`/`victorTakesScienceUpTo`. A payload-less
+# `Special::FreeCivilAction` could not tell those apart -- SIX different
+# cards' ordered actions all became the exact same variant, the textbook
+# case of this project's "present in one registry, absent from the other,
+# nothing fails when they disagree" bug class (confirmed 2026-08-05: 18
+# cards print `freeCivilAction`, across 6 distinct values, all 18 collapsed
+# into one `Special::FreeCivilAction` before this fix).
+#
+# Fixed the same way `PACT_BLOCK_FIELDS` fixes the equivalent problem for
+# dict-valued keys: every OBSERVED value is named explicitly, and a value
+# outside this map stops the build rather than silently becoming "some
+# string, which one is anyone's guess". Hand-mapped rather than
+# `camel()`-generated from the value directly -- unlike an effect KEY,
+# these VALUES are not guaranteed to make a legal Rust identifier
+# (`onBuildCulture`'s Fast Food Chains/Internet formulas both start with a
+# digit) or a nameable one (Internet's formula is a full sentence).
+STRING_EFFECT_VALUES = {
+    "freeCivilAction": {
+        "build_or_upgrade_farm_or_mine": "BuildOrUpgradeFarmOrMine",
+        "build_or_upgrade_urban_building": "BuildOrUpgradeUrbanBuilding",
+        "increase_population": "IncreasePopulation",
+        "build_one_wonder_stage": "BuildOneWonderStage",
+        "develop_technology": "DevelopTechnology",
+        "upgrade_farm_mine_or_urban_building": "UpgradeFarmMineOrUrbanBuilding",
+    },
+    "onBuildCulture": {
+        "2*workers(farm,mine)+1*workers(urban,military)": "FastFoodChains",
+        "2*(cultureProduction of theaters+libraries)": "Hollywood",
+        "sum over urban buildings of (culture + science + strength) they "
+        "give, including leader modifications to those buildings' output":
+            "Internet",
+    },
+    "gainResources": {
+        "half of each destroyed building's printed build cost, rounded up":
+            "HalfDestroyedBuildingCostRoundedUp",
+    },
+    "victorTakesScienceUpTo": {
+        "strengthAdvantage": "StrengthAdvantage",
+    },
+}
 
 
 def camel(key: str) -> str:
@@ -476,7 +540,8 @@ def main():
                     f"transcription error, fix data/*.json")
 
         for key, val in _eff.items():
-            if key in IGNORED_KEYS or key in ("tacticBonus", "tacticBonusObsolete"):
+            if key in IGNORED_KEYS or key in IGNORED_NESTED_EFFECT_KEYS \
+                    or key in ("tacticBonus", "tacticBonusObsolete"):
                 continue
             field = EFFECT_FIELDS.get(key)
             if field is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -517,19 +582,31 @@ def main():
                 shape = "unit"
                 payload = None
             elif isinstance(val, str):
-                # A free-text formula (Fast Food Chains'/Hollywood's/
-                # Internet's `onBuildCulture`, Raid's `gainResources`, War
-                # over Technology's `victorTakesScienceUpTo`) or an action
-                # identifier (`freeCivilAction`'s `build_one_wonder_stage`
-                # and friends). Python resolves every one of these by NAME
-                # dispatch in a bespoke function
-                # (`_one_time_culture`/aggression resolution/
-                # `free_action_moves`), never by reading this string as a
-                # magnitude -- there is no `(i16)` to carry, so a bare unit
-                # variant is correct here too, not a gap.
+                # See STRING_EFFECT_VALUES above: a real dispatch value
+                # (`freeCivilAction`) or a per-card formula
+                # (`onBuildCulture`/`gainResources`/`victorTakesScienceUpTo`)
+                # -- either way, Python's behaviour DOES depend on which
+                # string this is, so it needs a real payload, not a bare
+                # flag every such card would otherwise share indistinguishably.
+                if key not in STRING_EFFECT_VALUES:
+                    raise ValueError(
+                        f"{name}: effects.{key} is a string-valued key this "
+                        f"generator does not recognize -- add it to "
+                        f"STRING_EFFECT_VALUES (every expected value named) "
+                        f"or IGNORED_NESTED_EFFECT_KEYS (if Python truly "
+                        f"never reads the value, verified against engine/) "
+                        f"in gen_cards.py")
+                values = STRING_EFFECT_VALUES[key]
+                if val not in values:
+                    raise ValueError(
+                        f"{name}: effects.{key} = {val!r} is not in "
+                        f"STRING_EFFECT_VALUES[{key!r}] -- a new value here "
+                        f"is exactly the case this generator exists to "
+                        f"catch, not paper over; add it with a real name")
                 variant = camel(key)
-                shape = "unit"
-                payload = None
+                shape = "string_enum"
+                enum_type = variant + "Value"
+                payload = f"{enum_type}::{values[val]}"
             elif isinstance(val, (int, float)):
                 # A magnitude Python's own dispatch DOES read (Sid Meier's
                 # sciencePerLab is -1, a reduction; Napoleon's
@@ -681,6 +758,25 @@ def main():
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
+
+    # One small enum per string-valued effects key actually seen in the data
+    # (`STRING_EFFECT_VALUES`) -- emitted before `Special` since `Special`'s
+    # variants reference them as payloads.
+    for key, values in STRING_EFFECT_VALUES.items():
+        variant = camel(key)
+        if specials.get(variant) != "string_enum":
+            continue  # key defined but never observed in this data revision
+        enum_type = variant + "Value"
+        w(f"/// Every value `effects.{key}` prints in the base game -- see")
+        w("/// gen_cards.py's `STRING_EFFECT_VALUES` for why this is a closed,")
+        w("/// hand-named enum rather than a `&'static str`.")
+        w("#[derive(Clone, Copy, PartialEq, Eq, Debug)]")
+        w(f"pub enum {enum_type} {{")
+        for name_ in values.values():
+            w(f"    {name_},")
+        w("}")
+        w("")
+
     w("/// One card's unique rule. Generated: one variant per effect key that is")
     w("/// not a recurring numeric field. The `match` over this in `effects.rs`")
     w("/// is exhaustive, so a card the engine cannot interpret is a COMPILE")
@@ -689,10 +785,13 @@ def main():
     w("/// A variant carries an `(i16)` payload when the printed effect has a")
     w("/// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`")
     w("/// / `_apply_special`); a `(PactBlock)` payload when the printed value is")
-    w("/// one of the four pact blocks (§5.9); and stays a bare unit variant when")
-    w("/// Python ignores the JSON value too (a bool-flag key, or a dict-valued")
-    w("/// key this port has not modeled yet -- see gen_cards.py's")
-    w("/// DEFERRED_DICT_EFFECT_KEYS for the reason on each).")
+    w("/// one of the four pact blocks (§5.9); a `(<Key>Value)` payload when the")
+    w("/// printed value is a STRING Python's own dispatch reads (`freeCivilAction`")
+    w("/// et al -- see `STRING_EFFECT_VALUES` in gen_cards.py); and stays a bare")
+    w("/// unit variant when Python ignores the JSON value too (a bool-flag key, or")
+    w("/// a dict/list-valued key this port has not modeled yet -- see")
+    w("/// gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/DEFERRED_LIST_EFFECT_KEYS for")
+    w("/// the reason on each).")
     w("#[derive(Clone, Copy, PartialEq, Eq, Debug)]")
     w("pub enum Special {")
     for v in ordered:
@@ -701,6 +800,8 @@ def main():
             w(f"    {v}(i16),")
         elif shape == "pact_block":
             w(f"    {v}(PactBlock),")
+        elif shape == "string_enum":
+            w(f"    {v}({v}Value),")
         else:
             w(f"    {v},")
     w("}")

@@ -9,6 +9,45 @@ use crate::cards::{Age, Card, CardEffects, CardType, Composition, ImmediateEffec
 
 pub const NUM_CARDS: usize = 236;
 
+/// Every value `effects.freeCivilAction` prints in the base game -- see
+/// gen_cards.py's `STRING_EFFECT_VALUES` for why this is a closed,
+/// hand-named enum rather than a `&'static str`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FreeCivilActionValue {
+    BuildOrUpgradeFarmOrMine,
+    BuildOrUpgradeUrbanBuilding,
+    IncreasePopulation,
+    BuildOneWonderStage,
+    DevelopTechnology,
+    UpgradeFarmMineOrUrbanBuilding,
+}
+
+/// Every value `effects.onBuildCulture` prints in the base game -- see
+/// gen_cards.py's `STRING_EFFECT_VALUES` for why this is a closed,
+/// hand-named enum rather than a `&'static str`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OnBuildCultureValue {
+    FastFoodChains,
+    Hollywood,
+    Internet,
+}
+
+/// Every value `effects.gainResources` prints in the base game -- see
+/// gen_cards.py's `STRING_EFFECT_VALUES` for why this is a closed,
+/// hand-named enum rather than a `&'static str`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GainResourcesValue {
+    HalfDestroyedBuildingCostRoundedUp,
+}
+
+/// Every value `effects.victorTakesScienceUpTo` prints in the base game -- see
+/// gen_cards.py's `STRING_EFFECT_VALUES` for why this is a closed,
+/// hand-named enum rather than a `&'static str`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VictorTakesScienceUpToValue {
+    StrengthAdvantage,
+}
+
 /// One card's unique rule. Generated: one variant per effect key that is
 /// not a recurring numeric field. The `match` over this in `effects.rs`
 /// is exhaustive, so a card the engine cannot interpret is a COMPILE
@@ -17,10 +56,13 @@ pub const NUM_CARDS: usize = 236;
 /// A variant carries an `(i16)` payload when the printed effect has a
 /// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`
 /// / `_apply_special`); a `(PactBlock)` payload when the printed value is
-/// one of the four pact blocks (§5.9); and stays a bare unit variant when
-/// Python ignores the JSON value too (a bool-flag key, or a dict-valued
-/// key this port has not modeled yet -- see gen_cards.py's
-/// DEFERRED_DICT_EFFECT_KEYS for the reason on each).
+/// one of the four pact blocks (§5.9); a `(<Key>Value)` payload when the
+/// printed value is a STRING Python's own dispatch reads (`freeCivilAction`
+/// et al -- see `STRING_EFFECT_VALUES` in gen_cards.py); and stays a bare
+/// unit variant when Python ignores the JSON value too (a bool-flag key, or
+/// a dict/list-valued key this port has not modeled yet -- see
+/// gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/DEFERRED_LIST_EFFECT_KEYS for
+/// the reason on each).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Special {
     A(PactBlock),
@@ -54,14 +96,13 @@ pub enum Special {
     DestroyUrbanBuildings,
     DoubleBestMine,
     DoublesTacticBonusOfOneArmy,
-    Duration,
     ExtraHappyPerHappySource(i16),
-    FreeCivilAction,
+    FreeCivilAction(FreeCivilActionValue),
     FreePopIncreasePerTurn,
     Gain,
     GainCulturePerLevelOfRemovedCard(i16),
     GainFoodOrResources(i16),
-    GainResources,
+    GainResources(GainResourcesValue),
     InfantryCountsAsCavalryForTactics,
     LastRoundSubstitute,
     LeaderTakeCivilActionDiscount(i16),
@@ -71,7 +112,7 @@ pub enum Special {
     MilitaryActionCombinedPopIncreaseAndUnitBuild,
     NoAttacksBetweenParties,
     OnAttackBetweenParties(PactBlock),
-    OnBuildCulture,
+    OnBuildCulture(OnBuildCultureValue),
     OnBuildCulturePerTechLevelSum,
     OnReplacePutUnderCompletedWonderHappy(i16),
     OncePerGameTwoPoliticalActions,
@@ -105,12 +146,11 @@ pub enum Special {
     StrongestPlayer,
     StrongestPlayers,
     TakeFromOpponent,
-    Target,
     TheaterResourceDiscountIfLibrary(i16),
     TheaterScienceDiscountIfLibrary(i16),
     TheaterTechScienceDiscount(i16),
     VictorTakesCulture,
-    VictorTakesScienceUpTo,
+    VictorTakesScienceUpTo(VictorTakesScienceUpToValue),
     VictorTakesYellowTokens,
     WeakestPlayer,
     WeakestPlayers,
@@ -1404,7 +1444,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::OnBuildCulture],
+        special: &[Special::OnBuildCulture(OnBuildCultureValue::FastFoodChains)],
         stages: &[4, 4, 4, 4],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -1423,7 +1463,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::OnBuildCulture],
+        special: &[Special::OnBuildCulture(OnBuildCultureValue::Internet)],
         stages: &[2, 3, 4, 3, 2],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -1442,7 +1482,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::OnBuildCulture],
+        special: &[Special::OnBuildCulture(OnBuildCultureValue::Hollywood)],
         stages: &[5, 6, 5],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2221,7 +2261,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources],
+        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2278,7 +2318,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 2,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources],
+        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2373,7 +2413,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 3,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources],
+        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2430,7 +2470,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 2,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::VictorTakesScienceUpTo, Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost],
+        special: &[Special::VictorTakesScienceUpTo(VictorTakesScienceUpToValue::StrengthAdvantage), Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -3190,7 +3230,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::Target, Special::Condition, Special::DecreasePopulation(1)],
+        special: &[Special::Condition, Special::DecreasePopulation(1)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -3323,7 +3363,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::AllPlayers, Special::Duration],
+        special: &[Special::AllPlayers],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -3988,7 +4028,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeFarmOrMine)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4007,7 +4047,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4026,7 +4066,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::IncreasePopulation)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4045,7 +4085,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOneWonderStage)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4121,7 +4161,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeFarmOrMine)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4140,7 +4180,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4159,7 +4199,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::IncreasePopulation)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4178,7 +4218,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOneWonderStage)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4216,7 +4256,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::DevelopTechnology)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4273,7 +4313,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeFarmOrMine)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4292,7 +4332,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4311,7 +4351,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::IncreasePopulation)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4330,7 +4370,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOneWonderStage)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4368,7 +4408,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::DevelopTechnology)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4406,7 +4446,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::UpgradeFarmMineOrUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4463,7 +4503,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4482,7 +4522,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOneWonderStage)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4539,7 +4579,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FreeCivilAction],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::UpgradeFarmMineOrUrbanBuilding)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,

@@ -411,18 +411,20 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | CultureOnRevolution(_)
         | CultureOnTechDevelop(_)
         | CulturePerCivilizationWithMoreCulture
-        | FreeCivilAction
+        // Which ordered free action a card grants -- `FreeCivilActionValue`
+        // now names it (gen_cards.py, 2026-08-05), read by `actions.rs`, not
+        // `compute()`.
+        | FreeCivilAction(_)
         | GainFoodOrResources(_)
         | LeaderTakeCivilActionDiscount(_)
         | LibraryDiscountsIfTheater
         | MilitaryActionAsCivilPerTurn(_)
         | MilitaryActionCombinedPopIncreaseAndUnitBuild
-        // Fast Food Chains / Internet / Hollywood: `onBuildCulture`'s value is
-        // a free-text formula in the data (not a machine number), resolved by
+        // Fast Food Chains / Internet / Hollywood: resolved by
         // `engine/effects.py::_one_time_culture`/`wonder_completion_culture`
         // at wonder-completion time -- a one-shot build trigger, not a
-        // recurring `compute()` field.
-        | OnBuildCulture
+        // recurring `compute()` field. `OnBuildCultureValue` names which.
+        | OnBuildCulture(_)
         | OnBuildCulturePerTechLevelSum
         | OncePerGameTwoPoliticalActions
         | PeekTopEventCardInPolitics
@@ -448,9 +450,10 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | DestroyUrbanBuildings
         | DoublesTacticBonusOfOneArmy
         // Aggression: Raid -- "half of each destroyed building's printed
-        // build cost, rounded up" is a free-text formula in the data, not a
-        // number; resolved at aggression-resolution time, not by `compute()`.
-        | GainResources
+        // build cost, rounded up"; `GainResourcesValue` names that formula
+        // (today's only value); resolved at aggression-resolution time, not
+        // by `compute()`.
+        | GainResources(_)
         | GainCulturePerLevelOfRemovedCard(_)
         | InfantryCountsAsCavalryForTactics
         | OpponentDecreasesPopulation(_)
@@ -460,15 +463,20 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | StealColony(_)
         | TakeFromOpponent
         | VictorTakesCulture
-        | VictorTakesScienceUpTo
+        // War over Technology's `strengthAdvantage` formula, named by
+        // `VictorTakesScienceUpToValue`; war-resolution-time, not `compute()`.
+        | VictorTakesScienceUpTo(_)
         | VictorTakesYellowTokens => {}
 
         // -------------------------------------- belongs to events.rs ----
-        // Age/military event-card resolution and targeting.
+        // Age/military event-card resolution and targeting. (`target` and
+        // `duration` are NOT variants here or anywhere -- gen_cards.py's
+        // `IGNORED_NESTED_EFFECT_KEYS`: Python confirmed never reads either
+        // value, only `target`'s PRESENCE on Barbarians, which `Condition`/
+        // `DecreasePopulation` on that same card already carry.)
         AllPlayers
         | Condition
         | DecreasePopulation(_)
-        | Duration
         | Gain
         | Lose
         | LastRoundSubstitute
@@ -478,7 +486,6 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | PlayersWithMostHappyFaces
         | StrongestPlayer
         | StrongestPlayers
-        | Target
         | WeakestPlayer
         | WeakestPlayers => {}
 
