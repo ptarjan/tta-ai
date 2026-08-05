@@ -182,9 +182,14 @@ STRUCTURAL_KEYS = {
 }
 
 #: New this pass -- see `cards.rs`'s `Card`/`CardEffects`/`ImmediateEffects`.
+#: `scoringEvent` (added for the §12.5.2 final-scoring port, 2026-08-05) is
+#: read directly in the main loop below -- true on exactly the 15 base-game
+#: Age III "Impact of ..." event cards, and is what selects the
+#: `effects.allPlayers` -> `FinalScoringBlock` payload path over the
+#: ordinary payload-less `DEFERRED_DICT_EFFECT_KEYS["allPlayers"]` one.
 IMPLEMENTED_TOP_KEYS = {
     "peacefulCost", "revolutionCost", "stages",
-    "permanentEffects", "immediateEffects",
+    "permanentEffects", "immediateEffects", "scoringEvent",
 }
 
 #: Present in `data/*.json`, read by nothing ported yet. Confirmed against
@@ -198,8 +203,6 @@ DEFERRED_TOP_KEYS = {
     "urbanLimitCategory": "always equals the card's own `type` for every "
              "urban building in the base data (verified 2026-08-05) -- "
              "redundant with CardType, not modeled separately",
-    "scoringEvent": "marks an end-game 'Impact of X' scoring event card -- "
-             "events.rs scoring is not ported",
 }
 
 # ------------------------------------------------ pact blocks (A/B/...) -----
@@ -513,6 +516,180 @@ def build_age_array(name, key, block):
     return "[" + ", ".join(str(x) for x in values) + "]"
 
 
+# ------------------------------------------- §12.5.2 final scoring events --
+#
+# The 15 base-game "Impact of ..." Age III event cards print
+# `scoringEvent: true` and an `effects.allPlayers` block holding the actual
+# formula (`engine/events.py::scoring_culture`'s key vocabulary). Every
+# other `allPlayers` block in the data (event targeting during PLAY, not
+# final scoring) stays the payload-less `Special::AllPlayers` unit variant
+# `DEFERRED_DICT_EFFECT_KEYS` already gives it -- this is scoped to the 15
+# `scoringEvent` cards specifically, verified 2026-08-05 to be exactly the
+# same 15 cards `age == "III" and "allPlayers" in effects` selects.
+
+#: `effects.allPlayers` sub-key -> `cards::FinalScoringBlock` field, for the
+#: plain-magnitude keys. `culturePerCompletedWonderByAge` (age-keyed dict),
+#: `rankingCulture`/`statistic` (the ranking table) are handled separately
+#: below, not through this map. Exhaustive against the live data (2026-08-05
+#: census of all 15 `scoringEvent` cards' `allPlayers` blocks).
+SCORING_BLOCK_FIELDS = {
+    "culturePerResourceProducedByMines": "culture_per_resource_produced_by_mines",
+    "culturePerFoodProducedByFarms": "culture_per_food_produced_by_farms",
+    "bonusIfProductionExceedsConsumption": "bonus_if_production_exceeds_consumption",
+    "culturePerLevelOfMilitaryUnitsAndArenas":
+        "culture_per_level_of_military_units_and_arenas",
+    "culturePerLevelOfSpecialTechsAndGovernment":
+        "culture_per_level_of_special_techs_and_government",
+    "culturePerContentWorkerAbove10": "culture_per_content_worker_above_10",
+    "culturePerColony": "culture_per_colony",
+    "culturePerCivilAction": "culture_per_civil_action",
+    "culturePerMilitaryAction": "culture_per_military_action",
+    "culturePerLevelOfUrbanBuildings": "culture_per_level_of_urban_buildings",
+    "culturePerHappyFace": "culture_per_happy_face",
+    "maxCultureFromHappyFaces": "max_culture_from_happy_faces",
+    "culturePerDiscontentWorker": "culture_per_discontent_worker",
+    "culturePerAgeIIITechnology": "culture_per_age_iii_technology",
+    "cultureTimesLowestProduction": "culture_times_lowest_production",
+    "culturePerDistinctTypeOfUnitUrbanBuildingAndSpecialTech":
+        "culture_per_distinct_type_of_unit_urban_building_and_special_tech",
+}
+
+#: `allPlayers` sub-keys `engine/events.py::scoring_culture` never reads at
+#: all -- decorative/documentation keys, only ever seen on "Impact of
+#: Balance" (`statistics`, `ignore`: a human-readable restatement of what
+#: `cultureTimesLowestProduction` already means). Verified against
+#: `scoring_culture`'s own `elif` chain 2026-08-05: neither key has a
+#: matching branch. Scoped to this block only -- NOT the same set as the
+#: top-level `IGNORED_KEYS`, which is also checked first.
+SCORING_BLOCK_IGNORED_KEYS = {"statistics", "ignore"}
+
+#: `effects.allPlayers.statistic` -> `cards::FinalScoringStat` variant.
+#: Mirrors `engine/events.py::_STAT_ALIASES`.
+SCORING_STAT_ALIASES = {
+    "strengthRating": "Strength",
+    "scienceProduction": "Science",
+    "cultureProduction": "CultureRate",
+    "foodProduction": "Food",
+    "resourceProduction": "Resources",
+}
+
+SCORING_BLOCK_FIELD_ORDER = (
+    "culture_per_resource_produced_by_mines",
+    "culture_per_food_produced_by_farms",
+    "bonus_if_production_exceeds_consumption",
+    "culture_per_level_of_military_units_and_arenas",
+    "culture_per_level_of_special_techs_and_government",
+    "culture_per_completed_wonder_by_age",
+    "culture_per_content_worker_above_10",
+    "culture_per_colony",
+    "culture_per_civil_action",
+    "culture_per_military_action",
+    "culture_per_level_of_urban_buildings",
+    "culture_per_happy_face",
+    "max_culture_from_happy_faces",
+    "culture_per_discontent_worker",
+    "culture_per_age_iii_technology",
+    "culture_times_lowest_production",
+    "culture_per_distinct_type_of_unit_urban_building_and_special_tech",
+    "has_ranking",
+    "ranking_stat",
+    "ranking_2p",
+    "ranking_3p",
+    "ranking_4p",
+)
+SCORING_BLOCK_BOOL_FIELDS = {"has_ranking"}
+
+
+def scoring_stat_variant(name, statistic):
+    """`effects.allPlayers.statistic` -> a `FinalScoringStat::<Variant>`
+    literal.
+
+    Python's own lookup (`_STAT_ALIASES.get(block.get("statistic",
+    "strengthRating"), "strength")`) silently falls back to `"strength"` for
+    a `statistic` value it does not recognize, rather than erroring --
+    unlike almost everything else in this generator, which fails loud on an
+    unrecognized value. That is a real quirk of the Python it is faithfully
+    reproducing, not hardened away here (this project's standing rule:
+    reproduce a found gap, do not paper over it). No base-game card
+    exercises the fallback -- verified 2026-08-05, only `strengthRating`/
+    `scienceProduction` are ever printed -- so this only ever returns
+    `Strength` by the documented default path, never the silent one.
+    """
+    return SCORING_STAT_ALIASES.get(statistic, "Strength")
+
+
+def build_final_scoring_block(name, block):
+    """`effects.allPlayers` on a `scoringEvent` card -> a `FinalScoringBlock
+    { ... }` Rust literal (see cards.rs)."""
+    values = {f: 0 for f in SCORING_BLOCK_FIELD_ORDER}
+    values["culture_per_completed_wonder_by_age"] = "[0, 0, 0, 0, 0]"
+    values["has_ranking"] = False
+    values["ranking_stat"] = "FinalScoringStat::Strength"
+    values["ranking_2p"] = "[0, 0]"
+    values["ranking_3p"] = "[0, 0, 0]"
+    values["ranking_4p"] = "[0, 0, 0, 0]"
+
+    ranking_table = None
+    statistic = None
+    for k, v in block.items():
+        if k in IGNORED_KEYS or k in SCORING_BLOCK_IGNORED_KEYS:
+            continue
+        if k == "culturePerCompletedWonderByAge":
+            values["culture_per_completed_wonder_by_age"] = build_age_array(
+                name, "allPlayers.culturePerCompletedWonderByAge", v)
+            continue
+        if k == "rankingCulture":
+            ranking_table = v
+            continue
+        if k == "statistic":
+            statistic = v
+            continue
+        field = SCORING_BLOCK_FIELDS.get(k)
+        if field is None:
+            raise ValueError(
+                f"{name}: effects.allPlayers.{k} is not a recognized final-"
+                f"scoring key -- add it to SCORING_BLOCK_FIELDS (with the "
+                f"FinalScoringBlock field it feeds), SCORING_BLOCK_IGNORED_KEYS "
+                f"(if events.py::scoring_culture truly never reads it) or "
+                f"IGNORED_KEYS in gen_cards.py")
+        values[field] = as_int(v, f"{name}.effects.allPlayers.{k}")
+
+    if ranking_table is not None:
+        values["has_ranking"] = True
+        values["ranking_stat"] = (
+            f"FinalScoringStat::{scoring_stat_variant(name, statistic or 'strengthRating')}")
+        unknown_pkeys = set(ranking_table) - {"2p", "3p", "4p"}
+        if unknown_pkeys:
+            raise ValueError(
+                f"{name}: effects.allPlayers.rankingCulture has unrecognized "
+                f"player-count key(s) {sorted(unknown_pkeys)!r}")
+        for pkey, field, width in (("2p", "ranking_2p", 2),
+                                    ("3p", "ranking_3p", 3),
+                                    ("4p", "ranking_4p", 4)):
+            table = ranking_table.get(pkey)
+            if table is None:
+                raise ValueError(
+                    f"{name}: effects.allPlayers.rankingCulture is missing "
+                    f"{pkey!r}")
+            if len(table) != width:
+                raise ValueError(
+                    f"{name}: effects.allPlayers.rankingCulture.{pkey} has "
+                    f"{len(table)} entries, expected {width}")
+            values[field] = "[" + ", ".join(
+                str(as_int(x, f"{name}.rankingCulture.{pkey}")) for x in table
+            ) + "]"
+    elif statistic is not None:
+        raise ValueError(
+            f"{name}: effects.allPlayers.statistic printed without "
+            f"rankingCulture")
+
+    parts = []
+    for f in SCORING_BLOCK_FIELD_ORDER:
+        v = values[f]
+        parts.append(f"{f}: {rust_bool(v) if f in SCORING_BLOCK_BOOL_FIELDS else v}")
+    return "FinalScoringBlock { " + ", ".join(parts) + " }"
+
+
 #: `effects.takeFromOpponent` sub-key -> `cards::TakeFromOpponentBlock`
 #: field. Exhaustive against the live data (2026-08-05: three base-game
 #: aggression cards -- Plunder/Spy/Armed Intervention -- one field each):
@@ -666,6 +843,31 @@ def main():
         for key, val in _eff.items():
             if key in IGNORED_KEYS or key in IGNORED_NESTED_EFFECT_KEYS \
                     or key in ("tacticBonus", "tacticBonusObsolete"):
+                continue
+            if key == "allPlayers" and c.get("scoringEvent"):
+                # One of the 15 "Impact of ..." final-scoring events (see
+                # this file's "§12.5.2 final scoring events" section) -- a
+                # REAL `FinalScoringBlock` payload, in addition to (not
+                # instead of) the ordinary payload-less `AllPlayers` marker
+                # every other `allPlayers`-printing event card still gets,
+                # so nothing that already tests for `Special::AllPlayers`
+                # generically needs to change. Two variants from one source
+                # key, so this appends both directly rather than falling
+                # through to the single-append tail below.
+                for variant, shape, payload in (
+                    ("AllPlayers", "unit", None),
+                    ("FinalScoring", "final_scoring_block",
+                     build_final_scoring_block(name, val)),
+                ):
+                    prev = specials.get(variant)
+                    if prev is not None and prev != shape:
+                        raise ValueError(
+                            f"{name}: Special::{variant} used as both "
+                            f"{prev!r} and {shape!r} across cards (key "
+                            f"{key!r}) -- gen_cards.py cannot pick one shape "
+                            f"silently, give it bespoke handling")
+                    specials[variant] = shape
+                    mine.append((variant, payload))
                 continue
             field = EFFECT_FIELDS.get(key)
             if field is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -891,7 +1093,8 @@ def main():
     w("// change arrives as a reviewable diff rather than a runtime surprise.")
     w("")
     w("use crate::cards::{Age, Card, CardEffects, CardType, Composition, "
-      "ImmediateEffects, PactBlock, Production, TakeFromOpponentBlock};")
+      "FinalScoringBlock, FinalScoringStat, ImmediateEffects, PactBlock, "
+      "Production, TakeFromOpponentBlock};")
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
@@ -923,7 +1126,11 @@ def main():
     w("/// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`")
     w("/// / `_apply_special`); a `(PactBlock)` payload when the printed value is")
     w("/// one of the four pact blocks (§5.9); a `(TakeFromOpponentBlock)`")
-    w("/// payload for `takeFromOpponent` (§5.4.6); an `([i16; 5])` payload,")
+    w("/// payload for `takeFromOpponent` (§5.4.6); a `(FinalScoringBlock)`")
+    w("/// payload for `allPlayers` on one of the 15 `scoringEvent` Age III")
+    w("/// cards (§12.5.2 -- see `FinalScoring`, emitted ALONGSIDE the ordinary")
+    w("/// payload-less `AllPlayers` marker every `allPlayers`-printing event")
+    w("/// still gets, not instead of it); an `([i16; 5])` payload,")
     w("/// indexed by `Age as u8`, when the printed value is a per-age magnitude")
     w("/// dict (`buildDiscount`); a `(&'static [Age])` payload for")
     w("/// `destroyUrbanBuildings`, one entry per raid; a `(<Key>Value)` payload")
@@ -947,6 +1154,8 @@ def main():
             w(f"    {v}(&'static [Age]),")
         elif shape == "take_from_opponent_block":
             w(f"    {v}(TakeFromOpponentBlock),")
+        elif shape == "final_scoring_block":
+            w(f"    {v}(FinalScoringBlock),")
         elif shape == "string_enum":
             w(f"    {v}({v}Value),")
         else:

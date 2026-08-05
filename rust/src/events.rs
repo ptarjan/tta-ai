@@ -1,7 +1,10 @@
-//! Event-gain application (§5.3/§5.4.6). Ports exactly `engine/events.py`'s
-//! "gain blocks" section (that file's own header comment, lines 41-125):
-//! `apply_gains` and its one directly-needed helper, `_food_or_resources`
-//! (this module's [`food_or_resources`]).
+//! Event-gain application (§5.3/§5.4.6) and §12.5.2 final scoring. Ports
+//! `engine/events.py`'s "gain blocks" section (that file's own header
+//! comment, lines 41-125: `apply_gains` and its one directly-needed helper,
+//! `_food_or_resources`, this module's [`food_or_resources`]) and, added
+//! 2026-08-05, its final-scoring section (`pending_final_events`,
+//! `scoring_culture`, `final_event_awards`, `evaluate_final_events` --
+//! [`final_event_awards`]/[`evaluate_final_events`] below).
 //!
 //! ## Scope: what this module is, and is not
 //!
@@ -10,13 +13,36 @@
 //! `resolve_event`) AND to pay an aggression's success gains to the attacker
 //! (`finish_aggression`). Only the second caller is wired up by this pass --
 //! `combat.rs::finish_aggression`'s SUCCESS branch, which used to
-//! `unimplemented!` naming this module. Event RESOLUTION itself
+//! `unimplemented!` naming this module. Event RESOLUTION DURING PLAY
 //! (`resolve_event`, `_apply_player_block`, `_conditional_target`,
-//! `_apply_extras`, `scoring_culture`, `pending_final_events`,
-//! `final_event_awards`, `evaluate_final_events`, ...) is a separate, larger
-//! job and is deliberately not touched here -- see "keys this module does
-//! not implement" below for exactly where that leaves `apply_gains` short of
-//! Python's version, and why that shortfall is inert today.
+//! `_apply_extras`) is a separate, larger job and is deliberately not
+//! touched here -- see "keys this module does not implement" below for
+//! exactly where that leaves `apply_gains` short of Python's version, and
+//! why that shortfall is inert today.
+//!
+//! §12.5.2 final scoring is a DIFFERENT, self-contained slice of
+//! `engine/events.py` that this pass DOES port in full: the fifteen
+//! "Impact of ..." Age III event cards still sitting in `current_events`/
+//! `future_events` at game end score directly off their own printed data
+//! (`cards::FinalScoringBlock`, built by `gen_cards.py` from each card's
+//! `effects.allPlayers`), with no dependency on `resolve_event` or anything
+//! else still unported.
+//!
+//! In Python's actual rules, one of these 15 cards CAN also score early: if
+//! revealed during play, `resolve_event` moves it to `past_events` and
+//! `_apply_player_block` calls `scoring_culture` (and the same
+//! `rankingCulture` logic [`final_event_awards`] below reimplements) right
+//! then, banking the culture in `p.culture` immediately rather than at game
+//! end -- which is exactly why [`pending_final_events`] excludes
+//! `past_events`, the same exclusion Python's own function documents.
+//! `resolve_event`/`_apply_player_block` are out of THIS pass's scope and,
+//! separately, are not reachable at all yet in this port (`Move::
+//! PrepareEvent` is `unimplemented!()` in `apply.rs`, and nothing seeds an
+//! Age III event into `current_events`/`future_events` either -- see
+//! `game.rs`'s KNOWN GAPS) -- so today this module is the ONLY path any Age
+//! III event can score through, but the `past_events` boundary itself is a
+//! real rule this port will still need the day event-revealing lands, not a
+//! today-only shortcut invented here.
 //!
 //! `_draw_military` (`engine/events.py:117-124`) is NOT ported: nothing in
 //! Python's `apply_gains` can reach it except through a `drawMilitaryCards`
@@ -107,8 +133,10 @@
 //! variant to dispatch on, just no aggression/event card that currently
 //! does.
 
-use crate::cards::{CardId, Special};
+use crate::cards::{Age, CardId, CardType, FinalScoringStat, Special};
 use crate::economy;
+use crate::effects;
+use crate::game;
 use crate::interact;
 use crate::state::{GameState, PlayerState, QueueItem};
 
@@ -245,6 +273,292 @@ pub(crate) fn food_or_resources(p: &mut PlayerState, amount: i32, sign: i32) {
         let take = p.resources.min(amount);
         p.resources -= take;
         p.food = p.food.saturating_sub(amount - take);
+    }
+}
+
+// ==================================================== §12.5.2 final scoring
+
+/// The Age III scoring events still owed a payout, in scoring order.
+/// Mirrors `engine/events.py::pending_final_events`, including its exclusion
+/// of `past_events` -- see this module's top doc comment for why an event
+/// there already paid out through `_apply_player_block`.
+///
+/// Python returns `[(name, block), ...]`; this returns just the `CardId`s,
+/// since `block` here is `card.get().special`'s own `Special::FinalScoring`
+/// payload rather than a separate dict -- [`final_scoring_block`] reads it
+/// straight off the card, so there is nothing a second return value would
+/// carry that the caller cannot already get from the `CardId` alone.
+fn pending_final_events(state: &GameState) -> Vec<CardId> {
+    state
+        .current_events
+        .as_slice()
+        .iter()
+        .chain(state.future_events.as_slice().iter())
+        .copied()
+        .filter(|c| !c.is_none() && final_scoring_block(*c).is_some())
+        .collect()
+}
+
+/// The `Special::FinalScoring` payload off one card, if it has one. `None`
+/// for every card except the 15 base-game `scoringEvent` events (see
+/// `cards::FinalScoringBlock`'s doc comment).
+fn final_scoring_block(card: CardId) -> Option<&'static crate::cards::FinalScoringBlock> {
+    card.get().special.iter().find_map(|sp| match sp {
+        Special::FinalScoring(block) => Some(block),
+        _ => None,
+    })
+}
+
+/// Live players in clockwise turn order starting at `state.start_player`.
+/// Mirrors `engine/events.py::_order_from(state, first_idx)`, but narrowed
+/// to the one `first_idx` [`final_event_awards`] ever calls it with --
+/// Python's other three call sites (`resolve_event`, `_conditional_target`,
+/// `interact.start_auction`) start from the revealer/current player instead,
+/// and are out of this pass's scope.
+fn order_from_start(state: &GameState) -> Vec<u8> {
+    let n = state.num_players;
+    (0..n)
+        .map(|i| (state.start_player + i) % n)
+        .filter(|&idx| !state.players[idx as usize].resigned)
+        .collect()
+}
+
+/// The one statistic value `final_event_awards`'s `rankingCulture` ranking
+/// ever needs. Mirrors `engine/events.py::_stat_value`, narrowed to the five
+/// `FinalScoringStat` targets `_STAT_ALIASES` maps final-scoring's
+/// `statistic` key onto -- Python's fuller version also answers
+/// `happy`/`discontent`/`culture` for `resolve_event`'s targeting callers,
+/// out of scope here.
+fn final_scoring_stat_value(state: &GameState, p: &PlayerState, stat: FinalScoringStat) -> i32 {
+    let s = effects::state_stats(state, p);
+    match stat {
+        FinalScoringStat::Strength => s.strength,
+        FinalScoringStat::Science => s.science,
+        FinalScoringStat::CultureRate => s.culture,
+        FinalScoringStat::Food => s.food,
+        FinalScoringStat::Resources => s.resources,
+    }
+}
+
+/// `order`'s players, best-`stat`-first, ties broken by position in `order`
+/// (§5.3 tie-break: whoever is closer to the start player in turn order).
+/// Mirrors `engine/events.py::_rank(state, order, stat, best_first=True)` --
+/// the only `best_first` value `final_event_awards` ever passes -- via a
+/// stable sort on `order` itself: `order` is already in tie-break order, so
+/// a stable sort preserves ties in exactly the position Python's explicit
+/// `idx[q.idx]` secondary key does, with no second key needed.
+fn rank_by_final_scoring_stat(state: &GameState, order: &[u8], stat: FinalScoringStat) -> Vec<u8> {
+    let mut ranked = order.to_vec();
+    ranked.sort_by_key(|&idx| -final_scoring_stat_value(state, &state.players[idx as usize], stat));
+    ranked
+}
+
+/// Culture awarded by ONE "Impact of ..." Age III scoring event to ONE
+/// player. Ports `engine/events.py::scoring_culture`'s per-key dispatch --
+/// `block`'s fields are [`crate::cards::FinalScoringBlock`]'s zero-default
+/// fields rather than a dict entry per printed key, so every branch below
+/// runs unconditionally and is a no-op on a card that did not print that
+/// key, the same "0 = not printed" convention `TakeFromOpponentBlock`'s/
+/// `PactBlock`'s magnitude fields already use.
+///
+/// Python's `scoring_culture(state, p, block, order)` takes a fourth `order`
+/// parameter its own body never reads anywhere (checked 2026-08-05) -- a
+/// dead parameter, not ported.
+fn scoring_culture(
+    state: &GameState,
+    p: &PlayerState,
+    block: &crate::cards::FinalScoringBlock,
+) -> i32 {
+    let s = effects::state_stats(state, p);
+    let mut total: i32 = 0;
+
+    // culturePerResourceProducedByMines -- "Impact of Industry".
+    total += block.culture_per_resource_produced_by_mines as i32 * effects::mine_resources(p);
+
+    // culturePerFoodProducedByFarms (+ bonusIfProductionExceedsConsumption)
+    // -- "Impact of Agriculture". The two keys only ever co-occur on this
+    // one base-game card (see `FinalScoringBlock`'s doc comment), so gating
+    // the bonus on its own nonzero value alone reproduces Python's
+    // per-key-branch reading exactly for every card that exists today.
+    total += block.culture_per_food_produced_by_farms as i32 * effects::farm_food(p);
+    if block.bonus_if_production_exceeds_consumption != 0
+        && s.food > economy::consumption(p.yellow_bank) as i32
+    {
+        total += block.bonus_if_production_exceeds_consumption as i32;
+    }
+
+    // culturePerLevelOfMilitaryUnitsAndArenas -- "Impact of Competition".
+    for (id, slot) in p.techs.iter() {
+        if id.kind().is_unit() || id.kind() == CardType::Arena {
+            total += block.culture_per_level_of_military_units_and_arenas as i32
+                * id.level() as i32
+                * slot.workers as i32;
+        }
+    }
+
+    // culturePerLevelOfSpecialTechsAndGovernment -- "Impact of Progress".
+    let mut tech_and_gov_levels = p.government.level() as i32;
+    for (id, _) in p.techs.of_type(CardType::SpecialTech) {
+        tech_and_gov_levels += id.level() as i32;
+    }
+    total += block.culture_per_level_of_special_techs_and_government as i32 * tech_and_gov_levels;
+
+    // culturePerCompletedWonderByAge -- "Impact of Wonders": a per-age
+    // table, indexed by `Age as u8` exactly like `Special::BuildDiscount`.
+    for &w in p.completed_wonders.as_slice() {
+        total += block.culture_per_completed_wonder_by_age[w.get().age as usize] as i32;
+    }
+
+    // culturePerContentWorkerAbove10 -- "Impact of Population". A yellow
+    // token in the worker pool is a worker too (events.py's own comment: "a
+    // discontent worker is physically an unused worker moved onto the
+    // happiness track"), so this counts on-card workers PLUS
+    // `workers_free`, minus discontent.
+    let workers: i32 =
+        p.techs.iter().map(|(_, slot)| slot.workers as i32).sum::<i32>() + p.workers_free as i32;
+    let content = (workers - economy::discontent(state, p)).max(0);
+    total += block.culture_per_content_worker_above_10 as i32 * (content - 10).max(0);
+
+    // culturePerColony -- "Impact of Colonies".
+    total += block.culture_per_colony as i32 * p.colonies.len() as i32;
+
+    // culturePerCivilAction / culturePerMilitaryAction -- "Impact of
+    // Government". Scores the player's current ACTION ALLOWANCE
+    // (`state_stats`'s `civil_actions`/`military_actions`), not actions
+    // actually spent over the course of the game -- matching Python's own
+    // `s.civil_actions`/`s.military_actions` read exactly.
+    total += block.culture_per_civil_action as i32 * s.civil_actions;
+    total += block.culture_per_military_action as i32 * s.military_actions;
+
+    // culturePerLevelOfUrbanBuildings -- "Impact of Architecture".
+    for (id, slot) in p.techs.iter() {
+        if id.kind().is_urban() {
+            total += block.culture_per_level_of_urban_buildings as i32
+                * id.level() as i32
+                * slot.workers as i32;
+        }
+    }
+
+    // culturePerHappyFace (+ maxCultureFromHappyFaces cap) -- "Impact of
+    // Happiness". `max_culture_from_happy_faces == 0` means "no cap" -- see
+    // `FinalScoringBlock`'s doc comment; no base-game card prints an actual
+    // cap of 0.
+    let mut happy_gain = block.culture_per_happy_face as i32 * s.happy;
+    if block.max_culture_from_happy_faces != 0 {
+        happy_gain = happy_gain.min(block.max_culture_from_happy_faces as i32);
+    }
+    total += happy_gain;
+
+    // culturePerDiscontentWorker -- also "Impact of Happiness" (negative on
+    // that card: -2 per discontent worker).
+    total += block.culture_per_discontent_worker as i32 * economy::discontent(state, p);
+
+    // culturePerAgeIIITechnology -- "Impact of Technology".
+    let mut n_iii = p.techs.iter().filter(|(id, _)| id.get().age == Age::III).count() as i32;
+    if p.government.get().age == Age::III {
+        n_iii += 1;
+    }
+    total += block.culture_per_age_iii_technology as i32 * n_iii;
+
+    // cultureTimesLowestProduction -- "Impact of Balance".
+    total +=
+        block.culture_times_lowest_production as i32 * s.food.min(s.resources).min(s.science).min(s.culture);
+
+    // culturePerDistinctTypeOfUnitUrbanBuildingAndSpecialTech -- "Impact of
+    // Variety". Python builds this by unioning distinct CARD TYPES (staffed
+    // urban/unit buildings) with distinct CARD NAMES (special techs) into
+    // ONE set -- a special tech is always unique by construction, so that
+    // union is exactly "count of distinct types present" + "count of
+    // special techs held"; counted that way directly here (a bitmask over
+    // `CardType`, DESIGN.md rule 3) instead of replicating the string-set
+    // trick.
+    let mut urban_or_unit_kinds: u32 = 0;
+    for (id, slot) in p.techs.iter() {
+        let kind = id.kind();
+        if slot.workers > 0 && (kind.is_urban() || kind.is_unit()) {
+            urban_or_unit_kinds |= 1 << (kind as u32);
+        }
+    }
+    let distinct = urban_or_unit_kinds.count_ones() as i32
+        + p.techs.of_type(CardType::SpecialTech).count() as i32;
+    total += block.culture_per_distinct_type_of_unit_urban_building_and_special_tech as i32
+        * distinct;
+
+    total
+}
+
+/// THE Age III final-scoring calculation (§12.5.2). Everything else calls
+/// this. Mirrors `engine/events.py::final_event_awards`.
+///
+/// Returns one entry per pending scoring event, holding the individual
+/// culture awards **in the order the engine applies them** -- for each
+/// player in turn order starting at `state.start_player`, the
+/// [`scoring_culture`] award and then, if the event carries a ranking table,
+/// the `rankingCulture` award. The step list is deliberately not pre-summed:
+/// [`evaluate_final_events`] clamps a player's running culture at zero after
+/// EACH award, so a player near zero with a net-negative scoring board gets
+/// a different total from the pooled sum.
+///
+/// Python recomputes its `_rank` call fresh on every iteration of the
+/// per-player loop (`events.py:583`), even though nothing in the loop body
+/// changes it between iterations; this hoists it once per event instead --
+/// same result, no wasted work, not a behaviour change.
+pub fn final_event_awards(state: &GameState) -> Vec<(CardId, Vec<(u8, i32)>)> {
+    let order = order_from_start(state);
+    let live = game::live_count(state);
+    let mut out = Vec::new();
+    for card in pending_final_events(state) {
+        let block = final_scoring_block(card).expect(
+            "pending_final_events only returns cards final_scoring_block resolves to Some",
+        );
+        let ranked = if block.has_ranking {
+            Some(rank_by_final_scoring_stat(state, &order, block.ranking_stat))
+        } else {
+            None
+        };
+        let table: &[i16] = match live {
+            2 => &block.ranking_2p,
+            3 => &block.ranking_3p,
+            _ => &block.ranking_4p,
+        };
+
+        let mut steps = Vec::new();
+        for &idx in &order {
+            let p = &state.players[idx as usize];
+            steps.push((idx, scoring_culture(state, p, block)));
+            if let Some(ranked) = &ranked {
+                if let Some(pos) = ranked.iter().position(|&r| r == idx) {
+                    if pos < table.len() {
+                        steps.push((idx, table[pos] as i32));
+                    }
+                }
+            }
+        }
+        out.push((card, steps));
+    }
+    out
+}
+
+/// Applies [`final_event_awards`] -- it does not recompute anything. Mirrors
+/// `engine/events.py::evaluate_final_events`; the starting player counts as
+/// the current player (`order_from_start`).
+///
+/// Python's `if state.has_military:` guard is not reproduced: `has_military`
+/// is a card-database-completeness flag, always true for this engine's
+/// always-complete 236-card table (same reasoning `legal.rs::politics_moves`
+/// already documents for the same guard), so there is no `state.has_military`
+/// field to read. Python also `state.emit`s a log line per event; there is
+/// no journal/emit sink in this port and nothing reads the string (same
+/// treatment `economy.rs::end_of_turn` already gives every other dropped
+/// `emit` call).
+pub fn evaluate_final_events(state: &mut GameState) {
+    for (_card, steps) in final_event_awards(state) {
+        for (idx, amount) in steps {
+            if amount != 0 {
+                let p = &mut state.players[idx as usize];
+                p.culture = (p.culture as i32 + amount).max(0) as u16;
+            }
+        }
     }
 }
 
@@ -458,5 +772,98 @@ mod tests {
         food_or_resources(&mut p, 5, -1);
         assert_eq!(p.resources, 0);
         assert_eq!(p.food, 0);
+    }
+
+    // -------------------------------------------------------- final scoring
+
+    /// Like `one_player_state`, but with `num_players` real seats (players
+    /// beyond `players_in` are filled the same way `one_player_state` fills
+    /// player 0's siblings) and a caller-supplied `current_events` list, for
+    /// exercising [`final_event_awards`]/[`evaluate_final_events`], which
+    /// read across every live player.
+    fn multi_player_state(
+        num_players: u8,
+        players_in: &[PlayerState],
+        current_events: &[CardId],
+    ) -> GameState {
+        let filler = || blank_player(9, card("Despotism"));
+        let mut players = [filler(), filler(), filler(), filler()];
+        for (i, p) in players_in.iter().enumerate() {
+            players[i] = p.clone();
+        }
+        let mut ce = CardList::new();
+        for &c in current_events {
+            ce.push(c);
+        }
+        let mut state = one_player_state(players[0].clone());
+        state.num_players = num_players;
+        state.players = players;
+        state.current_events = ce;
+        state
+    }
+
+    #[test]
+    fn pending_final_events_only_returns_scoring_event_cards() {
+        // "Impact of Industry" (scoringEvent) is pending; an ordinary Age III
+        // military card sitting in the same deck is not -- `pending_final_events`
+        // must not treat every Age III card in `current_events` as scoring.
+        let state = multi_player_state(
+            2,
+            &[blank_player(0, card("Despotism")), blank_player(1, card("Despotism"))],
+            &[card("Impact of Industry")],
+        );
+        assert_eq!(pending_final_events(&state), vec![card("Impact of Industry")]);
+    }
+
+    #[test]
+    fn evaluate_final_events_scores_mine_resources_for_impact_of_industry() {
+        // Bronze (a starting mine) prints 1 resource/worker; 2 workers on it
+        // -> `mine_resources` = 2 -> "Impact of Industry"'s
+        // `culturePerResourceProducedByMines: 1` awards 2 culture.
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.techs.insert(card("Bronze"), crate::state::TechSlot { workers: 2, stored: 0 });
+        let p1 = blank_player(1, card("Despotism"));
+        let mut state = multi_player_state(2, &[p0, p1], &[card("Impact of Industry")]);
+        evaluate_final_events(&mut state);
+        assert_eq!(state.players[0].culture, 2);
+        assert_eq!(state.players[1].culture, 0);
+    }
+
+    #[test]
+    fn evaluate_final_events_applies_the_rankingculture_table_by_live_player_count() {
+        // "Impact of Strength" ranks by strength; with nobody's tableau
+        // contributing strength, ties break by turn order (start_player
+        // first), so at 2p the table [10, 0] goes to seats 0 then 1.
+        let p0 = blank_player(0, card("Despotism"));
+        let p1 = blank_player(1, card("Despotism"));
+        let mut state = multi_player_state(2, &[p0, p1], &[card("Impact of Strength")]);
+        evaluate_final_events(&mut state);
+        assert_eq!(state.players[0].culture, 10);
+        assert_eq!(state.players[1].culture, 0);
+    }
+
+    #[test]
+    fn evaluate_final_events_clamps_negative_culture_at_zero_per_award() {
+        // "Impact of Happiness" (`culturePerDiscontentWorker: -2`) can drive
+        // a player's running culture negative; `evaluate_final_events` clamps
+        // after EACH award, matching `p.culture = max(0, p.culture + amount)`.
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.techs.insert(card("Bronze"), crate::state::TechSlot { workers: 2, stored: 0 });
+        p0.workers_free = 20; // plenty of unused workers to go discontent.
+        p0.culture = 1;
+        let p1 = blank_player(1, card("Despotism"));
+        let mut state = multi_player_state(2, &[p0, p1], &[card("Impact of Happiness")]);
+        evaluate_final_events(&mut state);
+        assert_eq!(state.players[0].culture, 0);
+    }
+
+    #[test]
+    fn scoring_culture_counts_completed_wonders_by_their_own_age() {
+        // "Impact of Wonders": {A: 5, I: 4, II: 3, III: 2}.
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.completed_wonders.push(card("Pyramids")); // Age A wonder -> 5.
+        let block = final_scoring_block(card("Impact of Wonders")).unwrap();
+        let state = one_player_state(p0.clone());
+        assert_eq!(scoring_culture(&state, &p0, block), 5);
     }
 }

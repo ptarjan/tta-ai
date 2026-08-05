@@ -261,6 +261,82 @@ fn best_staffed(techs: &Tableau, pred: impl Fn(CardType) -> bool) -> Option<Card
     best.map(|(id, _)| id)
 }
 
+/// Whether `p` has `target` active from any of the five sources Python's
+/// `_output_modifiers` scans (`engine/effects.py:194-207`): the government,
+/// every tableau card regardless of type, every colony, a completed AND
+/// UNFLIPPED wonder, and the leader. Used by [`mine_resources`]/
+/// [`farm_food`] below to gate `doubleBestMine`, the one `_BUILDING_OUTPUT`
+/// modifier that touches either of them.
+///
+/// `compute`'s own [`apply_special`] dispatch only reads `card.special` off
+/// a narrower set (government/`SpecialTech`/wonder/leader/colony) because
+/// that is everywhere a `Special` variant is actually printed in the base
+/// game today (confirmed 2026-08-05: no farm/mine/urban/unit card prints
+/// one) -- but Python's `_output_modifiers` does not assume that, and
+/// neither does this.
+fn has_special_active(p: &PlayerState, target: Special) -> bool {
+    if p.government.get().special.contains(&target) {
+        return true;
+    }
+    if p.techs.iter().any(|(id, _)| id.get().special.contains(&target)) {
+        return true;
+    }
+    if p.colonies.as_slice().iter().any(|&c| c.get().special.contains(&target)) {
+        return true;
+    }
+    if p.completed_wonders.as_slice().iter().any(|&w| {
+        !p.flipped_wonders.contains(w) && w.get().special.contains(&target)
+    }) {
+        return true;
+    }
+    !p.leader.is_none() && p.leader.get().special.contains(&target)
+}
+
+/// Resources produced BY THIS PLAYER'S MINES, ignoring every other source of
+/// resources (§12.5.2 "Impact of Industry"). Mirrors `engine/effects.py::
+/// mine_resources` -> `building_output(p, {"mine"}, ("resources",))`.
+///
+/// Python's `building_output` is fully general (it also powers Hollywood's
+/// theater/library culture and Internet's whole-urban-building sum, neither
+/// ported here); this is the narrow slice that mine scoring actually needs.
+/// Verified against `_BUILDING_OUTPUT`'s full key list (2026-08-05): the
+/// ONLY modifier whose types are a subset of `{mine}` is `doubleBestMine`
+/// (Transcontinental Railroad's "one of your best mines produces twice as
+/// many resources") -- every other modifier there touches theater/lab/
+/// library, never mine, so a general port would carry dead branches.
+pub fn mine_resources(p: &PlayerState) -> i32 {
+    let mut total = 0i32;
+    for (id, slot) in p.techs.iter() {
+        if id.kind() == CardType::Mine {
+            total += id.get().production.resources as i32 * slot.workers as i32;
+        }
+    }
+    // The bonus is the BEST staffed mine's own per-worker rate, added once
+    // more flat -- not doubled per worker -- matching `_building_modifier`'s
+    // `doubleBestMine` branch (FAQ v1.5 p.9: doubles one WORKER's output).
+    if has_special_active(p, Special::DoubleBestMine) {
+        if let Some(b) = best_staffed(&p.techs, |k| k == CardType::Mine) {
+            total += b.get().production.resources as i32;
+        }
+    }
+    total
+}
+
+/// Food produced BY THIS PLAYER'S FARMS (§12.5.2 "Impact of Agriculture").
+/// The twin of [`mine_resources`], and simpler: `_BUILDING_OUTPUT` has no
+/// entry whose types are a subset of `{farm}`, so nothing ever adds to this
+/// beyond the plain per-worker scan -- verified 2026-08-05 against the same
+/// key list. Mirrors `engine/effects.py::farm_food`.
+pub fn farm_food(p: &PlayerState) -> i32 {
+    let mut total = 0i32;
+    for (id, slot) in p.techs.iter() {
+        if id.kind() == CardType::Farm {
+            total += id.get().production.food as i32 * slot.workers as i32;
+        }
+    }
+    total
+}
+
 /// Number of cards/buildings providing at least one happy face (St. Peter's
 /// Basilica). Mirrors `engine/effects.py::_happy_source_count`: "every
 /// building/CARD providing happy faces provides one additional happy face"
@@ -814,6 +890,12 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         AllPlayers
         | Condition
         | DecreasePopulation(_)
+        // §12.5.2 final scoring (events::scoring_culture): a per-GAME payload
+        // read once, at `finish_game`, directly off an Age III event card's
+        // `special` list -- never through this per-player, per-turn dispatch,
+        // and an event card is never in `p.techs`/`completed_wonders`/
+        // `leader`/`government` either, so this arm never actually fires.
+        | FinalScoring(_)
         | Gain
         | Lose
         | LastRoundSubstitute

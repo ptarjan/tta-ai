@@ -38,46 +38,20 @@
 //! list is byte-identical too (`gen_cards.py` walks `data/*.json` in the same
 //! order `cards.CardDB._deck` does, and no card overrides its default
 //! `deck` field), so both sides shuffle the same list with the same
-//! generator. See KNOWN GAP 4 for why the differential fixtures still
+//! generator. See KNOWN GAP 2 for why the differential fixtures still
 //! disagree; it is not this.
 //!
 //! ## KNOWN GAPS (reported, not routed around)
 //!
-//! 1. **`events.rs` does not exist.** Two of its functions are called by the
-//!    turn loop:
-//!    * `events.resolve_war` (§5.7, start of turn) -- ported here in full via
-//!      [`combat::resolve_war_outcome`]/[`combat::apply_war_spoils`], which
-//!      are exactly its two halves. Not a gap.
-//!    * `events.evaluate_final_events` (§12.5.2, game end) -- a genuine gap.
-//!      [`pending_final_events`] reproduces Python's test for *which* events
-//!      are owed a payout and [`finish_game`] panics, naming them, if any is.
-//!      It cannot fire today (nothing can put an Age III event into
-//!      `current_events`/`future_events`: `Move::PrepareEvent` is
-//!      `unimplemented!()` in `apply.rs` and `new_game` only ever seeds Age A
-//!      military cards), so this is a tripwire for the day events land, not a
-//!      live limitation. It is a panic and not a silent skip because silently
-//!      skipping is how a scoring rule goes missing without a test failing.
-//! 2. **The decision queue is wired but one caller still bypasses it.**
-//!    `state.pending`/`state.queue` and `interact.rs` landed while this module
-//!    was being written, so all three places the Python turn loop consults
-//!    them are ported for real: [`start_turn`]'s deferred
-//!    [`auto_skip_politics`], [`resume_end_turn`]'s suspend-and-resume around
-//!    the §6.6 step-1 military discard, and [`current_player`]'s
-//!    `state.decider()`. The gap is one module over: `economy::end_of_turn`
-//!    calls its OWN private `discard_excess_military`, written before
-//!    `state.pending` existed, which `unimplemented!()`s the genuine-choice
-//!    case instead of opening it -- so this module's suspend path is
-//!    unreachable and a real game panics inside `economy` a few rounds in.
-//!    `interact::discard_excess_military` is the same function done properly
-//!    and `interact.rs`'s own doc comment already asks economy.rs's owner to
-//!    delete the copy and call it. TWO implementations of one rule with
-//!    nothing failing when they disagree is the exact bug class DESIGN.md
-//!    exists to close, so this is reported rather than papered over here.
-//!    `tests/random_game.rs` carries a clearly-labelled shim (it runs the
-//!    real `interact` implementation itself, just before `end_turn`) so that
-//!    a full game is playable today; deleting that shim is the check that
-//!    economy.rs has been rewired.
-//! 3. `GameState` has no `final_scores`, `moves_played` or `move_cap_hit`
+//! Two gaps this list used to carry are closed and deleted rather than left
+//! as dead history: `events.rs` now exists (`apply_gains`, and, 2026-08-05,
+//! §12.5.2 final scoring -- [`finish_game`] calls [`events::
+//! evaluate_final_events`] unconditionally, no tripwire), and
+//! `economy::end_of_turn` already calls [`crate::interact::
+//! discard_excess_military`] directly (`economy.rs`'s own doc comment) --
+//! both were stale before this pass touched either file.
+//!
+//! 1. `GameState` has no `final_scores`, `moves_played` or `move_cap_hit`
 //!    field, and this module deliberately did NOT add one (`state.rs` is not
 //!    this port's file). None is load-bearing: Python's `_finish_game` writes
 //!    the same numbers into `p.culture` that it snapshots into
@@ -85,7 +59,7 @@
 //!    returns exactly what Python's `scores()` does; `moves_played` /
 //!    `move_cap_hit` are `play_game` bookkeeping and are this port's return
 //!    value instead (see [`Outcome`]).
-//! 4. **The checked-in differential fixtures cannot be matched at an age
+//! 2. **The checked-in differential fixtures cannot be matched at an age
 //!    transition, and the fault is not in this file.** `tools/
 //!    dump_fixtures.py` builds ONE `random.Random(seed ^ 0x5EED)` per game
 //!    and passes it to every `actions.apply` call (mirroring
@@ -107,10 +81,13 @@
 //!      * `events._recycle_future_events` also draws from that same stream
 //!        (once per `prepare_event` that empties the current-events deck --
 //!        5 to 8 times in a typical fixture, before the Age II and Age III
-//!        transitions). Reproducing those draws needs `events.rs`, which is
-//!        KNOWN GAP 1, and the number of them that have already happened is
-//!        NOT recoverable from a state snapshot (a revealed territory goes to
-//!        an auction rather than to `past_events`, so nothing counts reveals).
+//!        transitions). Reproducing those draws needs `events.rs::
+//!        reveal_current_event`/`_recycle_future_events` (§5.2 event
+//!        revealing, NOT the §12.5.2 final scoring or §5.3/§5.4.6 gain-block
+//!        interpreter that exist in `events.rs` today -- still unported), and
+//!        the number of them that have already happened is NOT recoverable
+//!        from a state snapshot (a revealed territory goes to an auction
+//!        rather than to `past_events`, so nothing counts reveals).
 //!
 //!    The fix is to regenerate the fixtures through the entry point this port
 //!    actually implements -- one derived stream per apply -- which was
@@ -132,6 +109,7 @@
 use crate::cards::{Age, CardId, CardType, Special, CARDS};
 use crate::combat;
 use crate::economy;
+use crate::events;
 use crate::legal;
 use crate::moves::{Move, MoveList};
 use crate::rng::{shuffle_cards, PyRandom};
@@ -797,46 +775,16 @@ fn next_player(state: &GameState) -> Option<u8> {
 
 // ================================================================ game end
 
-/// The Age III scoring events still owed a payout (§12.5.2), in scoring
-/// order. Mirrors `engine/events.py::pending_final_events`, including its
-/// exclusion of `past_events`: an Age III event that was revealed DURING play
-/// already paid out and its culture is banked in `p.culture`.
-///
-/// Python tests for an `effects.allPlayers` block; `gen_cards.py` cannot
-/// carry that dict's contents, so it lands as the payload-less
-/// `Special::AllPlayers` -- which is exactly the "does this card have an
-/// all-players block" flag this needs, and nothing more.
-fn pending_final_events(state: &GameState) -> Vec<CardId> {
-    state
-        .current_events
-        .as_slice()
-        .iter()
-        .chain(state.past_events.as_slice().iter().take(0))
-        .chain(state.future_events.as_slice().iter())
-        .copied()
-        .filter(|c| {
-            !c.is_none()
-                && c.get().age == Age::III
-                && c.get().special.contains(&Special::AllPlayers)
-        })
-        .collect()
-}
-
-/// §12.5 final scoring.
+/// §12.5 final scoring. Mirrors `engine/game.py::_finish_game`.
 fn finish_game(state: &mut GameState) {
     // §12.5.2: Age III events left in the current/future decks score at game
-    // end. See this module's KNOWN GAPS 1 -- `events.rs` does not exist, so
-    // the fifteen "Impact of ..." formulas have nowhere to come from. This
-    // cannot fire today (nothing can seed an Age III event), and it is a
-    // panic rather than a skip because a silently unscored endgame event is
-    // indistinguishable from a correct one right up until it decides a game.
-    let pending = pending_final_events(state);
-    assert!(
-        pending.is_empty(),
-        "§12.5.2 final scoring needs events::final_event_awards for {:?}, and events.rs is \
-         not ported",
-        pending.iter().map(|c| c.name()).collect::<Vec<_>>()
-    );
+    // end -- `events::evaluate_final_events`. Python guards this call with
+    // `if state.has_military:`; that flag is card-database-completeness, not
+    // per-game state, and is always true for this port's always-complete
+    // 236-card table (same reasoning `legal.rs::politics_moves` already
+    // documents for the identical guard), so there is no `state.has_military`
+    // field to read here and the call is unconditional.
+    events::evaluate_final_events(state);
 
     for idx in 0..state.num_players as usize {
         let bonus = end_of_game_bonus(&state.players[idx]);
@@ -894,7 +842,7 @@ pub fn is_over(state: &GameState) -> bool {
 /// Culture by player index. After the game is over these are the final
 /// scores: `finish_game` writes the end-of-game bonuses into `p.culture`
 /// itself, exactly as Python does before snapshotting them into
-/// `final_scores` (see this module's KNOWN GAPS 3).
+/// `final_scores` (see this module's KNOWN GAPS 1).
 pub fn scores(state: &GameState) -> Vec<i32> {
     state.players[..state.num_players as usize]
         .iter()

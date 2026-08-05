@@ -324,6 +324,101 @@ pub struct TakeFromOpponentBlock {
     pub culture: i16,
 }
 
+/// Which statistic `FinalScoringBlock.ranking_stat` ranks players by
+/// (`effects.allPlayers.statistic`, §12.5.2 "Impact of Strength"/"Impact of
+/// Science"). Mirrors `engine/events.py::_STAT_ALIASES`'s five target names
+/// (`strength`/`science`/`culture_rate`/`food`/`resources`) exactly -- a
+/// closed, hand-named enum for the same reason `FreeCivilActionValue` et al
+/// are (gen_cards.py's `STRING_EFFECT_VALUES`), even though only the first
+/// two are ever printed in the base game today.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FinalScoringStat {
+    #[default]
+    Strength,
+    Science,
+    CultureRate,
+    Food,
+    Resources,
+}
+
+/// One Age III "Impact of ..." event's `effects.allPlayers` block (§12.5.2)
+/// -- the fifteen final-scoring formulas `engine/events.py::scoring_culture`
+/// dispatches over. A dedicated struct rather than folding into
+/// [`CardEffects`]: same reasoning as [`PactBlock`]/[`TakeFromOpponentBlock`]
+/// -- these fields are read exactly once per game, by ONE bespoke function
+/// (`events::scoring_culture`), never by `effects::compute`'s per-turn scan.
+///
+/// Every numeric field follows the same "0 = key not printed" convention
+/// [`TakeFromOpponentBlock`] already uses, EXCEPT `max_culture_from_happy_faces`:
+/// Python distinguishes "no cap" (`None`) from a hypothetical printed cap of
+/// `0` (`if cap is not None: gained = min(gained, cap)`), and those two would
+/// clamp very differently. `0` stands in for "no cap" here anyway -- no
+/// base-game card ever prints an actual cap of 0 (the one card that prints
+/// this key at all prints 16) -- but a future data revision that ever did
+/// would need a real presence flag, not a bigger sentinel.
+///
+/// `bonus_if_production_exceeds_consumption` and `max_culture_from_happy_faces`
+/// are each only ever printed alongside `culture_per_food_produced_by_farms`/
+/// `culture_per_happy_face` respectively in the base data (one card each:
+/// "Impact of Agriculture", "Impact of Happiness") -- Python's own dispatch
+/// only reads them while handling that sibling key's `elif` branch, which
+/// this port's unconditional zero-safe arithmetic reproduces exactly for
+/// every card that exists today without needing to encode that pairing as a
+/// rule.
+///
+/// `ranking_2p`/`ranking_3p`/`ranking_4p` hold the `rankingCulture` table
+/// (`has_ranking` false and all-zero on the thirteen events that do not
+/// print one), one fixed-width array per player count rather than a map,
+/// per DESIGN.md rule 3 -- the consumer indexes by `game::live_count`
+/// directly instead of looking a key up.
+///
+/// Exhaustive against the live data (2026-08-05: 15 base-game cards print
+/// `scoringEvent: true`, one `effects.allPlayers` block each -- gen_cards.py
+/// asserts every key inside every one of those 15 blocks is classified here,
+/// in `SCORING_BLOCK_IGNORED_KEYS`, or in `IGNORED_KEYS`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FinalScoringBlock {
+    /// "Impact of Industry".
+    pub culture_per_resource_produced_by_mines: i16,
+    /// "Impact of Agriculture", paired with `bonus_if_production_exceeds_consumption`.
+    pub culture_per_food_produced_by_farms: i16,
+    pub bonus_if_production_exceeds_consumption: i16,
+    /// "Impact of Competition".
+    pub culture_per_level_of_military_units_and_arenas: i16,
+    /// "Impact of Progress".
+    pub culture_per_level_of_special_techs_and_government: i16,
+    /// "Impact of Wonders" -- per age, indexed by `Age as u8` exactly like
+    /// [`Special::BuildDiscount`].
+    pub culture_per_completed_wonder_by_age: [i16; 5],
+    /// "Impact of Population".
+    pub culture_per_content_worker_above_10: i16,
+    /// "Impact of Colonies".
+    pub culture_per_colony: i16,
+    /// "Impact of Government", alongside `culture_per_military_action`.
+    pub culture_per_civil_action: i16,
+    pub culture_per_military_action: i16,
+    /// "Impact of Architecture".
+    pub culture_per_level_of_urban_buildings: i16,
+    /// "Impact of Happiness", paired with `max_culture_from_happy_faces`.
+    pub culture_per_happy_face: i16,
+    pub max_culture_from_happy_faces: i16,
+    /// Also "Impact of Happiness" (negative: -2 per discontent worker).
+    pub culture_per_discontent_worker: i16,
+    /// "Impact of Technology".
+    pub culture_per_age_iii_technology: i16,
+    /// "Impact of Balance".
+    pub culture_times_lowest_production: i16,
+    /// "Impact of Variety".
+    pub culture_per_distinct_type_of_unit_urban_building_and_special_tech: i16,
+    /// "Impact of Strength"/"Impact of Science" -- the other fifteen events
+    /// leave this `false` and every `ranking_*` array zeroed.
+    pub has_ranking: bool,
+    pub ranking_stat: FinalScoringStat,
+    pub ranking_2p: [i16; 2],
+    pub ranking_3p: [i16; 3],
+    pub ranking_4p: [i16; 4],
+}
+
 /// Printed per-worker production. A struct, not a single scalar, because one
 /// card routinely prints more than one field at once -- Religion is
 /// `{culture: 1, happy: 1}`, Printing Press is `{science: 1, culture: 1}` --
