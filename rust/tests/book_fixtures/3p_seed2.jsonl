@@ -1,0 +1,70 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",0],"v2":["take",4]}
+{"pending":false,"phase":"actions","ply":20,"v1":["play_tactic","Medieval Army"],"v2":["play_tactic","Medieval Army"]}
+{"pending":true,"phase":"actions","ply":24,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":32,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":33,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":40,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":41,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":42,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":43,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":47,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":48,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":49,"v1":["bid",1],"v2":["bid",1]}
+{"pending":false,"phase":"actions","ply":60,"v1":["pop"],"v2":["pop"]}
+{"pending":true,"phase":"actions","ply":63,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":64,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":65,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":72,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":80,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":82,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":83,"v1":["choose",4],"v2":["choose",4]}
+{"pending":true,"phase":"actions","ply":84,"v1":["choose",4],"v2":["choose",4]}
+{"pending":false,"phase":"actions","ply":100,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":108,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":120,"v1":["play_leader","Frederick Barbarossa"],"v2":["play_leader","Frederick Barbarossa"]}
+{"pending":true,"phase":"actions","ply":126,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":135,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":140,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":141,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":145,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":146,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":152,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":156,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":160,"v1":["play_leader","Frederick Barbarossa"],"v2":["play_leader","Frederick Barbarossa"]}
+{"pending":true,"phase":"actions","ply":161,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":165,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":169,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":174,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":178,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":180,"v1":["play_leader","Genghis Khan"],"v2":["play_leader","Genghis Khan"]}
+{"pending":true,"phase":"actions","ply":190,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":196,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":200,"v1":["play_leader","Frederick Barbarossa"],"v2":["play_leader","Frederick Barbarossa"]}
+{"pending":true,"phase":"actions","ply":201,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":202,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":206,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":210,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":220,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":222,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":233,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":234,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":240,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":242,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":249,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":257,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":260,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":265,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":277,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":280,"v1":["take",1],"v2":["take",1]}
+{"pending":false,"phase":"actions","ply":300,"v1":["play_leader","Charlie Chaplin"],"v2":["play_leader","Charlie Chaplin"]}
+{"pending":true,"phase":"actions","ply":306,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":307,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":311,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":312,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":317,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":320,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":323,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":327,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":335,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":336,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":340,"v1":["play_action","Urban Growth (III)"],"v2":["play_action","Urban Growth (III)"]}

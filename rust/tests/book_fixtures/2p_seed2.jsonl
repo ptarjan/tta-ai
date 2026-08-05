@@ -1,0 +1,56 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",0],"v2":["take",4]}
+{"pending":true,"phase":"actions","ply":13,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":14,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":20,"v1":["play_tactic","Medieval Army"],"v2":["play_tactic","Medieval Army"]}
+{"pending":true,"phase":"actions","ply":22,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":27,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":32,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":33,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":37,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":40,"v1":["play_leader","Christopher Columbus"],"v2":["play_leader","Christopher Columbus"]}
+{"pending":true,"phase":"actions","ply":52,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":54,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":57,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":60,"v1":["play_leader","Christopher Columbus"],"v2":["play_leader","Christopher Columbus"]}
+{"pending":true,"phase":"actions","ply":64,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":73,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":74,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":80,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":82,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":91,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":95,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":96,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":100,"v1":["pop"],"v2":["pop"]}
+{"pending":true,"phase":"actions","ply":105,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":106,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":112,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":117,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":120,"v1":["prepare_event","International Agreement"],"v2":["prepare_event","International Agreement"]}
+{"pending":true,"phase":"actions","ply":124,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":125,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":126,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":131,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":132,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":138,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":139,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":140,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":154,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":155,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":156,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":160,"v1":["take",6],"v2":["take",6]}
+{"pending":true,"phase":"actions","ply":163,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":172,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":173,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":177,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":180,"v1":["play_leader","J. S. Bach"],"v2":["play_leader","J. S. Bach"]}
+{"pending":true,"phase":"actions","ply":186,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":198,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":199,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"politics","ply":200,"v1":["prepare_event","Civil Unrest"],"v2":["prepare_event","Civil Unrest"]}
+{"pending":true,"phase":"actions","ply":204,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":212,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":213,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":214,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":220,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":229,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":230,"v1":["choose",2],"v2":["choose",2]}

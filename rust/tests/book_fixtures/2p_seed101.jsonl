@@ -1,0 +1,36 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",1],"v2":["take",8]}
+{"pending":true,"phase":"actions","ply":16,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":17,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":20,"v1":["take",2],"v2":["take",2]}
+{"pending":true,"phase":"actions","ply":33,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":40,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":41,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":44,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":52,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":57,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":58,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":59,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":60,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":72,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":73,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":79,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":80,"v1":["prepare_event","Scientific Breakthrough"],"v2":["prepare_event","Scientific Breakthrough"]}
+{"pending":true,"phase":"actions","ply":84,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":100,"v1":["take",2],"v2":["take",2]}
+{"pending":true,"phase":"actions","ply":104,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":114,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":120,"v1":["build","Religion"],"v2":["build","Religion"]}
+{"pending":true,"phase":"actions","ply":122,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":135,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":140,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":158,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":159,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":160,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":163,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":166,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":167,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":178,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
+{"pending":true,"phase":"actions","ply":179,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
+{"pending":false,"phase":"actions","ply":180,"v1":["take",10],"v2":["take",2]}
+{"pending":false,"phase":"actions","ply":200,"v1":["play_leader","Albert Einstein"],"v2":["play_leader","Albert Einstein"]}
+{"pending":true,"phase":"actions","ply":204,"v1":["choose",2],"v2":["choose",2]}

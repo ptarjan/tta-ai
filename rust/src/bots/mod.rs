@@ -109,6 +109,7 @@
 //!   [`crate::apply::apply`] directly and needs no rng parameter to do it.
 
 pub mod board_yields;
+pub mod book;
 pub mod counting;
 pub mod pending;
 pub mod quiescent;

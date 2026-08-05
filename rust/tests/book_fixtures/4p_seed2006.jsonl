@@ -1,0 +1,80 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":20,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":34,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":40,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":44,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":60,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":61,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":71,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":74,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":80,"v1":["play_tactic","Medieval Army"],"v2":["play_tactic","Medieval Army"]}
+{"pending":true,"phase":"actions","ply":87,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":94,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":95,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":96,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":97,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":100,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":105,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":108,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":120,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":129,"v1":["defend","Fighting Band"],"v2":["defend","Fighting Band"]}
+{"pending":true,"phase":"actions","ply":130,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":131,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":false,"phase":"actions","ply":140,"v1":["pop"],"v2":["pop"]}
+{"pending":false,"phase":"actions","ply":160,"v1":["build","Religion"],"v2":["build","Religion"]}
+{"pending":true,"phase":"actions","ply":165,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":180,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":182,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":200,"v1":["develop","Monarchy"],"v2":["develop","Monarchy"]}
+{"pending":true,"phase":"actions","ply":220,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":225,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":240,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":260,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":261,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":267,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":268,"v1":["send_done"],"v2":["send_done"]}
+{"pending":true,"phase":"actions","ply":273,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":280,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":292,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":299,"v1":["defend","Military Bonus (defense 2 / colonization 1)"],"v2":["defend","Military Bonus (defense 2 / colonization 1)"]}
+{"pending":false,"phase":"actions","ply":300,"v1":["pop"],"v2":["pop"]}
+{"pending":true,"phase":"actions","ply":305,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":308,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":309,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":313,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":314,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":320,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":321,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":340,"v1":["develop","Alchemy"],"v2":["develop","Alchemy"]}
+{"pending":true,"phase":"actions","ply":345,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":347,"v1":["defend","Military Bonus (defense 4 / colonization 2)"],"v2":["defend","Military Bonus (defense 4 / colonization 2)"]}
+{"pending":true,"phase":"actions","ply":348,"v1":["defend","Military Bonus (defense 4 / colonization 2)"],"v2":["defend","Military Bonus (defense 4 / colonization 2)"]}
+{"pending":true,"phase":"actions","ply":349,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":354,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":360,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":372,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":378,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":379,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":380,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":387,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":400,"v1":["play_leader","Winston Churchill"],"v2":["play_leader","Winston Churchill"]}
+{"pending":false,"phase":"actions","ply":420,"v1":["play_leader","Winston Churchill"],"v2":["play_leader","Winston Churchill"]}
+{"pending":true,"phase":"actions","ply":429,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":431,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":440,"v1":["play_leader","Winston Churchill"],"v2":["play_leader","Winston Churchill"]}
+{"pending":true,"phase":"actions","ply":445,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":449,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":450,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":460,"v1":["play_leader","Napoleon Bonaparte"],"v2":["play_leader","Napoleon Bonaparte"]}
+{"pending":true,"phase":"actions","ply":464,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":465,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":466,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":480,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":484,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
+{"pending":true,"phase":"actions","ply":485,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
+{"pending":false,"phase":"actions","ply":500,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":520,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":540,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":552,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":553,"v1":["send_done"],"v2":["send_done"]}
+{"pending":false,"phase":"actions","ply":560,"v1":["take",1],"v2":["take",1]}

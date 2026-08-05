@@ -1,0 +1,59 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":20,"v1":["play_leader","Alexander the Great"],"v2":["play_leader","Alexander the Great"]}
+{"pending":false,"phase":"politics","ply":40,"v1":["prepare_event","Rebellion"],"v2":["prepare_event","Rebellion"]}
+{"pending":true,"phase":"actions","ply":50,"v1":["defend","Crusades"],"v2":["defend","Crusades"]}
+{"pending":true,"phase":"actions","ply":51,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":57,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":58,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":59,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":60,"v1":["revolution","Monarchy"],"v2":["revolution","Monarchy"]}
+{"pending":true,"phase":"actions","ply":70,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":80,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":83,"v1":["defend","Border Conflict"],"v2":["defend","Border Conflict"]}
+{"pending":true,"phase":"actions","ply":84,"v1":["defend","Border Conflict"],"v2":["defend","Border Conflict"]}
+{"pending":true,"phase":"actions","ply":86,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":100,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":116,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":120,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":122,"v1":["defend","Defensive Army"],"v2":["defend","Defensive Army"]}
+{"pending":true,"phase":"actions","ply":123,"v1":["defend","Defensive Army"],"v2":["defend","Defensive Army"]}
+{"pending":true,"phase":"actions","ply":139,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":140,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":153,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":160,"v1":["pop"],"v2":["pop"]}
+{"pending":false,"phase":"actions","ply":180,"v1":["build","Bronze"],"v2":["build","Bronze"]}
+{"pending":true,"phase":"actions","ply":188,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":199,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":200,"v1":["send_done"],"v2":["send_done"]}
+{"pending":true,"phase":"actions","ply":206,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":207,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":220,"v1":["take",4],"v2":["take",4]}
+{"pending":true,"phase":"actions","ply":223,"v1":["defend","Crime Wave"],"v2":["defend","Crime Wave"]}
+{"pending":true,"phase":"actions","ply":224,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":231,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":232,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":240,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":241,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":246,"v1":["defend","Crime Wave"],"v2":["defend","Crime Wave"]}
+{"pending":true,"phase":"actions","ply":247,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":248,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":256,"v1":["bid",1],"v2":["bid",1]}
+{"pending":false,"phase":"actions","ply":260,"v1":["play_leader","J. S. Bach"],"v2":["play_leader","J. S. Bach"]}
+{"pending":true,"phase":"actions","ply":270,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":271,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":280,"v1":["play_leader","J. S. Bach"],"v2":["play_leader","J. S. Bach"]}
+{"pending":true,"phase":"actions","ply":286,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":289,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":295,"v1":["defend","Impact of Government"],"v2":["defend","Impact of Government"]}
+{"pending":true,"phase":"actions","ply":296,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":297,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":false,"phase":"politics","ply":300,"v1":["prepare_event","Impact of Population"],"v2":["prepare_event","Impact of Population"]}
+{"pending":true,"phase":"actions","ply":301,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":310,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":315,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":320,"v1":["take",3],"v2":["take",3]}
+{"pending":true,"phase":"actions","ply":325,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":338,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":340,"v1":["take",1],"v2":["take",1]}
+{"pending":true,"phase":"actions","ply":344,"v1":["defend","Aggression: Raid (III)"],"v2":["defend","Aggression: Raid (III)"]}
+{"pending":true,"phase":"actions","ply":345,"v1":["defend_done"],"v2":["defend_done"]}
