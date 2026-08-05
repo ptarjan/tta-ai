@@ -47,20 +47,20 @@
 //! records the declaration. `state.rs` grew both fields, so [`h_war`] is now
 //! fully ported, and so is the war-cleanup half of [`h_resign`] (§5.11:
 //! "wars against a resigned player score their declarer 7 culture"). War
-//! RESOLUTION (as opposed to declaration) now exists too -- `combat::
-//! resolve_war_outcome` / `apply_war_spoils` -- but nothing here calls it:
-//! Python fires it from `game.start_turn` (`game.rs`, not ported), not from
-//! `_h_war`, so it is combat.rs's function to exist and `game.rs`'s, once
-//! written, to call at the right point in the turn loop.
+//! RESOLUTION (as opposed to declaration) exists too -- `combat::
+//! resolve_war_outcome` / `apply_war_spoils` -- and `game.rs` now calls it:
+//! Python fires it from `game.start_turn`, not from `_h_war`, and the ported
+//! turn loop matches that placement.
 //!
-//! [`Move::Aggression`] is now PARTIALLY ported: [`h_aggression`] calls
+//! [`Move::Aggression`] is FULLY ported. [`h_aggression`] calls
 //! `combat::start_aggression` (cost, discard, strength, doomed-pact
-//! cancellation -- everything `events.start_aggression` does before handing
-//! off to `interact.start_defense`) and then panics naming that hand-off
-//! specifically, rather than events.rs/combat.rs generically -- see
-//! `combat.rs`'s own top doc comment "Aggression: declaration ported,
-//! resolution blocked on `interact.rs`" for why a real defense total cannot
-//! exist without `state.pending`.
+//! cancellation -- everything `events.start_aggression` does) and then hands
+//! off to `interact::start_defense`, which `state.pending` makes expressible.
+//! An earlier revision of this comment said the hand-off panicked; it has not
+//! since `state.pending` landed, and the differential fixtures now play
+//! aggressions through to resolution with zero divergences. Corrected
+//! 2026-08-05 -- two edits the same day left this paragraph contradicting the
+//! one at the top of this block.
 //!
 //! `Card::stages` and `Card::revolution_cost` landed in `cards.rs` mid-port,
 //! ahead of `costs.rs` being updated to use them -- both are closed now:
