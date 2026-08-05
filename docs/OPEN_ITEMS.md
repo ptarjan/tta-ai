@@ -1212,10 +1212,31 @@ single largest item on this list.
 Dead in **both** representations at once — the linear evaluator cannot see them
 and they are permanently-constant neural-net inputs.
 
-* **`state.current_events_age` — FOUND BY THE NEW TEST.**  Declared, written by
+* ~~**`state.current_events_age` — FOUND BY THE NEW TEST.**  Declared, written by
   nothing, and read in exactly one place: `neural_encode`'s third age one-hot.
   So five encoding slots are frozen on age `A` for the life of every game.  Same
-  shape as `scoring_events`, which was already recorded here.
+  shape as `scoring_events`, which was already recorded here.~~  **CLOSED
+  2026-08-05.**  It now tracks the age of `current_events[-1]` -- the next
+  card `events.reveal_current_event` will pop, the same card
+  `events.peek_top_event` already calls "top" -- mirroring the "age of the
+  deck being drawn" meaning `age_civil`/`age_military` carry for their decks.
+  `events._sync_current_events_age` writes it at every point the pile
+  changes: the initial Age A deal (`game.new_game`), every reveal, every
+  recycle from `future_events`.  Recycling can leave the pile holding more
+  than one age at once -- a player's `prepare_event` political action feeds
+  in whatever age their military hand currently draws from, and the recycle
+  sort only guarantees the OLDEST age surfaces first -- so this field
+  deliberately tracks just the next card to surface, not the mix; that is
+  stated at the field's declaration in `state.py`.  Proven non-constant
+  across a real game by `tests/test_current_events_age.py`, and by the
+  registry's own corpus check (`test_the_constant_slices_are_exactly_...`,
+  which no longer lists `encode:global.current_events_age`).  Checkpoint
+  note: existing trained weights still LOAD -- the vector's shape and every
+  other slot are unchanged -- but the five weights at this one-hot's
+  coordinates were trained against an input that was always `[1,0,0,0,0]`
+  ("Age A"), so their learned value reflects nothing about age and now
+  receives a genuinely varying signal.  Retraining is a league decision, not
+  made here.
 * ~~**`PlayerState.caesar_double_politics_used` — FOUND BY THE NEW TEST.**
   Referenced nowhere else in the repo, so Julius Caesar's once-per-turn double
   politics is either unimplemented or implemented without its guard.  **Check

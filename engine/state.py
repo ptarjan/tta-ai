@@ -176,6 +176,19 @@ class GameState:
     future_events: list = field(default_factory=list)
     current_events: list = field(default_factory=list)
     past_events: list = field(default_factory=list)
+    # Age of the card that will be revealed NEXT -- ``current_events[-1]``,
+    # the same card `events.peek_top_event` calls "top" -- mirroring what
+    # `age_civil`/`age_military` already track for their decks ("age of the
+    # deck being drawn").  The only writer is `engine/events.py`
+    # (`_sync_current_events_age`), called wherever `current_events` changes:
+    # initial deal, every `reveal_current_event` pop, and every
+    # `_recycle_future_events`.  A recycle can leave the pile holding MORE
+    # THAN ONE age at once (players `prepare_event` cards drawn from whatever
+    # age their military hand currently holds; recycling sorts oldest-last so
+    # the oldest age always surfaces first) -- this field intentionally
+    # tracks only the next card to surface, not that mix.  Left at its last
+    # value when the pile runs empty, rather than snapping to something that
+    # means nothing.
     current_events_age: str = "A"
     seeded_by: dict = field(default_factory=dict)  # event -> player idx
     scoring_events: list = field(default_factory=list)  # Age III events

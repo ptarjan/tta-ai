@@ -170,6 +170,7 @@ def reveal_current_event(state, rng):
         if not state.current_events:
             return None
     name = journal.touch(state.current_events).pop()
+    _sync_current_events_age(state)
     db = _DB
     if name in db.by_name and db.type_of(name) == "territory":
         # §11.1: a territory starts a colonization auction instead
@@ -192,6 +193,22 @@ def _recycle_future_events(state, rng):
     # pop() takes from the end, so earlier ages must sit last
     deck.sort(key=lambda n: -_DB.level_of(n))
     state.current_events = deck
+    _sync_current_events_age(state)
+
+
+def _sync_current_events_age(state):
+    """Point `state.current_events_age` at the next card to be revealed.
+
+    `current_events` is only ever popped from the end (see
+    `reveal_current_event`), so `current_events[-1]` -- the card
+    `peek_top_event` already calls "top" -- is always the next one to
+    surface.  See the field's declaration in `state.py` for why this tracks
+    only that next card and not the whole pile.  A no-op when the pile is
+    empty: the field keeps whatever age it last reflected rather than being
+    reset to something meaningless.
+    """
+    if state.current_events:
+        state.current_events_age = _DB.age_of(state.current_events[-1])
 
 
 def resolve_event(state, name, rng, revealer_idx):

@@ -89,6 +89,7 @@ def new_game(num_players, seed=0):
         age_a = db.military_deck("A", num_players)
         rng.shuffle(age_a)
         state.current_events = age_a[:num_players + 2]
+        events._sync_current_events_age(state)
 
     state.phase = "actions"          # §1.9: no politics phase in round 1
     return state

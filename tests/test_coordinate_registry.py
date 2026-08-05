@@ -343,13 +343,13 @@ KNOWN_DEAD = {
         "neural_encode's `1.0 if state.scoring_events else 0.0` -- so it is "
         "also a permanently-zero neural input, which is the entry below",
         "docs/OPEN_ITEMS.md: dead state fields"),
-    "current_events_age": (
-        ("never-written",),
-        "FOUND BY THIS TEST, and the same shape as scoring_events: declared, "
-        "never written, and read in exactly one place -- neural_encode's third "
-        "age one-hot, which is therefore frozen on 'A' for the life of every "
-        "game.  Five encoding slots that can never carry information",
-        "docs/OPEN_ITEMS.md: dead state fields"),
+    # `current_events_age` WAS HERE and is not any more.  It was found by
+    # this test, declared, never written, and read in exactly one place --
+    # neural_encode's third age one-hot, frozen on 'A' for the life of every
+    # game.  `events._sync_current_events_age` now writes it (age of
+    # `current_events[-1]`, the next card `reveal_current_event` will pop)
+    # at every point the pile changes: initial deal, each reveal, each
+    # recycle.  See docs/OPEN_ITEMS.md §9.3.
     # `caesar_double_politics_used` WAS HERE and is not any more.  It was
     # found by this test, checked against the rules as the entry asked, and
     # turned out to be the missing rule rather than the dead field: Julius
@@ -395,12 +395,9 @@ KNOWN_DEAD = {
         "listed for the same reason",
         "none -- deliberate, docs/APP_HARNESS.md"),
     # ------------------------------- encoding slots that can carry no signal
-    "encode:global.current_events_age": (
-        ("constant-encoding",),
-        "the one-hot of a field the engine never writes (see above): five "
-        "slots frozen on 'A'.  One defect, two registries, and this is the "
-        "half that shows the net cannot learn from it",
-        "docs/OPEN_ITEMS.md: dead state fields"),
+    # `encode:global.current_events_age` WAS HERE and is not any more: it was
+    # the one-hot of the field above, five slots frozen on 'A'.  Now that
+    # `current_events_age` is written, the slot varies across the corpus.
     "encode:global.scoring_events": (
         ("constant-encoding",),
         "the flag on `state.scoring_events`, which is never written; 0.0 in "
