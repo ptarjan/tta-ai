@@ -16,12 +16,13 @@
 pub mod card_table;
 pub mod cards;
 pub mod economy;
+pub mod effects;
 pub mod fixtures;
 pub mod moves;
 pub mod rng;
 pub mod state;
 
-pub use cards::{Age, Card, CardEffects, CardId, CardType, Special, CARDS, NUM_CARDS};
+pub use cards::{Age, Card, CardEffects, CardId, CardType, Production, Special, CARDS, NUM_CARDS};
 pub use moves::{Move, MoveList};
 pub use state::{GameState, PlayerState, Phase, Tableau, TechSlot};
 
