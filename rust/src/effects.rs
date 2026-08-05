@@ -34,11 +34,16 @@
 //!   `COLONY_PERMANENT_FIELDS`) -- so the ordinary tableau-scanning code
 //!   below handles a colony with no colony-specific branch at all.
 //!
-//! One thing stays out of scope, unrelated to any of the above:
+//! A fourth gap, closed 2026-08-05 by the same route:
 //!
-//! - **`build_discount`** (a per-age dict on Python's `Stats`): not needed by
-//!   anything in this port's scope (`build_cost` is not ported), and a dict
-//!   does not fit this struct's "flat fields, no Vec/HashMap" shape anyway.
+//! - **`build_discount`** (a per-age dict on Python's `Stats`): was "not
+//!   needed by anything in this port's scope (`build_cost` is not ported),
+//!   and a dict does not fit this struct's flat-fields shape anyway".
+//!   `costs.rs::build_cost_for` ports `build_cost` now and does need it, and
+//!   the dict was never the only option: `Special::BuildDiscount` carries a
+//!   real `[i16; 5]` payload indexed by `Age` (gen_cards.py's
+//!   `AGE_ARRAY_EFFECT_KEYS`), so [`Stats::build_discount`] below is a flat
+//!   fixed-size array, no map involved.
 //!
 //! ## Caching
 //!
@@ -55,8 +60,7 @@ use crate::cards::{Card, CardEffects, CardId, CardType, Composition, PactBlock, 
 use crate::state::{GameState, PlayerState, Tableau};
 
 /// A player's aggregate statistics for one recomputation. Mirrors Python's
-/// `effects.Stats` dataclass, minus `build_discount` (see this module's top
-/// doc comment).
+/// `effects.Stats` dataclass field for field.
 ///
 /// Signed, 32-bit throughout: unlike [`CardEffects`] (one card, kept small so
 /// `CARDS` stays cache-friendly), this is a per-call accumulation over an
@@ -87,6 +91,17 @@ pub struct Stats {
     /// `add_flat_except_actions` below.
     pub wonder_stages: i32,
     pub pop_food_discount: i32,
+    /// Resources off an URBAN building's build cost, per AGE -- indexed by
+    /// `Age as u8` (`build_discount[Age::II as usize]` is the Age II entry),
+    /// summed across every source that prints one, exactly as Python's
+    /// `_apply_special` accumulates its `age -> resources` dict.
+    ///
+    /// Read by `costs.rs::build_cost_for`, and ONLY for a card whose type is
+    /// in `C.URBAN_TYPES` -- narrower than the `C.URBAN_OR_PRODUCTION` the
+    /// one-time event discount uses, so a farm or mine never gets this.
+    /// Python's dict, being sparse, returns 0 for an age nobody printed;
+    /// this array says the same thing with a real stored 0.
+    pub build_discount: [i32; 5],
     pub free_pop_per_turn: bool,
     pub no_aggression: bool,
     // ------------------------------------------------- pact-derived (§5.9)
@@ -126,6 +141,7 @@ impl Default for Stats {
             military_hand_limit: 0,
             wonder_stages: 1,
             pop_food_discount: 0,
+            build_discount: [0; 5],
             free_pop_per_turn: false,
             no_aggression: false,
             tech_discount: 0,
@@ -678,6 +694,19 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         CannotPlayAggressionOrWar => stats.no_aggression = true,
         // Moses.
         PopIncreaseFoodDiscount(v) => stats.pop_food_discount += v as i32,
+        // Masonry / Architecture / Engineering: resources off an urban
+        // building's build cost, per age. SUMMED per age across sources,
+        // matching `_apply_special`'s `bd[age] = bd.get(age, 0) + d` -- not
+        // maxed, which is what the `wonderStagesPerAction` printed on the
+        // very same three cards does (`add_flat_except_actions`). Holding
+        // two of the three at once is unreachable in the base game (§7.6
+        // allows one construction special-tech in play), so nothing today
+        // tells the two rules apart at runtime; Python sums, so this sums.
+        BuildDiscount(by_age) => {
+            for (slot, add) in stats.build_discount.iter_mut().zip(by_age.iter()) {
+                *slot += *add as i32;
+            }
+        }
         // Homer. `compute` never reads this key's VALUE in Python either --
         // the +1 happy is hardcoded in the wonders loop keyed on
         // `p.homer_wonder == w` (`engine/effects.py:448-449`), unconditionally.
@@ -691,8 +720,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // reads none of these; `engine/actions.py` and the leader-trigger
         // functions in `engine/effects.py` (`on_develop`, `on_take_card`,
         // ...) do, by NAME dispatch, not by this key.
-        BuildDiscount
-        | CivilActionBackOnTechDevelop(_)
+        CivilActionBackOnTechDevelop(_)
         | CivilActionUpgradeUrbanBuildingToTheater
         | ComboFoodDiscount(_)
         | ComboResourceDiscount(_)
@@ -1030,6 +1058,7 @@ mod tests {
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
         }
     }
@@ -1147,6 +1176,56 @@ mod tests {
             assert!(!s.free_pop_per_turn);
             assert!(!s.no_aggression);
         }
+    }
+
+    // -------------------------------------------------------- buildDiscount
+
+    /// Masonry prints `buildDiscount {I: 1, II: 1, III: 1}` and
+    /// `wonderStagesPerAction: 2`. The discount lands in the array indexed by
+    /// `Age as u8` -- ages A and IV stay 0, which is the card's own "Age A
+    /// unchanged" -- and the wonder-stage number is unaffected by it.
+    #[test]
+    fn build_discount_lands_in_the_array_indexed_by_age() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.build_discount, [0, 1, 1, 1, 0]);
+        assert_eq!(s.wonder_stages, 2, "same card, unrelated field");
+    }
+
+    /// Engineering's is `{I: 1, II: 2, III: 3}` -- three DIFFERENT numbers.
+    /// Collapsing a per-age dict to one scalar (which is what the generator
+    /// used to do) would price two of the three ages wrong.
+    #[test]
+    fn build_discount_keeps_a_distinct_amount_per_age() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Engineering"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(2, p);
+        assert_eq!(compute(&state, &state.players[0]).build_discount, [0, 1, 2, 3, 0]);
+    }
+
+    /// Python's `_apply_special` does `bd[age] = bd.get(age, 0) + d`: it
+    /// SUMS per age across sources, where the `wonderStagesPerAction` on the
+    /// very same cards is MAXed. §7.6 (one special tech per icon in play)
+    /// means no real game reaches this, but the two rules must not be
+    /// implemented as one.
+    #[test]
+    fn build_discount_sums_across_sources_where_wonder_stages_maxes() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.build_discount, [0, 2, 3, 3, 0], "[0,1,1,1,0] + [0,1,2,2,0], summed");
+        assert_eq!(s.wonder_stages, 3, "max(2, 3), not 5");
+    }
+
+    #[test]
+    fn build_discount_is_all_zero_without_a_construction_tech() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(2, p);
+        assert_eq!(compute(&state, &state.players[0]).build_discount, [0; 5]);
     }
 
     // ---------------------------------------------------- every government

@@ -182,8 +182,13 @@ pub struct CardEffects {
     pub gain_food: i16,
     pub gain_resources: i16,
 
-    /// Discounts, in the units of the thing discounted.
-    pub build_discount: i16,
+    /// Discounts, in the units of the thing discounted. The per-age
+    /// construction discount is NOT here: every card that prints
+    /// `buildDiscount` prints a per-AGE dict, so it lives on
+    /// [`Special::BuildDiscount`] as an `[i16; 5]` indexed by [`Age`]. A
+    /// `build_discount: i16` field sat here until 2026-08-05 and was zero on
+    /// all 236 cards -- the generator could only ever have written it from a
+    /// scalar, and no such card exists.
     pub resource_discount: i16,
     pub resources_for_military_units: i16,
 

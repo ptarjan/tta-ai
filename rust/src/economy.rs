@@ -143,14 +143,15 @@ pub fn pop_food_cost(
 /// `engine/economy.py::pop_cost` -- the state-reading wrapper around
 /// [`pop_food_cost`]'s pure formula. `None` when the yellow bank is empty.
 ///
-/// The one-time discount is `0`: `PlayerState` has no `one_time_discount`
-/// field (see this module's top doc comment). `legal.rs` grew a private copy
-/// of this wrapper while `economy.rs` predated `effects.rs`; that copy calls
-/// [`pop_food_cost`] too, so the FORMULA is still single-sourced -- only the
-/// two-line wrapper is duplicated, and `legal.rs` is another worker's file.
+/// The one-time discount is `p.one_time_discount.pop_food`, exactly as
+/// Python's `pop_cost` passes the real `p.one_time_discount` dict.
+/// `legal.rs` grew a private copy of this wrapper while `economy.rs`
+/// predated `effects.rs`; that copy calls [`pop_food_cost`] too, so the
+/// FORMULA is still single-sourced -- only the two-line wrapper is
+/// duplicated, and `legal.rs` is another worker's file.
 pub fn pop_cost(state: &GameState, p: &PlayerState) -> Option<i32> {
     let s = effects::state_stats(state, p);
-    pop_food_cost(s.pop_food_discount, p.yellow_bank, 0)
+    pop_food_cost(s.pop_food_discount, p.yellow_bank, p.one_time_discount.pop_food as i32)
 }
 
 /// Unhappy workers: how far the player's happiness falls short of what §6.1/
@@ -718,6 +719,7 @@ mod tests {
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
@@ -854,6 +856,22 @@ mod tests {
         assert_eq!(pop_food_cost(5, 14, 2), Some(0));
         // discount smaller than the total: 3 - 1 (one-time) - 1 (stat) = 1
         assert_eq!(pop_food_cost(1, 14, 1), Some(1));
+    }
+
+    /// `pop_cost` must pass `p.one_time_discount.pop_food` through, not the
+    /// `0` it hardcoded until `state::OneTimeDiscount` existed: Python's
+    /// `pop_cost` hands `pop_food_cost` the real dict, so a player holding
+    /// the "Development of Civil Life" grant pays 1 food less, and pricing
+    /// it 1 high is what made `apply.rs`'s `h_pop` trip its own
+    /// affordability assert on replayed states.
+    #[test]
+    fn pop_cost_passes_the_one_time_food_discount_through() {
+        let mut state = blank_state();
+        state.players[0].government = card("Despotism");
+        state.players[0].yellow_bank = 14; // pop_cost_base(14) == 3
+        assert_eq!(pop_cost(&state, &state.players[0]), Some(3));
+        state.players[0].one_time_discount.pop_food = 1;
+        assert_eq!(pop_cost(&state, &state.players[0]), Some(2));
     }
 
     // -------------------------------------------------------- lose_population

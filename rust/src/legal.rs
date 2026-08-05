@@ -133,13 +133,17 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
 /// `economy::pop_food_cost`'s pure formula. Not in `economy.rs` itself:
 /// that module predates `effects.rs` and deliberately left this one wrapper
 /// for whichever module needed it first (see its own module doc "What is
-/// NOT here, and why"). `one_time_food_discount` is always 0 here --
-/// `PlayerState` has no `one_time_discount` field (events are not ported;
-/// the same already-documented gap `costs.rs`'s `build_cost_for`/
-/// `tech_cost` carry).
+/// NOT here, and why"). `one_time_food_discount` is
+/// `p.one_time_discount.pop_food` -- `state::OneTimeDiscount` exists now,
+/// closing the gap `costs.rs`'s `build_cost_for`/`tech_cost` used to carry
+/// alongside this.
 fn pop_cost(state: &GameState, p: &PlayerState) -> Option<i32> {
     let stats = effects::state_stats(state, p);
-    economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank, 0)
+    economy::pop_food_cost(
+        stats.pop_food_discount,
+        p.yellow_bank,
+        p.one_time_discount.pop_food as i32,
+    )
 }
 
 // ------------------------------------------------------- move generation
@@ -781,6 +785,7 @@ mod tests {
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,

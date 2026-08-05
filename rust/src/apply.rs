@@ -414,7 +414,11 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
     let stats = effects::state_stats(state, &state.players[idx as usize]);
     let cost = {
         let p = &state.players[idx as usize];
-        economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank, 0)
+        economy::pop_food_cost(
+            stats.pop_food_discount,
+            p.yellow_bank,
+            p.one_time_discount.pop_food as i32,
+        )
             .expect("h_pop: called with an empty yellow bank (caller must check legality)")
     };
     if !free {
@@ -1051,6 +1055,7 @@ mod tests {
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,

@@ -78,6 +78,11 @@ TYPES = {
 
 AGES = {"A": "A", "I": "I", "II": "II", "III": "III", "IV": "IV"}
 
+#: Age order, i.e. the index `cards::Age as u8` gives each age.  Used to turn
+#: an age-keyed effect dict into the fixed-size array `AGE_ARRAY_EFFECT_KEYS`
+#: emits; must stay in step with `cards::Age`'s `#[repr(u8)]` discriminants.
+AGE_ORDER = ("A", "I", "II", "III", "IV")
+
 #: Effect keys that RECUR, mapped to their `CardEffects` field.  These are read
 #: on every stats recomputation, so they are field loads.  Keys NOT listed here
 #: become `Special` variants -- see the module docstring.
@@ -96,7 +101,14 @@ EFFECT_FIELDS = {
     "gainScience": "gain_science",
     "gainFood": "gain_food",
     "gainResources": "gain_resources",
-    "buildDiscount": "build_discount",
+    # `buildDiscount` is NOT here: it is a per-age DICT on every card that
+    # prints it, so it could never have reached a scalar `CardEffects` field
+    # -- see `AGE_ARRAY_EFFECT_KEYS` below, which gives it a real
+    # `Special::BuildDiscount([i16; 5])` payload instead. (It was listed here
+    # until 2026-08-05, which made `CardEffects.build_discount` a field that
+    # was zero on all 236 cards while looking, to a reader, like the printed
+    # construction discount -- the same-fact-two-registries shape this
+    # generator exists to refuse.)
     "resourceDiscount": "resource_discount",
     "resourcesForMilitaryUnits": "resources_for_military_units",
     "defenseBonus": "defense_bonus",
@@ -260,9 +272,21 @@ DEFERRED_DICT_EFFECT_KEYS = {
         "per-player-count action-card bonus -- actions.rs not ported",
     "perTurnChoice": "Churchill's per-turn choice structure -- actions.rs "
         "not ported",
-    "buildDiscount": "per-age discount dict; build_cost is out of this "
-        "port's scope today -- see effects.rs's own KNOWN GAPS",
 }
+
+#: Dict-valued `effects` keys whose keys are AGES and whose values are a
+#: magnitude per age (`{"I": 1, "II": 2, "III": 3}`).  Emitted as a
+#: `[i16; 5]` payload indexed by `cards::Age as u8` -- a fixed-size array,
+#: not a map (DESIGN.md rule 3), so the consumer indexes rather than looks up
+#: and an age nobody printed is a real 0 rather than a missing key.
+#:
+#: `buildDiscount` (Masonry / Architecture / Engineering, the three
+#: construction special-techs) is the only such key in the base game.
+#: `engine/effects.py::_apply_special` accumulates it into
+#: `Stats.build_discount` by SUMMING per age across every source, which
+#: `effects.rs`'s `Special::BuildDiscount` arm mirrors; `costs.rs::
+#: build_cost_for` then subtracts the entry for the card's own age.
+AGE_ARRAY_EFFECT_KEYS = {"buildDiscount"}
 
 #: `effects`-dict keys whose VALUE Python confirms it never reads -- prose,
 #: not a rule -- despite the KEY sometimes mattering (Barbarians' `target` is
@@ -456,6 +480,24 @@ def build_pact_block(name, block_key, block):
     return "PactBlock { " + ", ".join(parts) + " }"
 
 
+def build_age_array(name, key, block):
+    """An age-keyed effect dict -> a `[i16; 5]` Rust literal indexed by
+    `cards::Age as u8`.  A key that is not an age stops the build: an
+    unrecognised one would silently price every age at zero, which is
+    exactly the failure mode this generator refuses everywhere else."""
+    values = [0] * len(AGE_ORDER)
+    for k, v in block.items():
+        if k in IGNORED_KEYS:
+            continue
+        if k not in AGES:
+            raise ValueError(
+                f"{name}: effects.{key} is keyed by {k!r}, which is not an age "
+                f"-- an age-array effect ({sorted(AGE_ARRAY_EFFECT_KEYS)}) may "
+                f"only be keyed by {list(AGE_ORDER)}")
+        values[AGE_ORDER.index(k)] = as_int(v, f"{name}.effects.{key}.{k}")
+    return "[" + ", ".join(str(x) for x in values) + "]"
+
+
 def load_cards():
     cards = []
     for fn in PART_FILES:
@@ -486,8 +528,10 @@ def load_cards():
 def main():
     cards = load_cards()
 
-    # variant name -> "int" | "unit" | "pact_block" (carries an `(i16)`, no
-    # payload, or a `(PactBlock)` payload respectively). A key that shows up
+    # variant name -> "int" | "unit" | "pact_block" | "age_array" |
+    # "string_enum" (carries an `(i16)`, no payload, a `(PactBlock)`, an
+    # `([i16; 5])` indexed by age, or a small generated enum respectively).
+    # A key that shows up
     # as both across different cards is a modelling question this generator
     # cannot resolve silently -- it must fail instead of picking one shape
     # and hiding the other card's value (the exact bug class this whole
@@ -552,6 +596,10 @@ def main():
                     variant = camel(key)
                     shape = "pact_block"
                     payload = build_pact_block(name, key, val)
+                elif key in AGE_ARRAY_EFFECT_KEYS:
+                    variant = camel(key)
+                    shape = "age_array"
+                    payload = build_age_array(name, key, val)
                 elif key in DEFERRED_DICT_EFFECT_KEYS:
                     variant = camel(key)
                     shape = "unit"
@@ -785,7 +833,9 @@ def main():
     w("/// A variant carries an `(i16)` payload when the printed effect has a")
     w("/// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`")
     w("/// / `_apply_special`); a `(PactBlock)` payload when the printed value is")
-    w("/// one of the four pact blocks (§5.9); a `(<Key>Value)` payload when the")
+    w("/// one of the four pact blocks (§5.9); an `([i16; 5])` payload, indexed by")
+    w("/// `Age as u8`, when the printed value is a per-age magnitude dict")
+    w("/// (`buildDiscount`); a `(<Key>Value)` payload when the")
     w("/// printed value is a STRING Python's own dispatch reads (`freeCivilAction`")
     w("/// et al -- see `STRING_EFFECT_VALUES` in gen_cards.py); and stays a bare")
     w("/// unit variant when Python ignores the JSON value too (a bool-flag key, or")
@@ -800,6 +850,8 @@ def main():
             w(f"    {v}(i16),")
         elif shape == "pact_block":
             w(f"    {v}(PactBlock),")
+        elif shape == "age_array":
+            w(f"    {v}([i16; 5]),")
         elif shape == "string_enum":
             w(f"    {v}({v}Value),")
         else:

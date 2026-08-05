@@ -7,38 +7,47 @@
 //! `legal_moves`/`_action_moves`/`_politics_moves`, one for `apply`/the
 //! `_h_*` handlers. Neither of those is ported here.
 //!
-//! ## KNOWN GAPS (type-layer, not oversights here -- see the port report)
+//! ## KNOWN GAPS: none left. What closed each (see the port reports)
 //!
-//! `engine/actions.py` leans on a few Python fields/values that the current
-//! Rust type layer (`cards.rs`, `card_table.rs`, `state.rs`, `effects.rs`)
-//! does not carry yet. This module is scoped to NOT touch any of those files
-//! (concurrent work is in flight on some of them), so each gap below is
-//! worked around explicitly and flagged rather than silently approximated:
+//! Every gap this module ever carried came from the same place -- a Python
+//! field/value the Rust type layer (`cards.rs`, `card_table.rs`, `state.rs`,
+//! `effects.rs`) did not carry yet -- and each was worked around explicitly
+//! and flagged here rather than silently approximated, until the type layer
+//! caught up. All five are now closed:
 //!
-//! - **`effects::Stats` has no `build_discount` / `tech_discount` fields**
-//!   (documented in `effects.rs`'s own KNOWN GAPS: "not needed by anything in
-//!   this port's scope (`build_cost` is not ported)" -- written before this
-//!   module existed). [`build_cost_for`]/[`tech_cost`] therefore cannot apply
-//!   the `buildDiscount`/`technologyScienceDiscount` pools; treated as zero.
-//! - **`PlayerState` has no `one_time_discount` field** (Python's
-//!   event-granted one-shot build/develop discount, `engine/events.py:307`).
-//!   Events are not ported, so this is always empty in practice today;
-//!   treated as zero here too, consistently.
+//! - **`Card` had no `stages` field** ([`wonder_stage_cost`] panicked): the
+//!   field landed in `cards.rs` and `wonder_stage_cost` reads it.
+//! - **`PlayerState` had no `taken_leader_ages` field** ([`take_gate`]/
+//!   [`can_take`] took it as an explicit parameter): the field landed in
+//!   `state.rs`, both read it directly, and the parameter is retired.
+//! - **`Card.science_cost` only ever captured `techCost`**, so every
+//!   government (which prints `techCost: null` and its real develop cost in
+//!   `peacefulCost`) priced as `None`: `Card::peaceful_cost` now exists and
+//!   [`tech_cost`] reads it for governments.
+//! - **`effects::Stats` had no `build_discount` / `tech_discount`**, so
+//!   [`build_cost_for`]/[`tech_cost`] treated both pools as zero
+//!   (`effects.rs`'s own KNOWN GAPS said `build_discount` was "not needed by
+//!   anything in this port's scope" -- written before this module existed).
+//!   `Special::BuildDiscount` now carries a real `[i16; 5]` payload indexed
+//!   by `Age` (`gen_cards.py`'s `AGE_ARRAY_EFFECT_KEYS`), `Stats` accumulates
+//!   it into `build_discount: [i32; 5]`, and both cost functions read the
+//!   pools: [`build_cost_for`] subtracts `build_discount[card.age]` for
+//!   URBAN cards only, [`tech_cost`] subtracts `tech_discount` from every
+//!   technology.
+//! - **`PlayerState` had no `one_time_discount` field** (Python's
+//!   event-granted build/develop/population discount, `engine/events.py:360`).
+//!   `state::OneTimeDiscount` now exists -- three scalars, since exactly one
+//!   card in the game writes it and its schema is closed -- and all three
+//!   readers are wired: [`build_cost_for`] (`URBAN_OR_PRODUCTION` only),
+//!   [`tech_cost`] (every technology), and `economy::pop_food_cost`. Read
+//!   `state::OneTimeDiscount`'s doc comment before touching it: it is
+//!   knowingly never consumed, mirroring a Python defect, and nothing in
+//!   this crate can set it until `events.rs` is ported.
 //!
-//! Two gaps this module used to carry -- `Card` had no `stages` field
-//! ([`wonder_stage_cost`] panicked) and `PlayerState` had no
-//! `taken_leader_ages` field ([`take_gate`]/[`can_take`] took it as an
-//! explicit parameter) -- are closed: both fields landed in `cards.rs`/
-//! `state.rs`, `wonder_stage_cost` reads `Card::stages`, and `take_gate`/
-//! `can_take` read `p.taken_leader_ages` directly (the parameter is retired).
-//! Likewise `Card.science_cost` only ever captured `techCost`, so every
-//! government (which prints `techCost: null` and its real develop cost in
-//! `peacefulCost`) priced as `None`; `Card::peaceful_cost` now exists and
-//! [`tech_cost`] reads it for governments.
-//!
-//! Neither remaining gap affects the vast majority of build/develop/take
-//! costs in a pre-event, non-one-time-discount game state, which is what
-//! this module's tests cover.
+//! The two type-set distinctions above are load-bearing and easy to get
+//! backwards: `buildDiscount` is `C.URBAN_TYPES`, the one-time build
+//! discount is `C.URBAN_OR_PRODUCTION`, and `tech_discount` is gated on
+//! nothing at all.
 //!
 //! ## A note on leader identity
 //!
@@ -166,17 +175,21 @@ pub enum SpecialIcon {
 /// test ("is this KEY present in `effects`", not "is its value truthy").
 ///
 /// `buildDiscount`'s value is a per-age dict in the source data, so
-/// `gen_cards.py` records its PRESENCE as `Special::BuildDiscount` (a bare
-/// unit variant -- see this module's top KNOWN GAPS) rather than a
-/// `CardEffects` field; checking `special` for it is therefore the accurate
-/// translation of Python's `"buildDiscount" in eff`, not an approximation.
+/// `gen_cards.py` records it as `Special::BuildDiscount([i16; 5])` rather
+/// than a `CardEffects` field; matching the VARIANT here, whatever its
+/// payload, is therefore the accurate translation of Python's
+/// `"buildDiscount" in eff`, not an approximation. Written as a `matches!`
+/// on the variant rather than `contains(&...)` on a value precisely because
+/// this is a presence test: the magnitudes are `build_cost_for`'s business,
+/// and a second construction tech with different numbers must still read as
+/// the Construction icon.
 /// `colonizeBonus`/`militaryActions`/`civilActions` ARE flat `CardEffects`
 /// fields, so "key present" is approximated as "field nonzero" -- verified
 /// against `data/*.json` (2026-08-05): every special-tech that prints one of
 /// these three keys prints a nonzero value, so the two conditions coincide
 /// for every card that exists today.
 pub fn special_icon(card: &Card) -> SpecialIcon {
-    if card.special.contains(&Special::BuildDiscount) {
+    if card.special.iter().any(|s| matches!(s, Special::BuildDiscount(_))) {
         return SpecialIcon::Construction;
     }
     if card.effects.colonize_bonus != 0 {
@@ -322,24 +335,41 @@ pub fn can_take(state: &GameState, p: &PlayerState, idx: usize, budget: Option<i
 /// it: `build_cost` is explicitly out of `effects.rs`'s scope (see that
 /// module's KNOWN GAPS), and this module is not allowed to add it there.
 pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
-    // `state` is reserved: the per-age `buildDiscount` pool and event
-    // one-time discounts both need it and neither is representable yet --
-    // see this module's top KNOWN GAPS.
-    let _ = state;
     let card = id.get();
     if card.resource_cost == 0 {
         return None;
     }
     let mut cost = card.resource_cost as i32;
-    if card.kind.is_urban() && leader_is(p, "William Shakespeare") {
-        let has_library = p.techs.iter().any(|(t, _)| t.kind() == CardType::Library);
-        let has_theater = p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater);
-        if card.kind == CardType::Theater && has_library {
-            cost -= 1;
-        } else if card.kind == CardType::Library && has_theater {
-            cost -= 1;
+    // The two discounts are gated on DIFFERENT type sets, and the difference
+    // is the whole rule (Python: `C.URBAN_OR_PRODUCTION` on the first,
+    // `C.URBAN_TYPES` on the second, four lines apart):
+    //
+    //   * the event-granted one-time discount reaches farms and mines too;
+    //   * the per-age `buildDiscount` pool -- Masonry/Architecture/
+    //     Engineering, "urban buildings cost less" -- does NOT.
+    //
+    // Collapsing them onto one predicate would silently make Engineering pay
+    // for a player's farms, which is not what the card says.
+    if card.kind.is_urban() || card.kind.is_production() {
+        cost -= p.one_time_discount.build_resources as i32;
+    }
+    if card.kind.is_urban() {
+        // `state_stats` is consulted only on this branch, matching Python's
+        // own note that the lookup is hot (once per buildable card per
+        // move-generation pass) and belongs inside the gate.
+        cost -= effects::state_stats(state, p).build_discount[card.age as usize];
+        if leader_is(p, "William Shakespeare") {
+            let has_library = p.techs.iter().any(|(t, _)| t.kind() == CardType::Library);
+            let has_theater = p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater);
+            if card.kind == CardType::Theater && has_library {
+                cost -= 1;
+            } else if card.kind == CardType::Library && has_theater {
+                cost -= 1;
+            }
         }
     }
+    // ONE clamp, at the end -- never per term. A build discount larger than
+    // the printed cost must not turn into a credit against the next term.
     Some(cost.max(0))
 }
 
@@ -355,22 +385,26 @@ pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<
 /// the same government -- Paul has ruled both change types must stay
 /// representable at once, so neither is derived from the other here.
 ///
-/// See this module's top KNOWN GAPS: the `technologyScienceDiscount` pool
-/// and event one-time discounts are not applied (to governments or anything
-/// else).
+/// Both science discounts -- the standing `technologyScienceDiscount` pool
+/// (`Stats::tech_discount`, from a pact) and the event-granted one-time
+/// `developTechnology.science` -- apply to EVERY technology, unconditionally
+/// and before the leader adjustments, governments very much included: Python
+/// subtracts both from `cost` after the `government`/`else` split, not
+/// inside either branch. A government that returned early here would be the
+/// one card type quietly paying full price.
 pub fn tech_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
-    let _ = state; // reserved, see build_cost_for
     let card = id.get();
-    if card.kind == CardType::Government {
-        if card.peaceful_cost == 0 {
-            return None;
-        }
-        return Some(card.peaceful_cost as i32);
-    }
-    if card.science_cost == 0 {
+    let printed = if card.kind == CardType::Government {
+        card.peaceful_cost
+    } else {
+        card.science_cost
+    };
+    if printed == 0 {
         return None;
     }
-    let mut cost = card.science_cost as i32;
+    let mut cost = printed as i32;
+    cost -= effects::state_stats(state, p).tech_discount;
+    cost -= p.one_time_discount.develop_science as i32;
     if card.kind == CardType::Theater {
         if leader_is(p, "J. S. Bach") {
             cost -= 2;
@@ -551,6 +585,7 @@ mod tests {
             ca_penalty_next_turn: 0,
             mil_discount: 0,
             mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
@@ -874,6 +909,119 @@ mod tests {
         assert_eq!(build_cost_for(&state, &state.players[0], card("Drama")), Some(3));
     }
 
+    // ------------------------------------ build_cost_for: the two discounts
+
+    /// Masonry prints `buildDiscount {I: 1, II: 1, III: 1}`; Bread and
+    /// Circuses is an ARENA (urban) of Age I with a printed build cost of 3.
+    /// This is the exact case `tests/differential.rs` had allowlisted:
+    /// Python charges 2, Rust used to charge 3.
+    #[test]
+    fn build_cost_for_applies_the_per_age_build_discount_to_urban_cards() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert_eq!(
+            build_cost_for(&state, &state.players[0], card("Bread and Circuses")),
+            Some(2),
+            "3 printed - 1 for Masonry's Age I entry"
+        );
+    }
+
+    /// The discount is indexed by the CARD's age, not by the player's
+    /// current age or by "any age the tech prints". Masonry's array is
+    /// `[0, 1, 1, 1, 0]`, so an Age A temple gets nothing and an Age IV
+    /// card would too -- indexing by the wrong thing would silently make
+    /// Religion cost 2.
+    #[test]
+    fn build_cost_for_build_discount_is_indexed_by_the_cards_own_age() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        // Religion: temple, Age A, printed build cost 3. Masonry's Age A
+        // entry is 0 (the card says "Age A unchanged").
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Religion")), Some(3));
+    }
+
+    /// Engineering prints `{I: 1, II: 2, III: 3}` -- a per-age array, not one
+    /// number. Reading the wrong slot would make an Age III lab cost 10
+    /// instead of 8, or an Age I arena cost 0 instead of 2.
+    #[test]
+    fn build_cost_for_build_discount_reads_a_different_amount_per_age() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Engineering"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        let s = &state.players[0];
+        assert_eq!(build_cost_for(&state, s, card("Bread and Circuses")), Some(3 - 1), "Age I");
+        assert_eq!(build_cost_for(&state, s, card("Team Sports")), Some(5 - 2), "Age II");
+        assert_eq!(build_cost_for(&state, s, card("Professional Sports")), Some(8 - 3), "Age III");
+    }
+
+    /// The two build discounts are gated on DIFFERENT type sets -- Python's
+    /// `C.URBAN_OR_PRODUCTION` for the event-granted one-time discount,
+    /// `C.URBAN_TYPES` for the per-age pool, four lines apart. A farm must
+    /// get the first and NOT the second: Irrigation is an Age I farm costing
+    /// 4, so the right answer is 3, and collapsing the two predicates would
+    /// give 2 (Masonry paying for a farm, which the card does not say).
+    #[test]
+    fn build_cost_for_production_card_gets_the_one_time_discount_but_not_the_per_age_pool() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Irrigation")), Some(3));
+    }
+
+    /// The same player, same discounts, on an URBAN card of the same age:
+    /// both apply. Read together with the test above, this pins down that
+    /// the difference is the TYPE SET and nothing else.
+    #[test]
+    fn build_cost_for_urban_card_gets_both_discounts() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Masonry"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert_eq!(
+            build_cost_for(&state, &state.players[0], card("Bread and Circuses")),
+            Some(1),
+            "3 printed - 1 one-time - 1 Masonry"
+        );
+    }
+
+    /// A unit is neither urban nor production, so neither build discount
+    /// touches it (the military pool `build_cost_net` spends is the one that
+    /// does -- see the `*_net` tests below).
+    #[test]
+    fn build_cost_for_ignores_both_discounts_for_a_military_unit() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Engineering"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Swordsmen")), Some(3));
+    }
+
+    /// ONE clamp, at the very end. With a discount stack bigger than the
+    /// printed cost the answer is 0, not a negative number and not a credit
+    /// carried into the next term -- Python's `cost if cost > 0 else 0` runs
+    /// once, after every subtraction.
+    #[test]
+    fn build_cost_for_clamps_at_zero_once_not_per_term() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Engineering"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 9;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Bread and Circuses")), Some(0));
+    }
+
+    /// An unbuildable card is `None` BEFORE any discount is considered: a
+    /// discount must never conjure a build cost for a card that prints none.
+    #[test]
+    fn build_cost_for_stays_none_for_an_unbuildable_card_even_with_discounts() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Monarchy")), None);
+    }
+
     #[test]
     fn build_cost_for_shakespeare_needs_the_matching_building_present() {
         let mut p = blank_player(0, card("Despotism"));
@@ -917,6 +1065,89 @@ mod tests {
         assert_eq!(tech_cost(&state, &state.players[0], card("Communism")), Some(19));
         assert_eq!(tech_cost(&state, &state.players[0], card("Fundamentalism")), Some(18));
         assert_eq!(tech_cost(&state, &state.players[0], card("Democracy")), Some(17));
+    }
+
+    // ------------------------------------------- tech_cost: the discounts
+
+    /// A player with a `technologyScienceDiscount` pact in play. Scientific
+    /// Cooperation prints `bothPlayers { technologyScienceDiscount: 2 }`, so
+    /// both parties get 2 science off every technology.
+    fn state_with_science_pact() -> GameState {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let filler = || blank_player(1, card("Despotism"));
+        let mut players = [p0, filler(), filler(), filler()];
+        players[1].idx = 1;
+        blank_state(4, players)
+    }
+
+    #[test]
+    fn tech_cost_applies_the_pact_science_discount_to_an_ordinary_technology() {
+        let state = state_with_science_pact();
+        // Irrigation's printed techCost is 3, minus the pact's 2.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Irrigation")), Some(1));
+    }
+
+    /// Python subtracts `tech_discount` AFTER the government/non-government
+    /// split, so a government pays it too. Returning `peaceful_cost`
+    /// straight off the card -- which this function used to do -- made
+    /// governments the one card type quietly paying full price.
+    #[test]
+    fn tech_cost_applies_the_science_discounts_to_governments_too() {
+        let state = state_with_science_pact();
+        // Monarchy's peacefulCost is 8, minus the pact's 2.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), Some(6));
+
+        let mut p = blank_player(0, card("Despotism"));
+        p.one_time_discount.develop_science = 1;
+        let state = one_player_state(p);
+        assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), Some(7));
+    }
+
+    /// The one-time develop discount is gated on NOTHING -- not a type set,
+    /// unlike its build-side sibling. A unit technology gets it just as a
+    /// lab does.
+    #[test]
+    fn tech_cost_one_time_develop_discount_applies_to_every_technology_type() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.one_time_discount.develop_science = 1;
+        let state = one_player_state(p);
+        let s = &state.players[0];
+        assert_eq!(tech_cost(&state, s, card("Irrigation")), Some(3 - 1), "a farm");
+        assert_eq!(tech_cost(&state, s, card("Alchemy")), Some(4 - 1), "a lab");
+        assert_eq!(tech_cost(&state, s, card("Swordsmen")), Some(4 - 1), "a military unit");
+        assert_eq!(tech_cost(&state, s, card("Masonry")), Some(3 - 1), "a special tech");
+    }
+
+    /// Both science discounts stack, and the clamp is applied ONCE at the
+    /// end -- a discount stack larger than the printed cost is 0, never
+    /// negative, and never a credit against the leader adjustments below it.
+    #[test]
+    fn tech_cost_stacks_both_discounts_and_clamps_at_zero_once() {
+        let mut state = state_with_science_pact();
+        state.players[0].one_time_discount.develop_science = 1;
+        // Masonry's printed techCost is 3; 3 - 2 (pact) - 1 (one-time) = 0,
+        // and a fourth point of discount would still be 0, not -1.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Masonry")), Some(0));
+        state.players[0].one_time_discount.develop_science = 2;
+        assert_eq!(tech_cost(&state, &state.players[0], card("Masonry")), Some(0));
+    }
+
+    /// A card with no develop cost is `None` before any discount is
+    /// considered -- the discounts must never invent a develop cost for a
+    /// starting technology.
+    #[test]
+    fn tech_cost_stays_none_for_an_undevelopable_card_even_with_discounts() {
+        let mut state = state_with_science_pact();
+        state.players[0].one_time_discount.develop_science = 1;
+        assert_eq!(tech_cost(&state, &state.players[0], card("Agriculture")), None);
+        assert_eq!(tech_cost(&state, &state.players[0], card("Despotism")), None);
     }
 
     #[test]

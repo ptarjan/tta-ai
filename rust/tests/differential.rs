@@ -290,80 +290,31 @@ const KNOWN_APPLY_GAP_MARKERS: &[&str] = &[
     "per-player-count",
     "not captured by the type layer",
     "decision queue",
-    // `h_pop`'s `debug_assert!` (`apply.rs`'s `h_pop`, calls
-    // `economy::increase_population`). Root-caused during this replay
-    // (2026-08-05), NOT a new `apply.rs` bug: `h_pop` computes its food cost
-    // via `economy::pop_food_cost(stats.pop_food_discount, p.yellow_bank,
-    // 0)` -- the trailing `0` is a hardcoded `one_time_food_discount`,
-    // because `PlayerState` has no `one_time_discount` field (`costs.rs`'s
-    // own doc comment already names this: events are not ported). Python's
-    // `economy.pop_cost` passes the REAL `p.one_time_discount` dict, so when
-    // an event has granted `{"increasePopulation": {"food": 1}}`, Python's
-    // true cost is 1 lower than Rust's. Confirmed against
-    // `tests/fixtures/3p_seed100.jsonl` ply 206 (decider 2: `food=3`,
-    // `yellow_bank=11` -> `pop_cost_base=4`, Python cost `4-1=3` <= food,
-    // Rust cost `4` > food) and `4p_seed133.jsonl` ply 408, both deciders
-    // holding a non-empty `one_time_discount` with an `increasePopulation`
-    // entry in the state one ply earlier. Same root cause as
-    // `GameState::from_json`'s deliberate drop of `one_time_discount`
-    // (`fixtures.rs`, this crate) -- fixing it for real means giving
-    // `PlayerState` the field AND updating `costs.rs`/`apply.rs` to read it,
-    // neither of which is this test file's to do.
-    "caller must ensure enough food",
+    // "caller must ensure enough food" -- `h_pop`'s `debug_assert!` -- was
+    // listed here until 2026-08-05. It fired because `h_pop` passed a
+    // hardcoded `0` for `one_time_food_discount` while Python passed the
+    // real `p.one_time_discount`, so Rust priced a population increase 1
+    // food above Python's and tripped its own affordability assert
+    // (confirmed then at `3p_seed100.jsonl` ply 206 and `4p_seed133.jsonl`
+    // ply 408). `state::OneTimeDiscount` exists now and `h_pop` reads it;
+    // the marker fires on zero plies across all 9 fixtures, so it is gone.
+    // A marker that never fires is an excuse nobody is checking.
 ];
 
 fn classify_panic(msg: &str) -> bool {
     KNOWN_APPLY_GAP_MARKERS.iter().any(|m| msg.contains(m))
 }
 
-/// `(fixture file name, ply)` pairs verified, by directly loading the dumped
-/// state into the PYTHON engine and calling `effects.build_cost`
-/// (2026-08-05, see the comment on the caller of this table), to diverge
-/// because of `costs.rs`'s OWN documented KNOWN GAP: "`effects::Stats` has
-/// no `build_discount` / `tech_discount` fields ... treated as zero"
-/// (`costs.rs:18-22`). This is a DIFFERENT gap from `one_time_discount`
-/// (which is EVENT-granted and one-shot): `build_discount`/`tech_discount`
-/// are per-age STANDING pools computed by `effects.state_stats` from
-/// whatever is in play (Python: `engine/effects.py::build_cost` reads
-/// `state_stats(state, p).build_discount`), not a one-time flag anything can
-/// peek at from the dump the way `one_time_discount` can
-/// (`fixtures::player_has_one_time_discount`) -- there is no cheap way for
-/// THIS file to detect "a build_discount is active" in general without
-/// reimplementing `effects.rs`'s stats computation, which is not this file's
-/// job. So this is a verified allowlist, not a formula, kept deliberately
-/// small: every entry was individually confirmed, not guessed.
-///
-/// Root cause, confirmed for `4p_seed123.jsonl` decider 0 (`Bread and
-/// Circuses`, an arena, printed `buildCost` 3): at ply 414 the real (Python)
-/// cost is 2 (a build_discount of 1 for Age I is active), so `res=2` is
-/// AFFORDABLE in Python but NOT at Rust's undiscounted cost of 3 -- this
-/// under-generates `Build{Bread and Circuses}` in `legal_moves` at plies
-/// 415, 416, 418, 419, 440, 480, 499-503 (11 plies, all decider 0, all this
-/// one card). By ply 439 the same player's `resources` had grown to where
-/// Rust's undiscounted cost (3) WAS affordable, so Rust generated and
-/// applied `Build{Bread and Circuses}` there too -- but charged 3 instead of
-/// Python's real 2, landing on `resources: 1` where Python's dump says `2`
-/// (the one `state_divergences` entry this replay found, ply 439). Same
-/// mechanism, two different symptoms (a missing move vs. an overcharge).
-const BUILD_DISCOUNT_GAP_PLIES: &[(&str, u32)] = &[
-    ("4p_seed123.jsonl", 415),
-    ("4p_seed123.jsonl", 416),
-    ("4p_seed123.jsonl", 418),
-    ("4p_seed123.jsonl", 419),
-    ("4p_seed123.jsonl", 439), // the state-diff (overcharge), not a legal mismatch
-    ("4p_seed123.jsonl", 440),
-    ("4p_seed123.jsonl", 480),
-    ("4p_seed123.jsonl", 499),
-    ("4p_seed123.jsonl", 500),
-    ("4p_seed123.jsonl", 501),
-    ("4p_seed123.jsonl", 502),
-    ("4p_seed123.jsonl", 503),
-];
-
-fn is_build_discount_gap_ply(path: &Path, ply: u32) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    BUILD_DISCOUNT_GAP_PLIES.iter().any(|&(f, p)| f == name && p == ply)
-}
+// A `BUILD_DISCOUNT_GAP_PLIES` allowlist lived here until 2026-08-05: 12
+// verified `(file, ply)` pairs in `4p_seed123.jsonl` where Rust priced
+// `Bread and Circuses` (an arena, printed `buildCost` 3) at 3 while Python
+// charged 2, because an Age I `buildDiscount` of 1 was active and
+// `effects::Stats` had no `build_discount` field to hold it. Both symptoms
+// it covered -- `Build{Bread and Circuses}` missing from `legal_moves` at 11
+// plies where `res=2` was affordable only at Python's real price, and the
+// one overcharge state-diff at ply 439 -- are gone now that `costs.rs`
+// applies the pool. Deleted rather than kept "just in case": an allowlist
+// that no longer fires is a claim about the engine nobody is checking.
 
 fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = e.downcast_ref::<&str>() {
@@ -377,11 +328,8 @@ fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
 
 /// Whether `m` is a move `legal_moves` is DOCUMENTED not to generate yet
 /// (`legal.rs`'s top doc comment, gaps 1 and 3), so its absence from Rust's
-/// list is expected rather than a new finding. `discount_active` is whether
-/// the ACTING player has a non-empty `one_time_discount` right now
-/// (`fixtures::player_has_one_time_discount`) -- see this function's callers'
-/// doc comment for the third, cost-shaped gap this additionally covers.
-fn is_known_legal_gap_move(m: Move, discount_active: bool) -> bool {
+/// list is expected rather than a new finding.
+fn is_known_legal_gap_move(m: Move) -> bool {
     match m {
         // Gap 3: `politics_moves` does not generate pact/aggression/war
         // moves at all (combat.rs / pact resolution not built).
@@ -391,25 +339,17 @@ fn is_known_legal_gap_move(m: Move, discount_active: bool) -> bool {
         Move::PlayAction { card } => {
             card.get().special.iter().any(|s| matches!(s, Special::FreeCivilAction(_)))
         }
-        // Third gap, root-caused during this replay (2026-08-05): every one
-        // of these four costs money (science, resources, or food) and
-        // `costs.rs`'s cost functions -- `build_cost_for`/`tech_cost`
-        // (Develop/Upgrade/Build) and `economy::pop_food_cost` (Pop, via
-        // `legal.rs`'s own `pop_cost` wrapper) -- all hardcode the
-        // `one_time_discount` term at 0 (their own doc comments already say
-        // so: "PlayerState has no one_time_discount field, events are not
-        // ported"). When Python's active player holds a real one-time
-        // discount, Rust prices these 1 (or more) higher than Python and
-        // silently under-generates. Confirmed against
-        // `tests/fixtures/2p_seed1.jsonl` ply 30 (missing `Develop{Knights}`:
-        // decider 0 held `{"developTechnology": {"science": 1}}`, science 4,
-        // Knights costs 5) -- this single cause explained 420 of the 421
-        // "python has, rust doesn't" move instances measured across all 9
-        // fixtures the day this was written; it is by far the dominant shape
-        // of every remaining `legal_moves` divergence.
-        Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::Pop => {
-            discount_active
-        }
+        // A third arm lived here until 2026-08-05:
+        // `Build`/`Develop`/`Upgrade`/`Pop` were excused whenever
+        // `discount_active`, because `costs.rs`/`economy.rs` hardcoded the
+        // `one_time_discount` term at 0 and so priced all four above Python
+        // and under-generated them. That single cause explained 420 of the
+        // 421 "python has, rust doesn't" move instances across all 9
+        // fixtures. `state::OneTimeDiscount` exists now, `fixtures.rs` loads
+        // it, and all three cost paths read it -- so the arm is gone, and
+        // with it the risk it carried: it excused the FOUR most common moves
+        // in the game on most plies of 7 of the 9 fixtures, which would have
+        // hidden any unrelated pricing bug in them just as effectively.
         _ => false,
     }
 }
@@ -423,7 +363,7 @@ fn is_known_legal_gap_move(m: Move, discount_active: bool) -> bool {
 /// disagree in any other way (extra moves Rust generates that Python
 /// doesn't, a reordering, or a missing move that is not one of the
 /// documented gaps): that is an unexplained divergence.
-fn classify_legal_mismatch(ours: &[Move], theirs: &[Move], discount_active: bool) -> Option<String> {
+fn classify_legal_mismatch(ours: &[Move], theirs: &[Move]) -> Option<String> {
     let mut removed = 0usize;
     let mut ti = theirs.iter();
     for &om in ours {
@@ -431,13 +371,13 @@ fn classify_legal_mismatch(ours: &[Move], theirs: &[Move], discount_active: bool
             match ti.next() {
                 None => return None,
                 Some(&tm) if tm == om => break,
-                Some(&tm) if is_known_legal_gap_move(tm, discount_active) => removed += 1,
+                Some(&tm) if is_known_legal_gap_move(tm) => removed += 1,
                 Some(_) => return None,
             }
         }
     }
     for &tm in ti {
-        if !is_known_legal_gap_move(tm, discount_active) {
+        if !is_known_legal_gap_move(tm) {
             return None;
         }
         removed += 1;
@@ -479,13 +419,6 @@ struct ReplayReport {
     /// A full state snapshot existed and `diff` found at least one --
     /// one string per ply (fields joined), `file:ply` prefixed.
     state_divergences: Vec<String>,
-    /// Same as `state_divergences`, but the acting player had an active
-    /// `one_time_discount` going into this ply -- the same cost-formula gap
-    /// `is_known_legal_gap_move` documents, so counted rather than asserted
-    /// on. Diff text kept (not just a count) since it is still useful
-    /// evidence of the gap's real-world SIZE, even though it is not a new
-    /// finding.
-    state_known_gap: Vec<String>,
     /// A full state snapshot existed but `GameState::from_json` itself
     /// could not load it (e.g. a non-empty `pending`/`queue`/`seeded_by` --
     /// `fixtures.rs`'s `GameState::from_json` doc comment); the replay chain
@@ -508,7 +441,7 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
         })
         .collect();
 
-    let Some((anchor, mut cur, mut cur_json)) = next_anchor(&plies, 0, path, report) else {
+    let Some((anchor, mut cur)) = next_anchor(&plies, 0, path, report) else {
         return; // no loadable anchor anywhere in the file -- nothing to replay
     };
     // `plies[anchor].state` is the state AFTER `plies[anchor]`'s own move was
@@ -520,19 +453,11 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
 
     while k < plies.len() {
         let ply = plies[k];
-        // Whether the ABOUT-TO-ACT player has an active one-time discount,
-        // per `cur_json` (the raw dump `cur` was itself loaded from) --
-        // `is_known_legal_gap_move`'s third gap and its analogue for state
-        // diffs below both key off this.
-        let discount_active = fixtures::player_has_one_time_discount(cur_json, cur.current);
-
         // ---- 1. legal_moves(state) vs the fixture's `legal` list ----
         let ours = legal_moves(&cur);
         if ours.as_slice() == ply.legal.as_slice() {
             report.legal_ok += 1;
-        } else if classify_legal_mismatch(ours.as_slice(), &ply.legal, discount_active).is_some()
-            || is_build_discount_gap_ply(path, ply.ply)
-        {
+        } else if classify_legal_mismatch(ours.as_slice(), &ply.legal).is_some() {
             report.legal_known_gap += 1;
         } else {
             report.legal_divergences.push(format!(
@@ -567,9 +492,8 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
                 // `cur` is unreliable after a caught panic (partial mutation);
                 // jump to the next state we can load fresh from the fixture.
                 match next_anchor(&plies, k + 1, path, report) {
-                    Some((j, s, sj)) => {
+                    Some((j, s)) => {
                         cur = s;
-                        cur_json = sj;
                         k = j + 1;
                     }
                     None => return,
@@ -586,15 +510,6 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
                     let diffs = cur.diff(&expected);
                     if diffs.is_empty() {
                         report.state_ok += 1;
-                    } else if discount_active || is_build_discount_gap_ply(path, ply.ply) {
-                        report.state_known_gap.push(format!(
-                            "{}: ply {}: state diverges after apply({:?}) (acting player had an \
-                             active one_time_discount and/or verified build_discount going in):\n    {}",
-                            path.display(),
-                            ply.ply,
-                            chosen,
-                            diffs.join("\n    ")
-                        ));
                     } else {
                         report.state_divergences.push(format!(
                             "{}: ply {}: state diverges after apply({:?}):\n    {}",
@@ -607,14 +522,12 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
                     // Resync to Python's ground truth regardless of outcome so
                     // one divergence does not cascade into every later ply.
                     cur = expected;
-                    cur_json = json;
                 }
                 Err(e) => {
                     report.state_unloadable.push(format!("{}: ply {}: {e}", path.display(), ply.ply));
                     match next_anchor(&plies, k + 1, path, report) {
-                        Some((j, s, sj)) => {
+                        Some((j, s)) => {
                             cur = s;
-                            cur_json = sj;
                             k = j + 1;
                         }
                         None => return,
@@ -628,7 +541,7 @@ fn replay_file<'a>(path: &Path, records: &'a [Record], report: &mut ReplayReport
 }
 
 /// The next ply at or after `from` whose `state` snapshot loads cleanly,
-/// as `(index into plies, loaded GameState, the raw Json it loaded from)`.
+/// as `(index into plies, loaded GameState)`.
 /// Plies skipped along the way that DID carry a snapshot but failed to load
 /// are recorded in `report.state_unloadable`; plies with no snapshot at all
 /// are silently skipped (nothing to report -- they simply were not a
@@ -638,11 +551,11 @@ fn next_anchor<'a>(
     from: usize,
     path: &Path,
     report: &mut ReplayReport,
-) -> Option<(usize, GameState, &'a fixtures::Json)> {
+) -> Option<(usize, GameState)> {
     for (j, p) in plies.iter().enumerate().skip(from) {
         if let Some(json) = &p.state {
             match GameState::from_json(json) {
-                Ok(s) => return Some((j, s, json)),
+                Ok(s) => return Some((j, s)),
                 Err(e) => {
                     report.state_unloadable.push(format!("{}: ply {}: {e}", path.display(), p.ply));
                 }
@@ -660,7 +573,7 @@ fn run_replay() -> ReplayReport {
     eprintln!(
         "differential replay: legal_ok={} legal_known_gap={} legal_divergences={} | \
          applied_ok={} apply_known_gap={} apply_divergences={} | \
-         state_ok={} state_known_gap={} state_divergences={} state_unloadable={}",
+         state_ok={} state_divergences={} state_unloadable={}",
         report.legal_ok,
         report.legal_known_gap,
         report.legal_divergences.len(),
@@ -668,7 +581,6 @@ fn run_replay() -> ReplayReport {
         report.apply_known_gap.len(),
         report.apply_divergences.len(),
         report.state_ok,
-        report.state_known_gap.len(),
         report.state_divergences.len(),
         report.state_unloadable.len(),
     );
@@ -737,4 +649,32 @@ fn apply_matches_python_state_stream() {
         report.state_divergences.len(),
         report.state_divergences.join("\n\n")
     );
+}
+
+/// Acceptance case for the `buildDiscount` gap that `BUILD_DISCOUNT_GAP_PLIES`
+/// used to excuse: `4p_seed123.jsonl` ply 414, decider 0, `Bread and
+/// Circuses` (arena, Age I, printed build cost 3). The live Python engine
+/// (`engine.effects.build_cost` on the same dumped state, checked directly)
+/// says 2, because Masonry's Age I `buildDiscount` of 1 is in play. Rust
+/// charged 3 until `costs.rs` read the pool.
+#[test]
+fn bread_and_circuses_costs_two_at_the_ply_the_allowlist_named() {
+    let path = fixtures_dir().join("4p_seed123.jsonl");
+    let records = fixtures::read_fixture_file(&path).unwrap_or_else(|e| panic!("{e}"));
+    let json = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Ply(p) if p.ply == 414 => p.state.as_ref(),
+            _ => None,
+        })
+        .expect("ply 414 carries a state snapshot");
+    let state = GameState::from_json(json).unwrap_or_else(|e| panic!("{e}"));
+    let card = CardId::by_name("Bread and Circuses").unwrap();
+    let p = &state.players[0];
+    assert_eq!(
+        tta::effects::state_stats(&state, p).build_discount[1],
+        1,
+        "Masonry's Age I entry"
+    );
+    assert_eq!(tta::costs::build_cost_for(&state, p, card), Some(2));
 }

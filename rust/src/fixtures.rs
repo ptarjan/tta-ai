@@ -24,7 +24,8 @@ use crate::cards::{Age, CardId, CardType};
 use crate::moves::{ChurchillChoice, Move, PactSide};
 use crate::state::{
     Auction, CardGains, CardList, Choice, ChoiceKind, ChoiceOption, Colonize, Defense,
-    FreeBuildSpec, GainOption, GainOptions, GameState, Keyword, OptionList, Pact, PactList, Pending,
+    FreeBuildSpec, GainOption, GainOptions, GameState, Keyword, OneTimeDiscount, OptionList, Pact,
+    PactList, Pending,
     PendingStack, Phase, PlayerState, Queue, QueueItem, Tableau, TechSlot, MAX_DECK, MAX_PLAYERS,
     ROW_SIZE,
 };
@@ -634,14 +635,12 @@ pub fn fixture_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 //     plies, which was tried and measured: 327 of 327 later anchors failed
 //     to load. `must_be_empty` would be technically defensible but
 //     practically self-defeating here.
-//   * `one_time_discount` (per-player one-shot cost discounts an event
-//     granted -- `costs.rs`'s own doc comment already names this gap) has no
-//     home on `PlayerState` at all. Nothing in `costs.rs`/`economy.rs` reads
-//     it regardless (events are not ported on that side either), so there is
-//     no field whose absence would make a loaded state claim to be further
-//     along than it is -- the loaded state is simply missing information
-//     nothing downstream consults yet. A future events-porting worker who
-//     gives `PlayerState` this field should also come back here.
+// `one_time_discount` used to be listed here as a third silently-dropped
+// field ("has no home on `PlayerState` at all"). It is LOADED now, by
+// `one_time_discount_field` below, into `state::OneTimeDiscount` -- and it
+// had to be: it is non-empty on most plies of 7 of the 9 fixtures, and
+// `costs.rs`/`economy.rs` read it, so dropping it made Rust overcharge for
+// every build, develop and population increase in those replays.
 //
 // `has_military` (always `true` for the complete base-game card table --
 // see `legal.rs`'s `politics_moves` comment) and `final_scores` (only
@@ -1153,21 +1152,66 @@ fn queue_field(v: &Json) -> Result<Queue, FixtureError> {
     Ok(out)
 }
 
-/// Whether `players[player_idx].one_time_discount` is non-empty in a dumped
-/// state -- exposed for `tests/differential.rs` to use as a divergence
-/// CLASSIFIER, not loaded into `GameState` itself (see `from_json`'s doc
-/// comment: `PlayerState` has no `one_time_discount` field, and nothing in
-/// `costs.rs`/`economy.rs` reads one). A missing `Build`/`Develop`/`Pop`/
-/// `Upgrade` move, or a state divergence in a cost-derived field, for a
-/// player with an active one-time discount is expected -- Rust prices the
-/// move without the discount Python applies -- rather than a new finding.
-/// Returns `false` (not "active") on any shape this cannot parse, same as
-/// an absent field: this is a best-effort classifier, not a correctness
-/// gate, so it must never be the reason a REAL divergence goes unloaded.
-pub fn player_has_one_time_discount(v: &Json, player_idx: u8) -> bool {
-    let Some(Json::Arr(players)) = v.get("players") else { return false };
-    let Some(p) = players.get(player_idx as usize) else { return false };
-    matches!(p.get("one_time_discount"), Some(Json::Obj(o)) if !o.is_empty())
+// `player_has_one_time_discount(v, player_idx) -> bool` lived here until
+// 2026-08-05: a peek at the RAW dump, used by `tests/differential.rs` to
+// EXCUSE a divergence ("Rust priced this move without the discount Python
+// applied"). `one_time_discount_field` below loads the discount for real
+// now, so nothing needs excusing and nothing called it. Deleted rather than
+// left `pub`: its only purpose was to describe a gap that no longer exists.
+
+/// `players[i].one_time_discount` -> [`OneTimeDiscount`].
+///
+/// The dump's shape is a dict of dicts -- `{"build": {"resources": 1},
+/// "developTechnology": {"science": 1}, "increasePopulation": {"food": 1}}`
+/// -- and it is CLOSED: exactly one card in `data/*.json` ("Development of
+/// Civil Life", the Age A event) writes it, `engine/events.py:360` copies it
+/// through verbatim, and `engine/effects.py`/`engine/economy.py` read
+/// exactly these three paths. So an unrecognised outer key, an unrecognised
+/// inner key, or a non-object value is an ERROR here rather than a silent
+/// zero: a discount this loader dropped would make Rust overcharge for the
+/// rest of the replay, which is precisely the divergence
+/// `tests/differential.rs` exists to catch, and it must not be caused by the
+/// loader itself.
+///
+/// Absent or `{}` (the field only appears once an event has granted it) is
+/// the zero discount, not an error.
+fn one_time_discount_field(v: &Json, tag: &str) -> Result<OneTimeDiscount, FixtureError> {
+    let mut out = OneTimeDiscount::default();
+    let Some(raw) = v.get("one_time_discount") else { return Ok(out) };
+    let Json::Obj(entries) = raw else {
+        return Err(FixtureError::new(format!("{tag}.one_time_discount: not an object")));
+    };
+    for (key, block) in entries {
+        let path = format!("{tag}.one_time_discount.{key}");
+        let (inner_key, slot): (&str, &mut i16) = match key.as_str() {
+            "build" => ("resources", &mut out.build_resources),
+            "developTechnology" => ("science", &mut out.develop_science),
+            "increasePopulation" => ("food", &mut out.pop_food),
+            other => {
+                return Err(FixtureError::new(format!(
+                    "{tag}.one_time_discount: unknown key {other:?} -- the only card that \
+                     grants a one-time discount prints build/developTechnology/\
+                     increasePopulation; a fourth would need a field on \
+                     state::OneTimeDiscount and a reader, not a silent drop"
+                )))
+            }
+        };
+        let Json::Obj(fields) = block else {
+            return Err(FixtureError::new(format!("{path}: not an object")));
+        };
+        for (k, v) in fields {
+            if k != inner_key {
+                return Err(FixtureError::new(format!(
+                    "{path}: unknown key {k:?}, expected {inner_key:?}"
+                )));
+            }
+            *slot = v
+                .as_f64()
+                .ok_or_else(|| FixtureError::new(format!("{path}.{k}: not a number")))?
+                as i16;
+        }
+    }
+    Ok(out)
 }
 
 fn parse_age(s: &str, tag: &str) -> Result<Age, FixtureError> {
@@ -1403,6 +1447,7 @@ fn blank_player(idx: u8) -> PlayerState {
         ca_penalty_next_turn: 0,
         mil_discount: 0,
         mil_sci_discount: 0,
+        one_time_discount: OneTimeDiscount::default(),
         resigned: false,
     }
 }
@@ -1468,9 +1513,8 @@ fn load_player(v: &Json, idx: u8) -> Result<PlayerState, FixtureError> {
         ca_penalty_next_turn: req_num(v, "ca_penalty_next_turn")? as i8,
         mil_discount: req_num(v, "mil_discount")? as i16,
         mil_sci_discount: req_num(v, "mil_sci_discount")? as i16,
+        one_time_discount: one_time_discount_field(v, &tag)?,
         resigned: req_bool(v, "resigned")?,
-        // `one_time_discount` deliberately dropped -- see this module's top
-        // doc comment on `GameState::from_json`.
     })
 }
 
@@ -1563,9 +1607,10 @@ impl GameState {
     /// Python fields this cannot represent and what happens to each.
     pub fn from_json(v: &Json) -> Result<GameState, FixtureError> {
         // `pending` / `queue` are LOADED now (see "the decision queue"
-        // above); they used to be rejected. `seeded_by` and
-        // `one_time_discount` are still dropped -- see this module's section
-        // doc comment for why each is safe to drop and the other two were not.
+        // above); they used to be rejected, as was `one_time_discount`,
+        // which is loaded now too. `seeded_by` is the one field still
+        // dropped -- see this module's section doc comment for why it alone
+        // is safe to drop.
         let num_players = req_num(v, "num_players")? as u8;
         if !(2..=MAX_PLAYERS as u8).contains(&num_players) {
             return Err(FixtureError::new(format!(
@@ -1774,6 +1819,7 @@ fn diff_player(out: &mut Vec<String>, i: usize, a: &PlayerState, b: &PlayerState
     f!(ca_penalty_next_turn);
     f!(mil_discount);
     f!(mil_sci_discount);
+    f!(one_time_discount);
     f!(resigned);
 
     diff_cardlist(
@@ -1833,6 +1879,45 @@ mod tests {
         assert_eq!(b[4].as_bool(), Some(false));
         assert_eq!(b[5], Json::Null);
         assert_eq!(b[6].as_str(), Some("x\ny\"z"));
+    }
+
+    /// The exact payload `data/cards_military_actions.json`'s "Development
+    /// of Civil Life" prints, as `tools/dump_fixtures.py` dumps it.
+    #[test]
+    fn one_time_discount_loads_the_only_payload_the_game_prints() {
+        let v = parse_json(
+            r#"{"one_time_discount": {"increasePopulation": {"food": 1},
+                "build": {"resources": 1}, "developTechnology": {"science": 1}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            one_time_discount_field(&v, "players[0]").unwrap(),
+            OneTimeDiscount { build_resources: 1, develop_science: 1, pop_food: 1 }
+        );
+    }
+
+    /// Absent (pre-event) and `{}` (dumped but empty) are both the zero
+    /// discount, not an error -- most plies of most fixtures look like one
+    /// of these two.
+    #[test]
+    fn one_time_discount_absent_or_empty_is_zero() {
+        let empty = parse_json(r#"{"one_time_discount": {}}"#).unwrap();
+        assert_eq!(one_time_discount_field(&empty, "p").unwrap(), OneTimeDiscount::default());
+        let absent = parse_json(r#"{}"#).unwrap();
+        assert_eq!(one_time_discount_field(&absent, "p").unwrap(), OneTimeDiscount::default());
+    }
+
+    /// A key this loader has no field for is an ERROR, not a silent zero: a
+    /// dropped discount would make Rust overcharge for the rest of the
+    /// replay and show up as a mystery cost divergence miles away.
+    #[test]
+    fn one_time_discount_rejects_a_key_it_cannot_represent() {
+        let outer = parse_json(r#"{"one_time_discount": {"buildWonder": {"resources": 1}}}"#).unwrap();
+        assert!(one_time_discount_field(&outer, "p").is_err(), "unknown outer key");
+        let inner = parse_json(r#"{"one_time_discount": {"build": {"food": 1}}}"#).unwrap();
+        assert!(one_time_discount_field(&inner, "p").is_err(), "unknown inner key");
+        let shape = parse_json(r#"{"one_time_discount": {"build": 1}}"#).unwrap();
+        assert!(one_time_discount_field(&shape, "p").is_err(), "not an object");
     }
 
     #[test]
