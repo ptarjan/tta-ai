@@ -421,7 +421,7 @@ pub fn discard_civil(state: &mut GameState, card: CardId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{CardList, Phase, TechSlot, MAX_HAND};
+    use crate::state::{CardList, PactList, Phase, TechSlot, MAX_HAND};
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.
@@ -442,6 +442,7 @@ mod tests {
             tactic_exclusive: false,
             colonies: CardList::new(),
             flipped_wonders: CardList::new(),
+            pacts: PactList::new(),
             hand_civil: CardList::<MAX_HAND>::new(),
             hand_military: CardList::<MAX_HAND>::new(),
             hidden_civil: 0,

@@ -626,7 +626,7 @@ pub fn state_stats(state: &GameState, p: &PlayerState) -> Stats {
 mod tests {
     use super::*;
     use crate::cards::CARDS;
-    use crate::state::{CardList, GameState, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
+    use crate::state::{CardList, GameState, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
@@ -653,6 +653,7 @@ mod tests {
             tactic_exclusive: false,
             colonies: CardList::new(),
             flipped_wonders: CardList::new(),
+            pacts: PactList::new(),
             hand_civil: CardList::new(),
             hand_military: CardList::new(),
             hidden_civil: 0,

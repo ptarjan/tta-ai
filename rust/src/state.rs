@@ -190,6 +190,103 @@ impl Default for Tableau {
     }
 }
 
+/// One pact in play (§5.9).
+///
+/// A pact card is asymmetric: it prints an `A` block and a `B` block, and which
+/// player gets which is decided when the pact is offered, independently of who
+/// physically holds the card. So `owner`/`partner` (who holds it, who agreed)
+/// and `a`/`b` (who takes which printed block) are four separate indices, not
+/// two -- `engine/actions.py:1084` sets `a`/`b` in either order depending on
+/// which side was offered. Collapsing them to "owner is A" would be right about
+/// half the time and silently wrong the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pact {
+    pub card: CardId,
+    pub owner: u8,
+    pub partner: u8,
+    pub a: u8,
+    pub b: u8,
+}
+
+impl Pact {
+    /// The other party to this pact, seen from `idx`. Meaningless unless `idx`
+    /// is a party, which every caller checks first.
+    #[inline]
+    pub fn partner_of(&self, idx: u8) -> u8 {
+        if self.owner == idx {
+            self.partner
+        } else {
+            self.owner
+        }
+    }
+
+    #[inline]
+    pub fn is_party(&self, idx: u8) -> bool {
+        self.owner == idx || self.partner == idx
+    }
+}
+
+/// Pacts held in one play area. Four is already more than the base game deals
+/// out; the bound is asserted rather than assumed, per the deck bounds above.
+pub const MAX_PACTS: usize = 8;
+
+#[derive(Clone, Debug)]
+pub struct PactList {
+    items: [Pact; MAX_PACTS],
+    len: u8,
+}
+
+impl PactList {
+    pub const fn new() -> Self {
+        PactList {
+            items: [Pact { card: CardId::NONE, owner: 0, partner: 0, a: 0, b: 0 }; MAX_PACTS],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    pub fn push(&mut self, p: Pact) {
+        debug_assert!((self.len as usize) < MAX_PACTS, "pact list overflow");
+        self.items[self.len as usize] = p;
+        self.len += 1;
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[Pact] {
+        &self.items[..self.len as usize]
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Drop every pact matching `pred`, preserving the order of the rest --
+    /// Python rebuilds the list with a comprehension (`effects.cancel_attack_pacts`,
+    /// `drop_pacts_of`), so order survives there and must survive here.
+    pub fn retain(&mut self, mut keep: impl FnMut(&Pact) -> bool) {
+        let mut out = 0usize;
+        for i in 0..self.len as usize {
+            if keep(&self.items[i]) {
+                self.items[out] = self.items[i];
+                out += 1;
+            }
+        }
+        self.len = out as u8;
+    }
+}
+
+impl Default for PactList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A fixed-capacity list of cards: hands, decks, discards, event stacks.
 ///
 /// Exists so none of those is a `Vec`. A `Vec` in the state means an allocation
@@ -296,6 +393,11 @@ pub struct PlayerState {
     pub tactic_exclusive: bool,
     pub colonies: CardList<8>,
     pub flipped_wonders: CardList<8>,
+    /// Pacts sitting in MY play area (§5.9). A pact binds two players but is
+    /// physically held by one, and both facts matter: `pacts_for` scans every
+    /// player's list to find the ones an index is party to, while cancelling
+    /// removes it from wherever it sits. See `PactList`.
+    pub pacts: PactList,
 
     // ---- hands ----
     pub hand_civil: CardList<MAX_HAND>,

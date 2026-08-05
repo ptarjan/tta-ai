@@ -187,12 +187,16 @@ pub struct CardEffects {
     pub resource_discount: i16,
     pub resources_for_military_units: i16,
 
-    /// Tactic scoring. `tactic_bonus_obsolete` is the reduced value once the
-    /// tactic is superseded (§4.2) -- two fields because they are two numbers
-    /// on the printed card, not one number with a modifier.
-    pub tactic_bonus: i16,
-    pub tactic_bonus_obsolete: i16,
-
+    // A tactic's army strength is NOT here. The data prints it twice -- once
+    // as top-level `strength`/`obsoleteStrength` and again as
+    // `effects.tacticBonus`/`tacticBonusObsolete` -- and the Python engine
+    // reads only the first pair (`effects.py:991`); `bots/weighted.py:2029`
+    // documents the second pair as "a duplicate spelling" and excludes it.
+    // Carrying both would put the same fact in two registries with nothing
+    // failing when they disagree, which is the bug class this rewrite exists
+    // to close. `Card.effects.strength` and `Card.obsolete_strength` are the
+    // single source, and `gen_cards.py` asserts the duplicate agrees with them
+    // rather than storing it.
     pub defense_bonus: i16,
     pub colonization_bonus: i16,
     pub colonize_bonus: i16,
@@ -261,11 +265,57 @@ pub struct Card {
     /// Zero-valued (`Production::default()`) for everything else.
     pub production: Production,
     pub effects: CardEffects,
+    /// Military actions this card costs to play. Printed inside a `cost` dict
+    /// in the data rather than alongside the other costs, which is why it took
+    /// a second pass to notice it was missing.
+    pub military_action_cost: u8,
+    /// Tactic cards only (§10): the army this tactic forms, and what it is
+    /// worth once obsolete. `Composition::is_empty()` for every non-tactic.
+    pub composition: Composition,
+    /// Strength of an army built from units a full age behind the tactic
+    /// (§10.4). Zero on the early tactics, which have no reduced rate.
+    pub obsolete_strength: u8,
     /// The card's unique rules. Empty for the majority whose whole behaviour is
     /// `effects`. A slice rather than one value because several cards carry two
     /// or three unrelated one-offs, and because events additionally carry their
     /// targeting this way until the events port gives targeting its own type.
     pub special: &'static [Special],
+}
+
+/// The units a tactic's army is made of (§10.2).
+///
+/// The data prints this as a list -- `["infantry", "infantry", "cavalry"]` --
+/// but every rule that reads it treats it as a multiset: `army_strength`
+/// accumulates the player's units by type and asks how many complete copies of
+/// the composition they can field. Counts per type say that directly, so the
+/// consumer does not re-derive them on every stats recomputation, and an army
+/// with a unit type nobody prints is unrepresentable rather than merely absent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Composition {
+    pub infantry: u8,
+    pub cavalry: u8,
+    pub artillery: u8,
+    pub air: u8,
+}
+
+impl Composition {
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self == Composition::default()
+    }
+
+    /// Units of one type this army needs. Returns 0 for a non-unit type, which
+    /// is what every caller wants -- an army never requires a farm.
+    #[inline]
+    pub fn need(self, kind: CardType) -> u8 {
+        match kind {
+            CardType::Infantry => self.infantry,
+            CardType::Cavalry => self.cavalry,
+            CardType::Artillery => self.artillery,
+            CardType::Air => self.air,
+            _ => 0,
+        }
+    }
 }
 
 /// A rule that belongs to exactly one card (or a handful).

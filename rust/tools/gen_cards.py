@@ -78,8 +78,6 @@ EFFECT_FIELDS = {
     "buildDiscount": "build_discount",
     "resourceDiscount": "resource_discount",
     "resourcesForMilitaryUnits": "resources_for_military_units",
-    "tacticBonus": "tactic_bonus",
-    "tacticBonusObsolete": "tactic_bonus_obsolete",
     "defenseBonus": "defense_bonus",
     "colonizationBonus": "colonization_bonus",
     "colonizeBonus": "colonize_bonus",
@@ -205,8 +203,26 @@ def main():
             if key in c and c[key] is not None:
                 fields[EFFECT_FIELDS[key]] = as_int(c[key], f"{name}.{key}")
 
-        for key, val in (c.get("effects") or {}).items():
-            if key in IGNORED_KEYS:
+        # `effects.tacticBonus` / `tacticBonusObsolete` are a duplicate
+        # spelling of the top-level `strength` / `obsoleteStrength` that the
+        # engine actually reads (`effects.py:991`, and `bots/weighted.py:2029`
+        # calls them a duplicate in so many words). Storing both would be the
+        # same fact in two registries with nothing failing when they disagree.
+        # So: verify and drop. If the data ever disagrees with itself, that is
+        # a transcription error and it stops the build instead of silently
+        # picking one.
+        _eff = c.get("effects") or {}
+        for dup, printed in (("tacticBonus", "strength"),
+                             ("tacticBonusObsolete", "obsoleteStrength")):
+            if dup in _eff and as_int(_eff[dup], f"{name}.effects.{dup}") != \
+                    as_int(c.get(printed), f"{name}.{printed}"):
+                raise ValueError(
+                    f"{name}: effects.{dup}={_eff[dup]!r} disagrees with "
+                    f"printed {printed}={c.get(printed)!r} -- one of them is a "
+                    f"transcription error, fix data/*.json")
+
+        for key, val in _eff.items():
+            if key in IGNORED_KEYS or key in ("tacticBonus", "tacticBonusObsolete"):
                 continue
             field = EFFECT_FIELDS.get(key)
             if field is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -254,6 +270,33 @@ def main():
         production = {field: as_int(prod.get(key), f"{name}.production.{key}")
                      for key, field in PRODUCTION_FIELDS.items()}
 
+        # `cost` is a dict and, in the base game, only ever names military
+        # actions.  Checked rather than assumed: a second key here would be a
+        # cost the engine never charges.
+        cost = c.get("cost") or {}
+        unknown = set(cost) - {"militaryActions"}
+        if unknown:
+            raise ValueError(
+                f"{name}: cost key(s) {sorted(unknown)!r} are not charged by "
+                f"anything -- add them to cards::Card and to this check")
+        mil_cost = as_int(cost.get("militaryActions"), f"{name}.cost")
+
+        # Tactics (§10).  A composition is a LIST of unit type names in the
+        # data but a multiset everywhere it is read, so it is counted here
+        # once instead of on every stats recomputation.  An unknown member is
+        # a hard error: an army silently missing a unit would make the tactic
+        # cheaper to field than the card says.
+        comp = {"infantry": 0, "cavalry": 0, "artillery": 0, "air": 0}
+        for unit in (c.get("composition") or []):
+            if unit not in comp:
+                raise ValueError(
+                    f"{name}: composition names {unit!r}, which is not a unit "
+                    f"type -- add it to cards::Composition and here")
+            comp[unit] += 1
+        if comp != {"infantry": 0, "cavalry": 0, "artillery": 0, "air": 0} \
+                and c["type"] != "tactic":
+            raise ValueError(f"{name}: only tactics may print a composition")
+
         count = c["count"]
         rows.append({
             "name": name,
@@ -265,6 +308,10 @@ def main():
             "count": [as_int(count.get(f"{n}p", 0), f"{name}.count") for n in (2, 3, 4)],
             "production": production,
             "effects": fields,
+            "military_action_cost": mil_cost,
+            "composition": comp,
+            "obsolete_strength": as_int(c.get("obsoleteStrength"),
+                                        f"{name}.obsoleteStrength"),
             "special": mine,
         })
 
@@ -281,7 +328,7 @@ def main():
     w("// the engine parses no JSON and has no dependencies, and a card-data")
     w("// change arrives as a reviewable diff rather than a runtime surprise.")
     w("")
-    w("use crate::cards::{Age, Card, CardEffects, CardType, Production};")
+    w("use crate::cards::{Age, Card, CardEffects, CardType, Composition, Production};")
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
@@ -324,6 +371,11 @@ def main():
         prod = ", ".join(f"{k}: {r['production'][k]}" for k in prod_order)
         w(f"        production: Production {{ {prod} }},")
         w(f"        effects: CardEffects {{ {eff} }},")
+        w(f"        military_action_cost: {r['military_action_cost']},")
+        comp = ", ".join(f"{k}: {r['composition'][k]}"
+                         for k in ("infantry", "cavalry", "artillery", "air"))
+        w(f"        composition: Composition {{ {comp} }},")
+        w(f"        obsolete_strength: {r['obsolete_strength']},")
         w(f"        special: &[{sp}],")
         w("    },")
     w("];")

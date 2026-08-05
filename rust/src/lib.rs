@@ -22,9 +22,11 @@ pub mod moves;
 pub mod rng;
 pub mod state;
 
-pub use cards::{Age, Card, CardEffects, CardId, CardType, Production, Special, CARDS, NUM_CARDS};
+pub use cards::{
+    Age, Card, CardEffects, CardId, CardType, Composition, Production, Special, CARDS, NUM_CARDS,
+};
 pub use moves::{Move, MoveList};
-pub use state::{GameState, PlayerState, Phase, Tableau, TechSlot};
+pub use state::{GameState, Pact, PactList, PlayerState, Phase, Tableau, TechSlot};
 
 #[cfg(test)]
 mod tests {
@@ -50,6 +52,36 @@ mod tests {
                 assert!(
                     c.resource_cost > 0 || c.age == Age::A,
                     "{} takes workers but costs nothing to build",
+                    c.name
+                );
+            }
+        }
+    }
+
+    /// Every tactic forms an army and nothing else does. The Python reads a
+    /// tactic's composition straight out of the card dict, so a tactic that
+    /// lost its composition in transcription would silently be worth zero
+    /// strength rather than failing -- which is why this is asserted over the
+    /// whole table rather than spot-checked.
+    #[test]
+    fn tactics_and_only_tactics_form_armies() {
+        for c in CARDS.iter() {
+            let forms_army = !c.composition.is_empty();
+            assert_eq!(
+                forms_army,
+                c.kind == CardType::Tactic,
+                "{}: composition {:?} but kind {:?}",
+                c.name,
+                c.composition,
+                c.kind
+            );
+            if forms_army {
+                // An army worth nothing is a transcription failure, not a card.
+                assert!(c.effects.strength > 0, "{} forms an army worth 0", c.name);
+                // The reduced rate is never an increase (§10.4).
+                assert!(
+                    (c.obsolete_strength as i16) <= c.effects.strength,
+                    "{}: obsolete strength exceeds fresh",
                     c.name
                 );
             }
