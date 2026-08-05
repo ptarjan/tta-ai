@@ -1961,19 +1961,28 @@ _unpriced(
 #    cheaper in a way only the rules engine can express.
 #
 #    "THE RULES ENGINE EXPRESSES THIS" IS A CLAIM ABOUT ANOTHER FILE, and for
-#    four of these keys it was false for the life of the list: nothing in
+#    SEVEN of these keys it was false for the life of the list: nothing in
 #    `engine/` had ever heard of `oncePerGameTwoPoliticalActions`,
 #    `removeAsPoliticalActionForYellowToken`,
-#    `removeAsPoliticalActionFreeColonize` or `peekTopEventCardInPolitics`, so
-#    the write-off pointed at an implementation that did not exist and nothing
-#    failed.  They are expressed now -- `actions._end_politics`,
-#    `actions._leader_politics_moves`, `interact.colonize_without_sacrifice`
-#    and `events.peek_top_event` -- and they stay on this list because the
-#    reason above is now TRUE of them: a second political action, a leader
-#    traded for a token, a colonization with no force and a look at a
-#    face-down card are all rules, none of them a number `_card_yields` could
-#    multiply a weight by.  `tests/test_leader_politics_abilities.py` is what
-#    makes the claim checkable.
+#    `removeAsPoliticalActionFreeColonize`, `peekTopEventCardInPolitics`,
+#    `militaryActionCombinedPopIncreaseAndUnitBuild`,
+#    `civilActionUpgradeUrbanBuildingToTheater` or
+#    `colonizeDiscardUpTo2MilitaryCardsForBonus`, so the write-off pointed at
+#    an implementation that did not exist and nothing failed.  All seven are
+#    expressed now -- `actions._end_politics`,
+#    `actions._leader_politics_moves`, `interact.colonize_without_sacrifice`,
+#    `events.peek_top_event`, `actions._barbarossa_moves`,
+#    `actions._bach_moves` and `interact.cook_pool` -- and they stay on this
+#    list because the reason above is now TRUE of them: a second political
+#    action, a leader traded for a token, a colonization with no force, a look
+#    at a face-down card, two actions merged into one, an upgrade across
+#    building types and two cards burned for force are all rules, none of them
+#    a number `_card_yields` could multiply a weight by.  The bots reach all
+#    of them anyway, because each is a MOVE whose consequences the evaluator
+#    already prices (a worker, a unit, a theater, a card leaving the hand).
+#    `tests/test_leader_politics_abilities.py` and
+#    `tests/test_leader_action_abilities.py` are what make the claim
+#    checkable.
 _unpriced(
     "rule change: alters what is legal, not what is produced",
     "noAttacksBetweenParties", "cancelledIfPartiesAttackEachOther",

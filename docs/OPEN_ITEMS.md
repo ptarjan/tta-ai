@@ -1251,6 +1251,18 @@ and they are permanently-constant neural-net inputs.
   `actions._leader_politics_moves`, `interact.colonize_without_sacrifice`,
   `events.peek_top_event`) and pinned by
   `tests/test_leader_politics_abilities.py`.
+* **`PlayerState.bach_upgrade_used` — the same shape, and CLOSED the same
+  way 2026-08-05.**  Declared on `PlayerState`, reset every turn in two places
+  (`economy.end_of_turn`, `tools/bgo_moves._start_turn`) and *written* nowhere,
+  because J. S. Bach's "once per turn, as a civil action, you may upgrade one
+  of your urban buildings to a theater" did not exist.  It is
+  `actions._bach_moves` / `actions._h_bach_theater` now — the only cross-type
+  upgrade in the game — and with it the last two of the six unimplemented
+  leader abilities: Frederick Barbarossa's combined population-increase-and-
+  unit-build for one military action (`actions._barbarossa_moves`) and James
+  Cook's "discard up to 2 military cards for +1 colonization each"
+  (`interact.cook_pool`, inside the §11.3 `colonize` decision).  All three are
+  pinned by `tests/test_leader_action_abilities.py`.
 * **`PlayerState.used_leader_ability` — FOUND BY THE NEW TEST.**  The generic
   once-per-game/turn leader flag; every leader that needs one carries its own
   instead.  Probably safe to delete.

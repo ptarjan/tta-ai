@@ -413,7 +413,11 @@ class VariantBot(BookBot):
     def _r_population(self, state, p, ctx, by_kind):
         if by_kind.get("pop_free"):
             return by_kind["pop_free"][0]
-        if not by_kind.get("pop"):
+        # Barbarossa's combined action, for the reason in `BookBot`: when he
+        # is in play it is the same worker for a military action, a food
+        # cheaper, with a unit under it.
+        combo = by_kind.get("barbarossa")
+        if not by_kind.get("pop") and not combo:
             return None
         appetite = self.k("pop_appetite", ctx)
         if appetite <= 0:
@@ -427,6 +431,10 @@ class VariantBot(BookBot):
             return None
         if ctx.late:
             return None
+        if combo:
+            db = ctx.db
+            return max(combo, key=lambda m: (db.get(m[1]).get("strength") or 0,
+                                             m[1]))
         return by_kind["pop"][0]
 
     # rule: upgrade in place --------------------------------------------

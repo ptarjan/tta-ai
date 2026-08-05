@@ -515,7 +515,14 @@ class BookBot:
         compounding asset -- but never grow into unhappiness."""
         if by_kind.get("pop_free"):
             return by_kind["pop_free"][0]
-        if not by_kind.get("pop"):
+        # Frederick Barbarossa's combined action buys the same worker for a
+        # MILITARY action instead of a civil one, a food cheaper, and puts a
+        # unit under it.  Whenever the book wants to grow and he is in play,
+        # that is the way to grow -- and a book that ranks him a 7 in
+        # LEADER_RANK and then never uses him is the same "declared but never
+        # played" defect one level up.
+        combo = by_kind.get("barbarossa")
+        if not by_kind.get("pop") and not combo:
             return None
         if ctx.workers_free >= 1 and ctx.age <= 1:
             return None            # a worker already idle: place it first
@@ -527,6 +534,10 @@ class BookBot:
             return None
         if ctx.late:
             return None            # a worker bought on the last turns cannot pay back
+        if combo:
+            db = ctx.db
+            return max(combo, key=lambda m: (db.get(m[1]).get("strength") or 0,
+                                             m[1]))
         return by_kind["pop"][0]
 
     # rule 7 -------------------------------------------------------------
@@ -920,14 +931,29 @@ class BookBot:
         weakest unit first, then cheapest bonus card -- so the choice is
         `moves[0]`, but it is spelled out rather than inherited so a change
         to that ordering cannot silently change this bot's policy.
+
+        JAMES COOK's discards come FIRST, but only when they can finish the
+        job on their own.  Each is worth a flat +1 and a Military Bonus card
+        is worth 2, 4 or 6 defence if it is kept, so burning junk to close a
+        gap of one or two is the cheapest thing on the table -- while spending
+        a slot on a gap Cook cannot close (his cap is two) would throw the
+        card away and still cost a bonus card afterwards.
         """
+        from .. import interact as I
         if ("send_done",) in moves:
             return ("send_done",)
+        discards = [m for m in moves if m[0] == "send_discard"]
+        if discards:
+            gap = pend["bid"] - I.pend_force(state, p, pend)
+            if gap <= I.cook_slots_left(pend) * I.COOK_BONUS_PER_DISCARD:
+                return discards[0]
         bonuses = [m for m in moves if m[0] == "send_bonus"]
         if bonuses:
             return bonuses[0]
         units = [m for m in moves if m[0] == "send_unit"]
-        return units[0] if units else moves[0]
+        if units:
+            return units[0]
+        return discards[0] if discards else moves[0]
 
 
 # --------------------------------------------------------------- the hybrid

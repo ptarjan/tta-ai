@@ -450,10 +450,19 @@ class TestEveryLeaderIsPriced(unittest.TestCase):
             "rule: one military action usable as a civil action, plus a "
             "discount on taking the next leader",
         "Christopher Columbus":
-            "rule: remove him as a political action to colonize free",
+            "rule: remove him as a political action to colonize free "
+            "(actions._leader_politics_moves)",
         "Frederick Barbarossa":
             "rule: pop-increase and unit-build combined into one military "
-            "action, each discounted",
+            "action, each discounted (actions._barbarossa_moves).  He STAYS "
+            "here now that the rule is implemented, and the entry is the "
+            "point rather than an omission: `board_yields` swaps the card in "
+            "and asks `effects.compute` what changed, and what Barbarossa "
+            "changes is the price and the action-type of a MOVE -- nothing "
+            "in the production phase moves at all.  The bots reach him "
+            "through the move itself (`tests/test_leader_action_abilities.py`"
+            "::TheBotsCanActuallyUseThem), which is where a rule change has "
+            "to be priced.",
     }
 
     def _stocked(self, players=2):

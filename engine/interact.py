@@ -19,8 +19,9 @@ Decision kinds:
 ``auction``  moves are ``("bid", n)`` / ``("bid_pass",)``
 ``defense``  moves are ``("defend", card)`` / ``("defend_done",)``
 ``colonize`` moves are ``("send_unit", tech)`` / ``("send_bonus", card)`` /
-             ``("send_done",)`` -- the auction winner builds the force it
-             sacrifices (RULES_SPEC 11.3)
+             ``("send_discard", card)`` (James Cook only) / ``("send_done",)``
+             -- the auction winner builds the force it sacrifices
+             (RULES_SPEC 11.3)
 """
 from __future__ import annotations
 
@@ -77,7 +78,7 @@ def apply_pending(state, move, rng=None):
         _auction_move(state, pend, move, rng)
     elif kind in ("defend", "defend_done"):
         _defense_move(state, pend, move, rng)
-    elif kind in ("send_unit", "send_bonus", "send_done"):
+    elif kind in ("send_unit", "send_bonus", "send_discard", "send_done"):
         _colonize_move(state, pend, move, rng)
     else:
         raise ValueError(f"unknown pending move {move!r}")
@@ -757,8 +758,52 @@ def bonus_pool(p):
     return out
 
 
-def force_value(state, p, units, bonuses):
-    """Colonization force of a concrete sacrifice (§11.3)."""
+#: James Cook, *"when colonizing, you may discard up to 2 military cards,
+#: gaining +1 colony bonus for each card discarded"* -- both numbers read off
+#: the card rather than typed in twice.
+_COOK = (_BY_NAME.get("James Cook", {}).get("effects") or {})
+COOK_DISCARDS = 2
+COOK_BONUS_PER_DISCARD = _COOK.get("colonizeDiscardUpTo2MilitaryCardsForBonus",
+                                   0)
+
+
+def cook_pool(p):
+    """The military cards James Cook may burn for +1 colonization each.
+
+    *"When colonizing, you may discard up to 2 military cards, gaining +1
+    colony bonus for each card discarded."*  ANY military card -- the card
+    says "military cards", not "bonus cards", so a spent event, a tactic or a
+    pact all qualify; this is Cook's whole point, that a hand of junk is worth
+    2 force at the auction.
+
+    BONUS CARDS ARE EXCLUDED, and that is an ordering fact rather than a rule:
+    §11.3 already lets ANY NUMBER of bonus cards into the force at their
+    printed colonization value (1/2/3), which is >= the flat +1 this pays and
+    is not capped at two.  Spending one of Cook's two slots on a card that is
+    worth at least as much through `send_bonus` is therefore weakly dominated
+    in every position, and offering the dominated duplicate would only give
+    every bot in the repo a way to waste the ability.
+
+    ONE ENTRY PER CARD, like `unit_pool` and `bonus_pool` and unlike
+    `discard_options`, which de-duplicates for a menu: two copies of one card
+    are two discards, and folding them into one name would both understate
+    `max_force` and strand the second copy mid-decision.  `_colonize_moves`
+    de-duplicates the MOVES, which is the place that wants distinct names.
+
+    Ordered least-useful-first by `defense_points`, for the reason written on
+    `discard_options`: the evaluators cannot tell two same-age military cards
+    apart, so the fallback has to be "burn the card that defends least".
+    """
+    if p.leader != "James Cook":
+        return []
+    db = _DB
+    return sorted((n for n in p.hand_military
+                   if n in db.by_name and db.type_of(n) != "bonus"),
+                  key=lambda n: (defense_points(n), n))
+
+
+def force_value(state, p, units, bonuses, discards=()):
+    """Colonization force of a concrete sacrifice (§11.3, + James Cook)."""
     db = _DB
     if not units:
         return 0
@@ -768,15 +813,28 @@ def force_value(state, p, units, bonuses):
     total += effects.state_stats(state, p).colonize
     total += sum((db.get(n).get("effects") or {}).get("colonizationBonus", 0)
                  for n in bonuses)
+    total += COOK_BONUS_PER_DISCARD * len(discards)
     return total
 
 
+def cook_ceiling(p):
+    """How much force Cook's discards could add at most (0 for anybody else)."""
+    return COOK_BONUS_PER_DISCARD * min(COOK_DISCARDS, len(cook_pool(p)))
+
+
 def max_force(state, p):
-    """Largest force this player could send -- the bidding ceiling (§11.2)."""
+    """Largest force this player could send -- the bidding ceiling (§11.2).
+
+    §11.2 caps a bid at "the maximum colonization force the bidder can
+    actually send", so Cook's two discards belong in it: they are force he can
+    actually send, and leaving them out would let him win an auction and then
+    be unable to bid the amount his own card was bought for.
+    """
     units = unit_pool(p)
     if not units:
         return 0
-    return force_value(state, p, units, bonus_pool(p))
+    return (force_value(state, p, units, bonus_pool(p))
+            + cook_ceiling(p))
 
 
 def start_auction(state, name, revealer_idx, rng=None):
@@ -867,7 +925,8 @@ def colonize(state, p, name, bid, rng=None):
         # with no legal moves, which hangs a bot instead of naming the bug.
         raise ValueError(f"P{p.idx} must colonize {name} with no units")
     pend = {"kind": "colonize", "player": p.idx, "card": name, "bid": bid,
-            "units": [], "bonuses": [], "pool": units, "bpool": bonuses}
+            "units": [], "bonuses": [], "discards": [],
+            "pool": units, "bpool": bonuses, "dpool": cook_pool(p)}
     journal.touch(state.pending).append(pend)
     _colonize_auto(state, pend, rng)
 
@@ -887,16 +946,34 @@ def _colonize_moves(state, pend):
     `unit_pool` is sorted weakest-first and `bonus_pool` cheapest-first, so
     "the mandatory unit, then bonus cards, then more units, and stop as soon
     as the bid is met" is exactly what the deleted `_build_force` did.
+
+    James Cook's two discards join the list in the same place bonus cards do
+    -- after the mandatory unit, because §11.3's ">= 1 unit" floor is a floor
+    on the SACRIFICE and no card of any kind can stand in for it.
     """
     p = state.players[pend["player"]]
     out = []
-    if pend["units"] and force_value(
-            state, p, pend["units"], pend["bonuses"]) >= pend["bid"]:
+    if pend["units"] and pend_force(state, p, pend) >= pend["bid"]:
         out.append(("send_done",))
     units = [("send_unit", n) for n in _distinct(pend["pool"])]
     if not pend["units"]:                 # §11.3: at least one unit, always
         return out + units
-    return out + [("send_bonus", n) for n in _distinct(pend["bpool"])] + units
+    out += [("send_bonus", n) for n in _distinct(pend["bpool"])]
+    if len(pend.get("discards", ())) < COOK_DISCARDS:
+        out += [("send_discard", n) for n in _distinct(pend.get("dpool", ()))]
+    return out + units
+
+
+def pend_force(state, p, pend):
+    """Force committed so far in a `colonize` decision (§11.3)."""
+    return force_value(state, p, pend["units"], pend["bonuses"],
+                       pend.get("discards", ()))
+
+
+def cook_slots_left(pend):
+    """Discards James Cook could still make in this colonization."""
+    return min(COOK_DISCARDS - len(pend.get("discards", ())),
+               len(pend.get("dpool", ())))
 
 
 def _distinct(names):
@@ -928,6 +1005,13 @@ def _colonize_step(state, pend, move, rng):
     if move[0] == "send_bonus":            # §11.6 discarded before any draw
         journal.touch(pend["bpool"]).remove(name)
         journal.touch(pend["bonuses"]).append(name)
+        journal.touch(p.hand_military).remove(name)
+        economy.discard_military(state, name)
+        effects.invalidate(state, p)
+        return
+    if move[0] == "send_discard":          # James Cook, +1 force per card
+        journal.touch(pend["dpool"]).remove(name)
+        journal.touch(pend["discards"]).append(name)
         journal.touch(p.hand_military).remove(name)
         economy.discard_military(state, name)
         effects.invalidate(state, p)

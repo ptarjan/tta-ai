@@ -66,6 +66,16 @@ def _cost_note(state, p, move):
             unit = A.is_unit(move[1])
             return (f"{c} resources, 1 "
                     f"{'military' if unit else 'civil'} action")
+        if kind == "barbarossa":
+            food = max(0, (economy.pop_cost(state, p) or 0)
+                       - A.COMBO_FOOD_DISCOUNT)
+            res = max(0, (A.build_cost_net(state, p, move[1]) or 0)
+                      - A.COMBO_RESOURCE_DISCOUNT)
+            return (f"{food} food + {res} resources, 1 military action "
+                    f"(both halves)")
+        if kind == "bach_theater":
+            return (f"{A.upgrade_cost(state, p, move[1], move[2])} resources, "
+                    f"1 civil action")
         if kind == "upgrade":
             c = A.upgrade_cost_net(state, p, move[1], move[2])
             unit = A.is_unit(move[2])
@@ -127,6 +137,12 @@ def _describe(state, move, board=None):
         return f"INCREASE POPULATION: move a yellow token to your unused pile{tail}"
     if kind == "pop_free":
         return "INCREASE POPULATION for free (Ocean Liners / leader ability)"
+    if kind == "barbarossa":
+        return (f"BARBAROSSA: increase population AND build '{move[1]}' in one "
+                f"military action{tail}")
+    if kind == "bach_theater":
+        return (f"BACH: upgrade '{move[1]}' to the theater '{move[2]}' "
+                f"(once per turn){tail}")
     if kind == "build":
         return f"BUILD '{move[1]}': put an unused worker on it{tail}"
     if kind == "upgrade":
@@ -197,6 +213,9 @@ def _describe(state, move, board=None):
         return f"SACRIFICE a '{move[1]}' unit to the colonization force"
     if kind == "send_bonus":
         return f"PLAY '{move[1]}' for its colonization value"
+    if kind == "send_discard":
+        return (f"COOK: discard '{move[1]}' for +1 colonization force "
+                f"(2 cards maximum)")
     if kind == "send_done":
         return "FORCE COMPLETE (send it and take the colony)"
     return " ".join(str(x) for x in move)

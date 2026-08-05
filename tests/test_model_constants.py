@@ -92,6 +92,14 @@ CLASSIFIED = {
         "numerical guard", "the same, on the military side"),
     ("engine/bots/book.py", "AGE_IDX"): (
         "rule-derived", "the five ages, in order"),
+    ("engine/interact.py", "COOK_DISCARDS"): (
+        "rule-derived",
+        "James Cook: 'you may discard UP TO 2 military cards'.  The only one "
+        "of his two numbers that is not a queryable value in the card data -- "
+        "it is spelled inside the effect KEY "
+        "(`colonizeDiscardUpTo2MilitaryCardsForBonus`) rather than beside it, "
+        "so it cannot be read the way COOK_BONUS_PER_DISCARD is.  "
+        "tests/test_leader_action_abilities.py pins it against that key"),
     # ------------------------------------------------------ numeric guards
     ("engine/bots/weighted.py", "_TURNS_CAP"): (
         "numerical guard", "wonder_turns_to_finish is a ratio; caps infinity"),

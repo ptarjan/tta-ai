@@ -270,11 +270,21 @@ def _rng(state):
 
 # ---------------------------------------------------- population helpers
 
-def increase_population(state, p, free=False):
-    """Move a token from the yellow bank into the worker pool (§3.3)."""
+def increase_population(state, p, free=False, discount=0):
+    """Move a token from the yellow bank into the worker pool (§3.3).
+
+    `discount` is food off THIS increase only, floored at 0 -- Frederick
+    Barbarossa's `comboFoodDiscount`, which applies to the increase bought by
+    his combined military action and to no other.  It is deliberately NOT
+    `Stats.pop_food_discount`: that field is a STANDING discount on every
+    population increase (`popIncreaseFoodDiscount`, e.g. Irrigation), it is
+    read by both evaluators through `pop_food_cost`, and putting a
+    once-per-action discount there would make every plain `pop` cheaper than
+    the rulebook says and make the evaluators believe it.
+    """
     if p.yellow_bank <= 0:
         return False
-    cost = 0 if free else (pop_cost(state, p) or 0)
+    cost = 0 if free else max(0, (pop_cost(state, p) or 0) - discount)
     if p.food < cost:
         return False
     p.food -= cost

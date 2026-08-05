@@ -30,6 +30,16 @@ _LEVEL_BY_NAME = _DB.level_by_name
 
 STRICT = os.environ.get("TTA_STRICT", "") not in ("", "0", "false", "no")
 
+#: Frederick Barbarossa's two discounts, READ FROM THE CARD rather than typed
+#: in again: *"By spending 1 military action, you may increase population and
+#: build a military unit all at once; the population increase costs 1 less
+#: food and the unit costs 1 less resource."*  `tests/test_score_audit.py`'s
+#: `HardcodedConstantsMatchTheData` is the standing rule that an engine
+#: constant and the card printing it may not be two numbers.
+_BARBAROSSA = (_BY_NAME.get("Frederick Barbarossa", {}).get("effects") or {})
+COMBO_FOOD_DISCOUNT = _BARBAROSSA.get("comboFoodDiscount", 0)
+COMBO_RESOURCE_DISCOUNT = _BARBAROSSA.get("comboResourceDiscount", 0)
+
 #: "not memoized yet" for the lazily-filled dicts in this module.  A distinct
 #: object, because `None` is a real memoized answer (see `cost_of`).
 _MISS = object()
@@ -378,6 +388,92 @@ def _leader_politics_moves(state, p):
     return []
 
 
+def _barbarossa_moves(state, p, by_type, cost_of, res, disc):
+    """Frederick Barbarossa: one military action buys BOTH halves (§3.3+§4.1).
+
+    *"By spending 1 military action, you may increase population and build a
+    military unit all at once; the population increase costs 1 less food and
+    the unit costs 1 less resource."*
+
+    UNLIMITED PER TURN, not once (docs/EXPERT_STRATEGY.md:138 -- "each
+    activation converts an MA into a CA + 1 food + 1 rock, unlimited per
+    turn"; the quoted line of play is using him three times in a turn).  The
+    only limit is the military-action pool, so there is no flag here to spend.
+
+    ONE MOVE PER UNIT TECHNOLOGY, for the reason `_leader_politics_moves`
+    spells out for Columbus: the unit built is the whole point of the action
+    and a bare `("barbarossa",)` plus a deferred choice would price at
+    whatever the *population* alone is worth.
+
+    §3 (CoL p.5): "an action cannot be performed unless ALL required
+    sub-steps/costs can be paid", so both halves are gated here -- the
+    discounted food AND the discounted resources -- and a Barbarossa who can
+    only afford one half is offered neither.  The worker is never a gate: the
+    increase itself supplies the one the build needs.
+    """
+    pc = economy.pop_cost(state, p)
+    if pc is None or p.food < max(0, pc - COMBO_FOOD_DISCOUNT):
+        return []
+    out = []
+    for typ in C.UNIT_TYPES:
+        for name in by_type.get(typ, ()):
+            cost = cost_of(name)
+            if cost is None:
+                continue
+            if res >= max(0, cost - COMBO_RESOURCE_DISCOUNT - disc):
+                out.append(("barbarossa", name))
+    out.sort()                    # C.UNIT_TYPES is a set: pin the order
+    return out
+
+
+def _bach_moves(state, p, techs, by_type, urban_names, urban_workers,
+                cost_of, res, s):
+    """J. S. Bach: the only CROSS-TYPE upgrade in the game (§3.5 + card text).
+
+    *"Once per turn, as a civil action, you may upgrade one of your urban
+    buildings to a theater of the same or higher level, paying the resource
+    cost difference as normal."*
+
+    §3.5's upgrade action moves a worker "to the higher-level card of the SAME
+    type", which is why `_action_moves` builds its candidates out of
+    `by_type[type_of[lo]]`; Bach is the one card that breaks that, so this is
+    its own generator rather than a widening of that loop.  Three consequences
+    of the cross-type move that the same-type path never has to think about:
+
+    * **the level may be EQUAL** ("of the same or higher level"), so a level-2
+      temple may become a level-2 theater -- the same-type loop's strict
+      `level_of(hi) > level_of(lo)` would drop exactly that case;
+    * **the urban limit is a real check.**  §7.5 caps each urban TYPE at the
+      government's number, and §3.5 only calls the limit trivially satisfied
+      because a same-type upgrade "keeps count constant".  This one does not:
+      it adds a theater.  A Despotism with two theaters cannot Bach a third;
+    * **once per turn** (`p.bach_upgrade_used`), gated by the caller.
+
+    Theater-to-theater is deliberately NOT offered.  It is legal by the card's
+    words -- a theater is an urban building -- but it is the plain `upgrade`
+    action at an identical civil action and an identical cost, so offering it
+    here would be a strictly dominated duplicate that also burns the
+    once-per-turn.
+    """
+    theaters = by_type.get("theater", ())
+    if not theaters or urban_workers.get("theater", 0) >= s.urban_limit:
+        return []
+    type_of = _TYPE_BY_NAME
+    level_of = _LEVEL_BY_NAME
+    out = []
+    for lo in urban_names:
+        if type_of[lo] == "theater" or techs[lo].workers <= 0:
+            continue
+        lo_cost = cost_of(lo) or 0
+        lo_level = level_of[lo]
+        for hi in theaters:
+            if level_of[hi] < lo_level:
+                continue
+            if res >= max(0, (cost_of(hi) or 0) - lo_cost):
+                out.append(("bach_theater", lo, hi))
+    return out
+
+
 @_lru_cache(maxsize=4096)
 def _tableau(names):
     """Everything move generation derives from the SET of tableau card names.
@@ -512,6 +608,16 @@ def _action_moves(state, p):
                 cost = max(0, cost - disc)
             if res >= cost:
                 moves.append(("upgrade", lo, hi))
+
+    # the two leaders whose ability IS an action-phase action (§3, §4)
+    if p.leader == "Frederick Barbarossa":
+        if have_ma:
+            moves.extend(_barbarossa_moves(state, p, by_type, cost_of,
+                                           res, disc))
+    elif p.leader == "J. S. Bach":
+        if have_ca and not p.bach_upgrade_used:
+            moves.extend(_bach_moves(state, p, techs, by_type, urban_names,
+                                     urban_workers, cost_of, res, s))
 
     # destroy / disband (§3.6, §4.3)
     for name in names:
@@ -773,6 +879,36 @@ def _h_pop(state, p, move, rng):
 def _h_pop_free(state, p, move, rng):
     economy.increase_population(state, p, free=True)
     p.ocean_liners_used = True
+
+
+def _h_barbarossa(state, p, move, rng):
+    """Frederick Barbarossa's combined action: 1 MA buys both halves.
+
+    The military action is paid by `do_build`, which spends one for a unit --
+    and one is the whole price of the combination, so the population half
+    costs NO civil action.  That is the entire card: an MA converted into a
+    CA, plus a food and a resource (docs/EXPERT_STRATEGY.md:138).
+
+    The order is the card's: population first, then the build, so the worker
+    the increase just produced is available to be placed.
+    """
+    ok = economy.increase_population(state, p, discount=COMBO_FOOD_DISCOUNT)
+    assert ok, "Barbarossa's population increase was not payable"
+    do_build(state, p, move[1], discount=COMBO_RESOURCE_DISCOUNT)
+    state.emit(f"Barbarossa: grew and built {move[1]} for 1 military action")
+
+
+def _h_bach_theater(state, p, move, rng):
+    """J. S. Bach: upgrade an urban building to a theater, 1 CA, once a turn.
+
+    `do_upgrade` is the shared §3.5 implementation and it already does the
+    right thing for a cross-type move: the cost is the difference of the two
+    build costs (floored at 0), the civil action is paid because the source is
+    not a unit, and the worker moves from one card to the other.
+    """
+    p.bach_upgrade_used = True
+    do_upgrade(state, p, move[1], move[2])
+    state.emit(f"Bach: upgraded {move[1]} to {move[2]}")
 
 
 def _h_build(state, p, move, rng):
@@ -1285,6 +1421,8 @@ _HANDLERS = {
     "take": _h_take,
     "pop": _h_pop,
     "pop_free": _h_pop_free,
+    "barbarossa": _h_barbarossa,
+    "bach_theater": _h_bach_theater,
     "build": _h_build,
     "upgrade": _h_upgrade,
     "destroy": _h_destroy,
