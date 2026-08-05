@@ -766,6 +766,10 @@ mod tests {
         assert_eq!(take_cost(&state, &state.players[0], 6), 2);
     }
 
+    /// The `destroyed_wonders = 1` here is a hand-built state, not a reachable
+    /// one: no base-game card destroys a completed wonder (see the field's doc
+    /// on `PlayerState`). It is pinned anyway because §2.3 counts the term and
+    /// the expansion will reach it.
     #[test]
     fn take_cost_wonder_adds_completed_and_destroyed_surcharge() {
         let mut p = blank_player(0, card("Despotism"));

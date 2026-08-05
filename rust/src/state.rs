@@ -385,6 +385,16 @@ pub struct PlayerState {
     pub wonder_steps: u8,
     pub completed_wonders: CardList<8>,
     /// Destroyed wonders still count toward the row take surcharge (§2.3).
+    ///
+    /// Always 0 in the 2015 base game, and that is correct, not a gap. Nothing
+    /// here removes a wonder from [`Self::completed_wonders`] -- the only card
+    /// that touches a finished wonder is `flipCompletedWonder` (Ravages of
+    /// Time), which leaves it completed and adds it to
+    /// [`Self::flipped_wonders`], so it keeps paying the surcharge through the
+    /// `completed_wonders` term. §2.3 says "built or destroyed" because the
+    /// EXPANSION can destroy one; the term is modelled so the rule reads as
+    /// printed and so the expansion needs no new field. Checked 2026-08-05:
+    /// `completed_wonders` is append-only in both engines.
     pub destroyed_wonders: u8,
     /// Wonder that Homer was tucked under.
     pub homer_wonder: CardId,
