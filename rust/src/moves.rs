@@ -69,11 +69,22 @@ pub enum Move {
     PrepareEvent { card: CardId },
 
     // ---- responses to a decision somebody else opened (engine::interact) ----
-    /// Commit `n` military strength to an auction or a colonisation bid.
+    /// Commit `n` military strength to a colonization auction.
     Bid { n: u8 },
-    /// Commit `n` strength to defence.
-    Defend { n: u8 },
-    /// Stop committing units.
+    /// Stop bidding in a colonization auction.
+    BidPass,
+    /// Commit one military card from hand as defense strength against an
+    /// aggression (`engine/interact.py` `_defense_move`: the move is
+    /// `("defend", card_name)`, not a raw strength number -- the strength is
+    /// derived from the card once committed).
+    Defend { card: CardId },
+    /// Stop committing defenders.
+    DefendDone,
+    /// Colonization (§11.3): commit one unit from the auction-winner's pool.
+    SendUnit { card: CardId },
+    /// Colonization (§11.3): commit one bonus card from the pool.
+    SendBonus { card: CardId },
+    /// Stop committing units/bonuses to a colonization force.
     SendDone,
     /// Pick option `n` of an open `choice` decision. The option list is
     /// generated with the decision and is positional, so this index is only
@@ -82,6 +93,10 @@ pub enum Move {
     Churchill { choice: ChurchillChoice },
 
     // ---- turn control ----
+    /// End the Actions phase (`engine/actions.py` `("end_turn",)`).
+    EndTurn,
+    /// Pass the (at most one) political action (`("pol_pass",)`).
+    PolPass,
     Resign,
 }
 
@@ -103,10 +118,14 @@ impl Move {
             | Aggression { card, .. }
             | War { card, .. }
             | OfferPact { card, .. }
-            | PrepareEvent { card } => Some(card),
+            | PrepareEvent { card }
+            | Defend { card }
+            | SendUnit { card }
+            | SendBonus { card } => Some(card),
             Upgrade { from: _, to } => Some(to),
             Take { .. } | WonderStep { .. } | Pop | PopFree | CancelPact { .. } | Bid { .. }
-            | Defend { .. } | SendDone | Choose { .. } | Churchill { .. } | Resign => None,
+            | BidPass | DefendDone | SendDone | Choose { .. } | Churchill { .. } | EndTurn
+            | PolPass | Resign => None,
         }
     }
 
@@ -122,7 +141,11 @@ impl Move {
                 | War { .. }
                 | OfferPact { .. }
                 | Bid { .. }
+                | BidPass
                 | Defend { .. }
+                | DefendDone
+                | SendUnit { .. }
+                | SendBonus { .. }
                 | SendDone
         )
     }
