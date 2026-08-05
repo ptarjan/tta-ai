@@ -292,8 +292,6 @@ const KNOWN_APPLY_GAP_MARKERS: &[&str] = &[
     "events.rs",
     "game.rs",
     "named gap",
-    "per-player-count",
-    "not captured by the type layer",
     "decision queue",
     // "caller must ensure enough food" -- `h_pop`'s `debug_assert!` -- was
     // listed here until 2026-08-05. It fired because `h_pop` passed a
@@ -304,6 +302,18 @@ const KNOWN_APPLY_GAP_MARKERS: &[&str] = &[
     // ply 408). `state::OneTimeDiscount` exists now and `h_pop` reads it;
     // the marker fires on zero plies across all 9 fixtures, so it is gone.
     // A marker that never fires is an excuse nobody is checking.
+    //
+    // "per-player-count" / "not captured by the type layer" -- `apply.rs::
+    // h_play_action`'s `unimplemented!()` for `Wave of Nationalism`/
+    // `Military Build-Up`/`Endowment for the Arts` -- were listed here until
+    // 2026-08-05. `gen_cards.py` now gives `Special::
+    // CulturePerCivilizationWithMoreCulture`/`Special::
+    // ResourcesForMilitaryUnitsPerStrongerCivilization` a real `[i16; 3]`
+    // payload (the `count_table` shape `strongestPlayers`/`weakestPlayers`/
+    // `condition` already used) and `h_play_action` applies both, so the
+    // panic these two markers matched no longer happens: `apply_known_gap`
+    // dropped from 7 to 0 across all 13 fixtures. Both markers fire on zero
+    // plies now -- gone, same as the food-discount marker above.
 ];
 
 fn classify_panic(msg: &str) -> bool {

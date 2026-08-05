@@ -13,9 +13,11 @@
 //!
 //! Every card of a type any entry point prices is checked, for every live
 //! player, on every sampled state -- see `rust/src/bots/board_yields.rs`'s
-//! top doc comment for the two known, already-flagged gaps
-//! ([`BOARD_EXTRA_GAP_CARDS`], [`WONDER_CULTURE_GAP_CARDS`]) this test
-//! allowlists rather than silently absorbing into a passing run.
+//! top doc comment for the one remaining known, already-flagged gap
+//! ([`WONDER_CULTURE_GAP_CARDS`]) this test allowlists rather than silently
+//! absorbing into a passing run. [`BOARD_EXTRA_CARDS`] used to be a second
+//! one (`BOARD_EXTRA_GAP_CARDS`, hard-asserted empty) -- closed 2026-08-05,
+//! now an ordinary real-value comparison like every other entry point.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,10 +46,15 @@ fn expected_dir() -> PathBuf {
 /// elsewhere in the same triple list).
 const WONDER_CULTURE_GAP_CARDS: &[&str] = &["Hollywood", "Internet"];
 
-/// Action cards `board_extra` cannot price -- see `board_yields.rs`'s top
-/// doc comment: the per-player-count coefficient is not carried by the
-/// `Special` payload `gen_cards.py` generated for either key.
-const BOARD_EXTRA_GAP_CARDS: &[&str] = &["Endowment for the Arts", "Wave of Nationalism", "Military Build-Up"];
+/// The 3 cards `board_extra` has anything to say about (mirrors
+/// `engine/bots/board_yields.py`'s own `_EXTRA_CARDS`/`tools/
+/// dump_board_yields.py`'s `_EXTRA_NAMES`). Used to be
+/// `BOARD_EXTRA_GAP_CARDS`, asserted to always price at zero -- closed
+/// 2026-08-05 once `gen_cards.py` gave the two per-player-count `Special`
+/// variants a real `[i16; 3]` payload, so this now checks `board_extra`
+/// against the dump's real `"board_extra"` key like every other entry point
+/// here, instead of hard-asserting the gap.
+const BOARD_EXTRA_CARDS: &[&str] = &["Endowment for the Arts", "Wave of Nationalism", "Military Build-Up"];
 
 fn load_states(path: &Path) -> HashMap<u32, GameState> {
     let records = fixtures::read_fixture_file(path).unwrap_or_else(|e| panic!("{e}"));
@@ -239,15 +246,13 @@ fn check_player(path: &Path, ply: u32, state: &GameState, idx: usize, expected: 
     }
 
     // ---- board_extra ----
-    for name in BOARD_EXTRA_GAP_CARDS {
+    for name in BOARD_EXTRA_CARDS {
         let id = CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"));
-        // Known gap (module doc comment): Rust always returns nothing here.
-        // Assert exactly that -- a Rust result stops being empty is itself
-        // news (the gap silently changed shape) worth failing loudly on.
         let got = by::board_extra(id, state, idx);
+        let expected_v = expected.get("board_extra").and_then(|o| o.get(*name));
         report.checked += 1;
-        if !got.is_empty() {
-            note(format!("board_extra({name}): expected the known gap (empty), got {got:?}"));
+        if !triples_ok(&got, expected_v) {
+            note(format!("board_extra({name}): rust={got:?} python={expected_v:?}"));
         }
     }
 }

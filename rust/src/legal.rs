@@ -713,8 +713,8 @@ fn action_card_has_any_gain(card: &Card) -> bool {
         matches!(
             s,
             Special::GainFoodOrResources(_)
-                | Special::ResourcesForMilitaryUnitsPerStrongerCivilization
-                | Special::CulturePerCivilizationWithMoreCulture
+                | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_)
+                | Special::CulturePerCivilizationWithMoreCulture(_)
         )
     })
 }

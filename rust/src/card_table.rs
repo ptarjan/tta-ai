@@ -63,8 +63,11 @@ pub enum VictorTakesScienceUpToValue {
 /// keys plus `gain`/`lose` (§5.3 event resolution -- see
 /// `cards::EventBlock`'s own doc comment for why one shape serves all
 /// nine); a `([i16; 3])` payload, indexed by live player count minus 2,
-/// for `strongestPlayers`/`weakestPlayers`'s own per-count table and for
-/// `condition`'s `amongWeakest` table; a `(LastRoundSubstituteBlock)`
+/// for `strongestPlayers`/`weakestPlayers`'s own per-count table, for
+/// `condition`'s `amongWeakest` table, and for the two action-card
+/// per-player-count magnitudes (`resourcesForMilitaryUnitsPerStronger
+/// Civilization`/`culturePerCivilizationWithMoreCulture`); a
+/// `(LastRoundSubstituteBlock)`
 /// payload for `lastRoundSubstitute`; an `([i16; 5])` payload,
 /// indexed by `Age as u8`, when the printed value is a per-age magnitude
 /// dict (`buildDiscount`); a `(&'static [Age])` payload for
@@ -99,7 +102,7 @@ pub enum Special {
     CultureOnRevolution(i16),
     CultureOnTechDevelop(i16),
     CulturePerAdditionalColony(i16),
-    CulturePerCivilizationWithMoreCulture,
+    CulturePerCivilizationWithMoreCulture([i16; 3]),
     CulturePerHappyFromTemplesTheatersWonders(i16),
     CulturePerLabEqualToLevel,
     CulturePerLibraryTheaterPair(i16),
@@ -144,7 +147,7 @@ pub enum Special {
     RemoveFromGame,
     ResourceOnMilitaryUnitBuildOrUpgrade(i16),
     ResourceOnTechDevelop(i16),
-    ResourcesForMilitaryUnitsPerStrongerCivilization,
+    ResourcesForMilitaryUnitsPerStrongerCivilization([i16; 3]),
     ResourcesPerLabEqualToLevel,
     RevolutionUsesMilitaryActionsInstead,
     ScienceOnTechCardTake(i16),
@@ -4478,7 +4481,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::ResourcesForMilitaryUnitsPerStrongerCivilization],
+        special: &[Special::ResourcesForMilitaryUnitsPerStrongerCivilization([6, 3, 2])],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4611,7 +4614,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::CulturePerCivilizationWithMoreCulture],
+        special: &[Special::CulturePerCivilizationWithMoreCulture([6, 3, 2])],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -4630,7 +4633,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::ResourcesForMilitaryUnitsPerStrongerCivilization],
+        special: &[Special::ResourcesForMilitaryUnitsPerStrongerCivilization([8, 5, 3])],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,

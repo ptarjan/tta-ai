@@ -248,20 +248,27 @@ PACT_BLOCK_FIELD_ORDER = (
 #: real port. Event targeting/resolution (`allPlayers` and its 12 siblings)
 #: is handled below now (`EVENT_BLOCK_DICT_KEYS`/`build_event_block` etc,
 #: 2026-08-05 events.rs pass) -- what is left here belongs to `combat.rs`
-#: (war spoils) or `actions.rs` (per-player-count action-card bonuses,
-#: Churchill's per-turn choice), neither in scope for that pass. Each
-#: remaining key still becomes a payload-less `Special` variant -- exactly
-#: what every dict-valued key silently did before this pass -- but doing so
-#: now requires being named here, with a reason, rather than falling through
-#: an `else` branch that could not tell "known, deferred" apart from "new key
-#: nobody has looked at yet".
+#: (war spoils) or `actions.rs` (Churchill's per-turn choice), neither in
+#: scope for that pass.
+#:
+#: `resourcesForMilitaryUnitsPerStrongerCivilization`/
+#: `culturePerCivilizationWithMoreCulture` USED to live here too (both are a
+#: per-player-count dict, `{"2p": 6, "3p": 3, "4p": 2}`) -- moved out
+#: 2026-08-05 to the `count_table` branch below, alongside
+#: `strongestPlayers`/`weakestPlayers`/`condition`, which already builds the
+#: exact `[i16; 3]` payload these two need (`build_count_table`). There was
+#: never a reason these needed bespoke handling; `DEFERRED_DICT_EFFECT_KEYS`
+#: had them only because the `count_table` shape did not have a branch for
+#: an arbitrary key yet when they were first classified.
+#:
+#: Each remaining key here still becomes a payload-less `Special` variant --
+#: exactly what every dict-valued key silently did before this pass -- but
+#: doing so now requires being named here, with a reason, rather than falling
+#: through an `else` branch that could not tell "known, deferred" apart from
+#: "new key nobody has looked at yet".
 DEFERRED_DICT_EFFECT_KEYS = {
     "victorTakesYellowTokens": "war resolution -- combat.rs not ported",
     "victorTakesCulture": "war resolution -- combat.rs not ported",
-    "resourcesForMilitaryUnitsPerStrongerCivilization":
-        "per-player-count action-card bonus -- actions.rs not ported",
-    "culturePerCivilizationWithMoreCulture":
-        "per-player-count action-card bonus -- actions.rs not ported",
     "perTurnChoice": "Churchill's per-turn choice structure -- actions.rs "
         "not ported",
 }
@@ -1203,7 +1210,9 @@ def main():
                     variant = camel(key)
                     shape = "count_table"
                     payload = build_condition(name, val)
-                elif key in ("strongestPlayers", "weakestPlayers"):
+                elif key in ("strongestPlayers", "weakestPlayers",
+                             "resourcesForMilitaryUnitsPerStrongerCivilization",
+                             "culturePerCivilizationWithMoreCulture"):
                     variant = camel(key)
                     shape = "count_table"
                     payload = build_count_table(name, f"effects.{key}", val)
@@ -1458,8 +1467,11 @@ def main():
     w("/// keys plus `gain`/`lose` (§5.3 event resolution -- see")
     w("/// `cards::EventBlock`'s own doc comment for why one shape serves all")
     w("/// nine); a `([i16; 3])` payload, indexed by live player count minus 2,")
-    w("/// for `strongestPlayers`/`weakestPlayers`'s own per-count table and for")
-    w("/// `condition`'s `amongWeakest` table; a `(LastRoundSubstituteBlock)`")
+    w("/// for `strongestPlayers`/`weakestPlayers`'s own per-count table, for")
+    w("/// `condition`'s `amongWeakest` table, and for the two action-card")
+    w("/// per-player-count magnitudes (`resourcesForMilitaryUnitsPerStronger")
+    w("/// Civilization`/`culturePerCivilizationWithMoreCulture`); a")
+    w("/// `(LastRoundSubstituteBlock)`")
     w("/// payload for `lastRoundSubstitute`; an `([i16; 5])` payload,")
     w("/// indexed by `Age as u8`, when the printed value is a per-age magnitude")
     w("/// dict (`buildDiscount`); a `(&'static [Age])` payload for")

@@ -803,7 +803,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | CultureOnLeaveEqualToLabResourceProduction
         | CultureOnRevolution(_)
         | CultureOnTechDevelop(_)
-        | CulturePerCivilizationWithMoreCulture
+        | CulturePerCivilizationWithMoreCulture(_)
         // Which ordered free action a card grants (`build_one_wonder_stage`,
         // `develop_technology`, ...) -- `engine/actions.py::free_action_moves`
         // dispatches on this VALUE directly (lines 597-618), which is why it
@@ -829,7 +829,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | RemoveAsPoliticalActionFreeColonize
         | ResourceOnMilitaryUnitBuildOrUpgrade(_)
         | ResourceOnTechDevelop(_)
-        | ResourcesForMilitaryUnitsPerStrongerCivilization
+        | ResourcesForMilitaryUnitsPerStrongerCivilization(_)
         | RevolutionUsesMilitaryActionsInstead
         | ScienceOnTechCardTake(_)
         | TheaterResourceDiscountIfLibrary(_)

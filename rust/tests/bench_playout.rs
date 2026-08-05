@@ -99,16 +99,17 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
     }
 }
 
+// Mirrors `tests/random_game.rs::action_card_is_blocked` -- see this file's
+// top doc comment for why it is a byte-for-byte copy rather than a shared
+// helper. Kept in sync 2026-08-05: the per-player-count magnitude gap that
+// USED to widen this `matches!` (`CulturePerCivilizationWithMoreCulture`/
+// `ResourcesForMilitaryUnitsPerStrongerCivilization`) is closed in
+// `apply.rs` now, so those two cards are no longer skipped here either.
 fn action_card_is_blocked(card: CardId) -> bool {
-    card.get().special.iter().any(|s| {
-        matches!(
-            s,
-            Special::FreeCivilAction(_)
-                | Special::GainFoodOrResources(_)
-                | Special::CulturePerCivilizationWithMoreCulture
-                | Special::ResourcesForMilitaryUnitsPerStrongerCivilization
-        )
-    })
+    card.get()
+        .special
+        .iter()
+        .any(|s| matches!(s, Special::FreeCivilAction(_) | Special::GainFoodOrResources(_)))
 }
 
 enum Played {

@@ -85,11 +85,15 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
             Some("interact.rs: War over Technology spoils are a decision")
         }
 
-        // apply.rs `h_play_action`. Three separate gaps, all on action cards:
+        // apply.rs `h_play_action`. Two remaining gaps, both on action cards:
         // a `freeCivilAction` order with 2+ legal ways to obey it is a real
-        // choice; `gainFoodOrResources` is a real choice; and two cards print
-        // a per-player-count magnitude the generated card table cannot carry.
-        // The first is skipped for EVERY `freeCivilAction` card rather than
+        // choice, and `gainFoodOrResources` is a real choice. (A third --
+        // `Wave of Nationalism`/`Military Build-Up`/`Endowment for the Arts`
+        // printing a per-player-count magnitude the generated card table
+        // could not carry -- was closed 2026-08-05: `gen_cards.py` now gives
+        // both effect keys a real `[i16; 3]` payload and `h_play_action`
+        // applies them, so those three cards are no longer skipped here.)
+        // The freeCivilAction case is skipped for EVERY such card rather than
         // only the ambiguous ones -- deciding which are ambiguous means
         // reproducing `h_play_action`'s pre-`pay_ca` `revolt_ok` snapshot out
         // here, and a test that re-derives engine internals to predict the
@@ -143,17 +147,12 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
 }
 
 /// Whether playing this action card would reach one of `h_play_action`'s
-/// three `unimplemented!` arms.
+/// remaining `unimplemented!` arms.
 fn action_card_is_blocked(card: CardId) -> bool {
-    card.get().special.iter().any(|s| {
-        matches!(
-            s,
-            Special::FreeCivilAction(_)
-                | Special::GainFoodOrResources(_)
-                | Special::CulturePerCivilizationWithMoreCulture
-                | Special::ResourcesForMilitaryUnitsPerStrongerCivilization
-        )
-    })
+    card.get()
+        .special
+        .iter()
+        .any(|s| matches!(s, Special::FreeCivilAction(_) | Special::GainFoodOrResources(_)))
 }
 
 /// How far a driven game got.

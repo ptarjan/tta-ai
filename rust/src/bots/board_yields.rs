@@ -56,21 +56,15 @@
 //! `building_output` would have said. This is `apply.rs`'s/`effects.rs`'s
 //! gap, not this module's to close; flagged here, and in the port report.
 //!
-//! **`board_extra`'s per-player-count coefficient is not carried by the
-//! type layer.** Endowment for the Arts / Wave of Nationalism / Military
-//! Build-Up each print a `{"2p": N, "3p": N, "4p": N}` table as the VALUE of
-//! `culturePerCivilizationWithMoreCulture` / \
-//! `resourcesForMilitaryUnitsPerStrongerCivilization`. `gen_cards.py`
-//! generated both as bare, payload-less `Special` variants (confirmed
-//! 2026-08-05: `card_table.rs` has no arm carrying that dict for either key)
-//! because nothing consumed the value before this module needed it.
-//! [`board_extra`] below detects presence of both keys correctly but cannot
-//! recover the table, so it returns no triples for either -- the same
-//! "priced at zero" state these two cards are already in today (the static
-//! table does not price them either, per the Python docstring), so this is a
-//! non-regression, not a new wrong number, but it is not the fix either.
-//! Closing it needs a `gen_cards.py` change to give these two `Special`
-//! variants a real payload, which is out of this module's scope.
+//! ~~**`board_extra`'s per-player-count coefficient is not carried by the
+//! type layer.**~~ CLOSED 2026-08-05. Endowment for the Arts / Wave of
+//! Nationalism / Military Build-Up each print a `{"2p": N, "3p": N, "4p": N}`
+//! table as the VALUE of `culturePerCivilizationWithMoreCulture` /
+//! `resourcesForMilitaryUnitsPerStrongerCivilization`. `gen_cards.py` now
+//! folds that table into a real `Special::<Name>([i16; 3])` payload (the same
+//! shape `strongestPlayers`/`weakestPlayers`/`condition` already used), so
+//! [`board_extra`] below reads the coefficient off the card directly rather
+//! than merely detecting the key's presence.
 
 use crate::apply;
 use crate::cards::{CardId, CardType, Special};
@@ -697,21 +691,49 @@ pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<T
 // ------------------------------------- board-scaled action cards (additive)
 
 /// `board_extra`: board-scaled triples to ADD to the static card-yield
-/// table. See this module's top doc comment for the per-player-count gap
-/// that leaves this returning nothing for the two cards it detects.
-pub fn board_extra(name: CardId, _state: &GameState, _idx: usize) -> Vec<Triple> {
+/// table. Mirrors `engine/bots/board_yields.py::board_extra` exactly for the
+/// two per-player-count action-card magnitudes it prices -- Endowment for
+/// the Arts (`culturePerCivilizationWithMoreCulture`, a one-shot `culture`
+/// stock gain) and Wave of Nationalism / Military Build-Up
+/// (`resourcesForMilitaryUnitsPerStrongerCivilization`, ring-fenced to
+/// military units, hence `RestrictedResources` rather than `ResourceStock`
+/// -- see `apply.rs::h_play_action`'s use of `p.mil_discount` for why that
+/// pool, not the general resource stock, is the honest price). Used to be a
+/// KNOWN GAP (see this module's former top doc comment note, removed
+/// 2026-08-05 once `gen_cards.py` gave both `Special` variants a real
+/// `[i16; 3]` payload): both keys were detected but the coefficient could
+/// not be recovered, so this always returned nothing.
+pub fn board_extra(name: CardId, state: &GameState, idx: usize) -> Vec<Triple> {
     if name.is_none() {
         return Vec::new();
     }
     let card = name.get();
-    let _has_endowment = card.special.contains(&Special::CulturePerCivilizationWithMoreCulture);
-    let _has_wave = card.special.contains(&Special::ResourcesForMilitaryUnitsPerStrongerCivilization);
-    // KNOWN GAP (see module doc comment): both keys are detected above but
-    // neither carries its printed `{"2p": N, "3p": N, "4p": N}` table in the
-    // Rust type layer yet, so there is no coefficient to multiply the rival
-    // count by. Returning nothing here matches the static table's existing
-    // (also zero) price for both cards -- a non-regression, not a fix.
-    Vec::new()
+    let p = &state.players[idx];
+    let count_idx = crate::events::live_count_idx(state);
+    let mut out = Vec::new();
+    if let Some(t) = card.special.iter().find_map(|&s| match s {
+        Special::CulturePerCivilizationWithMoreCulture(t) => Some(t),
+        _ => None,
+    }) {
+        let n = live_rivals(state, p).into_iter().filter(|q| q.culture > p.culture).count();
+        if n > 0 {
+            out.push((Feature::Culture, t[count_idx] as f64 * n as f64, Kind::Gain));
+        }
+    }
+    if let Some(t) = card.special.iter().find_map(|&s| match s {
+        Special::ResourcesForMilitaryUnitsPerStrongerCivilization(t) => Some(t),
+        _ => None,
+    }) {
+        let mine = effects::state_stats(state, p).strength;
+        let n = live_rivals(state, p)
+            .into_iter()
+            .filter(|q| effects::state_stats(state, q).strength > mine)
+            .count();
+        if n > 0 {
+            out.push((Feature::RestrictedResources, t[count_idx] as f64 * n as f64, Kind::Gain));
+        }
+    }
+    out
 }
 
 /// `board_choices`: mutually exclusive alternatives. Mirrors Python exactly:

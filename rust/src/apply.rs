@@ -69,17 +69,32 @@
 //! field directly and was never a gap), and [`revolution_cost`] below reads
 //! `Card::revolution_cost` directly, so [`h_revolution`] is fully ported too.
 //!
-//! - **Per-player-count effect magnitudes.** `Wave of Nationalism` /
-//!   `Military Build-Up` (`resourcesForMilitaryUnitsPerStrongerCivilization`)
-//!   and `Endowment for the Arts` (`culturePerCivilizationWithMoreCulture`)
-//!   print a per-player-count dict (`{"2p": 6, "3p": 3, "4p": 2}`), which
-//!   `gen_cards.py` cannot fold into a flat `i16` `CardEffects` field (only a
-//!   bare int/float value survives; a dict value degrades to a payload-less
-//!   `Special` variant -- see `EFFECT_FIELDS`/`_compile_effects` in
-//!   `gen_cards.py`). [`h_play_action`] panics naming this rather than
-//!   guessing a player count band. `Special::FreeCivilAction` is unrelated to
-//!   this gap now: it carries a real `FreeCivilActionValue` payload (fixed
-//!   2026-08-05) naming one of the six ordered actions, [`legal::
+//! - ~~**Per-player-count effect magnitudes.**~~ CLOSED 2026-08-05.
+//!   `Wave of Nationalism` / `Military Build-Up`
+//!   (`resourcesForMilitaryUnitsPerStrongerCivilization`) and `Endowment for
+//!   the Arts` (`culturePerCivilizationWithMoreCulture`) print a
+//!   per-player-count dict (`{"2p": 6, "3p": 3, "4p": 2}`), which
+//!   `gen_cards.py` could not fold into a flat `i16` `CardEffects` field
+//!   (only a bare int/float value survives that path; a dict value degraded
+//!   to a payload-less `Special` variant). Fixed the same way
+//!   `strongestPlayers`/`weakestPlayers`/`condition` already were: both keys
+//!   now build through `gen_cards.py`'s existing `build_count_table` into a
+//!   real `Special::<Name>([i16; 3])` payload (index 0/1/2 = 2p/3p/4p, `events::
+//!   live_count_idx` picks the live one), no new machinery needed.
+//!   [`h_play_action`] applies both exactly as `engine/actions.py::
+//!   _h_play_action` does: culture gain per civilization with MORE culture
+//!   than the player (a one-shot `p.culture` add), and `p.mil_discount`
+//!   increased by the per-count magnitude for each civilization STRONGER
+//!   (matching `effects::state_stats(..).strength`) than the player -- the
+//!   same one-shot discount pool `resourcesForMilitaryUnits` (a bare int
+//!   effect, already ported) and Churchill's military option already feed:
+//!   spent by [`costs::spend_mil_discount`] on the next unit build/upgrade,
+//!   and any unspent balance expires at end of turn (`economy::end_of_turn`
+//!   zeroes `p.mil_discount`, mirroring `engine/economy.py::end_of_turn`'s
+//!   own `p.mil_discount = 0` -- "§3.11 action-card discounts expire").
+//!   `Special::FreeCivilAction` is unrelated to this gap: it carries a real
+//!   `FreeCivilActionValue` payload
+//!   (fixed 2026-08-05) naming one of the six ordered actions, [`legal::
 //!   free_action_kind_of`] maps that onto `legal::FreeActionKind`, and
 //!   [`h_play_action`] resolves it -- the only remaining blocker for THOSE 18
 //!   cards is the 2+-legal-options case described above, not a missing place
@@ -878,10 +893,12 @@ fn h_offer_pact(state: &mut GameState, idx: u8, card: CardId, target: u8, side: 
 /// Ports `engine/actions.py::_h_play_action`. See this module's top doc
 /// comment for exactly which cards still panic (`Reserves` --
 /// `gainFoodOrResources`, always needs `interact::push_choice` per Python's
-/// `apply_card_gains`, `auto=False`; `Wave of Nationalism`, `Military
-/// Build-Up`, `Endowment for the Arts` -- per-player-count magnitudes; and,
-/// for the 18 `freeCivilAction` cards, only the case where their ordered
-/// action has 2+ legal options, which now opens a real decision).
+/// `apply_card_gains`, `auto=False`; and, for the 18 `freeCivilAction`
+/// cards, only the case where their ordered action has 2+ legal options,
+/// which now opens a real decision). `Wave of Nationalism`/`Military
+/// Build-Up`/`Endowment for the Arts` (the per-player-count magnitudes) are
+/// CLOSED as of 2026-08-05 -- see the top doc comment's "Per-player-count
+/// effect magnitudes" entry.
 fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // RB p.15: Breakthrough's `develop_technology` order may spend itself on
     // a revolution instead, gated on every civil action THIS TURN still
@@ -900,16 +917,6 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     economy::discard_civil(state, id); // one-shot: played face up, spent
 
     let card = id.get();
-    if card.special.contains(&Special::CulturePerCivilizationWithMoreCulture)
-        || card.special.contains(&Special::ResourcesForMilitaryUnitsPerStrongerCivilization)
-    {
-        unimplemented!(
-            "play_action({}): per-player-count effect magnitude is not captured \
-             by the type layer (a dict-valued JSON effect collapses to a \
-             payload-less Special) -- see this module's top doc comment",
-            card.name
-        );
-    }
     let eff = card.effects;
     {
         let p = &mut state.players[idx as usize];
@@ -924,6 +931,46 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
         // branch too.
         p.military_actions = p.military_actions.saturating_add(eff.military_actions as i8);
         p.mil_discount += eff.resources_for_military_units;
+    }
+
+    // The two per-player-count action-card magnitudes (Endowment for the
+    // Arts / Wave of Nationalism / Military Build-Up -- see this module's
+    // top doc comment for why `gen_cards.py` could not fold these into a
+    // flat `CardEffects` field). Mirrors `engine/actions.py::_h_play_action`
+    // lines 1153-1167 exactly, including the order (culture bonus, THEN the
+    // military discount -- moot in practice since no base-game card prints
+    // both, but kept for fidelity) and the strict `>` comparisons (Python:
+    // `q.culture > p.culture` / `state_stats(q).strength > mine`).
+    let count_idx = events::live_count_idx(state);
+    if let Some(t) = card.special.iter().find_map(|&s| match s {
+        Special::CulturePerCivilizationWithMoreCulture(t) => Some(t),
+        _ => None,
+    }) {
+        let per = t[count_idx] as i32;
+        let mine = state.players[idx as usize].culture as i32;
+        let mut n = 0i32;
+        for q in state.active() {
+            if q.idx != idx && q.culture as i32 > mine {
+                n += 1;
+            }
+        }
+        let gained = per * n;
+        state.players[idx as usize].culture =
+            (state.players[idx as usize].culture as i32 + gained).max(0) as u16;
+    }
+    if let Some(t) = card.special.iter().find_map(|&s| match s {
+        Special::ResourcesForMilitaryUnitsPerStrongerCivilization(t) => Some(t),
+        _ => None,
+    }) {
+        let per = t[count_idx] as i32;
+        let mine = effects::state_stats(state, &state.players[idx as usize]).strength;
+        let mut n = 0i32;
+        for q in state.active() {
+            if q.idx != idx && effects::state_stats(state, q).strength > mine {
+                n += 1;
+            }
+        }
+        state.players[idx as usize].mil_discount += (per * n) as i16;
     }
 
     // §3.11: the ordered action resolves FIRST, and only THEN the card's own

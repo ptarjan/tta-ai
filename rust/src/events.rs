@@ -746,8 +746,12 @@ fn event_block(card: CardId, matcher: impl Fn(Special) -> Option<EventBlock>) ->
 
 /// The `[i16; 3]` (2p/3p/4p) payload for ONE `Special` variant on `card`, or
 /// all-zero if absent. The `Condition`/`StrongestPlayers`/`WeakestPlayers`
-/// twin of [`event_block`].
-fn count_table(card: CardId, matcher: impl Fn(Special) -> Option<[i16; 3]>) -> [i16; 3] {
+/// twin of [`event_block`]. `pub(crate)`: `apply.rs::h_play_action` reuses it
+/// for the two per-player-count action-card magnitudes
+/// (`CulturePerCivilizationWithMoreCulture`/
+/// `ResourcesForMilitaryUnitsPerStrongerCivilization`) rather than
+/// reimplementing the same `[i16; 3]` lookup a second time.
+pub(crate) fn count_table(card: CardId, matcher: impl Fn(Special) -> Option<[i16; 3]>) -> [i16; 3] {
     card.get().special.iter().copied().find_map(matcher).unwrap_or([0, 0, 0])
 }
 
@@ -766,7 +770,8 @@ fn decrease_population_of(card: CardId) -> Option<i16> {
 }
 
 /// Index into a `[i16; 3]` (2p/3p/4p) count table for the current game.
-fn live_count_idx(state: &GameState) -> usize {
+/// `pub(crate)` for the same reason as [`count_table`] above.
+pub(crate) fn live_count_idx(state: &GameState) -> usize {
     game::live_count(state).saturating_sub(2).min(2)
 }
 
