@@ -1,0 +1,3 @@
+# Build output. `Cargo.lock` IS committed (below): this crate is an
+# application, not a library, and the league must be reproducible.
+/target

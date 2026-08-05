@@ -1,0 +1,33 @@
+[package]
+name = "tta"
+version = "0.1.0"
+edition = "2021"
+description = "Through the Ages (base 2015) engine — native Rust rewrite"
+publish = false
+
+# DELIBERATELY EMPTY.  See DESIGN.md rule 2: the card data is generated into
+# `src/card_table.rs` by `tools/gen_cards.py` and checked in, so the engine
+# parses no JSON, allocates nothing at start-up, and pulls in no serde.  A
+# dependency here is a decision, not a convenience -- justify it in the commit.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+# Self-play is the benchmark, and it is dominated by state clones and by
+# `legal_moves`.  Both are inlining-sensitive across module boundaries, which
+# is what `lto = "fat"` plus a single codegen unit are here for; measure before
+# relaxing either.
+
+[profile.bench]
+inherits = "release"
+
+# Debug assertions stay ON in the differential-testing profile: the port's
+# whole safety net is "the invariant fired at ply 41", and an invariant
+# compiled out is an invariant that cannot fire.
+[profile.difftest]
+inherits = "release"
+debug-assertions = true
