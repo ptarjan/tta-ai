@@ -76,28 +76,49 @@
 //!   byte-for-byte the pre-drain behaviour. `Cow::Borrowed(state)` is that
 //!   same identity guarantee, checkable in Rust with `matches!(root,
 //!   Cow::Borrowed(_))`; `Cow::Owned(root)` is the determinized copy.
-//! * **`copy_fn` is `FnOnce(&GameState) -> GameState`, not
-//!   `fastcopy::copy_state`.** Python injects `fastcopy.copy_state`
-//!   (performance hack around `copy.deepcopy`) at the call site; this port's
-//!   `fastcopy.py` was NOT ported (see `rust/src/bots/mod.rs`'s doc comment
-//!   for the full verdict) because `GameState` already derives `Clone` and a
-//!   derived `Clone` over this struct's fixed-size arrays *is* the cheap
-//!   structural copy `fastcopy.py` exists to hand-roll in CPython. A future
-//!   caller passes `GameState::clone` (or a closure around it) here; this
-//!   module stays agnostic to which, exactly as the Python did.
-//! * **Counters are `AtomicU64`, not module globals mutated under the GIL.**
-//!   Same contract as Python's `_CALLS`/`_QUIET_CALLS`/`_DET_CALLS`: an
-//!   instrumentation counter a differential test reads to prove the shared
-//!   path was actually taken, not re-inlined. `Ordering::Relaxed` is
-//!   sufficient because nothing here synchronizes on the counters' VALUE
-//!   with other state -- they are read back by the same single-threaded
-//!   search that incremented them, exactly like Python's single-threaded
-//!   module globals.
+//! * **No `copy_fn` injection.** Python injects `fastcopy.copy_state`
+//!   (performance hack around `copy.deepcopy`) at the call site because
+//!   Python has no cheap structural copy of its own to fall back on.
+//!   [`crate::state::GameState`] already derives `Clone`, and `mod.rs`'s own
+//!   doc comment establishes that a derived `Clone` over this struct's
+//!   fixed-size arrays *is* the cheap structural copy `fastcopy.py` exists
+//!   to hand-roll in CPython -- there is no second implementation of "copy a
+//!   `GameState`" for a caller to inject, so [`prepare_root`] below just
+//!   calls `state.clone()`. Threading a closure through for an operation
+//!   that only ever has one implementation would be indirection with
+//!   nothing behind it.
+//! * **`determinize_fn` IS still injected, and that one earns its keep.**
+//!   Unlike the copy, the reshuffle has no Rust implementation to call
+//!   directly yet: it is Python's `plan.determinize` (`engine/bots/plan.py`),
+//!   and `plan.rs` is not ported (see "No caller in this port yet" above).
+//!   This module holds the POLICY of when to reshuffle; the MECHANISM
+//!   belongs to whichever bot module eventually reshuffles a root, exactly
+//!   as this module's top doc comment already draws that line for the
+//!   evaluator-specific scoring. A generic `impl FnOnce(&mut GameState, &mut
+//!   PyRandom)` parameter is the ordinary Rust spelling of "the caller
+//!   supplies the one mechanism this module intentionally does not own" --
+//!   kept as a single generic parameter, not two, now that the copy no
+//!   longer needs one.
+//! * **Counters are owned by the caller, not process-global statics.**
+//!   Python's `_CALLS`/`_QUIET_CALLS`/`_DET_CALLS` are module globals
+//!   because CPython gives every caller the same interpreter-wide module
+//!   object; a differential test reads them to prove the shared path was
+//!   actually taken rather than re-inlined. Rust has no equivalent
+//!   "the module IS the instance" -- a process-global `static` here would
+//!   make every caller in the process (and every test in the same binary)
+//!   share one counter, which is exactly why the earlier version of this
+//!   file needed a `Mutex` in its own test module purely to stop unrelated
+//!   tests from interleaving on shared global state. [`Counters`] is instead
+//!   an ordinary value the caller owns -- one per bot instance, passed
+//!   `&mut` into [`fallback_pick`]/[`prepare_root`] -- so two callers (or two
+//!   tests) never share storage and there is nothing left to lock. Resetting
+//!   is just constructing a fresh `Counters::default()`; there is no
+//!   `reset_counters` function because zeroing caller-owned state needs no
+//!   API of its own.
 
 use crate::rng::PyRandom;
 use crate::state::GameState;
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Drain a pending decision of MINE before pricing the candidates.
 ///
@@ -125,20 +146,16 @@ pub const QUIET_PENDING: bool = true;
 /// common additive term and an argmax is invariant to a common offset.
 pub const DETERMINIZE: bool = true;
 
-/// Shared-path call counts since the last [`reset_counters`]. A differential
-/// test reads this to prove a bot actually routed through [`fallback_pick`]/
-/// [`prepare_root`] rather than re-inlining the branch -- see this module's
-/// top doc comment.
+/// Shared-path call counts, owned by the caller (one per bot instance). A
+/// differential test reads a caller's own `Counters` to prove a bot actually
+/// routed through [`fallback_pick`]/[`prepare_root`] rather than re-inlining
+/// the branch -- see this module's top doc comment.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
     pub calls: u64,
     pub quiet: u64,
     pub roots: u64,
 }
-
-static CALLS: AtomicU64 = AtomicU64::new(0);
-static QUIET_CALLS: AtomicU64 = AtomicU64::new(0);
-static ROOT_CALLS: AtomicU64 = AtomicU64::new(0);
 
 /// Per-bot override of this module's two module-level defaults. `None`
 /// means "ask this module" (Python's `getattr(bot, NAME, None)` returning
@@ -212,25 +229,22 @@ pub fn wants_determinize(bot: &BotConfig, _state: &GameState) -> bool {
 /// one copy per decision, not per candidate -- the candidate loop copies
 /// again on top of this.
 ///
-/// `copy_fn` and `determinize_fn` are injected exactly as they are in
-/// Python (`fastcopy.copy_state`, `plan.determinize`): this module holds the
-/// policy of WHEN to copy and reshuffle, never the mechanism.
-pub fn prepare_root<'a, C, D>(
+/// `counters.roots` is incremented on every call, drained or not, exactly
+/// like Python's `_ROOT_CALLS`. `determinize_fn` is injected exactly as
+/// Python's `plan.determinize` is; see this module's top doc comment for why
+/// that one (and not the copy) still earns a caller-supplied hook.
+pub fn prepare_root<'a>(
     bot: &BotConfig,
     state: &'a GameState,
-    copy_fn: C,
-    determinize_fn: D,
+    counters: &mut Counters,
+    determinize_fn: impl FnOnce(&mut GameState, &mut PyRandom),
     rng: &mut PyRandom,
-) -> Cow<'a, GameState>
-where
-    C: FnOnce(&GameState) -> GameState,
-    D: FnOnce(&mut GameState, &mut PyRandom),
-{
-    ROOT_CALLS.fetch_add(1, Ordering::Relaxed);
+) -> Cow<'a, GameState> {
+    counters.roots += 1;
     if !wants_determinize(bot, state) {
         return Cow::Borrowed(state);
     }
-    let mut root = copy_fn(state);
+    let mut root = state.clone();
     determinize_fn(&mut root, rng);
     Cow::Owned(root)
 }
@@ -243,31 +257,17 @@ where
 pub fn fallback_pick<T>(
     bot: &BotConfig,
     state: &GameState,
+    counters: &mut Counters,
     plain: impl FnOnce() -> T,
     quiet: impl FnOnce() -> T,
 ) -> T {
-    CALLS.fetch_add(1, Ordering::Relaxed);
+    counters.calls += 1;
     if wants_quiet(bot, state) {
-        QUIET_CALLS.fetch_add(1, Ordering::Relaxed);
+        counters.quiet += 1;
         quiet()
     } else {
         plain()
     }
-}
-
-/// Shared-path call counts since the last [`reset_counters`].
-pub fn counters() -> Counters {
-    Counters {
-        calls: CALLS.load(Ordering::Relaxed),
-        quiet: QUIET_CALLS.load(Ordering::Relaxed),
-        roots: ROOT_CALLS.load(Ordering::Relaxed),
-    }
-}
-
-pub fn reset_counters() {
-    CALLS.store(0, Ordering::Relaxed);
-    QUIET_CALLS.store(0, Ordering::Relaxed);
-    ROOT_CALLS.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -276,12 +276,6 @@ mod tests {
     use crate::cards::CardId;
     use crate::game;
     use crate::state::{Defense, Pending};
-    use std::sync::Mutex;
-
-    // The counters are process-global statics (mirroring Python's module
-    // globals), so tests that read them must not interleave with each other
-    // under `cargo test`'s default multi-threaded runner.
-    static COUNTER_LOCK: Mutex<()> = Mutex::new(());
 
     /// A state with a real pending Defense, decider = player 1 (the
     /// attacker's target). Mirrors `tests/test_plan_defends_when_it_can_win
@@ -364,10 +358,11 @@ mod tests {
         let bot = BotConfig { pending_determinize: Some(false), ..BotConfig::default() };
         assert!(!wants_determinize(&bot, &state));
         let mut rng = PyRandom::new(1);
+        let mut counters = Counters::default();
         let root = prepare_root(
             &bot,
             &state,
-            |s| s.clone(),
+            &mut counters,
             |_s, _r| panic!("determinize_fn must not run when determinization is off"),
             &mut rng,
         );
@@ -376,68 +371,68 @@ mod tests {
             "with determinization off the fallback must price the state itself, byte-for-byte"
         );
         assert_eq!(&*root as *const GameState, &state as *const GameState);
+        assert_eq!(counters.roots, 1, "prepare_root must count the call whether it drains or not");
     }
 
     #[test]
-    fn determinize_on_calls_copy_then_determinize_and_returns_a_copy() {
+    fn determinize_on_calls_determinize_and_returns_a_copy() {
         let state = defending_state();
         let bot = BotConfig { pending_determinize: Some(true), ..BotConfig::default() };
         assert!(wants_determinize(&bot, &state));
         let mut rng = PyRandom::new(1);
-        let mut copy_called = false;
+        let mut counters = Counters::default();
         let mut det_called = false;
         let root = prepare_root(
             &bot,
             &state,
-            |s| {
-                copy_called = true;
-                s.clone()
-            },
+            &mut counters,
             |_s, _r| {
                 det_called = true;
             },
             &mut rng,
         );
-        assert!(copy_called, "prepare_root must copy before determinizing");
         assert!(det_called, "prepare_root must determinize the copy");
         assert!(matches!(root, Cow::Owned(_)), "must not return the real state's identity");
+        assert_eq!(counters.roots, 1);
     }
 
     #[test]
     fn fallback_pick_takes_the_quiet_path_iff_configured() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
-        reset_counters();
         let state = defending_state();
         let bot = BotConfig { quiet_pending: Some(true), ..BotConfig::default() };
-        let picked = fallback_pick(&bot, &state, || "plain", || "quiet");
+        let mut counters = Counters::default();
+        let picked = fallback_pick(&bot, &state, &mut counters, || "plain", || "quiet");
         assert_eq!(picked, "quiet");
-        let c = counters();
-        assert_eq!(c.calls, 1);
-        assert_eq!(c.quiet, 1);
+        assert_eq!(counters.calls, 1);
+        assert_eq!(counters.quiet, 1);
     }
 
     #[test]
     fn fallback_pick_takes_the_plain_path_when_quiet_is_off() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
-        reset_counters();
         let state = defending_state();
         let bot = BotConfig { quiet_pending: Some(false), ..BotConfig::default() };
-        let picked = fallback_pick(&bot, &state, || "plain", || "quiet");
+        let mut counters = Counters::default();
+        let picked = fallback_pick(&bot, &state, &mut counters, || "plain", || "quiet");
         assert_eq!(picked, "plain");
-        let c = counters();
-        assert_eq!(c.calls, 1);
-        assert_eq!(c.quiet, 0);
+        assert_eq!(counters.calls, 1);
+        assert_eq!(counters.quiet, 0);
     }
 
+    /// Two callers -- here, two independent `Counters` in the same test --
+    /// never share storage. This is the property a process-global `static`
+    /// could not offer without a `Mutex` (see this module's top doc
+    /// comment): owning the counter is what makes it safe to call
+    /// [`fallback_pick`] from anywhere, including concurrently, with no lock.
     #[test]
-    fn reset_counters_zeroes_every_field() {
-        let _guard = COUNTER_LOCK.lock().unwrap();
+    fn counters_accumulate_per_owner_not_globally() {
         let state = defending_state();
         let bot = BotConfig { quiet_pending: Some(true), ..BotConfig::default() };
-        fallback_pick(&bot, &state, || (), || ());
-        let mut rng = PyRandom::new(1);
-        let _ = prepare_root(&bot, &state, |s| s.clone(), |_, _| {}, &mut rng);
-        reset_counters();
-        assert_eq!(counters(), Counters::default());
+        let mut a = Counters::default();
+        let mut b = Counters::default();
+        fallback_pick(&bot, &state, &mut a, || (), || ());
+        fallback_pick(&bot, &state, &mut a, || (), || ());
+        fallback_pick(&bot, &state, &mut b, || (), || ());
+        assert_eq!(a, Counters { calls: 2, quiet: 2, roots: 0 });
+        assert_eq!(b, Counters { calls: 1, quiet: 1, roots: 0 });
     }
 }

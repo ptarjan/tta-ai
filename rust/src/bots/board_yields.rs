@@ -211,21 +211,23 @@ pub type Triple = (Feature, f64, Kind);
 /// two entries for the same feature -- Gandhi replacing Churchill is exactly
 /// this, +2 culture from the `Stats` diff and -3 from the rider subtraction,
 /// both landing on `culture_rate`.
+///
+/// A single `Vec<((Feature, Kind), f64)>` rather than a parallel `order`
+/// (the key) and `sums` (the running total) kept in lockstep by index: two
+/// `Vec`s updated in the same two places by construction can drift out of
+/// step the moment one of the two push/update sites is edited without the
+/// other, which is exactly the Python-dict-in-two-arrays shape this type
+/// exists to avoid.
 pub fn merge(triples: Vec<Triple>) -> Vec<Triple> {
-    let mut order: Vec<(Feature, Kind)> = Vec::new();
-    let mut sums: Vec<f64> = Vec::new();
+    let mut merged: Vec<((Feature, Kind), f64)> = Vec::new();
     for (feat, amt, kind) in triples {
-        match order.iter().position(|&(f, k)| f == feat && k == kind) {
-            Some(pos) => sums[pos] += amt,
-            None => {
-                order.push((feat, kind));
-                sums.push(amt);
-            }
+        match merged.iter_mut().find(|((f, k), _)| *f == feat && *k == kind) {
+            Some((_, sum)) => *sum += amt,
+            None => merged.push(((feat, kind), amt)),
         }
     }
-    order
+    merged
         .into_iter()
-        .zip(sums)
         .filter(|&(_, amt)| amt != 0.0)
         .map(|((f, k), amt)| (f, amt, k))
         .collect()
@@ -349,9 +351,11 @@ fn pop_cost_feature(stats: &Stats, p: &PlayerState) -> f64 {
 /// one player. Shared by the swap diff (leader/government/wonder) and the
 /// technology diff (`tech_upgrade`) so both read the SAME fields through the
 /// SAME feature names -- two copies of this list is exactly how Python's
-/// `_PROD_TO_FEATURE` and `_YIELD_TO_FEATURE` drifted apart once.
-fn delta_triples(before: &Stats, after: &Stats, p: &PlayerState) -> Vec<Triple> {
-    let mut out = Vec::new();
+/// `_PROD_TO_FEATURE` and `_YIELD_TO_FEATURE` drifted apart once. Pushes
+/// into `out`: every call site immediately folds this into a larger
+/// accumulator (the swap diff, the government gain list, the tech-upgrade
+/// staff triples), so there is nothing for an intermediate `Vec` to buy.
+fn delta_triples(before: &Stats, after: &Stats, p: &PlayerState, out: &mut Vec<Triple>) {
     for &(get, feat) in STATS_FEATURES {
         let d = get(after) - get(before);
         if d != 0 {
@@ -380,7 +384,6 @@ fn delta_triples(before: &Stats, after: &Stats, p: &PlayerState) -> Vec<Triple> 
     if d != 0 {
         out.push((Feature::NoAggression, d as f64, Kind::Gain));
     }
-    out
 }
 
 // ------------------------------------------------------------------- riders
@@ -395,30 +398,31 @@ fn live_rivals<'a>(state: &'a GameState, p: &PlayerState) -> Vec<&'a PlayerState
 }
 
 /// Genghis Khan: 3 culture at the end of your turn if you are one of the two
-/// strongest civilizations, ties in your favour.
-fn genghis(state: &GameState, p: &PlayerState) -> Vec<Triple> {
+/// strongest civilizations, ties in your favour. Pushes into `out` rather
+/// than returning a fresh `Vec` -- see this module's top doc comment on the
+/// out-param convention shared by every rider helper below; this one only
+/// ever has 0 or 1 item to add.
+fn genghis(state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
     let mine = effects::state_stats(state, p).strength;
     let stronger = live_rivals(state, p)
         .into_iter()
         .filter(|q| effects::state_stats(state, q).strength > mine)
         .count();
     if stronger <= 1 {
-        vec![(Feature::CultureRate, 3.0, Kind::Gain)]
-    } else {
-        Vec::new()
+        out.push((Feature::CultureRate, 3.0, Kind::Gain));
     }
 }
 
 /// Winston Churchill: the unconditional culture option, priced as the floor
 /// on the card's value -- see the Python module's doc comment for why the
 /// military option is not (it is ring-fenced and cannot be worth its face).
-fn churchill(_state: &GameState, _p: &PlayerState) -> Vec<Triple> {
-    vec![(Feature::CultureRate, 3.0, Kind::Gain)]
+fn churchill(_state: &GameState, _p: &PlayerState, out: &mut Vec<Triple>) {
+    out.push((Feature::CultureRate, 3.0, Kind::Gain));
 }
 
 /// `RIDERS`: leader name -> rider function. Only the leaders whose value is
 /// not in `Stats` and IS computable.
-fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState) -> Vec<Triple>> {
+fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState, &mut Vec<Triple>)> {
     match leader_name {
         "Genghis Khan" => Some(genghis),
         "Winston Churchill" => Some(churchill),
@@ -428,20 +432,24 @@ fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState) -> Vec<Tri
 
 /// `_rider_delta`: rider triples for taking `name`, MINUS the rider of the
 /// leader it replaces -- the subtraction is the whole point (taking Gandhi
-/// while holding Churchill is a LOSS of Churchill's culture rider).
-fn rider_delta(state: &GameState, p: &PlayerState, name: CardId) -> Vec<Triple> {
-    let mut out = Vec::new();
+/// while holding Churchill is a LOSS of Churchill's culture rider). Pushes
+/// into `out`: the negation of the replaced leader's rider still needs its
+/// own scratch `Vec` (there is no way to push a negated amount without
+/// computing it first), but the net-new rider goes straight into the
+/// caller's accumulator with no intermediate allocation.
+fn rider_delta(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     if let Some(f) = rider_of(name.get().name) {
-        out.extend(f(state, p));
+        f(state, p, out);
     }
     if !p.leader.is_none() {
         if let Some(f) = rider_of(p.leader.get().name) {
-            for (feat, amt, kind) in f(state, p) {
+            let mut replaced = Vec::new();
+            f(state, p, &mut replaced);
+            for (feat, amt, kind) in replaced {
                 out.push((feat, -amt, kind));
             }
         }
     }
-    out
 }
 
 // ------------------------------------------------------- government costs
@@ -466,19 +474,26 @@ fn government_cost(state: &GameState, p: &PlayerState, name: CardId, out: &mut V
 /// the government -- RULES_SPEC 8.1, "new government always replaces the old
 /// regardless of level", so a lateral or downgrade move is representable
 /// (and typically never legal to choose, but the number is honest either
-/// way).
-fn government_level(p: &PlayerState, name: CardId) -> Vec<Triple> {
+/// way). Pushes into `out`, like [`government_cost`]/[`wonder_cost`] beside
+/// it -- 0 or 2 items, never its own independent collection.
+fn government_level(p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     let d = name.level() as i32 - p.government.level() as i32;
-    if d == 0 {
-        Vec::new()
-    } else {
-        vec![(Feature::TechLevels, d as f64, Kind::Gain), (Feature::GovLevel, d as f64, Kind::Gain)]
+    if d != 0 {
+        out.push((Feature::TechLevels, d as f64, Kind::Gain));
+        out.push((Feature::GovLevel, d as f64, Kind::Gain));
     }
 }
 
 /// `_government_routes`: the cost triples of each LEGAL route to `name`,
 /// cheapest chosen later by the caller (which holds the weights) -- the same
 /// division of labour `board_choices` uses for a card that makes you pick.
+/// Left returning `Vec<Vec<Triple>>` rather than an out-param, unlike most
+/// of this file's other small helpers: this genuinely IS an independent
+/// collection -- a set of mutually exclusive alternatives, 1 or 2 of them,
+/// each its own multi-item route -- not a handful of triples that get
+/// folded flat into one accumulator. [`government_plans`] returns it
+/// unmodified, so there is no accumulator downstream for an out-param to
+/// write into.
 /// `gained` is the swap diff, read for the allotment deltas rather than
 /// recomputing them.
 fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &[Triple]) -> Vec<Vec<Triple>> {
@@ -543,8 +558,9 @@ pub fn government_plans(name: CardId, state: &GameState, idx: usize) -> (Vec<Tri
     }
     let before = effects::state_stats(state, p);
     let after = swap_stats(state, idx, |pl| pl.government = name);
-    let mut gained = delta_triples(&before, &after, p);
-    gained.extend(government_level(p, name));
+    let mut gained = Vec::new();
+    delta_triples(&before, &after, p, &mut gained);
+    government_level(p, name, &mut gained);
     let gained = merge(gained);
     let routes = government_routes(state, p, name, &gained);
     (gained, routes)
@@ -555,16 +571,14 @@ pub fn government_plans(name: CardId, state: &GameState, idx: usize) -> (Vec<Tri
 /// `_on_build_culture`: the four Age III wonders' one-time completion
 /// culture. See this module's top doc comment for the Hollywood/Internet
 /// gap this guards against.
-fn on_build_culture(p: &PlayerState, name: CardId) -> Vec<Triple> {
+fn on_build_culture(p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     let base = name.get().base_name;
     if base == "Hollywood" || base == "Internet" {
-        return Vec::new();
+        return;
     }
     let got = apply::wonder_completion_culture(p, name);
     if got != 0 {
-        vec![(Feature::Culture, got as f64, Kind::Gain)]
-    } else {
-        Vec::new()
+        out.push((Feature::Culture, got as f64, Kind::Gain));
     }
 }
 
@@ -578,30 +592,26 @@ const FREE_POP_UTIL: f64 = 0.17;
 /// discount, matching Python's `economy.pop_food_cost(s, p.yellow_bank)` --
 /// see [`pop_cost_feature`]'s doc comment for why that omission is
 /// deliberate and shared.
-fn free_pop_increase(state: &GameState, p: &PlayerState) -> Vec<Triple> {
+fn free_pop_increase(state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
     let s = effects::state_stats(state, p);
     let Some(food) = economy::pop_food_cost(s.pop_food_discount, p.yellow_bank, 0) else {
-        return Vec::new();
+        return;
     };
     if s.happy < economy::happy_required(p.yellow_bank.saturating_sub(1)) as i32 {
-        return Vec::new();
+        return;
     }
-    vec![
-        (Feature::CivilActions, FREE_POP_UTIL, Kind::Gain),
-        (Feature::FoodRate, FREE_POP_UTIL * food as f64, Kind::Gain),
-        (Feature::FreeWorkers, 1.0 - FREE_POP_UTIL, Kind::Gain),
-    ]
+    out.push((Feature::CivilActions, FREE_POP_UTIL, Kind::Gain));
+    out.push((Feature::FoodRate, FREE_POP_UTIL * food as f64, Kind::Gain));
+    out.push((Feature::FreeWorkers, 1.0 - FREE_POP_UTIL, Kind::Gain));
 }
 
 /// `_blue_tokens`: Taj Mahal's `blueTokens`, invisible to the swap diff
 /// because `effects::compute` never reads `CardEffects::blue_tokens` --
 /// `apply::on_enter_play` adds it to `p.blue_total` directly.
-fn blue_tokens_rider(name: CardId) -> Vec<Triple> {
+fn blue_tokens_rider(name: CardId, out: &mut Vec<Triple>) {
     let n = name.get().effects.blue_tokens;
     if n != 0 {
-        vec![(Feature::BlueFree, n as f64, Kind::Gain)]
-    } else {
-        Vec::new()
+        out.push((Feature::BlueFree, n as f64, Kind::Gain));
     }
 }
 
@@ -614,21 +624,19 @@ fn blue_tokens_rider(name: CardId) -> Vec<Triple> {
 /// separate `if`s that could double-fire -- verified against the live card
 /// data (2026-08-05) that no base-game wonder ever prints both at once, so
 /// this is a structural simplification, not a behaviour change.
-fn wonder_rider_delta(state: &GameState, p: &PlayerState, name: CardId) -> Vec<Triple> {
+fn wonder_rider_delta(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     let card = name.get();
-    let mut out = Vec::new();
     let has_on_build_culture = card.special.iter().any(|s| matches!(s, Special::OnBuildCulture(_)))
         || card.special.contains(&Special::OnBuildCulturePerTechLevelSum);
     if has_on_build_culture {
-        out.extend(on_build_culture(p, name));
+        on_build_culture(p, name, out);
     }
     if card.special.contains(&Special::FreePopIncreasePerTurn) {
-        out.extend(free_pop_increase(state, p));
+        free_pop_increase(state, p, out);
     }
     if card.effects.blue_tokens != 0 {
-        out.extend(blue_tokens_rider(name));
+        blue_tokens_rider(name, out);
     }
-    out
 }
 
 /// `_wonder_cost`: what a wonder costs, which the swap diff does not charge
@@ -665,11 +673,12 @@ pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<T
         CardType::Wonder => swap_stats(state, idx, |pl| pl.completed_wonders.push(name)),
         _ => unreachable!("is_swap_type gates this to Leader/Government/Wonder"),
     };
-    let mut out = delta_triples(&before, &after, p);
+    let mut out = Vec::new();
+    delta_triples(&before, &after, p, &mut out);
     match typ {
         CardType::Wonder => {
             wonder_cost(name, &mut out);
-            out.extend(wonder_rider_delta(state, p, name));
+            wonder_rider_delta(state, p, name, &mut out);
         }
         CardType::Leader => {
             if p.leader.is_none() {
@@ -677,10 +686,10 @@ pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<T
                 // already have one: a leader replaces a leader.
                 out.push((Feature::Leader, 1.0, Kind::Gain));
             }
-            out.extend(rider_delta(state, p, name));
+            rider_delta(state, p, name, &mut out);
         }
         CardType::Government => {
-            out.extend(government_level(p, name));
+            government_level(p, name, &mut out);
             government_cost(state, p, name, &mut out);
         }
         _ => unreachable!(),
@@ -748,7 +757,14 @@ pub fn board_choices(_name: CardId, _state: &GameState, _idx: usize) -> Vec<Vec<
 
 /// `_upgradable_onto`: `[(tech, workers)]` this player could LEGALLY upgrade
 /// onto `name` -- same type, strictly lower level, at least one worker
-/// standing on it. Shared by [`unit_upgrade`] and [`tech_upgrade`].
+/// standing on it. Shared by [`unit_upgrade`] and [`tech_upgrade`]. Not
+/// converted to an out-param like this file's `Triple`-producing helpers:
+/// this returns `(CardId, u8)` pairs, not triples, and both callers use it
+/// as a genuinely independent value -- held by a `let`, checked with
+/// `is_empty()`, and iterated MORE THAN ONCE (once for the resource-cost
+/// sum, once inside [`with_tech`]) rather than being folded once into a
+/// growing accumulator. That is exactly the shape this module's other
+/// helpers were changed away from and this one already has.
 fn upgradable_onto(p: &PlayerState, name: CardId) -> Vec<(CardId, u8)> {
     let typ = name.kind();
     let lv = name.level();
@@ -853,7 +869,8 @@ pub fn tech_upgrade(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>
         } else {
             let before = effects::state_stats(state, p);
             let after = with_tech(state, idx, name, &held);
-            let staff = delta_triples(&before, &after, p);
+            let mut staff = Vec::new();
+            delta_triples(&before, &after, p, &mut staff);
             let res: i32 = held.iter().map(|&(lo, k)| k as i32 * costs::upgrade_cost(state, p, lo, name)).sum();
             (staff, sci, res as f64)
         }
@@ -866,12 +883,11 @@ pub fn tech_upgrade(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>
 /// `_build_triples`: the four features a fresh build moves that a `Stats`
 /// diff cannot see -- `weighted.features` reads all four off the player
 /// rather than off `Stats`. `uprising` is a THRESHOLD, recomputed the same
-/// way `economy::uprising`/`features()` do, off the same two numbers.
-fn build_triples(p: &PlayerState, typ: CardType, before: &Stats, after: &Stats, workers: i32) -> Vec<Triple> {
-    let mut out = vec![
-        (Feature::FreeWorkers, -(workers as f64), Kind::Gain),
-        (Feature::Workers, workers as f64, Kind::Gain),
-    ];
+/// way `economy::uprising`/`features()` do, off the same two numbers. Pushes
+/// into `out`, same convention as [`delta_triples`] beside it.
+fn build_triples(p: &PlayerState, typ: CardType, before: &Stats, after: &Stats, workers: i32, out: &mut Vec<Triple>) {
+    out.push((Feature::FreeWorkers, -(workers as f64), Kind::Gain));
+    out.push((Feature::Workers, workers as f64, Kind::Gain));
     if let Some(cls) = worker_class(typ) {
         out.push((cls, workers as f64, Kind::Gain));
     }
@@ -881,7 +897,6 @@ fn build_triples(p: &PlayerState, typ: CardType, before: &Stats, after: &Stats, 
     if now != was {
         out.push((Feature::Uprising, now - was, Kind::Gain));
     }
-    out
 }
 
 /// `_with_built`: `effects::compute` with `name` developed and `workers`
@@ -920,7 +935,8 @@ pub fn build_fresh(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>,
         }
     }
     let after = with_built(state, idx, name, 1);
-    let mut out = delta_triples(&before, &after, p);
-    out.extend(build_triples(p, typ, &before, &after, 1));
+    let mut out = Vec::new();
+    delta_triples(&before, &after, p, &mut out);
+    build_triples(p, typ, &before, &after, 1, &mut out);
     (merge(out), res as f64)
 }
