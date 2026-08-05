@@ -31,6 +31,16 @@
 //! exists to close. One derived stream per `end_turn`, threaded through the
 //! whole start-of-turn sequence exactly as Python threads its one object.
 //!
+//! [`rng_for`] is VERIFIED correct against CPython for that entry point:
+//! `random.Random(2 * 1000003 + 2 * 97 + 1).shuffle(db.civil_deck("I", 2))`
+//! reproduces this port's Age I deck at `2p_seed2` ply 1 card for card,
+//! including the `list.pop()`-off-the-end deal direction. The pre-shuffle
+//! list is byte-identical too (`gen_cards.py` walks `data/*.json` in the same
+//! order `cards.CardDB._deck` does, and no card overrides its default
+//! `deck` field), so both sides shuffle the same list with the same
+//! generator. See KNOWN GAP 4 for why the differential fixtures still
+//! disagree; it is not this.
+//!
 //! ## KNOWN GAPS (reported, not routed around)
 //!
 //! 1. **`events.rs` does not exist.** Two of its functions are called by the
@@ -75,6 +85,49 @@
 //!    returns exactly what Python's `scores()` does; `moves_played` /
 //!    `move_cap_hit` are `play_game` bookkeeping and are this port's return
 //!    value instead (see [`Outcome`]).
+//! 4. **The checked-in differential fixtures cannot be matched at an age
+//!    transition, and the fault is not in this file.** `tools/
+//!    dump_fixtures.py` builds ONE `random.Random(seed ^ 0x5EED)` per game
+//!    and passes it to every `actions.apply` call (mirroring
+//!    `game.play_game`), so `_rng_for(state, rng)` hands `_advance_age` a
+//!    PERSISTENT stream whose position depends on everything drawn from it
+//!    earlier in the game. This port derives a fresh stream per `end_turn`
+//!    instead (see "Randomness" above), so every age transition in a fixture
+//!    comes out as a different permutation of the same multiset -- 14 of
+//!    them across the 9 files, and they are the only state divergences left.
+//!    Verified both directions on `2p_seed2` ply 1: this port's Age I deck is
+//!    exactly `Random(2 * 1000003 + 2 * 97 + 1)`'s shuffle, and the fixture's
+//!    is exactly `Random(2 ^ 0x5EED)`'s.
+//!
+//!    A stateless port cannot follow that stream, and neither can a stateful
+//!    one, for two independent reasons:
+//!      * `tests/differential.rs` reloads the state from the fixture after
+//!        EVERY ply, and the fixtures do not record the generator's position,
+//!        so an rng carried in `GameState` would be reset every ply.
+//!      * `events._recycle_future_events` also draws from that same stream
+//!        (once per `prepare_event` that empties the current-events deck --
+//!        5 to 8 times in a typical fixture, before the Age II and Age III
+//!        transitions). Reproducing those draws needs `events.rs`, which is
+//!        KNOWN GAP 1, and the number of them that have already happened is
+//!        NOT recoverable from a state snapshot (a revealed territory goes to
+//!        an auction rather than to `past_events`, so nothing counts reveals).
+//!
+//!    The fix is to regenerate the fixtures through the entry point this port
+//!    actually implements -- one derived stream per apply -- which was
+//!    measured: 8 of the 9 games regenerated that way replay at
+//!    `state_divergences=0`. Two things block doing it in `tools/`:
+//!      * `actions.apply(state, mv)` -- the literal rng=None default this
+//!        module's "Randomness" section names -- CRASHES. `apply` passes its
+//!        `rng` straight to the handlers without the `_rng_for` backfill
+//!        `game.start_turn`/`end_turn` do, so the first `prepare_event` dies
+//!        in `events._recycle_future_events` on `None.shuffle`. Only
+//!        `game.py`'s own entry points are None-safe. That is a Python bug,
+//!        not a porting question: `_h_prepare_event` needs the same
+//!        `_rng_for` backfill its siblings have.
+//!      * the fixtures are stale against today's `engine/`: regenerating
+//!        surfaces a `remove_leader_yellow` move tag `moves.rs` has no
+//!        variant for, and two `PlayerState` fields (`caesar_second_politics`,
+//!        `peeked_event`) that postdate the recording.
 
 use crate::cards::{Age, CardId, CardType, Special, CARDS};
 use crate::combat;
