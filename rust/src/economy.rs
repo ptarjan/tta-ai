@@ -6,44 +6,48 @@
 //! the rules, never the representation" licenses it, and every such place is
 //! called out below.
 //!
-//! ## What is NOT here, and why
+//! ## What is here now
 //!
-//! `economy.py` also holds `pop_cost`, `discontent`, `uprising`,
-//! `_end_of_turn_leader_bonus` and the `end_of_turn` orchestrator. All of
-//! them read `effects.state_stats(state, p)` for at least one of
-//! `happy` / `science` / `culture` / `civil_actions` / `military_actions` /
-//! `strength` / `pop_food_discount`. `effects.rs` does not exist in this
-//! crate yet (it is a separate worker's module, and this port must not touch
-//! or pre-empt it), so none of those five functions can be written against a
-//! real `Stats` type today. What CAN be ported without it:
+//! The whole of `economy.py` is ported: the §6.1/§6.2 tables, the blue-token
+//! bank (§6.4), the population helpers (§3.3), the deck-departure bookkeeping
+//! and -- since `effects.rs` and `rng.rs` landed -- `pop_cost`, `discontent`,
+//! `uprising`, `draw_military`, `_end_of_turn_leader_bonus` and the
+//! [`end_of_turn`] orchestrator itself (§6.6).
 //!
-//! - [`pop_food_cost`]: Python already splits this out as "the pure formula
-//!   that takes the discount as a value" versus `pop_cost`, "the state-
-//!   reading wrapper" (see the Python docstring) -- so the pure half ports
-//!   cleanly, and the wrapper is a one-line call once `effects::state_stats`
-//!   exists: `pop_food_cost(stats.pop_food_discount, p.yellow_bank,
-//!   one_time_food_discount)`.
-//! - [`increase_population`]: ported as "move the token, given an
-//!   already-known `cost`" -- the same split, for the same reason. The
-//!   caller computes `cost` from `pop_food_cost` once it can.
+//! ## What is still missing, and why it is missing LOUDLY
 //!
-//! `discontent`, `uprising` and `_end_of_turn_leader_bonus` are each a
-//! one-line combination of a table function here with a `Stats` field, so
-//! there is nothing to port ahead of `effects.rs` landing; they are not
-//! stubbed here to avoid a second copy of "the formula" that could drift.
+//! §6.6 step 1 -- "discard down to the military hand limit" -- is the ONLY
+//! decision the end-of-turn sequence asks the player to make (RB p.20, quoted
+//! in RULES_SPEC §6.6: "Once you have decided which military cards to
+//! discard, the rest of your turn is automatic"). Python routes it through
+//! `interact.push_choice`, which has two behaviours:
 //!
-//! `end_of_turn` itself needs, beyond `Stats`: (a) `interact.rs`'s decision
-//! queue for step 1 (discard down to the military hand limit) -- `GameState`
-//! has no `pending`-decision field yet, so this is a `state.rs` gap, not
-//! only a missing module; and (b) a Python-compatible seeded shuffle for
-//! step 4 (see [`draw_military`]). Both are cross-cutting infrastructure
-//! this module should not invent unilaterally.
+//!   * one distinct card name in an over-limit hand -> `auto=True` resolves it
+//!     immediately WITHOUT opening a decision (there is nothing to choose
+//!     between, so §6.6 is satisfied);
+//!   * two or more distinct names -> a genuine choice, pushed onto
+//!     `state.pending`, and `end_of_turn` returns `False` with steps 2-5 NOT
+//!     run. The turn does not advance until the player answers.
 //!
-//! `discard_military` and `discard_civil` (deck-departure bookkeeping) ARE
-//! self-contained and are ported below.
+//! `GameState` has no `pending` field (`interact.rs` is not ported -- the gap
+//! `apply.rs` and `legal.rs` already document). The first behaviour is ported
+//! faithfully here and needs nothing. The second CANNOT be: there is nowhere
+//! to record the open decision, and both alternatives are silent divergences
+//! -- returning `false` without recording anything would make the caller
+//! either spin or skip production, and auto-picking option 0 would change
+//! which card a bot discards. So it panics, naming the gap, exactly as
+//! `apply.rs::h_play_action` panics on the equivalent genuine-tie case for an
+//! ordered free civil action. See [`discard_excess_military`].
+//!
+//! One field-level gap remains, and it is not this module's to close:
+//! `PlayerState` has no `one_time_discount` (events are not ported), so
+//! [`pop_cost`] passes `0` for the one-time food discount, the same
+//! already-documented hole `costs.rs::build_cost_for` and `legal.rs` carry.
 
-use crate::cards::{CardId, CardType};
-use crate::state::{GameState, PlayerState, Tableau};
+use crate::cards::{Age, CardId, CardType, Special};
+use crate::effects;
+use crate::rng::{shuffle_cards, PyRandom};
+use crate::state::{CardList, GameState, PlayerState, Tableau, MAX_PLAYERS};
 
 // --------------------------------------------------------------- tables
 
@@ -142,6 +146,35 @@ pub fn pop_food_cost(
     let base = pop_cost_base(yellow_bank)? as i32;
     let base = base - one_time_food_discount;
     Some((base - pop_food_discount).max(0))
+}
+
+/// `engine/economy.py::pop_cost` -- the state-reading wrapper around
+/// [`pop_food_cost`]'s pure formula. `None` when the yellow bank is empty.
+///
+/// The one-time discount is `0`: `PlayerState` has no `one_time_discount`
+/// field (see this module's top doc comment). `legal.rs` grew a private copy
+/// of this wrapper while `economy.rs` predated `effects.rs`; that copy calls
+/// [`pop_food_cost`] too, so the FORMULA is still single-sourced -- only the
+/// two-line wrapper is duplicated, and `legal.rs` is another worker's file.
+pub fn pop_cost(state: &GameState, p: &PlayerState) -> Option<i32> {
+    let s = effects::state_stats(state, p);
+    pop_food_cost(s.pop_food_discount, p.yellow_bank, 0)
+}
+
+/// Unhappy workers: how far the player's happiness falls short of what §6.1/
+/// §6.3 demands for the population already born. Never negative.
+pub fn discontent(state: &GameState, p: &PlayerState) -> i32 {
+    let s = effects::state_stats(state, p);
+    (happy_required(p.yellow_bank) as i32 - s.happy).max(0)
+}
+
+/// §6.3: the discontented outnumber the workers who could be sent to placate
+/// them, so the civilization rebels and the production phase is skipped.
+///
+/// Note the STRICT `>`: discontent exactly equal to the free-worker count is
+/// not an uprising -- those workers are the ones being spent on the unhappy.
+pub fn uprising(state: &GameState, p: &PlayerState) -> bool {
+    discontent(state, p) > p.workers_free as i32
 }
 
 // ---------------------------------------------------- population helpers
@@ -391,37 +424,329 @@ pub fn discard_civil(state: &mut GameState, card: CardId) {
     state.civil_removed[age as usize].push(card);
 }
 
-// `draw_military` (§6.6 step 4) is deliberately NOT ported. Its fast path
-// (deck non-empty: pop one card) would be a one-liner, but the reshuffle
-// path needs two things this module cannot supply on its own:
-//
-//   1. `CardList<N>` (state.rs) exposes no mutable-slice accessor, so there
-//      is no way to shuffle the reclaimed discard pile in place without
-//      either copying it out through `as_slice()` into a local array (which
-//      still needs somewhere to write the shuffled order back to) or adding
-//      a method to `CardList` -- and this port is scoped to
-//      `economy.rs` only, not `state.rs`. Flagging this prominently: ANY
-//      future in-place shuffle (colonization pools, event/tactic decks) hits
-//      the identical wall.
-//   2. Python seeds a fresh `random.Random(state.seed * 7919 + state.turn)`
-//      per call and shuffles with CPython's Mersenne-Twister-backed
-//      `Random.shuffle`. Matching that bit-for-bit for the differential
-//      harness needs a from-scratch MT19937 + Fisher-Yates port shared by
-//      every RNG-consuming module (colonization bidding, event/tactic
-//      shuffles, bots) -- a cross-cutting piece of infrastructure, not a
-//      one-off worth inventing inside `economy.rs`. The empty `Cargo.toml`
-//      also deliberately forbids reaching for the `rand` crate without
-//      justifying a new dependency (see `Cargo.toml`'s own comment).
-//
-// Whoever adds the shared RNG module and/or a `CardList` mutable accessor
-// should add `draw_military` here afterward; the rest of `end_of_turn`'s
-// step 4 (`for _ in 0..min(3, max(0, p.military_actions)) { ... }`) is a
-// trivial loop once that exists.
+/// The RNG `draw_military` reshuffles with: `random.Random(state.seed * 7919
+/// + state.turn)`, constructed FRESH at every reshuffle (`engine/economy.py::
+/// _rng`). It is deliberately not the `rng` argument `game.py` threads into
+/// `economy.end_of_turn` -- that argument is never read by the Python
+/// `end_of_turn` at all, which is why this port's [`end_of_turn`] takes no
+/// rng parameter (see its doc comment).
+///
+/// `state.seed` is a `u64` and `PyRandom` takes an `i64` (see `rng.rs`: "None
+/// of the engine's current call sites pass a seed outside `i64` range").
+/// Python's ints are unbounded, so a seed large enough to overflow would draw
+/// a DIFFERENT shuffle there than any `i64` could here -- that is a silent
+/// divergence, so it is asserted rather than wrapped or truncated.
+fn deck_rng(state: &GameState) -> PyRandom {
+    let seed = i64::try_from(state.seed)
+        .ok()
+        .and_then(|s| s.checked_mul(7919))
+        .and_then(|s| s.checked_add(state.turn as i64))
+        .expect(
+            "game seed * 7919 + turn overflows i64; Python's unbounded ints would seed a \
+             different MT19937 stream -- widen rng::PyRandom::new rather than wrapping",
+        );
+    PyRandom::new(seed)
+}
+
+/// Draw one military card (§6.6 step 4), reshuffling the current age's
+/// discard pile back into the deck when the deck runs dry. `None` when both
+/// are empty -- the age's military cards are all in hands or in play.
+///
+/// The reclaimed pile is moved into `military_deck` in discard order and THEN
+/// shuffled, and the pile is emptied, exactly as Python does. Drawing is
+/// `pop()` -- off the END of the list, which is what `list.pop()` means, so
+/// the shuffled order is consumed back-to-front. Getting that end wrong would
+/// still deal "a random card" and still diverge from every fixture.
+pub fn draw_military(state: &mut GameState) -> Option<CardId> {
+    if state.military_deck.is_empty() {
+        let age = state.age_military as usize;
+        if state.discarded_military[age].is_empty() {
+            return None;
+        }
+        state.military_deck = CardList::new();
+        // `for &c in ...push(c)` rather than a slice assignment: the two
+        // `CardList`s have the same capacity but the borrow checker cannot
+        // know that, and this runs at most once per age.
+        for i in 0..state.discarded_military[age].len() {
+            let c = state.discarded_military[age].as_slice()[i];
+            state.military_deck.push(c);
+        }
+        state.discarded_military[age] = CardList::new();
+        let mut rng = deck_rng(state);
+        shuffle_cards(&mut rng, state.military_deck.as_mut_slice());
+    }
+    state.military_deck.pop()
+}
+
+// ------------------------------------------------- end-of-turn sequence
+
+/// §6.6 step 1: discard down to the military hand limit.
+///
+/// Returns `true` when the sequence must SUSPEND on a real decision, `false`
+/// when the hand is legal (or was made legal without a decision). Idempotent
+/// -- it re-reads the limit every pass -- which is the whole resume mechanism
+/// on the Python side.
+///
+/// Ports `engine/interact.py::discard_excess_military`, which belongs to
+/// `interact.rs`; it lives here because `interact.rs` does not exist and this
+/// is its only caller. Move it when that module lands.
+///
+/// The limit is `military_actions + military_hand_limit` (§6.7), read off
+/// CARDS IN PLAY, not off the hand -- so it cannot move while the loop runs.
+/// The hand count is `hand_military.len()`, matching Python's
+/// `len(p.hand_military)`: `hidden_military` (cards known to be held but not
+/// identified, an app-harness concept) is deliberately NOT counted, since a
+/// card the engine cannot name is a card it cannot discard.
+///
+/// # Panics
+///
+/// When the hand is over the limit and holds two or more DISTINCT cards --
+/// the genuine choice that needs `interact.rs`'s decision queue. See this
+/// module's top doc comment for why this is a panic and not a quiet default.
+fn discard_excess_military(state: &mut GameState, idx: u8) -> bool {
+    loop {
+        let p = &state.players[idx as usize];
+        let s = effects::state_stats(state, p);
+        let limit = s.military_actions + s.military_hand_limit;
+        if p.hand_military.len() as i32 <= limit {
+            return false;
+        }
+        // Python: `opts = discard_options(p.hand_military)`, the DISTINCT
+        // card names. Its ordering (least defensively useful first) is
+        // `interact.rs`'s business and is only observable once there is more
+        // than one option -- which is exactly the case that panics below --
+        // so it is not duplicated here.
+        let mut distinct = 0usize;
+        let mut only = CardId::NONE;
+        for (i, &c) in p.hand_military.as_slice().iter().enumerate() {
+            if !p.hand_military.as_slice()[..i].contains(&c) {
+                distinct += 1;
+                if distinct == 1 {
+                    only = c;
+                } else {
+                    break;
+                }
+            }
+        }
+        if distinct == 0 {
+            // Python: `if not opts: return False`. Only reachable with an
+            // empty hand and a NEGATIVE limit, which no government prints;
+            // ported anyway because Python's guard is what stops the `while
+            // True` from spinning.
+            return false;
+        }
+        if distinct > 1 {
+            unimplemented!(
+                "end_of_turn step 1: player {idx} must choose which of {} military cards \
+                 to discard (hand {} > limit {limit}), and there is nowhere to record the \
+                 decision -- GameState has no `pending` field, interact.rs is not ported",
+                distinct,
+                p.hand_military.len(),
+            );
+        }
+        // One distinct name: Python's `push_choice(..., auto=True)` resolves
+        // it immediately and returns False, so the loop continues rather than
+        // suspending. `_c_discard_military` removes ONE copy and files it.
+        state.players[idx as usize].hand_military.remove_first(only);
+        discard_military(state, only);
+    }
+}
+
+/// §6.6, in exact order. Mutates `state.players[idx]` in place.
+///
+/// Returns `false` when step 1 suspended on a discard decision and steps 2-5
+/// have NOT run; `true` when the sequence ran to the end. (Today the suspend
+/// path panics instead for anything but the no-choice case -- see
+/// [`discard_excess_military`] -- but the `bool` is Python's contract and the
+/// caller `game.rs` will need it, so it is not collapsed away.)
+///
+/// The order below is the rules text and is load-bearing in ways that are
+/// invisible if you get them wrong:
+///
+///   1. discard excess military cards (the only decision);
+///   2. uprising check -- and on an uprising the ENTIRE production phase is
+///      skipped, science and culture included, not merely food/resources;
+///   3. production: (a) science + culture + the leader bonus, (b) corruption,
+///      (c) food production, (d) food consumption, (e) resource production;
+///   4. draw military cards;
+///   5. reset actions.
+///
+/// Three orderings inside step 3 are silent scoring bugs if swapped:
+///
+///   * **Culture is scored BEFORE the famine penalty.** Step (a) adds this
+///     turn's culture; step (d) subtracts 4 per missing food from the same
+///     stock. Scoring after the famine would let a player who cannot feed
+///     their people keep culture the rules take away (and vice versa: the
+///     penalty is floored at zero, so which side of it the income lands on
+///     changes the result whenever the penalty exceeds the stock).
+///   * **Corruption is paid BEFORE food is produced.** Corruption's size is
+///     read off `blue_available`, and gaining food OCCUPIES blue tokens; a
+///     player who produces first would be assessed corruption against a
+///     fuller bank and pay more. Both directions are wrong in real games.
+///   * **Consumption is paid out of the food produced this turn.** (c) then
+///     (d), not (d) then (c) -- a civilization eats what it just grew.
+///
+/// The `Stats` used for science/culture/food/resources is computed ONCE, up
+/// front (after step 1), and is NOT recomputed as the steps mutate the
+/// player. Step 5 takes a second, fresh reading for the action totals.
+///
+/// Python's signature takes an `rng` and never reads it (`draw_military`
+/// derives its own from `state.seed`/`state.turn` -- see [`deck_rng`]), so
+/// there is no rng parameter here.
+pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+    // Python opens with `effects.invalidate(state, p)`; there is no stats
+    // cache in this port (see `increase_population`), so there is nothing to
+    // invalidate here or at step 5.
+
+    // ---- 1. discard excess military cards -----------------------------
+    if discard_excess_military(state, idx) {
+        return false;
+    }
+
+    let s = effects::state_stats(state, &state.players[idx as usize]);
+
+    // ---- 2. uprising check --------------------------------------------
+    // Python emits a log line here (`state.emit(...)`); `GameState` has no
+    // journal/emit sink and the string is not read by anything.
+    if !uprising(state, &state.players[idx as usize]) {
+        // ---- 3a. score science and culture ----------------------------
+        {
+            let p = &mut state.players[idx as usize];
+            // `Stats::science`/`culture` are clamped at zero by
+            // `effects::compute` ("Limits on Ratings"), so these additions
+            // are never subtractions and the unsigned stocks are safe.
+            p.science += s.science as u16;
+            p.culture += s.culture as u16;
+        }
+        end_of_turn_leader_bonus(state, idx);
+
+        let p = &mut state.players[idx as usize];
+
+        // ---- 3b. corruption -------------------------------------------
+        // Resources first; food covers whatever the resources could not.
+        // `pay_resources` never pays more than it was asked for, so the
+        // shortfall cannot go negative.
+        let corr = corruption(blue_available(p));
+        let paid = pay_resources(p, corr);
+        let short = corr - paid;
+        if short > 0 {
+            p.food = p.food.saturating_sub(short);
+        }
+
+        // ---- 3c. food production --------------------------------------
+        gain_food(p, s.food as u16);
+
+        // ---- 3d. food consumption -------------------------------------
+        let need = consumption(p.yellow_bank) as u16;
+        if p.food >= need {
+            p.food -= need;
+        } else {
+            let missing = need - p.food;
+            p.food = 0;
+            p.culture = p.culture.saturating_sub(4 * missing);
+        }
+
+        // ---- 3e. resource production ----------------------------------
+        gain_resources(p, s.resources as u16);
+    }
+
+    // ---- 4. draw military cards ---------------------------------------
+    // Never in age IV (the military deck is exhausted by then) and never on
+    // round 1. Python also gates on `state.has_military`, a card-DATABASE
+    // completeness flag that is always true for the compiled-in base game --
+    // the same non-field `legal.rs::politics_moves` documents.
+    //
+    // The count is `min(3, max(0, p.military_actions))` read BEFORE step 5
+    // resets it: it is what the player had LEFT this turn, not what they will
+    // have next turn. Reordering 4 and 5 would hand a player who spent every
+    // military action a full refill of cards.
+    if state.age_military != Age::IV && state.round > 1 {
+        let n = state.players[idx as usize].military_actions.clamp(0, 3);
+        for _ in 0..n {
+            match draw_military(state) {
+                Some(card) => state.players[idx as usize].hand_military.push(card),
+                None => break,
+            }
+        }
+    }
+
+    // ---- 5. reset actions ---------------------------------------------
+    // A FRESH `Stats`: steps 3 and 4 can have changed what the player has in
+    // play only via the leader bonus (which cannot), but Python re-reads here
+    // and the re-read is what makes this robust to that changing.
+    let s = effects::state_stats(state, &state.players[idx as usize]);
+    let p = &mut state.players[idx as usize];
+    p.civil_actions = (s.civil_actions - p.ca_penalty_next_turn as i32).max(0) as i8;
+    p.ca_penalty_next_turn = 0;
+    p.military_actions = s.military_actions as i8;
+    p.tactic_action_used = false;
+    p.hammurabi_used = false;
+    p.churchill_used = false;
+    p.bach_upgrade_used = false;
+    p.ocean_liners_used = false;
+    p.politics_done = false;
+    p.taken_this_turn = CardList::new();
+    // §3.11: action-card discount pools expire at end of turn.
+    p.mil_discount = 0;
+    // Churchill's ring-fenced science, same lifetime.
+    p.mil_sci_discount = 0;
+    true
+}
+
+/// §6.6 step 3a tail: Genghis Khan scores 3 culture per turn while his owner
+/// is at or above SECOND place in military strength.
+///
+/// `strengths` includes the Khan's own strength, so the test is "my strength
+/// is >= the second-highest strength in the game", i.e. at most one rival
+/// out-arms me. A tie at second place still scores (`>=`). With fewer than
+/// two civilizations still in the game there is no second place and the bonus
+/// is unconditional. Note that with exactly two players left the condition is
+/// vacuously true -- `strengths[1]` is then `min(mine, theirs)` -- which is
+/// the printed rule ("top two"), not an accident of the port.
+///
+/// Python dispatches on the leader's NAME (`if p.leader == "Genghis Khan"`)
+/// and hardcodes the 3. This reads `Special::CultureIfTopTwoStrength(n)` off
+/// the leader card instead: same card, but the magnitude comes from the card
+/// table rather than from a string compare against a literal (DESIGN.md rule
+/// 5 / "an unhandled case is a compile error, not a silent skip"). Genghis is
+/// the only carrier of that variant today, asserted by
+/// `tests::only_genghis_khan_carries_the_top_two_strength_special` so a
+/// second carrier cannot appear without this function noticing.
+///
+/// Only the LEADER slot is scanned, matching Python exactly -- a wonder or
+/// tech carrying the same special would score nothing there either, which is
+/// what the assertion above exists to catch.
+fn end_of_turn_leader_bonus(state: &mut GameState, idx: u8) {
+    let p = &state.players[idx as usize];
+    if p.leader.is_none() {
+        return;
+    }
+    let mut bonus = 0i32;
+    for &sp in p.leader.get().special {
+        if let Special::CultureIfTopTwoStrength(n) = sp {
+            bonus += n as i32;
+        }
+    }
+    if bonus == 0 {
+        return;
+    }
+    let mine = effects::state_stats(state, p).strength;
+    let mut strengths = [0i32; MAX_PLAYERS];
+    let mut n = 0usize;
+    for q in state.active() {
+        strengths[n] = effects::state_stats(state, q).strength;
+        n += 1;
+    }
+    strengths[..n].sort_unstable_by(|a, b| b.cmp(a));
+    if n < 2 || mine >= strengths[1] {
+        state.players[idx as usize].culture += bonus as u16;
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{CardList, PactList, Phase, TechSlot, MAX_HAND, MAX_PLAYERS};
+    use crate::state::{PactList, Phase, TechSlot, MAX_HAND};
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.
@@ -791,5 +1116,511 @@ mod tests {
         p.wonder_steps = 3;
         assert_eq!(blue_used(&p), 3);
         assert_eq!(blue_available(&p), 7);
+    }
+
+    // =================================================== end-of-turn tests
+    //
+    // Everything below needs `effects::compute`, which dereferences
+    // `p.government` unconditionally, so a player in these tests always has
+    // one. Despotism is the Age A starting government: 4 civil actions, 2
+    // military actions, urban limit 2, `military_hand_limit` 0 -- so the §6.7
+    // military hand limit is 2 + 0 = 2 unless a test says otherwise.
+
+    /// A blank player holding `government` -- the minimum `compute` accepts.
+    fn gov_player(idx: u8, government: &str) -> PlayerState {
+        let mut p = blank_player(idx);
+        p.government = card(government);
+        p
+    }
+
+    /// Two-player game, both on Despotism, round 1 (so §6.6 step 4 does not
+    /// draw and cannot perturb a test that is about steps 2-3).
+    fn duel() -> GameState {
+        let mut st = blank_state();
+        st.players[0] = gov_player(0, "Despotism");
+        st.players[1] = gov_player(1, "Despotism");
+        st
+    }
+
+    // -------------------------------------------------- discontent/uprising
+
+    #[test]
+    fn discontent_is_the_shortfall_against_happy_required() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 7; // happy_required(7) == 4
+        st.players[0].happy_extra = 1;
+        assert_eq!(discontent(&st, &st.players[0]), 3);
+
+        st.players[0].happy_extra = 4;
+        assert_eq!(discontent(&st, &st.players[0]), 0);
+
+        // Never negative, and `Stats::happy` is clamped to 8 by `compute`, so
+        // a surplus does not become credit.
+        st.players[0].happy_extra = 40;
+        assert_eq!(discontent(&st, &st.players[0]), 0);
+    }
+
+    #[test]
+    fn uprising_needs_strictly_more_discontent_than_free_workers() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 7; // happy_required 4, happy 0 -> discontent 4
+        assert_eq!(discontent(&st, &st.players[0]), 4);
+
+        st.players[0].workers_free = 4;
+        assert!(!uprising(&st, &st.players[0]), "equal is NOT an uprising");
+        st.players[0].workers_free = 3;
+        assert!(uprising(&st, &st.players[0]));
+    }
+
+    #[test]
+    fn pop_cost_reads_the_bank_and_the_discount_off_state() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 14; // pop_cost_base(14) == 3
+        assert_eq!(pop_cost(&st, &st.players[0]), Some(3));
+        st.players[0].yellow_bank = 0;
+        assert_eq!(pop_cost(&st, &st.players[0]), None);
+    }
+
+    // ------------------------------------------------------- §6.6 ordering
+
+    /// An uprising skips the ENTIRE production phase -- not just food and
+    /// resources but science and culture too, and corruption and consumption
+    /// with them. A civilization in revolt neither produces nor eats.
+    #[test]
+    fn end_of_turn_uprising_skips_all_of_step_3() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 7; // happy_required 4; happy 0, workers_free 0
+            p.science_rate_extra = 5;
+            p.culture_rate_extra = 5;
+            p.blue_total = 4; // corruption(4) would be 4 if step 3b ran
+            p.food = 10;
+            p.resources = 3;
+            p.culture = 20;
+        }
+        assert!(uprising(&st, &st.players[0]));
+        assert!(end_of_turn(&mut st, 0));
+
+        let p = &st.players[0];
+        assert_eq!(p.science, 0, "science is production, and production was skipped");
+        assert_eq!(p.culture, 20, "culture is production, and production was skipped");
+        assert_eq!(p.resources, 3, "no corruption is paid during an uprising");
+        assert_eq!(p.food, 10, "and nobody eats either");
+        // Step 5 still runs: the turn ends even though nothing was produced.
+        assert_eq!(p.civil_actions, 4);
+        assert_eq!(p.military_actions, 2);
+    }
+
+    /// Step 3a before step 3d: this turn's culture income lands in the stock
+    /// BEFORE the famine penalty comes out of it. Reversing the two changes
+    /// the result whenever the penalty is bigger than one of the operands,
+    /// because the penalty floors at zero.
+    #[test]
+    fn end_of_turn_scores_culture_before_the_famine_penalty() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 3; // consumption 4, happy_required 6
+            p.happy_extra = 6; // ... met exactly, so no uprising
+            p.blue_total = 11; // corruption(11) == 0, isolating step 3d
+            p.culture_rate_extra = 10;
+            p.food = 0; // no farms, no food: 4 missing -> -16 culture
+        }
+        assert!(!uprising(&st, &st.players[0]));
+        assert!(end_of_turn(&mut st, 0));
+
+        // Correct order: (0 + 10) - 16 -> floored to 0.
+        // Scoring after the famine would give max(0, 0 - 16) + 10 == 10.
+        assert_eq!(st.players[0].culture, 0);
+        assert_eq!(st.players[0].food, 0);
+    }
+
+    /// Step 3b before step 3c: corruption is assessed against the blue bank
+    /// as it stands BEFORE this turn's food occupies tokens in it. Producing
+    /// first would push a player down a corruption band and overcharge them.
+    #[test]
+    fn end_of_turn_pays_corruption_before_producing_food() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 17; // consumption 0, happy_required 0
+            // 5 stored resources already occupy 5 tokens, so 16 total puts
+            // `blue_available` at exactly 11 -- the corruption(>=11) == 0
+            // boundary, one token wide.
+            p.blue_total = 16;
+            p.resources = 5;
+            // One farm worker: `Stats::food` == 1, which costs one blue token
+            // to store and would drop `blue_available` to 10 -> corruption 2.
+            p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        }
+        assert_eq!(blue_available(&st.players[0]), 11);
+        assert!(end_of_turn(&mut st, 0));
+
+        assert_eq!(st.players[0].food, 1, "the farm produced");
+        assert_eq!(
+            st.players[0].resources, 5,
+            "corruption was 0 -- assessed before the new food took a token"
+        );
+    }
+
+    /// Step 3c before step 3d: a civilization eats what it just grew.
+    #[test]
+    fn end_of_turn_feeds_the_population_from_this_turns_harvest() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 5; // consumption 3, happy_required 5
+            p.happy_extra = 5; // met exactly
+            p.blue_total = 16; // corruption 0, plenty of storage
+            p.culture = 20;
+            p.food = 0;
+            p.techs.insert(card("Agriculture"), TechSlot { workers: 4, stored: 0 });
+        }
+        assert!(end_of_turn(&mut st, 0));
+
+        // Produce 4, eat 3, keep 1, no famine.
+        assert_eq!(st.players[0].food, 1);
+        assert_eq!(
+            st.players[0].culture, 20,
+            "eating before producing would have starved 3 and cost 12 culture"
+        );
+    }
+
+    /// Corruption takes resources first and only then bites into food, and
+    /// the food side floors at zero rather than wrapping.
+    #[test]
+    fn end_of_turn_corruption_falls_back_from_resources_to_food() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 17; // consumption 0, happy_required 0
+            p.blue_total = 3; // blue_available 1 after the stocks below
+            p.resources = 1;
+            p.food = 1;
+        }
+        // stocks: 1 resource + 1 food = 2 tokens used of 3 -> available 1
+        assert_eq!(blue_available(&st.players[0]), 1);
+        assert_eq!(corruption(1), 4);
+        assert!(end_of_turn(&mut st, 0));
+
+        // 1 resource paid, 3 short, food 1 -> floored to 0 (not -2).
+        assert_eq!(st.players[0].resources, 0);
+        assert_eq!(st.players[0].food, 0);
+    }
+
+    #[test]
+    fn end_of_turn_scores_science_and_culture_at_the_stat_rate() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 17; // consumption 0, happy_required 0
+            p.blue_total = 11; // corruption 0
+            p.science_rate_extra = 3;
+            p.culture_rate_extra = 7;
+            p.science = 2;
+            p.culture = 100;
+        }
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].science, 5);
+        assert_eq!(st.players[0].culture, 107);
+    }
+
+    // ------------------------------------------------------ step 4 (draws)
+
+    fn stock_military_deck(st: &mut GameState, n: usize) {
+        st.round = 2;
+        st.age_military = Age::A;
+        st.military_deck = CardList::new();
+        for i in 0..n {
+            st.military_deck.push(CardId(i as u16));
+        }
+    }
+
+    #[test]
+    fn end_of_turn_draws_one_card_per_unspent_military_action_capped_at_three() {
+        for (unspent, expect) in [(0i8, 0usize), (1, 1), (2, 2), (5, 3), (-1, 0)] {
+            let mut st = duel();
+            stock_military_deck(&mut st, 10);
+            st.players[0].yellow_bank = 17; // no uprising, no consumption
+            st.players[0].blue_total = 11; // corruption 0
+            st.players[0].military_actions = unspent;
+            assert!(end_of_turn(&mut st, 0));
+            assert_eq!(
+                st.players[0].hand_military.len(),
+                expect,
+                "military_actions={unspent}"
+            );
+            // ...and step 5 refilled the actions afterwards, from the
+            // government, NOT from whatever step 4 read.
+            assert_eq!(st.players[0].military_actions, 2);
+        }
+    }
+
+    #[test]
+    fn end_of_turn_never_draws_in_age_iv_or_on_round_one() {
+        let mut st = duel();
+        stock_military_deck(&mut st, 10);
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[0].military_actions = 2;
+        st.age_military = Age::IV;
+        assert!(end_of_turn(&mut st, 0));
+        assert!(st.players[0].hand_military.is_empty(), "age IV draws nothing");
+
+        let mut st = duel();
+        stock_military_deck(&mut st, 10);
+        st.round = 1;
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[0].military_actions = 2;
+        assert!(end_of_turn(&mut st, 0));
+        assert!(st.players[0].hand_military.is_empty(), "round 1 draws nothing");
+    }
+
+    #[test]
+    fn end_of_turn_stops_drawing_when_the_deck_and_discard_are_both_empty() {
+        let mut st = duel();
+        stock_military_deck(&mut st, 1);
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[0].military_actions = 3;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].hand_military.len(), 1);
+    }
+
+    // ---------------------------------------------------------- step 5
+
+    #[test]
+    fn end_of_turn_resets_the_per_turn_state() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.yellow_bank = 17;
+            p.blue_total = 11;
+            p.ca_penalty_next_turn = 3; // rebellion: 4 - 3 == 1 civil action
+            p.civil_actions = 0;
+            p.military_actions = 0;
+            p.politics_done = true;
+            p.tactic_action_used = true;
+            p.hammurabi_used = true;
+            p.churchill_used = true;
+            p.bach_upgrade_used = true;
+            p.ocean_liners_used = true;
+            p.mil_discount = 4;
+            p.mil_sci_discount = 3;
+            p.taken_this_turn.push(card("Agriculture"));
+        }
+        assert!(end_of_turn(&mut st, 0));
+
+        let p = &st.players[0];
+        assert_eq!(p.civil_actions, 1, "the rebellion penalty applies once");
+        assert_eq!(p.ca_penalty_next_turn, 0);
+        assert_eq!(p.military_actions, 2);
+        assert!(!p.politics_done);
+        assert!(!p.tactic_action_used);
+        assert!(!p.hammurabi_used);
+        assert!(!p.churchill_used);
+        assert!(!p.bach_upgrade_used);
+        assert!(!p.ocean_liners_used);
+        assert_eq!(p.mil_discount, 0);
+        assert_eq!(p.mil_sci_discount, 0);
+        assert!(p.taken_this_turn.is_empty());
+    }
+
+    #[test]
+    fn end_of_turn_floors_civil_actions_at_zero_under_a_big_penalty() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[0].ca_penalty_next_turn = 9; // 4 - 9 == -5
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].civil_actions, 0);
+    }
+
+    // -------------------------------------------------- step 1 (discards)
+
+    #[test]
+    fn end_of_turn_auto_discards_when_there_is_nothing_to_choose_between() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        // Despotism: 2 military actions + 0 hand limit -> limit 2.
+        let bonus = card("Military Bonus (defense 2 / colonization 1)");
+        for _ in 0..5 {
+            st.players[0].hand_military.push(bonus);
+        }
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].hand_military.len(), 2, "trimmed to the limit");
+        assert_eq!(
+            st.discarded_military[Age::I as usize].as_slice(),
+            &[bonus, bonus, bonus],
+            "and the three that went are filed under the card's own age"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must choose which of")]
+    fn end_of_turn_over_the_limit_with_a_real_choice_is_a_named_gap() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[0].hand_military.push(card("Military Bonus (defense 2 / colonization 1)"));
+        st.players[0].hand_military.push(card("Military Bonus (defense 4 / colonization 2)"));
+        st.players[0].hand_military.push(card("Military Bonus (defense 6 / colonization 3)"));
+        end_of_turn(&mut st, 0);
+    }
+
+    #[test]
+    fn end_of_turn_at_the_limit_discards_nothing() {
+        let mut st = duel();
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        let a = card("Military Bonus (defense 2 / colonization 1)");
+        let b = card("Military Bonus (defense 4 / colonization 2)");
+        st.players[0].hand_military.push(a);
+        st.players[0].hand_military.push(b);
+        // Two distinct cards, but exactly AT the limit -- no decision arises,
+        // so the two-way case above must not fire here.
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].hand_military.as_slice(), &[a, b]);
+    }
+
+    // ------------------------------------------------------ leader bonus
+
+    /// The magnitude comes from the card table, not from a name compare, so
+    /// a second carrier of the variant would silently be ignored by
+    /// `end_of_turn_leader_bonus`'s leader-only scan. Assert there is exactly
+    /// one, and that it is the leader Python special-cases.
+    #[test]
+    fn only_genghis_khan_carries_the_top_two_strength_special() {
+        let carriers: Vec<&str> = crate::cards::CARDS
+            .iter()
+            .filter(|c| {
+                c.special.iter().any(|s| matches!(s, Special::CultureIfTopTwoStrength(_)))
+            })
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(carriers, vec!["Genghis Khan"]);
+        let khan = card("Genghis Khan");
+        assert_eq!(khan.get().kind, crate::cards::CardType::Leader);
+        assert!(khan
+            .get()
+            .special
+            .contains(&Special::CultureIfTopTwoStrength(3)));
+    }
+
+    /// Three players, so "top two" is a real test rather than vacuous.
+    fn khan_trio(mine: i16, b: i16, c: i16) -> GameState {
+        let mut st = blank_state();
+        st.num_players = 3;
+        for i in 0..3u8 {
+            st.players[i as usize] = gov_player(i, "Despotism");
+        }
+        st.players[0].leader = card("Genghis Khan");
+        st.players[0].strength_extra = mine;
+        st.players[1].strength_extra = b;
+        st.players[2].strength_extra = c;
+        // Neutral economy: no uprising, no consumption, no corruption.
+        for i in 0..3usize {
+            st.players[i].yellow_bank = 17;
+            st.players[i].blue_total = 11;
+        }
+        st
+    }
+
+    #[test]
+    fn genghis_khan_scores_while_at_or_above_second_place_in_strength() {
+        // Second of three: scores.
+        let mut st = khan_trio(4, 5, 3);
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 3);
+
+        // Tied for second: still scores (the test is `>=`).
+        let mut st = khan_trio(4, 5, 4);
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 3);
+
+        // Third of three: nothing.
+        let mut st = khan_trio(3, 5, 4);
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 0);
+
+        // Strongest: scores.
+        let mut st = khan_trio(9, 5, 4);
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 3);
+    }
+
+    #[test]
+    fn genghis_khan_ignores_resigned_rivals() {
+        // Khan is last of three on paper, but the player above him has
+        // resigned, so he is second of the two still playing.
+        let mut st = khan_trio(3, 5, 4);
+        st.players[2].resigned = true;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 3);
+    }
+
+    #[test]
+    fn no_leader_bonus_without_the_leader() {
+        let mut st = khan_trio(3, 5, 4);
+        st.players[0].leader = CardId::NONE;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 0);
+
+        let mut st = khan_trio(3, 5, 4);
+        st.players[0].leader = card("Homer");
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 0, "Homer scores no top-two bonus");
+    }
+
+    // ------------------------------------------------------ draw_military
+
+    #[test]
+    fn draw_military_pops_off_the_end_of_the_deck() {
+        let mut st = blank_state();
+        st.military_deck.push(CardId(7));
+        st.military_deck.push(CardId(9));
+        assert_eq!(draw_military(&mut st), Some(CardId(9)));
+        assert_eq!(draw_military(&mut st), Some(CardId(7)));
+        assert_eq!(draw_military(&mut st), None);
+    }
+
+    /// The reshuffle path, checked against CPython's own MT19937 rather than
+    /// against itself: `rng.rs`'s fixture table records that
+    /// `random.Random(7919).shuffle(list(range(5)))` yields `[0, 2, 4, 1, 3]`.
+    /// `economy._rng` seeds with `state.seed * 7919 + state.turn`, so seed 1 /
+    /// turn 0 IS that stream. Python then draws with `list.pop()` -- off the
+    /// END -- which is the half of this that a "shuffle and deal" port gets
+    /// backwards while still looking random.
+    #[test]
+    fn draw_military_reshuffles_the_discard_with_pythons_stream() {
+        let mut st = blank_state();
+        st.seed = 1;
+        st.turn = 0;
+        st.age_military = Age::A;
+        for i in 0..5u16 {
+            st.discarded_military[Age::A as usize].push(CardId(i));
+        }
+        // Reclaimed in discard order, shuffled to [0, 2, 4, 1, 3], drawn
+        // back-to-front.
+        let drawn: Vec<u16> =
+            (0..5).map(|_| draw_military(&mut st).unwrap().0).collect();
+        assert_eq!(drawn, vec![3, 1, 4, 2, 0]);
+        assert!(
+            st.discarded_military[Age::A as usize].is_empty(),
+            "the pile must be emptied, not copied"
+        );
+        assert_eq!(draw_military(&mut st), None);
+    }
+
+    #[test]
+    fn draw_military_only_reclaims_the_current_ages_discard() {
+        let mut st = blank_state();
+        st.age_military = Age::II;
+        st.discarded_military[Age::A as usize].push(CardId(3));
+        assert_eq!(draw_military(&mut st), None, "another age's pile is not the deck");
+        assert_eq!(st.discarded_military[Age::A as usize].len(), 1);
     }
 }
