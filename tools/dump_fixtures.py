@@ -52,6 +52,24 @@ _BOTS = {"greedy": GreedyBot, "random": RandomBot}
 
 _DUMP_JSON_KW = dict(sort_keys=True, separators=(",", ":"))
 
+#: Used ONLY for the on-disk fixture file (`dump_game`), never for
+#: `state_digest`. `sort_keys=True` is right for the digest (order-
+#: insensitivity where Python's own dict order carries no information the
+#: Rust side can reproduce -- see `state_digest`'s docstring), but it is
+#: WRONG for the raw "state" snapshot embedded in a `ply` record: `p.techs`
+#: is a `dict[name, TechCard]` whose insertion order IS the tableau's BUILD
+#: order, and the Rust port's `Tableau` deliberately preserves that order
+#: (`rust/DESIGN.md`, `rust/src/state.rs::Tableau::remove`'s doc comment --
+#: `economy.lose_population` weakens the FIRST worker-holding card in build
+#: order). `json.dumps(sort_keys=True)` would alphabetize `techs`' keys on
+#: the way to disk and silently discard exactly the order
+#: `GameState::from_json` needs to reconstruct a `Tableau` Python would
+#: agree with. Found 2026-08-05 while building that loader: every fixture
+#: previously on disk had this bug (verified against `2p_seed1.jsonl`'s
+#: `techs` keys, which came out alphabetically sorted); fixtures were
+#: regenerated once this constant existed.
+_FILE_JSON_KW = dict(sort_keys=False, separators=(",", ":"))
+
 
 # --------------------------------------------------------------- git rev
 #
@@ -242,7 +260,7 @@ def dump_game(path, num_players, seed, max_plies, state_every, bot_name="greedy"
                                           state_every, bot_name)
     with open(path, "w") as f:
         for rec in (header, *plies, footer):
-            f.write(json.dumps(rec, **_DUMP_JSON_KW) + "\n")
+            f.write(json.dumps(rec, **_FILE_JSON_KW) + "\n")
     return len(plies)
 
 

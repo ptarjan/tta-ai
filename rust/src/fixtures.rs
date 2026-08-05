@@ -20,8 +20,12 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::cards::CardId;
+use crate::cards::{Age, CardId};
 use crate::moves::{ChurchillChoice, Move, PactSide};
+use crate::state::{
+    CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_DECK,
+    MAX_PLAYERS, ROW_SIZE,
+};
 
 // ============================================================ json ======
 
@@ -593,6 +597,743 @@ pub fn fixture_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+// ================================================== GameState::from_json ==
+//
+// Loads a `GameState.to_dict()` dump (`tools/dump_fixtures.py`'s "state"
+// field) into a Rust `GameState`, so `tests/differential.rs` can replay a
+// fixture from a known-good point rather than needing `game::new_game`
+// (`game.rs` is not ported -- see `apply.rs`'s top doc comment).
+//
+// Three Python `GameState` fields have NO home in `state.rs` and are
+// rejected rather than silently dropped if the dumped state actually needs
+// them:
+//
+//   * `pending` / `queue` -- `interact.rs`'s decision queue. Not ported;
+//     `state.rs` has no field for it (apply.rs's top doc comment). Checked
+//     by `must_be_empty` below -- erroring loudly the one time it would
+//     matter (silently dropping a non-empty decision queue would make a
+//     loaded state look further along than it is: whose move is next, and
+//     what is legal, both depend on it) rather than every time.
+//
+// A second and third field are silently dropped even when non-empty,
+// deliberately NOT gated by `must_be_empty`:
+//
+//   * `seeded_by` (event name -> which player prepared it) is read ONLY by
+//     the bots' own evaluation heuristics (`bots/weighted.py`,
+//     `bots/counting.py`, `bots/neural_encode.py` -- grepped 2026-08-05,
+//     nothing in `engine/actions.py`, `costs.py`, `economy.py` or
+//     `effects.py` touches it) -- never by `legal_moves`/`apply` or anything
+//     `costs.rs`/`economy.rs`/`effects.rs` port. This replay never calls a
+//     bot (it replays the fixture's already-`chosen` move), so it never
+//     needs this field. It is also the ONE dict that becomes permanently
+//     non-empty almost immediately (any `PrepareEvent` adds an entry that is
+//     never removed) -- gating on it the way `pending`/`queue` are gated
+//     would reject nearly every snapshot in the game after its opening
+//     plies, which was tried and measured: 327 of 327 later anchors failed
+//     to load. `must_be_empty` would be technically defensible but
+//     practically self-defeating here.
+//   * `one_time_discount` (per-player one-shot cost discounts an event
+//     granted -- `costs.rs`'s own doc comment already names this gap) has no
+//     home on `PlayerState` at all. Nothing in `costs.rs`/`economy.rs` reads
+//     it regardless (events are not ported on that side either), so there is
+//     no field whose absence would make a loaded state claim to be further
+//     along than it is -- the loaded state is simply missing information
+//     nothing downstream consults yet. A future events-porting worker who
+//     gives `PlayerState` this field should also come back here.
+//
+// `has_military` (always `true` for the complete base-game card table --
+// see `legal.rs`'s `politics_moves` comment) and `final_scores` (only
+// meaningful once `game_over`, and nothing here scores a finished game) are
+// likewise not loaded; both are read-only derived/terminal facts, never
+// inputs to `legal_moves`/`apply`. `log` is dropped same as
+// `tools/dump_fixtures.py::state_digest` drops it.
+
+/// A field the dumped JSON carries but `GameState`/`PlayerState` cannot
+/// represent turned out to be non-empty -- loading would silently produce a
+/// state that claims less is going on than the real game has recorded.
+/// Named separately from a plain parse error so callers (`tests/
+/// differential.rs`) can tell "this fixture point is unloadable because of a
+/// documented, known gap" apart from "the loader itself is wrong".
+fn must_be_empty(v: Option<&Json>, key: &str) -> Result<(), FixtureError> {
+    let empty = match v {
+        None | Some(Json::Null) => true,
+        Some(Json::Arr(a)) => a.is_empty(),
+        Some(Json::Obj(o)) => o.is_empty(),
+        Some(_) => false,
+    };
+    if empty {
+        Ok(())
+    } else {
+        Err(FixtureError::new(format!(
+            "{key} is non-empty in the dumped state -- GameState has no `{key}` field \
+             (see fixtures.rs's `GameState::from_json` doc comment); this state cannot \
+             be loaded faithfully"
+        )))
+    }
+}
+
+/// Whether `players[player_idx].one_time_discount` is non-empty in a dumped
+/// state -- exposed for `tests/differential.rs` to use as a divergence
+/// CLASSIFIER, not loaded into `GameState` itself (see `from_json`'s doc
+/// comment: `PlayerState` has no `one_time_discount` field, and nothing in
+/// `costs.rs`/`economy.rs` reads one). A missing `Build`/`Develop`/`Pop`/
+/// `Upgrade` move, or a state divergence in a cost-derived field, for a
+/// player with an active one-time discount is expected -- Rust prices the
+/// move without the discount Python applies -- rather than a new finding.
+/// Returns `false` (not "active") on any shape this cannot parse, same as
+/// an absent field: this is a best-effort classifier, not a correctness
+/// gate, so it must never be the reason a REAL divergence goes unloaded.
+pub fn player_has_one_time_discount(v: &Json, player_idx: u8) -> bool {
+    let Some(Json::Arr(players)) = v.get("players") else { return false };
+    let Some(p) = players.get(player_idx as usize) else { return false };
+    matches!(p.get("one_time_discount"), Some(Json::Obj(o)) if !o.is_empty())
+}
+
+fn parse_age(s: &str, tag: &str) -> Result<Age, FixtureError> {
+    Ok(match s {
+        "A" => Age::A,
+        "I" => Age::I,
+        "II" => Age::II,
+        "III" => Age::III,
+        "IV" => Age::IV,
+        other => return Err(FixtureError::new(format!("{tag}: unknown age {other:?}"))),
+    })
+}
+
+/// `null` -> `CardId::NONE`, a string -> `CardId::by_name`. The one place a
+/// dumped card-or-nothing field becomes a `CardId`.
+fn card_id_opt(v: &Json, tag: &str) -> Result<CardId, FixtureError> {
+    match v {
+        Json::Null => Ok(CardId::NONE),
+        Json::Str(s) => CardId::by_name(s)
+            .ok_or_else(|| FixtureError::new(format!("{tag}: unknown card {s:?}"))),
+        other => Err(FixtureError::new(format!("{tag}: expected string or null, got {other:?}"))),
+    }
+}
+
+fn req_arr<'a>(v: &'a Json, key: &str, tag: &str) -> Result<&'a [Json], FixtureError> {
+    req(v, key)?
+        .as_arr()
+        .ok_or_else(|| FixtureError::new(format!("{tag}.{key}: not an array")))
+}
+
+/// A JSON array of card names into a fixed-capacity [`CardList`]. List order
+/// is preserved -- draw order / hand order is real state (DESIGN.md).
+fn card_list<const N: usize>(v: &Json, key: &str, tag: &str) -> Result<CardList<N>, FixtureError> {
+    let arr = req_arr(v, key, tag)?;
+    let mut out = CardList::<N>::new();
+    for (i, item) in arr.iter().enumerate() {
+        let name = item
+            .as_str()
+            .ok_or_else(|| FixtureError::new(format!("{tag}.{key}[{i}]: not a string")))?;
+        let id = CardId::by_name(name).ok_or_else(|| {
+            FixtureError::new(format!("{tag}.{key}[{i}]: unknown card {name:?}"))
+        })?;
+        out.push(id);
+    }
+    Ok(out)
+}
+
+/// `p.techs`: `{name: {name, workers, stored}}`. Inserted in the JSON
+/// object's own key order, which -- now that `tools/dump_fixtures.py` writes
+/// the "state" snapshot with `sort_keys=False` (`_FILE_JSON_KW`; see that
+/// module's comment on why the old `sort_keys=True` dump silently discarded
+/// this) -- IS Python's dict insertion order, i.e. tableau BUILD order.
+/// `Tableau::insert` preserves exactly that order, matching `state.rs`'s
+/// documented contract (`economy.lose_population` walks the first
+/// worker-holding card in build order).
+fn techs_tableau(v: &Json, tag: &str) -> Result<Tableau, FixtureError> {
+    let obj = match req(v, "techs")? {
+        Json::Obj(fields) => fields,
+        other => return Err(FixtureError::new(format!("{tag}.techs: not an object, got {other:?}"))),
+    };
+    let mut t = Tableau::new();
+    for (name, val) in obj {
+        let id = CardId::by_name(name).ok_or_else(|| {
+            FixtureError::new(format!("{tag}.techs[{name:?}]: unknown card"))
+        })?;
+        let workers = req_num(val, "workers")? as u8;
+        let stored = req_num(val, "stored")? as u8;
+        t.insert(id, TechSlot { workers, stored });
+    }
+    Ok(t)
+}
+
+/// `p.wonder`: `null` or `{name, steps_built}` -> `(CardId, wonder_steps)`.
+fn wonder_field(v: &Json, tag: &str) -> Result<(CardId, u8), FixtureError> {
+    match req(v, "wonder")? {
+        Json::Null => Ok((CardId::NONE, 0)),
+        obj @ Json::Obj(_) => {
+            let name = req_str(obj, "name")?;
+            let steps = req_num(obj, "steps_built")? as u8;
+            let id = CardId::by_name(&name)
+                .ok_or_else(|| FixtureError::new(format!("{tag}.wonder: unknown card {name:?}")))?;
+            Ok((id, steps))
+        }
+        other => Err(FixtureError::new(format!("{tag}.wonder: expected object or null, got {other:?}"))),
+    }
+}
+
+/// `p.taken_leader_ages`: a list of age strings -> the bitmask `state.rs`
+/// stores instead (see `PlayerState::taken_leader_ages`'s doc comment).
+fn taken_leader_ages_mask(v: &Json, tag: &str) -> Result<u8, FixtureError> {
+    let arr = req_arr(v, "taken_leader_ages", tag)?;
+    let mut mask = 0u8;
+    for item in arr {
+        let s = item
+            .as_str()
+            .ok_or_else(|| FixtureError::new(format!("{tag}.taken_leader_ages: not a string")))?;
+        mask |= 1 << (parse_age(s, tag)? as u8);
+    }
+    Ok(mask)
+}
+
+/// `p.pacts`: a list of `{name, owner, partner, a, b}` objects.
+fn pacts_field(v: &Json, tag: &str) -> Result<PactList, FixtureError> {
+    let arr = req_arr(v, "pacts", tag)?;
+    let mut out = PactList::new();
+    for (i, item) in arr.iter().enumerate() {
+        let name = req_str(item, "name")?;
+        let card = CardId::by_name(&name).ok_or_else(|| {
+            FixtureError::new(format!("{tag}.pacts[{i}]: unknown card {name:?}"))
+        })?;
+        let owner = req_num(item, "owner")? as u8;
+        let partner = req_num(item, "partner")? as u8;
+        let a = req_num(item, "a")? as u8;
+        let b = req_num(item, "b")? as u8;
+        out.push(Pact { card, owner, partner, a, b });
+    }
+    Ok(out)
+}
+
+/// `p.war_declared_by_me`: `null` or `[name, attacker_idx, target_idx]`
+/// (Python: `(name, p.idx, target)`, `engine/actions.py:1148`) ->
+/// `(war_declared_by_me, war_target)`.
+fn war_declared_by_me_field(v: &Json, tag: &str) -> Result<(CardId, u8), FixtureError> {
+    match req(v, "war_declared_by_me")? {
+        Json::Null => Ok((CardId::NONE, 0)),
+        Json::Arr(a) if a.len() == 3 => {
+            let name = a[0]
+                .as_str()
+                .ok_or_else(|| FixtureError::new(format!("{tag}.war_declared_by_me[0]: not a string")))?;
+            let card = CardId::by_name(name).ok_or_else(|| {
+                FixtureError::new(format!("{tag}.war_declared_by_me[0]: unknown card {name:?}"))
+            })?;
+            let target = a[2]
+                .as_f64()
+                .ok_or_else(|| FixtureError::new(format!("{tag}.war_declared_by_me[2]: not a number")))?
+                as u8;
+            Ok((card, target))
+        }
+        other => Err(FixtureError::new(format!(
+            "{tag}.war_declared_by_me: expected null or a 3-element array, got {other:?}"
+        ))),
+    }
+}
+
+/// `p.wars_declared_on_me`: a list of `[name, attacker_idx, target_idx]`
+/// (Python: `(name, p.idx, target)`, appended to the TARGET's
+/// `wars_declared_on_me`, `engine/actions.py:1149`) -> the array `state.rs`
+/// keys by attacker index instead (see the field's doc comment).
+fn wars_declared_on_me_field(v: &Json, tag: &str) -> Result<[CardId; MAX_PLAYERS], FixtureError> {
+    let arr = req_arr(v, "wars_declared_on_me", tag)?;
+    let mut out = [CardId::NONE; MAX_PLAYERS];
+    for (i, item) in arr.iter().enumerate() {
+        let t = item
+            .as_arr()
+            .ok_or_else(|| FixtureError::new(format!("{tag}.wars_declared_on_me[{i}]: not an array")))?;
+        let name = t
+            .first()
+            .and_then(Json::as_str)
+            .ok_or_else(|| FixtureError::new(format!("{tag}.wars_declared_on_me[{i}][0]: not a string")))?;
+        let attacker = t
+            .get(1)
+            .and_then(Json::as_f64)
+            .ok_or_else(|| FixtureError::new(format!("{tag}.wars_declared_on_me[{i}][1]: not a number")))?
+            as usize;
+        let card = CardId::by_name(name).ok_or_else(|| {
+            FixtureError::new(format!("{tag}.wars_declared_on_me[{i}][0]: unknown card {name:?}"))
+        })?;
+        if attacker >= MAX_PLAYERS {
+            return Err(FixtureError::new(format!(
+                "{tag}.wars_declared_on_me[{i}]: attacker index {attacker} out of range"
+            )));
+        }
+        out[attacker] = card;
+    }
+    Ok(out)
+}
+
+/// A `PlayerState` with every field zeroed, for `GameState::players` slots
+/// beyond `num_players` (Python's `players` list is exactly `num_players`
+/// long; `state.rs`'s array is fixed at [`MAX_PLAYERS`]). Never read by
+/// anything that respects `num_players` (`GameState::active`,
+/// `legal_moves`, ...), so the exact values here do not matter -- only that
+/// every field is a valid, in-range value.
+fn blank_player(idx: u8) -> PlayerState {
+    PlayerState {
+        idx,
+        techs: Tableau::new(),
+        government: CardId::NONE,
+        leader: CardId::NONE,
+        used_leader_ability: false,
+        wonder: CardId::NONE,
+        wonder_steps: 0,
+        completed_wonders: CardList::new(),
+        destroyed_wonders: 0,
+        homer_wonder: CardId::NONE,
+        tactic: CardId::NONE,
+        tactic_exclusive: false,
+        colonies: CardList::new(),
+        flipped_wonders: CardList::new(),
+        taken_leader_ages: 0,
+        war_declared_by_me: CardId::NONE,
+        war_target: 0,
+        wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
+        pacts: PactList::new(),
+        hand_civil: CardList::new(),
+        hand_military: CardList::new(),
+        hidden_civil: 0,
+        hidden_military: 0,
+        yellow_bank: 0,
+        yellow_granted: 0,
+        workers_free: 0,
+        blue_total: 0,
+        food: 0,
+        resources: 0,
+        science: 0,
+        culture: 0,
+        culture_rate_extra: 0,
+        science_rate_extra: 0,
+        strength_extra: 0,
+        happy_extra: 0,
+        civil_actions: 0,
+        military_actions: 0,
+        politics_done: false,
+        tactic_action_used: false,
+        taken_this_turn: CardList::new(),
+        ca_spent_taking: 0,
+        hammurabi_used: false,
+        churchill_used: false,
+        bach_upgrade_used: false,
+        ocean_liners_used: false,
+        caesar_double_politics_used: false,
+        skip_next_politics: false,
+        ca_penalty_next_turn: 0,
+        mil_discount: 0,
+        mil_sci_discount: 0,
+        resigned: false,
+    }
+}
+
+fn load_player(v: &Json, idx: u8) -> Result<PlayerState, FixtureError> {
+    let tag = format!("players[{idx}]");
+    let json_idx = req_num(v, "idx")? as u8;
+    if json_idx != idx {
+        return Err(FixtureError::new(format!(
+            "{tag}: idx field says {json_idx}, position in `players` says {idx}"
+        )));
+    }
+    let (wonder, wonder_steps) = wonder_field(v, &tag)?;
+    let (war_declared_by_me, war_target) = war_declared_by_me_field(v, &tag)?;
+    Ok(PlayerState {
+        idx,
+        techs: techs_tableau(v, &tag)?,
+        government: card_id_opt(req(v, "government")?, &format!("{tag}.government"))?,
+        leader: card_id_opt(req(v, "leader")?, &format!("{tag}.leader"))?,
+        used_leader_ability: req_bool(v, "used_leader_ability")?,
+        wonder,
+        wonder_steps,
+        completed_wonders: card_list(v, "completed_wonders", &tag)?,
+        destroyed_wonders: req_num(v, "destroyed_wonders")? as u8,
+        homer_wonder: card_id_opt(req(v, "homer_wonder")?, &format!("{tag}.homer_wonder"))?,
+        tactic: card_id_opt(req(v, "tactic")?, &format!("{tag}.tactic"))?,
+        tactic_exclusive: req_bool(v, "tactic_exclusive")?,
+        colonies: card_list(v, "colonies", &tag)?,
+        flipped_wonders: card_list(v, "flipped_wonders", &tag)?,
+        taken_leader_ages: taken_leader_ages_mask(v, &tag)?,
+        war_declared_by_me,
+        war_target,
+        wars_declared_on_me: wars_declared_on_me_field(v, &tag)?,
+        pacts: pacts_field(v, &tag)?,
+        hand_civil: card_list(v, "hand_civil", &tag)?,
+        hand_military: card_list(v, "hand_military", &tag)?,
+        hidden_civil: req_num(v, "hidden_civil")? as u8,
+        hidden_military: req_num(v, "hidden_military")? as u8,
+        yellow_bank: req_num(v, "yellow_bank")? as u8,
+        yellow_granted: req_num(v, "yellow_granted")? as u8,
+        workers_free: req_num(v, "workers_free")? as u8,
+        blue_total: req_num(v, "blue_total")? as u8,
+        food: req_num(v, "food")? as u16,
+        resources: req_num(v, "resources")? as u16,
+        science: req_num(v, "science")? as u16,
+        culture: req_num(v, "culture")? as u16,
+        culture_rate_extra: req_num(v, "culture_rate_extra")? as i16,
+        science_rate_extra: req_num(v, "science_rate_extra")? as i16,
+        strength_extra: req_num(v, "strength_extra")? as i16,
+        happy_extra: req_num(v, "happy_extra")? as i16,
+        civil_actions: req_num(v, "civil_actions")? as i8,
+        military_actions: req_num(v, "military_actions")? as i8,
+        politics_done: req_bool(v, "politics_done")?,
+        tactic_action_used: req_bool(v, "tactic_action_used")?,
+        taken_this_turn: card_list(v, "taken_this_turn", &tag)?,
+        ca_spent_taking: req_num(v, "ca_spent_taking")? as u8,
+        hammurabi_used: req_bool(v, "hammurabi_used")?,
+        churchill_used: req_bool(v, "churchill_used")?,
+        bach_upgrade_used: req_bool(v, "bach_upgrade_used")?,
+        ocean_liners_used: req_bool(v, "ocean_liners_used")?,
+        caesar_double_politics_used: req_bool(v, "caesar_double_politics_used")?,
+        skip_next_politics: req_bool(v, "skip_next_politics")?,
+        ca_penalty_next_turn: req_num(v, "ca_penalty_next_turn")? as i8,
+        mil_discount: req_num(v, "mil_discount")? as i16,
+        mil_sci_discount: req_num(v, "mil_sci_discount")? as i16,
+        resigned: req_bool(v, "resigned")?,
+        // `one_time_discount` deliberately dropped -- see this module's top
+        // doc comment on `GameState::from_json`.
+    })
+}
+
+/// `card_row`: exactly [`ROW_SIZE`] slots, each a name or `null`.
+fn card_row_field(v: &Json) -> Result<[CardId; ROW_SIZE], FixtureError> {
+    let arr = req_arr(v, "card_row", "state")?;
+    if arr.len() != ROW_SIZE {
+        return Err(FixtureError::new(format!(
+            "state.card_row: {} slots, expected {ROW_SIZE}",
+            arr.len()
+        )));
+    }
+    let mut out = [CardId::NONE; ROW_SIZE];
+    for (i, item) in arr.iter().enumerate() {
+        out[i] = card_id_opt(item, &format!("state.card_row[{i}]"))?;
+    }
+    Ok(out)
+}
+
+/// One of the age-keyed dicts (`civil_discard`, `civil_removed`,
+/// `discarded_military`): `{age_string: [names]}`, sparse (only ages that
+/// have had a card land in them get a key). List order within one age is
+/// preserved; key order is not meaningful (each key is read directly by
+/// `Age`, never iterated).
+fn age_keyed_lists(v: &Json, key: &str) -> Result<[CardList<MAX_DECK>; 5], FixtureError> {
+    let mut out: [CardList<MAX_DECK>; 5] =
+        [CardList::new(), CardList::new(), CardList::new(), CardList::new(), CardList::new()];
+    let obj = match req(v, key)? {
+        Json::Obj(fields) => fields,
+        other => return Err(FixtureError::new(format!("state.{key}: not an object, got {other:?}"))),
+    };
+    for (age_str, list) in obj {
+        let age = parse_age(age_str, &format!("state.{key}"))?;
+        let arr = list
+            .as_arr()
+            .ok_or_else(|| FixtureError::new(format!("state.{key}[{age_str:?}]: not an array")))?;
+        let mut cl = CardList::<MAX_DECK>::new();
+        for (i, item) in arr.iter().enumerate() {
+            let name = item.as_str().ok_or_else(|| {
+                FixtureError::new(format!("state.{key}[{age_str:?}][{i}]: not a string"))
+            })?;
+            let id = CardId::by_name(name).ok_or_else(|| {
+                FixtureError::new(format!("state.{key}[{age_str:?}][{i}]: unknown card {name:?}"))
+            })?;
+            cl.push(id);
+        }
+        out[age as usize] = cl;
+    }
+    Ok(out)
+}
+
+fn opt_u16(v: &Json, key: &str) -> Result<Option<u16>, FixtureError> {
+    match v.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(other) => Ok(Some(
+            other
+                .as_f64()
+                .ok_or_else(|| FixtureError::new(format!("{key}: not a number or null")))?
+                as u16,
+        )),
+    }
+}
+
+fn opt_u8(v: &Json, key: &str) -> Result<Option<u8>, FixtureError> {
+    match v.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(other) => Ok(Some(
+            other
+                .as_f64()
+                .ok_or_else(|| FixtureError::new(format!("{key}: not a number or null")))?
+                as u8,
+        )),
+    }
+}
+
+fn phase_field(v: &Json) -> Result<Phase, FixtureError> {
+    match req_str(v, "phase")?.as_str() {
+        "politics" => Ok(Phase::Politics),
+        "actions" => Ok(Phase::Actions),
+        "done" => Ok(Phase::Done),
+        other => Err(FixtureError::new(format!("state.phase: unknown phase {other:?}"))),
+    }
+}
+
+impl GameState {
+    /// Load a `GameState.to_dict()` dump (one fixture ply's `"state"` field,
+    /// or any other JSON value with the same shape) into a real `GameState`.
+    ///
+    /// See this module's section doc comment (just above) for the four
+    /// Python fields this cannot represent and what happens to each.
+    pub fn from_json(v: &Json) -> Result<GameState, FixtureError> {
+        must_be_empty(v.get("pending"), "pending")?;
+        must_be_empty(v.get("queue"), "queue")?;
+        // `seeded_by` deliberately NOT gated -- see this module's section
+        // doc comment above `must_be_empty`.
+
+        let num_players = req_num(v, "num_players")? as u8;
+        if !(2..=MAX_PLAYERS as u8).contains(&num_players) {
+            return Err(FixtureError::new(format!(
+                "state.num_players: {num_players}, outside 2..={MAX_PLAYERS}"
+            )));
+        }
+        let players_json = req_arr(v, "players", "state")?;
+        if players_json.len() != num_players as usize {
+            return Err(FixtureError::new(format!(
+                "state.players: {} entries but num_players is {num_players}",
+                players_json.len()
+            )));
+        }
+        let mut players: [PlayerState; MAX_PLAYERS] =
+            std::array::from_fn(|i| blank_player(i as u8));
+        for (i, pv) in players_json.iter().enumerate() {
+            players[i] = load_player(pv, i as u8)?;
+        }
+
+        Ok(GameState {
+            num_players,
+            seed: req_num(v, "seed")? as u64,
+            players,
+            current: req_num(v, "current")? as u8,
+            turn: req_num(v, "turn")? as u16,
+            round: req_num(v, "round")? as u16,
+            start_player: req_num(v, "start_player")? as u8,
+            age_civil: parse_age(&req_str(v, "age_civil")?, "state.age_civil")?,
+            age_military: parse_age(&req_str(v, "age_military")?, "state.age_military")?,
+            civil_deck: card_list(v, "civil_deck", "state")?,
+            military_deck: card_list(v, "military_deck", "state")?,
+            card_row: card_row_field(v)?,
+            future_events: card_list(v, "future_events", "state")?,
+            current_events: card_list(v, "current_events", "state")?,
+            past_events: card_list(v, "past_events", "state")?,
+            current_events_age: parse_age(&req_str(v, "current_events_age")?, "state.current_events_age")?,
+            scoring_events: card_list(v, "scoring_events", "state")?,
+            available_tactics: card_list(v, "available_tactics", "state")?,
+            civil_discard: age_keyed_lists(v, "civil_discard")?,
+            civil_removed: age_keyed_lists(v, "civil_removed")?,
+            discarded_military: age_keyed_lists(v, "discarded_military")?,
+            last_round: req_bool(v, "last_round")?,
+            final_round_end: opt_u16(v, "final_round_end")?,
+            game_over: req_bool(v, "game_over")?,
+            phase: phase_field(v)?,
+            forced_winner: opt_u8(v, "forced_winner")?,
+        })
+    }
+}
+
+// ======================================================= structural diff ==
+//
+// `tests/differential.rs`'s replay wants "state diverges at ply 41, field
+// food" (`rust/DESIGN.md`, "How correctness is established"), not "digest
+// mismatch". Computing a digest that would actually MATCH `tools/
+// dump_fixtures.py::state_digest` byte-for-byte is not attainable anyway --
+// that digest hashes Python's full `to_dict()`, including the three fields
+// `GameState::from_json` above cannot represent, so a Rust digest could only
+// ever agree with Python's by coincidence. A field-by-field structural
+// compare between two ALREADY-LOADED `GameState`s is strictly more useful
+// (it names the field) and sidesteps the mismatch entirely: it never looks
+// at what Rust cannot represent, only at what it does.
+//
+// Reuses `GameState::from_json` as the parser for the "expected" side rather
+// than comparing against raw `Json` -- one parser, checked against real
+// games, rather than a second hand-rolled reader that could disagree with
+// the first about what a field means.
+
+impl GameState {
+    /// Every difference between `self` and `other`, as `"path: detail"`
+    /// strings -- empty means structurally identical over every field this
+    /// type represents. Order-sensitive wherever the field itself is
+    /// (DESIGN.md: "ordering is load-bearing all the way down into the
+    /// containers"), scoped to `self.num_players` active players (the
+    /// unused padding slots beyond that carry no information either state
+    /// claims to have).
+    pub fn diff(&self, other: &GameState) -> Vec<String> {
+        let mut out = Vec::new();
+        macro_rules! f {
+            ($path:expr, $a:expr, $b:expr) => {
+                if $a != $b {
+                    out.push(format!("{}: {:?} != {:?}", $path, $a, $b));
+                }
+            };
+        }
+        f!("state.num_players", self.num_players, other.num_players);
+        f!("state.seed", self.seed, other.seed);
+        f!("state.current", self.current, other.current);
+        f!("state.turn", self.turn, other.turn);
+        f!("state.round", self.round, other.round);
+        f!("state.start_player", self.start_player, other.start_player);
+        f!("state.age_civil", self.age_civil, other.age_civil);
+        f!("state.age_military", self.age_military, other.age_military);
+        diff_cardlist(&mut out, "state.civil_deck", self.civil_deck.as_slice(), other.civil_deck.as_slice());
+        diff_cardlist(
+            &mut out,
+            "state.military_deck",
+            self.military_deck.as_slice(),
+            other.military_deck.as_slice(),
+        );
+        f!("state.card_row", self.card_row, other.card_row);
+        diff_cardlist(&mut out, "state.future_events", self.future_events.as_slice(), other.future_events.as_slice());
+        diff_cardlist(&mut out, "state.current_events", self.current_events.as_slice(), other.current_events.as_slice());
+        diff_cardlist(&mut out, "state.past_events", self.past_events.as_slice(), other.past_events.as_slice());
+        f!("state.current_events_age", self.current_events_age, other.current_events_age);
+        diff_cardlist(&mut out, "state.scoring_events", self.scoring_events.as_slice(), other.scoring_events.as_slice());
+        diff_cardlist(
+            &mut out,
+            "state.available_tactics",
+            self.available_tactics.as_slice(),
+            other.available_tactics.as_slice(),
+        );
+        for age in 0..5 {
+            diff_cardlist(
+                &mut out,
+                &format!("state.civil_discard[{age}]"),
+                self.civil_discard[age].as_slice(),
+                other.civil_discard[age].as_slice(),
+            );
+            diff_cardlist(
+                &mut out,
+                &format!("state.civil_removed[{age}]"),
+                self.civil_removed[age].as_slice(),
+                other.civil_removed[age].as_slice(),
+            );
+            diff_cardlist(
+                &mut out,
+                &format!("state.discarded_military[{age}]"),
+                self.discarded_military[age].as_slice(),
+                other.discarded_military[age].as_slice(),
+            );
+        }
+        f!("state.last_round", self.last_round, other.last_round);
+        f!("state.final_round_end", self.final_round_end, other.final_round_end);
+        f!("state.game_over", self.game_over, other.game_over);
+        f!("state.phase", self.phase, other.phase);
+        f!("state.forced_winner", self.forced_winner, other.forced_winner);
+
+        for i in 0..self.num_players.max(other.num_players) as usize {
+            diff_player(&mut out, i, &self.players[i], &other.players[i]);
+        }
+        out
+    }
+}
+
+fn diff_cardlist(out: &mut Vec<String>, path: &str, a: &[CardId], b: &[CardId]) {
+    if a != b {
+        out.push(format!("{path}: {a:?} != {b:?}"));
+    }
+}
+
+fn diff_player(out: &mut Vec<String>, i: usize, a: &PlayerState, b: &PlayerState) {
+    macro_rules! f {
+        ($field:ident) => {
+            if a.$field != b.$field {
+                out.push(format!(
+                    "state.players[{i}].{}: {:?} != {:?}",
+                    stringify!($field),
+                    a.$field,
+                    b.$field
+                ));
+            }
+        };
+    }
+    f!(idx);
+    f!(government);
+    f!(leader);
+    f!(used_leader_ability);
+    f!(wonder);
+    f!(wonder_steps);
+    f!(destroyed_wonders);
+    f!(homer_wonder);
+    f!(tactic);
+    f!(tactic_exclusive);
+    f!(taken_leader_ages);
+    f!(war_declared_by_me);
+    f!(war_target);
+    f!(wars_declared_on_me);
+    f!(hidden_civil);
+    f!(hidden_military);
+    f!(yellow_bank);
+    f!(yellow_granted);
+    f!(workers_free);
+    f!(blue_total);
+    f!(food);
+    f!(resources);
+    f!(science);
+    f!(culture);
+    f!(culture_rate_extra);
+    f!(science_rate_extra);
+    f!(strength_extra);
+    f!(happy_extra);
+    f!(civil_actions);
+    f!(military_actions);
+    f!(politics_done);
+    f!(tactic_action_used);
+    f!(ca_spent_taking);
+    f!(hammurabi_used);
+    f!(churchill_used);
+    f!(bach_upgrade_used);
+    f!(ocean_liners_used);
+    f!(caesar_double_politics_used);
+    f!(skip_next_politics);
+    f!(ca_penalty_next_turn);
+    f!(mil_discount);
+    f!(mil_sci_discount);
+    f!(resigned);
+
+    diff_cardlist(
+        out,
+        &format!("state.players[{i}].completed_wonders"),
+        a.completed_wonders.as_slice(),
+        b.completed_wonders.as_slice(),
+    );
+    diff_cardlist(out, &format!("state.players[{i}].colonies"), a.colonies.as_slice(), b.colonies.as_slice());
+    diff_cardlist(
+        out,
+        &format!("state.players[{i}].flipped_wonders"),
+        a.flipped_wonders.as_slice(),
+        b.flipped_wonders.as_slice(),
+    );
+    diff_cardlist(out, &format!("state.players[{i}].hand_civil"), a.hand_civil.as_slice(), b.hand_civil.as_slice());
+    diff_cardlist(
+        out,
+        &format!("state.players[{i}].hand_military"),
+        a.hand_military.as_slice(),
+        b.hand_military.as_slice(),
+    );
+    diff_cardlist(
+        out,
+        &format!("state.players[{i}].taken_this_turn"),
+        a.taken_this_turn.as_slice(),
+        b.taken_this_turn.as_slice(),
+    );
+
+    let ta: Vec<(CardId, TechSlot)> = a.techs.iter().map(|(id, s)| (id, *s)).collect();
+    let tb: Vec<(CardId, TechSlot)> = b.techs.iter().map(|(id, s)| (id, *s)).collect();
+    if ta != tb {
+        out.push(format!("state.players[{i}].techs: {ta:?} != {tb:?}"));
+    }
+
+    let pa = a.pacts.as_slice();
+    let pb = b.pacts.as_slice();
+    if pa != pb {
+        out.push(format!("state.players[{i}].pacts: {pa:?} != {pb:?}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +1377,31 @@ mod tests {
     fn parse_move_rejects_unknown_card() {
         let v = parse_json(r#"["build", "Not A Real Card"]"#).unwrap();
         assert!(parse_move(&v).is_err());
+    }
+
+    /// `GameState::from_json` against a real dumped state: loads without
+    /// error, round-trips (`diff` against itself is empty), and -- the whole
+    /// point of the `_FILE_JSON_KW` fix -- the tableau is NOT alphabetically
+    /// sorted (a real game builds `Warriors` before `Agriculture` at this
+    /// seed; alphabetical would put `Agriculture` first).
+    #[test]
+    fn from_json_loads_a_real_fixture_state_and_round_trips() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/3p_seed1.jsonl");
+        let records = read_fixture_file(&path).expect("read 3p_seed1.jsonl");
+        let ply10 = records
+            .iter()
+            .find_map(|r| match r {
+                Record::Ply(p) if p.ply == 10 => p.state.as_ref(),
+                _ => None,
+            })
+            .expect("ply 10 must carry a state snapshot at state_every=10");
+        let state = GameState::from_json(ply10).expect("from_json");
+        assert_eq!(state.num_players, 3);
+        let techs: Vec<&str> = state.players[0].techs.iter().map(|(id, _)| id.name()).collect();
+        assert_eq!(techs, vec!["Warriors", "Agriculture", "Bronze", "Philosophy", "Religion"]);
+        assert!(state.diff(&state).is_empty(), "a state must not differ from itself");
+
+        let reloaded = GameState::from_json(ply10).unwrap();
+        assert!(state.diff(&reloaded).is_empty(), "reloading the same JSON must produce an equal state");
     }
 }
