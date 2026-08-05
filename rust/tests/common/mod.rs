@@ -4,8 +4,8 @@
 //!
 //! Each file directly under `tests/` is compiled as its own crate with no
 //! access to another test file's private items, so for a while `Rng`,
-//! [`blocked_on`], [`action_card_is_blocked`] and [`play_random`] existed
-//! twice -- once in `tests/random_game.rs`, once in `tests/bench_playout.rs`
+//! [`blocked_on`] and [`play_random`] existed twice -- once in
+//! `tests/random_game.rs`, once in `tests/bench_playout.rs`
 //! -- with a comment in each asking the next person to mirror their changes
 //! into the other. That is the bug class DESIGN.md names: the same rule
 //! written in two registries, and nothing that fails when they disagree. They
@@ -39,7 +39,6 @@
 //! [`play_random`] returns [`Played::Blocked`] carrying the reasons, so a stop
 //! can never be mistaken for a stuck engine.
 
-use tta::cards::{CardId, Special};
 use tta::game;
 use tta::moves::Move;
 use tta::state::GameState;
@@ -102,21 +101,24 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
             Some("interact.rs: War over Technology spoils are a decision")
         }
 
-        // apply.rs `h_play_action`. Two gaps left, both on action cards: a
-        // `freeCivilAction` order with 2+ legal ways to obey it is a real
-        // choice, and `gainFoodOrResources` is a real choice. (A third,
-        // "two cards print a per-player-count magnitude the generated card
-        // table cannot carry", closed in `2b5c4a3` -- `gen_cards.py` now
-        // emits the same `[i16; 3]` count table it already used for
-        // `strongestPlayers`, so both cards play end to end.) The
-        // `freeCivilAction` case is skipped for EVERY such card rather than
-        // only the ambiguous ones -- deciding which are ambiguous means
-        // reproducing `h_play_action`'s pre-`pay_ca` `revolt_ok` snapshot out
-        // here, and a test that re-derives engine internals to predict the
-        // engine is worse than one that skips a few playable cards.
-        Move::PlayAction { card } if action_card_is_blocked(card) => {
-            Some("interact.rs / card table: an action card's ordered choice")
-        }
+        // `Move::PlayAction` was here, with an `action_card_is_blocked` helper
+        // naming three gaps in `apply.rs::h_play_action`. All three are shut,
+        // and the arm outlived every one of them:
+        //
+        //   * "two cards print a per-player-count magnitude the generated card
+        //     table cannot carry" closed in `2b5c4a3` -- `gen_cards.py` emits
+        //     the same `[i16; 3]` count table it already used for
+        //     `strongestPlayers`.
+        //   * a `freeCivilAction` order with 2+ legal ways to obey it is a
+        //     real choice -- and it is offered as one: `h_play_action` pushes
+        //     `QueueItem::FreeCivil` and `interact::resolve_choice` answers
+        //     `ChoiceKind::FreeCivil`.
+        //   * `gainFoodOrResources` is a real choice -- `interact::
+        //     apply_card_gains` opens `ChoiceKind::FoodOrRes` for it.
+        //
+        // `rust/src/apply.rs` has no `unimplemented!` left at all. Removed
+        // 2026-08-05 after confirming random play at 2/3/4p reaches and
+        // resolves both choice kinds.
 
         // Not a missing module: resigning is a legal, fully-ported move that
         // ends the game early (§5.11), which would make "a game played to the
@@ -126,15 +128,6 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
 
         _ => None,
     }
-}
-
-/// Whether playing this action card would reach one of `h_play_action`'s
-/// remaining `unimplemented!` arms.
-pub fn action_card_is_blocked(card: CardId) -> bool {
-    card.get()
-        .special
-        .iter()
-        .any(|s| matches!(s, Special::FreeCivilAction(_) | Special::GainFoodOrResources(_)))
 }
 
 /// How far a driven game got.

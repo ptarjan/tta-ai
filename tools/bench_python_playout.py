@@ -4,10 +4,11 @@ read that file's module doc comment first for why a "filtered" mode exists.
 
 Two bot modes:
 
-  filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`: skips War
-              over Technology declarations and the two ordered-choice action
-              cards.  This is the apples-to-apples number against the Rust
-              bench: both sides play the same restricted move space, so the
+  filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`, which is
+              now down to one move: a War over Technology declaration, whose
+              spoils are a choice `rust/src/combat.rs` does not yet offer.
+              This is the apples-to-apples number against the Rust bench:
+              both sides play the same restricted move space, so the
               comparison is of engine speed, not of how much of the ruleset
               is implemented.
 
@@ -34,9 +35,7 @@ import time
 
 from engine import game
 from engine import actions
-from engine.cards import db as _card_db
 
-_DB = _card_db()
 
 # ------------------------------------------------------- the shared filter
 #
@@ -51,30 +50,21 @@ _DB = _card_db()
 # BY HAND.  If that function changes, change this.  It goes away when the
 # Python engine does.
 
-_BLOCKED_ACTION_EFFECT_KEYS = (
-    "freeCivilAction",
-    "gainFoodOrResources",
-)
-
-
-def _action_card_blocked(name):
-    eff = _DB.get(name).get("effects") or {}
-    return any(k in eff for k in _BLOCKED_ACTION_EFFECT_KEYS)
-
-
 def _blocked(move):
     tag = move[0]
-    # `offer_pact`, `aggression` and `prepare_event` were here, along with
+    # This list is now two entries long, and everything that came off it came
+    # off on 2026-08-05: `offer_pact`, `aggression` and `prepare_event`, plus
     # the responses only they can open (`bid`/`bid_pass`/`defend`/
-    # `defend_done`/`send_unit`/`send_bonus`/`send_done`).  All of it came
-    # off on 2026-08-05 when `interact::push_choice`/`start_defense` and
-    # `events::reveal_current_event` landed on the Rust side; the two
-    # per-player-count action cards came off with `2b5c4a3`.
+    # `defend_done`/`send_unit`/`send_bonus`/`send_done`), when
+    # `interact::push_choice`/`start_defense` and
+    # `events::reveal_current_event` landed on the Rust side; `wonder_step`
+    # on Hollywood/Internet, when `effects::building_output` landed; and
+    # `play_action` on the `freeCivilAction`/`gainFoodOrResources`/
+    # per-player-count cards, all three of which `rust/src/apply.rs` now
+    # implements -- it has no `unimplemented!` left at all.
     if tag == "resign":
         return True
     if tag == "war" and move[1] == "War over Technology":
-        return True
-    if tag == "play_action" and _action_card_blocked(move[1]):
         return True
     return False
 
@@ -82,9 +72,8 @@ def _blocked(move):
 class FilteredRandomBot:
     """Uniform-random over the same restricted move space the Rust
     random-game test driver plays.  NOT `engine.bots.RandomBot`: that bot
-    excludes only `resign` and sees every other move, including War over
-    Technology and the two ordered-choice action cards -- which is exactly
-    the extra work the Rust port does not do yet.
+    excludes only `resign`, and so also plays War over Technology -- which
+    is exactly the extra work the Rust port does not do yet.
     """
     name = "filtered_random"
 
