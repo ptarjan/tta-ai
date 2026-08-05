@@ -13,9 +13,11 @@
 // real ones. Delete this line once `effects` and `actions` are ported.
 #![allow(dead_code)]
 
+pub mod apply;
 pub mod card_table;
 pub mod cards;
 pub mod costs;
+pub mod legal;
 pub mod economy;
 pub mod effects;
 pub mod fixtures;
