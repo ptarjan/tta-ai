@@ -4,11 +4,9 @@ read that file's module doc comment first for why a "filtered" mode exists.
 
 Two bot modes:
 
-  filtered    Mirrors `rust/tests/random_game.rs`'s `blocked_on`: skips
-              event/pact/aggression moves, War over Technology declarations,
-              a few ordered-choice action cards, Hollywood/Internet wonder
-              completion, and the pending-decision responses only those
-              moves can open (bid/defend/send_*).  This is the
+  filtered    Mirrors `rust/tests/common/mod.rs`'s `blocked_on`: skips War
+              over Technology declarations, the two ordered-choice action
+              cards, and Hollywood/Internet wonder completion.  This is the
               apples-to-apples number against the Rust bench: both sides
               play the same restricted move space, so the comparison is of
               engine speed, not of how much of the ruleset is implemented.
@@ -42,23 +40,21 @@ _DB = _card_db()
 
 # ------------------------------------------------------- the shared filter
 #
-# Kept in exact correspondence with `rust/tests/random_game.rs`'s
-# `blocked_on`/`action_card_is_blocked`.  If that file's filter changes,
-# mirror the change here -- see this module's docstring.
+# THE LAST HAND-MIRRORED COPY.  The Rust side used to carry two copies of
+# this filter, in `rust/tests/random_game.rs` and `rust/tests/
+# bench_playout.rs`, and they drifted: the test unblocked events, pacts,
+# aggression and the colonization responses as those modules landed, and the
+# bench kept blocking them, so the benchmark was timing a smaller game than
+# the suite played.  Those two are now one file, `rust/tests/common/mod.rs`.
+# This one cannot share that code -- it filters Python's move list, not
+# Rust's -- so it is kept in exact correspondence with `common::blocked_on`
+# BY HAND.  If that function changes, change this.  It goes away when the
+# Python engine does.
 
 _BLOCKED_ACTION_EFFECT_KEYS = (
     "freeCivilAction",
     "gainFoodOrResources",
-    "culturePerCivilizationWithMoreCulture",
-    "resourcesForMilitaryUnitsPerStrongerCivilization",
 )
-
-# Responses to decisions only prepare_event/aggression/offer_pact can open
-# (auctions, aggression defense, colonization).  Blocking those three moves
-# already makes these unreachable; listed too, so a divergence fails loudly
-# (see FilteredRandomBot) instead of silently playing an unfiltered move.
-_BLOCKED_PENDING_TAGS = ("bid", "bid_pass", "defend", "defend_done",
-                          "send_unit", "send_bonus", "send_done")
 
 
 def _action_card_blocked(name):
@@ -68,7 +64,13 @@ def _action_card_blocked(name):
 
 def _blocked(p, move):
     tag = move[0]
-    if tag in ("offer_pact", "aggression", "prepare_event", "resign"):
+    # `offer_pact`, `aggression` and `prepare_event` were here, along with
+    # the responses only they can open (`bid`/`bid_pass`/`defend`/
+    # `defend_done`/`send_unit`/`send_bonus`/`send_done`).  All of it came
+    # off on 2026-08-05 when `interact::push_choice`/`start_defense` and
+    # `events::reveal_current_event` landed on the Rust side; the two
+    # per-player-count action cards came off with `2b5c4a3`.
+    if tag == "resign":
         return True
     if tag == "war" and move[1] == "War over Technology":
         return True
@@ -77,17 +79,15 @@ def _blocked(p, move):
     if tag == "wonder_step" and p.wonder is not None \
             and p.wonder.name in ("Hollywood", "Internet"):
         return True
-    if tag in _BLOCKED_PENDING_TAGS:
-        return True
     return False
 
 
 class FilteredRandomBot:
     """Uniform-random over the same restricted move space the Rust
     random-game test driver plays.  NOT `engine.bots.RandomBot`: that bot
-    excludes only `resign` and sees every other move -- events, pacts,
-    aggression, War over Technology, the blocked action cards -- which is
-    exactly the extra work the Rust port does not do yet.
+    excludes only `resign` and sees every other move, including War over
+    Technology and the two ordered-choice action cards -- which is exactly
+    the extra work the Rust port does not do yet.
     """
     name = "filtered_random"
 
