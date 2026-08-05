@@ -15,22 +15,6 @@
 //! (concurrent work is in flight on some of them), so each gap below is
 //! worked around explicitly and flagged rather than silently approximated:
 //!
-//! - **`Card` has no `stages` field.** A wonder's per-stage resource cost
-//!   (`data/cards_wonders_leaders.json` prints e.g. Pyramids
-//!   `"stages":[3,2,1]`) is not captured by `tools/gen_cards.py` at all.
-//!   [`wonder_stage_cost`] cannot be computed and panics loudly rather than
-//!   fabricating a number -- see its doc comment.
-//! - **`PlayerState` has no `taken_leader_ages` field.** Python reads
-//!   `p.taken_leader_ages` directly off the player for the "one leader per
-//!   age" rule; here it is a required parameter to [`take_gate`]/[`can_take`]
-//!   instead, so a caller cannot silently get "nothing taken" and generate an
-//!   illegal second-same-age leader take. Retire the parameter once
-//!   `state.rs` grows the field.
-//! - **`Card.science_cost` only ever captures `techCost`.** Every government
-//!   prints `techCost: null` and its real develop cost in `peacefulCost`
-//!   (`data/cards_civil.json`), which the generator never reads. [`tech_cost`]
-//!   therefore returns `None` for every government -- correct for Despotism
-//!   only (whose `peacefulCost` really is null), wrong for the other seven.
 //! - **`effects::Stats` has no `build_discount` / `tech_discount` fields**
 //!   (documented in `effects.rs`'s own KNOWN GAPS: "not needed by anything in
 //!   this port's scope (`build_cost` is not ported)" -- written before this
@@ -41,9 +25,20 @@
 //!   Events are not ported, so this is always empty in practice today;
 //!   treated as zero here too, consistently.
 //!
-//! None of these affect the vast majority of build/develop/take costs in a
-//! pre-event, non-wonder-stage, non-peaceful-revolution game state, which is
-//! what this module's tests cover. All five are reported to the coordinator.
+//! Two gaps this module used to carry -- `Card` had no `stages` field
+//! ([`wonder_stage_cost`] panicked) and `PlayerState` had no
+//! `taken_leader_ages` field ([`take_gate`]/[`can_take`] took it as an
+//! explicit parameter) -- are closed: both fields landed in `cards.rs`/
+//! `state.rs`, `wonder_stage_cost` reads `Card::stages`, and `take_gate`/
+//! `can_take` read `p.taken_leader_ages` directly (the parameter is retired).
+//! Likewise `Card.science_cost` only ever captured `techCost`, so every
+//! government (which prints `techCost: null` and its real develop cost in
+//! `peacefulCost`) priced as `None`; `Card::peaceful_cost` now exists and
+//! [`tech_cost`] reads it for governments.
+//!
+//! Neither remaining gap affects the vast majority of build/develop/take
+//! costs in a pre-event, non-one-time-discount game state, which is what
+//! this module's tests cover.
 //!
 //! ## A note on leader identity
 //!
@@ -213,11 +208,10 @@ pub fn urban_count(p: &PlayerState, kind: CardType) -> i32 {
 /// (mirrors `engine/actions.py::_take_gate`): everything in §2.5 that does
 /// not depend on the row slot being tested.
 ///
-/// `taken_leader_ages` is not read off `p` the way Python reads
-/// `p.taken_leader_ages` -- see this module's top KNOWN GAPS. It is a
-/// bitmask, bit `card.age as u8` set once a leader of that age has ever been
-/// taken (§ one leader per age); `Age` has 5 values (A..IV) so a `u8` has
-/// ample headroom.
+/// `taken_leader_ages` is `p.taken_leader_ages` verbatim -- a bitmask, bit
+/// `card.age as u8` set once a leader of that age has ever been taken
+/// (§ one leader per age); `Age` has 5 values (A..IV) so a `u8` has ample
+/// headroom. See `state.rs`'s doc comment on the field.
 pub struct TakeGate {
     pub have: i32,
     pub hand_full: bool,
@@ -228,12 +222,7 @@ pub struct TakeGate {
 
 /// Build a [`TakeGate`]. `budget`, if given, overrides `spare_ca` the same
 /// way Python's `_take_gate(state, p, budget=None)` does.
-pub fn take_gate(
-    state: &GameState,
-    p: &PlayerState,
-    budget: Option<i32>,
-    taken_leader_ages: u8,
-) -> TakeGate {
+pub fn take_gate(state: &GameState, p: &PlayerState, budget: Option<i32>) -> TakeGate {
     let have = budget.unwrap_or_else(|| spare_ca(p));
     let surcharge = if leader_is(p, "Michelangelo") {
         0
@@ -245,7 +234,7 @@ pub fn take_gate(
     // app harness can hold a rival's hand as a bare count (`hidden_civil`)
     // without names. Identical to `hand_civil.len()` in self-play.
     let hand_full = p.hand_size_civil() as i32 >= civil_hand_limit(state, p);
-    TakeGate { have, hand_full, surcharge, leader_discount, taken_leader_ages }
+    TakeGate { have, hand_full, surcharge, leader_discount, taken_leader_ages: p.taken_leader_ages }
 }
 
 /// §2.5 taking limits for one row slot, given a precomputed [`TakeGate`].
@@ -316,14 +305,8 @@ pub fn can_take_gated(
 ///
 /// Mirrors `engine/actions.py::can_take`; see [`take_gate`] for
 /// `taken_leader_ages`.
-pub fn can_take(
-    state: &GameState,
-    p: &PlayerState,
-    idx: usize,
-    budget: Option<i32>,
-    taken_leader_ages: u8,
-) -> bool {
-    can_take_gated(state, p, idx, &take_gate(state, p, budget, taken_leader_ages), None)
+pub fn can_take(state: &GameState, p: &PlayerState, idx: usize, budget: Option<i32>) -> bool {
+    can_take_gated(state, p, idx, &take_gate(state, p, budget), None)
 }
 
 // ------------------------------------------------------------- build/tech costs
@@ -363,15 +346,26 @@ pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<
 /// Science cost to develop technology `id`, or `None` if `id` has no
 /// develop cost at all (mirrors `engine/effects.py::tech_cost`).
 ///
-/// See this module's top KNOWN GAPS: governments always return `None` here
-/// (their real cost is `peacefulCost`, which the type layer does not carry),
-/// and the `technologyScienceDiscount` pool / event one-time discounts are
-/// not applied.
+/// Governments price off `peaceful_cost` (their PEACEFUL revolution price,
+/// paid through the ordinary `develop` action, §8.3), never `science_cost`
+/// (which is always 0 for a government -- `techCost` is always printed
+/// `null`, see `Card::science_cost`'s doc comment). This is a DIFFERENT
+/// number from `Card::revolution_cost` (the VIOLENT-revolution price,
+/// `apply.rs::revolution_cost`, paid with `Move::Revolution` instead) for
+/// the same government -- Paul has ruled both change types must stay
+/// representable at once, so neither is derived from the other here.
+///
+/// See this module's top KNOWN GAPS: the `technologyScienceDiscount` pool
+/// and event one-time discounts are not applied (to governments or anything
+/// else).
 pub fn tech_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
     let _ = state; // reserved, see build_cost_for
     let card = id.get();
     if card.kind == CardType::Government {
-        return None;
+        if card.peaceful_cost == 0 {
+            return None;
+        }
+        return Some(card.peaceful_cost as i32);
     }
     if card.science_cost == 0 {
         return None;
@@ -406,27 +400,22 @@ pub fn upgrade_cost(state: &GameState, p: &PlayerState, lo: CardId, hi: CardId) 
 }
 
 /// Resource cost to build the next `k` stages of the wonder currently under
-/// construction (§ wonders).
+/// construction (§ wonders). Mirrors `engine/actions.py::wonder_stage_cost`:
+/// `stages[done:done+k]`, summed. `p.wonder_steps` is `done`; `Card::stages`
+/// (Pyramids `[3, 2, 1]`, Internet `[2, 3, 4, 3, 2]`, First Space Flight
+/// `[1, 2, 4, 9]`) is the per-stage price list.
 ///
-/// **NOT PORTED.** `engine/actions.py::wonder_stage_cost` reads
-/// `db.get(p.wonder.name)["stages"]` -- the per-stage resource-cost list
-/// printed on every wonder (`data/cards_wonders_leaders.json`, e.g. Pyramids
-/// `"stages":[3,2,1]`). `cards::Card` has no `stages` field and
-/// `tools/gen_cards.py` never reads the `stages` key at all: confirmed by
-/// inspection 2026-08-05, not a port-time oversight. Fixing this needs a
-/// `cards.rs`/`card_table.rs`/`gen_cards.py` change (a `stages: &'static
-/// [u8]` field, sized like `count`), which is out of this module's scope --
-/// those files are off-limits here and other work may be in flight on them.
-/// Reported to the coordinator. This panics rather than fabricating a
-/// number: a caller silently getting `0` or `resource_cost` here would
-/// generate legal-looking wonder-build moves at the wrong price, which is
-/// exactly the failure mode DESIGN.md's "compile error, not silent" rule
-/// exists to prevent -- a runtime panic is the closest this can get to that
-/// without editing an off-limits file.
-pub fn wonder_stage_cost(_state: &GameState, _p: &PlayerState, _k: u8) -> i32 {
-    unimplemented!(
-        "wonder_stage_cost needs Card::stages, not yet in the type layer -- see costs.rs's doc comment"
-    )
+/// Matches Python's forgiving slice rather than panicking on an over-wide
+/// `k`: `stages[done:done+k]` on a Python list silently truncates at the end
+/// rather than raising, so `end` is clamped to `stages.len()` here too --
+/// every real caller already bounds `k` to what is left (`legal.rs`'s
+/// `min(left, s.wonder_stages)`), so this is a safety net, not a rule.
+pub fn wonder_stage_cost(_state: &GameState, p: &PlayerState, k: u8) -> i32 {
+    debug_assert!(!p.wonder.is_none(), "wonder_stage_cost: no wonder in progress");
+    let stages = p.wonder.get().stages;
+    let done = (p.wonder_steps as usize).min(stages.len());
+    let end = (done + k as usize).min(stages.len());
+    stages[done..end].iter().map(|&s| s as i32).sum()
 }
 
 /// Whether `id` is a military unit technology (infantry/cavalry/artillery/
@@ -563,6 +552,10 @@ mod tests {
             mil_discount: 0,
             mil_sci_discount: 0,
             resigned: false,
+            taken_leader_ages: 0,
+            war_declared_by_me: CardId::NONE,
+            war_target: 0,
+            wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
         }
     }
 
@@ -789,9 +782,9 @@ mod tests {
         let mut state = one_player_state(p);
         state.card_row[9] = card("Bronze"); // slot cost 3
         let p = &state.players[0];
-        assert!(can_take(&state, p, 9, None, 0));
-        assert!(can_take(&state, p, 9, Some(3), 0));
-        assert!(!can_take(&state, p, 9, Some(2), 0), "budget one short");
+        assert!(can_take(&state, p, 9, None));
+        assert!(can_take(&state, p, 9, Some(3)));
+        assert!(!can_take(&state, p, 9, Some(2)), "budget one short");
     }
 
     #[test]
@@ -804,7 +797,7 @@ mod tests {
         let mut state = one_player_state(p);
         state.card_row[0] = card("Selective Breeding");
         let p = &state.players[0];
-        assert!(!can_take(&state, p, 0, None, 0), "hand at civil_hand_limit");
+        assert!(!can_take(&state, p, 0, None), "hand at civil_hand_limit");
     }
 
     #[test]
@@ -821,8 +814,8 @@ mod tests {
         state.card_row[1] = card("Rich Land (A)");
         state.players[0].hand_civil.push(card("Rich Land (A)"));
         let p = &state.players[0];
-        assert!(!can_take(&state, p, 0, None, 0), "already holding an Irrigation");
-        assert!(can_take(&state, p, 1, None, 0), "action cards are exempt from one-per-name");
+        assert!(!can_take(&state, p, 0, None), "already holding an Irrigation");
+        assert!(can_take(&state, p, 1, None), "action cards are exempt from one-per-name");
     }
 
     #[test]
@@ -831,9 +824,9 @@ mod tests {
         p.civil_actions = 10;
         let mut state = one_player_state(p);
         state.card_row[0] = card("Colossus");
-        assert!(can_take(&state, &state.players[0], 0, None, 0));
+        assert!(can_take(&state, &state.players[0], 0, None));
         state.players[0].wonder = card("Pyramids");
-        assert!(!can_take(&state, &state.players[0], 0, None, 0), "already building a wonder");
+        assert!(!can_take(&state, &state.players[0], 0, None), "already building a wonder");
     }
 
     #[test]
@@ -844,9 +837,10 @@ mod tests {
         let leader_slot = card("Napoleon Bonaparte");
         state.card_row[0] = leader_slot;
         let age_bit = 1u8 << (leader_slot.get().age as u8);
-        assert!(can_take(&state, &state.players[0], 0, None, 0));
+        assert!(can_take(&state, &state.players[0], 0, None));
+        state.players[0].taken_leader_ages = age_bit;
         assert!(
-            !can_take(&state, &state.players[0], 0, None, age_bit),
+            !can_take(&state, &state.players[0], 0, None),
             "that age's leader was already taken"
         );
     }
@@ -897,14 +891,30 @@ mod tests {
     }
 
     #[test]
-    fn tech_cost_is_none_for_every_government_a_known_gap() {
+    fn tech_cost_is_none_for_despotism_which_prints_no_peaceful_cost() {
         let p = blank_player(0, card("Despotism"));
         let state = one_player_state(p);
-        // Monarchy's real peaceful-revolution cost is 8 (peacefulCost in the
-        // data); this returns None because `Card` has no peacefulCost field
-        // -- see this module's top KNOWN GAPS. This test pins the gap so a
-        // silent behaviour change shows up here first.
-        assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), None);
+        // Despotism prints `peacefulCost: null` for real -- the one
+        // government that is genuinely undevelopable this way (it is the
+        // starting government, never taken from hand).
+        assert_eq!(tech_cost(&state, &state.players[0], card("Despotism")), None);
+    }
+
+    #[test]
+    fn tech_cost_reads_peaceful_cost_for_governments() {
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        // data/cards_civil.json peacefulCost, verified 2026-08-05.
+        assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), Some(8));
+        assert_eq!(tech_cost(&state, &state.players[0], card("Theocracy")), Some(6));
+        assert_eq!(
+            tech_cost(&state, &state.players[0], card("Constitutional Monarchy")),
+            Some(12)
+        );
+        assert_eq!(tech_cost(&state, &state.players[0], card("Republic")), Some(13));
+        assert_eq!(tech_cost(&state, &state.players[0], card("Communism")), Some(19));
+        assert_eq!(tech_cost(&state, &state.players[0], card("Fundamentalism")), Some(18));
+        assert_eq!(tech_cost(&state, &state.players[0], card("Democracy")), Some(17));
     }
 
     #[test]
@@ -953,12 +963,34 @@ mod tests {
     // ----------------------------------------------------- wonder_stage_cost
 
     #[test]
-    #[should_panic(expected = "Card::stages")]
-    fn wonder_stage_cost_is_not_ported_yet() {
+    fn wonder_stage_cost_sums_the_next_k_printed_stages() {
+        // Pyramids: stages [3, 2, 1] (data/cards_wonders_leaders.json).
         let mut p = blank_player(0, card("Despotism"));
         p.wonder = card("Pyramids");
         let state = one_player_state(p);
-        wonder_stage_cost(&state, &state.players[0], 1);
+        assert_eq!(wonder_stage_cost(&state, &state.players[0], 1), 3, "first stage only");
+        assert_eq!(wonder_stage_cost(&state, &state.players[0], 2), 3 + 2, "first two stages");
+        assert_eq!(wonder_stage_cost(&state, &state.players[0], 3), 3 + 2 + 1, "all three stages");
+    }
+
+    #[test]
+    fn wonder_stage_cost_reads_from_the_current_progress() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.wonder = card("Pyramids");
+        p.wonder_steps = 1; // first stage (cost 3) already paid
+        let state = one_player_state(p);
+        assert_eq!(wonder_stage_cost(&state, &state.players[0], 1), 2, "second stage only");
+    }
+
+    #[test]
+    fn wonder_stage_cost_clamps_k_past_the_last_stage() {
+        // Mirrors Python's forgiving slice: asking for more stages than are
+        // left sums only what is actually printed, rather than panicking.
+        let mut p = blank_player(0, card("Despotism"));
+        p.wonder = card("Pyramids");
+        p.wonder_steps = 2; // only the last stage (cost 1) remains
+        let state = one_player_state(p);
+        assert_eq!(wonder_stage_cost(&state, &state.players[0], 5), 1);
     }
 
     // ------------------------------------------------------------- is_unit

@@ -16,23 +16,23 @@
 //! relay ["2 hops from a human" limit], so this doc comment is the durable
 //! record until it is re-reported)
 //!
-//! 1. **`rust/tools/gen_cards.py` silently drops WHICH action a yellow card
-//!    orders.** `data/*.json` prints `effects.freeCivilAction` as a STRING
-//!    (e.g. `"build_or_upgrade_farm_or_mine"`, confirmed in
-//!    `data/cards_military_actions.json`) on 18 cards. The generator's
-//!    `EFFECT_FIELDS["freeCivilAction"]` mapping only ever fires when the
-//!    value is `int`/`float`; a string falls through to the Special-variant
-//!    branch, which names the variant after the JSON KEY
-//!    (`camel("freeCivilAction")`), not the VALUE -- so all 18 cards compile
-//!    to the exact same bare `Special::FreeCivilAction` (confirmed: 18
-//!    identical occurrences in `card_table.rs`), and the string saying WHICH
-//!    of the six kinds each one orders is gone before `card_table.rs`
-//!    exists. This blocks the ordered-action branch of
-//!    [`action_card_playable`] for those 18 cards (treated as never
-//!    playable via `PlayAction`, not guessed). [`free_action_moves`] itself
-//!    is fully ported and correct against an explicit `kind` parameter,
-//!    since the function never touches card data to learn its own kind --
-//!    it is ready to use the moment a real kind is recoverable.
+//! 1. ~~`rust/tools/gen_cards.py` silently drops WHICH action a yellow card
+//!    orders~~ **FIXED on the `card_table.rs` side, 2026-08-05, by the
+//!    worker porting `effects.rs`'s pact/colony/army-strength gaps**: every
+//!    string-valued `effects` key (`freeCivilAction`, `onBuildCulture`,
+//!    `gainResources`, `victorTakesScienceUpTo`) now generates a real
+//!    `<Key>Value` enum instead of collapsing to a bare `Special` variant --
+//!    `Special::FreeCivilAction` is `Special::FreeCivilAction(
+//!    FreeCivilActionValue)` now, one of six variants matching exactly the
+//!    six string values this gap originally described. **This module's OWN
+//!    side is not updated to match**: [`action_card_playable`] still
+//!    unconditionally returns `false` for these 18 cards, and this file's
+//!    own `FreeActionKind` (below) is a second, independently-named enum
+//!    for the identical six values -- both are this module's decision to
+//!    make (map `FreeCivilActionValue` onto `FreeActionKind`, or retire one
+//!    of them), not something the type-layer fix should have decided
+//!    unilaterally. [`free_action_moves`] itself is unaffected either way:
+//!    it already takes its `kind` as an explicit parameter.
 //! 2. ~~`Card` has no `revolutionCost` field~~ **FIXED under this module
 //!    while it was being written**: `cards.rs` grew `Card::revolution_cost`
 //!    (and `peaceful_cost`, `stages`, `immediate_effects`) mid-flight, ahead
@@ -44,26 +44,33 @@
 //!    `develop_technology` revolt sub-case (Breakthrough, RB p.15).
 //! 3. **Combat/pact resolution (a `combat.rs`) is not built yet.**
 //!    `effects.rs` has no `pacts_for`/`pact_forbids_attack`/
-//!    `attack_strength`/`defense_strength`/`war_forbidden`, `Stats` has no
-//!    `war_immune`, and `PlayerState` has no `war_declared_by_me`/
-//!    `wars_declared_on_me`. This blocks `offer_pact`/`aggression`/`war`
-//!    move generation in [`politics_moves`] entirely (`Card` also has no
-//!    "prints distinct A/B sides" flag, which would additionally block
-//!    `offer_pact` even once combat.rs lands). `pol_pass`, `resign`,
-//!    `prepare_event` and `cancel_pact` need none of that infrastructure and
-//!    are fully ported -- `cancel_pact` in particular works today because
-//!    `PlayerState::pacts` already exists, it is only the ATTACK-side
-//!    queries that are missing.
+//!    `attack_strength`/`defense_strength`/`war_forbidden`, and `Stats` has
+//!    no `war_immune`. This blocks `offer_pact`/`aggression`/`war` move
+//!    generation in [`politics_moves`] entirely (`Card` also has no "prints
+//!    distinct A/B sides" flag, which would additionally block `offer_pact`
+//!    even once combat.rs lands). `pol_pass`, `resign`, `prepare_event` and
+//!    `cancel_pact` need none of that infrastructure and are fully ported --
+//!    `cancel_pact` in particular works today because `PlayerState::pacts`
+//!    already exists, it is only the ATTACK-side queries that are missing.
+//!    `PlayerState` DOES now carry `war_declared_by_me`/`wars_declared_on_me`
+//!    (state.rs grew them so `apply.rs::h_war` could be ported), so the one
+//!    piece of `war` move generation that needed no combat math at all --
+//!    "you may not declare a second war while one is already open"
+//!    (`p.war_declared_by_me` truthy in Python's `_politics_moves`) -- is no
+//!    longer blocked on a missing field, only on `war_forbidden` above.
 //!
-//! Smaller, already-known gaps carried forward without re-reporting (see
-//! `costs.rs`'s own KNOWN GAPS): [`taken_leader_ages`] has no real
-//! per-player history to read off `PlayerState`, so it derives a
-//! best-effort bitmask from `p.leader`'s CURRENT age only (undercounts a
-//! replaced leader's age, never overcounts -- strictly better than passing
-//! 0, which would legalise re-taking a second leader of the currently-held
-//! one's age); and government develop cost is priced at 0 in
-//! [`action_moves`] (the existing `techCost`/`peacefulCost` gap propagates
-//! through `costs::tech_cost_net`).
+//! Two gaps this module used to carry forward from `costs.rs` are now
+//! closed: this module used to derive a best-effort `taken_leader_ages`
+//! bitmask from `p.leader`'s CURRENT age only, because `PlayerState` had no
+//! real per-player history; `state.rs` grew `taken_leader_ages` and `costs::
+//! take_gate`/`can_take` read it directly, so this module no longer computes
+//! or passes one at all. And government develop cost used to be priced at 0
+//! in [`action_moves`] (the `techCost`/`peacefulCost` gap in `costs::
+//! tech_cost`); `Card::peaceful_cost` landed and `costs::tech_cost` reads it,
+//! so `costs::tech_cost_net` now returns the real price for every
+//! government. Wonder-stage moves are likewise no longer blocked:
+//! `costs::wonder_stage_cost` reads `Card::stages` now, so [`action_moves`]
+//! and [`free_action_moves`] both generate `WonderStep` moves.
 //!
 //! [`legal_moves`] also does not check a `state.pending` flag:
 //! `engine/interact.py` (the decision-queue subsystem Python routes to for a
@@ -132,26 +139,6 @@ fn tableau_names_sorted(techs: &Tableau, buf: &mut [CardId; MAX_TABLEAU]) -> usi
 /// about keys, and no name here is ever used as one).
 fn leader_is(p: &PlayerState, name: &str) -> bool {
     !p.leader.is_none() && p.leader.get().name == name
-}
-
-/// Best-effort `taken_leader_ages` bitmask for [`costs::take_gate`]/
-/// [`costs::can_take`] (§ one leader per age, taken across the WHOLE game).
-///
-/// **Known-incomplete** -- see this module's top doc comment. `PlayerState`
-/// has no history of every leader ever taken, only the CURRENT one in
-/// `p.leader`, so this sets only that leader's age bit. That undercounts a
-/// player who has since REPLACED a leader of some age (that age's bit is
-/// lost the moment `_h_play_leader` would discard the old card, because
-/// `state.rs` has nowhere to record it) and never overcounts. Passing 0
-/// instead would be strictly worse: it would legalise re-taking a second
-/// leader of the CURRENTLY held one's age, an outright rules violation
-/// rather than a missed edge case.
-fn taken_leader_ages(p: &PlayerState) -> u8 {
-    if p.leader.is_none() {
-        0
-    } else {
-        1u8 << (p.leader.get().age as u8)
-    }
 }
 
 /// `engine/economy.py::pop_cost` -- the `state`/`p`-reading wrapper around
@@ -270,7 +257,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     let ca = costs::spare_ca(p);
 
     // take a card from the row
-    let gate = costs::take_gate(state, p, None, taken_leader_ages(p));
+    let gate = costs::take_gate(state, p, None);
     for (idx, &id) in state.card_row.iter().enumerate() {
         if !id.is_none() && costs::can_take_gated(state, p, idx, &gate, Some(id)) {
             moves.push(Move::Take { slot: idx as u8 });
@@ -374,18 +361,18 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         }
     }
 
-    // Wonder-stage moves: BLOCKED. `costs::wonder_stage_cost` is still
-    // `unimplemented!()` as of this port, even though `Card::stages` (the
-    // data it needs) landed in `cards.rs`/`card_table.rs` while this module
-    // was being written -- `costs.rs` itself has not been updated to read it
-    // yet, and that update belongs to costs.rs's own worker, not here (this
-    // module must not grow a second implementation of the same formula --
-    // DESIGN.md's "in one registry, absent from another" bug class runs both
-    // directions). Calling the unimplemented function here would panic the
-    // first time any player has a wonder in progress, which is far worse
-    // than under-generating a move category in a function that runs every
-    // decision of self-play, so this deliberately never calls it. Re-check
-    // `costs::wonder_stage_cost` before treating this as still blocked.
+    // wonder stages
+    if !p.wonder.is_none() {
+        let stages_left = p.wonder.get().stages.len() as i32 - p.wonder_steps as i32;
+        if ca >= 1 {
+            let max_k = stages_left.min(s.wonder_stages);
+            for k in 1..=max_k {
+                if p.resources as i32 >= costs::wonder_stage_cost(state, p, k as u8) {
+                    moves.push(Move::WonderStep { steps: k as u8 });
+                }
+            }
+        }
+    }
 
     // hand: leaders, technologies, governments, action cards
     let mut hand_buf = [CardId::NONE; MAX_HAND];
@@ -398,11 +385,11 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 }
             }
             CardType::Government => {
-                // See costs.rs's KNOWN GAPS: `tech_cost` returns `None` for
-                // every government (its real cost is `peacefulCost`, not
-                // captured), so `.unwrap_or(0)` prices every peaceful
-                // develop at 0 science -- already reported there, carried
-                // forward here, not re-reported.
+                // `costs::tech_cost` now reads `Card::peaceful_cost` for
+                // governments, so this prices a peaceful develop at its real
+                // science cost (`.unwrap_or(0)` only fires for Despotism,
+                // which prints no `peacefulCost` at all and is never in a
+                // hand to begin with).
                 if ca >= 1 && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0) {
                     moves.push(Move::Develop { card: id });
                 }
@@ -482,17 +469,21 @@ fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
 
 /// §3.11: a yellow card that orders an action needs that action to be legal.
 ///
-/// **PARTIALLY BLOCKED** -- see this module's top doc comment (gap 1).
+/// **PARTIALLY BLOCKED** -- see this module's top doc comment (gap 1: the
+/// `card_table.rs` side is now FIXED, this module's side is not yet).
 /// Mirrors `engine/actions.py::_action_card_playable`. The 18 cards that
-/// print an ordered action (`Special::FreeCivilAction`) always return
-/// `false` here, since there is no way to recover WHICH of the six kinds a
-/// given one of them orders. Cards with no ordered action are unaffected --
-/// that branch only needs `card.effects`/`card.special`, all of which exist,
-/// and is ported in full via [`action_card_has_any_gain`].
+/// print an ordered action (`Special::FreeCivilAction`, now carrying a real
+/// `FreeCivilActionValue` payload -- gen_cards.py, 2026-08-05) still always
+/// return `false` here: this module has its OWN `FreeActionKind` enum
+/// (below) that nothing yet maps the new payload onto, and
+/// `free_action_moves`'s decision-queue wiring is a separate, larger gap
+/// regardless. Cards with no ordered action are unaffected -- that branch
+/// only needs `card.effects`/`card.special`, all of which exist, and is
+/// ported in full via [`action_card_has_any_gain`].
 fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
     let _ = (state, p);
     let card = id.get();
-    if card.special.contains(&Special::FreeCivilAction) {
+    if card.special.iter().any(|s| matches!(s, Special::FreeCivilAction(_))) {
         return false;
     }
     action_card_has_any_gain(card)
@@ -586,10 +577,12 @@ pub fn free_action_moves(
             }
         }
         BuildOneWonderStage => {
-            // BLOCKED: needs `costs::wonder_stage_cost`, which needs
-            // `Card::stages` -- see this module's top doc comment and
-            // `action_moves`'s wonder-step comment. Never calling the
-            // unimplemented function here, for the same reason.
+            if !p.wonder.is_none() && (p.wonder_steps as usize) < p.wonder.get().stages.len() {
+                let cost = (costs::wonder_stage_cost(state, p, 1) - discount).max(0);
+                if p.resources as i32 >= cost {
+                    out.push(Move::WonderStep { steps: 1 });
+                }
+            }
         }
         DevelopTechnology => {
             let mut buf = [CardId::NONE; MAX_HAND];
@@ -725,6 +718,10 @@ mod tests {
             mil_discount: 0,
             mil_sci_discount: 0,
             resigned: false,
+            taken_leader_ages: 0,
+            war_declared_by_me: CardId::NONE,
+            war_target: 0,
+            wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
         }
     }
 
@@ -814,13 +811,25 @@ mod tests {
     // ------------------------------------------------------- taken_leader_ages
 
     #[test]
-    fn taken_leader_ages_sets_only_the_current_leaders_bit() {
-        let p = blank_player(0, card("Despotism"));
-        assert_eq!(taken_leader_ages(&p), 0, "no leader");
-        let mut p2 = blank_player(0, card("Despotism"));
-        p2.leader = card("Napoleon Bonaparte");
-        let expect = 1u8 << (card("Napoleon Bonaparte").get().age as u8);
-        assert_eq!(taken_leader_ages(&p2), expect);
+    fn action_moves_take_reads_taken_leader_ages_off_the_player_directly() {
+        // Unlike the old best-effort derivation from `p.leader`'s CURRENT
+        // age, `p.taken_leader_ages` is real per-player history now: a
+        // player who took (and has since replaced) an Age-A leader must
+        // still be blocked from taking a SECOND Age-A leader, even though
+        // `p.leader` no longer points at the first one.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let leader_slot = card("Napoleon Bonaparte"); // Age A
+        let age_bit = 1u8 << (leader_slot.get().age as u8);
+        p.taken_leader_ages = age_bit;
+        p.leader = card("Hammurabi"); // a DIFFERENT (non-Age-A) leader now held
+        let mut state = one_player_state(p);
+        state.card_row[0] = leader_slot;
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().iter().any(|m| matches!(m, Move::Take { slot: 0 })),
+            "that age's leader was already taken this game, regardless of who is currently held"
+        );
     }
 
     // -------------------------------------------------------------- legal_moves
@@ -1019,18 +1028,42 @@ mod tests {
     }
 
     #[test]
-    fn wonder_step_is_never_generated_yet() {
-        // Pin for the documented gap: `costs::wonder_stage_cost` is
-        // unimplemented, so this must never be called, and no `WonderStep`
-        // move may ever appear -- even when a wonder is in progress and the
-        // player can clearly afford *something*.
+    fn wonder_step_generated_up_to_the_wonder_stages_limit_when_affordable() {
+        // Pyramids: stages [3, 2, 1]. Default `Stats::wonder_stages` is 1 (no
+        // card raises it), so with plenty of resources exactly ONE
+        // `WonderStep { steps: 1 }` move should appear -- not `steps: 2` or
+        // `steps: 3`, which would need a higher `wonder_stages` stat.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.resources = 100;
         p.wonder = card("Pyramids");
         let state = one_player_state(p);
         let moves = action_moves(&state, &state.players[0]);
-        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::WonderStep { .. })));
+        assert!(moves.as_slice().contains(&Move::WonderStep { steps: 1 }));
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::WonderStep { steps } if *steps != 1)));
+    }
+
+    #[test]
+    fn wonder_step_needs_enough_resources_and_a_civil_action() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 2; // Pyramids' first stage costs 3
+        p.wonder = card("Pyramids");
+        let state = one_player_state(p);
+        assert!(!action_moves(&state, &state.players[0])
+            .as_slice()
+            .iter()
+            .any(|m| matches!(m, Move::WonderStep { .. })));
+
+        let mut p2 = blank_player(0, card("Despotism"));
+        p2.civil_actions = 0; // no civil action left
+        p2.resources = 100;
+        p2.wonder = card("Pyramids");
+        let state2 = one_player_state(p2);
+        assert!(!action_moves(&state2, &state2.players[0])
+            .as_slice()
+            .iter()
+            .any(|m| matches!(m, Move::WonderStep { .. })));
     }
 
     #[test]
@@ -1044,13 +1077,24 @@ mod tests {
     }
 
     #[test]
-    fn develop_government_is_priced_at_zero_a_known_gap() {
+    fn develop_government_is_priced_at_its_real_peaceful_cost() {
+        // Monarchy's peacefulCost is 8 (data/cards_civil.json).
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
-        p.science = 0; // real Monarchy peacefulCost is 8; this must still be legal
+        p.science = 7; // one short
         p.hand_civil.push(card("Monarchy"));
         let state = one_player_state(p);
-        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy") }));
+        assert!(
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy") }),
+            "7 science is not enough to peacefully develop Monarchy (needs 8)"
+        );
+
+        let mut p2 = blank_player(0, card("Despotism"));
+        p2.civil_actions = 4;
+        p2.science = 8;
+        p2.hand_civil.push(card("Monarchy"));
+        let state2 = one_player_state(p2);
+        assert!(action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy") }));
     }
 
     #[test]
@@ -1103,7 +1147,7 @@ mod tests {
             .iter()
             .find(|c| {
                 c.kind == CardType::Action
-                    && !c.special.contains(&Special::FreeCivilAction)
+                    && !c.special.iter().any(|s| matches!(s, Special::FreeCivilAction(_)))
                     && (c.effects.gain_science != 0
                         || c.effects.gain_culture != 0
                         || c.effects.gain_food != 0
@@ -1190,10 +1234,37 @@ mod tests {
     }
 
     #[test]
-    fn free_action_build_one_wonder_stage_is_never_generated_yet() {
+    fn free_action_build_one_wonder_stage() {
         let mut p = blank_player(0, card("Despotism"));
         p.wonder = card("Pyramids");
         p.resources = 100;
+        let state = one_player_state(p);
+        let out = free_action_moves(&state, &state.players[0], FreeActionKind::BuildOneWonderStage, 0, false);
+        assert!(out.as_slice().contains(&Move::WonderStep { steps: 1 }));
+    }
+
+    #[test]
+    fn free_action_build_one_wonder_stage_applies_the_discount() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.wonder = card("Pyramids"); // first stage costs 3
+        p.resources = 2; // short of 3, but covered by a discount of 1
+        let state = one_player_state(p);
+        let out = free_action_moves(&state, &state.players[0], FreeActionKind::BuildOneWonderStage, 1, false);
+        assert!(out.as_slice().contains(&Move::WonderStep { steps: 1 }));
+
+        let state2 = one_player_state({
+            let mut p2 = blank_player(0, card("Despotism"));
+            p2.wonder = card("Pyramids");
+            p2.resources = 2;
+            p2
+        });
+        let out2 = free_action_moves(&state2, &state2.players[0], FreeActionKind::BuildOneWonderStage, 0, false);
+        assert!(out2.is_empty(), "no discount: 2 resources is not enough for a cost-3 stage");
+    }
+
+    #[test]
+    fn free_action_build_one_wonder_stage_needs_a_wonder_in_progress() {
+        let p = blank_player(0, card("Despotism"));
         let state = one_player_state(p);
         let out = free_action_moves(&state, &state.players[0], FreeActionKind::BuildOneWonderStage, 0, false);
         assert!(out.is_empty());

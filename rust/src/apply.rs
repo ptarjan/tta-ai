@@ -37,31 +37,23 @@
 //!   winner, §5.11) is in the same boat -- [`h_resign`] performs every OTHER
 //!   effect of resigning and stops one call short of that, with a comment at
 //!   the stopping point, rather than pretending the game continues normally.
-//! - **[`Move::War`].** Not a `combat.rs` dependency -- `_h_war` itself never
-//!   resolves combat, it only records the declaration. It is blocked on
-//!   `PlayerState` having no `war_declared_by_me` / `wars_declared_on_me`
-//!   fields (state.rs, off limits to this module). Panics in [`apply`]; the
-//!   war-cleanup half of [`h_resign`] (§5.11's "wars against a resigned
-//!   player score their declarer 7") is skipped for the same reason, noted
-//!   at its call site rather than silently omitted.
 //!
-//! One more gap is narrower, and half-resolved out from under this module
-//! mid-port -- exactly the "expect `cards.rs`/`card_table.rs` to change
-//! under you" the coordinator's brief warned about:
+//! [`Move::War`] used to be blocked here too (`PlayerState` had no
+//! `war_declared_by_me` / `wars_declared_on_me` fields), but it was never a
+//! `combat.rs` dependency -- `_h_war` itself never resolves combat, it only
+//! records the declaration. `state.rs` grew both fields, so [`h_war`] is now
+//! fully ported, and so is the war-cleanup half of [`h_resign`] (§5.11:
+//! "wars against a resigned player score their declarer 7 culture"). Combat
+//! resolution proper (an attack actually reducing strength/population) still
+//! needs a `combat.rs` that does not exist -- nothing here claims otherwise.
 //!
-//! - **`Card::stages`.** [`costs::wonder_stage_cost`] still
-//!   `unimplemented!()`s (its own module's doc comment says why -- `Card`
-//!   had no `stages` field when it was written). `Card` HAS grown that field
-//!   since (checked 2026-08-05, mid-port), but `costs.rs` is another
-//!   worker's file and has not been updated to use it yet, so
-//!   [`do_wonder_step`] still panics through the unchanged
-//!   `costs::wonder_stage_cost` call. This module's OWN
-//!   [`wonder_is_complete`] (the other place §9's wonder-completion check
-//!   needs the stage count) reads the new field directly and is real, not a
-//!   gap -- `do_wonder_step` just never reaches it today, because the cost
-//!   lookup that runs first still panics. `Card::revolution_cost` landed the
-//!   same way; [`revolution_cost`] below reads it directly, so
-//!   [`h_revolution`] is fully ported, no gap left on this module's side.
+//! `Card::stages` and `Card::revolution_cost` landed in `cards.rs` mid-port,
+//! ahead of `costs.rs` being updated to use them -- both are closed now:
+//! [`costs::wonder_stage_cost`] reads `Card::stages` (so [`do_wonder_step`]
+//! is fully ported; this module's own [`wonder_is_complete`] already read the
+//! field directly and was never a gap), and [`revolution_cost`] below reads
+//! `Card::revolution_cost` directly, so [`h_revolution`] is fully ported too.
+//!
 //! - **Per-player-count effect magnitudes.** `Wave of Nationalism` /
 //!   `Military Build-Up` (`resourcesForMilitaryUnitsPerStrongerCivilization`)
 //!   and `Endowment for the Arts` (`culturePerCivilizationWithMoreCulture`)
@@ -70,12 +62,13 @@
 //!   bare int/float value survives; a dict value degrades to a payload-less
 //!   `Special` variant -- see `EFFECT_FIELDS`/`_compile_effects` in
 //!   `gen_cards.py`). [`h_play_action`] panics naming this rather than
-//!   guessing a player count band. `Special::FreeCivilAction` has the same
-//!   problem one level worse: the JSON value it drops is not a magnitude but
-//!   a STRING naming which ordered action to run (`"build_one_wonder_stage"`,
-//!   `"develop_technology"`, ...), so even wiring up `interact.rs` later
-//!   would not be enough on its own -- `card_table.rs` needs a place to put
-//!   that string (or an enum of it) first.
+//!   guessing a player count band. `Special::FreeCivilAction` USED to have
+//!   the same problem one level worse (the JSON value was a STRING naming
+//!   which ordered action to run, and `gen_cards.py` dropped it) -- fixed
+//!   2026-08-05: it now carries a `FreeCivilActionValue` payload naming one
+//!   of the six actions, so [`h_play_action`]'s remaining blocker is only
+//!   `interact.rs`'s decision queue, not a missing place in `card_table.rs`
+//!   to put the value.
 //!
 //! One thing is a genuine, self-contained gap in THIS module, not a missing
 //! dependency: [`wonder_completion_culture`] implements the two `onBuildCulture`
@@ -111,7 +104,7 @@ use crate::costs;
 use crate::economy;
 use crate::effects;
 use crate::moves::{ChurchillChoice, Move};
-use crate::state::{CardList, GameState, PlayerState, TechSlot, MAX_HAND};
+use crate::state::{CardList, GameState, PlayerState, TechSlot, MAX_HAND, MAX_PLAYERS};
 
 // ------------------------------------------------------------- leader identity
 //
@@ -150,6 +143,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         // ---- military (declaration only; no combat resolution needed) ----
         Move::PlayTactic { card } => h_play_tactic(state, idx, card),
         Move::CopyTactic { card } => h_copy_tactic(state, idx, card),
+        Move::War { card, target } => h_war(state, idx, card, target),
         Move::CancelPact { owner } => h_cancel_pact(state, idx, owner),
 
         // ---- politics / turn control ----
@@ -180,12 +174,6 @@ pub fn apply(state: &mut GameState, mv: Move) {
         ),
         Move::Aggression { .. } => unimplemented!(
             "Aggression needs events::start_aggression -- events.rs is not ported"
-        ),
-
-        // ---- blocked on state.rs (no war-tracking fields) ----
-        Move::War { .. } => unimplemented!(
-            "War needs PlayerState::war_declared_by_me / wars_declared_on_me, \
-             which state.rs does not have yet -- see this module's top doc comment"
         ),
 
         // ---- blocked on game.rs ----
@@ -286,7 +274,12 @@ fn wonder_completion_culture(p: &PlayerState, wonder: CardId) -> i32 {
         }
         return gained + p.government.level() as i32;
     }
-    if card.special.contains(&Special::OnBuildCulture) {
+    // `OnBuildCulture` now carries an `OnBuildCultureValue` payload naming
+    // which of the three formulas (gen_cards.py, 2026-08-05) -- `.contains`
+    // no longer type-checks against a bare variant, so this matches on the
+    // variant only; `one_time_culture` below still dispatches on
+    // `base_name`, unchanged.
+    if card.special.iter().any(|s| matches!(s, Special::OnBuildCulture(_))) {
         return one_time_culture(p, card.base_name);
     }
     0
@@ -373,11 +366,11 @@ fn take_card(state: &mut GameState, idx: u8, slot: usize) {
     } else {
         let p = &mut state.players[idx as usize];
         p.hand_civil.push(id);
-        // `taken_leader_ages` (§ one leader per age) is NOT recorded here:
-        // `PlayerState` has no such field yet -- the exact gap `costs.rs`
-        // already documents ("Retire the parameter once state.rs grows the
-        // field"). Carried forward, not a new gap.
-        if card.kind == CardType::Action {
+        if card.kind == CardType::Leader {
+            // § one leader per age (state.rs's doc comment on the field):
+            // set once, never cleared, even once this leader is replaced.
+            p.taken_leader_ages |= 1 << (card.age as u8);
+        } else if card.kind == CardType::Action {
             p.taken_this_turn.push(id);
         }
     }
@@ -671,6 +664,27 @@ fn h_copy_tactic(state: &mut GameState, idx: u8, id: CardId) {
     p.tactic_action_used = true;
 }
 
+/// §5.6 / CoL p.4: reveal, pay, name the rival, drop the pact, record the
+/// declaration. Mirrors `engine/actions.py::_h_war`. NOT a `combat.rs`
+/// dependency -- this never resolves combat, only records that a war is
+/// open; see this module's top doc comment.
+fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
+    let mut cost = id.get().military_action_cost as i32;
+    if leader_is(&state.players[target as usize], "Mahatma Gandhi") {
+        cost *= 2;
+    }
+    state.players[idx as usize].military_actions -= cost as i8;
+    state.players[idx as usize].hand_military.remove_first(id);
+    // CoL p.4 / FAQ p.11: a pact that ends if its parties attack each other
+    // is removed before the war is recorded, and its strength never applies.
+    cancel_attack_pacts(state, idx, target);
+    state.players[idx as usize].war_declared_by_me = id;
+    state.players[idx as usize].war_target = target;
+    state.players[target as usize].wars_declared_on_me[idx as usize] = id;
+    state.players[idx as usize].politics_done = true;
+    state.phase = crate::state::Phase::Actions;
+}
+
 /// Ports `engine/actions.py::_h_play_action` for every action card whose
 /// effects the type layer captures as flat, player-count-independent
 /// numbers. See this module's top doc comment for exactly which cards that
@@ -686,12 +700,18 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     economy::discard_civil(state, id); // one-shot: played face up, spent
 
     let card = id.get();
-    if card.special.contains(&Special::FreeCivilAction) {
+    // `FreeCivilAction` now carries a `FreeCivilActionValue` payload naming
+    // WHICH of the six ordered actions this card grants (gen_cards.py,
+    // 2026-08-05 -- it no longer drops the value, so `.contains` needed
+    // updating to a variant-only match). Still `unimplemented!()`: the
+    // remaining blocker this module's top doc comment describes --
+    // interact.rs's decision queue for choosing/resolving the ordered
+    // action -- is unrelated to that fix and is not addressed here.
+    if card.special.iter().any(|s| matches!(s, Special::FreeCivilAction(_))) {
         unimplemented!(
             "play_action({}): orders a free civil action -- blocked on \
-             interact.rs's decision queue AND on the ordered action's KIND, \
-             which gen_cards.py drops (freeCivilAction's value is a string, \
-             not a magnitude) -- see this module's top doc comment",
+             interact.rs's decision queue for choosing/resolving it -- see \
+             this module's top doc comment",
             card.name
         );
     }
@@ -749,8 +769,9 @@ fn h_cancel_pact(state: &mut GameState, idx: u8, owner: u8) {
 }
 
 /// Ports `engine/actions.py::_h_resign` up to (not including) `game.after_
-/// resign` and the war-cleanup section -- see this module's top doc comment
-/// for both gaps.
+/// resign`, which is `game.rs`'s to write -- see this module's top doc
+/// comment. The war-cleanup section is fully ported now that `state.rs`
+/// carries `war_declared_by_me`/`wars_declared_on_me`.
 fn h_resign(state: &mut GameState, idx: u8) {
     state.players[idx as usize].resigned = true;
     state.players[idx as usize].hand_civil = CardList::new();
@@ -763,10 +784,34 @@ fn h_resign(state: &mut GameState, idx: u8) {
 
     drop_pacts_of(state, idx);
 
-    // NOT PORTED: §5.11's war-cleanup ("wars against a resigned player score
-    // their declarer 7 culture", clearing `war_declared_by_me` /
-    // `wars_declared_on_me`) -- `PlayerState` has neither field yet. See
-    // this module's top doc comment.
+    // §5.11 war-cleanup: every war declared ON the resigning player scores
+    // its declarer 7 culture, clears that declarer's OWN `war_declared_by_me`
+    // if it is still this same war (it may already have moved on), and
+    // discards the war card. `wars_declared_on_me` is indexed by attacker
+    // (state.rs's doc comment), so this is a flat scan rather than Python's
+    // list walk.
+    for attacker in 0..MAX_PLAYERS as u8 {
+        let war_card = state.players[idx as usize].wars_declared_on_me[attacker as usize];
+        if war_card.is_none() {
+            continue;
+        }
+        state.players[attacker as usize].culture += 7;
+        if state.players[attacker as usize].war_declared_by_me == war_card {
+            state.players[attacker as usize].war_declared_by_me = CardId::NONE;
+        }
+        economy::discard_military(state, war_card);
+    }
+    state.players[idx as usize].wars_declared_on_me = [CardId::NONE; MAX_PLAYERS];
+
+    // And the symmetric half: a war the resigning player themselves declared
+    // is also torn down (the defender no longer faces it).
+    let my_war = state.players[idx as usize].war_declared_by_me;
+    if !my_war.is_none() {
+        let target = state.players[idx as usize].war_target;
+        state.players[target as usize].wars_declared_on_me[idx as usize] = CardId::NONE;
+        economy::discard_military(state, my_war);
+        state.players[idx as usize].war_declared_by_me = CardId::NONE;
+    }
 
     state.players[idx as usize].politics_done = true;
 
@@ -837,6 +882,10 @@ mod tests {
             mil_discount: 0,
             mil_sci_discount: 0,
             resigned: false,
+            taken_leader_ages: 0,
+            war_declared_by_me: CardId::NONE,
+            war_target: 0,
+            wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
         }
     }
 
@@ -1189,6 +1238,53 @@ mod tests {
         assert!(!state.players[0].tactic_exclusive);
     }
 
+    // ----------------------------------------------------------------- war
+
+    #[test]
+    fn h_war_pays_military_actions_and_records_the_declaration() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = 3;
+        p.hand_military.push(card("War over Territory")); // cost 2
+        let mut state = one_player_state(p);
+        h_war(&mut state, 0, card("War over Territory"), 1);
+        assert_eq!(state.players[0].military_actions, 1);
+        assert!(!state.players[0].hand_military.contains(card("War over Territory")));
+        assert_eq!(state.players[0].war_declared_by_me, card("War over Territory"));
+        assert_eq!(state.players[0].war_target, 1);
+        assert_eq!(state.players[1].wars_declared_on_me[0], card("War over Territory"));
+        assert!(state.players[0].politics_done);
+        assert_eq!(state.phase, Phase::Actions);
+    }
+
+    #[test]
+    fn h_war_doubles_cost_against_mahatma_gandhi() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = 4;
+        p.hand_military.push(card("War over Territory")); // cost 2, doubled to 4
+        let mut target = blank_player(1, card("Despotism"));
+        target.leader = card("Mahatma Gandhi");
+        let mut state = blank_state(4, {
+            let filler = || blank_player(2, card("Despotism"));
+            [p, target, filler(), blank_player(3, card("Despotism"))]
+        });
+        h_war(&mut state, 0, card("War over Territory"), 1);
+        assert_eq!(state.players[0].military_actions, 0, "cost doubled to 4");
+    }
+
+    #[test]
+    fn h_war_cancels_a_pact_that_ends_on_mutual_attack() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = 3;
+        p.hand_military.push(card("War over Territory"));
+        p.pacts.push(Pact { card: card("Military Alliance"), owner: 0, partner: 1, a: 0, b: 1 });
+        let mut state = blank_state(4, {
+            let filler = || blank_player(2, card("Despotism"));
+            [p, blank_player(1, card("Despotism")), filler(), blank_player(3, card("Despotism"))]
+        });
+        h_war(&mut state, 0, card("War over Territory"), 1);
+        assert!(state.players[0].pacts.is_empty(), "Military Alliance ends the moment its parties attack");
+    }
+
     // ------------------------------------------------------------- play_action
 
     #[test]
@@ -1282,6 +1378,44 @@ mod tests {
         assert!(state.players[0].politics_done);
     }
 
+    #[test]
+    fn h_resign_scores_the_declarer_of_a_war_against_the_resigning_player() {
+        // §5.11: a war against a resigned player scores its declarer 7
+        // culture, clears the declarer's OWN `war_declared_by_me` if it is
+        // still this same war, and discards the war card.
+        let mut attacker = blank_player(1, card("Despotism"));
+        attacker.war_declared_by_me = card("War over Territory");
+        attacker.war_target = 0;
+        let mut resigner = blank_player(0, card("Despotism"));
+        resigner.wars_declared_on_me[1] = card("War over Territory");
+        let mut state = blank_state(4, {
+            let filler = || blank_player(2, card("Despotism"));
+            [resigner, attacker, filler(), blank_player(3, card("Despotism"))]
+        });
+        h_resign(&mut state, 0);
+        assert_eq!(state.players[1].culture, 7);
+        assert!(state.players[1].war_declared_by_me.is_none(), "the declarer's own war is cleared too");
+        assert!(state.players[0].wars_declared_on_me.iter().all(|c| c.is_none()));
+        assert!(state.discarded_military[Age::II as usize].contains(card("War over Territory")));
+    }
+
+    #[test]
+    fn h_resign_tears_down_a_war_the_resigning_player_themselves_declared() {
+        let mut resigner = blank_player(0, card("Despotism"));
+        resigner.war_declared_by_me = card("War over Territory");
+        resigner.war_target = 1;
+        let mut defender = blank_player(1, card("Despotism"));
+        defender.wars_declared_on_me[0] = card("War over Territory");
+        let mut state = blank_state(4, {
+            let filler = || blank_player(2, card("Despotism"));
+            [resigner, defender, filler(), blank_player(3, card("Despotism"))]
+        });
+        h_resign(&mut state, 0);
+        assert!(state.players[0].war_declared_by_me.is_none());
+        assert!(state.players[1].wars_declared_on_me[0].is_none());
+        assert!(state.discarded_military[Age::II as usize].contains(card("War over Territory")));
+    }
+
     // -------------------------------------------------------------- gaps
 
     #[test]
@@ -1302,12 +1436,39 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "wonder_stage_cost needs Card::stages")]
-    fn do_wonder_step_is_blocked_on_the_missing_card_field() {
+    fn do_wonder_step_pays_resources_and_advances_progress() {
+        // Pyramids: stages [3, 2, 1].
         let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 10;
         p.wonder = card("Pyramids");
         let mut state = one_player_state(p);
         do_wonder_step(&mut state, 0, 1, 0, false);
+        assert_eq!(state.players[0].civil_actions, 3);
+        assert_eq!(state.players[0].resources, 10 - 3);
+        assert_eq!(state.players[0].wonder_steps, 1);
+        assert_eq!(state.players[0].wonder, card("Pyramids"), "not complete yet: 1 of 3 stages paid");
+    }
+
+    #[test]
+    fn do_wonder_step_completes_the_wonder_and_gains_completion_culture() {
+        // Fast Food Chains: stages [4, 4, 4, 4], onBuildCulture
+        // "2*workers(farm,mine)+1*workers(urban,military)".
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.wonder = card("Fast Food Chains");
+        p.wonder_steps = 3; // only the last stage remains
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 2, stored: 0 }); // production
+        p.techs.insert(card("Warriors"), TechSlot { workers: 1, stored: 0 }); // unit
+        let mut state = one_player_state(p);
+        do_wonder_step(&mut state, 0, 1, 0, false);
+        assert_eq!(state.players[0].resources, 10 - 4);
+        assert!(state.players[0].wonder.is_none(), "wonder completed");
+        assert_eq!(state.players[0].wonder_steps, 0);
+        assert!(state.players[0].completed_wonders.contains(card("Fast Food Chains")));
+        // 2 * production workers (2) + 1 * urban-or-unit workers (1) = 5.
+        assert_eq!(state.players[0].culture, 5);
     }
 
     #[test]

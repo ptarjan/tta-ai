@@ -421,7 +421,7 @@ pub fn discard_civil(state: &mut GameState, card: CardId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{CardList, PactList, Phase, TechSlot, MAX_HAND};
+    use crate::state::{CardList, PactList, Phase, TechSlot, MAX_HAND, MAX_PLAYERS};
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.
@@ -475,6 +475,10 @@ mod tests {
             mil_discount: 0,
             mil_sci_discount: 0,
             resigned: false,
+            taken_leader_ages: 0,
+            war_declared_by_me: CardId::NONE,
+            war_target: 0,
+            wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
         }
     }
 

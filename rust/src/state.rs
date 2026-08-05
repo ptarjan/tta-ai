@@ -393,6 +393,31 @@ pub struct PlayerState {
     pub tactic_exclusive: bool,
     pub colonies: CardList<8>,
     pub flipped_wonders: CardList<8>,
+    /// §2.5/§9.1: every age a leader has EVER been taken in, across the
+    /// whole game -- bit `card.age as u8` set the moment a leader of that
+    /// age is taken (`take_card`), never cleared, even once that leader is
+    /// later replaced (`Age` has 5 values, ample headroom in a `u8`). Mirrors
+    /// Python's `p.taken_leader_ages` list membership test as a bitmask
+    /// instead, per DESIGN.md rule 3 (flat, fixed-size, no `Vec`). Was a
+    /// caller-supplied parameter to `costs::take_gate`/`can_take` before this
+    /// field existed; both now read it directly off `PlayerState`.
+    pub taken_leader_ages: u8,
+    /// §5.6: the war card THIS player currently has declared, `CardId::NONE`
+    /// if none. At most one at a time -- `legal.rs`'s war move generation
+    /// (once written) gates a second declaration on this being set, exactly
+    /// as `engine/actions.py::_politics_moves` gates on `p.war_declared_by_me`
+    /// being truthy.
+    pub war_declared_by_me: CardId,
+    /// Player index `war_declared_by_me` targets. Meaningless while
+    /// `war_declared_by_me` is `CardId::NONE`.
+    pub war_target: u8,
+    /// §5.6: wars declared ON this player, indexed by the ATTACKER's player
+    /// index (`CardId::NONE` = that attacker has no war declared on me).
+    /// A flat array rather than Python's list: at most one active war per
+    /// attacker at a time (their own `war_declared_by_me` gates a second),
+    /// so the attacker's index is already a unique key -- no growable
+    /// container needed (DESIGN.md rule 3).
+    pub wars_declared_on_me: [CardId; MAX_PLAYERS],
     /// Pacts sitting in MY play area (§5.9). A pact binds two players but is
     /// physically held by one, and both facts matter: `pacts_for` scans every
     /// player's list to find the ones an index is party to, while cancelling
