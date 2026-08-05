@@ -116,25 +116,42 @@ impl Tableau {
         self.len += 1;
     }
 
-    /// Remove a card, swapping the last dense entry into the hole.
+    /// Remove a card, closing the hole and PRESERVING insertion order.
     ///
-    /// NOTE: this does NOT preserve insertion order, so nothing that affects
-    /// play may iterate this structure and depend on the order. Move ordering
-    /// is part of the differential contract (DESIGN.md), so `legal_moves` must
-    /// sort by `CardId` rather than trusting tableau order.
+    /// This was a swap-remove until the economy port found what that costs.
+    /// Python's tableau is a dict, so it iterates in build order, and two
+    /// things depend on that order in ways that change play:
+    ///
+    ///   * `economy.lose_population` takes the worker off the FIRST
+    ///     worker-holding card it walks (`engine/economy.py:290`). Which card
+    ///     shrinks is arbitrary as a rule, but it is not arbitrary as a
+    ///     position -- losing a farm worker is not losing a mine worker.
+    ///   * `legal_moves` enumerates in the same order, and the bots break ties
+    ///     by index, so a reordered list silently changes the chosen move.
+    ///
+    /// A swap-remove would diverge from the Python the first time any card
+    /// left a tableau (a destroyed wonder, an antiquated tech, a Ravages of
+    /// Time flip) and every fixture replayed after that point would drift.
+    /// Order-preserving removal costs a memmove bounded by `MAX_TABLEAU` (48)
+    /// on an operation that happens a handful of times per game, against a
+    /// correctness property every later module leans on. That trade is not
+    /// close.
     pub fn remove(&mut self, id: CardId) -> Option<TechSlot> {
         let pos = self.index[id.0 as usize];
         if pos == Self::ABSENT {
             return None;
         }
-        let out = self.slots[pos as usize];
-        let last = self.len - 1;
-        if pos != last {
-            self.ids[pos as usize] = self.ids[last as usize];
-            self.slots[pos as usize] = self.slots[last as usize];
-            self.index[self.ids[pos as usize].0 as usize] = pos;
+        let pos = pos as usize;
+        let n = self.len as usize;
+        let out = self.slots[pos];
+        self.ids.copy_within(pos + 1..n, pos);
+        self.slots.copy_within(pos + 1..n, pos);
+        // Everything after the hole shifted down one; reindex it.
+        for i in pos..n - 1 {
+            self.index[self.ids[i].0 as usize] = i as u8;
         }
-        self.ids[last as usize] = CardId::NONE;
+        self.ids[n - 1] = CardId::NONE;
+        self.slots[n - 1] = TechSlot::default();
         self.index[id.0 as usize] = Self::ABSENT;
         self.len -= 1;
         Some(out)
@@ -459,7 +476,7 @@ mod tests {
         t.insert(b, TechSlot { workers: 1, stored: 3 });
         assert!(t.has(a) && t.has(b));
         assert_eq!(t.workers(a), 2);
-        // Removing the FIRST entry is the swap-into-the-hole path; the survivor
+        // Removing the FIRST entry moves every survivor down one slot; each
         // must still be findable through the sparse index afterwards.
         assert_eq!(t.remove(a).unwrap().workers, 2);
         assert!(!t.has(a));
@@ -467,6 +484,34 @@ mod tests {
         assert_eq!(t.workers(b), 1);
         assert_eq!(t.get(b).unwrap().stored, 3);
         assert_eq!(t.len(), 1);
+    }
+
+    /// Build order is play-relevant: `economy.lose_population` takes a worker
+    /// off the first worker-holding card in tableau order, and `legal_moves`
+    /// enumerates in that order while the bots break ties by index. A
+    /// swap-remove passes the round-trip test above and still fails this one,
+    /// which is exactly why this test exists separately.
+    #[test]
+    fn tableau_remove_preserves_build_order() {
+        let mut t = Tableau::new();
+        for i in 0..6u16 {
+            t.insert(CardId(i), TechSlot { workers: i as u8, stored: 0 });
+        }
+        // Take one out of the middle -- an antiquated tech, say.
+        t.remove(CardId(2));
+        let order: Vec<u16> = t.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(order, vec![0, 1, 3, 4, 5]);
+        // ...and the sparse index must still agree with the dense order, or
+        // the next removal corrupts a different card.
+        for (id, slot) in t.iter() {
+            assert_eq!(slot.workers, id.0 as u8, "slot followed the wrong id");
+        }
+        t.remove(CardId(0));
+        let order: Vec<u16> = t.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(order, vec![1, 3, 4, 5]);
+        for (id, slot) in t.iter() {
+            assert_eq!(slot.workers, id.0 as u8);
+        }
     }
 
     #[test]

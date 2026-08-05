@@ -93,6 +93,16 @@ exactly this comparison and its output format is what the Rust side reproduces.
 Move ordering is part of the contract, not an implementation detail: the bots
 break ties by index, so a reordered `legal_moves` silently changes play.
 
+Ordering is therefore load-bearing all the way down into the containers.
+Python's tableau is a `dict`, so it iterates in build order; `Tableau::remove`
+is order-preserving for that reason and not because removal is hot. The first
+casualty found was `economy.lose_population`, which takes a worker off the
+first worker-holding card it walks — a swap-remove would have weakened a
+different card than Python does, but only in games where something had already
+left play, which is the kind of divergence that shows up late and reads as a
+logic bug. Any container the engine iterates in a play-affecting order gets the
+Python container's ordering semantics, and says so at the definition.
+
 ## Division of labour
 
 The **types are written up front, by hand, before any module is ported** — this

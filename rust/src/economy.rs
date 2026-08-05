@@ -176,22 +176,17 @@ pub fn increase_population(p: &mut PlayerState, cost: u16) -> bool {
 
 /// "Lose 1 population": an unused worker first, else one off a card (§6.x).
 ///
-/// KNOWN DIVERGENCE RISK, flagged per the porting brief rather than fixed
-/// unilaterally: Python picks the card by iterating `p.techs`, a `dict`
-/// that preserves INSERTION order for the player's whole game regardless of
-/// what else was removed from it. `Tableau` (state.rs) documents that its
-/// `remove` does NOT preserve insertion order -- it swaps the last dense
-/// entry into the removed slot -- so `Tableau::iter()`'s order can diverge
-/// from Python's dict order for any player who has ever had a card leave
-/// play (a destroyed wonder, an antiquated tech, the Ravages-of-Time flip)
-/// before this runs. That means this function can legitimately weaken a
-/// DIFFERENT card than Python would, which is a real state divergence, not
-/// just a cosmetic one. Fixing it needs either an insertion-order-preserving
-/// removal mode on `Tableau` or a documented rule that this pick may differ
-/// -- both are `state.rs` calls, not this module's to make unilaterally.
-/// Ported as the best available order (`Tableau::iter()`) with this comment
-/// so the differential harness's first divergence here is diagnosed in
-/// seconds instead of hunted from scratch.
+/// Which card gets weakened is decided by tableau order: Python iterates
+/// `p.techs`, a `dict`, so it walks build order and takes the worker off the
+/// first worker-holding card it finds. That is arbitrary as a rule but not as
+/// a position -- losing a farm worker is not losing a mine worker.
+///
+/// This was flagged during the port as a divergence risk, because `Tableau`
+/// used a swap-remove and so lost build order the first time any card left
+/// play. `Tableau::remove` is now order-preserving (see the note on it in
+/// state.rs), which makes `Tableau::iter()` the right order here. Do not
+/// reintroduce a swap-remove without dealing with this function and with
+/// `legal_moves`.
 pub fn lose_population(p: &mut PlayerState) -> bool {
     if p.workers_free > 0 {
         p.workers_free -= 1;
