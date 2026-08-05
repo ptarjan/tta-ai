@@ -1097,9 +1097,14 @@ The single most important entry is #22.*
   discontent at all) was tested and fits worse.
 * **`state.scoring_events` (`state.py:157`) is declared and never read or
   written** — a dead field that is also a permanently-zero neural-net input.
-  `PlayerState.destroyed_wonders` is read by the take surcharge but never
-  incremented.  `urbanLimitCategory`, `scoringEvent` and top-level `target` are
+  `urbanLimitCategory`, `scoringEvent` and top-level `target` are
   dead or duplicate fields nothing reads.
+  (`PlayerState.destroyed_wonders` was listed here too and is **closed,
+  2026-08-05**: always zero is correct.  Nothing in the base game removes a
+  wonder from `completed_wonders` — append-only in both engines — and
+  `flipCompletedWonder` leaves the wonder completed, so it keeps paying the
+  surcharge through the other term.  §2.3 says "built or destroyed" because the
+  expansion can destroy one.  Documented on the field in `rust/src/state.rs`.)
 * Card-data provenance items are all closed — see the appendix of
   [`docs/RULES_SPEC.md`](RULES_SPEC.md).
 
