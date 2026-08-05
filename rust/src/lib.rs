@@ -22,6 +22,7 @@ pub mod legal;
 pub mod economy;
 pub mod effects;
 pub mod fixtures;
+pub mod game;
 pub mod moves;
 pub mod rng;
 pub mod state;

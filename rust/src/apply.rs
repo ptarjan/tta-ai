@@ -197,7 +197,10 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::Aggression { card, target } => h_aggression(state, idx, card, target),
 
         // ---- blocked on game.rs ----
-        Move::EndTurn => unimplemented!("EndTurn needs game::end_turn -- game.rs is not ported"),
+        // The End-of-Turn Sequence orchestrator (§6.6) plus the hand-off to
+        // the next player. `game.rs` owns it; Python's `_h_end_turn` is the
+        // same one-line delegation.
+        Move::EndTurn => crate::game::end_turn(state),
     }
 }
 
@@ -942,10 +945,11 @@ fn h_resign(state: &mut GameState, idx: u8) {
 
     state.players[idx as usize].politics_done = true;
 
-    // NOT PORTED: `game.after_resign(state, rng)` -- determines whether one
-    // player is now the forced winner (§5.11). game.rs is not ported. A
-    // caller of this function today gets every OTHER effect of resigning but
-    // must decide forced-winner status itself until game.rs exists.
+    // §5.11: a resigning player's turn ends at once, and if that leaves one
+    // player standing they win outright. `game.rs` owns that decision (it is
+    // the same hand-off `end_turn` makes), exactly as Python's `_h_resign`
+    // tail-calls `game.after_resign`.
+    crate::game::after_resign(state);
 }
 
 // ============================================================== tests ====
