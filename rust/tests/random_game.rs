@@ -10,8 +10,11 @@
 //!
 //! ## The move filter
 //!
-//! `events.rs` is not ported and several of `interact.rs`'s decision-driven
-//! halves are still `unimplemented!()`. A random player reaches all of them
+//! `events.rs` is only partly ported -- `apply_gains` and §12.5.2 final
+//! scoring are in (commits `044fd92`, `3792e10`), but `resolve_event` and
+//! `_apply_player_block` are not, so revealing the current event is still
+//! blocked -- and several of `interact.rs`'s decision-driven halves are still
+//! `unimplemented!()`. A random player reaches all of them
 //! within a few turns, and `apply.rs`/`combat.rs` panic -- correctly and
 //! loudly -- when it does. [`blocked_on`] is the list of moves the driver may
 //! not choose yet, each naming the module it waits on; delete an arm when
