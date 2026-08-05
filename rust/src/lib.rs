@@ -21,6 +21,7 @@ pub mod costs;
 pub mod legal;
 pub mod economy;
 pub mod effects;
+pub mod events;
 pub mod fixtures;
 pub mod game;
 pub mod interact;

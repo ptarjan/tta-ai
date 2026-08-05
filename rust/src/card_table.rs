@@ -5,7 +5,7 @@
 // the engine parses no JSON and has no dependencies, and a card-data
 // change arrives as a reviewable diff rather than a runtime surprise.
 
-use crate::cards::{Age, Card, CardEffects, CardType, Composition, ImmediateEffects, PactBlock, Production};
+use crate::cards::{Age, Card, CardEffects, CardType, Composition, ImmediateEffects, PactBlock, Production, TakeFromOpponentBlock};
 
 pub const NUM_CARDS: usize = 236;
 
@@ -56,15 +56,17 @@ pub enum VictorTakesScienceUpToValue {
 /// A variant carries an `(i16)` payload when the printed effect has a
 /// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`
 /// / `_apply_special`); a `(PactBlock)` payload when the printed value is
-/// one of the four pact blocks (§5.9); an `([i16; 5])` payload, indexed by
-/// `Age as u8`, when the printed value is a per-age magnitude dict
-/// (`buildDiscount`); a `(<Key>Value)` payload when the
-/// printed value is a STRING Python's own dispatch reads (`freeCivilAction`
-/// et al -- see `STRING_EFFECT_VALUES` in gen_cards.py); and stays a bare
-/// unit variant when Python ignores the JSON value too (a bool-flag key, or
-/// a dict/list-valued key this port has not modeled yet -- see
-/// gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/DEFERRED_LIST_EFFECT_KEYS for
-/// the reason on each).
+/// one of the four pact blocks (§5.9); a `(TakeFromOpponentBlock)`
+/// payload for `takeFromOpponent` (§5.4.6); an `([i16; 5])` payload,
+/// indexed by `Age as u8`, when the printed value is a per-age magnitude
+/// dict (`buildDiscount`); a `(&'static [Age])` payload for
+/// `destroyUrbanBuildings`, one entry per raid; a `(<Key>Value)` payload
+/// when the printed value is a STRING Python's own dispatch reads
+/// (`freeCivilAction` et al -- see `STRING_EFFECT_VALUES` in
+/// gen_cards.py); and stays a bare unit variant when Python ignores the
+/// JSON value too (a bool-flag key, or a dict/list-valued key this port
+/// has not modeled yet -- see gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/
+/// LIST_PRESENCE_EFFECT_KEYS for the reason on each).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Special {
     A(PactBlock),
@@ -95,7 +97,7 @@ pub enum Special {
     CulturePerLibraryTheaterPair(i16),
     CulturePerTheater(i16),
     DecreasePopulation(i16),
-    DestroyUrbanBuildings,
+    DestroyUrbanBuildings(&'static [Age]),
     DoubleBestMine,
     DoublesTacticBonusOfOneArmy,
     ExtraHappyPerHappySource(i16),
@@ -147,7 +149,7 @@ pub enum Special {
     StrengthPerUnitType(i16),
     StrongestPlayer,
     StrongestPlayers,
-    TakeFromOpponent,
+    TakeFromOpponent(TakeFromOpponentBlock),
     TheaterResourceDiscountIfLibrary(i16),
     TheaterScienceDiscountIfLibrary(i16),
     TheaterTechScienceDiscount(i16),
@@ -2244,7 +2246,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::TakeFromOpponent],
+        special: &[Special::TakeFromOpponent(TakeFromOpponentBlock { food_and_or_resources: 3, science: 0, culture: 0 })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2263,7 +2265,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
+        special: &[Special::DestroyUrbanBuildings(&[Age::I]), Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2301,7 +2303,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::TakeFromOpponent],
+        special: &[Special::TakeFromOpponent(TakeFromOpponentBlock { food_and_or_resources: 5, science: 0, culture: 0 })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2320,7 +2322,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 2,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
+        special: &[Special::DestroyUrbanBuildings(&[Age::II, Age::I]), Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2339,7 +2341,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::TakeFromOpponent],
+        special: &[Special::TakeFromOpponent(TakeFromOpponentBlock { food_and_or_resources: 0, science: 5, culture: 0 })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2396,7 +2398,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::TakeFromOpponent],
+        special: &[Special::TakeFromOpponent(TakeFromOpponentBlock { food_and_or_resources: 7, science: 0, culture: 0 })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2415,7 +2417,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 3,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::DestroyUrbanBuildings, Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
+        special: &[Special::DestroyUrbanBuildings(&[Age::III, Age::II]), Special::GainResources(GainResourcesValue::HalfDestroyedBuildingCostRoundedUp)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -2434,7 +2436,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 2,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::TakeFromOpponent],
+        special: &[Special::TakeFromOpponent(TakeFromOpponentBlock { food_and_or_resources: 0, science: 0, culture: 7 })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,

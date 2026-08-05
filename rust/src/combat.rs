@@ -74,7 +74,7 @@
 //! existed; it landed 2026-08-05, so [`apply_war_spoils`] now handles all
 //! three war kinds and the `unimplemented!` here is gone.
 //!
-//! ## Aggression: declaration and defense ported; success effects are not
+//! ## Aggression: declaration, defense and success effects all ported
 //!
 //! [`start_aggression`] is the exact portable prefix of `engine/events.py::
 //! start_aggression`: pay the (Gandhi-doubled) cost, discard the card,
@@ -83,25 +83,33 @@
 //! through `interact::start_defense`, and [`finish_aggression`] here is what
 //! that decision resolves into once the defender's committed total exists.
 //!
-//! [`finish_aggression`]'s FAILURE branch is complete. Its success branch is
-//! not, and the blocker is no longer `interact.rs` -- it is the payloads:
-//! most aggression cards' success effects (`takeFromOpponent`,
-//! `destroyUrbanBuildings`, `removeFromGame`, `stealColony`,
-//! `opponentDecreasesPopulation`) are payload-less per `gen_cards.py`'s
-//! `DEFERRED_DICT_EFFECT_KEYS`, and -- unlike the war-spoils formulas above
-//! -- genuinely so: `engine/events.py::finish_aggression` reads their
-//! per-card dict VALUES directly off the data (`eff.get("takeFromOpponent")
-//! .items()`, `spec.get("maxAge")`, ...), not a hardcoded rule. It also opens
-//! with the general `events.apply_gains`. So [`finish_aggression`] panics
-//! naming both, rather than resolving half a card. The QUEUE side of that
-//! branch is already ported and waiting: `QueueItem::Raid`/`Annex`/
-//! `Infiltrate`/`LosePop` are exactly the four items it enqueues.
+//! [`finish_aggression`]'s FAILURE branch was always complete (a log line
+//! Python has and this port drops, then `return False`). Its SUCCESS branch
+//! (2026-08-05) now is too: it opens with the general `events::apply_gains`
+//! (`events.rs` -- the event-gain interpreter -- landed alongside this
+//! change) and then walks `takeFromOpponent`/`destroyUrbanBuildings`/
+//! `opponentDecreasesPopulation`/`stealColony`/`removeFromGame`, the five
+//! per-card payloads `gen_cards.py`'s `DEFERRED_DICT_EFFECT_KEYS`/
+//! `DEFERRED_LIST_EFFECT_KEYS` used to collapse to payload-less `Special`s.
+//! Two of the five (`opponentDecreasesPopulation`/`stealColony`) already
+//! carried a real `(i16)` payload -- nothing but this function was reading
+//! them; the other three needed generator work: `takeFromOpponent` got a
+//! dedicated `TakeFromOpponentBlock` (three fields, §5.4.6's own closed
+//! vocabulary -- see its doc comment in `cards.rs`), `destroyUrbanBuildings`
+//! got a real `&'static [Age]` (one entry per raid), and `removeFromGame`
+//! stayed a unit variant on purpose: Python only ever tests its PRESENCE
+//! (`events.py:679`), never its list contents -- see [`finish_aggression`]'s
+//! own doc comment. The QUEUE side of this branch was already ported and
+//! waiting: `QueueItem::Raid`/`Annex`/`Infiltrate`/`LosePop` are exactly the
+//! four items it enqueues, and `interact::run_item` already resolved all
+//! four.
 
 use crate::cards::{CardId, Special};
 use crate::economy;
 use crate::effects;
+use crate::events;
 use crate::interact;
-use crate::state::{GameState, Pact, PlayerState};
+use crate::state::{GameState, Pact, PlayerState, QueueItem};
 
 /// Duplicated (not imported) from `costs.rs`'s private `leader_is` -- see
 /// that module's "a note on leader identity", and `legal.rs`/`apply.rs`'s own
@@ -389,43 +397,123 @@ pub fn apply_war_spoils(state: &mut GameState, outcome: &WarOutcome) {
 /// committed total exists (which is the thing that did not exist before
 /// `state.pending` did -- see this module's top doc comment).
 ///
-/// Returns whether the aggression SUCCEEDED. The failure branch is complete:
-/// Python's is a log line and `return False`, nothing more.
+/// Returns whether the aggression SUCCEEDED. The failure branch is a log
+/// line and `return False` in Python, nothing more -- there is no logging
+/// port (see `economy.rs`'s equivalent note), so it is just the early
+/// return here.
 ///
-/// The success branch is not, and the blocker is not `interact.rs` any more
-/// -- it is the payloads. Every aggression card's success effect is a
-/// dict-valued JSON key that `rust/tools/gen_cards.py`'s
-/// `DEFERRED_DICT_EFFECT_KEYS` collapsed to a payload-less `Special`
-/// (`takeFromOpponent`, `destroyUrbanBuildings`, `opponentDecreasesPopulation`,
-/// `stealColony`, `removeFromGame`), and `events.finish_aggression` reads
-/// those dict VALUES directly off the data rather than applying a hardcoded
-/// rule -- unlike the two war-spoils formulas above, which really are
-/// literals in `events.py`. It also opens with `apply_gains(state, attacker,
-/// eff, rng)`, the general event gain-block interpreter, which `events.rs`
-/// owns. So this panics naming both, rather than resolving half a card.
+/// The success branch opens with the general `events::apply_gains` (the
+/// attacker's own gains, e.g. Enslave's `gainFood`/`gainResources`), then
+/// walks the five per-card payloads `rust/tools/gen_cards.py` used to
+/// collapse to payload-less `Special`s before this pass:
+/// `takeFromOpponent`/`destroyUrbanBuildings` (now real payloads --
+/// `TakeFromOpponentBlock`/`&'static [Age]`), `opponentDecreasesPopulation`/
+/// `stealColony` (already int-shape `Special`s -- nothing but this function
+/// was reading them), and `removeFromGame` (still a unit `Special`, read for
+/// PRESENCE only, matching `events.py:679`'s own `if eff.get(...)` -- see
+/// `gen_cards.py`'s `LIST_PRESENCE_EFFECT_KEYS`).
 ///
-/// The queue side of that branch is already ported and waiting for it:
-/// `QueueItem::Raid` / `Annex` / `Infiltrate` / `LosePop` are exactly the
-/// four items `finish_aggression` enqueues, and `interact::run_item`
-/// resolves all four.
+/// The queue side was already ported and waiting: `QueueItem::Raid` /
+/// `Annex` / `Infiltrate` / `LosePop` are exactly the four items
+/// `finish_aggression` enqueues, and `interact::run_item` resolves all four.
 pub fn finish_aggression(state: &mut GameState, ctx: &crate::state::Defense) -> bool {
     if ctx.dfn >= ctx.atk {
         return false;
     }
-    let _ = state;
-    unimplemented!(
-        "aggression {} vs P{} succeeded ({} > {}): its success effects need \
-         events::apply_gains -- events.rs is not ported -- plus the per-card \
-         dict payloads gen_cards.py collapsed to payload-less Specials \
-         (takeFromOpponent, destroyUrbanBuildings, opponentDecreasesPopulation, \
-         stealColony, removeFromGame); see this function's doc comment. The \
-         DEFENSE half is fully ported: `ctx.dfn` is the defender's committed \
-         total.",
-        ctx.card.name(),
-        ctx.player,
-        ctx.atk,
-        ctx.dfn,
-    )
+    let attacker = ctx.attacker;
+    let defender = ctx.player;
+    let card = ctx.card;
+
+    // events.py:650: the attacker's own gains off the card's top-level
+    // effects (e.g. Enslave's gainFood/gainResources).
+    events::apply_gains(state, attacker, card, 1);
+
+    // events.py:651-667: steal from the defender. Only three sub-keys are
+    // ever read (see `TakeFromOpponentBlock`'s doc comment); a zero field
+    // means that sub-key was not printed on this card.
+    if let Some(&Special::TakeFromOpponent(block)) =
+        card.get().special.iter().find(|s| matches!(s, Special::TakeFromOpponent(_)))
+    {
+        if block.food_and_or_resources != 0 {
+            let before_f = state.players[defender as usize].food;
+            let before_r = state.players[defender as usize].resources;
+            events::food_or_resources(
+                &mut state.players[defender as usize],
+                block.food_and_or_resources as i32,
+                -1,
+            );
+            let moved = (before_f - state.players[defender as usize].food) as i32
+                + (before_r - state.players[defender as usize].resources) as i32;
+            events::food_or_resources(&mut state.players[attacker as usize], moved, 1);
+        }
+        if block.science != 0 {
+            let moved = (block.science as u16).min(state.players[defender as usize].science);
+            state.players[defender as usize].science -= moved;
+            state.players[attacker as usize].science += moved;
+        }
+        if block.culture != 0 {
+            let moved = (block.culture as u16).min(state.players[defender as usize].culture);
+            state.players[defender as usize].culture -= moved;
+            state.players[attacker as usize].culture += moved;
+        }
+    }
+
+    // events.py:668-671.
+    if let Some(&Special::OpponentDecreasesPopulation(n)) = card
+        .get()
+        .special
+        .iter()
+        .find(|s| matches!(s, Special::OpponentDecreasesPopulation(_)))
+    {
+        if n != 0 {
+            interact::enqueue(state, QueueItem::LosePop { player: defender, n: n as u8 });
+        }
+    }
+
+    // events.py:672-675: one raid per printed spec, in order, WITH loot
+    // (Python passes no `no_loot` key, and `interact.py::_q_raid` defaults
+    // `loot = not item.get("no_loot")` to `True` when the key is absent --
+    // this IS the Raid aggression card's whole point, matching
+    // `QueueItem::Raid`'s `no_loot: false`).
+    if let Some(&Special::DestroyUrbanBuildings(ages)) =
+        card.get().special.iter().find(|s| matches!(s, Special::DestroyUrbanBuildings(_)))
+    {
+        for &age in ages {
+            interact::enqueue(
+                state,
+                QueueItem::Raid { player: attacker, victim: defender, max_age: age, no_loot: false },
+            );
+        }
+    }
+
+    // events.py:676-678.
+    if let Some(&Special::StealColony(n)) =
+        card.get().special.iter().find(|s| matches!(s, Special::StealColony(_)))
+    {
+        if n != 0 {
+            interact::enqueue(state, QueueItem::Annex { player: attacker, victim: defender });
+        }
+    }
+
+    // events.py:679-683: `removeFromGame`'s list contents are never read (see
+    // this function's doc comment) -- only its presence, and the per-level
+    // culture rate, defaulting to 3 exactly as Python's `_num(...) or 3`
+    // does (a PRINTED `gainCulturePerLevelOfRemovedCard: 0` would also fall
+    // back to 3, since Python's `or` treats 0 as falsy too).
+    if card.get().special.contains(&Special::RemoveFromGame) {
+        let per = card
+            .get()
+            .special
+            .iter()
+            .find_map(|s| match s {
+                Special::GainCulturePerLevelOfRemovedCard(n) if *n != 0 => Some(*n as u8),
+                _ => None,
+            })
+            .unwrap_or(3);
+        interact::enqueue(state, QueueItem::Infiltrate { player: attacker, victim: defender, per });
+    }
+
+    true
 }
 
 // ============================================================== tests ====

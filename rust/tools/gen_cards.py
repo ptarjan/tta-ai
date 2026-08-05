@@ -241,9 +241,12 @@ PACT_BLOCK_FIELD_ORDER = (
     "attacker_strength",
 )
 
-#: The 20 OTHER dict-valued `effects` keys in the base data (2026-08-05
-#: census: 24 distinct dict-valued keys total, 4 of them the pact blocks
-#: above). Each still becomes a payload-less `Special` variant -- exactly
+#: The OTHER dict-valued `effects` keys in the base data still awaiting a
+#: real port (2026-08-05 census: 24 distinct dict-valued keys total, 4 of
+#: them the pact blocks above and 1 -- `takeFromOpponent` -- now handled
+#: below by `TAKE_FROM_OPPONENT_FIELDS`/`build_take_from_opponent`, since
+#: `combat.rs::finish_aggression` reads its per-card values directly). Each
+#: remaining key still becomes a payload-less `Special` variant -- exactly
 #: what every dict-valued key silently did before this pass -- but doing so
 #: now requires being named here, with a reason, rather than falling through
 #: an `else` branch that could not tell "known, deferred" apart from "new key
@@ -263,7 +266,6 @@ DEFERRED_DICT_EFFECT_KEYS = {
     "lastRoundSubstitute": "event resolution -- events.rs not ported",
     "gain": "event resolution -- events.rs not ported",
     "lose": "event resolution -- events.rs not ported",
-    "takeFromOpponent": "aggression resolution -- combat.rs not ported",
     "victorTakesYellowTokens": "war resolution -- combat.rs not ported",
     "victorTakesCulture": "war resolution -- combat.rs not ported",
     "resourcesForMilitaryUnitsPerStrongerCivilization":
@@ -304,14 +306,27 @@ IGNORED_NESTED_EFFECT_KEYS = {"target", "duration"}
 
 #: List-valued `effects` keys -- a target filter (age list) or a set of
 #: target types, never a magnitude. Same "must be named, not caught by an
-#: `else`" treatment as `DEFERRED_DICT_EFFECT_KEYS`, kept as its own set
-#: because a list needs no sub-key validation the way a dict block does.
-DEFERRED_LIST_EFFECT_KEYS = {
-    "destroyUrbanBuildings": "aggression resolution, age-filtered target "
-        "list -- combat.rs not ported",
-    "removeFromGame": "aggression resolution, target-type list -- combat.rs "
-        "not ported",
-}
+#: `else`" treatment as `DEFERRED_DICT_EFFECT_KEYS`, split into two sets
+#: because the two base-game list keys need different shapes.
+#:
+#: `destroyUrbanBuildings`: a list of per-raid `{"maxAge": "<Age>"}` specs,
+#: one raid per entry, in printed order -- `engine/events.py::
+#: finish_aggression` (672-675) loops this list reading `spec.get("maxAge",
+#: "A")` from each entry, so `combat.rs` needs the actual ages, not just the
+#: key's presence. Given a real payload below: `&'static [Age]`, built by
+#: `build_age_list`.
+LIST_AGE_EFFECT_KEYS = {"destroyUrbanBuildings"}
+
+#: `removeFromGame`: a list of target-TYPE strings (`["leader",
+#: "unfinishedWonder"]` on the only base-game printing, Infiltrate).
+#: `engine/events.py::finish_aggression` (line 679) only ever tests
+#: `if eff.get("removeFromGame"):` -- the list's CONTENTS are never read
+#: (which targets are actually offered is derived structurally in
+#: `interact.rs`'s `QueueItem::Infiltrate` handler, from which of the
+#: victim's leader/wonder exist) -- so this stays the payload-less unit
+#: variant it already was. Not "deferred" any more, though:
+#: `combat.rs::finish_aggression` reads its PRESENCE now.
+LIST_PRESENCE_EFFECT_KEYS = {"removeFromGame"}
 
 # ---------------------------------------------------------- colony keys -----
 #
@@ -498,6 +513,71 @@ def build_age_array(name, key, block):
     return "[" + ", ".join(str(x) for x in values) + "]"
 
 
+#: `effects.takeFromOpponent` sub-key -> `cards::TakeFromOpponentBlock`
+#: field. Exhaustive against the live data (2026-08-05: three base-game
+#: aggression cards -- Plunder/Spy/Armed Intervention -- one field each):
+#: an unrecognized sub-key stops the build rather than vanishing, same
+#: treatment as `PACT_BLOCK_FIELDS` above.
+TAKE_FROM_OPPONENT_FIELDS = {
+    "foodAndOrResources": "food_and_or_resources",
+    "science": "science",
+    "culture": "culture",
+}
+TAKE_FROM_OPPONENT_FIELD_ORDER = (
+    "food_and_or_resources", "science", "culture",
+)
+
+
+def build_take_from_opponent(name, block):
+    """`effects.takeFromOpponent` -> a `TakeFromOpponentBlock { ... }` Rust
+    literal (see cards.rs). `engine/events.py::finish_aggression` (651-667)
+    reads exactly these three keys off this dict and ignores any other --
+    but an unrecognized key here still stops the build, on the theory that a
+    key finish_aggression doesn't read is far more likely to be a
+    transcription surprise than a deliberate no-op (same posture as
+    `build_pact_block`)."""
+    values = {f: 0 for f in TAKE_FROM_OPPONENT_FIELDS.values()}
+    for k, v in block.items():
+        if k in IGNORED_KEYS:
+            continue
+        field = TAKE_FROM_OPPONENT_FIELDS.get(k)
+        if field is None:
+            raise ValueError(
+                f"{name}: effects.takeFromOpponent.{k} is not a recognized "
+                f"key -- add it to TAKE_FROM_OPPONENT_FIELDS (with the real "
+                f"handling combat.rs::finish_aggression needs) or "
+                f"IGNORED_KEYS in gen_cards.py")
+        values[field] = as_int(v, f"{name}.effects.takeFromOpponent.{k}")
+    parts = [f"{f}: {values[f]}" for f in TAKE_FROM_OPPONENT_FIELD_ORDER]
+    return "TakeFromOpponentBlock { " + ", ".join(parts) + " }"
+
+
+def build_age_list(name, key, val):
+    """`destroyUrbanBuildings`'s list of per-raid `{"maxAge": "<Age>"}`
+    specs -> a `&[Age]` Rust slice literal, one element per raid, in printed
+    order. `engine/events.py::finish_aggression` (674-675) loops this list
+    calling `spec.get("maxAge", "A")` per entry, so a spec printing no
+    `maxAge` at all defaults to `Age::A` here too. Any OTHER key inside a
+    spec stops the build -- nothing in `finish_aggression` reads one, so a
+    spec that had one would be a transcription surprise, not a deliberate
+    extra."""
+    ages = []
+    for i, spec in enumerate(val):
+        unknown = set(spec) - {"maxAge"}
+        if unknown:
+            raise ValueError(
+                f"{name}: effects.{key}[{i}] has key(s) {sorted(unknown)!r} "
+                f"besides maxAge -- gen_cards.py only knows how to read "
+                f"maxAge from a {key} entry")
+        age = spec.get("maxAge", "A")
+        if age not in AGES:
+            raise ValueError(
+                f"{name}: effects.{key}[{i}].maxAge = {age!r} is not a "
+                f"recognized age")
+        ages.append(f"Age::{AGES[age]}")
+    return "&[" + ", ".join(ages) + "]"
+
+
 def load_cards():
     cards = []
     for fn in PART_FILES:
@@ -600,6 +680,10 @@ def main():
                     variant = camel(key)
                     shape = "age_array"
                     payload = build_age_array(name, key, val)
+                elif key == "takeFromOpponent":
+                    variant = camel(key)
+                    shape = "take_from_opponent_block"
+                    payload = build_take_from_opponent(name, val)
                 elif key in DEFERRED_DICT_EFFECT_KEYS:
                     variant = camel(key)
                     shape = "unit"
@@ -612,15 +696,20 @@ def main():
                         f"DEFERRED_DICT_EFFECT_KEYS (with a one-line reason) "
                         f"in gen_cards.py")
             elif isinstance(val, list):
-                if key not in DEFERRED_LIST_EFFECT_KEYS:
+                if key in LIST_AGE_EFFECT_KEYS:
+                    variant = camel(key)
+                    shape = "age_list"
+                    payload = build_age_list(name, key, val)
+                elif key in LIST_PRESENCE_EFFECT_KEYS:
+                    variant = camel(key)
+                    shape = "unit"
+                    payload = None
+                else:
                     raise ValueError(
                         f"{name}: effects.{key} is a list-valued key this "
                         f"generator does not recognize -- add it to "
-                        f"DEFERRED_LIST_EFFECT_KEYS (with a one-line reason) "
-                        f"in gen_cards.py")
-                variant = camel(key)
-                shape = "unit"
-                payload = None
+                        f"LIST_AGE_EFFECT_KEYS or LIST_PRESENCE_EFFECT_KEYS "
+                        f"(with a one-line reason) in gen_cards.py")
             elif isinstance(val, bool):
                 # Bool-flag keys carry no magnitude in Python's own dispatch
                 # either (`_apply_modifier`/`_apply_special` ignore `val` for
@@ -802,7 +891,7 @@ def main():
     w("// change arrives as a reviewable diff rather than a runtime surprise.")
     w("")
     w("use crate::cards::{Age, Card, CardEffects, CardType, Composition, "
-      "ImmediateEffects, PactBlock, Production};")
+      "ImmediateEffects, PactBlock, Production, TakeFromOpponentBlock};")
     w("")
     w(f"pub const NUM_CARDS: usize = {len(rows)};")
     w("")
@@ -833,15 +922,17 @@ def main():
     w("/// A variant carries an `(i16)` payload when the printed effect has a")
     w("/// magnitude Python's own dispatch reads (`val` used in `_apply_modifier`")
     w("/// / `_apply_special`); a `(PactBlock)` payload when the printed value is")
-    w("/// one of the four pact blocks (§5.9); an `([i16; 5])` payload, indexed by")
-    w("/// `Age as u8`, when the printed value is a per-age magnitude dict")
-    w("/// (`buildDiscount`); a `(<Key>Value)` payload when the")
-    w("/// printed value is a STRING Python's own dispatch reads (`freeCivilAction`")
-    w("/// et al -- see `STRING_EFFECT_VALUES` in gen_cards.py); and stays a bare")
-    w("/// unit variant when Python ignores the JSON value too (a bool-flag key, or")
-    w("/// a dict/list-valued key this port has not modeled yet -- see")
-    w("/// gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/DEFERRED_LIST_EFFECT_KEYS for")
-    w("/// the reason on each).")
+    w("/// one of the four pact blocks (§5.9); a `(TakeFromOpponentBlock)`")
+    w("/// payload for `takeFromOpponent` (§5.4.6); an `([i16; 5])` payload,")
+    w("/// indexed by `Age as u8`, when the printed value is a per-age magnitude")
+    w("/// dict (`buildDiscount`); a `(&'static [Age])` payload for")
+    w("/// `destroyUrbanBuildings`, one entry per raid; a `(<Key>Value)` payload")
+    w("/// when the printed value is a STRING Python's own dispatch reads")
+    w("/// (`freeCivilAction` et al -- see `STRING_EFFECT_VALUES` in")
+    w("/// gen_cards.py); and stays a bare unit variant when Python ignores the")
+    w("/// JSON value too (a bool-flag key, or a dict/list-valued key this port")
+    w("/// has not modeled yet -- see gen_cards.py's DEFERRED_DICT_EFFECT_KEYS/")
+    w("/// LIST_PRESENCE_EFFECT_KEYS for the reason on each).")
     w("#[derive(Clone, Copy, PartialEq, Eq, Debug)]")
     w("pub enum Special {")
     for v in ordered:
@@ -852,6 +943,10 @@ def main():
             w(f"    {v}(PactBlock),")
         elif shape == "age_array":
             w(f"    {v}([i16; 5]),")
+        elif shape == "age_list":
+            w(f"    {v}(&'static [Age]),")
+        elif shape == "take_from_opponent_block":
+            w(f"    {v}(TakeFromOpponentBlock),")
         elif shape == "string_enum":
             w(f"    {v}({v}Value),")
         else:

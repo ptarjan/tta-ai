@@ -775,7 +775,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         ColonizeDiscardUpTo2MilitaryCardsForBonus(_)
         | ColonyImmediateBonusApplies
         | ColonyPermanentBonusTransfers
-        | DestroyUrbanBuildings
+        | DestroyUrbanBuildings(_)
         | DoublesTacticBonusOfOneArmy
         // Aggression: Raid -- "half of each destroyed building's printed
         // build cost, rounded up"; the `GainResourcesValue` payload names
@@ -788,7 +788,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | OrTakesSpecialTechnologiesOfSameTotalScienceCost
         | RemoveFromGame
         | StealColony(_)
-        | TakeFromOpponent
+        | TakeFromOpponent(_)
         | VictorTakesCulture
         // War over Technology's `strengthAdvantage` formula, named by
         // `VictorTakesScienceUpToValue`; war-resolution-time, not `compute()`.

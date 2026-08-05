@@ -302,6 +302,28 @@ pub struct PactBlock {
     pub attacker_strength: i16,
 }
 
+/// The three keys `effects.takeFromOpponent` prints in the base game
+/// (§5.4.6, `engine/events.py::finish_aggression` lines 651-667): what the
+/// attacker steals from the defender when this aggression succeeds. A
+/// dedicated struct rather than folding these into [`CardEffects`] -- same
+/// reasoning as [`PactBlock`]'s own doc comment: these three numbers are
+/// read by ONE bespoke function (`combat::finish_aggression`'s theft loop),
+/// not by `effects::compute`, so mixing them into the struct every card's
+/// stats recomputation walks would invite exactly the kind of stray field
+/// this project keeps a list of.
+///
+/// Exhaustive against the live data (2026-08-05: three base-game aggression
+/// cards use this key, one field each -- Plunder prints
+/// `foodAndOrResources`, Spy prints `science`, Armed Intervention prints
+/// `culture` -- but nothing stops a card from printing more than one, so all
+/// three fields are always present, zero when unprinted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TakeFromOpponentBlock {
+    pub food_and_or_resources: i16,
+    pub science: i16,
+    pub culture: i16,
+}
+
 /// Printed per-worker production. A struct, not a single scalar, because one
 /// card routinely prints more than one field at once -- Religion is
 /// `{culture: 1, happy: 1}`, Printing Press is `{science: 1, culture: 1}` --

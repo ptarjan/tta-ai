@@ -36,22 +36,24 @@
 //! variant for it. If a future event ever needs it, the compile error is at
 //! the enqueue site, which is where it belongs.
 //!
-//! ## What is still blocked, and on what
+//! ## Nothing here is stubbed
 //!
-//! Nothing in this module is stubbed. The auction, the colonization force,
-//! the defense decision, all fifteen choice resolvers and all fifteen
-//! deferred sub-effects are ported; the three that hand back to the turn loop
-//! ([`QueueItem::EndOfTurn`], [`QueueItem::AutoSkipPolitics`] and
-//! `finish_take_row`'s `deal_row`) call `game.rs` for real.
+//! The auction, the colonization force, the defense decision, all fifteen
+//! choice resolvers and all fifteen deferred sub-effects are ported; the
+//! three that hand back to the turn loop ([`QueueItem::EndOfTurn`],
+//! [`QueueItem::AutoSkipPolitics`] and `finish_take_row`'s `deal_row`) call
+//! `game.rs` for real.
 //!
-//! One thing is blocked one step PAST this module: `combat::
-//! finish_aggression`'s success branch needs `events::apply_gains` and the
-//! per-card dict payloads `gen_cards.py` collapsed to payload-less `Special`s.
-//! The four queue items it enqueues (`Raid`/`Annex`/`Infiltrate`/`LosePop`)
-//! are all resolved here already, waiting for it. Nothing else here needs
-//! `events.rs`: the two gain blocks that DO reach this module -- an event's
-//! `choose` option and a territory's `immediateEffects` -- are closed
-//! vocabularies, applied directly.
+//! One thing used to be blocked one step PAST this module: `combat::
+//! finish_aggression`'s success branch needed `events::apply_gains` and the
+//! per-card dict payloads `gen_cards.py` collapsed to payload-less
+//! `Special`s. Both landed 2026-08-05 (`events.rs`, plus generator work for
+//! `takeFromOpponent`/`destroyUrbanBuildings`) -- the four queue items that
+//! branch enqueues (`Raid`/`Annex`/`Infiltrate`/`LosePop`) were already
+//! resolved here, waiting for it, and now are reached for real. Nothing else
+//! here needs `events.rs`: the two gain blocks that DO reach this module --
+//! an event's `choose` option and a territory's `immediateEffects` -- are
+//! closed vocabularies, applied directly.
 
 use crate::cards::{Age, CardId, CardType};
 use crate::combat;
@@ -1727,14 +1729,22 @@ mod tests {
         assert!(state.pending.is_empty());
     }
 
-    /// ...and a SUCCEEDING aggression is still blocked, one step further on
-    /// than it used to be: the defense total now exists, the card's success
-    /// effects are what is missing.
+    /// ...and a SUCCEEDING aggression resolves fully now that `combat::
+    /// finish_aggression`'s success branch is ported (2026-08-05). The
+    /// defender here has an empty tableau, so "Aggression: Raid (I)"'s
+    /// `destroyUrbanBuildings` raid has nothing to destroy -- `run_item`
+    /// isn't called by `start_defense` itself (that is `interact::run_queue`,
+    /// driven by `apply`'s tail), so the raid is left sitting in the queue,
+    /// unresolved but present, which is exactly what this pins.
     #[test]
-    #[should_panic(expected = "succeeded")]
-    fn a_successful_aggression_is_blocked_on_its_success_effects() {
+    fn a_successful_aggression_resolves_its_success_effects() {
         let mut state = blank_state(2);
         start_defense(&mut state, 0, 1, card("Aggression: Raid (I)"), 5);
+        assert!(state.pending.is_empty(), "nothing to destroy -- no decision opened");
+        assert_eq!(
+            state.queue.iter().collect::<Vec<_>>(),
+            vec![QueueItem::Raid { player: 0, victim: 1, max_age: Age::I, no_loot: false }]
+        );
     }
 
     /// A failed aggression is fully resolvable, and it is the branch the
