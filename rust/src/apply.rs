@@ -17,23 +17,21 @@
 //! stubbed -- DESIGN.md's whole point is that an unhandled case is loud, not
 //! quiet.
 //!
-//! - **`interact.rs`'s decision queue.** `GameState` has no `pending` field
-//!   (the economy port already flagged this). Python's `apply()` opens with
-//!   `if state.pending: interact.apply_pending(...)`; there is no field to
-//!   test, so every call into this module implicitly assumes no decision is
-//!   open. Response moves ([`Move::Bid`], [`Move::BidPass`], [`Move::Defend`],
-//!   [`Move::DefendDone`], [`Move::SendUnit`], [`Move::SendBonus`],
-//!   [`Move::SendDone`], [`Move::Choose`]) panic in [`apply`] for the same
-//!   reason: nothing opened them, so they can never be legal today. So does
-//!   [`Move::OfferPact`] (Python: `interact.push_choice`). [`Move::PlayAction`]
-//!   ordering a free civil action (`Special::FreeCivilAction`) is NOT
-//!   unconditionally in this list any more: Python's `push_choice(...,
-//!   auto=True)` resolves a single legal option immediately and no-ops on
-//!   zero, without ever pushing onto `state.pending` -- only a GENUINE tie
-//!   (2+ legal options for the ordered action) opens a real decision. 2026-
-//!   08-05: [`h_play_action`] now mirrors that directly via [`legal::
-//!   free_action_moves`], and only panics, naming the card and the option
-//!   count, in the 2+ case -- see [`h_play_action`].
+//! - ~~**`interact.rs`'s decision queue.**~~ CLOSED 2026-08-05.
+//!   `GameState::pending` exists, [`apply`] opens with the `if state.pending:
+//!   interact.apply_pending(...)` branch Python does, [`Move::OfferPact`] is
+//!   ported ([`h_offer_pact`]), [`Move::Aggression`] hands off to
+//!   `interact::start_defense`, and the response moves ([`Move::Bid`],
+//!   [`Move::Defend`], [`Move::SendUnit`], [`Move::Choose`], ...) are taken by
+//!   that branch. They still `panic!` in the `match` below, but for the
+//!   opposite reason: reaching the match arm means one was played with
+//!   NOTHING open, which is a caller legality bug rather than a port gap.
+//!   [`h_play_action`] now defers its ordered action and its gains onto
+//!   `state.queue` exactly as Python does (`QueueItem::FreeCivil` then
+//!   `QueueItem::CardGains`), and [`apply`] drains the queue on the way out;
+//!   the two synchronous stand-ins written before the queue existed
+//!   (`resolve_free_civil_action`, `apply_action_card_gains`) are deleted
+//!   rather than left as a second copy of the same rule.
 //! - **`events.rs`.** [`Move::PrepareEvent`] (`events.reveal_current_event`)
 //!   calls into it directly. Panics in [`apply`].
 //! - **`game.rs`.** [`Move::EndTurn`] (`game.end_turn`) is the whole End-of-
@@ -116,14 +114,14 @@
 //! comment: "a caller must have checked ... first, not a legality gate of its
 //! own"). Add the assert back in [`apply`] once `legal.rs` exists.
 
-use crate::card_table::FreeCivilActionValue;
-use crate::cards::{CardEffects, CardId, CardType, Special};
+use crate::cards::{CardId, CardType, Special};
 use crate::combat;
 use crate::costs;
 use crate::economy;
-use crate::effects;
+#[cfg(test)]
 use crate::legal;
-use crate::moves::{ChurchillChoice, Move};
+use crate::effects;
+use crate::moves::{ChurchillChoice, Move, PactSide};
 use crate::state::{CardList, GameState, PlayerState, TechSlot, MAX_HAND, MAX_PLAYERS};
 
 // ------------------------------------------------------------- leader identity
@@ -145,6 +143,13 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
 /// the `state.pending` branch and the STRICT assert -- see this module's top
 /// doc comment.
 pub fn apply(state: &mut GameState, mv: Move) {
+    // Python's `apply` opens with exactly this: `if state.pending: return
+    // interact.apply_pending(state, move, rng)`. An open decision owns the
+    // move, and its owner is `state.decider()`, not `state.current`.
+    if !state.pending.is_empty() {
+        crate::interact::apply_pending(state, mv);
+        return;
+    }
     let idx = state.current;
     match mv {
         // ---- civil actions ----
@@ -171,11 +176,12 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::Resign => h_resign(state, idx),
         Move::Churchill { choice } => h_churchill(state, idx, choice),
 
-        // ---- blocked on interact.rs (no `pending` field / decision queue) ----
-        Move::OfferPact { .. } => unimplemented!(
-            "OfferPact needs interact::push_choice -- interact.rs is not ported \
-             (GameState has no `pending` field yet)"
-        ),
+        Move::OfferPact { card, target, side } => h_offer_pact(state, idx, card, target, side),
+
+        // Responses to an open decision. Unreachable: the `state.pending`
+        // branch at the top of this function has already taken them. Getting
+        // here means one was played with NOTHING open, which is a legality
+        // bug in the caller, not a port gap.
         Move::Bid { .. }
         | Move::BidPass
         | Move::Defend { .. }
@@ -183,9 +189,9 @@ pub fn apply(state: &mut GameState, mv: Move) {
         | Move::SendUnit { .. }
         | Move::SendBonus { .. }
         | Move::SendDone
-        | Move::Choose { .. } => unimplemented!(
-            "{mv:?} is a response to an interact.rs decision, and nothing can \
-             have opened one: GameState has no `pending` field yet"
+        | Move::Choose { .. } => panic!(
+            "{mv:?} is a response to a decision, but `state.pending` is empty -- \
+             nothing opened one"
         ),
 
         // ---- blocked on events.rs ----
@@ -193,7 +199,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
             "PrepareEvent needs events::reveal_current_event -- events.rs is not ported"
         ),
 
-        // ---- declaration ported (combat.rs); resolution blocked on interact.rs ----
+        // ---- combat.rs declaration + interact.rs defense decision ----
         Move::Aggression { card, target } => h_aggression(state, idx, card, target),
 
         // ---- blocked on game.rs ----
@@ -202,6 +208,11 @@ pub fn apply(state: &mut GameState, mv: Move) {
         // same one-line delegation.
         Move::EndTurn => crate::game::end_turn(state),
     }
+    // Python's `apply` tail: `effects.invalidate(state, p); interact.run_queue
+    // (state, rng)`. There is no stats cache here, but the queue drain is
+    // real -- a handler that defers a sub-effect (an action card's ordered
+    // action, an event's population loss) has nothing to run it otherwise.
+    crate::interact::run_queue(state);
 }
 
 // ============================================================ enter/leave play
@@ -246,7 +257,7 @@ fn on_enter_play(p: &mut PlayerState, id: CardId) {
 /// technology's own `on_enter_play`" without it. Left unported since Bill
 /// Gates is a rare leader swap and this module already has enough named
 /// gaps to track.
-fn on_leave_play(p: &mut PlayerState, id: CardId) {
+pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
     let eff = &id.get().effects;
     let bt = eff.blue_tokens as i32;
     if bt != 0 {
@@ -372,7 +383,7 @@ fn h_take(state: &mut GameState, idx: u8, slot: u8) {
 
 /// Move row card `slot` into `idx`'s hand/play area (actions already paid).
 /// Mirrors `engine/actions.py::take_card`.
-fn take_card(state: &mut GameState, idx: u8, slot: usize) {
+pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
     let id = state.card_row[slot];
     state.card_row[slot] = CardId::NONE;
     on_take_card(&mut state.players[idx as usize], id);
@@ -724,14 +735,41 @@ fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
 /// for the full reasoning; this handler only names the one remaining
 /// blocker.
 fn h_aggression(state: &mut GameState, idx: u8, card: CardId, target: u8) {
-    combat::start_aggression(state, idx, card, target);
-    unimplemented!(
-        "aggression({}) vs P{target}: interact::start_defense needs \
-         state.pending, which does not exist -- combat::start_aggression \
-         already paid the cost, discarded the card and cancelled any doomed \
-         pact, so resolving the defender's response is the only piece left \
-         once interact.rs is ported",
-        card.name()
+    // Python's `_h_aggression` marks the politics action spent and advances
+    // the phase BEFORE handing the defense decision over -- the attacker's
+    // political action is finished either way, and the defender answering
+    // must not look like the attacker still owing a move.
+    state.players[idx as usize].politics_done = true;
+    state.phase = crate::state::Phase::Actions;
+    let atk = combat::start_aggression(state, idx, card, target);
+    crate::interact::start_defense(state, idx, target, card, atk);
+}
+
+/// §5.9: reveal the pact, name the partner and the sides, and hand the
+/// accept/refuse decision to that partner. Mirrors `engine/actions.py::
+/// _h_offer_pact`.
+///
+/// `side` decides which printed block each party takes, and it is NOT the
+/// same as who owns the card: offering side B puts the TARGET on `a` and the
+/// offerer on `b`. See `state::Pact`'s doc comment for why those are four
+/// separate indices.
+fn h_offer_pact(state: &mut GameState, idx: u8, card: CardId, target: u8, side: PactSide) {
+    state.players[idx as usize].hand_military.remove_first(card);
+    let (a, b) = match side {
+        PactSide::B => (target, idx),
+        PactSide::A | PactSide::Unspecified => (idx, target),
+    };
+    state.players[idx as usize].politics_done = true;
+    state.phase = crate::state::Phase::Actions;
+    let mut options = crate::state::OptionList::new();
+    options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Accept));
+    options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Refuse));
+    crate::interact::push_choice(
+        state,
+        target,
+        crate::state::ChoiceKind::PactOffer { owner: idx, card, a, b },
+        options,
+        false,
     );
 }
 
@@ -741,7 +779,7 @@ fn h_aggression(state: &mut GameState, idx: u8, card: CardId, target: u8) {
 /// `apply_card_gains`, `auto=False`; `Wave of Nationalism`, `Military
 /// Build-Up`, `Endowment for the Arts` -- per-player-count magnitudes; and,
 /// for the 18 `freeCivilAction` cards, only the case where their ordered
-/// action has 2+ legal options -- see [`resolve_free_civil_action`]).
+/// action has 2+ legal options, which now opens a real decision).
 fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // RB p.15: Breakthrough's `develop_technology` order may spend itself on
     // a revolution instead, gated on every civil action THIS TURN still
@@ -749,8 +787,8 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // own `pay_ca` call below -- playing the card itself must not count as
     // "a civil action spent" for this test -- so this has to be captured
     // here, ahead of that payment, not recomputed later inside
-    // `resolve_free_civil_action` (which would otherwise always see the CA
-    // this card itself just cost and read `revolt_ok` as false).
+    // the queue item's own resolution (which would otherwise always see the
+    // CA this card itself just cost and read `revolt_ok` as false).
     let revolt_ok = {
         let p = &state.players[idx as usize];
         p.civil_actions as i32 == costs::ca_total(state, p)
@@ -770,14 +808,6 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
             card.name
         );
     }
-    if card.special.iter().any(|s| matches!(s, Special::GainFoodOrResources(_))) {
-        unimplemented!(
-            "play_action({}): gainFoodOrResources needs interact::push_choice \
-             -- interact.rs is not ported",
-            card.name
-        );
-    }
-
     let eff = card.effects;
     {
         let p = &mut state.players[idx as usize];
@@ -800,54 +830,69 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // `interact.enqueue` order: "free_civil" is pushed ahead of "card_gains").
     // A card with no ordered action skips straight to the gains, matching
     // Python's `else: apply_card_gains(...)` branch.
+    let gains = card_gains_of(card);
     if let Some(value) = card.special.iter().find_map(|s| match s {
         Special::FreeCivilAction(v) => Some(*v),
         _ => None,
     }) {
-        resolve_free_civil_action(state, idx, card.name, value, eff.resource_discount as i32, revolt_ok);
-    }
-    apply_action_card_gains(state, idx, &eff);
-}
-
-/// Resolve one action card's ordered free civil action (§3.11). Mirrors
-/// Python's `interact._q_free_civil` + `interact.push_choice(..., auto=True)`
-/// collapsed into one synchronous call, since there is no `state.pending`
-/// queue here to defer through: `push_choice` with `auto=True` (the default)
-/// resolves a single legal option immediately and no-ops on zero WITHOUT ever
-/// opening a real decision, so those two cases need nothing from
-/// `interact.rs` at all. Only a genuine tie -- 2+ legal options -- would open
-/// one, and that is the one case actually blocked here. `revolt_ok` is
-/// [`h_play_action`]'s pre-`pay_ca` snapshot -- see its own comment.
-fn resolve_free_civil_action(
-    state: &mut GameState,
-    idx: u8,
-    card_name: &'static str,
-    value: FreeCivilActionValue,
-    discount: i32,
-    revolt_ok: bool,
-) {
-    let kind = legal::free_action_kind_of(value);
-    let moves = legal::free_action_moves(state, &state.players[idx as usize], kind, discount, revolt_ok);
-    match moves.as_slice() {
-        [] => {} // `push_choice` with no options: the order fizzles, silently, same as Python
-        [only] => apply_free_civil_move(state, idx, *only, discount),
-        many => unimplemented!(
-            "play_action({card_name}): {} legal choices for its ordered action \
-             ({kind:?}) -- interact.rs's decision queue is not ported, so a \
-             genuine multi-way choice cannot be resolved here",
-            many.len()
-        ),
+        // FIFO, and the order is the rule (§3.11): the ordered action
+        // resolves, and only THEN the card's own gains -- Breakthrough's
+        // science and Frugality's food arrive too late to pay for the very
+        // action the card just ordered.
+        crate::interact::enqueue(
+            state,
+            crate::state::QueueItem::FreeCivil {
+                player: idx,
+                kind: value,
+                discount: eff.resource_discount,
+                revolt_ok,
+            },
+        );
+        crate::interact::enqueue(
+            state,
+            crate::state::QueueItem::CardGains { player: idx, gains },
+        );
+    } else {
+        crate::interact::apply_card_gains(state, idx, gains);
     }
 }
 
-/// Apply the one move [`resolve_free_civil_action`] decided on, at no action
+/// One action card's gain half as a [`crate::state::CardGains`]. Mirrors the
+/// `{k: eff[k] for k in _GAIN_KEYS if k in eff}` comprehension in
+/// `engine/actions.py::_h_play_action`, over the same six keys.
+///
+/// `gainPopulation` is dead in the base game's data today (confirmed
+/// 2026-08-05: `data/*.json` prints the key on no card at all) and
+/// `CardEffects` has no field for it, so it stays zero here; `interact::
+/// apply_card_gains` implements the arithmetic anyway, because the field
+/// exists and a silently-unimplemented gain is the bug class this port is
+/// about.
+fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
+    crate::state::CardGains {
+        science: card.effects.gain_science,
+        culture: card.effects.gain_culture,
+        food: card.effects.gain_food,
+        resources: card.effects.gain_resources,
+        population: 0,
+        food_or_resources: card
+            .special
+            .iter()
+            .find_map(|s| match s {
+                Special::GainFoodOrResources(n) => Some(*n),
+                _ => None,
+            })
+            .unwrap_or(0),
+    }
+}
+
+/// Apply the one move an ordered free civil action resolved to, at no action
 /// cost and `discount` off its resource cost (mirrors `engine/actions.py::
 /// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop` /
 /// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` are the only shapes
 /// `free_action_moves`'s build/upgrade/pop/wonder-step arms ever produce;
 /// `Move::Develop` / `Move::Revolution` are the two `DevelopTechnology` can
 /// produce. No other `Move` variant is reachable from there.
-fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
+pub(crate) fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
     match mv {
         Move::Pop => h_pop(state, idx, true),
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
@@ -864,26 +909,6 @@ fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32
             "free_action_moves produced a move apply_free_civil_move does not \
              expect: {other:?}"
         ),
-    }
-}
-
-/// The gain half of a yellow action card (§3.11). Mirrors
-/// `engine/actions.py::apply_card_gains` minus its `gainFoodOrResources`
-/// tail (always needs `interact::push_choice`, `auto=False` -- [`h_play_action`]
-/// panics on that key before this is ever called) and its `gainPopulation`
-/// loop (dead in the base game's data today -- confirmed 2026-08-05,
-/// `data/*.json` prints the key on no card at all -- and `CardEffects` has no
-/// field for it regardless, the same check `h_play_action` already made for
-/// `extraCivilActions`).
-fn apply_action_card_gains(state: &mut GameState, idx: u8, eff: &CardEffects) {
-    let p = &mut state.players[idx as usize];
-    p.science += eff.gain_science as u16;
-    p.culture += eff.gain_culture as u16;
-    if eff.gain_food != 0 {
-        economy::gain_food(p, eff.gain_food as u16);
-    }
-    if eff.gain_resources != 0 {
-        economy::gain_resources(p, eff.gain_resources as u16);
     }
 }
 
@@ -928,6 +953,10 @@ fn h_resign(state: &mut GameState, idx: u8) {
         state.players[attacker as usize].culture += 7;
         if state.players[attacker as usize].war_declared_by_me == war_card {
             state.players[attacker as usize].war_declared_by_me = CardId::NONE;
+            // Cleared together -- see `combat::resolve_war_outcome`'s comment
+            // on why a stale `war_target` is a real divergence, not just a
+            // meaningless leftover.
+            state.players[attacker as usize].war_target = 0;
         }
         economy::discard_military(state, war_card);
     }
@@ -941,6 +970,7 @@ fn h_resign(state: &mut GameState, idx: u8) {
         state.players[target as usize].wars_declared_on_me[idx as usize] = CardId::NONE;
         economy::discard_military(state, my_war);
         state.players[idx as usize].war_declared_by_me = CardId::NONE;
+        state.players[idx as usize].war_target = 0;
     }
 
     state.players[idx as usize].politics_done = true;
@@ -962,6 +992,15 @@ mod tests {
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    /// `h_play_action` DEFERS an action card's ordered action and its gains
+    /// onto `state.queue` (§3.11, Python's `_h_play_action`), and it is
+    /// `apply()` -- not the handler -- that drains the queue. These tests
+    /// call the handler directly, so they do the drain themselves.
+    fn play_action_and_drain(state: &mut GameState, id: CardId) {
+        h_play_action(state, 0, id);
+        crate::interact::run_queue(state);
     }
 
     fn blank_player(idx: u8, government: CardId) -> PlayerState {
@@ -1054,6 +1093,8 @@ mod tests {
             game_over: false,
             phase: Phase::Actions,
             forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
         }
     }
 
@@ -1428,15 +1469,10 @@ mod tests {
     // -------------------------------------------------------------- aggression
 
     #[test]
-    #[should_panic(expected = "interact::start_defense")]
-    fn h_aggression_pays_cost_discards_and_cancels_pacts_before_panicking() {
-        // `h_aggression` mutates state via `combat::start_aggression` (the
-        // portable prefix of `events.start_aggression`) and only THEN panics
-        // naming `interact::start_defense` -- matching the codebase's
-        // established "partial mutation before an unimplemented tail" shape
-        // (see `h_play_action`'s own top doc comment). `std::panic::
-        // catch_unwind` lets this test assert BOTH the panic message and the
-        // mutation that happened first.
+    fn h_aggression_pays_cost_discards_and_cancels_pacts_then_resolves() {
+        // `h_aggression` runs `combat::start_aggression` (the portable
+        // prefix of `events.start_aggression`) and then hands the defense
+        // decision to the rival through `interact::start_defense`.
         let agg = crate::cards::CARDS
             .iter()
             .position(|c| c.kind == CardType::Aggression)
@@ -1449,24 +1485,20 @@ mod tests {
         p.pacts.push(Pact { card: card("Military Alliance"), owner: 0, partner: 1, a: 0, b: 1 });
         let mut state = one_player_state(p);
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            h_aggression(&mut state, 0, agg, 1);
-        }));
-        assert_eq!(state.players[0].military_actions, 2, "cost was paid before the panic");
-        assert!(!state.players[0].hand_military.contains(agg), "card left the hand before the panic");
+        h_aggression(&mut state, 0, agg, 1);
+        assert_eq!(state.players[0].military_actions, 2, "cost was paid");
+        assert!(!state.players[0].hand_military.contains(agg), "card left the hand");
         assert!(
             state.discarded_military[agg.get().age as usize].contains(agg),
-            "card was discarded before the panic"
+            "card was discarded"
         );
-        assert!(state.players[0].pacts.is_empty(), "doomed pact was cancelled before the panic");
-        // Resume the ORIGINAL panic (not `.unwrap()`, which would panic with
-        // its own generic message and defeat `#[should_panic(expected = ..)]`
-        // below) so this test still proves the panic message names the real
-        // blocker.
-        match result {
-            Ok(()) => panic!("expected h_aggression to panic (interact.rs is not ported)"),
-            Err(e) => std::panic::resume_unwind(e),
-        }
+        assert!(state.players[0].pacts.is_empty(), "doomed pact was cancelled");
+        assert!(state.players[0].politics_done, "the political action is spent");
+        // The defender holds no military cards, so §5.4.4 offers nothing to
+        // decide and the aggression resolves at its printed strength -- 0 vs
+        // 0, which FAILS. That whole tail was `unimplemented!` until
+        // `interact::start_defense` existed to produce a defense total.
+        assert!(state.pending.is_empty(), "nothing left to decide");
     }
 
     // ------------------------------------------------------------- play_action
@@ -1478,7 +1510,7 @@ mod tests {
         p.military_actions = 2;
         p.hand_civil.push(card("Patriotism (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Patriotism (A)"));
+        play_action_and_drain(&mut state, card("Patriotism (A)"));
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].military_actions, 3, "Patriotism grants +1 MA");
         assert_eq!(state.players[0].mil_discount, 1, "resourcesForMilitaryUnits: 1");
@@ -1491,7 +1523,7 @@ mod tests {
         p.civil_actions = 4;
         p.hand_civil.push(card("Cultural Heritage (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Cultural Heritage (A)"));
+        play_action_and_drain(&mut state, card("Cultural Heritage (A)"));
         assert_eq!(state.players[0].science, 1);
         assert_eq!(state.players[0].culture, 4);
     }
@@ -1503,7 +1535,7 @@ mod tests {
         p.blue_total = 10;
         p.hand_civil.push(card("Stock Pile"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Stock Pile"));
+        play_action_and_drain(&mut state, card("Stock Pile"));
         assert_eq!(state.players[0].food, 1);
         assert_eq!(state.players[0].resources, 1);
     }
@@ -1518,7 +1550,7 @@ mod tests {
         p.civil_actions = 4;
         p.hand_civil.push(card("Rich Land (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Rich Land (A)"));
+        play_action_and_drain(&mut state, card("Rich Land (A)"));
         assert_eq!(state.players[0].civil_actions, 3, "only the card's own CA is spent");
         assert!(!state.players[0].hand_civil.contains(card("Rich Land (A)")));
     }
@@ -1535,7 +1567,7 @@ mod tests {
         p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
         p.hand_civil.push(card("Rich Land (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Rich Land (A)"));
+        play_action_and_drain(&mut state, card("Rich Land (A)"));
         assert_eq!(state.players[0].techs.workers(card("Bronze")), 1);
         assert_eq!(state.players[0].resources, 0);
         assert_eq!(state.players[0].workers_free, 0);
@@ -1553,7 +1585,7 @@ mod tests {
         p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
         p.hand_civil.push(card("Efficient Upgrade (II)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Efficient Upgrade (II)"));
+        play_action_and_drain(&mut state, card("Efficient Upgrade (II)"));
         assert_eq!(state.players[0].techs.workers(card("Agriculture")), 0);
         assert_eq!(state.players[0].techs.workers(card("Irrigation")), 1);
         assert_eq!(state.players[0].civil_actions, 3, "the upgrade itself is free");
@@ -1569,7 +1601,7 @@ mod tests {
         p.resources = 1;
         p.hand_civil.push(card("Engineering Genius (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Engineering Genius (A)"));
+        play_action_and_drain(&mut state, card("Engineering Genius (A)"));
         assert_eq!(state.players[0].wonder_steps, 1);
         assert_eq!(state.players[0].resources, 0);
         assert_eq!(state.players[0].civil_actions, 3, "the wonder step itself is free");
@@ -1588,7 +1620,7 @@ mod tests {
         p.blue_total = 10; // gain_food needs blue tokens free to convert
         p.hand_civil.push(card("Frugality (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Frugality (A)"));
+        play_action_and_drain(&mut state, card("Frugality (A)"));
         assert_eq!(state.players[0].workers_free, 1, "the ordered pop happened");
         assert_eq!(state.players[0].yellow_bank, 4);
         assert_eq!(state.players[0].food, 1, "0 left after the pop, +1 from the card's own gainFood");
@@ -1608,7 +1640,7 @@ mod tests {
         p.blue_total = 10; // gain_food needs blue tokens free to convert
         p.hand_civil.push(card("Frugality (A)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Frugality (A)"));
+        play_action_and_drain(&mut state, card("Frugality (A)"));
         assert_eq!(state.players[0].workers_free, 0, "the ordered pop must not happen");
         assert_eq!(state.players[0].yellow_bank, 5, "unchanged: no token moved");
         assert_eq!(state.players[0].food, 5, "4 unspent + the card's own +1 gainFood");
@@ -1624,7 +1656,7 @@ mod tests {
         p.hand_civil.push(card("Breakthrough (I)"));
         p.hand_civil.push(card("Bronze"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        play_action_and_drain(&mut state, card("Breakthrough (I)"));
         assert_eq!(state.players[0].techs.workers(card("Bronze")), 0, "developed, not built");
         assert!(state.players[0].techs.has(card("Bronze")));
         assert!(!state.players[0].hand_civil.contains(card("Bronze")));
@@ -1643,26 +1675,34 @@ mod tests {
         p.hand_civil.push(card("Breakthrough (I)"));
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        play_action_and_drain(&mut state, card("Breakthrough (I)"));
         assert!(!state.players[0].techs.has(card("Irrigation")), "must not develop");
         assert!(state.players[0].hand_civil.contains(card("Irrigation")), "stays in hand");
         assert_eq!(state.players[0].science, 4, "2 unspent + the card's own +2 gainScience");
     }
 
+    /// Two developable, freely-affordable technologies in hand: a GENUINE
+    /// tie, which `push_choice(auto=True)` does not resolve. This used to be
+    /// the one case that had to panic; it now opens a real decision, and the
+    /// player who owns it is the one who played the card.
     #[test]
-    #[should_panic(expected = "2 legal choices")]
-    fn h_play_action_breakthrough_panics_on_a_genuine_multi_way_choice() {
-        // Two developable, freely-affordable technologies in hand: Python
-        // would open a real `push_choice` decision here (`auto=True` only
-        // auto-resolves 0 or 1 options); `interact.rs` is not ported, so this
-        // is the one case that must be loud rather than silently picking one.
+    fn h_play_action_breakthrough_opens_a_decision_on_a_genuine_multi_way_choice() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.hand_civil.push(card("Breakthrough (I)"));
         p.hand_civil.push(card("Bronze"));
         p.hand_civil.push(card("Agriculture"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        play_action_and_drain(&mut state, card("Breakthrough (I)"));
+        assert_eq!(state.decider(), 0);
+        let moves = legal::legal_moves(&state);
+        assert_eq!(moves.len(), 2, "develop Agriculture, or develop Bronze");
+        // §3.11: the card's own gains are queued BEHIND the ordered action,
+        // so they have not landed yet.
+        assert_eq!(state.players[0].science, 0);
+        apply(&mut state, Move::Choose { n: 0 });
+        assert!(state.pending.is_empty());
+        assert_eq!(state.players[0].science, 2, "...and now the gains land");
     }
 
     #[test]
@@ -1681,19 +1721,32 @@ mod tests {
         p.hand_civil.push(card("Breakthrough (I)"));
         p.hand_civil.push(card("Monarchy"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Breakthrough (I)"));
+        play_action_and_drain(&mut state, card("Breakthrough (I)"));
         assert_eq!(state.players[0].government, card("Monarchy"), "revolution happened");
         assert_eq!(state.players[0].science, 2, "0 left after the revolution, +2 from the card's own gainScience");
     }
 
+    /// `Reserves` prints `gainFoodOrResources`, which is a real choice --
+    /// a named gap here until `interact::push_choice` existed.
     #[test]
-    #[should_panic(expected = "gainFoodOrResources")]
-    fn h_play_action_reserves_is_a_named_gap() {
+    fn h_play_action_reserves_offers_food_or_resources() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
+        p.blue_total = 20;
         p.hand_civil.push(card("Reserves (I)"));
         let mut state = one_player_state(p);
-        h_play_action(&mut state, 0, card("Reserves (I)"));
+        play_action_and_drain(&mut state, card("Reserves (I)"));
+        assert_eq!(legal::legal_moves(&state).len(), 2, "food, or resources");
+        apply(&mut state, Move::Choose { n: 1 });
+        let n = match card("Reserves (I)").get().special.iter().find_map(|s| match s {
+            Special::GainFoodOrResources(n) => Some(*n),
+            _ => None,
+        }) {
+            Some(n) => n as u16,
+            None => panic!("Reserves prints gainFoodOrResources"),
+        };
+        assert_eq!(state.players[0].resources, n);
+        assert_eq!(state.players[0].food, 0);
     }
 
     // -------------------------------------------------------------- pacts
@@ -1823,20 +1876,43 @@ mod tests {
         assert_eq!(state.players[0].culture, 5);
     }
 
+    /// `EndTurn` was a named gap here until `game.rs` landed. It is now a
+    /// one-line delegation to `game::end_turn` (the whole §6.6 sequence plus
+    /// the hand-off), which `game.rs`'s own tests cover -- this is only a
+    /// smoke test that [`apply`] routes there at all.
     #[test]
-    #[should_panic(expected = "EndTurn needs game::end_turn")]
-    fn apply_end_turn_is_a_named_gap() {
-        let p = blank_player(0, card("Despotism"));
-        let mut state = one_player_state(p);
+    fn apply_end_turn_delegates_to_game() {
+        let mut state =
+            blank_state(2, std::array::from_fn(|i| blank_player(i as u8, card("Despotism"))));
+        let before = state.turn;
         apply(&mut state, Move::EndTurn);
+        assert_eq!(state.turn, before + 1, "the turn advanced");
+        assert_eq!(state.current, 1, "...to the next player");
     }
 
+    /// `OfferPact` used to be a named gap here (no `state.pending` field).
+    /// It now opens a real decision -- and the point of the whole subsystem
+    /// is that the TARGET answers it while `current` stays put.
     #[test]
-    #[should_panic(expected = "interact.rs is not ported")]
-    fn apply_offer_pact_is_a_named_gap() {
+    fn apply_offer_pact_hands_the_decision_to_the_target() {
         let p = blank_player(0, card("Despotism"));
-        let mut state = one_player_state(p);
-        apply(&mut state, Move::OfferPact { card: card("Peace Treaty"), target: 1, side: crate::moves::PactSide::Unspecified });
+        let mut state = blank_state(2, std::array::from_fn(|i| blank_player(i as u8, card("Despotism"))));
+        state.players[0] = p;
+        let peace = card("Peace Treaty");
+        state.players[0].hand_military.push(peace);
+        apply(&mut state, Move::OfferPact { card: peace, target: 1, side: PactSide::B });
+        assert!(!state.players[0].hand_military.contains(peace), "the card is revealed");
+        assert!(state.players[0].politics_done, "the political action is spent either way");
+        assert_eq!(state.decider(), 1, "the partner answers");
+        assert_eq!(state.current, 0, "...and the turn has not moved");
+        // Offering side B puts the TARGET on `a` -- see `state::Pact`.
+        match state.pending.top() {
+            Some(crate::state::Pending::Choice(c)) => assert_eq!(
+                c.kind,
+                crate::state::ChoiceKind::PactOffer { owner: 0, card: peace, a: 1, b: 0 }
+            ),
+            other => panic!("expected a pact offer, got {other:?}"),
+        }
     }
 
     // -------------------------------------------- wonder-completion culture

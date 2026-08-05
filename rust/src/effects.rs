@@ -388,12 +388,9 @@ fn army_strength(p: &PlayerState) -> i32 {
         if w == 0 {
             continue;
         }
-        let i = match id.kind() {
-            CardType::Infantry => INFANTRY,
-            CardType::Cavalry => CAVALRY,
-            CardType::Artillery => ARTILLERY,
-            CardType::Air => AIR,
-            _ => continue,
+        let i = match unit_slot(id.kind()) {
+            Some(i) => i,
+            None => continue,
         };
         avail[i] += w;
         // "fresh" = not a full age behind the tactic (§10.4).
@@ -401,20 +398,67 @@ fn army_strength(p: &PlayerState) -> i32 {
             fresh[i] += w;
         }
     }
+    army_strength_from_counts(p, &avail, &fresh)
+}
+
+/// `[INFANTRY, CAVALRY, ARTILLERY, AIR]` slot for a unit type, `None` for
+/// everything else.
+#[inline]
+fn unit_slot(kind: CardType) -> Option<usize> {
+    match kind {
+        CardType::Infantry => Some(INFANTRY),
+        CardType::Cavalry => Some(CAVALRY),
+        CardType::Artillery => Some(ARTILLERY),
+        CardType::Air => Some(AIR),
+        _ => None,
+    }
+}
+
+/// The shared tail of [`army_strength`] and [`army_strength_units`] --
+/// Python's `_army_strength_counts`, which both of its callers route through
+/// for exactly this reason: the Genghis Khan branch and the fresh-armies
+/// clamp must not exist twice.
+fn army_strength_from_counts(p: &PlayerState, avail: &[i32; 4], fresh: &[i32; 4]) -> i32 {
+    let card = p.tactic.get();
     let need = need_counts(card.composition);
     let genghis = !p.leader.is_none()
         && p.leader.get().special.contains(&Special::InfantryCountsAsCavalryForTactics);
     let (total_armies, fresh_armies) = if genghis {
-        let total = count_armies_genghis(&avail, &need);
-        (total, count_armies_genghis(&fresh, &need).min(total))
+        let total = count_armies_genghis(avail, &need);
+        (total, count_armies_genghis(fresh, &need).min(total))
     } else {
-        let total = count_armies(&avail, &need);
-        (total, count_armies(&fresh, &need).min(total))
+        let total = count_armies(avail, &need);
+        (total, count_armies(fresh, &need).min(total))
     };
     if total_armies == 0 {
         return 0;
     }
     army_value(card, total_armies, fresh_armies, avail[AIR])
+}
+
+/// §10.3-10.5 over an EXPLICIT unit multiset rather than the whole tableau.
+/// Mirrors `engine/effects.py::army_strength_units`, and exists for the same
+/// caller it does in Python: a colonization force, where only the SACRIFICED
+/// units form armies (§10.7) -- `interact::force_value`. One entry per
+/// worker, so a card carrying two workers appears twice.
+pub fn army_strength_units(p: &PlayerState, units: &[CardId]) -> i32 {
+    if p.tactic.is_none() {
+        return 0;
+    }
+    if p.tactic.get().composition.is_empty() {
+        return 0;
+    }
+    let tactic_lv = p.tactic.level() as i32;
+    let mut avail = [0i32; 4];
+    let mut fresh = [0i32; 4];
+    for &id in units {
+        let Some(i) = unit_slot(id.kind()) else { continue };
+        avail[i] += 1;
+        if id.level() as i32 >= tactic_lv - 1 {
+            fresh[i] += 1;
+        }
+    }
+    army_strength_from_counts(p, &avail, &fresh)
 }
 
 // ------------------------------------------------------------------ pacts
@@ -1040,6 +1084,8 @@ mod tests {
             game_over: false,
             phase: Phase::Actions,
             forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
         }
     }
 

@@ -20,11 +20,13 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::cards::{Age, CardId};
+use crate::cards::{Age, CardId, CardType};
 use crate::moves::{ChurchillChoice, Move, PactSide};
 use crate::state::{
-    CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_DECK,
-    MAX_PLAYERS, ROW_SIZE,
+    Auction, CardGains, CardList, Choice, ChoiceKind, ChoiceOption, Colonize, Defense,
+    FreeBuildSpec, GainOption, GainOptions, GameState, Keyword, OptionList, Pact, PactList, Pending,
+    PendingStack, Phase, PlayerState, Queue, QueueItem, Tableau, TechSlot, MAX_DECK, MAX_PLAYERS,
+    ROW_SIZE,
 };
 
 // ============================================================ json ======
@@ -648,28 +650,507 @@ pub fn fixture_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 // inputs to `legal_moves`/`apply`. `log` is dropped same as
 // `tools/dump_fixtures.py::state_digest` drops it.
 
-/// A field the dumped JSON carries but `GameState`/`PlayerState` cannot
-/// represent turned out to be non-empty -- loading would silently produce a
-/// state that claims less is going on than the real game has recorded.
-/// Named separately from a plain parse error so callers (`tests/
-/// differential.rs`) can tell "this fixture point is unloadable because of a
-/// documented, known gap" apart from "the loader itself is wrong".
-fn must_be_empty(v: Option<&Json>, key: &str) -> Result<(), FixtureError> {
-    let empty = match v {
-        None | Some(Json::Null) => true,
-        Some(Json::Arr(a)) => a.is_empty(),
-        Some(Json::Obj(o)) => o.is_empty(),
-        Some(_) => false,
-    };
-    if empty {
-        Ok(())
-    } else {
-        Err(FixtureError::new(format!(
-            "{key} is non-empty in the dumped state -- GameState has no `{key}` field \
-             (see fixtures.rs's `GameState::from_json` doc comment); this state cannot \
-             be loaded faithfully"
-        )))
+// ------------------------------------------- the decision queue (pending) -
+//
+// `pending` and `queue` used to be rejected outright by `must_be_empty`
+// (deleted with this change): `state.rs` had no field for either, and
+// silently dropping a non-empty decision queue would make a loaded state look
+// further along than it is -- whose move is next, and what is legal, both
+// depend on it. 247 of the fixtures' anchor states were unloadable for that
+// reason alone. `state::PendingStack` / `state::Queue` exist now, so this
+// section loads them.
+//
+// Every option list, every context key and every queue payload is mapped
+// EXPLICITLY, per tag, and an unrecognised tag / option shape / context key
+// is an error. That is the point: Python's option lists are untyped JSON, so
+// the only way to know a `("choose", 3)` means the same thing on both sides
+// is to name what each option IS. A silent fallback here would produce a
+// state that loads and then diverges at the next ply for no visible reason.
+
+/// A card name from a JSON string, in a decision payload.
+fn pend_card(v: &Json, tag: &str) -> Result<CardId, FixtureError> {
+    let name = v
+        .as_str()
+        .ok_or_else(|| FixtureError::new(format!("{tag}: expected a card name string")))?;
+    CardId::by_name(name)
+        .ok_or_else(|| FixtureError::new(format!("{tag}: unknown card {name:?}")))
+}
+
+fn pend_u8(v: &Json, key: &str, tag: &str) -> Result<u8, FixtureError> {
+    Ok(req_num(v, key).map_err(|e| FixtureError::new(format!("{tag}: {e}")))? as u8)
+}
+
+fn pend_i16(v: &Json, key: &str, tag: &str) -> Result<i16, FixtureError> {
+    Ok(req_num(v, key).map_err(|e| FixtureError::new(format!("{tag}: {e}")))? as i16)
+}
+
+/// The `ctx` sub-object of a `choice`, or an empty object when absent.
+fn ctx_of(v: &Json) -> Json {
+    match v.get("ctx") {
+        Some(o @ Json::Obj(_)) => o.clone(),
+        _ => Json::Obj(Vec::new()),
     }
+}
+
+/// Card names (+ an optional trailing keyword) into a [`ChoiceOption`] list.
+fn card_options_json(arr: &[Json], tag: &str, trailing: Option<Keyword>) -> Result<OptionList, FixtureError> {
+    let mut out = OptionList::new();
+    for (i, item) in arr.iter().enumerate() {
+        let last = i + 1 == arr.len();
+        if let (Some(word), Some(s)) = (trailing, item.as_str()) {
+            if last && s == keyword_text(word) {
+                out.push(ChoiceOption::Word(word));
+                continue;
+            }
+        }
+        out.push(ChoiceOption::Card(pend_card(item, tag)?));
+    }
+    Ok(out)
+}
+
+/// The exact JSON spelling of each keyword option, so the loader and the
+/// engine cannot drift on what `"stop"` means.
+fn keyword_text(w: Keyword) -> &'static str {
+    match w {
+        Keyword::Stop => "stop",
+        Keyword::Skip => "skip",
+        Keyword::Science => "science",
+        Keyword::Food => "food",
+        Keyword::Resources => "resources",
+        Keyword::Accept => "accept",
+        Keyword::Refuse => "refuse",
+        Keyword::Leader => "leader",
+        Keyword::Wonder => "wonder",
+    }
+}
+
+fn word_options(arr: &[Json], tag: &str, allowed: &[Keyword]) -> Result<OptionList, FixtureError> {
+    let mut out = OptionList::new();
+    for item in arr {
+        let s = item
+            .as_str()
+            .ok_or_else(|| FixtureError::new(format!("{tag}: expected a keyword string")))?;
+        let w = allowed
+            .iter()
+            .copied()
+            .find(|w| keyword_text(*w) == s)
+            .ok_or_else(|| FixtureError::new(format!("{tag}: unexpected option {s:?}")))?;
+        out.push(ChoiceOption::Word(w));
+    }
+    Ok(out)
+}
+
+/// One `{"food": n}` / `{"resources": n}` branch of an event's `choose`
+/// block. Any OTHER key is an error, not a zero -- `state::GainOption`'s doc
+/// comment records that the base game prints exactly these two, so a third
+/// means the data grew and this must grow with it.
+fn gain_option(v: &Json, tag: &str) -> Result<GainOption, FixtureError> {
+    let Json::Obj(fields) = v else {
+        return Err(FixtureError::new(format!("{tag}: gain option is not an object")));
+    };
+    let mut out = GainOption::default();
+    for (k, val) in fields {
+        let n = val
+            .as_f64()
+            .ok_or_else(|| FixtureError::new(format!("{tag}: {k:?} is not a number")))?
+            as i16;
+        match k.as_str() {
+            "food" => out.food = n,
+            "resources" => out.resources = n,
+            other => {
+                return Err(FixtureError::new(format!(
+                    "{tag}: gain option key {other:?} is not one of food/resources -- \
+                     see state::GainOption"
+                )))
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn parse_card_type(s: &str, tag: &str) -> Result<CardType, FixtureError> {
+    Ok(match s {
+        "farm" => CardType::Farm,
+        "mine" => CardType::Mine,
+        "lab" => CardType::Lab,
+        "temple" => CardType::Temple,
+        "library" => CardType::Library,
+        "arena" => CardType::Arena,
+        "theater" => CardType::Theater,
+        "infantry" => CardType::Infantry,
+        "cavalry" => CardType::Cavalry,
+        "artillery" => CardType::Artillery,
+        "air" => CardType::Air,
+        other => {
+            return Err(FixtureError::new(format!(
+                "{tag}: card type {other:?} is not a worker-holding type"
+            )))
+        }
+    })
+}
+
+/// One `pending` entry.
+fn parse_pending(v: &Json) -> Result<Pending, FixtureError> {
+    let kind = req_str(v, "kind")?;
+    Ok(match kind.as_str() {
+        "choice" => Pending::Choice(parse_choice(v)?),
+        "auction" => {
+            let tag = "pending.auction";
+            let active_json = req_arr(v, "active", tag)?;
+            let mut active = [0u8; MAX_PLAYERS];
+            if active_json.len() > MAX_PLAYERS {
+                return Err(FixtureError::new(format!("{tag}: {} bidders", active_json.len())));
+            }
+            for (i, a) in active_json.iter().enumerate() {
+                active[i] = a
+                    .as_f64()
+                    .ok_or_else(|| FixtureError::new(format!("{tag}.active[{i}]: not a number")))?
+                    as u8;
+            }
+            Pending::Auction(Auction::restore(
+                pend_card(req(v, "card")?, tag)?,
+                &active[..active_json.len()],
+                pend_u8(v, "pos", tag)?,
+                pend_u8(v, "bid", tag)?,
+                opt_u8(v, "high")?,
+                pend_u8(v, "player", tag)?,
+            ))
+        }
+        "defense" => {
+            let tag = "pending.defense";
+            Pending::Defense(Defense {
+                player: pend_u8(v, "player", tag)?,
+                attacker: pend_u8(v, "attacker", tag)?,
+                card: pend_card(req(v, "card")?, tag)?,
+                atk: req_num(v, "atk")? as i32,
+                dfn: req_num(v, "dfn")? as i32,
+                spent: pend_u8(v, "spent", tag)?,
+                budget: pend_u8(v, "budget", tag)?,
+            })
+        }
+        "colonize" => {
+            let tag = "pending.colonize";
+            Pending::Colonize(Colonize {
+                player: pend_u8(v, "player", tag)?,
+                card: pend_card(req(v, "card")?, tag)?,
+                bid: pend_u8(v, "bid", tag)?,
+                units: card_list(v, "units", tag)?,
+                bonuses: card_list(v, "bonuses", tag)?,
+                pool: card_list(v, "pool", tag)?,
+                bpool: card_list(v, "bpool", tag)?,
+            })
+        }
+        other => {
+            return Err(FixtureError::new(format!(
+                "pending: unknown decision kind {other:?} -- state::Pending has no variant"
+            )))
+        }
+    })
+}
+
+/// A `choice` entry: its `tag`+`ctx` become a [`ChoiceKind`] and its
+/// `options` become an [`OptionList`], both keyed off the same tag so the
+/// two can never be parsed against different rules.
+fn parse_choice(v: &Json) -> Result<Choice, FixtureError> {
+    let tag = req_str(v, "tag")?;
+    let player = pend_u8(v, "player", &tag)?;
+    let opts = req_arr(v, "options", "pending.choice")?;
+    let ctx = ctx_of(v);
+    let t = tag.as_str();
+    let (kind, options) = match t {
+        "gain_block" => {
+            let mut out = OptionList::new();
+            for o in opts {
+                out.push(ChoiceOption::Gain(gain_option(o, t)?));
+            }
+            (ChoiceKind::GainBlock, out)
+        }
+        "free_civil" => {
+            let mut out = OptionList::new();
+            for o in opts {
+                out.push(ChoiceOption::Move(parse_move(o)?));
+            }
+            (ChoiceKind::FreeCivil { discount: pend_i16(&ctx, "discount", t)? }, out)
+        }
+        "food_or_res" => (
+            ChoiceKind::FoodOrRes { n: pend_i16(&ctx, "n", t)? },
+            word_options(opts, t, &[Keyword::Food, Keyword::Resources])?,
+        ),
+        "free_build" => (ChoiceKind::FreeBuild, card_options_json(opts, t, Some(Keyword::Skip))?),
+        "destroy_own" => (ChoiceKind::DestroyOwn, card_options_json(opts, t, None)?),
+        "lose_pop" => (ChoiceKind::LosePop, card_options_json(opts, t, None)?),
+        "lose_colony" => (ChoiceKind::LoseColony, card_options_json(opts, t, None)?),
+        "flip_wonder" => (ChoiceKind::FlipWonder, card_options_json(opts, t, None)?),
+        "discard_military" => {
+            (ChoiceKind::DiscardMilitary, card_options_json(opts, t, None)?)
+        }
+        "raid" => (
+            ChoiceKind::Raid {
+                victim: pend_u8(&ctx, "victim", t)?,
+                // Python's `ctx.get("loot", True)`.
+                loot: ctx.get("loot").and_then(Json::as_bool).unwrap_or(true),
+            },
+            card_options_json(opts, t, None)?,
+        ),
+        "annex" => (
+            ChoiceKind::Annex { victim: pend_u8(&ctx, "victim", t)? },
+            card_options_json(opts, t, None)?,
+        ),
+        "infiltrate" => (
+            ChoiceKind::Infiltrate {
+                victim: pend_u8(&ctx, "victim", t)?,
+                per: ctx.get("per").and_then(Json::as_f64).unwrap_or(3.0) as u8,
+            },
+            word_options(opts, t, &[Keyword::Leader, Keyword::Wonder])?,
+        ),
+        "pact_offer" => (
+            ChoiceKind::PactOffer {
+                owner: pend_u8(&ctx, "owner", t)?,
+                card: pend_card(req(&ctx, "name")?, t)?,
+                a: pend_u8(&ctx, "a", t)?,
+                b: pend_u8(&ctx, "b", t)?,
+            },
+            word_options(opts, t, &[Keyword::Accept, Keyword::Refuse])?,
+        ),
+        "take_row" => {
+            // Row slot indices, then a trailing "stop".
+            let mut out = OptionList::new();
+            for o in opts {
+                match o {
+                    Json::Num(n) => out.push(ChoiceOption::Slot(*n as u8)),
+                    Json::Str(s) if s == "stop" => out.push(ChoiceOption::Word(Keyword::Stop)),
+                    other => {
+                        return Err(FixtureError::new(format!(
+                            "take_row: unexpected option {other:?}"
+                        )))
+                    }
+                }
+            }
+            (ChoiceKind::TakeRow { budget: pend_i16(&ctx, "budget", t)? }, out)
+        }
+        "war_tech" => {
+            // A leading "science", then card names -- and the position of
+            // "science" is load-bearing (`interact::WAR_TECH_SCIENCE_IDX`).
+            let mut out = OptionList::new();
+            for (i, o) in opts.iter().enumerate() {
+                match o.as_str() {
+                    Some("science") if i == 0 => out.push(ChoiceOption::Word(Keyword::Science)),
+                    _ => out.push(ChoiceOption::Card(pend_card(o, t)?)),
+                }
+            }
+            (
+                ChoiceKind::WarTech {
+                    victim: pend_u8(&ctx, "victim", t)?,
+                    budget: pend_i16(&ctx, "budget", t)?,
+                },
+                out,
+            )
+        }
+        other => {
+            return Err(FixtureError::new(format!(
+                "pending.choice: unknown tag {other:?} -- state::ChoiceKind has no variant \
+                 (interact._CHOICE has {other:?}, so one of the two registries is stale)"
+            )))
+        }
+    };
+    Ok(Choice { player, kind, options })
+}
+
+/// One `queue` entry.
+fn parse_queue_item(v: &Json) -> Result<QueueItem, FixtureError> {
+    let tag = req_str(v, "tag")?;
+    let t = tag.as_str();
+    let player = pend_u8(v, "player", t)?;
+    // Python's `int(item.get("n", 1))` / `item.get("per", 3)` defaults.
+    let n = || v.get("n").and_then(Json::as_f64).unwrap_or(1.0) as u8;
+    Ok(match t {
+        "choose" => {
+            let mut options = GainOptions::new();
+            for o in req_arr(v, "options", "queue.choose")? {
+                options.push(gain_option(o, t)?);
+            }
+            QueueItem::Choose { player, options }
+        }
+        "free_civil" => QueueItem::FreeCivil {
+            player,
+            kind: parse_free_civil_kind(&req_str(v, "kind")?)?,
+            discount: v.get("discount").and_then(Json::as_f64).unwrap_or(0.0) as i16,
+            revolt_ok: v.get("revolt_ok").and_then(Json::as_bool).unwrap_or(false),
+        },
+        "card_gains" => QueueItem::CardGains { player, gains: parse_card_gains(v)? },
+        "free_build" => QueueItem::FreeBuild { player, spec: parse_free_build_spec(v)? },
+        "destroy_own" => QueueItem::DestroyOwn { player },
+        "lose_pop" => QueueItem::LosePop { player, n: n() },
+        "lose_colony" => QueueItem::LoseColony { player },
+        "flip_wonder" => {
+            // Python passes a list of age strings, defaulting to ["A", "I"].
+            let mut ages = 0u8;
+            match v.get("ages") {
+                Some(Json::Arr(a)) => {
+                    for item in a {
+                        let s = item.as_str().ok_or_else(|| {
+                            FixtureError::new("queue.flip_wonder: age is not a string")
+                        })?;
+                        ages |= 1 << (parse_age(s, "queue.flip_wonder")? as u8);
+                    }
+                }
+                _ => ages = (1 << (Age::A as u8)) | (1 << (Age::I as u8)),
+            }
+            QueueItem::FlipWonder { player, ages }
+        }
+        "discard_military" => QueueItem::DiscardMilitary { player, n: n() },
+        "end_of_turn" => QueueItem::EndOfTurn { player },
+        "auto_skip_politics" => QueueItem::AutoSkipPolitics { player },
+        "raid" => QueueItem::Raid {
+            player,
+            victim: pend_u8(v, "victim", t)?,
+            // Python's `C.level(item.get("max_age", "A"))`.
+            max_age: match v.get("max_age").and_then(Json::as_str) {
+                Some(s) => parse_age(s, "queue.raid.max_age")?,
+                None => Age::A,
+            },
+            no_loot: v.get("no_loot").and_then(Json::as_bool).unwrap_or(false),
+        },
+        "annex" => QueueItem::Annex { player, victim: pend_u8(v, "victim", t)? },
+        "infiltrate" => QueueItem::Infiltrate {
+            player,
+            victim: pend_u8(v, "victim", t)?,
+            per: v.get("per").and_then(Json::as_f64).unwrap_or(3.0) as u8,
+        },
+        "take_row" => QueueItem::TakeRow {
+            player,
+            budget: v.get("budget").and_then(Json::as_f64).unwrap_or(0.0) as i16,
+        },
+        // `"gains"` is registered in `interact._QUEUE_ITEMS` and enqueued by
+        // nothing (see `interact.rs`'s top doc comment). Reaching it here
+        // would mean a producer appeared, which is worth failing on rather
+        // than absorbing.
+        other => {
+            return Err(FixtureError::new(format!(
+                "queue: unknown tag {other:?} -- state::QueueItem has no variant"
+            )))
+        }
+    })
+}
+
+fn parse_free_civil_kind(
+    s: &str,
+) -> Result<crate::card_table::FreeCivilActionValue, FixtureError> {
+    use crate::card_table::FreeCivilActionValue as V;
+    Ok(match s {
+        "buildOrUpgradeFarmOrMine" => V::BuildOrUpgradeFarmOrMine,
+        "buildOrUpgradeUrbanBuilding" => V::BuildOrUpgradeUrbanBuilding,
+        "increasePopulation" => V::IncreasePopulation,
+        "buildOneWonderStage" => V::BuildOneWonderStage,
+        "developTechnology" => V::DevelopTechnology,
+        "upgradeFarmMineOrUrbanBuilding" => V::UpgradeFarmMineOrUrbanBuilding,
+        other => {
+            return Err(FixtureError::new(format!(
+                "queue.free_civil: unknown ordered action {other:?}"
+            )))
+        }
+    })
+}
+
+/// A `card_gains` payload -- Python's `_GAIN_KEYS`, and nothing else.
+fn parse_card_gains(v: &Json) -> Result<CardGains, FixtureError> {
+    let mut out = CardGains::default();
+    let Some(Json::Obj(fields)) = v.get("gains") else { return Ok(out) };
+    for (k, val) in fields {
+        let n = val
+            .as_f64()
+            .ok_or_else(|| FixtureError::new(format!("queue.card_gains: {k:?} is not a number")))?
+            as i16;
+        match k.as_str() {
+            "gainScience" => out.science = n,
+            "gainCulture" => out.culture = n,
+            "gainFood" => out.food = n,
+            "gainResources" => out.resources = n,
+            "gainPopulation" => out.population = n,
+            "gainFoodOrResources" => out.food_or_resources = n,
+            other => {
+                return Err(FixtureError::new(format!(
+                    "queue.card_gains: key {other:?} is not one of actions.py's _GAIN_KEYS"
+                )))
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn parse_free_build_spec(v: &Json) -> Result<FreeBuildSpec, FixtureError> {
+    let Some(spec) = v.get("spec") else {
+        return Err(FixtureError::new("queue.free_build: missing spec"));
+    };
+    let mut out = FreeBuildSpec::default();
+    let Json::Obj(fields) = spec else {
+        return Err(FixtureError::new("queue.free_build: spec is not an object"));
+    };
+    for (k, val) in fields {
+        match k.as_str() {
+            "card" => out.card = pend_card(val, "queue.free_build.spec.card")?,
+            "age" => {
+                let s = val.as_str().ok_or_else(|| {
+                    FixtureError::new("queue.free_build.spec.age: not a string")
+                })?;
+                out.age = Some(parse_age(s, "queue.free_build.spec.age")?);
+            }
+            "type" => {
+                let s = val.as_str().ok_or_else(|| {
+                    FixtureError::new("queue.free_build.spec.type: not a string")
+                })?;
+                out.kind = Some(parse_card_type(s, "queue.free_build.spec")?);
+            }
+            "cost" => {
+                out.cost = val.as_f64().ok_or_else(|| {
+                    FixtureError::new("queue.free_build.spec.cost: not a number")
+                })? as u16
+            }
+            // `requiresAvailableWorker` is not a filter on the option list:
+            // `_q_free_build` already returns early when `workers_free == 0`,
+            // which is the same test for every base-game printing of the key
+            // (both print it `true`). Nothing to store.
+            "requiresAvailableWorker" => {}
+            other => {
+                return Err(FixtureError::new(format!(
+                    "queue.free_build.spec: unknown key {other:?}"
+                )))
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn pending_field(v: &Json) -> Result<PendingStack, FixtureError> {
+    let mut out = PendingStack::new();
+    let Some(arr) = v.get("pending").and_then(Json::as_arr) else { return Ok(out) };
+    if arr.len() > crate::state::MAX_PENDING {
+        return Err(FixtureError::new(format!(
+            "state.pending is {} deep, MAX_PENDING is {}",
+            arr.len(),
+            crate::state::MAX_PENDING
+        )));
+    }
+    for item in arr {
+        out.push(parse_pending(item)?);
+    }
+    Ok(out)
+}
+
+fn queue_field(v: &Json) -> Result<Queue, FixtureError> {
+    let mut out = Queue::new();
+    let Some(arr) = v.get("queue").and_then(Json::as_arr) else { return Ok(out) };
+    if arr.len() > crate::state::MAX_QUEUE {
+        return Err(FixtureError::new(format!(
+            "state.queue holds {} items, MAX_QUEUE is {}",
+            arr.len(),
+            crate::state::MAX_QUEUE
+        )));
+    }
+    for item in arr {
+        out.push_back(parse_queue_item(item)?);
+    }
+    Ok(out)
 }
 
 /// Whether `players[player_idx].one_time_discount` is non-empty in a dumped
@@ -1081,11 +1562,10 @@ impl GameState {
     /// See this module's section doc comment (just above) for the four
     /// Python fields this cannot represent and what happens to each.
     pub fn from_json(v: &Json) -> Result<GameState, FixtureError> {
-        must_be_empty(v.get("pending"), "pending")?;
-        must_be_empty(v.get("queue"), "queue")?;
-        // `seeded_by` deliberately NOT gated -- see this module's section
-        // doc comment above `must_be_empty`.
-
+        // `pending` / `queue` are LOADED now (see "the decision queue"
+        // above); they used to be rejected. `seeded_by` and
+        // `one_time_discount` are still dropped -- see this module's section
+        // doc comment for why each is safe to drop and the other two were not.
         let num_players = req_num(v, "num_players")? as u8;
         if !(2..=MAX_PLAYERS as u8).contains(&num_players) {
             return Err(FixtureError::new(format!(
@@ -1132,6 +1612,8 @@ impl GameState {
             game_over: req_bool(v, "game_over")?,
             phase: phase_field(v)?,
             forced_winner: opt_u8(v, "forced_winner")?,
+            pending: pending_field(v)?,
+            queue: queue_field(v)?,
         })
     }
 }

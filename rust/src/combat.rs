@@ -3,9 +3,8 @@
 //! it) resolution. Ports the combat-facing half of `engine/effects.py`
 //! (`pacts_for`, `pact_forbids_attack`, `war_forbidden`, `pact_attack_bonus`,
 //! `_doomed_pact_strength`, `attack_strength`, `defense_strength`,
-//! `cancel_attack_pacts`) plus the non-interactive prefix of
-//! `engine/events.py`'s `start_aggression` and the non-spoils body of
-//! `resolve_war`.
+//! `cancel_attack_pacts`) plus `engine/events.py`'s `start_aggression`,
+//! `finish_aggression` and `resolve_war`.
 //!
 //! ## What is here, and why it is the single source
 //!
@@ -40,7 +39,7 @@
 //! `Special::A` and `Special::B` in `special`" is the same test as Python's
 //! `if sides:`, with no new field needed.
 //!
-//! ## War spoils: two of three kinds ported, one still blocked (with why)
+//! ## War spoils: all three kinds ported
 //!
 //! `rust/tools/gen_cards.py`'s `DEFERRED_DICT_EFFECT_KEYS` dropped
 //! `victorTakesYellowTokens` and `victorTakesCulture` to payload-less
@@ -63,54 +62,45 @@
 //! duplicates rather than reads them.)
 //!
 //! "War over Technology" (`victorTakesScienceUpTo` +
-//! `orTakesSpecialTechnologiesOfSameTotalScienceCost`) is genuinely
-//! different: `orTakesSpecialTechnologiesOfSameTotalScienceCost` is printed
-//! `true` on the base game's only copy (`data/cards_military_actions.json`),
-//! so `events.resolve_war` always routes it through `interact::
-//! war_tech_spoils` -- a real decision (science vs. one or more stealable
-//! blue technologies, and FAQ p.8 says mixing is legal) that only ever
-//! degrades to the no-decision case (`interact::take_war_science`, itself a
-//! pure `min(budget, loser.science)` with no missing data) when the loser
-//! holds no stealable special technology. Determining THAT needs `interact::
-//! war_tech_options`, which needs `interact.rs`'s decision queue to exist at
-//! all (to walk the loser's tableau against a budget and offer a choice) --
-//! genuinely blocked, not a stale gap. [`apply_war_spoils`] panics naming
-//! this, rather than guessing which of the two cases applies.
+//! `orTakesSpecialTechnologiesOfSameTotalScienceCost`) is a real DECISION:
+//! `orTakesSpecialTechnologiesOfSameTotalScienceCost` is printed `true` on
+//! the base game's only copy (`data/cards_military_actions.json`), so
+//! `events.resolve_war` always routes it through `interact::war_tech_spoils`
+//! -- science vs. one or more stealable blue technologies, and FAQ p.8 says
+//! mixing is legal. It degrades to the no-decision case (`interact::
+//! take_war_science`, a pure `min(budget, loser.science)`) when the loser
+//! holds no stealable special technology, and determining THAT needs
+//! `interact::war_tech_options`. This was blocked until `interact.rs`
+//! existed; it landed 2026-08-05, so [`apply_war_spoils`] now handles all
+//! three war kinds and the `unimplemented!` here is gone.
 //!
-//! ## Aggression: declaration ported, resolution blocked on `interact.rs`
+//! ## Aggression: declaration and defense ported; success effects are not
 //!
 //! [`start_aggression`] is the exact portable prefix of `engine/events.py::
 //! start_aggression`: pay the (Gandhi-doubled) cost, discard the card,
 //! compute the attacker's strength, cancel any pact that ends on mutual
-//! attack. It stops exactly where Python calls `interact.start_defense`:
-//! the DEFENDER's committed total is only ever produced by a decision-queue
-//! response (the defender chooses which military cards to commit), which
-//! needs `state.pending` -- `GameState` has no such field, and this module
-//! may not add one (see the coordinator's rules for this pass). So there is
-//! no `finish_aggression` here: unlike the two war-spoils kinds above, a
-//! defense total literally does not exist yet to resolve against, panic-
-//! naming a missing payload would be beside the point when the REAL blocker
-//! is upstream of any payload. `apply::h_aggression` calls
-//! [`start_aggression`] and then panics naming `interact::start_defense`
-//! directly.
+//! attack. `apply::h_aggression` then hands the defense decision over
+//! through `interact::start_defense`, and [`finish_aggression`] here is what
+//! that decision resolves into once the defender's committed total exists.
 //!
-//! Separately, even once a defense total exists, most aggression cards'
-//! success effects (`takeFromOpponent`, `destroyUrbanBuildings`,
-//! `removeFromGame`) are ALSO payload-less per `gen_cards.py`'s
-//! `DEFERRED_DICT_EFFECT_KEYS` -- and, unlike the war-spoils case above,
-//! genuinely so: `engine/events.py::finish_aggression` reads their per-card
-//! dict VALUES directly off the data (`eff.get("takeFromOpponent").items()`,
-//! `spec.get("maxAge")`, ...), not a hardcoded rule. Only `GainResources
-//! (HalfDestroyedBuildingCostRoundedUp)` (Raid's `gainResources`) already
-//! carries a real payload, and even that needs `destroyUrbanBuildings` to
-//! have already chosen WHICH buildings were destroyed -- another
-//! `interact.rs` decision. So this module does not attempt a partial
-//! `finish_aggression` at all: there is no reachable state to test it
-//! against without `interact.rs`.
+//! [`finish_aggression`]'s FAILURE branch is complete. Its success branch is
+//! not, and the blocker is no longer `interact.rs` -- it is the payloads:
+//! most aggression cards' success effects (`takeFromOpponent`,
+//! `destroyUrbanBuildings`, `removeFromGame`, `stealColony`,
+//! `opponentDecreasesPopulation`) are payload-less per `gen_cards.py`'s
+//! `DEFERRED_DICT_EFFECT_KEYS`, and -- unlike the war-spoils formulas above
+//! -- genuinely so: `engine/events.py::finish_aggression` reads their
+//! per-card dict VALUES directly off the data (`eff.get("takeFromOpponent")
+//! .items()`, `spec.get("maxAge")`, ...), not a hardcoded rule. It also opens
+//! with the general `events.apply_gains`. So [`finish_aggression`] panics
+//! naming both, rather than resolving half a card. The QUEUE side of that
+//! branch is already ported and waiting: `QueueItem::Raid`/`Annex`/
+//! `Infiltrate`/`LosePop` are exactly the four items it enqueues.
 
 use crate::cards::{CardId, Special};
 use crate::economy;
 use crate::effects;
+use crate::interact;
 use crate::state::{GameState, Pact, PlayerState};
 
 /// Duplicated (not imported) from `costs.rs`'s private `leader_is` -- see
@@ -315,6 +305,14 @@ pub fn resolve_war_outcome(state: &mut GameState, attacker_idx: u8) -> Option<Wa
     }
     let target = state.players[attacker_idx as usize].war_target;
     state.players[attacker_idx as usize].war_declared_by_me = CardId::NONE;
+    // `war_target` is documented "meaningless while `war_declared_by_me` is
+    // NONE", but it is still a FIELD, and the differential replay compares
+    // fields: a stale target survives into the next snapshot and reads as a
+    // divergence (`2p_seed101.jsonl` ply 133, found the moment `interact.rs`
+    // made mid-war-spoils states loadable). Python has no such field at all
+    // -- its `war_declared_by_me` is one tuple that becomes `None` -- so
+    // clearing both together is what makes the two representations agree.
+    state.players[attacker_idx as usize].war_target = 0;
     state.players[target as usize].wars_declared_on_me[attacker_idx as usize] = CardId::NONE;
 
     let a = {
@@ -352,13 +350,82 @@ pub fn apply_war_spoils(state: &mut GameState, outcome: &WarOutcome) {
             state.players[outcome.loser as usize].culture -= take as u16;
             state.players[outcome.victor as usize].culture += take as u16;
         }
+        // events.py:690-697. Gated on the CARD's own effect key rather than
+        // on the spoils kind, exactly as Python is, so the alternative spoil
+        // stays a property of the data: a war card that pays science with no
+        // such clause takes the science with no decision. The base game's
+        // only War over Technology prints the clause, so the first arm is
+        // the live one and the second is parity, not dead weight.
+        "War over Technology" => {
+            if outcome
+                .card
+                .get()
+                .special
+                .contains(&Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost)
+            {
+                interact::war_tech_spoils(state, outcome.victor, outcome.loser, outcome.advantage);
+            } else {
+                interact::take_war_science(
+                    state,
+                    outcome.victor,
+                    outcome.loser,
+                    outcome.advantage,
+                );
+            }
+        }
         other => unimplemented!(
-            "war spoils for {other}: needs interact::war_tech_spoils / \
-             war_tech_options (the loser's tableau decides whether the victor \
-             even gets a real choice) -- interact.rs is not ported, see this \
-             module's top doc comment",
+            "war spoils for {other}: no rule known for this printed name -- \
+             `engine/events.py::WAR_SPOILS` maps exactly three, and this is \
+             not one of them",
         ),
     }
+}
+
+// -------------------------------------------------- aggression resolution
+
+/// §5.4.5-5.4.6: compare the two totals and resolve the card. Mirrors
+/// `engine/events.py::finish_aggression`, and is called by
+/// `interact::start_defense` / `interact::defense_move` once the defender's
+/// committed total exists (which is the thing that did not exist before
+/// `state.pending` did -- see this module's top doc comment).
+///
+/// Returns whether the aggression SUCCEEDED. The failure branch is complete:
+/// Python's is a log line and `return False`, nothing more.
+///
+/// The success branch is not, and the blocker is not `interact.rs` any more
+/// -- it is the payloads. Every aggression card's success effect is a
+/// dict-valued JSON key that `rust/tools/gen_cards.py`'s
+/// `DEFERRED_DICT_EFFECT_KEYS` collapsed to a payload-less `Special`
+/// (`takeFromOpponent`, `destroyUrbanBuildings`, `opponentDecreasesPopulation`,
+/// `stealColony`, `removeFromGame`), and `events.finish_aggression` reads
+/// those dict VALUES directly off the data rather than applying a hardcoded
+/// rule -- unlike the two war-spoils formulas above, which really are
+/// literals in `events.py`. It also opens with `apply_gains(state, attacker,
+/// eff, rng)`, the general event gain-block interpreter, which `events.rs`
+/// owns. So this panics naming both, rather than resolving half a card.
+///
+/// The queue side of that branch is already ported and waiting for it:
+/// `QueueItem::Raid` / `Annex` / `Infiltrate` / `LosePop` are exactly the
+/// four items `finish_aggression` enqueues, and `interact::run_item`
+/// resolves all four.
+pub fn finish_aggression(state: &mut GameState, ctx: &crate::state::Defense) -> bool {
+    if ctx.dfn >= ctx.atk {
+        return false;
+    }
+    let _ = state;
+    unimplemented!(
+        "aggression {} vs P{} succeeded ({} > {}): its success effects need \
+         events::apply_gains -- events.rs is not ported -- plus the per-card \
+         dict payloads gen_cards.py collapsed to payload-less Specials \
+         (takeFromOpponent, destroyUrbanBuildings, opponentDecreasesPopulation, \
+         stealColony, removeFromGame); see this function's doc comment. The \
+         DEFENSE half is fully ported: `ctx.dfn` is the defender's committed \
+         total.",
+        ctx.card.name(),
+        ctx.player,
+        ctx.atk,
+        ctx.dfn,
+    )
 }
 
 // ============================================================== tests ====
@@ -465,6 +532,8 @@ mod tests {
             game_over: false,
             phase: Phase::Actions,
             forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
         }
     }
 
@@ -737,13 +806,35 @@ mod tests {
         assert_eq!(state.players[0].culture, 12);
     }
 
+    /// War over Technology used to panic here (`interact.rs` did not exist).
+    /// With no stealable blue technology in the loser's play area there is no
+    /// decision to make, so the whole advantage is taken as science -- FAQ
+    /// p.8's cap included.
     #[test]
-    #[should_panic(expected = "interact")]
-    fn apply_war_spoils_technology_is_not_implemented() {
+    fn apply_war_spoils_technology_with_nothing_stealable_takes_science() {
         let p0 = blank_player(0, card("Despotism"));
-        let p1 = blank_player(1, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 10;
         let mut state = two_player_state(p0, p1);
         let outcome = WarOutcome { victor: 0, loser: 1, advantage: 3, card: card("War over Technology") };
         apply_war_spoils(&mut state, &outcome);
+        assert!(state.pending.is_empty(), "no decision when nothing is stealable");
+        assert_eq!(state.players[0].science, 3);
+        assert_eq!(state.players[1].science, 7);
+    }
+
+    /// ...and with one, the victor gets a real choice: science, or the card.
+    /// `interact::WAR_TECH_SCIENCE_IDX` pins science at index 0.
+    #[test]
+    fn apply_war_spoils_technology_offers_a_choice_when_something_is_stealable() {
+        let p0 = blank_player(0, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 10;
+        p1.techs.insert(card("Cartography"), crate::state::TechSlot::default()); // techCost 4
+        let mut state = two_player_state(p0, p1);
+        let outcome = WarOutcome { victor: 0, loser: 1, advantage: 6, card: card("War over Technology") };
+        apply_war_spoils(&mut state, &outcome);
+        assert_eq!(state.decider(), 0, "the VICTOR answers, whoever is to move");
+        assert_eq!(crate::legal::legal_moves(&state).len(), 2, "science, or Cartography");
     }
 }

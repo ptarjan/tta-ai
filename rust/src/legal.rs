@@ -150,11 +150,13 @@ pub fn legal_moves(state: &GameState) -> MoveList {
     if state.game_over {
         return MoveList::new();
     }
-    // Python: `if state.pending: return interact.pending_moves(state)`.
-    // Not checked here -- see this module's top doc comment: that whole
-    // subsystem is not ported, and `state.rs` has no `pending` field to
-    // branch on. This needs a branch here, before the phase dispatch below,
-    // once it lands.
+    // Python: `if state.pending: return interact.pending_moves(state)`. An
+    // open decision owns the move and its owner is `state.decider()`, which
+    // need not be `state.current` -- so this branch comes BEFORE the phase
+    // dispatch, and the phase is irrelevant while it holds.
+    if !state.pending.is_empty() {
+        return crate::interact::pending_moves(state);
+    }
     let p = state.me();
     match state.phase {
         Phase::Politics => politics_moves(state, p),
@@ -833,6 +835,8 @@ mod tests {
             game_over: false,
             phase: Phase::Actions,
             forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
         }
     }
 

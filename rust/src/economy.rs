@@ -853,6 +853,8 @@ mod tests {
             game_over: false,
             phase: Phase::Actions,
             forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
         }
     }
 

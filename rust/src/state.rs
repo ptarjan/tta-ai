@@ -291,7 +291,7 @@ impl Default for PactList {
 ///
 /// Exists so none of those is a `Vec`. A `Vec` in the state means an allocation
 /// per clone, and the search clones far more often than it pushes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CardList<const N: usize> {
     items: [CardId; N],
     len: u16,
@@ -487,6 +487,636 @@ pub struct PlayerState {
     pub resigned: bool,
 }
 
+// ==================================================== the decision queue ==
+//
+// Ports the STATE half of `engine/interact.py` (the behaviour half is
+// `interact.rs`). Two containers, and the difference between them is the
+// whole design:
+//
+//   * `GameState::pending` -- a STACK of open decisions. The top one owns the
+//     move, and its `player` is `GameState::decider()`, which is not
+//     necessarily `current`: a colonization auction, an aggression defense
+//     and a pact offer are all answered by somebody other than the player
+//     whose turn it is.
+//   * `GameState::queue` -- a FIFO of DEFERRED sub-effects. `interact::
+//     run_queue` drains it only while `pending` is empty, so a queued item
+//     that opens a decision suspends the drain until that decision is
+//     answered.
+//
+// Python spells both as lists of plain JSON dicts (so `GameState.to_dict()`
+// stays serializable) and dispatches on a `"tag"` string. Here they are
+// enums, for DESIGN.md rule 5's reason and one more: Python's dispatch
+// tables (`interact._CHOICE`, `interact._QUEUE_ITEMS`) are `dict.get(tag)`
+// with `if fn is None: return` -- a decision whose tag is not in the table
+// is SILENTLY DROPPED. That is precisely this project's recurring bug class,
+// and an exhaustive `match` over these enums makes it a compile error.
+
+/// One option inside an event's `choose` block (§5.3, `engine/events.py::
+/// _queue_decisions`).
+///
+/// The base game prints exactly ONE such block -- `Development of Markets`,
+/// `{"choose": [{"food": 2}, {"resources": 2}]}` (verified over all of
+/// `data/*.json`, 2026-08-05) -- so this is the closed vocabulary, not a
+/// general gain block. `fixtures.rs` rejects any other key rather than
+/// dropping it, so a future card that prints a third key fails loudly here
+/// instead of silently gaining nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GainOption {
+    pub food: i16,
+    pub resources: i16,
+}
+
+/// The base game's only `choose` block offers two options; four is headroom.
+pub const MAX_GAIN_OPTIONS: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GainOptions {
+    items: [GainOption; MAX_GAIN_OPTIONS],
+    len: u8,
+}
+
+impl GainOptions {
+    pub const fn new() -> Self {
+        GainOptions { items: [GainOption { food: 0, resources: 0 }; MAX_GAIN_OPTIONS], len: 0 }
+    }
+
+    #[inline]
+    pub fn push(&mut self, o: GainOption) {
+        debug_assert!((self.len as usize) < MAX_GAIN_OPTIONS, "gain option list overflow");
+        self.items[self.len as usize] = o;
+        self.len += 1;
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[GainOption] {
+        &self.items[..self.len as usize]
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for GainOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One option of an open `choice` decision.
+///
+/// Python's options are raw JSON -- a card name, a row index, a bare keyword
+/// string, a `{"food": 2}` dict, or a move tuple -- all in the same list, and
+/// each `_c_*` handler re-interprets its own. Here the five shapes are five
+/// variants, so a handler that reaches for the wrong one does not compile.
+///
+/// The list is POSITIONAL and its order is part of the contract: `Move::
+/// Choose { n }` is an index into it, every bot in this project breaks ties
+/// to the lowest index, and `interact::WAR_TECH_SCIENCE_IDX` is a documented
+/// dependency on option 0 specifically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceOption {
+    /// A card: which one to discard / destroy / build / steal / lose.
+    Card(CardId),
+    /// A `card_row` slot index (`take_row` only).
+    Slot(u8),
+    /// A concrete move satisfying an action card's ordered action (§3.11).
+    /// Python spells these `["build", "Philosophy"]`.
+    Move(crate::moves::Move),
+    /// One branch of an event's `choose` block.
+    Gain(GainOption),
+    /// One of the bare keyword options; see [`Keyword`].
+    Word(Keyword),
+}
+
+/// The bare-string options Python mixes into an option list. Closed: these
+/// are every non-card, non-index, non-dict option string `engine/interact.py`
+/// ever puts in an `options` list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keyword {
+    /// `take_row`: stop taking cards.
+    Stop,
+    /// `free_build`: decline the free build.
+    Skip,
+    /// `war_tech`: take the remaining advantage as science (`interact::
+    /// WAR_TECH_SCIENCE_IDX` -- always option 0).
+    Science,
+    /// `food_or_res`.
+    Food,
+    /// `food_or_res`.
+    Resources,
+    /// `pact_offer`.
+    Accept,
+    /// `pact_offer`.
+    Refuse,
+    /// `infiltrate`: remove the rival's leader.
+    Leader,
+    /// `infiltrate`: remove the rival's unfinished wonder.
+    Wonder,
+}
+
+/// Options one `choice` decision can offer.
+///
+/// Bound picked the way `MAX_DECK`/`MAX_TABLEAU` were: from the data, not
+/// from a guess. The largest option list any producer in `interact.py` can
+/// build is the tableau-derived one (`_q_destroy_own` / `_q_lose_pop`), which
+/// offers one option per DISTINCT worker-holding card in the tableau; the
+/// base game prints 34 such cards in total (4 farms, 4 mines, 4 labs, 3
+/// temples, 3 libraries, 3 arenas, 3 theaters, 4 infantry, 3 cavalry, 2
+/// artillery, 1 air -- counted from `data/*.json` on 2026-08-05), which no
+/// player can exceed. The next largest are `take_row` at `ROW_SIZE + 1` = 14
+/// and `discard_military`, bounded by `MAX_HAND` (24). 40 is that ceiling
+/// plus headroom, and `push` debug-asserts it rather than assuming it. The
+/// largest list actually observed across the 3383 fixture states is 14.
+pub const MAX_OPTIONS: usize = 40;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OptionList {
+    items: [ChoiceOption; MAX_OPTIONS],
+    len: u8,
+}
+
+impl OptionList {
+    pub const fn new() -> Self {
+        OptionList { items: [ChoiceOption::Slot(0); MAX_OPTIONS], len: 0 }
+    }
+
+    #[inline]
+    pub fn push(&mut self, o: ChoiceOption) {
+        debug_assert!((self.len as usize) < MAX_OPTIONS, "choice option list overflow");
+        self.items[self.len as usize] = o;
+        self.len += 1;
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[ChoiceOption] {
+        &self.items[..self.len as usize]
+    }
+
+    #[inline]
+    pub fn get(&self, i: usize) -> Option<ChoiceOption> {
+        self.as_slice().get(i).copied()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for OptionList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What an open `choice` decision IS, plus the context its resolution needs.
+///
+/// One variant per key of Python's `interact._CHOICE` dispatch table -- the
+/// tag and the `ctx` dict folded into one value, because they were never
+/// independent: `ctx["victim"]` is meaningful for `raid`/`annex`/`infiltrate`/
+/// `war_tech` and meaningless everywhere else, and a flat struct carrying
+/// every key would let a handler read a field its own tag never set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceKind {
+    /// `_c_gain_block`: pick one branch of an event's `choose` block.
+    GainBlock,
+    /// `_c_free_civil`: perform an action card's ordered action (§3.11).
+    FreeCivil { discount: i16 },
+    /// `_c_food_or_res`: `gainFoodOrResources`, `n` of whichever is picked.
+    FoodOrRes { n: i16 },
+    /// `_c_free_build`: an event's free build, or decline.
+    FreeBuild,
+    /// `_c_destroy_own`: destroy one of your own worker-holding cards.
+    DestroyOwn,
+    /// `_c_lose_pop`: lose 1 population when no unused worker is available.
+    LosePop,
+    /// `_c_lose_colony`.
+    LoseColony,
+    /// `_c_flip_wonder`.
+    FlipWonder,
+    /// `_c_discard_military`: §6.6 step 1 / an event's discard.
+    DiscardMilitary,
+    /// `_c_raid`: attacker picks the urban building to destroy.
+    Raid { victim: u8, loot: bool },
+    /// `_c_annex`: attacker picks which colony changes hands.
+    Annex { victim: u8 },
+    /// `_c_infiltrate`: remove the rival's leader or unfinished wonder,
+    /// `per` culture per level.
+    Infiltrate { victim: u8, per: u8 },
+    /// `_c_pact_offer`: the partner accepts or refuses (§5.9). `owner` holds
+    /// the card, `a`/`b` are who takes which printed block -- four separate
+    /// indices, exactly as [`Pact`] documents.
+    PactOffer { owner: u8, card: CardId, a: u8, b: u8 },
+    /// `_c_take_row`: International Agreement, spend up to `budget` civil
+    /// actions taking cards.
+    TakeRow { budget: i16 },
+    /// `_c_war_tech`: War over Technology spoils (§5.7).
+    WarTech { victim: u8, budget: i16 },
+}
+
+/// An open `choice`: somebody must pick one of `options`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub player: u8,
+    pub kind: ChoiceKind,
+    pub options: OptionList,
+}
+
+/// A colonization auction in progress (§11.1-11.2).
+///
+/// `active` is the still-bidding players in clockwise order from the
+/// revealer, and `pos` indexes it; a pass REMOVES an entry, so the order is
+/// load-bearing and the removal must preserve it (`_auction_move`'s
+/// `del pend["active"][pend["pos"]]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Auction {
+    pub card: CardId,
+    active: [u8; MAX_PLAYERS],
+    n_active: u8,
+    pub pos: u8,
+    pub bid: u8,
+    /// Highest bidder so far, `None` before any bid (Python's `high: None`).
+    pub high: Option<u8>,
+    /// Whose move it is -- always `active[pos]` while the auction runs.
+    pub player: u8,
+}
+
+impl Auction {
+    pub fn new(card: CardId, active: &[u8]) -> Self {
+        debug_assert!(!active.is_empty(), "auction with no bidders");
+        let mut a = [0u8; MAX_PLAYERS];
+        a[..active.len()].copy_from_slice(active);
+        Auction {
+            card,
+            active: a,
+            n_active: active.len() as u8,
+            pos: 0,
+            bid: 0,
+            high: None,
+            player: active[0],
+        }
+    }
+
+    /// Rebuild an auction from a dumped mid-auction state (`fixtures.rs`).
+    /// `pos`/`bid`/`high`/`player` are whatever the dump recorded, not
+    /// re-derived: a snapshot taken between two bids has all four already.
+    pub fn restore(card: CardId, active: &[u8], pos: u8, bid: u8, high: Option<u8>, player: u8) -> Self {
+        let mut a = [0u8; MAX_PLAYERS];
+        a[..active.len()].copy_from_slice(active);
+        Auction { card, active: a, n_active: active.len() as u8, pos, bid, high, player }
+    }
+
+    #[inline]
+    pub fn active(&self) -> &[u8] {
+        &self.active[..self.n_active as usize]
+    }
+
+    /// Drop the bidder at `i`, preserving the order of the rest.
+    pub fn drop_at(&mut self, i: usize) {
+        let n = self.n_active as usize;
+        debug_assert!(i < n);
+        self.active.copy_within(i + 1..n, i);
+        self.n_active -= 1;
+    }
+}
+
+/// An aggression's defense decision (§5.4.4).
+///
+/// `atk`/`dfn` are the two totals being compared; `dfn` starts at the
+/// defender's printed strength and grows by [`crate::interact::
+/// defense_points`] per committed card. `spent` counts committed cards
+/// against `budget` military actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defense {
+    pub player: u8,
+    pub attacker: u8,
+    pub card: CardId,
+    pub atk: i32,
+    pub dfn: i32,
+    pub spent: u8,
+    pub budget: u8,
+}
+
+/// Cards one colonization force can involve.
+///
+/// `unit_pool` puts one entry in per WORKER on a military unit, so the pool
+/// is bounded by the yellow tokens a player owns (18 in the base game, and
+/// only some of them are ever on units); `bonus_pool` is bounded by the
+/// military hand, i.e. `MAX_HAND`. `MAX_HAND` covers both with room to
+/// spare, and each of the four lists debug-asserts its own bound.
+pub const MAX_FORCE: usize = MAX_HAND;
+
+/// The auction winner building the force it sacrifices (§11.3-11.5).
+///
+/// Four lists, not two: `pool`/`bpool` are what is still AVAILABLE and
+/// `units`/`bonuses` are what has been COMMITTED, and both halves are read --
+/// `_colonize_moves` enumerates the pools, `force_value` scores the
+/// commitments. Each commitment is paid the moment it is made (see
+/// `interact::colonize`'s doc comment for why that is not an optimization).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Colonize {
+    pub player: u8,
+    pub card: CardId,
+    pub bid: u8,
+    pub units: CardList<MAX_FORCE>,
+    pub bonuses: CardList<MAX_FORCE>,
+    pub pool: CardList<MAX_FORCE>,
+    pub bpool: CardList<MAX_FORCE>,
+}
+
+/// One open decision. Python's `state.pending[-1]`, with its `"kind"` string
+/// made a variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pending {
+    Choice(Choice),
+    Auction(Auction),
+    Defense(Defense),
+    Colonize(Colonize),
+}
+
+impl Pending {
+    /// The player who must answer this decision. Python reads `pend["player"]`
+    /// off whichever dict is on top; every kind carries one.
+    #[inline]
+    pub fn player(&self) -> u8 {
+        match self {
+            Pending::Choice(c) => c.player,
+            Pending::Auction(a) => a.player,
+            Pending::Defense(d) => d.player,
+            Pending::Colonize(c) => c.player,
+        }
+    }
+}
+
+/// Depth of the decision stack.
+///
+/// Python's `state.pending` is a stack, but it can only ever hold one entry
+/// in practice and the reason is structural, not incidental: `run_queue`
+/// drains the deferred queue only `while not state.pending`, and every
+/// `push_choice` that happens DURING a resolution (`_offer_war_tech`'s
+/// re-offer, `_offer_take_row`'s re-offer) runs after `apply_pending` has
+/// already popped. Measured: across all 3383 fixture states the depth is 0
+/// or 1, never 2. Four is headroom, and `push` debug-asserts it rather than
+/// trusting the argument.
+pub const MAX_PENDING: usize = 4;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingStack {
+    items: [Option<Pending>; MAX_PENDING],
+    len: u8,
+}
+
+impl PendingStack {
+    pub fn new() -> Self {
+        PendingStack { items: [None, None, None, None], len: 0 }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// The decision that owns the next move (`interact.top`).
+    #[inline]
+    pub fn top(&self) -> Option<&Pending> {
+        if self.len == 0 {
+            None
+        } else {
+            self.items[self.len as usize - 1].as_ref()
+        }
+    }
+
+    #[inline]
+    pub fn top_mut(&mut self) -> Option<&mut Pending> {
+        if self.len == 0 {
+            None
+        } else {
+            self.items[self.len as usize - 1].as_mut()
+        }
+    }
+
+    pub fn push(&mut self, p: Pending) {
+        debug_assert!((self.len as usize) < MAX_PENDING, "pending stack overflow");
+        self.items[self.len as usize] = Some(p);
+        self.len += 1;
+    }
+
+    pub fn pop(&mut self) -> Option<Pending> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        self.items[self.len as usize].take()
+    }
+}
+
+impl Default for PendingStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// An event's `freeBuild` spec (`engine/events.py::_queue_decisions`).
+///
+/// Both base-game printings name a specific card (`Development of Warfare` ->
+/// Warriors, `Development of Religion` -> Temple age A), so `card` is always
+/// set today; `age`/`kind`/`cost` are the other keys the spec may print and
+/// are carried because `_q_free_build` filters on all of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FreeBuildSpec {
+    /// `CardId::NONE` when the spec names no specific card.
+    pub card: CardId,
+    pub age: Option<Age>,
+    pub kind: Option<CardType>,
+    pub cost: u16,
+}
+
+/// The gain half of a yellow action card, deferred behind its ordered action
+/// (§3.11). Exactly Python's `_GAIN_KEYS`, in that order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CardGains {
+    pub science: i16,
+    pub culture: i16,
+    pub food: i16,
+    pub resources: i16,
+    pub population: i16,
+    /// `gainFoodOrResources`: opens a `FoodOrRes` choice rather than paying
+    /// out directly. `0` means the card does not print the key at all, which
+    /// is also what Python's `if "gainFoodOrResources" in eff` tests -- no
+    /// base-game card prints an explicit zero here.
+    pub food_or_resources: i16,
+}
+
+/// One deferred sub-effect. Python's `state.queue` entries, with the `"tag"`
+/// string made a variant and the per-tag keys made its payload.
+///
+/// `player` is on every variant because `interact::_run_item` reads it before
+/// dispatching (and skips the item entirely if that player has resigned).
+///
+/// Python registers a sixteenth handler, `"gains"` (`_q_gains` ->
+/// `events.apply_gains`), that NOTHING enqueues -- `grep -rn '"tag": "gains"'
+/// engine/` finds only the registry entry itself (2026-08-05). It is dead,
+/// so it has no variant here; see `interact.rs`'s top doc comment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueItem {
+    /// `_q_choose`: offer an event's `choose` block.
+    Choose { player: u8, options: GainOptions },
+    /// `_q_free_civil`: offer the moves satisfying an action card's order.
+    FreeCivil { player: u8, kind: crate::card_table::FreeCivilActionValue, discount: i16, revolt_ok: bool },
+    /// `_q_card_gains`: the gain half of an action card, behind its order.
+    CardGains { player: u8, gains: CardGains },
+    /// `_q_free_build`.
+    FreeBuild { player: u8, spec: FreeBuildSpec },
+    /// `_q_destroy_own`.
+    DestroyOwn { player: u8 },
+    /// `_q_lose_pop`: `n` losses, re-queued one at a time behind a decision.
+    LosePop { player: u8, n: u8 },
+    /// `_q_lose_colony`.
+    LoseColony { player: u8 },
+    /// `_q_flip_wonder`: `ages` is a bitmask over `Age as u8` (Python passes
+    /// a list of age strings, default `["A", "I"]`).
+    FlipWonder { player: u8, ages: u8 },
+    /// `_q_discard_military`: `n` discards, re-queued like `LosePop`.
+    DiscardMilitary { player: u8, n: u8 },
+    /// `_q_end_of_turn`: resume §6.6 after the discard decision.
+    EndOfTurn { player: u8 },
+    /// `_q_auto_skip_politics`: resume the start-of-turn "is passing the only
+    /// political option?" test after a War over Technology's spoils.
+    AutoSkipPolitics { player: u8 },
+    /// `_q_raid`: destroy one of `victim`'s urban buildings, up to `max_age`.
+    Raid { player: u8, victim: u8, max_age: Age, no_loot: bool },
+    /// `_q_annex`.
+    Annex { player: u8, victim: u8 },
+    /// `_q_infiltrate`.
+    Infiltrate { player: u8, victim: u8, per: u8 },
+    /// `_q_take_row`.
+    TakeRow { player: u8, budget: i16 },
+}
+
+impl QueueItem {
+    #[inline]
+    pub fn player(&self) -> u8 {
+        use QueueItem::*;
+        match *self {
+            Choose { player, .. }
+            | FreeCivil { player, .. }
+            | CardGains { player, .. }
+            | FreeBuild { player, .. }
+            | DestroyOwn { player }
+            | LosePop { player, .. }
+            | LoseColony { player }
+            | FlipWonder { player, .. }
+            | DiscardMilitary { player, .. }
+            | EndOfTurn { player }
+            | AutoSkipPolitics { player }
+            | Raid { player, .. }
+            | Annex { player, .. }
+            | Infiltrate { player, .. }
+            | TakeRow { player, .. } => player,
+        }
+    }
+}
+
+/// Deferred sub-effects outstanding at once.
+///
+/// The producers that enqueue more than one item are all bounded and small:
+/// `destroyOneUrbanBuildingOfEachOpponent` enqueues one `Raid` per opponent
+/// (at most `MAX_PLAYERS - 1` = 3), `destroyOwnBuilding`/`loseColony` enqueue
+/// their printed count (1 in the base game's data), and an action card
+/// enqueues exactly two (`FreeCivil` then `CardGains`). The deepest queue
+/// observed across the 3383 fixture states is 3. Sixteen is that ceiling with
+/// generous headroom, debug-asserted on push.
+pub const MAX_QUEUE: usize = 16;
+
+/// FIFO. Python appends and `pop(0)`s, and `_q_lose_pop`/`_q_discard_military`
+/// additionally `insert(0, ...)` to put their own remainder at the FRONT --
+/// so this needs both ends, and the order is play-affecting (§5.3 resolves
+/// deferred effects in clockwise order). A ring buffer rather than a shifting
+/// array so `push_front` is not a memmove.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Queue {
+    items: [Option<QueueItem>; MAX_QUEUE],
+    head: u8,
+    len: u8,
+}
+
+impl Queue {
+    pub const fn new() -> Self {
+        Queue { items: [None; MAX_QUEUE], head: 0, len: 0 }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn slot(&self, i: usize) -> usize {
+        (self.head as usize + i) % MAX_QUEUE
+    }
+
+    /// `list.append` -- the normal enqueue.
+    pub fn push_back(&mut self, item: QueueItem) {
+        debug_assert!((self.len as usize) < MAX_QUEUE, "deferred queue overflow");
+        let s = self.slot(self.len as usize);
+        self.items[s] = Some(item);
+        self.len += 1;
+    }
+
+    /// `list.insert(0, ...)` -- a handler putting its own remainder back at
+    /// the front, ahead of everything already queued.
+    pub fn push_front(&mut self, item: QueueItem) {
+        debug_assert!((self.len as usize) < MAX_QUEUE, "deferred queue overflow");
+        self.head = ((self.head as usize + MAX_QUEUE - 1) % MAX_QUEUE) as u8;
+        self.items[self.head as usize] = Some(item);
+        self.len += 1;
+    }
+
+    /// `list.pop(0)`.
+    pub fn pop_front(&mut self) -> Option<QueueItem> {
+        if self.len == 0 {
+            return None;
+        }
+        let out = self.items[self.head as usize].take();
+        self.head = ((self.head as usize + 1) % MAX_QUEUE) as u8;
+        self.len -= 1;
+        out
+    }
+
+    /// Front-to-back, for tests and diffing. Not on any hot path.
+    pub fn iter(&self) -> impl Iterator<Item = QueueItem> + '_ {
+        (0..self.len as usize).filter_map(move |i| self.items[self.slot(i)])
+    }
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Whose turn phase it is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
@@ -545,6 +1175,13 @@ pub struct GameState {
     pub phase: Phase,
     /// Last player standing (§5.11).
     pub forced_winner: Option<u8>,
+
+    /// Open decisions, innermost last (`engine/interact.py`). While this is
+    /// non-empty the top entry owns the next move and [`GameState::decider`]
+    /// -- NOT `current` -- says whose it is. See "the decision queue" above.
+    pub pending: PendingStack,
+    /// Deferred sub-effects, resolved FIFO once `pending` empties (§5.3).
+    pub queue: Queue,
 }
 
 impl GameState {
@@ -556,6 +1193,24 @@ impl GameState {
     #[inline]
     pub fn me_mut(&mut self) -> &mut PlayerState {
         &mut self.players[self.current as usize]
+    }
+
+    /// Index of the player who must choose the next move (`engine/state.py::
+    /// decider`). This, not `current`, is who `legal_moves` is generated for:
+    /// an aggression defense, a colonization auction and a pact offer are all
+    /// answered by somebody else while `current` stays put.
+    #[inline]
+    pub fn decider(&self) -> u8 {
+        match self.pending.top() {
+            Some(p) => p.player(),
+            None => self.current,
+        }
+    }
+
+    /// The player `decider` names (`engine/state.py::actor`).
+    #[inline]
+    pub fn actor(&self) -> &PlayerState {
+        &self.players[self.decider() as usize]
     }
 
     #[inline]
