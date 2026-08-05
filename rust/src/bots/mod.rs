@@ -6,6 +6,59 @@
 //! [`crate::state::PlayerState`], no search, no weights, no RNG, which is
 //! what makes it safe to port and verify on its own before the modules that
 //! sit on top of it (`weighted.py`'s evaluator, the search itself) exist here.
+//!
+//! ## `engine/bots/fastcopy.py` (329 lines): NOT ported, deliberately
+//!
+//! Python's `fastcopy.copy_state` is a hand-rolled, code-generated
+//! replacement for `copy.deepcopy` on a `GameState` -- its own module doc
+//! comment opens with the measurement that motivates it: "`copy.deepcopy`
+//! accounts for ~78% of a lookahead bot's runtime". Every trick in that file
+//! (per-class generated copiers, an atomic-container fast path, a
+//! private-attribute skip list) exists to avoid `deepcopy`'s per-object
+//! bookkeeping -- the memo dict, the alive-list, reconstruction through
+//! `__reduce_ex__` -- none of which a Rust struct copy has in the first
+//! place.
+//!
+//! [`crate::state::GameState`] already derives `Clone`, and every field it
+//! owns is a fixed-size array / scalar / small enum
+//! (`CardList<N>`/`[T; N]`/`u8`/`Option<T>`...), never a `Vec`, a `HashMap`
+//! or a trait object -- DESIGN.md's rule against heap allocation in hot
+//! state is exactly what makes the derived `Clone` a flat memcpy-shaped
+//! copy, no allocation, no indirection to chase. That derived `Clone` IS
+//! this module's "fast structural copy of a GameState for 1-ply search",
+//! not a stand-in for one -- `economy.rs`'s own doc comment already reached
+//! this conclusion independently, for the journal rather than the copier:
+//! "There is no `journal.touch` equivalent: Python's journal is an undo-log
+//! for `GreedyBot`'s trial moves (`engine/journal.py`) that exists ... trial
+//! moves just clone the state and there is nothing to journal."
+//!
+//! Two fields Python's copier special-cases do not exist here to special-case:
+//!
+//! * **`GameState.log`** (Python: a `list` of up to ~400 strings, dropped by
+//!   `copy_state` by default because "search never reads it" and it is "the
+//!   single biggest copy cost") -- [`crate::state::GameState`] has no `log`
+//!   field at all. Nothing in this port writes a play-by-play log onto the
+//!   state, so there is nothing to drop.
+//! * **`state._stats_cache`** (Python: a private cache `fastcopy` strips
+//!   because caches are not state) -- `effects.rs`'s own doc comment records
+//!   the equivalent Rust decision explicitly: `Stats::compute` is
+//!   recomputed fresh on every call, "DELIBERATELY not replicated
+//!   [cached] here ... there is no hot loop a cache is fixing". No cache
+//!   field exists on `GameState` to strip.
+//!
+//! So `fastcopy.py`'s three jobs -- copy fast, drop `log`, drop the cache --
+//! are respectively: what `#[derive(Clone)]` already does structurally, a
+//! field this port never created, and a field this port never created. There
+//! is no semantics left over to port: nothing in `fastcopy.py` encodes a
+//! shallow/deep-copy distinction that changes a bot's behaviour (the
+//! generic-vs-generated split, the atomic-container registry and paranoid
+//! mode are all pure performance machinery over CPython's data model, guarded
+//! by paranoid-mode assertions that exist only because Python has no type
+//! system to make the atomic-container claim by construction the way Rust's
+//! field types already do). `keep_log`, `copy_state`'s only behavioural
+//! parameter, has no Rust counterpart to receive it because there is no
+//! `log` field for it to gate.
 
 pub mod board_yields;
 pub mod counting;
+pub mod pending;
