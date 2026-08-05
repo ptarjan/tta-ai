@@ -298,15 +298,18 @@ pub fn discard_options(hand: &[CardId], buf: &mut [CardId]) -> usize {
 /// "call it again". The limit cannot move while the loop runs -- it is read
 /// off cards in play, not off the hand.
 ///
-/// NOTE FOR `economy.rs`'s OWNER: `economy::discard_excess_military` is a
-/// SECOND implementation of this function, written while `state.pending` did
-/// not exist, and it `unimplemented!()`s the multi-option case. In Python
-/// this function lives in `interact.py` and `economy.end_of_turn` calls it;
-/// there is exactly one copy. Two copies of "how §6.6 step 1 works" with
-/// nothing failing when they disagree is the bug class DESIGN.md exists to
-/// close, so `economy::discard_excess_military` should be deleted in favour
-/// of this one. Not done here: `economy.rs` is another worker's file this
-/// pass (see this port's coordination rules), so it is reported instead.
+/// This is the ONLY implementation of §6.6 step 1. `economy.rs` briefly
+/// carried a second copy, written while `state.pending` did not exist, which
+/// `unimplemented!()`d the multi-option case; games panicked within about
+/// four rounds, because the military hand limit is `military_actions +
+/// militaryHandLimit` and no base-game government prints `militaryHandLimit`
+/// at all -- so the limit is 2 under Despotism while a player draws up to 3
+/// cards a turn, and the over-limit case is the COMMON case, not the corner.
+/// That copy was deleted (commit `d2824de`) and `economy::end_of_turn` now
+/// calls this function, matching Python, where §6.6 step 1 likewise lives in
+/// `interact.py` and is called from `economy.end_of_turn`. Two copies of one
+/// rule with nothing failing when they disagree is the bug class DESIGN.md
+/// exists to close; do not add a third.
 pub fn discard_excess_military(state: &mut GameState, idx: u8) -> bool {
     loop {
         let limit = {
