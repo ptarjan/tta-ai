@@ -15,6 +15,7 @@
 
 pub mod card_table;
 pub mod cards;
+pub mod economy;
 pub mod fixtures;
 pub mod moves;
 pub mod state;
