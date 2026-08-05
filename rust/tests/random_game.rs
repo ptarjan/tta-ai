@@ -70,14 +70,13 @@ impl Rng {
 fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
     let me = state.me();
     match mv {
-        // apply.rs `apply`: needs `interact::push_choice` -- a pact offer is
-        // a decision handed to the other player.
-        Move::OfferPact { .. } => Some("interact.rs: a pact offer is the other player's decision"),
-
-        // apply.rs `h_aggression`: the declaration is ported, the defender's
-        // response (`interact::start_defense`) is not.
-        Move::Aggression { .. } => Some("interact.rs: the aggression defense is a decision"),
-
+        // `Move::OfferPact` and `Move::Aggression` were both here, on the
+        // claim that the decision they hand to the other player was unported.
+        // Both claims went stale: `interact::push_choice` takes the pact offer
+        // and `interact::start_defense` takes the aggression defense, and the
+        // differential fixtures now play aggressions through to resolution
+        // with zero divergences. Removed 2026-08-05 after checking that
+        // random play reaches and resolves both.
         // combat.rs `apply_war_spoils` handles War over Territory and War
         // over Culture. War over Technology's spoils are a CHOICE (science or
         // blue technologies, and the victor may mix them). The panic lands a
@@ -128,9 +127,11 @@ fn blocked_on(state: &GameState, mv: Move) -> Option<&'static str> {
         // `Pending::Choice`, and `interact::resolve_choice`'s dispatch is
         // exhaustive over every `ChoiceKind` -- there is no unported
         // resolver behind it to fall into.
-        Move::Defend { .. } | Move::DefendDone => {
-            Some("interact.rs: a response to an open decision")
-        }
+        // `Move::Defend`/`Move::DefendDone` were here only because
+        // `Move::Aggression` above was: with the declaration skipped,
+        // `Pending::Defense` never arose and neither could ever be legal.
+        // Aggressions are played now, so the defense response is reached and
+        // resolved like any other pending decision. Removed 2026-08-05.
 
         // Not a missing module: resigning is a legal, fully-ported move that
         // ends the game early (§5.11), which would make "a game played to the
