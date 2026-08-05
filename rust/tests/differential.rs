@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use tta::apply::apply;
-use tta::cards::{CardId, Special};
+use tta::cards::CardId;
 use tta::fixtures::{self, Ply, Record};
 use tta::legal::legal_moves;
 use tta::moves::Move;
@@ -331,30 +331,50 @@ fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-/// Whether `m` is a move `legal_moves` is DOCUMENTED not to generate yet
-/// (`legal.rs`'s top doc comment, gaps 1 and 3), so its absence from Rust's
-/// list is expected rather than a new finding.
+/// Whether `m` is a move `legal_moves` is DOCUMENTED not to generate yet.
+/// Currently nothing -- see the two retired arms below -- but the function
+/// (and the `legal_known_gap` counting path in [`classify_legal_mismatch`])
+/// stays in place for the next real one, rather than deleting the whole
+/// mechanism: `KNOWN_APPLY_GAP_MARKERS` right above this uses the same
+/// "keep the plumbing, retire the excuse" shape.
 fn is_known_legal_gap_move(m: Move) -> bool {
     match m {
-        // Gap 3: `politics_moves` does not generate pact/aggression/war
-        // moves at all (combat.rs / pact resolution not built).
-        Move::OfferPact { .. } | Move::Aggression { .. } | Move::War { .. } => true,
-        // Gap 1: `action_card_playable` returns `false` unconditionally for
-        // the 18 `freeCivilAction` cards (`legal.rs:466`).
-        Move::PlayAction { card } => {
-            card.get().special.iter().any(|s| matches!(s, Special::FreeCivilAction(_)))
-        }
-        // A third arm lived here until 2026-08-05:
-        // `Build`/`Develop`/`Upgrade`/`Pop` were excused whenever
+        // Two arms lived here until 2026-08-05, both citing `legal.rs`'s
+        // top doc comment "gaps 1 and 3":
+        //   * `OfferPact`/`Aggression`/`War` unconditionally, for
+        //     "`politics_moves` does not generate pact/aggression/war moves
+        //     at all (combat.rs / pact resolution not built)".
+        //   * `PlayAction { card }` where `card` carries
+        //     `Special::FreeCivilAction`, for "`action_card_playable`
+        //     returns `false` unconditionally for the 18 `freeCivilAction`
+        //     cards".
+        // Both gaps are closed as of today (`legal.rs`'s own top doc
+        // comment now marks its gap 2 -- combat/pact resolution --
+        // "CLOSED 2026-08-05", and `card_table.rs`'s `FreeCivilActionValue`
+        // -- gap 1 -- "fixed 2026-08-05"): `politics_moves` generates
+        // `OfferPact`/`Aggression`/`War`, and `action_card_playable` reads
+        // `Special::FreeCivilAction` for real, for all six ordered-action
+        // kinds. Confirmed empirically too, not just by doc comment:
+        // `legal_known_gap=0` across all 9 fixtures (3388 legal-move
+        // comparisons) before this edit, meaning neither arm had fired even
+        // once -- so removing them changes nothing about the 9 existing
+        // fixtures, but stops a REAL divergence in pact/aggression/war
+        // legality, or in a freeCivilAction card's playability, for a card
+        // no fixture exercised yet from being silently absorbed into
+        // "known gap" instead of failing loudly. That risk was concrete,
+        // not theoretical: `card_coverage.rs`'s allowlist work the same day
+        // found pacts, aggressions and freeCivilAction cards among the real
+        // (fillable) coverage gaps this exemption would have sat directly
+        // in front of.
+        //
+        // A third arm lived here until 2026-08-05, for a different reason
+        // (excusing `Build`/`Develop`/`Upgrade`/`Pop` whenever
         // `discount_active`, because `costs.rs`/`economy.rs` hardcoded the
-        // `one_time_discount` term at 0 and so priced all four above Python
-        // and under-generated them. That single cause explained 420 of the
-        // 421 "python has, rust doesn't" move instances across all 9
-        // fixtures. `state::OneTimeDiscount` exists now, `fixtures.rs` loads
-        // it, and all three cost paths read it -- so the arm is gone, and
-        // with it the risk it carried: it excused the FOUR most common moves
-        // in the game on most plies of 7 of the 9 fixtures, which would have
-        // hidden any unrelated pricing bug in them just as effectively.
+        // `one_time_discount` term at 0): `state::OneTimeDiscount` exists
+        // now and all three cost paths read it, so that arm is gone too.
+        //
+        // "An allowlist entry that no longer fires is a claim about the
+        // engine nobody is checking" applied three times running now.
         _ => false,
     }
 }
@@ -387,12 +407,16 @@ fn classify_legal_mismatch(ours: &[Move], theirs: &[Move]) -> Option<String> {
         }
         removed += 1;
     }
+    // `is_known_legal_gap_move` currently has no exemptions (2026-08-05 --
+    // see its doc comment), so in practice this arm is unreachable: the
+    // caller only invokes this function when `ours != theirs`, and with
+    // nothing exempt, any real difference returns `None` above before
+    // reaching here. Left in place, message kept generic rather than
+    // naming specific gaps, for the day `is_known_legal_gap_move` grows a
+    // real one again.
     Some(format!(
         "{removed} move(s) present in python's legal list but not rust's, all matching a \
-         documented gap: pact/aggression/war generation unbuilt [legal.rs gap 3], and/or \
-         freeCivilAction PlayAction blocked [legal.rs gap 1, legal.rs:466], and/or an active \
-         one_time_discount not applied by costs.rs's cost functions [this function's doc \
-         comment]"
+         documented gap (see is_known_legal_gap_move's doc comment for what's currently exempt)"
     ))
 }
 
