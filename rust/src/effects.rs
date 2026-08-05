@@ -12,31 +12,33 @@
 //! EXHAUSTIVE `match` on [`Special`], so a card whose rule this file cannot
 //! interpret is a compile error, never a silently-ignored key.
 //!
-//! ## KNOWN GAPS (deliberate, not oversights -- see the port report)
+//! ## Formerly KNOWN GAPS, closed 2026-08-05
 //!
-//! Python's `compute` reads a few things this port cannot reach yet, because
-//! the data or the state shape to hold them does not exist on the Rust side:
+//! `army_strength`, pacts and a colony's own bonuses were all blocked on type
+//! layer this file's original port could not reach; `gen_cards.py`'s
+//! generator rewrite (see its own module doc, and `cards::Composition` /
+//! `cards::PactBlock` / `cards::CardEffects`'s `food`/`resources`/
+//! `yellow_tokens`) closed all three:
 //!
-//! - **`army_strength`** (`engine/effects.py:471`): tactical strength from a
-//!   tactic + army composition. Needs a tactic's `composition` list and
-//!   `obsoleteStrength`, neither of which `card_table.rs` carries today.
-//!   `Stats.strength` here is Python's PRE-army-strength baseline.
-//! - **Pacts** (`_apply_pacts`, `engine/effects.py:608`): `PlayerState` has no
-//!   `pacts` field in `state.rs` yet, so `tech_discount` / `war_immune` /
-//!   `food_as_resource` / `resource_as_food` / `science_partners` are not on
-//!   [`Stats`] at all rather than being silently wrong.
-//! - **A colony's own bonuses** (`_colony_permanents`, `permanent` production,
-//!   `engine/effects.py:453-458`): needs `permanentEffects`/`permanent` keys
-//!   the generator does not capture (a sibling gap to the one this port fixed
-//!   for urban buildings -- see `gen_cards.py` `PRODUCTION_FIELDS`). The two
-//!   colony-COUNT modifiers (`CultureFirstColony`, `CulturePerAdditionalColony`)
-//!   ARE implemented below, since they only need `p.colonies.len()`.
+//! - **`army_strength`** (`engine/effects.py:471`, ported below as
+//!   [`army_strength`]): a tactic's `composition`/`obsolete_strength` are now
+//!   on `cards::Card`.
+//! - **Pacts** (`_apply_pacts`, `engine/effects.py:608`, ported below as
+//!   [`apply_pacts`]): `state::Pact`/`PactList` now exist, and `Special::A`/
+//!   `B`/`BothPlayers` now carry a real `cards::PactBlock` payload instead of
+//!   being bare flags.
+//! - **A colony's own bonuses** (`_colony_permanents`, `engine/effects.py:
+//!   453-458`): a territory's `permanentEffects`, filtered to Python's
+//!   `COLONY_PERMANENT_KEYS`, is now merged onto the SAME `CardEffects` a
+//!   regular card's `effects` dict uses (`gen_cards.py`'s
+//!   `COLONY_PERMANENT_FIELDS`) -- so the ordinary tableau-scanning code
+//!   below handles a colony with no colony-specific branch at all.
+//!
+//! One thing stays out of scope, unrelated to any of the above:
+//!
 //! - **`build_discount`** (a per-age dict on Python's `Stats`): not needed by
 //!   anything in this port's scope (`build_cost` is not ported), and a dict
 //!   does not fit this struct's "flat fields, no Vec/HashMap" shape anyway.
-//!
-//! None of these affect the starting position or any pre-tactic, pre-pact,
-//! pre-colony game state, which is what this file's tests cover.
 //!
 //! ## Caching
 //!
@@ -49,12 +51,12 @@
 //! finished Rust engine says `compute` is hot, is exactly the premature
 //! optimisation this rewrite exists to avoid. Add it later, measured.
 
-use crate::cards::{CardEffects, CardId, CardType, Production, Special};
+use crate::cards::{Card, CardEffects, CardId, CardType, Composition, PactBlock, Production, Special};
 use crate::state::{GameState, PlayerState, Tableau};
 
 /// A player's aggregate statistics for one recomputation. Mirrors Python's
-/// `effects.Stats` dataclass, minus the fields listed in this module's
-/// "KNOWN GAPS" doc comment.
+/// `effects.Stats` dataclass, minus `build_discount` (see this module's top
+/// doc comment).
 ///
 /// Signed, 32-bit throughout: unlike [`CardEffects`] (one card, kept small so
 /// `CARDS` stays cache-friendly), this is a per-call accumulation over an
@@ -87,6 +89,24 @@ pub struct Stats {
     pub pop_food_discount: i32,
     pub free_pop_per_turn: bool,
     pub no_aggression: bool,
+    // ------------------------------------------------- pact-derived (§5.9)
+    /// Science off every technology `p` develops (`technologyScienceDiscount`).
+    pub tech_discount: i32,
+    /// Nobody may declare war on `p` (`cannotBeDeclaredWarOnByAnyone`).
+    pub war_immune: bool,
+    /// Food spendable as resources, up to this many per turn (Trade Routes).
+    pub food_as_resource: i32,
+    pub resource_as_food: i32,
+    /// Bitmask over player index (`1 << idx`): players who must pay 1 science
+    /// for `p` to develop a technology at all (`otherPartyPaysScience`,
+    /// Scientific Cooperation). A fixed-width mask, not a `Vec`, for the same
+    /// reason every other per-call field here is a plain scalar -- `idx` is
+    /// always `< MAX_PLAYERS` (4), so 8 bits is already double the room
+    /// needed. Mirrors Python's `Stats.science_partners`, which nothing else
+    /// in the engine reads either (checked: `grep -rn science_partners
+    /// engine/` finds only the write site) -- carried for parity, not because
+    /// anything consumes it yet.
+    pub science_partners: u8,
 }
 
 impl Default for Stats {
@@ -108,6 +128,11 @@ impl Default for Stats {
             pop_food_discount: 0,
             free_pop_per_turn: false,
             no_aggression: false,
+            tech_discount: 0,
+            war_immune: false,
+            food_as_resource: 0,
+            resource_as_food: 0,
+            science_partners: 0,
         }
     }
 }
@@ -137,6 +162,16 @@ fn add_flat_except_actions(stats: &mut Stats, eff: &CardEffects) {
     if stages > stats.wonder_stages {
         stats.wonder_stages = stages;
     }
+    // `food`/`resources` are zero on every card except a territory's own
+    // `permanentEffects` (`gen_cards.py`'s `COLONY_PERMANENT_FIELDS`) -- see
+    // `CardEffects::food`'s doc comment. Reading them here unconditionally,
+    // like every other field in this function, is what lets `compute`'s
+    // colonies loop below call this SAME function with no colony-specific
+    // branch, exactly mirroring `engine/effects.py::_apply_flat` being the
+    // one function every source (government/techs/wonders/leader/colonies/
+    // pacts) routes through.
+    stats.food += eff.food as i32;
+    stats.resources += eff.resources as i32;
 }
 
 /// [`add_flat_except_actions`] plus `civil_actions`/`military_actions` as a
@@ -214,9 +249,9 @@ fn best_staffed(techs: &Tableau, pred: impl Fn(CardType) -> bool) -> Option<Card
 /// Basilica). Mirrors `engine/effects.py::_happy_source_count`: "every
 /// building/CARD providing happy faces provides one additional happy face"
 /// -- so the government and leader cards count too, not only buildings, and
-/// a wonder ruined by Ravages of Time provides none.
-///
-/// Colonies are NOT counted here -- see this module's "KNOWN GAPS" doc.
+/// a wonder ruined by Ravages of Time provides none. A colony counts too
+/// (`docs/SCORE_AUDIT.md` 3.7, quoted in Python) -- Historic Territory's
+/// `permanentEffects.happiness` is exactly this.
 fn happy_source_count(p: &PlayerState) -> i32 {
     let mut n = 0;
     for (id, slot) in p.techs.iter() {
@@ -238,13 +273,219 @@ fn happy_source_count(p: &PlayerState) -> i32 {
     if p.government.get().production.happy > 0 {
         n += 1;
     }
+    for &col in p.colonies.as_slice() {
+        if col.get().effects.happy > 0 {
+            n += 1;
+        }
+    }
     n
+}
+
+// -------------------------------------------------------- army strength
+//
+// §10: a tactic in play, plus the units it has to form armies from. Ported
+// from `engine/effects.py::army_strength`/`_army_strength_counts`/
+// `_army_value` -- the shared core those functions and `army_strength_units`/
+// `tactic_outlook` (combat.rs, not ported) all route through.
+
+/// One unit type slot in the `[infantry, cavalry, artillery, air]` arrays
+/// `army_strength` and its helpers pass around below. A plain index rather
+/// than a `HashMap<CardType, i32>`: exactly four unit types exist
+/// (`CardType::is_unit`), so a fixed-size array is both the DESIGN.md-
+/// preferred shape and faster than hashing a 1-byte key four times a call.
+const INFANTRY: usize = 0;
+const CAVALRY: usize = 1;
+const ARTILLERY: usize = 2;
+const AIR: usize = 3;
+
+/// `cards::Composition`'s four counts, in `[INFANTRY, CAVALRY, ARTILLERY,
+/// AIR]` order, to line up with the `avail`/`fresh` arrays below.
+fn need_counts(comp: Composition) -> [i32; 4] {
+    [comp.infantry as i32, comp.cavalry as i32, comp.artillery as i32, comp.air as i32]
+}
+
+/// Complete armies formable from `avail`, given `need` -- the non-Genghis-
+/// Khan fast path of `engine/effects.py::_army_strength_counts`: armies =
+/// the MIN, over every unit type the composition actually requires, of
+/// `avail // need`. A composition never requires air (`data/*.json`: no
+/// tactic's `composition` names it), so `need[AIR]` is always 0 and never
+/// constrains this; `avail[AIR]` is read separately by the air-force bonus
+/// in `army_value` below.
+fn count_armies(avail: &[i32; 4], need: &[i32; 4]) -> i32 {
+    let mut best: Option<i32> = None;
+    for i in 0..4 {
+        if need[i] > 0 {
+            let armies = avail[i] / need[i];
+            best = Some(best.map_or(armies, |b| b.min(armies)));
+        }
+    }
+    best.unwrap_or(0)
+}
+
+/// Genghis Khan (`Special::InfantryCountsAsCavalryForTactics`): infantry may
+/// fill a cavalry slot. Mirrors the nested `count_armies` inside Python's
+/// `_army_strength_counts` Genghis branch literally, loop included --
+/// `k*(need_inf+need_cav) <= total` and `k*need_cav <= total` are
+/// independent bounds in Python's own formula, not re-derived here (if this
+/// ever needs re-justifying against the rulebook, start from
+/// `engine/effects.py::_army_strength_counts`, not from first principles).
+fn count_armies_genghis(avail: &[i32; 4], need: &[i32; 4]) -> i32 {
+    let need_inf = need[INFANTRY];
+    let need_cav = need[CAVALRY];
+    if need_inf == 0 && need_cav == 0 {
+        return count_armies(avail, need);
+    }
+    let total = avail[INFANTRY] + avail[CAVALRY];
+    let mut best = 0;
+    for k in 0..=total {
+        let others_ok = (ARTILLERY..=AIR)
+            .all(|i| need[i] == 0 || k * need[i] <= avail[i]);
+        if k * (need_inf + need_cav) <= total && k * need_cav <= total && others_ok {
+            best = k;
+        }
+    }
+    best
+}
+
+/// Strength of `total_armies` armies (`fresh_armies` of them not a full age
+/// behind the tactic, the rest outdated), plus the air-force doubling bonus.
+/// Mirrors `engine/effects.py::_army_value` exactly, including the ordering
+/// note in its own comment: doubling an OUTDATED army is worth
+/// `obsolete_strength`, not the fresh value.
+fn army_value(card: &Card, total_armies: i32, fresh_armies: i32, air: i32) -> i32 {
+    let outdated_armies = total_armies - fresh_armies;
+    let val = card.effects.strength as i32;
+    // Zero means "not printed" (`cards::Card::obsolete_strength`'s own doc
+    // comment) -- no base-game tactic prints an explicit zero here, so this
+    // sentinel is unambiguous. Mirrors Python's `old_val = ... or val`.
+    let old_val = if card.obsolete_strength != 0 { card.obsolete_strength as i32 } else { val };
+    let mut total = fresh_armies * val + outdated_armies * old_val;
+    if air > 0 {
+        let assigned = air.min(total_armies);
+        let on_fresh = assigned.min(fresh_armies);
+        total += on_fresh * val + (assigned - on_fresh) * old_val;
+    }
+    total
+}
+
+/// Tactical strength from armies formed by `p`'s current tactic (§10).
+/// Mirrors `engine/effects.py::army_strength`: zero without a tactic, or with
+/// a tactic whose `composition` is empty (every non-tactic card, guarded by
+/// the `lib.rs` test `tactics_and_only_tactics_form_armies`).
+fn army_strength(p: &PlayerState) -> i32 {
+    if p.tactic.is_none() {
+        return 0;
+    }
+    let card = p.tactic.get();
+    if card.composition.is_empty() {
+        return 0;
+    }
+    let tactic_lv = p.tactic.level() as i32;
+    let mut avail = [0i32; 4];
+    let mut fresh = [0i32; 4];
+    for (id, slot) in p.techs.iter() {
+        let w = slot.workers as i32;
+        if w == 0 {
+            continue;
+        }
+        let i = match id.kind() {
+            CardType::Infantry => INFANTRY,
+            CardType::Cavalry => CAVALRY,
+            CardType::Artillery => ARTILLERY,
+            CardType::Air => AIR,
+            _ => continue,
+        };
+        avail[i] += w;
+        // "fresh" = not a full age behind the tactic (§10.4).
+        if id.level() as i32 >= tactic_lv - 1 {
+            fresh[i] += w;
+        }
+    }
+    let need = need_counts(card.composition);
+    let genghis = !p.leader.is_none()
+        && p.leader.get().special.contains(&Special::InfantryCountsAsCavalryForTactics);
+    let (total_armies, fresh_armies) = if genghis {
+        let total = count_armies_genghis(&avail, &need);
+        (total, count_armies_genghis(&fresh, &need).min(total))
+    } else {
+        let total = count_armies(&avail, &need);
+        (total, count_armies(&fresh, &need).min(total))
+    };
+    if total_armies == 0 {
+        return 0;
+    }
+    army_value(card, total_armies, fresh_armies, avail[AIR])
+}
+
+// ------------------------------------------------------------------ pacts
+//
+// §5.9: a pact card sits in `p.pacts`, never in `p.techs`/`completed_wonders`/
+// `leader`/`government`, so it is never seen by `apply_special` below --
+// these two functions are `compute`'s ONLY route to a pact's numbers.
+// Ported from `engine/effects.py::pacts_for`/`_pact_blocks`/`_apply_pacts`.
+
+/// Add one pact block's grants to `stats`. Mirrors the parts of Python's
+/// `_apply_flat(s, block, mods)` a `PactBlock` can actually contain (its
+/// vocabulary is the closed set `gen_cards.py::PACT_BLOCK_FIELDS` maps, a
+/// subset of `FLAT_KEYS`/`SPECIAL_KEYS` -- no `MODIFIER_KEYS` key has ever
+/// appeared in a pact block, so there is no phase-3 queueing to do here)
+/// plus the two keys Python reads directly off `block` afterwards
+/// (`cultureProductionPerCompletedWonderOfTheOtherParty`,
+/// `otherPartyPaysScience`).
+fn apply_pact_block(stats: &mut Stats, block: &PactBlock, other: &PlayerState) {
+    stats.culture += block.culture as i32;
+    stats.food += block.food as i32;
+    stats.resources += block.resources as i32;
+    stats.strength += block.strength as i32;
+    stats.military_actions += block.military_actions as i32;
+    stats.tech_discount += block.tech_discount as i32;
+    if block.war_immune {
+        stats.war_immune = true;
+    }
+    stats.food_as_resource += block.food_as_resource as i32;
+    stats.resource_as_food += block.resource_as_food as i32;
+    if block.culture_per_wonder_of_other_party != 0 {
+        stats.culture +=
+            block.culture_per_wonder_of_other_party as i32 * other.completed_wonders.len() as i32;
+    }
+    if block.other_party_pays_science {
+        stats.science_partners |= 1 << other.idx;
+    }
+}
+
+/// Every pact `p.idx` is party to, wherever physically held, applied to
+/// `stats`. Mirrors `engine/effects.py::pacts_for` + `_apply_pacts` fused
+/// into one pass (nothing else in this module needs the pact list on its
+/// own, unlike Python where `pact_forbids_attack`/`pact_attack_bonus`/
+/// `cancel_attack_pacts` -- all combat.rs, not ported -- reuse `pacts_for`
+/// too).
+fn apply_pacts(stats: &mut Stats, state: &GameState, p: &PlayerState) {
+    for q in state.players.iter() {
+        for pact in q.pacts.as_slice() {
+            if !pact.is_party(p.idx) {
+                continue;
+            }
+            let other = &state.players[pact.partner_of(p.idx) as usize];
+            for &sp in pact.card.get().special {
+                match sp {
+                    Special::BothPlayers(block) => apply_pact_block(stats, &block, other),
+                    Special::A(block) if p.idx == pact.a => apply_pact_block(stats, &block, other),
+                    Special::B(block) if p.idx == pact.b => apply_pact_block(stats, &block, other),
+                    // `OnAttackBetweenParties` (attack-time strength bonus)
+                    // and the flag-only pact specials are combat.rs's
+                    // resolution-time concern, not `compute`'s -- see
+                    // `apply_special`'s own grouping below.
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 // --------------------------------------------------------------- dispatch
 
 /// The exhaustive dispatch over [`Special`]. Every one of the 92 generated
-/// variants appears exactly once below, in one of four groups:
+/// variants appears exactly once below, in one of five groups:
 ///
 /// 1. Implemented -- read by `compute`/`state_stats` (Python's
 ///    `MODIFIER_KEYS`/`SPECIAL_KEYS`, `_apply_modifier`/`_apply_special`).
@@ -252,11 +493,15 @@ fn happy_source_count(p: &PlayerState) -> i32 {
 ///    build, develop, political action, or a build-cost discount. None of
 ///    these are read by `engine/effects.py::compute`.
 /// 3. `// belongs to combat.rs` -- aggression/war/tactic/colonization
-///    resolution.
+///    resolution, including the pact keys that only matter at attack-
+///    resolution time (`onAttackBetweenParties`,
+///    `cancelledIfPartiesAttackEachOther`, `noAttacksBetweenParties`).
 /// 4. `// belongs to events.rs` -- age/military event-card resolution and
 ///    targeting.
-/// 5. `// not yet ported` -- genuinely part of `compute` in Python (pacts),
-///    blocked on `state.rs` growing a `pacts` field, not a scoping choice.
+/// 5. `// handled elsewhere, not this match` -- genuinely read by `compute`
+///    (Genghis Khan's tactic rule, the three pact blocks `compute` DOES
+///    read), just not through this particular dispatch function -- see
+///    `army_strength`/`apply_pacts` above for where each actually is.
 ///
 /// Adding a 93rd variant to the generated enum breaks this match at compile
 /// time, which is the entire point (DESIGN.md).
@@ -411,9 +656,11 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | CultureOnRevolution(_)
         | CultureOnTechDevelop(_)
         | CulturePerCivilizationWithMoreCulture
-        // Which ordered free action a card grants -- `FreeCivilActionValue`
-        // now names it (gen_cards.py, 2026-08-05), read by `actions.rs`, not
-        // `compute()`.
+        // Which ordered free action a card grants (`build_one_wonder_stage`,
+        // `develop_technology`, ...) -- `engine/actions.py::free_action_moves`
+        // dispatches on this VALUE directly (lines 597-618), which is why it
+        // now carries a real `FreeCivilActionValue` payload instead of being
+        // a bare flag; still `actions.rs`'s to read, not `compute()`'s.
         | FreeCivilAction(_)
         | GainFoodOrResources(_)
         | LeaderTakeCivilActionDiscount(_)
@@ -423,7 +670,8 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // Fast Food Chains / Internet / Hollywood: resolved by
         // `engine/effects.py::_one_time_culture`/`wonder_completion_culture`
         // at wonder-completion time -- a one-shot build trigger, not a
-        // recurring `compute()` field. `OnBuildCultureValue` names which.
+        // recurring `compute()` field. The `OnBuildCultureValue` payload
+        // tells `actions.rs` which of the three formulas to run.
         | OnBuildCulture(_)
         | OnBuildCulturePerTechLevelSum
         | OncePerGameTwoPoliticalActions
@@ -450,12 +698,11 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | DestroyUrbanBuildings
         | DoublesTacticBonusOfOneArmy
         // Aggression: Raid -- "half of each destroyed building's printed
-        // build cost, rounded up"; `GainResourcesValue` names that formula
-        // (today's only value); resolved at aggression-resolution time, not
-        // by `compute()`.
+        // build cost, rounded up"; the `GainResourcesValue` payload names
+        // that one formula (today's only value), resolved at aggression-
+        // resolution time, not by `compute()`.
         | GainResources(_)
         | GainCulturePerLevelOfRemovedCard(_)
-        | InfantryCountsAsCavalryForTactics
         | OpponentDecreasesPopulation(_)
         | OpponentsPayDoubleMilitaryActionsToAttackYou
         | OrTakesSpecialTechnologiesOfSameTotalScienceCost
@@ -466,7 +713,17 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // War over Technology's `strengthAdvantage` formula, named by
         // `VictorTakesScienceUpToValue`; war-resolution-time, not `compute()`.
         | VictorTakesScienceUpTo(_)
-        | VictorTakesYellowTokens => {}
+        | VictorTakesYellowTokens
+        // Pact-cancellation/attack-legality flags (§5.4.2-5.4.3): read by
+        // `pact_forbids_attack`/`_doomed_pact_strength`/
+        // `cancel_attack_pacts`, all attack-RESOLUTION-time, not `compute`.
+        | CancelledIfPartiesAttackEachOther
+        | NoAttacksBetweenParties
+        // Attack-time strength bonus between the two pact parties (§5.4.2,
+        // `pact_attack_bonus`) -- resolution-time, not `compute`. The OTHER
+        // three dict-payload pact keys (`A`/`B`/`bothPlayers`) ARE read by
+        // `compute`, just not through this dispatch -- see `apply_pacts`.
+        | OnAttackBetweenParties(_) => {}
 
         // -------------------------------------- belongs to events.rs ----
         // Age/military event-card resolution and targeting. (`target` and
@@ -489,19 +746,26 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | WeakestPlayer
         | WeakestPlayers => {}
 
-        // ------------------------------------------- not yet ported -----
-        // Pact mechanics (`engine/effects.py::_apply_pacts`, called from
-        // `compute` itself). These genuinely belong in `state_stats` --
-        // unlike the two groups above, this is a real gap, not an
-        // out-of-scope module. `state.rs` now has `pacts`/`Pact`/`PactList`
-        // and `A`/`B`/`BothPlayers`/`OnAttackBetweenParties` now carry a
-        // real `PactBlock` payload (gen_cards.py, 2026-08-05) -- the port
-        // itself is the next commit on top of this one; this arm is a
-        // type-layer-only placeholder so the crate keeps building in
-        // between (`(_)` discards the now-real payload deliberately, not
-        // silently: see this module's top "KNOWN GAPS").
-        A(_) | B(_) | BothPlayers(_) | CancelledIfPartiesAttackEachOther | NoAttacksBetweenParties
-        | OnAttackBetweenParties(_) => {}
+        // --------------------------- handled elsewhere, not this match ----
+        // Genghis Khan: `army_strength` above checks this directly on the
+        // leader's special list -- it changes how a unit multiset is
+        // COUNTED, not a `Stats` FIELD to add to, so there is nothing for
+        // this dispatch to do with it. (`army_strength_units`/
+        // `tactic_outlook`, combat.rs, will read it the same way once
+        // colonization/tactic-switching are ported.)
+        InfantryCountsAsCavalryForTactics
+        // Pact blocks (§5.9): `apply_pacts` above reads these directly off a
+        // pact card's `special` list, gated on `pact.a`/`pact.b`/party-hood
+        // -- information this dispatch does not have (it only ever sees ONE
+        // player, `p`, where a pact block's meaning depends on WHICH side of
+        // the pact `p` is). A pact card is also never in `p.techs`/
+        // `completed_wonders`/`leader`/`government`, so these three never
+        // actually reach this particular match at runtime -- the arm exists
+        // only because `Special` is generated, not hand-written, and the
+        // match must stay exhaustive regardless.
+        | A(_)
+        | B(_)
+        | BothPlayers(_) => {}
     }
 }
 
@@ -596,13 +860,24 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
         add_production(&mut stats, &card.production, 1);
     }
 
-    // --- phase 2: colonies. Only the colony-COUNT-based leader modifiers
-    // (`CultureFirstColony`, `CulturePerAdditionalColony`, dispatched above
-    // via the leader's `special` list) read `p.colonies` today. A colony's
-    // OWN bonuses are not applied -- see this module's top "KNOWN GAPS".
+    // --- phase 2: colonies (§11.5). A colony's own bonuses are a territory's
+    // `permanentEffects`, filtered to Python's `COLONY_PERMANENT_KEYS` and
+    // merged onto `CardEffects` by `gen_cards.py` -- so this is the exact
+    // same `add_flat`/`apply_special` pair every other source above uses, no
+    // colony-specific branch needed. (The colony-COUNT-based leader
+    // modifiers `CultureFirstColony`/`CulturePerAdditionalColony` were
+    // already reading `p.colonies.len()` via the leader's `special` list
+    // above, before this loop existed.)
+    for &col in p.colonies.as_slice() {
+        let card = col.get();
+        add_flat(&mut stats, &card.effects);
+        for &sp in card.special {
+            apply_special(&mut stats, p, sp);
+        }
+    }
 
-    // --- pacts: not ported -- `PlayerState` has no `pacts` field yet.
-    let _ = state; // reserved for pacts/army_strength once those land.
+    // --- pacts (§5.9).
+    apply_pacts(&mut stats, state, p);
 
     // --- event-granted permanents.
     stats.culture += p.culture_rate_extra as i32;
@@ -610,10 +885,12 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
     stats.strength += p.strength_extra as i32;
     stats.happy += p.happy_extra as i32;
 
-    // NOTE: Python adds `army_strength(state, p)` to `s.strength` here
-    // (`engine/effects.py:471`). Not ported -- see this module's top
-    // "KNOWN GAPS": tactic `composition`/`obsoleteStrength` are not in the
-    // card type layer yet, so there is nothing to compute it from.
+    // --- phase 3: army strength (§10). Last, like Python's `s.strength +=
+    // army_strength(state, p)` (`engine/effects.py:471`) -- addition
+    // commutes, so this only needs to run after `p.tactic`'s own printed
+    // `strength`/`obsoleteStrength` and the tableau's units are both known,
+    // which they are by this point regardless of ordering.
+    stats.strength += army_strength(p);
 
     // "Limits on Ratings" (rulebook, Civilization Statistics): no rating may
     // go below zero.
@@ -638,7 +915,7 @@ pub fn state_stats(state: &GameState, p: &PlayerState) -> Stats {
 mod tests {
     use super::*;
     use crate::cards::CARDS;
-    use crate::state::{CardList, GameState, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
+    use crate::state::{CardList, GameState, Pact, PactList, Phase, PlayerState, Tableau, TechSlot, MAX_PLAYERS, ROW_SIZE};
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
@@ -765,6 +1042,19 @@ mod tests {
         let mut players = [filler(), filler(), filler(), filler()];
         players[0] = p;
         blank_state(num_players, players)
+    }
+
+    /// Two players with genuine (non-filler) state, for pact tests: pacts
+    /// are the only thing `compute` reads off a player OTHER than the one
+    /// being scored, so `one_player_state`'s filler seats (never
+    /// distinguished from each other) are not enough. Callers set `idx` on
+    /// `p0`/`p1` themselves via `blank_player`.
+    fn two_player_state(p0: PlayerState, p1: PlayerState) -> GameState {
+        let filler = || blank_player(2, card("Despotism"));
+        let mut players = [filler(), filler(), filler(), filler()];
+        players[0] = p0;
+        players[1] = p1;
+        blank_state(4, players)
     }
 
     // ------------------------------------------------- starting position
@@ -927,6 +1217,192 @@ mod tests {
         assert_eq!(s.happy, 2);
     }
 
+    // ------------------------------------------------------ army strength
+
+    #[test]
+    fn no_tactic_scores_zero_army_strength() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Warriors"), TechSlot { workers: 2, stored: 0 });
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Warriors: 1 strength/worker * 2 workers, and NOTHING extra --
+        // `army_strength` must return 0 without a tactic in play.
+        assert_eq!(s.strength, 2);
+    }
+
+    #[test]
+    fn tactic_with_no_matching_units_scores_zero() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.tactic = card("Fighting Band"); // needs 2 infantry
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.strength, 0);
+    }
+
+    #[test]
+    fn tactic_forms_one_fresh_army() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.tactic = card("Fighting Band"); // Age I, strength 1, needs 2 infantry
+        p.techs.insert(card("Warriors"), TechSlot { workers: 2, stored: 0 }); // Age A
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Warriors' own strength: 1/worker * 2 = 2. Fighting Band's tactic
+        // level is I (1); Warriors is Age A (0) >= 1-1 = 0, so the army is
+        // fresh: 1 army * strength 1 = 1. Total 3.
+        assert_eq!(s.strength, 3);
+    }
+
+    #[test]
+    fn obsolete_army_scores_the_reduced_rate_and_air_doubles_it() {
+        let mut p = blank_player(0, card("Despotism"));
+        // Entrenchments: Age III, strength 9, obsolete 5, needs 1 infantry + 2 artillery.
+        p.tactic = card("Entrenchments");
+        p.techs.insert(card("Swordsmen"), TechSlot { workers: 1, stored: 0 }); // Age I infantry
+        p.techs.insert(card("Cannon"), TechSlot { workers: 2, stored: 0 }); // Age II artillery
+        p.techs.insert(card("Air Forces"), TechSlot { workers: 1, stored: 0 }); // Age III air
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Fresh threshold for an Age III tactic is level >= 2. Swordsmen is
+        // Age I (level 1): NOT fresh. Cannon is Age II (level 2): fresh. One
+        // army total (min(1 infantry/1, 2 artillery/2) = 1), but the
+        // infantry required for it is entirely non-fresh, so the WHOLE army
+        // is outdated (fresh_armies = min(0 fresh infantry / 1, ...) = 0).
+        // Army value: 0 fresh * 9 + 1 outdated * 5 = 5.
+        // One air unit doubles ONE army's bonus; that army is the outdated
+        // one, so the doubling is worth `obsolete_strength` (5), not the
+        // fresh value (9) -- exactly the distinction this module's
+        // `army_value` doc comment calls out. Air bonus: 5. Army total: 10.
+        // Tech-phase per-unit strength: Swordsmen 2*1 + Cannon 3*2 + Air
+        // Forces 5*1 = 2+6+5 = 13. Grand total: 13 + 10 = 23.
+        assert_eq!(s.strength, 23);
+    }
+
+    #[test]
+    fn genghis_khan_lets_infantry_fill_a_cavalry_slot() {
+        // Medieval Army: Age I, strength 2, needs 1 infantry + 1 cavalry.
+        // With no cavalry at all, a normal leader forms zero armies.
+        let mut p = blank_player(0, card("Despotism"));
+        p.tactic = card("Medieval Army");
+        p.techs.insert(card("Warriors"), TechSlot { workers: 2, stored: 0 });
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.strength, 2, "2 Warriors, no tactic bonus (no cavalry, no Genghis)");
+
+        // Genghis Khan: infantry may fill the cavalry slot too.
+        let mut p2 = blank_player(0, card("Despotism"));
+        p2.leader = card("Genghis Khan");
+        p2.tactic = card("Medieval Army");
+        p2.techs.insert(card("Warriors"), TechSlot { workers: 2, stored: 0 });
+        let state2 = one_player_state(2, p2);
+        let s2 = compute(&state2, &state2.players[0]);
+        // 2 Warriors: 1 strength/worker * 2 = 2, PLUS one Genghis-formed army
+        // (1 infantry-as-infantry + 1 infantry-as-cavalry) at strength 2.
+        assert_eq!(s2.strength, 4);
+    }
+
+    // ---------------------------------------------------------- colonies
+
+    #[test]
+    fn colony_permanent_effects_add_strength_and_happy() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.colonies.push(card("Strategic Territory (I)")); // permanentEffects.strength = 2
+        p.colonies.push(card("Historic Territory (I)")); // permanentEffects.happiness = 1
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.strength, 2);
+        assert_eq!(s.happy, 1);
+    }
+
+    #[test]
+    fn colony_happy_counts_as_a_happy_source_for_st_peters() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.colonies.push(card("Historic Territory (I)")); // +1 happy, one source
+        let w = card("St. Peter's Basilica"); // +2 culture, +1 happy, +1 happy/source
+        p.completed_wonders.push(w);
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Base happy: St. Peter's +1, the colony's +1 = 2. Two happy
+        // SOURCES (the wonder and the colony, both printing happy > 0) at
+        // +1 each via `extraHappyPerHappySource` = 2 more. Total 4.
+        assert_eq!(s.happy, 4);
+    }
+
+    // -------------------------------------------------------------- pacts
+
+    #[test]
+    fn both_players_pact_block_applies_to_both_sides_symmetrically() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        // Scientific Cooperation: bothPlayers { technologyScienceDiscount:
+        // 2, otherPartyPaysScience: 1 }.
+        p0.pacts.push(Pact { card: card("Scientific Cooperation"), owner: 0, partner: 1, a: 0, b: 1 });
+        let p1 = blank_player(1, card("Despotism"));
+        let state = two_player_state(p0, p1);
+
+        let s0 = compute(&state, &state.players[0]);
+        assert_eq!(s0.tech_discount, 2);
+        assert_eq!(s0.science_partners, 1 << 1, "player 0's partner is player 1");
+
+        let s1 = compute(&state, &state.players[1]);
+        assert_eq!(s1.tech_discount, 2);
+        assert_eq!(s1.science_partners, 1 << 0, "player 1's partner is player 0");
+    }
+
+    #[test]
+    fn pact_does_not_affect_a_third_uninvolved_player() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        p0.pacts.push(Pact { card: card("Scientific Cooperation"), owner: 0, partner: 1, a: 0, b: 1 });
+        let p1 = blank_player(1, card("Despotism"));
+        let mut state = two_player_state(p0, p1);
+        state.players[2].idx = 2;
+        let s2 = compute(&state, &state.players[2]);
+        assert_eq!(s2.tech_discount, 0);
+        assert_eq!(s2.science_partners, 0);
+    }
+
+    #[test]
+    fn a_b_pact_block_is_asymmetric_and_can_grant_war_immunity() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        // Loss of Sovereignty: A { cultureProduction: 2 }, B {
+        // cultureProduction: -2, cannotBeDeclaredWarOnByAnyone: true }.
+        p0.pacts.push(Pact { card: card("Loss of Sovereignty"), owner: 0, partner: 1, a: 0, b: 1 });
+        let p1 = blank_player(1, card("Despotism"));
+        let state = two_player_state(p0, p1);
+
+        let s0 = compute(&state, &state.players[0]);
+        assert_eq!(s0.culture, 2, "player 0 is side A: +2 culture");
+        assert!(!s0.war_immune);
+
+        let s1 = compute(&state, &state.players[1]);
+        // Side B's -2 culture floors at 0 (rulebook "Limits on Ratings").
+        assert_eq!(s1.culture, 0);
+        assert!(s1.war_immune, "side B: cannotBeDeclaredWarOnByAnyone");
+    }
+
+    #[test]
+    fn pact_culture_per_wonder_reads_the_other_partys_wonder_count() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        // International Tourism: bothPlayers {
+        // cultureProductionPerCompletedWonderOfTheOtherParty: 1 }.
+        p0.pacts.push(Pact { card: card("International Tourism"), owner: 0, partner: 1, a: 0, b: 1 });
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.completed_wonders.push(card("St. Peter's Basilica"));
+        p1.completed_wonders.push(card("Colossus"));
+        let state = two_player_state(p0, p1);
+
+        let s0 = compute(&state, &state.players[0]);
+        // Player 0 has no wonders of their own, but reads player 1's TWO.
+        assert_eq!(s0.culture, 2);
+
+        let s1 = compute(&state, &state.players[1]);
+        // Player 1 reads player 0's wonder count (zero), PLUS St. Peter's
+        // own +2 culture and +1 happy/extraHappyPerHappySource (1 source).
+        assert_eq!(s1.culture, 2);
+    }
+
     // ---------------------------------------------------- ids_round_trip
 
     #[test]
@@ -938,7 +1414,10 @@ mod tests {
             "Despotism", "Monarchy", "Theocracy", "Constitutional Monarchy", "Republic",
             "Communism", "Fundamentalism", "Democracy", "Warriors", "Agriculture", "Bronze",
             "Philosophy", "Religion", "Theology", "Sid Meier", "Napoleon Bonaparte",
-            "St. Peter's Basilica",
+            "St. Peter's Basilica", "Fighting Band", "Entrenchments", "Swordsmen", "Cannon",
+            "Air Forces", "Medieval Army", "Genghis Khan", "Strategic Territory (I)",
+            "Historic Territory (I)", "Scientific Cooperation", "Loss of Sovereignty",
+            "International Tourism", "Colossus",
         ] {
             assert!(CardId::by_name(name).is_some(), "missing card: {name}");
         }
