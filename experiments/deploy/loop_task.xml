@@ -10,7 +10,7 @@
      * The action popped a console window.  With ~12 generation workers per
        iteration plus resume-after-every-game, the box owner saw a window every
        few minutes while gaming.  Now routed through tools/hidden_launch.vbs,
-       whose hidden console is INHERITED by bash and by every python worker.
+       whose hidden console is INHERITED by bash and by every worker it starts.
 
      Priority 7 = BELOW_NORMAL, inherited by every child process, so a game
      always outranks training. -->
