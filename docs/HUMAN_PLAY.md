@@ -629,3 +629,219 @@ etc. now read count 2 at 2p/3p/4p, matching the correction). If a future
 card-data change is proposed, `docs/SOURCES.md`'s replacement — this
 section — is the reminder to check three-source agreement before touching
 `data/`, not just the loudest single source.
+
+## Diagnosing the 2p champion's passivity: anchor saturation, not a measurement bug (2026-08-06)
+
+The census above found the 2p champion declaring **0 wars in 300 games**,
+bidding in territory auctions at 10% of the human rate, and building wonder
+stages at ~1.5–2% of it — yet the same champion reports ~88–95% against its
+own anchor in `experiments/rust_champion_2p.json`. This section works out
+why those two facts coexist, testing (not arguing from the armchair) the
+four candidate explanations `docs/HAZARDS.md`'s "no external anchor" hazard
+implies: a measurement bug, a too-weak anchor, an objective that rewards
+this, and 2p-specific wonder mispricing. Weights compared here come from
+`/Users/pt/tta-ai/experiments/` (gitignored, not committed) at whatever
+generation the live league had reached when each measurement was taken —
+the champion is a moving target under continuous training throughout this
+investigation, which turns out to matter (see the last section below).
+
+### 1. Ruled out: the war/wonder numbers are not a `botcensus` artifact
+
+`botcensus.rs` already caught one bug in itself (miscounting colonization
+by diffing a field that also grows on a war's `Annex` spoil — see above), so
+its other numbers needed independent confirmation before being trusted
+further. Two checks, neither reusing `classify_move`/`BotClass`:
+
+- **Wars, by state-edge detection.** A standalone loop (not committed —
+  scratch code, deleted after use) played the same weights through
+  `game::step` directly and counted every transition of
+  `PlayerState::war_declared_by_me` from `CardId::NONE` to set, across
+  `state.rs`'s own field rather than `Move::War` pattern-matching. Result
+  over 300 games, seed 1: **0 wars, exact agreement** with `botcensus`'s
+  count via a completely different code path.
+- **Wonders, by final-state accounting.** The same loop summed
+  `PlayerState::completed_wonders.len()` (an append-only field, never
+  reused for anything else) plus the in-progress `wonder_steps` at game
+  end — no move classification at all. Result: **0.053 wonders
+  completed/player/game**, about 2% of the human corpus's 2.74/player
+  baseline from the measured-human-baseline table above — the same
+  order-of-magnitude gap `botcensus` reported, via numbers that share no
+  code with it.
+
+Both independent measurements land in the same place `botcensus` did. The
+passivity is real; **explanation 1 (bad measurement) is ruled out.**
+
+One wrinkle this check surfaced: re-running `botcensus` itself today against
+the *current* checkpoint (`gen` ~1262, same command as the doc's original
+table) gives `build wonder stage` = **0.527/game**, not the 0.183/game
+tabulated above — a ~2.9x increase within the same day. The league kept
+training after this morning's crash-loop fix (`95728dc`, seed-overflow
+panics that had it repeatedly resuming from a gen-1164 checkpoint) landed,
+and `experiments/logs/rust_climb_2p.jsonl` shows real, continued generation
+acceptance since (gen 1164's own logged standing was 88.3% vs. anchor;
+by gen ~1298 it's over 95%). So this doc's original table was already
+measuring a stale, mid-recovery checkpoint by the time it was read — worth
+knowing before treating any single census run as a fixed fact about "the"
+2p champion, since it is not a fixed thing. War rate did not move (still
+exactly 0 in today's rerun); wonder rate did. That asymmetry is itself a
+clue, developed below.
+
+### 2. Directly demonstrated: the anchor's signal saturates and cannot tell these two vectors apart
+
+`climb.rs`'s own module doc is explicit that the anchor exists only to
+catch a **regression** (every champion the old Python league produced was
+secretly worse than the untuned default vector — see that file's point 2),
+not to serve as an absolute strength ladder. Whether it can still do the
+narrower job is testable: does a large margin over the anchor mean anything
+about strength *relative to another real, differently-trained vector*?
+
+Measured with `arena`/`kindmatch` (240 games = 120 deals × 2 seats,
+`--threads 3`, `rust_champion_2p.json` at its current live checkpoint):
+
+| opponent | 2p champion's win rate |
+|---|---|
+| default weights (the anchor) | **89.6% ± 4.0** (p < 0.0001) |
+| `GreedyBot` (`kindmatch --a weighted --b greedy`) | **97.5% ± 2.0** |
+| `RandomBot` | **98.75% ± 1.4** |
+| `rust_champion_3p.json`'s vector, played at a real 2p table | **54.4% ± 6.6** (p = 0.19, seed 700) / **50.8% ± 6.6** (p = 0.80, seed 12345) — statistically even on both seeds |
+| `rust_champion_4p.json`'s vector, played at a real 2p table | **68.8% ± 6.3** (p < 0.0001) |
+
+And the control that makes this decisive: the anchor itself is not simply
+"weak at everything" — `weighted` playing the *default* vector also beats
+`GreedyBot` 94.4% and `RandomBot` 99.6%, and `rust_champion_3p.json`'s
+vector beats the *same* anchor 93.8% ± 3.2, a margin statistically
+indistinguishable from the 2p champion's own 89.6%.
+
+Put together: two vectors (2p champion, 3p vector) that both crush the
+anchor by ~90% margins are themselves an even match at a real 2p table
+(54%/51% across two independent seeds). The anchor comparison cannot tell
+a genuinely strong strategy from this one — **its signal has saturated**.
+An 88–95% score against the anchor is consistent with "this vector is much
+stronger than a fixed, never-updated default" and tells you nothing further
+about whether it is close to the best strategy reachable, or merely better
+than a weak fixed point that a wide range of competent vectors all beat by
+similar margins. **Explanation 2 (the anchor is too weak, in the specific
+sense of no longer discriminating) is directly supported by evidence, not
+just plausible by design.**
+
+Caveat on the 3p/4p-vector comparisons: those vectors were never trained
+for a 2p table, so any pact-related weight they carry is simply inert
+there (no legal pact target exists at 2p) rather than actively wrong — a
+fair, if imperfect, "different strong opponent" rather than a clean
+strength benchmark.
+
+### 3. A plausible, code-grounded mechanism for why passive play specifically survives the climb
+
+`climb.rs::challenge` accepts a mutant only when the **one-sided lower
+confidence bound** on its win share against the current champion clears the
+null (`lo > null`, `accept_z` = 90% one-sided by default) — not merely a
+higher point estimate. This is a deliberately conservative gate (the file's
+own doc: "a veto that fires on noise would stall a healthy climb," applied
+here to acceptance too), and it has a side effect the design doc does not
+name: **it is variance-averse, not just mean-seeking.** A mutation that
+raises the mean win rate but also raises its variance can fail to clear a
+lower-bound gate that an equal- or lower-mean, lower-variance mutation
+clears easily.
+
+War is exactly the kind of high-variance move this would select against.
+The human corpus's own finding (this doc, above) is that war is rare and
+almost always decisive — 84–91% win rate for the side that declares it, a
+near-coin-flip-stakes gamble on the roll of relative strength at
+resolution time. In a **mirror self-play match** (`climb`'s own arena
+seats the mutant against the champion, both `BotKind::Weighted`), an
+aggressive mutation's expected value against a near-identical opponent is
+close to neutral by symmetry, while its variance is not — exactly the
+profile a `lo > null` gate structurally disfavors relative to a safe,
+low-variance economic line whose edge is small but reliable. This is
+consistent with, though not proven by, what was actually observed: 0 wars
+across 300 games in two independent measurements taken hours apart, while
+the 3p and 4p champions (separately trained, different local optima per
+this doc's earlier "Where the bot is far off" section) each landed on
+*much* more warlike postures — three different vectors, three different
+resolutions of the same mean/variance tradeoff, which is itself consistent
+with "the gate's variance-aversion interacts with the opponent's
+population statistics" rather than "war is bad at 2p and good at 3p/4p"
+being a fact about the game.
+
+This is offered as **a plausible mechanism grounded in the actual accept
+rule**, not a proven causal account — confirming it would mean mapping the
+local fitness landscape around the champion (does a genuinely-tested
+aggressive 2p mutant in fact show higher variance and a similar-or-better
+mean, and does it fail the gate for exactly that reason), which is a
+retraining/instrumentation exercise out of scope for a diagnosis that was
+asked not to retrain or touch weights. **Explanation 3 (the objective
+rewards this) is plausible and mechanistically grounded, not confirmed.**
+
+### 4. Correlational, not causal: 2p's wonder-timing weight is a striking outlier
+
+Comparing the wonder-related weights across the three live champions:
+
+| key | 2p | 3p | 4p |
+|---|---|---|---|
+| `wonder_turns_to_finish` | **-6.819** | -0.440 | +0.022 |
+| `wonder_stages_left` | 2.596 | -0.060 | -0.303 |
+| `wonders` | -0.533 | -0.790 | +1.800 |
+| `wonder_remaining` | -1.145 | -0.707 | +0.525 |
+| `wonder_progress` | 1.192 | -0.592 | 0.940 |
+| `card_board_wonder` | 0.378 | -0.477 | 0.520 |
+| `rival_building_wonder` | -0.188 | 0.117 | 2.016 |
+
+`wonder_turns_to_finish` stands out: 2p's coefficient is roughly 15x more
+negative than 3p's and has the *opposite sign* from 4p's — a wonder that
+will take many more turns to complete is penalized far harder by the 2p
+vector than by either other champion. That is exactly the kind of term
+that would suppress starting long wonders specifically at 2p, and it lines
+up directionally with the near-zero wonder-building rate. But this is a
+**correlation observed in one linear evaluator's weights**, not a
+causally-isolated effect — the 64-odd weights interact, feature scales
+differ by player count (fewer civil actions per turn at 2p means "turns to
+finish" is a bigger number for the same wonder to begin with, which by
+itself would justify *some* asymmetry in this coefficient without any
+brokenness), and testing causality would mean perturbing this one weight
+and re-measuring, i.e. exactly the retraining this diagnosis was told not
+to do. **Explanation 4 (wonders are mispriced at 2p) is consistent with the
+weight evidence and worth flagging, but not established as causal.**
+
+### Verdict: evidence separates some of these, not all
+
+- **Explanation 1 (bad measurement): ruled out.** Two independent
+  measurement routes reproduce `botcensus`'s war and wonder numbers.
+- **Explanation 2 (anchor too weak): supported directly.** The anchor
+  comparison provably cannot distinguish the 2p champion from an
+  independently-trained vector that is, in fact, its equal at a real 2p
+  table. An 88–95% anchor score is not evidence of absolute strength once
+  the anchor is this saturated.
+- **Explanation 3 (objective rewards this): plausible, mechanistically
+  grounded in `climb.rs`'s conservative one-sided accept gate, not proven.**
+  Confirming it needs a landscape-mapping experiment this diagnosis did not
+  run.
+- **Explanation 4 (2p-specific wonder mispricing): a real, quantified
+  correlation** (`wonder_turns_to_finish` is a 15x outlier), **not shown to
+  be causal.**
+- **The crash-loop connection is partial, not the whole story.** Training
+  was genuinely stalled at gen 1164 by the seed-overflow bug and has
+  resumed since the same-day fix — the wonder-building rate nearly tripled
+  in a same-day rerun, so some of the gap was a stale-checkpoint artifact of
+  training being interrupted mid-climb. But the war rate has not moved at
+  all (0/300 in both measurements), which argues against "just let it keep
+  training and the passivity will fix itself" as a complete account — the
+  war-avoidance specifically looks like it could be the more structural
+  piece (explanation 3), while the wonder gap looks like a mix of the
+  structural wonder-timing weight (explanation 4) and genuine recovery
+  headroom left by the crash loop.
+
+**Recommended next action**: do not touch weights or the league. Two things
+worth doing precede any weight change: (a) let the post-crash-fix training
+run substantially longer (the league is running continuously; this was a
+same-day snapshot) and re-run this same census in a week or two to see how
+much of the wonder gap is recovery vs. a stable local optimum — war rate is
+the more informative number to watch, since it hasn't moved yet; (b) if the
+gap persists, the actual test for explanation 3 is a landscape-mapping
+experiment outside `climb`'s own loop — measure the variance, not just the
+mean, of a deliberately-aggressive 2p mutant's win share against the
+champion, to see whether it is being rejected by the accept gate for
+exactly the mean/variance reason argued above. Both are measurement
+proposals, not fixes — this diagnosis was scoped to find out which
+explanation the evidence supports, and the honest answer is "anchor
+saturation, demonstrated directly, plus a plausible-but-unconfirmed
+variance-averse selection pressure — not a bug."
