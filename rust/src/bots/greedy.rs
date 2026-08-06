@@ -594,6 +594,21 @@ impl Bot {
     /// -- `quiescent::pick`'s own signature is generic over the scorer
     /// precisely so a caller can do this with no allocation and no trait
     /// object.
+    /// Which kind this is. `make_bots` cycles a spec over the seats, so a
+    /// caller that wants to tally results per bot has to be able to ask a
+    /// seat what it is rather than re-deriving it from the spec string and
+    /// the seat index -- re-deriving it is how a tally ends up labelling the
+    /// wrong bot the moment rotation or an odd seat count is introduced.
+    pub const fn kind(&self) -> BotKind {
+        match self {
+            Bot::Random(_) => BotKind::Random,
+            Bot::Greedy(_) => BotKind::Greedy,
+            Bot::Weighted(_) => BotKind::Weighted,
+            Bot::Quiescent { .. } => BotKind::Quiescent,
+            Bot::Plan { .. } => BotKind::Plan,
+        }
+    }
+
     pub fn pick(&mut self, state: &GameState) -> Move {
         let moves = legal::legal_moves(state);
         let moves = moves.as_slice();
