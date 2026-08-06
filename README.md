@@ -47,15 +47,39 @@ Then, by area:
 ## Layout
 
 ```
-engine/       rules engine and the bot family (engine/bots/)
-harness/      play against the app, or drive a game interactively
-experiments/  the self-play league, hill climb and neural search loop
-tools/        one-off measurement scripts, censuses, A/B harnesses, the gate
-tests/        the unit suite (~1130 tests)
+rust/         the live implementation: engine, bots, self-play, the hill-climb
+              league, the advisor and the app harness (rust/src/bin/)
+engine/       the original Python rules engine and bot family -- superseded by
+              rust/ for everything except one thing: it is still a live
+              runtime dependency of the GPU neural-training loop
+              (experiments/neural_search_loop.sh), which has not been ported
+tools/        tools/gate.sh (the Python verification gate for engine/) and its
+              two dependencies; everything else here was one-off and is gone
+experiments/  the live Rust league (rust_league.sh) plus the still-Python,
+              still-live neural self-play/training loop and its GPU-box
+              deploy scripts (deploy/); the old Python hill-climb league is
+              gone -- rust/src/bin/climb.rs replaced it
+tests/        the Python unit suite -- kept because it covers engine/, which
+              is still live (see above)
 data/         card data, derived from the sources in docs/SOURCES.md
 docs/         see docs/README.md
-analysis/     corpus analysis output
+analysis/     analysis/frozen/ only: reference champion vectors the neural
+              loop and several docs load by that path; everything else here
+              was one-off and is gone
 ```
+
+**Most of the Python in this repo is dead and has been deleted** (`advisor/`,
+`harness/`, `exp_quiesce/`, most of `tools/`, `analysis/` and `experiments/`) —
+`rust/` is the current implementation of the engine, every bot, self-play, the
+hill-climb league, the advisor and the app harness. What survives under
+`engine/`, `tests/`, `tools/gate.sh` and part of `experiments/` is not legacy:
+it is a still-running Python/torch GPU training loop for the neural net
+(scheduled on the desktop training box, see [`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md)
+and [`docs/NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md)) that has not
+been ported. Do not delete `engine/` without porting that loop first.
+
+Build the Rust binaries with `cd rust && cargo build --release`; they land in
+`rust/target/release/` (`arena`, `climb`, `selfplay`, `advisor`, `harness`).
 
 The bots live in `engine/bots/`: `GreedyBot` (`__init__.py`), `WeightedBot`
 (`weighted.py`, the linear evaluator), `QuiescentBot` (`quiescent.py`),
@@ -80,24 +104,25 @@ Just the tests:
 python3 -m unittest discover -s tests
 ```
 
-Play a game through the app harness:
+Play a game through the app harness (Rust; see `rust/src/bin/harness.rs`):
 
 ```bash
-python3 -m harness.play --players 3
+rust/target/release/harness --players 3 --difficulty hard --app-version 2.4.1
 ```
 
-Evaluate one bot against another, seat-balanced:
+Evaluate one bot against another, seat-balanced (either the Python wrapper,
+still live, or the Rust binary directly):
 
 ```bash
 python3 -m experiments.evaluate --a champion_4p.json --b greedy --games 120 --players 4
+rust/target/release/arena --a challenger.json --b experiments/champion_4p.json --games 240 --threads 6
 ```
 
-Run the self-play league (normally kept alive from cron by the watchdog, which
-launches all three player counts):
-
-```bash
-bash experiments/watchdog.sh
-```
+The self-play league is Rust now and is kept alive from cron by
+`experiments/rust_league.sh`, which launches all three player counts (`climb`,
+`rust/src/bin/climb.rs`). The separate, still-Python neural self-play/training
+loop (`experiments/neural_search_loop.sh`) runs unattended on the desktop GPU
+box; see [`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md).
 
 ---
 
@@ -112,11 +137,12 @@ the gate pass.** Explain why it moved first, on a clean clone, attributing each
 moved arm to a specific cause. The derivation discipline is written down in
 [`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0.
 
-**Do not run any git command in a working checkout while league arms are
+**Do not run any git command in a working checkout while the league arms are
 running** — not `pull`, not `checkout`, not `stash`, not even `status`. It
-kills them. Stop the arms first by writing the sentinels
-`experiments/logs/stop_league_{2,3,4}p.json` and running
-`bash experiments/watchdog.sh` to reap, or work from a clone under `/tmp`.
+kills them. Stop an arm by touching
+`experiments/logs/stop_rust_league_{2,3,4}p` (see `experiments/rust_league.sh`
+— the sentinel stops a running arm immediately, not just the next relaunch),
+or work from a clone under `/tmp`, as this deletion pass did.
 
 ---
 

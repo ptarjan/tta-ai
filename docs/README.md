@@ -103,8 +103,13 @@ these for the reasoning.*
 
 ## Elsewhere in the repo
 
-[`engine/PROGRESS.md`](../engine/PROGRESS.md), [`experiments/PROGRESS.md`](../experiments/PROGRESS.md), [`data/PROGRESS.md`](../data/PROGRESS.md) and
-[`advisor/PROGRESS.md`](../advisor/PROGRESS.md) are per-package build logs.  [`analysis/frozen/README.md`](../analysis/frozen/README.md)
+[`engine/PROGRESS.md`](../engine/PROGRESS.md), [`experiments/PROGRESS.md`](../experiments/PROGRESS.md) and
+[`data/PROGRESS.md`](../data/PROGRESS.md) are per-package build logs. `advisor/`
+and `harness/` (Python) were deleted once `rust/src/advisor/` and
+`rust/src/harness/` fully replaced them, so `advisor/PROGRESS.md` is gone too.
+`experiments/PROGRESS.md` predates the Rust port and documents only the old
+Python toolchain (hillclimb.py, the league_*p/ ladders, arena.py) — read it as
+history, not as a current build log. [`analysis/frozen/README.md`](../analysis/frozen/README.md)
 records which frozen weight vectors are trustworthy and which are quarantined —
 read it before quoting any frozen-champion number.
 

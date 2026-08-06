@@ -10,9 +10,13 @@ This document is the operator's manual. The design rationale — and the
 measured field-by-field justification for how little you type — is in §2.
 
 ```
-python3 -m harness.fields                 # what you will have to type, and why
-python3 -m harness.play --players 3 --difficulty hard --app-version 2.4.1
+rust/target/release/harness fields --players 3   # what you will have to type, and why
+rust/target/release/harness --players 3 --difficulty hard --app-version 2.4.1
 ```
+
+(Rust now; `cd rust && cargo build --release` first. Ported from
+`harness/play.py` and `harness/fields.py`, deleted once the port landed --
+see `rust/src/bin/harness.rs`, `rust/src/harness/fields.rs`.)
 
 ---
 
@@ -43,9 +47,9 @@ The expensive part of a human-in-the-loop game is transcription.
 [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) measured that the evaluator is blind to most of
 what a conscientious operator would type in. So the harness does not have a
 hardcoded input list — it **derives** one by perturbing the live position and
-watching whether the bot's decision moves (`harness/fields.py`).
+watching whether the bot's decision moves (`rust/src/harness/fields.rs`).
 
-`python3 -m harness.fields` on the 3p champion today:
+`rust/target/release/harness fields` on the 3p champion today:
 
 | you must type | why |
 |---|---|
@@ -76,12 +80,12 @@ starts reading something new it interrupts the game with:
 ```
 
 Nobody has to remember to update anything. If you want to know before you sit
-down, run `python3 -m harness.fields`.
+down, run `rust/target/release/harness fields`.
 
 ### The seven numbers per rival
 
 We never mirror an opponent's board. You read seven numbers off their player
-panel and `advisor/state_io.py` back-solves the mirror to match:
+panel and `rust/src/advisor/state_io.rs` back-solves the mirror to match:
 
 ```
   p1    c/cr/sr/str/ca/hc/w > 41/5/3/12/4/3/1
