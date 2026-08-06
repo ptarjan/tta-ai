@@ -56,6 +56,7 @@
 use crate::bots::counting;
 use crate::cards::{CardEffects, CardId, ImmediateEffects, PactBlock, Special};
 use crate::costs::{self, TakeGate};
+use crate::economy;
 use crate::effects;
 use crate::state::{CardList, GameState, Pending, PlayerState, Tableau, MAX_HAND, MAX_PLAYERS, ROW_SIZE};
 
@@ -379,10 +380,13 @@ pub const PACT_OFFER_CREDIT: f64 = 0.5;
 
 /// Payoffs the 1-ply trial state cannot show yet, priced by their yield --
 /// Python's `deferred_credit`. See that function's own docstring
-/// (`engine/bots/weighted.py:679`) for the two moves this covers
-/// (`offer_pact`, a live `bid`) and the documented third gap
-/// (`interact.colonize`'s pending sacrifice) that is left unhandled in both
-/// engines on purpose.
+/// (`engine/bots/weighted.py:679`) for the two moves it covers
+/// (`offer_pact`, a live `bid`) and its documented third gap
+/// (`interact.colonize`'s pending sacrifice), which Python leaves unhandled
+/// on purpose. This port closes that third gap instead (the `Pending::
+/// Colonize` arm below): a WON auction still needs its colony priced for
+/// the one ply between `bid_pass` settling the winner and `colonize_auto`
+/// resolving the sacrifice, and nothing else prices it in that window.
 ///
 /// `state.pending` is read through [`crate::state::PendingStack::top`]
 /// rather than a general loop: that type's own doc comment establishes the
@@ -459,6 +463,25 @@ pub fn deferred_credit(state: &GameState, idx: u8) -> DeferredCredit {
                 let card = auc.card.get();
                 add_permanent_effects(&mut out.gains, &card.effects, share);
                 add_immediate_effects(&mut out.gains, &card.immediate_effects, share);
+            }
+        }
+        // `bid_pass` on the sole remaining bidder pops `Auction` and pushes
+        // `Colonize` in the same move (`interact::end_auction_round`), so a
+        // winning bid's credit vanishes for exactly one ply unless this arm
+        // exists: the `Auction` guard above never sees it again, because the
+        // pending decision it matched on is already gone. Share is 1.0, not
+        // the `Auction` branch's bid-still-live fraction, because a
+        // `Colonize` decision only ever exists AFTER the winner is settled
+        // (`interact::colonize` is called with a single `player`, never a
+        // set of contenders) -- there is no more "chance of winning" left to
+        // discount by.
+        Pending::Colonize(c) if c.player == idx => {
+            out.auction_committed += 1.0;
+            out.auction_bid += c.bid as f64;
+            if !c.card.is_none() {
+                let card = c.card.get();
+                add_permanent_effects(&mut out.gains, &card.effects, 1.0);
+                add_immediate_effects(&mut out.gains, &card.immediate_effects, 1.0);
             }
         }
         _ => {}
@@ -698,6 +721,31 @@ pub fn strength_marginal(state: &GameState, idx: u8, w: &Weights, ctx: Option<&R
     total
 }
 
+/// What ONE point of happiness is worth to `evaluate` on THIS board -- the
+/// same clamp-aware treatment [`strength_marginal`] gives `strength_lead`,
+/// applied to `features()`'s OWN clamp on `happy_margin` (`margin.min(3.0)`,
+/// `features.rs`). Priced linearly through the bare `w[happy_margin]` (the
+/// bug this function fixes), a card pricer would value the margin's 6th
+/// point exactly as much as its 1st, even though `features()` cannot show
+/// the 6th one at all -- once `margin >= 3` the feature is already pinned at
+/// its ceiling and one more happy face buys `evaluate` nothing.
+///
+/// A LOCAL derivative, like `strength_marginal`, and right-differentiable at
+/// the clamp for the same reason: `margin == 3.0` already reads as clamped
+/// (`3.0.min(3.0) == 3.0`, so one more point still cannot move it), matching
+/// `margin.min(3.0)`'s own tie-break.
+pub fn happy_margin_marginal(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let p = &state.players[idx as usize];
+    let s = effects::state_stats(state, p);
+    let dc = deferred_credit(state, idx);
+    let margin = f64::from(s.happy) - f64::from(economy::happy_required(p.yellow_bank)) + dc.gains.get(GainFeature::Happy);
+    if margin >= 3.0 {
+        0.0
+    } else {
+        w.get(WeightKey::HappyMargin)
+    }
+}
+
 /// What ONE unit of `features()[key]` (unowned) is worth to `evaluate` on
 /// THIS board -- Python's `feature_marginal`, `strength_marginal`
 /// generalised. `evaluate` prices a [`horizon::PHASE_KEYS`] feature at `w[k]
@@ -712,7 +760,9 @@ pub fn strength_marginal(state: &GameState, idx: u8, w: &Weights, ctx: Option<&R
 /// resolve to one before it ever reaches `feature_marginal`) -- `"happy"`,
 /// the one [`GainFeature`] that is NOT a `WeightKey`, is read directly out of
 /// [`Gains`] by `features()`, never routed through here. `WeightKey::Strength`
-/// is delegated to [`strength_marginal`] rather than special-cased twice.
+/// and `WeightKey::HappyMargin` are each delegated to their own clamp-aware
+/// marginal ([`strength_marginal`], [`happy_margin_marginal`]) rather than
+/// special-cased inline here.
 ///
 /// `_PHASE_SET` needs no port: [`horizon::PHASE_KEYS`] (four elements) is
 /// already the honest source of "which keys carry a phase pair", and a
@@ -727,6 +777,9 @@ pub fn feature_marginal(
 ) -> f64 {
     if key == WeightKey::Strength {
         return strength_marginal(state, idx, w, ctx);
+    }
+    if key == WeightKey::HappyMargin {
+        return happy_margin_marginal(state, idx, w);
     }
     let mut m = w.get(key);
     if PHASE_KEYS.contains(&key) {
@@ -753,6 +806,11 @@ pub fn feature_marginal(
 mod tests {
     use super::*;
     use crate::game as G;
+    use crate::state::Colonize;
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
 
     /// `rival_board` on a state with no rivals (single seat live) is all
     /// zero -- Python's own no-rivals early return.
@@ -844,5 +902,96 @@ mod tests {
         let via_marginal = feature_marginal(WeightKey::Strength, &state, 0, &w, None, None);
         assert_eq!(direct, via_marginal);
         assert_ne!(direct, w.get(WeightKey::Strength), "strength_marginal must fold in strength_rel and its phase pair too");
+    }
+
+    /// A `bid_pass` that settles the LAST bidder pops `Auction` and pushes
+    /// `Colonize` in the same move (`interact::end_auction_round`) -- so once
+    /// `Colonize` is on top of `state.pending`, the `Auction` arm above never
+    /// sees this decision again, and unless a sibling arm exists for it, a bot
+    /// that just won an auction reads its own winning `bid_pass` as though it
+    /// bought nothing. Share is 1.0, not the `Auction` arm's
+    /// `1 / (1 + rivals_still_bidding)`: `interact::colonize` is only ever
+    /// called with the single settled winner, so there is no more "chance of
+    /// winning" left to discount by.
+    #[test]
+    fn a_won_colonize_credits_the_colony_at_full_share() {
+        let mut state = G::new_game(2, 30);
+        let territory = card("Developed Territory (I)");
+        state.pending.push(Pending::Colonize(Colonize {
+            player: 0,
+            card: territory,
+            bid: 3,
+            units: CardList::new(),
+            bonuses: CardList::new(),
+            discards: CardList::new(),
+            pool: CardList::new(),
+            bpool: CardList::new(),
+            dpool: CardList::new(),
+        }));
+        let dc = deferred_credit(&state, 0);
+        assert_eq!(dc.auction_committed, 1.0);
+        assert_eq!(dc.auction_bid, 3.0);
+        // "Developed Territory (I)": permanentEffects {yellowTokens: 1,
+        // blueTokens: 1}, immediateEffects {science: 3} -- the same
+        // `add_permanent_effects`/`add_immediate_effects` calls the `Auction`
+        // arm makes, just at share 1.0 instead of a fraction.
+        assert_eq!(dc.gains.get(GainFeature::YellowBank), 1.0);
+        assert_eq!(dc.gains.get(GainFeature::BlueFree), 1.0);
+        assert_eq!(dc.gains.get(GainFeature::Science), 3.0);
+    }
+
+    /// A rival's pending `Colonize` (or the idle-player early return) must
+    /// not credit `idx` -- the `c.player == idx` guard on the new arm, the
+    /// same ownership check the `Auction` arm makes with `auc.high ==
+    /// Some(idx)`.
+    #[test]
+    fn a_rivals_pending_colonize_credits_nothing_to_idx() {
+        let mut state = G::new_game(2, 31);
+        state.pending.push(Pending::Colonize(Colonize {
+            player: 1,
+            card: card("Developed Territory (I)"),
+            bid: 3,
+            units: CardList::new(),
+            bonuses: CardList::new(),
+            discards: CardList::new(),
+            pool: CardList::new(),
+            bpool: CardList::new(),
+            dpool: CardList::new(),
+        }));
+        let dc = deferred_credit(&state, 0);
+        assert_eq!(dc, DeferredCredit::default());
+    }
+
+    /// `feature_marginal(WeightKey::HappyMargin, ...)` delegates to
+    /// [`happy_margin_marginal`] rather than reading the bare `happy_margin`
+    /// weight -- and once `margin` (`features()`'s own `s.happy -
+    /// happy_required(..)`) is already at or past its `min(3.0)` ceiling, one
+    /// more point of happiness cannot move the feature, so the marginal must
+    /// read 0.0 even though the weight itself is nonzero.
+    #[test]
+    fn feature_marginal_on_happy_margin_is_zero_once_the_margin_is_already_clamped() {
+        let mut state = G::new_game(2, 32);
+        state.players[0].yellow_bank = 17; // happy_required(17) == 0
+        state.players[0].happy_extra = 100; // clamps to s.happy == 8, margin == 8
+        let mut w = Weights::default();
+        w.set(WeightKey::HappyMargin, 1.2);
+        let direct = happy_margin_marginal(&state, 0, &w);
+        let via_marginal = feature_marginal(WeightKey::HappyMargin, &state, 0, &w, None, None);
+        assert_eq!(direct, via_marginal);
+        assert_eq!(direct, 0.0, "margin (8) is already past the min(3.0) ceiling `features()` reports");
+    }
+
+    /// Below the clamp, `happy_margin`'s marginal is exactly the bare weight
+    /// -- the same "no phase pair, no rate horizon" shape `feature_marginal`
+    /// gives any other plain key, confirming the new special case does not
+    /// change pricing where the feature can still move.
+    #[test]
+    fn feature_marginal_on_happy_margin_is_the_bare_weight_below_the_clamp() {
+        let mut state = G::new_game(2, 33);
+        state.players[0].yellow_bank = 17; // happy_required(17) == 0
+        state.players[0].happy_extra = -100; // clamps to s.happy == 0, margin == 0
+        let mut w = Weights::default();
+        w.set(WeightKey::HappyMargin, 1.2);
+        assert_eq!(feature_marginal(WeightKey::HappyMargin, &state, 0, &w, None, None), 1.2);
     }
 }
