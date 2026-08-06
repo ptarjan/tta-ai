@@ -9,13 +9,22 @@
 //!   encoding every other module here feeds. Reuses `bots::weighted::
 //!   features::sweep_tableau`, `costs::row_cost` and `combat::pacts_for`
 //!   rather than restating them; see its own top doc comment.
-//! * [`net`] -- `neural_net.py`: the value network's forward-pass ARITHMETIC
-//!   only (`Cargo.toml`'s `[dependencies]` is deliberately empty -- no torch,
-//!   no ndarray). See its own top doc comment for what is deliberately not
-//!   ported (checkpoint I/O) and why this module has no Python oracle to
-//!   differential-test against at all (torch is unavailable both to the
-//!   Python module on its host machine and to this differential-testing
-//!   environment).
+//! * [`net`] -- `neural_net.py`: the value network's forward-pass ARITHMETIC,
+//!   plus this crate's own hand-rolled checkpoint format (`Cargo.toml`'s
+//!   `[dependencies]` is deliberately empty -- no torch, no ndarray, no
+//!   serde). See its own top doc comment for why this module has no Python
+//!   oracle to differential-test against at all (torch is unavailable both
+//!   to the Python module on its host machine and to this
+//!   differential-testing environment).
+//! * [`rankdata`] -- `experiments/neural_rankdata.py`: training-data
+//!   generation from Rust self-play (ranking pairs + value anchors), and
+//!   the `Shard` binary format [`train`] reads.
+//! * [`train`] -- `experiments/neural_train_rank.py`: hand-rolled
+//!   backpropagation, AdamW, and the combined value+ranking training
+//!   objective for [`net::ValueNet`], pinned against finite differences
+//!   (there is no Python oracle here either, for the same reason as
+//!   `net`). See its own top doc comment for the loss shape; the training
+//!   data it consumes is [`rankdata::Shard`].
 //! * [`bot`] -- `neural_bot.py`: `NeuralBot`, the 1-ply search built on
 //!   [`net::ValueNet`].
 //! * [`plan`] -- `neural_plan.py`: `NeuralPlanBot`, the whole-turn beam
@@ -29,3 +38,4 @@ pub mod encode;
 pub mod net;
 pub mod plan;
 pub mod rankdata;
+pub mod train;
