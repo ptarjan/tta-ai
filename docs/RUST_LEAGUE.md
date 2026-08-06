@@ -149,6 +149,109 @@ sense. `docs/HUMAN_PLAY.md`'s behavioural census against real games remains
 the only check in this repo that is not trained by the same process it is
 evaluating.
 
+## A single gauntlet reading is a noisy point sample, not a fact (2026-08-06)
+
+The gauntlet's first live reading and the `arena`/`kindmatch` measurement
+that motivated it looked like a contradiction: `docs/HUMAN_PLAY.md`'s
+"anchor saturation" section measured the 2p champion against the 3p
+vector, at a real 2p table, as a **dead heat — 54.4% ± 6.6 and 50.8% ± 6.6**
+on two seeds. Minutes later, `experiments/logs/rust_climb_2p.jsonl`'s first
+`"gauntlet"` line — same matchup, same frozen 3p file
+(`analysis/frozen/gauntlet/champion_3p_gen1384_140key_2026-08-06.json`),
+gen 1550 — logged **83.4% ± 8.66 (share 0.8417, n=60)**, a decisive win.
+Same two vectors, same table size, wildly different verdicts. This section
+is the resolution.
+
+**Ruled out by reading the code, not by reasoning about it.** `measure_
+gauntlet` calls `measure_against`, which builds an `arena::Match` and calls
+`.play()` — the exact same struct and method `arena`/`kindmatch` use, seat
+rotation (`Match::play_one`'s `index % players`) included, and the exact
+same `Summary::of(...).win` definition of "share" (fraction of games won,
+ties split). There is no second code path to disagree with the first: a
+gauntlet line and an `arena` run of the same two files at the same player
+count are, by construction, measuring identically-defined quantities. This
+rules out both "they measure different things" (share vs. culture, say) and
+"unrotated seats bias the gauntlet" — the leading suspicion going in. Diffing
+`rust/src/arena.rs` and `rust/src/bin/climb.rs` between this clone and the
+live box's checkout (`/Users/pt/tta-ai`) also confirmed the running binary
+and the committed frozen 3p file are byte-identical to what is analyzed
+here — nothing stale or locally patched on the box that isn't in the repo.
+
+**Real improvement is confirmed directly, but does not reach 84%.** Rebuilt
+`arena` and played the CURRENT live champion (gen 1586 at measurement time,
+36 generations past the gauntlet's gen-1550 snapshot — the exact gen-1550
+weights are gone; `experiments/rust_champion_2p.json` is gitignored and
+overwritten every generation, so nothing preserves intermediate champions
+except the gauntlet's own occasional frozen copies) against the same frozen
+3p file, at 2p, with the old method's own game count (240 games = 120 deals
+× 2 seats, `--threads 3`):
+
+| seed | win rate |
+|---|---|
+| 700 | 65.2% ± 5.9 |
+| 12345 | 61.9% ± 6.7 |
+| 99 | 60.0% ± 6.2 |
+
+All three are decisively above the 50% null and decisively above the
+original 54.4%/50.8% dead heat — **the champion has genuinely,
+measurably pulled ahead of the 3p vector since that measurement was taken.**
+The "anchor saturation" finding's dead-heat numbers are stale. But none of
+the three reach anywhere near 84%, and they cluster tightly (~60–65%) across
+480+ games and three independent seeds — a far more precise estimate than
+any single `n=60` gauntlet reading, and it disagrees with 84% by more than
+sampling noise on 480 games should allow.
+
+**The resolution: gen 1550's 84% was a real but volatile outlier, not a bug
+— and the live league proved it without being asked.** Twelve more `n=60`
+draws (`--games 60 --threads 2`, matching `gauntlet_games`/production
+exactly) against the same 3p file, same champion generation, ranged
+53.3%–71.7% (mean ≈ 61.5%) — 84.17% is roughly 3.5 sample-standard-deviations
+outside that spread, not a plausible draw from the champion's *current*
+strength against this opponent. And the league's own next scheduled
+reading, at gen 1600 (`gauntlet_every` = 50, logged with no intervention
+from this investigation), landed at **62.5% ± 12.2** — down 22 points from
+84.17% in 50 generations, and matching the independent `arena` reproduction
+above almost exactly:
+
+```
+gen 1550  champion_3p_gen1384: share 0.8417 half 0.0866 n 60
+gen 1600  champion_3p_gen1384: share 0.6250 half 0.1219 n 60
+```
+
+(The self-comparison member moved far less over the same window — 58.3% →
+60.0% — consistent with slow, steady progress against the champion's own
+recent history, the thing `climb`'s accept gate actually selects for.)
+
+**Why this happens without any code being wrong.** `climb`'s accept gate
+only ever compares a mutant against the *current champion* and the anchor
+(`Anchor::clearly_worse_than`, `docs/RUST_LEAGUE.md`'s "The gate is
+untouched" above) — it has no opinion about, and never measures against,
+the frozen 3p vector between gauntlet cadence ticks. Nothing selects for
+"stays ahead of `champion_3p_gen1384` specifically." So the champion's
+standing against that one fixed, external point is free to drift
+non-monotonically as self-play explores strategy space — up 30 points in
+one 50-generation window, back down 22 in the next — while its standing
+against its own lineage (the anchor, and the gauntlet's self-comparison
+member) climbs steadily, because that IS what the gate selects for. A
+single `n=60` gauntlet line samples a quantity that is genuinely this
+noisy; it is not a stable fact about "how far ahead the champion is."
+
+**The fix is how these numbers get read, not the measurement code.**
+`measure_gauntlet` and `arena` were never in disagreement — same code, same
+definition, confirmed by reading both and by the live league reproducing
+the discrepancy's resolution on its own next tick. Nothing here changed
+`measure_gauntlet`, `gauntlet_games`, `gauntlet_every`, or the accept gate:
+there is no bug to fix. What changes is how a gauntlet line should be
+quoted: **a single reading is a noisy `n=60` point sample of a value that
+can move 20+ points in 50 generations even when nothing is broken. Read the
+trend across several gauntlet ticks, not any one line** — exactly the same
+caveat this doc's "What this does and does not prove" already gives for
+over-reading a *rising* score as absolute strength, extended to cover a
+single reading's precision as well. `docs/HUMAN_PLAY.md`'s "anchor
+saturation" section has been corrected to mark its specific 54.4%/50.8%
+figures as a stale snapshot rather than a durable fact, without touching
+the structural argument they were used for (below).
+
 ## Operator control
 
 Touch `experiments/logs/stop_rust_league_{2,3,4}p` to stop one arm — the

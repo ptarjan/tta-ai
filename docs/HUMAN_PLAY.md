@@ -845,3 +845,34 @@ proposals, not fixes — this diagnosis was scoped to find out which
 explanation the evidence supports, and the honest answer is "anchor
 saturation, demonstrated directly, plus a plausible-but-unconfirmed
 variance-averse selection pressure — not a bug."
+
+### Correction (2026-08-06, same day): the 54.4%/50.8% dead heat is stale, not wrong
+
+Section 2's headline numbers — the 2p champion vs. `rust_champion_3p.json`'s
+vector at a real 2p table, 54.4% ± 6.6 and 50.8% ± 6.6 — were an accurate
+measurement of the champion *at the moment they were taken*. They stopped
+being current within the hour: `docs/RUST_LEAGUE.md`'s "A single gauntlet
+reading is a noisy point sample, not a fact" section works out why in full
+(read that first), but the short version is that this same matchup was
+re-measured three ways after the fact — a fresh, larger `arena` run against
+the live champion (480+ games, three seeds, clustering 60–65%), and two
+points the running league logged on its own without any weights being
+touched (gauntlet gen 1550: 84.2%; gen 1600, 50 generations later: 62.5%).
+The champion has genuinely, measurably pulled ahead of the 3p vector since
+this section's measurement — it is not still a dead heat — but that number
+also swings by 20+ points across a single 50-generation gauntlet tick, so
+no single reading of it (this section's original one included) should be
+quoted as a fixed fact about "the" 2p-vs-3p standing.
+
+**This does not undo explanation 2 above.** The saturation argument was
+never "these two vectors are exactly tied" — it was that the anchor gives
+the 2p champion (89.6% ± 4.0) and the 3p vector (93.8% ± 3.2) statistically
+indistinguishable margins while the two vectors clearly do NOT play like
+equals against each other (a dead heat at the time, a clear win since, but
+never anywhere near symmetric with their near-identical anchor scores).
+That structural mismatch — two vectors the anchor can't tell apart turning
+out to be measurably different in a direct match, in either direction — is
+what demonstrates the anchor's signal has saturated, and it holds regardless
+of which side that direct match currently favors. What changes is only
+this: do not read "54.4%/50.8%, dead heat" as a durable fact about these two
+specific vectors. It was one snapshot of a value that moves.
