@@ -360,6 +360,54 @@ impl WeightedBot {
         // keep their own `unwrap_or(moves[0])`.
         best.map(|(m, _)| m).unwrap_or(moves[0])
     }
+
+    /// Like [`WeightedBot::choose`], but returns every candidate's score
+    /// instead of only the argmax -- for a move-agreement analysis
+    /// (`docs/REPLAY.md`, `bin/agreement.rs`) that needs the bot's full
+    /// preference order over the same legal-move list a human faced, not
+    /// just its top pick. Shares every step of `choose`'s own
+    /// trial-and-evaluate loop (same `filter_resign`, same shared
+    /// `rival_context`/`determinize_current_events` root, same
+    /// `end_turn_bias` asymmetry) so the two can never silently diverge on
+    /// what "the bot's opinion" means -- deliberately NOT applying `choose`'s
+    /// own `moves.len() == 1` short-circuit, so a single-candidate call still
+    /// returns a real (if moot) score rather than a placeholder.
+    ///
+    /// Returned in descending score order; ties keep the ORIGINAL `moves`
+    /// ordering (`sort_by` is a stable sort over a vector built in `moves`'
+    /// own order), matching `choose`'s own first-candidate-wins tie-break --
+    /// so `ranked[0].0 == self.choose(state, moves)` whenever `moves` is
+    /// non-empty.
+    ///
+    /// Returns an empty `Vec` for an empty (post-`filter_resign`) candidate
+    /// list, rather than `choose`'s own out-of-bounds panic on that input --
+    /// a caller passing a genuine `legal_moves()` output never hits this,
+    /// since a live game's legal-move list is never empty.
+    pub fn rank_moves(&self, state: &GameState, moves: &[Move]) -> Vec<(Move, f64)> {
+        let filtered = super::super::filter_resign(moves, self.allow_resign);
+        let moves: &[Move] = filtered.as_slice();
+
+        let idx = state.decider();
+        let ctx = rivals::rival_context(state, idx, None, None);
+        let w = &self.weights;
+        let end_bias = w.get(WeightKey::EndTurnBias);
+
+        let mut root = state.clone();
+        plan::determinize_current_events(&mut root, &mut plan::plan_rng(state, idx));
+
+        let mut scored: Vec<(Move, f64)> = Vec::with_capacity(moves.len());
+        for &mv in moves {
+            let mut trial = root.clone();
+            apply::apply(&mut trial, mv);
+            let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
+            if matches!(mv, Move::EndTurn) {
+                val += end_bias;
+            }
+            scored.push((mv, val));
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored
+    }
 }
 
 // -------------------------------------------------------- dominance guard
@@ -825,6 +873,66 @@ mod tests {
             "the two states differ ONLY in which card an unpeeked events pile has on top -- a bot that has \
              not legitimately peeked it must not let that difference change its move"
         );
+    }
+
+    /// `rank_moves`'s own top entry must always agree with `choose` on the
+    /// SAME `state`/`moves` -- the move-agreement analysis this exists for
+    /// (`bin/agreement.rs`) reports "did the bot's #1 choice match the
+    /// human's" straight off `rank_moves`' first entry, so a silent
+    /// divergence here would be a silent divergence in every reported
+    /// agreement rate.
+    #[test]
+    fn rank_moves_top_entry_always_agrees_with_choose() {
+        for n in [2u8, 3, 4] {
+            let state = G::new_game(n, 6);
+            let moves = crate::legal::legal_moves(&state);
+            let bot = WeightedBot::default();
+            let chosen = bot.choose(&state, moves.as_slice());
+            let ranked = bot.rank_moves(&state, moves.as_slice());
+            assert_eq!(ranked[0].0, chosen, "{n}p: rank_moves()[0] disagreed with choose()");
+        }
+    }
+
+    /// `rank_moves` returns exactly one entry per (post-`filter_resign`)
+    /// candidate, in strictly non-increasing score order.
+    #[test]
+    fn rank_moves_is_sorted_descending_and_covers_every_candidate() {
+        let state = G::new_game(2, 7);
+        let moves = crate::legal::legal_moves(&state);
+        let bot = WeightedBot::default();
+        let ranked = bot.rank_moves(&state, moves.as_slice());
+
+        assert_eq!(ranked.len(), moves.len(), "every legal move must appear exactly once");
+        for w in ranked.windows(2) {
+            assert!(w[0].1 >= w[1].1, "not sorted descending: {:?} then {:?}", w[0], w[1]);
+        }
+        for &(mv, _) in &ranked {
+            assert!(moves.as_slice().contains(&mv), "{mv:?} ranked but never offered");
+        }
+    }
+
+    /// A single-candidate call still returns a real score, not the empty
+    /// `Vec` reserved for a genuinely empty candidate list -- `rank_moves`
+    /// deliberately skips `choose`'s `len() == 1` short-circuit (see its own
+    /// doc comment) so a caller comparing scores across decision points
+    /// never has to special-case "the human had no real choice."
+    #[test]
+    fn rank_moves_with_a_single_candidate_still_scores_it() {
+        let state = G::new_game(2, 8);
+        let bot = WeightedBot::default();
+        let ranked = bot.rank_moves(&state, &[Move::EndTurn]);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].0, Move::EndTurn);
+        assert!(ranked[0].1.is_finite());
+    }
+
+    /// An empty candidate list ranks to an empty `Vec` -- no `moves[0]`
+    /// panic, unlike `choose`'s own contract for this input.
+    #[test]
+    fn rank_moves_with_no_candidates_returns_an_empty_vec() {
+        let state = G::new_game(2, 9);
+        let bot = WeightedBot::default();
+        assert!(bot.rank_moves(&state, &[]).is_empty());
     }
 
     // ---------------------------------------------------------- dominance

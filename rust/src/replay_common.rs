@@ -1,0 +1,1950 @@
+//! The game-state reconstruction machinery behind `bin/replay.rs`
+//! (`docs/REPLAY.md`), extracted into the library so `bin/agreement.rs`
+//! (`docs/REPLAY.md`'s planned move-agreement analysis) can reuse it without
+//! duplicating it -- `bin/*.rs` files are separate crates that cannot import
+//! from one another directly, only from this library, which is the entire
+//! reason this module exists apart from `bin/replay.rs` itself.
+//! `bin/replay.rs` is now a thin CLI wrapper (`run`/`print_result`/`main`)
+//! over [`replay_game`]; see its own doc comment for the exact invocation.
+//!
+//! For a given BGO human game id, walks `sources/bgo/journals/<id>.tsv` in
+//! order, translates each line into the corresponding engine [`Move`], and
+//! applies it through the REAL engine (`legal::legal_moves`, `apply::apply`)
+//! -- never by hand-mutating `GameState` to force a match. At every step the
+//! human's action must appear in `legal_moves()` for the reconstructed
+//! state; when it does not, that is recorded as a structured [`Mismatch`]
+//! and the game stops there.
+//!
+//! # The `Decision` recording hook, for `agreement.rs`
+//!
+//! [`Replayer::try_apply`] is the single choke point through which every
+//! journal-observed HUMAN move (as opposed to an auto-resolution this file
+//! infers on the human's behalf -- a stale pending drain, an inferred hidden
+//! `PrepareEvent`, the colonize auto-drain, a forced political pass) is
+//! checked against `legal_moves` and applied. Call sites that translate a
+//! real, journal-observed human action pass `record: true`; internal
+//! auto-resolutions (and moves with no real strategic content, like the
+//! forced 0-defender `DefendDone`) pass `false`. When [`Replayer::
+//! record_decisions`] is set (via [`replay_game`]'s own `record_decisions`
+//! parameter -- `false`, i.e. zero-cost, for `replay`'s own binary), each
+//! `record: true` call snapshots the PRE-move `GameState`, the exact
+//! `legal_moves` list, and the human's chosen `Move` into [`Replayer::
+//! decisions`], returned from `replay_game` as [`GameResult::decisions`].
+//! `GameState::clone` is a flat, alloc-free structural copy (`bots/mod.rs`'s
+//! own doc comment), so snapshotting a few hundred of these per game is
+//! cheap -- no closures, no trait objects, no bot dependency in this module
+//! at all: what a caller does with the snapshot (rank it with a bot, or
+//! anything else) is entirely up to them.
+//!
+//! ```text
+//! tar -xzf sources/bgo/journals.tar.gz -C /tmp/bgo-journals
+//! cargo run --profile difftest --bin replay -- \
+//!     sources/bgo/index.tsv /tmp/bgo-journals/journals <game_id> [game_id ...]
+//! ```
+//!
+//! # What is RECONSTRUCTED vs SIMULATED
+//!
+//! The journal cannot tell this binary everything the engine needs -- in
+//! particular the true civil/military deck shuffle order, and what sat in a
+//! player's hand before it was played. This file draws a hard line between
+//! two kinds of state, and the fidelity report (`docs/REPLAY.md`) reports
+//! against that line explicitly:
+//!
+//! - **RECONSTRUCTED**: every card identity a human is ever observed to
+//!   take, build, develop, play, elect, declare, propose, colonize, bid on,
+//!   or destroy. These come straight from the journal text (reusing
+//!   `tta::corpus::classify`, the same classifier `corpuscensus.rs` already
+//!   validated at 99.99% line coverage) and are applied as real engine
+//!   `Move`s, checked against `legal_moves` at every step.
+//! - **SIMULATED**: everything the engine needs to hold a legal, complete
+//!   `GameState` that the journal never reveals -- unrevealed card-row
+//!   slots, the civil/military deck order beyond what's been drawn, and a
+//!   player's hand contents before they are observed playing them. This
+//!   binary seeds these from `game::new_game`'s ordinary (fictional) shuffle
+//!   and OVERWRITES a slot/hand entry with the real observed card the
+//!   instant that slot/card is ever taken or played -- "grounding" it, in
+//!   this file's terms. An ungrounded slot's identity is never validated
+//!   against anything and never claimed to be historically accurate; only
+//!   its EXISTENCE (there was some card there, costing some action) is real.
+//!
+//! # Event/Territory preparation: the one inference this file makes
+//!
+//! `Move::PrepareEvent` (the political action that queues a drawn Event or
+//! Territory card to fire later) has NO journal line of its own --
+//! `corpus.rs`'s module doc already establishes this for `corpuscensus.rs`'s
+//! purposes; it matters much more here, because replay cannot progress past
+//! a Politics-phase decision without resolving it somehow. Every
+//! `PrepareEvent` call causes exactly one `events::reveal_current_event`
+//! (`rust/src/events.rs`), so this file pre-scans each journal once,
+//! collecting the exact card named in every `"...Current event:; <Age> /
+//! <Name>; ..."` line (`event_reveals`, FIFO). Whenever a player's Politics
+//! decision cannot be explained by an explicit textual action (pass,
+//! revolution, war, aggression, pact offer), this file infers a hidden
+//! `PrepareEvent`, grants that player a placeholder Event-kind card (its
+//! identity is never checked against anything -- see SIMULATED above), and
+//! forces `state.current_events` to reveal exactly the next journal-observed
+//! event/territory so the resolution the journal shows next lines up.
+//!
+//! This reproduces the right cards firing in the right ORDER, but NOT on the
+//! historically correct turn and NOT by the historically correct preparer:
+//! both are permanently unrecoverable from BGO's journal format (it never
+//! logs preparation, only firing). `docs/REPLAY.md` states this plainly as
+//! a boundary on what a later agreement analysis may claim about political
+//! decisions specifically.
+//!
+//! # What this file gives up on, and why
+//!
+//! - **Discard** (§6.6 hand-limit, and any other forced military discard):
+//!   BGO's journal logs only a count (`"<Color> discards N cards"`), never
+//!   which cards. NOT given up on: `discard_solver::DiscardSolver` resolves
+//!   this by constraint propagation over the rest of the journal -- see that
+//!   module's doc and `docs/REPLAY.md`'s "Military discard: solved, not
+//!   given up on" section for the full argument and the honest solved-vs-
+//!   chosen-vs-forced-collision accounting.
+//! - **Aggression defense** with any committed defense cards: BGO logs only
+//!   a count (`"<Color> defends N Defense card(s) played"`), never which
+//!   ones. Zero committed cards is unambiguous (`DefendDone` immediately);
+//!   any positive count is unrecoverable, and stops the game.
+//! - **`PutBack`** (a human undoing their own `Take` via BGO's client-side
+//!   undo): there is no `Move` for this in the engine at all -- `moves.rs`'s
+//!   variant list has no "untake". Stops the game rather than hand-mutate
+//!   state to fake a reversal that was never a real game action.
+//! - **Colonization sacrifice specifics**: `"Sacrificed Units:; ..."` DOES
+//!   name exact identities, but resolving `Pending::Colonize`'s branching
+//!   `SendUnit`/`SendBonus`/`SendDiscard` choices against that list is not
+//!   implemented in this pass -- this file auto-drains colonization by
+//!   picking the engine's own first offered option at each step
+//!   (`colonize_moves`'s own ordering) until the force clears. This keeps
+//!   the game running and gets the CULTURE/RESOURCE totals from the
+//!   colonize card right (those come from the reveal, not the sacrifice),
+//!   but does NOT verify which units were spent -- flagged as an
+//!   approximation, not a validated step, in every game where it fires.
+
+use std::collections::{HashMap, VecDeque};
+
+use crate::corpus::{
+    actor_and_rest, classify, longest_known_card_prefix, ActionClass, Classified, Color, GameMeta,
+    LineOutcome,
+};
+pub use crate::corpus::build_card_index;
+use crate::discard_solver::{DiscardSolver, FutureNeed};
+use crate::moves::PactSide;
+use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
+use crate::{apply, costs, game, legal, CardId, CardType, Move};
+
+// ---------------------------------------------------------------------
+// Journal line
+// ---------------------------------------------------------------------
+
+/// One journal row, still borrowing from the file's text.
+struct Line<'a> {
+    lineno: usize,
+    age: &'a str,
+    round: &'a str,
+    text: &'a str,
+}
+
+fn parse_lines(journal_text: &str) -> Vec<Line<'_>> {
+    let mut out = Vec::new();
+    for (i, line) in journal_text.lines().enumerate() {
+        if i == 0 || line.is_empty() {
+            continue; // header / blank
+        }
+        let fields: Vec<&str> = line.splitn(5, '\t').collect();
+        if fields.len() != 5 {
+            continue; // malformed row, same tolerance corpuscensus uses
+        }
+        out.push(Line { lineno: i + 1, age: fields[2], round: fields[3], text: fields[4] });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// Mismatch categories
+// ---------------------------------------------------------------------
+
+/// Why a game's replay stopped before the journal ran out. Every variant
+/// corresponds to one row of `docs/REPLAY.md`'s mismatch table.
+// Every field here is read through `{:?}` in `print_result`, not by field
+// access -- `dead_code` can't see through `Debug`, so it's silenced rather
+// than worked around with unit-typed fields that would lose the detail.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum MismatchKind {
+    /// A hidden piece of state (discard identity, defense-card identity,
+    /// BGO's client-side undo) genuinely cannot be recovered from the
+    /// journal; see this file's module doc.
+    UnrecoverableHiddenInfo(String),
+    /// The `Move` this binary constructed from the line is not present in
+    /// `legal_moves()` for the reconstructed state -- either a parser gap
+    /// (this binary mis-translated the line) or a genuine engine rules
+    /// mismatch (flagged separately once triaged).
+    IllegalMove { attempted: String, legal_moves: String },
+    /// `resolve_intervening` could not make progress -- the decider the
+    /// state demands next never matches any upcoming actor, or a pending
+    /// decision kind it does not know how to auto-resolve blocks it.
+    StuckPending(String),
+    /// This binary could not parse a field the journal text was expected to
+    /// carry (a target colour, an action-point cost, a bid amount, ...).
+    ParserGap(String),
+}
+
+pub struct Mismatch {
+    pub lineno: usize,
+    pub age: String,
+    pub round: String,
+    pub raw_text: String,
+    pub kind: MismatchKind,
+}
+
+// ---------------------------------------------------------------------
+// Decision recording, for `agreement.rs` -- see the module doc's own
+// section on this.
+// ---------------------------------------------------------------------
+
+/// One point in a replayed game where this file is about to apply the
+/// HUMAN's own journal-observed move against the legal-move list a bot could
+/// equally have been asked to rank -- see [`Replayer::try_apply`]'s `record`
+/// parameter for exactly which call sites this fires at (and which don't).
+pub struct Decision {
+    /// The journal line this decision was translated from (`Line::lineno`) --
+    /// enough to go back and print the surrounding raw journal text for a
+    /// specific disagreement later.
+    pub lineno: usize,
+    /// The PRE-move `GameState` -- the same position a bot asked to play
+    /// this decision would see. A flat, alloc-free `Clone` (see the module
+    /// doc), so cloning one per decision point is cheap.
+    pub state: GameState,
+    /// Exactly what `legal::legal_moves(&state)` returned at this point --
+    /// the same candidate list `human_move` was drawn from.
+    pub legal_moves: Vec<Move>,
+    /// The move this file constructed from the journal line and is about to
+    /// apply -- always a member of `legal_moves`, since `try_apply` only
+    /// records after its own legality check has already passed.
+    pub human_move: Move,
+    /// Whether an earlier `Pending::Choice(DiscardMilitary)` THIS game has
+    /// already resolved was an arbitrary pick (`DiscardSolver`'s "chosen" or
+    /// "forced collision" buckets, never "solved") rather than a
+    /// constraint-derived certainty -- see `discard_solver`'s module doc.
+    /// Every card identity downstream of such a discard is grounded in a
+    /// guess, not a fact, so a decision point reached after one is slightly
+    /// fictional (`docs/REPLAY.md`'s own caveat) -- flagged here rather than
+    /// silently mixed in with clean decision points, so a later analysis can
+    /// filter on it.
+    pub after_arbitrary_discard: bool,
+}
+
+// ---------------------------------------------------------------------
+// Replay state
+// ---------------------------------------------------------------------
+
+struct Replayer<'a> {
+    card_index: &'a HashMap<&'static str, CardId>,
+    state: GameState,
+    /// Which of the 13 card-row slots currently hold a card whose identity
+    /// is REAL (observed) rather than SIMULATED filler from `new_game`'s
+    /// fictional deal. See the module doc's "RECONSTRUCTED vs SIMULATED".
+    row_grounded: [bool; 13],
+    /// FIFO of the exact card revealed by each `"...Current event:; ..."`
+    /// line, pre-scanned once per game. See the module doc's "Event/
+    /// Territory preparation" section.
+    event_reveals: VecDeque<CardId>,
+    /// Whether any colonization in this game was resolved by the
+    /// approximate auto-drain rather than a verified sacrifice match.
+    colonize_approximated: bool,
+    /// Number of actionable (non-bookkeeping) journal lines consumed.
+    actions_consumed: usize,
+    /// The journal `Line::lineno` currently being resolved, set once per
+    /// loop iteration in `replay_game` before `resolve_intervening` runs.
+    /// `DiscardSolver::choose` needs this to tell a FUTURE named play
+    /// (still in hand right now, so not a valid discard candidate) from a
+    /// PAST one (already left the hand, so it isn't excluded) -- see that
+    /// module's doc. `0` (no line has "already happened") is a safe initial
+    /// value: every real journal line number is >= 2 (`parse_lines` skips
+    /// the header).
+    current_lineno: usize,
+    /// Whether seat `i` has ever been credited a `"draws N military
+    /// card(s)"` clause yet (parsed off their own `EndTurn` lines as they
+    /// are applied). BGO deals no military cards at all until a player's
+    /// FIRST end-of-turn draw; before that, their military hand is
+    /// genuinely empty, so a Politics-phase decision with no explicit
+    /// textual action is a forced, trivially-logged-or-not pass -- NOT a
+    /// hidden `PrepareEvent` (which needs an Event/Territory card in hand
+    /// that cannot possibly exist yet). Without this check the inference in
+    /// `resolve_hidden_politics_decision` mistakes round 2's forced pass for
+    /// a real preparation, consuming the wrong entry off `event_reveals`
+    /// and misattributing every event downstream -- found by testing
+    /// against a real 2p game (`docs/REPLAY.md`).
+    has_drawn_military: [bool; 4],
+    /// Per-seat FIFO of `(is_resources, amount)` pulled off every
+    /// standalone `"<Color> produces N food"` / `"<Color> produces N
+    /// resources"` bookkeeping line, pre-scanned once per game -- see
+    /// `resolve_intervening`'s `ChoiceKind::GainBlock` handling and
+    /// `prescan_gain_produces`'s doc comment.
+    gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
+    /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
+    /// over the rest of the journal -- see `discard_solver`'s module doc and
+    /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
+    /// section. Also tallies the solved/chosen/forced-collision counts this
+    /// game's replay reports.
+    discard_solver: DiscardSolver,
+    /// Whether [`Replayer::try_apply`]'s `record: true` call sites should
+    /// snapshot a [`Decision`] into `decisions` -- set once, right after
+    /// construction, by [`replay_game`]'s own `record_decisions` parameter.
+    /// `false` (the default via `Replayer::new`) costs nothing beyond the
+    /// branch itself: no clone, no allocation.
+    record_decisions: bool,
+    /// Accumulated in journal order by every `record: true` call to
+    /// `try_apply` while `record_decisions` is set -- see the module doc's
+    /// "Decision recording" section. Drained into [`GameResult::decisions`]
+    /// at the end of [`replay_game`].
+    decisions: Vec<Decision>,
+}
+
+/// A placeholder Event-kind card used to satisfy `Move::PrepareEvent`'s
+/// hand requirement when this binary infers a hidden preparation. Its
+/// identity is never checked against anything (see module doc): the engine
+/// only needs SOME Event/Territory-kind card in the decider's military hand
+/// to make `PrepareEvent` legal at all, and this file immediately overrides
+/// `current_events` with the journal-observed card that must actually be
+/// revealed. Picked once, lazily, from `tta::CARDS`.
+fn filler_event_card() -> CardId {
+    (0..crate::CARDS.len() as u16)
+        .map(CardId)
+        .find(|id| id.kind() == CardType::Event)
+        .expect("the base game table has at least one Event card")
+}
+
+impl<'a> Replayer<'a> {
+    fn new(
+        card_index: &'a HashMap<&'static str, CardId>,
+        num_players: u8,
+        event_reveals: VecDeque<CardId>,
+        gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
+        future_military_needs: HashMap<u8, Vec<FutureNeed>>,
+    ) -> Self {
+        // The seed is thrown away semantically -- every field it determines
+        // (deck order, starting row/hand contents) is SIMULATED filler this
+        // binary overwrites the instant a slot/hand entry is observed. It is
+        // fixed (not random) purely so a run is reproducible byte-for-byte.
+        let state = game::new_game(num_players, 0xC0FFEE);
+        Replayer {
+            card_index,
+            state,
+            row_grounded: [false; 13],
+            event_reveals,
+            colonize_approximated: false,
+            actions_consumed: 0,
+            current_lineno: 0,
+            has_drawn_military: [false; 4],
+            gain_produces,
+            discard_solver: DiscardSolver::new(future_military_needs),
+            record_decisions: false,
+            decisions: Vec::new(),
+        }
+    }
+
+    /// Make `legal_moves(&self.state)` actually offer `mv`, resolving every
+    /// decision that stands between the current state and `expected_actor`
+    /// getting to move -- auto-declining stale pact offers, auto-passing
+    /// auctions nobody bid on, auto-draining a colonization force, and (the
+    /// one real inference this file makes) resolving a Politics-phase
+    /// decision that has no explicit textual action as a hidden
+    /// `PrepareEvent`. See the module doc for the justification of each.
+    /// `next_line_explains_own_politics` tells this whether the journal line
+    /// about to be translated is itself `expected_actor`'s explicit
+    /// political action (pass/revolution/war/aggression/pact) -- if so, and
+    /// it is exactly `expected_actor`'s own turn to make that decision
+    /// (`phase == Politics`, no pending, `decider == expected_actor`), this
+    /// returns immediately and lets the caller apply that line normally.
+    /// Otherwise a Politics-phase stop at `expected_actor` with no
+    /// explaining line means THEY had a hidden `PrepareEvent` -- inferred
+    /// the same way as for any other player (see the module doc).
+    fn resolve_intervening(
+        &mut self,
+        expected_actor: u8,
+        upcoming: (ActionClass, Option<CardId>),
+        next_line_explains_own_politics: bool,
+    ) -> Result<(), MismatchKind> {
+        for _ in 0..200 {
+            let decider = self.state.decider();
+            if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                eprintln!(
+                    "DEBUG resolve_intervening loop: decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
+                    self.state.pending.top()
+                );
+            }
+            if let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
+                // A `Pending::Choice(GainBlock)` (an event's "Each
+                // civilization gains 2 resources or 2 food (player's
+                // choice)" -- e.g. "Development of Markets") is opened for
+                // EVERY player, one choice each, the instant the event
+                // resolves -- not just the player who played it. BGO logs
+                // each player's own pick as its OWN standalone bookkeeping
+                // line, `"<Color> produces N food"` / `"<Color> produces N
+                // resources"` (`corpus.rs` already treats this shape as
+                // bookkeeping -- not a distinct action -- for census
+                // purposes; `prescan_gain_produces` below re-reads it here
+                // because a real `Move::Choose` is still needed to clear the
+                // pending). Like `FreeBuild` below, this is drained
+                // regardless of whose turn it nominally is (it blocks ANY
+                // further action by that player, including their own, until
+                // resolved) -- found by testing against a real 3p game
+                // where a `WonderStep` several lines later was rejected
+                // because the actor's own still-open choice from an EARLIER
+                // event had never been cleared (`docs/REPLAY.md`).
+                if matches!(c.kind, ChoiceKind::GainBlock) {
+                    let picked = self
+                        .gain_produces
+                        .get_mut(&decider)
+                        .and_then(|q| q.pop_front())
+                        .ok_or_else(|| {
+                            MismatchKind::StuckPending(format!(
+                                "GainBlock choice open for player {decider} but no journal-observed \
+                                 \"produces\" line left to resolve it with"
+                            ))
+                        })?;
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| match o {
+                            ChoiceOption::Gain(g) => {
+                                (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
+                                    || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
+                            }
+                            _ => false,
+                        })
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "GainBlock options {:?} do not offer the journal-observed {} {}",
+                                c.options.as_slice(),
+                                picked.1,
+                                if picked.0 { "resources" } else { "food" }
+                            ))
+                        })?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    continue;
+                }
+                // A `Pending::Choice(FreeBuild)` (an event's "each player
+                // with an unused worker may immediately build X for free"
+                // -- e.g. "Development of Religion") is left open regardless
+                // of WHOSE turn it nominally is, is not gated on `phase`,
+                // and a human DECLINING it (`Skip`) leaves no journal trace
+                // at all -- the same silent-response shape as a
+                // Politics-phase pass, just for a different pending kind.
+                // Drained here, ahead of the decider-equality check below,
+                // exactly like the Politics case: if the upcoming line is a
+                // build that matches one of its options, stop here and let
+                // `apply_one`'s Build handling resolve it (it needs the
+                // parsed card, which this function doesn't have reason to
+                // duplicate); otherwise assume `Skip` and keep draining
+                // (there can be one such pending per qualifying player,
+                // queued back to back) -- found by testing against a real
+                // 3p game (`docs/REPLAY.md`).
+                if matches!(c.kind, ChoiceKind::FreeBuild) {
+                    let matches_upcoming = decider == expected_actor
+                        && matches!(upcoming.0, ActionClass::BuildBuilding | ActionClass::BuildUnit)
+                        && upcoming.1.is_some_and(|want| {
+                            c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Card(id) if *id == want))
+                        });
+                    if matches_upcoming {
+                        return Ok(());
+                    }
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Word(Keyword::Skip)))
+                        .ok_or_else(|| MismatchKind::StuckPending("FreeBuild choice has no Skip option".into()))?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    continue;
+                }
+                // A `Pending::Choice(DiscardMilitary)` (`interact::
+                // discard_excess_military`, `apply.rs`'s implementation of
+                // §6.6 step 1) blocks EVERY further action by the player it
+                // is open for -- their own next move AND, if they are not
+                // `decider`, whoever else is trying to act while it sits
+                // unresolved (the "reached through a different code path"
+                // shape `docs/REPLAY.md` used to report as unrecoverable).
+                // Two cases:
+                //
+                // - This IS `expected_actor`'s own pending, and the line
+                //   about to be translated is their own `"discards N
+                //   cards"` line (`upcoming.0 == Discard`): defer to
+                //   `apply_one`'s `Discard` arm (via `resolve_one_discard`),
+                //   exactly like the `FreeBuild` `matches_upcoming` case
+                //   above -- NOT because it needs the parsed line (unlike
+                //   `FreeBuild` it doesn't), but because resolving the LAST
+                //   queued discard can itself finish that player's end of
+                //   turn and advance `state.current` to the NEXT player
+                //   (`interact::QueueItem::DiscardMilitary`'s own doc:
+                //   resolving it resumes `game::resume_end_turn`) -- doing
+                //   that HERE, before the decider-equality check below,
+                //   would make `decider` legitimately stop matching
+                //   `expected_actor` and get wrongly reported as a stuck
+                //   pending, even though the line was fully, correctly
+                //   consumed. Found by testing against real games where
+                //   EVERY "discards" line failed this way the moment this
+                //   branch existed unconditionally.
+                // - Anything else (a DIFFERENT player's stale discard, or
+                //   this player's discard reached from an unrelated line --
+                //   the original "different code path" shape): drain it
+                //   here, same as `GainBlock`/`FreeBuild`, since nothing
+                //   else in this file will ever get a chance to.
+                if matches!(c.kind, ChoiceKind::DiscardMilitary) {
+                    let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Discard;
+                    if matches_upcoming {
+                        return Ok(());
+                    }
+                    self.resolve_one_discard_choice(&c);
+                    continue;
+                }
+            }
+            if decider == expected_actor {
+                let own_politics_decision = self.state.phase == Phase::Politics && self.state.pending.is_empty();
+                if !own_politics_decision || next_line_explains_own_politics {
+                    return Ok(());
+                }
+                self.resolve_hidden_politics_decision(decider)?;
+                continue;
+            }
+            match self.state.pending.top().cloned() {
+                Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::PactOffer { .. }) => {
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Word(Keyword::Refuse)))
+                        .ok_or_else(|| MismatchKind::StuckPending("PactOffer choice has no Refuse option".into()))?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                }
+                Some(Pending::Auction(_)) => {
+                    apply::apply(&mut self.state, Move::BidPass);
+                }
+                Some(Pending::Colonize(_)) => {
+                    self.auto_drain_colonize()?;
+                }
+                Some(Pending::Defense(_)) => {
+                    // A live defense should always be resolved inline right
+                    // after the triggering Aggression (see
+                    // `apply_play_aggression`); reaching one here means an
+                    // earlier aggression's defense was left open, which this
+                    // binary treats as a bug in its own bookkeeping, not a
+                    // journal fact -- fail loudly rather than silently
+                    // picking a defense.
+                    return Err(MismatchKind::StuckPending(
+                        "a Defense pending was left open across an action boundary".into(),
+                    ));
+                }
+                Some(Pending::Choice(c)) => {
+                    return Err(MismatchKind::StuckPending(format!(
+                        "no auto-resolution for pending choice {:?} (decider {decider}, options {})",
+                        c.kind,
+                        c.options.len()
+                    )));
+                }
+                None => {
+                    if self.state.phase == Phase::Politics && decider != expected_actor {
+                        self.resolve_hidden_politics_decision(decider)?;
+                    } else {
+                        return Err(MismatchKind::StuckPending(format!(
+                            "decider {decider} != expected actor {expected_actor}, phase {:?}, no pending",
+                            self.state.phase
+                        )));
+                    }
+                }
+            }
+        }
+        Err(MismatchKind::StuckPending("resolve_intervening did not converge in 200 steps".into()))
+    }
+
+    /// Resolves a Politics-phase decision for `decider` that has no
+    /// explicit textual action. Two real causes look identical in the
+    /// journal (nothing is logged either way): a genuinely forced pass
+    /// (no military-hand card exists to do anything else with -- true
+    /// before `decider`'s first `"draws N military card(s)"` credit, see
+    /// `has_drawn_military`'s doc) and a hidden `PrepareEvent`. This
+    /// disambiguates using that one text-derivable fact rather than
+    /// guessing; see the module doc's "Event/Territory preparation"
+    /// section for the inference itself once it applies.
+    fn resolve_hidden_politics_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG resolve_hidden_politics_decision decider={decider} has_drawn_military={} round={}",
+                self.has_drawn_military[decider as usize], self.state.round
+            );
+        }
+        if !self.has_drawn_military[decider as usize] {
+            return self.try_apply(Move::PolPass, false);
+        }
+        let filler = filler_event_card();
+        self.state.players[decider as usize].hand_military.push(filler);
+        if let Some(want) = self.event_reveals.pop_front() {
+            // `current_events.pop()` takes from the END (see `CardList`), so
+            // pushing `want` last guarantees it is exactly what
+            // `events::reveal_current_event` reveals for this PrepareEvent.
+            self.state.current_events.push(want);
+        }
+        let mv = Move::PrepareEvent { card: filler };
+        let legal = legal::legal_moves(&self.state);
+        if !legal.as_slice().contains(&mv) {
+            return Err(MismatchKind::IllegalMove {
+                attempted: format!("{mv:?} (inferred hidden preparation for player {decider})"),
+                legal_moves: format!("{:?}", legal.as_slice()),
+            });
+        }
+        apply::apply(&mut self.state, mv);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG PrepareEvent applied for decider={decider} want_revealed={:?} -> pending_top={:?} current_events={:?} future_events={:?}",
+                self.state.past_events.as_slice().last(),
+                self.state.pending.top(),
+                self.state.current_events.as_slice(),
+                self.state.future_events.as_slice(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Repeatedly pick the engine's own first-offered continuation of an
+    /// open `Pending::Colonize` until it clears. Not verified against
+    /// `"Sacrificed Units:; ..."` -- see the module doc's "gives up on"
+    /// section. Records that this game's colonize sacrifice is approximate.
+    fn auto_drain_colonize(&mut self) -> Result<(), MismatchKind> {
+        self.colonize_approximated = true;
+        for _ in 0..64 {
+            if !matches!(self.state.pending.top(), Some(Pending::Colonize(_))) {
+                return Ok(());
+            }
+            let legal = legal::legal_moves(&self.state);
+            let Some(&mv) = legal.as_slice().first() else {
+                return Err(MismatchKind::StuckPending("Pending::Colonize offered zero moves".into()));
+            };
+            apply::apply(&mut self.state, mv);
+        }
+        Err(MismatchKind::StuckPending("colonize force did not resolve in 64 steps".into()))
+    }
+
+    /// Ensure `card` is in `actor`'s military hand, granting it directly if
+    /// the journal is the first place this binary has ever seen it (the
+    /// task's suggested approach for hidden military-hand info: "grant a
+    /// player the card they are observed to play"). A no-op if it is
+    /// already there (e.g. the fictional per-round deal happened to match).
+    fn ground_military_hand(&mut self, actor: u8, card: CardId) {
+        let hand = &mut self.state.players[actor as usize].hand_military;
+        if !hand.contains(card) {
+            hand.push(card);
+        }
+    }
+
+    /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
+    /// -- `c` must be that pending's own snapshot, read by the caller just
+    /// before calling this (`resolve_intervening` and `resolve_discard`
+    /// both do). Applying the `Move::Choose` this picks may itself finish
+    /// the discarding player's end of turn and advance `state.current` --
+    /// see `resolve_intervening`'s `DiscardMilitary` branch for why that
+    /// matters to callers.
+    fn resolve_one_discard_choice(&mut self, c: &Choice) {
+        let opts: Vec<CardId> = c
+            .options
+            .as_slice()
+            .iter()
+            .map(|o| match o {
+                ChoiceOption::Card(id) => *id,
+                other => panic!("DiscardMilitary choice offered a non-card option {other:?}"),
+            })
+            .collect();
+        let (n, certainty) = self.discard_solver.choose(c.player, self.current_lineno, &opts);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG discard: player {} line {} picked {} of {} candidates ({certainty:?})",
+                c.player,
+                self.current_lineno,
+                opts[n].get().name,
+                opts.len()
+            );
+        }
+        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+    }
+
+    /// Drain every currently open `Pending::Choice(DiscardMilitary)`
+    /// belonging to `actor` -- called from `apply_one`'s `ActionClass::
+    /// Discard` arm, i.e. when the journal line being translated IS that
+    /// player's own `"discards N cards"` line. Stops the instant the top
+    /// pending is no longer a `DiscardMilitary` choice for `actor`: either
+    /// it fully resolved (the common case), or -- reaching a DIFFERENT
+    /// pending or a different player's discard here would mean this
+    /// binary's own reconstructed hand size disagrees with the journal's
+    /// stated count, which is a real, separate mismatch this function
+    /// deliberately does not paper over by draining someone else's pending
+    /// to make the count match.
+    fn resolve_discard(&mut self, actor: u8) {
+        while let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
+            if c.kind != ChoiceKind::DiscardMilitary || c.player != actor {
+                break;
+            }
+            self.resolve_one_discard_choice(&c);
+        }
+    }
+
+    /// Find (or force) the row slot `card` should be taken from. Prefers a
+    /// slot already grounded to `card` (a filler had NOT been placed over
+    /// it because this exact card was placed there by an earlier call);
+    /// otherwise forces `card` into whichever ungrounded slot's `take_cost`
+    /// matches the journal's stated action-point cost, or the first
+    /// ungrounded slot if no cost was parseable. See the module doc.
+    fn ground_row_slot(&mut self, actor: u8, card: CardId, observed_cost: Option<i32>) -> Option<u8> {
+        // Only trust a slot already showing `card` if THIS binary put it
+        // there (`row_grounded`). `new_game`'s fictional deal can coincide
+        // with the real card by pure chance (13 cards drawn from a 236-card
+        // table isn't rare to collide on); an ungrounded coincidence has no
+        // bearing on which slot the human actually paid for, so it must
+        // still be forced by cost like any other take.
+        if let Some(idx) = (0..13).find(|&i| self.row_grounded[i] && self.state.card_row[i] == card) {
+            return Some(idx as u8);
+        }
+        let ungrounded: Vec<usize> = (0..13)
+            .filter(|&i| !self.row_grounded[i] && !self.state.card_row[i].is_none())
+            .collect();
+        if let Some(want) = observed_cost {
+            for &i in &ungrounded {
+                let saved = self.state.card_row[i];
+                self.state.card_row[i] = card;
+                let cost = costs::take_cost(&self.state, &self.state.players[actor as usize], i);
+                if cost == want {
+                    self.row_grounded[i] = true;
+                    return Some(i as u8);
+                }
+                self.state.card_row[i] = saved;
+            }
+        }
+        let i = *ungrounded.first()?;
+        self.state.card_row[i] = card;
+        self.row_grounded[i] = true;
+        Some(i as u8)
+    }
+
+    /// Apply `mv` if legal; otherwise build an `IllegalMove` mismatch.
+    /// Check `mv` against `legal_moves` and apply it if legal.
+    ///
+    /// `record` distinguishes a real, journal-observed HUMAN move (`true`)
+    /// from an internal auto-resolution this file infers on the human's
+    /// behalf (`false` -- a stale-pending drain, an inferred hidden
+    /// `PrepareEvent`, the forced 0-defender `DefendDone`, ...): see the
+    /// module doc's "Decision recording" section. Every call site in this
+    /// file passes an explicit, considered value -- there is no default,
+    /// on purpose, so a new call site can't silently mis-tag itself either
+    /// way.
+    fn try_apply(&mut self, mv: Move, record: bool) -> Result<(), MismatchKind> {
+        let legal = legal::legal_moves(&self.state);
+        if !legal.as_slice().contains(&mv) {
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                let p = &self.state.players[self.state.current as usize];
+                eprintln!(
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?}",
+                    self.state.current,
+                    p.civil_actions,
+                    p.military_actions,
+                    p.government.get().name,
+                    if p.leader.is_none() { "none" } else { p.leader.get().name },
+                    self.state.phase,
+                    self.state.pending.top(),
+                );
+            }
+            return Err(MismatchKind::IllegalMove {
+                attempted: format!("{mv:?}"),
+                legal_moves: format!("{:?}", legal.as_slice()),
+            });
+        }
+        if record && self.record_decisions {
+            // Never "solved" -- a constraint-derived certainty is a real
+            // fact, not a guess -- so only "chosen"/"forced_collision" taint
+            // downstream decisions. See `Decision::after_arbitrary_discard`.
+            let after_arbitrary_discard =
+                self.discard_solver.chosen > 0 || self.discard_solver.forced_collisions > 0;
+            self.decisions.push(Decision {
+                lineno: self.current_lineno,
+                state: self.state.clone(),
+                legal_moves: legal.as_slice().to_vec(),
+                human_move: mv,
+                after_arbitrary_discard,
+            });
+        }
+        let pending_top_before = self.state.pending.top().cloned();
+        apply::apply(&mut self.state, mv);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            let p = &self.state.players[self.state.current as usize];
+            eprintln!(
+                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?} yellow_bank={} food={}",
+                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before, p.yellow_bank, p.food
+            );
+        }
+        Ok(())
+    }
+}
+
+/// The `Move` a player OTHER than `state.decider()` is legally allowed to
+/// make right now, purely because Development of Civil Life ("Development
+/// of Civilization" in BGO's UI -- `corpus.rs::ALIASES`) banked them a
+/// one-time discount (`docs/REPLAY.md` Finding 2, `state::OneTimeDiscount`'s
+/// own doc comment: the ONLY writer of these three fields). The real card
+/// text is "Immediately, each civilization may either: increase its
+/// population; or build a farm, mine or urban building; or develop a
+/// technology. It costs 1 [resource] less than usual" -- an untimed grant to
+/// EVERY player, not a choice scoped to whoever prepared it or to their own
+/// turn, which is exactly why a real BGO player can and does spend it
+/// interleaved into another player's live turn (confirmed against real BGO
+/// games `7523354`, `7523355`, and every other sampled game whose replay
+/// stopped on a `decider != expected actor` mismatch: all of them contain
+/// this event). `None` when `class`/`card` do not match a shape Civil Life
+/// can explain (including: the field is already zero, meaning either this
+/// player never had the grant or already spent it on a real, in-turn action
+/// -- in which case the caller's normal, `state.decider()`-gated dispatch is
+/// the right path and should run instead, most likely producing an honest
+/// mismatch rather than silently guessing).
+///
+/// `ActionClass::DevelopTechnology` (BGO logs this shape as `"<Color>
+/// discovers <Card> <Color> loses N science"`, not `"develops"` -- see
+/// `corpus.rs`'s `"discovers "` prefix) IS covered, unlike Pop/Build:
+/// `apply::h_develop` also removes the developed card from `p.hand_civil`,
+/// which is only safe to trust out of turn when this binary already
+/// grounded that exact card in `actor`'s hand from an earlier, ordinary,
+/// in-turn `TakeCard` line -- checked via `hand_civil.contains` below
+/// rather than assumed. In every real game this fired against
+/// (`docs/REPLAY.md` Finding 2), that was true: the interjecting player had
+/// already taken the card into hand normally, sometimes turns earlier, and
+/// was simply waiting for a chance to develop it.
+fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<CardId>) -> Option<Move> {
+    let p = &r.state.players[actor as usize];
+    match class {
+        ActionClass::IncreasePopulation if p.one_time_discount.pop_food != 0 => Some(Move::Pop),
+        ActionClass::BuildBuilding if p.one_time_discount.build_resources != 0 => {
+            let card = card?;
+            // Civil Life only discounts a build, never grants the
+            // technology itself -- `card` must already be developed (in
+            // `actor`'s own tableau), and never a military unit (the
+            // discount field is scoped to `URBAN_OR_PRODUCTION` cards only,
+            // matching the card text's "farm, mine or urban building").
+            if !crate::costs::is_unit(card) && p.techs.get(card).is_some() {
+                Some(Move::Build { card })
+            } else {
+                None
+            }
+        }
+        ActionClass::DevelopTechnology if p.one_time_discount.develop_science != 0 => {
+            let card = card?;
+            if p.hand_civil.contains(card) {
+                Some(Move::Develop { card })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Small text helpers replay.rs needs beyond tta::corpus::classify
+// ---------------------------------------------------------------------
+
+/// Sums every `"uses N civil action"` / `"uses N military action"` clause in
+/// a line -- the total action-point cost BGO printed for a take/declare/
+/// aggression/tactic line, used to disambiguate which row slot (or to
+/// sanity-check a cost) since the journal never prints a slot index
+/// directly.
+/// The number right after the FIRST `"spends N resource"` in `text`, if any
+/// -- used to cross-check a build's stated cost against this binary's own
+/// `costs::build_cost_for`. BGO logs `"builds X using Y"` for at least two
+/// real discount sources (a per-age blue-tech `buildDiscount` pool, and
+/// William Shakespeare's library/theater discount are both modeled in
+/// `costs::build_cost_for` already) but ALSO for at least one this binary
+/// does not model (observed against a real 2p game, `docs/REPLAY.md`: a
+/// build tagged `"using Urban Growth"` costing 1 less than the printed/
+/// computed price with no leader or blue-tech explaining it). Silently
+/// applying the wrong (higher) cost drains the reconstructed economy by the
+/// missed discount every time it fires, which does not fail AT that build --
+/// it fails several actions later when the shortfall finally blocks
+/// something, far from its real cause. Catching the mismatch at the source
+/// turns a confusing cascading failure into one clearly labelled stop.
+fn spent_resources(text: &str) -> Option<i32> {
+    let p = text.find(" spends ")?;
+    let rest = &text[p + " spends ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    if !rest[digits_end..].starts_with(" resource") {
+        return None; // "spends N food" etc. -- not this check's business
+    }
+    rest[..digits_end].parse().ok()
+}
+
+/// The number right after `" loses "` in `text`, if the SAME clause names
+/// `"military resource"` -- e.g. `"Purple builds Warrior Purple loses 1
+/// military resource; Purple spends 1 resource"`. BGO's UI splits a unit
+/// build/upgrade's total resource payment into two clauses by SOURCE: any
+/// portion covered by `p.mil_discount` (Patriotism/Wave of Nationalism/
+/// Military Build-Up's "pay N fewer resources [for military units]" pool,
+/// `costs::spend_mil_discount`) is printed as `"loses N military resource"`,
+/// and any REMAINING portion paid from the ordinary resource pool as
+/// `"spends N resource"` -- found by replaying real BGO games
+/// (`docs/REPLAY.md` fifth pass): `loses` + `spends` summed always equals
+/// exactly this binary's own `costs::build_cost_for` for the unit, even on
+/// lines with NO preceding Patriotism-style grant visible in the journal at
+/// all (a currently-unexplained baseline case -- see the doc's own notes).
+/// Reading `"spends"` alone (the OLD behaviour) silently under-counted the
+/// unit's total cost by exactly the `"loses"` amount, which this binary's
+/// `costs::build_cost_for` never subtracts for units (`is_unit` gates BOTH
+/// `one_time_discount` fields out on purpose -- Civil Life's grant text is
+/// farm/mine/urban building only, never a unit) -- reported as a "build cost
+/// mismatch (unmodeled discount)" that was actually a pure parsing gap, not
+/// a discount this binary's `costs::build_cost_for` needed to model at all.
+fn lost_military_resource(text: &str) -> Option<i32> {
+    let p = text.find(" loses ")?;
+    let rest = &text[p + " loses ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    if !rest[digits_end..].starts_with(" military resource") {
+        return None; // e.g. "loses 1 population" -- a different clause entirely
+    }
+    rest[..digits_end].parse().ok()
+}
+
+/// The TOTAL a build/upgrade line actually paid: [`spent_resources`]'s
+/// `"spends N resource"` clause plus [`lost_military_resource`]'s `"loses N
+/// military resource"` clause, whichever of the two (or both) are present.
+/// `None` only when NEITHER clause appears (a fully free build this check
+/// has nothing to compare) -- see [`lost_military_resource`]'s own doc
+/// comment for why summing, not choosing one, is correct.
+fn total_paid_for_build(text: &str) -> Option<i32> {
+    match (lost_military_resource(text), spent_resources(text)) {
+        (None, None) => None,
+        (lost, spent) => Some(lost.unwrap_or(0) + spent.unwrap_or(0)),
+    }
+}
+
+fn total_action_cost(text: &str) -> Option<i32> {
+    let mut total = 0i32;
+    let mut found = false;
+    let mut rest = text;
+    while let Some(p) = rest.find("uses ") {
+        rest = &rest[p + "uses ".len()..];
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+        if digits_end == 0 {
+            continue;
+        }
+        let n: i32 = rest[..digits_end].parse().ok()?;
+        let after = &rest[digits_end..];
+        if after.starts_with(" civil action") || after.starts_with(" military action") {
+            total += n;
+            found = true;
+        }
+        rest = after;
+    }
+    found.then_some(total)
+}
+
+/// Finds a known colour immediately following `marker` in `text` (e.g.
+/// `marker = " on "` for a war declaration's target, `" against "` for an
+/// aggression's, `" to "` for a pact proposal's).
+fn color_after(text: &str, marker: &str) -> Option<Color> {
+    let pos = text.find(marker)?;
+    let rest = &text[pos + marker.len()..];
+    Color::parse(rest.split(|c: char| !c.is_ascii_alphabetic()).next()?)
+}
+
+/// `"<N> stage(s) of <Wonder>"` -- the stage count, which
+/// `tta::corpus::classify` does not surface (it only returns the wonder
+/// card).
+fn wonder_stage_count(rest_after_builds: &str) -> Option<u8> {
+    let digits_end = rest_after_builds.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    rest_after_builds[..digits_end].parse().ok()
+}
+
+/// `"<From> to <To> ..."` -- the FROM card, which `classify` also does not
+/// surface (it only returns the TO card, since that decides
+/// UpgradeUnit/UpgradeProduction).
+fn upgrade_from_card(card_index: &HashMap<&'static str, CardId>, rest_after_upgrades: &str) -> Option<CardId> {
+    longest_known_card_prefix(card_index, rest_after_upgrades).map(|(id, _)| id)
+}
+
+/// `"<Actor> is A"` / `"<Actor> is B"` -- which side a pact proposer took.
+/// Both are legal moves when the card has distinct sides; `Unspecified`
+/// covers cards that don't.
+fn pact_side(text: &str, actor: Color, card_id: CardId) -> PactSide {
+    let has_sides = card_id.get().special.iter().any(|s| matches!(s, crate::cards::Special::A(_)))
+        && card_id.get().special.iter().any(|s| matches!(s, crate::cards::Special::B(_)));
+    if !has_sides {
+        return PactSide::Unspecified;
+    }
+    let marker = format!("{} is A", actor.as_str());
+    if text.contains(&marker) {
+        PactSide::A
+    } else {
+        PactSide::B
+    }
+}
+
+/// `"<Color> defends N Defense card..."` -- the count of committed defense
+/// cards on the line right after an Aggression. `0` is unambiguous
+/// (`DefendDone`); any positive count is unrecoverable (identities never
+/// printed) -- see the module doc.
+fn defends_count(text: &str) -> Option<i32> {
+    let (_, rest) = actor_and_rest(text)?;
+    let rest = rest.strip_prefix("defends ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    rest[..digits_end].parse().ok()
+}
+
+/// The event/territory name out of `"...Current event:; <Age> / <Name>; ..."`.
+fn current_event_name(text: &str) -> Option<&str> {
+    let p = text.find("Current event:; ")?;
+    let rest = &text[p + "Current event:; ".len()..];
+    let slash = rest.find(" / ")?;
+    let after_slash = &rest[slash + 3..];
+    let end = after_slash.find(';').unwrap_or(after_slash.len());
+    Some(after_slash[..end].trim())
+}
+
+// ---------------------------------------------------------------------
+// Pre-scan: the event/territory reveal FIFO
+// ---------------------------------------------------------------------
+
+fn prescan_event_reveals(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> VecDeque<CardId> {
+    let mut out = VecDeque::new();
+    for line in lines {
+        if let Some((_, rest)) = actor_and_rest(line.text) {
+            if rest.starts_with("plays event") {
+                if let Some(name) = current_event_name(line.text) {
+                    if let Some(&id) = card_index.get(name) {
+                        out.push_back(id);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `"<Color> produces N food"` / `"<Color> produces N resources"` -- a
+/// STANDALONE bookkeeping line (nothing else on it besides the actor and
+/// this clause). `corpus.rs` classifies this shape as pure bookkeeping (not
+/// a distinct action) for `corpuscensus.rs`'s purposes, which is correct for
+/// counting, but `replay.rs` needs more: every sampled occurrence of this
+/// EXACT shape in the corpus was found (empirically, `docs/REPLAY.md`) to be
+/// a player's resolution of a `ChoiceKind::GainBlock` opened by an event
+/// like "Development of Markets" ("Each civilization gains 2 resources or 2
+/// food (player's choice)") -- see `resolve_intervening`'s handling of that
+/// pending kind, which this feeds. Returns `None` for any line with extra
+/// clauses (e.g. a colonize reveal's own trailing `"... Purple produces 3
+/// food"`), which is a DIFFERENT (deterministic, non-choice) production this
+/// binary must not mistake for a GainBlock resolution.
+fn parse_standalone_produces(text: &str) -> Option<(Color, bool, i32)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let rest = rest.strip_prefix("produces ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    match &rest[digits_end..] {
+        " resources" => Some((actor, true, n)),
+        " food" => Some((actor, false, n)),
+        _ => None,
+    }
+}
+
+/// The LAST `"produces N food"` / `"produces N resources"` clause anywhere
+/// in `text`, no matter what precedes it -- unlike [`parse_standalone_produces`]
+/// (which requires the WHOLE line to be nothing but that clause, matching a
+/// `GainBlock` event's own separate bookkeeping row per player), this reads
+/// a produces clause BGO glues onto the SAME row as the action that caused
+/// it. Reserves (`Special::GainFoodOrResources`, `ChoiceKind::FoodOrRes`) is
+/// the only base-game card with this shape: `"<Color> plays Reserves
+/// <Color> produces N food"` -- one single row, no separating punctuation,
+/// the actor's name repeated (confirmed against the full corpus: 4157 of
+/// 4158 "plays Reserves" lines across all 1,011 games have this exact glued
+/// shape; the one exception is a different anomaly, not chased here). `rfind`
+/// (not `find`) in case an EARLIER, unrelated clause on the same row also
+/// happens to contain " produces " (not observed for Reserves specifically,
+/// but cheap insurance).
+fn trailing_produces(text: &str) -> Option<(bool, i32)> {
+    let p = text.rfind(" produces ")?;
+    let rest = &text[p + " produces ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    if rest[digits_end..].starts_with(" resources") {
+        Some((true, n))
+    } else if rest[digits_end..].starts_with(" food") {
+        Some((false, n))
+    } else {
+        None
+    }
+}
+
+/// Pre-scans every standalone `"<Color> produces ..."` line in the journal
+/// into a per-seat FIFO (see `parse_standalone_produces`'s doc comment for
+/// why this shape means a `ChoiceKind::GainBlock` resolution). FIFO order
+/// matches journal order per seat, which is safe because a `GainBlock`
+/// pending for a given player blocks every other action by that SAME player
+/// until resolved (confirmed empirically: every standalone `"produces"` line
+/// sampled across the corpus follows a "(player's choice)" event with no
+/// unrelated action by that player in between).
+fn prescan_gain_produces(lines: &[Line]) -> HashMap<u8, VecDeque<(bool, i32)>> {
+    let mut out: HashMap<u8, VecDeque<(bool, i32)>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, is_resources, n)) = parse_standalone_produces(line.text) {
+            out.entry(actor.seat()).or_default().push_back((is_resources, n));
+        }
+    }
+    out
+}
+
+/// Pre-scans the whole journal once for every point where a player is
+/// observed playing a NAMED card out of their own military hand --
+/// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
+/// `CopyTactic`, `"adopts existing tactics ..."`, which copies an
+/// opponent's already-played tactic rather than consuming the actor's own
+/// hand card -- see `apply_one`'s `ActionClass::PlayTactic` arm, which draws
+/// the same distinction). Feeds `discard_solver::DiscardSolver`: a card
+/// observed being played AFTER a given discard decision was, by definition,
+/// still in that player's hand at the time of the discard, so it cannot
+/// have been the card discarded there -- see that module's doc for the full
+/// argument this pre-scan supplies the raw facts for.
+fn prescan_future_military_needs(
+    lines: &[Line],
+    card_index: &HashMap<&'static str, CardId>,
+) -> HashMap<u8, Vec<FutureNeed>> {
+    let mut out: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
+    for line in lines {
+        let LineOutcome::Action(Classified { class, card: Some(card) }) = classify(card_index, line.text) else {
+            continue;
+        };
+        let Some((actor, rest)) = actor_and_rest(line.text) else { continue };
+        let consumes_own_hand_card = match class {
+            ActionClass::DeclareWar | ActionClass::PlayAggression | ActionClass::ProposePact => true,
+            ActionClass::PlayTactic => !rest.starts_with("adopts existing tactics "),
+            _ => false,
+        };
+        if consumes_own_hand_card {
+            out.entry(actor.seat()).or_default().push(FutureNeed { lineno: line.lineno, card });
+        }
+    }
+    out
+}
+
+/// Line indices to skip entirely because they are a `TakeCard` undone by a
+/// same-actor, same-card `PutBack` -- BGO's client-side undo (`corpus.rs`'s
+/// module doc: "~8% of raw takes are a human undoing their own take within
+/// the same turn"). Rather than modelling `PutBack` as an engine `Move`
+/// (there is none -- see this file's module doc), the take that never should
+/// have counted is simply never applied: both journal lines are skipped as a
+/// pair, which is the exact meaning of "take it back."
+///
+/// A take and its put-back are NOT always textually adjacent: BGO's UI lets
+/// a player hold several tentative takes at once (a stack -- take A, take B,
+/// put B back, put A back is a real observed pattern) and freely interleave
+/// OTHER committed actions (builds, other takes, ...) in between, e.g. take
+/// Frugality, take Alchemy, build a wonder stage, put Frugality back. The
+/// original adjacency-only pairing (a single `last_take` slot, reset by any
+/// intervening classified line) missed both shapes and reported an
+/// "unpaired PutBack" mismatch that stopped replay outright -- 3/24 games in
+/// the initial sample (`docs/REPLAY.md`).
+///
+/// Since every row/hand card is a unique instance in the table (the same
+/// name never denotes two different physical cards within one game -- the
+/// same assumption `ground_row_slot`/`card_index` already rely on), a
+/// `PutBack` can only ever refer to a still-open take of that exact card by
+/// that exact actor, so matching is done with a per-card stack of
+/// not-yet-resolved takes rather than a single "last take" slot: any
+/// `TakeCard` pushes onto its card's stack, any `PutBack` pops the most
+/// recent entry for the same actor, and (defensively, since it should never
+/// happen with unique card instances) any OTHER classified line naming that
+/// same card by the same actor -- i.e. the take was committed some other way
+/// (built, developed, played, elected, ...) -- removes it from the stack so
+/// a later same-named "put back" (which cannot legitimately exist once a
+/// card is committed) can never wrongly erase this now-real action.
+fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> std::collections::HashSet<usize> {
+    let mut skip = std::collections::HashSet::new();
+    let mut open: HashMap<CardId, Vec<(usize, Color)>> = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let LineOutcome::Action(Classified { class, card }) = classify(card_index, line.text) else {
+            continue; // bookkeeping: never references a card, nothing to do
+        };
+        let Some((actor, _)) = actor_and_rest(line.text) else { continue };
+        let Some(c) = card else { continue };
+        match class {
+            ActionClass::TakeCard => open.entry(c).or_default().push((i, actor)),
+            ActionClass::PutBack => {
+                if let Some(stack) = open.get_mut(&c) {
+                    if let Some(pos) = stack.iter().rposition(|&(_, a)| a == actor) {
+                        let (take_i, _) = stack.remove(pos);
+                        skip.insert(take_i);
+                        skip.insert(i);
+                    }
+                }
+            }
+            _ => {
+                if let Some(stack) = open.get_mut(&c) {
+                    stack.retain(|&(_, a)| a != actor);
+                }
+            }
+        }
+    }
+    skip
+}
+
+// ---------------------------------------------------------------------
+// Per-game replay
+// ---------------------------------------------------------------------
+
+pub struct GameResult {
+    pub id: String,
+    pub players: u8,
+    pub actions_consumed: usize,
+    pub completed: bool,
+    pub mismatch: Option<Mismatch>,
+    pub colonize_approximated: bool,
+    pub engine_scores: Option<Vec<i32>>,
+    pub index_scores: Vec<i32>,
+    /// Counts from this game's `DiscardSolver` -- see that module's doc and
+    /// `docs/REPLAY.md` for why these three are reported separately rather
+    /// than folded into one "discards handled" number.
+    pub discards_solved: u32,
+    pub discards_chosen: u32,
+    pub discards_forced_collision: u32,
+    /// Every human decision point recorded along the way -- empty unless
+    /// `replay_game` was called with `record_decisions: true`. See the
+    /// module doc's "Decision recording" section.
+    pub decisions: Vec<Decision>,
+}
+
+/// Replay one game's journal through the real engine. `record_decisions`
+/// gates [`Decision`] snapshotting (see the module doc) -- `false` for
+/// `replay`'s own binary, `true` for `agreement.rs`'s move-agreement
+/// analysis.
+pub fn replay_game(
+    meta: &GameMeta,
+    journal_text: &str,
+    card_index: &HashMap<&'static str, CardId>,
+    record_decisions: bool,
+) -> GameResult {
+    let lines = parse_lines(journal_text);
+    let event_reveals = prescan_event_reveals(&lines, card_index);
+    let putback_skips = prescan_putback_skips(&lines, card_index);
+    let gain_produces = prescan_gain_produces(&lines);
+    let future_military_needs = prescan_future_military_needs(&lines, card_index);
+    let mut r = Replayer::new(card_index, meta.players, event_reveals, gain_produces, future_military_needs);
+    r.record_decisions = record_decisions;
+
+    let mut mismatch: Option<Mismatch> = None;
+    let mut completed = false;
+
+    'lines: for (i, line) in lines.iter().enumerate() {
+        if line.text.starts_with("End of game") {
+            completed = true;
+            break;
+        }
+        if putback_skips.contains(&i) {
+            continue;
+        }
+        r.current_lineno = line.lineno;
+        let outcome = classify(card_index, line.text);
+        let LineOutcome::Action(Classified { class, card }) = outcome else {
+            continue; // bookkeeping / unclassified: no move to apply
+        };
+        let Some((actor_color, rest)) = actor_and_rest(line.text) else {
+            // EndTurn lines start with "End turn", no leading colour --
+            // the actor is whoever the engine currently has as `current`.
+            if class == ActionClass::EndTurn {
+                let actor = r.state.current;
+                if let Err(kind) = r
+                    .resolve_intervening(actor, (class, None), false)
+                    .and_then(|()| r.try_apply(Move::EndTurn, true))
+                {
+                    mismatch = Some(mk_mismatch(line, kind));
+                    break 'lines;
+                }
+                if line.text.contains("draws ") && line.text.contains(" military card") {
+                    r.has_drawn_military[actor as usize] = true;
+                }
+                r.actions_consumed += 1;
+                continue;
+            }
+            mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("action line has no leading colour and is not EndTurn".into())));
+            break 'lines;
+        };
+        let actor = actor_color.seat();
+        if actor >= meta.players {
+            mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
+            break 'lines;
+        }
+
+        // Development of Civil Life ("Development of Civilization" in BGO's
+        // UI) grants EVERY player a banked, untimed `one_time_discount` the
+        // instant it resolves -- spendable whenever that player likes,
+        // including mid-ANOTHER-player's-turn, since the grant is not
+        // gated on whose turn it is (`civil_life_move`'s own doc comment;
+        // `docs/REPLAY.md` Finding 2). Checked and applied here, BEFORE
+        // `resolve_intervening`/`apply_one`, because both of those assume
+        // the acting player IS (or is about to become) `state.decider()` --
+        // true for every other kind of action this binary handles, never
+        // true for this one. `actor != r.state.decider()` is the gate: a
+        // player exercising their OWN discount on their OWN turn (the
+        // common case) still goes through the normal path below.
+        if actor != r.state.decider() && r.state.pending.is_empty() {
+            if let Some(mv) = civil_life_move(&r, actor, class, card) {
+                apply::apply_free_civil_move(&mut r.state, actor, mv, 0);
+                r.actions_consumed += 1;
+                continue 'lines;
+            }
+        }
+
+        let explains_own_politics = matches!(
+            class,
+            ActionClass::Pass
+                | ActionClass::ChangeGovernment
+                | ActionClass::DeclareWar
+                | ActionClass::PlayAggression
+                | ActionClass::ProposePact
+        );
+        // `ActionClass::PlayEvent` (`"X plays event ..."`) is the
+        // JOURNAL-side confirmation that an event already resolved -- see
+        // the module doc's "Event/Territory preparation" section: the
+        // engine resolves an event's ENTIRE effect (gains, `queue_decisions`
+        // for every qualifying player -- e.g. a `FreeBuild`/`GainBlock`
+        // choice opened for each of them at once) synchronously, inside
+        // `h_prepare_event`, the instant the hidden `PrepareEvent` is
+        // inferred; `apply_one`'s own `PlayEvent` arm is a bare `Ok(())`
+        // that reads no state at all. Calling `resolve_intervening` for
+        // THIS line was actively harmful: its job is to make `legal_moves`
+        // offer whatever comes NEXT, so when that "next" is the PlayEvent
+        // no-op itself, its one-line lookahead (`upcoming = (PlayEvent,
+        // None)`) can never match a `FreeBuild`/`GainBlock` pending's own
+        // options -- and the FreeBuild branch's fallback IS "assume Skip",
+        // so it silently, wrongly discarded every qualifying player's real
+        // free-build choice before the following lines (which DO ask for
+        // it) were ever read. Skipping the call here defers resolution
+        // (including the hidden-`PrepareEvent` inference itself, if it
+        // hasn't fired yet) to whatever the NEXT real line's own
+        // `resolve_intervening` call needs -- which has the right
+        // `upcoming` to match against -- found by testing against a real 3p
+        // game where "Development of Religion" (a `FreeBuild` event) opened
+        // a choice for all 3 players and every one of them was wrongly
+        // auto-skipped before their own real "builds Religion" line was
+        // even read (`docs/REPLAY.md`).
+        //
+        // `ActionClass::Discard` (`"<Color> discards N card(s)"`) still
+        // NEEDS this call, unlike `PlayEvent` -- `resolve_intervening`'s own
+        // `ChoiceKind::DiscardMilitary` branch has a `matches_upcoming` case
+        // (mirroring `FreeBuild`'s) that returns `Ok(())` without draining
+        // when the open pending IS `expected_actor`'s own and the upcoming
+        // line IS their `"discards"` line, deferring the actual `Move::
+        // Choose` to `apply_one`'s `Discard` arm (`resolve_discard`) --
+        // see that branch's doc for why resolving it any earlier would
+        // wrongly report a stuck pending (resolving the LAST queued discard
+        // can itself finish `actor`'s end of turn and advance `state.
+        // current`, making the generic `decider == expected_actor` exit
+        // test fail even though nothing went wrong).
+        if class != ActionClass::PlayEvent {
+            if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
+                mismatch = Some(mk_mismatch(line, kind));
+                break 'lines;
+            }
+        }
+
+        let next_text = lines.get(i + 1).map(|l| l.text);
+        let result = apply_one(&mut r, actor, class, card, rest, line.text, next_text);
+        match result {
+            Ok(()) => {
+                r.actions_consumed += 1;
+            }
+            Err(kind) => {
+                mismatch = Some(mk_mismatch(line, kind));
+                break 'lines;
+            }
+        }
+    }
+
+    if mismatch.is_none() && !completed {
+        // Journal ran out without an explicit "End of game" line (some
+        // journals end mid-stream, e.g. a resignation) -- not a mismatch,
+        // just not a verified-complete replay either.
+    }
+
+    let engine_scores = if completed && r.state.game_over {
+        Some(game::scores(&r.state))
+    } else {
+        None
+    };
+
+    GameResult {
+        id: meta.id.clone(),
+        players: meta.players,
+        actions_consumed: r.actions_consumed,
+        completed: completed && mismatch.is_none(),
+        mismatch,
+        colonize_approximated: r.colonize_approximated,
+        engine_scores,
+        index_scores: meta.scores.clone(),
+        discards_solved: r.discard_solver.solved,
+        discards_chosen: r.discard_solver.chosen,
+        discards_forced_collision: r.discard_solver.forced_collisions,
+        decisions: r.decisions,
+    }
+}
+
+fn mk_mismatch(line: &Line, kind: MismatchKind) -> Mismatch {
+    Mismatch {
+        lineno: line.lineno,
+        age: line.age.to_string(),
+        round: line.round.to_string(),
+        raw_text: line.text.to_string(),
+        kind,
+    }
+}
+
+/// If `rest` (the `"builds ..."` line, text after the actor's colour) names
+/// a `"using <Card>"` discount source that is a `FreeCivilAction`-granting
+/// Action card currently in `actor`'s hand, plays it (`Move::PlayAction`)
+/// and returns the `Move::Choose` that resolves the resulting
+/// `Pending::Choice(FreeCivil)` onto building `built_card` -- the caller
+/// applies that returned move. Returns `Ok(None)` when there is no such
+/// discount source named (falls back to a plain `Move::Build`) rather than
+/// when there IS one but something about it fails to resolve (that's an
+/// `Err`, not a silent fallback -- see the module doc's "gives up on" list
+/// for why this file never guesses).
+fn free_civil_build_move(
+    r: &mut Replayer,
+    actor: u8,
+    rest: &str,
+    built_card: CardId,
+) -> Result<Option<Move>, MismatchKind> {
+    let Some(using_pos) = rest.find(" using ") else {
+        return Ok(None);
+    };
+    let after_using = &rest[using_pos + " using ".len()..];
+    let Some((discount_card, _)) = longest_known_card_prefix(r.card_index, after_using) else {
+        return Ok(None);
+    };
+    let grants_free_civil = discount_card
+        .get()
+        .special
+        .iter()
+        .any(|s| matches!(s, crate::cards::Special::FreeCivilAction(_)));
+    if !grants_free_civil || !r.state.players[actor as usize].hand_civil.contains(discount_card) {
+        return Ok(None);
+    }
+    r.try_apply(Move::PlayAction { card: discount_card }, true)?;
+    let Some(Pending::Choice(c)) = r.state.pending.top() else {
+        return Err(MismatchKind::StuckPending(format!(
+            "played {} for its free-civil-action discount but no Choice pending opened",
+            discount_card.get().name
+        )));
+    };
+    if !matches!(c.kind, ChoiceKind::FreeCivil { .. }) {
+        return Err(MismatchKind::StuckPending(format!(
+            "played {} but the pending choice is {:?}, not FreeCivil",
+            discount_card.get().name,
+            c.kind
+        )));
+    }
+    let n = c
+        .options
+        .as_slice()
+        .iter()
+        .position(|o| matches!(o, ChoiceOption::Move(Move::Build { card }) if *card == built_card))
+        .ok_or_else(|| {
+            MismatchKind::ParserGap(format!(
+                "{}'s free-civil-action options do not include building {}",
+                discount_card.get().name,
+                built_card.get().name
+            ))
+        })?;
+    Ok(Some(Move::Choose { n: n as u8 }))
+}
+
+/// Translates one already-classified, already-actor-resolved journal line
+/// into the `Move`(s) it represents and applies them. `rest` is the text
+/// right after `"<Color> "` (what `tta::corpus::classify_after_actor`
+/// itself dispatches on), reused here for the extra fields `classify`
+/// doesn't surface.
+fn apply_one(
+    r: &mut Replayer,
+    actor: u8,
+    class: ActionClass,
+    card: Option<CardId>,
+    rest: &str,
+    raw_text: &str,
+    next_text: Option<&str>,
+) -> Result<(), MismatchKind> {
+    match class {
+        ActionClass::TakeCard => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("take with no resolved card".into()))?;
+            let cost = total_action_cost(raw_text);
+            let slot = r
+                .ground_row_slot(actor, card, cost)
+                .ok_or_else(|| MismatchKind::ParserGap("no ungrounded row slot available to take from".into()))?;
+            r.try_apply(Move::Take { slot }, true)?;
+            // The slot's REFILL (whatever `deal()` just drew into it) is
+            // unobserved SIMULATED filler again -- ungroundeding it lets a
+            // later take force the true next observed card into it, exactly
+            // like a never-yet-touched slot. Without this, `row_grounded`
+            // only ever grows, and once every low-cost slot has been taken
+            // from once, later same-cost takes get force-placed into a
+            // higher-cost slot purely because it's the only "fresh" one left
+            // -- found by testing against a real 2p game (`docs/REPLAY.md`).
+            r.row_grounded[slot as usize] = false;
+            Ok(())
+        }
+        ActionClass::BuildBuilding | ActionClass::BuildUnit => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("build with no resolved card".into()))?;
+            // An event's "each player with an unused worker may immediately
+            // build X for free" left a `Pending::Choice(FreeBuild)` open for
+            // `actor` (`resolve_intervening` stopped here on purpose rather
+            // than guess which building without the parsed card -- see its
+            // doc). If this build IS that free build, resolve it as a
+            // `Choose`, not a priced `Move::Build`.
+            if let Some(Pending::Choice(c)) = r.state.pending.top() {
+                if matches!(c.kind, ChoiceKind::FreeBuild) {
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                        .ok_or_else(|| MismatchKind::ParserGap(format!("open FreeBuild choice does not offer {}", card.get().name)))?;
+                    return r.try_apply(Move::Choose { n: n as u8 }, true);
+                }
+            }
+            // `"builds X using Y"`: Y is an Action card in hand printing
+            // `freeCivilAction: build_or_upgrade_farm_or_mine` (Rich Land,
+            // Urban Growth, ...) -- BGO folds "play Y" and "build X, for
+            // free/discounted, as Y's effect" into one printed line the same
+            // way it folds an action card's wonder-stage build into its
+            // "plays ..." line (see `corpus.rs`'s
+            // `plays_engineering_genius_...` test). The real move sequence
+            // is `PlayAction{Y}` (opens `Pending::Choice(FreeCivil)`) then
+            // `Choose{n}` for the option that IS `Move::Build{card}` --
+            // never a bare `Move::Build`, which the engine plainly charges
+            // full price (found by testing against a real 2p game;
+            // `docs/REPLAY.md`).
+            if let Some(mv) = free_civil_build_move(r, actor, rest, card)? {
+                return r.try_apply(mv, true);
+            }
+            if let (Some(want), Some(got)) = (
+                total_paid_for_build(raw_text),
+                costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
+            ) {
+                if want != got {
+                    return Err(MismatchKind::UnrecoverableHiddenInfo(format!(
+                        "build cost mismatch for {}: journal says {want} resources, this binary's \
+                         reconstructed state computes {got} -- an unmodeled discount source (not a \
+                         parser gap: the card and actor are both correctly resolved)",
+                        card.get().name
+                    )));
+                }
+            }
+            r.try_apply(Move::Build { card }, true)
+        }
+        ActionClass::BuildWonderStage => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("wonder stage with no resolved card".into()))?;
+            let after_builds = rest.strip_prefix("builds ").ok_or_else(|| MismatchKind::ParserGap("wonder-stage line missing 'builds '".into()))?;
+            let steps = wonder_stage_count(after_builds).ok_or_else(|| MismatchKind::ParserGap("could not parse wonder stage count".into()))?;
+            let _ = card; // the wonder itself is implicit in state (under construction)
+            r.try_apply(Move::WonderStep { steps }, true)
+        }
+        ActionClass::IncreasePopulation => {
+            let legal = legal::legal_moves(&r.state);
+            if legal.as_slice().contains(&Move::Pop) {
+                r.try_apply(Move::Pop, true)
+            } else if legal.as_slice().contains(&Move::PopFree) {
+                r.try_apply(Move::PopFree, true)
+            } else {
+                // Neither is legal -- almost always food/yellow-bank drift
+                // from an earlier build/economy step this binary priced
+                // differently than the true game (see the module doc's
+                // "gives up on" list and `docs/REPLAY.md`'s mismatch
+                // categories), not a parser gap in THIS line.
+                if std::env::var("REPLAY_DEBUG").is_ok() {
+                    let p = &r.state.players[actor as usize];
+                    eprintln!(
+                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} raw={:?}",
+                        p.food, p.yellow_bank, p.civil_actions,
+                        crate::economy::pop_cost(&r.state, p), raw_text
+                    );
+                }
+                Err(MismatchKind::IllegalMove {
+                    attempted: "Pop or PopFree".into(),
+                    legal_moves: format!("{:?}", legal.as_slice()),
+                })
+            }
+        }
+        ActionClass::UpgradeUnit | ActionClass::UpgradeProduction => {
+            let to = card.ok_or_else(|| MismatchKind::ParserGap("upgrade with no resolved target card".into()))?;
+            let after_upgrades = rest.strip_prefix("upgrades ").ok_or_else(|| MismatchKind::ParserGap("upgrade line missing 'upgrades '".into()))?;
+            let from = upgrade_from_card(r.card_index, after_upgrades)
+                .ok_or_else(|| MismatchKind::ParserGap("could not parse upgrade source card".into()))?;
+            r.try_apply(Move::Upgrade { from, to }, true)
+        }
+        ActionClass::DevelopTechnology => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("develop with no resolved card".into()))?;
+            r.try_apply(Move::Develop { card }, true)
+        }
+        ActionClass::ElectLeader => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("elect with no resolved card".into()))?;
+            r.try_apply(Move::PlayLeader { card }, true)
+        }
+        ActionClass::ChangeGovernment => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("revolution with no resolved card".into()))?;
+            r.try_apply(Move::Revolution { card }, true)
+        }
+        ActionClass::PlayActionCard => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("play-action with no resolved card".into()))?;
+            r.try_apply(Move::PlayAction { card }, true)?;
+            // Reserves (`Special::GainFoodOrResources`) opens a
+            // `ChoiceKind::FoodOrRes` the instant it's played, with no
+            // ordered action ahead of it (`apply.rs`'s own doc comment: "a
+            // real choice") -- resolve it here, from the SAME line's own
+            // trailing `"produces N food/resources"` clause, rather than
+            // leaving it open for a LATER line to trip over (found by
+            // testing against a real 2p game, `7523818`: an unresolved
+            // `FoodOrRes` blocked a `WonderStep` several lines later --
+            // `trailing_produces`'s own doc comment has the corpus-wide
+            // shape check justifying this fix).
+            if let Some(Pending::Choice(c)) = r.state.pending.top().cloned() {
+                if matches!(c.kind, ChoiceKind::FoodOrRes { .. }) {
+                    let (is_resources, _n) = trailing_produces(raw_text).ok_or_else(|| {
+                        MismatchKind::ParserGap(format!(
+                            "PlayAction {{{}}} opened a FoodOrRes choice but no trailing \"produces\" \
+                             clause found in {raw_text:?}",
+                            card.get().name
+                        ))
+                    })?;
+                    let want = if is_resources { Keyword::Resources } else { Keyword::Food };
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Word(k) if *k == want))
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "FoodOrRes options {:?} do not offer the journal-observed {}",
+                                c.options.as_slice(),
+                                if is_resources { "resources" } else { "food" }
+                            ))
+                        })?;
+                    r.try_apply(Move::Choose { n: n as u8 }, true)?;
+                }
+            }
+            Ok(())
+        }
+        ActionClass::Destroy | ActionClass::Disband => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("destroy/disband with no resolved card".into()))?;
+            if let Some(Pending::Choice(c)) = r.state.pending.top() {
+                if matches!(c.kind, ChoiceKind::DestroyOwn) {
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                        .ok_or_else(|| MismatchKind::ParserGap("observed destroy card not among DestroyOwn options".into()))?;
+                    return r.try_apply(Move::Choose { n: n as u8 }, true);
+                }
+            }
+            r.try_apply(Move::Destroy { card }, true)
+        }
+        ActionClass::PlayTactic => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("tactic with no resolved card".into()))?;
+            if rest.starts_with("adopts existing tactics ") {
+                r.try_apply(Move::CopyTactic { card }, true)
+            } else {
+                r.ground_military_hand(actor, card);
+                r.try_apply(Move::PlayTactic { card }, true)
+            }
+        }
+        ActionClass::DeclareWar => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("war with no resolved card".into()))?;
+            let target = color_after(rest, " on ").ok_or_else(|| MismatchKind::ParserGap("could not parse war target colour".into()))?;
+            r.ground_military_hand(actor, card);
+            r.try_apply(Move::War { card, target: target.seat() }, true)
+        }
+        ActionClass::WinWar => Ok(()), // automatic (game::resolve_war_outcome); validation checkpoint only
+        ActionClass::PlayAggression => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("aggression with no resolved card".into()))?;
+            let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
+            r.ground_military_hand(actor, card);
+            r.try_apply(Move::Aggression { card, target: target.seat() }, true)?;
+            resolve_aggression_defense(r, next_text)
+        }
+        ActionClass::ProposePact => {
+            let card = card.ok_or_else(|| MismatchKind::ParserGap("pact with no resolved card".into()))?;
+            let target = color_after(rest, " to ").ok_or_else(|| MismatchKind::ParserGap("could not parse pact target colour".into()))?;
+            let side = pact_side(raw_text, target_actor_color(actor), card);
+            r.ground_military_hand(actor, card);
+            r.try_apply(Move::OfferPact { card, target: target.seat(), side }, true)
+        }
+        ActionClass::AcceptPact => {
+            let Some(Pending::Choice(c)) = r.state.pending.top() else {
+                return Err(MismatchKind::StuckPending("AcceptPact line but no pending PactOffer choice".into()));
+            };
+            if !matches!(c.kind, ChoiceKind::PactOffer { .. }) {
+                return Err(MismatchKind::StuckPending("AcceptPact line but pending choice is not a PactOffer".into()));
+            }
+            let n = c
+                .options
+                .as_slice()
+                .iter()
+                .position(|o| matches!(o, ChoiceOption::Word(Keyword::Accept)))
+                .ok_or_else(|| MismatchKind::ParserGap("PactOffer choice has no Accept option".into()))?;
+            r.try_apply(Move::Choose { n: n as u8 }, true)
+        }
+        ActionClass::Colonize => {
+            // The auction/colonize sequence is driven entirely by the Bid/
+            // BidPass lines and `resolve_intervening`'s auto-drain; by the
+            // time a "colonizes a ..." line is reached it is a pure
+            // validation checkpoint (nothing left to apply).
+            let _ = card;
+            Ok(())
+        }
+        ActionClass::Bid => {
+            let n = rest
+                .strip_prefix("bids ")
+                .and_then(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit() && !c.is_ascii_digit()).parse::<u8>().ok())
+                .or_else(|| rest.strip_prefix("bids ").and_then(|s| s.split_whitespace().next()).and_then(|s| s.parse::<u8>().ok()))
+                .ok_or_else(|| MismatchKind::ParserGap("could not parse bid amount".into()))?;
+            r.try_apply(Move::Bid { n }, true)
+        }
+        ActionClass::WinAuction => Ok(()), // automatic settlement of Pending::Auction; validation checkpoint only
+        ActionClass::Pass => {
+            if matches!(r.state.pending.top(), Some(Pending::Auction(_))) {
+                r.try_apply(Move::BidPass, true)
+            } else {
+                r.try_apply(Move::PolPass, true)
+            }
+        }
+        ActionClass::PlayEvent => Ok(()), // resolved automatically when the triggering PrepareEvent was inferred
+        // The common case (an undo immediately following its own take) is
+        // erased before this loop ever sees it -- `prescan_putback_skips`.
+        // Reaching this arm means a `PutBack` with no matching preceding
+        // `Take` of the same card by the same actor (a same-turn take/build/
+        // take-back/rebuild sequence, or a parser gap); there is still no
+        // engine `Move` for it.
+        ActionClass::PutBack => Err(MismatchKind::UnrecoverableHiddenInfo(
+            "unpaired BGO client-side undo (\"puts X back in the row\" with no matching preceding take)".into(),
+        )),
+        // The card(s) BGO logs only a count for ("<Color> discards N
+        // cards") -- resolved HERE, not left as a bare validation
+        // checkpoint like `PlayEvent`/`WinWar`/`WinAuction`/`Colonize`
+        // above, because resolving the LAST queued discard can itself
+        // finish `actor`'s end of turn and advance `state.current`
+        // (`resolve_intervening`'s `DiscardMilitary` branch's doc explains
+        // why that rules out resolving it any earlier). `resolve_discard`
+        // is a no-op if nothing is pending (the discard was already fully
+        // drained by `resolve_intervening`'s own handling of a DIFFERENT
+        // player's stale pending reached along the way here -- the
+        // "different code path" shape `docs/REPLAY.md` used to report as a
+        // separate, unrecoverable stop). See `discard_solver`'s module doc
+        // for how the card is picked.
+        ActionClass::Discard => {
+            r.resolve_discard(actor);
+            Ok(())
+        }
+        ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
+    }
+}
+
+/// After applying an `Aggression`, resolve the victim's `Pending::Defense`
+/// using the count on the very next `"<Color> defends N ..."` bookkeeping
+/// line, if any -- 0 is `DefendDone`; a positive count is unrecoverable
+/// (identities never printed, see the module doc). If no `Pending::Defense`
+/// opened at all (the victim had nothing eligible to spend), this is a
+/// no-op. If the next line isn't a "defends" line at all, that means BGO
+/// didn't log one for a defense that DID open -- treated as 0 committed
+/// (the common case: RB, committing defense cards is rare and costly).
+fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Result<(), MismatchKind> {
+    if !matches!(r.state.pending.top(), Some(Pending::Defense(_))) {
+        return Ok(());
+    }
+    match next_text.and_then(defends_count) {
+        Some(n) if n > 0 => Err(MismatchKind::UnrecoverableHiddenInfo(format!(
+            "aggression defense: {n} committed defense card(s), BGO logs only the count, never identities"
+        ))),
+        _ => r.try_apply(Move::DefendDone, false),
+    }
+}
+
+/// `color_after`'s callers need the ACTOR's own colour (not the target's)
+/// to build the `"<Actor> is A"` marker `pact_side` searches for.
+fn target_actor_color(seat: u8) -> Color {
+    match seat {
+        0 => Color::Orange,
+        1 => Color::Purple,
+        2 => Color::Green,
+        _ => Color::Grey,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_action_cost_sums_a_civil_and_a_military_clause_on_one_line() {
+        // Hammurabi's leader ability converts part of a take's cost from a
+        // civil action to a military one -- the two clauses share a line.
+        let text = "Orange takes Breakthrough in hand Orange uses 1 civil action; \
+                     Orange uses 1 military action";
+        assert_eq!(total_action_cost(text), Some(2));
+    }
+
+    #[test]
+    fn total_action_cost_reads_a_single_civil_clause() {
+        let text = "Orange takes Engineering Genius in hand Orange uses 1 civil action";
+        assert_eq!(total_action_cost(text), Some(1));
+    }
+
+    #[test]
+    fn total_action_cost_is_none_when_no_uses_clause_is_present() {
+        assert_eq!(total_action_cost("Orange increases population Orange spends 2 food"), None);
+    }
+
+    #[test]
+    fn color_after_finds_the_war_target_past_the_on_marker() {
+        let text = "declares War over Culture on Green The victor takes 5 culture ...";
+        assert_eq!(color_after(text, " on "), Some(Color::Green));
+    }
+
+    #[test]
+    fn color_after_finds_the_aggression_target_past_the_against_marker() {
+        let text = "plays Plunder against Orange Your rival loses ...";
+        assert_eq!(color_after(text, " against "), Some(Color::Orange));
+    }
+
+    #[test]
+    fn color_after_is_none_when_the_marker_is_not_followed_by_a_known_colour() {
+        assert_eq!(color_after("declares War over Culture on nobody", " on "), None);
+    }
+
+    #[test]
+    fn wonder_stage_count_reads_the_leading_digit() {
+        assert_eq!(wonder_stage_count("1 stage of Pyramids; ; Wonder completed"), Some(1));
+        assert_eq!(wonder_stage_count("2 stages of Colossus"), Some(2));
+    }
+
+    #[test]
+    fn spent_resources_reads_a_resources_clause_not_a_food_clause() {
+        assert_eq!(spent_resources("Purple builds Bronze Purple spends 2 resources"), Some(2));
+        assert_eq!(spent_resources("Purple increases population Purple spends 1 food"), None);
+    }
+
+    /// REPLAYER FIX (`docs/REPLAY.md` fifth pass): Reserves' `FoodOrRes`
+    /// pick is glued onto the SAME row as the "plays Reserves" line, not a
+    /// standalone row -- `trailing_produces` reads it from anywhere in the
+    /// text, unlike `parse_standalone_produces` which requires the WHOLE
+    /// line to be nothing else.
+    #[test]
+    fn trailing_produces_reads_a_produces_clause_glued_onto_a_play_line() {
+        assert_eq!(trailing_produces("Orange plays Reserves Orange produces 2 resources"), Some((true, 2)));
+        assert_eq!(trailing_produces("Orange plays Reserves Orange produces 3 food"), Some((false, 3)));
+    }
+
+    #[test]
+    fn trailing_produces_is_none_with_no_produces_clause_at_all() {
+        assert_eq!(trailing_produces("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    #[test]
+    fn spent_resources_reads_the_discounted_amount_on_a_using_line() {
+        assert_eq!(
+            spent_resources("Purple builds Printing Press using Urban Growth Purple spends 2 resources"),
+            Some(2)
+        );
+    }
+
+    /// REPLAYER FIX (`docs/REPLAY.md` fifth pass): a unit build/upgrade's
+    /// `p.mil_discount`-funded portion is printed as a SEPARATE `"loses N
+    /// military resource"` clause, not folded into `"spends"` -- reading
+    /// `spends` alone silently under-counted the total by exactly this much.
+    #[test]
+    fn lost_military_resource_reads_a_loses_military_resource_clause() {
+        assert_eq!(
+            lost_military_resource("Purple builds Warrior Purple loses 1 military resource; Purple spends 1 resource"),
+            Some(1)
+        );
+        assert_eq!(
+            lost_military_resource("Green builds Warrior Green loses 2 military resource"),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn lost_military_resource_ignores_an_unrelated_loses_clause() {
+        // "loses 1 population" (Reign of Terror etc.) must not be mistaken
+        // for a military-resource clause just because both start with " loses ".
+        assert_eq!(lost_military_resource("Purple loses 1 population"), None);
+        assert_eq!(lost_military_resource("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    /// The property this binary's build-cost cross-check actually needs:
+    /// the TOTAL a unit build paid is `loses` + `spends` summed, matching
+    /// the engine's own `costs::build_cost_for` (which prices units at full
+    /// printed cost, before `p.mil_discount` is netted off at apply time) --
+    /// confirmed against real BGO games where reading `spends` alone made
+    /// this binary wrongly report a "build cost mismatch (unmodeled
+    /// discount)" for a cost that was actually correct once both clauses are
+    /// counted.
+    #[test]
+    fn total_paid_for_build_sums_the_military_resource_and_spends_clauses() {
+        assert_eq!(
+            total_paid_for_build("Purple builds Warrior Purple loses 1 military resource; Purple spends 1 resource"),
+            Some(2)
+        );
+        assert_eq!(
+            total_paid_for_build("Purple builds Swordsmen Purple loses 1 military resource; Purple spends 2 resources"),
+            Some(3)
+        );
+        // A fully mil-discount-funded build has no "spends" clause at all.
+        assert_eq!(total_paid_for_build("Green builds Warrior Green loses 2 military resource"), Some(2));
+        // An ordinary building has neither clause matching "loses ... military
+        // resource" -- falls back to plain `spends`.
+        assert_eq!(total_paid_for_build("Purple builds Bronze Purple spends 2 resources"), Some(2));
+        // Neither clause present at all (e.g. a fully free build): None.
+        assert_eq!(total_paid_for_build("Purple builds 1 stage of Pyramids"), None);
+    }
+
+    #[test]
+    fn defends_count_reads_the_committed_card_count() {
+        let text = "Orange defends 1 Defense card +6 played; Orange strength: 26; Purple strength: 26";
+        assert_eq!(defends_count(text), Some(1));
+    }
+
+    #[test]
+    fn defends_count_is_none_for_a_line_that_is_not_a_defends_line() {
+        assert_eq!(defends_count("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    #[test]
+    fn current_event_name_extracts_the_bare_name_between_the_slash_and_the_semicolon() {
+        let text = "Purple plays event Purple scores 1 culture; Current event:; \
+                     A / Development of Agriculture; Each civilization gains 2 food.";
+        assert_eq!(current_event_name(text), Some("Development of Agriculture"));
+    }
+
+    #[test]
+    fn current_event_name_is_none_when_there_is_no_current_event_clause() {
+        assert_eq!(current_event_name("Orange builds Bronze Orange spends 2 resources"), None);
+    }
+}

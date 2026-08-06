@@ -28,6 +28,7 @@ pub mod game;
 pub mod harness;
 pub mod interact;
 pub mod moves;
+pub mod replay_common;
 pub mod rng;
 pub mod state;
 pub mod stats;
