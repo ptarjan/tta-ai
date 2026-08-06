@@ -41,6 +41,19 @@ fi
 # a champion is only comparable against its own player count.
 THREADS=2
 
+# The frozen gauntlet (docs/RUST_LEAGUE.md "The anchor number is not a
+# strength ladder", analysis/frozen/gauntlet/README.md): dated past champions
+# that never move, reported alongside the anchor because the anchor itself
+# saturated long ago.  Every arm plays all three, 2p included -- the finding
+# that motivated this was a *cross*-player-count matchup (the 3p vector,
+# seated at a 2p table).  Purely observational: it cannot veto or accept a
+# generation, only get logged.  At the cadence and game count `climb`
+# defaults to (--gauntlet-every 50, --gauntlet-games 60), this costs about
+# 3.6 games/generation amortized -- see that doc section for the arithmetic.
+GAUNTLET_2P=analysis/frozen/gauntlet/champion_2p_gen1454_140key_2026-08-06.json
+GAUNTLET_3P=analysis/frozen/gauntlet/champion_3p_gen1384_140key_2026-08-06.json
+GAUNTLET_4P=analysis/frozen/gauntlet/champion_4p_gen448_140key_2026-08-06.json
+
 for PLAYERS in 2 3 4; do
     SENTINEL=$LOGDIR/stop_rust_league_${PLAYERS}p
     # `-f` matches the whole command line, so `--players N` is what
@@ -72,5 +85,8 @@ for PLAYERS in 2 3 4; do
         --threads "$THREADS" \
         --hours 6 \
         --seed "$PLAYERS" \
+        --gauntlet "$GAUNTLET_2P" \
+        --gauntlet "$GAUNTLET_3P" \
+        --gauntlet "$GAUNTLET_4P" \
         >>"$LOGDIR/rust_league_${PLAYERS}p.log" 2>&1 &
 done

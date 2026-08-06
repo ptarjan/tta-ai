@@ -346,19 +346,22 @@ struct Anchor {
     half: f64,
 }
 
-fn measure_anchor(w: &Weights, cfg: &Config, seed: u64) -> Anchor {
-    let mut duel = Match {
-        a: *w,
-        b: cfg.anchor,
-        kind: cfg.kind,
-        games: cfg.anchor_games,
-        players: cfg.players,
-        seed,
-        threads: cfg.threads,
-    };
-    duel.validate().expect("anchor duel was validated at start-up");
+/// Win share (+ two-sided half-width) of `w` against `opponent` over `games`
+/// games at this run's table size. Shared by the anchor check and the
+/// gauntlet below -- both ask "how does this vector do against a fixed
+/// reference", they differ only in what the reference is and what happens
+/// with the answer: the anchor can veto a promotion, the gauntlet is only
+/// ever logged.
+fn measure_against(w: &Weights, opponent: &Weights, cfg: &Config, games: usize, seed: u64) -> Anchor {
+    let mut duel =
+        Match { a: *w, b: *opponent, kind: cfg.kind, games, players: cfg.players, seed, threads: cfg.threads };
+    duel.validate().expect("duel was validated at start-up");
     let s = Summary::of(&duel.play(), cfg.players as usize);
     Anchor { mean: s.win.mean, half: if s.win.half.is_finite() { s.win.half } else { 1.0 } }
+}
+
+fn measure_anchor(w: &Weights, cfg: &Config, seed: u64) -> Anchor {
+    measure_against(w, &cfg.anchor, cfg, cfg.anchor_games, seed)
 }
 
 impl Anchor {
@@ -367,6 +370,32 @@ impl Anchor {
     fn clearly_worse_than(&self, other: &Anchor) -> bool {
         self.mean + self.half < other.mean - other.half
     }
+}
+
+/// The champion's standing against every frozen gauntlet member
+/// (`docs/RUST_LEAGUE.md`'s "gauntlet" section) -- purely observational,
+/// never consulted by the accept gate or the drift veto. Empty when
+/// `--gauntlet` was never passed, which keeps every existing invocation of
+/// this binary (and every test) byte-for-byte unaffected.
+fn measure_gauntlet(w: &Weights, cfg: &Config, seed_base: u64) -> Vec<(String, Anchor)> {
+    cfg.gauntlet
+        .iter()
+        .enumerate()
+        .map(|(i, (name, opponent))| {
+            // `104_729` is just a prime far bigger than any plausible member
+            // count, so consecutive members' seed ranges cannot overlap.
+            let seed = seed_base.wrapping_add(i as u64 * 104_729);
+            (name.clone(), measure_against(w, opponent, cfg, cfg.gauntlet_games, seed))
+        })
+        .collect()
+}
+
+/// Whether generation `gen` is due for a gauntlet measurement. A pure
+/// function so the cadence is testable without playing a single game.
+/// `every == 0` disables the gauntlet entirely (also true if `--gauntlet`
+/// was never passed, since `measure_gauntlet` returns nothing to log then).
+fn gauntlet_due(gen: u64, every: usize) -> bool {
+    every > 0 && gen % every as u64 == 0
 }
 
 // ====================================================================== args
@@ -389,6 +418,12 @@ struct Config {
     anchor_games: usize,
     threads: usize,
     accept_z: f64,
+    /// Frozen past champions this run reports standing against, labelled by
+    /// filename stem. Observation only -- see [`measure_gauntlet`]. Never
+    /// read by the accept gate or [`Anchor::clearly_worse_than`].
+    gauntlet: Vec<(String, Weights)>,
+    /// Games played per gauntlet member, each time the gauntlet runs.
+    gauntlet_games: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -403,6 +438,10 @@ struct Args {
     sigma: f64,
     sigma_floor: f64,
     stall_kick: usize,
+    /// Generations between gauntlet measurements; 0 disables it. A run-loop
+    /// cadence, not a duel parameter, so it lives here rather than in
+    /// [`Config`] alongside `gauntlet_games`.
+    gauntlet_every: usize,
 }
 
 impl Default for Args {
@@ -419,6 +458,8 @@ impl Default for Args {
                 anchor_games: 120,
                 threads: 1,
                 accept_z: 1.2816,
+                gauntlet: Vec::new(),
+                gauntlet_games: 60,
             },
             out: PathBuf::from("champion.json"),
             log: None,
@@ -429,6 +470,7 @@ impl Default for Args {
             sigma: 0.25,
             sigma_floor: 0.08,
             stall_kick: 15,
+            gauntlet_every: 50,
         }
     }
 }
@@ -450,6 +492,11 @@ usage: climb --out PATH [options]
   --min-games N      games before an early accept is allowed (default: 2x --screen)
   --max-games N      games a single challenge may spend (default 240)
   --anchor-games N   games per anchor measurement (default 120)
+  --gauntlet PATH    frozen past champion to report standing against
+                     (repeatable; observational only, never gates a promotion)
+  --gauntlet-games N games per gauntlet member each time it runs (default 60)
+  --gauntlet-every N generations between gauntlet measurements; 0 disables
+                     (default 50)
   --threads N        games in parallel (default 1)
   --seed N           run seed (default 0)
   --sigma X          initial step size, if not resumed (default 0.25)
@@ -481,6 +528,21 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--min-games" => a.cfg.min_games = parse_num(&value(flag)?, flag)?,
             "--max-games" => a.cfg.max_games = parse_num(&value(flag)?, flag)?,
             "--anchor-games" => a.cfg.anchor_games = parse_num(&value(flag)?, flag)?,
+            "--gauntlet" => {
+                let p = PathBuf::from(value(flag)?);
+                let w = load_weights(&p)?;
+                // The filename stem carries the provenance (generation, key
+                // count, date -- see analysis/frozen/README.md's naming
+                // rule), which is exactly what belongs in the log next to
+                // the number, so reuse it rather than inventing a new label.
+                let label = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.display().to_string());
+                a.cfg.gauntlet.push((label, w));
+            }
+            "--gauntlet-games" => a.cfg.gauntlet_games = parse_num(&value(flag)?, flag)?,
+            "--gauntlet-every" => a.gauntlet_every = parse_num(&value(flag)?, flag)?,
             "--threads" => a.cfg.threads = parse_num(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
             "--sigma" => a.sigma = parse_num(&value(flag)?, flag)?,
@@ -511,6 +573,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     probe(a.cfg.screen).map_err(|e| format!("--screen: {e}"))?;
     probe(a.cfg.max_games).map_err(|e| format!("--max-games: {e}"))?;
     probe(a.cfg.anchor_games).map_err(|e| format!("--anchor-games: {e}"))?;
+    probe(a.cfg.gauntlet_games).map_err(|e| format!("--gauntlet-games: {e}"))?;
     if a.cfg.max_games < a.cfg.screen {
         return Err("--max-games must be at least --screen".to_string());
     }
@@ -702,6 +765,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
 
+        // Deliberately NOT every generation -- see docs/RUST_LEAGUE.md's
+        // "gauntlet" section for the cost/generation this cadence buys. Runs
+        // against the champion this generation actually settled on (after
+        // accept/veto/reject), same as the anchor `standing` it is logged
+        // beside.
+        let gauntlet = if gauntlet_due(progress.gen, args.gauntlet_every) {
+            measure_gauntlet(
+                &args.cfg.champion,
+                &args.cfg,
+                20_011u64.wrapping_add(progress.gen.wrapping_mul(53)),
+            )
+        } else {
+            Vec::new()
+        };
+
         let secs = t0.elapsed().as_secs_f64();
         let verdict = if accepted {
             "ACCEPT"
@@ -710,21 +788,44 @@ fn main() -> ExitCode {
         } else {
             "reject"
         };
+        let gauntlet_str = if gauntlet.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " gauntlet=[{}]",
+                gauntlet
+                    .iter()
+                    .map(|(name, a)| format!("{name}={:.3}", a.mean))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
         println!(
-            "[{}p] gen {} {} sigma={:.3} {:.1}s anchor={:.3} {}",
+            "[{}p] gen {} {} sigma={:.3} {:.1}s anchor={:.3}{} {}",
             args.cfg.players,
             progress.gen,
             verdict,
             progress.sigma,
             secs,
             standing.mean,
+            gauntlet_str,
             tried.join(" "),
         );
         if let Some(path) = &args.log {
+            let gauntlet_json: String = gauntlet
+                .iter()
+                .map(|(name, a)| {
+                    format!(
+                        "{{\"name\":\"{name}\",\"share\":{:.4},\"half\":{:.4},\"n\":{}}}",
+                        a.mean, a.half, args.cfg.gauntlet_games,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
             let line = format!(
                 "{{\"gen\":{},\"players\":{},\"accepted\":{},\"vetoed\":{},\"sigma\":{:.4},\
                  \"secs\":{:.1},\"since_accept\":{},\"anchor\":{:.4},\"anchor_half\":{:.4},\
-                 \"tried\":[{}]}}\n",
+                 \"gauntlet\":[{}],\"tried\":[{}]}}\n",
                 progress.gen,
                 args.cfg.players,
                 accepted,
@@ -734,6 +835,7 @@ fn main() -> ExitCode {
                 progress.since_accept,
                 standing.mean,
                 standing.half,
+                gauntlet_json,
                 tried.join(","),
             );
             // A log that cannot be written is worth saying so about once, but
@@ -934,6 +1036,93 @@ mod tests {
         let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
         assert!(mean.abs() < 0.05, "mean {mean}");
         assert!((var.sqrt() - 2.0).abs() < 0.1, "sd {}", var.sqrt());
+    }
+
+    // ================================================================ gauntlet
+
+    #[test]
+    fn the_gauntlet_is_due_only_on_multiples_of_its_cadence() {
+        assert!(gauntlet_due(50, 50));
+        assert!(gauntlet_due(100, 50));
+        assert!(!gauntlet_due(49, 50));
+        assert!(!gauntlet_due(51, 50));
+        // 0 is the "disabled" cadence, not an every-generation one.
+        assert!(!gauntlet_due(50, 0));
+        assert!(!gauntlet_due(0, 0));
+    }
+
+    #[test]
+    fn an_empty_gauntlet_plays_no_games_and_reports_nothing() {
+        let c = cfg();
+        assert!(c.gauntlet.is_empty());
+        let got = measure_gauntlet(&c.champion, &c, 1);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn the_gauntlet_reports_one_row_per_member_labelled_by_name() {
+        let mut c = cfg();
+        c.players = 2;
+        c.gauntlet_games = 4; // cheap: this only checks shape, not the number
+        c.gauntlet = vec![
+            ("frozen_a".to_string(), Weights::defaults()),
+            ("frozen_b".to_string(), Weights::defaults()),
+        ];
+        let got = measure_gauntlet(&c.champion, &c, 42);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, "frozen_a");
+        assert_eq!(got[1].0, "frozen_b");
+        for (_, a) in &got {
+            assert!((0.0..=1.0).contains(&a.mean), "share {} out of range", a.mean);
+        }
+    }
+
+    /// The whole point of the gauntlet is that it cannot move the champion:
+    /// nothing in this file reads `Config::gauntlet` or `measure_gauntlet`'s
+    /// return value except the logging code in `main`. This test pins the
+    /// weaker but checkable half of that claim -- the accept gate's own
+    /// logic (`c.lo > cfg.null()`, [`Anchor::clearly_worse_than`]) never
+    /// takes a gauntlet result as an argument, which a type signature grep
+    /// of this file confirms and a future refactor could silently break.
+    #[test]
+    fn gauntlet_measurement_does_not_influence_the_accept_gate() {
+        let mut c = cfg();
+        c.players = 2;
+        c.gauntlet_games = 4;
+        c.gauntlet = vec![("frozen".to_string(), Weights::defaults())];
+        // Run it twice, once with the gauntlet populated and once without --
+        // the mutant accept decision (`challenge`) must be identical either
+        // way, since it never consults `c.gauntlet`.
+        let with_gauntlet = challenge(&c.champion, &c, 777);
+        c.gauntlet.clear();
+        let without_gauntlet = challenge(&c.champion, &c, 777);
+        assert_eq!(with_gauntlet.share, without_gauntlet.share);
+        assert_eq!(with_gauntlet.lo, without_gauntlet.lo);
+    }
+
+    #[test]
+    fn a_gauntlet_flag_loads_the_file_and_labels_it_by_stem() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_flag");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("champion_2p_gen99_140key_2026-08-06.json");
+        save_weights(&path, &Weights::defaults(), &[("gen", 99.0)]).unwrap();
+
+        let args = parse_args(&[
+            "--gauntlet".into(),
+            path.to_string_lossy().into_owned(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.cfg.gauntlet.len(), 1);
+        assert_eq!(args.cfg.gauntlet[0].0, "champion_2p_gen99_140key_2026-08-06");
+        assert_eq!(args.cfg.gauntlet[0].1.get(WeightKey::Culture), Weights::defaults().get(WeightKey::Culture));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_gauntlet_flag_pointing_at_a_missing_file_is_a_command_line_error() {
+        let e = parse_args(&["--gauntlet".into(), "/nonexistent/tta/nope.json".into()]);
+        assert!(e.is_err(), "{e:?}");
     }
 
     #[test]

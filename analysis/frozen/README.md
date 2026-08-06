@@ -4,6 +4,13 @@ These files are the fixed reference bots the A/B harnesses load. They are
 **not** the bot the league trains. This file exists because that difference
 silently invalidated a night of measurements, and nothing on disk said so.
 
+**`gauntlet/`, this directory's one subdirectory, is a different collection
+for a different purpose** — dated past champions `climb` itself measures the
+live champion against every `--gauntlet-every` generations, because the
+anchor it already compares against saturated (`docs/RUST_LEAGUE.md`'s "The
+anchor number is not a strength ladder"). Same freeze-forever, append-only
+rule as everything below, its own `README.md`, but not an A/B harness input.
+
 ## Provenance
 
 All three were written by `f6318cc` (2026-07-26 12:45) — "frozen champion
