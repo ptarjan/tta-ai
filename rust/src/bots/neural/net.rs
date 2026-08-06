@@ -269,14 +269,6 @@ pub(crate) fn push_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
-/// `pub(crate)`: `train.rs`'s own `RankData` binary format (record counts
-/// can run past `u32::MAX` bits of precision headroom is nice to have, if
-/// never strictly needed at today's dataset sizes) reuses this rather than
-/// hand-rolling a second little-endian writer.
-pub(crate) fn push_u64(out: &mut Vec<u8>, v: u64) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
 /// Append every element of `xs` as 8-byte little-endian `f64`s, in order.
 pub(crate) fn push_f64_slice(out: &mut Vec<u8>, xs: &[f64]) {
     for &x in xs {
@@ -312,10 +304,6 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    pub(crate) fn u64(&mut self) -> Result<u64, String> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
-    }
-
     pub(crate) fn f64(&mut self) -> Result<f64, String> {
         Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
@@ -328,17 +316,6 @@ impl<'a> Reader<'a> {
         String::from_utf8(self.take(n)?.to_vec()).map_err(|e| format!("checkpoint: meta key is not utf8: {e}"))
     }
 
-    /// True once every byte has been consumed -- callers use this to catch
-    /// trailing garbage after an otherwise well-formed record.
-    pub(crate) fn at_end(&self) -> bool {
-        self.pos == self.bytes.len()
-    }
-
-    /// Bytes consumed so far, for an error message pointing at exactly
-    /// where a "trailing bytes" mismatch was detected.
-    pub(crate) fn pos(&self) -> usize {
-        self.pos
-    }
 }
 
 /// Serialise `net` plus `meta` (arbitrary named numbers -- the trainer's

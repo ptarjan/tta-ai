@@ -164,10 +164,6 @@ impl SelfCheckKey {
         }
     }
 
-    fn parse(s: &str) -> Option<SelfCheckKey> {
-        SELF_CHECKS.iter().copied().find(|k| k.as_str() == s)
-    }
-
     /// What the mirror predicts the app is showing for this key. No
     /// `effects::invalidate` -- this port's `effects::compute` recomputes
     /// fresh every call (see `advisor::state_io`'s own doc comment on why).
@@ -214,9 +210,6 @@ impl BoardKey {
         }
     }
 
-    fn parse(s: &str) -> Option<BoardKey> {
-        BOARD_CHECKS.iter().copied().find(|k| k.as_str() == s)
-    }
 }
 
 // ------------------------------------------------------------ rival checks
@@ -350,10 +343,6 @@ impl RivalAskKey {
             Col => ProbeId::RivalColonies,
             Wip => ProbeId::RivalWonderProgress,
         }
-    }
-
-    fn parse(s: &str) -> Option<RivalAskKey> {
-        RIVAL_ASK_KEYS.iter().copied().find(|k| k.as_str() == s)
     }
 
     /// What the mirror believes about this CHECKED quantity. Only meaningful

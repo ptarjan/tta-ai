@@ -8,10 +8,6 @@
 //! Scope is the base game only. The expansion is deliberately out of scope.
 
 #![forbid(unsafe_code)]
-// The port is incremental and the type layer lands before the module bodies
-// that consume it; without this the crate is a wall of warnings that hides the
-// real ones. Delete this line once `effects` and `actions` are ported.
-#![allow(dead_code)]
 
 pub mod advisor;
 pub mod apply;
