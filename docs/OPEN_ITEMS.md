@@ -285,11 +285,12 @@ an engineering decision.
   Read by `effects.compute` (`engine/effects.py:462-463`,
   `rust/src/effects.rs:1242-1243`), written by nothing in either engine —
   event-granted per-turn culture/science channels that exist and are
-  always zero. `rust/src/fixtures.rs`'s `req_num` (lines 1516-1517) makes
-  both part of the FIXTURE FORMAT, so deleting them means touching the
-  fixture reader and ~65MB of committed fixtures, not just two struct
-  fields. Either implement the event effect that should write them, or do
-  the fixture-format surgery — neither has been started.
+  always zero. Used to also be pinned into the Python-parity fixture
+  format (`rust/src/fixtures.rs`'s `req_num`, ~65MB of committed
+  fixtures) as a reason not to touch the struct fields; that corpus and
+  its reader were retired with the Python engine, so that constraint is
+  gone. Either implement the event effect that should write them, or
+  delete the two dead fields — neither has been started.
 * **`one_time_discount` is in-flight, split across the two engines.** The
   Python bug ("one-time" was a lie — never cleared, so it silently applies
   to every future build/develop/population-increase) has been fixed:

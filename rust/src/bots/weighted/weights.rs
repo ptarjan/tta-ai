@@ -4,8 +4,9 @@
 //! that Python range's own extensive per-weight commentary for the "why"
 //! behind each fitted number; it is the source of the rationale and is
 //! deliberately not reproduced line-for-line here -- this module ports the
-//! SHAPE and the VALUES (pinned against Python byte-for-byte by
-//! `rust/tests/weighted_horizon.rs`), not the prose.
+//! SHAPE and the VALUES (pinned against Python byte-for-byte during the
+//! port by the since-retired `rust/tests/weighted_horizon.rs`), not the
+//! prose.
 //!
 //! ## Representation: an enum, not a string-keyed map
 //!
@@ -671,8 +672,9 @@ mod tests {
     use std::collections::HashSet;
 
     /// Every [`WeightKey`] round-trips through its printed name -- the
-    /// invariant the differential test (`rust/tests/weighted_horizon.rs`)
-    /// relies on to compare Rust's defaults against Python's by name.
+    /// invariant the (since-retired) differential test
+    /// `rust/tests/weighted_horizon.rs` relied on to compare Rust's
+    /// defaults against Python's by name.
     #[test]
     fn every_weight_key_name_round_trips() {
         for &k in WeightKey::ALL {

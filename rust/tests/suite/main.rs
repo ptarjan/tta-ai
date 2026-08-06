@@ -23,18 +23,4 @@ mod common;
 
 mod bench_playout;
 mod board_yields;
-mod book;
-mod card_coverage;
-mod counting;
-mod differential;
-mod greedy_features;
-mod neural;
-mod plan;
 mod random_game;
-mod weighted_cards;
-mod weighted_eval;
-mod weighted_events;
-mod weighted_features;
-mod weighted_horizon;
-mod weighted_rivals;
-mod weighted_row;

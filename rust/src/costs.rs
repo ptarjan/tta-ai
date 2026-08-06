@@ -930,8 +930,8 @@ mod tests {
 
     /// Masonry prints `buildDiscount {I: 1, II: 1, III: 1}`; Bread and
     /// Circuses is an ARENA (urban) of Age I with a printed build cost of 3.
-    /// This is the exact case `tests/differential.rs` had allowlisted:
-    /// Python charges 2, Rust used to charge 3.
+    /// This is the exact case the (since-retired) Python-parity differential
+    /// suite had allowlisted: Python charges 2, Rust used to charge 3.
     #[test]
     fn build_cost_for_applies_the_per_age_build_discount_to_urban_cards() {
         let mut p = blank_player(0, card("Despotism"));

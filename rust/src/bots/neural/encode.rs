@@ -809,9 +809,10 @@ mod tests {
 
     /// Pinned against `python3.13 -c "from engine.bots import neural_encode as
     /// NE; print(NE.encoding_dim())"` (1907, checked 2026-08-05) -- the
-    /// differential test (`rust/tests/neural.rs`) checks every coordinate on
-    /// real states, but this is the one-line guard that fires first and
-    /// fastest if the two ever disagree about the vector's LENGTH.
+    /// (since-retired) differential test `rust/tests/neural.rs` used to
+    /// check every coordinate on real states, but this is the one-line guard
+    /// that fires first and fastest if the two ever disagree about the
+    /// vector's LENGTH.
     #[test]
     fn encoding_dim_matches_python() {
         assert_eq!(ENCODING_DIM, 1907, "must match engine.bots.neural_encode.encoding_dim()");

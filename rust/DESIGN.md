@@ -81,18 +81,36 @@ on 2026-08-04.
 
 ## How correctness is established
 
-Differential testing against the Python engine, with the oracle **offline**
-because there is no in-process bridge:
+While the port was in progress, correctness was established by differential
+testing against the Python engine, with the oracle **offline** because there
+is no in-process bridge:
 
-1. Python replays seeded self-play games and dumps, per ply, the state digest,
-   the legal-move list and the chosen move (`tools/dump_fixtures.py`).
-2. Rust replays the same fixtures and asserts identical digests, identical legal
-   moves in identical order, and identical resulting states.
-3. A divergence names one ply and one field. That is a cheap, precise target.
+1. Python replayed seeded self-play games and dumped, per ply, the state
+   digest, the legal-move list and the chosen move (`tools/dump_fixtures.py`
+   and its siblings, one dump script per Rust module under test).
+2. Rust replayed the same fixtures and asserted identical digests, identical
+   legal moves in identical order, and identical resulting states.
+3. A divergence named one ply and one field. That was a cheap, precise target.
 
 "Make the tests pass" is where a port's budget dies; "state diverges at ply 41,
-field `food`" does not. The Python `engine/statediff.py` already exists for
-exactly this comparison and its output format is what the Rust side reproduces.
+field `food`" does not. The Python `engine/statediff.py` existed for exactly
+this comparison and its output format is what the Rust side reproduced.
+
+That corpus (`rust/tests/*_fixtures/`, ~62MB of recorded Python answers) did
+its job: the port passed every differential test on master before this
+paragraph was rewritten. It was retired together with the machinery that only
+existed to read it once the Python engine it recorded was slated for deletion
+— a fixture can never be regenerated once its source engine is gone, and a
+fix that makes Rust MORE correct (matching the rulebook, not Python) will
+always turn some of those frozen recordings red. Keeping the corpus around
+would have meant either reverting real bug fixes or maintaining a permanent
+allowlist of "known-better-than-Python" divergences, which is worse than no
+test at all: it hides exactly the class of regression this project's own
+"present in this registry, absent from that one" bug shape warns about.
+Correctness is now established the ordinary way — Rust's own unit tests
+(`rust/src/**`, `#[cfg(test)]`) and the rules/behaviour integration tests
+under `rust/tests/`, both checked against the rulebook and constructed
+expectations rather than against a frozen Python recording.
 
 Move ordering is part of the contract, not an implementation detail: the bots
 break ties by index, so a reordered `legal_moves` silently changes play.
@@ -115,6 +133,8 @@ worker handed a finished type layout writes idiomatic Rust by construction and
 the job stays mechanical.
 
 Workers then fill in module bodies against those types, one short worker per
-module, each finishing at a green differential run. Short workers, never long
-ones: a subagent never compacts, so its context only grows and every step
-re-reads all of it.
+module, each finishing at a green test run (a green differential run, back
+when the Python-parity corpus was still how correctness was checked; a green
+`cargo test --profile difftest` now). Short workers, never long ones: a
+subagent never compacts, so its context only grows and every step re-reads
+all of it.

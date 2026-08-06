@@ -164,9 +164,10 @@ pub enum GainFeature {
 }
 
 impl GainFeature {
-    /// Every variant, in declaration order -- for the differential test's own
-    /// both-directions iteration (`rust/tests/weighted_rivals.rs`), the same
-    /// role `WeightKey::ALL` plays for `weights.rs`.
+    /// Every variant, in declaration order -- for the (since-retired)
+    /// differential test's own both-directions iteration
+    /// (`rust/tests/weighted_rivals.rs`), the same role `WeightKey::ALL`
+    /// plays for `weights.rs`.
     pub const ALL: &'static [GainFeature] = &[
         GainFeature::CultureRate,
         GainFeature::ScienceRate,
@@ -668,10 +669,12 @@ pub fn rival_context(
 /// [`strength_marginal`] needs, off [`effects::state_stats`] rather than a
 /// bare `compute`.
 ///
-/// A SECOND SPELLING OF ONE QUANTITY, so it is guarded like one: the
-/// differential test in `rust/tests/weighted_rivals.rs` checks this against
-/// `RivalContext::rival_strength` on every sampled state, the same device
-/// Python's `TestRivalStrengthAgrees` uses.
+/// A SECOND SPELLING OF ONE QUANTITY, so it is guarded like one:
+/// `rival_strength_agrees_with_rival_context` below checks this against
+/// `RivalContext::rival_strength` directly; the (since-retired) differential
+/// test in `rust/tests/weighted_rivals.rs` used to check the same invariant
+/// against real sampled states, the same device Python's
+/// `TestRivalStrengthAgrees` uses.
 pub fn rival_strength(state: &GameState, idx: u8) -> i32 {
     let mut best = 0;
     for q in state.players[..state.num_players as usize].iter() {
@@ -833,8 +836,9 @@ mod tests {
     }
 
     /// `GainFeature::ALL` has no duplicate name and covers every variant --
-    /// the invariant `rust/tests/weighted_rivals.rs` relies on to compare
-    /// Python's `gains` dict against `Gains` by name in both directions.
+    /// the invariant the (since-retired) `rust/tests/weighted_rivals.rs`
+    /// relied on to compare Python's `gains` dict against `Gains` by name in
+    /// both directions.
     #[test]
     fn gain_feature_all_names_are_unique_and_complete() {
         use std::collections::HashSet;
@@ -870,8 +874,9 @@ mod tests {
     /// `rival_strength` (the standalone spelling) agrees with
     /// `RivalContext::rival_strength` (the batched spelling) on a real deal
     /// -- guards the "second spelling of one quantity" invariant this
-    /// module's own doc comment on `rival_strength` calls out, the same way
-    /// `rust/tests/weighted_rivals.rs` does across the sampled fixtures.
+    /// module's own doc comment on `rival_strength` calls out, the same
+    /// invariant the (since-retired) `rust/tests/weighted_rivals.rs` used to
+    /// check across sampled fixtures.
     #[test]
     fn rival_strength_agrees_with_rival_context() {
         for n in [2u8, 3, 4] {

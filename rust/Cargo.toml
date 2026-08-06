@@ -27,9 +27,12 @@ panic = "abort"
 [profile.bench]
 inherits = "release"
 
-# Debug assertions stay ON in the differential-testing profile: the port's
-# whole safety net is "the invariant fired at ply 41", and an invariant
-# compiled out is an invariant that cannot fire. LTO and codegen-units are
+# Debug assertions stay ON in this test profile (named `difftest` from when
+# the whole suite was differential tests against the Python engine; the name
+# stuck after that corpus was retired because this is still the everyday fast
+# test path): the safety net an assertion provides only works if it can fire,
+# and an invariant compiled out is an invariant that cannot fire. LTO and
+# codegen-units are
 # relaxed here relative to [profile.release]: this profile is the test path,
 # not the self-play benchmark that `lto = "fat"`/`codegen-units = 1` are
 # justified for. An earlier measurement on the OLD 16-separate-binaries
