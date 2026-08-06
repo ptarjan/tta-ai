@@ -892,3 +892,266 @@ claimed as newly discovered bugs.
    question the third pass raised: 0/24 complete, and a full BGO game gives
    every category above many chances to fire over 15-20+ rounds.
 
+## Fifth pass: the "build cost mismatch" category fully closed (two real fixes), the two named residuals investigated further but still open, one new well-evidenced lead found
+
+This pass's job was the fourth pass's open-items list, in priority order. Two
+were closed outright (both confirmed causes, both fixed and tested); two
+(the budget-shortfall residuals, the `Development of Religion` interleave)
+were investigated in real depth but are reported honestly as STILL open,
+with new evidence attached rather than a forced fix. **0/24 still complete**
+(as every prior pass), but mean actions before a stop rose from 63.7 to
+**73.5 (+15%)**, and the `WonderStep`/`build cost mismatch` blocker
+categories the fourth pass left unresolved are gone -- replaced by new,
+deeper stops (expected, the same "closing one wall exposes the next"
+pattern every prior pass reports).
+
+### Finding A (ENGINE BUG, confirmed, fixed, tested): Development of Civil Life's discount was modeled as three independent grants; the real card is ONE mutually-exclusive choice
+
+This is a correction of a bug the fourth pass itself introduced while fixing
+a different bug. The card ("Development of Civil Life", "Development of
+Civilization" in BGO's UI) reads "Players may **either** increase its
+population; **or** build...; **or** develop a technology... 1 [resource]
+less" -- an either/or/or list, one choice among three, not a grant of three
+independent one-time discounts. `state.rs`'s prior doc comment (added
+2026-08-05) read the JSON schema's three sub-keys as license for three
+independent grants, each cleared only when its own field was spent -- a
+plausible-looking misreading that this pass found and reverted.
+
+**Confirmed wrong by replaying three separate real BGO games**, each
+showing the same shape: a human spends ONE of the three discounts (pop,
+build, or develop) and later, the same turn or a later one, pays FULL,
+undiscounted price for an action of a DIFFERENT type that the old
+independent-grants model predicted should still be discounted --
+
+- `7523357`: Grey spends the `pop_food` discount (`"increases population
+  ... spends 1 food"`, not the turn's usual 2), then later pays full price
+  (2, not 1) for a Bronze mine build the old model said should still be
+  discounted.
+- `7523350`: Orange spends `develop_science` on Printing Press (2 science,
+  not the printed 3), then pays full price for a later Bronze build.
+- `7522619`: Green spends `pop_food` (1 food, not 2), then pays full price
+  for a later Religion build (3 resources, not the discounted 2).
+
+**Fixed** via `OneTimeDiscount::exhaust()` (`state.rs`), called from all
+three consumption sites (`economy::increase_population`,
+`apply::do_build`, `apply::h_develop`) whenever THAT site's own field was
+actually live -- clearing all three fields together, not just one, and
+specifically NOT clearing anything when the acting site's own field was
+already 0 (so an ordinary, unrelated action never wipes a sibling grant
+this player hasn't spent yet). **Tests** (both confirmed to fail against the
+reverted old behaviour and pass after, by temporarily restoring the old
+independent-clearing code, rerunning, and reverting back):
+`economy::tests::increase_population_exhausts_the_whole_civil_life_grant_not_just_pop_food`,
+`apply::tests::spending_any_one_civil_life_discount_exhausts_the_whole_grant`
+(this one REPLACES a test that asserted the old, wrong behaviour by name --
+`one_time_discount_categories_are_consumed_independently` no longer exists).
+
+**Sibling grep**: `oneTimeDiscount`/`gainFoodOrResources`-shaped "list of
+alternatives, one choice" card text is rare -- grepped `card_table.rs` and
+`data/*.json` for every other "either/or" multi-field one-time grant;
+Development of Civil Life is the ONLY base-game card with an
+`oneTimeDiscount` payload at all, so there is no sibling site sharing this
+exact shape to fix. (A structurally adjacent but semantically DIFFERENT
+case, `ChoiceKind::FoodOrRes`, is Finding C below -- a replayer gap, not
+this bug.)
+
+### Finding B (`replay.rs`, not engine): a unit build/upgrade's `p.mil_discount`-funded portion is a SEPARATE journal clause, never summed into the parsed cost
+
+Closes the other half of the fourth pass's 8/24 "build cost mismatch"
+category (`7523341`, `7522668`, `7522616` -- the three where the engine's
+computed cost was HIGHER than what the journal showed paid, the opposite
+direction from Finding A's cases). BGO logs a unit build/upgrade's total
+resource payment as up to two clauses: `"loses N military resource"` (the
+portion covered by `p.mil_discount`, the real per-turn pool Patriotism /
+Wave of Nationalism / Military Build-Up grant, `costs::spend_mil_discount`)
+and `"spends N resource"` (the rest, from the ordinary pool) -- e.g. `"Purple
+builds Warrior Purple loses 1 military resource; Purple spends 1
+resource"`. `replay.rs`'s build-cost cross-check was reading `spends` alone,
+silently under-counting the total by exactly the `"loses"` amount (which
+`costs::build_cost_for` never subtracts for units on purpose -- Civil
+Life's `build_resources` discount is farm/mine/urban only, and `mil_discount`
+is netted off at APPLY time, not at this check's comparison baseline).
+Confirmed by exact arithmetic across every sampled instance: `loses` +
+`spends` always equals `build_cost_for`'s raw printed cost, including lines
+with NO Patriotism-style grant visible anywhere earlier in that player's
+turn (an unexplained baseline case -- see "What remains open," below).
+
+**Fixed** by `total_paid_for_build` (`lost_military_resource` +
+`spent_resources`, summed). **Tests**:
+`lost_military_resource_reads_a_loses_military_resource_clause`,
+`lost_military_resource_ignores_an_unrelated_loses_clause`,
+`total_paid_for_build_sums_the_military_resource_and_spends_clauses`
+(`rust/src/bin/replay.rs`).
+
+**Together, Findings A and B closed all 8/24 of the fourth pass's "build
+cost mismatch" games** -- 5 were Finding A (Bronze/Bronze/Philosophy/
+Religion/Religion), 3 were Finding B (Warriors/Swordsmen/Warriors).
+
+### Finding C (`replay.rs`, not engine): Reserves' `FoodOrRes` choice was never resolved -- the exact GainBlock bug shape, missed at the one OTHER site it applies
+
+The fourth pass fixed `ChoiceKind::GainBlock` (an event's "gain 2 resources
+or 2 food, player's choice") going unresolved and blocking a later action.
+`ChoiceKind::FoodOrRes` is the SAME journal shape -- a standalone-looking
+`"produces N food"` / `"produces N resources"` bookkeeping pick -- but is
+opened by a DIFFERENT mechanic (Reserves, `Special::GainFoodOrResources`, an
+action card's own ordered gain, §3.11) and was never covered. Grepped
+`card_table.rs` for every `GainFoodOrResources` site to confirm Reserves is
+the ONLY base-game card with this shape (never an event, so never opened
+for "every qualifying player" the way GainBlock is -- always scoped to the
+one player who played it). **Found by replaying `7523818`**: an unresolved
+`FoodOrRes` pending blocked a `WonderStep` several lines later.
+
+This did NOT get folded into the existing `GainBlock` drain code, because
+the journal shape is subtly different in a way that matters: GainBlock's
+pick is always its OWN standalone journal ROW (`"<Color> produces N
+food"`, nothing else on the line); Reserves' pick is glued onto the SAME
+row as the `"plays Reserves"` line with no separating punctuation
+(`"Orange plays Reserves Orange produces 2 resources"` -- confirmed
+against the FULL corpus: 4157 of 4158 `"plays Reserves"` lines have this
+exact glued shape). **Fixed** in `ActionClass::PlayActionCard`'s own
+handler (which has the raw line text `GainBlock`'s prescan-based drain
+doesn't need), via a new `trailing_produces` helper that reads the LAST
+`"produces"` clause anywhere in the line. **Tests**:
+`trailing_produces_reads_a_produces_clause_glued_onto_a_play_line`,
+`trailing_produces_is_none_with_no_produces_clause_at_all`.
+
+### The two residual budget-shortfall games (`7522632`, `7523087`): still open, but a new, corpus-wide lead found
+
+Re-examined both with `REPLAY_DEBUG_ALL=1` from scratch (not assuming the
+fourth pass's diagnosis). Confirmed, again, NOT Civil Life (in `7522632`
+the event doesn't even fire until 3 rounds after the shortfall), NOT
+Hammurabi's MA-as-CA conversion (the leader is gone by the time of the
+shortfall in both games), NOT Michelangelo's wonder-surcharge waiver (it's
+individually verified correct in `7523087` -- Colossus's own take costs
+exactly `row_cost`, matching its printed clause). Every individual
+CA-costing action's OWN printed cost matches this engine's own formula; the
+SUM simply exceeds the government's printed budget by exactly 1 in both
+games.
+
+**A new, well-evidenced lead**: in `7522632`, the specific failing action
+is `"Orange takes Taj Mahal in hand"` -- with **no `"uses N civil action"`
+clause at all**, unlike the overwhelming majority of civil-row takes.
+Widening the search to the full corpus (all 1,011 games, not just the
+sample) turns this from a one-off oddity into a real, structured signal:
+
+| card | total takes | no CA clause | rate |
+|---|---|---|---|
+| Taj Mahal | 317 | 150 | 47% |
+| Leonardo Da Vinci | 700 | 123 | 18% |
+| Michelangelo | 414 | 57 | 14% |
+| Great Wall | 318 | 2 | 0.6% |
+| Colossus | 274 | 7 | 2.6% |
+| Hanging Gardens | 511 | 2 | 0.4% |
+| Pyramids | 820 | 3 | 0.4% |
+| Hammurabi | 716 | 0 | 0% |
+
+This is not noise: three specific cards (two Leaders, one Wonder) show the
+missing clause 14-47% of the time; every other sampled Leader/Wonder shows
+it under 3% of the time, close to zero. `7523347` (this SAME sample's
+`Take{Taj Mahal}` slot-specific mismatch, distinct from the two named
+budget-shortfall games) hits the identical `"takes Taj Mahal in hand"`
+no-clause line, a THIRD independent occurrence. When a clause IS present
+for Taj Mahal, the cost varies (1/2/3/4 CA observed), ruling out "Taj Mahal
+has a fixed printed take cost BGO sometimes omits." **Not diagnosed**:
+several candidate explanations were considered and none confirmed --
+Michelangelo being in play does NOT explain it alone (one of the five
+sampled no-clause instances has no leader-election anywhere nearby in the
+same turn); it is not simply "first action of the turn" (checked against
+counter-examples on both sides). Flagged here, with the full cross-card
+frequency table, as the single most promising remaining lead for the two
+residual budget-shortfall games specifically -- **whatever this pattern
+turns out to mean, it directly overlaps both `7522632`'s and `7523347`'s
+proximate failing lines**, though `7523087`'s own failure (a Colossus take
+WITH a normal, correctly-priced clause) shows it cannot be the WHOLE
+explanation for that game. Per the standing rule, NOT guessed at or
+force-fixed.
+
+### The `Development of Religion` interleave (`7523791`): confirmed to be a FOUR-PLAYER interleave, not a two-player one -- root cause still open
+
+The fourth pass's framing ("a narrower bug in the FreeBuild per-player
+draining order") undersold the shape: the real journal shows FOUR
+consecutive `"<Color> builds Religion"` lines from four DIFFERENT players
+(Green, Grey, Orange, Purple in that order) with **no `EndTurn` anywhere
+between any of them** -- every qualifying player spending their own
+`Development of Religion`-granted `FreeBuild` the instant the event
+resolves, not in turn order and not gated on whose turn it nominally is
+(same "banked, spendable whenever" shape Finding 2 of the fourth pass
+established for Development of Civil Life, but for a DIFFERENT event/
+mechanic). `resolve_intervening`'s existing `ChoiceKind::FreeBuild` handling
+already drains regardless of whose turn it is, matching by whether the
+UPCOMING line's card is among the pending's own options -- and the first
+three players' builds (Green, Grey, Orange) resolve fine; only the FOURTH
+(Purple) is where `state.decider()` stops naming the actor the journal
+names next. Not root-caused this pass: the leading candidate (the
+FreeBuild queue's internal order not matching the journal's per-player
+resolution order once more than 2-3 players are queued at once) was not
+confirmed against the actual `Pending` stack ordering in time. Flagged
+open, not guessed at.
+
+### Newly reached, not diagnosed this pass (expected -- closing walls exposes new ones)
+
+Every one of these is a stop point only reachable now that Findings A/B/C
+let games run substantially deeper; none was reachable before this pass on
+this sample. Each is a single or double occurrence, too thin to responsibly
+diagnose in the time this pass had left:
+
+- **Colonize bidding** (`7523818`, newly reached): `Bid { n: 3 }` illegal,
+  only `BidPass` offered -- likely related to the pre-existing "colonize
+  sacrifice specifics" approximation this file already documents as
+  unexercised against real data until now.
+- **Aggression defense with a committed defense card** (`7523355`):
+  exactly the ALREADY-DOCUMENTED "gives up on" case (BGO logs only a
+  count, never identities) -- genuinely unrecoverable, not a bug.
+- **`Rich Land` building Iron, `ParserGap`** (`7523354`): `free_civil_build_move`
+  does not recognize an Iron build/upgrade as one of Rich Land's offered
+  options.
+- **`Upgrade` blocked by a live 2-3 option `Pending::Choice`** (`7522668`,
+  `7522652`): same general SHAPE as Finding C (a stale, un-drained pending
+  blocking a later action) but for `Upgrade` specifically -- not confirmed
+  to be the same root cause.
+- **`Pop` blocked by a live 5-option `Pending::Choice`** (`7522619`): same
+  shape again, not confirmed.
+- **`decider != expected actor`** (`7523350`, newly reached): a fresh
+  instance in a DIFFERENT game, immediately after a Civil-Life-discounted
+  `Develop`; not confirmed to be the same root cause as `7523791`'s.
+
+### Updated sample numbers after this pass
+
+| | fourth pass | fifth pass (this one) |
+|---|---|---|
+| games complete | 0/24 | 0/24 |
+| mean actions before stop | 63.7 | **73.5 (+15%)** |
+| `build cost mismatch` (unmodeled discount) | 8/24 | **0/24 (closed)** |
+| `WonderStep` illegal (2 shapes) | 5/24 | **0/24 as originally shaped** (Finding C fixed the 3 Choice-blocked cases; the 2 no-option cases are unchanged, still open, see fourth pass) |
+| civil-action-budget shortfall, unexplained | 2/24 | 2/24 (same two games, new lead found, not resolved) |
+| `decider != expected actor` (interleaving) | 1/24 | 2/24 (`7523791` root-caused further but not fixed; `7523350` newly reached) |
+
+Every game reached the same or a strictly later stop point than the fourth
+pass; none regressed.
+
+### Final-score cross-check: still not reached
+
+`game::scores(&state)` vs `index.tsv`'s `results` column still could not be
+run -- 0/24 games in this sample reached `state.game_over`. Unchanged from
+every prior pass's own note on this.
+
+### What remains open going into a sixth pass
+
+1. **The two residual budget-shortfall games** (`7522632`, `7523087`) --
+   see the Taj Mahal/Leonardo Da Vinci/Michelangelo "missing CA clause"
+   lead above; the single highest-value unstarted thread (a corpus-wide,
+   not sample-local, pattern spanning hundreds of occurrences).
+2. **The `Development of Religion` four-player interleave** (`7523791`) --
+   root-caused to a `FreeBuild` queue/drain-order question but not fixed.
+3. **The `Rich Land` building Iron `ParserGap`** (`7523354`) and the two
+   remaining no-option `WonderStep` shapes (`7523809`, `7523353`) -- single
+   occurrences, not investigated.
+4. **The new `Upgrade`/`Pop` Choice-blocked shapes** (`7522668`, `7522652`,
+   `7522619`) -- worth checking whether they share Finding C's root shape
+   (an un-drained `Pending::Choice` from an action card's own ordered gain)
+   before assuming they are something new.
+5. Colonize bidding (`7523818`) and the colonize-approximation's own
+   accuracy remain entirely unexercised against real bid amounts.
+6. Scaling the sample past 24 games remains blocked on the same scoping
+   question the third pass raised.
+
