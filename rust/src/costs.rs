@@ -225,6 +225,7 @@ pub fn urban_count(p: &PlayerState, kind: CardType) -> i32 {
 /// `card.age as u8` set once a leader of that age has ever been taken
 /// (§ one leader per age); `Age` has 5 values (A..IV) so a `u8` has ample
 /// headroom. See `state.rs`'s doc comment on the field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TakeGate {
     pub have: i32,
     pub hand_full: bool,
