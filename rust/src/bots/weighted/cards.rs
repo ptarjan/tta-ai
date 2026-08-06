@@ -1144,7 +1144,7 @@ pub fn card_potential(
 /// `None`. `None` for an ordinary card, and also for a leader/government
 /// when its board credit is 0.0 -- then [`card_potential`] returned the
 /// static-table value, which is not a replacement and must not be collapsed.
-fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
+pub fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
     let typ = swap_type(id)?;
     let key = board_credit_key(id).expect("a single-slot type always has a board credit key");
     if w.get(WeightKey::CardBoardCredit) + w.get(key) != 0.0 { Some(typ) } else { None }

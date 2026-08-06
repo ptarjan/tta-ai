@@ -334,6 +334,19 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
     let mut demand: Option<Vec<RivalDemand>> = None;
     let mut urgency = 0.0;
     let mut bargain = 0.0;
+    // Doomed single-slot cards (leader, government) collapse into `urgency`
+    // the same way `cards::hand_total` collapses the hand -- see that
+    // function's doc comment. `card_potential` prices a leader/government as
+    // a diff against the CURRENT slot when board-aware pricing is on, so
+    // summing that over two leaders about to be swept asserts you get both
+    // replacements, when only the better one ever will be (the rest is worth
+    // `hand_swap_extra`, reused here rather than duplicated: it is the same
+    // free parameter either way -- the incremental value of a spare
+    // single-slot card beyond the one you would actually play, whether the
+    // spare arrives via the row or the hand). index 0 = Leader, index 1 =
+    // Government, matching `hand_total`'s fixed-size accumulator and its own
+    // reasoning for why that beats a keyed collection here.
+    let mut doomed_slots: [Option<(f64, f64)>; 2] = [None, None];
 
     for &(i, name) in &visible {
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
@@ -345,7 +358,25 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
         }
         let nxt = i as i32 - slide;
         if nxt < 0 {
-            urgency += val;
+            match cards::swap_slot(name, w) {
+                None => urgency += val,
+                Some(typ) => {
+                    let slot = match typ {
+                        CardType::Leader => 0,
+                        CardType::Government => 1,
+                        _ => unreachable!("swap_slot only ever returns a single-slot CardType"),
+                    };
+                    match &mut doomed_slots[slot] {
+                        None => doomed_slots[slot] = Some((val, val)),
+                        Some((best, tot)) => {
+                            if val > *best {
+                                *best = val;
+                            }
+                            *tot += val;
+                        }
+                    }
+                }
+            }
             continue;
         }
         let saving = costs::row_cost(i as usize) - costs::row_cost(nxt as usize);
@@ -386,6 +417,10 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
             survive *= 1.0 - rival_take_p(cost, gate.have, compete, view.hand_slack, share);
         }
         bargain += f64::from(saving) * survive;
+    }
+    let extra = w.get(WeightKey::HandSwapExtra);
+    for (best, tot) in doomed_slots.into_iter().flatten() {
+        urgency += best + extra * (tot - best);
     }
     (urgency, bargain)
 }
@@ -686,6 +721,38 @@ mod tests {
         let ctx = rivals::rival_context(&state, 0, None, None);
         let (_, safe) = row_pressure(&state, 0, &w, Some(&ctx));
         assert!(safe > contested, "a full-handed rival must not discount the bargain");
+    }
+
+    /// `row_urgency` collapses two leaders about to be swept off the row to
+    /// "the better one, plus `hand_swap_extra` times the rest" -- the same
+    /// bug `hand_total`'s doc comment describes (cards.rs), just for the row
+    /// instead of the hand (docs/CARD_BLINDNESS.md 13.10.1: "row_pressure's
+    /// row_urgency -- yes, and NOT fixed here"). Reuses `hand_swap_extra`:
+    /// the free parameter is the same question either way -- the incremental
+    /// worth of a spare single-slot card beyond the one you would actually
+    /// play, whether the spare arrives via the row or the hand. Built with
+    /// `card_board_credit` on (so `swap_slot` actually collapses) and two
+    /// DIFFERENT leaders so their `card_potential` values are not forced
+    /// equal by symmetry.
+    #[test]
+    fn urgency_collapses_two_doomed_leaders_to_the_better_one_plus_extra_times_the_rest() {
+        let mut state = G::new_game(2, 46);
+        state.players[0].civil_actions = 6;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        let a = card("Julius Caesar");
+        let b = card("Napoleon Bonaparte");
+        state.card_row[0] = a;
+        state.card_row[1] = b;
+        let mut w = Weights::default();
+        w.set(WeightKey::CardBoardCredit, 1.0);
+        w.set(WeightKey::HandSwapExtra, 0.0);
+        let late = horizon::lateness(&state);
+        let mut scratch = Vec::new();
+        let va = cards::card_potential(a, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let vb = cards::card_potential(b, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        assert!(va > 0.0 && vb > 0.0, "va={va} vb={vb}");
+        let (urgency, _) = row_pressure(&state, 0, &w, None);
+        assert_eq!(urgency, va.max(vb), "hand_swap_extra=0.0 must keep only the better doomed leader's value, not the sum of both");
     }
 
     /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`.
