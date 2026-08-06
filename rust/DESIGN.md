@@ -125,6 +125,58 @@ left play, which is the kind of divergence that shows up late and reads as a
 logic bug. Any container the engine iterates in a play-affecting order gets the
 Python container's ordering semantics, and says so at the definition.
 
+## GPU training: the one dependency exception
+
+Rule 2 says the core crate's `[dependencies]` stays empty, and `rust/Cargo.toml`'s
+own header comment says a dependency there "is a decision, not a convenience --
+justify it in the commit." This section is that justification, recorded once
+rather than re-litigated at every future GPU-training change.
+
+On 2026-08-06 Paul decided to add GPU training for the value net (`rust/src/
+bots/neural/`) using a real Rust ML crate -- candle (`candle-core`/
+`candle-nn`, autograd plus a CUDA backend) -- rather than continuing to
+hand-roll backprop and eventually hand-writing CUDA kernels to make it fast.
+That is the ordinary engineering call: a Rust programmer reaches for an ML
+crate to do calculus and drive a GPU, the same way `net.rs`'s forward pass
+reaches for ordinary `f64` arithmetic rather than a hand-rolled BLAS. Refusing
+the dependency on principle here would be cargo-culting rule 2 past the reason
+it exists.
+
+The reason rule 2 exists is specific to the **engine**: `card_table.rs`'s data
+is baked in so the engine parses no JSON, allocates nothing at start-up,
+builds anywhere `rustc` runs with no install step, and no library update can
+quietly change how the game plays. None of that is about training. A GPU
+training run is an offline, explicitly-invoked batch job with its own
+checkpoint artefact as output -- it does not run inside a game, is not on any
+bot's play-time path, and a candle version bump cannot silently change a rule
+of Through the Ages the way a baked-in-card-table dependency drift could.
+
+So the shape of the exception is: **`rust/trainer/`, a separate workspace
+member**, not a dependency folded into the `tta` package itself.
+`rust/Cargo.toml` is now both the `tta` package manifest AND the workspace
+root (`[workspace] members = ["trainer"]` -- an ordinary Cargo layout, not a
+virtual workspace); `rust/trainer/Cargo.toml` takes a `path = ".."`
+dependency on `tta` plus pinned-exact candle versions. `cargo test`/`cargo
+build` run from `rust/` itself (no `-p`/`--workspace`) still resolve to the
+`tta` package alone -- Cargo's default-package behaviour for a command
+invoked inside a workspace member's own directory -- so the core crate is
+unaffected: it still builds with zero dependencies, still has no install
+step, and still cannot be changed by a `candle` release. `tta`'s own
+`[dependencies]` line is not touched by this exception and must stay that
+way; if a future change ever needs `trainer/` code to become reachable FROM
+the core crate (not just the other way around), that is a new decision, not
+an extension of this one.
+
+The other two of the "which ML crate" evaluation, for the record: `tch`
+(libtorch bindings) needs a system libtorch install and linking against it,
+which is exactly the "install step" property rule 2 protects the engine
+from, even though `trainer/` is a narrower promise than the engine's; `cudarc`
+(raw CUDA, no autograd) would mean hand-writing backward passes in CUDA,
+which is the thing this decision exists to stop doing by hand. candle is pure
+Rust with a CPU backend by default (builds and tests on a machine with no
+NVIDIA GPU at all, e.g. this Mac mini) and a `cuda` feature that needs `nvcc`
+plus the CUDA toolkit at build time -- not just an NVIDIA driver.
+
 ## Division of labour
 
 The **types are written up front, by hand, before any module is ported** — this
