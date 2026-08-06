@@ -151,16 +151,23 @@
 //! outcome: grow [`corpus`], or promote the affected card to
 //! [`STRUCTURAL_EXCLUSIONS`] with the trace for why it changed.
 //!
-//! As of 2026-08-06, [`corpus`] (120 games: every combination of 2/3/4
-//! players, four bot specs, and ten seeds -- see its own doc comment) covers
-//! all 236 cards with no exclusions needed, so [`STRUCTURAL_EXCLUSIONS`] is
-//! empty. The allowlist mechanism -- and both ratchet-direction checks below
-//! -- stay in place rather than being deleted: if some future card is found
-//! to be GENUINELY unnameable by any `Move` AND unobservable in the played
-//! state (nothing like that is known to exist today, past the three
-//! families above), it belongs here with that trace as the reason, not
-//! silently uncovered and not hidden behind an invented state signal that
-//! doesn't actually prove the effect ran.
+//! As of 2026-08-06, [`corpus`] (heavy on `random`-spec seeds, plus a
+//! smaller table of `greedy`/`weighted`/mixed games -- see its own doc
+//! comment for the split and why) covers all 236 cards with no exclusions
+//! needed, so [`STRUCTURAL_EXCLUSIONS`] is empty. The allowlist mechanism --
+//! and both ratchet-direction checks below -- stay in place rather than
+//! being deleted: if some future card is found to be GENUINELY unnameable by
+//! any `Move` AND unobservable in the played state (nothing like that is
+//! known to exist today, past the three families above), it belongs here
+//! with that trace as the reason, not silently uncovered and not hidden
+//! behind an invented state signal that doesn't actually prove the effect
+//! ran. Separately, the last assertion in
+//! [`every_base_game_card_is_chosen_by_some_self_play_game`] -- folded into
+//! the same test rather than a second one, so the corpus is never played
+//! twice -- proves the stronger property that this coverage does not even
+//! depend on `greedy`/`weighted` play at all: see [`corpus`]'s doc comment
+//! for why that property is the actual fix here rather than just a wider
+//! corpus.
 
 use std::collections::BTreeSet;
 
@@ -190,7 +197,7 @@ const STRUCTURAL_EXCLUSIONS: &[Exclusion] = &[];
 /// the seats -- see `bots/greedy.rs`), and the seed [`game::new_game`] deals
 /// from. Every field of every game here is fixed, so this whole file is
 /// exactly as deterministic as any frozen fixture was -- rerunning it
-/// replays the identical 120 games and gets the identical verdict, forever.
+/// replays the identical games and gets the identical verdict, forever.
 #[derive(Clone, Copy)]
 struct GameSpec {
     players: u8,
@@ -198,25 +205,59 @@ struct GameSpec {
     seed: u64,
 }
 
-/// 3 player counts x 4 bot specs x 10 seeds = 120 games, chosen to be the
-/// smallest corpus this crate found (by widening from a smaller one until
-/// the uncovered list emptied out) that reaches all 236 cards -- see the
-/// commit this file landed in for the search. `random` is included at every
-/// player count specifically because a uniform bot has no preference that
-/// could avoid a weak-looking card the way an evaluator-driven bot might;
-/// `greedy`/`weighted` add realistic play (contested wonders, wars actually
-/// worth declaring); the mixed table exercises interactions a single-kind
-/// table cannot (an aggression against a genuinely different play style, a
-/// pact between two evaluators that disagree). Running on a fast difftest
-/// build, this corpus plays in a few seconds -- comfortably inside this
-/// file's budget as a test that runs on every `cargo test`. If a future card
-/// needs more games to reach, widen this (more seeds first -- cheapest lever
-/// -- then more specs) rather than reaching for [`STRUCTURAL_EXCLUSIONS`];
-/// the standing rule for every allowlist in this suite is empty.
+/// Number of `random`-spec seeds played at each player count. Chosen with
+/// margin over the measured minimum: at 90 seeds/player-count (270 random
+/// games total) the random-only subset, checked by the last assertion in
+/// [`every_base_game_card_is_chosen_by_some_self_play_game`], already
+/// reaches all 236 cards on this checkout (found by raising this constant
+/// from a too-small guess until that assertion stopped finding anything
+/// uncovered); 150 leaves ~65% headroom so a future card added deep in a
+/// deck, or a rules change that makes some card rarer to reach, doesn't
+/// immediately flip this back to red. `random` games are also the cheapest
+/// this crate can play (no evaluator call per decision), so this lever is
+/// nearly free: 450 of them run in a couple of seconds on a difftest build.
+const RANDOM_SEEDS: u64 = 150;
+
+/// Corpus design, rebuilt again 2026-08-06 (same day as the previous
+/// rebuild, in `9a84458`): that version was 120 games split evenly across
+/// `random`/`greedy`/`weighted`/mixed specs, and it went red within the hour
+/// when `c731d5a` fixed two information leaks in the trained bots -- the
+/// bots' *play* changed, which changed which cards a corpus of only 10 seeds
+/// per trained spec happened to touch, and `Engineering` fell out uncovered
+/// even though nothing about the engine's handling of Engineering had
+/// changed at all. A coverage corpus that depends on trained-bot judgement
+/// to reach some cards will keep doing this to whoever next improves a bot,
+/// forever, and the reflex fix -- add an exclusion -- is exactly the rot
+/// [`STRUCTURAL_EXCLUSIONS`] exists to refuse.
+///
+/// The fix is to stop relying on bot judgement for coverage at all. A
+/// `random` player takes and builds essentially uniformly over its legal
+/// moves (see `bots/greedy.rs`'s `random` arm), so it has no preference that
+/// could systematically avoid a weak-looking card the way an
+/// evaluator-driven bot might; the only thing standing between "uniform
+/// choice" and "certain to eventually take every reachable card" is enough
+/// independent seeds, which is cheap to buy (see [`RANDOM_SEEDS`]). This
+/// corpus is therefore built as [`RANDOM_SEEDS`] `random`-only seeds at each
+/// of 2/3/4 players -- proven sufficient on its own by the last assertion in
+/// [`every_base_game_card_is_chosen_by_some_self_play_game`], not merely
+/// assumed -- PLUS the original 10-seed `greedy`/`weighted`/mixed tables kept
+/// alongside them. Those trained-bot games are no longer load-bearing for
+/// the ratchet (deleting them would not turn this test red), but they stay:
+/// they exercise realistic sequences a uniform player rarely produces
+/// (contested wonders, wars actually worth declaring, a pact between two
+/// evaluators that disagree), which is real coverage of *interactions* even
+/// though it is not needed for per-card coverage. If a future card still
+/// needs more games to reach after this change, widen [`RANDOM_SEEDS`]
+/// first -- cheapest lever, and the one that keeps coverage bot-independent
+/// -- rather than reaching for [`STRUCTURAL_EXCLUSIONS`]; the standing rule
+/// for every allowlist in this suite is empty.
 fn corpus() -> Vec<GameSpec> {
     let mut v = Vec::new();
     for players in [2u8, 3, 4] {
-        for bots in ["random", "greedy", "weighted", "random,greedy,weighted"] {
+        for seed in 1..=RANDOM_SEEDS {
+            v.push(GameSpec { players, bots: "random", seed });
+        }
+        for bots in ["greedy", "weighted", "random,greedy,weighted"] {
             for seed in 1..=10u64 {
                 v.push(GameSpec { players, bots, seed });
             }
@@ -255,15 +296,31 @@ impl Sets {
             .copied()
             .collect()
     }
+
+    /// Fold another game's coverage into this accumulator. Used to build both
+    /// the full corpus's [`Sets`] and, from the very same played-out games
+    /// (no re-simulation), the `random`-only subset's [`Sets`] that the last
+    /// assertion in [`every_base_game_card_is_chosen_by_some_self_play_game`]
+    /// checks.
+    fn merge(&mut self, other: &Sets) {
+        self.chosen.extend(other.chosen.iter().copied());
+        self.wonder.extend(other.wonder.iter().copied());
+        self.events.extend(other.events.iter().copied());
+        self.government.extend(other.government.iter().copied());
+    }
 }
 
-/// Play one [`GameSpec`] to the end, folding every coverage source it
-/// produces into `sets`. All four sources are read from the SAME playthrough
-/// rather than four separate passes (unlike the old fixture-reading
-/// version, which had four independent file scans to make): a self-play
-/// game is not a file that can be re-read for free, so this reads each
-/// signal off the one pass that already has to happen.
-fn play_and_record(spec: &GameSpec, sets: &mut Sets) {
+/// Play one [`GameSpec`] to the end and return every coverage source it
+/// produces, read from the SAME playthrough rather than four separate passes
+/// (unlike the old fixture-reading version, which had four independent file
+/// scans to make): a self-play game is not a file that can be re-read for
+/// free, so this reads each signal off the one pass that already has to
+/// happen. Returning a fresh [`Sets`] (rather than folding into a
+/// caller-supplied accumulator) lets the caller fold the SAME result into
+/// more than one accumulator -- the whole corpus's, and, for `random`-spec
+/// games, the random-only subset's too -- without playing the game twice.
+fn play_and_record(spec: &GameSpec) -> Sets {
+    let mut sets = Sets::default();
     let seats = make_seats(spec.bots, spec.players, Weights::defaults())
         .unwrap_or_else(|e| panic!("bad bot spec {:?} in corpus(): {e}", spec.bots));
     let mut bots = build_bots(&seats, spec.seed as i64);
@@ -309,6 +366,8 @@ fn play_and_record(spec: &GameSpec, sets: &mut Sets) {
     for &card in state.past_events.as_slice() {
         sets.events.insert(card);
     }
+
+    sets
 }
 
 /// Cards covered by [`Sets::wonder`]/[`Sets::events`]/[`Sets::government`]
@@ -333,9 +392,20 @@ fn covered_only_by_structural_reads(sets: &Sets) -> BTreeSet<CardId> {
 
 #[test]
 fn every_base_game_card_is_chosen_by_some_self_play_game() {
+    // `random_only` accumulates the exact same per-game results as `sets`,
+    // restricted to the `spec.bots == "random"` games -- no game is ever
+    // simulated twice to get both. See the last assertion in this test,
+    // below, for what this buys.
     let mut sets = Sets::default();
+    let mut random_only = Sets::default();
+    let mut random_game_count = 0usize;
     for spec in corpus() {
-        play_and_record(&spec, &mut sets);
+        let game_sets = play_and_record(&spec);
+        if spec.bots == "random" {
+            random_only.merge(&game_sets);
+            random_game_count += 1;
+        }
+        sets.merge(&game_sets);
     }
     let covered = sets.union();
 
@@ -439,5 +509,52 @@ fn every_base_game_card_is_chosen_by_some_self_play_game() {
          STRUCTURAL_EXCLUSIONS with that trace as the reason:\n    {}",
         uncovered.len(),
         uncovered.join("\n    ")
+    );
+
+    // The corpus() doc comment's central claim -- that this ratchet no
+    // longer depends on trained-bot judgement to reach every card -- is
+    // checked here, not merely asserted in prose: recompute "everything else
+    // covered" using ONLY the `random`-spec games' coverage (`excluded_ids`
+    // reused as-is, since a structurally-unreachable card is exactly as
+    // unreachable for a random player as for anyone else). If this ever goes
+    // red on its own while the full-corpus assert above stays green, some
+    // card has quietly become reachable only through greedy/weighted play --
+    // exactly the fragility `c731d5a` exposed when it changed what the
+    // trained bots do and `Engineering` fell out of a 10-seed-per-spec
+    // corpus -- and the fix is the one corpus()'s doc comment names: grow
+    // [`RANDOM_SEEDS`], don't add trained-bot variety or a
+    // [`STRUCTURAL_EXCLUSIONS`] entry.
+    let random_covered = random_only.union();
+    let mut random_uncovered: Vec<&'static str> = CARDS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            let id = CardId(i as u16);
+            if excluded_ids.contains(&id) || random_covered.contains(&id) {
+                None
+            } else {
+                Some(c.name)
+            }
+        })
+        .collect();
+    random_uncovered.sort_unstable();
+
+    eprintln!(
+        "card coverage (random-only subset, {} games): {}/{} covered, {} uncovered",
+        random_game_count,
+        random_covered.len(),
+        CARDS.len(),
+        random_uncovered.len(),
+    );
+    assert!(
+        random_uncovered.is_empty(),
+        "the random-only subset of corpus() ({} games, spec.bots == \"random\") no longer \
+         covers every base-game card by itself ({} uncovered) -- this is the assertion that \
+         proves coverage does not secretly depend on greedy/weighted bot judgement (see \
+         corpus()'s doc comment, and the Engineering regression from c731d5a that motivated \
+         it); widen RANDOM_SEEDS rather than adding trained-bot variety or an exclusion:\n    {}",
+        random_game_count,
+        random_uncovered.len(),
+        random_uncovered.join("\n    ")
     );
 }
