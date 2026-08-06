@@ -29,6 +29,7 @@ pub mod interact;
 pub mod moves;
 pub mod rng;
 pub mod state;
+pub mod stats;
 
 pub use cards::{
     Age, Card, CardEffects, CardId, CardType, Composition, Production, Special, CARDS, NUM_CARDS,
