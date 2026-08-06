@@ -496,3 +496,147 @@ completion count" is this method's real deliverable) rather than more
    confirmed alias to see if any OTHER corpus-wide name gaps exist (the
    `Development of Civilization` alias, found in this pass, was previously
    invisible to every prior validation pass).
+
+## Third pass: military discard, solved by constraint propagation — not given up on
+
+The prior section calls the forced military discard "genuinely
+unrecoverable hidden information" and reports it as 14/24 (58%) of the
+sample's stops, with the framing that most real games likely contain one
+eventually and closing it was probably not worth attempting. **That framing
+was wrong about recoverability, right about difficulty, and the fix was
+worth doing anyway** — this section reports it plainly, including the parts
+that didn't work out the way a first read of the idea suggests they should.
+
+### The argument, and where it actually lands
+
+BGO's journal never names which card a `"<Color> discards N cards"` line
+removed — only the count. But a card a player is later observed **playing**
+(`Move::War`/`Move::Aggression`/`Move::OfferPact`/`Move::PlayTactic` all
+name the card on their own journal line) was, by definition, still in their
+hand at the time of an earlier discard — it cannot have been discarded
+there. `rust/src/discard_solver.rs` (new module, kept separate from
+`replay.rs`/`apply.rs` on purpose — see below) implements exactly this:
+pre-scan the whole journal once for every FUTURE such named play per seat
+(`prescan_future_military_needs` in `replay.rs`), and at each discard
+decision, rule out any of the engine's own currently-offered
+`discard_options` candidates that reappears later. Three honestly-separated
+outcomes, matching this project's standing rule that a completion rate
+built mostly on guesses is weaker evidence than one built on facts:
+
+- **Solved**: exactly one candidate survives the filter — not a guess.
+- **Chosen**: more than one survives (genuine ambiguity) — picks the
+  least-valuable one (`interact::discard_options` already sorts
+  worst-defender-first), matching a rational real player's own incentive,
+  per the explicit instruction: "if there really is some ambiguity that's
+  fine, just of the valid possibilities choose one."
+- **Forced collision**: EVERY candidate reappears later (the filter
+  couldn't help at all) — still picks one (the least-valuable), but this is
+  the "detect and report rather than silently let it pass" case: it means
+  either this game's simulated hand undercounts what the real hand held (an
+  earlier divergence), or a duplicate-named military card's second copy was
+  the real discard. Counted and surfaced separately, never folded into
+  "solved."
+
+`DiscardSolver::choose` is pure and has 7 unit tests covering all three
+buckets, including that a future need BEFORE the current line does NOT
+exclude a candidate (already left the hand, so it's fair game again), and
+that needs are scoped per-seat (another player's future play must not
+exclude this player's candidate). Wired into `replay.rs` at two points:
+`resolve_intervening` drains any OTHER player's stale `DiscardMilitary`
+pending immediately (closing the "reached through a different code path"
+shape the previous pass reported as 3/24 of the discard total), and
+`apply_one`'s `ActionClass::Discard` arm resolves the CURRENT actor's own
+discard via `Replayer::resolve_discard`. Those had to be split, not merged
+into one unconditional drain, because of a real trap: resolving the LAST
+queued discard can itself finish that player's end of turn
+(`interact::QueueItem::DiscardMilitary` resumes `game::resume_end_turn`
+once it clears) and advance `state.current` to the next player — draining
+unconditionally ahead of the decider-equality check made `resolve_
+intervening` see `decider != expected_actor` on a line that had, in fact,
+just been fully and correctly consumed, and report every such line as
+stuck. Found by testing against real games (the first commit of this pass
+regressed to 0 stops recovered at all until this was fixed) — see the
+second commit's own message for the full trace.
+
+### What this closes, honestly, including why it mostly does NOT produce "Solved"
+
+On the same 24-game sample (8 each of 2p/3p/4p, first-in-`index.tsv` order,
+identical selection to both prior passes):
+
+| | second pass | third pass (this one) |
+|---|---|---|
+| games complete | 0/24 | 0/24 |
+| mean actions before stop | 42.75 | **51.0 (+19%)** |
+| stopped ON a military discard | 14/24 (58%) | **0/24** |
+| military discards resolved (not stopped on) | 0 | **63** (0 solved, 63 chosen, 0 forced collisions) |
+
+Every one of the 24 games individually reached the same or a strictly
+later stop point than the second pass; none regressed. **Discard is no
+longer this sample's bottleneck at all** — every game that used to stop on
+one now runs straight through it into whatever the NEXT real issue is.
+
+The honest disappointment: **of 63 discards resolved, 0 were "Solved" —
+all 63 landed in "Chosen."** This is not a bug in the solver (the unit
+tests confirm `choose` correctly narrows to one, or flags a forced
+collision, whenever the input data supports it) — it is a real, structural
+fact about this corpus that the task's original framing (draw analogy: "you
+know every card taken from the row, and every card later played") does not
+quite fit for MILITARY cards specifically, and is worth stating precisely
+so nobody re-derives it the hard way: **military-hand cards are never named
+at draw time.** Unlike a civil-row `Take`, which BGO logs with the card's
+name every time, a military card enters a hand via an anonymous
+end-of-turn draw (`"<Color> draws N military card(s)"` — a count only, see
+`corpus.rs`). `replay.rs`'s reconstructed `hand_military` is therefore
+SIMULATED filler for essentially its entire content at any moment a discard
+decision is open — `Replayer::ground_military_hand` only ever grounds a
+card's real identity in the SAME function call that immediately consumes it
+(war/aggression/pact/tactic all ground-then-remove atomically), so no
+journal-verified card is ever sitting in hand at a discard boundary to be
+excluded from consideration in the first place. The exclusion this module
+performs is real and correctly implemented, but it can only fire when a
+piece of SIMULATED filler already in hand happens to coincide, by CardId,
+with a card independently named by a later play — a coincidence, not a
+structural certainty, and this sample was simply too small (and the games
+too short before hitting the NEXT open issue) to hit many. This is reported
+as a scoping fact for anyone tempted to expect "Solved" to dominate at
+scale: it will remain a minority category under this reconstruction model
+regardless of sample size, because the underlying journal signal for
+military cards specifically is thinner than for civil ones. **Zero forced
+collisions** occurred either, for the same reason (the exclusion rarely
+fires at all, so it rarely fires universally).
+
+### Why 0/24 still complete, and what actually blocks each game now
+
+Discard being solved does not, by itself, reach completion — it just moves
+the wall. Re-triaging all 24 stops on this pass's output:
+
+| # games | category | status |
+|---|---|---|
+| 9 | `decider != expected actor` (interleaving, no `EndTurn` between) | Same OPEN question as the second pass — see "What remains open" above. Grew from 5/24 to 9/24 purely because more games now run deep enough to reach it, the same "closing one wall exposes the next" pattern that grew the discard category from 7/24 to 14/24 across the first two passes. |
+| 8 | Civil-action-budget shortfall (`Pop`/`PopFree`/`Take`/`Build` all illegal, `civil_actions == 0`) | Same OPEN question as the second pass — see "What remains open" above. Grew from 4/24 to 8/24, same reason. |
+| 2 | `"plays Frugality ... increases population"` — `PlayAction{Frugality}` not offered by `legal_moves` at all | **Newly reached, NOT diagnosed.** Not investigated this pass (out of scope: this is a `replay.rs`/engine question unrelated to discards, and this repo has a second agent actively working `apply.rs`'s action-economy bug concurrently with this pass — deliberately left alone rather than risk stepping on that work). Plausibly the same general shape as the already-known "`FreeCivilAction` no-pending-opened" gap (row below) since Frugality also grants a `FreeCivilAction`, but for `IncreasePopulation` rather than `Build` — NOT confirmed, flagged as a lead only. |
+| 2 | `"builds X using Urban Growth"` opens no `Pending::Choice` | Same OPEN gap the second pass reported as 1/24 (`FreeCivilAction` no-pending-opened) — grew to 2/24, same "runs deeper now" reason. Not investigated further this pass. |
+| 1 | `WonderStep` illegal completing a wonder | **Newly reached, NOT diagnosed.** A single occurrence; not investigated this pass for the same reason as the Frugality row above. |
+| 1 | `PolPass` illegal (`state.phase` apparently already past Politics) | **Newly reached, NOT diagnosed.** A single occurrence, same shape as a `PlayEvent`-drain bug the second pass fixed at its source — possibly a NEW instance of a similar timing issue, not confirmed. |
+| 1 | Build cost mismatch (unmodeled discount, `Warriors`) | Unchanged from the second pass's own "gives up on" list (an unmodeled discount source, not a parser gap). |
+
+No new engine (`apply.rs`/`legal.rs`) bug is claimed or confirmed by this
+pass — every mismatch above is either a previously-open question growing
+because games run deeper (expected, not new information) or a genuinely
+new-looking `replay.rs`-level gap flagged but explicitly NOT chased down,
+both to stay in scope (this pass's job was discard, not the action-economy
+investigation already underway elsewhere in this repo) and because a
+single occurrence each is too thin a sample to diagnose responsibly.
+
+### Final-score cross-check: still not reached
+
+`game::scores(&state)` vs `index.tsv`'s `results` column still could not be
+run — 0/24 games in this sample reached `state.game_over`. This remains
+true for the same structural reason the second pass named (a full BGO game
+gives every one of the categories above, not just discard, many chances to
+fire over 15-20+ rounds) — closing discard alone was never expected to be
+sufficient, and this pass confirms that prediction rather than
+contradicting it. The two OPEN questions ("What remains open," above)
+are now this project's highest-leverage remaining unknowns for reaching any
+completions at all.
+
