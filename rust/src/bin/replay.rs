@@ -676,8 +676,8 @@ impl<'a> Replayer<'a> {
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             let p = &self.state.players[self.state.current as usize];
             eprintln!(
-                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?}",
-                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before
+                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?} yellow_bank={} food={}",
+                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before, p.yellow_bank, p.food
             );
         }
         Ok(())
@@ -1302,6 +1302,14 @@ fn apply_one(
                 // differently than the true game (see the module doc's
                 // "gives up on" list and `docs/REPLAY.md`'s mismatch
                 // categories), not a parser gap in THIS line.
+                if std::env::var("REPLAY_DEBUG").is_ok() {
+                    let p = &r.state.players[actor as usize];
+                    eprintln!(
+                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} raw={:?}",
+                        p.food, p.yellow_bank, p.civil_actions,
+                        tta::economy::pop_cost(&r.state, p), raw_text
+                    );
+                }
                 Err(MismatchKind::IllegalMove {
                     attempted: "Pop or PopFree".into(),
                     legal_moves: format!("{:?}", legal.as_slice()),

@@ -1016,25 +1016,48 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
         );
     }
     if block.increase_population != 0 {
-        paid_increase_population(state, idx, block.increase_population.max(0) as u32);
+        free_increase_population(state, idx, block.increase_population.max(0) as u32);
     }
 }
 
-/// `increasePopulation` (events.py:79-81): `economy.increase_population`
-/// called `n` times -- the PAID §6.1 increase (food cost, `p.one_time_
-/// discount.pop_food` already applies through `economy::pop_cost`), never
-/// the free grant the unprinted bare `population`/`gainPopulation` keys
-/// would use. Python's loop does not stop early on a failed call (each
-/// subsequent call just re-checks and fails again); looping the full `n`
-/// times here is behaviourally identical except for the yellow-bank-empty
-/// case, which this DOES stop early on since every later call would fail
-/// identically too.
-fn paid_increase_population(state: &mut GameState, idx: u8, n: u32) {
+/// ENGINE BUG FIX (`docs/REPLAY.md` Finding 1, 2026-08): `increasePopulation`
+/// is the effect key on exactly three cards -- Development of Settlement
+/// ("Players increase population."), Immigration ("The players with the most
+/// happy faces increase population."), Refugees ("The strongest player ...
+/// increases population.") -- and on all three the population gain is an
+/// unconditional event REWARD, listed in the same terse, cost-free phrasing
+/// digital-edition card text uses for every other `EventBlock` gain (Development
+/// of Agriculture's "gain 2 food", Development of Crafts' "gain 2 resources",
+/// ...); nothing in any of the three cards' text mentions paying food, and
+/// namu_events.txt's independent translation phrases Settlement identically
+/// ("All civilizations increase their population by 1") with no cost either.
+/// This WAS wired to the PAID §6.1 mechanic (`economy::pop_cost`, food
+/// deducted, `p.one_time_discount.pop_food` consumed) -- confirmed wrong by
+/// replaying real BGO game 7522616 (`sources/bgo/journals`): Purple prepares
+/// Development of Settlement, then LATER the same turn performs their own,
+/// separately-logged, explicitly PAID "increases population" for "3 food".
+/// Reconstructing the turn (yellow_bank 17 entering the turn) proves the
+/// event grant must have been FREE: a paid event grant would leave yellow_bank
+/// at 16 after paying `pop_cost_base(17) == 2` food, matching the journal's
+/// own arithmetic for the LATER paid action only if that first grant charged
+/// nothing -- `pop_cost_base(16) == 3`, exactly the "3 food" the human paid.
+/// Under the old (paid) code this binary's own reconstruction spent 2 food on
+/// the event grant it should not have, leaving only 1 food when Purple's real
+/// paid Pop needed 3 -- an `IllegalMove` this binary reported as a mystery
+/// "player needs one more civil action than the budget allows" (never actually
+/// about civil actions: it's the same-turn PAID Pop failing because an
+/// EARLIER free grant had wrongly been billed). See
+/// `events::tests::an_event_granted_population_increase_costs_no_food` for
+/// the before/after regression.
+fn free_increase_population(state: &mut GameState, idx: u8, n: u32) {
     for _ in 0..n {
-        let Some(cost) = economy::pop_cost(state, &state.players[idx as usize]) else { break };
-        // PAID, never free (see this function's own doc comment), so the
-        // one-time discount `cost` just read is consumed: `true`.
-        economy::increase_population(&mut state.players[idx as usize], cost.max(0) as u16, true);
+        // `cost: 0, consume_one_time: false` is the established free-grant
+        // shape (`apply.rs::h_pop_free`, Ocean Liners): never reads or
+        // consumes the one-time discount, matching a grant that never looked
+        // at food in the first place.
+        if !economy::increase_population(&mut state.players[idx as usize], 0, false) {
+            break; // yellow bank empty; every later call would fail too
+        }
     }
 }
 
@@ -1441,6 +1464,26 @@ mod tests {
         // gainFood/gainResources are both 2; losing floors at 0, not -1.
         assert_eq!(state.players[0].food, 0);
         assert_eq!(state.players[0].resources, 0);
+    }
+
+    #[test]
+    fn an_event_granted_population_increase_costs_no_food() {
+        // ENGINE BUG (see `free_increase_population`'s doc comment): the
+        // three cards with an `increasePopulation` `EventBlock` key --
+        // Development of Settlement, Immigration, Refugees -- grant
+        // population the same way every other `EventBlock` gain (food,
+        // resources, science, culture) does: unconditionally, matching the
+        // terse card text ("Players increase population.") and confirmed by
+        // reconstructing real BGO game 7522616's food arithmetic. Before the
+        // fix this routed through `economy::pop_cost`/the paid §6.1 formula
+        // and silently spent food the player never actually paid.
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.yellow_bank = 17;
+        p0.food = 3; // enough to pay if (wrongly) charged pop_cost_base(17) == 2
+        let mut state = one_player_state(p0);
+        resolve_event(&mut state, card("Development of Settlement"), 0);
+        assert_eq!(state.players[0].yellow_bank, 16, "population still moves one yellow token");
+        assert_eq!(state.players[0].food, 3, "the grant must not touch food at all");
     }
 
     #[test]
