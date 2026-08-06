@@ -4685,7 +4685,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
 mod baked_table_matches_source_data {
     use super::*;
     use crate::fixtures::{parse_json, Json};
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::{BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
     // ---------------------------------------------------------------- I/O --
@@ -5952,5 +5952,190 @@ mod baked_table_matches_source_data {
             only_in_baked.is_empty(),
             "card(s) present in the baked CARDS table but missing from data/*.json: {only_in_baked:?}"
         );
+    }
+
+    // ============================================================ card data
+    //
+    // Ports `data/validate_cards.py` (84 lines), which was the standing
+    // regression on the card DATA FILES themselves -- `docs/RULES_SPEC.md`
+    // 341 calls it exactly that, and `docs/SOURCES.md` cites it four times as
+    // the check that re-verifies every deck size a sourcing decision moved.
+    //
+    // It is a different question from the tests above, and that is why it
+    // survives rather than being folded into them: those ask "does the baked
+    // CARDS table still agree with data/*.json", which stays true if BOTH
+    // drift together. These ask "is data/*.json internally consistent with
+    // the printed component counts" -- 179 civil and 150 military cards,
+    // decks of 10/45/50/45 and 20/53/53/53 -- which is the question a sourcing
+    // change can get wrong without either file disagreeing with the other.
+    //
+    // The Python printed a table and exited 1 on any error; here each check
+    // is its own test so a failure names which invariant broke.
+
+    /// Cards from `cards_military_actions.json`, the file all these checks
+    /// read. Kept to one helper so no test re-parses it with a different
+    /// notion of what a card is.
+    fn military_file() -> Vec<Json> {
+        load_part("cards_military_actions.json")
+    }
+
+    fn card_name(c: &Json) -> &str {
+        c.get("name").and_then(Json::as_str).unwrap_or("<unnamed>")
+    }
+
+    fn card_str<'a>(c: &'a Json, key: &str) -> &'a str {
+        c.get(key)
+            .and_then(Json::as_str)
+            .unwrap_or_else(|| panic!("{}: missing or non-string {key}", card_name(c)))
+    }
+
+    /// A card's copies at 2/3/4 players.
+    fn card_counts(c: &Json) -> (i64, i64, i64) {
+        let at = |p: &str| -> i64 {
+            c.get("count")
+                .and_then(|n| n.get(p))
+                .and_then(Json::as_f64)
+                .unwrap_or_else(|| panic!("{}: missing count.{p}", card_name(c)))
+                as i64
+        };
+        (at("2p"), at("3p"), at("4p"))
+    }
+
+    #[test]
+    fn every_military_card_has_the_five_required_fields_with_legal_values() {
+        for c in &military_file() {
+            let name = card_name(c);
+            assert_ne!(name, "<unnamed>", "a card has no name");
+            let age = card_str(c, "age");
+            assert!(
+                matches!(age, "A" | "I" | "II" | "III"),
+                "{name}: age {age:?} is not one of A, I, II, III"
+            );
+            let deck = card_str(c, "deck");
+            assert!(
+                matches!(deck, "military" | "civil"),
+                "{name}: deck {deck:?} is neither military nor civil"
+            );
+            let kind = card_str(c, "type");
+            let (a2, a3, a4) = card_counts(c);
+            for (p, n) in [("2p", a2), ("3p", a3), ("4p", a4)] {
+                assert!(n >= 0, "{name}: count.{p} is negative ({n})");
+            }
+            // The action cards are the only thing from this file that lives
+            // in the civil deck; anything else there is a mis-filed card.
+            if deck == "civil" {
+                assert_eq!(kind, "action", "{name}: sits in the civil deck but is a {kind}");
+            }
+        }
+    }
+
+    /// More players, more copies -- except pacts, which are removed outright
+    /// in a two-player game (RB p.4) and so legitimately drop to zero.
+    #[test]
+    fn copy_counts_rise_with_the_player_count_except_for_pacts() {
+        for c in &military_file() {
+            if card_str(c, "type") == "pact" {
+                continue;
+            }
+            let (a2, a3, a4) = card_counts(c);
+            assert!(
+                a2 <= a3 && a3 <= a4,
+                "{} ({}): non-monotonic counts {a2}/{a3}/{a4}",
+                card_name(c),
+                card_str(c, "age")
+            );
+        }
+    }
+
+    #[test]
+    fn every_pact_is_removed_entirely_from_a_two_player_game() {
+        for c in &military_file() {
+            if card_str(c, "type") == "pact" {
+                let (a2, _, _) = card_counts(c);
+                assert_eq!(a2, 0, "pact {} has a non-zero 2p count", card_name(c));
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_cards_in_the_military_file_share_a_name_and_an_age() {
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        for c in &military_file() {
+            let key = (card_name(c).to_string(), card_str(c, "age").to_string());
+            assert!(seen.insert(key.clone()), "duplicate card {key:?}");
+        }
+    }
+
+    /// Deck sizes against the published component list: military decks of
+    /// 10/45/50/45 at four players, 150 cards in the box
+    /// (czechgames.com component list; `docs/SOURCES.md` 359).
+    #[test]
+    fn the_military_decks_are_the_sizes_the_component_list_prints() {
+        let expected = [("A", (10, 10, 10)), ("I", (43, 45, 45)), ("II", (46, 50, 50)), ("III", (41, 45, 45))];
+        let cards = military_file();
+        let mut total4 = 0;
+        for (age, want) in expected {
+            let mut got = (0i64, 0i64, 0i64);
+            for c in &cards {
+                if card_str(c, "deck") == "military" && card_str(c, "age") == age {
+                    let (a2, a3, a4) = card_counts(c);
+                    got = (got.0 + a2, got.1 + a3, got.2 + a4);
+                }
+            }
+            assert_eq!(got, want, "military deck {age}");
+            total4 += got.2;
+        }
+        assert_eq!(total4, 150, "the box prints 150 military cards");
+    }
+
+    /// The civil deck is the techs, plus the wonders and leaders, plus the
+    /// action cards filed in the military file: 20 in Age A and 53 in each of
+    /// I/II/III at four players, 179 in the box.
+    #[test]
+    fn the_civil_decks_are_the_sizes_the_component_list_prints() {
+        let expected =
+            [("A", (20, 20, 20)), ("I", (44, 50, 53)), ("II", (44, 50, 53)), ("III", (44, 50, 53))];
+        let civil = load_part("cards_civil.json");
+        let military = military_file();
+        let wonders = load_part("cards_wonders_leaders.json");
+        let mut total4 = 0;
+        for (age, want) in expected {
+            let mut got = (0i64, 0i64, 0i64);
+            for c in civil.iter().chain(military.iter().filter(|c| card_str(c, "deck") == "civil")) {
+                if card_str(c, "age") == age {
+                    let (a2, a3, a4) = card_counts(c);
+                    got = (got.0 + a2, got.1 + a3, got.2 + a4);
+                }
+            }
+            // A wonder or leader is one card at every player count, and the
+            // data files do not give them a `count` block at all.
+            for c in &wonders {
+                if card_str(c, "age") == age {
+                    got = (got.0 + 1, got.1 + 1, got.2 + 1);
+                }
+            }
+            assert_eq!(got, want, "civil deck {age}");
+            total4 += got.2;
+        }
+        assert_eq!(total4, 179, "the box prints 179 civil cards");
+    }
+
+    /// A scoring event is an Age III event and nothing else -- both
+    /// directions, because the interesting failure is an Age III event that
+    /// nobody remembered to mark.
+    #[test]
+    fn the_scoring_events_are_exactly_the_age_three_events() {
+        for c in &military_file() {
+            let marked = c.get("scoringEvent").and_then(Json::as_bool).unwrap_or(false);
+            let is_age_three_event = card_str(c, "age") == "III" && card_str(c, "type") == "event";
+            assert_eq!(
+                marked,
+                is_age_three_event,
+                "{}: scoringEvent={marked} but age={} type={}",
+                card_name(c),
+                card_str(c, "age"),
+                card_str(c, "type"),
+            );
+        }
     }
 }
