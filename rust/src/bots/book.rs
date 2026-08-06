@@ -16,9 +16,46 @@
 //! nothing in `book.py` is CPython performance machinery: every rule and
 //! every rank table is hand-authored strategy opinion, cited to
 //! `docs/STRENGTH_CHECK.md`/`docs/EXPERT_STRATEGY.md`. The whole file is
-//! ported faithfully below. Four things found along the way are NOT bugs in
-//! this port -- they are genuine, pre-existing properties of the Python it
-//! is a faithful port OF, called out here rather than silently "fixed":
+//! ported faithfully below, with three exceptions: the repo owner ruled
+//! ("fix things as you port") on three things the port found along the way,
+//! fixed identically in `book.py` so the two engines keep agreeing:
+//!
+//! * **`_r_play_leader` used to rank with the bare v1 `LEADER_RANK` table
+//!   even under `version >= 2`.** Every OTHER leader-ranking call site
+//!   (`card_value`, transitively `best_take`/`best_develop`) goes through
+//!   [`leader_rank`], which switches to `V2_LEADER_RANK`/`v2_homer` under
+//!   `ctx.version >= 2`. This was a plain inconsistent-lookup bug -- e.g. a
+//!   `version=2` bot used to prefer Julius Caesar (v1 rank 8) over
+//!   Alexander the Great (v1 rank 5) even though the v2 tournament table
+//!   ranks them the other way round (3.0 vs 5.5, "in the new TTA he is
+//!   terrible"). `r_play_leader` now calls [`leader_rank`] like every other
+//!   site; see `tests::r_play_leader_routes_through_the_version_aware_table`.
+//! * **`V2_TUNABLES["iron_over_bronze"]` and `_Ctx.ca`/`_Ctx.ma`/
+//!   `_Ctx.rival_best_culture`/`_Ctx.age_row`** were computed every decision
+//!   and read by ZERO rules (grepped the whole repo, not just this file --
+//!   nothing in `plan.py`/`weighted.py`/`neural_*.py`/`tools/` touched them
+//!   either). Deleted rather than carried as dead weight: [`V2Tunables`] no
+//!   longer has an `iron_over_bronze` field, and [`Ctx`] no longer has
+//!   `ca`/`ma`/`rival_best_culture`/`age_row`. (If a rule was meant to price
+//!   the Bronze-vs-Iron upgrade decision using `iron_over_bronze`, that rule
+//!   never existed -- a missing rule, not just an unread tunable; reported,
+//!   not invented, in the fix-up report.)
+//! * **Winston Churchill's once-per-turn choice (`("churchill", ...)` /
+//!   [`crate::moves::Move::Churchill`]) used to be referenced by none of the
+//!   12 rules in `_action_phase`.** `h_churchill`/`_h_churchill` never
+//!   spends a civil or military action (only the once-per-turn flag itself,
+//!   lost for the turn either way), so taking it is strictly better than
+//!   not -- never taking a free, no-downside bonus was a plain bug. Fixed
+//!   with a 13th rule, [`r_churchill`], appended after `r_take_card`: it
+//!   always takes the bonus when offered. WHICH of the two flavours to take
+//!   remains a genuine, unresolved strategy question -- culture is
+//!   unconditional value, the military discount is wiped at end of turn if
+//!   nothing military gets bought or upgraded afterwards -- so `r_churchill`
+//!   always defaults to the risk-free flavour (culture) rather than
+//!   guessing at a same-turn military purchase.
+//!
+//! One more thing found along the way is genuinely NOT a bug, unlike the
+//! three above, and stays exactly as it was:
 //!
 //! * **`self.rng` is dead in Python.** `BookBot.__init__` stores
 //!   `rng or random.Random(seed)`, and NOTHING in `choose`/`_action_phase`/
@@ -26,36 +63,6 @@
 //!   (every tie-break is a deterministic `max`/`min`/`sorted`). This port
 //!   carries no rng field at all: [`BookBot`] is a pure function of
 //!   `(state, moves)`, which is the true behaviour, not a smaller one.
-//! * **`V2_TUNABLES["iron_over_bronze"]`** is defined, documented with a
-//!   real strategy citation, and never read by any rule in `book.py`.
-//!   [`V2Tunables::iron_over_bronze`] is carried here purely for shape
-//!   fidelity with the tunables dict a caller could in principle override
-//!   (see that field's own doc comment) -- exactly as dead as it is in
-//!   Python, not applied anywhere here either.
-//! * **`_Ctx.ca`/`_Ctx.ma`/`_Ctx.rival_best_culture`/`_Ctx.age_row`** are
-//!   computed in `_Ctx.__init__` and never read by ANY rule function in the
-//!   whole file (grepped: each name appears exactly once outside its own
-//!   assignment). [`Ctx`] still carries [`Ctx::ca`]/[`Ctx::ma`]/
-//!   [`Ctx::rival_best_culture`]/[`Ctx::age_row`] for the same fidelity
-//!   reason, unread by every rule below, exactly as in Python.
-//! * **`_r_play_leader` ranks with the bare v1 `LEADER_RANK` table, not the
-//!   version-aware `_leader_rank` helper.** Every OTHER leader-ranking call
-//!   site (`_card_value`, transitively `_best_take`/`_best_develop`) goes
-//!   through `_leader_rank`, which switches to `V2_LEADER_RANK`/`V2_HOMER`
-//!   under `ctx.version >= 2`. `_r_play_leader` alone reads `LEADER_RANK`
-//!   directly, so a `version=2` bot decides WHICH leader in hand to play
-//!   from the v1 table while it decides everything else about leaders from
-//!   the v2 one. This reads like an oversight, not a deliberate choice, but
-//!   there is no test or doc pinning either reading, so this port keeps the
-//!   asymmetry exactly as written (`r_play_leader` below reads [`LEADER_RANK`]
-//!   directly, matching `_r_play_leader`) rather than guessing which behaviour
-//!   was intended.
-//! * **Winston Churchill's once-per-turn choice (`("churchill", ...)` /
-//!   [`crate::moves::Move::Churchill`]) is never referenced by any of the 12
-//!   rules in `_action_phase`.** `book.py` simply has no opinion on it, so a
-//!   Churchill move is never selected by any rule and the bot always falls
-//!   through past it (usually to `end_turn`, if nothing else fires first).
-//!   Ported faithfully: nothing below matches on `Move::Churchill` either.
 //!
 //! ## This port is generic over the champion evaluator, deliberately
 //!
@@ -90,12 +97,12 @@
 //! not a silently-defaulted rank discovered by a strength regression months
 //! later.
 use crate::card_table::{FreeCivilActionValue, Special};
-use crate::cards::{Age, CardId, CardType, Production};
+use crate::cards::{CardId, CardType, Production};
 use crate::costs;
 use crate::economy;
 use crate::effects::{self, Stats};
 use crate::interact;
-use crate::moves::{Move, MoveList, PactSide};
+use crate::moves::{ChurchillChoice, Move, MoveList, PactSide};
 use crate::state::{
     Auction, Choice, ChoiceKind, ChoiceOption, Colonize, Defense, GameState, Keyword, Pending, Phase,
     PlayerState,
@@ -267,13 +274,10 @@ pub struct V2Tunables {
     pub taj_mahal: f64,
     /// Tier 3 at 0.03, but happiness genuinely solves an early problem.
     pub hanging_gardens: f64,
-    /// "upgrade to Iron only if it lands early in Age I"; otherwise stay on
-    /// 3-4 Bronze and buy the 5th civil action instead. DEAD in Python
-    /// (`book.py::V2_TUNABLES["iron_over_bronze"]` is defined and never
-    /// read by any rule -- grepped) and dead here for the same reason: no
-    /// rule in this file reads it either. Carried for shape fidelity only,
-    /// see this module's top doc comment.
-    pub iron_over_bronze: f64,
+    // ("iron_over_bronze" used to live here -- "upgrade to Iron only if it
+    // lands early in Age I" -- but no rule anywhere consulted it; deleted
+    // rather than carried as dead weight, see this module's top doc
+    // comment.)
     /// Theology was selected 0 times in 39 tournament games; happiness
     /// cards let you skip it. Multiplies its value.
     pub theology: f64,
@@ -286,7 +290,6 @@ impl Default for V2Tunables {
             great_wall: 0.6,
             taj_mahal: 0.7,
             hanging_gardens: 0.6,
-            iron_over_bronze: 1.0,
             theology: 0.15,
         }
     }
@@ -295,29 +298,26 @@ impl Default for V2Tunables {
 // ------------------------------------------------------------------ context
 
 /// The dozen numbers every rule below reads. Computed once per decision.
-/// Mirrors `_Ctx`; see this module's top doc comment for the four fields
-/// ([`Ctx::ca`], [`Ctx::ma`], [`Ctx::rival_best_culture`], [`Ctx::age_row`])
-/// that are computed here and read by nothing below, exactly as in Python.
+/// Mirrors `_Ctx`. `ca`/`ma`/`rival_best_culture`/`age_row` used to live
+/// here too -- computed every decision, read by zero rules -- and were
+/// deleted rather than carried as dead weight; see this module's top doc
+/// comment.
 #[derive(Clone, Copy, Debug)]
 pub struct Ctx {
     pub version: u8,
     pub tun: V2Tunables,
     pub nplayers: u8,
-    pub age_row: Age,
     /// `AGE_IDX`: A=0, I=1, II=2, III=3, IV=4 -- exactly `Age`'s own
     /// discriminants, so this is `state.age_civil as u8` directly.
     pub age: u8,
     pub rnd: u16,
     pub last: bool,
-    pub ca: i32,
-    pub ma: i8,
     pub workers_free: u8,
     pub food_need: i32,
     pub res_need: i32,
     pub happy_gap: i32,
     pub strength: i32,
     pub mil_target: i32,
-    pub rival_best_culture: u16,
     /// "Late" = stop investing in economy that will not pay back.
     pub late: bool,
     pub s: Stats,
@@ -344,7 +344,6 @@ impl Ctx {
         // "don't be the softest target".
         let mut rival_strength = [0i32; 3];
         let mut n_rivals = 0usize;
-        let mut rival_best_culture = 0u16;
         for q in state.players[..state.num_players as usize].iter() {
             if q.idx == p.idx || q.resigned {
                 continue;
@@ -353,7 +352,6 @@ impl Ctx {
                 rival_strength[n_rivals] = effects::state_stats(state, q).strength;
                 n_rivals += 1;
             }
-            rival_best_culture = rival_best_culture.max(q.culture);
         }
         rival_strength[..n_rivals].sort_unstable();
         let mil_target = match n_rivals {
@@ -366,19 +364,15 @@ impl Ctx {
             version,
             tun,
             nplayers: state.num_players,
-            age_row: state.age_civil,
             age,
             rnd: state.round,
             last,
-            ca: costs::spare_ca(p),
-            ma: p.military_actions,
             workers_free: p.workers_free,
             food_need,
             res_need,
             happy_gap,
             strength: s.strength,
             mil_target,
-            rival_best_culture,
             late: last || age >= 3,
             s,
         }
@@ -583,7 +577,7 @@ type Rule = fn(&GameState, &PlayerState, &Ctx, &[Move]) -> Option<Move>;
 
 /// The priority list `_action_phase` walks, in order. Every function here
 /// mirrors its `_r_*` twin exactly; see each one's own doc comment.
-const RULES: [Rule; 12] = [
+const RULES: [Rule; 13] = [
     r_round1,
     r_revolution,
     r_play_leader,
@@ -596,6 +590,7 @@ const RULES: [Rule; 12] = [
     r_develop,
     r_action_card,
     r_take_card,
+    r_churchill,
 ];
 
 impl BookBot {
@@ -707,15 +702,23 @@ fn r_revolution(_state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move]) 
 // rule 2 -------------------------------------------------------------
 
 /// Play a leader the moment you have one: an unplayed leader is a card that
-/// did nothing all game. See this module's top doc comment for why this
-/// reads [`LEADER_RANK`] (v1) directly rather than the version-aware
-/// [`leader_rank`], matching `_r_play_leader` exactly.
-fn r_play_leader(_state: &GameState, p: &PlayerState, _ctx: &Ctx, moves: &[Move]) -> Option<Move> {
+/// did nothing all game.
+///
+/// Ranked through [`leader_rank`], the same version-aware helper every
+/// other leader-ranking call site uses (`card_value`, transitively
+/// `best_take`/`best_develop`). This rule used to read the bare v1
+/// `LEADER_RANK` table directly regardless of `ctx.version`, so a
+/// `version=2` bot picked WHICH leader in hand to play from the v1 opinion
+/// table while it decided everything else about leaders from the v2 one --
+/// an inconsistent lookup, not a deliberate choice; fixed here (and in
+/// `book.py::_r_play_leader` identically). See
+/// `tests::r_play_leader_routes_through_the_version_aware_table`.
+fn r_play_leader(_state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move]) -> Option<Move> {
     let mut best: Option<Move> = None;
     let mut best_key: (f64, &str) = (0.0, "");
     for &m in moves {
         if let Move::PlayLeader { card } = m {
-            let key = (rank_of(LEADER_RANK, card, 5.0), card.name());
+            let key = (leader_rank(card, ctx, Some(p)), card.name());
             if best.is_none() || key > best_key {
                 best = Some(m);
                 best_key = key;
@@ -730,7 +733,7 @@ fn r_play_leader(_state: &GameState, p: &PlayerState, _ctx: &Ctx, moves: &[Move]
         return Some(best_mv);
     }
     // Replacing a leader is only right for a clear upgrade.
-    if rank_of(LEADER_RANK, best_card, 5.0) >= rank_of(LEADER_RANK, p.leader, 5.0) + 2.0 {
+    if leader_rank(best_card, ctx, Some(p)) >= leader_rank(p.leader, ctx, Some(p)) + 2.0 {
         return Some(best_mv);
     }
     None
@@ -965,6 +968,30 @@ fn r_take_card(state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move]) ->
         return None;
     }
     best_take(state, p, ctx, moves, false)
+}
+
+// rule 12 -------------------------------------------------------------
+
+/// Winston Churchill's once-per-turn choice draws down no civil or military
+/// action -- `h_churchill`/`_h_churchill` never touch `p.civil_actions`/
+/// `p.military_actions`, only the choice itself, which is gone for the turn
+/// whether it is spent or not (`p.churchill_used`). Never spending a free,
+/// no-downside bonus was a plain bug (no rule referenced `Move::Churchill`
+/// at all); fixed here and in `book.py::_r_churchill` identically.
+///
+/// WHICH of the two flavours to take *is* a strategy call: culture is
+/// unconditional value, but the military discount (`p.mil_discount`/
+/// `p.mil_sci_discount`) is wiped at end of turn (`economy::end_of_turn`)
+/// and so is entirely wasted if this rule fires on a turn nothing military
+/// gets bought or upgraded afterwards. Predicting that would need to peek
+/// at rules this bot has not run yet this turn -- a real optimisation, not
+/// a bug fix -- so this always takes the risk-free flavour instead.
+fn r_churchill(_state: &GameState, _p: &PlayerState, _ctx: &Ctx, moves: &[Move]) -> Option<Move> {
+    moves
+        .iter()
+        .copied()
+        .find(|m| matches!(m, Move::Churchill { choice: ChurchillChoice::Culture }))
+        .or_else(|| moves.iter().copied().find(|m| matches!(m, Move::Churchill { .. })))
 }
 
 // ------------------------------------------------------------ helpers
@@ -1606,6 +1633,102 @@ mod tests {
         assert_eq!(rank_of(LEADER_RANK, despotism, 5.0), 5.0);
         let hammurabi = CardId::by_name("Hammurabi").expect("Hammurabi must exist");
         assert_eq!(rank_of(LEADER_RANK, hammurabi, 5.0), 9.0);
+    }
+
+    /// v1's `LEADER_RANK` ranks Julius Caesar (8) well above Alexander the
+    /// Great (5); v2's tournament-derived `V2_LEADER_RANK` says the
+    /// opposite -- Caesar 3.0 ("in the new TTA he is terrible"), Alexander
+    /// 5.5. Before the fix `r_play_leader` read `LEADER_RANK` (v1) directly
+    /// regardless of `ctx.version`, so a version=2 bot picked Caesar too;
+    /// it must now route through the version-aware `leader_rank` like every
+    /// other leader decision.
+    #[test]
+    fn r_play_leader_routes_through_the_version_aware_table() {
+        let state = crate::game::new_game(2, 1);
+        let p = &state.players[0];
+        let caesar = card("Julius Caesar");
+        let alexander = card("Alexander the Great");
+        let moves = [Move::PlayLeader { card: caesar }, Move::PlayLeader { card: alexander }];
+
+        let ctx1 = Ctx::new(&state, 0, 1, V2Tunables::default());
+        assert_eq!(
+            r_play_leader(&state, p, &ctx1, &moves),
+            Some(Move::PlayLeader { card: caesar }),
+            "v1 ranks Caesar above Alexander"
+        );
+
+        let ctx2 = Ctx::new(&state, 0, 2, V2Tunables::default());
+        assert_eq!(
+            r_play_leader(&state, p, &ctx2, &moves),
+            Some(Move::PlayLeader { card: alexander }),
+            "v2 ranks Alexander above Caesar -- before the fix this read the bare v1 \
+             table and picked Caesar too"
+        );
+    }
+
+    /// Replacing an already-played leader requires a >= 2 point gain on
+    /// whichever table is in force. Michelangelo is v1's best leader (9)
+    /// but v2's worst (2.0, "last in every list found"); with Caesar (v2
+    /// rank 3.0) already played, v2 must NOT treat Michelangelo as the
+    /// upgrade v1 would.
+    #[test]
+    fn r_play_leader_upgrade_threshold_also_uses_the_v2_table() {
+        let mut state = crate::game::new_game(2, 1);
+        state.players[0].leader = card("Julius Caesar");
+        let p = &state.players[0];
+        let michelangelo = card("Michelangelo");
+        let moves = [Move::PlayLeader { card: michelangelo }];
+        let ctx2 = Ctx::new(&state, 0, 2, V2Tunables::default());
+        assert_eq!(
+            r_play_leader(&state, p, &ctx2, &moves),
+            None,
+            "v2 should not swap into a leader it ranks worse"
+        );
+    }
+
+    /// `h_churchill` never spends a civil or military action -- only the
+    /// once-per-turn flag itself, lost for the turn either way -- so taking
+    /// it is strictly better than not. `r_churchill` always takes it when
+    /// offered, defaulting to the risk-free flavour (culture): the military
+    /// discount is wiped at end of turn and wasted if nothing military gets
+    /// bought or upgraded this turn, so WHICH flavour to prefer in that
+    /// case remains an open strategy question, not resolved here.
+    #[test]
+    fn r_churchill_always_takes_the_free_bonus_defaulting_to_culture() {
+        let state = crate::game::new_game(2, 1);
+        let p = &state.players[0];
+        let ctx = Ctx::new(&state, 0, 1, V2Tunables::default());
+        let moves = [
+            Move::Churchill { choice: ChurchillChoice::Culture },
+            Move::Churchill { choice: ChurchillChoice::Military },
+        ];
+        assert_eq!(
+            r_churchill(&state, p, &ctx, &moves),
+            Some(Move::Churchill { choice: ChurchillChoice::Culture })
+        );
+        assert_eq!(r_churchill(&state, p, &ctx, &[]), None);
+    }
+
+    /// End-to-end: with Churchill as leader and nothing else on offer,
+    /// `choose` must pick the free bonus over `end_turn` -- pins that
+    /// `r_churchill` is really reachable through `RULES`, not just correct
+    /// in isolation.
+    #[test]
+    fn choose_takes_churchill_over_end_turn_when_nothing_else_fires() {
+        let mut state = crate::game::new_game(2, 1);
+        state.round = 3;
+        state.phase = Phase::Actions;
+        state.players[0].leader = card("Winston Churchill");
+        let moves =
+            [Move::Churchill { choice: ChurchillChoice::Culture }, Move::Churchill { choice: ChurchillChoice::Military }, Move::EndTurn];
+        for version in [1u8, 2] {
+            let bot = BookBot { version, tunables: V2Tunables::default() };
+            assert_eq!(
+                bot.choose(&state, &moves),
+                Move::Churchill { choice: ChurchillChoice::Culture },
+                "version={version}"
+            );
+        }
     }
 
     #[test]

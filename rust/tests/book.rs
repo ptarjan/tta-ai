@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use tta::bots::book::{BookBot, V2Tunables};
 use tta::fixtures::{self, Json, Record};
-use tta::moves::{Move, PactSide};
+use tta::moves::{ChurchillChoice, Move, PactSide};
 use tta::state::GameState;
 
 fn fixtures_dir() -> PathBuf {
@@ -112,9 +112,17 @@ fn move_matches(mv: Move, expected: &Json) -> Result<(), String> {
         Move::SendDiscard { card } => tag == "send_discard" && name_at(0) == Some(card.name()),
         Move::SendDone => tag == "send_done",
         Move::Choose { n } => tag == "choose" && num_at(0) == Some(n as f64),
-        // book.py never plays Churchill (see `bots::book`'s module doc
-        // comment); no Python tuple shape exists to compare against.
-        Move::Churchill { .. } => false,
+        // `("churchill", "culture"|"military")` -- book.py's own tuple
+        // shape (`_h_churchill`'s `move[1]`), see `bots::book`'s module doc
+        // comment for the fix that made both engines select this move.
+        Move::Churchill { choice } => {
+            tag == "churchill"
+                && name_at(0)
+                    == Some(match choice {
+                        ChurchillChoice::Culture => "culture",
+                        ChurchillChoice::Military => "military",
+                    })
+        }
         Move::EndTurn => tag == "end_turn",
         Move::PolPass => tag == "pol_pass",
         Move::Resign => tag == "resign",

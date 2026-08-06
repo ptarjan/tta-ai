@@ -25,7 +25,16 @@ THE PRIORITY LIST (action phase)
   9. Spend science on the tech priority list.
  10. Play action cards whose free action is one you wanted anyway.
  11. Take cards from the row -- cheap slots, cards you will actually play.
- 12. End the turn.
+ 12. Winston Churchill's once-per-turn choice, if he is your leader and it
+     is unused: it draws down no civil or military action, so taking it is
+     strictly better than not (the choice is lost for the turn either way).
+     WHICH of the two flavours to take is a genuine strategy question --
+     culture is unconditional, the military discount is wasted if nothing
+     military gets bought before end of turn -- so this always takes the
+     risk-free flavour (culture) rather than guessing at a same-turn
+     military purchase; a smarter choice is an open question, not answered
+     here.
+ 13. End the turn.
 
 SOURCES
 -------
@@ -123,24 +132,26 @@ def _db():
 class _Ctx:
     """The dozen numbers every rule below reads.  Computed once per decision."""
 
-    __slots__ = ("p", "s", "age", "rnd", "last", "ca", "ma", "food_need",
+    # `ca`, `ma`, `rival_best_culture` and `age_row` used to live here too:
+    # computed every decision, read by zero rules (grepped the whole repo,
+    # not just this file -- nothing in `plan.py`/`weighted.py`/`neural_*.py`/
+    # `tools/` touched them either).  Deleted rather than carried as dead
+    # weight; see `rust/src/bots/book.rs`'s matching deletion.
+    __slots__ = ("p", "s", "age", "rnd", "last", "food_need",
                  "res_need", "happy_gap", "mil_target", "strength",
-                 "rival_best_culture", "workers_free", "late", "db",
-                 "version", "tun", "nplayers", "age_row")
+                 "workers_free", "late", "db",
+                 "version", "tun", "nplayers")
 
     def __init__(self, state, p, version=1, tun=None):
         db = self.db = _db()
         self.version = version
         self.tun = tun or V2_TUNABLES
         self.nplayers = len(state.players)
-        self.age_row = state.age_civil
         self.p = p
         s = self.s = effects.state_stats(state, p)
         self.age = AGE_IDX.get(state.age_civil, 0)
         self.rnd = state.round
         self.last = bool(getattr(state, "last_round", False))
-        self.ca = A.spare_ca(state, p)
-        self.ma = p.military_actions
         self.workers_free = p.workers_free
 
         # Food: you must out-produce consumption or the civilisation stalls.
@@ -165,7 +176,6 @@ class _Ctx:
             # Multiplayer: the book rule is "don't be the softest target".
             # Match the second-strongest, and stay within 3 of the strongest.
             self.mil_target = max(rs[-2], rs[-1] - 3)
-        self.rival_best_culture = max((q.culture for q in rivals), default=0)
         # "Late" = stop investing in economy that will not pay back.
         self.late = self.last or self.age >= 3
 
@@ -389,7 +399,8 @@ class BookBot:
                      self._r_upgrade,
                      self._r_develop,
                      self._r_action_card,
-                     self._r_take_card):
+                     self._r_take_card,
+                     self._r_churchill):
             mv = rule(state, p, ctx, by_kind)
             if mv is not None:
                 return mv
@@ -429,15 +440,24 @@ class BookBot:
     # rule 2 -------------------------------------------------------------
     def _r_play_leader(self, state, p, ctx, by_kind):
         """Play a leader the moment you have one: an unplayed leader is a
-        card that did nothing all game."""
+        card that did nothing all game.
+
+        Ranked through `_leader_rank`, the same version-aware helper every
+        other leader-ranking call site uses (`_card_value`, transitively
+        `_best_take`/`_best_develop`).  This rule used to read the bare v1
+        `LEADER_RANK` table directly regardless of `ctx.version`, so a
+        version=2 bot picked WHICH leader in hand to play from the v1
+        opinion table while deciding everything else about leaders from the
+        v2 tournament table -- an inconsistent lookup, not a deliberate
+        choice; fixed here."""
         cands = by_kind.get("play_leader")
         if not cands:
             return None
-        best = max(cands, key=lambda m: (LEADER_RANK.get(m[1], 5), m[1]))
+        best = max(cands, key=lambda m: (_leader_rank(m[1], ctx, p), m[1]))
         if p.leader is None:
             return best
         # Replacing a leader is only right for a clear upgrade.
-        if LEADER_RANK.get(best[1], 5) >= LEADER_RANK.get(p.leader, 5) + 2:
+        if _leader_rank(best[1], ctx, p) >= _leader_rank(p.leader, ctx, p) + 2:
             return best
         return None
 
@@ -592,6 +612,32 @@ class BookBot:
         if not takes:
             return None
         return self._best_take(state, p, ctx, takes)
+
+    # rule 12 ------------------------------------------------------------
+    def _r_churchill(self, state, p, ctx, by_kind):
+        """Winston Churchill's once-per-turn choice draws down no civil or
+        military action -- `_h_churchill` never touches `p.civil_actions`/
+        `p.military_actions` -- only the choice itself, which is gone for
+        the turn whether it is spent or not (`p.churchill_used`).  Never
+        spending a free, no-downside bonus was a plain bug (no rule in the
+        12-rule list ever referenced `("churchill", ...)`), not a strategy
+        call, so it is fixed here.
+
+        WHICH of the two flavours to take *is* a strategy call: culture is
+        unconditional value, but the military discount
+        (`p.mil_discount`/`p.mil_sci_discount`) is wiped at end of turn
+        (`economy.end_of_turn`) and so is entirely wasted if this rule fires
+        on a turn nothing military gets bought or upgraded afterwards.
+        Predicting that would need to peek at rules this bot has not run
+        yet this turn -- a real optimisation, not a bug fix -- so this
+        always takes the risk-free flavour instead."""
+        cands = by_kind.get("churchill")
+        if not cands:
+            return None
+        for mv in cands:
+            if mv[1] == "culture":
+                return mv
+        return cands[0]
 
     # ------------------------------------------------------------ helpers
     def _best_build(self, state, p, ctx, by_kind, happy_only=False):
@@ -1051,9 +1097,12 @@ V2_TUNABLES = {
     "taj_mahal": 0.7,
     # Tier 3 at 0.03, but happiness genuinely solves an early problem.
     "hanging_gardens": 0.6,
-    # "upgrade to Iron only if it lands early in Age I"; otherwise stay on
-    # 3-4 Bronze and buy the 5th civil action instead.
-    "iron_over_bronze": 1.0,
+    # ("iron_over_bronze" used to live here -- "upgrade to Iron only if it
+    # lands early in Age I" -- but no rule below ever consulted it; deleted
+    # rather than carried as dead weight.  If a rule is meant to price the
+    # Iron-over-Bronze upgrade decision, that rule does not exist yet; this
+    # was a missing rule, not just an unread tunable, so it is not invented
+    # here -- see this repo's book-bot fix report.)
     # Theology was selected 0 times in 39 tournament games; happiness cards
     # let you skip it.  Multiplies its value.
     "theology": 0.15,
