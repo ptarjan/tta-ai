@@ -149,14 +149,14 @@ fn check_file(path: &Path, expected_path: &Path, report: &mut Report) {
             );
         };
         let players = rec.get("players").expect("players object");
-        for idx in 0..state.num_players as usize {
+        for idx in 0..state.num_players {
             let Some(p_expected) = players.get(&idx.to_string()) else { continue };
             check_player(path, ply, state, idx, p_expected, report);
         }
     }
 }
 
-fn check_player(path: &Path, ply: u32, state: &GameState, idx: usize, expected: &Json, report: &mut Report) {
+fn check_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Json, report: &mut Report) {
     let mut note = |what: String| {
         report.mismatches.push(format!("{}: ply {ply} player {idx}: {what}", path.display()));
     };

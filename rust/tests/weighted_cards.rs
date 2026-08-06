@@ -1,25 +1,33 @@
-//! Differential test for the yield-plumbing layer of `bots::weighted::cards`
-//! against `tools/dump_weighted_cards.py`'s output
-//! (`rust/tests/weighted_cards_fixtures/card_yields.json`) -- see that
-//! script's own doc comment for the exact dump shape and for why this checks
-//! every card in the database rather than sampling (`card_yields`/
-//! `card_choice`/`swap_type`/`board_credit_key`/`is_unit`/`is_levelled_tech`/
-//! `is_action`/`is_government` are pure functions of card identity, no board,
-//! so full coverage of 236 cards is cheap where a board-aware question would
-//! need to sample states).
+//! Differential test for `bots::weighted::cards` -- both layers -- against
+//! `tools/dump_weighted_cards.py`'s output.
 //!
-//! `yield_marginal` is not checked here -- see the dump script's doc comment
-//! for why (it depends on `feature_marginal`, not yet ported); its own
-//! arithmetic is unit-tested in `bots::weighted::cards` against a mock
-//! closure instead.
+//! Two dumps, two shapes of test in this one file, matching the dump
+//! script's own split (see its doc comment for the full rationale):
+//!
+//! * `card_yields_matches_python_for_every_card` and the registry tests below
+//!   it check the YIELD-PLUMBING layer against `card_yields.json`, a single
+//!   JSON object covering every one of the 236 base-game cards once
+//!   (`card_yields`/`card_choice`/`swap_type`/`board_credit_key`/`is_unit`/
+//!   `is_levelled_tech`/`is_action`/`is_government` are pure functions of
+//!   card identity, no board, so full coverage is cheap here).
+//! * `valuation_matches_python_on_sampled_fixture_states` checks the
+//!   VALUATION layer (`action_value`/`tech_value`/`gov_value`/
+//!   `card_potential`/`hand_potential`/`wonder_potential`/
+//!   `hand_mil_potential`/`rival_hand_potential`/`tactic_terms`) against
+//!   `<fixture-name>.jsonl` -- one JSON object per sampled ply, the same
+//!   shape `rust/tests/board_yields.rs`/`rust/tests/weighted_row.rs` read,
+//!   because this layer genuinely IS board-aware and needs real sampled
+//!   states, not just every card once.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tta::bots::board_yields;
 use tta::bots::weighted::cards::{self, CardYield, YieldKind};
 use tta::bots::weighted::weights::{Weights, WeightKey};
 use tta::cards::{CardId, CardType};
-use tta::fixtures::{self, Json};
+use tta::fixtures::{self, Json, Record};
+use tta::state::GameState;
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/weighted_cards_fixtures/card_yields.json")
@@ -265,6 +273,25 @@ fn local_vector(name: &str) -> Weights {
             w.set(WeightKey::BonusCardCredit, 4.0);
             w.set(WeightKey::RestrictedResourceCredit, 0.7);
         }
+        // The two extra vectors `tools/dump_weighted_cards.py::
+        // _valuation_vectors` adds for the VALUATION layer -- see that
+        // function's own doc comment for why the plumbing layer's four
+        // vectors above never exercise these credits.
+        "board_on" => {
+            w.set(WeightKey::CardBoardCredit, 1.0);
+            w.set(WeightKey::CardBoardLeader, 0.5);
+            w.set(WeightKey::CardBoardGovernment, 0.3);
+            w.set(WeightKey::CardBoardAction, 0.4);
+            w.set(WeightKey::CardBoardWonder, 0.6);
+            w.set(WeightKey::HandSwapExtra, 0.5);
+            w.set(WeightKey::FreeActionCredit, 0.3);
+        }
+        "credits_off" => {
+            w.set(WeightKey::TechBoardCredit, 0.0);
+            w.set(WeightKey::GovBoardCredit, 0.0);
+            w.set(WeightKey::ActionBoardCredit, 0.0);
+            w.set(WeightKey::UnitTechCredit, 0.0);
+        }
         other => panic!("unknown vector name in dump: {other}"),
     }
     w
@@ -325,4 +352,204 @@ fn unpriced_values_matches_python_both_directions() {
         }
     }
     assert!(mismatches.is_empty(), "{} mismatch(es):\n{}", mismatches.len(), mismatches.join("\n"));
+}
+
+// ==================================== the valuation layer (sampled states)
+
+fn fixtures_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+fn valuation_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/weighted_cards_fixtures")
+}
+
+fn load_states(path: &Path) -> HashMap<u32, GameState> {
+    let records = fixtures::read_fixture_file(path).unwrap_or_else(|e| panic!("{e}"));
+    let mut out = HashMap::new();
+    for rec in records {
+        if let Record::Ply(p) = rec {
+            if let Some(json) = &p.state {
+                if let Ok(s) = GameState::from_json(json) {
+                    out.insert(p.ply, s);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn f64_close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+#[derive(Default)]
+struct ValuationReport {
+    checked: usize,
+    mismatches: Vec<String>,
+}
+
+/// Compares one `{name: value}` table (`card_potential`/`action_value`/
+/// `tech_value`/`gov_value`) against `got`, called once per name the dump
+/// recorded. `got` is `FnMut` rather than `Fn`: `card_potential`'s own check
+/// threads a `&mut Vec<CardYield>` scratch buffer through it (mirroring how
+/// a real caller reuses one buffer across a whole hand/row loop -- see
+/// `cards::card_potential`'s own doc comment), which the other three tables
+/// do not need but `FnMut` accepts either way.
+///
+/// Skips [`WONDER_CULTURE_GAP_CARDS`] -- see that constant's own doc comment.
+fn check_named_table(label: &str, mut got: impl FnMut(CardId) -> f64, table: &Json, report: &mut ValuationReport, ctx: &str) {
+    let Some(Json::Obj(fields)) = table.get(label) else {
+        report.mismatches.push(format!("{ctx}: missing {label} table"));
+        return;
+    };
+    for (name, want_json) in fields {
+        if WONDER_CULTURE_GAP_CARDS.contains(&name.as_str()) {
+            continue;
+        }
+        let Some(id) = CardId::by_name(name) else {
+            report.mismatches.push(format!("{ctx}: {label}[{name}]: not a Rust CardId"));
+            continue;
+        };
+        let want = want_json.as_f64().unwrap_or_else(|| panic!("{ctx}: {label}[{name}] not a number"));
+        report.checked += 1;
+        let g = got(id);
+        if !f64_close(g, want) {
+            report.mismatches.push(format!("{ctx}: {label}[{name}]: rust={g} python={want}"));
+        }
+    }
+}
+
+/// Wonders whose completion culture `board_yields::board_yields`'s swap diff
+/// cannot yet price -- `effects::building_output`, which `on_build_culture`
+/// (`board_yields.rs`) needs for these two names, is not ported. Mirrors
+/// `rust/tests/board_yields.rs`'s own `WONDER_CULTURE_GAP_CARDS` allowlist
+/// exactly (same root cause, one layer up): `card_potential`'s board-aware
+/// branch for a Wonder calls `board_yields::board_yields` directly, and
+/// `wonder_potential`'s board-aware branch does too, so both inherit the
+/// identical gap. Not this pass's to close (`apply.rs`/`effects.rs`'s
+/// `building_output`, out of `weighted.py` lines 1730-3211 entirely) --
+/// allowlisted here for the same reason `board_yields.rs`'s own test does,
+/// so the gap stays visible and named rather than silently passing OR
+/// silently failing every run.
+const WONDER_CULTURE_GAP_CARDS: &[&str] = &["Hollywood", "Internet"];
+
+fn check_valuation_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Json, report: &mut ValuationReport) {
+    let ctx = format!("{}: ply {ply} player {idx}", path.display());
+
+    // `tactic_terms` takes no weight vector -- dumped (and checked) once.
+    report.checked += 1;
+    let (gain, short) = cards::tactic_terms(state, idx);
+    match expected.get("tactic_terms").and_then(Json::as_arr) {
+        Some([g, s]) => {
+            let (wg, ws) = (g.as_f64().unwrap_or(f64::NAN), s.as_f64().unwrap_or(f64::NAN));
+            if !f64_close(gain, wg) || !f64_close(short, ws) {
+                report.mismatches.push(format!("{ctx}: tactic_terms: rust=({gain},{short}) python=({wg},{ws})"));
+            }
+        }
+        _ => report.mismatches.push(format!("{ctx}: missing tactic_terms")),
+    }
+
+    let vectors_obj = match expected.get("vectors") {
+        Some(Json::Obj(fields)) => fields.as_slice(),
+        _ => {
+            report.mismatches.push(format!("{ctx}: missing vectors object"));
+            return;
+        }
+    };
+
+    for (vname, rec) in vectors_obj {
+        let w = local_vector(vname);
+        let vctx = format!("{ctx} [{vname}]");
+
+        let mut scratch: Vec<CardYield> = Vec::new();
+        check_named_table(
+            "card_potential",
+            |id| cards::card_potential(id, &w, Some(state), Some(idx), None, &mut scratch),
+            rec,
+            report,
+            &vctx,
+        );
+        check_named_table("action_value", |id| cards::action_value(id, state, idx, &w, None), rec, report, &vctx);
+        check_named_table("tech_value", |id| cards::tech_value(id, state, idx, &w, 1.0, None), rec, report, &vctx);
+        check_named_table("gov_value", |id| cards::gov_value(id, state, idx, &w, None), rec, report, &vctx);
+
+        // `wonder_potential` inherits the same `WONDER_CULTURE_GAP_CARDS` gap
+        // as `card_potential` (its board-aware branch calls the same
+        // `board_yields::board_yields` swap diff) whenever the wonder
+        // actually IN PROGRESS is one of the two gap cards -- skipped here,
+        // not compared, for the reason `check_named_table` skips them.
+        let wonder_name = state.players[idx as usize].wonder;
+        let wonder_has_gap = !wonder_name.is_none() && WONDER_CULTURE_GAP_CARDS.contains(&wonder_name.name());
+        let mut checks = vec![
+            ("hand_potential", cards::hand_potential(state, idx, &w)),
+            ("hand_mil_potential", cards::hand_mil_potential(state, idx, &w)),
+            ("rival_hand_potential", cards::rival_hand_potential(state, idx, &w)),
+        ];
+        if !wonder_has_gap {
+            checks.push(("wonder_potential", cards::wonder_potential(state, idx, &w)));
+        }
+        for (label, got) in checks {
+            report.checked += 1;
+            let want = rec.get(label).and_then(Json::as_f64).unwrap_or(f64::NAN);
+            if !f64_close(got, want) {
+                report.mismatches.push(format!("{vctx}: {label}: rust={got} python={want}"));
+            }
+        }
+    }
+}
+
+fn check_valuation_file(path: &Path, expected_path: &Path, report: &mut ValuationReport) {
+    let states = load_states(path);
+    let text = std::fs::read_to_string(expected_path).unwrap_or_else(|e| panic!("reading {}: {e}", expected_path.display()));
+    for (lineno, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rec = fixtures::parse_json(line).unwrap_or_else(|e| panic!("{}:{}: {e}", expected_path.display(), lineno + 1));
+        let ply = rec.get("ply").and_then(Json::as_f64).unwrap_or(-1.0) as u32;
+        let Some(state) = states.get(&ply) else {
+            panic!("{}: ply {ply} has no matching state in {}", expected_path.display(), path.display());
+        };
+        let players = rec.get("players").expect("players object");
+        for idx in 0..state.num_players {
+            let Some(p_expected) = players.get(&idx.to_string()) else { continue };
+            check_valuation_player(path, ply, state, idx, p_expected, report);
+        }
+    }
+}
+
+/// The valuation-layer counterpart of `card_yields_matches_python_for_every_card`
+/// above: board-aware, so it samples real states (`rust/tests/fixtures/*
+/// .jsonl`) rather than walking every card once. See this file's own top doc
+/// comment and `tools/dump_weighted_cards.py`'s for the exact dump shape.
+#[test]
+fn valuation_matches_python_on_sampled_fixture_states() {
+    let dir = fixtures_dir();
+    let edir = valuation_dir();
+    let files = fixtures::fixture_files(&dir).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!files.is_empty(), "no fixtures in {}", dir.display());
+
+    let mut report = ValuationReport::default();
+    let mut files_checked = 0usize;
+    for path in &files {
+        let expected_path = edir.join(path.file_name().unwrap());
+        if !expected_path.exists() {
+            continue;
+        }
+        files_checked += 1;
+        check_valuation_file(path, &expected_path, &mut report);
+    }
+    assert!(files_checked >= 3, "expected weighted_cards_fixtures per-ply jsonl for at least 2p/3p/4p, found {files_checked}");
+    eprintln!(
+        "weighted valuation differential: {files_checked} files, {} checks, {} mismatches",
+        report.checked,
+        report.mismatches.len()
+    );
+    assert!(
+        report.mismatches.is_empty(),
+        "{} valuation mismatch(es):\n{}",
+        report.mismatches.len(),
+        report.mismatches.join("\n")
+    );
 }

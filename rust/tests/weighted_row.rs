@@ -1,12 +1,20 @@
 //! Differential test for `bots::weighted::row` against
 //! `tools/dump_weighted_row.py`'s output (`rust/tests/weighted_row_fixtures/
 //! *.jsonl`, one line per sampled ply -- see that script's own doc comment
-//! for the exact dump shape and, in particular, for why `card_potential` is
-//! dumped as DATA rather than reimplemented here: `cards::card_potential`
-//! (owned by `cards.rs`) has not landed its valuation layer yet, so
-//! `row_pressure`/`row_last_copy` take it as an injected closure, and this
-//! test's closure is a lookup into the dump rather than a second
-//! implementation of card pricing.
+//! for the exact dump shape).
+//!
+//! An earlier revision of this file took `card_potential` as an injected
+//! closure backed by the dump's `{viewer_idx: {name: value}}` table, because
+//! `cards::card_potential` (owned by `cards.rs`) had not landed its
+//! valuation layer yet. It has now, and `row.rs` calls it directly (no more
+//! injected dependency, see that module's own top doc comment) -- so this
+//! test does too: `row::row_pressure`/`row::row_last_copy` read the real
+//! `cards::card_potential` internally, exercising both `row.rs`'s own
+//! arithmetic AND its integration with the real card pricing in one pass.
+//! The dump's `card_potential` table is unused by this file as a result (it
+//! predates the valuation layer landing and is left in the fixture rather
+//! than regenerated, since `weighted_cards.rs`'s own differential coverage
+//! is what pins `cards::card_potential` now).
 //!
 //! Same split as `rust/tests/counting.rs`: the ground-truth STATE for each
 //! sampled ply comes from the ordinary differential fixtures
@@ -24,7 +32,6 @@ use std::path::{Path, PathBuf};
 use tta::bots::weighted::row;
 use tta::bots::weighted::rivals;
 use tta::bots::weighted::weights::{WeightKey, Weights};
-use tta::cards::CardId;
 use tta::fixtures::{self, Json, Record};
 use tta::state::GameState;
 
@@ -72,26 +79,6 @@ fn weights_for_variant(tag: &str) -> Weights {
     w
 }
 
-/// A `card_potential` closure backed by the dump's `{viewer_idx: {name:
-/// value}}` table rather than a Rust port -- see this file's own top doc
-/// comment. Panics (not a silent 0.0 default) if a query falls outside the
-/// universe the dump script computed: that would mean `row.rs`'s masking or
-/// gating logic is reaching a card/viewer combination the dump did not
-/// anticipate, which is itself a real finding, not a gap to paper over.
-fn card_potential_from_dump<'a>(
-    table: &'a Json,
-) -> impl Fn(CardId, &Weights, &GameState, u8, f64) -> f64 + 'a {
-    move |id, _w, _state, viewer, _late| {
-        let viewer_key = viewer.to_string();
-        let name = id.name();
-        table
-            .get(&viewer_key)
-            .and_then(|v| v.get(name))
-            .and_then(Json::as_f64)
-            .unwrap_or_else(|| panic!("card_potential dump has no entry for viewer {viewer_key} card {name:?}"))
-    }
-}
-
 fn nearly(a: f64, b: f64, eps: f64) -> bool {
     (a - b).abs() < eps
 }
@@ -107,12 +94,6 @@ fn check_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Js
         report.mismatches.push(format!("{}: ply {ply} player {idx}: {what}", path.display()));
     };
 
-    let Some(table) = expected.get("card_potential") else {
-        note("missing card_potential table in dump".to_string());
-        return;
-    };
-    let cp = card_potential_from_dump(table);
-
     let ctx = rivals::rival_context(state, idx, None, None);
 
     let results_obj = match expected.get("results") {
@@ -126,8 +107,8 @@ fn check_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Js
         let w = weights_for_variant(tag);
         report.checked += 1;
 
-        let (urgency, bargain) = row::row_pressure(state, idx, &w, Some(&ctx), &cp);
-        let last_copy = row::row_last_copy(state, idx, &w, Some(&ctx), &cp);
+        let (urgency, bargain) = row::row_pressure(state, idx, &w, Some(&ctx));
+        let last_copy = row::row_last_copy(state, idx, &w, Some(&ctx));
 
         let want_urgency = rec.get("row_urgency").and_then(Json::as_f64).unwrap_or(f64::NAN);
         let want_bargain = rec.get("row_bargain_forgone").and_then(Json::as_f64).unwrap_or(f64::NAN);

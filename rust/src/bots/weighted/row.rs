@@ -8,20 +8,19 @@
 //! `RIVAL_TAKE_SHARE`/[`WeightKey::RivalTakeShare`] -- restated here only
 //! where the Rust shape earns its own note.
 //!
-//! ## `card_potential`: the one dependency still injected
+//! ## `card_potential` is called directly, not injected
 //!
-//! `card_potential` (`weighted.py` lines 1730-3211, owned by `cards.rs`) only
-//! has its YIELD-PLUMBING layer landed so far -- the VALUATION layer
-//! (`card_potential` itself) is not ported yet, which is exactly the case
-//! this port's house style reserves dependency injection for: a real
-//! capability nothing in this crate can supply today. [`row_pressure`]/
-//! [`row_last_copy`] take it as an injected `&dyn Fn` for that reason, so
-//! this file compiles and is testable now rather than blocking on the rest
-//! of `cards.rs` landing first. Once `cards::card_potential` exists, its
-//! caller (`eval.rs`, not this file) should pass `&cards::card_potential`
-//! here; nothing in this file needs to change for that to work, because the
-//! closure's signature already matches Python's `card_potential(name, w,
-//! state, idx, late)`.
+//! An earlier revision of this file took `card_potential` (`weighted.py`
+//! lines 1730-3211, owned by `cards.rs`) as an injected `&dyn Fn`, because
+//! only its yield-plumbing layer had landed at the time -- DESIGN.md's "no DI
+//! for its own sake" rule excuses a closure only for a dependency that is
+//! genuinely not ported yet. `cards::card_potential` (the valuation layer)
+//! exists now, so [`row_pressure`]/[`row_last_copy`]/[`rival_desire`] call it
+//! directly like every other landed dependency in this file. Each owns ONE
+//! `Vec<cards::CardYield>` scratch buffer for its own whole loop
+//! (`cards::card_potential`'s own doc comment: it threads a caller-supplied
+//! buffer through to `card_yields` rather than allocating per call, DESIGN.md
+//! rule 4), reused -- not reallocated -- across every card it prices.
 //!
 //! ## Gating a `RivalView` needs its own legality check
 //!
@@ -47,6 +46,7 @@ use crate::costs::{self, TakeGate};
 use crate::game;
 use crate::state::{GameState, ROW_SIZE};
 
+use super::cards::{self, CardYield};
 use super::horizon;
 use super::rivals::{RivalContext, RivalView};
 use super::weights::{WeightKey, Weights};
@@ -251,7 +251,7 @@ fn rival_desire(
     gate: &TakeGate,
     late: f64,
     want_values: bool,
-    card_potential: &dyn Fn(CardId, &Weights, &GameState, u8, f64) -> f64,
+    scratch: &mut Vec<CardYield>,
 ) -> RivalDemand {
     let mut reach = 0.0;
     let mut vals: Vec<(u8, f64)> = Vec::new();
@@ -262,7 +262,7 @@ fn rival_desire(
         }
         reach += 1.0;
         if want_values {
-            let v = card_potential(nm, w, state, view.idx, late);
+            let v = cards::card_potential(nm, w, Some(state), Some(view.idx), Some(late), scratch);
             if v > 0.0 {
                 vals.push((j, v));
                 total += v;
@@ -310,13 +310,7 @@ fn rival_desire(
 /// path) masks nothing and considers no rivals, as leaky as Python's
 /// `ctx=None` call site; every real caller goes through `rivals::
 /// rival_context`.
-pub fn row_pressure(
-    state: &GameState,
-    idx: u8,
-    w: &Weights,
-    ctx: Option<&RivalContext>,
-    card_potential: &dyn Fn(CardId, &Weights, &GameState, u8, f64) -> f64,
-) -> (f64, f64) {
+pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalContext>) -> (f64, f64) {
     let root_row = ctx.map(|c| c.root_row.as_slice());
     let visible = visible_row(&state.card_row, root_row);
     if visible.is_empty() {
@@ -331,6 +325,9 @@ pub fn row_pressure(
     let late = horizon::lateness(state);
     let rival_views: &[(RivalView, TakeGate)] = ctx.map(|c| c.rival_views.as_slice()).unwrap_or(&[]);
 
+    // One scratch buffer for every `cards::card_potential` call this whole
+    // decision makes -- see this module's top doc comment.
+    let mut scratch: Vec<CardYield> = Vec::new();
     // Per-rival slot counts, built at most once -- see `rival_desire`'s own
     // doc comment for why this is lazy: a row with no card ever passing the
     // `saving > 0` gate below never needs it at all.
@@ -342,7 +339,7 @@ pub fn row_pressure(
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
             continue;
         }
-        let val = card_potential(name, w, state, idx, late);
+        let val = cards::card_potential(name, w, Some(state), Some(idx), Some(late), &mut scratch);
         if val <= 0.0 {
             continue;
         }
@@ -355,14 +352,15 @@ pub fn row_pressure(
         if saving <= 0 {
             continue;
         }
-        let demand = demand.get_or_insert_with(|| {
-            rival_views
-                .iter()
-                .map(|(v, g)| rival_desire(state, w, &visible, v, g, late, desire > 0.0, card_potential))
-                .collect()
-        });
+        if demand.is_none() {
+            let mut d = Vec::with_capacity(rival_views.len());
+            for (v, g) in rival_views {
+                d.push(rival_desire(state, w, &visible, v, g, late, desire > 0.0, &mut scratch));
+            }
+            demand = Some(d);
+        }
         let mut survive = 1.0;
-        for ((view, gate), dem) in rival_views.iter().zip(demand.iter()) {
+        for ((view, gate), dem) in rival_views.iter().zip(demand.as_ref().unwrap().iter()) {
             if !rival_view_can_take(view, gate, i as usize, name) {
                 continue;
             }
@@ -417,13 +415,7 @@ pub fn row_pressure(
 /// `ctx: None` recomputes the outlook from `state` via
 /// `counting::civil_outlook`, correct at the search root and the same
 /// degraded path `row_pressure` documents.
-pub fn row_last_copy(
-    state: &GameState,
-    idx: u8,
-    w: &Weights,
-    ctx: Option<&RivalContext>,
-    card_potential: &dyn Fn(CardId, &Weights, &GameState, u8, f64) -> f64,
-) -> f64 {
+pub fn row_last_copy(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalContext>) -> f64 {
     let root_row = ctx.map(|c| c.root_row.as_slice());
     let visible = visible_row(&state.card_row, root_row);
     if visible.is_empty() {
@@ -440,12 +432,13 @@ pub fn row_last_copy(
     let p = &state.players[idx as usize];
     let mine = costs::take_gate(state, p, Some(costs::ca_total(state, p)));
     let late = horizon::lateness(state);
+    let mut scratch: Vec<CardYield> = Vec::new();
     let mut total = 0.0;
     for &(i, name) in &visible {
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
             continue;
         }
-        let val = card_potential(name, w, state, idx, late);
+        let val = cards::card_potential(name, w, Some(state), Some(idx), Some(late), &mut scratch);
         if val <= 0.0 {
             continue;
         }
@@ -630,41 +623,45 @@ mod tests {
 
     // ------------------------------------------------- row_pressure/last_copy
 
-    /// A row with nothing takeable prices at exactly zero, whatever
-    /// `card_potential` would say -- the early-return path, never calling
-    /// the closure at all.
+    /// A row with nothing takeable prices at exactly zero -- the early-return
+    /// path, before `cards::card_potential` is ever reached.
     #[test]
-    fn empty_row_is_zero_zero_and_never_calls_card_potential() {
+    fn empty_row_is_zero_zero() {
         let mut state = G::new_game(2, 5);
         state.card_row = [CardId::NONE; ROW_SIZE];
-        let cp = |_: CardId, _: &Weights, _: &GameState, _: u8, _: f64| -> f64 {
-            panic!("must not be called on an empty row")
-        };
         let w = Weights::default();
-        assert_eq!(row_pressure(&state, 0, &w, None, &cp), (0.0, 0.0));
-        assert_eq!(row_last_copy(&state, 0, &w, None, &cp), 0.0);
+        assert_eq!(row_pressure(&state, 0, &w, None), (0.0, 0.0));
+        assert_eq!(row_last_copy(&state, 0, &w, None), 0.0);
     }
 
     /// A card the sweep destroys before my next turn contributes to
     /// `row_urgency`; one that survives contributes zero. 2p: slide = 2 *
     /// sweep_count(2), so a card sitting inside the first `slide` slots is
     /// doomed and one past it survives.
+    ///
+    /// Uses a Wonder ("Colossus") under `Weights::default()`: `card_board_credit`
+    /// and `card_board_wonder` both default to 0.0, so `cards::card_potential`
+    /// takes the static-table early return for it regardless of board --
+    /// deterministic and known-positive (pinned by `cards::tests::
+    /// wonders_pay_a_stage_cost_and_grant_a_wonders_point`'s sibling
+    /// coverage) without needing a hand-zeroed weight vector, which would
+    /// also zero `rival_take_share`/`rival_desire` and break the very
+    /// rival-gating arithmetic these row.rs tests exist to check.
     #[test]
     fn urgency_counts_only_cards_the_sweep_destroys() {
         let mut state = G::new_game(2, 23);
         state.players[0].civil_actions = 6;
         let slide = 2 * game::sweep_count(2);
         state.card_row = [CardId::NONE; ROW_SIZE];
-        state.card_row[0] = card("Alchemy");
+        state.card_row[0] = card("Colossus");
         let w = Weights::default();
-        let cp = |_: CardId, _: &Weights, _: &GameState, _: u8, _: f64| 1.0;
-        let (doomed, _) = row_pressure(&state, 0, &w, None, &cp);
+        let (doomed, _) = row_pressure(&state, 0, &w, None);
         assert!(doomed > 0.0, "slot 0 is inside the slide");
 
         state.card_row = [CardId::NONE; ROW_SIZE];
         let safe_slot = slide.min(ROW_SIZE - 1);
-        state.card_row[safe_slot] = card("Alchemy");
-        let (safe, _) = row_pressure(&state, 0, &w, None, &cp);
+        state.card_row[safe_slot] = card("Colossus");
+        let (safe, _) = row_pressure(&state, 0, &w, None);
         assert_eq!(safe, 0.0, "slot {safe_slot} is not inside the slide, so it is priced as a bargain, not an urgency");
     }
 
@@ -676,41 +673,45 @@ mod tests {
         let mut state = G::new_game(2, 29);
         state.players[0].civil_actions = 6;
         state.card_row = [CardId::NONE; ROW_SIZE];
-        state.card_row[9] = card("Alchemy"); // 3 CA now, slot 3 (1 CA) next turn
+        state.card_row[9] = card("Colossus"); // 3 CA now, slot 3 (1 CA) next turn
         let w = Weights::default();
-        let cp = |_: CardId, _: &Weights, _: &GameState, _: u8, _: f64| 1.0;
 
         let ctx = rivals::rival_context(&state, 0, None, None);
-        let (_, contested) = row_pressure(&state, 0, &w, Some(&ctx), &cp);
+        let (_, contested) = row_pressure(&state, 0, &w, Some(&ctx));
 
         // Fill the rival's civil hand past the limit so `hand_slack` is 0.
         for _ in 0..20 {
             state.players[1].hand_civil.push(card("Theology"));
         }
         let ctx = rivals::rival_context(&state, 0, None, None);
-        let (_, safe) = row_pressure(&state, 0, &w, Some(&ctx), &cp);
+        let (_, safe) = row_pressure(&state, 0, &w, Some(&ctx));
         assert!(safe > contested, "a full-handed rival must not discount the bargain");
     }
 
     /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`.
-    /// Rather than assume a fresh deal's real `civil_outlook` for "Alchemy"
+    /// Rather than assume a fresh deal's real `civil_outlook` for "Colossus"
     /// (a fitted/measured number, not a constant this test should hardcode),
     /// this computes that same outlook independently via
     /// `counting::civil_outlook` and checks `row_last_copy` against the
     /// formula directly -- correct whichever side of 1.0 the real outlook
-    /// happens to land on.
+    /// happens to land on. Likewise `cards::card_potential` itself is called
+    /// once, directly, to get the exact value `row_last_copy` must scale --
+    /// its own arithmetic is `cards.rs`'s to pin, not this file's.
     #[test]
     fn row_last_copy_matches_the_one_minus_outlook_formula() {
         let mut state = G::new_game(2, 31);
         state.players[0].civil_actions = 6;
         state.card_row = [CardId::NONE; ROW_SIZE];
-        let name = card("Alchemy");
+        let name = card("Colossus");
         state.card_row[0] = name;
         let w = Weights::default();
-        let cp = |_: CardId, _: &Weights, _: &GameState, _: u8, _: f64| 2.0;
+        let late = horizon::lateness(&state);
+        let mut scratch = Vec::new();
+        let val = cards::card_potential(name, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        assert!(val > 0.0, "val={val}");
         let outlook = counting::lookup(&counting::civil_outlook(&state, 0), name, 0.0);
         let gone = (1.0 - outlook).max(0.0);
-        let total = row_last_copy(&state, 0, &w, None, &cp);
-        assert!((total - 2.0 * gone).abs() < 1e-9, "total={total} expected={}", 2.0 * gone);
+        let total = row_last_copy(&state, 0, &w, None);
+        assert!((total - val * gone).abs() < 1e-9, "total={total} expected={}", val * gone);
     }
 }

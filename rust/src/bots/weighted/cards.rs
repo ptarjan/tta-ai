@@ -1,14 +1,27 @@
 //! `engine/bots/weighted.py` lines 1730-3211: card, hand and wonder pricing --
 //! what a card in hand or a wonder in progress is worth, board-aware.
 //!
-//! This file owns only the YIELD-PLUMBING layer: turning one card's printed
-//! numbers into `(feature, amount, kind)` triples and summing them at a
-//! weight vector. The VALUATION layer built on top -- `action_value`,
-//! `tech_value`, `gov_value`, `card_potential`, `_hand_total`, `_swap_slot`,
-//! `hand_potential`, `wonder_potential`, `_gains_only`, `tactic_terms`,
-//! `hand_mil_potential`, `rival_hand_potential` -- is a separate port and
-//! lives elsewhere; nothing below decides what a hand or a wonder is worth,
-//! only what one card is.
+//! Two layers, landed in two passes and still split in the module's own
+//! layout below (yield-plumbing first, valuation second) even though both
+//! are now in one file:
+//!
+//! * YIELD-PLUMBING (landed first, commit `009f756`): turning one card's
+//!   printed numbers into `(feature, amount, kind)` triples and summing them
+//!   at a weight vector -- [`card_yields`]/[`card_choice`]/[`sum_yields`]/
+//!   [`board_credit_key`]/[`swap_type`]/[`yield_marginal`] and the
+//!   [`DELIBERATELY_UNPRICED`]/[`UNPRICED_VALUES`] tables. Board-independent
+//!   except where noted.
+//! * VALUATION (this pass): what a card in hand, a wonder in progress, or a
+//!   whole hand is worth ON A BOARD -- [`action_value`]/[`tech_value`]/
+//!   [`gov_value`] (the three civil types the static plumbing table alone
+//!   prices badly or not at all), [`card_potential`] (the one entry point
+//!   `eval.rs`/`row.rs` call, dispatching to the three above or falling back
+//!   to the static table), [`hand_potential`]/[`hand_mil_potential`]/
+//!   [`rival_hand_potential`]/[`wonder_potential`] (summed/maxed
+//!   `card_potential` over a hand, a rival's hand, or the wonder in
+//!   progress), and [`tactic_terms`] (the one term here that reaches into
+//!   `effects::tactic_outlook`/`army_strength` rather than the yield-plumbing
+//!   layer -- see its own doc comment).
 //!
 //! ## The type system already fixed the bug this file exists to prevent
 //!
@@ -72,15 +85,17 @@
 //! `Special::OnBuildCulture` (board-priced, `board_yields.rs`'s concern, not
 //! this file's -- Python's own `_card_yields` never prices it either).
 //!
-//! ## API the valuation layer calls
+//! ## The yield-plumbing layer's own API, restated
 //!
 //! * [`card_yields`]/[`card_choice`]/[`sum_yields`] -- the pricing table
 //!   itself. [`card_yields`] pushes into a caller-supplied `&mut Vec`
 //!   (DESIGN.md rule 4: this is called for every card in every hand on every
 //!   evaluation, so the caller owns one scratch buffer across the whole
 //!   evaluation and clears it between cards rather than each call
-//!   allocating). [`card_choice`] is `Option<(CardYield, CardYield)>`, not a
-//!   `Vec` of alternatives -- today's only mutually-exclusive card (Reserves,
+//!   allocating) -- [`card_potential`] below is that caller, threading its
+//!   own `scratch` parameter down for exactly this reason. [`card_choice`] is
+//!   `Option<(CardYield, CardYield)>`, not a `Vec` of alternatives --
+//!   today's only mutually-exclusive card (Reserves,
 //!   `Special::GainFoodOrResources`, "N food OR N resources") is exactly a
 //!   pair, and a hypothetical wider choice should widen the return type, not
 //!   grow a `Vec` next to it.
@@ -88,18 +103,15 @@
 //!   (`card_board_*` offsets, `SINGLE_SLOT`).
 //! * [`yield_marginal`] -- `_yield_marginal`: [`rivals::feature_marginal`]
 //!   plus the two ring-fenced pseudo-features (`resource_discount`/
-//!   `restricted_resources`). `rivals.rs` landed (with `feature_marginal`)
-//!   while this file was being written, so this calls it directly rather
-//!   than through an injected closure -- DESIGN.md's "no DI for its own
-//!   sake" rule only excuses a closure for a dependency that is genuinely
-//!   not ported yet, and by the time this file was done, that dependency
-//!   was. Note the mismatched index width this exposes: `rivals::
-//!   feature_marginal` takes `idx: u8` where `board_yields.rs`'s functions
-//!   ([`card_yields`]'s neighbours in the valuation layer) take `idx: usize`
-//!   -- two sibling ports picked different conventions independently. Not
-//!   this file's to fix (out of this pass's line range); flagged here and in
-//!   the port report so the valuation layer, which will call both, does not
-//!   have to rediscover it.
+//!   `restricted_resources`). Calls `feature_marginal` directly rather than
+//!   through an injected closure -- `rivals.rs` had already landed by the
+//!   time the yield-plumbing half of this file was written, so there was
+//!   never a real dependency to inject a stand-in for. The `idx: u8` vs.
+//!   `idx: usize` mismatch this exposed against `board_yields.rs` (flagged in
+//!   an earlier revision of this comment) is gone: this pass unified both on
+//!   `u8` (matching `GameState::current` and the rest of the engine) and
+//!   removed the casts at the boundary -- see [`feature_key`] and every
+//!   `board_yields::*` call below.
 //! * [`crate::cards::CardType::is_unit`]/[`crate::bots::board_yields::
 //!   is_levelled_type`]/[`crate::cards::CardType::is_action`]/
 //!   [`crate::cards::CardType::is_government`] -- `_is_unit`/
@@ -117,8 +129,10 @@
 
 use crate::bots::board_yields;
 use crate::cards::{CardId, CardType, Special};
+use crate::effects;
 use crate::state::GameState;
 
+use super::horizon;
 use super::rivals;
 use super::weights::WeightKey;
 use super::weights::Weights;
@@ -708,6 +722,636 @@ pub const UNPRICED_VALUES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+// ======================================================= the valuation layer
+//
+// `engine/bots/weighted.py` lines 2528-3238 (`action_value` through
+// `rival_hand_potential`): what a card in hand, a wonder in progress, or a
+// whole hand is worth ON A BOARD, built on the yield-plumbing layer above.
+
+/// [`board_yields::Feature`] -> [`WeightKey`]: the two enums name the same
+/// features by construction ([`board_yields::Feature::python_key`] and
+/// [`WeightKey::name`] agree on every variant -- `tests::
+/// feature_key_agrees_with_both_enums_printed_names` below pins it), so
+/// [`action_value`]/[`tech_value`]/[`gov_value`] can price a board-derived
+/// triple through the SAME weight vector `evaluate` uses. An exhaustive
+/// `match` rather than a string round-trip through the two `name`/
+/// `python_key` methods: DESIGN.md prefers an enum-to-enum `match` over a
+/// stringly-typed lookup, and a `Feature` variant added later without a
+/// matching arm here is a compile error, not a silent `panic!` at eval time.
+fn feature_key(f: board_yields::Feature) -> WeightKey {
+    use board_yields::Feature as F;
+    match f {
+        F::CultureRate => WeightKey::CultureRate,
+        F::ScienceRate => WeightKey::ScienceRate,
+        F::FoodRate => WeightKey::FoodRate,
+        F::ResourceRate => WeightKey::ResourceRate,
+        F::Strength => WeightKey::Strength,
+        F::HappyMargin => WeightKey::HappyMargin,
+        F::CivilActions => WeightKey::CivilActions,
+        F::MilitaryActions => WeightKey::MilitaryActions,
+        F::ColonizeBonus => WeightKey::ColonizeBonus,
+        F::UrbanLimit => WeightKey::UrbanLimit,
+        F::WonderStagesPerAction => WeightKey::WonderStagesPerAction,
+        F::HandLimit => WeightKey::HandLimit,
+        F::BuildDiscount => WeightKey::BuildDiscount,
+        F::PopCost => WeightKey::PopCost,
+        F::NoAggression => WeightKey::NoAggression,
+        F::Leader => WeightKey::Leader,
+        F::GovLevel => WeightKey::GovLevel,
+        F::TechLevels => WeightKey::TechLevels,
+        F::GovActionCost => WeightKey::GovActionCost,
+        F::Science => WeightKey::Science,
+        F::CaLeft => WeightKey::CaLeft,
+        F::MaLeft => WeightKey::MaLeft,
+        F::Culture => WeightKey::Culture,
+        F::FreeWorkers => WeightKey::FreeWorkers,
+        F::BlueFree => WeightKey::BlueFree,
+        F::Wonders => WeightKey::Wonders,
+        F::ResourceStock => WeightKey::ResourceStock,
+        F::NumTechs => WeightKey::NumTechs,
+        F::SpecialTechs => WeightKey::SpecialTechs,
+        F::BestFarm => WeightKey::BestFarm,
+        F::BestMine => WeightKey::BestMine,
+        F::BestLab => WeightKey::BestLab,
+        F::BestTemple => WeightKey::BestTemple,
+        F::BestTheater => WeightKey::BestTheater,
+        F::BestLibrary => WeightKey::BestLibrary,
+        F::BestArena => WeightKey::BestArena,
+        F::BestUnit => WeightKey::BestUnit,
+        F::Workers => WeightKey::Workers,
+        F::ProdWorkers => WeightKey::ProdWorkers,
+        F::UrbanWorkers => WeightKey::UrbanWorkers,
+        F::UnitWorkers => WeightKey::UnitWorkers,
+        F::Uprising => WeightKey::Uprising,
+        F::RestrictedResources => WeightKey::RestrictedResources,
+    }
+}
+
+/// `_sum_yields` restricted to a board-derived triple list
+/// ([`board_yields::Triple`]: `Feature`/`Kind`, not `WeightKey`/`YieldKind`)
+/// -- routed through the SAME weight vector via [`feature_key`]. Board
+/// triples are only ever `Kind::Gain`/`Kind::Cost` (`board_yields.rs` never
+/// emits the RATE/UNIT/TERRITORY/BONUS distinctions [`sum_yields`]'s `credit`
+/// argument exists to price -- that vocabulary belongs to the static table
+/// only), so this needs no `credit` parameter of its own.
+fn sum_board_triples(triples: &[board_yields::Triple], w: &Weights) -> f64 {
+    let mut total = 0.0;
+    for &(feat, amt, kind) in triples {
+        let mut wk = w.get(feature_key(feat));
+        if kind == board_yields::Kind::Cost && wk < 0.0 {
+            wk = 0.0;
+        }
+        if wk != 0.0 && amt != 0.0 {
+            total += wk * amt;
+        }
+    }
+    total
+}
+
+/// `_gains_only`: true unless `kind` is a cost -- see [`wonder_potential`]'s
+/// doc comment for why a wonder's stage cost must not be priced twice. A
+/// predicate rather than Python's filtered tuple: [`gains_only_sum`]/
+/// [`gains_only_board_sum`] fold it in directly while summing, so a wonder's
+/// handful of triples never need a second `Vec` allocated just to drop one
+/// entry from the first (DESIGN.md rule 4).
+fn gains_only(kind: YieldKind) -> bool {
+    kind != YieldKind::Cost
+}
+
+/// [`sum_yields`], with every [`gains_only`]-excluded ([`YieldKind::Cost`])
+/// triple skipped entirely rather than clamped -- the stage cost
+/// [`wonder_potential`] deliberately drops (`wonder_remaining`, unowned by
+/// this file, already prices an in-progress wonder's outstanding resources
+/// correctly; [`card_yields`]'s flat `-sum(stages)` would double-count and
+/// would charge for stages already paid).
+fn gains_only_sum(triples: &[CardYield], w: &Weights, credit: f64) -> f64 {
+    let mut total = 0.0;
+    for &(key, amount, kind) in triples {
+        if !gains_only(kind) {
+            continue;
+        }
+        let mut amt = amount;
+        match kind {
+            YieldKind::Rate => amt *= credit,
+            YieldKind::Unit => amt *= w.get(WeightKey::UnitStrengthCredit),
+            YieldKind::Territory => amt *= w.get(WeightKey::TerritoryCredit),
+            YieldKind::Bonus => amt *= w.get(WeightKey::BonusCardCredit),
+            YieldKind::Gain | YieldKind::Cost => {}
+        }
+        let wk = w.get(key);
+        if wk != 0.0 && amt != 0.0 {
+            total += wk * amt;
+        }
+    }
+    total
+}
+
+/// [`sum_board_triples`], with every `Kind::Cost` triple skipped -- the
+/// board-swap sibling of [`gains_only_sum`], for a wonder priced by the swap
+/// diff instead of the static table.
+fn gains_only_board_sum(triples: &[board_yields::Triple], w: &Weights) -> f64 {
+    let mut total = 0.0;
+    for &(feat, amt, kind) in triples {
+        if kind == board_yields::Kind::Cost {
+            continue;
+        }
+        let wk = w.get(feature_key(feat));
+        if wk != 0.0 && amt != 0.0 {
+            total += wk * amt;
+        }
+    }
+    total
+}
+
+// ------------------------------------------------------- the static civil types
+
+/// `action_value`: eval-points playing this yellow action card would be
+/// worth ON THIS BOARD. `tech_value`'s sibling, for the one civil type left
+/// on the static table -- see `engine/bots/weighted.py:2528`'s extensive doc
+/// comment (not reproduced here) for the five-point derivation: a one-shot
+/// gain is worth [`yield_marginal`], not `w[key]`; a free civil action is
+/// worth a civil action times `free_action_credit`, whose default is 0.0
+/// because playing the action card already spends the one it grants back (a
+/// wash, RB 3.11); the two ring-fenced resources ride the same
+/// `yield_marginal`; a choice ([`card_choice`]) is a `max`, not a sum; and the
+/// three per-table-size cards (Endowment for the Arts, Wave of Nationalism,
+/// Military Build-Up) are priced by [`board_yields::board_extra`] rather than
+/// reimplemented.
+///
+/// Walks `card.effects` directly rather than reusing [`card_yields`]'s
+/// output: the two are NOT the same walk. [`card_yields`] feeds
+/// [`sum_yields`], which needs `YieldKind` to know how to scale each triple
+/// (a `Rate` triple by `credit`, a `Unit`/`Territory`/`Bonus` triple by its
+/// own credit weight) and also prices `production`, the two costs and
+/// `card.special`'s `BuildDiscount`/`FreeCivilAction`. `action_value` prices
+/// NONE of those -- it walks only the `effects` dict Python's own
+/// `_EFF_TO_FEATURE` table covers, treats every entry identically through
+/// [`yield_marginal`] regardless of kind, and has its own bespoke
+/// `freeCivilAction` handling (`free_action_credit`, not the generic
+/// `FreeCivilAction` weight `card_yields` prices it through for the static
+/// path). Reusing [`card_yields`]'s buffer here would silently pull in
+/// `production`, `BuildDiscount`, `WonderStagesPerAction` and the wrong
+/// `FreeCivilAction` pricing -- exactly the kind of drift this port's own
+/// house style exists to prevent, so this is a deliberate second walk, not
+/// an oversight.
+pub fn action_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    let card = id.get();
+    let eff = &card.effects;
+    let late = late.unwrap_or_else(|| horizon::lateness(state));
+    let mut total = 0.0;
+    {
+        let mut add = |key: WeightKey, amt: i16| {
+            if amt != 0 {
+                total += f64::from(amt) * yield_marginal(key, state, idx, w, Some(late));
+            }
+        };
+        add(WeightKey::Culture, eff.gain_culture);
+        add(WeightKey::Science, eff.gain_science);
+        add(WeightKey::FoodStock, eff.gain_food);
+        add(WeightKey::ResourceStock, eff.gain_resources);
+        add(WeightKey::CivilActions, eff.civil_actions);
+        add(WeightKey::MilitaryActions, eff.military_actions);
+        add(WeightKey::CultureRate, eff.culture);
+        add(WeightKey::ScienceRate, eff.science);
+        add(WeightKey::Strength, eff.strength);
+        add(WeightKey::HappyMargin, eff.happy);
+        add(WeightKey::YellowBank, eff.yellow_tokens);
+        add(WeightKey::BlueFree, eff.blue_tokens);
+        add(WeightKey::HandLimit, eff.civil_hand_limit);
+        add(WeightKey::HandLimit, eff.military_hand_limit);
+        add(WeightKey::ColonizeBonus, eff.colonize_bonus);
+        add(WeightKey::ResourceDiscount, eff.resource_discount);
+        add(WeightKey::RestrictedResources, eff.resources_for_military_units);
+    }
+
+    // `_card_choices`: a choice is a `max`, not a sum -- Reserves' "gain N
+    // food OR N resources", resolved here with no board credit gating it
+    // (see `card_potential`'s own note on why the pre-fix static path
+    // multiplied this by `card_board_credit`, 0.0 on every champion, and
+    // priced every Reserves at exactly nothing).
+    if let Some((a, b)) = card_choice(id) {
+        let va = a.1 * yield_marginal(a.0, state, idx, w, Some(late));
+        let vb = b.1 * yield_marginal(b.0, state, idx, w, Some(late));
+        total += va.max(vb);
+    }
+
+    for &(feat, amt, _kind) in &board_yields::board_extra(id, state, idx) {
+        total += amt * yield_marginal(feature_key(feat), state, idx, w, Some(late));
+    }
+
+    // `eff.get("freeCivilAction")` in Python reads the RAW effects dict,
+    // whose value is a STRING naming which free action (`Special::
+    // FreeCivilAction`'s payload here, not `CardEffects.free_civil_action` --
+    // that typed field is dead, always 0, on every one of the 236 base-game
+    // cards; see this module's top doc comment). Checking `eff.
+    // free_civil_action` here would silently zero this branch on every one
+    // of the 18 cards it exists for.
+    if card.special.iter().any(|sp| matches!(sp, Special::FreeCivilAction(_))) {
+        let fc = w.get(WeightKey::FreeActionCredit);
+        if fc != 0.0 {
+            total += fc * rivals::feature_marginal(WeightKey::CivilActions, state, idx, w, Some(late), None);
+        }
+    }
+    total
+}
+
+/// `tech_value`: eval-points developing this technology is worth ON THIS
+/// BOARD -- one function for all fifteen technology types, red included. See
+/// `engine/bots/weighted.py:2642`'s extensive doc comment (not reproduced
+/// here) for the four-point derivation: the move is an upgrade
+/// ([`board_yields::tech_upgrade`]'s `staff`/`dev` split), not a fresh build;
+/// a unit of any feature is worth [`rivals::feature_marginal`], not `w[key]`;
+/// developing buys `tech_levels`/`num_techs`/a `best_*` step whether or not
+/// anybody staffs it (the `dev` triples, scaled by `dev_credit`); and you
+/// develop, then decide how many workers to move, linear in that count so the
+/// optimum is an endpoint (`max(0.0, ...)`) -- with `board_yields::
+/// build_fresh`'s ONE-fresh-worker plan competing for the same turn (a `max`,
+/// not a sum: `build_fresh_credit` gates it, default 0.0, so this is inert
+/// until the league is told to look).
+///
+/// Costs are clamped with `max(0.0, w)` for the same reason [`YieldKind::
+/// Cost`] is: a hill climb is free to drive a stock weight negative and
+/// paying a cost must never read as a gain.
+pub fn tech_value(id: CardId, state: &GameState, idx: u8, w: &Weights, dev_credit: f64, late: Option<f64>) -> f64 {
+    let (staff, dev, sci, res) = board_yields::tech_upgrade(id, state, idx);
+    if staff.is_empty() && dev.is_empty() && sci == 0.0 && res == 0.0 {
+        return 0.0;
+    }
+    let late = late.unwrap_or_else(|| horizon::lateness(state));
+    let mut net = -res * w.get(WeightKey::ResourceStock).max(0.0);
+    for &(feat, amt, _kind) in &staff {
+        net += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+    }
+    if net < 0.0 {
+        net = 0.0;
+    }
+    // the OTHER staffing plan: develop it and build ONE fresh worker --
+    // `board_yields::build_fresh`. A `max`, not a sum: the two plans compete
+    // for the same turn.
+    let build_credit = w.get(WeightKey::BuildFreshCredit);
+    if build_credit != 0.0 {
+        let (b_triples, b_res) = board_yields::build_fresh(id, state, idx);
+        if !b_triples.is_empty() {
+            let mut b_net = -b_res * w.get(WeightKey::ResourceStock).max(0.0);
+            for &(feat, amt, _kind) in &b_triples {
+                b_net += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+            }
+            b_net *= build_credit;
+            if b_net > net {
+                net = b_net;
+            }
+        }
+    }
+    if dev_credit != 0.0 {
+        let mut gain = 0.0;
+        for &(feat, amt, _kind) in &dev {
+            gain += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+        }
+        net += dev_credit * gain;
+    }
+    net - sci * w.get(WeightKey::Science).max(0.0)
+}
+
+/// `gov_value`: eval-points putting this government in play would be worth
+/// ON THIS BOARD, by the cheaper of the two routes the rules offer --
+/// `tech_value`'s and `action_value`'s sibling, for the last civil type still
+/// on the static table. See `engine/bots/weighted.py:2773`'s extensive doc
+/// comment (not reproduced here) for the three things this prices that
+/// nothing else did: the level ([`board_yields::government_plans`]'s
+/// `TechLevels`/`GovLevel` gain triples); everything `effects::compute` sees
+/// through the swap diff; and both legal routes (RULES_SPEC 8.2 peaceful,
+/// 8.3 revolution), gated on the board -- `max` over the (negative) route
+/// costs is "take the cheaper one".
+///
+/// Costs are clamped with `max(0.0, w)` inside each route for the same reason
+/// [`tech_value`] is.
+pub fn gov_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    let (gains, routes) = board_yields::government_plans(id, state, idx);
+    if routes.is_empty() {
+        return 0.0;
+    }
+    let late = late.unwrap_or_else(|| horizon::lateness(state));
+    let mut total = 0.0;
+    for &(feat, amt, _kind) in &gains {
+        total += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+    }
+    let mut best: Option<f64> = None;
+    for route in &routes {
+        let mut cost = 0.0;
+        for &(feat, amt, kind) in route {
+            let m = rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+            cost += amt * if kind == board_yields::Kind::Cost { m.max(0.0) } else { m };
+        }
+        // costs are negative: the cheapest route is the max.
+        if best.is_none_or(|b| cost > b) {
+            best = Some(cost);
+        }
+    }
+    total + best.unwrap_or(0.0)
+}
+
+// ---------------------------------------------------------- card_potential
+
+/// `card_potential`: eval-points a single card in hand (or the row, or a
+/// rival's hand) would be worth if it were played.
+///
+/// `state`/`idx` are `Option` and turn on board-aware pricing, exactly as
+/// Python's `state=None, idx=None` defaults do: a caller without a board
+/// (there is none in this crate today, but the signature stays honest to
+/// Python's, since `analysis/`-shaped callers are exactly what it exists
+/// for) gets the static-table answer every time. Board pricing itself is
+/// gated on `w[card_board_credit]` plus the card type's own offset, so 0.0
+/// recovers the pre-valuation-layer pricing byte for byte.
+///
+/// `scratch` is threaded through to [`card_yields`] rather than allocated
+/// here (DESIGN.md rule 4: this runs for every card in every hand on every
+/// candidate move) -- cleared at the top of every branch that fills it, so a
+/// caller owns ONE buffer across a whole hand/row loop and this function
+/// never assumes what was in it on entry.
+#[allow(clippy::too_many_arguments)]
+pub fn card_potential(
+    id: CardId,
+    w: &Weights,
+    state: Option<&GameState>,
+    idx: Option<u8>,
+    late: Option<f64>,
+    scratch: &mut Vec<CardYield>,
+) -> f64 {
+    if let (Some(st), Some(ix)) = (state, idx) {
+        let kind = id.kind();
+        let tb = w.get(WeightKey::TechBoardCredit);
+        if kind.is_unit() {
+            let uc = w.get(WeightKey::UnitTechCredit);
+            if uc != 0.0 {
+                return uc * tech_value(id, st, ix, w, tb, late);
+            }
+        } else if tb != 0.0 && board_yields::is_levelled_type(kind) {
+            return tb * tech_value(id, st, ix, w, 1.0, late);
+        } else if kind.is_government() {
+            let gb = w.get(WeightKey::GovBoardCredit);
+            if gb != 0.0 {
+                return gb * gov_value(id, st, ix, w, late);
+            }
+        } else if kind.is_action() {
+            let ab = w.get(WeightKey::ActionBoardCredit);
+            if ab != 0.0 {
+                return ab * action_value(id, st, ix, w, late);
+            }
+        }
+    }
+
+    let credit = w.get(WeightKey::CardRateCredit);
+    let base = w.get(WeightKey::CardBoardCredit);
+    let board = base + board_credit_key(id).map_or(0.0, |k| w.get(k));
+    if base == 0.0 && board == 0.0 {
+        // the exact pre-valuation-layer answer, and this early return is why:
+        // every branch below has to be behind the gate for an A/B to stay
+        // paired.
+        scratch.clear();
+        card_yields(id, scratch);
+        return sum_yields(scratch, w, credit);
+    }
+    let on_board = state.is_some() && idx.is_some();
+    if on_board && board != 0.0 {
+        // A swap card (leader/government/wonder) is priced ONLY by the diff
+        // -- `card_yields` would count a leader's printed gain a second time
+        // on top of the delta that already contains it.
+        if let Some(swap) = board_yields::board_yields(id, state.unwrap(), idx.unwrap()) {
+            return board * sum_board_triples(&swap, w);
+        }
+    }
+    scratch.clear();
+    card_yields(id, scratch);
+    let mut total = sum_yields(scratch, w, credit);
+    // `_card_choices` rides `base`, not `board` -- it is not board-aware
+    // pricing at all (it needs no board), it rides the same knob only
+    // because it needs more than a table lookup. `action_value` (above)
+    // resolves a choice with no credit gating it at all, which is the fix;
+    // this line is what `action_board_credit = 0.0` falls back to.
+    if let Some((a, b)) = card_choice(id) {
+        total += base * sum_yields(&[a], w, credit).max(sum_yields(&[b], w, credit));
+    }
+    if on_board && board != 0.0 {
+        let extra = board_yields::board_extra(id, state.unwrap(), idx.unwrap());
+        total += board * sum_board_triples(&extra, w);
+    }
+    total
+}
+
+// --------------------------------------------------------------- hand terms
+
+/// `_swap_slot`: the single-slot class `id` is being priced as a diff for, or
+/// `None`. `None` for an ordinary card, and also for a leader/government
+/// when its board credit is 0.0 -- then [`card_potential`] returned the
+/// static-table value, which is not a replacement and must not be collapsed.
+fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
+    let typ = swap_type(id)?;
+    let key = board_credit_key(id).expect("a single-slot type always has a board credit key");
+    if w.get(WeightKey::CardBoardCredit) + w.get(key) != 0.0 { Some(typ) } else { None }
+}
+
+/// `_hand_total`: [`card_potential`] over `hand`, with the single-slot
+/// classes (leader, government) collapsed to one card each.
+///
+/// THE THING THIS FIXES. A leader and a government are priced as a swap DIFF
+/// -- what replacing the one you have with this one would change. Summing
+/// that over the hand asserts you get to make the same replacement once per
+/// card you hold, which is wrong: holding Joan of Arc, a hand of
+/// {Michelangelo, Julius Caesar, Homer} sums three replacements (two of them
+/// ruinous) when the truthful answer is the one you would actually play. See
+/// `engine/bots/weighted.py:2962`'s docstring for the measured cost of this
+/// (docs/CARD_BLINDNESS.md sections 13.5.2/13.8) -- not reproduced here.
+///
+/// So each slot contributes the BEST card in the hand for it, plus
+/// `hand_swap_extra` times the rest (a spare leader is not worthless -- you
+/// may play the best one now and a better one two ages later -- but its true
+/// incremental value is measured against the leader you will have by then,
+/// which this function cannot see; `hand_swap_extra` is a free 0.0-default
+/// WEIGHT, not a constant, for exactly that reason).
+///
+/// Exactly two single-slot classes exist ([`board_yields::is_single_slot`]:
+/// leader, government), so the accumulator below is `[Option<(f64, f64)>;
+/// 2]` (best-so-far, sum-so-far) rather than a `HashMap<CardType, _>` --
+/// DESIGN.md's "no parallel collections kept in step by index" cuts the other
+/// way here too: a two-element fixed array indexed by an exhaustive `match`
+/// on the only two variants [`swap_slot`] can ever return is not a parallel
+/// collection, it is the natural shape of "exactly two things can happen".
+pub fn hand_total(hand: &[CardId], state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let mut total = 0.0;
+    // index 0 = Leader, index 1 = Government -- see this function's own doc
+    // comment for why a 2-element array replaces Python's `dict`.
+    let mut slots: [Option<(f64, f64)>; 2] = [None, None];
+    let late = horizon::lateness(state);
+    let mut scratch = Vec::new();
+    for &n in hand {
+        let v = card_potential(n, w, Some(state), Some(idx), Some(late), &mut scratch);
+        let Some(typ) = swap_slot(n, w) else {
+            total += v;
+            continue;
+        };
+        let i = match typ {
+            CardType::Leader => 0,
+            CardType::Government => 1,
+            _ => unreachable!("swap_slot only ever returns a single-slot CardType"),
+        };
+        match &mut slots[i] {
+            None => slots[i] = Some((v, v)),
+            Some((best, tot)) => {
+                if v > *best {
+                    *best = v;
+                }
+                *tot += v;
+            }
+        }
+    }
+    let extra = w.get(WeightKey::HandSwapExtra);
+    for (best, tot) in slots.into_iter().flatten() {
+        total += best + extra * (tot - best);
+    }
+    total
+}
+
+/// `hand_potential`: [`card_potential`] over the civil hand, single-slot
+/// classes collapsed (0.0 for an empty hand). See [`hand_total`].
+pub fn hand_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let hand = &state.players[idx as usize].hand_civil;
+    if hand.is_empty() {
+        return 0.0;
+    }
+    hand_total(hand.as_slice(), state, idx, w)
+}
+
+/// `wonder_potential`: WHICH wonder am I building? [`hand_potential`]'s
+/// missing sibling -- a wonder under construction never enters `hand_civil`
+/// (`apply::on_enter_play`/`actions::take_card` put it straight into
+/// `p.wonder`), so without this term two different wonders at the same stage
+/// of the same cost are the same card to every other feature `features()`
+/// (unowned by this file) reads: all of them are arithmetic on the
+/// RESOURCES outstanding, none on card identity. See
+/// `engine/bots/weighted.py:3053`'s doc comment for why this bites at BOTH
+/// decisions that matter (keep paying into this wonder, and whether to take
+/// a wonder from the row AT ALL) -- not reproduced here.
+///
+/// GAINS ONLY ([`gains_only_sum`]/[`gains_only_board_sum`]): the stage cost
+/// is deliberately dropped -- `wonder_remaining` (unowned by this file)
+/// already prices the outstanding resources correctly for a part-built
+/// wonder, and adding the flat `-sum(stages)` here would double-count it and
+/// charge for stages already paid.
+///
+/// Scaled by nothing of its own beyond `card_rate_credit`/`card_board_credit`
+/// -- `wonder_potential` (the WEIGHT, [`WeightKey::WonderPotential`]) is
+/// `eval.rs`'s (unowned) concern, applied to this function's return value,
+/// not inside it.
+pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let p = &state.players[idx as usize];
+    if p.wonder.is_none() {
+        return 0.0;
+    }
+    let credit = w.get(WeightKey::CardRateCredit);
+    let board = w.get(WeightKey::CardBoardCredit);
+    let name = p.wonder;
+    if board != 0.0 {
+        if let Some(swap) = board_yields::board_yields(name, state, idx) {
+            return board * gains_only_board_sum(&swap, w);
+        }
+    }
+    let mut buf = Vec::new();
+    card_yields(name, &mut buf);
+    gains_only_sum(&buf, w, credit)
+}
+
+/// `hand_mil_potential`: summed [`card_potential`] over the MILITARY hand.
+/// `hand_potential`'s sibling for the hand `_card_yields` was never reached
+/// for at all before this landed (territory/tactic/war/aggression/bonus
+/// cards) -- unlike [`hand_total`], no single-slot collapsing: a military
+/// hand cannot hold a leader or a government.
+pub fn hand_mil_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let hand = &state.players[idx as usize].hand_military;
+    if hand.is_empty() {
+        return 0.0;
+    }
+    let late = horizon::lateness(state);
+    let mut total = 0.0;
+    let mut scratch = Vec::new();
+    for &n in hand.as_slice() {
+        total += card_potential(n, w, Some(state), Some(idx), Some(late), &mut scratch);
+    }
+    total
+}
+
+/// `rival_hand_potential`: the most dangerous rival civil hand, priced
+/// through the same weights. LEGAL: cards taken from the row are public
+/// knowledge (RULES_SPEC 2.6, the open civil cards convention), so
+/// `q.hand_civil` is information a human at the table has and this crate's
+/// evaluator (unowned by this file) had simply never looked at.
+///
+/// `max` over rivals rather than `sum`, so the term means the same thing at
+/// 2p/3p/4p. Within one rival's hand the single-slot classes collapse
+/// exactly as they do in mine ([`hand_total`]) -- a rival holding three
+/// leaders is not three replacements dangerous either.
+///
+/// No `rivals` override parameter, unlike Python's `rivals=None`: every real
+/// caller in this crate (as in Python) always wants the live rival set, and
+/// DESIGN.md bans dependency injection for a capability nothing needs
+/// injected.
+pub fn rival_hand_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let mut best = 0.0;
+    for q in state.players[..state.num_players as usize].iter() {
+        if q.idx == idx || q.resigned || q.hand_civil.is_empty() {
+            continue;
+        }
+        // priced on the RIVAL's board -- a leader that pays per theater is
+        // worth what it is worth to the player who would play it.
+        let total = hand_total(q.hand_civil.as_slice(), state, q.idx, w);
+        if total > best {
+            best = total;
+        }
+    }
+    best
+}
+
+// ------------------------------------------------------------- tactic terms
+
+/// `tactic_terms`: `(tactic_gain, tactic_short)`, the two halves of the
+/// tactic deadlock -- see [`effects::tactic_outlook`]'s own doc comment for
+/// what the deadlock is (playing a tactic with no army for it is +0
+/// strength; building the unit that would complete an army is +printed
+/// strength only, because the tactic is not in play yet -- so a 1-ply search
+/// does neither).
+///
+/// * `tactic_gain` -- army strength the best REACHABLE tactic (in hand, or
+///   copyable from `state.available_tactics`, or the one already in play)
+///   would add over [`effects::army_strength`]. Exactly 0 once the best
+///   tactic is already in play, so a positive weight prices GETTING there
+///   rather than pricing tactics themselves.
+/// * `tactic_short` -- unit workers still owed before it forms one more
+///   army -- the gradient `tactic_gain` alone lacks (a step function, flat at
+///   zero for the first two of a three-cavalry tactic).
+///
+/// The only function in this file that reaches into [`effects`] rather than
+/// the yield-plumbing layer above: a tactic's value is board-scaled (armies
+/// you can FORM), which `card_yields` structurally cannot see (see this
+/// module's top doc comment on why `card_yields` never prices a tactic's own
+/// `strength` field at all) -- `effects::tactic_outlook` is the rules-engine
+/// authority this reads instead, the same one `army_strength` (a tactic
+/// already in play) is.
+///
+/// Python additionally guards `if not state.has_military: return 0.0, 0.0`;
+/// `has_military` is card-database-completeness (`horizon.rs`/`legal.rs`/
+/// `events.rs` all drop the identical guard for the identical reason), always
+/// true for this crate's complete 236-card table, so there is no
+/// `state.has_military` field to read here.
+pub fn tactic_terms(state: &GameState, idx: u8) -> (f64, f64) {
+    let p = &state.players[idx as usize];
+    let military_tactics = p.hand_military.as_slice().iter().copied().filter(|&id| id.kind() == CardType::Tactic);
+    let available = state.available_tactics.as_slice().iter().copied();
+    let current = (!p.tactic.is_none()).then_some(p.tactic);
+    let cands = military_tactics.chain(available).chain(current);
+    let (best_army, short) = effects::tactic_outlook(p, cands);
+    let gain = (best_army - effects::army_strength(p)).max(0) as f64;
+    (gain, f64::from(short))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,5 +1609,181 @@ mod tests {
         for &(n, k, why) in UNPRICED_VALUES {
             assert!(why.len() > 20, "{n}/{k}: reason too short to be real: {why:?}");
         }
+    }
+
+    // ============================================== the valuation layer
+
+    /// [`feature_key`]'s exhaustive `match` names the same feature
+    /// [`board_yields::Feature::python_key`] and [`WeightKey::name`] do, for
+    /// a representative sample spanning every group of the match (not all 42
+    /// -- the differential test drives every real triple `board_yields.rs`
+    /// emits through this function on sampled boards, which is the
+    /// exhaustive check; this is a fast, readable pin of a few).
+    #[test]
+    fn feature_key_agrees_with_both_enums_printed_names() {
+        use board_yields::Feature;
+        for f in [
+            Feature::CultureRate,
+            Feature::TechLevels,
+            Feature::CaLeft,
+            Feature::RestrictedResources,
+            Feature::Wonders,
+            Feature::BestUnit,
+        ] {
+            assert_eq!(f.python_key(), feature_key(f).name(), "{f:?}");
+        }
+    }
+
+    /// Every weight [`card_potential`]'s dispatch reads by name
+    /// (`tech_board_credit`, `unit_tech_credit`, `gov_board_credit`,
+    /// `action_board_credit`, `card_rate_credit`, `card_board_credit`) is a
+    /// real [`WeightKey`] -- the exact bug shape `feedback-make-it-permanent`
+    /// warns about: a feature key that silently isn't a member of
+    /// `DEFAULT_WEIGHTS` prices at zero forever with nothing failing.
+    /// `WeightKey` being a Rust enum (not a string) already makes a
+    /// misspelled key a compile error, but this pins that every credit this
+    /// function's own doc comment names by Python's string spelling still
+    /// exists as the variant used here.
+    #[test]
+    fn card_potential_dispatch_credits_are_real_weight_keys() {
+        for (k, name) in [
+            (WeightKey::TechBoardCredit, "tech_board_credit"),
+            (WeightKey::UnitTechCredit, "unit_tech_credit"),
+            (WeightKey::GovBoardCredit, "gov_board_credit"),
+            (WeightKey::ActionBoardCredit, "action_board_credit"),
+            (WeightKey::CardRateCredit, "card_rate_credit"),
+            (WeightKey::CardBoardCredit, "card_board_credit"),
+            (WeightKey::FreeActionCredit, "free_action_credit"),
+            (WeightKey::HandSwapExtra, "hand_swap_extra"),
+        ] {
+            assert_eq!(k.name(), name);
+        }
+    }
+
+    /// The `freeCivilAction` special prices through `free_action_credit`
+    /// (`Special::FreeCivilAction`), not through the dead `CardEffects::
+    /// free_civil_action` field -- see `action_value`'s own doc comment for
+    /// why reading the wrong one would silently zero this branch on every
+    /// card that has it. `Rich Land` carries `freeCivilAction` (build a farm
+    /// or mine free) per `docs/CARD_BLINDNESS.md`.
+    #[test]
+    fn action_value_prices_the_free_civil_action_special_not_the_dead_field() {
+        let Some(id) = CardId::by_name("Rich Land") else { return };
+        assert!(
+            id.get().special.iter().any(|sp| matches!(sp, Special::FreeCivilAction(_))),
+            "Rich Land must carry Special::FreeCivilAction for this test to mean anything"
+        );
+        assert_eq!(id.get().effects.free_civil_action, 0, "the typed field is dead, see this module's top doc comment");
+
+        let state = crate::game::new_game(2, 42);
+        let mut w = Weights::default();
+        w.set(WeightKey::FreeActionCredit, 1.0);
+        let with_credit = action_value(id, &state, 0, &w, None);
+        w.set(WeightKey::FreeActionCredit, 0.0);
+        let without_credit = action_value(id, &state, 0, &w, None);
+        assert!(with_credit > without_credit, "with={with_credit} without={without_credit}");
+    }
+
+    /// `tech_value` of a technology the player already has developed is
+    /// exactly 0.0 -- `board_yields::tech_upgrade`'s own early return, and
+    /// `tech_value` must pass it through rather than pricing a phantom
+    /// develop.
+    #[test]
+    fn tech_value_of_an_already_developed_tech_is_zero() {
+        let state = crate::game::new_game(2, 43);
+        let w = Weights::default();
+        // Agriculture is developed for every player from the start of the game.
+        let id = CardId::by_name("Agriculture").expect("a base-game starting tech");
+        assert_eq!(tech_value(id, &state, 0, &w, 1.0, None), 0.0);
+    }
+
+    /// `gov_value` of the government already in play is exactly 0.0 --
+    /// `board_yields::government_plans`'s own early return (dead in hand, not
+    /// a cost or a gain).
+    #[test]
+    fn gov_value_of_the_current_government_is_zero() {
+        let state = crate::game::new_game(2, 44);
+        let w = Weights::default();
+        let gov = state.players[0].government;
+        assert_eq!(gov_value(gov, &state, 0, &w, None), 0.0);
+    }
+
+    /// `card_potential`'s early-return fallback (`card_board_credit` and its
+    /// per-type offset both 0.0) is exactly `sum_yields(card_yields(id), w,
+    /// credit)` -- the pre-valuation-layer answer, pinned directly for a
+    /// Wonder (a type none of `card_potential`'s board-dispatch branches
+    /// intercept).
+    #[test]
+    fn card_potential_falls_back_to_the_static_table_when_board_credit_is_zero() {
+        let state = crate::game::new_game(2, 45);
+        let mut w = Weights::default();
+        w.set(WeightKey::CardBoardCredit, 0.0);
+        w.set(WeightKey::CardBoardWonder, 0.0);
+        let id = CardId::by_name("Colossus").unwrap();
+        let mut scratch = Vec::new();
+        let got = card_potential(id, &w, Some(&state), Some(0), None, &mut scratch);
+        let mut buf = Vec::new();
+        card_yields(id, &mut buf);
+        let want = sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
+        assert_eq!(got, want);
+    }
+
+    /// `hand_total` collapses two leaders in hand to "the better one, plus
+    /// `hand_swap_extra` times the rest" rather than summing both
+    /// replacements -- the bug `_hand_total`'s own doc comment describes.
+    /// Built with `card_board_credit` on (so `swap_slot` actually collapses)
+    /// and two DIFFERENT leaders so their `card_potential` values are not
+    /// forced equal by symmetry.
+    #[test]
+    fn hand_total_collapses_two_leaders_to_the_better_one_plus_extra_times_the_rest() {
+        let state = crate::game::new_game(2, 46);
+        let mut w = Weights::default();
+        w.set(WeightKey::CardBoardCredit, 1.0);
+        w.set(WeightKey::HandSwapExtra, 0.0);
+        let a = CardId::by_name("Julius Caesar").unwrap();
+        let b = CardId::by_name("Napoleon Bonaparte").unwrap();
+        let hand = [a, b];
+        let mut scratch = Vec::new();
+        let late = horizon::lateness(&state);
+        let va = card_potential(a, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let vb = card_potential(b, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let total = hand_total(&hand, &state, 0, &w);
+        assert_eq!(total, va.max(vb), "hand_swap_extra=0.0 must keep only the better card's value");
+    }
+
+    /// `wonder_potential` never charges the stage cost -- `gains_only_sum`'s
+    /// whole reason to exist. A wonder in progress prices at exactly the sum
+    /// of its GAIN triples, with `card_board_credit` at 0.0 so the static
+    /// (non-swap) path is exercised.
+    #[test]
+    fn wonder_potential_never_charges_the_stage_cost() {
+        let mut state = crate::game::new_game(2, 47);
+        let w = Weights::default();
+        let colossus = CardId::by_name("Colossus").unwrap();
+        state.players[0].wonder = colossus;
+        let got = wonder_potential(&state, 0, &w);
+        let mut buf = Vec::new();
+        card_yields(colossus, &mut buf);
+        assert!(buf.iter().any(|&(_, _, k)| k == YieldKind::Cost), "Colossus must carry a stage-cost triple");
+        let with_cost = sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
+        assert!(got > with_cost, "wonder_potential={got} must exceed the cost-inclusive sum={with_cost}");
+    }
+
+    /// `rival_hand_potential` is 0.0 with no live rivals holding a civil
+    /// hand, and reads no information about the mover's own hand.
+    #[test]
+    fn rival_hand_potential_is_zero_with_no_rival_civil_hands() {
+        let state = crate::game::new_game(2, 48);
+        let w = Weights::default();
+        assert_eq!(rival_hand_potential(&state, 0, &w), 0.0);
+    }
+
+    /// `tactic_terms` on a fresh deal (nobody has a tactic, no tactic in
+    /// hand, no available tactics) is `(0.0, 0.0)` -- the empty-candidate
+    /// case every real hand builds on.
+    #[test]
+    fn tactic_terms_is_zero_zero_with_no_candidate_tactics() {
+        let state = crate::game::new_game(2, 49);
+        assert_eq!(tactic_terms(&state, 0), (0.0, 0.0));
     }
 }

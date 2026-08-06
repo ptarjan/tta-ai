@@ -305,8 +305,8 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
 /// replaces Python's mutate/`effects.compute`/restore -- the original player
 /// is never touched, so there is nothing to restore and nothing a stale cache
 /// could read.
-fn swap_stats(state: &GameState, idx: usize, mutate: impl FnOnce(&mut PlayerState)) -> Stats {
-    let mut p = state.players[idx].clone();
+fn swap_stats(state: &GameState, idx: u8, mutate: impl FnOnce(&mut PlayerState)) -> Stats {
+    let mut p = state.players[idx as usize].clone();
     mutate(&mut p);
     effects::compute(state, &p)
 }
@@ -548,11 +548,11 @@ fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &
 /// `government_plans`: (gain triples, cost routes) for putting `name` in
 /// play as government. `(vec![], vec![])` for a non-government card, or the
 /// government already in play (dead in hand: not a cost, not a gain).
-pub fn government_plans(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>, Vec<Vec<Triple>>) {
+pub fn government_plans(name: CardId, state: &GameState, idx: u8) -> (Vec<Triple>, Vec<Vec<Triple>>) {
     if name.is_none() || name.kind() != CardType::Government {
         return (Vec::new(), Vec::new());
     }
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     if p.government == name {
         return (Vec::new(), Vec::new());
     }
@@ -657,7 +657,7 @@ fn wonder_cost(name: CardId, out: &mut Vec<Triple>) {
 
 /// `board_yields`: `(feature, amount, kind)` triples for `name` on this
 /// board, or `None` meaning "not board-priced, use the static table".
-pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<Triple>> {
+pub fn board_yields(name: CardId, state: &GameState, idx: u8) -> Option<Vec<Triple>> {
     if name.is_none() {
         return None;
     }
@@ -665,7 +665,7 @@ pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<T
     if !is_swap_type(typ) {
         return None;
     }
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     let before = effects::state_stats(state, p);
     let after = match typ {
         CardType::Leader => swap_stats(state, idx, |pl| pl.leader = name),
@@ -712,12 +712,12 @@ pub fn board_yields(name: CardId, state: &GameState, idx: usize) -> Option<Vec<T
 /// 2026-08-05 once `gen_cards.py` gave both `Special` variants a real
 /// `[i16; 3]` payload): both keys were detected but the coefficient could
 /// not be recovered, so this always returned nothing.
-pub fn board_extra(name: CardId, state: &GameState, idx: usize) -> Vec<Triple> {
+pub fn board_extra(name: CardId, state: &GameState, idx: u8) -> Vec<Triple> {
     if name.is_none() {
         return Vec::new();
     }
     let card = name.get();
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     let count_idx = crate::events::live_count_idx(state);
     let mut out = Vec::new();
     if let Some(t) = card.special.iter().find_map(|&s| match s {
@@ -749,7 +749,7 @@ pub fn board_extra(name: CardId, state: &GameState, idx: usize) -> Vec<Triple> {
 /// nothing board-priced needs one yet, so this always returns empty; the
 /// entry point exists so a future card can grow one without a new function
 /// signature appearing out of nowhere.
-pub fn board_choices(_name: CardId, _state: &GameState, _idx: usize) -> Vec<Vec<Triple>> {
+pub fn board_choices(_name: CardId, _state: &GameState, _idx: u8) -> Vec<Vec<Triple>> {
     Vec::new()
 }
 
@@ -778,8 +778,8 @@ fn upgradable_onto(p: &PlayerState, name: CardId) -> Vec<(CardId, u8)> {
 /// `_with_tech`: `effects::compute` with `name` developed and `moved`
 /// workers moved onto it, off the technologies they are standing on. A clone
 /// of the player, per this module's top doc comment -- no mutate/restore.
-fn with_tech(state: &GameState, idx: usize, name: CardId, moved: &[(CardId, u8)]) -> Stats {
-    let mut p = state.players[idx].clone();
+fn with_tech(state: &GameState, idx: u8, name: CardId, moved: &[(CardId, u8)]) -> Stats {
+    let mut p = state.players[idx as usize].clone();
     let mut total: u8 = 0;
     for &(from, k) in moved {
         if let Some(slot) = p.techs.get_mut(from) {
@@ -795,11 +795,11 @@ fn with_tech(state: &GameState, idx: usize, name: CardId, moved: &[(CardId, u8)]
 /// "develop `name`, then move every worker that could LEGALLY upgrade onto
 /// it". `(0.0, 0.0, 0.0)` for a non-unit-technology card, or one already
 /// developed (dead in hand).
-pub fn unit_upgrade(name: CardId, state: &GameState, idx: usize) -> (f64, f64, f64) {
+pub fn unit_upgrade(name: CardId, state: &GameState, idx: u8) -> (f64, f64, f64) {
     if name.is_none() || !name.kind().is_unit() {
         return (0.0, 0.0, 0.0);
     }
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     if p.techs.has(name) {
         return (0.0, 0.0, 0.0);
     }
@@ -824,11 +824,11 @@ pub fn unit_upgrade(name: CardId, state: &GameState, idx: usize) -> (f64, f64, f
 /// for the three things a static table cannot say (tech_levels, upgrade vs
 /// fresh build, phase-weighted rates) -- none of that is re-derived here,
 /// only the mechanics of computing it.
-pub fn tech_upgrade(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>, Vec<Triple>, f64, f64) {
+pub fn tech_upgrade(name: CardId, state: &GameState, idx: u8) -> (Vec<Triple>, Vec<Triple>, f64, f64) {
     if name.is_none() || !is_levelled_type(name.kind()) {
         return (Vec::new(), Vec::new(), 0.0, 0.0);
     }
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     if p.techs.has(name) {
         return (Vec::new(), Vec::new(), 0.0, 0.0);
     }
@@ -903,8 +903,8 @@ fn build_triples(p: &PlayerState, typ: CardType, before: &Stats, after: &Stats, 
 /// fresh workers on it. `p.workers_free` is NOT touched here -- neither is
 /// it in Python -- `effects::compute` does not read it; the free-worker side
 /// of the trade is priced in [`build_triples`].
-fn with_built(state: &GameState, idx: usize, name: CardId, workers: u8) -> Stats {
-    let mut p = state.players[idx].clone();
+fn with_built(state: &GameState, idx: u8, name: CardId, workers: u8) -> Stats {
+    let mut p = state.players[idx as usize].clone();
     p.techs.insert(name, TechSlot { workers, stored: 0 });
     effects::compute(state, &p)
 }
@@ -913,11 +913,11 @@ fn with_built(state: &GameState, idx: usize, name: CardId, workers: u8) -> Stats
 /// one worker". `(vec![], 0.0)` whenever the engine would not offer the
 /// build: no free worker, no build cost on the card, or an urban type
 /// already at its `urban_limit`.
-pub fn build_fresh(name: CardId, state: &GameState, idx: usize) -> (Vec<Triple>, f64) {
+pub fn build_fresh(name: CardId, state: &GameState, idx: u8) -> (Vec<Triple>, f64) {
     if name.is_none() || !is_levelled_type(name.kind()) {
         return (Vec::new(), 0.0);
     }
-    let p = &state.players[idx];
+    let p = &state.players[idx as usize];
     if p.techs.has(name) || p.workers_free == 0 {
         return (Vec::new(), 0.0);
     }

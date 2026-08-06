@@ -579,7 +579,12 @@ fn army_value(card: &Card, total_armies: i32, fresh_armies: i32, air: i32) -> i3
 /// Mirrors `engine/effects.py::army_strength`: zero without a tactic, or with
 /// a tactic whose `composition` is empty (every non-tactic card, guarded by
 /// the `lib.rs` test `tactics_and_only_tactics_form_armies`).
-fn army_strength(p: &PlayerState) -> i32 {
+///
+/// `pub`: `bots::weighted::cards::tactic_terms` (the port of
+/// `weighted.py::tactic_terms`) calls this directly, the same way Python's
+/// `tactic_terms` calls `effects.army_strength` -- see [`tactic_outlook`]'s
+/// own doc comment for why that function cannot simply reuse this one's body.
+pub fn army_strength(p: &PlayerState) -> i32 {
     if p.tactic.is_none() {
         return 0;
     }
@@ -605,7 +610,7 @@ fn army_strength(p: &PlayerState) -> i32 {
             fresh[i] += w;
         }
     }
-    army_strength_from_counts(p, &avail, &fresh)
+    army_strength_from_counts(p, card, &avail, &fresh)
 }
 
 /// `[INFANTRY, CAVALRY, ARTILLERY, AIR]` slot for a unit type, `None` for
@@ -621,12 +626,15 @@ fn unit_slot(kind: CardType) -> Option<usize> {
     }
 }
 
-/// The shared tail of [`army_strength`] and [`army_strength_units`] --
-/// Python's `_army_strength_counts`, which both of its callers route through
-/// for exactly this reason: the Genghis Khan branch and the fresh-armies
-/// clamp must not exist twice.
-fn army_strength_from_counts(p: &PlayerState, avail: &[i32; 4], fresh: &[i32; 4]) -> i32 {
-    let card = p.tactic.get();
+/// The shared tail of [`army_strength`], [`army_strength_units`] and
+/// [`tactic_outlook`] -- Python's `_army_strength_counts`, which every one of
+/// its callers routes through for exactly this reason: the Genghis Khan
+/// branch and the fresh-armies clamp must not exist three times. `card` is a
+/// parameter (Python's own `_army_strength_counts(p, card, ...)` signature)
+/// rather than read off `p.tactic` internally, because [`tactic_outlook`]
+/// needs to price a CANDIDATE tactic that is not necessarily the one `p` has
+/// in play.
+fn army_strength_from_counts(p: &PlayerState, card: &Card, avail: &[i32; 4], fresh: &[i32; 4]) -> i32 {
     let need = need_counts(card.composition);
     let genghis = !p.leader.is_none()
         && p.leader.get().special.contains(&Special::InfantryCountsAsCavalryForTactics);
@@ -652,7 +660,8 @@ pub fn army_strength_units(p: &PlayerState, units: &[CardId]) -> i32 {
     if p.tactic.is_none() {
         return 0;
     }
-    if p.tactic.get().composition.is_empty() {
+    let card = p.tactic.get();
+    if card.composition.is_empty() {
         return 0;
     }
     let tactic_lv = p.tactic.level() as i32;
@@ -665,7 +674,80 @@ pub fn army_strength_units(p: &PlayerState, units: &[CardId]) -> i32 {
             fresh[i] += 1;
         }
     }
-    army_strength_from_counts(p, &avail, &fresh)
+    army_strength_from_counts(p, card, &avail, &fresh)
+}
+
+/// (best_strength, units_short) over the tactics `p` could switch to --
+/// `engine/effects.py::tactic_outlook`. Answers the two questions
+/// [`army_strength`] cannot, because it only ever looks at the tactic already
+/// in play:
+///
+/// * **best_strength** -- the army strength `p` would have if it played the
+///   best tactic it has access to right now. [`army_strength`] subtracted
+///   from this (by this function's one caller,
+///   `bots::weighted::cards::tactic_terms`) is the strength sitting unclaimed
+///   on the table.
+/// * **units_short** -- how many more unit workers that same tactic needs
+///   before it forms ONE MORE army. 0 when the next army is already there.
+///
+/// `names` is the caller's business (`tactic_terms` passes the tactics in
+/// hand plus `state.available_tactics`, plus the tactic already in play, if
+/// any) -- mirrors Python's own division of labour. The candidate maximizing
+/// `(strength, -shortfall, printed bonus)` is chosen, so that with nothing
+/// formable yet the shortfall reported is the nearest tactic's, not an
+/// arbitrary one's -- Python's own tuple-max `key = (val, -short, card.get
+/// ("strength") or 0)`, restated as a Rust tuple (lexicographic `Ord`, same
+/// comparison).
+///
+/// Recomputes `avail`/`fresh` from `p.techs` once PER CANDIDATE rather than
+/// hoisting Python's `counts` list out of the loop: `p.techs` is a handful of
+/// entries and `names` a handful of candidates (hand tactics plus
+/// `available_tactics`, bounded by `RULES_SPEC`), so the O(techs x
+/// candidates) rescan costs nothing a `Vec` allocation to cache it would be
+/// worth avoiding -- and it keeps this function allocation-free, called once
+/// per candidate move like the rest of `bots::weighted::cards`'s per-decision
+/// (not per-card) helpers.
+pub fn tactic_outlook(p: &PlayerState, names: impl Iterator<Item = CardId>) -> (i32, i32) {
+    let mut best: Option<(i32, i32, i32)> = None;
+    let mut best_val = 0;
+    let mut best_short = 0;
+    for name in names {
+        if name.is_none() {
+            continue;
+        }
+        let card = name.get();
+        if card.composition.is_empty() {
+            continue;
+        }
+        let lv = name.level() as i32;
+        let mut avail = [0i32; 4];
+        let mut fresh = [0i32; 4];
+        for (id, slot) in p.techs.iter() {
+            let w = slot.workers as i32;
+            if w == 0 {
+                continue;
+            }
+            let Some(i) = unit_slot(id.kind()) else { continue };
+            avail[i] += w;
+            if id.level() as i32 >= lv - 1 {
+                fresh[i] += w;
+            }
+        }
+        let val = army_strength_from_counts(p, card, &avail, &fresh);
+        let need = need_counts(card.composition);
+        let armies = (0..4).filter(|&i| need[i] > 0).map(|i| avail[i] / need[i]).min().unwrap_or(0);
+        let short: i32 = (0..4).map(|i| (need[i] * (armies + 1) - avail[i]).max(0)).sum();
+        let key = (val, -short, card.effects.strength as i32);
+        if best.is_none_or(|b| key > b) {
+            best = Some(key);
+            best_val = val;
+            best_short = short;
+        }
+    }
+    match best {
+        None => (0, 0),
+        Some(_) => (best_val, best_short),
+    }
 }
 
 // ------------------------------------------------------------------ pacts
