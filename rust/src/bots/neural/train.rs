@@ -40,7 +40,7 @@
 
 use crate::rng::PyRandom;
 
-use super::net::{layer_norm_stats, relu_inplace, ValueNet, LAYER_NORM_EPS, MARGIN_NORM};
+use super::net::{layer_norm_stats, relu_inplace, ResBlock, ValueNet, LAYER_NORM_EPS, MARGIN_NORM};
 use super::rankdata::{RankPair, ValueRow};
 
 // ================================================================ gradients
@@ -514,6 +514,14 @@ impl AdamW {
         }
     }
 
+    /// Set the learning rate for subsequent steps -- what the training
+    /// binary's cosine schedule (mirroring `torch.optim.lr_scheduler.
+    /// CosineAnnealingLR`, which `neural_train_rank.py` wraps `AdamW` in)
+    /// calls once per epoch.
+    fn set_lr(&mut self, lr: f64) {
+        self.lr = lr;
+    }
+
     /// One step: `param -= lr*wd*param` (decoupled decay) THEN the usual
     /// bias-corrected Adam update, matching torch's documented `AdamW`
     /// update order.
@@ -627,6 +635,12 @@ impl Trainer {
         self.adamw.step(&mut self.net, &self.grad);
     }
 
+    /// Set the learning rate for subsequent [`Self::optim_step`] calls --
+    /// see [`AdamW::set_lr`].
+    pub fn set_lr(&mut self, lr: f64) {
+        self.adamw.set_lr(lr);
+    }
+
     /// Forward+backward ONE ranking pair (`pair.chosen` vs `pair.rejected`,
     /// [`super::rankdata::RankPair`]'s own naming) with training-mode
     /// dropout, scaling its gradient contribution by `lam /
@@ -677,12 +691,46 @@ pub fn predict(net: &ValueNet, x: &[f64]) -> f64 {
     net.forward(x)
 }
 
+/// A freshly initialised [`ValueNet`] for a training run with no `--init`
+/// warm start. Not a port of anything (`net.rs` only has the forward
+/// arithmetic; there is no Python init to differential-test against here
+/// either) -- follows `nn.Linear`'s own default: weights and biases drawn
+/// `Uniform(-bound, bound)` with `bound = 1/sqrt(fan_in)` (PyTorch's
+/// `kaiming_uniform_` with `a = sqrt(5)` reduces to exactly this bound for
+/// a `Linear` layer), and `nn.LayerNorm`'s default `gamma = 1, beta = 0`.
+pub fn random_init(in_dim: usize, hidden: usize, blocks: usize, seed: i64) -> ValueNet {
+    let mut rng = PyRandom::new(seed);
+    let uniform = |rng: &mut PyRandom, n: usize, fan_in: usize| -> Vec<f64> {
+        let bound = 1.0 / (fan_in as f64).sqrt();
+        (0..n).map(|_| (rng.random() * 2.0 - 1.0) * bound).collect()
+    };
+    ValueNet {
+        in_dim,
+        hidden,
+        stem_w: uniform(&mut rng, hidden * in_dim, in_dim),
+        stem_b: uniform(&mut rng, hidden, in_dim),
+        stem_ln_gamma: vec![1.0; hidden],
+        stem_ln_beta: vec![0.0; hidden],
+        blocks: (0..blocks)
+            .map(|_| ResBlock {
+                fc1_w: uniform(&mut rng, hidden * hidden, hidden),
+                fc1_b: uniform(&mut rng, hidden, hidden),
+                fc2_w: uniform(&mut rng, hidden * hidden, hidden),
+                fc2_b: uniform(&mut rng, hidden, hidden),
+                ln_gamma: vec![1.0; hidden],
+                ln_beta: vec![0.0; hidden],
+            })
+            .collect(),
+        head_w: uniform(&mut rng, hidden, hidden),
+        head_b: 0.0,
+    }
+}
+
 // ===================================================================== tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::net::ResBlock;
 
     // ---------------------------------------------------------- fixtures
 
@@ -1082,5 +1130,29 @@ mod tests {
         let after_gap = predict(&trainer.net, &xa) - predict(&trainer.net, &xb);
         assert!(after_gap > 0.0, "chosen did not end up above rejected: gap={after_gap}");
         assert!(after_gap > before_gap, "gap did not widen: before={before_gap} after={after_gap}");
+    }
+
+    /// `random_init` must produce the SHAPE `ValueNet::forward` expects
+    /// (checked by just calling `forward` and requiring a finite result --
+    /// a shape bug here would panic or NaN, not silently misbehave), with
+    /// LayerNorm at its `nn.LayerNorm` default (`gamma=1, beta=0`) and
+    /// linear weights that are not all the same value (a constant-fill bug
+    /// would make every hidden unit identical and every gradient below
+    /// degenerate).
+    #[test]
+    fn random_init_produces_a_well_shaped_finite_net_with_layer_norm_at_its_default() {
+        let net = random_init(5, 8, 2, 99);
+        assert_eq!(net.stem_w.len(), 8 * 5);
+        assert_eq!(net.blocks.len(), 2);
+        assert!(net.stem_ln_gamma.iter().all(|&g| g == 1.0));
+        assert!(net.stem_ln_beta.iter().all(|&b| b == 0.0));
+        for b in &net.blocks {
+            assert!(b.ln_gamma.iter().all(|&g| g == 1.0));
+            assert!(b.ln_beta.iter().all(|&b| b == 0.0));
+        }
+        // Not a constant fill: at least two stem weights differ.
+        assert!(net.stem_w.windows(2).any(|w| w[0] != w[1]));
+        let y = net.forward(&tiny_input(1, 5));
+        assert!(y.is_finite());
     }
 }
