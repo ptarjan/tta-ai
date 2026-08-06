@@ -80,6 +80,21 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("Bread & Circuses", "Bread and Circuses"),
     // A BGO typo, not a spelling choice: the card is "Loss of Sovereignty".
     ("Loss of Sovereignity", "Loss of Sovereignty"),
+    // BGO's own display name for this Age A event differs from the engine's
+    // (which follows the underlying `data/*.json` spelling): the printed
+    // flavour text ("Immediately, each civilization may either: increase
+    // its population; or build a farm, mine or urban building; or develop
+    // a technology. It costs 1 [resource] less than usual.") is verbatim
+    // "Development of Civil Life"'s card text (`state.rs`'s own doc comment
+    // on `OneTimeDiscount` quotes it) -- confirmed by text match, not
+    // guessed. Missing this alias meant `current_event_name`'s lookup
+    // silently failed every time this event (471/1011 games in the corpus)
+    // fired, dropping it from `replay.rs`'s `event_reveals` prescan FIFO
+    // entirely and shifting every LATER event in that game by one slot --
+    // the single largest confirmed cause of the "event-timing collapse"
+    // mismatch category in `docs/REPLAY.md` (found by testing against a
+    // real 2p game whose FIRST Age I event was this one).
+    ("Development of Civilization", "Development of Civil Life"),
 ];
 
 /// The longest a real base-game card name spans once split on ASCII spaces

@@ -314,6 +314,32 @@ fn on_enter_play(p: &mut PlayerState, id: CardId) {
     if eff.yellow_tokens != 0 {
         grant_yellow(p, eff.yellow_tokens as i32);
     }
+    // A card whose STANDING `CardEffects.civil_actions`/`military_actions`
+    // raises the player's per-turn total (Pyramids +1 CA, Code of Laws +1
+    // CA, Justice System +1 CA, Civil Service +2 CA, Kremlin +1 CA/+1 MA --
+    // `effects::compute`'s `add_flat` already sums these into `ca_total`
+    // going forward) must ALSO top up the LIVE `p.civil_actions`/
+    // `p.military_actions` counter for the REST OF THIS TURN the instant it
+    // enters play, exactly like `set_government` already does for a
+    // mid-turn revolution (`p.civil_actions = (s.civil_actions -
+    // spent).max(0)`, recomputed from the new total). Without this, a
+    // player who e.g. completes Pyramids mid-turn is capped at the STALE
+    // (pre-bonus) budget for their remaining actions that turn, contradicting
+    // the real rule (and the observed BGO human corpus, `docs/REPLAY.md`):
+    // a newly active action source is usable THIS turn, not just future
+    // ones. `p.civil_actions`/`military_actions` are otherwise a
+    // decrementing-only pool (see `costs::pay_ca`), so the fix is a direct
+    // += of the card's own contribution -- the exact amount `ca_total` just
+    // gained -- not a full state_stats recompute (this function only takes
+    // `&mut PlayerState`, no `&GameState`, matching every other case here).
+    let ca = eff.civil_actions as i32;
+    if ca != 0 {
+        p.civil_actions = (p.civil_actions as i32 + ca).max(0) as i8;
+    }
+    let ma = eff.military_actions as i32;
+    if ma != 0 {
+        p.military_actions = (p.military_actions as i32 + ma).max(0) as i8;
+    }
 }
 
 /// The leave-play twin of [`on_enter_play`]. `cultureOnLeaveEqualToLab
@@ -333,6 +359,19 @@ pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
     }
     if eff.yellow_tokens != 0 {
         p.yellow_bank = (p.yellow_bank as i32 - eff.yellow_tokens as i32).max(0) as u8;
+    }
+    // Symmetric twin of the bump `on_enter_play` now applies (see its doc
+    // comment) -- a leader carrying a `civil_actions`/`military_actions`
+    // bonus (Julius Caesar, Napoleon, ...) leaving play mid-turn (replaced
+    // by a new leader, `h_play_leader`) must give back the headroom it
+    // added, clamped at 0 so an already-spent turn can't go negative.
+    let ca = eff.civil_actions as i32;
+    if ca != 0 {
+        p.civil_actions = (p.civil_actions as i32 - ca).max(0) as i8;
+    }
+    let ma = eff.military_actions as i32;
+    if ma != 0 {
+        p.military_actions = (p.military_actions as i32 - ma).max(0) as i8;
     }
 }
 
@@ -2277,6 +2316,35 @@ mod tests {
         assert!(state.players[0].completed_wonders.contains(card("Fast Food Chains")));
         // 2 * production workers (2) + 1 * urban-or-unit workers (1) = 5.
         assert_eq!(state.players[0].culture, 5);
+    }
+
+    /// Pyramids prints a standing `civil_actions: 1` bonus (`ca_total`
+    /// includes it from the moment it is complete). Completing it MID-TURN
+    /// must make that extra civil action usable for the REST of that same
+    /// turn, exactly like `set_government` already does for a mid-turn
+    /// revolution -- not just from next turn's reset onward. Found via
+    /// `rust/src/bin/replay.rs` against a real BGO human game
+    /// (`docs/REPLAY.md`): a human took a 5th civil-costing action in the
+    /// same turn Pyramids completed, which the reconstructed engine (before
+    /// this fix) rejected as illegal because `p.civil_actions` -- a
+    /// decrementing-only per-turn pool -- was never topped up when
+    /// `on_enter_play` ran for the newly completed wonder.
+    #[test]
+    fn do_wonder_step_completing_pyramids_grants_the_extra_civil_action_this_turn() {
+        let mut p = blank_player(0, card("Despotism")); // ca_total == 4
+        p.civil_actions = 1; // this turn's last civil action, about to pay for the final stage
+        p.resources = 10;
+        p.wonder = card("Pyramids"); // stages [3, 2, 1], printed civil_actions: 1
+        p.wonder_steps = 2; // only the last (cost-1) stage remains
+        let mut state = one_player_state(p);
+        do_wonder_step(&mut state, 0, 1, 0, false);
+        assert!(state.players[0].completed_wonders.contains(card("Pyramids")), "wonder completed");
+        assert_eq!(
+            state.players[0].civil_actions, 1,
+            "Pyramids' +1 civil action must be usable THIS turn (paid the final stage's own CA down \
+             to 0, then Pyramids' own +1 CA effect should bring it back to 1), not just from the \
+             next turn's reset"
+        );
     }
 
     /// `EndTurn` was a named gap here until `game.rs` landed. It is now a

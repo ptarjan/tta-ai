@@ -200,6 +200,12 @@ struct Replayer<'a> {
     /// and misattributing every event downstream -- found by testing
     /// against a real 2p game (`docs/REPLAY.md`).
     has_drawn_military: [bool; 4],
+    /// Per-seat FIFO of `(is_resources, amount)` pulled off every
+    /// standalone `"<Color> produces N food"` / `"<Color> produces N
+    /// resources"` bookkeeping line, pre-scanned once per game -- see
+    /// `resolve_intervening`'s `ChoiceKind::GainBlock` handling and
+    /// `prescan_gain_produces`'s doc comment.
+    gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
 }
 
 /// A placeholder Event-kind card used to satisfy `Move::PrepareEvent`'s
@@ -217,7 +223,12 @@ fn filler_event_card() -> CardId {
 }
 
 impl<'a> Replayer<'a> {
-    fn new(card_index: &'a HashMap<&'static str, CardId>, num_players: u8, event_reveals: VecDeque<CardId>) -> Self {
+    fn new(
+        card_index: &'a HashMap<&'static str, CardId>,
+        num_players: u8,
+        event_reveals: VecDeque<CardId>,
+        gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
+    ) -> Self {
         // The seed is thrown away semantically -- every field it determines
         // (deck order, starting row/hand contents) is SIMULATED filler this
         // binary overwrites the instant a slot/hand entry is observed. It is
@@ -231,6 +242,7 @@ impl<'a> Replayer<'a> {
             colonize_approximated: false,
             actions_consumed: 0,
             has_drawn_military: [false; 4],
+            gain_produces,
         }
     }
 
@@ -258,22 +270,80 @@ impl<'a> Replayer<'a> {
     ) -> Result<(), MismatchKind> {
         for _ in 0..200 {
             let decider = self.state.decider();
-            // A `Pending::Choice(FreeBuild)` (an event's "each player with
-            // an unused worker may immediately build X for free" -- e.g.
-            // "Development of Religion") is left open regardless of WHOSE
-            // turn it nominally is, is not gated on `phase`, and a human
-            // DECLINING it (`Skip`) leaves no journal trace at all -- the
-            // same silent-response shape as a Politics-phase pass, just for
-            // a different pending kind. Drained here, ahead of the
-            // decider-equality check below, exactly like the Politics case:
-            // if the upcoming line is a build that matches one of its
-            // options, stop here and let `apply_one`'s Build handling
-            // resolve it (it needs the parsed card, which this function
-            // doesn't have reason to duplicate); otherwise assume `Skip` and
-            // keep draining (there can be one such pending per qualifying
-            // player, queued back to back) -- found by testing against a
-            // real 3p game (`docs/REPLAY.md`).
+            if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                eprintln!(
+                    "DEBUG resolve_intervening loop: decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
+                    self.state.pending.top()
+                );
+            }
             if let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
+                // A `Pending::Choice(GainBlock)` (an event's "Each
+                // civilization gains 2 resources or 2 food (player's
+                // choice)" -- e.g. "Development of Markets") is opened for
+                // EVERY player, one choice each, the instant the event
+                // resolves -- not just the player who played it. BGO logs
+                // each player's own pick as its OWN standalone bookkeeping
+                // line, `"<Color> produces N food"` / `"<Color> produces N
+                // resources"` (`corpus.rs` already treats this shape as
+                // bookkeeping -- not a distinct action -- for census
+                // purposes; `prescan_gain_produces` below re-reads it here
+                // because a real `Move::Choose` is still needed to clear the
+                // pending). Like `FreeBuild` below, this is drained
+                // regardless of whose turn it nominally is (it blocks ANY
+                // further action by that player, including their own, until
+                // resolved) -- found by testing against a real 3p game
+                // where a `WonderStep` several lines later was rejected
+                // because the actor's own still-open choice from an EARLIER
+                // event had never been cleared (`docs/REPLAY.md`).
+                if matches!(c.kind, ChoiceKind::GainBlock) {
+                    let picked = self
+                        .gain_produces
+                        .get_mut(&decider)
+                        .and_then(|q| q.pop_front())
+                        .ok_or_else(|| {
+                            MismatchKind::StuckPending(format!(
+                                "GainBlock choice open for player {decider} but no journal-observed \
+                                 \"produces\" line left to resolve it with"
+                            ))
+                        })?;
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| match o {
+                            ChoiceOption::Gain(g) => {
+                                (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
+                                    || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
+                            }
+                            _ => false,
+                        })
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "GainBlock options {:?} do not offer the journal-observed {} {}",
+                                c.options.as_slice(),
+                                picked.1,
+                                if picked.0 { "resources" } else { "food" }
+                            ))
+                        })?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    continue;
+                }
+                // A `Pending::Choice(FreeBuild)` (an event's "each player
+                // with an unused worker may immediately build X for free"
+                // -- e.g. "Development of Religion") is left open regardless
+                // of WHOSE turn it nominally is, is not gated on `phase`,
+                // and a human DECLINING it (`Skip`) leaves no journal trace
+                // at all -- the same silent-response shape as a
+                // Politics-phase pass, just for a different pending kind.
+                // Drained here, ahead of the decider-equality check below,
+                // exactly like the Politics case: if the upcoming line is a
+                // build that matches one of its options, stop here and let
+                // `apply_one`'s Build handling resolve it (it needs the
+                // parsed card, which this function doesn't have reason to
+                // duplicate); otherwise assume `Skip` and keep draining
+                // (there can be one such pending per qualifying player,
+                // queued back to back) -- found by testing against a real
+                // 3p game (`docs/REPLAY.md`).
                 if matches!(c.kind, ChoiceKind::FreeBuild) {
                     let matches_upcoming = decider == expected_actor
                         && matches!(upcoming.0, ActionClass::BuildBuilding | ActionClass::BuildUnit)
@@ -361,6 +431,12 @@ impl<'a> Replayer<'a> {
     /// guessing; see the module doc's "Event/Territory preparation"
     /// section for the inference itself once it applies.
     fn resolve_hidden_politics_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG resolve_hidden_politics_decision decider={decider} has_drawn_military={} round={}",
+                self.has_drawn_military[decider as usize], self.state.round
+            );
+        }
         if !self.has_drawn_military[decider as usize] {
             return self.try_apply(Move::PolPass);
         }
@@ -381,6 +457,15 @@ impl<'a> Replayer<'a> {
             });
         }
         apply::apply(&mut self.state, mv);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG PrepareEvent applied for decider={decider} want_revealed={:?} -> pending_top={:?} current_events={:?} future_events={:?}",
+                self.state.past_events.as_slice().last(),
+                self.state.pending.top(),
+                self.state.current_events.as_slice(),
+                self.state.future_events.as_slice(),
+            );
+        }
         Ok(())
     }
 
@@ -456,12 +541,33 @@ impl<'a> Replayer<'a> {
     fn try_apply(&mut self, mv: Move) -> Result<(), MismatchKind> {
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv) {
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                let p = &self.state.players[self.state.current as usize];
+                eprintln!(
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?}",
+                    self.state.current,
+                    p.civil_actions,
+                    p.military_actions,
+                    p.government.get().name,
+                    if p.leader.is_none() { "none" } else { p.leader.get().name },
+                    self.state.phase,
+                    self.state.pending.top(),
+                );
+            }
             return Err(MismatchKind::IllegalMove {
                 attempted: format!("{mv:?}"),
                 legal_moves: format!("{:?}", legal.as_slice()),
             });
         }
+        let pending_top_before = self.state.pending.top().cloned();
         apply::apply(&mut self.state, mv);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            let p = &self.state.players[self.state.current as usize];
+            eprintln!(
+                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?}",
+                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before
+            );
+        }
         Ok(())
     }
 }
@@ -608,34 +714,108 @@ fn prescan_event_reveals(lines: &[Line], card_index: &HashMap<&'static str, Card
     out
 }
 
-/// Line indices to skip entirely because they are a `TakeCard` immediately
-/// (allowing only intervening bookkeeping lines) undone by a same-actor,
-/// same-card `PutBack` -- BGO's client-side undo (`corpus.rs`'s module doc:
-/// "~8% of raw takes are a human undoing their own take within the same
-/// turn"). Rather than modelling `PutBack` as an engine `Move` (there is
-/// none -- see this file's module doc), the take that never should have
-/// counted is simply never applied: both journal lines are skipped as a
+/// `"<Color> produces N food"` / `"<Color> produces N resources"` -- a
+/// STANDALONE bookkeeping line (nothing else on it besides the actor and
+/// this clause). `corpus.rs` classifies this shape as pure bookkeeping (not
+/// a distinct action) for `corpuscensus.rs`'s purposes, which is correct for
+/// counting, but `replay.rs` needs more: every sampled occurrence of this
+/// EXACT shape in the corpus was found (empirically, `docs/REPLAY.md`) to be
+/// a player's resolution of a `ChoiceKind::GainBlock` opened by an event
+/// like "Development of Markets" ("Each civilization gains 2 resources or 2
+/// food (player's choice)") -- see `resolve_intervening`'s handling of that
+/// pending kind, which this feeds. Returns `None` for any line with extra
+/// clauses (e.g. a colonize reveal's own trailing `"... Purple produces 3
+/// food"`), which is a DIFFERENT (deterministic, non-choice) production this
+/// binary must not mistake for a GainBlock resolution.
+fn parse_standalone_produces(text: &str) -> Option<(Color, bool, i32)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let rest = rest.strip_prefix("produces ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    match &rest[digits_end..] {
+        " resources" => Some((actor, true, n)),
+        " food" => Some((actor, false, n)),
+        _ => None,
+    }
+}
+
+/// Pre-scans every standalone `"<Color> produces ..."` line in the journal
+/// into a per-seat FIFO (see `parse_standalone_produces`'s doc comment for
+/// why this shape means a `ChoiceKind::GainBlock` resolution). FIFO order
+/// matches journal order per seat, which is safe because a `GainBlock`
+/// pending for a given player blocks every other action by that SAME player
+/// until resolved (confirmed empirically: every standalone `"produces"` line
+/// sampled across the corpus follows a "(player's choice)" event with no
+/// unrelated action by that player in between).
+fn prescan_gain_produces(lines: &[Line]) -> HashMap<u8, VecDeque<(bool, i32)>> {
+    let mut out: HashMap<u8, VecDeque<(bool, i32)>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, is_resources, n)) = parse_standalone_produces(line.text) {
+            out.entry(actor.seat()).or_default().push_back((is_resources, n));
+        }
+    }
+    out
+}
+
+/// Line indices to skip entirely because they are a `TakeCard` undone by a
+/// same-actor, same-card `PutBack` -- BGO's client-side undo (`corpus.rs`'s
+/// module doc: "~8% of raw takes are a human undoing their own take within
+/// the same turn"). Rather than modelling `PutBack` as an engine `Move`
+/// (there is none -- see this file's module doc), the take that never should
+/// have counted is simply never applied: both journal lines are skipped as a
 /// pair, which is the exact meaning of "take it back."
+///
+/// A take and its put-back are NOT always textually adjacent: BGO's UI lets
+/// a player hold several tentative takes at once (a stack -- take A, take B,
+/// put B back, put A back is a real observed pattern) and freely interleave
+/// OTHER committed actions (builds, other takes, ...) in between, e.g. take
+/// Frugality, take Alchemy, build a wonder stage, put Frugality back. The
+/// original adjacency-only pairing (a single `last_take` slot, reset by any
+/// intervening classified line) missed both shapes and reported an
+/// "unpaired PutBack" mismatch that stopped replay outright -- 3/24 games in
+/// the initial sample (`docs/REPLAY.md`).
+///
+/// Since every row/hand card is a unique instance in the table (the same
+/// name never denotes two different physical cards within one game -- the
+/// same assumption `ground_row_slot`/`card_index` already rely on), a
+/// `PutBack` can only ever refer to a still-open take of that exact card by
+/// that exact actor, so matching is done with a per-card stack of
+/// not-yet-resolved takes rather than a single "last take" slot: any
+/// `TakeCard` pushes onto its card's stack, any `PutBack` pops the most
+/// recent entry for the same actor, and (defensively, since it should never
+/// happen with unique card instances) any OTHER classified line naming that
+/// same card by the same actor -- i.e. the take was committed some other way
+/// (built, developed, played, elected, ...) -- removes it from the stack so
+/// a later same-named "put back" (which cannot legitimately exist once a
+/// card is committed) can never wrongly erase this now-real action.
 fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> std::collections::HashSet<usize> {
     let mut skip = std::collections::HashSet::new();
-    let mut last_take: Option<(usize, Color, CardId)> = None;
+    let mut open: HashMap<CardId, Vec<(usize, Color)>> = HashMap::new();
     for (i, line) in lines.iter().enumerate() {
         let LineOutcome::Action(Classified { class, card }) = classify(card_index, line.text) else {
-            continue; // bookkeeping between a take and its put-back is fine
+            continue; // bookkeeping: never references a card, nothing to do
         };
         let Some((actor, _)) = actor_and_rest(line.text) else { continue };
-        match (class, card) {
-            (ActionClass::TakeCard, Some(c)) => last_take = Some((i, actor, c)),
-            (ActionClass::PutBack, Some(c)) => {
-                if let Some((take_i, take_actor, take_card)) = last_take {
-                    if take_actor == actor && take_card == c {
+        let Some(c) = card else { continue };
+        match class {
+            ActionClass::TakeCard => open.entry(c).or_default().push((i, actor)),
+            ActionClass::PutBack => {
+                if let Some(stack) = open.get_mut(&c) {
+                    if let Some(pos) = stack.iter().rposition(|&(_, a)| a == actor) {
+                        let (take_i, _) = stack.remove(pos);
                         skip.insert(take_i);
                         skip.insert(i);
                     }
                 }
-                last_take = None;
             }
-            _ => last_take = None,
+            _ => {
+                if let Some(stack) = open.get_mut(&c) {
+                    stack.retain(|&(_, a)| a != actor);
+                }
+            }
         }
     }
     skip
@@ -660,7 +840,8 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
     let lines = parse_lines(journal_text);
     let event_reveals = prescan_event_reveals(&lines, card_index);
     let putback_skips = prescan_putback_skips(&lines, card_index);
-    let mut r = Replayer::new(card_index, meta.players, event_reveals);
+    let gain_produces = prescan_gain_produces(&lines);
+    let mut r = Replayer::new(card_index, meta.players, event_reveals, gain_produces);
 
     let mut mismatch: Option<Mismatch> = None;
     let mut completed = false;
@@ -712,9 +893,36 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
                 | ActionClass::PlayAggression
                 | ActionClass::ProposePact
         );
-        if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
-            mismatch = Some(mk_mismatch(line, kind));
-            break 'lines;
+        // `ActionClass::PlayEvent` (`"X plays event ..."`) is the
+        // JOURNAL-side confirmation that an event already resolved -- see
+        // the module doc's "Event/Territory preparation" section: the
+        // engine resolves an event's ENTIRE effect (gains, `queue_decisions`
+        // for every qualifying player -- e.g. a `FreeBuild`/`GainBlock`
+        // choice opened for each of them at once) synchronously, inside
+        // `h_prepare_event`, the instant the hidden `PrepareEvent` is
+        // inferred; `apply_one`'s own `PlayEvent` arm is a bare `Ok(())`
+        // that reads no state at all. Calling `resolve_intervening` for
+        // THIS line was actively harmful: its job is to make `legal_moves`
+        // offer whatever comes NEXT, so when that "next" is the PlayEvent
+        // no-op itself, its one-line lookahead (`upcoming = (PlayEvent,
+        // None)`) can never match a `FreeBuild`/`GainBlock` pending's own
+        // options -- and the FreeBuild branch's fallback IS "assume Skip",
+        // so it silently, wrongly discarded every qualifying player's real
+        // free-build choice before the following lines (which DO ask for
+        // it) were ever read. Skipping the call here defers resolution
+        // (including the hidden-`PrepareEvent` inference itself, if it
+        // hasn't fired yet) to whatever the NEXT real line's own
+        // `resolve_intervening` call needs -- which has the right
+        // `upcoming` to match against -- found by testing against a real 3p
+        // game where "Development of Religion" (a `FreeBuild` event) opened
+        // a choice for all 3 players and every one of them was wrongly
+        // auto-skipped before their own real "builds Religion" line was
+        // even read (`docs/REPLAY.md`).
+        if class != ActionClass::PlayEvent {
+            if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
+                mismatch = Some(mk_mismatch(line, kind));
+                break 'lines;
+            }
         }
 
         let next_text = lines.get(i + 1).map(|l| l.text);
