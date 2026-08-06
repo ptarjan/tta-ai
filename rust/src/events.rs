@@ -245,7 +245,12 @@ fn pending_final_events(state: &GameState) -> Vec<CardId> {
 /// The `Special::FinalScoring` payload off one card, if it has one. `None`
 /// for every card except the 15 base-game `scoringEvent` events (see
 /// `cards::FinalScoringBlock`'s doc comment).
-fn final_scoring_block(card: CardId) -> Option<&'static crate::cards::FinalScoringBlock> {
+///
+/// `pub(crate)`: `bots::weighted::events::scoring_weights` also needs this,
+/// to mirror Python's `_scoring_weights` filtering its event pool down to
+/// cards `final_event_awards` will actually score -- reusing this rather
+/// than restating "does this card score" as a second predicate.
+pub(crate) fn final_scoring_block(card: CardId) -> Option<&'static crate::cards::FinalScoringBlock> {
     card.get().special.iter().find_map(|sp| match sp {
         Special::FinalScoring(block) => Some(block),
         _ => None,
@@ -782,8 +787,14 @@ pub(crate) fn live_count_idx(state: &GameState) -> usize {
 /// never targets `happy`/`discontent`/banked `culture` and instead has its
 /// own `culture_rate`/`food`/`resources`/`science`), so the two are not
 /// merged into one enum despite the overlap.
+///
+/// `pub(crate)`, same as [`rank_players`] below: `bots::weighted::events::
+/// my_event_threat` needs both, to rank players by exactly this vocabulary
+/// for the `_EVENT_RANKED` targeting keys Python's `my_event_threat` reads
+/// -- reusing this module's `_rank`/`_stat_value` port rather than a second
+/// copy of the same four-branch dispatch.
 #[derive(Clone, Copy)]
-enum RankStat {
+pub(crate) enum RankStat {
     Strength,
     /// Banked culture (`p.culture`) -- NOT `Stats.culture`'s per-turn RATE,
     /// which `FinalScoringStat::CultureRate` names instead.
@@ -808,7 +819,7 @@ fn rank_stat_value(state: &GameState, idx: u8, stat: RankStat) -> i32 {
 /// direction flag since `resolve_event`'s six-key loop needs BOTH
 /// directions, unlike final scoring's always-best-first ranking. Mirrors
 /// `engine/events.py::_rank(state, order, stat, best_first)`.
-fn rank_players(state: &GameState, order: &[u8], stat: RankStat, best_first: bool) -> Vec<u8> {
+pub(crate) fn rank_players(state: &GameState, order: &[u8], stat: RankStat, best_first: bool) -> Vec<u8> {
     let mut ranked = order.to_vec();
     if best_first {
         ranked.sort_by_key(|&idx| -rank_stat_value(state, idx, stat));
