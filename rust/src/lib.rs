@@ -13,6 +13,7 @@
 // real ones. Delete this line once `effects` and `actions` are ported.
 #![allow(dead_code)]
 
+pub mod advisor;
 pub mod apply;
 pub mod arena;
 pub mod bots;
