@@ -1,11 +1,270 @@
 //! `engine/bots/weighted.py` lines 1056-1415: the game horizon -- how many
 //! rounds are left, how much of the civil supply is unseen, how "late" the
 //! game is, and what a per-turn RATE feature is worth given how much game is
-//! left to collect it in.
+//! left to collect it in. See that Python range's own extensive comments
+//! (`_tail`/`_supply`/`take_rate`/`rounds_left`/`lateness`/`rate_multiplier`
+//! each carry a paragraph or more on WHY the arithmetic is shaped the way it
+//! is -- rule-derived vs. measured vs. fitted, and what each replaced) for
+//! the derivations; restated here only where the Rust shape earns its own
+//! note.
 //!
-//! TODO: port `_tail`, `_supply`, `_live`, `cards_unseen`, `_replenishes`,
-//! `take_rate`, `rounds_left`, `lateness`, `horizon_scale`, `rate_multiplier`,
-//! and the constants `AGE_IV_ROUNDS`/`_SWEEP`/`_ROW`/`_TAKE_PRIOR`/
-//! `_TAKE_PRIOR_W`/`RATE_KEYS`. `_tail`/`_supply` are memo caches in Python
-//! keyed by (players, age); in Rust these must be `const` tables or cheap
-//! recomputation, NOT a lazily-populated global map.
+//! ## No memo caches
+//!
+//! Python's `_TAIL`/`_SUPPLY` are module-level dicts, lazily filled and kept
+//! forever, because `C.db().civil_deck(age, n)` -- a dict-of-dicts walk -- is
+//! "far too slow for the search loop" (that module's own comment). This port
+//! has no such cost to hide: [`crate::game::build_deck`] is a single
+//! filtering pass over the static `CARDS` array (236 entries, no heap
+//! allocation -- it returns a fixed-capacity [`crate::state::CardList`], the
+//! same "never a `Vec`" shape [`crate::bots::counting`] already established
+//! for the identical composition question). [`tail`]/[`supply`] below
+//! therefore recompute on every call rather than memoize -- a process-global
+//! mutable cache would be exactly the "Python in Rust" shape this port's
+//! house style forbids, for a saving Rust does not need in the first place.
+//! [`crate::bots::counting`]'s own `civil_outlook` already calls
+//! `build_deck` uncached on this exact hot path, so this is not a new trade,
+//! just the same one repeated for a second question about the same decks.
+//!
+//! ## `_ROW` and `horizon_scale`'s `w` parameter: two dead-code fixes
+//!
+//! While surveying this range for the port, two artifacts turned out to be
+//! genuinely unread and were fixed in the Python original alongside this
+//! port (repo owner's ruling: fix a found defect in both engines rather than
+//! carry it forward for shape fidelity):
+//!
+//! * `_ROW = actions.ROW_SIZE` used to sit next to `_SWEEP`/`AGE_IV_ROUNDS`
+//!   here. Grepping the whole tree for the name turns up only its own
+//!   definition -- nothing ever read it. Not ported; see
+//!   `tests/test_rate_horizon.py::DeadCodeFoundWhilePortingToRust` in the
+//!   Python tree.
+//! * `horizon_scale(state, n=None, w=None)` accepted a `w` weight dict and
+//!   never referenced it in its body. [`horizon_scale`] below takes only
+//!   `state`/`n`.
+//!
+//! Neither changes any number this module or Python's `evaluate` produces --
+//! both were parameters/constants nothing downstream ever read.
+
+use crate::cards::Age;
+use crate::game;
+use crate::state::GameState;
+
+use super::weights::{WeightKey, Weights};
+
+/// RULE-DERIVED, RULES_SPEC 12.3: once Age IV begins, the game ends this
+/// round or the next.
+pub const AGE_IV_ROUNDS: f64 = 2.0;
+
+/// The four ages with a civil deck at all -- Age IV's is always empty
+/// (`game::advance_age` empties both decks entering it), so it is left out
+/// rather than filtered every call.
+const CIVIL_AGES: [Age; 4] = [Age::A, Age::I, Age::II, Age::III];
+
+/// FITTED PRIOR (see docs/MODEL_CONSTANTS.md), the only fitted number left in
+/// the horizon: cards taken off the row per replenish before this game has
+/// produced any evidence of its own, by live player count. Measured over 240
+/// self-play games (`tools/deal_rate.py`, deleted 2026-08-04, Python side).
+/// Indexed by `n - 2` (2p/3p/4p), mirroring `Card::count`'s own `[u8; 3]`
+/// convention in `cards.rs`.
+const TAKE_PRIOR: [f64; 3] = [0.30, 0.35, 0.40];
+
+/// `TAKE_PRIOR`'s weight in pseudo-replenishes -- shrunk away within a
+/// couple of rounds, so it moves the estimate only in Age A and the first
+/// rounds of Age I.
+const TAKE_PRIOR_W: f64 = 4.0;
+
+/// The four per-turn RATE features [`rate_multiplier`] scales. Deliberately
+/// excludes `rival_culture_rate`/`rival_science_rate` -- those are
+/// max-over-rivals THREAT signals the coordinate registry declares inert
+/// across a candidate set, and scaling them would vary between candidates as
+/// a side effect nobody asked for. See Python's own comment on `RATE_KEYS`
+/// for the full argument.
+pub const RATE_KEYS: &[WeightKey] =
+    &[WeightKey::CultureRate, WeightKey::ScienceRate, WeightKey::FoodRate, WeightKey::ResourceRate];
+
+/// `_live`: live player count, clamped to the 2-4 range every composition
+/// lookup below assumes (RULES_SPEC 13).
+///
+/// Deliberately NOT [`crate::bots::counting::live_count`] (private to that
+/// module in any case): that one is UNCLAMPED on purpose, because Python's
+/// `Db._deck` simply returns nothing for a count key that is not `"2p"`/
+/// `"3p"`/`"4p"` -- an empty composition, not a crash. [`game::build_deck`]
+/// instead computes `num_players - 2` to index `Card::count`, which
+/// underflows below 2 players, so every caller here needs the clamp Python's
+/// `_live` applies (`2 if n < 2 else (4 if n > 4 else n)`).
+///
+/// `pub`, not `_live`-private: [`crate::bots::counting`]'s own top doc
+/// comment requires callers to compute a value like this once at the search
+/// root and thread it down rather than recomputing it deep in a search --
+/// which requires every submodule under `bots::weighted` to be able to reach
+/// it, not just this file.
+pub fn live_count(state: &GameState) -> usize {
+    let n = state.players[..state.num_players as usize].iter().filter(|p| !p.resigned).count();
+    n.clamp(2, 4)
+}
+
+/// `_tail`: civil cards left in every age's deck strictly AFTER `age`, for
+/// `n` players -- EXACT, from the same printed card data `game::build_deck`
+/// deals from. See this module's top doc comment for why this recomputes
+/// rather than memoizes.
+fn tail(n: usize, age: Age) -> u32 {
+    debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
+    CIVIL_AGES.iter().copied().filter(|&a| a as u8 > age as u8).map(|a| game::build_deck(a, true, n).len() as u32).sum()
+}
+
+/// `_supply`: `(total civil cards for `n` players across ages A-III, size of
+/// the Age A deck alone)`. Both exact card data.
+fn supply(n: usize) -> (u32, u32) {
+    debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
+    let mut total = 0u32;
+    let mut age_a = 0u32;
+    for age in CIVIL_AGES {
+        let len = game::build_deck(age, true, n).len() as u32;
+        total += len;
+        if age == Age::A {
+            age_a = len;
+        }
+    }
+    (total, age_a)
+}
+
+/// `cards_unseen`: civil cards still to be dealt -- EXACT, the current deck
+/// plus every later age's deck.
+pub fn cards_unseen(state: &GameState, n: usize) -> u32 {
+    state.civil_deck.len() as u32 + tail(n, state.age_civil)
+}
+
+/// `_replenishes`: how many times the top-of-turn replenish has run --
+/// EXACT. `state.turn` is a 1-based player-turn counter and replenishing
+/// starts from round 2, so this is the turn counter less the first round's
+/// `num_players` turns. Can be negative during round 1, which every caller
+/// treats as "no history yet" (see [`take_rate`]).
+fn replenishes(state: &GameState) -> i32 {
+    state.turn as i32 - state.num_players as i32
+}
+
+/// `take_rate`: cards players take off the row per replenish, MEASURED in
+/// this game (not a fitted constant, past the first round or two -- see
+/// Python's `take_rate` for the full derivation of `consumed`/`taken`).
+pub fn take_rate(state: &GameState, n: usize) -> f64 {
+    debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
+    let r = replenishes(state);
+    let prior = TAKE_PRIOR[n - 2];
+    if r <= 0 || state.age_civil == Age::A {
+        return prior;
+    }
+    let (total, age_a) = supply(n);
+    let consumed = total as f64 - cards_unseen(state, n) as f64;
+    let taken = (consumed - age_a as f64 - f64::from(r) * game::sweep_count(n) as f64).max(0.0);
+    (taken + TAKE_PRIOR_W * prior) / (f64::from(r) + TAKE_PRIOR_W)
+}
+
+/// `rounds_left`: estimated rounds still to play, including the one in
+/// progress. Exact once Age IV has begun (`state.final_round_end` is set);
+/// before that, the EXACT undealt-card count divided by a deal rate MEASURED
+/// in this game. Never below 1.0.
+pub fn rounds_left(state: &GameState, n: usize) -> f64 {
+    if let Some(fre) = state.final_round_end {
+        return (f64::from(fre) - f64::from(state.round) + 1.0).max(1.0);
+    }
+    debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
+    let cards = cards_unseen(state, n) as f64;
+    let per_round = n as f64 * (game::sweep_count(n) as f64 + take_rate(state, n));
+    (cards / per_round + AGE_IV_ROUNDS).max(1.0)
+}
+
+/// `lateness`: how far through the game we are, 0.0 at the deal, 1.0 when
+/// the civil supply is gone. EXACT -- no rate, no fit, no player-count table.
+///
+/// Clamped to `[0, 1]`, and the clamp is load-bearing: Python's own doc
+/// comment on this function measures what an unclamped `1 - L` does near the
+/// very end of the game (it goes negative and flips the sign of every
+/// early-phase weight). `f64::clamp` is that same guard, not an
+/// approximation of it.
+pub fn lateness(state: &GameState) -> f64 {
+    let n = live_count(state);
+    let (total, _) = supply(n);
+    let lv = 1.0 - cards_unseen(state, n) as f64 / f64::from(total);
+    lv.clamp(0.0, 1.0)
+}
+
+/// `horizon_scale`: `rounds_left`, normalised so an average-moment decision
+/// scores 1.0. Mean ~1.0 over a game by construction; ~1.9 at the deal,
+/// ~0.09 on the last turn. Never negative, because `rounds_left` never is.
+pub fn horizon_scale(state: &GameState, n: usize) -> f64 {
+    let rl = rounds_left(state, n);
+    let reference = 0.5 * (rl + (f64::from(state.round) - 1.0).max(0.0) + 1.0);
+    if reference > 0.0 {
+        rl / reference
+    } else {
+        1.0
+    }
+}
+
+/// `rate_multiplier`: what [`RATE_KEYS`] features are multiplied by. `1.0`
+/// (no-op) when [`WeightKey::RateHorizon`] is exactly `0.0`; otherwise a
+/// blend between flat pricing (0.0) and the full `rounds_left / mean`
+/// horizon (1.0), floored at 0.0 so a credit above 1.0 can flatten a rate but
+/// never invert its sign.
+pub fn rate_multiplier(state: &GameState, weights: &Weights, n: usize) -> f64 {
+    let c = weights.get(WeightKey::RateHorizon);
+    if c == 0.0 {
+        return 1.0;
+    }
+    (1.0 + c * (horizon_scale(state, n) - 1.0)).max(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game as G;
+
+    /// `rate_multiplier` at credit 0.0 is exactly 1.0 -- the "master is
+    /// unaffected" byte-identity guarantee `DEFAULT_WEIGHTS["rate_horizon"]
+    /// = 1.0`'s own comment leans on, checked at the point the credit is 0.0
+    /// rather than 1.0.
+    #[test]
+    fn zero_credit_multiplier_is_exactly_one() {
+        let state = G::new_game(3, 7);
+        let mut w = Weights::default();
+        w.set(WeightKey::RateHorizon, 0.0);
+        assert_eq!(rate_multiplier(&state, &w, live_count(&state)), 1.0);
+    }
+
+    /// `lateness` is small and positive right after `new_game` -- NOT exactly
+    /// 0.0, because `new_game` already deals the initial 13-card row out of
+    /// the Age A civil deck before returning (confirmed against Python:
+    /// `W.lateness(G.new_game(2, seed=11))` also returns `0.0855...`, not
+    /// `0.0`). The docstring's "0.0 at the deal" describes the theoretical
+    /// moment before anything has left the decks, which `new_game`'s return
+    /// state is already just past -- so this checks "close to zero and
+    /// bounded", not the unreachable exact endpoint.
+    #[test]
+    fn lateness_is_small_right_after_the_initial_deal() {
+        for n in [2, 3, 4] {
+            let state = G::new_game(n, 11);
+            let lv = lateness(&state);
+            assert!((0.0..0.15).contains(&lv), "{n}p: lateness {lv} out of expected range");
+        }
+    }
+
+    /// `rounds_left` never returns less than 1.0, whatever the inputs --
+    /// checked at the deal and is also asserted per-call by every caller's
+    /// own `.max(1.0)`.
+    #[test]
+    fn rounds_left_is_never_below_one() {
+        for n in [2, 3, 4] {
+            let state = G::new_game(n, 12);
+            assert!(rounds_left(&state, live_count(&state)) >= 1.0, "{n}p");
+        }
+    }
+
+    /// `live_count` clamps to the 2-4 range even for a state with more seats
+    /// resigned than the game normally allows to be simultaneously live.
+    #[test]
+    fn live_count_is_always_in_range() {
+        let mut state = G::new_game(4, 13);
+        state.players[2].resigned = true;
+        state.players[3].resigned = true;
+        assert_eq!(live_count(&state), 2);
+    }
+}

@@ -153,8 +153,17 @@ fn peek_top_event(state: &mut GameState, idx: u8) {
 
 /// §2.1: civil cards swept off the left of the row at the start of a turn, by
 /// live player count. Python's `SWEEP = {2: 3, 3: 2, 4: 1}`.
+///
+/// `pub(crate)` (not private) so `bots::weighted::horizon` -- which needs the
+/// exact same number for its own deal-rate arithmetic (Python's
+/// `weighted.py::_SWEEP`, a byte-for-byte duplicate of this table kept only
+/// because `engine.game` importing `engine.actions`, which `weighted.py`
+/// itself imports, would be a cycle) -- can call this directly instead of
+/// keeping a second copy that could drift from it. Rust's module tree has no
+/// such cycle, so there is no reason for the port to inherit Python's
+/// duplication once the reason for it stops applying.
 #[inline]
-fn sweep_count(live: usize) -> usize {
+pub(crate) fn sweep_count(live: usize) -> usize {
     match live {
         2 => 3,
         3 => 2,
