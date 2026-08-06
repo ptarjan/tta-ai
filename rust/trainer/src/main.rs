@@ -2,7 +2,7 @@
 //! autograd, driving the SAME combined value+ranking objective `neuraltrain`
 //! trains by hand on the CPU (`rust/src/bots/neural/train.rs`'s top doc
 //! comment has the objective's shape and the reason epoch 0 gets a VACUITY
-//! report before any gradient step -- `docs/NEURAL_LOOP_NULL.md`'s 41-hour
+//! report before any gradient step -- `docs/NEURAL.md`'s 41-hour
 //! null). Flags mirror `neuraltrain`'s: `--data --epochs --batch --lr --wd
 //! --hidden --blocks --dropout --lam --vweight --init --out`, plus
 //! `--device` (`cpu` by default; `cuda` needs this crate built with
@@ -330,7 +330,7 @@ fn run(args: &Args) -> Result<(), String> {
     }
 
     // --- epoch 0: the vacuity check -------------------------------------
-    // See train.rs's top doc comment / docs/NEURAL_LOOP_NULL.md 3.1: a
+    // See train.rs's top doc comment / docs/NEURAL.md: a
     // target the UNTRAINED warm start already satisfies is a fixed point,
     // not something gradient descent can learn from. Printed before the
     // first gradient step, unconditionally, same wording as neuraltrain.rs

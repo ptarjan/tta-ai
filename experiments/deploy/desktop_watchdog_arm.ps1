@@ -33,7 +33,8 @@
 # See experiments/rust_league.sh's own header for the design of what
 # replaced this (a Rust `climb` process per player count, resumable from its
 # own checkpoint, no separate flags to re-supply on relaunch) and
-# docs/DESKTOP_QUIET.md for the desktop's own deploy history.
+# docs/NEURAL.md (Operating the shared desktop box) for the desktop's own
+# deploy notes.
 #
 # The design notes below, about why aliveness was judged by log mtime rather
 # than process enumeration and why relaunches reaped the previous driver by

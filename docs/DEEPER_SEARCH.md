@@ -13,7 +13,7 @@ measurement — see section 4.0.
 
 ## 1. The defect this is aimed at
 
-[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) proves it for pacts and colony bids; the argument
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) proves it for pacts and colony bids; the argument
 generalises. `WeightedBot.pick` scores a candidate by
 
 ```python
@@ -342,7 +342,7 @@ themselves quiescent. Use LEVELS=1.
 
 `tools/behaviour_counts.py`, extended here to count `play_action` (missing
 before), to split action cards into the 18 that order a free action and the 15
-that do not, and to record the [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md) civil-action numbers.
+that do not, and to record the [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) civil-action numbers.
 **Mirror tables**: every seat runs the same bot, 120 games per cell, so these
 are "what this search does when everyone uses it", not "what it does against a
 field it out-searches".
@@ -407,7 +407,7 @@ Pact offers *fall* (6.4 → 2.9 at 3p, 16.7 → 4.8 at 4p) and colony bids *fall
 (3.7 → 2.6, 6.0 → 4.0) — while pacts live at the end are flat and colonies
 actually held **rise** (1.71 → 1.97, 2.73 → 3.02). The 1-ply bot is not
 failing to offer pacts and bid: `weighted.deferred_credit` (commit 166867d)
-already fixed that with a hand-priced constant, and [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)
+already fixed that with a hand-priced constant, and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)
 recorded the fix working. What a flat hand-priced credit cannot do is tell a
 *good* offer from a bad one, so it produces a lot of them. Quiescence plays the
 auction out and the partner's accept/refuse out, so it makes **fewer and better
@@ -423,7 +423,7 @@ Asked directly, because the live 2p champion has driven `civil_actions`,
 carries `end_turn_bias = −14.44` against a default of −3.0 — i.e. the trainer
 has spent a lot of its search budget building a bigger and bigger correction
 for `end_turn`'s production flattery (`engine/bots/weighted.py`, the DO-NOT-FIX
-block; [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). If quiescence removed that asymmetry the
+block; [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6). If quiescence removed that asymmetry the
 correction should become unnecessary.
 
 | | 2p 1-ply | 2p quiescent | 3p 1-ply | 3p quiescent | 4p 1-ply | 4p quiescent |
@@ -453,7 +453,7 @@ The `end_turn_bias` hack must therefore stay, and the fact that the 2p champion
 has pushed it to −14.44 remains what it was: a trained weight doing the job of
 a missing search property. Note also that removing it has already been measured
 twice and made the bot *much* weaker (38.4% / 29.8% / 11.0% against a 50% null,
-[`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6), so the correction is load-bearing and is also
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6), so the correction is load-bearing and is also
 acting as a move-quality filter. Nothing here contradicts that; quiescence
 simply operates on a different axis.
 
@@ -521,7 +521,7 @@ The reservations, in order of seriousness:
 that has not been run: a league arm whose challenger *and* whose mirror
 opponent are both quiescent, run for long enough to produce a champion, and
 then compared with the existing 1-ply champion **on opponents held out of both
-pools**. Note that [`docs/BOT_ROSTER.md`](BOT_ROSTER.md) is not that comparison as it stands —
+pools**. Note that [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) is not that comparison as it stands —
 `build_pool` puts `book`, `book2` and every variant into the training pool, so
 the roster measures in-distribution performance. A genuine hold-out needs at
 least one entrant excluded from training (`build_pool(exclude=...)` already
@@ -657,10 +657,10 @@ Unknown on any human scale, and weaker than the repo's older documents claim
 in one direction and stronger in another. Both corrections matter, so both are
 given.
 
-**The old external verdict is stale.** [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) reports
+**The old external verdict is stale.** [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) reports
 BookBot — a ~200-line hand-written priority list with no search, no evaluator
 and no learned weights — beating the trained champion 62.9% at 2p, and
-[`docs/BOT_ROSTER.md`](BOT_ROSTER.md) places the champion fifth of twelve. Both were measured
+places the champion fifth of twelve. Both were measured
 against the **frozen gen-222 snapshot**, before the league pool existed. The
 *current* 2p champion (gen 337) does not lose to those bots. Measured here,
 400 games each, 2p:
@@ -680,7 +680,7 @@ variant *including* `culture` **into the training pool**. The champion was
 trained against these exact opponents. What the table above measures is that
 the training worked on its own distribution — a real and useful result, and
 emphatically not evidence about play against anything the pool does not
-contain. [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)'s original point stands undamaged: we have
+contain. [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)'s original point stands undamaged: we have
 never measured this bot against anything outside its own training loop, and we
 have **no human benchmark at all**.
 
@@ -700,7 +700,7 @@ What can be said honestly, then:
   that never uses a whole third of the rulebook is not playing the game well,
   whatever its self-play win rate says.
 * The evaluation still cannot tell a good card from a bad one
-  ([`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6). That is a large, known, unfixed hole.
+  ([`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6). That is a large, known, unfixed hole.
 
 Quiescence's +5.8% / +9.5% / +16.7% is a real improvement, it replicates
 against opponents of a completely different design, and it opens a layer of the
@@ -712,7 +712,7 @@ step out of it.
 Ranked by expected value per unit of effort, most valuable first. Deeper
 classical search is deliberately last.
 
-1. **Fix the evaluation, not the search.** [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6–7 has
+1. **Fix the evaluation, not the search.** [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6–7 has
    already localised the biggest single defect: `features()` reduces the entire
    civil hand to a count and a sum of age levels, so the evaluation **cannot
    tell a good card from a bad one**, and therefore cannot price `take` at all.

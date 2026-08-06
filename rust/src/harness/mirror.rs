@@ -903,8 +903,9 @@ mod tests {
     /// grows a new derived `rival_*` feature, this test starts failing until
     /// a human either grows this list (extends the ask) or the exclusion
     /// list (declares it a hyperparameter, a conscious decision) -- the
-    /// property the Python test's `docs/EXTERNAL_AIS.md` note that it "has
-    /// fired for real once" was really protecting.
+    /// property a Python-era test once caught a real drift on (that test and
+    /// its note are gone with `engine/`; the property is why this Rust test
+    /// exists).
     const RIVAL_FEATURE_KEYS: &[WeightKey] = &[
         WeightKey::RivalCulture,
         WeightKey::RivalMeanCulture,

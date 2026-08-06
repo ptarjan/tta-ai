@@ -59,7 +59,7 @@ pub const AGE_IV_ROUNDS: f64 = 2.0;
 /// rather than filtered every call.
 const CIVIL_AGES: [Age; 4] = [Age::A, Age::I, Age::II, Age::III];
 
-/// FITTED PRIOR (see docs/MODEL_CONSTANTS.md), the only fitted number left in
+/// FITTED PRIOR (see docs/EVALUATOR_HISTORY.md), the only fitted number left in
 /// the horizon: cards taken off the row per replenish before this game has
 /// produced any evidence of its own, by live player count. Measured over 240
 /// self-play games (`tools/deal_rate.py`, deleted 2026-08-04, Python side).

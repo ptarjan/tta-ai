@@ -282,7 +282,7 @@ pub fn features(
 
     // ------------------------------------------------ deferred payoffs
     // An offered pact and a live high bid are both real positions the trial
-    // state cannot show (docs/COMBAT_AUDIT.md). `deferred_credit` no-ops
+    // state cannot show (docs/AUDIT_HISTORY.md). `deferred_credit` no-ops
     // (every field zero) when nothing is pending, so this is safe to call
     // unconditionally rather than gating on `state.pending` first.
     let dc = rivals::deferred_credit(state, idx);

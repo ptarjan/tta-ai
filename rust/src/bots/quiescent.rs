@@ -13,7 +13,7 @@
 //! 1-ply evaluator ranks it as strictly dominated by passing under any
 //! weight vector. Quiescence is the fix: after applying a candidate, keep
 //! resolving `state.pending` -- whoever the decider is -- until the stack is
-//! empty, and only then score. `docs/COMBAT_AUDIT.md` proves this for pacts
+//! empty, and only then score. `docs/AUDIT_HISTORY.md` proves this for pacts
 //! and colony bids; the same argument covers aggressions and action cards.
 //!
 //! ## This port is generic over the evaluator, deliberately

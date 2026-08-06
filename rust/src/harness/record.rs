@@ -138,8 +138,9 @@ impl Setup {
     pub fn validate(&self) -> Result<(), String> {
         if self.dlc {
             return Err(
-                "New Leaders & Wonders is ON. Our engine does not implement it (docs/EXTERNAL_AIS.md \
-                 section 1); this game cannot be logged. Restart the app game with the expansion off."
+                "New Leaders & Wonders is ON. Our engine does not implement it (base game only, \
+                 see README.md's scope note); this game cannot be logged. Restart the app game with \
+                 the expansion off."
                     .to_string(),
             );
         }

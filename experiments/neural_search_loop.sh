@@ -5,7 +5,7 @@
 # The one change that matters, and it has not changed: the improvement
 # operator is a SEARCH.  The old loop labelled its ranking pairs with the
 # net's own 1-ply argmax, so the untrained warm-start already satisfied 97.6%
-# of them and the loss had nothing to teach (docs/NEURAL_LOOP_NULL.md).  Here
+# of them and the loss had nothing to teach (docs/NEURAL.md).  Here
 # the label is the root choice of the whole-turn beam with this same net as
 # the leaf (`rankdata --teacher nplan:...`), which is measurably stronger than
 # the net's own argmax, and the gate is beam-vs-beam, i.e. the policy that
@@ -523,7 +523,7 @@ for it in $(seq "$start_it" "$ITERS"); do
   # health meter: the fraction of decisions where the beam OVERRULED the net's
   # own 1-ply argmax.  This is the entire information content of the target.
   # If it decays toward 0 the loop has gone vacuous and must be stopped --
-  # that is precisely the failure docs/NEURAL_LOOP_NULL.md 3.1 could not see.
+  # that is precisely the failure docs/NEURAL.md could not see.
   # `rankdata` prints NA, not 0, when it could not measure it; NA must not be
   # read as "vacuous", so the warning below tests a real number only.
   dis=$(grep -h '^DONE' "$GENLOG" 2>/dev/null \
@@ -531,7 +531,7 @@ for it in $(seq "$start_it" "$ITERS"); do
   [ -z "$dis" ] && dis=$NULL
   say "  gen it$it  DISAGREE=$dis  shards=$(ls "$GENDIR"/*.rkd 2>/dev/null | wc -l)  $(grep -h '^DONE' "$GENLOG" 2>/dev/null)"
   if [ "$dis" != "$NULL" ] && awk -v d="$dis" 'BEGIN{exit !(d+0 < 0.02)}'; then
-    say "  *** WARNING DISAGREE=$dis < 0.02: the search no longer overrules the net; the target is going vacuous (docs/NEURAL_LOOP_NULL.md 3.1) ***"
+    say "  *** WARNING DISAGREE=$dis < 0.02: the search no longer overrules the net; the target is going vacuous (docs/NEURAL.md) ***"
   fi
 
   if ! ls "$GENDIR"/*.rkd >/dev/null 2>&1; then
@@ -556,8 +556,8 @@ for it in $(seq "$start_it" "$ITERS"); do
   [ -f checkpoints/cand.ckpt ] || { say "  no cand (killed?) -> skip iter $it"; continue; }
   # The epoch-0 line is the guard against training that is secretly a no-op:
   # it scores the warm start on its own validation pairs BEFORE a single
-  # gradient step.  A pair accuracy already at ~1.0 is docs/NEURAL_LOOP_NULL.md
-  # 3.1 happening again, and neuraltrain says VACUOUS TARGET out loud when it
+  # gradient step.  A pair accuracy already at ~1.0 is docs/NEURAL.md's
+  # 41-hour null happening again, and neuraltrain says VACUOUS TARGET out loud when it
   # crosses the threshold.  Both lines are surfaced here so a reader of
   # master.log alone can see it.
   say "  train it$it  $(grep -h '^VACUITY' "loop2/train_it${it}.log" 2>/dev/null)"
@@ -698,7 +698,7 @@ for it in $(seq "$start_it" "$ITERS"); do
     # A STALLED LOOP LOOKS EXACTLY LIKE A WORKING ONE, LINE BY LINE.  Every
     # iteration prints a well-formed "kept best", the box stays busy, the
     # process list looks perfect, and nothing anywhere says the RUN has stopped
-    # moving.  That is precisely how docs/NEURAL_LOOP_NULL.md happened: 74
+    # moving.  That is precisely how docs/NEURAL.md's 41-hour null happened: 74
     # iterations, zero promotions, discovered only because a human happened to
     # read back through the log.  It happened again on 2026-07-31 (it33 -> it47,
     # ~11 hours).  Twice is a failure mode, not an accident, so the loop reports

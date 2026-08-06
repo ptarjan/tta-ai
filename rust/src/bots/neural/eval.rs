@@ -1,5 +1,5 @@
 //! Head-to-head play strength between any two [`super::spec`] contenders --
-//! the ONLY promotion criterion `docs/NEURAL_EVAL.md` is willing to trust.
+//! the ONLY promotion criterion `docs/NEURAL.md` is willing to trust.
 //!
 //! Ports `experiments/neural_eval.py`. That doc's load-bearing prior warning
 //! is why this module exists at all rather than the loop promoting on

@@ -9,7 +9,7 @@ carries a `file:line`. Anything I could not verify says so.
 > `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
 > informative weights** of `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` bit-for-bit,
 > including `science = −6.08883`. That is the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md)
-> says never to warm-start from and that [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8f-are-existing-champions-invalidated-yes--3p-and-4p-decisively) §8f measured at
+> says never to warm-start from and that [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §8f measured at
 > **20.1% against a 25% null** — a bot that loses to random seating.
 > `refuse_if_degenerate_champion` was supposed to catch it and did not: it
 > tested exact content, and the frozen copy is six generations later and
@@ -825,7 +825,7 @@ Where determinization stands:
   paragraph doesn't mention: `current_events` was never shuffled by
   `determinize` at all, so every `end_turn` a determinizing search expanded
   still revealed the true next event (100.0% true-card, 38.3% after the fix).
-  See [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a and `tools/infoleak.py --true-card`.
+  See [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §9a and `tools/infoleak.py --true-card`.
 
 ### 6.1 The gun is now loaded — measured 2026-07-29
 
@@ -1713,7 +1713,7 @@ move-flip rate (10 events in 2281 decisions) and it is quoted with its CI.
   measured it directly — 100.0% true-card on `current_events` before the fix
   (an identity, on the un-shuffled pile `plan.determinize` was missing) and
   38.3% after, moving 78 of 3,448 beam picks at 3p. See
-  [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#9a-the-bigger-leak-was-in-the-sentence-above-not-the-one-below-it) §9a.
+  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §9a.
 * Whether `rival_hand_potential` (GAP 3) is worth anything at 3p/4p. The civil
   `hand_potential` term itself was only validated at 2p
   (`engine/bots/weighted.py:673-677`). **Partial answer 2026-07-29:** the live

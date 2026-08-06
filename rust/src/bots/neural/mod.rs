@@ -33,7 +33,7 @@
 //!   `bots::greedy::make_seats`'s bare-`BotKind` grammar cannot.
 //! * [`eval`] -- `experiments/neural_eval.py`: seat-rotated head-to-head
 //!   play strength between any two [`spec`] contenders, which is the only
-//!   promotion criterion `docs/NEURAL_EVAL.md` trusts.
+//!   promotion criterion `docs/NEURAL.md` trusts.
 //! * [`plan`] -- `neural_plan.py`: `NeuralPlanBot`, the whole-turn beam
 //!   search built on it. Reuses `bots::plan`'s determinize/quiesce/pending
 //!   machinery rather than forking a second copy; see its own top doc

@@ -457,7 +457,7 @@ pub fn farm_food(p: &PlayerState) -> i32 {
 /// building/CARD providing happy faces provides one additional happy face"
 /// -- so the government and leader cards count too, not only buildings, and
 /// a wonder ruined by Ravages of Time provides none. A colony counts too
-/// (`docs/SCORE_AUDIT.md` 3.7, quoted in Python) -- Historic Territory's
+/// (`docs/AUDIT_HISTORY.md`, quoted in Python) -- Historic Territory's
 /// `permanentEffects.happiness` is exactly this.
 fn happy_source_count(p: &PlayerState) -> i32 {
     let mut n = 0;

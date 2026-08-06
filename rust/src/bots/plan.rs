@@ -555,7 +555,7 @@ fn one_ply(state: &GameState, moves: &[Move], me: u8, w: &Weights, ctx: &RivalCo
 /// `PlanBot._one_ply_quiet`. THE INCONSISTENCY THIS EXISTS TO REMOVE: every
 /// node inside [`beam`] is scored `apply -> quiesce -> score`, so at a REAL
 /// pending decision of mine the identical position must be priced the same
-/// way, or (Python's own measurement, `docs/AGGRESSION_RATE.md`) a defender
+/// way, or (Python's own measurement, `docs/AUDIT_HISTORY.md`) a defender
 /// spends cards on arithmetically hopeless defences and holds off none of
 /// the winnable ones, because an undrained position cannot express whether a
 /// defence succeeds.

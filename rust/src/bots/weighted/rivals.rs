@@ -372,9 +372,9 @@ fn pact_blocks_for(card: CardId, a: u8, b: u8, idx: u8, mut f: impl FnMut(&PactB
     }
 }
 
-/// FITTED PRIOR (see docs/MODEL_CONSTANTS.md): a pact you have OFFERED is not
+/// FITTED PRIOR (see docs/EVALUATOR_HISTORY.md): a pact you have OFFERED is not
 /// a pact -- the partner may refuse. Credit it at this fraction of a live
-/// pact (docs/COMBAT_AUDIT.md fix #2), without which a 1-ply search sees only
+/// pact (docs/AUDIT_HISTORY.md), without which a 1-ply search sees only
 /// the card leaving your hand and `offer_pact` is strictly dominated by
 /// `pol_pass` in every position.
 pub const PACT_OFFER_CREDIT: f64 = 0.5;

@@ -342,7 +342,7 @@ impl Health {
     }
 
     /// The health meter itself. `NA` when there is no net to compare against
-    /// and when nothing was sampled: `docs/NEURAL_SEARCH_LOOP.md` 6 makes
+    /// and when nothing was sampled: `docs/NEURAL.md` makes
     /// `DISAGREE < 0.02` a pre-registered kill condition, so printing 0.0000
     /// for "could not measure" would ask the driver to stop a run for a
     /// reason that was never observed.

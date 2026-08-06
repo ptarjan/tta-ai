@@ -2,7 +2,7 @@
 //! the SAME combined value+ranking objective `tta::bots::neural::train`
 //! computes by hand on the CPU. Read that module's own top doc comment
 //! first for the objective's shape and for why epoch 0's VACUITY check
-//! exists (`docs/NEURAL_LOOP_NULL.md`'s 41-hour null) -- `main.rs` is what
+//! exists (`docs/NEURAL.md`'s 41-hour null) -- `main.rs` is what
 //! reproduces that reporting; this module is just the arithmetic and the
 //! optimizer step.
 //!

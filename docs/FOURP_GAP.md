@@ -81,7 +81,7 @@ At 4p the per-game culture margin has a standard deviation of **91.4 points**
 points. **The 4p full-check columns cannot resolve anything smaller than a
 20-point move and must not be read generation-to-generation in either
 direction.** That is not a new class of error for this repo —
-[`docs/CULTURE_GAP.md`](CULTURE_GAP.md#0-first-the-briefs-numbers-are-one-fullcheck-stale) §0 opens by correcting a brief that quoted a stale n=48
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §0 opens by correcting a brief that quoted a stale n=48
 full check, and its §4 labels its own n=48 counterfactuals as nulls.
 
 The gate tier's *margin* column is the usable one and it tells a consistent,
@@ -276,7 +276,7 @@ phase multiplier's own sign carries no information. The blended coefficient,
 however, **is** gauge-invariant, and no guard looks at it.
 
 Effective coefficient on the champion's own culture, by age (L values from the
-horizon calibration in [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8b-choosing-the-constants-the-gauge-is-free-so-spend-it-on-calibration) §8b):
+horizon calibration in [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §8b):
 
 | vector | Age A | Age I | Age II | Age III |
 |---|---|---|---|---|
@@ -343,7 +343,7 @@ holding the 4p champion to 27.6%. (Spot-checked anyway: `engine/game.py`'s
 `SWEEP = {2: 3, 3: 2, 4: 1}` matches [`docs/RULES_SPEC.md`](RULES_SPEC.md#2-card-row-mechanics) §2 [RB p.6/8, CoL
 p.3]; `cards.civil_deck` / `military_deck` return 20/53/53/53 civil and
 10/45/50/45 military at 4p, matching [`docs/RULES_SPEC.md`](RULES_SPEC.md) appendix items 2, 17 and
-18. [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#3-q3--engine-bug-check-no-bug-found-in-the-waraggression-path) §3 audited the war/aggression path at 4p in detail
+18. [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §3 audited the war/aggression path at 4p in detail
 and found no engine bug; I did not re-derive it.)
 
 **Not the search architecture.** Both vectors in every comparison above were
@@ -358,7 +358,7 @@ shows up plainly the moment you point it at a non-saturated opponent, including
 at 2 players where the floor tier would still read ~100%.
 
 **Not, apparently, the specific defects the previous diagnosis found.** The
-gen-61 4p champion [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#2c-a-second-independent-defect-rival_culture-has-an-inverted-sign-at-4p) §2c dissected had `rival_culture` at
+gen-61 4p champion [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §2c dissected had `rival_culture` at
 +5.611 (an inverted sign worth −41 evaluation points on a 10-culture theft).
 The two-sided guard landed and the current 4p champion has `rival_culture` =
 0.000. The horizon fix (`e990920`) landed too. The gap survived both.

@@ -21,7 +21,7 @@
 //! script's flags are intentionally NOT exposed here and are fixed at its
 //! own defaults instead (`--select` always `last` -- the value the script's
 //! own `--select` help text says is now the right default, see
-//! `docs/NEURAL_LOOP_NULL.md`; `--val-frac` fixed at `0.15`; `--val-split`
+//! `docs/NEURAL.md`; `--val-frac` fixed at `0.15`; `--val-split`
 //! fixed at `rows`, the same default): the smaller flag surface keeps this
 //! binary's job to "does the loop reproduce, end to end" rather than
 //! re-exposing every knob the null run's post-mortem already recommends
@@ -67,7 +67,7 @@ struct Args {
     val_frac: f64,
     /// If the untrained warm start already orders this fraction of TRAIN
     /// pairs correctly, the ranking target is a fixed point and training
-    /// cannot learn anything from it (`docs/NEURAL_LOOP_NULL.md` 3.1).
+    /// cannot learn anything from it (`docs/NEURAL.md`).
     vacuity_warn: f64,
 }
 
@@ -320,7 +320,7 @@ fn run(args: &Args) -> Result<(), String> {
     }
 
     // --- epoch 0: the vacuity check ------------------------------------
-    // docs/NEURAL_LOOP_NULL.md 3.1: a target already satisfied by the
+    // docs/NEURAL.md: a target already satisfied by the
     // UNTRAINED net is a fixed point, not something gradient descent can
     // learn from. Printed before the first gradient step, unconditionally
     // -- see train.rs's top doc comment for why this line exists at all.

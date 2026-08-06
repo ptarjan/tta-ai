@@ -55,7 +55,7 @@
 //! the identical three-call resolution `war_value` performs and then
 //! [`super::encode::encode`]s the result, so both searches price the move
 //! class through the same underlying combat resolution
-//! (docs/PLAN_WAR_LOOKAHEAD.md, docs/TRANSFER_TEST.md: "two searches that
+//! (docs/PLAN_WAR_LOOKAHEAD.md, docs/EVALUATOR_HISTORY.md: "two searches that
 //! disagree about one move class do not share an evaluator").
 //!
 //! ## No `Option<f64>`/`try`-`except` anywhere in the leaf path

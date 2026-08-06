@@ -5958,8 +5958,9 @@ mod baked_table_matches_source_data {
     //
     // Ports `data/validate_cards.py` (84 lines), which was the standing
     // regression on the card DATA FILES themselves -- `docs/RULES_SPEC.md`
-    // 341 calls it exactly that, and `docs/SOURCES.md` cites it four times as
-    // the check that re-verifies every deck size a sourcing decision moved.
+    // calls it exactly that, and `docs/HUMAN_PLAY.md` (card-data provenance
+    // section) is the check that re-verifies every deck size a sourcing
+    // decision moved.
     //
     // It is a different question from the tests above, and that is why it
     // survives rather than being folded into them: those ask "does the baked
@@ -6068,7 +6069,9 @@ mod baked_table_matches_source_data {
 
     /// Deck sizes against the published component list: military decks of
     /// 10/45/50/45 at four players, 150 cards in the box
-    /// (czechgames.com component list; `docs/SOURCES.md` 359).
+    /// (czechgames.com component list; see `docs/HUMAN_PLAY.md`, which
+    /// records the Age I/III tactics-vs-aggressions count fix these sizes
+    /// depend on).
     #[test]
     fn the_military_decks_are_the_sizes_the_component_list_prints() {
         let expected = [("A", (10, 10, 10)), ("I", (43, 45, 45)), ("II", (46, 50, 50)), ("III", (41, 45, 45))];

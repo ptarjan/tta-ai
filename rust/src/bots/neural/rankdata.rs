@@ -3,8 +3,8 @@
 //! `experiments/neural_rankdata.py` (167 lines) -- read that file's own top
 //! doc comment first for the objective this feeds (a learning-to-rank loss
 //! over sibling moves, because squared-error regression spends ~no capacity
-//! on the difference between one action apart states -- `docs/BOT_ARCHITECTURE.md`
-//! 3b, `docs/NEURAL_EVAL.md`).
+//! on the difference between one action apart states -- `docs/BOT_ARCHITECTURE.md`,
+//! `docs/NEURAL.md`).
 //!
 //! Per sampled decision, from the mover's perspective, this records:
 //!   * a **value anchor** -- the pre-move state encoding, labelled with the
@@ -24,7 +24,7 @@
 //!     return E.encode(t, seat)
 //! ```
 //!
-//! `docs/NEURAL_LOOP_NULL.md` 3.4 measured the consequence: ~95% of
+//! `docs/NEURAL.md` measured the consequence: ~95% of
 //! `end_turn` candidates draw a card, and because the root was never
 //! determinized, an encoded `end_turn` child carries the TRUE next civil
 //! card -- something the mover cannot see when the search actually plays,
@@ -70,7 +70,7 @@
 //!
 //! ## `DISAGREE`: the vacuity meter, measured rather than assumed
 //!
-//! `docs/NEURAL_LOOP_NULL.md` 3.1 is a 41-hour null caused by labelling
+//! `docs/NEURAL.md` is a 41-hour null caused by labelling
 //! ranking pairs with the net's own argmax: the untrained incumbent already
 //! satisfied 97.6% of its own training pairs, so the loss had nothing to
 //! teach. The guard against a repeat is to MEASURE how often the teacher's
@@ -81,7 +81,7 @@
 //! readings a bare zero cannot distinguish, and one of them is a kill
 //! condition.
 //!
-//! ## The vacuity hazard (`docs/NEURAL_LOOP_NULL.md`)
+//! ## The vacuity hazard (`docs/NEURAL.md`)
 //!
 //! The 41-hour null happened because ranking pairs were labelled with the
 //! very model being warm-started from: the untrained net already satisfied

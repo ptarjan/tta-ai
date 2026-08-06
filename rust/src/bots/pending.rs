@@ -18,8 +18,8 @@
 //! Case 3 is the bug this module exists to make unrepeatable. Skipping the
 //! drain at a real decision while performing it at every searched node means
 //! the bot prices its own position differently from the way it prices the
-//! identical position inside its own search. Measured consequence,
-//! `docs/AGGRESSION_RATE.md`: 1,549 defences faced, 1,104 winnable by
+//! identical position inside its own search. Measured consequence
+//! (Python-era; see `docs/AUDIT_HISTORY.md`): 1,549 defences faced, 1,104 winnable by
 //! arithmetic, **0 ever held off**, with cards burned in 335 arithmetically
 //! hopeless defences. An undrained position cannot express whether a defence
 //! succeeds, and 588 of 589 winnable defences need 2+ cards, so the first
@@ -31,7 +31,8 @@
 //! twice -- `plan.py` had it and `neural_plan.py` had it copied out, so the
 //! fix for one was not the fix for the other. That is the shape that has
 //! cost this repo repeatedly (the build discount, the hand double-count, the
-//! population cost, the `rankingCulture` block). The evaluator-specific part
+//! population cost, the `rankingCulture` block, see `docs/AUDIT_HISTORY.md`).
+//! The evaluator-specific part
 //! (a linear dot product scored serially versus a net scored in one batch
 //! per ply) belongs in each bot; the *policy* belongs here, once, so two
 //! bots cannot resolve it differently. Python enforces the "once" with a
@@ -123,8 +124,9 @@ use std::borrow::Cow;
 /// Drain a pending decision of MINE before pricing the candidates.
 ///
 /// Measured at 3p and 4p against the live league references before being
-/// flipped -- see `docs/AGGRESSION_RATE.md` 7 for the A/B and the
-/// behavioural counters. It lands as a CONSISTENCY FIX, not on the strength
+/// flipped -- see `docs/AUDIT_HISTORY.md` for the general finding this A/B
+/// confirms (the Python-era per-run numbers are not reproduced there, only
+/// the mechanism). It lands as a CONSISTENCY FIX, not on the strength
 /// measurement: the beam already drains before scoring and the live
 /// decision did not. Six distinct blocks of 200 games against the frozen
 /// league references all favoured the drain; 3p is decisive (pure-qp pool

@@ -297,7 +297,7 @@ impl WeightedBot {
     /// is NOT the turn player -- pact accept/refuse is always one of these --
     /// `state.decider()` (not `state.actor()`) is who this maximises for,
     /// exactly as `evaluate`'s own `idx` parameter requires
-    /// (`docs/COMBAT_AUDIT.md`).
+    /// (`docs/AUDIT_HISTORY.md`).
     ///
     /// # Panics
     /// If `moves` is empty (a caller bug -- a live game's `legal_moves` never

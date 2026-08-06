@@ -15,7 +15,7 @@
 //! Unlike `fastcopy.py`/`trial.py` (see `bots/mod.rs`'s module doc comment),
 //! nothing in `book.py` is CPython performance machinery: every rule and
 //! every rank table is hand-authored strategy opinion, cited to
-//! `docs/STRENGTH_CHECK.md`/`docs/EXPERT_STRATEGY.md`. The whole file is
+//! `docs/EVALUATOR_HISTORY.md`/`docs/EXPERT_STRATEGY.md`. The whole file is
 //! ported faithfully below, with three exceptions: the repo owner ruled
 //! ("fix things as you port") on three things the port found along the way,
 //! fixed identically in `book.py` so the two engines keep agreeing:
@@ -1570,7 +1570,7 @@ fn colonize(state: &GameState, p: &PlayerState, c: &Colonize, moves: &[Move]) ->
 
 // --------------------------------------------------------------- the hybrid
 
-/// Move kinds where the measurements in `docs/STRENGTH_CHECK.md` say the
+/// Move kinds where the measurements in `docs/EVALUATOR_HISTORY.md` say the
 /// book beats the trained evaluator:
 ///
 /// * `develop`     -- the champion hoards science it never converts

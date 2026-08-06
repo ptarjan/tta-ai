@@ -132,8 +132,9 @@ clone scores 108.3 [98.6,118.2] against the champion's 69.0 [59.2,77.8] —
 a reversal of the 1-ply result — and lands within the human corpus's own
 CI on five behavioural axes simultaneously (wonders started, government
 changes, round of first government, civil cards taken, age-II/III takes).
-This is the same interaction `TRANSFER_TEST.md` documents elsewhere in this
-repo (a conclusion drawn under one search need not hold under another): do
+This is the same interaction `docs/EVALUATOR_HISTORY.md`'s transfer-test
+entry documents elsewhere in this repo (a conclusion drawn under one search
+need not hold under another): do
 not quote a strength comparison between two weight vectors without naming
 the search it was measured under, and remeasure under the ship policy
 before trusting a 1-ply verdict either way.

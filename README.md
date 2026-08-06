@@ -23,25 +23,31 @@ first, in order:
 |---|---|
 | [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md) | *What is still open?* The single register of unfinished work, deferred decisions and unanswered questions. |
 | [`docs/HAZARDS.md`](docs/HAZARDS.md) | *What will bite me?* Standing traps, every one of which has already cost a real bug. Read before touching the training loop. |
-| [`docs/SYSTEM_COVERAGE.md`](docs/SYSTEM_COVERAGE.md) | *How good is the bot right now, and what does it never do?* The current whole-system census against the 1,011-game human corpus. |
+| [`docs/BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md) | *Why is the bot shaped like this?* Roster, scoring, weight declaration, search structure, invariants. |
 
 Then, by area:
 
 - **The game** — [`RULES_SPEC.md`](docs/RULES_SPEC.md) (the only copy of the
-  rules in this repo, every claim cited), [`SOURCES.md`](docs/SOURCES.md)
-  (card-data provenance), [`EXPERT_STRATEGY.md`](docs/EXPERT_STRATEGY.md)
+  rules in this repo, every claim cited), [`docs/HUMAN_PLAY.md`](docs/HUMAN_PLAY.md)
+  (card-data provenance, at its end), [`EXPERT_STRATEGY.md`](docs/EXPERT_STRATEGY.md)
   (published human consensus, gathered independently of our bots).
 - **The bot** — [`BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md),
-  [`BOT_ROSTER.md`](docs/BOT_ROSTER.md),
   [`DEEPER_SEARCH.md`](docs/DEEPER_SEARCH.md),
-  [`INFORMATION_AUDIT.md`](docs/INFORMATION_AUDIT.md).
+  [`INFORMATION_AUDIT.md`](docs/INFORMATION_AUDIT.md),
+  [`docs/AUDIT_HISTORY.md`](docs/AUDIT_HISTORY.md) (rules bugs found and
+  fixed, plus standing evaluator blind spots),
+  [`docs/EVALUATOR_HISTORY.md`](docs/EVALUATOR_HISTORY.md) (why specific
+  evaluator constants and pricing routes are shaped the way they are).
 - **Training** — [`RUST_LEAGUE.md`](docs/RUST_LEAGUE.md) (the current
   mechanism reference for the live league, `rust/src/bin/climb.rs`, see
   Layout below),
-  [`NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md),
-  [`MODEL_CONSTANTS.md`](docs/MODEL_CONSTANTS.md).
+  [`docs/NEURAL.md`](docs/NEURAL.md) (the value net, its training loop, and
+  the desktop box it trains on).
 - **Human-facing output** — [`HEURISTICS.md`](docs/HEURISTICS.md) (carries a
   staleness caveat; read the evidence grades).
+
+See [`docs/README.md`](docs/README.md) for the full index; this is only the
+short list.
 
 ---
 
@@ -60,7 +66,7 @@ tools/        hidden_launch.vbs and wincheck.ps1, the Windows launcher that
               keeps Scheduled Tasks windowless and the check that proves it;
               plus the two fingerprint JSONs, kept as the recorded behaviour
               of the retired Python engine
-data/         card data, derived from the sources in docs/SOURCES.md
+data/         card data, derived from the sources in docs/HUMAN_PLAY.md
 docs/         see docs/README.md
 sources/      the human game-log corpus
 analysis/     analysis/frozen/ only: reference champion vectors the neural
@@ -93,8 +99,8 @@ Build the Rust binaries with `cd rust && cargo build --release`; they land in
 The bots live in `rust/src/bots/`: `GreedyBot` (`greedy.rs`), `WeightedBot`
 (`weighted/`, the linear evaluator), `QuiescentBot` (`quiescent.rs`),
 `PlanBot` (`plan.rs`, the beam search), the book bots (`book.rs`) and the
-neural family (`neural/`). [`docs/BOT_ROSTER.md`](docs/BOT_ROSTER.md) says
-what each is for.
+neural family (`neural/`). [`docs/BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md)
+says what each is for.
 
 ---
 
@@ -133,9 +139,8 @@ ignored `width=` measures a different bot than the one you asked for.
 The self-play league is kept alive from cron by `experiments/rust_league.sh`,
 which launches all three player counts (`climb`). The neural self-play and
 training loop (`experiments/neural_search_loop.sh`) runs unattended on the
-desktop box under a Scheduled Task; see
-[`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md) and
-[`docs/NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md).
+desktop box under a Scheduled Task; see [`docs/NEURAL.md`](docs/NEURAL.md)
+(covers both the loop and the desktop's own operating notes).
 
 ---
 

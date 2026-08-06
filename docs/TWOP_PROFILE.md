@@ -8,7 +8,7 @@
 > pool/objective mechanism has since been replaced by the Rust `climb` binary's
 > mirror-plus-anchor-veto design), and the current live 2p champion declares 1.10
 > wars/game against this one's 1.48-1.98 and completes 1.53 wonders against this
-> one's 0.16-0.26 ([`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)).  Read the numbers here as "true of
+> one's 0.16-0.26 ([`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)).  Read the numbers here as "true of
 > that vector".  What is *not* superseded: the causal method (ban a move class and
 > re-measure), the finding that the win came from **suppression rather than
 > scoring**, the MilitaryBot decomposition, and this document's naming of the

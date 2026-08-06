@@ -41,7 +41,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    champion's margin is threshold effects of that one hand-written family —
    `var:military` is held to 5.5% of turns at its required +3 lead and never gets
    to fight.  Beating the pool is not the same as playing well.  (Partly
-   addressed by the `hum:*` archetypes — [`docs/HUMAN_BOTS.md`](HUMAN_BOTS.md) — whose logistic
+   addressed by the `hum:*` archetypes — [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) — whose logistic
    gate degrades to x0.42 rather than `var:military`'s x0.18.)
 4. **Individual trained weights are not interpretable.**  Champion marginals are
    indistinguishable from a random walk (KS p=0.14-0.80) even though the same
@@ -88,7 +88,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    inflates apparent strength) is worth keeping in mind for any future
    pool-style design.
 7. **The training proxy is not known to track shipped strength.**
-   [`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) runs the check that says whether it does, from its
+   [`docs/NEURAL.md`](NEURAL.md) runs the check that says whether it does, from its
    own cron entry.  Before quoting any arm's progress as strength, read
    `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.  The
    `experiments/proxy_check` module that produced those lines was Python and
@@ -141,7 +141,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `experiments/frozen/champion_4p_strengthcheck.json` reproduce all 62
   informative weights of that vector bit-for-bit.  **Every 4p number measured
   against them is quarantined** — they are left in place in
-  [`docs/BOT_ROSTER.md`](BOT_ROSTER.md), [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md), [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) and
+  [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md), [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) and
   [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) so they stay auditable, not because they are
   facts.  See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 * **(Historical -- describes the retired Python trainer.)** `experiments/
@@ -173,7 +173,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   Removing it has been measured **five separate ways** and made the bot much
   weaker every time (down to 11.0% against a 50% null).  The phantom bonus acts
   as an accidental move-quality confidence filter.  There is a standing warning
-  in the code comment; [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 is the measurement.  Combining
+  in the code comment; [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6 is the measurement.  Combining
   the card-valuation fix with same-horizon scoring is *worse* than the card fix
   alone (39.8% +/- 6.7% vs 69.6% +/- 4.5%).
 * **The ten phase multipliers are deliberately exempt from sign clamping**
@@ -260,7 +260,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   everything.  Anyone proposing a learned evaluator in this project should be made
   to run that exact duel before claiming anything.
 * **Uniformly-positive blocks are also the signature of a systematic asymmetry.**
-  [`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md) ran a seat-bias audit for exactly this reason and found
+  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) ran a seat-bias audit for exactly this reason and found
   a real ~5pp seat effect.
 * **The 94.9%-of-`end_turn` figure is a draw count, not a leak measurement.**  It
   counts candidates whose trial `apply` draws a card, on `WeightedBot`, which
@@ -428,6 +428,6 @@ absolute epoch second) has passed.  To extend a run, rewrite the deadline file.
 Log: `experiments/logs/watchdog.log`.
 
 The BGO corpus scrape referenced by the old handoff note completed and now lives
-in `sources/bgo/` — see [`docs/BGO_CORPUS.md`](BGO_CORPUS.md).  The "no external anchor" item it
-carried is answered by [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md);
+in `sources/bgo/` — see [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md).  The "no external anchor" item it
+carried is answered by [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md);
 the remaining open pieces of it moved to [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#8-measurement-and-infrastructure) §8.

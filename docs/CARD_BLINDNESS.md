@@ -42,7 +42,7 @@ python3 -m tools.card_blindness --legacy    # master
 python3 -m tools.card_blindness             # this branch
 ```
 
-> **CORRECTION, 2026-07-29 ([`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md)).** The table below
+> **CORRECTION, 2026-07-29 ([`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)).** The table below
 > originally pooled both decks, and that **over-reported the blind spot by
 > 109 cards.** `_card_yields` is reached only through `card_potential` ←
 > `hand_potential`, and `hand_potential` walks `p.hand_civil` ONLY, so it is
@@ -76,7 +76,7 @@ counted too) the totals are **125 dropped / 129 zero-gain**.
 completeness. They are *not* a measure of how well the bot values these cards,
 because the tool cannot see where they are actually priced.
 
-> **CORRECTION, 2026-07-30 ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md)).** "Never asked" is true of
+> **CORRECTION, 2026-07-30 ([`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)).** "Never asked" is true of
 > `DEFAULT_WEIGHTS` and no longer true in general. `hand_mil_potential` walks
 > `p.hand_military` and calls `card_potential` → `_card_yields` on every card
 > in it, so any vector carrying a non-zero `hand_mil_potential` **does** ask —
@@ -88,12 +88,12 @@ because the tool cannot see where they are actually priced.
 
 | card type | n | dropped key | "zero visible gain" | where it is really priced |
 |---|---|---|---|---|
-| event | 55 | 55 | 55 | Age III scoring events: `weighted.event_scoring_margin` → `events.final_event_culture`. The other 40 deliberately unpriced, reasons in EVENT_SEEDING §6 |
+| event | 55 | 55 | 55 | Age III scoring events: `weighted.event_scoring_margin` → `events.final_event_culture`. The other 40 deliberately unpriced, reasons in AUDIT_HISTORY.md |
 | tactic | 15 | 15 | 15 | **genuinely unpriced** — needs a military sibling to `hand_potential`, not a table entry |
 | territory | 12 | 0 | 12 | `deferred_credit`'s auction branch |
 | aggression | 11 | 11 | 10 | quiescence: the defender's `defense` pending is drained and the quiet position scored |
 | pact | 10 | 10 | 10 | `deferred_credit`; and `count 2p: 0`, so absent from 2p entirely |
-| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) |
+| bonus | 3 | 3 | 3 | ~~genuinely unpriced~~ → `_BONUS_TO_FEATURE`: `defenseBonus−1` (the increment over the +1 any face-down card is worth) and `colonizationBonus` → `colonize_bonus`, both derived from `engine/interact.py`. [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) |
 | war | 3 | 3 | 3 | `quiescent.war_value` → the engine's own `events.resolve_war` |
 | **SUBTOTAL** | **109** | **97** | **108** | |
 
@@ -259,7 +259,7 @@ This is the honest inventory:
    or bonus card. Mapping `tacticBonus` today would change nothing. See §6.
    *(Superseded for two of the twelve: `hand_mil_potential` does call it, so
    `defenseBonus`/`colonizationBonus` were mapped rather than written off —
-   [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md). `tacticBonus` stays unpriced, but for the sharper
+   [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md). `tacticBonus` stays unpriced, but for the sharper
    reason recorded in `DELIBERATELY_UNPRICED`: it is a duplicate spelling of
    the top-level `strength` the engine actually reads.)*
 6. **addressing** (19 keys) — `allPlayers`, `weakestPlayer` and friends name
@@ -335,7 +335,7 @@ Every block is on the same side and the spread (57.1–62.3) is what 400 games
 of binomial noise looks like. No single block is carrying the result.
 
 I went into this expecting a null and said so in advance, for a specific and
-good reason: [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2 measured that *forcing* wonders
+good reason: [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §10.6.2 measured that *forcing* wonders
 on the strongest vector cost **34.3 ± 7.0 margin**, which is a real warning
 that wonders may be correctly avoided in the suppressive equilibrium these
 bots play. That warning is not contradicted here, and the reason is worth
@@ -444,7 +444,7 @@ All three are left at 0.0.
 
 ### 5.2 3p: does it transfer?
 
-[`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) is explicit that the tournament-derived 2p result did
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) is explicit that the tournament-derived 2p result did
 not transfer to 3p, so this was worth checking rather than assuming.
 
 **It transfers.** Same two weight files, 3 blocks of 300, challenger rotated
@@ -668,7 +668,7 @@ doubly irrelevant when the term is switched off.
 
 This reframes the question this document started from. "The bot does not build
 wonders — are wonders modelled wrong?" The answer is no: §6.1 of
-[`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md) verified the rules exact, and §1 here has now given
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) verified the rules exact, and §1 here has now given
 the evaluator the printed numbers. The bot still does not build them, because
 **a correctly priced wonder has almost no path into the decision.** It is a
 plumbing bug, not a pricing bug, and fixing it means giving wonder-in-progress
@@ -740,7 +740,7 @@ fixing the number every decision reads.
   state (`p.completed_wonders`, `p.wonder`) and recorded moves, not from the
   census tool.
 * **The rules were re-verified at `6968256`,** not assumed from
-  [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1061-the-wonder-rules-and-data-are-right) §10.6.1: all 16 wonders and all 53 stages match the
+  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §10.6.1: all 16 wonders and all 53 stages match the
   data file exactly, the take surcharge is `+1 CA per completed + destroyed`
   with the Michelangelo exemption, `Impact of Wonders` scores 5/4/3/2 by age
   as printed, and `tests.test_card_pricing` + `tests.test_scoring_bugfix` pass
@@ -867,7 +867,7 @@ numbers back.
   any remaining entry in the lookup table.
 * **The tier-list question is untouched.** This change gives the evaluator the
   *printed* value of a wonder. It says nothing about the tournament ordering,
-  and [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md)'s BookBot v2 result (+2.1%, p=0.098 at 2p,
+  and [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)'s BookBot v2 result (+2.1%, p=0.098 at 2p,
   slightly negative at 3p) remains the best evidence that hand-coded tier
   knowledge is worth little here.
 * **3p and 4p are not measured.** Everything in §5 is 2p.
@@ -1186,7 +1186,7 @@ i.e. one standard error of the difference, and the comment reasons "at n = 240
 a side is se ≈ 0.032, so the band is ~0.045". With the shard-clustered SE of
 **0.0490** per side the band is **6.93pp, not 4.52pp**. The gate is currently
 about **1.5× tighter than the data supports**, which is the promotion-on-noise
-failure [`docs/NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) documents at length.
+failure [`docs/NEURAL.md`](NEURAL.md) documents at length.
 
 **This was deliberately not changed by the audit.** `pool_summary` kept
 emitting `ci=` with the legacy value so a loop in flight saw byte-identical
@@ -2460,7 +2460,7 @@ nothing. Three tests, applied in order:
 A type that passes all three and is still seldom played is a **bad card, or a
 correct avoidance**, and is reported as such. That is the honest answer for
 several of the specific low-take-rate *cards* inside otherwise healthy types,
-and [`docs/SCORE_AUDIT.md`](SCORE_AUDIT.md#1062-the-scripted-ab-forcing-wonders) §10.6.2 — forcing wonders cost 34.3 ± 7.0 margin
+and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §10.6.2 — forcing wonders cost 34.3 ± 7.0 margin
 — is the standing reminder that low use is not automatically wrong. It is
 also why §12.4.0's search control comes before any of this: "seldom played" and
 "cannot see it" are both necessary, and neither is sufficient.
@@ -2687,7 +2687,7 @@ If it does not, the fix is inert for the same reason the last one was.
 §12.4.1 ranked **territory** its number-one confirmed-broken suspect and §12.2.3
 described war and aggression as "priced by resolution, and the resolution is not
 in the trial". Both are the same defect, and the defence lane found it from the
-other end — see [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md#8-the-bigger-half-this-was-never-mainly-about-defence-it-was-about-auctions) §8.
+other end — see [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §8.
 
 The census looked for a missing *feature* (`hand_mil_potential = 0.0`, a severed
 pipe). The missing thing is not only a feature: it is the **position** the
@@ -3537,12 +3537,12 @@ leaves the league a gradient to disagree on.
 
 ## 14. The bot never upgrades its army, and the reason is a table that cannot say "it depends" (merged from the former `UNIT_TECH_PRICING.md`, 2026-07-31)
 
-2026-07-30.  Closes the top-ranked hole in [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) ("What the
+2026-07-30.  Closes the top-ranked hole in [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) ("What the
 bot never does", #1).  Base game (2015), all three player counts.
 
 ### 14.0. The finding, and the number it is
 
-[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#5-technology-by-colour--the-biggest-structural-hole-in-the-whole-census) §5 measured unit-technology takes per seat-game at
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §5 measured unit-technology takes per seat-game at
 
 | | 2p | 3p | 4p |
 |---|---|---|---|
@@ -3682,7 +3682,7 @@ what a hill climb answers better than an argument.
 #### 14.3.4 The seam the brief warned about does not block this
 
 `hand_mil_potential` calling `card_potential` without a state was real and is
-**already fixed** ([`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md#11-hand_mil_potential-never-passed-the-board) §1.1 — the arguments are forwarded).
+**already fixed** ([`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §1.1 — the arguments are forwarded).
 It would not have blocked this fix in any case: **unit technologies are CIVIL
 cards.**  They arrive in the civil row and go to `hand_civil`, so they reach
 `card_potential` through `row_pressure`, `hand_potential` and
@@ -3714,7 +3714,7 @@ Mirror table, `plan:width=2,det=1`, same seeds, same vectors, the only
 difference being `unit_tech_credit` 0.0 → 1.0.  2p is the **live** champion
 (gen 72); 3p is the **archived pre-restart** champion (gen 1314), because
 `champion_3p.json` is gen 0 and byte-identical to `DEFAULT_WEIGHTS` — censusing
-it would measure the defaults, exactly as [`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) says.  40 games
+it would measure the defaults, exactly as [`AUDIT_HISTORY.md`](AUDIT_HISTORY.md) says.  40 games
 at 2p, 28 at 3p.
 
 | per seat-game | 2p before | 2p after | 2p human | 3p before | 3p after | 3p human |
@@ -3753,7 +3753,7 @@ measurement (both seats play the same policy), which is what §14.5 is for, but 
 is a warning that at 3p the army is being bought out of the culture budget.
 
 Yellow (farms/mines) falls at both counts.  It was already near zero and this
-did not touch it: that hole is [`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md#0-summary) §0's absolute-not-
+did not touch it: that hole is [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §0's absolute-not-
 delta pricing and is a different lane.
 
 ### 14.5. Strength: two nulls and one severe regression, and the regression is the
@@ -3816,7 +3816,7 @@ mildly positive.  `DEFAULT_WEIGHTS` carries `strength` 0.35 and
 
 **This is the vector the live 3p arm actually starts from.**
 `experiments/league_state/champion_3p.json` is gen 0 and byte-identical to
-`DEFAULT_WEIGHTS` ([`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s method note), as is `champion_4p`.
+`DEFAULT_WEIGHTS` ([`AUDIT_HISTORY.md`](AUDIT_HISTORY.md)'s method note), as is `champion_4p`.
 So nothing in the league today is in the regime of §14.5.2, and the arm that is
 live and trained — 2p — is the clean null of §14.5.1.
 
@@ -3902,7 +3902,7 @@ which is trivially true when there is no credit.
    reason.**  The mechanism in §14.5.2 is general: a coordinate the evaluator can
    read but never has to buy is unconstrained, and it will drift.  `strength`
    was one because no card priced it.  Worth a sweep.
-4. **Tactics remain confounded with this.**  [`SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#9-the-one-off-systems) §9 asked for
+4. **Tactics remain confounded with this.**  [`AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §9 asked for
    tactics to be re-measured after the unit hole, not in parallel with it.
    Tactics played moved 1.05 → 0.88 at 2p and 0.85 → 1.02 at 3p; that is now
    measurable and was not before.
@@ -4031,7 +4031,7 @@ promoted "from a footnote to the binding constraint on the red lane".
 
 #### 14.9.1 First, a correction to the brief
 
-[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#5-technology-by-colour--the-biggest-structural-hole-in-the-whole-census) §5 still names `unit_strength_credit` = 0.0 as
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §5 still names `unit_strength_credit` = 0.0 as
 the gate on the red lane and calls it "the most actionable finding in this
 document".  **That sentence is stale and the mechanism it names is gone.**
 `d8a2172` (§14) routes a unit technology through `weighted.tech_value` on
@@ -4123,7 +4123,7 @@ worth `ma_left` / `ca_left` = 0.05 apiece in `DEFAULT_WEIGHTS`.
 
 `tests/test_build_fresh.py` (18 tests) plays each plan out for real and diffs
 `weighted.features()` against the price, which is the standard
-[`docs/GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md) set for the revolution burn.  It found two
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) set for the revolution burn.  It found two
 things:
 
 1. **A cache-key collision.**  `effects.stats_key` names every field
@@ -4175,7 +4175,7 @@ a human 34.3 — a budget problem no per-card price can fix.
 
 **Blue goes the wrong way** — 4.44 → 4.97 against a human 3.71 — and it is
 reported rather than tuned against, for the reason
-[`docs/GOVERNMENT_PRICING.md`](GOVERNMENT_PRICING.md) gives for the same surprise: there is no free
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) gives for the same surprise: there is no free
 constant in the price to tune.  A first theatre really does produce +3
 culture, which is the *example item 21 itself uses*, and pricing it correctly
 is not made wrong by the level being off.  The level is what the league
@@ -5043,7 +5043,7 @@ Six of the eight `tools/gate.sh` arms moved and two did not.
 **The base moved under this lane and every arm was recomputed, not carried
 over.**  The whole set was first derived against `8b972ef` (e9cdc2d4 /
 0c5a4337 / ce0d22bf / 49b898e1 / 65d9a884 / b952c68e, with all eight verified
-the same way); the horizon lane ([`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md)) then landed
+the same way); the horizon lane ([`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)) then landed
 underneath and moved all six evaluator arms on its own.  Re-using a digest
 across a base change is exactly the laundering `docs/PYPY.md` (deleted) §9.0 forbids, so
 the clean-base control, both derivations and the attribution were all re-run
@@ -5081,7 +5081,7 @@ test_swept_card_cannot_lend_its_name_to_a_dealt_card` builds its position from
 card is one the unmasked evaluator would have priced.  It dealt that card at
 slot 7, outside the sweep slide, where `row_pressure` scores it through
 `bargain` — and `bargain` multiplies by `rival_take_p`, which
-[`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md) had just turned into a per-rival board estimate that
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) had just turned into a per-rival board estimate that
 saturates at 1.0 (survive 0, bargain 0) whenever the one rival can afford the
 one card they can reach.  Any evaluator change moves the 40-ply tableau, so
 **the guard could stop guarding without anything failing**; this lane is what
@@ -5128,7 +5128,7 @@ tests that are trivially true when there is no credit.
 
 Four audits have now measured card **pricing** — [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md),
 [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md), [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md),
-[`docs/UNCOVERED_TYPES.md`](UNCOVERED_TYPES.md) — and [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) states the gap all four share
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) — and [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) states the gap all four share
 in its own words: *"the suite checks that a card is priced, never that its
 price is read."*
 
@@ -5137,7 +5137,7 @@ found blind, a feature was added, four tests in `tests/test_card_pricing.py`
 were written and pass, and the weight shipped at **0.0** — so
 `card_potential` multiplied the entire new channel by zero and the ten cards
 priced *exactly* as they had before the fix. Nothing failed for days while
-[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) measured the bot taking military unit technology
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) measured the bot taking military unit technology
 0.06–0.45 times per seat-game against a human 2.79–3.84.
 
 This document asks the other question, for all 236 cards: **at what rate does
@@ -5223,7 +5223,7 @@ backs (`X puts <card> back in the row`) are matched against the most recent
 unmatched take and both are dropped, as `tools/bgo_parse.py` does it.
 
 Cross-check that the parser is measuring the right thing: it independently
-reproduces [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s human unit-technology rate to the
+reproduces [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)'s human unit-technology rate to the
 digit — **3.84 / 2.79 / 3.43** per seat-game at 2p/3p/4p.
 
 ### 17.2. Headline: the bot builds one civilization and it is blue
@@ -5263,7 +5263,7 @@ almost entirely on one colour.
 
 The 3p and 4p columns add a second shape: **wonders collapse** (0.94 and 0.28
 against a human 2.58 and 2.65) and **wars run 8× over** (1.28 and 1.25 against
-0.16 and 0.15), both of which [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md) already reported at the
+0.16 and 0.15), both of which [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) already reported at the
 whole-subsystem level. This document adds the card identities under them.
 
 ### 17.3. The (b) findings — priced, but the price is never read
@@ -5425,7 +5425,7 @@ The over-plays cluster the same way the under-plays do: **blue urban buildings
 and the Age III culture wonders at 2p, wars and the cheapest Age I tactic
 everywhere.** `War over Culture` at 3.6× / 9.6× / 9.5× the human rate is the
 single largest over-play in the game and is the card-level restatement of
-[`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md)'s "wars declared 2.2× / 6.6× / 7.9× over".
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)'s "wars declared 2.2× / 6.6× / 7.9× over".
 
 ### 17.5. Cards the bot never plays
 
@@ -5492,7 +5492,7 @@ that buys no science and no resources is not a strategy the corpus supports.
 `War over Culture` at 0.57 / 1.01 / 1.06 against a human 0.16 / 0.11 / 0.11,
 and `War over Technology` / `War over Territory` at zero on the bot side at
 2p. The bot declares the one war it can evaluate and never the two it cannot.
-[`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md#4-colonies--alive-everywhere-thin-at-2p) §4 own this;
+[`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §4 owns this;
 nothing new is claimed here beyond the card identities.
 
 #### 17.5.3 Tactics — class (c)
@@ -5513,7 +5513,7 @@ weighting question, not a blind spot.
   face down in the corpus, so no rate exists to compare against.
 * **Pacts (10 cards).** BGO prints `accepts pact offer` and never the card
   name. The bot's aggregate is 0.00 / 1.03 / 1.50 offers a seat-game, and the
-  2p zero is the rulebook, not a gap. [`docs/COMBAT_AUDIT.md`](COMBAT_AUDIT.md) owns this.
+  2p zero is the rulebook, not a gap. [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) owns this.
 * **Colonization use of a Military Bonus card.** `interact.force_value`
   assembles the sacrifice; it is not a bot decision, so there is nothing to
   count on the bot side (§17.3.2).

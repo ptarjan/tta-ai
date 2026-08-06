@@ -2,7 +2,7 @@
 
 Everything else we measure is our own bots playing our own bots. This is the
 only path to an **external** number, and there is no automated version of it:
-[`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#1-the-official-cge-digital-app-steam--ios--android) §1 established that the official app has no log export,
+[`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) §1 established that the official app has no log export,
 no API, no mod hooks and no readable saves. A human at the keyboard is the
 entire interface.
 
@@ -67,7 +67,7 @@ watching whether the bot's decision moves (`rust/src/harness/fields.rs`).
 | rival military hand size, military actions, free workers, yellow bank, happiness | **inert** |
 | current events, future events, deck contents, military discards | **inert** |
 
-That table is the entire saving. §6d of [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md) priced opponent turns
+That table is the entire saving. §6d of [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) priced opponent turns
 at "4–8 patch fields × 2 opponents × ~18 rounds, 20–30 s per opponent turn,
 **12–18 min/game**". Most of those fields are still in the second table.
 

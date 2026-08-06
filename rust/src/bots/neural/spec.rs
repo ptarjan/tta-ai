@@ -41,7 +41,7 @@
 //! constructor ignore what it does not recognise, so that command line runs
 //! and silently measures the wrong bot -- and an anchor match that silently
 //! measured `width=2` instead of `width=8` is precisely the class of error
-//! `docs/NEURAL_SEARCH_LOOP.md`'s curve-comment convention exists to clean up
+//! `docs/NEURAL.md`'s curve-comment convention exists to clean up
 //! after. [`Spec::parse`] instead rejects every (kind, knob) pair that would
 //! be ignored, by exhaustive `match`, so the set of knobs a kind honours is a
 //! compile-time fact rather than a documentation claim.

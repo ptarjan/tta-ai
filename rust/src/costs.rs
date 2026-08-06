@@ -488,7 +488,7 @@ pub fn upgrade_cost_net(state: &GameState, p: &PlayerState, lo: CardId, hi: Card
 
 /// [`tech_cost`] after the per-turn military-tech science discount pool
 /// (Winston Churchill's military option: 3 science usable only to develop
-/// military unit technologies, `docs/SCORE_AUDIT.md` 3.6).
+/// military unit technologies, `docs/AUDIT_HISTORY.md`).
 pub fn tech_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
     let cost = tech_cost(state, p, id)?;
     if is_unit(id) {

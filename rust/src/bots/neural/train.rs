@@ -5,7 +5,7 @@
 //! shape (value regression PLUS a Bradley-Terry pairwise ranking loss) and
 //! for why `rust/src/bin/neuraltrain.rs` prints an epoch-0 VACUITY line
 //! before the first gradient step -- that reporting exists because of a
-//! measured 41-hour null (`docs/NEURAL_LOOP_NULL.md`) where nobody looked
+//! measured 41-hour null (`docs/NEURAL.md`) where nobody looked
 //! at epoch 0 and a vacuous target went unnoticed for 74 iterations.
 //!
 //! ## Hand-rolled backprop, and how it is checked

@@ -5,7 +5,7 @@ roster, how a position is scored, how weights are declared/read/persisted,
 how search is structured, and the invariants that must not be broken. Every
 path below is in `rust/src/` and was checked against the current tree; the
 Python engine (`engine/`) was deleted 2026-08-06 and no longer exists.
-History, measurements and superseded prose live in `docs/_distilled_eval.md`.
+History, measurements and superseded prose live in `docs/EVALUATOR_HISTORY.md`.
 
 ## 1. The bot roster
 
@@ -39,7 +39,7 @@ external yardstick — an ordered priority list cited to tournament data, no
 search, no learned weights — fully ported but **not currently wired into
 any binary** in `rust/src/bin/`. It exists as an available module for
 whoever next needs an opponent that isn't a self-play product. See
-`docs/_distilled_eval.md` for why it was built.
+`docs/EVALUATOR_HISTORY.md` for why it was built.
 
 There is no rule-based variant pool (`CultureBot`/`InfraBot`/`MilitaryBot`/
 etc.) in this port. An older Python generation had one; it predated
@@ -74,7 +74,7 @@ turn). Four passes, in order:
    `FoodRate`, `ResourceRate`) — whichever pass they appear in, flat or
    phase-blended — are additionally scaled by `horizon::rate_multiplier`,
    gated by weight `RateHorizon` (default **1.0**). See §4 and
-   `docs/_distilled_eval.md`'s rate-horizon entry for why.
+   `docs/EVALUATOR_HISTORY.md`'s rate-horizon entry for why.
 4. **Identity-aware terms**, each gated by its own weight defaulting to
    0.0 and each skipped entirely when that weight is 0.0 (so a champion
    trained before one existed evaluates exactly as it did): `hand_potential`,
@@ -97,7 +97,7 @@ and `evaluate` from ever disagreeing about the phase blend or the rate
 horizon — see that function's own doc comment. Government pricing
 specifically prices the **cheaper of the two legal routes** (peaceful vs
 revolution) every time, gated by `WeightKey::GovBoardCredit` (default 1.0);
-see `docs/_distilled_eval.md`.
+see `docs/EVALUATOR_HISTORY.md`.
 
 Most of these board-credit weights (`TechBoardCredit`, `ActionBoardCredit`,
 `GovBoardCredit`, `RestrictedResourceCredit`, `TerritoryCredit`,
@@ -227,7 +227,7 @@ believed correct and kept), one ply of lookahead inside a turn that has
 several, and hidden information leaking through an undeterminized root.
 `PlanConfig::war_lookahead` defaults to **true** — it prices a declared war
 through `quiescent::war_value` rather than as pure cost, which closed a real
-transfer-failure bug (see `docs/_distilled_eval.md`'s transfer-test entry:
+transfer-failure bug (see `docs/EVALUATOR_HISTORY.md`'s transfer-test entry:
 a vector trained under a war-aware search used to be measurably *worse*
 under a war-blind `PlanBot`). If you ever see `war_lookahead: false`
 somewhere, that is a deliberate A/B arm, not a normal configuration — it
@@ -270,7 +270,7 @@ two *different* keys:
 
 This was found by measuring a synthetic defence where a trained champion
 preferred being robbed (losing 3 culture scored as +0.55; losing 4 resources
-scored as +1.27) — see `docs/_distilled_eval.md`. **If you find a term where
+scored as +1.27) — see `docs/EVALUATOR_HISTORY.md`. **If you find a term where
 a pure gain scores as a loss or vice versa, check `dominance_repair` first
 before assuming it's a new bug** — it may belong in one of these three
 lists rather than needing a bespoke fix.
@@ -292,7 +292,7 @@ parent):
   `--anchor` says otherwise — never updated for the life of the climb) is
   unambiguously below the sitting champion's own. This is the *structural*
   descendant of "measure against an external yardstick" (§1's `BookBot`
-  note, `docs/_distilled_eval.md`) — the gate no longer needs a second bot
+  note, `docs/EVALUATOR_HISTORY.md`) — the gate no longer needs a second bot
   to catch a slide, because it asks the absolute question directly.
 * **`FROZEN = [WeightKey::Culture]`.** `culture` is the numeraire every
   other weight is denominated in; scaling it rescales the whole objective

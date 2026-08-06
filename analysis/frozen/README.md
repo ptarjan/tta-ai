@@ -72,8 +72,11 @@ here and must use a vector that carries the card-row weights.
 ## `champion_4p.DEGENERATE.json` — retired, deliberately kept
 
 This file is the vector `docs/TRAINING_RUN.md` says never to warm-start from
-(`science = -6.08883`; `docs/CULTURE_GAP.md` Sec 8f measured it at **20.1%
-against a 25% null** — worse than random seating), six generations later. It
+(`science = -6.08883`; measured (Python-era, in the now-deleted
+`docs/CULTURE_GAP.md` — see `docs/EVALUATOR_HISTORY.md`'s "Superseded without
+independent content" note, or git history for the specific number) at
+**20.1% against a 25% null** — worse than random seating), six generations
+later. It
 reproduces **all 62** of that vector's informative weights bit-for-bit and
 differs on exactly two keys, `colonies` and `pacts` — and only because
 `15b9764` reset those two to defaults in the committed copy while the on-disk

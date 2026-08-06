@@ -1,11 +1,11 @@
 # Giving PlanBot a war lookahead
 
 Date: 2026-07-27
-Branch: `plan-war-lookahead`. Implements option (b) of [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)
+Branch: `plan-war-lookahead`. Implements option (b) of [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)
 §8.3. Read that document first; this one is only meaningful as its sequel.
 
 **One-line answer: the inversion is gone, and the production vector did not
-regress.** [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) measured the quiescent-trained vector Q
+regress.** [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) measured the quiescent-trained vector Q
 losing to the 1-ply-trained vector P by **−97.4 ± 3.7** margin at a **2.5% ±
 1.1%** win share under `plan:width=8`. With the war lookahead in PlanBot, the
 same 100 deals on the same seeds give **+1.4 ± 5.3** at **52.2% ± 3.7%** — a
@@ -82,9 +82,9 @@ PlanBot that would confound this measurement, so it was not made.
 ## 2. Method, and why the before/after is paired
 
 Everything is `tools/transfer_ab.py` at its defaults (`--seed 90210`,
-`--players 2`), the same tool, seeds and n as [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md). n and SE
+`--players 2`), the same tool, seeds and n as [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md). n and SE
 are over **deals** — one game seed played from every seat — not games; 2p, so
-games = 2 × deals. **2p only**, for the reasons in [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7;
+games = 2 × deals. **2p only**, for the reasons in [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §7;
 nothing here says anything about 3p or 4p. Zero engine errors in every run.
 
 The previous run's raw per-game series survived in `/tmp/transfer_vec/*.json`,
@@ -92,11 +92,11 @@ and its `args` confirm identical `seed`, `deals`, `policy` and `policy_b`. So
 the before/after is not two independent runs compared through their SEs — it
 is the **same deals**, differenced deal by deal, and the paired SE is much
 tighter than either arm's. As a harness check the reloaded BEFORE numbers
-reproduce [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) to the printed digit (−97.43 vs −97.4;
+reproduce [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) to the printed digit (−97.43 vs −97.4;
 0.770 / +46.26 vs 0.770 / +46.3), which is the evidence that the two runs are
 measuring the same thing.
 
-Two vectors throughout, unchanged from [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#1-what-was-played) §1:
+Two vectors throughout, unchanged from [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §1:
 
 | | file | gen |
 |---|---|---|
@@ -114,7 +114,7 @@ Two vectors throughout, unchanged from [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.m
 The collapse is gone. Under the fixed PlanBot the two vectors are a coin flip
 (0.6 SE from the null on win share, 0.26 SE on margin). For scale, the flag is
 worth +98.8 ± 4.8 margin to Q here, against the +52.8 ± 4.3 that the *same*
-flag was worth inside `QuiescentBot` ([`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#2-head-to-head-q-against-p-same-vectors-three-searches) §2 row 3) — a
+flag was worth inside `QuiescentBot` ([`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §2 row 3) — a
 whole-turn search can exploit a priced war harder than a 1-ply one can,
 presumably because it can also plan the military build-up that wins it.
 
@@ -163,7 +163,7 @@ change and remains live.
 
 ## 5. The regression check: search-only A/B on the same weight file
 
-[`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#4a-planbot-is-the-strongest-policy-we-have-is-vector-dependent) §4a: same vector on both sides, only the search
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §4a: same vector on both sides, only the search
 differs. This is the row that has to not get worse, because `plan:width=8` on
 a 1-ply-lineage vector is what [`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md)'s headline is about.
 
@@ -239,7 +239,7 @@ each other's boards.
 
 ## 6. What this does and does not buy the live training run
 
-**Does:** [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#6-answering-the-question-docstraining_runmd-asked) §6 concluded the proxy was *actively wrong* —
+**Does:** [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §6 concluded the proxy was *actively wrong* —
 training under quiescence produced a vector strictly worse under the ship
 policy. That is no longer true. The 48h arms' output is now, as far as 100
 deals can say, on par with the 1-ply lineage under `plan:width=8` rather than
@@ -251,7 +251,7 @@ says Q is worth +36.3 ± 4.8 over P; under the fixed `plan:width=8` the paired
 answer is −2.9 ± 7.8 and the head to head is +1.4 ± 5.3. Those are compatible
 with zero and incompatible with +36. So a generation that gates in under the
 quiescent proxy still cannot be assumed to gate in under PlanBot; the proxy has
-gone from wrong to *uninformative about magnitude*. [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)
+gone from wrong to *uninformative about magnitude*. [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)
 §8.3's options (a) and (c) are not retired by this change. In particular (c) —
 scoring the gate on own culture rather than margin — is untouched: §4a shows Q
 still earns most of its margin by suppression, and `margin_share` still pays
@@ -265,7 +265,7 @@ either search 99 points better, and nothing here should be quoted as if it
 were.
 
 The residual could also be a generation-count artefact (Q is gen 188, P is gen
-355); [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 argued that confound does not explain an
+355); [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §7 argued that confound does not explain an
 *interaction*, and the interaction is what has been removed. What is left is a
 main effect, and for a main effect the generation gap is a live confound. This
 document cannot separate them.
@@ -306,12 +306,12 @@ the one class that was changed and flat everywhere else is not a subtle signal.
   cpu-s, all `nice -n 19` beside five live league workers. The achieved SEs are
   printed above and are what they are: the vsfield paired row is ±7.8, so it
   can exclude −32.5 comfortably and can *not* exclude a true effect anywhere
-  in ±15. [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7's warning applies: n=50 deals at 2p is a
+  in ±15. [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §7's warning applies: n=50 deals at 2p is a
   usable margin instrument and a poor win-share instrument. 3p/4p were not
   attempted.
 * **`book` is one opponent and the pool is a monoculture** — every pool
-  opponent is a `BookBot` subclass. Unchanged from [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7.
-* **`plan:width=8` only.** `width=1` — the width [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)
+  opponent is a `BookBot` subclass. Unchanged from [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §7.
+* **`plan:width=8` only.** `width=1` — the width [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)
   §8.3(a) proposes training under — was not tested. Whether the war lookahead
   behaves the same at width 1, where there is no beam to prune the war line
   out of, is unknown.

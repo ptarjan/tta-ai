@@ -813,8 +813,8 @@ mod tests {
     /// the one-line guard that fires first and fastest if the two ever
     /// disagree about the vector's LENGTH.
     ///
-    /// Deliberately 1906, not 1907, per the "Width note" in
-    /// `docs/NEURAL_EVAL.md`'s encoder section (that doc, not
+    /// Deliberately 1906, not 1907, per the checkpoint-versioning note in
+    /// `docs/NEURAL.md` (that doc, not
     /// `docs/OPEN_ITEMS.md`, is the authority for this number -- OPEN_ITEMS
     /// never recorded an encoder width): `state.scoring_events` was a
     /// write-never field in both engines (a permanently-0 neural feature),

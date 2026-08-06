@@ -65,7 +65,7 @@ So the arm starts from
 verified key-by-key in place: all 82 (the Python evaluator's weight count at
 the time) of P's weights identical in the live
 `champion_2p.json`, the 7 newer features at `DEFAULT_WEIGHTS` (the same fill
-[`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 describes), `ladder_2p/gen00000.json` equal to the
+[`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) §7 describes), `ladder_2p/gen00000.json` equal to the
 champion, gen 0.
 
 **`--init` is ignored once the state dir holds a champion**, so this needed a
@@ -131,7 +131,7 @@ Why not the others:
 PlanBot* to *a narrow beam vs a wide one*, and `width=2`'s strength has never
 been measured ([`docs/BOT_ARCHITECTURE.md`](BOT_ARCHITECTURE.md) has `width=1` at 62.3% and `width=8`
 at 85.1% against 1-ply, nothing between). The residual is exactly what
-[`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) measures.
+[`docs/NEURAL.md`](NEURAL.md) measures.
 
 Three flags come with the retarget, all in the 2p branch of
 `experiments/watchdog.sh`: `--full-check-every 25 --check-games 24
@@ -149,7 +149,7 @@ merely rarer — single trained weights are not interpretable anyway
   opponents were between 87.5% and 100%. The Rust `climb` binary that runs
   the live league today has no pool at all — it duels the mirror plus a
   fixed anchor.
-* **[`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md)** — every few accepted champions, the new
+* **[`docs/NEURAL.md`](NEURAL.md)** — every few accepted champions, the new
   champion is played under `plan:width=8` against the previously validated one
   and against `book`, and the result is appended to a time series that answers
   "is proxy progress producing real progress". Separate cron entry, `nice -n
@@ -289,13 +289,15 @@ generation counts to come in under the estimates.
 
 ## The pre-registered observable
 
-This run is also a partial test of [`docs/CULTURE_GAP.md`](CULTURE_GAP.md)'s recorded prediction:
+This run is also a partial test of [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md)'s recorded prediction:
 that unless fixes #1 and #2 land, restarted arms re-inflate `culture_rate` and
 re-flatten the `*_early`/`*_late` phase multipliers within a few hundred
 generations.
 
 **Fix #1 landed. Fix #2 was STOOD DOWN and the gate's scoring is unchanged** —
-its premise did not survive a head-to-head measurement (CULTURE_GAP 23: the
+its premise did not survive a head-to-head measurement (the deleted
+`docs/CULTURE_GAP.md`, git history only — see `docs/EVALUATOR_HISTORY.md`'s
+"Superseded without independent content" note: the
 supposedly perverse `culture_rate = 35.574` beats the vector it was inflated
 from 41.7% ± 7.8% against a 25.0% null). So this run tests the prediction with
 only one of its two fixes in place, and **`culture_rate` re-inflating here is
@@ -311,8 +313,9 @@ So, on the record, to be read off `league_state/ladder_<K>p/`:
 2. **`culture_rate` should not reach the 20-35 range** that both the old 2p and
    4p champions reached. It will still random-walk — `mutate`'s step is
    proportional to `|w|` and nothing in this run adds a restoring force
-   (CULTURE_GAP fix #4, not landed) — so the honest bar is the drift null in
-   CULTURE_GAP 16b, not zero movement.
+   (a fix proposed in the deleted `docs/CULTURE_GAP.md`, not landed; recover
+   from git history for detail) — so the honest bar is the drift null that
+   doc measured, not zero movement.
 3. **Shape retention `|late - early| / 4.0` should stay near 1.0**, not collapse
    to 0.08-0.11 as it did at 2p and 4p.
 
