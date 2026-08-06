@@ -53,6 +53,13 @@ struct Args {
     vweight: f64,
     init: Option<PathBuf>,
     out: PathBuf,
+    /// Worker threads the batched forward/backward pass splits each
+    /// minibatch across (`Trainer::accumulate_pair_batch`/
+    /// `accumulate_value_batch`, `std::thread::scope`). The box this runs
+    /// on has 6 physical cores and no hyperthreading, and a hill-climbing
+    /// league is ALSO running on it at higher priority -- default to
+    /// something that leaves headroom rather than claiming every core.
+    threads: usize,
     /// Fraction of rows held out for validation, a random ROW split (the
     /// script's `rows` default -- see this file's top doc comment for why
     /// `shards` is not offered here). Not a flag; fixed at the script's own
@@ -79,6 +86,7 @@ impl Default for Args {
             vweight: 1.0,
             init: None,
             out: PathBuf::from("checkpoints/value_rank.ckpt"),
+            threads: 4,
             val_frac: 0.15,
             vacuity_warn: 0.95,
         }
@@ -110,6 +118,11 @@ usage: neuraltrain --data PATH [--data PATH ...] [options]
                     .pt file -- see net.rs)
   --out PATH       where to write the checkpoint every epoch (default
                     checkpoints/value_rank.ckpt)
+  --threads N      worker threads the batched forward/backward pass splits
+                    each minibatch across (default 4 -- this box has 6
+                    physical cores and a higher-priority league also runs
+                    on it, so this deliberately leaves headroom rather than
+                    defaulting to 6)
   --help
 ";
 
@@ -133,6 +146,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--vweight" => a.vweight = parse_num(&value(flag)?, flag)?,
             "--init" => a.init = Some(PathBuf::from(value(flag)?)),
             "--out" => a.out = PathBuf::from(value(flag)?),
+            "--threads" => a.threads = parse_num(&value(flag)?, flag)?,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -148,6 +162,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.batch == 0 {
         return Err("--batch must be at least 1".to_string());
+    }
+    if a.threads == 0 {
+        return Err("--threads must be at least 1".to_string());
     }
     if !(0.0..1.0).contains(&a.dropout) {
         return Err(format!("--dropout must be in [0, 1), got {}", a.dropout));
@@ -294,7 +311,7 @@ fn run(args: &Args) -> Result<(), String> {
         }
         None => random_init(ENCODING_DIM, args.hidden, args.blocks, 20260806),
     };
-    let mut trainer = Trainer::new(net, args.dropout, args.lr, args.wd, 20260807);
+    let mut trainer = Trainer::new(net, args.dropout, args.lr, args.wd, 20260807, args.batch, args.threads);
 
     if let Some(dir) = args.out.parent() {
         if !dir.as_os_str().is_empty() {
@@ -343,8 +360,11 @@ fn run(args: &Args) -> Result<(), String> {
             let bsz = end - i;
 
             // One AdamW step per MINIBATCH, not per row: `zero_grad` once,
-            // accumulate every row's (already `1/bsz`-scaled) gradient
-            // contribution, THEN step once -- matching
+            // accumulate the WHOLE minibatch's (already `1/bsz`-scaled)
+            // gradient contribution via the batched, multi-threaded
+            // `accumulate_*_batch` (see `train.rs`'s own doc comment on
+            // why row-at-a-time forward/backward was the measured
+            // bottleneck), THEN step once -- matching
             // `opt.zero_grad(); loss.backward(); opt.step()` running once
             // per batch in the Python script. Stepping per row was an
             // earlier bug here: AdamW's own update touches every one of
@@ -353,22 +373,25 @@ fn run(args: &Args) -> Result<(), String> {
             // optimizer, not the forward/backward math, the dominant cost
             // -- roughly `batch` times more O(params) work than intended.
             trainer.zero_grad();
-            let mut r_sum = 0.0;
+            let pair_refs: Vec<&RankPair> = pair_order[i..end].iter().map(|&pi| &pairs[pi]).collect();
+            let r_sum = trainer.accumulate_pair_batch(&pair_refs, args.lam, bsz);
+
             let mut v_sum = 0.0;
             let mut v_count = 0usize;
-            for &pi in &pair_order[i..end] {
-                r_sum += trainer.accumulate_pair(&pairs[pi], args.lam, bsz);
-
-                if !train_value_order.is_empty() {
-                    let vi = train_value_order[vcursor % train_value_order.len()];
-                    vcursor += 1;
-                    // Same batch size `bsz` as the pair side -- exactly
-                    // `bsz` value rows get accumulated into this step
-                    // (cycling/repeating rows when there are fewer value
-                    // rows than pairs), so the mean-reduction scale matches.
-                    v_sum += trainer.accumulate_value(&values[vi], args.vweight, bsz);
-                    v_count += 1;
-                }
+            if !train_value_order.is_empty() {
+                // Same batch size `bsz` as the pair side -- exactly `bsz`
+                // value rows get accumulated into this step (cycling/
+                // repeating rows when there are fewer value rows than
+                // pairs), so the mean-reduction scale matches.
+                let value_refs: Vec<&ValueRow> = (0..bsz)
+                    .map(|_| {
+                        let vi = train_value_order[vcursor % train_value_order.len()];
+                        vcursor += 1;
+                        &values[vi]
+                    })
+                    .collect();
+                v_count = value_refs.len();
+                v_sum = trainer.accumulate_value_batch(&value_refs, args.vweight, bsz);
             }
             trainer.optim_step();
             tot_r += r_sum / bsz as f64;

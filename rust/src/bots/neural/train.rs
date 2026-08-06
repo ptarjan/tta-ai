@@ -79,6 +79,34 @@ impl ResBlockGrad {
         self.ln_gamma.iter_mut().for_each(|x| *x = 0.0);
         self.ln_beta.iter_mut().for_each(|x| *x = 0.0);
     }
+
+    /// `self += other`, element by element -- see [`ValueNetGrad::add_assign`],
+    /// whose whole job is reducing one gradient accumulator per worker
+    /// thread down to one.
+    fn add_assign(&mut self, other: &ResBlockGrad) {
+        add_slices(&mut self.fc1_w, &other.fc1_w);
+        add_slices(&mut self.fc1_b, &other.fc1_b);
+        add_slices(&mut self.fc2_w, &other.fc2_w);
+        add_slices(&mut self.fc2_b, &other.fc2_b);
+        add_slices(&mut self.ln_gamma, &other.ln_gamma);
+        add_slices(&mut self.ln_beta, &other.ln_beta);
+    }
+}
+
+/// `dst[i] += src[i]` for every `i` -- the one-line reduction
+/// [`ValueNetGrad::add_assign`]/[`ResBlockGrad::add_assign`] both build on,
+/// so the actual per-thread gradient reduction (`self.grad.add_assign(&ws.grad)`
+/// in [`Trainer`]'s batched accumulate methods) is exactly equivalent to
+/// serial accumulation UP TO FLOATING-POINT SUMMATION ORDER -- summing N
+/// threads' partial sums in a different order than one serial run would
+/// have summed the same terms changes rounding, not the result's meaning;
+/// `n_threads_vs_one_thread_agree_to_a_tight_tolerance` below is what pins
+/// that down to a number instead of an assertion.
+fn add_slices(dst: &mut [f64], src: &[f64]) {
+    debug_assert_eq!(dst.len(), src.len());
+    for (d, s) in dst.iter_mut().zip(src.iter()) {
+        *d += s;
+    }
 }
 
 /// Gradient accumulator for a whole [`ValueNet`]. Also reused, with the
@@ -118,6 +146,20 @@ impl ValueNetGrad {
         }
         self.head_w.iter_mut().for_each(|x| *x = 0.0);
         self.head_b = 0.0;
+    }
+
+    /// `self += other` -- see [`add_slices`]'s doc comment for the property
+    /// this exists for (per-thread gradient reduction).
+    fn add_assign(&mut self, other: &ValueNetGrad) {
+        add_slices(&mut self.stem_w, &other.stem_w);
+        add_slices(&mut self.stem_b, &other.stem_b);
+        add_slices(&mut self.stem_ln_gamma, &other.stem_ln_gamma);
+        add_slices(&mut self.stem_ln_beta, &other.stem_ln_beta);
+        for (mine, theirs) in self.blocks.iter_mut().zip(other.blocks.iter()) {
+            mine.add_assign(theirs);
+        }
+        add_slices(&mut self.head_w, &other.head_w);
+        self.head_b += other.head_b;
     }
 }
 
@@ -431,6 +473,533 @@ fn backward_train(net: &ValueNet, cache: &ForwardCache, x: &[f64], dy: f64, grad
     linear_backward_accumulate(&net.stem_w, x, &s.g_resid, net.in_dim, &mut grad.stem_w, &mut grad.stem_b, None);
 }
 
+// ======================================================== batched arithmetic
+//
+// Everything above this point processes ONE row at a time -- correct, and
+// kept exactly as-is (it is what the finite-difference gradient checks pin,
+// and what `batched_forward_and_backward_match_the_naive_row_at_a_time_
+// reference_to_a_tight_tolerance` below checks the routines here against).
+// It is also the measured bottleneck: `Trainer` is a ~700k-parameter net
+// pushed through a 1906x256 stem and three 256x256 residual blocks one
+// input vector at a time, which wastes both cache locality (the weight
+// matrices get re-streamed from memory once per ROW instead of being reused
+// across many rows while resident) and every core but one.
+//
+// The routines below process a whole minibatch (`batch` rows) through the
+// SAME arithmetic, but with rows packed into TRANSPOSED buffers -- shape
+// (dim, batch) flattened as `buf[d*batch+k]`, batch as the FASTEST-varying
+// index, rather than (batch, dim). That layout is what turns the inner loop
+// of every matmul/LayerNorm below into a walk over a CONTIGUOUS run of
+// `batch` elements (an AXPY/reduction over the batch axis) instead of a
+// scalar-at-a-time dot product -- the shape LLVM auto-vectorizes with
+// SIMD/FMA, and the shape that lets a weight ROW (`w[o*in_dim..]`, streamed
+// once per output unit) get reused against many rows' worth of input while
+// a `BATCH_TILE`-wide slice of them is still resident in L1/L2, instead of
+// competing with the next row's read of the same weight matrix from
+// whatever level of cache (or RAM) it fell out to.
+//
+// Every batched linear/LayerNorm-stats routine below reproduces the PER-ROW
+// summation order of `linear_into`/`layer_norm_stats` for a fixed row `k`
+// (the reduction loop is the outer loop, accumulating into `acc[k]` in the
+// same left-to-right order a serial per-row call would use) -- so, absent
+// the redundant `sqrt`s and SIMD-reduction reordering noted inline, the
+// batched forward pass agrees with the naive one to within ordinary
+// floating-point reassociation noise, not just "close because the math is
+// the same". The backward pass's GRADIENT ACCUMULATION (`dw`/`dgamma`/...)
+// does not attempt the same bit-level discipline -- it is a sum over the
+// batch either way, and the test below checks it to a tight but non-zero
+// tolerance, matching this file's existing convention for gradients (see
+// `assert_matches_finite_diff`'s own tolerance).
+//
+// Dropout is the one place batched and naive draw from `PyRandom` in a
+// DIFFERENT order (naive draws all of one row's masks, across every block,
+// before moving to the next row; the batched path below draws one block's
+// masks for the whole batch before moving to the next block, since the
+// masks do not depend on any forward computation and there is no reason to
+// interleave them with it). Both are valid, correctly-scaled inverted
+// dropout -- see `dropout_is_the_identity_in_eval_and_actually_drops_units_
+// in_training` for that property, already pinned against the naive path --
+// but the two paths do not consume `PyRandom` identically, so the
+// batched-vs-naive equivalence test below runs with dropout OFF (`rng:
+// None`), the same "isolate this code path from RNG-order noise" move
+// `the_analytic_gradient_of_every_parameter_type_matches_finite_differences_
+// under_value_loss_no_dropout` already makes for an unrelated reason.
+
+/// Batch-dimension tile width for the routines below: large enough to
+/// amortise the fixed cost of streaming a weight row once per tile, small
+/// enough that a tile's slice of a `(dim, batch)` buffer -- `BATCH_TILE *
+/// dim` `f64`s, e.g. `64 * 1906 * 8 = 976,384` bytes for the stem -- stays
+/// resident in L1/L2 while `out_dim` weight rows stream past it, rather than
+/// evicting itself before it has been reused. Not tuned per-machine (no
+/// benchmark harness here to sweep it against); a round power of two in the
+/// range typical L1/L2 sizes suggest is a reasonable default.
+const BATCH_TILE: usize = 64;
+
+/// Build a TRANSPOSED batch-input buffer `(dim, batch)` from `batch` rows of
+/// `f32` shard data, widening to `f64` in the same pass -- the one place a
+/// shard row's storage width meets this file's `f64` arithmetic AND the one
+/// place per-row data gets laid out batch-minor for the routines below.
+/// Writes with a strided access pattern (transposing IS the strided part of
+/// this file); that cost is `O(dim*batch)`, a `hidden`-times-smaller term
+/// than the `O(dim*batch*hidden)` matmul work it feeds, so it is not worth
+/// tiling itself.
+fn transpose_widen_into(rows: &[&[f32]], dim: usize, out: &mut [f64]) {
+    let batch = rows.len();
+    debug_assert!(out.len() >= dim * batch, "transpose_widen_into: output buffer too small");
+    for (k, row) in rows.iter().enumerate() {
+        debug_assert_eq!(row.len(), dim, "transpose_widen_into: row width mismatch");
+        for d in 0..dim {
+            out[d * batch + k] = row[d] as f64;
+        }
+    }
+}
+
+/// Batched `y = W x + b`: `xt`/`yt` are `(in_dim, batch)`/`(out_dim, batch)`
+/// transposed buffers, `w` row-major `[out_dim, in_dim]` exactly as
+/// [`linear_into`] takes it (weights are never batch-dependent, so they stay
+/// in their natural layout). For a fixed batch column `k`, this accumulates
+/// `yt[o*batch+k]` over `i = 0..in_dim` in the same left-to-right order
+/// [`linear_into`] would for that row alone -- see this section's own doc
+/// comment.
+fn linear_batch_into(w: &[f64], b: &[f64], xt: &[f64], batch: usize, in_dim: usize, out_dim: usize, yt: &mut [f64]) {
+    debug_assert_eq!(w.len(), out_dim * in_dim);
+    debug_assert_eq!(b.len(), out_dim);
+    debug_assert!(xt.len() >= in_dim * batch);
+    debug_assert!(yt.len() >= out_dim * batch);
+    let mut t0 = 0;
+    while t0 < batch {
+        let tw = BATCH_TILE.min(batch - t0);
+        for o in 0..out_dim {
+            let row = &w[o * in_dim..(o + 1) * in_dim];
+            let out_tile = &mut yt[o * batch + t0..o * batch + t0 + tw];
+            out_tile.fill(b[o]);
+            for i in 0..in_dim {
+                let wi = row[i];
+                let in_tile = &xt[i * batch + t0..i * batch + t0 + tw];
+                for k in 0..tw {
+                    out_tile[k] += wi * in_tile[k];
+                }
+            }
+        }
+        t0 += tw;
+    }
+}
+
+/// Batched [`layer_norm_stats`]: per-column (per batch row) mean/biased
+/// variance over the `dim` axis, `mean`/`var` both length `batch`. For a
+/// fixed column `k` this accumulates over `d = 0..dim` in the same order
+/// [`layer_norm_stats`] would for that row alone.
+fn layer_norm_stats_batch(xt: &[f64], dim: usize, batch: usize, mean: &mut [f64], var: &mut [f64]) {
+    debug_assert!(xt.len() >= dim * batch);
+    mean[..batch].fill(0.0);
+    for d in 0..dim {
+        let row = &xt[d * batch..d * batch + batch];
+        for k in 0..batch {
+            mean[k] += row[k];
+        }
+    }
+    let nf = dim as f64;
+    for k in 0..batch {
+        mean[k] /= nf;
+    }
+    var[..batch].fill(0.0);
+    for d in 0..dim {
+        let row = &xt[d * batch..d * batch + batch];
+        for k in 0..batch {
+            let diff = row[k] - mean[k];
+            var[k] += diff * diff;
+        }
+    }
+    for k in 0..batch {
+        var[k] /= nf;
+    }
+}
+
+/// Batched [`layer_norm_into`]: `mean`/`var` are per-column (length `batch`,
+/// from [`layer_norm_stats_batch`]), `gamma`/`beta` per-feature (length
+/// `dim`, shared across the batch -- LayerNorm's affine parameters are not
+/// batch-dependent). Recomputes `sqrt(var[k]+eps)` once per `(d,k)` pair
+/// rather than caching it across the `d` loop: `O(dim*batch)` redundant
+/// `sqrt`s is a `hidden`-times-smaller cost than the matmul this feeds, so
+/// the extra buffer needed to cache it is not worth it here (unlike the
+/// backward pass below, which reuses the same per-column `std` across TWO
+/// separate passes over `d` and so caches it in `BackScratchBatch::std`).
+fn layer_norm_into_batch(xt: &[f64], mean: &[f64], var: &[f64], gamma: &[f64], beta: &[f64], dim: usize, batch: usize, out: &mut [f64]) {
+    for d in 0..dim {
+        let x_row = &xt[d * batch..d * batch + batch];
+        let out_row = &mut out[d * batch..d * batch + batch];
+        let g = gamma[d];
+        let be = beta[d];
+        for k in 0..batch {
+            let denom = (var[k] + LAYER_NORM_EPS).sqrt();
+            out_row[k] = (x_row[k] - mean[k]) / denom * g + be;
+        }
+    }
+}
+
+/// Batched [`layer_norm_backward_into`]: `mean`/`var`/`std` are per-column
+/// (length `batch`); `dgamma`/`dbeta` (length `dim`) are gradient
+/// ACCUMULATORS summed over the whole batch, in column order `k = 0..batch`
+/// for each feature `d` -- matching the naive path's row-by-row `+=` into
+/// the same net-wide buffer for a batch processed in that column order (see
+/// this section's own doc comment on why this is checked to a tolerance,
+/// not bit-for-bit, despite that ordering match).
+#[allow(clippy::too_many_arguments)]
+fn layer_norm_backward_batch(
+    xt: &[f64],
+    mean: &[f64],
+    var: &[f64],
+    gamma: &[f64],
+    dyt: &[f64],
+    dgamma: &mut [f64],
+    dbeta: &mut [f64],
+    dxt_out: &mut [f64],
+    xhat: &mut [f64],
+    dxhat: &mut [f64],
+    std: &mut [f64],
+    sum_dxhat: &mut [f64],
+    sum_dxhat_xhat: &mut [f64],
+    dim: usize,
+    batch: usize,
+) {
+    for k in 0..batch {
+        std[k] = (var[k] + LAYER_NORM_EPS).sqrt();
+    }
+    for d in 0..dim {
+        let x_row = &xt[d * batch..d * batch + batch];
+        let dy_row = &dyt[d * batch..d * batch + batch];
+        let xhat_row = &mut xhat[d * batch..d * batch + batch];
+        let dxhat_row = &mut dxhat[d * batch..d * batch + batch];
+        let g = gamma[d];
+        let mut dg = 0.0;
+        let mut db = 0.0;
+        for k in 0..batch {
+            xhat_row[k] = (x_row[k] - mean[k]) / std[k];
+            dxhat_row[k] = dy_row[k] * g;
+            dg += dy_row[k] * xhat_row[k];
+            db += dy_row[k];
+        }
+        dgamma[d] += dg;
+        dbeta[d] += db;
+    }
+    sum_dxhat[..batch].fill(0.0);
+    sum_dxhat_xhat[..batch].fill(0.0);
+    for d in 0..dim {
+        let dxhat_row = &dxhat[d * batch..d * batch + batch];
+        let xhat_row = &xhat[d * batch..d * batch + batch];
+        for k in 0..batch {
+            sum_dxhat[k] += dxhat_row[k];
+            sum_dxhat_xhat[k] += dxhat_row[k] * xhat_row[k];
+        }
+    }
+    let nf = dim as f64;
+    for d in 0..dim {
+        let dxhat_row = &dxhat[d * batch..d * batch + batch];
+        let xhat_row = &xhat[d * batch..d * batch + batch];
+        let dx_row = &mut dxt_out[d * batch..d * batch + batch];
+        for k in 0..batch {
+            dx_row[k] = (nf * dxhat_row[k] - sum_dxhat[k] - xhat_row[k] * sum_dxhat_xhat[k]) / (nf * std[k]);
+        }
+    }
+}
+
+/// Batched [`linear_backward_accumulate`]: `xt`/`dyt` are `(in_dim, batch)`/
+/// `(out_dim, batch)`; `dw`/`db` are accumulators summed over the batch.
+/// Loop order `o` outer, `i`/tile inner keeps every inner loop walking a
+/// contiguous `BATCH_TILE`-wide run: `dw` accumulation reduces a tile of
+/// `dyt[o,:]` against a tile of `xt[i,:]` (both contiguous), and `dx`
+/// accumulation (`dx[i,:] += w[o,i]*dyt[o,:]`, when requested) streams `w`'s
+/// row `o` sequentially while touching a tile of every `dx` row once per
+/// `o` -- the same access shape [`linear_batch_into`] uses forward, applied
+/// to the two backward reductions instead of one forward one.
+fn linear_backward_accumulate_batch(w: &[f64], xt: &[f64], dyt: &[f64], in_dim: usize, out_dim: usize, batch: usize, dw: &mut [f64], db: &mut [f64], mut dx_out: Option<&mut [f64]>) {
+    if let Some(dx) = dx_out.as_deref_mut() {
+        dx[..in_dim * batch].iter_mut().for_each(|v| *v = 0.0);
+    }
+    let mut t0 = 0;
+    while t0 < batch {
+        let tw = BATCH_TILE.min(batch - t0);
+        for o in 0..out_dim {
+            let dy_tile = &dyt[o * batch + t0..o * batch + t0 + tw];
+            db[o] += dy_tile.iter().sum::<f64>();
+            let w_row = &w[o * in_dim..(o + 1) * in_dim];
+            let dw_row = &mut dw[o * in_dim..(o + 1) * in_dim];
+            for i in 0..in_dim {
+                let x_tile = &xt[i * batch + t0..i * batch + t0 + tw];
+                let mut acc = 0.0;
+                for k in 0..tw {
+                    acc += dy_tile[k] * x_tile[k];
+                }
+                dw_row[i] += acc;
+            }
+            if let Some(dx) = dx_out.as_deref_mut() {
+                for i in 0..in_dim {
+                    let wi = w_row[i];
+                    let dx_tile = &mut dx[i * batch + t0..i * batch + t0 + tw];
+                    for k in 0..tw {
+                        dx_tile[k] += wi * dy_tile[k];
+                    }
+                }
+            }
+        }
+        t0 += tw;
+    }
+}
+
+// ================================================= batched forward/backward
+
+/// Batched analogue of [`BlockCache`]: every field the same shape, but
+/// `(dim, batch)` transposed instead of `(dim,)`, and `ln_mean`/`ln_var`
+/// per-column (length `batch`) instead of scalar. Sized once at `cap` (the
+/// trainer's configured batch capacity) and reused for every call with
+/// `batch <= cap` -- callers slice `[..dim*batch]`/`[..batch]` rather than
+/// reallocating when a trailing partial batch is smaller than `cap`.
+struct BlockCacheBatch {
+    h_in: Vec<f64>,
+    a1: Vec<f64>,
+    r1: Vec<f64>,
+    a2: Vec<f64>,
+    drop_mask: Vec<f64>,
+    resid: Vec<f64>,
+    ln_mean: Vec<f64>,
+    ln_var: Vec<f64>,
+    h_out: Vec<f64>,
+}
+
+impl BlockCacheBatch {
+    fn with_capacity(dim: usize, cap: usize) -> Self {
+        BlockCacheBatch {
+            h_in: vec![0.0; dim * cap],
+            a1: vec![0.0; dim * cap],
+            r1: vec![0.0; dim * cap],
+            a2: vec![0.0; dim * cap],
+            drop_mask: vec![1.0; dim * cap],
+            resid: vec![0.0; dim * cap],
+            ln_mean: vec![0.0; cap],
+            ln_var: vec![0.0; cap],
+            h_out: vec![0.0; dim * cap],
+        }
+    }
+}
+
+/// Batched analogue of [`ForwardCache`] -- see [`BlockCacheBatch`]'s own doc
+/// comment on the capacity/slicing convention every field here follows.
+struct BatchForwardCache {
+    stem_z: Vec<f64>,
+    stem_ln_mean: Vec<f64>,
+    stem_ln_var: Vec<f64>,
+    stem_out: Vec<f64>,
+    blocks: Vec<BlockCacheBatch>,
+}
+
+impl BatchForwardCache {
+    fn with_capacity(net: &ValueNet, cap: usize) -> Self {
+        BatchForwardCache {
+            stem_z: vec![0.0; net.hidden * cap],
+            stem_ln_mean: vec![0.0; cap],
+            stem_ln_var: vec![0.0; cap],
+            stem_out: vec![0.0; net.hidden * cap],
+            blocks: net.blocks.iter().map(|_| BlockCacheBatch::with_capacity(net.hidden, cap)).collect(),
+        }
+    }
+
+    /// See [`ForwardCache::last_hidden`] -- the batched analogue, sliced to
+    /// exactly the `(hidden, batch)` this call actually populated.
+    fn last_hidden(&self, hidden: usize, batch: usize) -> &[f64] {
+        match self.blocks.last() {
+            Some(b) => &b.h_out[..hidden * batch],
+            None => &self.stem_out[..hidden * batch],
+        }
+    }
+}
+
+/// Batched analogue of [`BackScratch`], plus the three per-column buffers
+/// (`std`/`sum_dxhat`/`sum_dxhat_xhat`) [`layer_norm_backward_batch`] needs
+/// that have no per-row counterpart (a single row has no "per-column"
+/// axis). See [`BlockCacheBatch`]'s doc comment for the capacity/slicing
+/// convention.
+struct BackScratchBatch {
+    g_out: Vec<f64>,
+    g_lnout: Vec<f64>,
+    g_resid: Vec<f64>,
+    g_a2: Vec<f64>,
+    g_r1: Vec<f64>,
+    g_a1: Vec<f64>,
+    g_hin_fc1: Vec<f64>,
+    xhat: Vec<f64>,
+    dxhat: Vec<f64>,
+    std: Vec<f64>,
+    sum_dxhat: Vec<f64>,
+    sum_dxhat_xhat: Vec<f64>,
+}
+
+impl BackScratchBatch {
+    fn with_capacity(hidden: usize, cap: usize) -> Self {
+        BackScratchBatch {
+            g_out: vec![0.0; hidden * cap],
+            g_lnout: vec![0.0; hidden * cap],
+            g_resid: vec![0.0; hidden * cap],
+            g_a2: vec![0.0; hidden * cap],
+            g_r1: vec![0.0; hidden * cap],
+            g_a1: vec![0.0; hidden * cap],
+            g_hin_fc1: vec![0.0; hidden * cap],
+            xhat: vec![0.0; hidden * cap],
+            dxhat: vec![0.0; hidden * cap],
+            std: vec![0.0; cap],
+            sum_dxhat: vec![0.0; cap],
+            sum_dxhat_xhat: vec![0.0; cap],
+        }
+    }
+}
+
+/// Batched analogue of [`forward_train`]: `xt` is a `(in_dim, batch)`
+/// transposed input (see [`transpose_widen_into`]), `preds` (length
+/// `batch`) gets the batch's predictions. Dropout masks are drawn one BLOCK
+/// at a time for the whole batch (not one row at a time across every
+/// block) when `rng` is `Some` -- see this section's top doc comment on why
+/// that draw order differs from [`forward_train`]'s and why that is fine.
+fn forward_batch(net: &ValueNet, xt: &[f64], batch: usize, dropout_p: f64, mut rng: Option<&mut PyRandom>, cache: &mut BatchForwardCache, preds: &mut [f64]) {
+    let hidden = net.hidden;
+    linear_batch_into(&net.stem_w, &net.stem_b, xt, batch, net.in_dim, hidden, &mut cache.stem_z[..hidden * batch]);
+    layer_norm_stats_batch(&cache.stem_z[..hidden * batch], hidden, batch, &mut cache.stem_ln_mean[..batch], &mut cache.stem_ln_var[..batch]);
+    layer_norm_into_batch(
+        &cache.stem_z[..hidden * batch],
+        &cache.stem_ln_mean[..batch],
+        &cache.stem_ln_var[..batch],
+        &net.stem_ln_gamma,
+        &net.stem_ln_beta,
+        hidden,
+        batch,
+        &mut cache.stem_out[..hidden * batch],
+    );
+    relu_inplace(&mut cache.stem_out[..hidden * batch]);
+
+    if let Some(first) = cache.blocks.first_mut() {
+        first.h_in[..hidden * batch].copy_from_slice(&cache.stem_out[..hidden * batch]);
+    }
+
+    for i in 0..net.blocks.len() {
+        let block = &net.blocks[i];
+        let bc = &mut cache.blocks[i];
+
+        linear_batch_into(&block.fc1_w, &block.fc1_b, &bc.h_in[..hidden * batch], batch, hidden, hidden, &mut bc.a1[..hidden * batch]);
+        bc.r1[..hidden * batch].copy_from_slice(&bc.a1[..hidden * batch]);
+        relu_inplace(&mut bc.r1[..hidden * batch]);
+        linear_batch_into(&block.fc2_w, &block.fc2_b, &bc.r1[..hidden * batch], batch, hidden, hidden, &mut bc.a2[..hidden * batch]);
+
+        match rng.as_deref_mut() {
+            Some(r) => {
+                let keep_prob = 1.0 - dropout_p;
+                for j in 0..hidden {
+                    let row = &mut bc.drop_mask[j * batch..j * batch + batch];
+                    for k in 0..batch {
+                        row[k] = if r.random() < keep_prob { 1.0 / keep_prob } else { 0.0 };
+                    }
+                }
+            }
+            None => bc.drop_mask[..hidden * batch].iter_mut().for_each(|m| *m = 1.0),
+        }
+
+        for idx in 0..hidden * batch {
+            bc.resid[idx] = bc.h_in[idx] + bc.a2[idx] * bc.drop_mask[idx];
+        }
+        layer_norm_stats_batch(&bc.resid[..hidden * batch], hidden, batch, &mut bc.ln_mean[..batch], &mut bc.ln_var[..batch]);
+        layer_norm_into_batch(&bc.resid[..hidden * batch], &bc.ln_mean[..batch], &bc.ln_var[..batch], &block.ln_gamma, &block.ln_beta, hidden, batch, &mut bc.h_out[..hidden * batch]);
+        relu_inplace(&mut bc.h_out[..hidden * batch]);
+
+        if i + 1 < cache.blocks.len() {
+            let (left, right) = cache.blocks.split_at_mut(i + 1);
+            right[0].h_in[..hidden * batch].copy_from_slice(&left[i].h_out[..hidden * batch]);
+        }
+    }
+
+    let last_h = cache.last_hidden(hidden, batch);
+    preds[..batch].fill(net.head_b);
+    for j in 0..hidden {
+        let hw = net.head_w[j];
+        let h_row = &last_h[j * batch..j * batch + batch];
+        for k in 0..batch {
+            preds[k] += hw * h_row[k];
+        }
+    }
+}
+
+/// Batched analogue of [`backward_train`]: `dy` (length `batch`) is
+/// `d(loss)/d(pred)` for each row, already scaled by the caller exactly as
+/// [`backward_train`]'s own `dy` argument is.
+fn backward_batch(net: &ValueNet, cache: &BatchForwardCache, xt: &[f64], batch: usize, dy: &[f64], grad: &mut ValueNetGrad, s: &mut BackScratchBatch) {
+    let hidden = net.hidden;
+    let last_h = cache.last_hidden(hidden, batch);
+    for j in 0..hidden {
+        let h_row = &last_h[j * batch..j * batch + batch];
+        let mut acc = 0.0;
+        for k in 0..batch {
+            acc += dy[k] * h_row[k];
+        }
+        grad.head_w[j] += acc;
+        let g_out_row = &mut s.g_out[j * batch..j * batch + batch];
+        let hw = net.head_w[j];
+        for k in 0..batch {
+            g_out_row[k] = dy[k] * hw;
+        }
+    }
+    grad.head_b += dy[..batch].iter().sum::<f64>();
+
+    for i in (0..cache.blocks.len()).rev() {
+        let block = &net.blocks[i];
+        let bc = &cache.blocks[i];
+        let g = &mut grad.blocks[i];
+
+        relu_backward_into(&bc.h_out[..hidden * batch], &s.g_out[..hidden * batch], &mut s.g_lnout[..hidden * batch]);
+        layer_norm_backward_batch(
+            &bc.resid[..hidden * batch],
+            &bc.ln_mean[..batch],
+            &bc.ln_var[..batch],
+            &block.ln_gamma,
+            &s.g_lnout[..hidden * batch],
+            &mut g.ln_gamma,
+            &mut g.ln_beta,
+            &mut s.g_resid[..hidden * batch],
+            &mut s.xhat[..hidden * batch],
+            &mut s.dxhat[..hidden * batch],
+            &mut s.std[..batch],
+            &mut s.sum_dxhat[..batch],
+            &mut s.sum_dxhat_xhat[..batch],
+            hidden,
+            batch,
+        );
+        for idx in 0..hidden * batch {
+            s.g_a2[idx] = s.g_resid[idx] * bc.drop_mask[idx];
+        }
+        linear_backward_accumulate_batch(&block.fc2_w, &bc.r1[..hidden * batch], &s.g_a2[..hidden * batch], hidden, hidden, batch, &mut g.fc2_w, &mut g.fc2_b, Some(&mut s.g_r1[..hidden * batch]));
+        relu_backward_into(&bc.r1[..hidden * batch], &s.g_r1[..hidden * batch], &mut s.g_a1[..hidden * batch]);
+        linear_backward_accumulate_batch(&block.fc1_w, &bc.h_in[..hidden * batch], &s.g_a1[..hidden * batch], hidden, hidden, batch, &mut g.fc1_w, &mut g.fc1_b, Some(&mut s.g_hin_fc1[..hidden * batch]));
+        for idx in 0..hidden * batch {
+            s.g_out[idx] = s.g_resid[idx] + s.g_hin_fc1[idx];
+        }
+    }
+
+    relu_backward_into(&cache.stem_out[..hidden * batch], &s.g_out[..hidden * batch], &mut s.g_lnout[..hidden * batch]);
+    layer_norm_backward_batch(
+        &cache.stem_z[..hidden * batch],
+        &cache.stem_ln_mean[..batch],
+        &cache.stem_ln_var[..batch],
+        &net.stem_ln_gamma,
+        &s.g_lnout[..hidden * batch],
+        &mut grad.stem_ln_gamma,
+        &mut grad.stem_ln_beta,
+        &mut s.g_resid[..hidden * batch],
+        &mut s.xhat[..hidden * batch],
+        &mut s.dxhat[..hidden * batch],
+        &mut s.std[..batch],
+        &mut s.sum_dxhat[..batch],
+        &mut s.sum_dxhat_xhat[..batch],
+        hidden,
+        batch,
+    );
+    linear_backward_accumulate_batch(&net.stem_w, xt, &s.g_resid[..hidden * batch], net.in_dim, hidden, batch, &mut grad.stem_w, &mut grad.stem_b, None);
+}
+
 // ===================================================================== loss
 
 /// `torch.nn.functional.smooth_l1_loss(pred, target, beta=1.0)` for ONE
@@ -572,6 +1141,47 @@ fn adamw_update(param: &mut [f64], grad: &[f64], m: &mut [f64], v: &mut [f64], t
 /// hot per-row loop needs -- constructed once per run, never reallocating
 /// its `Vec`s afterward (see [`ForwardCache`]/[`BackScratch`]'s own doc
 /// comments).
+/// Per-thread scratch [`Trainer`]'s batched accumulate methods split a
+/// minibatch across: each worker thread gets ITS OWN forward caches,
+/// backward scratch, gradient accumulator, transposed input buffers, and
+/// `PyRandom` stream, sized to `chunk_cap` (this trainer's batch capacity
+/// divided across `threads`, rounded up) -- so no two threads ever touch
+/// the same memory, and nothing here is (re)allocated per call. `cache_b`/
+/// `xt_b`/`preds_b`/`dvb` only get used by [`Trainer::accumulate_pair_batch`]
+/// (the "rejected" side of a pair); [`Trainer::accumulate_value_batch`]
+/// only ever touches the `_a` half.
+struct ThreadWorkspace {
+    cache_a: BatchForwardCache,
+    cache_b: BatchForwardCache,
+    grad: ValueNetGrad,
+    scratch: BackScratchBatch,
+    xt_a: Vec<f64>,
+    xt_b: Vec<f64>,
+    preds_a: Vec<f64>,
+    preds_b: Vec<f64>,
+    dva: Vec<f64>,
+    dvb: Vec<f64>,
+    rng: PyRandom,
+}
+
+impl ThreadWorkspace {
+    fn with_capacity(net: &ValueNet, chunk_cap: usize, seed: i64) -> Self {
+        ThreadWorkspace {
+            cache_a: BatchForwardCache::with_capacity(net, chunk_cap),
+            cache_b: BatchForwardCache::with_capacity(net, chunk_cap),
+            grad: ValueNetGrad::zeros_like(net),
+            scratch: BackScratchBatch::with_capacity(net.hidden, chunk_cap),
+            xt_a: vec![0.0; net.in_dim * chunk_cap],
+            xt_b: vec![0.0; net.in_dim * chunk_cap],
+            preds_a: vec![0.0; chunk_cap],
+            preds_b: vec![0.0; chunk_cap],
+            dva: vec![0.0; chunk_cap],
+            dvb: vec![0.0; chunk_cap],
+            rng: PyRandom::new(seed),
+        }
+    }
+}
+
 pub struct Trainer {
     pub net: ValueNet,
     grad: ValueNetGrad,
@@ -590,6 +1200,12 @@ pub struct Trainer {
     conv_v: Vec<f64>,
     rng: PyRandom,
     dropout_p: f64,
+    /// Worker-thread workspaces [`Self::accumulate_pair_batch`]/
+    /// [`Self::accumulate_value_batch`] split a minibatch across -- length
+    /// `threads.max(1)`, each sized for a `batch_cap`-sized minibatch split
+    /// `threads` ways. See [`ThreadWorkspace`]'s own doc comment.
+    workspaces: Vec<ThreadWorkspace>,
+    threads: usize,
 }
 
 /// Write `src` (an `f32` shard row) into `dst` (a same-length `f64`
@@ -603,7 +1219,15 @@ fn widen_into(src: &[f32], dst: &mut [f64]) {
 }
 
 impl Trainer {
-    pub fn new(net: ValueNet, dropout_p: f64, lr: f64, wd: f64, seed: i64) -> Self {
+    /// `batch_cap` is the largest minibatch [`Self::accumulate_pair_batch`]/
+    /// [`Self::accumulate_value_batch`] will ever be called with (callers
+    /// pass a SMALLER final batch on a trailing partial minibatch without
+    /// issue; a LARGER one panics on an out-of-bounds slice, by design --
+    /// see [`BlockCacheBatch`]'s doc comment on the capacity convention).
+    /// `threads` is how many [`ThreadWorkspace`]s to build; clamped to at
+    /// least 1, and further clamped per-call to `min(threads, batch.len())`
+    /// so a small trailing batch never spins up idle threads for it.
+    pub fn new(net: ValueNet, dropout_p: f64, lr: f64, wd: f64, seed: i64, batch_cap: usize, threads: usize) -> Self {
         let grad = ValueNetGrad::zeros_like(&net);
         let adamw = AdamW::new(&net, lr, wd);
         let cache_a = ForwardCache::zeros(&net);
@@ -611,6 +1235,10 @@ impl Trainer {
         let cache_v = ForwardCache::zeros(&net);
         let scratch = BackScratch::zeros(net.hidden);
         let in_dim = net.in_dim;
+        let threads = threads.max(1);
+        let batch_cap = batch_cap.max(1);
+        let chunk_cap = batch_cap.div_ceil(threads);
+        let workspaces = (0..threads).map(|t| ThreadWorkspace::with_capacity(&net, chunk_cap, seed.wrapping_add(1_000_003 + t as i64))).collect();
         Trainer {
             net,
             grad,
@@ -624,6 +1252,8 @@ impl Trainer {
             conv_v: vec![0.0; in_dim],
             rng: PyRandom::new(seed),
             dropout_p,
+            workspaces,
+            threads,
         }
     }
 
@@ -673,6 +1303,128 @@ impl Trainer {
         let scale = vweight / n_rows_in_batch as f64;
         backward_train(&self.net, &self.cache_v, &self.conv_v, dpred * scale, &mut self.grad, &mut self.scratch);
         loss
+    }
+
+    /// Batched analogue of [`Self::accumulate_pair`]: forward+backward a
+    /// WHOLE batch of ranking pairs (training-mode dropout), splitting it
+    /// across [`Self::workspaces`] with `std::thread::scope` (one
+    /// contiguous chunk per thread, each thread's own gradient buffer
+    /// untouched by any other thread), then reducing every thread's partial
+    /// gradient into `self.grad` via [`ValueNetGrad::add_assign`] -- see
+    /// [`add_slices`]'s doc comment for exactly what "equivalent to serial
+    /// accumulation" means here (same math, different float rounding).
+    /// Returns the SUM of the batch's (unscaled) per-pair losses -- what
+    /// summing [`Self::accumulate_pair`]'s return value over the same pairs,
+    /// in any order, would give.
+    ///
+    /// # Panics
+    /// If `pairs.len()` exceeds the `batch_cap` this trainer was built with
+    /// (a caller bug: the batch loop is expected to never exceed `--batch`).
+    pub fn accumulate_pair_batch(&mut self, pairs: &[&RankPair], lam: f64, n_pairs_in_batch: usize) -> f64 {
+        let batch = pairs.len();
+        if batch == 0 {
+            return 0.0;
+        }
+        let in_dim = self.net.in_dim;
+        let dropout_p = self.dropout_p;
+        let scale = lam / n_pairs_in_batch as f64;
+        let net = &self.net;
+        let threads = self.threads.min(batch);
+        let chunk_len = batch.div_ceil(threads);
+        let chunks: Vec<&[&RankPair]> = pairs.chunks(chunk_len).collect();
+        let workspaces = &mut self.workspaces[..chunks.len()];
+
+        let partial_losses: Vec<f64> = std::thread::scope(|scope| {
+            let handles: Vec<_> = workspaces
+                .iter_mut()
+                .zip(chunks.iter())
+                .map(|(ws, &chunk)| {
+                    scope.spawn(move || {
+                        ws.grad.zero();
+                        let b = chunk.len();
+                        let chosen: Vec<&[f32]> = chunk.iter().map(|p| p.chosen.as_slice()).collect();
+                        let rejected: Vec<&[f32]> = chunk.iter().map(|p| p.rejected.as_slice()).collect();
+                        transpose_widen_into(&chosen, in_dim, &mut ws.xt_a[..in_dim * b]);
+                        transpose_widen_into(&rejected, in_dim, &mut ws.xt_b[..in_dim * b]);
+                        forward_batch(net, &ws.xt_a[..in_dim * b], b, dropout_p, Some(&mut ws.rng), &mut ws.cache_a, &mut ws.preds_a[..b]);
+                        forward_batch(net, &ws.xt_b[..in_dim * b], b, dropout_p, Some(&mut ws.rng), &mut ws.cache_b, &mut ws.preds_b[..b]);
+                        let mut loss_sum = 0.0;
+                        for k in 0..b {
+                            let (loss, dva, dvb) = rank_pair_loss(ws.preds_a[k], ws.preds_b[k]);
+                            loss_sum += loss;
+                            ws.dva[k] = dva * scale;
+                            ws.dvb[k] = dvb * scale;
+                        }
+                        backward_batch(net, &ws.cache_a, &ws.xt_a[..in_dim * b], b, &ws.dva[..b], &mut ws.grad, &mut ws.scratch);
+                        backward_batch(net, &ws.cache_b, &ws.xt_b[..in_dim * b], b, &ws.dvb[..b], &mut ws.grad, &mut ws.scratch);
+                        loss_sum
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().expect("neuraltrain worker thread panicked")).collect()
+        });
+
+        let mut total_loss = 0.0;
+        for (ws, &loss) in workspaces.iter().zip(partial_losses.iter()) {
+            self.grad.add_assign(&ws.grad);
+            total_loss += loss;
+        }
+        total_loss
+    }
+
+    /// Batched analogue of [`Self::accumulate_value`] -- see
+    /// [`Self::accumulate_pair_batch`]'s doc comment for the threading/
+    /// reduction shape, identical here. Returns the SUM of the batch's
+    /// (unscaled) per-row losses.
+    ///
+    /// # Panics
+    /// If `rows.len()` exceeds the `batch_cap` this trainer was built with.
+    pub fn accumulate_value_batch(&mut self, rows: &[&ValueRow], vweight: f64, n_rows_in_batch: usize) -> f64 {
+        let batch = rows.len();
+        if batch == 0 {
+            return 0.0;
+        }
+        let in_dim = self.net.in_dim;
+        let dropout_p = self.dropout_p;
+        let scale = vweight / n_rows_in_batch as f64;
+        let net = &self.net;
+        let threads = self.threads.min(batch);
+        let chunk_len = batch.div_ceil(threads);
+        let chunks: Vec<&[&ValueRow]> = rows.chunks(chunk_len).collect();
+        let workspaces = &mut self.workspaces[..chunks.len()];
+
+        let partial_losses: Vec<f64> = std::thread::scope(|scope| {
+            let handles: Vec<_> = workspaces
+                .iter_mut()
+                .zip(chunks.iter())
+                .map(|(ws, &chunk)| {
+                    scope.spawn(move || {
+                        ws.grad.zero();
+                        let b = chunk.len();
+                        let states: Vec<&[f32]> = chunk.iter().map(|r| r.state.as_slice()).collect();
+                        transpose_widen_into(&states, in_dim, &mut ws.xt_a[..in_dim * b]);
+                        forward_batch(net, &ws.xt_a[..in_dim * b], b, dropout_p, Some(&mut ws.rng), &mut ws.cache_a, &mut ws.preds_a[..b]);
+                        let mut loss_sum = 0.0;
+                        for k in 0..b {
+                            let target = chunk[k].margin as f64 / MARGIN_NORM;
+                            let (loss, dpred) = smooth_l1(ws.preds_a[k], target);
+                            loss_sum += loss;
+                            ws.dva[k] = dpred * scale;
+                        }
+                        backward_batch(net, &ws.cache_a, &ws.xt_a[..in_dim * b], b, &ws.dva[..b], &mut ws.grad, &mut ws.scratch);
+                        loss_sum
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().expect("neuraltrain worker thread panicked")).collect()
+        });
+
+        let mut total_loss = 0.0;
+        for (ws, &loss) in workspaces.iter().zip(partial_losses.iter()) {
+            self.grad.add_assign(&ws.grad);
+            total_loss += loss;
+        }
+        total_loss
     }
 
     /// Draw a `[0, n)` index, used by the training binary to build a
@@ -1069,7 +1821,7 @@ mod tests {
     fn training_on_a_trivial_value_regression_drives_the_loss_down() {
         let in_dim = 3;
         let net = tiny_net(in_dim, 6, 1);
-        let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 999);
+        let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 999, 1, 1);
 
         // y = x0 + 2*x1 - x2, a simple linear target the net can fit.
         // `margin` is stored in CULTURE units (MARGIN_NORM'd back inside
@@ -1119,7 +1871,7 @@ mod tests {
         let xa = tiny_input(501, in_dim); // chosen
         let xb = tiny_input(502, in_dim); // rejected
         let pair = RankPair { chosen: xa.iter().map(|&v| v as f32).collect(), rejected: xb.iter().map(|&v| v as f32).collect() };
-        let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 314);
+        let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 314, 1, 1);
 
         let before_gap = predict(&trainer.net, &xa) - predict(&trainer.net, &xb);
         for _step in 0..300 {
@@ -1154,5 +1906,182 @@ mod tests {
         assert!(net.stem_w.windows(2).any(|w| w[0] != w[1]));
         let y = net.forward(&tiny_input(1, 5));
         assert!(y.is_finite());
+    }
+
+    // ------------------------------------------------------- batching tests
+    //
+    // These two are the whole safety net for the batched/threaded rewrite
+    // in "batched arithmetic"/"batched forward/backward" above: everything
+    // else in this file (the finite-difference gradient checks, the
+    // end-to-end training tests) exercises only the ORIGINAL row-at-a-time
+    // path, unchanged by this rewrite, so none of it would notice a bug
+    // introduced by the batched matmul/LayerNorm or the thread-split
+    // gradient reduction. Both run with `dropout_p: 0.0` -- not to avoid
+    // dropout's own correctness (already pinned by
+    // `dropout_is_the_identity_in_eval_and_actually_drops_units_in_training`
+    // above), but because the batched path draws its dropout masks in a
+    // DIFFERENT order than the per-row path (see the "batched arithmetic"
+    // section's own doc comment), so comparing WITH dropout active would be
+    // comparing two different random masks, not the same computation done
+    // two ways. At `dropout_p = 0.0`, `keep_prob = 1.0` and every draw is
+    // `< 1.0`, so the mask is the all-ones identity regardless of draw
+    // order -- this isolates exactly the matmul/LayerNorm/reduction-order
+    // rewrite this section exists to check.
+
+    /// Compare two [`ValueNetGrad`]s field by field (same field ORDER
+    /// `check_every_parameter_type` above walks, reused here for the same
+    /// "every parameter type, not just the last layer" reason) to `tol`.
+    fn assert_grads_close(a: &ValueNetGrad, b: &ValueNetGrad, tol: f64, label: &str) {
+        let cmp = |x: &[f64], y: &[f64], what: &str| {
+            assert_eq!(x.len(), y.len(), "{label} {what}: length mismatch");
+            for (i, (&xv, &yv)) in x.iter().zip(y.iter()).enumerate() {
+                assert!((xv - yv).abs() < tol, "{label} {what}[{i}]: a={xv} b={yv} diff={}", (xv - yv).abs());
+            }
+        };
+        cmp(&a.stem_w, &b.stem_w, "stem_w");
+        cmp(&a.stem_b, &b.stem_b, "stem_b");
+        cmp(&a.stem_ln_gamma, &b.stem_ln_gamma, "stem_ln_gamma");
+        cmp(&a.stem_ln_beta, &b.stem_ln_beta, "stem_ln_beta");
+        assert_eq!(a.blocks.len(), b.blocks.len(), "{label}: block count mismatch");
+        for (bi, (ba, bb)) in a.blocks.iter().zip(b.blocks.iter()).enumerate() {
+            cmp(&ba.fc1_w, &bb.fc1_w, &format!("blocks[{bi}].fc1_w"));
+            cmp(&ba.fc1_b, &bb.fc1_b, &format!("blocks[{bi}].fc1_b"));
+            cmp(&ba.fc2_w, &bb.fc2_w, &format!("blocks[{bi}].fc2_w"));
+            cmp(&ba.fc2_b, &bb.fc2_b, &format!("blocks[{bi}].fc2_b"));
+            cmp(&ba.ln_gamma, &bb.ln_gamma, &format!("blocks[{bi}].ln_gamma"));
+            cmp(&ba.ln_beta, &bb.ln_beta, &format!("blocks[{bi}].ln_beta"));
+        }
+        cmp(&a.head_w, &b.head_w, "head_w");
+        assert!((a.head_b - b.head_b).abs() < tol, "{label} head_b: a={} b={} diff={}", a.head_b, b.head_b, (a.head_b - b.head_b).abs());
+    }
+
+    fn f32_row(x: &[f64]) -> Vec<f32> {
+        x.iter().map(|&v| v as f32).collect()
+    }
+
+    /// The main safety net for the batched rewrite: build a small but
+    /// non-trivial batch of ranking pairs and value rows, accumulate their
+    /// gradient two ways -- [`Trainer::accumulate_pair`]/
+    /// [`Trainer::accumulate_value`] called once per row (the ORIGINAL,
+    /// still-present, still-tested path) versus
+    /// [`Trainer::accumulate_pair_batch`]/[`Trainer::accumulate_value_batch`]
+    /// called once for the whole batch (the new batched path, single
+    /// thread) -- starting from the SAME net and an EMPTY gradient
+    /// accumulator, and check both the summed loss and every gradient
+    /// entry agree to a tight tolerance.
+    #[test]
+    fn batched_forward_and_backward_match_the_naive_row_at_a_time_reference_to_a_tight_tolerance() {
+        let in_dim = 5;
+        let hidden = 8;
+        let n_blocks = 2;
+        let net = tiny_net(in_dim, hidden, n_blocks);
+        let n_pairs = 6usize;
+        let n_values = 5usize;
+        let pairs: Vec<RankPair> = (0..n_pairs)
+            .map(|i| RankPair { chosen: f32_row(&tiny_input(2000 + i as u64, in_dim)), rejected: f32_row(&tiny_input(3000 + i as u64, in_dim)) })
+            .collect();
+        let values: Vec<ValueRow> = (0..n_values)
+            .map(|i| ValueRow { state: f32_row(&tiny_input(4000 + i as u64, in_dim)), margin: (i as f64 * 3.7 - 5.0) as f32 })
+            .collect();
+        let lam = 0.7;
+        let vweight = 1.3;
+
+        let mut naive = Trainer::new(net.clone(), 0.0, 1e-3, 0.0, 1, 1, 1);
+        naive.zero_grad();
+        let naive_r: f64 = pairs.iter().map(|p| naive.accumulate_pair(p, lam, n_pairs)).sum();
+        let naive_v: f64 = values.iter().map(|row| naive.accumulate_value(row, vweight, n_values)).sum();
+
+        let mut batched = Trainer::new(net, 0.0, 1e-3, 0.0, 1, n_pairs.max(n_values), 1);
+        batched.zero_grad();
+        let pair_refs: Vec<&RankPair> = pairs.iter().collect();
+        let batched_r = batched.accumulate_pair_batch(&pair_refs, lam, n_pairs);
+        let value_refs: Vec<&ValueRow> = values.iter().collect();
+        let batched_v = batched.accumulate_value_batch(&value_refs, vweight, n_values);
+
+        assert!((naive_r - batched_r).abs() < 1e-9, "rank loss sum: naive={naive_r} batched={batched_r}");
+        assert!((naive_v - batched_v).abs() < 1e-9, "value loss sum: naive={naive_v} batched={batched_v}");
+        assert_grads_close(&naive.grad, &batched.grad, 1e-8, "batched(1 thread) vs naive row-at-a-time");
+    }
+
+    /// [`ValueNetGrad::add_assign`]'s whole reason to exist: splitting a
+    /// batch across N worker threads and summing their partial gradients
+    /// must be equivalent to running it on ONE thread, up to
+    /// floating-point summation order (see [`add_slices`]'s doc comment) --
+    /// checked here with a batch size (37 pairs, 29 values) that does NOT
+    /// divide evenly by the thread count, so the last chunk is a genuinely
+    /// different size than the others.
+    #[test]
+    fn n_threads_vs_one_thread_agree_to_a_tight_tolerance() {
+        let in_dim = 6;
+        let hidden = 8;
+        let n_blocks = 2;
+        let net = tiny_net(in_dim, hidden, n_blocks);
+        let n_pairs = 37usize;
+        let n_values = 29usize;
+        let pairs: Vec<RankPair> = (0..n_pairs)
+            .map(|i| RankPair { chosen: f32_row(&tiny_input(5000 + i as u64, in_dim)), rejected: f32_row(&tiny_input(6000 + i as u64, in_dim)) })
+            .collect();
+        let values: Vec<ValueRow> = (0..n_values)
+            .map(|i| ValueRow { state: f32_row(&tiny_input(7000 + i as u64, in_dim)), margin: (i as f64 * 1.3 - 4.0) as f32 })
+            .collect();
+        let lam = 0.9;
+        let vweight = 1.1;
+        let batch_cap = n_pairs.max(n_values);
+        let pair_refs: Vec<&RankPair> = pairs.iter().collect();
+        let value_refs: Vec<&ValueRow> = values.iter().collect();
+
+        let mut one = Trainer::new(net.clone(), 0.0, 1e-3, 0.0, 42, batch_cap, 1);
+        one.zero_grad();
+        let loss_r1 = one.accumulate_pair_batch(&pair_refs, lam, n_pairs);
+        let loss_v1 = one.accumulate_value_batch(&value_refs, vweight, n_values);
+
+        let mut four = Trainer::new(net, 0.0, 1e-3, 0.0, 42, batch_cap, 4);
+        four.zero_grad();
+        let loss_r4 = four.accumulate_pair_batch(&pair_refs, lam, n_pairs);
+        let loss_v4 = four.accumulate_value_batch(&value_refs, vweight, n_values);
+
+        assert!((loss_r1 - loss_r4).abs() < 1e-9, "rank loss sum: 1 thread={loss_r1} 4 threads={loss_r4}");
+        assert!((loss_v1 - loss_v4).abs() < 1e-9, "value loss sum: 1 thread={loss_v1} 4 threads={loss_v4}");
+        assert_grads_close(&one.grad, &four.grad, 1e-8, "4 threads vs 1 thread");
+    }
+
+    /// A trailing partial minibatch (smaller than `batch_cap`) must reuse
+    /// the same capacity-sized buffers correctly rather than reading stale
+    /// data left over from a larger previous call -- the property that
+    /// makes "size buffers once at `batch_cap`, slice to `batch` per call"
+    /// (this section's whole reuse-not-reallocate strategy) safe.
+    #[test]
+    fn a_smaller_trailing_batch_after_a_full_one_does_not_read_stale_buffer_contents() {
+        let in_dim = 4;
+        let hidden = 6;
+        let net = tiny_net(in_dim, hidden, 1);
+        let batch_cap = 10usize;
+        let mut trainer = Trainer::new(net, 0.0, 1e-3, 0.0, 7, batch_cap, 2);
+
+        let full: Vec<RankPair> = (0..batch_cap)
+            .map(|i| RankPair { chosen: f32_row(&tiny_input(100 + i as u64, in_dim)), rejected: f32_row(&tiny_input(200 + i as u64, in_dim)) })
+            .collect();
+        trainer.zero_grad();
+        let full_refs: Vec<&RankPair> = full.iter().collect();
+        trainer.accumulate_pair_batch(&full_refs, 1.0, batch_cap);
+
+        // A smaller batch afterward, built independently -- compare against
+        // a FRESH trainer's answer for the identical small batch, which by
+        // construction cannot be contaminated by the previous full call's
+        // leftover buffer contents.
+        let small: Vec<RankPair> = (0..3)
+            .map(|i| RankPair { chosen: f32_row(&tiny_input(300 + i as u64, in_dim)), rejected: f32_row(&tiny_input(400 + i as u64, in_dim)) })
+            .collect();
+        let small_refs: Vec<&RankPair> = small.iter().collect();
+
+        trainer.zero_grad();
+        let loss_after_full = trainer.accumulate_pair_batch(&small_refs, 1.0, 3);
+
+        let mut fresh = Trainer::new(tiny_net(in_dim, hidden, 1), 0.0, 1e-3, 0.0, 7, batch_cap, 2);
+        fresh.zero_grad();
+        let loss_fresh = fresh.accumulate_pair_batch(&small_refs, 1.0, 3);
+
+        assert!((loss_after_full - loss_fresh).abs() < 1e-9, "loss after a full batch={loss_after_full} fresh={loss_fresh}");
+        assert_grads_close(&trainer.grad, &fresh.grad, 1e-8, "small batch after full vs fresh");
     }
 }
