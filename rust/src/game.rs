@@ -105,7 +105,7 @@ use crate::economy;
 use crate::events;
 use crate::legal;
 use crate::moves::{Move, MoveList};
-use crate::rng::{shuffle_cards, PyRandom};
+use crate::rng::{shuffle_cards, LazyRandom, PyRandom};
 use crate::state::{
     CardList, GameState, PactList, Phase, PlayerState, PendingStack, Queue, QueueItem, Tableau,
     TechSlot, MAX_DECK, MAX_PLAYERS, ROW_SIZE,
@@ -193,10 +193,23 @@ fn next_age(a: Age) -> Option<Age> {
 /// any `i64` could here. That is a silent divergence, so it is asserted.
 /// (`economy::deck_rng` makes the same call for the same reason.)
 ///
+/// Returns a [`LazyRandom`], not a built [`PyRandom`]: every caller of this
+/// function reaches it on a path that MIGHT reshuffle a deck or pile several
+/// calls further down (`deal` -> `advance_age`, `replenish`, `start_turn`),
+/// gated on that deck/pile actually being empty -- true on only a small
+/// fraction of calls. A profiler run on a live `plan` bot found
+/// `PyRandom::new` as the single hottest named symbol in the process; a call
+/// count confirmed this function alone accounted for 99.66% of ~510k calls
+/// across 8 games, almost all of them paying MT19937's ~1900-word
+/// `init_by_array` for a stream nothing ever drew from. Deferring the build
+/// to [`LazyRandom::get`] changes nothing observable -- same formula, same
+/// algorithm, same fixture bytes once a shuffle actually happens -- it only
+/// skips the work when nothing downstream ever asks for a word.
+///
 /// `pub(crate)`: `events::events_rng` calls this directly rather than
 /// keeping its own copy of the formula -- see that function's doc comment
 /// for why the two used to disagree and why that was ever an accepted gap.
-pub(crate) fn rng_for(state: &GameState) -> PyRandom {
+pub(crate) fn rng_for(state: &GameState) -> LazyRandom {
     let s = i64::try_from(state.seed)
         .ok()
         .and_then(|s| s.checked_mul(1_000_003))
@@ -206,7 +219,7 @@ pub(crate) fn rng_for(state: &GameState) -> PyRandom {
             "seed * 1000003 + turn * 97 + round overflows i64; Python's unbounded ints would \
              seed a different MT19937 stream -- widen rng::PyRandom::new rather than wrapping",
         );
-    PyRandom::new(s)
+    LazyRandom::new(s)
 }
 
 // ==================================================================== setup
@@ -388,14 +401,20 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
     // rest of the game uses.
     state.civil_deck = build_deck(Age::A, true, n);
     shuffle_cards(&mut rng, state.civil_deck.as_mut_slice());
-    deal(&mut state, &mut rng);
+    // Wrapped rather than passed as a bare `&mut PyRandom`: `deal` takes a
+    // `LazyRandom` everywhere else it is called from (see `rng_for`'s doc
+    // comment), and `built` keeps this call on the SAME already-drawn-from
+    // stream instead of starting a second one at the same seed.
+    let mut lazy_rng = LazyRandom::built(rng);
+    deal(&mut state, &mut lazy_rng);
+    let rng = lazy_rng.get();
 
     // §1.6: no military DECK in Age A -- the ten Age A military cards are
     // shuffled and the top `num_players + 2` become the starting current
     // events. The rest are simply not in the game. `military_deck` stays
     // empty until the first age advance builds the Age I deck.
     let mut age_a = build_deck(Age::A, false, n);
-    shuffle_cards(&mut rng, age_a.as_mut_slice());
+    shuffle_cards(rng, age_a.as_mut_slice());
     for &card in &age_a.as_slice()[..(n + 2).min(age_a.len())] {
         state.current_events.push(card);
     }
@@ -413,7 +432,7 @@ pub fn live_count(state: &GameState) -> usize {
 
 /// §2.1: discard the leftmost N cards, slide the rest left, deal from the
 /// current deck.
-fn replenish(state: &mut GameState, rng: &mut PyRandom) {
+fn replenish(state: &mut GameState, rng: &mut LazyRandom) {
     // §1.10: the FIRST replenish ends Age A outright -- whatever is left of
     // the 20-card Age A deck is simply removed from the game, with no
     // antiquation and no yellow-token loss (that is what `advance_age`'s
@@ -465,7 +484,7 @@ pub fn deal_row(state: &mut GameState) {
 /// next needs one -- so the deck can advance mid-deal and the remaining slots
 /// come out of the new age. Getting that boundary wrong shows up as a row
 /// that is one card short for exactly one turn per age.
-fn deal(state: &mut GameState, rng: &mut PyRandom) {
+fn deal(state: &mut GameState, rng: &mut LazyRandom) {
     for i in 0..ROW_SIZE {
         if !state.card_row[i].is_none() {
             continue;
@@ -484,7 +503,7 @@ fn deal(state: &mut GameState, rng: &mut PyRandom) {
 // ========================================================= age progression
 
 /// End the current age and make the next age's decks current (§12.2).
-fn advance_age(state: &mut GameState, rng: &mut PyRandom) {
+fn advance_age(state: &mut GameState, rng: &mut LazyRandom) {
     let ended = state.age_civil;
     let Some(nxt) = next_age(ended) else { return };
 
@@ -510,9 +529,9 @@ fn advance_age(state: &mut GameState, rng: &mut PyRandom) {
         // game from the same seed.
         let n = live_count(state);
         state.civil_deck = build_deck(nxt, true, n);
-        shuffle_cards(rng, state.civil_deck.as_mut_slice());
+        shuffle_cards(rng.get(), state.civil_deck.as_mut_slice());
         state.military_deck = build_deck(nxt, false, n);
-        shuffle_cards(rng, state.military_deck.as_mut_slice());
+        shuffle_cards(rng.get(), state.military_deck.as_mut_slice());
     }
     // Python calls `effects.invalidate(state)` here; there is no stats cache
     // in this port (see `economy::increase_population`), so there is nothing
@@ -637,7 +656,7 @@ fn set_last_round(state: &mut GameState) {
 /// tactic I have been keeping to myself becomes public. Replenishing first
 /// matters -- it is what can end an age, and an age change can antiquate a
 /// card out of the very tableau the war is about to be scored against.
-fn start_turn(state: &mut GameState, rng: &mut PyRandom) {
+fn start_turn(state: &mut GameState, rng: &mut LazyRandom) {
     let idx = state.current;
     if state.round > 1 {
         replenish(state, rng);
@@ -775,7 +794,7 @@ pub fn after_resign(state: &mut GameState) {
     advance_turn(state, &mut rng);
 }
 
-fn advance_turn(state: &mut GameState, rng: &mut PyRandom) {
+fn advance_turn(state: &mut GameState, rng: &mut LazyRandom) {
     state.turn += 1;
 
     let Some(nxt) = next_player(state) else {
@@ -1058,7 +1077,7 @@ mod tests {
         let mut s = new_game(3, 5); // 3p sweeps 2
         // Get out of Age A first, so the sweep is a plain sweep rather than
         // §1.10's age-ending special case.
-        let mut rng = PyRandom::new(1);
+        let mut rng = LazyRandom::new(1);
         replenish(&mut s, &mut rng);
         assert_eq!(s.age_civil, Age::I, "§1.10: the first replenish ends Age A");
 
@@ -1080,7 +1099,7 @@ mod tests {
     #[test]
     fn an_exhausted_deck_advances_the_age_mid_deal() {
         let mut s = new_game(2, 3);
-        let mut rng = PyRandom::new(1);
+        let mut rng = LazyRandom::new(1);
         replenish(&mut s, &mut rng); // out of Age A
         // Empty the row and leave one card in the deck.
         s.card_row = [CardId::NONE; ROW_SIZE];
@@ -1096,12 +1115,66 @@ mod tests {
         );
     }
 
+    /// `deal_row` builds its own [`LazyRandom`] from `state.seed`/`state.
+    /// turn`/`state.round` on every call (`rng_for`'s doc comment: this is
+    /// the function that used to pay MT19937's full init even when the deck
+    /// never emptied). Deferred construction must not change the result:
+    /// two clones of the same position, put through an age-boundary refill
+    /// that DOES draw from the stream, must land on the identical row and
+    /// deck order every time.
+    #[test]
+    fn deal_row_determinizes_identically_from_the_same_state_twice() {
+        let build = || {
+            let mut s = new_game(2, 9);
+            s.card_row = [CardId::NONE; ROW_SIZE];
+            while s.civil_deck.len() > 1 {
+                s.civil_deck.pop();
+            }
+            s
+        };
+        let mut a = build();
+        let mut b = build();
+        deal_row(&mut a);
+        deal_row(&mut b);
+        assert_eq!(a.card_row, b.card_row, "same state must refill the row identically");
+        assert_eq!(
+            a.civil_deck.as_slice(),
+            b.civil_deck.as_slice(),
+            "same state must leave the deck in the identical order"
+        );
+    }
+
+    /// A different game seed must reach a different determinization once
+    /// the deck actually reshuffles -- otherwise `deal_row`'s per-call
+    /// stream would not be sampling anything, just replaying one fixed
+    /// order under a different name.
+    #[test]
+    fn deal_row_determinizes_differently_for_a_different_seed() {
+        let build = |seed: u64| {
+            let mut s = new_game(2, seed);
+            s.card_row = [CardId::NONE; ROW_SIZE];
+            while s.civil_deck.len() > 1 {
+                s.civil_deck.pop();
+            }
+            s
+        };
+        let mut a = build(9);
+        let mut b = build(10);
+        deal_row(&mut a);
+        deal_row(&mut b);
+        assert_ne!(
+            a.civil_deck.as_slice(),
+            b.civil_deck.as_slice(),
+            "different seeds must not reshuffle the new age's deck into the same order"
+        );
+    }
+
     /// §12.2: an age change culls older cards from hands, and §12.2.4 takes
     /// two unborn population from every supply.
     #[test]
     fn advancing_out_of_age_i_antiquates_and_taxes_the_bank() {
         let mut s = new_game(2, 11);
-        let mut rng = PyRandom::new(1);
+        let mut rng = LazyRandom::new(1);
         replenish(&mut s, &mut rng); // A -> I, no antiquation, no tax
         assert_eq!(s.players[0].yellow_bank, 18);
 
@@ -1210,7 +1283,7 @@ mod tests {
     #[test]
     fn a_round_advances_only_when_the_turn_order_wraps() {
         let mut s = new_game(3, 4);
-        let mut rng = PyRandom::new(1);
+        let mut rng = LazyRandom::new(1);
         assert_eq!((s.round, s.current), (1, 0));
         advance_turn(&mut s, &mut rng);
         assert_eq!((s.round, s.current), (1, 1));
@@ -1226,7 +1299,7 @@ mod tests {
     #[test]
     fn passing_the_final_round_ends_the_game() {
         let mut s = new_game(2, 4);
-        let mut rng = PyRandom::new(1);
+        let mut rng = LazyRandom::new(1);
         s.final_round_end = Some(1);
         s.current = 1; // next advance wraps into round 2
         advance_turn(&mut s, &mut rng);

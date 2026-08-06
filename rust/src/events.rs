@@ -562,7 +562,7 @@ fn recycle_future_events(state: &mut GameState) {
     }
     let mut rng = events_rng(state);
     state.current_events = std::mem::take(&mut state.future_events);
-    crate::rng::shuffle_cards(&mut rng, state.current_events.as_mut_slice());
+    crate::rng::shuffle_cards(rng.get(), state.current_events.as_mut_slice());
     // `pop()` takes from the end, so earlier ages must sit last -- a stable
     // sort after the shuffle, descending by age, same as Python's
     // `deck.sort(key=lambda n: -_DB.level_of(n))` (also stable).
@@ -604,7 +604,7 @@ fn recycle_future_events(state: &mut GameState) {
 /// (any recycle point diverged for THAT reason first). Fixed 2026-08-05 once
 /// the fixtures were regenerated through per-apply derived streams and this
 /// became the one remaining, checkable difference.
-fn events_rng(state: &GameState) -> crate::rng::PyRandom {
+fn events_rng(state: &GameState) -> crate::rng::LazyRandom {
     crate::game::rng_for(state)
 }
 

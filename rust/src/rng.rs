@@ -232,6 +232,56 @@ pub fn shuffle_cards(rng: &mut PyRandom, cards: &mut [CardId]) {
     }
 }
 
+/// A [`PyRandom`] whose seeding is deferred until the first draw.
+///
+/// `game::rng_for`'s three callers (`deal_row`, `resume_end_turn`,
+/// `after_resign`) each build a stream "just in case" a reshuffle happens
+/// somewhere downstream (`deal` -> `advance_age`, gated on the civil/military
+/// deck actually running dry -- a rare event, once or twice an age, not once
+/// a call). A live `sample` profile of a `plan` bot at width=8 found
+/// `PyRandom::new` at the top of the named symbols, ahead of every scoring
+/// function; a call-count check confirmed why: of ~510k `PyRandom::new`
+/// calls across 8 games, `game::rng_for` alone made 99.66% of them, and the
+/// deck-empty branch that would actually consume a word is hit on only a
+/// small fraction of those. Every one of those calls was paying MT19937's
+/// full `init_by_array` (~1900 word-mixes) for a stream nothing ever read
+/// from.
+///
+/// This type changes NONE of that: the seed formula and the MT19937
+/// algorithm are untouched (both are checked bit-exact against recorded
+/// CPython fixtures -- see `game.rs`'s "Randomness" doc comment -- and
+/// nothing here may diverge from that), it only moves the expensive part of
+/// [`PyRandom::new`] from "every call" to "every call that ends up shuffling
+/// something." A chain that DOES shuffle more than once (an age boundary
+/// inside `deal`, say) still draws from a single continuing stream, exactly
+/// as an eagerly-built `PyRandom` threaded through the same calls always
+/// has -- [`get`](Self::get) builds the stream at most once and hands out
+/// the same instance on every later call.
+pub struct LazyRandom {
+    seed: i64,
+    inner: Option<PyRandom>,
+}
+
+impl LazyRandom {
+    pub fn new(seed: i64) -> Self {
+        LazyRandom { seed, inner: None }
+    }
+
+    /// Wrap an already-built stream (e.g. one `new_game` setup has already
+    /// drawn words from for an earlier, unconditional shuffle) so a later
+    /// call that only MIGHT need more words -- `deal`'s `advance_age`
+    /// branch, say -- continues the SAME stream rather than starting a
+    /// second one from word 0 at the same seed.
+    pub fn built(rng: PyRandom) -> Self {
+        LazyRandom { seed: 0, inner: Some(rng) }
+    }
+
+    /// The real `PyRandom`, built on first use and reused after that.
+    pub fn get(&mut self) -> &mut PyRandom {
+        self.inner.get_or_insert_with(|| PyRandom::new(self.seed))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +478,104 @@ mod tests {
         shuffle_cards(&mut a, &mut xs);
         shuffle_cards(&mut b, &mut ys);
         assert_eq!(xs.iter().map(|c| c.0).collect::<Vec<_>>(), ys.iter().map(|c| c.0).collect::<Vec<_>>());
+    }
+
+    // ------------------------------------------------------------ LazyRandom
+
+    /// Deferring `PyRandom::new` to the first actual draw must not change
+    /// what gets drawn: a `LazyRandom` and an eagerly-built `PyRandom`
+    /// seeded identically shuffle the same deck the same way. This is the
+    /// property the whole fix rests on -- `game::rng_for`'s callers used to
+    /// pay MT19937's full init on every call whether or not anything was
+    /// ever shuffled; `LazyRandom` only changes WHEN the stream is built,
+    /// never the seed formula or the algorithm, so this must hold for every
+    /// caller's fixture bytes to stay unchanged.
+    #[test]
+    fn a_lazy_random_shuffles_identically_to_an_eager_one_seeded_the_same() {
+        let seed = 987_654_321;
+        let mut eager = PyRandom::new(seed);
+        let mut lazy = LazyRandom::new(seed);
+
+        let mut xs: Vec<CardId> = (0..30u16).map(CardId).collect();
+        let mut ys = xs.clone();
+        shuffle_cards(&mut eager, &mut xs);
+        shuffle_cards(lazy.get(), &mut ys);
+        assert_eq!(
+            xs.iter().map(|c| c.0).collect::<Vec<_>>(),
+            ys.iter().map(|c| c.0).collect::<Vec<_>>(),
+            "a lazily-built stream must draw the identical sequence as an eager one at the same seed"
+        );
+    }
+
+    /// A chain that calls [`LazyRandom::get`] more than once (mirroring
+    /// `advance_age` shuffling the civil deck and then the military deck
+    /// from the SAME stream) must keep drawing forward, not rebuild a fresh
+    /// stream at the same seed on the second call -- that would replay the
+    /// first shuffle's words instead of continuing past them, exactly the
+    /// "two shuffles must share one stream" invariant `game.rs`'s own
+    /// "Randomness" doc comment already requires of the eager code this
+    /// replaces.
+    #[test]
+    fn repeated_get_calls_keep_drawing_from_the_same_stream_not_a_fresh_one() {
+        let seed = 42;
+        let mut eager = PyRandom::new(seed);
+        let mut lazy = LazyRandom::new(seed);
+
+        let mut a1: Vec<CardId> = (0..13u16).map(CardId).collect();
+        let mut a2 = a1.clone();
+        shuffle_cards(&mut eager, &mut a1);
+        shuffle_cards(lazy.get(), &mut a2); // first `get`: builds the stream
+        assert_eq!(a1.iter().map(|c| c.0).collect::<Vec<_>>(), a2.iter().map(|c| c.0).collect::<Vec<_>>());
+
+        let mut b1: Vec<CardId> = (0..13u16).map(CardId).collect();
+        let mut b2 = b1.clone();
+        shuffle_cards(&mut eager, &mut b1); // continues the SAME eager stream
+        shuffle_cards(lazy.get(), &mut b2); // second `get`: must reuse, not rebuild
+        assert_eq!(
+            b1.iter().map(|c| c.0).collect::<Vec<_>>(),
+            b2.iter().map(|c| c.0).collect::<Vec<_>>(),
+            "a second `get()` must continue the stream built by the first, not restart it"
+        );
+    }
+
+    /// A different seed must determinize differently -- the property that
+    /// makes root determinization meaningful at all (a search that always
+    /// drew the same "random" deck order would not be sampling anything).
+    /// Two different seeds shuffling the same 64-card deck (this port's
+    /// largest, `state::MAX_DECK`) landing on the identical permutation
+    /// would be an astronomically unlikely coincidence, not a bug this test
+    /// should tolerate silently, so a plain inequality is the right check.
+    #[test]
+    fn different_seeds_give_different_shuffles() {
+        let mut a = LazyRandom::new(1);
+        let mut b = LazyRandom::new(2);
+        let mut xs: Vec<CardId> = (0..64u16).map(CardId).collect();
+        let mut ys = xs.clone();
+        shuffle_cards(a.get(), &mut xs);
+        shuffle_cards(b.get(), &mut ys);
+        assert_ne!(xs, ys, "different seeds must not determinize to the same order");
+    }
+
+    /// `LazyRandom::built` wraps an already-drawn-from stream (`new_game`'s
+    /// own use: two unconditional shuffles happen before `deal` is called,
+    /// and `deal`'s possible `advance_age` must continue THAT stream, not
+    /// restart a fresh one at word 0). Constructing it from a `PyRandom`
+    /// that has already produced output and then drawing once more must
+    /// match drawing one more time from that same original `PyRandom`
+    /// directly.
+    #[test]
+    fn built_wraps_an_already_advanced_stream_without_restarting_it() {
+        let mut original = PyRandom::new(7);
+        let _ = original.genrand_uint32(); // advance it past word 0
+        let next_from_original = original.genrand_uint32();
+
+        let mut replay = PyRandom::new(7);
+        let _ = replay.genrand_uint32(); // advance identically
+        let mut built = LazyRandom::built(replay);
+        assert_eq!(
+            built.get().genrand_uint32(),
+            next_from_original,
+            "built() must continue the wrapped stream, not reseed it"
+        );
     }
 }
