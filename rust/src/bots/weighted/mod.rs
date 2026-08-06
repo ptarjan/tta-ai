@@ -22,11 +22,14 @@
 //! revision took it as one while only `cards.rs`'s yield-plumbing layer had
 //! landed, and dropped it once the valuation layer did); [`events`], the Age
 //! III scoring-event modelling `features`/`row.rs`'s row terms both lean on;
-//! and [`features`], `evaluate`'s raw feature vector. [`eval`] (the
-//! evaluation entry point and `WeightedBot` itself) is the one submodule
-//! still a stub: a doc comment naming its Python range and a TODO list,
-//! deliberately with no code in it yet, so a later worker's first edit to it
-//! is not a merge conflict with this commit.
+//! and [`features`], `evaluate`'s raw feature vector. [`eval`] is now landed
+//! too -- `evaluate` itself, `WeightedBot`, and the dominance guard
+//! (`dominance_repair`/`NET_NONNEG_PHASE`/`DOMINATES`/`BENEFIT_GATES`) -- and
+//! is the module every other one in this file exists to feed; see its own
+//! top doc comment for the handful of Python-only mechanisms (the journalled
+//! search path, a per-candidate exception guard, `load_weights`/
+//! `save_weights`) it deliberately does not carry, and why. This was the last
+//! unported piece of `engine/bots/weighted.py`.
 
 pub mod cards;
 pub mod eval;

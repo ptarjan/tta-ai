@@ -66,7 +66,7 @@
 /// the representation rationale. `#[repr(usize)]` with no explicit
 /// discriminants assigns 0..N-1 in declaration order, which is what makes
 /// `self as usize` a valid [`Weights`] index.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(usize)]
 pub enum WeightKey {
     RateHorizon,
