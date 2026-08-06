@@ -495,6 +495,7 @@ fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &
     let find = |feat: Feature| gained.iter().find(|&&(f, _, _)| f == feat).map_or(0.0, |&(_, a, _)| a);
     let d_ca = find(Feature::CivilActions);
     let d_ma = find(Feature::MilitaryActions);
+    let ma_before = p.military_actions as f64;
 
     // ---- peaceful (RULES_SPEC 8.2): one civil action, the HIGHER science
     // cost (`costs::tech_cost` -- a government's peaceful price).
@@ -507,7 +508,10 @@ fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &
         peaceful.push((Feature::CaLeft, d_ca, Kind::Gain));
     }
     if d_ma != 0.0 {
-        peaceful.push((Feature::MaLeft, d_ma, Kind::Gain));
+        let d_ma_capped = ma_left_delta(ma_before, ma_before + d_ma);
+        if d_ma_capped != 0.0 {
+            peaceful.push((Feature::MaLeft, d_ma_capped, Kind::Gain));
+        }
     }
     let mut routes = vec![peaceful];
 
@@ -517,7 +521,12 @@ fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &
         let mut rev = vec![(Feature::Science, -(card.revolution_cost as f64), Kind::Cost)];
         if leader_is(p, "Maximilien Robespierre") {
             if p.military_actions != 0 {
-                rev.push((Feature::MaLeft, -(p.military_actions as f64), Kind::Cost));
+                // Every unused MA is spent, not just paid down to zero linearly
+                // -- §6.7's draw is capped at 3, so losing a 4th-or-later
+                // banked action costs nothing beyond what losing the 3rd
+                // already cost. `ma_left_delta` prices the actual before ->
+                // after (0) transition rather than the raw count.
+                rev.push((Feature::MaLeft, ma_left_delta(ma_before, 0.0), Kind::Cost));
             }
             if d_ca != 0.0 {
                 rev.push((Feature::CaLeft, d_ca, Kind::Gain));
@@ -532,12 +541,31 @@ fn government_routes(state: &GameState, p: &PlayerState, name: CardId, gained: &
                 rev.push((Feature::CaLeft, -left, Kind::Cost));
             }
             if d_ma != 0.0 {
-                rev.push((Feature::MaLeft, d_ma, Kind::Gain));
+                let d_ma_capped = ma_left_delta(ma_before, ma_before + d_ma);
+                if d_ma_capped != 0.0 {
+                    rev.push((Feature::MaLeft, d_ma_capped, Kind::Gain));
+                }
             }
         }
         routes.push(rev);
     }
     routes
+}
+
+/// RULES_SPEC §6.7 ("Unspent MAs at end of turn each draw 1 military card
+/// (max 3)"): the 4th-and-later unused military action converts into no
+/// card at all, so [`Feature::MaLeft`]'s draw-potential value saturates at
+/// [`MA_DRAW_CAP`]. A `government_routes` swap must therefore price the
+/// DIFFERENCE OF TWO CAPPED VALUES (`min(after, cap) - min(before, cap)`),
+/// never a capped difference of the raw delta -- the latter would, e.g.,
+/// still price a 5 -> 7 swap (both already past the cap, so genuinely worth
+/// nothing) as if it were a real gain.
+pub const MA_DRAW_CAP: f64 = 3.0;
+
+/// See [`MA_DRAW_CAP`]'s doc comment: the capped-before/capped-after
+/// difference, not `(after - before).min(MA_DRAW_CAP)`.
+fn ma_left_delta(before: f64, after: f64) -> f64 {
+    after.min(MA_DRAW_CAP) - before.min(MA_DRAW_CAP)
 }
 
 /// `government_plans`: (gain triples, cost routes) for putting `name` in
@@ -937,4 +965,44 @@ pub fn build_fresh(name: CardId, state: &GameState, idx: u8) -> (Vec<Triple>, f6
     delta_triples(&before, &after, p, &mut out);
     build_triples(p, typ, &before, &after, 1, &mut out);
     (merge(out), res as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RULES_SPEC 6.7: a government swap that raises the remaining
+    /// military-action count from below the cap to below the cap (2 -> 3)
+    /// is a real gain -- that 3rd action still draws a card at end of turn.
+    #[test]
+    fn a_swap_that_stays_under_the_draw_cap_prices_the_full_raw_delta() {
+        assert_eq!(ma_left_delta(2.0, 3.0), 1.0);
+    }
+
+    /// A swap that crosses the cap (2 -> 4) must be priced as only the room
+    /// left UNDER the cap (1: from 2 up to 3), not the full raw jump (2),
+    /// because the 4th action never converts to a card at all.
+    #[test]
+    fn a_swap_that_crosses_the_draw_cap_prices_only_the_room_under_it() {
+        assert_eq!(ma_left_delta(2.0, 4.0), 1.0);
+    }
+
+    /// A swap entirely above the cap (4 -> 6) is worth exactly nothing --
+    /// this is the trap the fix's own doc comment calls out: a capped
+    /// DIFFERENCE of the raw delta (`(6.0 - 4.0).min(3.0)` = 2.0) would get
+    /// this wrong; the difference of two CAPPED values is the only correct
+    /// shape (`min(6,3) - min(4,3)` = 0.0).
+    #[test]
+    fn a_swap_entirely_above_the_draw_cap_is_worth_nothing() {
+        assert_eq!(ma_left_delta(4.0, 6.0), 0.0);
+    }
+
+    /// Losing every unused action (the Robespierre revolution route, "after"
+    /// = 0) from a pool already past the cap must cost only the capped
+    /// amount (3), not the raw amount (5) -- the 4th and 5th were never
+    /// going to draw a card either way, so losing them costs nothing extra.
+    #[test]
+    fn losing_a_pool_already_past_the_cap_costs_only_the_capped_amount() {
+        assert_eq!(ma_left_delta(5.0, 0.0), -3.0);
+    }
 }

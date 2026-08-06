@@ -441,7 +441,16 @@ pub fn features(
     f.set(WeightKey::CivilActions, f64::from(s.civil_actions) + g(GainFeature::CivilActions));
     f.set(WeightKey::MilitaryActions, f64::from(s.military_actions) + g(GainFeature::MilitaryActions));
     f.set(WeightKey::CaLeft, f64::from(p.civil_actions));
-    f.set(WeightKey::MaLeft, f64::from(p.military_actions));
+    // RULES_SPEC 6.7 / the summary line "Unspent MAs at end of turn each
+    // draw 1 military card (max 3)": the 4th-and-later unused military
+    // action converts into nothing, so its draw-potential value saturates
+    // at `MA_DRAW_CAP` instead of scaling linearly with the raw count --
+    // see `board_yields::MA_DRAW_CAP`'s own doc comment for why a delta
+    // derived from this feature must cap BEFORE differencing, not after.
+    // `military_actions` is never negative (an `i8` the engine floors at 0
+    // on every write -- see `game.rs`/`economy.rs`'s "reset actions" step),
+    // so only the upper bound needs clamping here.
+    f.set(WeightKey::MaLeft, f64::from(p.military_actions).min(crate::bots::board_yields::MA_DRAW_CAP));
     // Civil actions spent THIS turn reaching into the row (GAP 1) -- a
     // separate channel from `ca_left` on purpose; see Python's own comment
     // (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict) for why
@@ -707,5 +716,30 @@ mod tests {
         let f = features(&state, 0, None, None, false);
         let default = Features::default();
         assert_ne!(f, default, "features() must not return an all-zero vector on a real deal");
+    }
+
+    /// RULES_SPEC 6.7 / the summary line "Unspent MAs at end of turn each
+    /// draw 1 military card (max 3)": a player's THIRD unused military
+    /// action is still worth a card, so `ma_left` must keep rising through
+    /// it -- but the FOURTH converts into nothing at all, so `ma_left` must
+    /// NOT rise again. A linear-count `ma_left` (the pre-fix shape) prices
+    /// the 4th exactly like the 3rd; capping at 3 is what makes the two
+    /// marginal actions read differently.
+    #[test]
+    fn the_third_unused_military_action_is_worth_more_but_the_fourth_is_worth_nothing() {
+        let state = G::new_game(2, 43);
+        let ma_left_at = |n: i8| -> f64 {
+            let mut s = state.clone();
+            s.players[0].military_actions = n;
+            features(&s, 0, None, None, false).get(WeightKey::MaLeft)
+        };
+        let at2 = ma_left_at(2);
+        let at3 = ma_left_at(3);
+        let at4 = ma_left_at(4);
+        assert!(at3 > at2, "the 3rd unused military action must still add value (it still draws a card): {at2} -> {at3}");
+        assert_eq!(
+            at4, at3,
+            "the 4th unused military action must add nothing -- RULES_SPEC 6.7 caps the draw at 3, got {at3} -> {at4}"
+        );
     }
 }

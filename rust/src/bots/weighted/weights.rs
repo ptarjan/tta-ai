@@ -281,7 +281,41 @@ weight_key_table! {
     Uprising => "uprising", -12.0;
     CivilActions => "civil_actions", 2.0;
     MilitaryActions => "military_actions", 0.7;
+    // VERDICT (2026-08-06 audit, docs/RULES_SPEC.md 6.7 vs 8.x): unlike
+    // `ma_left` below, `ca_left` needs NO saturating cap. Civil actions have
+    // no end-of-turn conversion at all (§6.6 lists no "draw a card per
+    // unspent CA" step -- they simply expire), so a naive reading of a
+    // positive weight here looks like the bot being paid to hoard civil
+    // actions it will never spend. It is not: `features()` reads
+    // `p.civil_actions` on WHATEVER state a candidate move resolves to,
+    // which for every move except `EndTurn` is still mid-turn -- a real
+    // remaining CA there has real option value (something still worth doing
+    // with it later this same turn) that a 1-ply search cannot see any
+    // other way, and `board_yields::government_routes` prices a government
+    // swap's CA delta the identical way (`Feature::CaLeft` as an immediate
+    // in-turn pool change, never as an end-of-turn reward). The one state
+    // where "remaining CA" is NOT mid-turn potential -- the trial built by
+    // applying `Move::EndTurn` -- pre-loads `p.civil_actions` to the FRESH
+    // allotment for the player's next turn (`economy::end_of_turn` step 5
+    // runs before the search ever calls `evaluate` on that trial), not to
+    // whatever was wasted; that refresh is exactly the asymmetry
+    // `end_turn_bias` was measured against and is deliberately left alone
+    // (see `eval.rs::choose`'s own "DO NOT fix this asymmetry" comment) --
+    // `ca_left` inherits that same calibration rather than fighting it.
+    // Net: no cliff for `ca_left` to saturate at, because there is no
+    // card-draw conversion function to approximate in the first place.
     CaLeft => "ca_left", 0.05;
+    // RULES_SPEC 6.7 / the summary line "Unspent MAs at end of turn each
+    // draw 1 military card (max 3)": unlike `ca_left` above, a military
+    // action DOES have an end-of-turn conversion, and that conversion is a
+    // CLIFF, not a slope -- the 4th-and-later unused action draws nothing.
+    // `features()` and `board_yields::government_routes` cap this
+    // feature's value at `board_yields::MA_DRAW_CAP` (3.0) for exactly that
+    // reason; see those call sites' own comments. `military_actions`
+    // (0.7, above) is untouched by that cap -- it carries the general
+    // standing value of having military actions (attacking, defending,
+    // forming armies), which keeps scaling past 3 and has nothing to do
+    // with the end-of-turn draw this weight prices.
     MaLeft => "ma_left", 0.05;
     TakeCostPaid => "take_cost_paid", 0.0;
     RowUrgency => "row_urgency", 0.0;
