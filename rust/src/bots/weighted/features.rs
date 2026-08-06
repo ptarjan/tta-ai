@@ -454,6 +454,11 @@ pub fn features(
     f.set(WeightKey::StrengthDeficit, (-rel).max(0.0));
     f.set(WeightKey::StrengthLead, rel.max(0.0).min(6.0));
     f.set(WeightKey::TacticLevel, if p.tactic.is_none() { 0.0 } else { f64::from(p.tactic.level()) });
+    // RULES_SPEC 11.3 cliff, not a slope -- see `WeightKey::HasUnit`'s own
+    // doc comment in `weights.rs`. `unit_workers` (the sweep total above)
+    // already counts every military unit staffed with a worker; this just
+    // asks whether that count is zero or not.
+    f.set(WeightKey::HasUnit, if unit_workers > 0 { 1.0 } else { 0.0 });
     f.set(WeightKey::Colonies, p.colonies.len() as f64);
     f.set(WeightKey::Pacts, pacts + dc.pact_offers);
     f.set(WeightKey::PactBlocksAttack, blocks_attack);
@@ -572,6 +577,35 @@ mod tests {
                 assert_eq!(f.get(WeightKey::WonderRemaining), 0.0, "{n}p idx {idx}");
             }
         }
+    }
+
+    /// `has_unit` (docs/OPEN_ITEMS.md, ported from the parked
+    /// `origin/has-unit-ab` branch): 1.0 the instant a player staffs their
+    /// FIRST military unit, 0.0 with none staffed -- a cliff, not a slope,
+    /// unlike the linear `unit_workers` it is derived from. Staffing the
+    /// starting `Warriors` tech's first worker must flip `has_unit` from 0.0
+    /// to 1.0 while moving `unit_workers` by exactly 1 -- the same +1 a
+    /// second or third staffed unit would also produce on `unit_workers`
+    /// alone, which is exactly the distinction `unit_workers` cannot
+    /// express and `has_unit` exists to add.
+    #[test]
+    fn has_unit_is_a_cliff_not_the_same_slope_as_unit_workers() {
+        let mut state = G::new_game(2, 40);
+        let warriors = crate::cards::CardId::by_name("Warriors").expect("Warriors is a base-game unit tech");
+        state.players[0]
+            .techs
+            .get_mut(warriors)
+            .expect("a fresh deal starts with Warriors in the tableau")
+            .workers = 0;
+
+        let before = features(&state, 0, None, None, false);
+        assert_eq!(before.get(WeightKey::UnitWorkers), 0.0, "no staffed units must read unit_workers=0.0");
+        assert_eq!(before.get(WeightKey::HasUnit), 0.0, "has_unit must be 0.0 with no staffed units");
+
+        state.players[0].techs.get_mut(warriors).unwrap().workers = 1;
+        let after = features(&state, 0, None, None, false);
+        assert_eq!(after.get(WeightKey::UnitWorkers), 1.0, "staffing one unit must move unit_workers by exactly 1");
+        assert_eq!(after.get(WeightKey::HasUnit), 1.0, "has_unit must flip to 1.0 the instant any unit is staffed");
     }
 
     /// `happy_margin` resolves through the hand-rolled `margin` local, not a

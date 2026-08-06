@@ -1,5 +1,5 @@
 //! `engine/bots/weighted.py` lines 3548-4103: the weight vector `evaluate`
-//! is linear over -- 132 named knobs, almost all defaulting to 0.0 so a new
+//! is linear over -- 133 named knobs, almost all defaulting to 0.0 so a new
 //! channel changes nothing until the league climbs it away from zero. See
 //! that Python range's own extensive per-weight commentary for the "why"
 //! behind each fitted number; it is the source of the rationale and is
@@ -126,6 +126,7 @@ pub enum WeightKey {
     TacticLevel,
     TacticGain,
     TacticShort,
+    HasUnit,
     Colonies,
     Pacts,
     PactBlocksAttack,
@@ -211,7 +212,7 @@ pub enum WeightKey {
 macro_rules! weight_key_table {
     ( $( $variant:ident => $name:literal, $default:expr );+ $(;)? ) => {
         impl WeightKey {
-            /// Every key, in declaration order -- the one place all 132 are
+            /// Every key, in declaration order -- the one place all 133 are
             /// listed together outside the enum declaration itself.
             pub const ALL: &'static [WeightKey] = &[ $( WeightKey::$variant, )+ ];
 
@@ -287,6 +288,17 @@ weight_key_table! {
     TacticLevel => "tactic_level", 0.5;
     TacticGain => "tactic_gain", 0.0;
     TacticShort => "tactic_short", 0.0;
+    // Owning a unit is a CLIFF (RULES_SPEC 11.3), not a slope: colonizing
+    // requires sacrificing at least one military unit "even if other
+    // bonuses would cover the bid", so a player at zero units is dropped
+    // from every aggression/colony auction before it ever reaches a
+    // decision, and `unit_workers` (linear) cannot express that unit #1 is
+    // worth far more than unit #5. Ported from the parked, never-merged
+    // `origin/has-unit-ab` branch (commit 2713037) -- that branch seeded
+    // this at 1.0 pending a 3p/4p no-harm A/B that never ran; this port
+    // seeds 0.0 instead and lets the league price it rather than carrying
+    // over an unmeasured guess (docs/OPEN_ITEMS.md).
+    HasUnit => "has_unit", 0.0;
     Colonies => "colonies", 2.0;
     Pacts => "pacts", 0.5;
     PactBlocksAttack => "pact_blocks_attack", 0.5;
@@ -428,7 +440,7 @@ impl WeightKey {
     /// convention -- is what keeps them together; see
     /// `tests::phase_key_shares_its_base_keys_group`.
     ///
-    /// Deliberately NO `_ =>` wildcard arm: all 132 variants are named here
+    /// Deliberately NO `_ =>` wildcard arm: all 133 variants are named here
     /// by hand. Python's `group_of` raises `KeyError` rather than falling
     /// through to a "?" label for exactly this reason -- its own docstring
     /// records that a silent fallback is how four features (including
@@ -465,7 +477,7 @@ impl WeightKey {
             HappyMargin | Discontent | Uprising => WeightGroup::Happiness,
 
             Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
-            | StrengthLead | TacticLevel | TacticGain | TacticShort | Colonies | Pacts
+            | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies | Pacts
             | PactBlocksAttack | AuctionCommitted | AuctionBid => WeightGroup::Military,
 
             HandLimit | ColonizeBonus | BuildDiscount | FreeCivilAction | ResourceDiscount
