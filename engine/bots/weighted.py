@@ -330,7 +330,25 @@ _EVENT_YIELD = {
     "yellowTokens": ("yellow_bank", 1),
     "blueTokens": ("blue_free", 1),
     "strength": ("strength", 1),
-    "happiness": ("happy", 1), "happy": ("happy", 1),
+    # `happy_margin`, NOT `happy`.  `happy` is what `_YIELD_TO_FEATURE` calls
+    # it, and `features()` resolves that name by hand into `happy_margin`
+    # (`margin = s.happy - happy_req + g("happy", 0.0)`).  This table gets no
+    # such resolution step -- `_event_block_value` does a bare `w.get(fk,
+    # 0.0)` -- so `("happy", 1)` priced every happiness an event block could
+    # ever grant at exactly zero, silently, whatever `happy_margin`'s weight
+    # said.  `_TERR_TO_FEATURE` (1852) and the two hand tables (1772, 1811)
+    # all already make this substitution and say why; this was the one table
+    # of the four that did not, which is this project's recurring bug shape --
+    # the same fact in four registries and nothing that fails when they
+    # disagree.  `test_event_scoring.py::EveryEventYieldNamesARealWeight` is
+    # that missing check: it fails if any key here stops being a weight.
+    #
+    # No live number moves.  Nothing in the base data nests `happiness`/
+    # `happy` inside a gain/lose/targeting block, so this arm has never fired;
+    # `rust/tools/gen_cards.py:978` raises on an unrecognised event-block key,
+    # so a card that ever did would stop the Rust build rather than reach a
+    # `cards::EventBlock` with no field to hold it.
+    "happiness": ("happy_margin", 1), "happy": ("happy_margin", 1),
     "drawMilitaryCards": ("hand_military", 1),
     # `loseAllStoredFood` carries no amount -- the amount is whatever I am
     # holding -- so it is priced from the board in `_event_block_value`.

@@ -338,5 +338,31 @@ class TestFeatureIsWired(unittest.TestCase):
                         "event_scoring_margin was 0.0 in every game")
 
 
+class EveryEventYieldNamesARealWeight(unittest.TestCase):
+    """`_EVENT_YIELD`'s feature keys must all be real weights.
+
+    Found while porting this section to Rust.  `_EVENT_YIELD["happiness"]`
+    named `"happy"`, which is not a key of `DEFAULT_WEIGHTS` -- only
+    `"happy_margin"` is -- so `_event_block_value`'s bare `w.get(fk, 0.0)`
+    priced it at zero no matter what the weight said.  Three sibling tables
+    (`_TERR_TO_FEATURE` and the two hand tables) already substituted
+    `happy_margin` and documented why; this one did not, and nothing failed
+    when they disagreed.
+
+    A name check, not a value check: it is the disagreement between the two
+    registries that is the bug, and it is the thing no other test could see.
+    """
+
+    def test_every_feature_key_is_a_weight(self):
+        for raw, (fk, _sign) in W._EVENT_YIELD.items():
+            if fk is None:          # `loseAllStoredFood`, priced from the board
+                continue
+            self.assertIn(
+                fk, W.DEFAULT_WEIGHTS,
+                f"_EVENT_YIELD[{raw!r}] prices through {fk!r}, which is not a "
+                f"weight -- _event_block_value's w.get(fk, 0.0) will silently "
+                f"score it 0.0")
+
+
 if __name__ == "__main__":
     unittest.main()
