@@ -103,8 +103,8 @@ trigger), but a driver that outlives its task registration is invisible to
 | `experiments/deploy/register_tasks.ps1` | new — registers all five tasks reproducibly instead of by hand-typed `schtasks` |
 | `experiments/deploy/guard_task.xml` | `CalendarTrigger` repeating every 5 min with an explicit `Duration`; action via the VBS; `Hidden`; priority 5 (NORMAL — the guard must be scheduled promptly even under full training load) |
 | `experiments/deploy/loop_task.xml` | same, 15 min, priority 7 (BELOW_NORMAL, inherited by every child) |
-| `experiments/deploy/desktop_watchdog_arm.ps1` | now version-controlled; **reaps the previous driver tree by stored PID** (`taskkill /F /T`) before relaunching; launches via the VBS |
-| `experiments/gpu_guard.py` | `PAUSE_HOLD` operator hold; **re-syncs `paused` against the file on every poll** |
+| `experiments/deploy/desktop_watchdog_arm.ps1` | now version-controlled; **reaps the previous driver tree by stored PID** (`taskkill /F /T`) before relaunching; launches via the VBS (superseded 2026-08-06 into a no-op stub — see the script's own header) |
+| `experiments/gpu_guard.py` | `PAUSE_HOLD` operator hold; **re-syncs `paused` against the file on every poll** (file deleted 2026-08-06 along with the guard it belonged to — see the banner above) |
 | `experiments/neural_search_loop.sh` | PID + heartbeat lock: a live driver wins and the newcomer exits; a stale-heartbeat driver is reaped |
 
 Two notes on the guard changes:
@@ -194,11 +194,11 @@ Second start, with a live driver already running:
 
 ### 3.5 Still unverified, stated plainly
 
-* **The arm-watchdog reap** (`taskkill /F /T` on the stored PID) is deployed but
-  has not yet been observed doing a reap, because the arms do not relaunch
-  while `PAUSE` is set. Confirm on the next resume that
-  `C:\Users\micro\tta_watchdog.log` shows a `reaped previous driver tree` line
-  and that `bash.exe` does not exceed ~3 per arm.
+* **The arm-watchdog reap** (`taskkill /F /T` on the stored PID) was never
+  observed doing a reap before the Python league it drove was deleted in the
+  Rust port; `experiments/deploy/desktop_watchdog_arm.ps1` is now a no-op
+  stub (2026-08-06 — see its own header), so this is moot rather than
+  outstanding.
 * **The 12-worker generation path under real load** has not been window-checked,
   because running it would have meant running compute during the owner's game.
   It uses the identical inherited-console chain verified in 3.2, and the
