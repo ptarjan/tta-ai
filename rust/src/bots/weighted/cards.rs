@@ -1097,6 +1097,30 @@ pub fn card_potential(
             if ab != 0.0 {
                 return ab * action_value(id, st, ix, w, late);
             }
+        } else if kind == CardType::Wonder {
+            // `wonder_board_credit`: `tech_board_credit`/`gov_board_credit`/
+            // `action_board_credit`'s missing sibling -- see
+            // docs/OPEN_ITEMS.md. Those three price a ROW card the player is
+            // positioned to take through a dedicated board-aware function
+            // (`tech_value`/`gov_value`/`action_value`) before ever falling
+            // to the generic `card_board_credit` + `board_credit_key` path
+            // below. A wonder on the row had no such dedicated gate at all --
+            // `card_board_wonder` only ever fires through the generic
+            // fallback, and both it and `card_board_credit` default 0.0, so
+            // a row wonder was priced at exactly nothing by default while
+            // tech/gov/action (seeded at 1.0) were not. There is no bespoke
+            // `wonder_value` to write: a wonder's board price already IS the
+            // swap diff [`board_yields::board_yields`] computes (the same
+            // function `wonder_potential`'s in-progress case and the generic
+            // fallback below both use) -- what changes here is only that a
+            // dedicated weight gates it, so the league can price a row
+            // wonder independently of `card_board_credit`/`card_board_wonder`.
+            let wb = w.get(WeightKey::WonderBoardCredit);
+            if wb != 0.0 {
+                if let Some(swap) = board_yields::board_yields(id, st, ix) {
+                    return wb * sum_board_triples(&swap, w);
+                }
+            }
         }
     }
 
@@ -1484,6 +1508,53 @@ mod tests {
         assert_eq!(sum_yields(&triples, &w, 0.0), 0.0);
     }
 
+    /// `wonder_board_credit` (docs/OPEN_ITEMS.md: "wonders on the row are
+    /// credited as nothing"): `tech_board_credit`/`gov_board_credit`/
+    /// `action_board_credit`'s missing sibling. Before this landed, a wonder
+    /// priced with a board present (`state`/`idx` both `Some`, exactly the
+    /// row-pricing shape `row_pressure` calls `card_potential` with) was
+    /// identical to the handless static-table price, because neither
+    /// `card_board_credit` nor `card_board_wonder` -- the only two knobs that
+    /// used to touch a wonder's board price at all -- default nonzero. With
+    /// `wonder_board_credit` nonzero, a row wonder now prices through the
+    /// same swap-diff [`board_yields::board_yields`] computes for a wonder
+    /// already under construction ([`wonder_potential`]).
+    ///
+    /// First Space Flight is the probe card: its culture bonus
+    /// (`Special::OnBuildCulturePerTechLevelSum`) depends on the player's
+    /// actual tech levels, which only the board-aware diff can see -- the
+    /// static [`card_yields`] table has no board to read, so it prices this
+    /// wonder at its bare stage cost alone. Giving the player one upgraded
+    /// tech (`Iron`, level 1) makes the two paths provably diverge rather
+    /// than coincide, which a plain, board-independent wonder like Colossus
+    /// would not (its static and board-diff prices are identical by
+    /// construction, since it carries no rider special at all).
+    #[test]
+    fn wonder_board_credit_prices_a_row_wonder_through_the_board_diff() {
+        let mut state = crate::game::new_game(2, 49);
+        state.players[0]
+            .techs
+            .insert(CardId::by_name("Iron").unwrap(), crate::state::TechSlot { workers: 1, stored: 0 });
+        let fsf = CardId::by_name("First Space Flight").unwrap();
+        let mut scratch = Vec::new();
+
+        let mut w = Weights::default();
+        w.set(WeightKey::WonderBoardCredit, 0.0);
+        let static_price = card_potential(fsf, &w, Some(&state), Some(0), None, &mut scratch);
+
+        w.set(WeightKey::WonderBoardCredit, 1.0);
+        let board_price = card_potential(fsf, &w, Some(&state), Some(0), None, &mut scratch);
+
+        assert_ne!(
+            static_price, board_price,
+            "wonder_board_credit=1.0 must move a row wonder's price off the static-table answer"
+        );
+
+        let swap = board_yields::board_yields(fsf, &state, 0).expect("First Space Flight is a swap type");
+        let expected = sum_board_triples(&swap, &w);
+        assert_eq!(board_price, expected, "wonder_board_credit=1.0 must price exactly the board-yields swap diff");
+    }
+
     #[test]
     fn sum_yields_scales_each_credited_kind_by_its_own_weight() {
         let mut w = Weights::default();
@@ -1636,14 +1707,14 @@ mod tests {
 
     /// Every weight [`card_potential`]'s dispatch reads by name
     /// (`tech_board_credit`, `unit_tech_credit`, `gov_board_credit`,
-    /// `action_board_credit`, `card_rate_credit`, `card_board_credit`) is a
-    /// real [`WeightKey`] -- the exact bug shape `feedback-make-it-permanent`
-    /// warns about: a feature key that silently isn't a member of
-    /// `DEFAULT_WEIGHTS` prices at zero forever with nothing failing.
-    /// `WeightKey` being a Rust enum (not a string) already makes a
-    /// misspelled key a compile error, but this pins that every credit this
-    /// function's own doc comment names by Python's string spelling still
-    /// exists as the variant used here.
+    /// `action_board_credit`, `wonder_board_credit`, `card_rate_credit`,
+    /// `card_board_credit`) is a real [`WeightKey`] -- the exact bug shape
+    /// `feedback-make-it-permanent` warns about: a feature key that silently
+    /// isn't a member of `DEFAULT_WEIGHTS` prices at zero forever with
+    /// nothing failing. `WeightKey` being a Rust enum (not a string) already
+    /// makes a misspelled key a compile error, but this pins that every
+    /// credit this function's own doc comment names by Python's string
+    /// spelling still exists as the variant used here.
     #[test]
     fn card_potential_dispatch_credits_are_real_weight_keys() {
         for (k, name) in [
@@ -1651,6 +1722,7 @@ mod tests {
             (WeightKey::UnitTechCredit, "unit_tech_credit"),
             (WeightKey::GovBoardCredit, "gov_board_credit"),
             (WeightKey::ActionBoardCredit, "action_board_credit"),
+            (WeightKey::WonderBoardCredit, "wonder_board_credit"),
             (WeightKey::CardRateCredit, "card_rate_credit"),
             (WeightKey::CardBoardCredit, "card_board_credit"),
             (WeightKey::FreeActionCredit, "free_action_credit"),

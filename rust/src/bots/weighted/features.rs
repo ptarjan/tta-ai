@@ -581,6 +581,48 @@ mod tests {
     /// with an empty yellow bank (`happy_required(0) == 8`, so a fresh
     /// player's margin is very negative and gets clamped by `discontent`,
     /// not by `happy_margin` itself, which only clamps its UPPER side at 3).
+    /// `docs/OPEN_ITEMS.md` records `wonder_overrun` as "doubly dead": the
+    /// weight is 0.0 on every committed vector AND the feature computes
+    /// exactly 0.0 on every state in the registry's 6-game self-play corpus,
+    /// flagged there as "likely a bug in the feature computation (something
+    /// that should fire near wonder completion never does)".
+    ///
+    /// It is not. This constructs the state the formula is FOR -- a wonder
+    /// with resources still owed, zero production, and one round left
+    /// (`final_round_end` pins `horizon::rounds_left` to exactly 1, rather
+    /// than relying on the generic cards-remaining estimate) -- and the
+    /// coordinate fires: `turns_to_finish` (3 resources owed / 1 production,
+    /// floored at 1.0) exceeds the 1 round actually left, so `overrun` is
+    /// positive. The 6-game corpus never happening to sample a state this
+    /// unlucky is a property of that corpus (small, deterministic, already
+    /// documented elsewhere in this file's own doc comment as fragile), not
+    /// of this formula -- see this module's top doc comment's `TURNS_CAP`
+    /// note and Python's identical `overrun` derivation
+    /// (`engine/bots/weighted.py:1548-1557`), which this ports unchanged.
+    /// This test is the guard: if a future edit to `rounds_left`/
+    /// `turns_to_finish` silently makes `overrun` structurally unreachable
+    /// again, this fails instead of the coordinate going quietly dead a
+    /// second time.
+    #[test]
+    fn wonder_overrun_fires_for_a_constructed_near_completion_shortfall_state() {
+        let mut state = crate::game::new_game(2, 47);
+        let pyramids = crate::cards::CardId::by_name("Pyramids").unwrap();
+        state.players[0].wonder = pyramids;
+        state.players[0].wonder_steps = 0;
+        state.players[0].resources = 0;
+        state.final_round_end = Some(state.round);
+        let f = features(&state, 0, None, None, false);
+        assert!(
+            f.get(WeightKey::WonderTurnsToFinish) > 0.0,
+            "turns_to_finish must be positive for this scenario"
+        );
+        assert!(
+            f.get(WeightKey::WonderOverrun) > 0.0,
+            "wonder_overrun must fire (turns_to_finish exceeds the 1 round left), got {}",
+            f.get(WeightKey::WonderOverrun)
+        );
+    }
+
     #[test]
     fn happy_margin_is_never_the_bare_happy_stat() {
         let state = G::new_game(2, 41);

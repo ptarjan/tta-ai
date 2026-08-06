@@ -1,5 +1,5 @@
 //! `engine/bots/weighted.py` lines 3548-4103: the weight vector `evaluate`
-//! is linear over -- 130 named knobs, almost all defaulting to 0.0 so a new
+//! is linear over -- 131 named knobs, almost all defaulting to 0.0 so a new
 //! channel changes nothing until the league climbs it away from zero. See
 //! that Python range's own extensive per-weight commentary for the "why"
 //! behind each fitted number; it is the source of the rationale and is
@@ -175,6 +175,7 @@ pub enum WeightKey {
     TechBoardCredit,
     ActionBoardCredit,
     GovBoardCredit,
+    WonderBoardCredit,
     BuildFreshCredit,
     RestrictedResourceCredit,
     FreeActionCredit,
@@ -209,7 +210,7 @@ pub enum WeightKey {
 macro_rules! weight_key_table {
     ( $( $variant:ident => $name:literal, $default:expr );+ $(;)? ) => {
         impl WeightKey {
-            /// Every key, in declaration order -- the one place all 130 are
+            /// Every key, in declaration order -- the one place all 131 are
             /// listed together outside the enum declaration itself.
             pub const ALL: &'static [WeightKey] = &[ $( WeightKey::$variant, )+ ];
 
@@ -334,6 +335,12 @@ weight_key_table! {
     TechBoardCredit => "tech_board_credit", 1.0;
     ActionBoardCredit => "action_board_credit", 1.0;
     GovBoardCredit => "gov_board_credit", 1.0;
+    // Seeded at 0.0, unlike its tech/action/gov siblings above (which default
+    // 1.0): those three were measured effective at 1.0 from the start, but
+    // no equivalent measurement exists for wonders yet -- see this key's own
+    // doc comment on `card_potential`'s wonder branch in `cards.rs`. 0.0 lets
+    // the league climb it rather than inheriting a guessed value.
+    WonderBoardCredit => "wonder_board_credit", 0.0;
     BuildFreshCredit => "build_fresh_credit", 0.0;
     RestrictedResourceCredit => "restricted_resource_credit", 1.0;
     FreeActionCredit => "free_action_credit", 0.0;
@@ -415,7 +422,7 @@ impl WeightKey {
     /// convention -- is what keeps them together; see
     /// `tests::phase_key_shares_its_base_keys_group`.
     ///
-    /// Deliberately NO `_ =>` wildcard arm: all 130 variants are named here
+    /// Deliberately NO `_ =>` wildcard arm: all 131 variants are named here
     /// by hand. Python's `group_of` raises `KeyError` rather than falling
     /// through to a "?" label for exactly this reason -- its own docstring
     /// records that a silent fallback is how four features (including
@@ -458,7 +465,7 @@ impl WeightKey {
             HandLimit | ColonizeBonus | BuildDiscount | FreeCivilAction | ResourceDiscount
             | DefenseBonus | CardRateCredit | UnitStrengthCredit | TerritoryCredit
             | BonusCardCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
-            | FreeActionCredit | GovBoardCredit | BuildFreshCredit
+            | FreeActionCredit | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
             | RestrictedResourceCredit => WeightGroup::Priced,
 
             RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
