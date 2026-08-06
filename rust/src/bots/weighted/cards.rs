@@ -321,8 +321,30 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
         push(out, WeightKey::HandLimit, eff.civil_hand_limit as i32, YieldKind::Gain);
         push(out, WeightKey::HandLimit, eff.military_hand_limit as i32, YieldKind::Gain);
         push(out, WeightKey::ColonizeBonus, eff.colonize_bonus as i32, YieldKind::Gain);
-        push(out, WeightKey::ResourceDiscount, eff.resource_discount as i32, YieldKind::Gain);
-        push(out, WeightKey::RestrictedResources, eff.resources_for_military_units as i32, YieldKind::Gain);
+        // `resource_discount`/`resources_for_military_units` are DELIBERATELY
+        // not pushed here. Both fields exist only on Action cards
+        // (`data/cards_military_actions.json`), which `card_potential`
+        // dispatches to `action_value` on every live champion today
+        // (`action_board_credit != 0.0` on all three trained vectors) --
+        // `action_value` already prices both, through `yield_marginal`'s
+        // ring-fenced reroute through `resource_stock`'s marginal, not
+        // through the flat `w[resource_discount]`/`w[restricted_resources]`
+        // lookup this function used to do. That used to be a SECOND,
+        // disagreeing formula for the same two coordinates, live only in the
+        // `action_board_credit == 0.0` edge case -- but genuinely live: on
+        // the live 2p Rust champion (`experiments/rust_champion_2p.json`,
+        // loaded through `eval::load_weights`) the two formulas priced Rich
+        // Land (A)'s `resourceDiscount` at 0.0 (static -- `dominance_repair`
+        // clamps the persisted `resource_discount = -0.0516` to 0.0 on load,
+        // since it is a `BENEFIT_GATES` member and a printed benefit may
+        // never price negative) vs 1.82 (board-aware, `resource_stock`'s own
+        // marginal). Not a rounding difference -- the static formula called
+        // this card worthless where the board-aware one found real value,
+        // because the static formula rode a weight (`resource_discount`)
+        // that `features()` never emits, so the league could only ever
+        // random-walk it, never climb it toward agreement.
+        // See `card_yields_never_reprices_the_action_boards_ring_fenced_
+        // coordinates` below for the regression pin.
     }
 
     // `_BONUS_TO_FEATURE`: the three Military Bonus cards. `defenseBonus` is
@@ -364,13 +386,19 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
                 let m = ages.iter().copied().max().unwrap_or(0);
                 push(out, WeightKey::BuildDiscount, m as i32, YieldKind::Gain);
             }
-            // `_EFF_SPECIAL["freeCivilAction"]`: a presence flag -- WHICH
-            // free action it is (18 cards, `FreeCivilActionValue`) does not
-            // change what it is worth, only that there is one. `effects.
-            // free_civil_action` (the CardEffects field of the same name) is
-            // dead for exactly this reason -- see this module's top doc
-            // comment -- so this reads the `Special` variant, not the field.
-            Special::FreeCivilAction(_) => out.push((WeightKey::FreeCivilAction, 1.0, YieldKind::Gain)),
+            // `Special::FreeCivilAction` is DELIBERATELY not priced here.
+            // `WeightKey::FreeCivilAction` used to be pushed as a flat 1.0
+            // gain -- a second, disagreeing formula for the exact same
+            // eighteen action cards `action_value` already prices through
+            // `free_action_credit` (a civil action's own board-aware
+            // marginal, gated so playing the action card's own spent civil
+            // action doesn't get counted as a wash-turned-gain). Only
+            // reachable when `action_board_credit == 0.0`, which no live
+            // champion's trained vector has ever been (see this function's
+            // `resource_discount` comment above for the same shape and a
+            // measured disagreement). `WeightKey::FreeCivilAction` stays
+            // in the registry as a known-dead coordinate; nothing pushes it
+            // anymore.
             _ => {}
         }
     }
@@ -910,17 +938,21 @@ fn gains_only_board_sum(triples: &[board_yields::Triple], w: &Weights) -> f64 {
 /// [`sum_yields`], which needs `YieldKind` to know how to scale each triple
 /// (a `Rate` triple by `credit`, a `Unit`/`Territory`/`Bonus` triple by its
 /// own credit weight) and also prices `production`, the two costs and
-/// `card.special`'s `BuildDiscount`/`FreeCivilAction`. `action_value` prices
-/// NONE of those -- it walks only the `effects` dict Python's own
-/// `_EFF_TO_FEATURE` table covers, treats every entry identically through
-/// [`yield_marginal`] regardless of kind, and has its own bespoke
-/// `freeCivilAction` handling (`free_action_credit`, not the generic
-/// `FreeCivilAction` weight `card_yields` prices it through for the static
-/// path). Reusing [`card_yields`]'s buffer here would silently pull in
-/// `production`, `BuildDiscount`, `WonderStagesPerAction` and the wrong
-/// `FreeCivilAction` pricing -- exactly the kind of drift this port's own
-/// house style exists to prevent, so this is a deliberate second walk, not
-/// an oversight.
+/// `card.special`'s `BuildDiscount`. `action_value` prices NONE of those --
+/// it walks only the `effects` dict Python's own `_EFF_TO_FEATURE` table
+/// covers, treats every entry identically through [`yield_marginal`]
+/// regardless of kind, and has its own bespoke `freeCivilAction` handling
+/// (`free_action_credit`). `card_yields` used to have its OWN, disagreeing
+/// `resource_discount`/`restricted_resources`/`freeCivilAction` handling --
+/// a flat `w[key]` lookup instead of this function's board-aware
+/// `yield_marginal` reroute -- reachable only when `action_board_credit ==
+/// 0.0`, which measurably disagreed (0.0 vs. 1.82 on Rich Land (A)'s
+/// `resourceDiscount`, the live 2p Rust champion) and has been removed; see
+/// `card_yields`'s own comments at the `resource_discount`/`FreeCivilAction`
+/// sites for the excision. Reusing `card_yields`'s buffer here would still
+/// silently pull in `production`, `BuildDiscount` and `WonderStagesPerAction`
+/// -- exactly the kind of drift this port's own house style exists to
+/// prevent, so this stays a deliberate second walk, not an oversight.
 pub fn action_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
     let card = id.get();
     let eff = &card.effects;
@@ -1814,6 +1846,37 @@ mod tests {
         w.set(WeightKey::FreeActionCredit, 0.0);
         let without_credit = action_value(id, &state, 0, &w, None);
         assert!(with_credit > without_credit, "with={with_credit} without={without_credit}");
+    }
+
+    /// Regression pin for the two-live-paths bug docs/OPEN_ITEMS.md's
+    /// "Retire the static action table" item described: `card_yields`'s
+    /// static fallback and `action_value`'s board-aware walk each had their
+    /// own formula for `resource_discount`/`restricted_resources`/
+    /// `free_civil_action`, and they measurably disagreed (0.0 static vs.
+    /// 1.82 board-aware pricing Rich Land (A)'s `resourceDiscount` at the
+    /// live 2p Rust champion's weights) whenever the static one was
+    /// reachable. The fix was to delete the static formula rather than pin
+    /// agreement, because it was provably unreachable on every trained champion
+    /// (`action_board_credit != 0.0` on all three) and the board-aware one
+    /// is what the league actually trains against. This test is the
+    /// tripwire: walk every card in the base game and fail the moment
+    /// `card_yields` prices any of the three coordinates again, however it
+    /// got reintroduced.
+    #[test]
+    fn card_yields_never_reprices_the_action_boards_ring_fenced_coordinates() {
+        let mut buf = Vec::new();
+        for i in 0..crate::cards::NUM_CARDS {
+            let id = CardId(i as u16);
+            buf.clear();
+            card_yields(id, &mut buf);
+            for &(key, amount, _kind) in &buf {
+                assert!(
+                    !matches!(key, WeightKey::ResourceDiscount | WeightKey::RestrictedResources | WeightKey::FreeCivilAction),
+                    "{id:?} priced {amount} of {key:?} through the static table -- \
+                     action_value must be the only pricer of this coordinate"
+                );
+            }
+        }
     }
 
     /// `tech_value` of a technology the player already has developed is

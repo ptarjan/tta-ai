@@ -6,45 +6,37 @@ against `rust/src/` directly (not against its own prior prose) on
 2026-08-06. Git history is the record of what used to be here and why it was
 closed -- there is deliberately no "recently closed" section in this file.
 
-## 1. `gov_action_cost` is computed and then multiplied by zero
+## 1. `gov_action_cost` has been climbed repeatedly, not multiplied by zero -- corrected 2026-08-06
 
 `government_cost` (`rust/src/bots/board_yields.rs:456-464`) pushes a real
 `Feature::GovActionCost` triple -- the civil actions a government revolution
-burns -- on the live board-aware path, and `feature_key` maps it to
-`WeightKey::GovActionCost` (`rust/src/bots/weighted/cards.rs:789`). But
-nothing ever sets that weight during `features()`'s accumulation, its coded
-default is 0.0 (`weights.rs:335`), and it is absent from all three live
-champions (`experiments/champion_{2,3,4}p.json`). So the quantity is
-computed on every relevant decision and always multiplied by zero.
+burns -- on the live board-aware path (`gov_value`, gated on
+`gov_board_credit`; `feature_key` at `cards.rs:817` maps it to
+`WeightKey::GovActionCost`). The coded default is 0.0 (`weights.rs:335`), and
+this item previously claimed it was "absent from all three live champions,"
+citing `experiments/champion_{2,3,4}p.json` -- but that file is a stale
+Jul-26 snapshot (78 weight keys, no `gov_action_cost` entry at all, untouched
+since) from before the coordinate existed in the schema, not the live
+champion. The Rust league's actual output (`experiments/rust_champion_
+{2,3,4}p.json`, written by `climb` per `experiments/rust_league.sh`,
+currently at generation 1083/777/241) has `gov_board_credit` substantially
+nonzero on all three (1.03/7.07/-2.66) and `gov_action_cost` drifted well off
+0.0 under real training pressure: 0.351/-0.201/0.029. The climb log confirms
+the mutation operator reaches it regularly: a `board`-group op was tried in
+98 of 1069 logged 2p generations and present in 18 of the 188 accepted ones
+(`experiments/logs/rust_climb_2p.jsonl`; similarly 63/762 tried and 15/143
+accepted at 3p, 20/236 tried and 8/50 accepted at 4p). So it has been climbed
+many times over, not left at its default.
 
-Next action: this is a one-line call, not an investigation -- either seed it
-away from 0.0 and let a league run climb it, or delete the computation if
-it's judged not worth pricing.
+Next action: not a seed-and-climb task any more -- what's actually missing
+is an ablation to tell whether the drift on this coordinate is signal or
+noise.
 
-## 2. Three action-card coordinates are duplicated across two live paths, not dead
-
-`ResourceDiscount`, `RestrictedResources`, `FreeCivilAction` are each
-emitted from two independent places that can disagree: the board-aware
-`action_value` (`rust/src/bots/weighted/cards.rs:950,951,976`), which fires
-whenever `action_board_credit` is nonzero (default 1.0, `weights.rs:354`)
-and so wins on every live champion today; and the static `card_yields`
-fallback (`cards.rs:324-325,373`), reached only when `card_potential` falls
-all the way through to it (`cards.rs:1157-1163`, i.e. when
-`action_board_credit` happens to be exactly 0.0). Both walks are real,
-independently-written Rust code today -- a champion or experiment that
-zeroes `action_board_credit` does not fall back to "unpriced," it falls back
-to a second implementation of the same three coordinates.
-
-Next action: either delete the static path's handling of these three
-(the board-aware path is strictly newer and already wins by default), or add
-a test pinning that both paths agree, before anyone tunes
-`action_board_credit` toward 0.0.
-
-## 3. Five military-deck card classes have no pricing path at all
+## 2. Five military-deck card classes have no pricing path at all
 
 Tactic, Aggression, War, Pact and Event cards have no board-aware pricing
 concept (`board_credit_key` returns `None` for all five, plus Territory,
-`cards.rs:500-506`) and no static `card_yields` pricing either: Tactic is
+`cards.rs:523-532`) and no static `card_yields` pricing either: Tactic is
 explicitly skipped (`cards.rs:315`), and the other four have empty
 `effects` blocks in the card data, so the generic walk finds nothing to
 price. All five price at exactly 0.0 on every live champion. This is
@@ -53,7 +45,7 @@ champion -- the first time the league prices the military hand, all five
 classes go blind simultaneously with nothing to catch it.
 
 Territory is NOT part of this group, despite being named alongside them in
-the `board_credit_key` comment at `cards.rs:500-506`: that comment is about
+the `board_credit_key` comment at `cards.rs:523-532`: that comment is about
 the absence of a board-aware BONUS multiplier specifically. Territory gets
 real static pricing through `card_yields`/`territory_credit` (default 1.0,
 `cards.rs:244-275`), so it is not truly 0.0.
@@ -63,16 +55,32 @@ aggression's one-shot steal / a pact-in-hand onto some board feature before
 there's anything to wire up. Single largest unpriced surface in the
 evaluator; no small fix exists here.
 
-## 4. `wonder_overrun` is unclimbed, not broken
+## 3. `wonder_overrun` has been climbed too -- corrected 2026-08-06
 
 The formula is live (`features.rs:489` sets it on every call) and tested
 (`wonder_overrun_fires_for_a_constructed_near_completion_shortfall_state`,
 `features.rs:641`, fires `> 0.0` on a constructed near-overrun state) -- an
 earlier version of this item claimed the feature itself computes 0.0 as a
 bug; that claim was checked, refuted with the constructed counterexample
-above, and is closed. What's still true: the weight defaults to 0.0
-(`weights.rs:324`) and stays there on all three live champions
-(`experiments/champion_{2,3,4}p.json`), so it has simply never been climbed.
+above, and is closed. The weight's default is 0.0 (`weights.rs:324`), and
+this item then claimed it "stays there on all three live champions,"
+citing `experiments/champion_{2,3,4}p.json` -- the same stale Jul-26
+snapshot item 1 was corrected against, not the live champion. The Rust
+league's actual output (`experiments/rust_champion_{2,3,4}p.json`, gen
+1083/777/241) reads -0.073/-0.249/0.101 -- drifted well off 0.0, same as
+`gov_action_cost`. The `wonders`-group mutation op was tried in 85 of 1069
+logged 2p generations and present in 16 of the 188 accepted ones
+(`experiments/logs/rust_climb_2p.jsonl`; similarly 63/762 tried and 15/143
+accepted at 3p, 18/236 tried and 6/50 accepted at 4p).
 
-Next action: nothing broken to fix. If it's worth pricing, seed it away
-from 0.0 and let a league run try it.
+That said, this is weaker evidence of a *working* coordinate than item 1's:
+`overrun` is 0.0 whenever no wonder is in progress or none is at risk of
+overrunning, which the 6-game/~2000-state coordinate-registry corpus
+apparently never samples outside the constructed test case above -- so a
+champion carrying -0.25 there could be riding pure noise the win-rate gate
+had no live signal to reject or confirm.
+
+Next action: nothing broken to fix, and it is not unclimbed -- what's
+missing is a real-game frequency measurement (how often does `overrun`
+actually go nonzero in league or corpus play?) before trusting either the
+sign or the magnitude of the drift.
