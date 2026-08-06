@@ -491,6 +491,22 @@ pub enum LineOutcome {
     Unclassified,
 }
 
+/// Splits `text` into `(actor, rest)` if a known colour leads it, the same
+/// prefix scan [`classify`] itself does (see that function's body) --
+/// exposed separately because callers that need MORE than [`classify`]
+/// extracts from a line (a war/aggression/pact target colour, an action-point
+/// cost, a bid amount -- `replay.rs`'s job, not `corpuscensus.rs`'s) need the
+/// actor AND the remainder of the line to re-parse it themselves, without
+/// duplicating this scan.
+pub fn actor_and_rest(text: &str) -> Option<(Color, &str)> {
+    for color in [Color::Orange, Color::Purple, Color::Green, Color::Grey] {
+        if let Some(rest) = text.strip_prefix(color.as_str()).and_then(|r| r.strip_prefix(' ')) {
+            return Some((color, rest));
+        }
+    }
+    None
+}
+
 /// Classifies `text` (the journal's `text` column) into an [`LineOutcome`].
 /// Column 2 (`player_colour`) is not consulted here at all -- see this
 /// function's body for why the leading colour is read from `text` itself.
@@ -1270,6 +1286,18 @@ mod tests {
         for &c in ActionClass::ALL {
             assert!(labels.insert(c.label()), "duplicate label for {c:?}");
         }
+    }
+
+    #[test]
+    fn actor_and_rest_splits_off_the_leading_colour_and_keeps_the_remainder_verbatim() {
+        let (actor, rest) = actor_and_rest("Grey declares War over Culture on Green blah").unwrap();
+        assert_eq!(actor, Color::Grey);
+        assert_eq!(rest, "declares War over Culture on Green blah");
+    }
+
+    #[test]
+    fn actor_and_rest_is_none_when_no_known_colour_leads_the_line() {
+        assert!(actor_and_rest("Action Phase begins").is_none());
     }
 
     #[test]
