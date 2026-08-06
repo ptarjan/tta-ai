@@ -112,5 +112,6 @@ pub mod board_yields;
 pub mod book;
 pub mod counting;
 pub mod pending;
+pub mod plan;
 pub mod quiescent;
 pub mod weighted;
