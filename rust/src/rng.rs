@@ -184,6 +184,22 @@ impl PyRandom {
     /// (`genrand_uint32() % n`) would desynchronise the stream from the
     /// first rejection onward -- silently, since it still returns *a*
     /// value in range, just not the SAME one Python drew next.
+    /// `random.random()` -- CPython's `random_random`: a 53-bit float in
+    /// `[0, 1)`, assembled from two tempered words as
+    /// `(a * 2**26 + b) / 2**53` with `a = w >> 5` and `b = w >> 6`.
+    ///
+    /// Nothing in the ENGINE draws a float -- shuffling is `randbelow` all the
+    /// way down -- so this exists for the search side (`climb`'s mutation
+    /// operators), where the alternative was a second, unrelated random number
+    /// generator in the same process. Two streams that both look random and
+    /// have to stay separately seeded is a state-management problem with no
+    /// upside; one stream, one seed, one twist schedule.
+    pub fn random(&mut self) -> f64 {
+        let a = (self.genrand_uint32() >> 5) as f64;
+        let b = (self.genrand_uint32() >> 6) as f64;
+        (a * 67_108_864.0 + b) * (1.0 / 9_007_199_254_740_992.0)
+    }
+
     fn randbelow(&mut self, n: u64) -> u64 {
         debug_assert!(n > 0, "_randbelow is only defined for n > 0");
         let k = 64 - n.leading_zeros(); // n.bit_length()
