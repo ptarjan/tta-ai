@@ -103,7 +103,7 @@ use tta::corpus::{
 };
 use tta::discard_solver::{DiscardSolver, FutureNeed};
 use tta::moves::PactSide;
-use tta::state::{ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
+use tta::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
 use tta::{apply, costs, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
@@ -391,38 +391,37 @@ impl<'a> Replayer<'a> {
                 // `decider`, whoever else is trying to act while it sits
                 // unresolved (the "reached through a different code path"
                 // shape `docs/REPLAY.md` used to report as unrecoverable).
-                // Drained here, ahead of the decider-equality check below,
-                // the same way `GainBlock`/`FreeBuild` are: BGO's journal
-                // never names which card was discarded (only a count -- see
-                // `discard_solver`'s module doc), but the identity does not
-                // need to be journal-verified to be a LEGAL choice --
-                // `c.options` is already the engine's own set of currently-
-                // held candidates. `DiscardSolver::choose` narrows which of
-                // those candidates is least likely to contradict a LATER
-                // named play by this same player, and reports which
-                // epistemic bucket (solved / chosen / forced collision) the
-                // pick falls into for `docs/REPLAY.md`'s honest accounting.
+                // Two cases:
+                //
+                // - This IS `expected_actor`'s own pending, and the line
+                //   about to be translated is their own `"discards N
+                //   cards"` line (`upcoming.0 == Discard`): defer to
+                //   `apply_one`'s `Discard` arm (via `resolve_one_discard`),
+                //   exactly like the `FreeBuild` `matches_upcoming` case
+                //   above -- NOT because it needs the parsed line (unlike
+                //   `FreeBuild` it doesn't), but because resolving the LAST
+                //   queued discard can itself finish that player's end of
+                //   turn and advance `state.current` to the NEXT player
+                //   (`interact::QueueItem::DiscardMilitary`'s own doc:
+                //   resolving it resumes `game::resume_end_turn`) -- doing
+                //   that HERE, before the decider-equality check below,
+                //   would make `decider` legitimately stop matching
+                //   `expected_actor` and get wrongly reported as a stuck
+                //   pending, even though the line was fully, correctly
+                //   consumed. Found by testing against real games where
+                //   EVERY "discards" line failed this way the moment this
+                //   branch existed unconditionally.
+                // - Anything else (a DIFFERENT player's stale discard, or
+                //   this player's discard reached from an unrelated line --
+                //   the original "different code path" shape): drain it
+                //   here, same as `GainBlock`/`FreeBuild`, since nothing
+                //   else in this file will ever get a chance to.
                 if matches!(c.kind, ChoiceKind::DiscardMilitary) {
-                    let opts: Vec<CardId> = c
-                        .options
-                        .as_slice()
-                        .iter()
-                        .map(|o| match o {
-                            ChoiceOption::Card(id) => *id,
-                            other => panic!("DiscardMilitary choice offered a non-card option {other:?}"),
-                        })
-                        .collect();
-                    let (n, certainty) = self.discard_solver.choose(c.player, self.current_lineno, &opts);
-                    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
-                        eprintln!(
-                            "DEBUG discard: player {} line {} picked {} of {} candidates ({certainty:?})",
-                            c.player,
-                            self.current_lineno,
-                            opts[n].get().name,
-                            opts.len()
-                        );
+                    let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Discard;
+                    if matches_upcoming {
+                        return Ok(());
                     }
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    self.resolve_one_discard_choice(&c);
                     continue;
                 }
             }
@@ -560,6 +559,56 @@ impl<'a> Replayer<'a> {
         let hand = &mut self.state.players[actor as usize].hand_military;
         if !hand.contains(card) {
             hand.push(card);
+        }
+    }
+
+    /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
+    /// -- `c` must be that pending's own snapshot, read by the caller just
+    /// before calling this (`resolve_intervening` and `resolve_discard`
+    /// both do). Applying the `Move::Choose` this picks may itself finish
+    /// the discarding player's end of turn and advance `state.current` --
+    /// see `resolve_intervening`'s `DiscardMilitary` branch for why that
+    /// matters to callers.
+    fn resolve_one_discard_choice(&mut self, c: &Choice) {
+        let opts: Vec<CardId> = c
+            .options
+            .as_slice()
+            .iter()
+            .map(|o| match o {
+                ChoiceOption::Card(id) => *id,
+                other => panic!("DiscardMilitary choice offered a non-card option {other:?}"),
+            })
+            .collect();
+        let (n, certainty) = self.discard_solver.choose(c.player, self.current_lineno, &opts);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG discard: player {} line {} picked {} of {} candidates ({certainty:?})",
+                c.player,
+                self.current_lineno,
+                opts[n].get().name,
+                opts.len()
+            );
+        }
+        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+    }
+
+    /// Drain every currently open `Pending::Choice(DiscardMilitary)`
+    /// belonging to `actor` -- called from `apply_one`'s `ActionClass::
+    /// Discard` arm, i.e. when the journal line being translated IS that
+    /// player's own `"discards N cards"` line. Stops the instant the top
+    /// pending is no longer a `DiscardMilitary` choice for `actor`: either
+    /// it fully resolved (the common case), or -- reaching a DIFFERENT
+    /// pending or a different player's discard here would mean this
+    /// binary's own reconstructed hand size disagrees with the journal's
+    /// stated count, which is a real, separate mismatch this function
+    /// deliberately does not paper over by draining someone else's pending
+    /// to make the count match.
+    fn resolve_discard(&mut self, actor: u8) {
+        while let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
+            if c.kind != ChoiceKind::DiscardMilitary || c.player != actor {
+                break;
+            }
+            self.resolve_one_discard_choice(&c);
         }
     }
 
@@ -1022,6 +1071,19 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
         // a choice for all 3 players and every one of them was wrongly
         // auto-skipped before their own real "builds Religion" line was
         // even read (`docs/REPLAY.md`).
+        //
+        // `ActionClass::Discard` (`"<Color> discards N card(s)"`) still
+        // NEEDS this call, unlike `PlayEvent` -- `resolve_intervening`'s own
+        // `ChoiceKind::DiscardMilitary` branch has a `matches_upcoming` case
+        // (mirroring `FreeBuild`'s) that returns `Ok(())` without draining
+        // when the open pending IS `expected_actor`'s own and the upcoming
+        // line IS their `"discards"` line, deferring the actual `Move::
+        // Choose` to `apply_one`'s `Discard` arm (`resolve_discard`) --
+        // see that branch's doc for why resolving it any earlier would
+        // wrongly report a stuck pending (resolving the LAST queued discard
+        // can itself finish `actor`'s end of turn and advance `state.
+        // current`, making the generic `decider == expected_actor` exit
+        // test fail even though nothing went wrong).
         if class != ActionClass::PlayEvent {
             if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
                 mismatch = Some(mk_mismatch(line, kind));
@@ -1364,15 +1426,22 @@ fn apply_one(
             "unpaired BGO client-side undo (\"puts X back in the row\" with no matching preceding take)".into(),
         )),
         // The card(s) BGO logs only a count for ("<Color> discards N
-        // cards") are already resolved by the time `apply_one` reaches this
-        // line: `resolve_intervening`'s `ChoiceKind::DiscardMilitary` branch
-        // drains any open discard pending for `actor` BEFORE this line's own
-        // translation runs (same "auto-drain ahead of the decider check" as
-        // `GainBlock`/`FreeBuild` -- see that branch's doc, and
-        // `discard_solver`'s module doc for how the card is picked). This
-        // arm is therefore a pure validation checkpoint, like `PlayEvent`/
-        // `WinWar`/`WinAuction`/`Colonize` above.
-        ActionClass::Discard => Ok(()),
+        // cards") -- resolved HERE, not left as a bare validation
+        // checkpoint like `PlayEvent`/`WinWar`/`WinAuction`/`Colonize`
+        // above, because resolving the LAST queued discard can itself
+        // finish `actor`'s end of turn and advance `state.current`
+        // (`resolve_intervening`'s `DiscardMilitary` branch's doc explains
+        // why that rules out resolving it any earlier). `resolve_discard`
+        // is a no-op if nothing is pending (the discard was already fully
+        // drained by `resolve_intervening`'s own handling of a DIFFERENT
+        // player's stale pending reached along the way here -- the
+        // "different code path" shape `docs/REPLAY.md` used to report as a
+        // separate, unrecoverable stop). See `discard_solver`'s module doc
+        // for how the card is picked.
+        ActionClass::Discard => {
+            r.resolve_discard(actor);
+            Ok(())
+        }
         ActionClass::EndTurn => r.try_apply(Move::EndTurn),
     }
 }
