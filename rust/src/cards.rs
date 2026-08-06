@@ -155,6 +155,20 @@ impl CardType {
         self.takes_workers()
             || matches!(self, Government | SpecialTech | Wonder | Leader | Action)
     }
+
+    /// Mirrors `bots/weighted.py::_is_action` (`type_by_name.get(name) ==
+    /// "action"`) -- a yellow action card, RB 3.11.
+    #[inline]
+    pub fn is_action(self) -> bool {
+        self == CardType::Action
+    }
+
+    /// Mirrors `bots/weighted.py::_is_government` -- one of the eight
+    /// government cards, RULES_SPEC 8.
+    #[inline]
+    pub fn is_government(self) -> bool {
+        self == CardType::Government
+    }
 }
 
 /// The numeric effects that RECUR across cards.
