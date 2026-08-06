@@ -350,6 +350,21 @@ pub fn pick_collecting(
     moves: &[Move],
     bank: &mut Bank<GameState>,
 ) -> Move {
+    // `beam` below already refuses to EXPAND a `Move::Resign` candidate (see
+    // its own per-move `continue`), so in the ordinary case Resign never wins
+    // on score. But nothing here ever checked what `moves[0]` -- the raw,
+    // UNfiltered root list -- actually is, and this function falls back to
+    // exactly that when nothing scores at all: `chosen.map(...)
+    // .unwrap_or(moves[0])`, reached whenever `cfg.max_nodes` starves before
+    // a single candidate is scored. Today `legal::politics_moves` happens to
+    // push `PolPass` before `Resign`, so `moves[0]` is never actually Resign
+    // -- but that ordering is an implementation detail of a function this
+    // one does not call and has no contract with; "happens not to" is not a
+    // guarantee. Filtering here, at the root, the same way every OTHER
+    // search bot in this crate does (`crate::bots::filter_resign`) closes
+    // that off by construction instead of by move-generation order.
+    let filtered = crate::bots::filter_resign(moves, false);
+    let moves: &[Move] = filtered.as_slice();
     if moves.len() == 1 {
         return moves[0];
     }

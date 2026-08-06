@@ -134,3 +134,72 @@ pub mod pending;
 pub mod plan;
 pub mod quiescent;
 pub mod weighted;
+
+use crate::moves::{Move, MoveList};
+
+/// Drop `Move::Resign` from `moves` unless `allow_resign` -- and even then
+/// only when a non-resign move is offered too, since a position where Resign
+/// is the ONLY legal move must still return it (there is nothing else to
+/// play).
+///
+/// `("resign",)` (RULES_SPEC 5.11) is legal on almost every turn, and handing
+/// it to a 1-ply evaluator or a random walk is a trap: `weighted::eval::
+/// WeightedBot::allow_resign`'s doc comment records a fitted value vector
+/// resigning on turn 3 of 3 games in 12, and this module's own top doc
+/// history shows every search bot independently reinvented the identical
+/// three-line filter to stop it -- `WeightedBot::choose`, `RandomBot::
+/// choose`, `neural::bot::pick`, `neural::plan::pick_collecting` all carried
+/// their own copy. `quiescent::pick` carried none at all: measured on
+/// trained weights it resigned in 43%/67%/75% of 2p/3p/4p games, losing on
+/// purpose rather than on merit (win rate 1.25%/0.42%/0.00% against WeightedBot
+/// on shared deals, against nulls of 50%/33.3%/25%). One filter, shared, so
+/// the next search bot inherits the guard by construction instead of by
+/// remembering to copy it a fifth time.
+pub(crate) fn filter_resign(moves: &[Move], allow_resign: bool) -> MoveList {
+    let mut filtered = MoveList::new();
+    if !allow_resign && moves.len() > 1 {
+        let has_non_resign = moves.iter().any(|m| !matches!(m, Move::Resign));
+        if has_non_resign {
+            for &m in moves {
+                if !matches!(m, Move::Resign) {
+                    filtered.push(m);
+                }
+            }
+        }
+    }
+    if filtered.is_empty() {
+        let mut out = MoveList::new();
+        for &m in moves {
+            out.push(m);
+        }
+        out
+    } else {
+        filtered
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_resign_drops_resign_when_a_non_resign_move_is_also_offered() {
+        let moves = [Move::Resign, Move::EndTurn];
+        let out = filter_resign(&moves, false);
+        assert_eq!(out.as_slice(), &[Move::EndTurn]);
+    }
+
+    #[test]
+    fn filter_resign_keeps_a_lone_resign_candidate_because_there_is_nothing_else_to_play() {
+        let moves = [Move::Resign];
+        let out = filter_resign(&moves, false);
+        assert_eq!(out.as_slice(), &[Move::Resign]);
+    }
+
+    #[test]
+    fn filter_resign_with_allow_resign_true_keeps_resign_in_a_mixed_candidate_set() {
+        let moves = [Move::Resign, Move::EndTurn];
+        let out = filter_resign(&moves, true);
+        assert_eq!(out.as_slice(), &[Move::Resign, Move::EndTurn]);
+    }
+}

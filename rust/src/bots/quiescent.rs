@@ -120,11 +120,29 @@ pub struct QuiescenceConfig {
     pub war_lookahead: bool,
     /// Added to a candidate's score when the candidate is `Move::EndTurn`.
     pub end_bias: f64,
+    /// `false` (the default) drops `Move::Resign` from the root candidate
+    /// set via [`crate::bots::filter_resign`] -- the guard every other
+    /// search bot in this crate carries (`WeightedBot::allow_resign`,
+    /// `RandomBot::allow_resign`, `NeuralBotConfig::allow_resign`,
+    /// `NeuralPlanConfig::allow_resign`). This bot went without it: measured
+    /// on trained champion weights it resigned in 43%/67%/75% of 2p/3p/4p
+    /// games instead of playing them out, because a 1-ply quiescent search
+    /// under the same fitted evaluator hits the identical scoring bug
+    /// `WeightedBot::allow_resign`'s doc comment describes -- see
+    /// `docs/OPEN_ITEMS.md` for that underlying defect.
+    pub allow_resign: bool,
 }
 
 impl Default for QuiescenceConfig {
     fn default() -> Self {
-        QuiescenceConfig { levels: 1, max_depth: 12, max_nodes: 600, war_lookahead: true, end_bias: 0.0 }
+        QuiescenceConfig {
+            levels: 1,
+            max_depth: 12,
+            max_nodes: 600,
+            war_lookahead: true,
+            end_bias: 0.0,
+            allow_resign: false,
+        }
     }
 }
 
@@ -283,6 +301,15 @@ pub fn pick<E>(cfg: &QuiescenceConfig, stats: &mut Stats, state: &GameState, mov
 where
     E: Fn(&GameState, u8) -> f64,
 {
+    // See `QuiescenceConfig::allow_resign`'s doc comment: this is the guard
+    // every other search bot applies at its own root entry point, applied
+    // here in the same place for the same reason -- `resolve`/`pick_one`
+    // below never see `Move::Resign` themselves (it is only ever offered in
+    // `Phase::Politics` with `state.pending` empty, per `legal::legal_moves`,
+    // and both of those functions only ever run while something IS pending),
+    // so filtering once here at the root is complete, not partial.
+    let filtered = crate::bots::filter_resign(moves, cfg.allow_resign);
+    let moves: &[Move] = filtered.as_slice();
     if moves.len() == 1 {
         return moves[0];
     }
@@ -398,6 +425,39 @@ mod tests {
             let mv = pick(&cfg, &mut stats, &state, moves.as_slice(), &culture);
             assert!(moves.as_slice().contains(&mv), "levels={levels}: {mv:?} was not offered");
         }
+    }
+
+    /// `allow_resign = false` (the default) must drop `Move::Resign` from the
+    /// root candidate set before it ever reaches `pick_one`'s argmax -- the
+    /// same guard `WeightedBot::choose`/`RandomBot::choose` carry via
+    /// `crate::bots::filter_resign`, which this bot went without entirely
+    /// until now (see `QuiescenceConfig::allow_resign`'s doc comment for the
+    /// measured 43%/67%/75% resign rate that produced, quitting playable
+    /// games instead of losing on merit). `flat` scores every candidate
+    /// identically, so an UNFILTERED search would have kept `Resign`
+    /// (`pick_one`'s argmax keeps the FIRST candidate on a tie, and `Resign`
+    /// is listed first here) -- the filter is the only thing standing
+    /// between this test and `Resign`.
+    #[test]
+    fn resign_is_filtered_out_of_the_root_candidate_set_by_default() {
+        let state = game::new_game(2, 4);
+        let mut stats = Stats::default();
+        let picked =
+            pick(&QuiescenceConfig::default(), &mut stats, &state, &[Move::Resign, Move::EndTurn], &flat);
+        assert_eq!(picked, Move::EndTurn, "resign must never be chosen over a live alternative");
+    }
+
+    /// `allow_resign = true` restores `Resign` as an eligible candidate --
+    /// pinning the STRUCTURAL half (a lone `Resign` candidate is not
+    /// filtered away to an empty set, which would panic on `moves[0]` of
+    /// nothing), the same shape `WeightedBot`'s identical test pins.
+    #[test]
+    fn allow_resign_true_keeps_a_lone_resign_candidate_eligible() {
+        let state = game::new_game(2, 5);
+        let cfg = QuiescenceConfig { allow_resign: true, ..QuiescenceConfig::default() };
+        let mut stats = Stats::default();
+        let picked = pick(&cfg, &mut stats, &state, &[Move::Resign], &flat);
+        assert_eq!(picked, Move::Resign);
     }
 
     #[test]

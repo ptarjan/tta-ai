@@ -98,7 +98,7 @@
 
 use crate::combat;
 use crate::interact;
-use crate::moves::{Move, MoveList};
+use crate::moves::Move;
 use crate::rng::PyRandom;
 use crate::state::GameState;
 
@@ -246,18 +246,8 @@ pub fn pick_collecting(
     moves: &[Move],
     bank: &mut Bank<Vec<f64>>,
 ) -> Move {
-    let mut filtered = MoveList::new();
-    if !cfg.allow_resign && moves.len() > 1 {
-        let has_non_resign = moves.iter().any(|m| !matches!(m, Move::Resign));
-        if has_non_resign {
-            for &m in moves {
-                if !matches!(m, Move::Resign) {
-                    filtered.push(m);
-                }
-            }
-        }
-    }
-    let moves: &[Move] = if filtered.as_slice().is_empty() { moves } else { filtered.as_slice() };
+    let filtered = super::super::filter_resign(moves, cfg.allow_resign);
+    let moves: &[Move] = filtered.as_slice();
     if moves.len() == 1 {
         return moves[0];
     }

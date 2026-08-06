@@ -607,14 +607,7 @@ impl BookBot {
     /// list, so an empty slice here is a caller bug, not a state to degrade
     /// gracefully from.
     pub fn choose(&self, state: &GameState, moves: &[Move]) -> Move {
-        let has_non_resign = moves.iter().any(|m| !matches!(m, Move::Resign));
-        let mut filtered = MoveList::new();
-        for &m in moves {
-            if has_non_resign && matches!(m, Move::Resign) {
-                continue;
-            }
-            filtered.push(m);
-        }
+        let filtered = super::filter_resign(moves, false);
         let moves = filtered.as_slice();
         if moves.len() == 1 {
             return moves[0];

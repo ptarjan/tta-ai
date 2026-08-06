@@ -108,7 +108,7 @@ use crate::apply;
 use crate::economy;
 use crate::effects;
 use crate::legal;
-use crate::moves::{Move, MoveList};
+use crate::moves::Move;
 use crate::rng::PyRandom;
 use crate::state::GameState;
 
@@ -183,15 +183,8 @@ impl RandomBot {
     /// If `moves` is empty (a caller bug, matching `random.choice([])`'s own
     /// `IndexError` and every other bot in this port).
     pub fn choose(&mut self, moves: &[Move]) -> Move {
-        let mut filtered = MoveList::new();
-        if !self.allow_resign {
-            for &m in moves {
-                if !matches!(m, Move::Resign) {
-                    filtered.push(m);
-                }
-            }
-        }
-        let pool: &[Move] = if filtered.as_slice().is_empty() { moves } else { filtered.as_slice() };
+        let filtered = super::filter_resign(moves, self.allow_resign);
+        let pool: &[Move] = filtered.as_slice();
         let i = self.rng.below(pool.len());
         pool[i]
     }
@@ -487,18 +480,8 @@ impl GreedyBot {
     /// If `moves` is empty (a caller bug, matching every other bot in this
     /// port).
     pub fn choose(&self, state: &GameState, moves: &[Move]) -> Move {
-        let mut filtered = MoveList::new();
-        if moves.len() > 1 {
-            let has_non_resign = moves.iter().any(|m| !matches!(m, Move::Resign));
-            if has_non_resign {
-                for &m in moves {
-                    if !matches!(m, Move::Resign) {
-                        filtered.push(m);
-                    }
-                }
-            }
-        }
-        let moves: &[Move] = if filtered.as_slice().is_empty() { moves } else { filtered.as_slice() };
+        let filtered = super::filter_resign(moves, false);
+        let moves: &[Move] = filtered.as_slice();
         if moves.len() == 1 {
             return moves[0];
         }

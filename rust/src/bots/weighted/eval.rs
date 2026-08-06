@@ -91,7 +91,7 @@
 //!   read as its default" from being a way to lose a trained value.
 
 use crate::apply;
-use crate::moves::{Move, MoveList};
+use crate::moves::Move;
 use crate::state::GameState;
 
 use super::super::plan;
@@ -303,18 +303,8 @@ impl WeightedBot {
     /// If `moves` is empty (a caller bug -- a live game's `legal_moves` never
     /// returns one, matching `BookBot::choose`'s identical contract).
     pub fn choose(&self, state: &GameState, moves: &[Move]) -> Move {
-        let mut filtered = MoveList::new();
-        if !self.allow_resign && moves.len() > 1 {
-            let has_non_resign = moves.iter().any(|m| !matches!(m, Move::Resign));
-            if has_non_resign {
-                for &m in moves {
-                    if !matches!(m, Move::Resign) {
-                        filtered.push(m);
-                    }
-                }
-            }
-        }
-        let moves: &[Move] = if filtered.as_slice().is_empty() { moves } else { filtered.as_slice() };
+        let filtered = super::super::filter_resign(moves, self.allow_resign);
+        let moves: &[Move] = filtered.as_slice();
         if moves.len() == 1 {
             return moves[0];
         }

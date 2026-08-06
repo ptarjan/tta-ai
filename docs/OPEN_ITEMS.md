@@ -65,3 +65,73 @@ Next action: nothing broken to fix, and it is not unclimbed -- what's
 missing is a real-game frequency measurement (how often does `overrun`
 actually go nonzero in league or corpus play?) before trusting either the
 sign or the magnitude of the drift.
+
+## 3. `evaluate()` has no opinion of `Move::Resign` because nothing ever trained it one -- opened 2026-08-06
+
+Every `allow_resign` field in this crate (`WeightedBot`, `RandomBot`,
+`NeuralBotConfig`, `NeuralPlanConfig`, `QuiescentBot` as of this commit) is a
+workaround for the same underlying defect, stated plainly in
+`WeightedBot::allow_resign`'s own doc comment
+(`rust/src/bots/weighted/eval.rs:263-271`): a value vector fitted by
+regression has been measured to resign mid-game, because the 1-ply score of
+the post-resign trial state can beat the score of playing on. Measured fresh
+for this commit: `QuiescentBot`, which lacked the guard entirely, resigned in
+43%/67%/75% of 2p/3p/4p games on trained champion weights and won 1.25%/
+0.42%/0.00% of its games against `WeightedBot` on shared deals (nulls
+50%/33.3%/25%) -- it was losing on purpose, not on merit.
+
+Traced one level deeper than the existing doc comments go: this is not a
+sign error or a missing term waiting to be added to `evaluate`
+(`rust/src/bots/weighted/eval.rs:133-252`), which is a plain dot product of
+`WeightKey::ALL` against `features::features` -- it has no `state.game_over`/
+`resigned` special case at all, by design (§2 of `docs/BOT_ARCHITECTURE.md`:
+the whole evaluator is "the same rule written once"). The real cause is that
+`Move::Resign` is categorically absent from the data the weight vector was
+ever fit or validated against:
+
+* `h_resign` (`rust/src/apply.rs:1177-1231`) empties both hands, drops every
+  pact, and tears down every war to or from the resigning player, then calls
+  `game::after_resign`. This is a large, one-shot swing in exactly the raw
+  material (`hand_civil`, `hand_military`, `pacts`, `war_declared_by_me`,
+  `wars_declared_on_me`) several `features()` terms read -- but which
+  direction that swings `evaluate` depends on the fitted sign of each
+  affected `WeightKey`, and nothing has ever checked which way it actually
+  goes for a live champion.
+* Nothing that fits or validates those signs ever samples a resigned state to
+  check: `WeightedBot::choose`/`RandomBot::choose`/`neural::bot::pick`/
+  `neural::plan::pick_collecting` all filter `Move::Resign` out of their own
+  candidate sets by default (this is `filter_resign`'s whole job, see
+  `rust/src/bots/mod.rs`); the self-play driver `climb`/`rankdata` actually
+  train and validate against
+  (`rust/src/bots/weighted/registry.rs:262-264`'s `sample_nonzero_feature_keys`
+  helper, and every other corpus-driving loop in this crate) explicitly
+  filters `Move::Resign` out of ITS random walk too, with the comment "this
+  test's sampling of it... on purpose." Grepping `rust/src/bin/*.rs` for
+  `allow_resign` returns nothing: no training or league binary ever
+  constructs a bot with it `true`.
+
+So the fitted vector has never been shown a single post-resign position, in
+training or in any coordinate-registry check, and nothing in its objective
+has ever penalized whatever `evaluate` happens to say about one. That a
+constructed-to-avoid-Resign search occasionally trips over a Resign candidate
+that outscores everything else is not a bug in any one formula; it is every
+formula's blind spot on an input they were never fit against, discovered only
+because a fifth bot (`QuiescentBot`) forgot to keep filtering it out. This
+also means the current fix (filter it everywhere) is not a stopgap for a
+formula that will get corrected later -- there is no planned correction; as
+long as `Move::Resign` stays outside every training/validation corpus,
+`allow_resign: false` is the only thing keeping this class of bot from
+losing on purpose, on any future weight vector, forever.
+
+Next action: not a formula fix -- `evaluate` cannot be trusted to score
+`Move::Resign` correctly by construction, so there is nothing to "fix" in
+`eval.rs` itself. Two real options, neither attempted here (out of scope for
+this item; this is a characterisation, not a design doc): (a) keep
+`Move::Resign` permanently out of every candidate set a linear evaluator ever
+scores, which is already true today and should stay a documented invariant
+rather than five independent opt-outs that a sixth bot can still forget --
+`filter_resign` (`rust/src/bots/mod.rs`) is that invariant now, shared; or
+(b) if a bot ever needs to decide WHETHER to resign for real (down a lost
+game, salvaging tournament time), that decision needs its own model trained
+on actual resign/no-resign outcomes, not `evaluate`'s board-position vector
+repurposed for a question it was never fit to answer.
