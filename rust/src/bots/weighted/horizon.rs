@@ -8,22 +8,47 @@
 //! the derivations; restated here only where the Rust shape earns its own
 //! note.
 //!
-//! ## No memo caches
+//! ## No memo caches -- but also no repeated scans, since the answer never
+//! ## changes
 //!
 //! Python's `_TAIL`/`_SUPPLY` are module-level dicts, lazily filled and kept
 //! forever, because `C.db().civil_deck(age, n)` -- a dict-of-dicts walk -- is
 //! "far too slow for the search loop" (that module's own comment). This port
-//! has no such cost to hide: [`crate::game::build_deck`] is a single
-//! filtering pass over the static `CARDS` array (236 entries, no heap
-//! allocation -- it returns a fixed-capacity [`crate::state::CardList`], the
-//! same "never a `Vec`" shape [`crate::bots::counting`] already established
-//! for the identical composition question). [`tail`]/[`supply`] below
-//! therefore recompute on every call rather than memoize -- a process-global
-//! mutable cache would be exactly the "Python in Rust" shape this port's
-//! house style forbids, for a saving Rust does not need in the first place.
-//! [`crate::bots::counting`]'s own `civil_outlook` already calls
-//! `build_deck` uncached on this exact hot path, so this is not a new trade,
-//! just the same one repeated for a second question about the same decks.
+//! still keeps the house rule those caches broke (no process-global mutable
+//! state, no lazily-populated global cache) but does NOT pay
+//! [`crate::game::build_deck`]'s cost to answer [`tail`]/[`supply`], because
+//! that cost turned out not to be optional to avoid: profiling `PlanBot`
+//! single-threaded (`sample` on a release `kindmatch` run, 2026-08-06) found
+//! [`supply`] as the single hottest leaf in the whole search by a wide
+//! margin, with [`cards_unseen`] (which calls [`tail`]) close behind.
+//! [`horizon::lateness`](lateness) alone is called from six independent
+//! sites across `bots/weighted/{eval,row,rivals,cards}.rs` -- several of them
+//! per CARD being priced, not per position -- so a single [`super::eval::
+//! evaluate`] call can re-run [`supply`]/[`tail`] a double-digit number of
+//! times, and a beam search calls `evaluate` at every node. `build_deck`
+//! itself is not the "single filtering pass, no heap allocation" this
+//! comment used to claim either: for every matching card it PUSHES one
+//! [`crate::cards::CardId`] per copy into a [`crate::state::CardList`] the
+//! caller here only ever calls `.len()` on and immediately discards --
+//! real writes for a length nobody wanted.
+//!
+//! The fix is not a cache (nothing is computed once and remembered across
+//! calls at runtime); it is that [`tail`]/[`supply`] never needed to call
+//! `build_deck` at all. Civil deck composition depends on nothing but
+//! `(age, player count)` -- both drawn from the same printed, checked-in card
+//! data [`crate::card_table::CARDS`] already bakes at compile time -- so
+//! [`CIVIL_DECK_LEN`] bakes the 4x3 answer as a literal table, the same
+//! "parse nothing, allocate nothing at start-up" choice `Cargo.toml`'s own
+//! comment on the empty `[dependencies]` describes for `card_table.rs`
+//! itself. [`tests::civil_deck_len_matches_build_deck_for_every_age_and_
+//! player_count`] pins the table against `build_deck`'s own output so a
+//! future edit to `data/*.json`/`card_table.rs` that changes a civil card's
+//! `count` fails loudly here instead of silently going stale.
+//!
+//! [`crate::bots::counting`]'s own `civil_outlook` still calls `build_deck`
+//! directly -- it needs actual card IDENTITIES (which ages/cards remain
+//! unseen), not just a length, so there is no length-only shortcut for it to
+//! take.
 //!
 //! ## `_ROW` and `horizon_scale`'s `w` parameter: two dead-code fixes
 //!
@@ -53,11 +78,6 @@ use super::weights::{WeightKey, Weights};
 /// RULE-DERIVED, RULES_SPEC 12.3: once Age IV begins, the game ends this
 /// round or the next.
 pub const AGE_IV_ROUNDS: f64 = 2.0;
-
-/// The four ages with a civil deck at all -- Age IV's is always empty
-/// (`game::advance_age` empties both decks entering it), so it is left out
-/// rather than filtered every call.
-const CIVIL_AGES: [Age; 4] = [Age::A, Age::I, Age::II, Age::III];
 
 /// FITTED PRIOR (see docs/EVALUATOR_HISTORY.md), the only fitted number left in
 /// the horizon: cards taken off the row per replenish before this game has
@@ -102,28 +122,47 @@ pub fn live_count(state: &GameState) -> usize {
     n.clamp(2, 4)
 }
 
+/// Civil deck size, by age index (`Age::A = 0` through `Age::III = 3`) and
+/// `n - 2` (2p/3p/4p) -- the exact counts `game::build_deck(age, true, n).len()`
+/// returns, baked once rather than recomputed by scanning+pushing every
+/// matching card out of `card_table::CARDS` on every call. See this module's
+/// top doc comment for why this is baked data, not a runtime cache, and
+/// [`tests::civil_deck_len_matches_build_deck_for_every_age_and_player_
+/// count`] for the proof this cannot silently drift from `card_table.rs`.
+const CIVIL_DECK_LEN: [[u32; 3]; 4] = [
+    [20, 20, 20], // Age A
+    [44, 50, 53], // Age I
+    [44, 50, 53], // Age II
+    [44, 50, 53], // Age III
+];
+
 /// `_tail`: civil cards left in every age's deck strictly AFTER `age`, for
 /// `n` players -- EXACT, from the same printed card data `game::build_deck`
-/// deals from. See this module's top doc comment for why this recomputes
-/// rather than memoizes.
+/// deals from, but read out of the baked [`CIVIL_DECK_LEN`] table rather than
+/// rescanning `card_table::CARDS`. See this module's top doc comment.
+///
+/// `age as usize` is [`CIVIL_DECK_LEN`]'s own row index (`Age::A = 0` through
+/// `Age::III = 3`) -- `age` is NOT guaranteed to be one of those four:
+/// `age` is `state.age_civil`, which reaches `Age::IV` in every Age IV
+/// position this is called from (`cards_unseen`/`lateness`/`rate_multiplier`
+/// do not stop being called once the deck runs out). `from` is then `5`,
+/// past [`CIVIL_DECK_LEN`]'s four rows, and slicing an empty-or-past-the-end
+/// range with `.get` rather than indexing directly returns `None` there --
+/// correctly zero cards left after the last age, matching the pre-baked-table
+/// code's own `CIVIL_AGES.iter().filter(|&a| a as u8 > age as u8)` (which
+/// also silently yielded nothing once `age` was at or past `III`).
 fn tail(n: usize, age: Age) -> u32 {
     debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
-    CIVIL_AGES.iter().copied().filter(|&a| a as u8 > age as u8).map(|a| game::build_deck(a, true, n).len() as u32).sum()
+    let from = age as usize + 1;
+    CIVIL_DECK_LEN.get(from..).unwrap_or(&[]).iter().map(|row| row[n - 2]).sum()
 }
 
 /// `_supply`: `(total civil cards for `n` players across ages A-III, size of
-/// the Age A deck alone)`. Both exact card data.
+/// the Age A deck alone)`. Both exact card data, read out of [`CIVIL_DECK_LEN`].
 fn supply(n: usize) -> (u32, u32) {
     debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
-    let mut total = 0u32;
-    let mut age_a = 0u32;
-    for age in CIVIL_AGES {
-        let len = game::build_deck(age, true, n).len() as u32;
-        total += len;
-        if age == Age::A {
-            age_a = len;
-        }
-    }
+    let total = CIVIL_DECK_LEN.iter().map(|row| row[n - 2]).sum();
+    let age_a = CIVIL_DECK_LEN[0][n - 2];
     (total, age_a)
 }
 
@@ -217,6 +256,37 @@ pub fn rate_multiplier(state: &GameState, weights: &Weights, n: usize) -> f64 {
 mod tests {
     use super::*;
     use crate::game as G;
+
+    /// [`CIVIL_DECK_LEN`] must equal `game::build_deck(age, true, n).len()`
+    /// for every `(age, n)` this module ever indexes it with -- the guard
+    /// that keeps the baked table from silently going stale if a civil
+    /// card's `count` ever changes in `card_table.rs`.
+    #[test]
+    fn civil_deck_len_matches_build_deck_for_every_age_and_player_count() {
+        // The four ages with a civil deck at all -- Age IV's is always empty
+        // (`game::advance_age` empties both decks entering it), so it is
+        // left out here too, matching [`CIVIL_DECK_LEN`]'s own four rows.
+        let ages = [Age::A, Age::I, Age::II, Age::III];
+        for (i, age) in ages.iter().copied().enumerate() {
+            for n in 2..=4usize {
+                let want = game::build_deck(age, true, n).len() as u32;
+                assert_eq!(CIVIL_DECK_LEN[i][n - 2], want, "{age:?} at {n}p");
+            }
+        }
+    }
+
+    /// `tail` must not panic once the civil deck has advanced past Age III
+    /// (`Age::IV` has no civil deck at all,
+    /// `game::advance_age` empties both decks entering it) -- the case
+    /// [`civil_deck_len_matches_build_deck_for_every_age_and_player_count`]
+    /// above cannot cover, since `build_deck(Age::IV, ..)` is never called by
+    /// this module's own callers either.
+    #[test]
+    fn tail_at_age_iv_is_zero_not_a_panic() {
+        for n in 2..=4usize {
+            assert_eq!(tail(n, crate::cards::Age::IV), 0);
+        }
+    }
 
     /// `rate_multiplier` at credit 0.0 is exactly 1.0 -- the "master is
     /// unaffected" byte-identity guarantee `DEFAULT_WEIGHTS["rate_horizon"]
