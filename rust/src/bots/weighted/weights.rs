@@ -405,6 +405,173 @@ impl WeightKey {
             _ => panic!("WeightKey::late called on a key outside PHASE_KEYS"),
         }
     }
+
+    /// The strategic axis this weight belongs to -- ports
+    /// `experiments/summarize.py`'s `GROUPS`/`group_of` (verified key-for-key
+    /// against that source in `tests::rust_grouping_agrees_with_python_groups`
+    /// below). A `_early`/`_late` phase key is placed in the SAME arm as its
+    /// base key, never a wildcard fallback to it, so the compiler -- not a
+    /// convention -- is what keeps them together; see
+    /// `tests::phase_key_shares_its_base_keys_group`.
+    ///
+    /// Deliberately NO `_ =>` wildcard arm: all 130 variants are named here
+    /// by hand. Python's `group_of` raises `KeyError` rather than falling
+    /// through to a "?" label for exactly this reason -- its own docstring
+    /// records that a silent fallback is how four features (including
+    /// `hand_potential`, the single most load-bearing 2p weight in the
+    /// ablation ledger) vanished from every generated weight table before
+    /// that guard existed. A wildcard arm here would be that same silent
+    /// fallback, just moved from runtime to never-caught-at-all: a brand
+    /// new `WeightKey` variant would compile straight into an (arbitrary,
+    /// wrong) group instead of failing the build until a human decides
+    /// where it belongs.
+    pub const fn group(self) -> WeightGroup {
+        use WeightKey::*;
+        match self {
+            CivilActions | MilitaryActions | CaLeft | MaLeft | TakeCostPaid => {
+                WeightGroup::Actions
+            }
+
+            UrbanLimit | GovActionCost | NoAggression | RestrictedResources
+            | CardBoardCredit | CardBoardLeader | CardBoardGovernment | CardBoardAction
+            | CardBoardWonder => WeightGroup::Board,
+
+            HandCivil | HandValue | HandValueEarly | HandValueLate | HandPotential
+            | HandMilitary | HandMilValue | HandMilPotential | HandSwapExtra => {
+                WeightGroup::Cards
+            }
+
+            RateHorizon | Culture | CultureRate | Science | ScienceRate | FoodRate
+            | ResourceRate | FoodStock | ResourceStock | BlueFree | CorruptionLoss
+            | Consumption | PopCost | YellowBank | FreeWorkers | Workers | WorkersEarly
+            | WorkersLate | ProdWorkers | UrbanWorkers | UnitWorkers => WeightGroup::Economy,
+
+            EventScoringMargin | MySeededPending | MyEventThreat => WeightGroup::Events,
+
+            HappyMargin | Discontent | Uprising => WeightGroup::Happiness,
+
+            Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
+            | StrengthLead | TacticLevel | TacticGain | TacticShort | Colonies | Pacts
+            | PactBlocksAttack | AuctionCommitted | AuctionBid => WeightGroup::Military,
+
+            HandLimit | ColonizeBonus | BuildDiscount | FreeCivilAction | ResourceDiscount
+            | DefenseBonus | CardRateCredit | UnitStrengthCredit | TerritoryCredit
+            | BonusCardCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
+            | FreeActionCredit | GovBoardCredit | BuildFreshCredit
+            | RestrictedResourceCredit => WeightGroup::Priced,
+
+            RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
+            | RivalStrength | RivalFreeCa | RivalHandCivil | RivalWonders
+            | RivalHandPotential | RivalScienceStock | RivalFoodStock | RivalResourceStock
+            | RivalFreeWorkers | RivalYellowBank | RivalColonies | RivalMilActions
+            | RivalBuildingWonder => WeightGroup::Rivals,
+
+            RowUrgency | RowBargainForgone | RivalTakeShare | RowLastCopy | RivalDesire => {
+                WeightGroup::Row
+            }
+
+            EndTurnBias => WeightGroup::Search,
+
+            AttackTargetLead | AttackTargetWeakness | PactPartnerLead => WeightGroup::Targeting,
+
+            TechLevels | TechLevelsEarly | TechLevelsLate | GovLevel | BestFarm | BestMine
+            | BestLab | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit
+            | NumTechs | SpecialTechs => WeightGroup::Tech,
+
+            Wonders | WonderProgress | WonderRemaining | WonderStagesLeft
+            | WonderTurnsToFinish | WonderOverrun | WonderStagesPerAction | WonderPotential
+            | Leader => WeightGroup::Wonders,
+        }
+    }
+}
+
+/// A coherent strategic axis of the weight vector -- e.g. every economy
+/// coefficient, or every military one -- so a hill-climb mutation operator
+/// can move a whole axis together instead of scattering onto unrelated
+/// coefficients. Mirrors `experiments/summarize.py`'s `GROUPS` dict, which
+/// `experiments/hillclimb.py` (`GROUP_KEYS`, lines 53-58) buckets every
+/// mutable `DEFAULT_WEIGHTS` key into via `group_of(k).split("/")[0]` (the
+/// `/phase` suffix `group_of` appends for a `_early`/`_late` key is an
+/// annotation for `summarize.py`'s own printed output, not a second group --
+/// `hillclimb.py` strips it with that same `.split("/")[0]`, which is why
+/// [`WeightKey::group`] below folds a phase key straight into its base
+/// key's group with no separate "/phase" concept at all).
+///
+/// Variant order matches [`WeightGroup::ALL`] (alphabetical by
+/// [`WeightGroup::name`]); nothing depends on the order, it's just a
+/// convention so a diff that adds a group is a one-line insert, not a
+/// reshuffle.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WeightGroup {
+    Actions,
+    Board,
+    Cards,
+    Economy,
+    Events,
+    Happiness,
+    Military,
+    Priced,
+    Rivals,
+    Row,
+    Search,
+    Targeting,
+    Tech,
+    Wonders,
+}
+
+impl WeightGroup {
+    /// Every group, alphabetical by [`WeightGroup::name`] -- matches the
+    /// enum declaration order above.
+    pub const ALL: &'static [WeightGroup] = &[
+        WeightGroup::Actions,
+        WeightGroup::Board,
+        WeightGroup::Cards,
+        WeightGroup::Economy,
+        WeightGroup::Events,
+        WeightGroup::Happiness,
+        WeightGroup::Military,
+        WeightGroup::Priced,
+        WeightGroup::Rivals,
+        WeightGroup::Row,
+        WeightGroup::Search,
+        WeightGroup::Targeting,
+        WeightGroup::Tech,
+        WeightGroup::Wonders,
+    ];
+
+    /// The exact group name Python's `summarize.GROUPS` uses -- the I/O
+    /// boundary for anything that prints or diffs against the Python
+    /// tooling, and what the anti-drift test below checks against.
+    pub const fn name(self) -> &'static str {
+        match self {
+            WeightGroup::Actions => "actions",
+            WeightGroup::Board => "board",
+            WeightGroup::Cards => "cards",
+            WeightGroup::Economy => "economy",
+            WeightGroup::Events => "events",
+            WeightGroup::Happiness => "happiness",
+            WeightGroup::Military => "military",
+            WeightGroup::Priced => "priced",
+            WeightGroup::Rivals => "rivals",
+            WeightGroup::Row => "row",
+            WeightGroup::Search => "search",
+            WeightGroup::Targeting => "targeting",
+            WeightGroup::Tech => "tech",
+            WeightGroup::Wonders => "wonders",
+        }
+    }
+
+    /// Every key in this group, base keys AND their `_early`/`_late` phase
+    /// partners -- a group move is "care more about this axis at every
+    /// age", not just at its default blend. Filters [`WeightKey::ALL`]
+    /// through [`WeightKey::group`] rather than being kept as a second,
+    /// parallel list of keys indexed by group: two lists that are supposed
+    /// to agree are exactly the shape that silently drifts apart (see this
+    /// file's own remarks on `PHASE_KEYS` vs the flat table for a case of
+    /// that being unavoidable; here it isn't, so there's no excuse).
+    pub fn keys(self) -> Vec<WeightKey> {
+        WeightKey::ALL.iter().copied().filter(|k| k.group() == self).collect()
+    }
 }
 
 /// Mirrors Python's `PHASE_KEYS`: which BASE features additionally carry an
@@ -576,5 +743,81 @@ mod tests {
         assert_eq!(w.get(WeightKey::EndTurnBias), 42.0);
         // an unrelated key is untouched
         assert_eq!(w.get(WeightKey::Culture), WeightKey::Culture.default_weight());
+    }
+
+    /// Every key belongs to exactly one group's `keys()` -- not zero (which
+    /// would mean `WeightKey::group` and `WeightGroup::keys` disagree, since
+    /// `keys()` is filtered straight off `group()`, so this is really a
+    /// sanity check on the filter) and not more than one, which is only
+    /// possible if `WeightGroup::ALL` itself has a duplicate entry.
+    #[test]
+    fn every_weight_key_lands_in_exactly_one_groups_keys() {
+        for &k in WeightKey::ALL {
+            let hits: Vec<WeightGroup> =
+                WeightGroup::ALL.iter().copied().filter(|g| g.keys().contains(&k)).collect();
+            assert_eq!(hits.len(), 1, "{}: expected exactly 1 group, got {:?}", k.name(), hits);
+        }
+    }
+
+    /// A group with no keys would be dead weight in `WeightGroup::ALL` -- a
+    /// mutation operator that picked it could never do anything.
+    #[test]
+    fn every_weight_group_has_a_non_empty_keys_list() {
+        for &g in WeightGroup::ALL {
+            assert!(!g.keys().is_empty(), "{}", g.name());
+        }
+    }
+
+    #[test]
+    fn weight_group_name_round_trips_through_all() {
+        for &g in WeightGroup::ALL {
+            assert!(WeightGroup::ALL.iter().any(|&g2| g2.name() == g.name() && g2 == g));
+        }
+        // no two groups share a printed name
+        let names: HashSet<&str> = WeightGroup::ALL.iter().map(|g| g.name()).collect();
+        assert_eq!(names.len(), WeightGroup::ALL.len());
+    }
+
+    /// A `_early`/`_late` phase key is in the SAME group as its base key,
+    /// for all four `PHASE_KEYS` -- the property `hillclimb.py`'s
+    /// `GROUP_KEYS` comment relies on ("a group move is 'care more/less
+    /// about this whole strategic axis', at every age").
+    #[test]
+    fn phase_key_shares_its_base_keys_group() {
+        for &k in PHASE_KEYS {
+            assert_eq!(k.early().group(), k.group(), "{}_early", k.name());
+            assert_eq!(k.late().group(), k.group(), "{}_late", k.name());
+        }
+    }
+
+    /// Anti-drift check: hardcodes a handful of (weight name, group name)
+    /// pairs read directly out of `experiments/summarize.py`'s `GROUPS`
+    /// dict -- at least one per group -- so that a future edit to either
+    /// side's grouping (Python's `GROUPS` or Rust's `WeightKey::group`)
+    /// that isn't mirrored in the other fails a test instead of silently
+    /// making the hill climber's Rust and Python mutation operators bucket
+    /// the same weight two different ways.
+    #[test]
+    fn rust_grouping_agrees_with_python_groups() {
+        let pairs: &[(&str, &str)] = &[
+            ("civil_actions", "actions"),                 // GROUPS["actions"]
+            ("card_board_wonder", "board"),                // GROUPS["board"]
+            ("hand_mil_value", "cards"),                   // GROUPS["cards"]
+            ("rate_horizon", "economy"),                   // GROUPS["economy"]
+            ("my_event_threat", "events"),                 // GROUPS["events"]
+            ("uprising", "happiness"),                     // GROUPS["happiness"]
+            ("tactic_short", "military"),                  // GROUPS["military"]
+            ("restricted_resource_credit", "priced"),      // GROUPS["priced"]
+            ("rival_building_wonder", "rivals"),           // GROUPS["rivals"]
+            ("rival_desire", "row"),                       // GROUPS["row"]
+            ("end_turn_bias", "search"),                   // GROUPS["search"]
+            ("pact_partner_lead", "targeting"),            // GROUPS["targeting"]
+            ("special_techs", "tech"),                     // GROUPS["tech"]
+            ("wonder_stages_per_action", "wonders"),       // GROUPS["wonders"]
+        ];
+        for &(name, group) in pairs {
+            let k = WeightKey::by_name(name).unwrap_or_else(|| panic!("no WeightKey {name}"));
+            assert_eq!(k.group().name(), group, "{name}");
+        }
     }
 }
