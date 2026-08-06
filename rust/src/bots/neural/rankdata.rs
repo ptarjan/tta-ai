@@ -48,16 +48,38 @@
 //! state from the mover's own perspective with no hypothetical move applied,
 //! which is exactly what the mover legitimately knows.
 //!
-//! ## What this port intentionally leaves out
+//! ## Value rows come from the SEARCH's leaves when the teacher has a search
 //!
-//! `plan_teacher_gen.py`'s OTHER fix -- sampling value rows from the leaf
-//! positions a whole-turn beam search actually scores, rather than pre-move
-//! states -- needs a hook into the beam's internal scoring loop
-//! (`TeacherPlanBot._score`/`NeuralPlanBot._score_many`). That is a
-//! substantially bigger change to `bots::plan`'s search internals than this
-//! module's job of reproducing `neural_rankdata.py`, so it is left for
-//! whoever next needs a turn-boundary-only value distribution, not silently
-//! folded in here.
+//! `plan_teacher_gen.py`'s OTHER fix: a beam's leaf evaluator is only ever
+//! asked about quiet, end-of-my-turn positions, so fitting it on *pre-move,
+//! mid-turn* states trains it on a distribution it is never queried on.
+//! `docs/BOT_ARCHITECTURE.md` 3b: "PlanBot evaluates only at turn
+//! boundaries, which is exactly the distribution a boundary-only fit is
+//! trained on ... the fitted vector and PlanBot are a matched pair by
+//! construction."
+//!
+//! So when the teacher HAS a beam ([`Contender`] `plan`/`nplan`), the value
+//! rows are the positions that beam actually priced, collected through
+//! `bots::plan::Bank` and normalised to the encoding the net is served at
+//! play time (war substitution included). When it does not -- a `weighted`
+//! or `greedy` teacher, which prices the candidate children directly -- there
+//! are no leaves to sample and the row falls back to the pre-move state
+//! encoding, exactly as `neural_rankdata.py` always did. Which of the two
+//! happened is reported in [`Recorded::values_from`] and printed on the
+//! generator's DONE line rather than being left for a reader to infer.
+//!
+//! ## `DISAGREE`: the vacuity meter, measured rather than assumed
+//!
+//! `docs/NEURAL_LOOP_NULL.md` 3.1 is a 41-hour null caused by labelling
+//! ranking pairs with the net's own argmax: the untrained incumbent already
+//! satisfied 97.6% of its own training pairs, so the loss had nothing to
+//! teach. The guard against a repeat is to MEASURE how often the teacher's
+//! search overrules the net's own 1-ply argmax on the very same determinized
+//! children -- [`Recorded::overruled`]. It is `None`, not `0`, when the
+//! teacher has no net to take an argmax with, because "the search never
+//! overruled the net" and "there was no net to overrule" are the two
+//! readings a bare zero cannot distinguish, and one of them is a kill
+//! condition.
 //!
 //! ## The vacuity hazard (`docs/NEURAL_LOOP_NULL.md`)
 //!
@@ -80,7 +102,6 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::apply;
-use crate::bots::greedy::{self, Seat};
 use crate::bots::plan::determinize;
 use crate::game;
 use crate::legal;
@@ -89,6 +110,8 @@ use crate::rng::PyRandom;
 use crate::state::GameState;
 
 use super::encode::{self, ENCODING_DIM};
+use super::net::value_batch;
+use super::spec::Contender;
 
 // =============================================================== in-memory
 
@@ -340,45 +363,88 @@ fn shuffle_indices(rng: &mut PyRandom, v: &mut [usize]) {
     }
 }
 
-/// One sampled decision's worth of rows: everything [`play_and_record`]
-/// needs to build its return value, `let`-bound in one struct instead of
-/// two more parallel vectors of "pending" state alongside `pairs`.
+/// Where a game's value rows came from. Reported rather than inferred: the
+/// two sources are different distributions and a shard mixing them silently
+/// would be indistinguishable, afterwards, from one that did not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueSource {
+    /// The positions the teacher's beam actually priced. What a leaf
+    /// evaluator should be fitted on.
+    SearchLeaves,
+    /// The pre-move state at each sampled decision. All a teacher without a
+    /// beam can offer.
+    PreMoveState,
+}
+
+impl ValueSource {
+    pub const fn name(self) -> &'static str {
+        match self {
+            ValueSource::SearchLeaves => "search-leaves",
+            ValueSource::PreMoveState => "pre-move-state",
+        }
+    }
+}
+
+/// One game's worth of generated rows plus the two health numbers a caller
+/// has to see. One struct, not a five-tuple: `neural_gen_plan.py` returns
+/// `(pa, pb, vstates, yv, decisions, disagree)` and its caller unpacks them
+/// positionally, which is exactly the shape that mislabels a counter the day
+/// one is inserted.
+pub struct Recorded {
+    pub pairs: Vec<RankPair>,
+    pub values: Vec<ValueRow>,
+    pub values_from: ValueSource,
+    /// Decisions where a label was recorded.
+    pub sampled: u64,
+    /// How many of `sampled` the teacher's SEARCH resolved DIFFERENTLY from
+    /// the net's own 1-ply argmax over the same determinized children --
+    /// the entire information content of the target.
+    ///
+    /// `None` when the teacher carries no net (see this module's top doc
+    /// comment): a zero would read as "the search never overruled the net",
+    /// which is a pre-registered kill condition, and reporting a kill
+    /// condition because nobody could measure it is worse than reporting
+    /// nothing.
+    pub overruled: Option<u64>,
+}
+
+/// A value row waiting for the game to end so its target can be filled in.
+/// The encoding and the seat travel together; the margin is not known until
+/// the final scores are.
 struct PendingValue {
     state: Vec<f32>,
     seat: u8,
 }
 
-/// Play one game with `seats` as the teacher and record ranking pairs and
-/// (seat-labelled, not-yet-margin-resolved) value rows. Mirrors
-/// `neural_rankdata.py::play_and_record`; see this module's top doc comment
-/// for the one behavioural fix (determinized children).
+/// Play one game with `teacher` in every seat and record ranking pairs and
+/// value rows. Mirrors `neural_rankdata.py::play_and_record`, with
+/// `plan_teacher_gen.py`/`neural_gen_plan.py`'s two distribution fixes
+/// folded in -- see this module's top doc comment for both.
 ///
-/// `seats` describes the teacher (kind + weights) round-robined over the
-/// table by [`greedy::make_seats`]; fresh [`Bot`]s are built from it every
-/// game, seeded from `seed`, exactly as Python constructs a fresh `BookBot`
-/// list per game.
-///
-/// `pub`, not just `pub(crate)`, so a caller that wants to parallelize game
-/// generation across threads -- `bin/rankdata.rs` does exactly this -- can
-/// play each game OUTSIDE whatever lock guards its [`ShardWriter`], and only
-/// take that lock for the cheap [`ShardWriter::push_game`] call. Bundling
-/// simulation and writing into one locked call would force a caller to hold
-/// the writer's lock for the length of a whole game to get both, which
-/// serializes exactly the work threading exists to parallelize.
+/// `pub`, not `pub(crate)`, so a caller parallelising generation across
+/// threads (`bin/rankdata.rs`) can play each game OUTSIDE whatever lock
+/// guards its [`ShardWriter`] and take that lock only for the cheap
+/// [`ShardWriter::push_game`].
 pub fn play_and_record(
-    seats: &[Seat],
+    teacher: &Contender,
     players: u8,
     seed: u64,
     stride: usize,
     krej: usize,
     epsilon: f64,
-) -> (Vec<RankPair>, Vec<ValueRow>) {
-    let mut bots = greedy::build_bots(seats, seed as i64);
+    leaf_per_decision: usize,
+) -> Recorded {
+    let mut bots: Vec<_> = (0..players as usize)
+        .map(|i| teacher.seat((seed as i64).wrapping_mul(131).wrapping_add(i as i64)))
+        .collect();
     let mut rng = PyRandom::new(seed.wrapping_mul(7919).wrapping_add(17) as i64);
     let mut state = game::new_game(players, seed);
 
     let mut pairs = Vec::new();
     let mut pending: Vec<PendingValue> = Vec::new();
+    let mut values_from = ValueSource::PreMoveState;
+    let mut sampled = 0u64;
+    let mut overruled = 0u64;
     let mut ply = 0usize;
     let mut moves_played = 0usize;
 
@@ -390,27 +456,29 @@ pub fn play_and_record(
         let dec = state.decider();
         let non_resign: Vec<Move> =
             legal.as_slice().iter().copied().filter(|m| *m != Move::Resign).collect();
-        let live: Vec<Move> = if non_resign.is_empty() { legal.as_slice().to_vec() } else { non_resign };
+        let live: Vec<Move> =
+            if non_resign.is_empty() { legal.as_slice().to_vec() } else { non_resign };
 
-        let chosen = bots[dec as usize].pick(&state);
+        // Sample BEFORE picking, so the (much more expensive) collecting
+        // pick only runs on decisions whose rows will actually be kept.
+        let sample = ply % stride == 0 && live.len() > 1;
+        let bot = &mut bots[dec as usize];
+        let (chosen, leaves) = if sample {
+            bot.pick_collecting(&state, &live)
+        } else {
+            (bot.pick_from(&state, &live), super::spec::Leaves::NoSearch)
+        };
 
-        // Only sample a decision whose chosen move is actually a member of
-        // `live`: a teacher that resigned while non-resign options existed
-        // has nothing to teach a sibling-preference objective (there would
-        // be no honest "child of the chosen move" to rank against).
-        // `neural_rankdata.py` handles this by re-`pick`ing over `live`
-        // alone; `Bot::pick` has no such "pick from this subset" entry
-        // point, so this port skips the sample instead of forcing one --
-        // strictly more conservative, since it can only ever produce
-        // *fewer* rows, never a mislabelled one.
-        let sample = ply % stride == 0 && live.len() > 1 && live.contains(&chosen);
+        // Only sample a decision whose chosen move is a member of `live`: a
+        // teacher that resigned while non-resign options existed has nothing
+        // to teach a sibling-preference objective, since there would be no
+        // honest "child of the chosen move" to rank against.
+        if sample && live.contains(&chosen) {
+            sampled += 1;
 
-        if sample {
-            pending.push(PendingValue { state: to_f32(&encode::encode(&state, dec)), seat: dec });
-
-            // One shared determinization for every candidate at this
+            // ONE shared determinization for every candidate at this
             // decision, so "chosen" and "rejected" are compared on the same
-            // honest hypothetical world instead of one of them (usually
+            // honest hypothetical instead of one of them (usually
             // `end_turn`) leaking the true next card. See this module's top
             // doc comment.
             let mut dstate = state.clone();
@@ -419,22 +487,73 @@ pub fn play_and_record(
             for &mv in &live {
                 let mut t = dstate.clone();
                 apply::apply(&mut t, mv);
-                encs.push(to_f32(&encode::encode(&t, dec)));
+                encs.push(encode::encode(&t, dec));
             }
 
             if let Some(ci) = live.iter().position(|&m| m == chosen) {
+                // The vacuity meter, and the most informative negative in
+                // one step: the net's own 1-ply argmax over these very
+                // children is both what the search is being compared
+                // against and what the net would have played, so when the
+                // two differ it goes to the FRONT of the rejected list and
+                // is never sampled away.
+                let argmax = teacher.net().map(|net| {
+                    let vals = value_batch(net, &encs);
+                    let mut best = 0usize;
+                    for (i, v) in vals.iter().enumerate() {
+                        if *v > vals[best] {
+                            best = i;
+                        }
+                    }
+                    best
+                });
                 let mut rej: Vec<usize> = (0..live.len()).filter(|&j| j != ci).collect();
                 shuffle_indices(&mut rng, &mut rej);
+                if let Some(gi) = argmax {
+                    if gi != ci {
+                        overruled += 1;
+                        if let Some(at) = rej.iter().position(|&j| j == gi) {
+                            rej.remove(at);
+                            rej.insert(0, gi);
+                        }
+                    }
+                }
+                let chosen_enc = to_f32(&encs[ci]);
                 for &j in rej.iter().take(krej) {
-                    pairs.push(RankPair { chosen: encs[ci].clone(), rejected: encs[j].clone() });
+                    pairs.push(RankPair {
+                        chosen: chosen_enc.clone(),
+                        rejected: to_f32(&encs[j]),
+                    });
+                }
+            }
+
+            // Value rows: the beam's own leaves when there are any, else the
+            // pre-move state. Subsampled, because one decision of a width-8
+            // beam prices a few hundred positions and keeping them all would
+            // both swamp the ranking pairs and fill a batch with rows from
+            // one correlated search.
+            let mut leaf_encs = bot.leaf_encodings(leaves, dec);
+            if leaf_encs.is_empty() {
+                pending.push(PendingValue { state: to_f32(&encode::encode(&state, dec)), seat: dec });
+            } else {
+                values_from = ValueSource::SearchLeaves;
+                if leaf_encs.len() > leaf_per_decision {
+                    let mut idx: Vec<usize> = (0..leaf_encs.len()).collect();
+                    shuffle_indices(&mut rng, &mut idx);
+                    idx.truncate(leaf_per_decision);
+                    // `idx` is a TRUNCATED PERMUTATION, so no index repeats
+                    // and `take` never empties a row that is still wanted.
+                    leaf_encs = idx.into_iter().map(|i| std::mem::take(&mut leaf_encs[i])).collect();
+                }
+                for e in &leaf_encs {
+                    pending.push(PendingValue { state: to_f32(e), seat: dec });
                 }
             }
         }
 
         // Advance with a small epsilon of random exploration for state
-        // diversity; the recorded label above is always the teacher's
-        // preferred move at the state actually visited, exactly as Python's
-        // comment on this line explains.
+        // diversity; the label recorded above is always the teacher's
+        // preferred move at the state actually visited.
         let mv = if epsilon > 0.0 && rng.random() < epsilon {
             let i = ((rng.random() * live.len() as f64) as usize).min(live.len() - 1);
             live[i]
@@ -451,7 +570,13 @@ pub fn play_and_record(
         .into_iter()
         .map(|p| ValueRow { state: p.state, margin: margins[p.seat as usize] as f32 })
         .collect();
-    (pairs, values)
+    Recorded {
+        pairs,
+        values,
+        values_from,
+        sampled,
+        overruled: teacher.net().map(|_| overruled),
+    }
 }
 
 // ========================================================== shard writer
@@ -659,20 +784,62 @@ mod tests {
         assert_eq!(sorted, (0..10).collect::<Vec<_>>(), "shuffle must not drop or duplicate indices");
     }
 
+    fn teacher(spec: &str) -> Contender {
+        Contender::parse_and_load(spec).unwrap()
+    }
+
     #[test]
-    fn playing_two_small_games_produces_value_rows_and_stays_at_the_current_encoder_width() {
-        let seats =
-            greedy::make_seats("weighted", 2, crate::bots::weighted::weights::Weights::default())
-                .unwrap();
-        let (pairs, values) = play_and_record(&seats, 2, 1, 3, 4, 0.05);
-        assert!(!values.is_empty(), "a stride-3 sampled game should yield at least one value row");
-        for v in &values {
+    fn playing_a_small_game_produces_value_rows_and_stays_at_the_current_encoder_width() {
+        let r = play_and_record(&teacher("weighted"), 2, 1, 3, 4, 0.05, 12);
+        assert!(!r.values.is_empty(), "a stride-3 sampled game should yield at least one value row");
+        for v in &r.values {
             assert_eq!(v.state.len(), ENCODING_DIM);
         }
-        for p in &pairs {
+        for p in &r.pairs {
             assert_eq!(p.chosen.len(), ENCODING_DIM);
             assert_eq!(p.rejected.len(), ENCODING_DIM);
         }
+    }
+
+    /// A teacher with no net cannot take a 1-ply argmax, so the vacuity
+    /// meter must ABSTAIN rather than report the zero that would read as the
+    /// loop's own kill condition.
+    #[test]
+    fn a_teacher_without_a_net_reports_no_disagreement_rate_rather_than_zero() {
+        let r = play_and_record(&teacher("weighted"), 2, 1, 3, 4, 0.05, 12);
+        assert_eq!(r.overruled, None);
+        assert!(r.sampled > 0, "the game should have sampled some decisions");
+    }
+
+    /// A teacher with no beam has no leaves to sample, and must SAY so
+    /// rather than let a reader assume a shard holds turn-boundary rows.
+    #[test]
+    fn a_teacher_without_a_beam_falls_back_to_pre_move_value_rows_and_says_so() {
+        let r = play_and_record(&teacher("weighted"), 2, 1, 3, 4, 0.05, 12);
+        assert_eq!(r.values_from, ValueSource::PreMoveState);
+    }
+
+    /// The distribution fix: a beam teacher's value rows are the positions
+    /// its search actually priced, not the pre-move states.
+    #[test]
+    fn a_beam_teacher_samples_its_value_rows_from_the_positions_it_priced() {
+        let r = play_and_record(&teacher("plan,width=2"), 2, 1, 12, 2, 0.0, 4);
+        assert_eq!(r.values_from, ValueSource::SearchLeaves);
+        assert!(!r.values.is_empty());
+        for v in &r.values {
+            assert_eq!(v.state.len(), ENCODING_DIM);
+        }
+    }
+
+    /// The subsample cap is a cap: one width-8 decision prices hundreds of
+    /// positions, and letting them all through would fill a training batch
+    /// with rows from a single correlated search.
+    #[test]
+    fn no_more_than_leaf_per_decision_value_rows_come_from_one_decision() {
+        let cap = 3;
+        let r = play_and_record(&teacher("plan,width=2"), 2, 1, 12, 2, 0.0, cap);
+        let decisions = r.sampled as usize;
+        assert!(r.values.len() <= decisions * cap, "{} rows over {decisions} decisions", r.values.len());
     }
 
     #[test]

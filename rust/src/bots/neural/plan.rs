@@ -104,7 +104,7 @@ use crate::state::GameState;
 use crate::apply;
 
 use super::super::pending;
-use super::super::plan::{determinize, plan_rng, quiesce, update_best};
+use super::super::plan::{determinize, plan_rng, quiesce, update_best, Bank};
 use super::super::weighted::rivals::{self, RivalContext};
 use super::super::weighted::weights::Weights;
 use super::encode::encode;
@@ -173,7 +173,7 @@ pub struct Stats {
 /// `wars` is incremented, not `stats.wars_priced` directly -- see "`Stats`-
 /// free helpers" above for why this and [`score_many`] return counts rather
 /// than mutating a `&mut Stats`.
-fn leaf_enc(t: &GameState, me: u8, war_lookahead: bool, wars: &mut u64) -> Vec<f64> {
+pub(crate) fn leaf_enc(t: &GameState, me: u8, war_lookahead: bool, wars: &mut u64) -> Vec<f64> {
     if war_lookahead && !t.game_over && !t.players[me as usize].war_declared_by_me.is_none() {
         let mut scratch = t.clone();
         if let Some(outcome) = combat::resolve_war_outcome(&mut scratch, me) {
@@ -188,9 +188,22 @@ fn leaf_enc(t: &GameState, me: u8, war_lookahead: bool, wars: &mut u64) -> Vec<f
 
 /// Batched leaf values for a whole ply/candidate set at once. Returns
 /// `(scores aligned with states, wars-priced delta)`.
-fn score_many(states: &[GameState], me: u8, war_lookahead: bool, net: &ValueNet) -> (Vec<f64>, u64) {
+fn score_many(
+    states: &[GameState],
+    me: u8,
+    war_lookahead: bool,
+    net: &ValueNet,
+    bank: &mut Bank<Vec<f64>>,
+) -> (Vec<f64>, u64) {
     let mut wars = 0u64;
     let encs: Vec<Vec<f64>> = states.iter().map(|t| leaf_enc(t, me, war_lookahead, &mut wars)).collect();
+    // The encodings are already built here, so collecting them is a clone
+    // rather than a second encode -- and they are what the net was actually
+    // asked about, war substitution included, which is the whole property a
+    // leaf-distribution training set needs.
+    for e in &encs {
+        bank.push(|| e.clone());
+    }
     (value_batch(net, &encs), wars)
 }
 
@@ -212,6 +225,25 @@ pub fn pick(
     rng: &mut PyRandom,
     state: &GameState,
     moves: &[Move],
+) -> Move {
+    pick_collecting(cfg, net, stats, counters, rng, state, moves, &mut Bank::Off)
+}
+
+/// [`pick`], plus the ENCODING of every leaf the beam priced appended to
+/// `bank` -- the hook `experiments/neural_gen_plan.py` spells as a
+/// `_score_many` override on a `NeuralPlanBot` subclass. See
+/// [`super::super::plan::Bank`] for why a generator needs these positions
+/// specifically and not the pre-move states it could collect for free.
+#[allow(clippy::too_many_arguments)]
+pub fn pick_collecting(
+    cfg: &NeuralPlanConfig,
+    net: &ValueNet,
+    stats: &mut Stats,
+    counters: &mut pending::Counters,
+    rng: &mut PyRandom,
+    state: &GameState,
+    moves: &[Move],
+    bank: &mut Bank<Vec<f64>>,
 ) -> Move {
     let mut filtered = MoveList::new();
     if !cfg.allow_resign && moves.len() > 1 {
@@ -238,13 +270,19 @@ pub fn pick(
 
     if pending::not_my_turn(state, me) {
         let root = pending::prepare_root(&cfg.bot, state, counters, determinize, rng);
+        // One bank per closure: `fallback_pick` runs exactly one of them,
+        // but both must be constructible at once and they cannot share a
+        // `&mut`. Absorbing both afterwards keeps whichever actually ran.
+        let (mut plain, mut quiet) = (bank.like(), bank.like());
         let (mv, evals, wars) = pending::fallback_pick(
             &cfg.bot,
             state,
             counters,
-            || one_ply_neural(&root, moves, me, net, false, &ctx, cfg),
-            || one_ply_neural(&root, moves, me, net, true, &ctx, cfg),
+            || one_ply_neural(&root, moves, me, net, false, &ctx, cfg, &mut plain),
+            || one_ply_neural(&root, moves, me, net, true, &ctx, cfg, &mut quiet),
         );
+        bank.absorb(plain);
+        bank.absorb(quiet);
         stats.evals += evals;
         stats.wars_priced += wars;
         return mv;
@@ -259,7 +297,7 @@ pub fn pick(
         if cfg.bot.determinize {
             determinize(&mut root, &mut drng);
         }
-        for (mv, v) in beam(cfg, net, stats, &root, moves, me, &ctx) {
+        for (mv, v) in beam(cfg, net, stats, &root, moves, me, &ctx, bank) {
             if let Some(entry) = totals.iter_mut().find(|(m, _, _)| *m == mv) {
                 entry.1 += v;
                 entry.2 += 1;
@@ -293,6 +331,7 @@ struct Frontier {
 /// Beam search to the end of `me`'s own turn, scored in one BATCH per ply
 /// (this module's top doc comment, "Batched per PLY, not per candidate").
 /// Returns `(first_move, best terminal score reachable through it)` pairs.
+#[allow(clippy::too_many_arguments)]
 fn beam(
     cfg: &NeuralPlanConfig,
     net: &ValueNet,
@@ -301,6 +340,7 @@ fn beam(
     moves: &[Move],
     me: u8,
     ctx: &RivalContext,
+    bank: &mut Bank<Vec<f64>>,
 ) -> Vec<(Move, f64)> {
     stats.searches += 1;
     let mut budget = cfg.max_nodes;
@@ -345,7 +385,7 @@ fn beam(
         if gen_states.is_empty() {
             break;
         }
-        let (vals, wars) = score_many(&gen_states, me, cfg.war_lookahead, net);
+        let (vals, wars) = score_many(&gen_states, me, cfg.war_lookahead, net, bank);
         stats.evals += gen_states.len() as u64;
         stats.wars_priced += wars;
 
@@ -373,6 +413,7 @@ fn beam(
 /// evals delta, wars-priced delta)`; see this module's top doc comment,
 /// "`Stats`-free helpers", for why the counts are returned rather than
 /// applied to a `&mut Stats` here.
+#[allow(clippy::too_many_arguments)]
 fn one_ply_neural(
     state: &GameState,
     moves: &[Move],
@@ -381,6 +422,7 @@ fn one_ply_neural(
     quiet: bool,
     ctx: &RivalContext,
     cfg: &NeuralPlanConfig,
+    bank: &mut Bank<Vec<f64>>,
 ) -> (Move, u64, u64) {
     let mut states: Vec<GameState> = Vec::with_capacity(moves.len());
     for &mv in moves {
@@ -397,7 +439,7 @@ fn one_ply_neural(
         // crate keeps its own `unwrap_or(moves[0])`.
         return (moves[0], 0, 0);
     }
-    let (vals, wars) = score_many(&states, me, cfg.war_lookahead, net);
+    let (vals, wars) = score_many(&states, me, cfg.war_lookahead, net, bank);
     let evals = states.len() as u64;
     let mut best: Option<(Move, f64)> = None;
     for (&mv, &v) in moves.iter().zip(vals.iter()) {
@@ -555,7 +597,7 @@ mod tests {
         state.players[0].techs.get_mut(warriors).unwrap().workers = 12;
 
         let net = flat_net();
-        let (_vals, wars) = score_many(std::slice::from_ref(&state), 0, true, &net);
+        let (_vals, wars) = score_many(std::slice::from_ref(&state), 0, true, &net, &mut Bank::Off);
         assert_eq!(wars, 1);
 
         let mut scratch = state.clone();

@@ -254,6 +254,79 @@ const QUIESCE_CAP: u32 = 12;
 /// # Panics
 /// If `moves` is empty (a caller bug, matching every other bot in this
 /// port).
+/// Somewhere for a caller to collect the positions a search actually PRICED,
+/// so a training-data generator can learn the leaf evaluator's own input
+/// distribution instead of guessing at it.
+///
+/// This exists because of a measured distribution bug, not for generality.
+/// `experiments/neural_rankdata.py` labelled value rows with *pre-move,
+/// mid-turn* encodings, and `experiments/plan_teacher_gen.py`'s top doc
+/// comment names that as the first of two bugs it closes: "A beam leaf
+/// evaluator is asked about *quiet, end-of-my-turn* positions and nothing
+/// else." `docs/BOT_ARCHITECTURE.md` 3b: "PlanBot evaluates only at turn
+/// boundaries, which is exactly the distribution a boundary-only fit is
+/// trained on ... the fitted vector and PlanBot are a matched pair by
+/// construction." A net fitted on the wrong distribution is asked, at play
+/// time, about states it never saw in training.
+///
+/// [`Bank::Off`] is the default every ordinary caller uses and costs
+/// nothing: [`Bank::push`] takes a CLOSURE, so the clone or encode that
+/// builds the collected value never runs at all unless someone is
+/// collecting.
+pub enum Bank<T> {
+    /// Collect nothing. What `pick` uses, so the search is not slowed down
+    /// by a facility only the generator wants.
+    Off,
+    On(Vec<T>),
+}
+
+impl<T> Bank<T> {
+    pub fn collecting() -> Bank<T> {
+        Bank::On(Vec::new())
+    }
+
+    /// Append `make()`'s result -- but only when collecting.
+    pub fn push(&mut self, make: impl FnOnce() -> T) {
+        match self {
+            Bank::Off => {}
+            Bank::On(v) => v.push(make()),
+        }
+    }
+
+    /// A second bank in the same MODE as this one. Two closures cannot both
+    /// hold `&mut` on one bank even when only one of them will ever run
+    /// (`pending::fallback_pick` takes exactly such a pair), so a caller in
+    /// that position gives each side its own bank and [`Bank::absorb`]s
+    /// afterwards.
+    pub fn like(&self) -> Bank<T> {
+        match self {
+            Bank::Off => Bank::Off,
+            Bank::On(_) => Bank::On(Vec::new()),
+        }
+    }
+
+    /// Move everything `other` collected into this bank.
+    pub fn absorb(&mut self, other: Bank<T>) {
+        match (self, other) {
+            (Bank::On(mine), Bank::On(theirs)) => mine.extend(theirs),
+            // Nothing to move, or nowhere to move it to. Both are the
+            // honest no-op: a bank that is Off never collected anything,
+            // and one that is Off was never asked to keep anything.
+            (Bank::On(_), Bank::Off) | (Bank::Off, Bank::On(_)) | (Bank::Off, Bank::Off) => {}
+        }
+    }
+
+    /// Take what has been collected so far, leaving the bank empty and still
+    /// collecting. An empty `Vec` when [`Bank::Off`], which is the honest
+    /// answer: nobody asked for anything.
+    pub fn take(&mut self) -> Vec<T> {
+        match self {
+            Bank::Off => Vec::new(),
+            Bank::On(v) => std::mem::take(v),
+        }
+    }
+}
+
 pub fn pick(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -261,6 +334,21 @@ pub fn pick(
     rng: &mut PyRandom,
     state: &GameState,
     moves: &[Move],
+) -> Move {
+    pick_collecting(cfg, stats, counters, rng, state, moves, &mut Bank::Off)
+}
+
+/// [`pick`], plus every position the beam priced appended to `bank`. The
+/// teacher-data generator (`bots::neural::rankdata`) is the only caller that
+/// passes anything but [`Bank::Off`]; see [`Bank`] for why it needs them.
+pub fn pick_collecting(
+    cfg: &PlanConfig,
+    stats: &mut Stats,
+    counters: &mut pending::Counters,
+    rng: &mut PyRandom,
+    state: &GameState,
+    moves: &[Move],
+    bank: &mut Bank<GameState>,
 ) -> Move {
     if moves.len() == 1 {
         return moves[0];
@@ -284,7 +372,7 @@ pub fn pick(
             state,
             counters,
             || one_ply(&root, moves, me, w, &ctx),
-            || one_ply_quiet(&root, moves, me, w, &ctx, cfg.war_lookahead, stats),
+            || one_ply_quiet(&root, moves, me, w, &ctx, cfg.war_lookahead, stats, bank),
         );
     }
 
@@ -297,7 +385,7 @@ pub fn pick(
         if cfg.bot.determinize {
             determinize(&mut root, &mut drng);
         }
-        let best = beam(cfg, stats, &root, moves, me, w, &ctx);
+        let best = beam(cfg, stats, &root, moves, me, w, &ctx, bank);
         for (mv, v) in best {
             if let Some(entry) = totals.iter_mut().find(|(m, _, _)| *m == mv) {
                 entry.1 += v;
@@ -340,6 +428,7 @@ fn beam(
     me: u8,
     w: &Weights,
     ctx: &RivalContext,
+    bank: &mut Bank<GameState>,
 ) -> Vec<(Move, f64)> {
     stats.searches += 1;
     let mut budget = cfg.max_nodes;
@@ -376,6 +465,9 @@ fn beam(
                 // search must not see).
                 quiesce(&mut t, w, Some(&ctx.root_row), Some((&ctx.civil_outlook, &ctx.event_pool)));
                 let v = score(&t, me, w, ctx, cfg.war_lookahead, stats);
+                // Collected AFTER `quiesce` and before the frontier decides
+                // anything: this is the exact position `score` was handed.
+                bank.push(|| t.clone());
                 if t.game_over || t.current != me {
                     update_best(&mut best, first, v);
                 } else {
@@ -475,6 +567,7 @@ fn one_ply_quiet(
     ctx: &RivalContext,
     war_lookahead: bool,
     stats: &mut Stats,
+    bank: &mut Bank<GameState>,
 ) -> Move {
     let mut best: Option<(Move, f64)> = None;
     for &mv in moves {
@@ -482,6 +575,7 @@ fn one_ply_quiet(
         apply::apply(&mut t, mv);
         quiesce(&mut t, w, Some(&ctx.root_row), Some((&ctx.civil_outlook, &ctx.event_pool)));
         let v = score(&t, me, w, ctx, war_lookahead, stats);
+        bank.push(|| t.clone());
         if best.is_none_or(|(_, bv)| v > bv) {
             best = Some((mv, v));
         }
