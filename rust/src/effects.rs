@@ -677,6 +677,76 @@ pub fn army_strength_units(p: &PlayerState, units: &[CardId]) -> i32 {
     army_strength_from_counts(p, card, &avail, &fresh)
 }
 
+/// `[Infantry, Cavalry, Artillery, Air]`, in [`unit_slot`]'s own index order
+/// -- the CardType each slot of an `avail`/`fresh`/`need` array names, so a
+/// caller holding a per-slot number (like [`TacticCandidate::short_by_type`])
+/// can zip it back against the type it is short OF without re-deriving
+/// `unit_slot`'s mapping by hand. `bots::weighted::cards::tactic_value` is the
+/// one caller outside this file that needs the reverse direction `unit_slot`
+/// itself does not offer.
+pub const UNIT_SLOT_TYPES: [CardType; 4] = [CardType::Infantry, CardType::Cavalry, CardType::Artillery, CardType::Air];
+
+/// One tactic card, evaluated against `p`'s CURRENT unit mix -- the per-
+/// candidate body [`tactic_outlook`]'s selection loop and
+/// [`tactic_shortfall`] both need, factored out once so the two can never
+/// compute "how short is this candidate" two different ways.
+struct TacticCandidate {
+    /// Army strength `p` could field with this tactic RIGHT NOW.
+    val: i32,
+    /// Complete armies formable right now -- `0` means genuinely
+    /// unreachable with today's board, not merely "not the best on offer".
+    armies: i32,
+    /// Total unit workers still owed before ONE MORE army forms, summed
+    /// over every type the composition needs -- `tactic_outlook`'s
+    /// `units_short`.
+    short: i32,
+    /// The same shortfall, broken out PER unit type (`UNIT_SLOT_TYPES`
+    /// order) -- `tactic_outlook`'s single summed `short` cannot say which
+    /// type is missing, and [`tactic_shortfall`]'s one caller
+    /// (`bots::weighted::cards::tactic_value`) needs exactly that to ask
+    /// "is THIS type's tech already researched, or still on the row" per
+    /// type, not for the composition as a whole.
+    short_by_type: [i32; 4],
+}
+
+/// Evaluate `name` as a candidate tactic for `p`, `None` if `name` is not
+/// tactic-shaped at all (`Composition::is_empty`). Mirrors the inner body of
+/// Python's `tactic_outlook` loop -- see [`TacticCandidate`]'s own doc
+/// comment for why this is its own function now rather than inlined once per
+/// caller.
+fn tactic_candidate(p: &PlayerState, name: CardId) -> Option<TacticCandidate> {
+    if name.is_none() {
+        return None;
+    }
+    let card = name.get();
+    if card.composition.is_empty() {
+        return None;
+    }
+    let lv = name.level() as i32;
+    let mut avail = [0i32; 4];
+    let mut fresh = [0i32; 4];
+    for (id, slot) in p.techs.iter() {
+        let w = slot.workers as i32;
+        if w == 0 {
+            continue;
+        }
+        let Some(i) = unit_slot(id.kind()) else { continue };
+        avail[i] += w;
+        if id.level() as i32 >= lv - 1 {
+            fresh[i] += w;
+        }
+    }
+    let val = army_strength_from_counts(p, card, &avail, &fresh);
+    let need = need_counts(card.composition);
+    let armies = (0..4).filter(|&i| need[i] > 0).map(|i| avail[i] / need[i]).min().unwrap_or(0);
+    let mut short_by_type = [0i32; 4];
+    for i in 0..4 {
+        short_by_type[i] = (need[i] * (armies + 1) - avail[i]).max(0);
+    }
+    let short = short_by_type.iter().sum();
+    Some(TacticCandidate { val, armies, short, short_by_type })
+}
+
 /// (best_strength, units_short) over the tactics `p` could switch to --
 /// `engine/effects.py::tactic_outlook`. Answers the two questions
 /// [`army_strength`] cannot, because it only ever looks at the tactic already
@@ -699,14 +769,14 @@ pub fn army_strength_units(p: &PlayerState, units: &[CardId]) -> i32 {
 /// ("strength") or 0)`, restated as a Rust tuple (lexicographic `Ord`, same
 /// comparison).
 ///
-/// Recomputes `avail`/`fresh` from `p.techs` once PER CANDIDATE rather than
-/// hoisting Python's `counts` list out of the loop: `p.techs` is a handful of
-/// entries and `names` a handful of candidates (hand tactics plus
-/// `available_tactics`, bounded by `RULES_SPEC`), so the O(techs x
-/// candidates) rescan costs nothing a `Vec` allocation to cache it would be
-/// worth avoiding -- and it keeps this function allocation-free, called once
-/// per candidate move like the rest of `bots::weighted::cards`'s per-decision
-/// (not per-card) helpers.
+/// Recomputes `avail`/`fresh` from `p.techs` once PER CANDIDATE (inside
+/// [`tactic_candidate`]) rather than hoisting Python's `counts` list out of
+/// the loop: `p.techs` is a handful of entries and `names` a handful of
+/// candidates (hand tactics plus `available_tactics`, bounded by
+/// `RULES_SPEC`), so the O(techs x candidates) rescan costs nothing a `Vec`
+/// allocation to cache it would be worth avoiding -- and it keeps this
+/// function allocation-free, called once per candidate move like the rest of
+/// `bots::weighted::cards`'s per-decision (not per-card) helpers.
 pub fn tactic_outlook(p: &PlayerState, names: impl Iterator<Item = CardId>) -> (i32, i32) {
     let mut best: Option<(i32, i32, i32)> = None;
     let mut best_val = 0;
@@ -715,38 +785,36 @@ pub fn tactic_outlook(p: &PlayerState, names: impl Iterator<Item = CardId>) -> (
         if name.is_none() {
             continue;
         }
-        let card = name.get();
-        if card.composition.is_empty() {
-            continue;
-        }
-        let lv = name.level() as i32;
-        let mut avail = [0i32; 4];
-        let mut fresh = [0i32; 4];
-        for (id, slot) in p.techs.iter() {
-            let w = slot.workers as i32;
-            if w == 0 {
-                continue;
-            }
-            let Some(i) = unit_slot(id.kind()) else { continue };
-            avail[i] += w;
-            if id.level() as i32 >= lv - 1 {
-                fresh[i] += w;
-            }
-        }
-        let val = army_strength_from_counts(p, card, &avail, &fresh);
-        let need = need_counts(card.composition);
-        let armies = (0..4).filter(|&i| need[i] > 0).map(|i| avail[i] / need[i]).min().unwrap_or(0);
-        let short: i32 = (0..4).map(|i| (need[i] * (armies + 1) - avail[i]).max(0)).sum();
-        let key = (val, -short, card.effects.strength as i32);
+        let Some(cand) = tactic_candidate(p, name) else { continue };
+        let key = (cand.val, -cand.short, name.get().effects.strength as i32);
         if best.is_none_or(|b| key > b) {
             best = Some(key);
-            best_val = val;
-            best_short = short;
+            best_val = cand.val;
+            best_short = cand.short;
         }
     }
     match best {
         None => (0, 0),
         Some(_) => (best_val, best_short),
+    }
+}
+
+/// (army strength right now, armies formable right now, per-type shortfall
+/// to the NEXT army) for ONE SPECIFIC candidate tactic `id` --
+/// [`tactic_outlook`]'s per-candidate body, exposed directly for
+/// `bots::weighted::cards::tactic_value`, which narrows `tactic_outlook`'s
+/// `names` iterator to `std::iter::once(id)` already (so calling both would
+/// recompute the exact same `avail`/`fresh` scan twice) and needs the
+/// per-TYPE breakdown `tactic_outlook`'s single summed return erases: "one
+/// cannon short with the tech already researched" and "one cannon short with
+/// no cannon tech anywhere in reach" are wildly different costs, and only
+/// the per-type array lets a caller tell them apart. `(0, 0, [0; 4])` for a
+/// card that is not tactic-shaped at all, matching `tactic_outlook`'s
+/// treatment of the same case.
+pub fn tactic_shortfall(p: &PlayerState, id: CardId) -> (i32, i32, [i32; 4]) {
+    match tactic_candidate(p, id) {
+        None => (0, 0, [0; 4]),
+        Some(cand) => (cand.val, cand.armies, cand.short_by_type),
     }
 }
 

@@ -317,6 +317,7 @@ mod tests {
         (WeightKey::PactBoardCredit, "cards.rs pact board-credit multiplier"),
         (WeightKey::EventBoardCredit, "cards.rs event board-credit multiplier"),
         (WeightKey::TacticShortfallCost, "cards.rs tactic_value shortfall coefficient"),
+        (WeightKey::TacticReachCredit, "cards.rs tactic_value not-yet-formable reachability credit"),
         // Identity-aware terms priced through `w` directly inside
         // `eval::evaluate`'s own gated blocks (each skipped outright at
         // its default 0.0 weight) -- not linear in the board, so not

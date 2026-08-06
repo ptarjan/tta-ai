@@ -129,8 +129,9 @@
 
 use crate::bots::board_yields;
 use crate::cards::{CardId, CardType, Special};
+use crate::costs;
 use crate::effects;
-use crate::state::GameState;
+use crate::state::{GameState, PlayerState};
 
 use super::horizon;
 use super::rivals;
@@ -1151,25 +1152,117 @@ pub fn gov_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Opti
 /// knob a league actually watching win rate can move, unlike a hand-guessed
 /// discount constant nothing would ever correct.
 ///
-/// [`effects::tactic_outlook`] fed a single-candidate iterator (`id` alone,
+/// [`effects::tactic_shortfall`] fed a single-candidate query (`id` alone,
 /// not the whole-hand candidate chain [`tactic_terms`] builds) is exactly
-/// "what would THIS card's army be" -- the same rules-engine function,
-/// narrowed to one card.
+/// "what would THIS card's army be, and how short of it is `p` right now" --
+/// the same rules-engine function, narrowed to one card.
 pub fn tactic_value(id: CardId, state: &GameState, idx: u8, w: &Weights) -> f64 {
     let p = &state.players[idx as usize];
-    let (candidate, short) = effects::tactic_outlook(p, std::iter::once(id));
-    let gain = (candidate - effects::army_strength(p)).max(0) as f64;
-    if gain == 0.0 {
-        // Either not tactic-shaped at all, or already dominated by the
-        // tactic in play -- a card cannot make holding it WORSE than not
-        // holding it, so the shortfall term below only ever refines a
-        // strictly positive gain, never invents a negative one out of a
-        // composition the player has no present path to completing.
+    let (val, armies, short_by_type) = effects::tactic_shortfall(p, id);
+    let current = effects::army_strength(p);
+    let gain = (val - current).max(0) as f64;
+    if gain > 0.0 {
+        // Already formable right now: the existing gradient, unchanged --
+        // a real strength delta over the tactic in play, refined downward
+        // by how short of the NEXT army (beyond this one) the player still
+        // is. See `tactic_value`'s own top doc comment for why the direct
+        // (rules-naive) term is priced rather than a guessed rival-adoption
+        // discount.
+        let strength_m = yield_marginal(WeightKey::Strength, state, idx, w, None);
+        let short: i32 = short_by_type.iter().sum();
+        let shortfall_w = w.get(WeightKey::TacticShortfallCost);
+        return (gain * strength_m - f64::from(short) * shortfall_w).max(0.0);
+    }
+    if armies > 0 {
+        // Reachable right now, but not an improvement over the tactic
+        // already in play (or not tactic-shaped at all) -- nothing to
+        // project here, and the reachability estimate below only ever
+        // exists to price a composition that cannot form even ONE army
+        // yet, never to invent value for a strictly-worse-or-equal one.
         return 0.0;
     }
+
+    // Not formable at all yet. Previously this returned 0.0 unconditionally
+    // -- the exact gap docs/OPEN_ITEMS.md's owner named: a tactic needing
+    // one more cannon scored the same whether the cannon tech was one
+    // upgrade away or nowhere on the board. Ask what it would actually cost
+    // to close every missing unit type's shortfall, and price the tactic's
+    // FIRST army (its printed per-army strength, `card.effects.strength`,
+    // over the baseline the current tactic already provides) net of that
+    // cost -- smoothly discounted by real cost-to-reach rather than a
+    // binary reachable/not cliff, and gated by `tactic_reach_credit` (a
+    // "how much to trust this projection" knob, not a "reaching a tactic is
+    // worth X" fitted constant).
+    let card = id.get();
+    let potential = (i32::from(card.effects.strength) - current).max(0);
+    if potential == 0 {
+        return 0.0;
+    }
+    let mut cost = 0.0;
+    for (i, &kind) in effects::UNIT_SLOT_TYPES.iter().enumerate() {
+        match unit_type_reach_cost(state, p, kind, short_by_type[i], w) {
+            Some(c) => cost += c,
+            None => return 0.0, // no visible route to this unit type at all
+        }
+    }
     let strength_m = yield_marginal(WeightKey::Strength, state, idx, w, None);
-    let shortfall_w = w.get(WeightKey::TacticShortfallCost);
-    (gain * strength_m - f64::from(short) * shortfall_w).max(0.0)
+    let reach_credit = w.get(WeightKey::TacticReachCredit);
+    (reach_credit * (f64::from(potential) * strength_m - cost)).max(0.0)
+}
+
+/// What it would cost THIS player, in eval-points, to add `missing` more
+/// workers of unit type `kind` to the board -- [`tactic_value`]'s "how hard
+/// is this shortfall really to close" query, restated as real board facts
+/// rather than a flat per-worker constant (the gap docs/OPEN_ITEMS.md's own
+/// owner flagged: "a real human would ... look for a canon easily available
+/// on the board before deciding to throw [a tactic] away").
+///
+/// * Already researched -- `p.techs.of_type(kind)` finds a card regardless
+///   of current staffing (an unstaffed tech still means no science/row cost
+///   remains, only the build itself): the highest level owned prices the
+///   BUILD, `costs::build_cost_net` (the same military-discount-aware build
+///   price [`tech_value`]'s own build-fresh branch prices a first worker
+///   at), plus one military action per worker.
+/// * Not researched, but a card of `kind` sits in [`GameState::card_row`]
+///   RIGHT NOW -- public information (RULES_SPEC: the row, every played
+///   card, every board and all discard piles are legal to read; a rival's
+///   HAND and the unshuffled deck order are not, and neither is touched
+///   here): the full take-develop-build bill -- the row-position take cost
+///   ([`costs::take_cost`]), the printed science to develop
+///   ([`costs::tech_cost`]), two civil actions (take + develop) and, for
+///   every worker including the first, a build cost and a military action.
+/// * Neither -- `None`: no route this evaluator can see, and this port does
+///   not invent one. [`tactic_value`] treats `None` as "no credit for this
+///   shortfall", never as a value to guess at.
+///
+/// Every cost is converted through the SAME weights everything else in this
+/// module prices a cost with, `max(0.0, w)` ([`YieldKind::Cost`]'s own
+/// reason: a hill-climbed-negative stock weight must never make a cost read
+/// as a gain) -- this is not a second currency, it is `resource_stock`/
+/// `science`/`civil_actions`/`military_actions` read the same way
+/// [`tech_value`]/[`gov_value`] already read them, not a fitted "reaching a
+/// tactic is worth about X" constant.
+fn unit_type_reach_cost(state: &GameState, p: &PlayerState, kind: CardType, missing: i32, w: &Weights) -> Option<f64> {
+    if missing <= 0 {
+        return Some(0.0);
+    }
+    let n = f64::from(missing);
+    let res_w = w.get(WeightKey::ResourceStock).max(0.0);
+    let ma_w = w.get(WeightKey::MilitaryActions).max(0.0);
+
+    if let Some((owned, _)) = p.techs.of_type(kind).max_by_key(|(id, _)| id.level()) {
+        let build = f64::from(costs::build_cost_net(state, p, owned).unwrap_or(0));
+        return Some(n * (build * res_w + ma_w));
+    }
+
+    let sci_w = w.get(WeightKey::Science).max(0.0);
+    let ca_w = w.get(WeightKey::CivilActions).max(0.0);
+    let (slot, &row_id) =
+        state.card_row.iter().enumerate().find(|&(_, &id)| !id.is_none() && id.kind() == kind)?;
+    let take = f64::from(costs::take_cost(state, p, slot));
+    let sci = f64::from(costs::tech_cost(state, p, row_id).unwrap_or(0));
+    let build = f64::from(costs::build_cost_net(state, p, row_id).unwrap_or(0));
+    Some(take * res_w + n * build * res_w + sci * sci_w + 2.0 * ca_w + n * ma_w)
 }
 
 /// `aggression_value`: eval-points holding THIS aggression card in hand is
@@ -2355,6 +2448,97 @@ mod tests {
         let w = Weights::default();
         let got = tactic_value(card("Fighting Band"), &state, 0, &w);
         assert!(got > 0.0, "got={got}");
+    }
+
+    // -------------------------------- reachability (docs/OPEN_ITEMS.md-style
+    // gap: "a real human would see a tactics card with a canon and look for a
+    // canon easily available on the board before deciding to throw it away")
+
+    /// Before this change, `tactic_value` returned exactly 0.0 for ANY
+    /// composition that cannot form even one army yet, whether the missing
+    /// unit was one build away or off the map entirely. Legion needs three
+    /// infantry; with two Warriors workers already staffed (Warriors is
+    /// infantry, a starting tech every player owns from turn one), the
+    /// player is one worker short -- but that worker only needs BUILDING
+    /// (2 resources, one military action, Warriors' own printed cost), no
+    /// research and no row at all. `tactic_value` must now price that as a
+    /// real, positive, discounted gain instead of the old flat 0.0.
+    #[test]
+    fn tactic_value_credits_a_not_yet_formable_tactic_when_its_missing_units_tech_is_already_owned() {
+        let mut state = crate::game::new_game(2, 60);
+        state.players[0].techs.get_mut(card("Warriors")).expect("starting tech").workers = 2;
+        let w = Weights::default();
+        let got = tactic_value(card("Legion"), &state, 0, &w);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    /// Heavy Cavalry needs three cavalry -- a unit type this fresh 2p deal's
+    /// player 0 has never researched (no cavalry tech in `p.techs` at all)
+    /// -- and the row is cleared of every cavalry card, so there is no
+    /// route to it this evaluator can see. `tactic_value` must still price
+    /// this at exactly 0.0: a smooth reachability estimate must not invent
+    /// value for a shortfall with no visible path to closing it, matching
+    /// the pre-existing "not yet reachable" cliff for the genuinely
+    /// unreachable case (a route that does exist, elsewhere in this test
+    /// module, prices positive instead -- see the test above).
+    #[test]
+    fn tactic_value_stays_zero_when_the_missing_unit_type_has_no_visible_route_at_all() {
+        let mut state = crate::game::new_game(2, 61);
+        state.card_row = [CardId::NONE; crate::state::ROW_SIZE];
+        let got = tactic_value(card("Heavy Cavalry"), &state, 0, &Weights::default());
+        assert_eq!(got, 0.0);
+    }
+
+    /// [`unit_type_reach_cost`]'s three-way split, pinned directly rather
+    /// than only through `tactic_value`'s clamp-at-zero net (which can mask
+    /// a real cost difference behind "not worth it either way" at default
+    /// weights): owning the tech already is strictly cheaper than needing
+    /// to take-and-develop it from the row for the SAME missing worker
+    /// count, and a type with no route at all -- not owned, not in the row
+    /// -- prices as `None`, never as some invented finite number.
+    #[test]
+    fn unit_type_reach_cost_is_cheaper_already_owned_than_taken_from_the_row_and_none_with_no_route() {
+        let mut state = crate::game::new_game(2, 62);
+        let w = Weights::default();
+
+        // No route at all: no cavalry tech owned, row cleared.
+        state.card_row = [CardId::NONE; crate::state::ROW_SIZE];
+        let p = &state.players[0];
+        assert_eq!(unit_type_reach_cost(&state, p, CardType::Cavalry, 2, &w), None);
+
+        // Visible in the row, not yet researched: some finite, positive cost.
+        state.card_row[0] = card("Knights");
+        let p = &state.players[0];
+        let row_cost = unit_type_reach_cost(&state, p, CardType::Cavalry, 2, &w)
+            .unwrap_or_else(|| panic!("Knights visible in the row must price a route"));
+        assert!(row_cost > 0.0, "row_cost={row_cost}");
+
+        // Already researched (even unstaffed): build cost only, cheaper
+        // than the take-develop-build bill above for the identical count.
+        state.players[0].techs.insert(card("Knights"), crate::state::TechSlot { workers: 0, stored: 0 });
+        let p = &state.players[0];
+        let owned_cost = unit_type_reach_cost(&state, p, CardType::Cavalry, 2, &w)
+            .unwrap_or_else(|| panic!("an owned tech must always price a build-only route"));
+        assert!(owned_cost > 0.0, "owned_cost={owned_cost}");
+        assert!(owned_cost < row_cost, "owned_cost={owned_cost} row_cost={row_cost}");
+    }
+
+    /// Smooth in the shortfall count, not a step function: two missing
+    /// workers of an already-owned type cost strictly more to close than
+    /// one, and by a consistent per-worker increment -- there is no cliff
+    /// at any particular count, matching the design goal that reachability
+    /// degrade continuously rather than jump.
+    #[test]
+    fn unit_type_reach_cost_grows_linearly_with_the_number_of_missing_workers() {
+        let mut state = crate::game::new_game(2, 63);
+        state.players[0].techs.insert(card("Knights"), crate::state::TechSlot { workers: 0, stored: 0 });
+        let w = Weights::default();
+        let p = &state.players[0];
+        let one = unit_type_reach_cost(&state, p, CardType::Cavalry, 1, &w).expect("owned route");
+        let two = unit_type_reach_cost(&state, p, CardType::Cavalry, 2, &w).expect("owned route");
+        let three = unit_type_reach_cost(&state, p, CardType::Cavalry, 3, &w).expect("owned route");
+        assert!(one > 0.0 && two > one && three > two, "one={one} two={two} three={three}");
+        assert!((two - one - (three - two)).abs() < 1e-9, "per-worker step must be constant: one={one} two={two} three={three}");
     }
 
     /// `card_potential` must actually reach `tactic_value` once

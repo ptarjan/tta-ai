@@ -199,6 +199,15 @@ pub enum WeightKey {
     // gradient `tactic_gain`'s step-function alone lacks, ported from the
     // same shape `tactic_short` (the whole-hand analogue) already uses.
     TacticShortfallCost,
+    // `cards::tactic_value`'s "how much to trust the projected value of a
+    // tactic that cannot form even one army YET" -- gates the reachability
+    // estimate (`cards::unit_type_reach_cost`) that replaced a flat "0.0
+    // until formable" cliff. Distinct from `TacticShortfallCost` (which
+    // prices the NEXT army once the first is already formable): this one
+    // prices reaching the FIRST army at all, off real board facts (owned
+    // tech, the visible card row, printed build/develop costs) rather than
+    // a fitted constant -- see that function's own doc comment.
+    TacticReachCredit,
     HandCivil,
     HandValue,
     HandPotential,
@@ -395,6 +404,11 @@ weight_key_table! {
     PactBoardCredit => "pact_board_credit", 0.3;
     EventBoardCredit => "event_board_credit", 0.3;
     TacticShortfallCost => "tactic_shortfall_cost", 0.1;
+    // Seeded at the same modest 0.3 "trust this some, not fully" starting
+    // point as `tactic_board_credit`/`aggression_board_credit`/etc above --
+    // a new estimate with no prior measurement to seed at, not a fitted
+    // number (see this key's own comment on its `WeightKey` declaration).
+    TacticReachCredit => "tactic_reach_credit", 0.3;
     HandCivil => "hand_civil", 0.3;
     HandValue => "hand_value", 0.25;
     HandPotential => "hand_potential", 0.125;
@@ -516,9 +530,8 @@ impl WeightKey {
             | BonusCardCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
             | FreeActionCredit | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
             | RestrictedResourceCredit | TacticBoardCredit | AggressionBoardCredit
-            | WarBoardCredit | PactBoardCredit | EventBoardCredit | TacticShortfallCost => {
-                WeightGroup::Priced
-            }
+            | WarBoardCredit | PactBoardCredit | EventBoardCredit | TacticShortfallCost
+            | TacticReachCredit => WeightGroup::Priced,
 
             RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
             | RivalStrength | RivalFreeCa | RivalHandCivil | RivalWonders
