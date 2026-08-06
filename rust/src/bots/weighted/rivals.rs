@@ -689,6 +689,33 @@ pub fn rival_strength(state: &GameState, idx: u8) -> i32 {
     best
 }
 
+/// The weakest live rival's player index, or `None` when `idx` has no rival
+/// left (every other seat resigned). Strength is a public rating-track
+/// marker (RULES_SPEC 1.2: "4 rating markers: science, culture, strength,
+/// happiness"), so reading every rival's is exactly as legal as
+/// [`rival_strength`] reading the STRONGEST one already is -- this is the
+/// same quantity, minimised instead of maximised.
+///
+/// `cards::aggression_value`/`cards::war_hand_value` (docs/OPEN_ITEMS.md item
+/// 2) both need the weakest rival specifically, for two different rules
+/// reasons that happen to name the same target: RULES_SPEC 5.4.2 makes a
+/// strictly-weaker rival the only LEGAL aggression target at all, and a war
+/// (no legality gate, RULES_SPEC 5.6) is simply most profitable in
+/// expectation against whoever the current margin already favours most.
+pub fn weakest_rival(state: &GameState, idx: u8) -> Option<u8> {
+    let mut best: Option<(u8, i32)> = None;
+    for q in state.players[..state.num_players as usize].iter() {
+        if q.idx == idx || q.resigned {
+            continue;
+        }
+        let s = effects::state_stats(state, q).strength;
+        if best.is_none_or(|(_, bs)| s < bs) {
+            best = Some((q.idx, s));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 // ========================================================= marginal pricing
 
 /// What ONE point of strength is worth to `evaluate` (unowned) on THIS

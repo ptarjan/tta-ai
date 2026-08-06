@@ -520,16 +520,23 @@ pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
         Wonder => Some(WeightKey::CardBoardWonder),
         Bonus => Some(WeightKey::CardBoardBonus),
 
-        // No board-aware pricing concept exists for these today -- a build
-        // (Farm/Mine/urban/unit/SpecialTech) is priced by `tech_value`
-        // gated on `tech_board_credit` directly, never through this
-        // per-type OFFSET table at all (see `card_potential`'s dispatch,
-        // which returns before ever calling this function for a levelled
-        // type). The military-deck classes besides Bonus (Tactic,
-        // Aggression, War, Pact, Territory) and Event price at 0.0 in both
-        // engines today (docs/OPEN_ITEMS.md: "four whole card classes...
-        // price at exactly 0.0") -- nothing to offset until one of them
-        // grows a board-aware pricing function of its own.
+        // No board-aware pricing concept exists in THIS table for these --
+        // not "unpriced", just priced a different way. A build (Farm/Mine/
+        // urban/unit/SpecialTech) is priced by `tech_value` gated on
+        // `tech_board_credit` directly, never through this per-type OFFSET
+        // table at all (see `card_potential`'s dispatch, which returns
+        // before ever calling this function for a levelled type). Tactic/
+        // Aggression/War/Pact/Event (docs/OPEN_ITEMS.md item 2, closed
+        // 2026-08-06) now follow the exact same shape: `tactic_value`/
+        // `aggression_value`/`war_hand_value`/`pact_value`/`event_prepare_
+        // value`, each gated on its own `*_board_credit`, dispatched from
+        // `card_potential` before this function is ever reached for one of
+        // the five. Territory is priced a third way, through the static
+        // table (`card_yields`'s `YieldKind::Territory` branch,
+        // `territory_credit`) -- see this module's top doc comment for why
+        // Territory was never truly part of item 2's "prices at 0.0" claim
+        // despite being named alongside these five in earlier drafts of
+        // this comment.
         Farm | Mine | Lab | Temple | Library | Arena | Theater | Infantry | Cavalry | Artillery
         | Air | SpecialTech | Tactic | Aggression | War | Pact | Territory | Event => None,
     }
@@ -1109,6 +1116,307 @@ pub fn gov_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Opti
     total + best.unwrap_or(0.0)
 }
 
+// ------------------------------------------------- the military-deck classes
+//
+// docs/OPEN_ITEMS.md item 2: Tactic/Aggression/War/Pact/Event priced at
+// exactly 0.0 on every live champion -- `board_credit_key` (above) returns
+// `None` for all five, and the static yield-plumbing table cannot see any of
+// them either (Tactic's own `strength` is explicitly skipped in
+// `card_yields`; the other four's real effects live in nested A/B/
+// allPlayers/gain/lose/takeFromOpponent blocks `CardEffects` has no fields
+// for -- see this module's top doc comment). Five dedicated functions below,
+// one per class, each dispatched from `card_potential` behind its own credit
+// weight -- the same shape `tech_value`/`gov_value`/`action_value` already
+// established for the three civil types the static table alone priced
+// badly. Closed 2026-08-06.
+
+/// `tactic_value`: eval-points playing THIS SPECIFIC tactic card from hand
+/// would add, over the tactic already in play, given the player's CURRENT
+/// unit mix -- [`tactic_terms`]'s per-card sibling. `tactic_terms` already
+/// answers "is any good tactic reachable at all" as one number summed over
+/// the whole hand plus `state.available_tactics`; this answers "is THIS
+/// card the one", which a card-by-card hand/row valuation (`hand_mil_
+/// potential`/`row.rs`) needs and `tactic_terms` structurally cannot give
+/// (it only ever surfaces the single best candidate's numbers).
+///
+/// RULES_SPEC 10.2 ("going public"): an exclusive tactic stays exclusive for
+/// exactly one round, then any rival may copy it for 2 MA -- so the
+/// rules-naive strength delta below overstates what is genuinely EXCLUSIVE
+/// to the owner. This function deliberately prices the DIRECT term only,
+/// rather than guessing at a rival-adoption discount this evaluator has no
+/// data to fit: `tactic_board_credit` is free to climb below what an
+/// exclusivity-blind estimate would otherwise justify, which is the one
+/// knob a league actually watching win rate can move, unlike a hand-guessed
+/// discount constant nothing would ever correct.
+///
+/// [`effects::tactic_outlook`] fed a single-candidate iterator (`id` alone,
+/// not the whole-hand candidate chain [`tactic_terms`] builds) is exactly
+/// "what would THIS card's army be" -- the same rules-engine function,
+/// narrowed to one card.
+pub fn tactic_value(id: CardId, state: &GameState, idx: u8, w: &Weights) -> f64 {
+    let p = &state.players[idx as usize];
+    let (candidate, short) = effects::tactic_outlook(p, std::iter::once(id));
+    let gain = (candidate - effects::army_strength(p)).max(0) as f64;
+    if gain == 0.0 {
+        // Either not tactic-shaped at all, or already dominated by the
+        // tactic in play -- a card cannot make holding it WORSE than not
+        // holding it, so the shortfall term below only ever refines a
+        // strictly positive gain, never invents a negative one out of a
+        // composition the player has no present path to completing.
+        return 0.0;
+    }
+    let strength_m = yield_marginal(WeightKey::Strength, state, idx, w, None);
+    let shortfall_w = w.get(WeightKey::TacticShortfallCost);
+    (gain * strength_m - f64::from(short) * shortfall_w).max(0.0)
+}
+
+/// `aggression_value`: eval-points holding THIS aggression card in hand is
+/// worth if played against the best LEGAL target visible right now.
+/// RULES_SPEC 5.4.2: illegal against a rival whose strength is not strictly
+/// less than the attacker's, so a rival's strength (a public rating-track
+/// marker, RULES_SPEC 1.2) is legal information to gate on --
+/// [`rivals::weakest_rival`] finds the rival most likely to clear that gate.
+///
+/// Prices only the numeric loot this port's data can see without resolving
+/// the card: [`Special::TakeFromOpponent`]'s three fields (Plunder/Spy/Armed
+/// Intervention) plus any flat `CardEffects.gain_food`/`gain_resources`/
+/// `gain_culture`/`gain_science` the printed card carries (e.g. Enslave's 2
+/// food + 2 resources). Raid's destroyed-building payout and Infiltrate/
+/// Annex's structural effects stay exactly as documented in
+/// [`UNPRICED_VALUES`]/[`DELIBERATELY_UNPRICED`] -- a prose amount chosen at
+/// resolution, or a rule change, neither a card property this function can
+/// read.
+///
+/// The defence (RULES_SPEC 5.4.4) can add up to the defender's own current
+/// military-action total in temporary strength (bonus cards played +
+/// cards discarded, both public totals) -- `safety` below is a smooth,
+/// board-derived proxy for "how much of the printed margin survives that",
+/// not a fixed win/lose cutoff: illegal (0.0) at `margin <= 0`; saturating
+/// toward 1.0 once `margin` clears the defender's whole MA budget; linear in
+/// between. The same shape [`war_hand_value`]'s `p_win` uses for the
+/// analogous uncertainty there.
+pub fn aggression_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    let Some(target) = rivals::weakest_rival(state, idx) else { return 0.0 };
+    let my_strength = effects::state_stats(state, &state.players[idx as usize]).strength;
+    let their_stats = effects::state_stats(state, &state.players[target as usize]);
+    let margin = f64::from(my_strength - their_stats.strength);
+    if margin <= 0.0 {
+        return 0.0; // RULES_SPEC 5.4.2: illegal against every visible rival.
+    }
+    let defender_ma = f64::from(their_stats.military_actions.max(0));
+    let safety = (margin / (defender_ma + 1.0)).min(1.0);
+
+    let card = id.get();
+    let eff = &card.effects;
+    let mut raw = 0.0;
+    {
+        let mut add = |key: WeightKey, amt: i16| {
+            if amt != 0 {
+                raw += f64::from(amt) * yield_marginal(key, state, idx, w, late);
+            }
+        };
+        add(WeightKey::Culture, eff.gain_culture);
+        add(WeightKey::Science, eff.gain_science);
+        add(WeightKey::FoodStock, eff.gain_food);
+        add(WeightKey::ResourceStock, eff.gain_resources);
+    }
+    for &sp in card.special {
+        if let Special::TakeFromOpponent(block) = sp {
+            if block.food_and_or_resources != 0 {
+                // "any mix": price at whichever pool is worth more right
+                // now -- the same max-of-alternatives [`card_choice`]
+                // already uses for Reserves' identical "N food OR N
+                // resources".
+                let food_m = yield_marginal(WeightKey::FoodStock, state, idx, w, late);
+                let res_m = yield_marginal(WeightKey::ResourceStock, state, idx, w, late);
+                raw += f64::from(block.food_and_or_resources) * food_m.max(res_m);
+            }
+            if block.science != 0 {
+                raw += f64::from(block.science) * yield_marginal(WeightKey::Science, state, idx, w, late);
+            }
+            if block.culture != 0 {
+                raw += f64::from(block.culture) * yield_marginal(WeightKey::Culture, state, idx, w, late);
+            }
+        }
+    }
+    safety * raw
+}
+
+/// Which RULES_SPEC 5.8 war-spoils row a printed war card is, restated as
+/// (feature, flat base, per-point-of-advantage rate) -- [`war_hand_value`]'s
+/// input, not [`combat::apply_war_spoils`]'s mutating resolution (which
+/// needs a real, already-resolved `WarOutcome`, not a hand card nobody has
+/// declared yet). Keyed by `base_name` exactly as `combat::apply_war_spoils`
+/// itself keys the same three kinds (that function's own doc comment:
+/// "`outcome.card`'s PRINTED name selects the kind") -- reusing that
+/// vocabulary rather than inventing a second one. `None` for a printed name
+/// this port's three-kind table does not recognise: the same conservative
+/// "no rule known, price nothing" this codebase already takes for a gap,
+/// rather than a guess.
+enum WarKind {
+    Territory,
+    Culture,
+    Technology,
+}
+
+fn war_spoils_shape(id: CardId) -> Option<(WarKind, WeightKey, f64, f64)> {
+    match id.get().base_name {
+        // RULES_SPEC 5.8: "1 yellow token + 1 per full 5 points of
+        // strength advantage".
+        "War over Territory" => Some((WarKind::Territory, WeightKey::YellowBank, 1.0, 0.2)),
+        // RULES_SPEC 5.8: "5 + advantage culture points".
+        "War over Culture" => Some((WarKind::Culture, WeightKey::Culture, 5.0, 1.0)),
+        // RULES_SPEC 5.8: "science points equal to advantage" -- the
+        // special-tech-swap alternative (`Special::
+        // OrTakesSpecialTechnologiesOfSameTotalScienceCost`) is priced at
+        // this science-equivalent floor, not its own (possibly larger)
+        // swap value: a defensible lower bound, not the exact number
+        // `combat.rs` would compute at real resolution time.
+        "War over Technology" => Some((WarKind::Technology, WeightKey::Science, 0.0, 1.0)),
+        _ => None,
+    }
+}
+
+/// The stock [`war_spoils_shape`]'s kind caps a war's spoils at -- RULES_SPEC
+/// 5.8: territory spoils are capped by the loser's yellow bank, culture by
+/// the loser's culture, science by the loser's science. Reads the same raw
+/// [`crate::state::PlayerState`] fields `combat::apply_war_spoils` itself
+/// reads (not `effects::state_stats`'s computed rating), for the same
+/// reason: a war's spoils come out of the loser's STOCK, not their per-turn
+/// production rate.
+fn war_spoils_cap(kind: &WarKind, p: &crate::state::PlayerState) -> f64 {
+    match kind {
+        WarKind::Territory => f64::from(p.yellow_bank),
+        WarKind::Culture => f64::from(p.culture),
+        WarKind::Technology => f64::from(p.science),
+    }
+}
+
+/// `war_hand_value`: eval-points holding THIS war card in hand is worth if
+/// declared against the best current target. NOT [`crate::bots::quiescent::
+/// war_value`] (a different function, same name pattern, in a different
+/// module): that one resolves an ALREADY-DECLARED war by playing a trial
+/// state forward through the engine's own `combat::resolve_war_outcome`.
+/// This card has not even been declared yet, so there is no trial state to
+/// play forward -- this prices the declaration itself, from public
+/// information alone.
+///
+/// Unlike [`aggression_value`], RULES_SPEC 5.6 puts no legality gate on
+/// relative strength -- but RULES_SPEC 5.7 makes the war EITHER side's to
+/// win at resolution (a future, unknown turn), so this prices BOTH
+/// branches: the printed spoils running toward the declarer on a win, and
+/// the SAME formula running the other way on a loss, weighted by a smooth
+/// function of the CURRENT strength margin against the best current target
+/// ([`rivals::weakest_rival`]) -- the best public proxy available for the
+/// margin at a resolution this player cannot see yet, and the same
+/// "include the downside, not just the upside" shape the task's own brief
+/// asked for.
+pub fn war_hand_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    let Some(target) = rivals::weakest_rival(state, idx) else { return 0.0 };
+    let my = &state.players[idx as usize];
+    let their = &state.players[target as usize];
+    let margin = f64::from(effects::state_stats(state, my).strength - effects::state_stats(state, their).strength);
+    // A smooth, symmetric win probability around margin = 0. `STEEPNESS` is
+    // a fixed, rule-free scale (roughly one bonus-card swing of strength),
+    // not a fitted number: at margin = 0 this is exactly 0.5 (RULES_SPEC
+    // 5.7.2's tie has "no effect", which a 50/50 split approximates as the
+    // fair default absent any other signal), saturating toward 0.0/1.0 as
+    // the margin grows either way.
+    const STEEPNESS: f64 = 6.0;
+    let p_win = 0.5 + 0.5 * margin / (margin.abs() + STEEPNESS);
+    let advantage = margin.abs();
+
+    let Some((kind, key, base, rate)) = war_spoils_shape(id) else { return 0.0 };
+    let m = yield_marginal(key, state, idx, w, late);
+    if m == 0.0 {
+        return 0.0;
+    }
+    let printed = base + rate * advantage;
+    let my_gain = printed.min(war_spoils_cap(&kind, their)).max(0.0);
+    let their_gain = printed.min(war_spoils_cap(&kind, my)).max(0.0);
+    m * (p_win * my_gain - (1.0 - p_win) * their_gain)
+}
+
+/// `pact_value`: eval-points a Pact card in hand is worth if eventually
+/// offered and accepted -- the ONGOING per-turn yield it would grant while
+/// it holds (RULES_SPEC 5.9), priced through [`yield_marginal`] (the SAME
+/// per-point-of-a-RATE-feature machinery [`card_yields`]'s
+/// [`YieldKind::Rate`]/[`action_value`] already use, which already folds in
+/// the game's own rate/horizon discount -- see [`rivals::feature_marginal`]'s
+/// own "THE RATE HORIZON" comment) rather than a flat number.
+///
+/// RULES_SPEC 5.9: the OFFERER names which side (A/B) is theirs -- so
+/// pricing `max` over `BothPlayers`/`A`/`B` is not an information leak, it
+/// is the legal choice the offering player actually gets to make.
+/// Discounted by [`rivals::PACT_OFFER_CREDIT`], the exact same "a pact you
+/// have OFFERED is not a pact yet, the partner may refuse" fraction
+/// [`rivals::deferred_credit`] already applies to a PENDING `offer_pact` --
+/// reused rather than inventing a second, disagreeing constant for the
+/// identical uncertainty.
+///
+/// Only the five [`crate::cards::PactBlock`] fields this evaluator already
+/// has a home for (`culture`/`food`/`resources`/`strength`/
+/// `military_actions`, all RATE-shaped per [`rivals::add_pact_block`]'s own
+/// doc comment) are priced -- `tech_discount`/`war_immune`/
+/// `food_as_resource`/`resource_as_food`/`other_party_pays_science`/
+/// `culture_per_wonder_of_other_party`, and `Special::OnAttackBetweenParties`'s
+/// conditional `attacker_strength`, stay unpriced: the same partial-credit
+/// shape [`card_yields`] already takes throughout this file, real value left
+/// on the table rather than a wrong number invented to cover it.
+pub fn pact_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    let mut best = 0.0;
+    for &sp in id.get().special {
+        let block = match sp {
+            Special::BothPlayers(b) | Special::A(b) | Special::B(b) => b,
+            _ => continue,
+        };
+        let mut v = 0.0;
+        v += f64::from(block.culture) * yield_marginal(WeightKey::CultureRate, state, idx, w, late);
+        v += f64::from(block.food) * yield_marginal(WeightKey::FoodRate, state, idx, w, late);
+        v += f64::from(block.resources) * yield_marginal(WeightKey::ResourceRate, state, idx, w, late);
+        v += f64::from(block.strength) * yield_marginal(WeightKey::Strength, state, idx, w, late);
+        v += f64::from(block.military_actions) * yield_marginal(WeightKey::MilitaryActions, state, idx, w, late);
+        if v > best {
+            best = v;
+        }
+    }
+    best * rivals::PACT_OFFER_CREDIT
+}
+
+/// `event_prepare_value`: eval-points holding THIS event card in hand is
+/// worth -- RULES_SPEC 5.2's one legally KNOWN, deterministic consequence of
+/// preparing it. `apply.rs::h_prepare_event` banks `card.level()` culture
+/// UNCONDITIONALLY the instant the card is prepared, regardless of what the
+/// card itself prints, because preparing an event does NOT reveal or
+/// resolve THIS card -- it reveals whatever already sits atop the shared
+/// CURRENT events deck, a different card entirely ("An event you prepare is
+/// always revealed on a LATER turn", RULES_SPEC 5.2).
+///
+/// The card's own printed effect is deliberately NOT priced here -- the
+/// judgement call the task instructions asked to be pinned rather than
+/// guessed at. By the time this specific card is drawn back off the future
+/// events deck and resolved, it is targeted by RULES_SPEC 5.3's
+/// strongest/weakest/most-culture/etc board comparisons evaluated on
+/// WHATEVER board exists at that later, unknown turn -- a board this player
+/// cannot see now and has no legal way to forecast, since even the ORDER
+/// future events resolve in is randomised at recycling time
+/// (`events::_recycle_future_events`'s own shuffle, ported as
+/// `events::recycle_future_events`). Pricing the printed effect against
+/// TODAY's board would silently smuggle in information (today's rival
+/// standings) as a proxy for information that does not exist yet (the
+/// standings on whatever future turn the shuffle lands this card on) --
+/// exactly the legality constraint the task's own instructions rule out.
+/// [`WeightKey::EventScoringMargin`]'s separate, board-aware pricing of the
+/// 15 Age III "Impact of..." events ([`DELIBERATELY_UNPRICED`] bucket 6's
+/// own comment) only ever runs on an event ALREADY seeded
+/// (`state.future_events`/`state.current_events`), never on one still
+/// sitting in a hand deciding whether to prepare it -- so there is no
+/// existing board-aware machinery this function could borrow even for that
+/// one better-behaved subclass.
+pub fn event_prepare_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    f64::from(id.level()) * yield_marginal(WeightKey::Culture, state, idx, w, late)
+}
+
 // ---------------------------------------------------------- card_potential
 
 /// `card_potential`: eval-points a single card in hand (or the row, or a
@@ -1179,6 +1487,33 @@ pub fn card_potential(
                 if let Some(swap) = board_yields::board_yields(id, st, ix) {
                     return wb * sum_board_triples(&swap, w);
                 }
+            }
+        } else if kind == CardType::Tactic {
+            // docs/OPEN_ITEMS.md item 2, closed 2026-08-06 -- see
+            // `tactic_value`'s own doc comment.
+            let tc = w.get(WeightKey::TacticBoardCredit);
+            if tc != 0.0 {
+                return tc * tactic_value(id, st, ix, w);
+            }
+        } else if kind == CardType::Aggression {
+            let ac = w.get(WeightKey::AggressionBoardCredit);
+            if ac != 0.0 {
+                return ac * aggression_value(id, st, ix, w, late);
+            }
+        } else if kind == CardType::War {
+            let wac = w.get(WeightKey::WarBoardCredit);
+            if wac != 0.0 {
+                return wac * war_hand_value(id, st, ix, w, late);
+            }
+        } else if kind == CardType::Pact {
+            let pc = w.get(WeightKey::PactBoardCredit);
+            if pc != 0.0 {
+                return pc * pact_value(id, st, ix, w, late);
+            }
+        } else if kind == CardType::Event {
+            let ec = w.get(WeightKey::EventBoardCredit);
+            if ec != 0.0 {
+                return ec * event_prepare_value(id, st, ix, w, late);
             }
         }
     }
@@ -1980,5 +2315,257 @@ mod tests {
     fn tactic_terms_is_zero_zero_with_no_candidate_tactics() {
         let state = crate::game::new_game(2, 49);
         assert_eq!(tactic_terms(&state, 0), (0.0, 0.0));
+    }
+
+    // ==================================== the five military-deck classes
+    //
+    // docs/OPEN_ITEMS.md item 2. Every test below was run against the
+    // pre-fix tree (git stash of this commit's diff) and FAILED there --
+    // `board_credit_key` returned `None` and `card_yields` had no path for
+    // any of the five, so every one of these raw functions either did not
+    // exist yet or (for `card_potential`, which did) returned exactly 0.0.
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    // ------------------------------------------------------------- Tactic
+
+    /// A fresh deal's single Warriors worker is one short of Fighting Band's
+    /// two-infantry requirement -- `tactic_value` must price this at exactly
+    /// 0.0, not a negative shortfall penalty for a card that cannot yet make
+    /// the player any worse off.
+    #[test]
+    fn tactic_value_is_zero_when_the_army_cannot_form_yet() {
+        let state = crate::game::new_game(2, 51);
+        let w = Weights::default();
+        assert_eq!(tactic_value(card("Fighting Band"), &state, 0, &w), 0.0);
+    }
+
+    /// Two Warriors complete Fighting Band's army (needs 2 infantry): with
+    /// no tactic currently in play, playing this card is a real strength
+    /// gain, and `tactic_value` must price it as one.
+    #[test]
+    fn tactic_value_prices_a_reachable_tactics_strength_delta_over_the_current_army() {
+        let mut state = crate::game::new_game(2, 52);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 2;
+        let w = Weights::default();
+        let got = tactic_value(card("Fighting Band"), &state, 0, &w);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    /// `card_potential` must actually reach `tactic_value` once
+    /// `tactic_board_credit` is nonzero (its seeded default) -- the wiring
+    /// pin, not just the raw function.
+    #[test]
+    fn card_potential_dispatches_tactic_through_tactic_value() {
+        let mut state = crate::game::new_game(2, 53);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 2;
+        let w = Weights::default();
+        assert_ne!(w.get(WeightKey::TacticBoardCredit), 0.0, "must be seeded nonzero to be reachable at all");
+        let mut scratch = Vec::new();
+        let got = card_potential(card("Fighting Band"), &w, Some(&state), Some(0), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    // ---------------------------------------------------------- Aggression
+
+    /// RULES_SPEC 5.4.2: illegal against a rival whose strength is not
+    /// strictly less than the attacker's -- with a fresh, symmetric 2p deal
+    /// (equal strength), `aggression_value` must be exactly 0.0, however
+    /// juicy the printed loot is.
+    #[test]
+    fn aggression_value_is_zero_with_no_legal_target() {
+        let state = crate::game::new_game(2, 54);
+        let w = Weights::default();
+        assert_eq!(aggression_value(card("Aggression: Plunder (I)"), &state, 0, &w, None), 0.0);
+    }
+
+    /// Plunder (I) prints `takeFromOpponent.foodAndOrResources = 3` and
+    /// nothing else -- once player 0 has a real strength margin over player
+    /// 1, `aggression_value` must price that loot as a real, positive
+    /// number.
+    #[test]
+    fn aggression_value_prices_take_from_opponent_loot_once_a_legal_target_exists() {
+        let mut state = crate::game::new_game(2, 55);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        let w = Weights::default();
+        let got = aggression_value(card("Aggression: Plunder (I)"), &state, 0, &w, None);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    /// Enslave prints flat `gainFood`/`gainResources` (2/2) with no
+    /// `takeFromOpponent` block at all -- confirms the flat-CardEffects half
+    /// of `aggression_value` fires on its own, not only the
+    /// `TakeFromOpponent` half.
+    #[test]
+    fn aggression_value_prices_a_flat_effects_gain_with_no_take_from_opponent_block() {
+        assert!(
+            !card("Aggression: Enslave").get().special.iter().any(|sp| matches!(sp, Special::TakeFromOpponent(_))),
+            "Enslave must have no TakeFromOpponent block for this test to mean anything"
+        );
+        let mut state = crate::game::new_game(2, 56);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        let w = Weights::default();
+        let got = aggression_value(card("Aggression: Enslave"), &state, 0, &w, None);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    #[test]
+    fn card_potential_dispatches_aggression_through_aggression_value() {
+        let mut state = crate::game::new_game(2, 57);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        let w = Weights::default();
+        assert_ne!(w.get(WeightKey::AggressionBoardCredit), 0.0);
+        let mut scratch = Vec::new();
+        let got = card_potential(card("Aggression: Plunder (I)"), &w, Some(&state), Some(0), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    // ----------------------------------------------------------------- War
+
+    /// A dead-even margin with equal, nonzero culture stock on both sides
+    /// nets to EXACTLY zero: `p_win = 0.5`, and the win/loss spoils are
+    /// identical amounts (same advantage magnitude, same cap) running in
+    /// opposite directions -- the "prices the downside, not just the
+    /// upside" property, pinned as an exact cancellation rather than merely
+    /// "not the naive one-sided number".
+    #[test]
+    fn war_hand_value_nets_to_exactly_zero_at_a_dead_even_symmetric_margin() {
+        let mut state = crate::game::new_game(2, 58);
+        state.players[0].culture = 20;
+        state.players[1].culture = 20;
+        let w = Weights::default();
+        assert_eq!(war_hand_value(card("War over Culture"), &state, 0, &w, None), 0.0);
+    }
+
+    /// The same card, with player 0 given a real strength margin: the
+    /// win-weighted spoils must now dominate the loss-weighted ones, and the
+    /// result must be strictly positive.
+    #[test]
+    fn war_hand_value_favours_the_side_with_a_real_strength_margin() {
+        let mut state = crate::game::new_game(2, 59);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        state.players[0].culture = 20;
+        state.players[1].culture = 20;
+        let w = Weights::default();
+        let got = war_hand_value(card("War over Culture"), &state, 0, &w, None);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    #[test]
+    fn card_potential_dispatches_war_through_war_hand_value() {
+        let mut state = crate::game::new_game(2, 60);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        state.players[0].culture = 20;
+        state.players[1].culture = 20;
+        let w = Weights::default();
+        assert_ne!(w.get(WeightKey::WarBoardCredit), 0.0);
+        let mut scratch = Vec::new();
+        let got = card_potential(card("War over Culture"), &w, Some(&state), Some(0), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    // ---------------------------------------------------------------- Pact
+
+    /// Open Borders Agreement grants BOTH parties +1 military action per
+    /// turn (`Special::BothPlayers`) -- a real, ongoing RATE yield, so
+    /// `pact_value` must be strictly positive on a fresh deal (no board
+    /// setup needed: the yield is unconditional).
+    #[test]
+    fn pact_value_prices_a_both_players_ongoing_yield() {
+        let state = crate::game::new_game(3, 61);
+        let w = Weights::default();
+        let got = pact_value(card("Open Borders Agreement"), &state, 0, &w, None);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    /// Acceptance of Supremacy prints A: `resourceProduction: 1`, B:
+    /// `resourceProduction: -1` -- RULES_SPEC 5.9 lets the OFFERER choose
+    /// which side is theirs, so `pact_value` must price side A (the max),
+    /// never the average or side B's negative number.
+    #[test]
+    fn pact_value_takes_the_better_of_two_asymmetric_ab_sides() {
+        let state = crate::game::new_game(3, 62);
+        let w = Weights::default();
+        let got = pact_value(card("Acceptance of Supremacy"), &state, 0, &w, None);
+        let resource_m = yield_marginal(WeightKey::ResourceRate, &state, 0, &w, None);
+        assert_eq!(got, resource_m.max(0.0) * rivals::PACT_OFFER_CREDIT, "got={got}");
+        assert!(got > 0.0, "got={got}");
+    }
+
+    #[test]
+    fn card_potential_dispatches_pact_through_pact_value() {
+        let state = crate::game::new_game(3, 63);
+        let w = Weights::default();
+        assert_ne!(w.get(WeightKey::PactBoardCredit), 0.0);
+        let mut scratch = Vec::new();
+        let got = card_potential(card("Open Borders Agreement"), &w, Some(&state), Some(0), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    // -------------------------------------------------------------- Event
+
+    /// RULES_SPEC 5.2: preparing an event banks `card.level()` culture
+    /// unconditionally, whatever the card prints -- `event_prepare_value`
+    /// must equal exactly `level * culture_marginal`, the one legally known
+    /// number, and nothing else (no peeking at the printed effect).
+    #[test]
+    fn event_prepare_value_prices_only_the_guaranteed_age_culture() {
+        let id = card("Impact of Industry");
+        assert_eq!(id.get().age, crate::cards::Age::III, "the test's own math assumes level() == 3");
+        let state = crate::game::new_game(2, 64);
+        let w = Weights::default();
+        let got = event_prepare_value(id, &state, 0, &w, None);
+        let culture_m = yield_marginal(WeightKey::Culture, &state, 0, &w, None);
+        assert_eq!(got, 3.0 * culture_m);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    #[test]
+    fn card_potential_dispatches_event_through_event_prepare_value() {
+        let state = crate::game::new_game(2, 65);
+        let w = Weights::default();
+        assert_ne!(w.get(WeightKey::EventBoardCredit), 0.0);
+        let mut scratch = Vec::new();
+        let got = card_potential(card("Impact of Industry"), &w, Some(&state), Some(0), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
+    }
+
+    // -------------------------------------------- the collective regression
+
+    /// The regression guard docs/OPEN_ITEMS.md item 2's own definition of
+    /// done asked for: walk EVERY printed card of each of the five classes
+    /// and confirm at least one prices strictly nonzero on a constructed,
+    /// favourable board -- so a future refactor that re-blinds any one class
+    /// (e.g. a `card_potential` dispatch arm accidentally deleted) fails
+    /// this test loudly instead of silently going back to the state item 2
+    /// described.
+    #[test]
+    fn the_five_military_deck_classes_are_no_longer_identically_zero() {
+        let mut state = crate::game::new_game(2, 66);
+        state.players[0].techs.get_mut(card("Warriors")).expect("Warriors is a starting tech").workers = 6;
+        state.players[0].culture = 20;
+        state.players[1].culture = 20;
+        state.players[1].science = 20;
+        state.players[1].yellow_bank = 10;
+        let w = Weights::default();
+        let mut scratch = Vec::new();
+
+        for &kind in &[CardType::Tactic, CardType::Aggression, CardType::War, CardType::Pact, CardType::Event] {
+            let mut any_nonzero = false;
+            for i in 0..crate::cards::NUM_CARDS {
+                let id = CardId(i as u16);
+                if id.get().kind != kind {
+                    continue;
+                }
+                let v = card_potential(id, &w, Some(&state), Some(0), None, &mut scratch);
+                if v != 0.0 {
+                    any_nonzero = true;
+                    break;
+                }
+            }
+            assert!(any_nonzero, "{kind:?}: every card of this class still prices at exactly 0.0");
+        }
     }
 }

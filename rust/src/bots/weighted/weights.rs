@@ -1,5 +1,5 @@
 //! `engine/bots/weighted.py` lines 3548-4103: the weight vector `evaluate`
-//! is linear over -- 133 named knobs, almost all defaulting to 0.0 so a new
+//! is linear over -- 139 named knobs, almost all defaulting to 0.0 so a new
 //! channel changes nothing until the league climbs it away from zero. See
 //! that Python range's own extensive per-weight commentary for the "why"
 //! behind each fitted number; it is the source of the rationale and is
@@ -183,6 +183,22 @@ pub enum WeightKey {
     FreeActionCredit,
     TerritoryCredit,
     BonusCardCredit,
+    // The military-deck classes docs/OPEN_ITEMS.md item 2 priced at exactly
+    // 0.0 -- Tactic/Aggression/War/Pact/Event each dispatch through a
+    // dedicated board-aware valuation function (`cards::tactic_value`/
+    // `aggression_value`/`war_hand_value`/`pact_value`/`event_prepare_value`),
+    // gated by its own credit exactly like `tech_board_credit`/
+    // `action_board_credit`/`gov_board_credit`/`wonder_board_credit` already
+    // gate their own dedicated functions.
+    TacticBoardCredit,
+    AggressionBoardCredit,
+    WarBoardCredit,
+    PactBoardCredit,
+    EventBoardCredit,
+    // `cards::tactic_value`'s per-unit-worker-still-owed penalty -- the
+    // gradient `tactic_gain`'s step-function alone lacks, ported from the
+    // same shape `tactic_short` (the whole-hand analogue) already uses.
+    TacticShortfallCost,
     HandCivil,
     HandValue,
     HandPotential,
@@ -212,7 +228,7 @@ pub enum WeightKey {
 macro_rules! weight_key_table {
     ( $( $variant:ident => $name:literal, $default:expr );+ $(;)? ) => {
         impl WeightKey {
-            /// Every key, in declaration order -- the one place all 133 are
+            /// Every key, in declaration order -- the one place all 139 are
             /// listed together outside the enum declaration itself.
             pub const ALL: &'static [WeightKey] = &[ $( WeightKey::$variant, )+ ];
 
@@ -364,6 +380,21 @@ weight_key_table! {
     FreeActionCredit => "free_action_credit", 0.0;
     TerritoryCredit => "territory_credit", 1.0;
     BonusCardCredit => "bonus_card_credit", 1.0;
+    // Seeded nonzero (unlike `wonder_board_credit`'s 0.0): docs/OPEN_ITEMS.md
+    // item 2's own warning is that a gated valuation path seeded at 0.0 stays
+    // exactly as invisible as no path at all until some later climb
+    // stumbles onto it -- these five are new estimates with no prior
+    // measurement to seed AT, so 0.3 is a deliberately modest "trust this
+    // some, not fully" starting point (not a fitted number, not 1.0's "this
+    // was already measured effective" claim tech/action/gov's defaults
+    // make) -- live from the first evaluation, refined by the league from
+    // there rather than waiting to be found.
+    TacticBoardCredit => "tactic_board_credit", 0.3;
+    AggressionBoardCredit => "aggression_board_credit", 0.3;
+    WarBoardCredit => "war_board_credit", 0.3;
+    PactBoardCredit => "pact_board_credit", 0.3;
+    EventBoardCredit => "event_board_credit", 0.3;
+    TacticShortfallCost => "tactic_shortfall_cost", 0.1;
     HandCivil => "hand_civil", 0.3;
     HandValue => "hand_value", 0.25;
     HandPotential => "hand_potential", 0.125;
@@ -440,7 +471,7 @@ impl WeightKey {
     /// convention -- is what keeps them together; see
     /// `tests::phase_key_shares_its_base_keys_group`.
     ///
-    /// Deliberately NO `_ =>` wildcard arm: all 133 variants are named here
+    /// Deliberately NO `_ =>` wildcard arm: all 139 variants are named here
     /// by hand. Python's `group_of` raises `KeyError` rather than falling
     /// through to a "?" label for exactly this reason -- its own docstring
     /// records that a silent fallback is how four features (including
@@ -484,7 +515,10 @@ impl WeightKey {
             | DefenseBonus | CardRateCredit | UnitStrengthCredit | TerritoryCredit
             | BonusCardCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
             | FreeActionCredit | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
-            | RestrictedResourceCredit => WeightGroup::Priced,
+            | RestrictedResourceCredit | TacticBoardCredit | AggressionBoardCredit
+            | WarBoardCredit | PactBoardCredit | EventBoardCredit | TacticShortfallCost => {
+                WeightGroup::Priced
+            }
 
             RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
             | RivalStrength | RivalFreeCa | RivalHandCivil | RivalWonders

@@ -34,30 +34,7 @@ Next action: not a seed-and-climb task any more -- what's actually missing
 is an ablation to tell whether the drift on this coordinate is signal or
 noise.
 
-## 2. Five military-deck card classes have no pricing path at all
-
-Tactic, Aggression, War, Pact and Event cards have no board-aware pricing
-concept (`board_credit_key` returns `None` for all five, plus Territory,
-`cards.rs:523-532`) and no static `card_yields` pricing either: Tactic is
-explicitly skipped (`cards.rs:315`), and the other four have empty
-`effects` blocks in the card data, so the generic walk finds nothing to
-price. All five price at exactly 0.0 on every live champion. This is
-harmless today only because `hand_mil_potential` is also 0.0 on every live
-champion -- the first time the league prices the military hand, all five
-classes go blind simultaneously with nothing to catch it.
-
-Territory is NOT part of this group, despite being named alongside them in
-the `board_credit_key` comment at `cards.rs:523-532`: that comment is about
-the absence of a board-aware BONUS multiplier specifically. Territory gets
-real static pricing through `card_yields`/`territory_credit` (default 1.0,
-`cards.rs:244-275`), so it is not truly 0.0.
-
-Next action: needs a mapping from a tactic's strength table / an
-aggression's one-shot steal / a pact-in-hand onto some board feature before
-there's anything to wire up. Single largest unpriced surface in the
-evaluator; no small fix exists here.
-
-## 3. `wonder_overrun` has been climbed too -- corrected 2026-08-06
+## 2. `wonder_overrun` has been climbed too -- corrected 2026-08-06
 
 The formula is live (`features.rs:489` sets it on every call) and tested
 (`wonder_overrun_fires_for_a_constructed_near_completion_shortfall_state`,

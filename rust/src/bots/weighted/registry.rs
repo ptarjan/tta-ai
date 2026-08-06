@@ -32,7 +32,7 @@
 //! did for direction 2 -- `WeightKey::ALL` happily lists a variant nothing
 //! ever reads, and [`super::eval::evaluate`]'s own generic `for &k in
 //! WeightKey::ALL { ... w.get(k) ... }` loop reads EVERY key uniformly, so
-//! "was `Weights::get` ever called with this key" is true of all 133 by
+//! "was `Weights::get` ever called with this key" is true of all 139 by
 //! construction and would catch nothing. Both checks below deliberately look
 //! for something narrower and more specific than that:
 //!
@@ -306,6 +306,17 @@ mod tests {
         (WeightKey::FreeActionCredit, "cards.rs free-action multiplier"),
         (WeightKey::TerritoryCredit, "cards.rs territory multiplier"),
         (WeightKey::BonusCardCredit, "cards.rs bonus-card multiplier"),
+        // docs/OPEN_ITEMS.md item 2: the five military-deck classes' own
+        // board-credit multipliers, same shape as tech/action/gov/wonder's
+        // above -- "how much to trust cards::tactic_value/aggression_value/
+        // war_hand_value/pact_value/event_prepare_value's estimate", not a
+        // board fact.
+        (WeightKey::TacticBoardCredit, "cards.rs tactic board-credit multiplier"),
+        (WeightKey::AggressionBoardCredit, "cards.rs aggression board-credit multiplier"),
+        (WeightKey::WarBoardCredit, "cards.rs war board-credit multiplier"),
+        (WeightKey::PactBoardCredit, "cards.rs pact board-credit multiplier"),
+        (WeightKey::EventBoardCredit, "cards.rs event board-credit multiplier"),
+        (WeightKey::TacticShortfallCost, "cards.rs tactic_value shortfall coefficient"),
         // Identity-aware terms priced through `w` directly inside
         // `eval::evaluate`'s own gated blocks (each skipped outright at
         // its default 0.0 weight) -- not linear in the board, so not
