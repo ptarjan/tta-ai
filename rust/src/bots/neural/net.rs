@@ -263,32 +263,41 @@ fn check_finite_slice(xs: &[f64], what: &str) -> Result<(), String> {
     }
 }
 
-fn push_u32(out: &mut Vec<u8>, v: u32) {
+pub(crate) fn push_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// `pub(crate)`: `train.rs`'s own `RankData` binary format (record counts
+/// can run past `u32::MAX` bits of precision headroom is nice to have, if
+/// never strictly needed at today's dataset sizes) reuses this rather than
+/// hand-rolling a second little-endian writer.
+pub(crate) fn push_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
 /// Append every element of `xs` as 8-byte little-endian `f64`s, in order.
-fn push_f64_slice(out: &mut Vec<u8>, xs: &[f64]) {
+pub(crate) fn push_f64_slice(out: &mut Vec<u8>, xs: &[f64]) {
     for &x in xs {
         out.extend_from_slice(&x.to_le_bytes());
     }
 }
 
-/// A read cursor over checkpoint bytes. Every accessor bounds-checks and
-/// returns `Err` on a short read instead of panicking -- a truncated or
-/// corrupt file is an expected failure mode of loading an artifact off
-/// disk, not a programming bug.
-struct Reader<'a> {
+/// A read cursor over binary-format bytes (checkpoints here, `train.rs`'s
+/// `RankData` shards there -- `pub(crate)` for exactly that reuse). Every
+/// accessor bounds-checks and returns `Err` on a short read instead of
+/// panicking -- a truncated or corrupt file is an expected failure mode of
+/// loading an artifact off disk, not a programming bug.
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Reader { bytes, pos: 0 }
     }
 
-    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         let end = self.pos.checked_add(n).ok_or_else(|| "checkpoint: length overflow".to_string())?;
         let slice = self.bytes.get(self.pos..end).ok_or_else(|| {
             format!("checkpoint: truncated (wanted {n} bytes at offset {}, file has {})", self.pos, self.bytes.len())
@@ -297,20 +306,36 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
-    fn u32(&mut self) -> Result<u32, String> {
+    pub(crate) fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn f64(&mut self) -> Result<f64, String> {
+    pub(crate) fn u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    pub(crate) fn f64(&mut self) -> Result<f64, String> {
         Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
-    fn f64_vec(&mut self, n: usize) -> Result<Vec<f64>, String> {
+    pub(crate) fn f64_vec(&mut self, n: usize) -> Result<Vec<f64>, String> {
         (0..n).map(|_| self.f64()).collect()
     }
 
-    fn string(&mut self, n: usize) -> Result<String, String> {
+    pub(crate) fn string(&mut self, n: usize) -> Result<String, String> {
         String::from_utf8(self.take(n)?.to_vec()).map_err(|e| format!("checkpoint: meta key is not utf8: {e}"))
+    }
+
+    /// True once every byte has been consumed -- callers use this to catch
+    /// trailing garbage after an otherwise well-formed record.
+    pub(crate) fn at_end(&self) -> bool {
+        self.pos == self.bytes.len()
+    }
+
+    /// Bytes consumed so far, for an error message pointing at exactly
+    /// where a "trailing bytes" mismatch was detected.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
     }
 }
 
