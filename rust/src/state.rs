@@ -384,7 +384,6 @@ pub struct PlayerState {
     pub techs: Tableau,
     pub government: CardId,
     pub leader: CardId,
-    pub used_leader_ability: bool,
     /// The wonder under construction and how many steps are paid for.
     pub wonder: CardId,
     pub wonder_steps: u8,
@@ -1267,7 +1266,6 @@ pub struct GameState {
     /// reader only ever looks an entry up for a name still sitting in
     /// `current_events`/`future_events`.
     pub seeded_by: [u8; NUM_CARDS],
-    pub scoring_events: CardList<8>,
     pub available_tactics: CardList<16>,
 
     /// Cards that left play, by age. Records, not state: nothing in the rules

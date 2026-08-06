@@ -438,7 +438,7 @@ fn push_onehot_age(age: Age, out: &mut Vec<f64>) {
     out.extend_from_slice(&v);
 }
 
-const GLOBAL_DIM: usize = 3 * 5 + 3 + 9 + 3 + 2 * 5;
+const GLOBAL_DIM: usize = 3 * 5 + 3 + 8 + 3 + 2 * 5;
 
 fn push_global_block(state: &GameState, out: &mut Vec<f64>) {
     let n = state.num_players;
@@ -463,7 +463,6 @@ fn push_global_block(state: &GameState, out: &mut Vec<f64>) {
         rl / 30.0,
         lat,
         if state.last_round { 1.0 } else { 0.0 },
-        if !state.scoring_events.is_empty() { 1.0 } else { 0.0 },
         state.current_events.len() as f64 / 10.0,
         state.future_events.len() as f64 / 10.0,
         row_occ as f64 / 13.0,
@@ -807,14 +806,33 @@ mod tests {
         assert_eq!(state.players[0].culture, before.players[0].culture);
     }
 
-    /// Pinned against `python3.13 -c "from engine.bots import neural_encode as
-    /// NE; print(NE.encoding_dim())"` (1907, checked 2026-08-05) -- the
-    /// (since-retired) differential test `rust/tests/neural.rs` used to
-    /// check every coordinate on real states, but this is the one-line guard
-    /// that fires first and fastest if the two ever disagree about the
-    /// vector's LENGTH.
+    /// Was pinned against `python3.13 -c "from engine.bots import
+    /// neural_encode as NE; print(NE.encoding_dim())"` (1907, checked
+    /// 2026-08-05) -- the (since-retired) differential test `rust/tests/
+    /// neural.rs` used to check every coordinate on real states, but this is
+    /// the one-line guard that fires first and fastest if the two ever
+    /// disagree about the vector's LENGTH.
+    ///
+    /// Deliberately 1906, not 1907, as of `docs/OPEN_ITEMS.md`'s
+    /// `state.scoring_events` deletion: that field was write-never in both
+    /// engines (a permanently-0 neural feature), so removing it here drops
+    /// `GLOBAL_DIM` by one. Python's `neural_encode.py` still carries the
+    /// same dead feature -- deleting it there is explicitly out of scope for
+    /// this fix (docs/OPEN_ITEMS.md only asked for the dead FIELD to go, and
+    /// only in this crate) -- so Python's `encoding_dim()` is still 1907
+    /// today. This is a KNOWN, ONE-DIMENSION cross-engine divergence, not a
+    /// bug in this guard: it will self-heal back to matching the moment
+    /// Python's own `scoring_events` deletion lands, at which point this
+    /// literal goes back to 1907 (or Python's new number) and this comment
+    /// should be trimmed back down to the single pinned-value form above.
+    /// Neither engine has a training loop that loads a checkpoint across the
+    /// language boundary today (`docs/OPEN_ITEMS.md`: "Rust owns no
+    /// self-play runner, league, or training loop yet"), so nothing live
+    /// depends on the two matching AT THIS MOMENT -- but any cached Rust
+    /// encoder output or checkpoint from before this change is now the
+    /// wrong shape and must be regenerated, not patched.
     #[test]
     fn encoding_dim_matches_python() {
-        assert_eq!(ENCODING_DIM, 1907, "must match engine.bots.neural_encode.encoding_dim()");
+        assert_eq!(ENCODING_DIM, 1906, "must match engine.bots.neural_encode.encoding_dim() once scoring_events is deleted there too");
     }
 }

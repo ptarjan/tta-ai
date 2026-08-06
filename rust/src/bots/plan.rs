@@ -584,7 +584,6 @@ mod tests {
         assert_eq!(after.card_row, state.card_row, "the visible row must not move");
         assert_eq!(after.players[0].hand_civil, state.players[0].hand_civil);
         assert_eq!(after.players[0].hand_military, state.players[0].hand_military);
-        assert_eq!(after.scoring_events, state.scoring_events);
         assert_eq!(after.past_events, state.past_events);
         assert_eq!(after.future_events, state.future_events, "future_events is never reshuffled here");
         assert_eq!(after.turn, state.turn);
