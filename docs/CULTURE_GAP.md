@@ -1128,7 +1128,7 @@ handful of generations readable at all:
    **0.0** as of the 20:50 restart.)
 3. **Engine version.** The live arm's generations 1–49 ran on the pre-journal
    engine; it relaunched on the journal engine at 18:41
-   ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)). Per [`docs/PYPY.md`](PYPY.md) 9.14 the journal branch's
+   ([`docs/TRAINING_RUN.md`](TRAINING_RUN.md)). Per `docs/PYPY.md` (deleted) 9.14 the journal branch's
    `perf_check` baselines were required to agree with master's, i.e. it is a
    bit-identical-play optimisation. **That is taken from the doc, not
    re-verified here.**

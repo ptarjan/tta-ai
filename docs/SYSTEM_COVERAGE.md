@@ -40,15 +40,15 @@ Concretely:
 * **Ship changes enabled**, at the value you can best defend from the model,
   not pinned at 0.0 pending an A/B.  The league is the judge.  A change whose
   best-reasoned setting is "off" should not be landed at all.
-* **`tools/gate.sh` is not run.**  The digest gate's *job* — catching a change
-  that altered behaviour nobody intended to alter — still matters, so it is
-  replaced by **logging**, not dropped: a change must leave the normal run
-  output rich enough that an unintended behavioural shift is visible in it.
-  `experiments/behaviour.py` is that channel.  Its `by_age` block now carries
-  `rounds_left`, `rate_mult` and `culture_rate_priced` (what the vector pays
-  for one point of culture production, and the ratio to its own ceiling) and
-  takes-per-age **with their denominators** — decisions seen, decisions where a
-  take was legal, and the take rate given one was offered.
+* **`tools/gate.sh` is not run** (and, as of the Rust port, no longer exists
+  at all — deleted along with the rest of `tools/`).  The digest gate's *job*
+  — catching a change that altered behaviour nobody intended to alter —
+  still matters, so it was replaced by **logging**, not dropped: a change
+  must leave the normal run output rich enough that an unintended
+  behavioural shift is visible in it. `experiments/behaviour.py` was that
+  channel in the Python engine; it too is deleted and has no Rust
+  equivalent yet, so this bullet's job today is met only by the unit-test
+  coverage in the next bullet, not by any logging channel.
 * **Unit tests are cheap and are still expected.**  `cd rust && cargo test
   --profile difftest`.  Tests are how the last two real bugs on this project
   were found; they are not what the rule is about.

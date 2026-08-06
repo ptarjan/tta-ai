@@ -1,5 +1,18 @@
 # A coordinate must appear in every registry it needs
 
+> **The standing guard this document describes is gone, and has no Rust
+> replacement (2026-08-06).** `tests/test_coordinate_registry.py` died with
+> the Python engine; a repo grep for `KNOWN_DEAD`/`coordinate_registry` in
+> `rust/src/` today finds only prose mentioning this retired tool, no actual
+> enumeration. Per-coordinate guarantees now live piecemeal in named Rust
+> unit tests, which is strictly weaker for exactly the reason this document
+> exists: nothing fails if a `WeightKey` variant is added with no reader, or
+> a reader is added with no matching variant. Tracked as open item 5 in
+> [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md). Everything below is the historical
+> record of why the guard was built and what it caught — read it as
+> methodology to reapply in Rust, not as a description of a check that
+> currently runs.
+
 2026-07-30.  The bug, in one sentence: **a weight that exists in one registry
 and is missing from another is silently dead, and the tree is green.**
 

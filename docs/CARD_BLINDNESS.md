@@ -3842,7 +3842,7 @@ short version:
   narrow and wide.  Expected, and predicted before the run: `DEFAULT_WEIGHTS`
   carries `unit_tech_credit` at 1.0, so every unit card in the row and in the
   civil hand prices differently for all three searching bots.
-* **Two-sided** per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0: derived from scratch in two separate
+* **Two-sided** per `docs/PYPY.md` (deleted) §9.0: derived from scratch in two separate
   clones of the same commit, which agreed byte for byte on all eight arms —
   including the two that did not move.  A clean-base control on the parent
   commit reproduced every pre-change constant first.
@@ -4605,7 +4605,7 @@ Six of the eight `tools/gate.sh` arms moved and two did not.
   narrow and wide.  Expected and predicted before the run: `DEFAULT_WEIGHTS`
   carries `tech_board_credit` at 1.0, so every technology in the row and in the
   civil hand prices differently for all three searching bots.
-* **Two-sided** per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0: derived from scratch in `/tmp/gateA`
+* **Two-sided** per `docs/PYPY.md` (deleted) §9.0: derived from scratch in `/tmp/gateA`
   and independently in `/tmp/gateB`, two separate copies of the same tree,
   which agreed byte for byte on all eight arms — **including the two that did
   not move**.  A clean-base control on the parent commit (`c0525c4`, in
@@ -5040,7 +5040,7 @@ over.**  The whole set was first derived against `8b972ef` (e9cdc2d4 /
 0c5a4337 / ce0d22bf / 49b898e1 / 65d9a884 / b952c68e, with all eight verified
 the same way); the horizon lane ([`docs/MODEL_CONSTANTS.md`](MODEL_CONSTANTS.md)) then landed
 underneath and moved all six evaluator arms on its own.  Re-using a digest
-across a base change is exactly the laundering [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0 forbids, so
+across a base change is exactly the laundering `docs/PYPY.md` (deleted) §9.0 forbids, so
 the clean-base control, both derivations and the attribution were all re-run
 from scratch on `7bf483a`.  The discarded first set is recorded in
 `tools/gate.sh` so a reader can see it was discarded rather than reconciled.
@@ -5051,7 +5051,7 @@ from scratch on `7bf483a`.  The discarded first set is recorded in
 * **All six evaluator arms moved**, predicted before the run: `DEFAULT_WEIGHTS`
   carries `action_board_credit` at 1.0, so every action card in the row and in
   the civil hand prices differently for all three searching bots.
-* **Two-sided per [`docs/PYPY.md`](PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0**: derived from scratch in
+* **Two-sided per `docs/PYPY.md` (deleted) §9.0**: derived from scratch in
   `/tmp/actionfix` and independently in `/tmp/actionfix2`, two separate clones
   of the same tree, which agreed byte for byte on **all eight** arms —
   including the two that did not move.  A clean-base control on the parent

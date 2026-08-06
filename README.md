@@ -148,7 +148,7 @@ retired: when a test that pins measured behaviour starts failing, **never
 re-derive the expected value to make it pass.** Explain what moved and why
 first, attributing it to a specific cause. That rule was written down after it
 was broken, in
-[`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale)
+`docs/PYPY.md` (deleted)
 §9.0, and it is about people, not about Python.
 
 **Do not run any git command in a working checkout while the league arms are

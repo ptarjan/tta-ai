@@ -12,7 +12,7 @@ need n>=400 and a 95% CI; anything smaller is called a lead, not a result.
 Measurement environment: Mac mini 8,1, i5-8500B, 6 physical cores, no SMT.
 CPython 3.14.6. All timings `time.process_time` under `nice -n 15`, because the
 2p training arm is live and wall clock is meaningless. `TTA_JOURNAL` **off** for
-every number here, so the copy path is the oracle ([`docs/PYPY.md`](PYPY.md) 9.16).
+every number here, so the copy path is the oracle (`docs/PYPY.md` (deleted) 9.16).
 
 Archaeology of the 22 existing docs is **not** in this file; it has its own
 agent and its own document ([`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#6-the-2026-07-26-lost-work-dig) §6). Where I lean on an existing
@@ -151,7 +151,7 @@ strictly dominated under **any** weight vector. That is not a tuning problem.
 `engine/bots/quiescent.py` already resolves the stack before evaluating, at a
 measured 1.16-1.29x cost (n=8 games/count, [`docs/DEEPER_SEARCH.md`](DEEPER_SEARCH.md#3-cost) §3). Its
 **strength was never measured** (§4/§5/§6 are still "RESULTS PENDING"; another
-agent is running that A/B now) and, per [`docs/PYPY.md`](PYPY.md) 9.14, `QuiescentBot`
+agent is running that A/B now) and, per `docs/PYPY.md` (deleted) 9.14, `QuiescentBot`
 occupies **0% of league training seats**. So the fix exists and the trained
 champion has never seen it.
 
@@ -793,7 +793,7 @@ the evaluator knows made the bot worse (five thresholds, two methods, n=200-400)
 current and becomes trainable. `legal_moves` is 60% of the forward model
 (MEASURED, cProfile) and recomputes every card's cost from scratch on every
 call, so an incremental generator plus the journal (1.44x measured on
-WeightedBot, [`docs/PYPY.md`](PYPY.md) 9.15) plausibly gets 2.5-4x. 10x needs a compiled
+WeightedBot, `docs/PYPY.md` (deleted) 9.15) plausibly gets 2.5-4x. 10x needs a compiled
 core. **A 10x forward-model speedup is worth more than any algorithmic
 cleverness available here**, exactly as the brief suspected.
 

@@ -109,7 +109,7 @@ spoils the engine itself would award. It is optimistic — the defender gets a
 turn in between to build strength — and it is flagged separately
 (`WAR_LOOKAHEAD`) so the A/B can attribute its effect.
 
-### Why the undo stack ([`docs/PYPY.md`](PYPY.md#6-copy-on-write--undo-stack--full-design-writeup-and-gono-go) §6) is not needed here
+### Why the undo stack (`docs/PYPY.md` (deleted) §6) is not needed here
 
 §6 recommends Design A, a journalling `apply` with rollback, for ~1.8x. The
 `journal-undo` branch has `engine/journal.py`, `engine/statediff.py`, the
@@ -178,7 +178,7 @@ Two separate effects, and both push the same way.
    `experiments/run_league.sh` now exports `TTA_JOURNAL=1`, which buys
    `WeightedBot` 1.2–1.5x here. `journal.install()` is lazy and
    `QuiescentBot` never calls `journal.begin` — it holds several live trial
-   states at once and must stay on `copy_state` ([`docs/PYPY.md`](PYPY.md) 9.15) — so it
+   states at once and must stay on `copy_state` (`docs/PYPY.md` (deleted) 9.15) — so it
    gets none of it. **In the trainer's actual configuration the ratio is 1.65x
    at 2p and 2.65x at 4p, not 1.2x.** This is the honest number for any
    budgeting decision.
@@ -578,7 +578,7 @@ section 3.1, where the cost ratio itself turned out to be understated.
 
 `journal.install()` is lazy, and `QuiescentBot` never calls `journal.begin` —
 it holds several live trial states at once and must stay on the `copy_state`
-path ([`docs/PYPY.md`](PYPY.md) 9.15). So with `TTA_JOURNAL=1`, which
+path (`docs/PYPY.md` (deleted) 9.15). So with `TTA_JOURNAL=1`, which
 `experiments/run_league.sh` now exports, **`WeightedBot` gets its 1.44x and
 `QuiescentBot` gets nothing**. Any cost ratio measured with the journal on is
 therefore biased against quiescence by roughly that factor; section 3's
@@ -724,7 +724,7 @@ classical search is deliberately last.
    — the AlphaZero-family answer, and the only path to genuinely strong play.
    The blocker is not the model, it is throughput: a game costs 0.5–2 cpu-s in
    CPython today, so 10^5–10^6 self-play games is one to three CPU-months.
-   Realistically gated on [`docs/PYPY.md`](PYPY.md) (the journal/undo work, ~1.8x, and
+   Realistically gated on `docs/PYPY.md` (deleted) (the journal/undo work, ~1.8x, and
    PyPy) or on an engine rewrite. Weeks, not days.
 3. **ISMCTS or determinized MCTS.** The textbook answer for a stochastic,
    imperfect-information, multiplayer game, and it dissolves the max^n problem

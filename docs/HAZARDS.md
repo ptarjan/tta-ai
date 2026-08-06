@@ -11,6 +11,19 @@ renumber them.**  New hazards go in the later sections, which are unnumbered.
 
 Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
+> **Read every `engine/`, `tools/*.py`, `tests/`, `experiments/*.py` mention
+> below as historical (2026-08-06).** This document predates the Rust port
+> and describes those paths in the present tense throughout — "the watchdog
+> relaunches...", "`X.py` is the standing check for..." — but the whole
+> Python tree (`engine/`, `tools/`, `tests/`, every `experiments/*.py`) is
+> deleted; `cargo test --profile difftest` is the gate now, and the league
+> supervision described here (`watchdog.sh`, `run_league.sh`,
+> `hillclimb_league.py`) no longer runs anywhere. The TRAPS themselves — the
+> shape of each bug, and the discipline it argues for — are still real and
+> still worth reading; only the specific file paths and "currently does X"
+> claims are stale. Where a Rust equivalent is known to exist it is noted
+> inline; otherwise assume there isn't one yet.
+
 ---
 
 ## 1. Training-loop traps (the original `UNATTENDED.md` numbering)

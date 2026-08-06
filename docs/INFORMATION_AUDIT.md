@@ -970,7 +970,7 @@ with no rival aggregates at all. 1112 raises in a single 4p game.
 * What found it was a **file-level bisect** — revert `plan.py` alone and master's
   scores return; revert `weighted.py` alone and they do not.
 * What *caught* it in the first place was the **`plan wide` fingerprint arm**,
-  added one commit earlier for precisely the reason [`docs/PYPY.md`](PYPY.md) 9.14 gives: a
+  added one commit earlier for precisely the reason `docs/PYPY.md` (deleted) 9.14 gives: a
   digest can only catch a change to a bot it actually plays. No other arm moved.
   It was also one decision away from being laundered: the honest-looking move
   when a fingerprint fails is to re-derive it and write "fingerprints moved, as
@@ -1005,7 +1005,7 @@ load-bearing control flow here: `effects.state_stats` initialises
 `_stats_cache` off a caught `AttributeError` (23,305 per 4p batch) and
 `actions.cost_of` probes card names with a caught `KeyError` (~15k). Including
 either would fail on every clean tree — a gate that cries wolf, which
-[`docs/PYPY.md`](PYPY.md) 9.0 records as expensive here.
+`docs/PYPY.md` (deleted) 9.0 records as expensive here.
 
 Both layers were verified with the real bug re-introduced: `ruff` names
 `plan.py:432:45`, and the unit test fails with
@@ -1368,7 +1368,7 @@ above (3p mirror 1,800 / book 1,200 / book2 1,200; 2p mirror 360 / book 480 /
 book2 480), plus 144 for the two validations and 900 for the discarded
 replication described below. All under `nice -n 10` alongside three live
 training arms and another agent. Wall clock is not quoted anywhere because
-[`docs/PYPY.md`](PYPY.md) records ~9% between-run wall-clock sd on this box under load.
+`docs/PYPY.md` (deleted) records ~9% between-run wall-clock sd on this box under load.
 
 * `tools/deleak_ab.py` — committed, not a throwaway. `--placebo` and
   `--verify-prefix` are the two validations; `--report a.json b.json c.json`

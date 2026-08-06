@@ -1466,7 +1466,7 @@ digests moved.
 `bash tools/gate.sh` on master before any change: **GATE PASS, 401 tests**,
 `NARROW 2fd656b3`, `WNARROW 7fc72fca`, `WIDE 1169007d`, `WWIDE 9dc0a5a6`.
 
-All four moved. Re-derived per [`docs/PYPY.md`](PYPY.md) 9.0's rule — computed from
+All four moved. Re-derived per `docs/PYPY.md` (deleted) 9.0's rule — computed from
 scratch in the working worktree and independently in a second detached one,
 with the two required to agree — and **attributed rather than assumed**: each
 of the four fixes was reverted on its own and all four arms re-hashed.
