@@ -404,6 +404,44 @@ class OpponentDesire(unittest.TestCase):
         self.assertEqual(techs, view.techs)
 
 
+class RivalDesireEffFloor(unittest.TestCase):
+    """`row_pressure`'s desire-weighted competition used to floor `eff =
+    total_i / mine_i` at 1.0 before blending it against the uniform `reach`.
+    That floor could never fire: `total_i` is a sum of the SAME positive
+    terms `mine_i` is drawn from (a slot only has a `want[k]` entry once its
+    own value was > 0.0), so `total_i >= mine_i` always -- in exact
+    arithmetic, and in `float` too (adding a non-negative term to a
+    non-negative running total cannot round the result below either one).
+    Removed 2026-08-05 from both engines alongside the Rust port of this
+    range (`rust/src/bots/weighted/row.rs`); this pins that the floor never
+    had anything to guard, on a real board with a real rival wanting more
+    than one card."""
+
+    def test_eff_is_always_at_least_one_wherever_a_rival_wants_the_slot(self):
+        st = G.new_game(2, 51)
+        st.players[0].civil_actions = 6
+        st.players[1].civil_actions = 6
+        st.card_row = [None] * 13
+        st.card_row[0] = "Alchemy"
+        st.card_row[6] = "Theology"
+        ctx = W.rival_context(st, 0)
+        views = ctx["rival_views"]
+        visible = [(i, name) for i, name in enumerate(st.card_row)
+                   if name is not None]
+        late = W.lateness(st)
+        want = W._rival_desire(st, W.DEFAULT_WEIGHTS, visible, views,
+                               A._can_take_gated, late)
+        saw_a_nonempty_want = False
+        for per_rival in want:
+            for _slot, (mine_i, total_i) in per_rival.items():
+                saw_a_nonempty_want = True
+                self.assertGreaterEqual(total_i, mine_i)
+                self.assertGreaterEqual(total_i / mine_i, 1.0)
+        self.assertTrue(saw_a_nonempty_want,
+                        "fixture produced no rival demand at all -- "
+                        "the property above was checked vacuously")
+
+
 # ----------------------------------------------------------- safety guards
 
 class DefaultsAreInert(unittest.TestCase):

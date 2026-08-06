@@ -3482,10 +3482,20 @@ def row_pressure(state, idx, w, ctx=None):
                     # slot the same amount, which is what the uniform model
                     # assumed; larger when this card is one they do not
                     # want, and as small as 1.0 when it is the only card on
-                    # the row that interests them.
+                    # the row that interests them -- `total_i` sums this
+                    # rival's WHOLE positive demand, of which `mine_i` is one
+                    # of the very addends (`want[k]` only has an entry for a
+                    # slot at all once its own value was > 0.0), so
+                    # `total_i >= mine_i` always: floating-point addition of
+                    # non-negative terms can never round a running total
+                    # below an addend it has already folded in.  `eff`
+                    # therefore never needs a floor here -- the `if eff < 1.0:
+                    # eff = 1.0` this line used to carry was dead code, found
+                    # 2026-08-05 while porting this range to Rust
+                    # (`rust/src/bots/weighted/row.rs`; see
+                    # `tests/test_row_features.py::RivalDesireEffFloor`) and
+                    # removed from both engines together.
                     eff = total_i / mine_i
-                    if eff < 1.0:
-                        eff = 1.0
                     compete = (1.0 - desire) * reach[k] + desire * eff
             survive *= 1.0 - rival_take_p(
                 _rival_take_cost(name, i, gate), gate[0], compete,
