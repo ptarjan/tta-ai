@@ -502,12 +502,20 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
     if !free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
     }
-    let ok = economy::increase_population(&mut state.players[idx as usize], cost.max(0) as u16);
+    // `cost` above ALWAYS folded in `one_time_discount.pop_food` (this
+    // function's own `free` only skips the civil action below, exactly per
+    // its doc comment -- the food cost, discount included, is paid either
+    // way), so consumption is unconditional here too: `true`, not `!free`.
+    let ok = economy::increase_population(
+        &mut state.players[idx as usize], cost.max(0) as u16, true);
     debug_assert!(ok, "h_pop: caller must ensure enough food (legality check)");
 }
 
 fn h_pop_free(state: &mut GameState, idx: u8) {
-    economy::increase_population(&mut state.players[idx as usize], 0);
+    // Ocean Liners: genuinely free, `cost = 0`, and this path never even
+    // calls `economy::pop_food_cost` -- so it never looked at the one-time
+    // discount and must not consume it.
+    economy::increase_population(&mut state.players[idx as usize], 0, false);
     state.players[idx as usize].ocean_liners_used = true;
 }
 
@@ -535,7 +543,9 @@ fn h_barbarossa(state: &mut GameState, idx: u8, unit: CardId) {
             .expect("h_barbarossa: called with an empty yellow bank (caller must check legality)")
     };
     let pay = (pop_cost - food_disc).max(0) as u16;
-    let ok = economy::increase_population(&mut state.players[idx as usize], pay);
+    // `pop_cost` above already read `one_time_discount.pop_food`; this IS a
+    // real, paid population increase (never free), so consume it: `true`.
+    let ok = economy::increase_population(&mut state.players[idx as usize], pay, true);
     debug_assert!(ok, "h_barbarossa: caller must ensure enough food (legality check)");
     do_build(state, idx, unit, res_disc, false);
 }
@@ -560,6 +570,15 @@ fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId) {
 pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free: bool) {
     let base = costs::build_cost_for(state, &state.players[idx as usize], id).unwrap_or(0);
     let mut cost = (base - discount).max(0);
+    if !costs::is_unit(id) {
+        // `build_cost_for` above already folded in Civil Life's one-shot
+        // `build_resources` discount for every non-unit build (exactly the
+        // farm/mine/urban cards it is gated on -- see its own doc comment);
+        // this is the ONE build that spends it. Unconditional on `free`:
+        // `free` only waives the civil action below, not the resource cost
+        // that already consumed the discount computing `base`.
+        state.players[idx as usize].one_time_discount.build_resources = 0;
+    }
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], id, cost);
         if costs::is_unit(id) {
@@ -678,7 +697,18 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
     // peaceful revolution taken via `develop` costs 0 science today instead
     // of its printed cost. Not fixed here -- costs.rs/cards.rs are off
     // limits to this module; carried forward, not a new gap.
-    let raw = costs::tech_cost(state, &state.players[idx as usize], id).unwrap_or(0);
+    let raw_cost = costs::tech_cost(state, &state.players[idx as usize], id);
+    if raw_cost.is_some() {
+        // `tech_cost` returns `None` only when the card has no develop cost
+        // at all, in which case it never looked at `one_time_discount`
+        // either (see its own doc comment: it subtracts the discount
+        // unconditionally whenever it returns `Some`). This is the ONE
+        // technology that spends Civil Life's one-shot `develop_science`
+        // discount; unconditional on `free` for the same reason as
+        // `do_build` above.
+        state.players[idx as usize].one_time_discount.develop_science = 0;
+    }
+    let raw = raw_cost.unwrap_or(0);
     let cost = costs::spend_mil_sci_discount(&mut state.players[idx as usize], id, raw);
     if !free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
@@ -1403,6 +1433,33 @@ mod tests {
         assert!(state.players[0].ocean_liners_used);
     }
 
+    /// THE REGRESSION, fixed 2026-08-05: Development of Civil Life's
+    /// `pop_food` discount is one population increase, not a standing
+    /// discount (state.rs's `OneTimeDiscount` doc comment has the card text).
+    /// Before the fix `h_pop` never cleared the field, so a SECOND increase
+    /// after the event resolved was still 1 food cheaper than it should be.
+    #[test]
+    fn h_pop_second_increase_after_the_event_costs_full_price() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        // pop_cost_base(18) == pop_cost_base(17) == 2 (both >= 17), so the
+        // SECOND call is still comparing apples to apples after one token
+        // moves out of the bank -- only the discount, nothing else, differs.
+        p.yellow_bank = 18;
+        p.food = 10;
+        p.one_time_discount.pop_food = 1;
+        let mut state = one_player_state(p);
+        h_pop(&mut state, 0, false);
+        assert_eq!(state.players[0].food, 10 - 1, "first increase: 2 - 1 discount");
+        assert_eq!(state.players[0].one_time_discount.pop_food, 0,
+                   "the discount must be consumed by the first increase");
+        let food_before = state.players[0].food;
+        h_pop(&mut state, 0, false);
+        assert_eq!(food_before - state.players[0].food, 2,
+                   "REGRESSION: the one-shot discount silently applied to a \
+                    second population increase");
+    }
+
     // ------------------------------------------------------------- build
 
     #[test]
@@ -1446,6 +1503,31 @@ mod tests {
         do_build(&mut state, 0, card("Irrigation"), 1, true);
         assert_eq!(state.players[0].civil_actions, 0, "free: no CA spent");
         assert_eq!(state.players[0].resources, 10 - (4 - 1));
+    }
+
+    /// THE REGRESSION, fixed 2026-08-05: same bug as `h_pop`'s, for `build`.
+    /// Civil Life's `build_resources` discount is one build, so a second one
+    /// must be full price.
+    #[test]
+    fn do_build_second_build_after_the_event_costs_full_price() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.workers_free = 2;
+        p.one_time_discount.build_resources = 1;
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        let mut state = one_player_state(p);
+        do_build(&mut state, 0, card("Irrigation"), 0, false);
+        assert_eq!(state.players[0].resources, 10 - (4 - 1), "first build: discounted");
+        assert_eq!(state.players[0].one_time_discount.build_resources, 0,
+                   "the discount must be consumed by the first build");
+        let before = state.players[0].resources;
+        // A second worker on the SAME card is a legal build too (no per-card
+        // worker cap -- farms/mines/urban buildings can carry any number).
+        do_build(&mut state, 0, card("Irrigation"), 0, false);
+        assert_eq!(before - state.players[0].resources, 4,
+                   "REGRESSION: the one-shot build discount silently applied \
+                    to a second build");
     }
 
     #[test]
@@ -1565,6 +1647,61 @@ mod tests {
         assert!(state.players[0].techs.has(card("Irrigation")));
         assert_eq!(state.players[0].techs.workers(card("Irrigation")), 0);
         assert!(!state.players[0].hand_civil.contains(card("Irrigation")));
+    }
+
+    /// THE REGRESSION, fixed 2026-08-05: same bug as `h_pop`'s and
+    /// `do_build`'s, for `develop`. Civil Life's `develop_science` discount
+    /// is one technology; two DISTINCT technologies (Irrigation techCost 3,
+    /// Iron techCost 5) so the second is not just re-developing the first.
+    #[test]
+    fn h_develop_second_technology_after_the_event_costs_full_price() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 20;
+        p.one_time_discount.develop_science = 1;
+        p.hand_civil.push(card("Irrigation"));
+        p.hand_civil.push(card("Iron"));
+        let mut state = one_player_state(p);
+        h_develop(&mut state, 0, card("Irrigation"), false);
+        assert_eq!(state.players[0].science, 20 - (3 - 1), "first develop: discounted");
+        assert_eq!(state.players[0].one_time_discount.develop_science, 0,
+                   "the discount must be consumed by the first develop");
+        let before = state.players[0].science;
+        h_develop(&mut state, 0, card("Iron"), false);
+        assert_eq!(before - state.players[0].science, 5,
+                   "REGRESSION: the one-shot develop discount silently \
+                    applied to a second technology");
+    }
+
+    /// The three categories are consumed INDEPENDENTLY (card text: three
+    /// separate discounted actions, not one discount usable on anything).
+    /// Spending the population discount must leave build and develop intact.
+    #[test]
+    fn one_time_discount_categories_are_consumed_independently() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 5;
+        p.food = 10;
+        p.resources = 10;
+        p.workers_free = 1;
+        p.one_time_discount = crate::state::OneTimeDiscount {
+            build_resources: 1,
+            develop_science: 1,
+            pop_food: 1,
+        };
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        let mut state = one_player_state(p);
+        h_pop(&mut state, 0, false);
+        let d = state.players[0].one_time_discount;
+        assert_eq!(d.pop_food, 0, "population discount spent");
+        assert_eq!(d.build_resources, 1, "build discount untouched by pop");
+        assert_eq!(d.develop_science, 1, "develop discount untouched by pop");
+        // and the still-pending build discount is for real, not just a field
+        let before = state.players[0].resources;
+        do_build(&mut state, 0, card("Irrigation"), 0, false);
+        assert_eq!(before - state.players[0].resources, 3,
+                   "spending the population discount must not have consumed \
+                    the still-pending build discount (Irrigation cost 4 - 1)");
     }
 
     #[test]

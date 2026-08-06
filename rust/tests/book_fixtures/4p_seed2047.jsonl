@@ -16,57 +16,57 @@
 {"pending":true,"phase":"actions","ply":120,"v1":["choose",2],"v2":["choose",2]}
 {"pending":true,"phase":"actions","ply":121,"v1":["choose",1],"v2":["choose",1]}
 {"pending":true,"phase":"actions","ply":139,"v1":["choose",0],"v2":["choose",0]}
-{"pending":false,"phase":"actions","ply":140,"v1":["wonder_step",1],"v2":["wonder_step",1]}
+{"pending":false,"phase":"actions","ply":140,"v1":["build","Warriors"],"v2":["build","Warriors"]}
 {"pending":true,"phase":"actions","ply":150,"v1":["choose",0],"v2":["choose",0]}
 {"pending":true,"phase":"actions","ply":151,"v1":["choose",2],"v2":["choose",2]}
 {"pending":false,"phase":"actions","ply":160,"v1":["pop"],"v2":["pop"]}
 {"pending":false,"phase":"actions","ply":180,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":false,"phase":"actions","ply":200,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":true,"phase":"actions","ply":213,"v1":["bid",1],"v2":["bid",1]}
-{"pending":true,"phase":"actions","ply":214,"v1":["bid_pass"],"v2":["bid_pass"]}
-{"pending":true,"phase":"actions","ply":215,"v1":["send_bonus","Military Bonus (defense 4 / colonization 2)"],"v2":["send_bonus","Military Bonus (defense 4 / colonization 2)"]}
-{"pending":true,"phase":"actions","ply":216,"v1":["send_bonus","Military Bonus (defense 4 / colonization 2)"],"v2":["send_bonus","Military Bonus (defense 4 / colonization 2)"]}
-{"pending":false,"phase":"actions","ply":220,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":230,"v1":["choose",1],"v2":["choose",1]}
-{"pending":true,"phase":"actions","ply":237,"v1":["choose",2],"v2":["choose",2]}
-{"pending":true,"phase":"actions","ply":239,"v1":["defend","Military Bonus (defense 2 / colonization 1)"],"v2":["defend","Military Bonus (defense 2 / colonization 1)"]}
-{"pending":false,"phase":"actions","ply":240,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":true,"phase":"actions","ply":243,"v1":["choose",1],"v2":["choose",1]}
-{"pending":true,"phase":"actions","ply":256,"v1":["defend","Classic Army"],"v2":["defend","Classic Army"]}
-{"pending":false,"phase":"actions","ply":260,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":262,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":272,"v1":["choose",1],"v2":["choose",1]}
-{"pending":false,"phase":"actions","ply":280,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":285,"v1":["choose",2],"v2":["choose",2]}
-{"pending":true,"phase":"actions","ply":287,"v1":["choose",0],"v2":["choose",0]}
-{"pending":false,"phase":"politics","ply":300,"v1":["prepare_event","National Pride"],"v2":["prepare_event","National Pride"]}
-{"pending":true,"phase":"actions","ply":309,"v1":["choose",3],"v2":["choose",3]}
-{"pending":false,"phase":"actions","ply":320,"v1":["develop","Architecture"],"v2":["develop","Architecture"]}
-{"pending":false,"phase":"actions","ply":340,"v1":["play_leader","Isaac Newton"],"v2":["play_leader","Isaac Newton"]}
-{"pending":true,"phase":"actions","ply":341,"v1":["choose",2],"v2":["choose",2]}
-{"pending":true,"phase":"actions","ply":349,"v1":["defend","Strategic Territory (II)"],"v2":["defend","Strategic Territory (II)"]}
-{"pending":false,"phase":"actions","ply":360,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":375,"v1":["defend","Impact of Balance"],"v2":["defend","Impact of Balance"]}
-{"pending":false,"phase":"actions","ply":380,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":true,"phase":"actions","ply":387,"v1":["choose",3],"v2":["choose",3]}
-{"pending":true,"phase":"actions","ply":400,"v1":["choose",1],"v2":["choose",1]}
-{"pending":false,"phase":"actions","ply":420,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":true,"phase":"actions","ply":426,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":433,"v1":["defend","Military Bonus (defense 4 / colonization 2)"],"v2":["defend","Military Bonus (defense 4 / colonization 2)"]}
-{"pending":true,"phase":"actions","ply":434,"v1":["defend","Military Bonus (defense 4 / colonization 2)"],"v2":["defend","Military Bonus (defense 4 / colonization 2)"]}
-{"pending":false,"phase":"actions","ply":440,"v1":["build","Organized Religion"],"v2":["build","Organized Religion"]}
-{"pending":true,"phase":"actions","ply":456,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":457,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":200,"v1":["prepare_event","International Agreement"],"v2":["prepare_event","International Agreement"]}
+{"pending":false,"phase":"actions","ply":220,"v1":["develop","Organized Religion"],"v2":["develop","Organized Religion"]}
+{"pending":true,"phase":"actions","ply":221,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":227,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":228,"v1":["bid_pass"],"v2":["bid_pass"]}
+{"pending":true,"phase":"actions","ply":229,"v1":["send_bonus","Military Bonus (defense 4 / colonization 2)"],"v2":["send_bonus","Military Bonus (defense 4 / colonization 2)"]}
+{"pending":true,"phase":"actions","ply":230,"v1":["send_bonus","Military Bonus (defense 4 / colonization 2)"],"v2":["send_bonus","Military Bonus (defense 4 / colonization 2)"]}
+{"pending":true,"phase":"actions","ply":231,"v1":["send_bonus","Military Bonus (defense 4 / colonization 2)"],"v2":["send_bonus","Military Bonus (defense 4 / colonization 2)"]}
+{"pending":false,"phase":"actions","ply":240,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":244,"v1":["defend","Military Bonus (defense 2 / colonization 1)"],"v2":["defend","Military Bonus (defense 2 / colonization 1)"]}
+{"pending":true,"phase":"actions","ply":253,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":260,"v1":["aggression","Aggression: Spy",3],"v2":["aggression","Aggression: Spy",3]}
+{"pending":true,"phase":"actions","ply":261,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":278,"v1":["defend","Aggression: Raid (II)"],"v2":["defend","Aggression: Raid (II)"]}
+{"pending":true,"phase":"actions","ply":279,"v1":["defend","Aggression: Raid (II)"],"v2":["defend","Aggression: Raid (II)"]}
+{"pending":true,"phase":"actions","ply":280,"v1":["defend_done"],"v2":["defend_done"]}
+{"pending":true,"phase":"actions","ply":285,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":300,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":304,"v1":["defend","Aggression: Annex"],"v2":["defend","Aggression: Annex"]}
+{"pending":true,"phase":"actions","ply":305,"v1":["defend","National Pride"],"v2":["defend","National Pride"]}
+{"pending":false,"phase":"actions","ply":320,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":325,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":340,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":360,"v1":["develop","Organized Religion"],"v2":["develop","Organized Religion"]}
+{"pending":false,"phase":"actions","ply":380,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":400,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":420,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":428,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":436,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":440,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":449,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":450,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":454,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":455,"v1":["choose",0],"v2":["choose",0]}
 {"pending":false,"phase":"actions","ply":460,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":467,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":474,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":478,"v1":["choose",1],"v2":["choose",1]}
 {"pending":false,"phase":"actions","ply":480,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":482,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
-{"pending":true,"phase":"actions","ply":483,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
-{"pending":true,"phase":"actions","ply":484,"v1":["defend","Military Bonus (defense 6 / colonization 3)"],"v2":["defend","Military Bonus (defense 6 / colonization 3)"]}
-{"pending":true,"phase":"actions","ply":485,"v1":["defend_done"],"v2":["defend_done"]}
-{"pending":false,"phase":"actions","ply":500,"v1":["build","Religion"],"v2":["build","Religion"]}
-{"pending":false,"phase":"actions","ply":520,"v1":["end_turn"],"v2":["end_turn"]}
-{"pending":true,"phase":"actions","ply":530,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":539,"v1":["choose",4],"v2":["choose",4]}
-{"pending":false,"phase":"actions","ply":540,"v1":["take",4],"v2":["take",4]}
-{"pending":true,"phase":"actions","ply":542,"v1":["defend","Mechanized Army"],"v2":["defend","Mechanized Army"]}
-{"pending":false,"phase":"actions","ply":560,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":481,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":482,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":489,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":500,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":501,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":502,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":503,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":514,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":520,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":523,"v1":["choose",1],"v2":["choose",1]}

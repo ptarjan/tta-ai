@@ -305,6 +305,16 @@ KNOWN_DEAD = {
         "away (295 of 2033 states before, 0 of 2004 after).  CORPUS-FRAGILE, "
         "not structurally dead",
         "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
+    "best_arena": (
+        ("never-nonzero",),
+        "NEW on 2026-08-05: the Development of Civil Life one-shot-discount "
+        "fix (`effects.consume_one_time_discount`) re-rolled the 9-seed "
+        "corpus and no game in it now builds an arena before the ply cap. "
+        "Same 9.5 shape as `hand_limit` above -- a rare-but-real board state "
+        "the corpus happens not to reach this time, not a coordinate the "
+        "evaluator cannot see. `encode:me.best_arena` / `encode:rival."
+        "best_arena` below are the encoding twins of the same re-roll",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
     # ------------------------------------------------ whole classes invisible
     "class:tactic": (
         ("invisible-class",),
@@ -453,6 +463,17 @@ KNOWN_DEAD = {
         "a zero-vector there and encodes the COUNT instead.  This entry is the "
         "machine-checkable form of that promise",
         "none -- deliberate, RULES_SPEC 196"),
+    "encode:me.best_arena": (
+        ("constant-encoding",),
+        "the encoding twin of `best_arena` above: the 2026-08-05 one-shot-"
+        "discount fix re-rolled the 9-seed corpus and no game in it builds an "
+        "arena before the ply cap, so this slot samples 0.0 everywhere. "
+        "CORPUS-FRAGILE, not structurally dead",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
+    "encode:rival.best_arena": (
+        ("constant-encoding",),
+        "the rival-block half of the same re-roll, same reason",
+        "docs/OPEN_ITEMS.md section 9.5: the corpus-pinned entries re-roll"),
     # -------------------------------------------------------- registry drift
     "has_unit@analysis/frozen/default_weights.json": (
         ("stale-vector-key",),
@@ -547,15 +568,13 @@ KNOWN_ZERO_CARDS = frozenset((
     # within an eval point of zero, and which of the two is on the wrong side
     # of it is a property of the six games, not of the pricing.
     "Military Theory",
-    # BACK on 2026-08-04, and this time the cause IS the pricing rather than
-    # the corpus: retiring `culture_late` (+1.5 in the defaults) removed the
-    # late-game premium on a culture point, and Sid Meier's whole payoff is
-    # culture.  Both leaders still sit within an eval point of zero, so the
-    # pair going in and out together is the same 9.5 fragility -- but the
-    # DIRECTION here was predictable from the change and is not noise.  A
-    # trained vector prices him off `culture` at its own weight; this list is
-    # about DEFAULT_WEIGHTS.
-    "Sid Meier",
+    # Sid Meier sat here from 2026-08-04 (retiring `culture_late` removed the
+    # late-game culture premium his whole payoff runs on) to 2026-08-05: the
+    # Development of Civil Life one-shot-discount fix (`effects.
+    # consume_one_time_discount`) re-rolled the 9-seed corpus again and moved
+    # him back off zero.  Same 9.5 fragility as `Military Theory` above --
+    # both leaders sit within an eval point of zero, so which side of it they
+    # land on is a property of the games, not the pricing.
 ))
 
 # --------------------------------------------------------------------------

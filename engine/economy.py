@@ -290,6 +290,12 @@ def increase_population(state, p, free=False, discount=0):
     p.food -= cost
     p.yellow_bank -= 1
     p.workers_free += 1
+    if not free:
+        # `pop_cost` above already folded in `p.one_time_discount` (Civil
+        # Life's one-shot food discount); this is the ONE increase it pays
+        # for.  `free` (Ocean Liners) never touched the discount -- it
+        # never even called `pop_cost` -- so it must not consume it either.
+        effects.consume_one_time_discount(p, "increasePopulation")
     effects.invalidate(state, p)
     return True
 

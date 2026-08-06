@@ -1,0 +1,27 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",1],"v2":["take",1]}
+{"pending":true,"phase":"actions","ply":12,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":13,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":20,"v1":["prepare_event","Strategic Territory (I)"],"v2":["prepare_event","Strategic Territory (I)"]}
+{"pending":false,"phase":"actions","ply":40,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":51,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":60,"v1":["play_leader","Genghis Khan"],"v2":["play_leader","Genghis Khan"]}
+{"pending":true,"phase":"actions","ply":62,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":66,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":70,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":71,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":80,"v1":["develop","Alchemy"],"v2":["develop","Alchemy"]}
+{"pending":true,"phase":"actions","ply":84,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":91,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":92,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":99,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":100,"v1":["prepare_event","Scientific Breakthrough"],"v2":["prepare_event","Scientific Breakthrough"]}
+{"pending":true,"phase":"actions","ply":106,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":120,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":136,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"politics","ply":140,"v1":["aggression","Aggression: Raid (III)",1],"v2":["aggression","Aggression: Raid (III)",1]}
+{"pending":true,"phase":"actions","ply":147,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":148,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":157,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":158,"v1":["bid",1],"v2":["bid",1]}
+{"pending":false,"phase":"actions","ply":160,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":false,"phase":"actions","ply":180,"v1":["end_turn"],"v2":["end_turn"]}

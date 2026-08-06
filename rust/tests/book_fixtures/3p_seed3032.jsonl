@@ -1,0 +1,62 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",1],"v2":["take",1]}
+{"pending":true,"phase":"actions","ply":15,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":16,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":17,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":20,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":34,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":40,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":41,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":48,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":60,"v1":["play_leader","Frederick Barbarossa"],"v2":["play_leader","Frederick Barbarossa"]}
+{"pending":true,"phase":"actions","ply":62,"v1":["choose",4],"v2":["choose",4]}
+{"pending":true,"phase":"actions","ply":63,"v1":["choose",4],"v2":["choose",4]}
+{"pending":true,"phase":"actions","ply":64,"v1":["choose",4],"v2":["choose",4]}
+{"pending":true,"phase":"actions","ply":75,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":80,"v1":["play_leader","Genghis Khan"],"v2":["play_leader","Genghis Khan"]}
+{"pending":true,"phase":"actions","ply":84,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":85,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":98,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":100,"v1":["play_leader","Frederick Barbarossa"],"v2":["play_leader","Frederick Barbarossa"]}
+{"pending":true,"phase":"actions","ply":104,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":109,"v1":["choose",2],"v2":["choose",2]}
+{"pending":false,"phase":"actions","ply":120,"v1":["end_turn"],"v2":["end_turn"]}
+{"pending":true,"phase":"actions","ply":122,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":126,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":131,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":135,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":140,"v1":["offer_pact","International Trade Agreement",0,"A"],"v2":["offer_pact","International Trade Agreement",0,"A"]}
+{"pending":true,"phase":"actions","ply":146,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":148,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":151,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":155,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":156,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":160,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":168,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":173,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":180,"v1":["play_leader","Christopher Columbus"],"v2":["play_leader","Christopher Columbus"]}
+{"pending":true,"phase":"actions","ply":194,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":195,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":200,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":203,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":218,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":219,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":220,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":227,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":229,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":235,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":240,"v1":["take",4],"v2":["take",4]}
+{"pending":true,"phase":"actions","ply":244,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":255,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":256,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":260,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":261,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":268,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":273,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":277,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":278,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":279,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"politics","ply":280,"v1":["pol_pass"],"v2":["pol_pass"]}
+{"pending":true,"phase":"actions","ply":291,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":295,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":296,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":300,"v1":["choose",0],"v2":["choose",0]}

@@ -17,16 +17,16 @@
 {"pending":false,"phase":"politics","ply":100,"v1":["prepare_event","Wealthy Territory (II)"],"v2":["prepare_event","Wealthy Territory (II)"]}
 {"pending":false,"phase":"politics","ply":120,"v1":["pol_pass"],"v2":["pol_pass"]}
 {"pending":true,"phase":"actions","ply":131,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":139,"v1":["choose",0],"v2":["choose",0]}
-{"pending":false,"phase":"politics","ply":140,"v1":["prepare_event","Impact of Progress"],"v2":["prepare_event","Impact of Progress"]}
+{"pending":true,"phase":"actions","ply":138,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":140,"v1":["develop","Opera"],"v2":["develop","Opera"]}
+{"pending":true,"phase":"actions","ply":145,"v1":["choose",1],"v2":["choose",1]}
 {"pending":true,"phase":"actions","ply":146,"v1":["choose",1],"v2":["choose",1]}
-{"pending":true,"phase":"actions","ply":147,"v1":["choose",1],"v2":["choose",1]}
-{"pending":true,"phase":"actions","ply":148,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":157,"v1":["choose",3],"v2":["choose",3]}
-{"pending":true,"phase":"actions","ply":158,"v1":["choose",2],"v2":["choose",2]}
+{"pending":true,"phase":"actions","ply":147,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":156,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":157,"v1":["choose",2],"v2":["choose",2]}
 {"pending":false,"phase":"actions","ply":160,"v1":["play_leader","William Shakespeare"],"v2":["play_leader","William Shakespeare"]}
-{"pending":true,"phase":"actions","ply":167,"v1":["choose",0],"v2":["choose",0]}
-{"pending":true,"phase":"actions","ply":175,"v1":["choose",1],"v2":["choose",1]}
-{"pending":false,"phase":"politics","ply":180,"v1":["prepare_event","Impact of Happiness"],"v2":["prepare_event","Impact of Happiness"]}
-{"pending":true,"phase":"actions","ply":189,"v1":["choose",1],"v2":["choose",1]}
-{"pending":true,"phase":"actions","ply":190,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":161,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":165,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":180,"v1":["play_leader","William Shakespeare"],"v2":["wonder_step",1]}
+{"pending":true,"phase":"actions","ply":182,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":192,"v1":["choose",0],"v2":["choose",0]}

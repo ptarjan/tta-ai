@@ -1026,7 +1026,9 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
 fn paid_increase_population(state: &mut GameState, idx: u8, n: u32) {
     for _ in 0..n {
         let Some(cost) = economy::pop_cost(state, &state.players[idx as usize]) else { break };
-        economy::increase_population(&mut state.players[idx as usize], cost.max(0) as u16);
+        // PAID, never free (see this function's own doc comment), so the
+        // one-time discount `cost` just read is consumed: `true`.
+        economy::increase_population(&mut state.players[idx as usize], cost.max(0) as u16, true);
     }
 }
 

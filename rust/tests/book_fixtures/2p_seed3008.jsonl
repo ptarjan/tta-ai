@@ -1,0 +1,41 @@
+{"pending":false,"phase":"actions","ply":0,"v1":["take",2],"v2":["take",2]}
+{"pending":false,"phase":"actions","ply":20,"v1":["play_tactic","Heavy Cavalry"],"v2":["play_tactic","Heavy Cavalry"]}
+{"pending":true,"phase":"actions","ply":37,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":38,"v1":["bid",1],"v2":["bid",1]}
+{"pending":false,"phase":"actions","ply":40,"v1":["pop"],"v2":["pop"]}
+{"pending":true,"phase":"actions","ply":44,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":46,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":47,"v1":["bid",1],"v2":["bid",1]}
+{"pending":true,"phase":"actions","ply":51,"v1":["choose",3],"v2":["choose",3]}
+{"pending":true,"phase":"actions","ply":58,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":60,"v1":["develop","Knights"],"v2":["develop","Knights"]}
+{"pending":true,"phase":"actions","ply":64,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":71,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":72,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":79,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":80,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":81,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":91,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":99,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":100,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":101,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":109,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":110,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":118,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":119,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"politics","ply":120,"v1":["aggression","Aggression: Raid (I)",1],"v2":["aggression","Aggression: Raid (I)",1]}
+{"pending":true,"phase":"actions","ply":134,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":140,"v1":["develop","Opera"],"v2":["develop","Opera"]}
+{"pending":true,"phase":"actions","ply":141,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":154,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":155,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":160,"v1":["develop","Movies"],"v2":["develop","Movies"]}
+{"pending":true,"phase":"actions","ply":163,"v1":["choose",1],"v2":["choose",1]}
+{"pending":true,"phase":"actions","ply":167,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":174,"v1":["choose",0],"v2":["choose",0]}
+{"pending":false,"phase":"actions","ply":180,"v1":["develop","Opera"],"v2":["develop","Opera"]}
+{"pending":true,"phase":"actions","ply":181,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":188,"v1":["choose",0],"v2":["choose",0]}
+{"pending":true,"phase":"actions","ply":195,"v1":["choose",1],"v2":["choose",1]}
+{"pending":false,"phase":"actions","ply":200,"v1":["play_leader","Sid Meier"],"v2":["play_leader","Sid Meier"]}
+{"pending":true,"phase":"actions","ply":203,"v1":["choose",0],"v2":["choose",0]}

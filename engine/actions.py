@@ -917,6 +917,14 @@ def _h_build(state, p, move, rng):
 
 def do_build(state, p, name, discount=0, free=False):
     cost = max(0, (build_cost_for(state, p, name) or 0) - discount)
+    if not is_unit(name):
+        # `build_cost_for` -> `effects.build_cost` already folded in Civil
+        # Life's one-shot resource discount for URBAN_OR_PRODUCTION cards
+        # (exactly the non-unit builds this function ever prices); this is
+        # the ONE build it pays for.  Unconditional on `free`: `free` only
+        # waives the civil action below, not the resource cost that already
+        # spent the discount computing `cost`.
+        effects.consume_one_time_discount(p, "build")
     if not free:
         cost = _spend_mil_discount(p, name, cost)
         if is_unit(name):
@@ -1002,8 +1010,15 @@ def _h_develop(state, p, move, rng, free=False):
     db = _DB
     name = move[1]
     card = db.get(name)
-    cost = effects.tech_cost(state, p, name) or 0
-    cost = _spend_mil_sci_discount(p, name, cost)
+    raw_cost = effects.tech_cost(state, p, name)
+    if raw_cost is not None:
+        # `tech_cost` returns None only when the card has no develop cost at
+        # all (a government's `peacefulCost` unset, etc.) -- in which case it
+        # never looked at `p.one_time_discount` either. Whenever it DID
+        # return a number, Civil Life's one-shot science discount was
+        # already folded in; this is the ONE technology it pays for.
+        effects.consume_one_time_discount(p, "developTechnology")
+    cost = _spend_mil_sci_discount(p, name, raw_cost or 0)
     if not free:
         pay_ca(state, p, 1)
     p.science -= cost

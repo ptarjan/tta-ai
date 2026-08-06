@@ -187,7 +187,17 @@ pub fn uprising(state: &GameState, p: &PlayerState) -> bool {
 /// hack for an expensive dict-walking `compute()`. This port's `compute` is
 /// meant to be a fast, uncached field-sum over `Tableau` (DESIGN.md: "the
 /// cost IS the dynamic lookups"), so there is nothing to invalidate.
-pub fn increase_population(p: &mut PlayerState, cost: u16) -> bool {
+///
+/// `consume_one_time`: whether this increase was a REAL, non-free one that
+/// already had Civil Life's one-shot `pop_food` discount folded into `cost`
+/// by the caller's `pop_food_cost` call (see
+/// [`OneTimeDiscount`](crate::state::OneTimeDiscount)'s doc comment, fixed
+/// 2026-08-05). `true` for every paying caller (`apply.rs::
+/// h_pop` when `!free`, `h_barbarossa`, `events.rs::paid_increase_population`);
+/// `false` for a free grant (`h_pop_free`, an Ocean Liners increase, which
+/// never even computes `pop_cost`) so it cannot consume a discount it never
+/// looked at.
+pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: bool) -> bool {
     if p.yellow_bank == 0 {
         return false;
     }
@@ -197,6 +207,9 @@ pub fn increase_population(p: &mut PlayerState, cost: u16) -> bool {
     p.food -= cost;
     p.yellow_bank -= 1;
     p.workers_free += 1;
+    if consume_one_time {
+        p.one_time_discount.pop_food = 0;
+    }
     true
 }
 
@@ -919,7 +932,7 @@ mod tests {
         let mut p = blank_player(0);
         p.yellow_bank = 5;
         p.food = 10;
-        assert!(increase_population(&mut p, 4));
+        assert!(increase_population(&mut p, 4, false));
         assert_eq!(p.food, 6);
         assert_eq!(p.yellow_bank, 4);
         assert_eq!(p.workers_free, 1);
@@ -930,12 +943,41 @@ mod tests {
         let mut p = blank_player(0);
         p.yellow_bank = 5;
         p.food = 2;
-        assert!(!increase_population(&mut p, 4));
+        assert!(!increase_population(&mut p, 4, false));
         assert_eq!(p.food, 2, "a rejected attempt must not spend anything");
 
         p.yellow_bank = 0;
         p.food = 100;
-        assert!(!increase_population(&mut p, 0));
+        assert!(!increase_population(&mut p, 0, false));
+    }
+
+    /// THE REGRESSION: fixed 2026-08-05.  Development of Civil Life's
+    /// `pop_food` discount is a ONE-SHOT grant (card text: "increase
+    /// population ... paying 1 food ... less"), not a standing discount --
+    /// `consume_one_time = true` must zero it so a second increase pays full
+    /// price. Before the fix nothing ever cleared `one_time_discount`, so it
+    /// silently applied to every population increase for the rest of the game.
+    #[test]
+    fn increase_population_consumes_the_one_time_discount_when_asked() {
+        let mut p = blank_player(0);
+        p.yellow_bank = 5;
+        p.food = 10;
+        p.one_time_discount.pop_food = 1;
+        assert!(increase_population(&mut p, 1, true));
+        assert_eq!(p.one_time_discount.pop_food, 0,
+                   "consume_one_time=true must clear the discount");
+    }
+
+    #[test]
+    fn increase_population_leaves_the_discount_alone_when_not_consuming() {
+        let mut p = blank_player(0);
+        p.yellow_bank = 5;
+        p.food = 10;
+        p.one_time_discount.pop_food = 1;
+        assert!(increase_population(&mut p, 0, false));
+        assert_eq!(p.one_time_discount.pop_food, 1,
+                   "a free increase (Ocean Liners) never looked at the \
+                    discount and must not consume it");
     }
 
     // --------------------------------------------------------- discard_*

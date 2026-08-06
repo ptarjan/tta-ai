@@ -1136,6 +1136,32 @@ def tech_cost(state, p, name):
     return max(0, cost)
 
 
+def consume_one_time_discount(p, category):
+    """Consume Development of Civil Life's one-shot discount for `category`.
+
+    Fixed 2026-08-05.  The card (`data/cards_military_actions.json`,
+    "Development of Civil Life") reads *"Players may increase population,
+    build a farm, mine or urban building, or develop a technology, paying 1
+    food, 1 resource or 1 science less."* -- ONE discounted population
+    increase, ONE discounted build and ONE discounted technology, each
+    consumed independently, not a standing discount that applies for the
+    rest of the game.
+
+    `build_cost`/`tech_cost` above and `economy.pop_food_cost` only READ
+    `p.one_time_discount` while pricing a move (called many times per
+    move-generation pass, so they must stay side-effect-free).  Whichever
+    action handler actually spends the resource -- `economy.increase_
+    population`, `actions.do_build`, `actions._h_develop` -- calls this once
+    the action goes through, popping only that category's key so using one
+    discount never touches the other two.  A fresh dict rather than an
+    in-place `del`/`pop`, so the journalling `__setattr__` hook
+    (`engine/journal.py`) sees the write like any other trial mutation.
+    """
+    if p.one_time_discount and category in p.one_time_discount:
+        p.one_time_discount = {k: v for k, v in p.one_time_discount.items()
+                                if k != category}
+
+
 _STATS_CACHE_KEY = "_stats_cache"
 
 
