@@ -16,6 +16,7 @@ pub mod bots;
 pub mod card_table;
 pub mod cards;
 pub mod combat;
+pub mod corpus;
 pub mod costs;
 pub mod legal;
 pub mod economy;
