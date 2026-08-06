@@ -95,6 +95,8 @@ use crate::interact;
 use crate::moves::Move;
 use crate::state::GameState;
 
+use super::plan;
+
 // ------------------------------------------------------------ configuration
 
 /// Search-shape knobs, mirroring `QuiescentBot`'s class attributes.
@@ -286,10 +288,22 @@ where
     let idx = state.decider();
     stats.decisions += 1;
     let mut nodes_left = cfg.max_nodes;
+    // Unlike `plan::pick` (this module's `PlanBot`-shaped sibling), nothing
+    // here ever called `plan::determinize` -- every candidate below was
+    // cloning straight off the real `state`, so a `Move::PrepareEvent`
+    // candidate's `apply` would reveal-and-resolve the TRUE top current
+    // event, an information leak this bot has no business having. Re-shuffle
+    // just that one pile (see `plan::determinize_current_events`'s own doc
+    // comment for why not the two draw decks too, and for the Joan-of-Arc
+    // peek carve-out this preserves) once, on a shared root every candidate
+    // clones from below -- not per candidate, keeping this off this
+    // function's hot per-candidate path.
+    let mut root = state.clone();
+    plan::determinize_current_events(&mut root, &mut plan::plan_rng(state, idx));
     let mut best: Option<(Move, f64)> = None;
     for &mv in moves {
         stats.candidates += 1;
-        let mut trial = state.clone();
+        let mut trial = root.clone();
         apply::apply(&mut trial, mv);
         if cfg.levels > 0 && !trial.pending.is_empty() {
             stats.quiesced += 1;
@@ -425,6 +439,59 @@ mod tests {
         assert_eq!(a2, Move::EndTurn, "a large positive end_bias must win regardless of position");
         assert_eq!(b2, Move::EndTurn, "a large positive end_bias must win regardless of position");
         let _ = (a, b);
+    }
+
+    /// The same property `weighted::eval`'s own `a_weighted_bots_choice_
+    /// does_not_depend_on_which_card_sits_atop_an_unpeeked_events_pile`
+    /// pins for `WeightedBot`, here for [`pick`] with a REAL evaluator
+    /// (`weighted::eval::evaluate`, exactly as `Bot::Quiescent` in
+    /// `bots/greedy.rs` builds its closure) rather than the flat/culture
+    /// stand-ins the rest of this module's tests use: those two carry no
+    /// opinion about a resolved event's effects, so they cannot exercise
+    /// this leak at all. See that test's own doc comment for why "Crusades"
+    /// vs "Pestilence" flips a naive read of the true top and why the
+    /// determinized top is provably the SAME filler card in both states
+    /// (a Fisher-Yates shuffle's swaps depend only on rng stream and
+    /// length, never content).
+    #[test]
+    fn a_quiescent_picks_choice_does_not_depend_on_which_card_sits_atop_an_unpeeked_events_pile() {
+        use crate::state::{CardList, Phase};
+
+        let hand_card = CardId::by_name("Development of Politics").unwrap();
+        let strong_top = CardId::by_name("Crusades").unwrap();
+        let weak_top = CardId::by_name("Pestilence").unwrap();
+        let fillers = ["Raiders", "Reign of Terror", "Border Conflict", "Uncertain Borders", "Rebellion"]
+            .map(|n| CardId::by_name(n).unwrap());
+
+        let build = |top: CardId| {
+            let mut state = game::new_game(2, 1);
+            state.phase = Phase::Politics;
+            state.current = 0;
+            state.players[0].strength_extra = 10;
+            state.players[0].hand_military.push(hand_card);
+            state.current_events = CardList::new();
+            for &f in &fillers {
+                state.current_events.push(f);
+            }
+            state.current_events.push(top);
+            state
+        };
+        let state_strong = build(strong_top);
+        let state_weak = build(weak_top);
+        let moves = [Move::PrepareEvent { card: hand_card }, Move::PolPass];
+        let w = crate::bots::weighted::weights::Weights::default();
+        let eval = |s: &GameState, i: u8| crate::bots::weighted::eval::evaluate(s, i, &w, None, None);
+        let cfg = QuiescenceConfig::default();
+        let mut stats = Stats::default();
+
+        let chosen_strong = pick(&cfg, &mut stats, &state_strong, &moves, &eval);
+        let mut stats2 = Stats::default();
+        let chosen_weak = pick(&cfg, &mut stats2, &state_weak, &moves, &eval);
+        assert_eq!(
+            chosen_strong, chosen_weak,
+            "the two states differ ONLY in which card an unpeeked events pile has on top -- a search that \
+             has not legitimately peeked it must not let that difference change its move"
+        );
     }
 
     // ------------------------------------------------------------ resolve

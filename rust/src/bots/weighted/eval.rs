@@ -94,6 +94,7 @@ use crate::apply;
 use crate::moves::{Move, MoveList};
 use crate::state::GameState;
 
+use super::super::plan;
 use super::cards;
 use super::events;
 use super::features::{self, Features};
@@ -327,9 +328,27 @@ impl WeightedBot {
         let w = &self.weights;
         let end_bias = w.get(WeightKey::EndTurnBias);
 
+        // A 1-ply trial applies exactly one candidate move and scores it
+        // immediately, with no later ply for a genuinely random look to
+        // average out over -- so if `mv` is `Move::PrepareEvent`, `apply`
+        // reveal-and-resolves the TRUE top card of `state.current_events`
+        // unconditionally, and this bot would be scoring a card it has not
+        // legally seen. Re-shuffle just that pile (preserving a genuinely
+        // peeked top card -- Joan of Arc) once here, on a shared root every
+        // candidate below clones from, rather than calling the full
+        // `plan::determinize`: see `plan::determinize_current_events`'s own
+        // doc comment for why `civil_deck`/`military_deck` are deliberately
+        // left out of this bot's determinization. `plan::plan_rng` derives
+        // the stream from `state` alone (no caller-owned rng field to add to
+        // this struct -- this module's own top doc comment already retired
+        // `self.rng` for being unread; a determinize-only stream would just
+        // be a new unread-outside-this-call field with extra steps).
+        let mut root = state.clone();
+        plan::determinize_current_events(&mut root, &mut plan::plan_rng(state, idx));
+
         let mut best: Option<(Move, f64)> = None;
         for &mv in moves {
-            let mut trial = state.clone();
+            let mut trial = root.clone();
             apply::apply(&mut trial, mv);
             let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
             if matches!(mv, Move::EndTurn) {
@@ -613,6 +632,7 @@ fn fmt_num(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cards::CardId;
     use crate::game as G;
 
     // ------------------------------------------------------------ evaluate
@@ -753,6 +773,68 @@ mod tests {
         let bot = WeightedBot { allow_resign: true, ..WeightedBot::default() };
         let picked = bot.choose(&state, &[Move::Resign]);
         assert_eq!(picked, Move::Resign);
+    }
+
+    /// A 1-ply `WeightedBot` trial for `Move::PrepareEvent` must not read the
+    /// TRUE top of `state.current_events` -- `apply.rs::h_prepare_event`
+    /// reveal-and-resolves it unconditionally, mid-`apply`, and nobody
+    /// peeked it (`peeked_event` is `CardId::NONE` here). Built from two
+    /// states identical in every field except which literal card sits on
+    /// top of an otherwise-identical six-card pile: "Crusades" (`Strongest
+    /// Player` +4 culture -- player 0 is forced strongest via
+    /// `strength_extra`) versus "Pestilence" (`AllPlayers` -1 population,
+    /// rank-independent). Confirmed empirically for this exact state/weight
+    /// pair (not asserted here, to keep the test itself black-box): reading
+    /// the literal top directly swings `evaluate` from clearly above
+    /// `PolPass`'s score (Crusades) to clearly below it (Pestilence) -- a
+    /// real decision flip a leaking bot could not help but make.
+    ///
+    /// Post-fix, [`WeightedBot::choose`] re-shuffles the pile once before
+    /// either candidate is scored (see `choose`'s own doc comment), and a
+    /// Fisher-Yates shuffle's sequence of index swaps depends only on the
+    /// rng stream and the slice's LENGTH, never its contents -- both states
+    /// hand it a length-6 slice with the SAME seed/turn/idx-derived stream
+    /// (`plan::plan_rng`), so the swapped-to-the-top card is the identical
+    /// FILLER card in both, and every candidate's score becomes byte-for-
+    /// byte equal between the two states. `choose` must therefore return
+    /// the SAME move for both, regardless of which of the two swings a
+    /// leaking bot would have felt.
+    #[test]
+    fn a_weighted_bots_choice_does_not_depend_on_which_card_sits_atop_an_unpeeked_events_pile() {
+        use crate::state::{CardList, Phase};
+
+        let hand_card = CardId::by_name("Development of Politics").unwrap();
+        let strong_top = CardId::by_name("Crusades").unwrap();
+        let weak_top = CardId::by_name("Pestilence").unwrap();
+        let fillers = ["Raiders", "Reign of Terror", "Border Conflict", "Uncertain Borders", "Rebellion"]
+            .map(|n| CardId::by_name(n).unwrap());
+
+        let build = |top: CardId| {
+            let mut state = G::new_game(2, 1);
+            state.phase = Phase::Politics;
+            state.current = 0;
+            // Forces player 0 strongest, so "Crusades"' `StrongestPlayer`
+            // block targets them (a clean plus) rather than the rival.
+            state.players[0].strength_extra = 10;
+            state.players[0].hand_military.push(hand_card);
+            state.current_events = CardList::new();
+            for &f in &fillers {
+                state.current_events.push(f);
+            }
+            state.current_events.push(top);
+            state
+        };
+        let state_strong = build(strong_top);
+        let state_weak = build(weak_top);
+        let moves = [Move::PrepareEvent { card: hand_card }, Move::PolPass];
+        let bot = WeightedBot::default();
+
+        assert_eq!(
+            bot.choose(&state_strong, &moves),
+            bot.choose(&state_weak, &moves),
+            "the two states differ ONLY in which card an unpeeked events pile has on top -- a bot that has \
+             not legitimately peeked it must not let that difference change its move"
+        );
     }
 
     // ---------------------------------------------------------- dominance

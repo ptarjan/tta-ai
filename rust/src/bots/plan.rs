@@ -87,10 +87,9 @@ use super::weighted::weights::Weights;
 /// Re-shuffle what the mover cannot see: `state.civil_deck`, `state.
 /// military_deck`, `state.current_events`. See this module's top doc comment
 /// and Python's own (much longer) comment on `determinize` for the full
-/// rationale, restated here only for the one piece that needs a Rust-shape
-/// note: the peeked-event carve-out reads `state.players[state.decider()]
-/// .peeked_event` and must finish BEFORE `state.current_events` is borrowed
-/// mutably, since both live on the same `state`.
+/// rationale. The `current_events` third is split out as [`determinize_
+/// current_events`] -- see that function's own doc comment for why it has a
+/// second, narrower caller.
 pub fn determinize(state: &mut GameState, rng: &mut PyRandom) {
     if !state.civil_deck.is_empty() {
         shuffle_cards(rng, state.civil_deck.as_mut_slice());
@@ -98,6 +97,35 @@ pub fn determinize(state: &mut GameState, rng: &mut PyRandom) {
     if !state.military_deck.is_empty() {
         shuffle_cards(rng, state.military_deck.as_mut_slice());
     }
+    determinize_current_events(state, rng);
+}
+
+/// The `current_events` third of [`determinize`], on its own: re-shuffle the
+/// pile the mover cannot see, preserving a genuinely-peeked top card (Joan of
+/// Arc) and the pile's public age-descending order. See [`determinize`]'s
+/// own doc comment and Python's (much longer) one on `determinize` for the
+/// full rationale; restated here only for the Rust-shape note: the
+/// peeked-event carve-out reads `state.players[state.decider()].peeked_event`
+/// and must finish BEFORE `state.current_events` is borrowed mutably, since
+/// both live on the same `state`.
+///
+/// Split out because it has a second kind of caller besides [`pick`]:
+/// [`super::weighted::eval::WeightedBot::choose`] and [`super::quiescent::
+/// pick`] each run a 1-ply trial per candidate move with no determinized root
+/// of their own (unlike this module's `PlanBot`-shaped search, they never
+/// called [`determinize`] at all before this fix -- an information leak,
+/// since `Move::PrepareEvent` (`apply::h_prepare_event`) reveals-and-resolves
+/// the TRUE top event mid-`apply`, unconditionally). Both close that leak by
+/// calling this function once per decision, on a shared root all their
+/// per-candidate trials clone from -- never the FULL [`determinize`]:
+/// `civil_deck`/`military_deck` can run 50+ cards deep, and nothing either
+/// bot's `evaluate` reads by card IDENTITY there (`bots/weighted/horizon.rs`
+/// reads `civil_deck.len()`, never a card out of it) the way [`my_event_
+/// threat`](super::weighted::events::my_event_threat) and a resolved event's
+/// immediate effects read `current_events`'s top card -- so shuffling those
+/// two piles too would cost real time for zero change in what either bot's
+/// score could possibly depend on.
+pub(crate) fn determinize_current_events(state: &mut GameState, rng: &mut PyRandom) {
     if state.current_events.len() > 1 {
         // Read the peeked-event carve-out before taking a mutable borrow of
         // `current_events` below -- both are fields of the same `state`.
@@ -390,8 +418,24 @@ pub(crate) fn update_best(best: &mut Vec<(Move, f64)>, mv: Move, v: f64) {
 /// real evaluated float in Python too), so `stats.wars_priced` increments
 /// unconditionally whenever this branch is taken, matching what Python's
 /// counter actually measures in practice.
+///
+/// EXCEPT when the war cannot resolve before the game ends. `apply.rs::
+/// h_war`'s own doc comment records that resolution fires at the start of
+/// the declarer's NEXT turn (`game.rs::start_turn` ->
+/// `combat::resolve_war_outcome`), not immediately -- and `game.rs::
+/// advance_turn` ends the game at the wrap into `final_round_end + 1`,
+/// before that next turn is ever reached, whenever the war was declared in
+/// `t.last_round` (`round >= final_round_end`; `game.rs::set_last_round`'s
+/// own doc comment: everyone finishes the round they are in, nobody starts
+/// another). A war declared there is real -- `h_war` already paid its cost
+/// on `t` (a military action, the card, any pact it broke) -- but it will
+/// sit open, unfought, forever: pricing it through `war_value`'s optimistic
+/// "resolved right now" would credit spoils this trial can never actually
+/// collect. `t.last_round` is what the engine itself already tracks for
+/// exactly this question, so this reads it rather than re-deriving "is
+/// there time left" from `t.round`/`t.final_round_end` by hand.
 fn score(t: &GameState, me: u8, w: &Weights, ctx: &RivalContext, war_lookahead: bool, stats: &mut Stats) -> f64 {
-    if war_lookahead && !t.game_over && !t.players[me as usize].war_declared_by_me.is_none() {
+    if war_lookahead && !t.game_over && !t.last_round && !t.players[me as usize].war_declared_by_me.is_none() {
         stats.wars_priced += 1;
         return quiescent::war_value(t, me, &|s, i| eval::evaluate(s, i, w, Some(ctx), None));
     }
@@ -799,6 +843,53 @@ mod tests {
         let looked = score(&state, 0, &w, &ctx, false, &mut stats);
         assert_eq!(stats.wars_priced, 0);
         assert_eq!(looked, eval::evaluate(&state, 0, &w, Some(&ctx), None));
+    }
+
+    /// A war declared in the last round never reaches the declarer's next
+    /// turn (`game.rs::advance_turn` ends the game at the wrap into
+    /// `final_round_end + 1` instead of starting it) -- see this function's
+    /// own doc comment for the full timing argument. `score` must therefore
+    /// price it as it actually stands (cost paid, no spoils ever), exactly
+    /// like the `war_lookahead = false` case above, NOT through `war_value`'s
+    /// "resolved right now" optimism -- built with the identical decisive
+    /// strength edge `score_prices_a_declared_war_through_war_value_not_as_
+    /// pure_cost` uses, so a passing `war_value` branch would visibly move
+    /// the score if it fired here (it must not).
+    #[test]
+    fn score_does_not_price_a_last_round_war_through_war_value() {
+        let mut state = G::new_game(2, 77);
+        let war = war_card("War over Territory");
+        state.players[0].war_declared_by_me = war;
+        state.players[0].war_target = 1;
+        state.players[1].wars_declared_on_me[0] = war;
+        let warriors = war_card("Warriors");
+        state.players[0].techs.get_mut(warriors).unwrap().workers = 12;
+        state.last_round = true;
+
+        let w = Weights::default();
+        let ctx = rivals::rival_context(&state, 0, None, None);
+        let mut stats = Stats::default();
+        let looked = score(&state, 0, &w, &ctx, true, &mut stats);
+        assert_eq!(stats.wars_priced, 0, "a war that cannot resolve must not count as priced");
+        assert_eq!(
+            looked,
+            eval::evaluate(&state, 0, &w, Some(&ctx), None),
+            "an unresolvable war must be scored as it actually stands"
+        );
+
+        // Positive control: the SAME position with `last_round` off prices
+        // DIFFERENTLY (mirroring `score_prices_a_declared_war_through_war_
+        // value_not_as_pure_cost`'s own `assert_ne!` -- combat can cost the
+        // victor real losses too, so "resolved" is not guaranteed to score
+        // higher, only different), proving `war_value` really did fire here
+        // and this position is not simply insensitive to the guard either
+        // way.
+        let mut not_last = state.clone();
+        not_last.last_round = false;
+        let mut stats2 = Stats::default();
+        let with_lookahead = score(&not_last, 0, &w, &ctx, true, &mut stats2);
+        assert_eq!(stats2.wars_priced, 1);
+        assert_ne!(with_lookahead, looked, "war_value must actually fire once `last_round` is off");
     }
 
     // -------------------------------------------------------------- quiesce
