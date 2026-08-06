@@ -357,6 +357,18 @@ in this pass touched them further.
 
 ## What remains open — two genuinely unresolved structural questions
 
+**Superseded by "Fourth pass" (below the Third pass section, further down
+this file) — kept here for continuity/history, not as the current status.**
+Both questions this section names were diagnosed in the fourth pass: #1
+(interleaving) was root-caused to Development of Civil Life's out-of-turn
+grant and fixed in `replay.rs` (9/24 → 1/24 residual); #2 (budget shortfall)
+turned out to be two confirmed engine bugs plus a genuinely unidentified
+residual (8/24 → 2/24). The `politics_done`-vs-global-`phase` theory #1
+proposes below was checked and does NOT explain the dominant shape — see
+the fourth pass's own section for why. Read on for the ORIGINAL diagnosis
+as it stood after the second pass, then skip to "Fourth pass" for what is
+actually still true today.
+
 Both are reported here, honestly, as OPEN rather than guessed at or papered
 over, per this project's standing rule that a confirmed rules disagreement
 (or an honestly-flagged open question) is worth more than forcing a
@@ -437,20 +449,35 @@ as above.
 
 ## Suspected ENGINE rules bugs
 
-**One confirmed and fixed this pass** — see "Bugs found and fixed" item 2
-above (the mid-turn `civil_actions`/`military_actions` top-up), with a
-before/after test (`do_wonder_step_completing_pyramids_grants_the_extra_
+**Superseded by "Fourth pass" (further down this file)** — the fourth pass
+confirmed and fixed TWO MORE engine bugs beyond the one below: event-granted
+population increases wrongly charging food (`events::tests::
+an_event_granted_population_increase_costs_no_food`), and Development of
+Civil Life's ordered action never getting the same CA exemption Rich
+Land/Urban Growth's identical grant already has (`apply::tests::
+do_build_spends_no_civil_action_when_civil_life_banked_a_build_discount`,
+`legal::tests::
+build_move_is_offered_with_zero_civil_actions_when_civil_life_banked_a_discount`).
+Three confirmed engine bugs total across this file's history, all fixed and
+tested. The historical text below is kept for continuity.
+
+**One confirmed and fixed in the second pass** — see "Bugs found and fixed"
+item 2 above (the mid-turn `civil_actions`/`military_actions` top-up), with
+a before/after test (`do_wonder_step_completing_pyramids_grants_the_extra_
 civil_action_this_turn`, `rust/src/apply.rs`).
 
-**One still open, NOT confirmed**: item 2 under "What remains open" above
-(the unexplained extra civil action) is the closest remaining candidate for
-a SECOND engine bug — the OBSERVED shape (budget shortfall with every
-known source individually verified correct) is identical to the one that
-turned out to be real, but a second bonus source has not been found or
-ruled out, and might instead be a `replay.rs` reconstruction gap (a build
-this binary priced differently than the true game, echoing the first pass's
-Rich Land/Urban Growth discovery) or the same interleaving mystery in
-disguise. Filed open per the standing rule, not asserted as a finding.
+**One still open, NOT confirmed, as of the second pass**: item 2 under "What
+remains open" above (the unexplained extra civil action) is the closest
+remaining candidate for a SECOND engine bug — the OBSERVED shape (budget
+shortfall with every known source individually verified correct) is
+identical to the one that turned out to be real, but a second bonus source
+has not been found or ruled out, and might instead be a `replay.rs`
+reconstruction gap (a build this binary priced differently than the true
+game, echoing the first pass's Rich Land/Urban Growth discovery) or the same
+interleaving mystery in disguise. Filed open per the standing rule, not
+asserted as a finding. **Resolved by the fourth pass** (see above) — mostly
+Finding 1b (Civil Life's missing CA exemption), with a genuinely
+unidentified 2/24 residual still open.
 
 Every OTHER category in this pass's mismatch table traces to one of:
 genuinely unrecoverable hidden information (discard), or an as-yet-unfixed
@@ -639,4 +666,229 @@ sufficient, and this pass confirms that prediction rather than
 contradicting it. The two OPEN questions ("What remains open," above)
 are now this project's highest-leverage remaining unknowns for reaching any
 completions at all.
+
+## Fourth pass: both "What remains open" questions diagnosed — one is a confirmed second ENGINE bug, the other a replayer/turn-model gap, both fixed
+
+This pass had one job: diagnose the two structural open questions above,
+verify rather than assume, and fix whatever turned out to be real. Both
+were root-caused with hard evidence from real games, both are now fixed and
+tested, and the sample's composition moved a lot as a direct result —
+reported here exactly as it landed, including the parts that are STILL open.
+
+### Finding 1 (civil-action-budget shortfall, was 8/24): a SECOND confirmed engine bug, plus one already-fixed bug's blast radius
+
+The "civil_actions == 0 shortfall" shape (§9.2's original framing) turned
+out to be at least two, and possibly three, unrelated things wearing the
+same symptom:
+
+**1a. ENGINE BUG (confirmed, fixed, tested): event-granted population
+increases were charged food as if they were the PAID §6.1 action.**
+`Development of Settlement`/`Immigration`/`Refugees` are the only three
+base-game cards whose `EventBlock` carries an `increasePopulation` key —
+`events.rs::apply_gains_block` routed it through `paid_increase_population`
+(the same food-costing, one-time-discount-consuming path as a normal
+`Move::Pop`), but the digital-edition card text for all three
+("Players increase population.", "The players with the most happy faces
+increase population.", "...gains 3 culture and increases population.") is
+phrased exactly like every other unconditional `EventBlock` gain (food,
+resources, science, culture) — none of which cost anything — with no
+mention of a food payment. **Found by replaying real BGO game `7522616`**:
+Purple prepares Development of Settlement, then LATER the same turn pays an
+explicit, separately-logged `"Purple increases population Purple spends 3
+food"` for their own real Pop action. Reconstructing the turn proves the
+event grant had to be free: entering the turn at `yellow_bank == 17`, a
+FREE grant moves it to 16 (`pop_cost_base(16) == 3`, exactly the food the
+human paid for their OWN LATER Pop); the old PAID code additionally spent
+`pop_cost_base(17) == 2` food on the event grant itself, leaving only 1 food
+when the human's real Pop needed 3 — an `IllegalMove` this binary reported
+as the "budget shortfall" mystery, for at least this one game. **Fixed** by
+renaming `paid_increase_population` to `free_increase_population` and
+switching it to `economy::increase_population`'s established free-grant
+shape (`cost: 0, consume_one_time: false` — the same shape `apply.rs::
+h_pop_free`/Ocean Liners already use). **Test**:
+`events::tests::an_event_granted_population_increase_costs_no_food`
+(`rust/src/events.rs`) — confirmed to fail before the fix (food dropped
+3 → 1, the exact BGO-observed shortfall) and pass after.
+
+**1b. ENGINE BUG (confirmed, fixed, tested): Development of Civil Life's
+ordered action was never wired to the "ordered free action" CA exemption
+every other card of its shape gets.** `Development of Civil Life`
+("Development of Civilization" in BGO's UI) reads "Immediately, each
+civilization may either: increase its population; or build a farm, mine or
+urban building; or develop a technology. It costs 1 [resource] less than
+usual." — textually near-identical to Rich Land's "Build or upgrade a farm
+or mine; pay 1 less resource" and Frugality's own `freeCivilAction` text,
+both of which rule item 11 already governs: "if it orders an action,
+perform it under normal rules but paying no civil ... action for it." Rich
+Land/Urban Growth/Frugality are wired to that exemption
+(`Special::FreeCivilAction`, `apply::apply_free_civil_move`, called with
+`free: true`) — but Civil Life's identical grant, banked in `PlayerState::
+one_time_discount` (`build_resources`/`develop_science`/`pop_food`), was
+only ever read for its RESOURCE discount, never for the CA exemption: the
+normal `Move::Pop`/`Move::Build`/`Move::Develop` dispatch (`apply.rs::
+apply`) always calls `h_pop`/`do_build`/`h_develop` with `free: false`, and
+`legal.rs::action_moves` gated Pop/non-unit-Build/Develop on `ca >= 1` with
+no exception. **Found by replaying real BGO game `7523355`**: Purple's
+round-3 turn (Despotism, 4 CA) spends 1 CA on their own Civil-Life-discounted
+build, 1 on a wonder stage, 2 on a `Take` — a correctly-priced 4 CA total —
+then a SECOND, real `Take` fails with `civil_actions == 0`: 5 CA-costing
+actions on a 4-CA budget, and the one action that shouldn't have cost
+anything was the Civil-Life build. **Fixed**, three sites, mirroring the
+existing pattern exactly (`costs::civil_life_ca_free`, a one-line documented
+helper, is the single source of truth all of them read):
+- `legal.rs::action_moves` — Pop, non-unit-Build, and both Develop gates now
+  read `ca >= 1 || civil_life_ca_free(p.one_time_discount.<field>)`. NOT
+  applied to Upgrade or Destroy — Civil Life's text does not cover them.
+- `apply.rs::h_pop`/`do_build`/`h_develop` — each now reads its own
+  `one_time_discount` field BEFORE the existing code zeroes it (consuming
+  the grant), and skips `costs::pay_ca`/`military_actions -= 1` when it was
+  set, exactly mirroring `free`'s existing effect from a DIFFERENT free
+  source (an action card) — the two stay independent, since a card in hand
+  and a banked event grant can both be live at once.
+
+  **Tests**: `apply::tests::
+  do_build_spends_no_civil_action_when_civil_life_banked_a_build_discount`
+  and `legal::tests::
+  build_move_is_offered_with_zero_civil_actions_when_civil_life_banked_a_discount`
+  (both confirmed to fail before the fix — the `apply.rs` one via a genuine
+  `debug_assert` panic, "paid more civil actions than available" — and pass
+  after).
+
+**Verified against real data, not just unit tests**: re-running the 24-game
+sample after 1a+1b, `7523355`/`7523354`/`7523350`/`7522616` (all feature
+Development of Civil Life, all previously stopped on the exact
+`civil_actions == 0` shortfall shape) each ran dramatically deeper (e.g.
+`7523355`: 27 → 62 actions before its NEXT, unrelated stop) — while
+`7523087` (no Civil Life event anywhere in that game's journal) stayed
+EXACTLY at its previous stop, unaffected, the clean negative control this
+fix predicts.
+
+**What is still open, honestly**: **2/24 games (`7522632`, `7523087`)
+still show the exact `civil_actions == 0`, everything-blocked shape**, and
+neither is explained by 1a, 1b, Hammurabi's MA-as-CA conversion, or any
+`CardEffects`/`Special` on a card either player has. `7522632`'s Civil Life
+event does not even fire until round 5 — three rounds AFTER this game's
+round-4 shortfall — so it is provably unrelated for that game specifically.
+`7523087` (Purple electing Michelangelo mid-turn, replacing Hammurabi) was
+already individually verified in an earlier pass: every civil-costing
+action that turn is independently correct, and the leader-replacement
+refund nets to zero exactly as §9.1 predicts. **A genuinely unidentified
+THIRD source, or something else — not diagnosed, not guessed at.**
+`REPLAY_DEBUG=1`/`REPLAY_DEBUG_ALL=1` reproduce the full trace for both.
+
+### Finding 2 (interleaving with no `EndTurn`, was 9/24): root-caused to Development of Civil Life's OUT-OF-TURN grant — a replayer/turn-model gap, not an engine rules bug, fixed in `replay.rs`
+
+**Root cause, confirmed against real games, not the `politics_done`-vs-
+global-`phase` theory this doc previously named as the most concrete lead**
+(that theory was checked and does not explain the dominant shape — see
+below). Development of Civil Life's grant (immediately above) is NOT scoped
+to whoever prepared it, or to their own turn — it is banked on `p.
+one_time_discount` for EVERY qualifying player the instant the event
+resolves, and a real BGO player may spend their own banked grant WHENEVER
+they like, including mid-ANOTHER-player's live turn, since the grant itself
+carries no timing restriction once banked. **Every one of the 8 sample
+games examined in detail that stopped on `decider != expected actor`
+contains this event** (`7523354`, `7523355`, `7523809`, `7523350`,
+`7522619`, `7523082`, `7523357`, `7522668`) — not a coincidence: e.g.
+`7523355` line 34-35 —
+
+```text
+Purple builds Philosophy Purple spends 2 resources          <- Purple's own turn
+Orange builds Philosophy Orange spends 2 resources          <- interjects, no EndTurn for Purple
+Purple builds 1 stage of Library of Alexandria ...           <- Purple's turn resumes
+```
+
+— and the SAME shape covers BGO's `"<Color> discovers <Card> <Color> loses
+N science"` phrasing (`corpus.rs`'s `"discovers "` prefix — `develop`, not
+`build`), the dominant remaining sub-case once build/pop were handled: e.g.
+`7523809` line 55, `"Orange discovers Alchemy Orange loses 3 science"` mid
+Purple's turn, Alchemy having been taken into Orange's hand normally,
+turns earlier.
+
+**Why this is a replayer/turn-model gap, not an engine rules bug**:
+`legal::legal_moves` (correctly, matching the real engine's design) only
+ever computes ACTIONS for `state.current`/`state.decider()` — it has no
+concept of "yes, but not your turn," because the base game has almost no
+mechanic that needs one (every other action-phase move genuinely does
+belong to whoever's turn it is). Development of Civil Life is the one
+exception, and self-play never needs to reproduce an out-of-turn grant
+faithfully (a bot with a banked, un-timed discount simply spends it on its
+own next qualifying action, which is a safe, non-exploitable
+simplification, not a strategy-relevant divergence) — the gap only shows up
+when trying to replay a REAL human's exact, out-of-turn action sequence.
+
+**Fixed in `replay.rs` only, no engine turn-model changes**: `civil_life_
+move` (new helper) recognizes, for the journal's stated actor, whether they
+have a live `one_time_discount` matching an `IncreasePopulation`/
+`BuildBuilding`/`DevelopTechnology` line; if so, the main per-line loop
+applies it directly via `apply::apply_free_civil_move` (bumped from
+`pub(crate)` to `pub` — already actor-explicit and `state.current`-agnostic
+by construction, since it existed for a DIFFERENT free-civil source, an
+action card's ordered move) BEFORE `resolve_intervening`/`apply_one`, which
+both assume the acting player IS the decider. Deliberately does NOT cover
+`ActionClass::Develop` when the card is not already in the interjecting
+player's grounded hand (`p.hand_civil.contains`) — an honest, narrower
+residual left unhandled rather than guessed at.
+
+**Verified against real data**: re-running the 24-game sample, `decider !=
+expected actor` dropped from 9/24 to 1/24. The one remaining case
+(`7523791`, line 89, `"Grey builds Religion"`) is a DIFFERENT, narrower bug
+in the pre-existing `Development of Religion` (`ChoiceKind::FreeBuild`)
+per-player draining order — not Civil Life, not diagnosed further this
+pass (a single occurrence).
+
+**The `politics_done`-vs-global-`phase` theory this doc previously flagged
+as the most concrete lead was checked and does NOT explain the dominant
+shape**: in every game examined, `resolve_intervening` reaches the
+interjecting line with `state.pending` genuinely empty and `state.
+decider()` genuinely still naming the ORIGINAL turn's player — there is no
+live per-player political-decision signal being missed, because nothing
+about this is a political decision at all. That theory may still explain
+some OTHER, rarer interleaving shape (untested — no sample game needed it
+once Civil Life's cases were excluded), but it is not the reason this
+sample's stops happened. Documented here so nobody re-chases it as the
+primary lead.
+
+### Updated sample numbers after this pass
+
+| | third pass | fourth pass (this one) |
+|---|---|---|
+| games complete | 0/24 | 0/24 |
+| mean actions before stop | 51.0 | **63.7 (+25%)** |
+| `decider != expected actor` (interleaving) | 9/24 | **1/24** |
+| civil-action-budget shortfall (`civil_actions == 0`, unexplained) | 8/24 | **2/24** |
+| build cost mismatch (unmodeled discount source) | 1/24 | 8/24 (pre-existing category, `docs/REPLAY.md`'s "gives up on" shape from the first pass — more visible now that games run deeper, not new; NOT investigated this pass) |
+| `WonderStep` illegal (two different unresolved shapes) | 1/24 | 5/24 (newly reached this deep; NOT diagnosed this pass — likely a wonder-completion `Pending::Choice` and/or a blue-token/multi-stage cost gap, out of this pass's scope) |
+| `FreeCivilAction` no-`Pending::Choice`-opened (Urban Growth) | ~2/24 | 2/24 (unchanged, pre-existing, still not investigated) |
+| other, single-occurrence, not diagnosed | 3/24 | 3/24 (`PolPass` illegal, `PlayAction` illegal, a `Take` with many other CA-costing options still legal — each a single occurrence this pass did not chase) |
+
+Every game reached the same or a strictly later stop point than the third
+pass; none regressed. As with every prior pass, closing two walls exposed
+the next ones (`WonderStep`/build-cost-mismatch categories, both
+pre-existing shapes that simply could not fire before games ran this deep)
+— expected, not new information, and reported honestly rather than
+claimed as newly discovered bugs.
+
+### What remains open going into a fifth pass
+
+1. **The residual 2/24 civil-action-budget shortfall** (`7522632`,
+   `7523087`) — confirmed NOT Civil Life, NOT Hammurabi, NOT any known
+   `CardEffects`/`Special`. The single highest-value remaining lead: a
+   THIRD unidentified action-economy source, reproducible with
+   `REPLAY_DEBUG_ALL=1` on either game.
+2. **The `build cost mismatch` category (8/24)**: an unmodeled discount
+   source, echoing the first pass's Rich Land/Urban Growth discovery and
+   this pass's own Finding 1b — worth checking whether it is ALSO a Civil
+   Life-shaped gap (a build discount this binary isn't crediting) before
+   assuming it is something new. Representative lines available for all 8
+   games via this pass's own re-run.
+3. **The two `WonderStep`-illegal shapes (5/24)**, one blocked by a live
+   2-option `Pending::Choice`, one with many other CA-costing moves still
+   legal — not investigated, not even loosely diagnosed, this pass.
+4. **The single residual `decider != expected actor` case (`7523791`)** —
+   a narrower bug in `Development of Religion`'s existing `FreeBuild`
+   per-player draining order, not Civil Life.
+5. Scaling the sample past 24 games remains blocked on the same scoping
+   question the third pass raised: 0/24 complete, and a full BGO game gives
+   every category above many chances to fire over 15-20+ rounds.
 

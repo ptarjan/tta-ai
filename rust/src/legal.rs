@@ -407,7 +407,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
 
     // increase population
     if let Some(cost) = pop_cost(state, p) {
-        if ca >= 1 && p.food as i32 >= cost {
+        if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food)) && p.food as i32 >= cost {
             moves.push(Move::Pop);
         }
     }
@@ -440,7 +440,11 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     continue;
                 }
             } else {
-                if res < cost || !have_ca {
+                // `have_ca` is shared with the Upgrade loop below, which
+                // Civil Life's text does NOT cover ("build", not
+                // "upgrade") -- the exemption is checked here, inline, not
+                // folded into `have_ca` itself.
+                if res < cost || !(have_ca || costs::civil_life_ca_free(p.one_time_discount.build_resources)) {
                     continue;
                 }
                 if kind.is_urban() && costs::urban_count(p, kind) >= s.urban_limit {
@@ -537,7 +541,9 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // science cost (`.unwrap_or(0)` only fires for Despotism,
                 // which prints no `peacefulCost` at all and is never in a
                 // hand to begin with).
-                if ca >= 1 && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0) {
+                if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
+                    && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                {
                     moves.push(Move::Develop { card: id });
                 }
                 if can_revolt(state, p, id) {
@@ -555,7 +561,9 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 }
             }
             k if k.takes_workers() || k == CardType::SpecialTech => {
-                if ca >= 1 && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0) {
+                if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
+                    && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                {
                     moves.push(Move::Develop { card: id });
                 }
             }
@@ -1530,6 +1538,26 @@ mod tests {
         p2.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
         let state2 = one_player_state(p2);
         assert!(!action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Build { card: card("Bronze") }));
+    }
+
+    /// ENGINE BUG (`docs/REPLAY.md` Finding 1, 2026-08): with ZERO civil
+    /// actions left, `Move::Build` must still be offered when Development of
+    /// Civil Life banked `p.one_time_discount.build_resources` -- the SAME
+    /// action-card-ordered-build exemption Rich Land's `FreeCivilAction`
+    /// already gets (`costs::civil_life_ca_free`'s doc comment). Before this
+    /// fix `action_moves` gated every non-unit build on `have_ca` alone, so
+    /// a real human's banked, in-hand grant looked illegal to this engine
+    /// even though nothing else in the turn was wrong.
+    #[test]
+    fn build_move_is_offered_with_zero_civil_actions_when_civil_life_banked_a_discount() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 0;
+        p.workers_free = 1;
+        p.resources = 10;
+        p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Build { card: card("Bronze") }));
     }
 
     #[test]

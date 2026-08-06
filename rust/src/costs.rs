@@ -115,6 +115,29 @@ pub fn spare_ca(p: &PlayerState) -> i32 {
     p.civil_actions as i32 + extra
 }
 
+/// Whether an Increase-Population / non-unit-Build / Develop action is
+/// payable RIGHT NOW even with `spare_ca(p) == 0`, because Development of
+/// Civil Life ("Immediately, each civilization may either: increase its
+/// population; or build a farm, mine or urban building; or develop a
+/// technology. It costs 1 [resource] less than usual") already banked `p.
+/// one_time_discount`'s matching field. ENGINE BUG (docs/REPLAY.md Finding
+/// 1, 2026-08): this ordered action is the SAME shape as an action card's
+/// own ordered build/pop/develop (Rich Land/Urban Growth/Frugality, whose
+/// nearly identical "pay 1 less resource" card text IS already wired
+/// CA-free via `Special::FreeCivilAction`/`apply_free_civil_move`) -- rule
+/// item 11's "perform it under normal rules but paying no civil ... action
+/// for it" governs BOTH, but only the action-card path was ever wired to
+/// the exemption. `costs::pay_ca` cannot express this fallback itself (it
+/// has no way to know WHICH action a shortfall is being paid for, so it
+/// cannot pick the right one of three discount fields the way Hammurabi's
+/// type-agnostic MA-as-CA conversion can) -- each of the three call sites
+/// (`legal.rs`'s Pop/Build/Develop gates, `apply.rs`'s `h_pop`/`do_build`/
+/// `h_develop`) checks its own matching field directly instead.
+#[inline]
+pub fn civil_life_ca_free(discount_field: i16) -> bool {
+    discount_field != 0
+}
+
 /// Pay `n` civil actions, falling back to Hammurabi's MA-as-CA conversion
 /// once per turn if the civil-action pool alone is not enough. Mutates `p`.
 /// `state` is dropped for the same reason as [`spare_ca`].

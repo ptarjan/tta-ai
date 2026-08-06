@@ -684,6 +684,66 @@ impl<'a> Replayer<'a> {
     }
 }
 
+/// The `Move` a player OTHER than `state.decider()` is legally allowed to
+/// make right now, purely because Development of Civil Life ("Development
+/// of Civilization" in BGO's UI -- `corpus.rs::ALIASES`) banked them a
+/// one-time discount (`docs/REPLAY.md` Finding 2, `state::OneTimeDiscount`'s
+/// own doc comment: the ONLY writer of these three fields). The real card
+/// text is "Immediately, each civilization may either: increase its
+/// population; or build a farm, mine or urban building; or develop a
+/// technology. It costs 1 [resource] less than usual" -- an untimed grant to
+/// EVERY player, not a choice scoped to whoever prepared it or to their own
+/// turn, which is exactly why a real BGO player can and does spend it
+/// interleaved into another player's live turn (confirmed against real BGO
+/// games `7523354`, `7523355`, and every other sampled game whose replay
+/// stopped on a `decider != expected actor` mismatch: all of them contain
+/// this event). `None` when `class`/`card` do not match a shape Civil Life
+/// can explain (including: the field is already zero, meaning either this
+/// player never had the grant or already spent it on a real, in-turn action
+/// -- in which case the caller's normal, `state.decider()`-gated dispatch is
+/// the right path and should run instead, most likely producing an honest
+/// mismatch rather than silently guessing).
+///
+/// `ActionClass::DevelopTechnology` (BGO logs this shape as `"<Color>
+/// discovers <Card> <Color> loses N science"`, not `"develops"` -- see
+/// `corpus.rs`'s `"discovers "` prefix) IS covered, unlike Pop/Build:
+/// `apply::h_develop` also removes the developed card from `p.hand_civil`,
+/// which is only safe to trust out of turn when this binary already
+/// grounded that exact card in `actor`'s hand from an earlier, ordinary,
+/// in-turn `TakeCard` line -- checked via `hand_civil.contains` below
+/// rather than assumed. In every real game this fired against
+/// (`docs/REPLAY.md` Finding 2), that was true: the interjecting player had
+/// already taken the card into hand normally, sometimes turns earlier, and
+/// was simply waiting for a chance to develop it.
+fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<CardId>) -> Option<Move> {
+    let p = &r.state.players[actor as usize];
+    match class {
+        ActionClass::IncreasePopulation if p.one_time_discount.pop_food != 0 => Some(Move::Pop),
+        ActionClass::BuildBuilding if p.one_time_discount.build_resources != 0 => {
+            let card = card?;
+            // Civil Life only discounts a build, never grants the
+            // technology itself -- `card` must already be developed (in
+            // `actor`'s own tableau), and never a military unit (the
+            // discount field is scoped to `URBAN_OR_PRODUCTION` cards only,
+            // matching the card text's "farm, mine or urban building").
+            if !tta::costs::is_unit(card) && p.techs.get(card).is_some() {
+                Some(Move::Build { card })
+            } else {
+                None
+            }
+        }
+        ActionClass::DevelopTechnology if p.one_time_discount.develop_science != 0 => {
+            let card = card?;
+            if p.hand_civil.contains(card) {
+                Some(Move::Develop { card })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------
 // Small text helpers replay.rs needs beyond tta::corpus::classify
 // ---------------------------------------------------------------------
@@ -1036,6 +1096,26 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
         if actor >= meta.players {
             mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
             break 'lines;
+        }
+
+        // Development of Civil Life ("Development of Civilization" in BGO's
+        // UI) grants EVERY player a banked, untimed `one_time_discount` the
+        // instant it resolves -- spendable whenever that player likes,
+        // including mid-ANOTHER-player's-turn, since the grant is not
+        // gated on whose turn it is (`civil_life_move`'s own doc comment;
+        // `docs/REPLAY.md` Finding 2). Checked and applied here, BEFORE
+        // `resolve_intervening`/`apply_one`, because both of those assume
+        // the acting player IS (or is about to become) `state.decider()` --
+        // true for every other kind of action this binary handles, never
+        // true for this one. `actor != r.state.decider()` is the gate: a
+        // player exercising their OWN discount on their OWN turn (the
+        // common case) still goes through the normal path below.
+        if actor != r.state.decider() && r.state.pending.is_empty() {
+            if let Some(mv) = civil_life_move(&r, actor, class, card) {
+                apply::apply_free_civil_move(&mut r.state, actor, mv, 0);
+                r.actions_consumed += 1;
+                continue 'lines;
+            }
         }
 
         let explains_own_politics = matches!(

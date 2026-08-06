@@ -529,6 +529,13 @@ pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
 /// (see its own comment -- "at full price").
 fn h_pop(state: &mut GameState, idx: u8, free: bool) {
     let stats = effects::state_stats(state, &state.players[idx as usize]);
+    // Read BEFORE `increase_population` (below) zeroes it: Development of
+    // Civil Life's grant is CA-free the same way Rich Land/Frugality's own
+    // ordered pop is (`costs::civil_life_ca_free`'s doc comment,
+    // `docs/REPLAY.md` Finding 1) -- checked here, not folded into `free`,
+    // because `free`'s caller (`apply_free_civil_move`) is a DIFFERENT free
+    // source (an action card) that must stay independent of this one.
+    let civil_life_free = costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.pop_food);
     let cost = {
         let p = &state.players[idx as usize];
         economy::pop_food_cost(
@@ -538,7 +545,7 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
         )
             .expect("h_pop: called with an empty yellow bank (caller must check legality)")
     };
-    if !free {
+    if !free && !civil_life_free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
     }
     // `cost` above ALWAYS folded in `one_time_discount.pop_food` (this
@@ -609,6 +616,12 @@ fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId) {
 pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free: bool) {
     let base = costs::build_cost_for(state, &state.players[idx as usize], id).unwrap_or(0);
     let mut cost = (base - discount).max(0);
+    // Read BEFORE this build zeroes it two lines down: same CA exemption as
+    // `h_pop`'s (`costs::civil_life_ca_free`'s doc comment, `docs/REPLAY.md`
+    // Finding 1) -- never true for a unit build, matching the discount
+    // field's own scope (`URBAN_OR_PRODUCTION` only).
+    let civil_life_free = !costs::is_unit(id)
+        && costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.build_resources);
     if !costs::is_unit(id) {
         // `build_cost_for` above already folded in Civil Life's one-shot
         // `build_resources` discount for every non-unit build (exactly the
@@ -620,10 +633,12 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     }
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], id, cost);
-        if costs::is_unit(id) {
-            state.players[idx as usize].military_actions -= 1;
-        } else {
-            costs::pay_ca(&mut state.players[idx as usize], 1);
+        if !civil_life_free {
+            if costs::is_unit(id) {
+                state.players[idx as usize].military_actions -= 1;
+            } else {
+                costs::pay_ca(&mut state.players[idx as usize], 1);
+            }
         }
     }
     {
@@ -737,6 +752,11 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
     // of its printed cost. Not fixed here -- costs.rs/cards.rs are off
     // limits to this module; carried forward, not a new gap.
     let raw_cost = costs::tech_cost(state, &state.players[idx as usize], id);
+    // Read BEFORE this develop zeroes it a few lines down: same CA
+    // exemption as `h_pop`'s/`do_build`'s (`costs::civil_life_ca_free`'s doc
+    // comment, `docs/REPLAY.md` Finding 1).
+    let civil_life_free =
+        raw_cost.is_some() && costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.develop_science);
     if raw_cost.is_some() {
         // `tech_cost` returns `None` only when the card has no develop cost
         // at all, in which case it never looked at `one_time_discount`
@@ -749,7 +769,7 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
     }
     let raw = raw_cost.unwrap_or(0);
     let cost = costs::spend_mil_sci_discount(&mut state.players[idx as usize], id, raw);
-    if !free {
+    if !free && !civil_life_free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
     }
     {
@@ -1116,7 +1136,24 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 /// `free_action_moves`'s build/upgrade/pop/wonder-step arms ever produce;
 /// `Move::Develop` / `Move::Revolution` are the two `DevelopTechnology` can
 /// produce. No other `Move` variant is reachable from there.
-pub(crate) fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
+///
+/// `pub`, not `pub(crate)`, since 2026-08: `replay.rs` (`docs/REPLAY.md`
+/// Finding 2) also calls this directly, for a DIFFERENT free-civil source
+/// than an action card -- Development of Civil Life's "immediately, each
+/// civilization may [act] ... 1 [resource] less than usual" grants every
+/// player (not just whoever prepared it) an untimed, banked `p.
+/// one_time_discount` (see that field's own doc comment), which a real BGO
+/// player can and does exercise OUT OF TURN, interleaved into whoever's turn
+/// happens to be live -- the dominant confirmed cause of the "a different
+/// player's action interleaves mid-turn, no `EndTurn` boundary" replay stop.
+/// `idx` here is exactly what makes that safe to call for a non-`state.
+/// current` actor: every branch below reads/writes `state.players[idx]`
+/// only, never `state.current`/`state.phase`/that player's `civil_actions`
+/// pool -- it was already actor-explicit and turn-agnostic for its
+/// original caller (`interact::run_item`'s `QueueItem::FreeCivil` arm, which
+/// resolves for a player who is not `state.current` in the 3p/4p case
+/// today).
+pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
     match mv {
         Move::Pop => h_pop(state, idx, true),
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
@@ -2345,6 +2382,44 @@ mod tests {
              to 0, then Pyramids' own +1 CA effect should bring it back to 1), not just from the \
              next turn's reset"
         );
+    }
+
+    /// ENGINE BUG (`docs/REPLAY.md` Finding 1, 2026-08): Development of
+    /// Civil Life's "Immediately, each civilization may ... build a farm,
+    /// mine or urban building ... It costs 1 [resource] less than usual" is
+    /// the SAME shape as Rich Land's "Build or upgrade a farm or mine; pay 1
+    /// less resource" -- rule item 11 says an action card's ordered action
+    /// is performed "under normal rules but paying no civil ... action for
+    /// it", and Rich Land's own `Special::FreeCivilAction` path IS wired
+    /// CA-free (`apply_free_civil_move`). Civil Life's identical grant,
+    /// banked in `p.one_time_discount.build_resources`, was never wired to
+    /// that same exemption for the ordinary `Move::Build` path -- found by
+    /// replaying real BGO game 7523355 (`docs/REPLAY.md`): a human spent 5
+    /// civil-costing actions on a 4-civil-action Despotism turn, and the
+    /// only one of the five explained by nothing else in play was their own
+    /// build of the very card Development of Civil Life had just discounted
+    /// for them.
+    #[test]
+    fn do_build_spends_no_civil_action_when_civil_life_banked_a_build_discount() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 0; // this turn's civil-action pool is already spent
+        p.resources = 10;
+        p.workers_free = 1;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1; // Civil Life's banked grant
+        let mut state = one_player_state(p);
+        do_build(&mut state, 0, card("Agriculture"), 0, false);
+        assert_eq!(
+            state.players[0].civil_actions, 0,
+            "Civil Life's own build must not spend a civil action -- there were none left to spend"
+        );
+        assert_eq!(
+            state.players[0].resources,
+            10 - (2 - 1),
+            "the build must still land at the DISCOUNTED resource cost"
+        );
+        assert_eq!(state.players[0].techs.workers(card("Agriculture")), 1, "the build must still place a worker");
+        assert_eq!(state.players[0].one_time_discount.build_resources, 0, "the one-shot grant is consumed exactly once");
     }
 
     /// `EndTurn` was a named gap here until `game.rs` landed. It is now a
