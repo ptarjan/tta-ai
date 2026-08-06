@@ -207,8 +207,15 @@ pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: boo
     p.food -= cost;
     p.yellow_bank -= 1;
     p.workers_free += 1;
-    if consume_one_time {
-        p.one_time_discount.pop_food = 0;
+    // Development of Civil Life's grant is ONE mutually-exclusive choice
+    // (pop XOR build XOR develop), not three independent discounts -- using
+    // this one must exhaust the OTHER two as well, not just `pop_food`. Only
+    // when `pop_food` was actually live (nonzero): an ordinary, unrelated
+    // population increase (no Civil Life grant ever banked) must not wipe a
+    // DIFFERENT, still-unspent build/develop grant this player hasn't used
+    // yet. See `OneTimeDiscount`'s own doc comment (`state.rs`).
+    if consume_one_time && p.one_time_discount.pop_food != 0 {
+        p.one_time_discount.exhaust();
     }
     true
 }
@@ -687,7 +694,7 @@ fn end_of_turn_leader_bonus(state: &mut GameState, idx: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{PactList, Phase, TechSlot, MAX_HAND};
+    use crate::state::{OneTimeDiscount, PactList, Phase, TechSlot, MAX_HAND};
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.
@@ -966,6 +973,38 @@ mod tests {
         assert!(increase_population(&mut p, 1, true));
         assert_eq!(p.one_time_discount.pop_food, 0,
                    "consume_one_time=true must clear the discount");
+    }
+
+    /// ENGINE BUG FIX (`docs/REPLAY.md` fifth pass): Development of Civil
+    /// Life's grant is ONE mutually-exclusive choice among pop/build/develop
+    /// -- confirmed against real BGO play (a human who spent the discount on
+    /// a technology later paid FULL price for an unrelated building, which
+    /// the old "three independent discounts" model wrongly predicted should
+    /// still be discounted). Spending `pop_food` must exhaust
+    /// `build_resources`/`develop_science` too, not just its own field.
+    #[test]
+    fn increase_population_exhausts_the_whole_civil_life_grant_not_just_pop_food() {
+        let mut p = blank_player(0);
+        p.yellow_bank = 5;
+        p.food = 10;
+        p.one_time_discount = OneTimeDiscount { pop_food: 1, build_resources: 1, develop_science: 1 };
+        assert!(increase_population(&mut p, 1, true));
+        assert_eq!(p.one_time_discount, OneTimeDiscount::default(),
+                   "spending the pop discount must exhaust build and develop too");
+    }
+
+    /// A population increase that never had a live Civil Life grant at all
+    /// (every field already 0) must not disturb an unrelated player's own
+    /// state -- trivially true here since there is nothing to clear, but
+    /// pinned so a future change to the "only when live" gate can't silently
+    /// start unconditionally exhausting on every ordinary Pop.
+    #[test]
+    fn increase_population_with_no_live_discount_leaves_the_grant_untouched() {
+        let mut p = blank_player(0);
+        p.yellow_bank = 5;
+        p.food = 10;
+        assert!(increase_population(&mut p, 4, true));
+        assert_eq!(p.one_time_discount, OneTimeDiscount::default());
     }
 
     #[test]

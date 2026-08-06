@@ -780,6 +780,52 @@ fn spent_resources(text: &str) -> Option<i32> {
     rest[..digits_end].parse().ok()
 }
 
+/// The number right after `" loses "` in `text`, if the SAME clause names
+/// `"military resource"` -- e.g. `"Purple builds Warrior Purple loses 1
+/// military resource; Purple spends 1 resource"`. BGO's UI splits a unit
+/// build/upgrade's total resource payment into two clauses by SOURCE: any
+/// portion covered by `p.mil_discount` (Patriotism/Wave of Nationalism/
+/// Military Build-Up's "pay N fewer resources [for military units]" pool,
+/// `costs::spend_mil_discount`) is printed as `"loses N military resource"`,
+/// and any REMAINING portion paid from the ordinary resource pool as
+/// `"spends N resource"` -- found by replaying real BGO games
+/// (`docs/REPLAY.md` fifth pass): `loses` + `spends` summed always equals
+/// exactly this binary's own `costs::build_cost_for` for the unit, even on
+/// lines with NO preceding Patriotism-style grant visible in the journal at
+/// all (a currently-unexplained baseline case -- see the doc's own notes).
+/// Reading `"spends"` alone (the OLD behaviour) silently under-counted the
+/// unit's total cost by exactly the `"loses"` amount, which this binary's
+/// `costs::build_cost_for` never subtracts for units (`is_unit` gates BOTH
+/// `one_time_discount` fields out on purpose -- Civil Life's grant text is
+/// farm/mine/urban building only, never a unit) -- reported as a "build cost
+/// mismatch (unmodeled discount)" that was actually a pure parsing gap, not
+/// a discount this binary's `costs::build_cost_for` needed to model at all.
+fn lost_military_resource(text: &str) -> Option<i32> {
+    let p = text.find(" loses ")?;
+    let rest = &text[p + " loses ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    if !rest[digits_end..].starts_with(" military resource") {
+        return None; // e.g. "loses 1 population" -- a different clause entirely
+    }
+    rest[..digits_end].parse().ok()
+}
+
+/// The TOTAL a build/upgrade line actually paid: [`spent_resources`]'s
+/// `"spends N resource"` clause plus [`lost_military_resource`]'s `"loses N
+/// military resource"` clause, whichever of the two (or both) are present.
+/// `None` only when NEITHER clause appears (a fully free build this check
+/// has nothing to compare) -- see [`lost_military_resource`]'s own doc
+/// comment for why summing, not choosing one, is correct.
+fn total_paid_for_build(text: &str) -> Option<i32> {
+    match (lost_military_resource(text), spent_resources(text)) {
+        (None, None) => None,
+        (lost, spent) => Some(lost.unwrap_or(0) + spent.unwrap_or(0)),
+    }
+}
+
 fn total_action_cost(text: &str) -> Option<i32> {
     let mut total = 0i32;
     let mut found = false;
@@ -1349,7 +1395,7 @@ fn apply_one(
                 return r.try_apply(mv);
             }
             if let (Some(want), Some(got)) = (
-                spent_resources(raw_text),
+                total_paid_for_build(raw_text),
                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
             ) {
                 if want != got {
@@ -1740,6 +1786,57 @@ mod tests {
             spent_resources("Purple builds Printing Press using Urban Growth Purple spends 2 resources"),
             Some(2)
         );
+    }
+
+    /// REPLAYER FIX (`docs/REPLAY.md` fifth pass): a unit build/upgrade's
+    /// `p.mil_discount`-funded portion is printed as a SEPARATE `"loses N
+    /// military resource"` clause, not folded into `"spends"` -- reading
+    /// `spends` alone silently under-counted the total by exactly this much.
+    #[test]
+    fn lost_military_resource_reads_a_loses_military_resource_clause() {
+        assert_eq!(
+            lost_military_resource("Purple builds Warrior Purple loses 1 military resource; Purple spends 1 resource"),
+            Some(1)
+        );
+        assert_eq!(
+            lost_military_resource("Green builds Warrior Green loses 2 military resource"),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn lost_military_resource_ignores_an_unrelated_loses_clause() {
+        // "loses 1 population" (Reign of Terror etc.) must not be mistaken
+        // for a military-resource clause just because both start with " loses ".
+        assert_eq!(lost_military_resource("Purple loses 1 population"), None);
+        assert_eq!(lost_military_resource("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    /// The property this binary's build-cost cross-check actually needs:
+    /// the TOTAL a unit build paid is `loses` + `spends` summed, matching
+    /// the engine's own `costs::build_cost_for` (which prices units at full
+    /// printed cost, before `p.mil_discount` is netted off at apply time) --
+    /// confirmed against real BGO games where reading `spends` alone made
+    /// this binary wrongly report a "build cost mismatch (unmodeled
+    /// discount)" for a cost that was actually correct once both clauses are
+    /// counted.
+    #[test]
+    fn total_paid_for_build_sums_the_military_resource_and_spends_clauses() {
+        assert_eq!(
+            total_paid_for_build("Purple builds Warrior Purple loses 1 military resource; Purple spends 1 resource"),
+            Some(2)
+        );
+        assert_eq!(
+            total_paid_for_build("Purple builds Swordsmen Purple loses 1 military resource; Purple spends 2 resources"),
+            Some(3)
+        );
+        // A fully mil-discount-funded build has no "spends" clause at all.
+        assert_eq!(total_paid_for_build("Green builds Warrior Green loses 2 military resource"), Some(2));
+        // An ordinary building has neither clause matching "loses ... military
+        // resource" -- falls back to plain `spends`.
+        assert_eq!(total_paid_for_build("Purple builds Bronze Purple spends 2 resources"), Some(2));
+        // Neither clause present at all (e.g. a fully free build): None.
+        assert_eq!(total_paid_for_build("Purple builds 1 stage of Pyramids"), None);
     }
 
     #[test]

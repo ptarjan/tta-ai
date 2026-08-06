@@ -628,8 +628,16 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
         // farm/mine/urban cards it is gated on -- see its own doc comment);
         // this is the ONE build that spends it. Unconditional on `free`:
         // `free` only waives the civil action below, not the resource cost
-        // that already consumed the discount computing `base`.
-        state.players[idx as usize].one_time_discount.build_resources = 0;
+        // that already consumed the discount computing `base`. Only when
+        // `build_resources` was actually live: this is ONE mutually-
+        // exclusive grant (pop XOR build XOR develop, `OneTimeDiscount`'s
+        // own doc comment, `state.rs`) -- exhausting it on a build that
+        // never had the discount banked in the first place would wrongly
+        // wipe a still-unspent pop/develop grant.
+        let p = &mut state.players[idx as usize];
+        if p.one_time_discount.build_resources != 0 {
+            p.one_time_discount.exhaust();
+        }
     }
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], id, cost);
@@ -764,8 +772,13 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
         // unconditionally whenever it returns `Some`). This is the ONE
         // technology that spends Civil Life's one-shot `develop_science`
         // discount; unconditional on `free` for the same reason as
-        // `do_build` above.
-        state.players[idx as usize].one_time_discount.develop_science = 0;
+        // `do_build` above. Only when `develop_science` was actually live --
+        // same "don't wipe a sibling grant that was never banked" reasoning
+        // as `do_build`'s (`OneTimeDiscount`'s own doc comment, `state.rs`).
+        let p = &mut state.players[idx as usize];
+        if p.one_time_discount.develop_science != 0 {
+            p.one_time_discount.exhaust();
+        }
     }
     let raw = raw_cost.unwrap_or(0);
     let cost = costs::spend_mil_sci_discount(&mut state.players[idx as usize], id, raw);
@@ -1747,11 +1760,17 @@ mod tests {
                     applied to a second technology");
     }
 
-    /// The three categories are consumed INDEPENDENTLY (card text: three
-    /// separate discounted actions, not one discount usable on anything).
-    /// Spending the population discount must leave build and develop intact.
+    /// ENGINE BUG FIX (`docs/REPLAY.md` fifth pass): Development of Civil
+    /// Life's grant is ONE mutually-exclusive choice ("may EITHER increase
+    /// population; OR build...; OR develop...") -- spending ANY ONE of the
+    /// three candidate discounts must exhaust the OTHER TWO, not leave them
+    /// standing. This replaces a same-named-in-spirit test that asserted the
+    /// OPPOSITE (independent consumption) -- that was the bug, confirmed
+    /// wrong by replaying real BGO games where a human who spent one
+    /// discount type paid FULL price on a later action of a different type
+    /// this engine's old model predicted should still be discounted.
     #[test]
-    fn one_time_discount_categories_are_consumed_independently() {
+    fn spending_any_one_civil_life_discount_exhausts_the_whole_grant() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.yellow_bank = 5;
@@ -1767,15 +1786,17 @@ mod tests {
         let mut state = one_player_state(p);
         h_pop(&mut state, 0, false);
         let d = state.players[0].one_time_discount;
-        assert_eq!(d.pop_food, 0, "population discount spent");
-        assert_eq!(d.build_resources, 1, "build discount untouched by pop");
-        assert_eq!(d.develop_science, 1, "develop discount untouched by pop");
-        // and the still-pending build discount is for real, not just a field
+        assert_eq!(d, crate::state::OneTimeDiscount::default(),
+                   "spending the population discount must exhaust build \
+                    and develop too, not just pop_food");
+        // and the now-exhausted build discount is for real, not just a
+        // field: the build below must be FULL price.
         let before = state.players[0].resources;
         do_build(&mut state, 0, card("Irrigation"), 0, false);
-        assert_eq!(before - state.players[0].resources, 3,
-                   "spending the population discount must not have consumed \
-                    the still-pending build discount (Irrigation cost 4 - 1)");
+        assert_eq!(before - state.players[0].resources, 4,
+                   "the build discount was already exhausted by the pop \
+                    action; this build must pay Irrigation's full cost 4, \
+                    not the discounted 3");
     }
 
     #[test]

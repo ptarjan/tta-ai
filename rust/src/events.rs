@@ -1158,8 +1158,12 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
     // separately track): the one base-game card that prints this key
     // (Development of Civil Life) always prints all three sub-amounts
     // nonzero, so the two conditions coincide for every card that exists
-    // today. See `state::OneTimeDiscount`'s own doc comment for the "never
-    // cleared" defect this mirrors on purpose.
+    // today. All three fields ARE banked here at once -- it is not yet
+    // known which of the three the player will eventually spend -- but the
+    // card is an "either/or/or" choice among the three, not a grant of all
+    // three: the FIRST one actually spent exhausts the other two as well.
+    // See `state::OneTimeDiscount`'s own doc comment (`state.rs`) for the
+    // full rules citation and the real-game evidence.
     if block.one_time_discount_build_resources != 0
         || block.one_time_discount_develop_science != 0
         || block.one_time_discount_pop_food != 0

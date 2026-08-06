@@ -514,55 +514,64 @@ pub struct PlayerState {
     pub mil_sci_discount: i16,
     /// Event-granted cost discount (§ "Development of Civil Life", the one
     /// Age A event that prints `oneTimeDiscount`). See [`OneTimeDiscount`]
-    /// for the one thing a reader needs to know about it: it is NEVER
-    /// consumed (a deliberately-mirrored Python defect).
+    /// for the one thing a reader needs to know about it: it is a SINGLE
+    /// mutually-exclusive one-time grant -- using ANY ONE of its three
+    /// candidate discounts exhausts ALL THREE, via [`OneTimeDiscount::exhaust`].
     pub one_time_discount: OneTimeDiscount,
 
     pub resigned: bool,
 }
 
-/// The one-time cost discount `engine/events.py:360` writes onto a player
-/// when the Age A event **Development of Civil Life** resolves. Its printed
-/// payload is exactly `{"increasePopulation": {"food": 1}, "build":
-/// {"resources": 1}, "developTechnology": {"science": 1}}` and exactly one
-/// card in `data/*.json` writes it, so this is three scalars rather than
-/// Python's dict: the schema is closed, and a `HashMap` here would be a
+/// The one-time cost discount `events::apply_extras` writes onto EVERY
+/// qualifying player when the Age A event **Development of Civil Life**
+/// resolves. Its printed payload is exactly `{"increasePopulation": {"food":
+/// 1}, "build": {"resources": 1}, "developTechnology": {"science": 1}}` and
+/// exactly one card in `data/*.json` writes it, so this is three scalars
+/// rather than a dict: the schema is closed, and a `HashMap` here would be a
 /// growable allocation inside a `Clone`-as-memcpy `GameState` (DESIGN.md
 /// rule 3) bought with nothing.
 ///
-/// **Fixed 2026-08-05, both engines in the same commit.** The card text
-/// (`data/cards_military_actions.json`, "Development of Civil Life"): *"Players
-/// may increase population, build a farm, mine or urban building, or develop
-/// a technology, paying 1 food, 1 resource or 1 science less."* That is ONE
-/// discounted population increase, ONE discounted build and ONE discounted
-/// technology -- each consumed independently the first time an action of
-/// that kind actually pays a cost -- not a standing discount for the rest of
-/// the game. Before this date the field was NEVER cleared in either engine
-/// (a genuine, mirrored defect: `grep -rn one_time_discount engine/` found
-/// one write, three reads, no clear), so once the event resolved the
-/// discount silently applied to every build, every develop and every
-/// population increase for the rest of the game. The fix: `apply.rs::h_pop`/
-/// `h_barbarossa` zero `pop_food` (via `economy::increase_population`'s new
-/// `consume_one_time` flag) whenever a real, non-free population increase
-/// happens; `apply.rs::do_build` zeroes `build_resources` for every
-/// non-unit build regardless of `free` (which only waives the civil action,
-/// not the resource cost); `apply.rs::h_develop` zeroes `develop_science`
-/// whenever `costs::tech_cost` returned `Some` (i.e. actually looked at the
-/// discount). `costs.rs::build_cost_for`/`tech_cost` themselves stay
-/// side-effect-free reads, exactly as before -- only the action handlers
-/// that spend the money now consume the discount.
+/// **A single mutually-exclusive choice, NOT three independent discounts.**
+/// The card text (`data/cards_military_actions.json`, "Development of Civil
+/// Life"): *"Players may **either** increase its population; **or** build a
+/// farm, mine or urban building; **or** develop a technology. It costs 1
+/// food or 1 resource or 1 science less than usual."* (BGO's own journal
+/// text for this event, verbatim -- see below) -- an "either/or/or" list is
+/// one choice among three options, not a grant of all three. All three
+/// scalar fields ARE still populated at once when the event resolves
+/// (below), because it is not yet known which of the three the player will
+/// eventually pick -- but the FIRST of the three that is actually spent by a
+/// real action must exhaust the OTHER TWO as well, via
+/// [`OneTimeDiscount::exhaust`], called from every consumption site
+/// (`economy::increase_population`'s `consume_one_time` branch,
+/// `apply::do_build`, `apply::h_develop`).
 ///
-/// `events::apply_extras` (Development of Civil Life's `allPlayers` block)
-/// is the only writer; `costs.rs::build_cost_for`/`tech_cost` and the
-/// population-cost path are the readers, wired up ahead of `events.rs`
-/// landing so that a Python-dumped fixture state (`fixtures.rs`'s loader)
-/// already priced identically before this field had a live writer.
+/// **Fixed twice, and the second fix reversed part of the first.** A
+/// 2026-08-05 fix (previously documented here) established that the field
+/// must be cleared AT ALL (before it, nothing ever cleared it, so it applied
+/// forever) but wrongly modeled it as three INDEPENDENT one-time discounts,
+/// each cleared only when ITS OWN field was spent -- a plausible-looking
+/// reading of the JSON schema (three separate sub-keys) that turns out to
+/// contradict the card's own English text once read as a list of
+/// alternatives. **Confirmed wrong by replaying real BGO games**
+/// (`docs/REPLAY.md`, fifth pass): in three separate sample games a human
+/// spent ONE of the three discounts (e.g. developed a technology 1 science
+/// under its printed cost) and later, the SAME turn or a later one, paid
+/// FULL, undiscounted price for an action of a DIFFERENT type (e.g. built a
+/// Mine at its full printed cost) that this engine's old independent-grants
+/// model predicted should ALSO have been discounted -- direct evidence the
+/// real rule exhausts all three the instant any one is used. Every one of
+/// the 8/24 sample games that stopped on `docs/REPLAY.md`'s "build cost
+/// mismatch (unmodeled discount)" category was this exact bug: the engine
+/// computed a cost 1 LOWER than the human actually paid, because it still
+/// thought an already-exhausted discount was live.
 ///
-/// Each field is in the units of the thing discounted, and each is applied
+/// Each field is in the units of the thing discounted, and each is checked
 /// by a DIFFERENT rule (`build_resources` only to `URBAN_OR_PRODUCTION`
 /// cards, `develop_science` to every technology including governments,
 /// `pop_food` to §6.1's population increase), which is why they are three
-/// named fields and not one number.
+/// named fields and not one number -- but [`exhaust`](Self::exhaust) always
+/// clears all three together.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OneTimeDiscount {
     /// `build.resources` -- off a farm/mine/urban building's build cost.
@@ -571,6 +580,16 @@ pub struct OneTimeDiscount {
     pub develop_science: i16,
     /// `increasePopulation.food` -- off the §6.1 population-increase cost.
     pub pop_food: i16,
+}
+
+impl OneTimeDiscount {
+    /// Clears all three candidate discounts at once. Call this the instant
+    /// ANY ONE of them is actually spent by a real action -- see this
+    /// struct's own doc comment for why using one must exhaust the other
+    /// two, not just its own field.
+    pub fn exhaust(&mut self) {
+        *self = OneTimeDiscount::default();
+    }
 }
 
 // ==================================================== the decision queue ==
