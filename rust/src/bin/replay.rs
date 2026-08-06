@@ -960,6 +960,37 @@ fn parse_standalone_produces(text: &str) -> Option<(Color, bool, i32)> {
     }
 }
 
+/// The LAST `"produces N food"` / `"produces N resources"` clause anywhere
+/// in `text`, no matter what precedes it -- unlike [`parse_standalone_produces`]
+/// (which requires the WHOLE line to be nothing but that clause, matching a
+/// `GainBlock` event's own separate bookkeeping row per player), this reads
+/// a produces clause BGO glues onto the SAME row as the action that caused
+/// it. Reserves (`Special::GainFoodOrResources`, `ChoiceKind::FoodOrRes`) is
+/// the only base-game card with this shape: `"<Color> plays Reserves
+/// <Color> produces N food"` -- one single row, no separating punctuation,
+/// the actor's name repeated (confirmed against the full corpus: 4157 of
+/// 4158 "plays Reserves" lines across all 1,011 games have this exact glued
+/// shape; the one exception is a different anomaly, not chased here). `rfind`
+/// (not `find`) in case an EARLIER, unrelated clause on the same row also
+/// happens to contain " produces " (not observed for Reserves specifically,
+/// but cheap insurance).
+fn trailing_produces(text: &str) -> Option<(bool, i32)> {
+    let p = text.rfind(" produces ")?;
+    let rest = &text[p + " produces ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    if rest[digits_end..].starts_with(" resources") {
+        Some((true, n))
+    } else if rest[digits_end..].starts_with(" food") {
+        Some((false, n))
+    } else {
+        None
+    }
+}
+
 /// Pre-scans every standalone `"<Color> produces ..."` line in the journal
 /// into a per-seat FIFO (see `parse_standalone_produces`'s doc comment for
 /// why this shape means a `ChoiceKind::GainBlock` resolution). FIFO order
@@ -1463,7 +1494,43 @@ fn apply_one(
         }
         ActionClass::PlayActionCard => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("play-action with no resolved card".into()))?;
-            r.try_apply(Move::PlayAction { card })
+            r.try_apply(Move::PlayAction { card })?;
+            // Reserves (`Special::GainFoodOrResources`) opens a
+            // `ChoiceKind::FoodOrRes` the instant it's played, with no
+            // ordered action ahead of it (`apply.rs`'s own doc comment: "a
+            // real choice") -- resolve it here, from the SAME line's own
+            // trailing `"produces N food/resources"` clause, rather than
+            // leaving it open for a LATER line to trip over (found by
+            // testing against a real 2p game, `7523818`: an unresolved
+            // `FoodOrRes` blocked a `WonderStep` several lines later --
+            // `trailing_produces`'s own doc comment has the corpus-wide
+            // shape check justifying this fix).
+            if let Some(Pending::Choice(c)) = r.state.pending.top().cloned() {
+                if matches!(c.kind, ChoiceKind::FoodOrRes { .. }) {
+                    let (is_resources, _n) = trailing_produces(raw_text).ok_or_else(|| {
+                        MismatchKind::ParserGap(format!(
+                            "PlayAction {{{}}} opened a FoodOrRes choice but no trailing \"produces\" \
+                             clause found in {raw_text:?}",
+                            card.get().name
+                        ))
+                    })?;
+                    let want = if is_resources { Keyword::Resources } else { Keyword::Food };
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Word(k) if *k == want))
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "FoodOrRes options {:?} do not offer the journal-observed {}",
+                                c.options.as_slice(),
+                                if is_resources { "resources" } else { "food" }
+                            ))
+                        })?;
+                    r.try_apply(Move::Choose { n: n as u8 })?;
+                }
+            }
+            Ok(())
         }
         ActionClass::Destroy | ActionClass::Disband => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("destroy/disband with no resolved card".into()))?;
@@ -1778,6 +1845,22 @@ mod tests {
     fn spent_resources_reads_a_resources_clause_not_a_food_clause() {
         assert_eq!(spent_resources("Purple builds Bronze Purple spends 2 resources"), Some(2));
         assert_eq!(spent_resources("Purple increases population Purple spends 1 food"), None);
+    }
+
+    /// REPLAYER FIX (`docs/REPLAY.md` fifth pass): Reserves' `FoodOrRes`
+    /// pick is glued onto the SAME row as the "plays Reserves" line, not a
+    /// standalone row -- `trailing_produces` reads it from anywhere in the
+    /// text, unlike `parse_standalone_produces` which requires the WHOLE
+    /// line to be nothing else.
+    #[test]
+    fn trailing_produces_reads_a_produces_clause_glued_onto_a_play_line() {
+        assert_eq!(trailing_produces("Orange plays Reserves Orange produces 2 resources"), Some((true, 2)));
+        assert_eq!(trailing_produces("Orange plays Reserves Orange produces 3 food"), Some((false, 3)));
+    }
+
+    #[test]
+    fn trailing_produces_is_none_with_no_produces_clause_at_all() {
+        assert_eq!(trailing_produces("Purple builds Bronze Purple spends 2 resources"), None);
     }
 
     #[test]
