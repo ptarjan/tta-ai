@@ -29,150 +29,19 @@
 //!
 //! ## Data format
 //!
-//! [`RankData`]/[`load_rankdata`]/[`save_rankdata`] define THIS file's own
-//! interface to training-data shards -- not a port of anything (the Python
-//! script reads `.npz`; there is no npz parser here). See [`RankData`]'s own
-//! doc comment for the exact binary layout. It is deliberately narrow (one
-//! file, one purpose) so it can be swapped for whatever the Rust self-play
-//! side lands on without touching backprop; if that lands on master first,
-//! adopt it instead of this one.
+//! Training data is [`super::rankdata::Shard`] (`RKD1`, `f32` rows) --
+//! that format landed on master from the other half of this port
+//! (`rust/src/bots/neural/rankdata.rs`) while this file was being written,
+//! so per the plan this file ADOPTS it rather than defining its own; see
+//! [`Trainer::accumulate_pair`]/[`Trainer::accumulate_value`] for exactly
+//! where the `f32` shard rows get converted to the `f64` this file's
+//! arithmetic runs in (a conversion into a buffer [`Trainer`] owns, not a
+//! fresh allocation per row).
 
 use crate::rng::PyRandom;
 
-use super::net::{layer_norm_stats, push_f64_slice, push_u32, push_u64, relu_inplace, Reader, ValueNet, LAYER_NORM_EPS};
-
-// ============================================================== rank data
-
-/// One training shard: ranking pairs (`xa` chosen, `xb` rejected, over the
-/// same decision) plus value-anchor rows (`xv` state, `yv` its eventual
-/// margin in CULTURE units, i.e. NOT yet divided by `MARGIN_NORM` -- callers
-/// normalise at the point they hand a row to the loss, matching
-/// `neural_train_rank.py`'s `yv_t = torch.tensor(yv / MARGIN_NORM)`).
-///
-/// Rows are stored FLAT (`xa.len() == n_pairs() * in_dim`) rather than as
-/// `Vec<Vec<f64>>`, matching this crate's "flat `Vec` with explicit
-/// strides" idiom (`Cargo.toml` takes no `ndarray`); use [`RankData::row_a`]
-/// etc. rather than indexing by hand.
-///
-/// ## Binary format ([`load_rankdata`]/[`save_rankdata`])
-///
-/// This is THIS FILE's own format, not a port of anything -- the Python
-/// side reads `.npz`. It exists so training can run end to end before the
-/// Rust self-play side (owned by another module) has landed its own
-/// data-generation format; adopt that one instead once it exists.
-///
-/// ```text
-/// magic     8 bytes   b"TTARANK1"
-/// version   u32 LE    1
-/// in_dim    u32 LE
-/// n_pairs   u64 LE
-/// n_value   u64 LE
-/// xa        f64[n_pairs*in_dim] LE
-/// xb        f64[n_pairs*in_dim] LE
-/// xv        f64[n_value*in_dim] LE
-/// yv        f64[n_value] LE
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct RankData {
-    pub in_dim: usize,
-    pub xa: Vec<f64>,
-    pub xb: Vec<f64>,
-    pub xv: Vec<f64>,
-    pub yv: Vec<f64>,
-}
-
-impl RankData {
-    pub fn n_pairs(&self) -> usize {
-        if self.in_dim == 0 {
-            0
-        } else {
-            self.xa.len() / self.in_dim
-        }
-    }
-
-    pub fn n_value(&self) -> usize {
-        self.yv.len()
-    }
-
-    pub fn row_a(&self, i: usize) -> &[f64] {
-        &self.xa[i * self.in_dim..(i + 1) * self.in_dim]
-    }
-
-    pub fn row_b(&self, i: usize) -> &[f64] {
-        &self.xb[i * self.in_dim..(i + 1) * self.in_dim]
-    }
-
-    pub fn row_v(&self, i: usize) -> &[f64] {
-        &self.xv[i * self.in_dim..(i + 1) * self.in_dim]
-    }
-}
-
-const RANKDATA_MAGIC: &[u8] = b"TTARANK1";
-const RANKDATA_VERSION: u32 = 1;
-
-/// Write `data` to `path` in this file's own binary format (see
-/// [`RankData`]'s doc comment). Mainly for tests and for round-tripping
-/// data between the two halves of this port while the Rust-native
-/// data-generation format is still being decided elsewhere.
-pub fn save_rankdata(path: &std::path::Path, data: &RankData) -> Result<(), String> {
-    let n_pairs = data.n_pairs();
-    if data.xa.len() != n_pairs * data.in_dim || data.xb.len() != n_pairs * data.in_dim {
-        return Err("save_rankdata: xa/xb length is not a multiple of in_dim".to_string());
-    }
-    if data.xv.len() != data.yv.len() * data.in_dim {
-        return Err("save_rankdata: xv length does not match yv.len() * in_dim".to_string());
-    }
-    let mut out = Vec::new();
-    out.extend_from_slice(RANKDATA_MAGIC);
-    push_u32(&mut out, RANKDATA_VERSION);
-    push_u32(&mut out, data.in_dim as u32);
-    push_u64(&mut out, n_pairs as u64);
-    push_u64(&mut out, data.n_value() as u64);
-    push_f64_slice(&mut out, &data.xa);
-    push_f64_slice(&mut out, &data.xb);
-    push_f64_slice(&mut out, &data.xv);
-    push_f64_slice(&mut out, &data.yv);
-
-    let tmp = path.with_extension("tmp");
-    if let Some(dir) = path.parent() {
-        if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-    }
-    std::fs::write(&tmp, &out).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Read a shard written by [`save_rankdata`]. Fails loudly (bad magic,
-/// unsupported version, truncated/oversized file) rather than silently
-/// loading a misaligned shape.
-pub fn load_rankdata(path: &std::path::Path) -> Result<RankData, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    parse_rankdata(&bytes).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn parse_rankdata(bytes: &[u8]) -> Result<RankData, String> {
-    let mut r = Reader::new(bytes);
-    let magic = r.take(RANKDATA_MAGIC.len())?;
-    if magic != RANKDATA_MAGIC {
-        return Err(format!("bad magic {magic:?}: not a TTARANK shard"));
-    }
-    let version = r.u32()?;
-    if version != RANKDATA_VERSION {
-        return Err(format!("rankdata version {version} is not supported (this build reads only version {RANKDATA_VERSION})"));
-    }
-    let in_dim = r.u32()? as usize;
-    let n_pairs = r.u64()? as usize;
-    let n_value = r.u64()? as usize;
-    let xa = r.f64_vec(n_pairs * in_dim)?;
-    let xb = r.f64_vec(n_pairs * in_dim)?;
-    let xv = r.f64_vec(n_value * in_dim)?;
-    let yv = r.f64_vec(n_value)?;
-    if !r.at_end() {
-        return Err(format!("rankdata: {} trailing bytes after a well-formed record", bytes.len() - r.pos()));
-    }
-    Ok(RankData { in_dim, xa, xb, xv, yv })
-}
+use super::net::{layer_norm_stats, relu_inplace, ValueNet, LAYER_NORM_EPS, MARGIN_NORM};
+use super::rankdata::{RankPair, ValueRow};
 
 // ================================================================ gradients
 
@@ -703,8 +572,26 @@ pub struct Trainer {
     cache_b: ForwardCache,
     cache_v: ForwardCache,
     scratch: BackScratch,
+    /// `f64` copies of a shard row's `f32` encoding -- [`RankPair`]/
+    /// [`ValueRow`] store `f32` (half the shard's footprint on disk), but
+    /// every arithmetic routine in this file runs in `f64`, so each
+    /// `accumulate_*` call converts into one of these THREE reusable
+    /// buffers rather than allocating a fresh `Vec` per row.
+    conv_a: Vec<f64>,
+    conv_b: Vec<f64>,
+    conv_v: Vec<f64>,
     rng: PyRandom,
     dropout_p: f64,
+}
+
+/// Write `src` (an `f32` shard row) into `dst` (a same-length `f64`
+/// buffer), widening element by element -- the one place a shard row's
+/// storage width and this file's arithmetic width meet.
+fn widen_into(src: &[f32], dst: &mut [f64]) {
+    debug_assert_eq!(src.len(), dst.len());
+    for i in 0..src.len() {
+        dst[i] = src[i] as f64;
+    }
 }
 
 impl Trainer {
@@ -715,7 +602,21 @@ impl Trainer {
         let cache_b = ForwardCache::zeros(&net);
         let cache_v = ForwardCache::zeros(&net);
         let scratch = BackScratch::zeros(net.hidden);
-        Trainer { net, grad, adamw, cache_a, cache_b, cache_v, scratch, rng: PyRandom::new(seed), dropout_p }
+        let in_dim = net.in_dim;
+        Trainer {
+            net,
+            grad,
+            adamw,
+            cache_a,
+            cache_b,
+            cache_v,
+            scratch,
+            conv_a: vec![0.0; in_dim],
+            conv_b: vec![0.0; in_dim],
+            conv_v: vec![0.0; in_dim],
+            rng: PyRandom::new(seed),
+            dropout_p,
+        }
     }
 
     pub fn zero_grad(&mut self) {
@@ -726,30 +627,37 @@ impl Trainer {
         self.adamw.step(&mut self.net, &self.grad);
     }
 
-    /// Forward+backward ONE ranking pair with training-mode dropout,
-    /// scaling its gradient contribution by `lam / n_pairs_in_batch` (so
-    /// accumulating over a whole minibatch then calling [`Self::optim_step`]
-    /// reproduces `loss = lam * rank.mean(); loss.backward()`). Returns the
-    /// pair's own (unscaled) loss value, for the reported running average.
-    pub fn accumulate_pair(&mut self, xa: &[f64], xb: &[f64], lam: f64, n_pairs_in_batch: usize) -> f64 {
-        let va = forward_train(&self.net, xa, self.dropout_p, Some(&mut self.rng), &mut self.cache_a);
-        let vb = forward_train(&self.net, xb, self.dropout_p, Some(&mut self.rng), &mut self.cache_b);
+    /// Forward+backward ONE ranking pair (`pair.chosen` vs `pair.rejected`,
+    /// [`super::rankdata::RankPair`]'s own naming) with training-mode
+    /// dropout, scaling its gradient contribution by `lam /
+    /// n_pairs_in_batch` (so accumulating over a whole minibatch then
+    /// calling [`Self::optim_step`] reproduces `loss = lam * rank.mean();
+    /// loss.backward()`). Returns the pair's own (unscaled) loss value,
+    /// for the reported running average.
+    pub fn accumulate_pair(&mut self, pair: &RankPair, lam: f64, n_pairs_in_batch: usize) -> f64 {
+        widen_into(&pair.chosen, &mut self.conv_a);
+        widen_into(&pair.rejected, &mut self.conv_b);
+        let va = forward_train(&self.net, &self.conv_a, self.dropout_p, Some(&mut self.rng), &mut self.cache_a);
+        let vb = forward_train(&self.net, &self.conv_b, self.dropout_p, Some(&mut self.rng), &mut self.cache_b);
         let (loss, dva, dvb) = rank_pair_loss(va, vb);
         let scale = lam / n_pairs_in_batch as f64;
-        backward_train(&self.net, &self.cache_a, xa, dva * scale, &mut self.grad, &mut self.scratch);
-        backward_train(&self.net, &self.cache_b, xb, dvb * scale, &mut self.grad, &mut self.scratch);
+        backward_train(&self.net, &self.cache_a, &self.conv_a, dva * scale, &mut self.grad, &mut self.scratch);
+        backward_train(&self.net, &self.cache_b, &self.conv_b, dvb * scale, &mut self.grad, &mut self.scratch);
         loss
     }
 
-    /// Forward+backward ONE value-anchor row, `yv_norm` already divided by
-    /// `MARGIN_NORM` (the caller's job, matching `yv / MARGIN_NORM` in the
-    /// Python script), scaling by `vweight / n_rows_in_batch`. Returns the
-    /// row's own (unscaled) loss.
-    pub fn accumulate_value(&mut self, xv: &[f64], yv_norm: f64, vweight: f64, n_rows_in_batch: usize) -> f64 {
-        let pred = forward_train(&self.net, xv, self.dropout_p, Some(&mut self.rng), &mut self.cache_v);
-        let (loss, dpred) = smooth_l1(pred, yv_norm);
+    /// Forward+backward ONE value-anchor row. `row.margin` is CULTURE
+    /// units (as the shard stores it); this divides by [`MARGIN_NORM`]
+    /// itself, matching `yv_t = torch.tensor(yv / MARGIN_NORM)` in the
+    /// Python script. Scales the gradient by `vweight / n_rows_in_batch`;
+    /// returns the row's own (unscaled) loss.
+    pub fn accumulate_value(&mut self, row: &ValueRow, vweight: f64, n_rows_in_batch: usize) -> f64 {
+        widen_into(&row.state, &mut self.conv_v);
+        let target = row.margin as f64 / MARGIN_NORM;
+        let pred = forward_train(&self.net, &self.conv_v, self.dropout_p, Some(&mut self.rng), &mut self.cache_v);
+        let (loss, dpred) = smooth_l1(pred, target);
         let scale = vweight / n_rows_in_batch as f64;
-        backward_train(&self.net, &self.cache_v, xv, dpred * scale, &mut self.grad, &mut self.scratch);
+        backward_train(&self.net, &self.cache_v, &self.conv_v, dpred * scale, &mut self.grad, &mut self.scratch);
         loss
     }
 
@@ -1116,23 +1024,34 @@ mod tests {
         let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 999);
 
         // y = x0 + 2*x1 - x2, a simple linear target the net can fit.
-        let rows: Vec<(Vec<f64>, f64)> = (0..24)
+        // `margin` is stored in CULTURE units (MARGIN_NORM'd back inside
+        // `accumulate_value`, matching real shard rows), so the target is
+        // scaled up here and predictions are scaled back down for the loss
+        // check below.
+        let rows: Vec<ValueRow> = (0..24)
             .map(|i| {
                 let x = tiny_input(1000 + i, in_dim);
                 let y = x[0] + 2.0 * x[1] - x[2];
-                (x, y)
+                ValueRow { state: x.iter().map(|&v| v as f32).collect(), margin: (y * MARGIN_NORM) as f32 }
             })
             .collect();
 
         let mean_loss = |trainer: &Trainer| -> f64 {
-            rows.iter().map(|(x, y)| smooth_l1(predict(&trainer.net, x), *y).0).sum::<f64>() / rows.len() as f64
+            rows.iter()
+                .map(|row| {
+                    let x: Vec<f64> = row.state.iter().map(|&v| v as f64).collect();
+                    let target = row.margin as f64 / MARGIN_NORM;
+                    smooth_l1(predict(&trainer.net, &x), target).0
+                })
+                .sum::<f64>()
+                / rows.len() as f64
         };
         let initial = mean_loss(&trainer);
 
         for _epoch in 0..200 {
             trainer.zero_grad();
-            for (x, y) in &rows {
-                trainer.accumulate_value(x, *y, 1.0, rows.len());
+            for row in &rows {
+                trainer.accumulate_value(row, 1.0, rows.len());
             }
             trainer.optim_step();
         }
@@ -1151,66 +1070,17 @@ mod tests {
         let net = tiny_net(in_dim, 6, 1);
         let xa = tiny_input(501, in_dim); // chosen
         let xb = tiny_input(502, in_dim); // rejected
+        let pair = RankPair { chosen: xa.iter().map(|&v| v as f32).collect(), rejected: xb.iter().map(|&v| v as f32).collect() };
         let mut trainer = Trainer::new(net, 0.0, 5e-3, 0.0, 314);
 
         let before_gap = predict(&trainer.net, &xa) - predict(&trainer.net, &xb);
         for _step in 0..300 {
             trainer.zero_grad();
-            trainer.accumulate_pair(&xa, &xb, 1.0, 1);
+            trainer.accumulate_pair(&pair, 1.0, 1);
             trainer.optim_step();
         }
         let after_gap = predict(&trainer.net, &xa) - predict(&trainer.net, &xb);
         assert!(after_gap > 0.0, "chosen did not end up above rejected: gap={after_gap}");
         assert!(after_gap > before_gap, "gap did not widen: before={before_gap} after={after_gap}");
-    }
-
-    // ------------------------------------------------------- rankdata tests
-
-    /// `load(save(data)) == data` -- `RankData`'s own round-trip property,
-    /// the same guarantee `net.rs`'s checkpoint format has, checked the
-    /// same way.
-    #[test]
-    fn rankdata_round_trip_is_bit_for_bit_exact() {
-        let in_dim = 3;
-        let data = RankData {
-            in_dim,
-            xa: (0..(2 * in_dim)).map(|i| i as f64 * 0.5 - 1.0).collect(),
-            xb: (0..(2 * in_dim)).map(|i| i as f64 * -0.25).collect(),
-            xv: (0..(3 * in_dim)).map(|i| i as f64 * 1.5).collect(),
-            yv: vec![10.0, -20.0, 33.5],
-        };
-        assert_eq!(data.n_pairs(), 2);
-        assert_eq!(data.n_value(), 3);
-
-        let dir = std::env::temp_dir().join(format!("ttarank_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("shard.rankdata");
-        save_rankdata(&path, &data).unwrap();
-        let loaded = load_rankdata(&path).unwrap();
-        assert_eq!(loaded, data);
-        assert_eq!(loaded.row_a(1), data.row_a(1));
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_dir(&dir).ok();
-    }
-
-    /// A shard whose `xa` length is not a multiple of `in_dim` is a
-    /// corrupt/mismatched file, not silently-truncated data -- `save_rankdata`
-    /// refuses to write one in the first place (the cheaper place to catch
-    /// it), and `load_rankdata` independently rejects a version it does not
-    /// recognise, mirroring the checkpoint format's failure mode.
-    #[test]
-    fn load_rankdata_rejects_an_unsupported_version() {
-        let data = RankData { in_dim: 2, xa: vec![1.0, 2.0], xb: vec![3.0, 4.0], xv: vec![], yv: vec![] };
-        let dir = std::env::temp_dir().join(format!("ttarank_test_v_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("bad_version.rankdata");
-        save_rankdata(&path, &data).unwrap();
-        let mut bytes = std::fs::read(&path).unwrap();
-        bytes[8..12].copy_from_slice(&7u32.to_le_bytes());
-        std::fs::write(&path, &bytes).unwrap();
-        let err = load_rankdata(&path).unwrap_err();
-        assert!(err.contains("version 7"), "{err}");
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_dir(&dir).ok();
     }
 }
