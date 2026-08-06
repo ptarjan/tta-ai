@@ -35,26 +35,21 @@
 //! machinery (which exists ONLY to make that cache safe) has no Rust
 //! counterpart to port.
 //!
-//! ## Two known gaps, found while porting, NOT fixed here
+//! ## Two known gaps, found while porting -- BOTH NOW CLOSED
 //!
-//! **Hollywood / Internet culture-on-completion is unpriced.** Wonder
-//! completion culture is priced by calling
+//! ~~**Hollywood / Internet culture-on-completion is unpriced.**~~ CLOSED
+//! 2026-08-05. Wonder completion culture is priced by calling
 //! [`crate::apply::wonder_completion_culture`], the SAME function
 //! `apply.rs`'s own `on_wonder_complete` pays out for real -- one
 //! implementation, so the evaluator and the scorer cannot disagree, exactly
 //! the property the Python module's docstring calls out as the whole point.
-//! That function already carries a NAMED, TESTED gap
-//! (`apply.rs::one_time_culture`, and its own test
-//! `wonder_completion_culture_hollywood_is_a_named_gap`): Hollywood and
-//! Internet score off `effects::building_output` in Python (what the
-//! buildings ACTUALLY produce, modifiers included), and `building_output` is
-//! not ported to `effects.rs` yet, so the Rust function panics for exactly
-//! those two card names. [`on_build_culture`] below guards both names and
-//! returns no rider rather than calling into that panic -- so a Hollywood or
-//! Internet wonder in hand or in the row is priced as if it had no
-//! completion-culture rider at all, understating it by whatever
-//! `building_output` would have said. This is `apply.rs`'s/`effects.rs`'s
-//! gap, not this module's to close; flagged here, and in the port report.
+//! Hollywood and Internet score off `effects::building_output` (what the
+//! buildings ACTUALLY produce, modifiers included) rather than their printed
+//! production, and while that function was unported the Rust one panicked on
+//! exactly those two names, so [`on_build_culture`] skipped them and both
+//! wonders were priced as if they had no completion-culture rider at all.
+//! `building_output` landed in `effects.rs`; the skip is gone and both
+//! differential suites dropped their `WONDER_CULTURE_GAP_CARDS` allowlist.
 //!
 //! ~~**`board_extra`'s per-player-count coefficient is not carried by the
 //! type layer.**~~ CLOSED 2026-08-05. Endowment for the Arts / Wave of
@@ -569,13 +564,16 @@ pub fn government_plans(name: CardId, state: &GameState, idx: u8) -> (Vec<Triple
 // ----------------------------------------------------------- wonder riders
 
 /// `_on_build_culture`: the four Age III wonders' one-time completion
-/// culture. See this module's top doc comment for the Hollywood/Internet
-/// gap this guards against.
+/// culture. Calls [`crate::apply::wonder_completion_culture`], the same
+/// function `apply.rs` pays out for real, so the evaluator and the scorer
+/// cannot disagree -- the property Python's docstring calls the whole point.
+///
+/// This used to special-case Hollywood and Internet out, back when
+/// `effects::building_output` was unported and that function panicked on
+/// them. It is ported, they are priced, and the guard is gone (2026-08-05);
+/// both differential suites dropped their `WONDER_CULTURE_GAP_CARDS`
+/// allowlist in the same change.
 fn on_build_culture(p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
-    let base = name.get().base_name;
-    if base == "Hollywood" || base == "Internet" {
-        return;
-    }
     let got = apply::wonder_completion_culture(p, name);
     if got != 0 {
         out.push((Feature::Culture, got as f64, Kind::Gain));

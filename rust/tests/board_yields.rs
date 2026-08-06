@@ -12,12 +12,13 @@
 //! stay small and neither duplicates the other's job.
 //!
 //! Every card of a type any entry point prices is checked, for every live
-//! player, on every sampled state -- see `rust/src/bots/board_yields.rs`'s
-//! top doc comment for the one remaining known, already-flagged gap
-//! ([`WONDER_CULTURE_GAP_CARDS`]) this test allowlists rather than silently
-//! absorbing into a passing run. [`BOARD_EXTRA_CARDS`] used to be a second
-//! one (`BOARD_EXTRA_GAP_CARDS`, hard-asserted empty) -- closed 2026-08-05,
-//! now an ordinary real-value comparison like every other entry point.
+//! player, on every sampled state, with NO allowlist and NO exclusion --
+//! both of the two this file used to carry are closed (2026-08-05):
+//! `BOARD_EXTRA_GAP_CARDS` once `gen_cards.py` gave the per-player-count
+//! specials a real payload, and `WONDER_CULTURE_GAP_CARDS` (Hollywood /
+//! Internet completion culture) once `effects::building_output` was ported.
+//! Both are now ordinary real-value comparisons like every other entry
+//! point. Nothing here is skipped; keep it that way.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,16 +36,6 @@ fn fixtures_dir() -> PathBuf {
 fn expected_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/board_yields_fixtures")
 }
-
-/// Wonders whose completion culture this port cannot yet price -- see
-/// `board_yields.rs`'s top doc comment: Hollywood/Internet need
-/// `effects::building_output`, unported. `board_yields(name, ...)` for these
-/// two is checked to still AGREE on the `Stats`-diff and `wonders`/
-/// `resource_stock` cost triples (a partial compare would need re-deriving
-/// which triples are affected, so this test skips them wholesale rather than
-/// silently accepting a partial credit that could mask a real regression
-/// elsewhere in the same triple list).
-const WONDER_CULTURE_GAP_CARDS: &[&str] = &["Hollywood", "Internet"];
 
 /// The 3 cards `board_extra` has anything to say about (mirrors
 /// `engine/bots/board_yields.py`'s own `_EXTRA_CARDS`/`tools/
@@ -165,9 +156,6 @@ fn check_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Js
     for id in all_cards().filter(|&id| by::is_swap_type(id.kind())) {
         report.checked += 1;
         let name = id.name();
-        if id.kind() == CardType::Wonder && WONDER_CULTURE_GAP_CARDS.contains(&name) {
-            continue; // named gap -- see the module doc comment above.
-        }
         let category = match id.kind() {
             CardType::Leader => "leader",
             CardType::Government => "government",

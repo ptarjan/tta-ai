@@ -396,17 +396,12 @@ struct ValuationReport {
 /// a real caller reuses one buffer across a whole hand/row loop -- see
 /// `cards::card_potential`'s own doc comment), which the other three tables
 /// do not need but `FnMut` accepts either way.
-///
-/// Skips [`WONDER_CULTURE_GAP_CARDS`] -- see that constant's own doc comment.
 fn check_named_table(label: &str, mut got: impl FnMut(CardId) -> f64, table: &Json, report: &mut ValuationReport, ctx: &str) {
     let Some(Json::Obj(fields)) = table.get(label) else {
         report.mismatches.push(format!("{ctx}: missing {label} table"));
         return;
     };
     for (name, want_json) in fields {
-        if WONDER_CULTURE_GAP_CARDS.contains(&name.as_str()) {
-            continue;
-        }
         let Some(id) = CardId::by_name(name) else {
             report.mismatches.push(format!("{ctx}: {label}[{name}]: not a Rust CardId"));
             continue;
@@ -419,20 +414,6 @@ fn check_named_table(label: &str, mut got: impl FnMut(CardId) -> f64, table: &Js
         }
     }
 }
-
-/// Wonders whose completion culture `board_yields::board_yields`'s swap diff
-/// cannot yet price -- `effects::building_output`, which `on_build_culture`
-/// (`board_yields.rs`) needs for these two names, is not ported. Mirrors
-/// `rust/tests/board_yields.rs`'s own `WONDER_CULTURE_GAP_CARDS` allowlist
-/// exactly (same root cause, one layer up): `card_potential`'s board-aware
-/// branch for a Wonder calls `board_yields::board_yields` directly, and
-/// `wonder_potential`'s board-aware branch does too, so both inherit the
-/// identical gap. Not this pass's to close (`apply.rs`/`effects.rs`'s
-/// `building_output`, out of `weighted.py` lines 1730-3211 entirely) --
-/// allowlisted here for the same reason `board_yields.rs`'s own test does,
-/// so the gap stays visible and named rather than silently passing OR
-/// silently failing every run.
-const WONDER_CULTURE_GAP_CARDS: &[&str] = &["Hollywood", "Internet"];
 
 fn check_valuation_player(path: &Path, ply: u32, state: &GameState, idx: u8, expected: &Json, report: &mut ValuationReport) {
     let ctx = format!("{}: ply {ply} player {idx}", path.display());
@@ -474,21 +455,17 @@ fn check_valuation_player(path: &Path, ply: u32, state: &GameState, idx: u8, exp
         check_named_table("tech_value", |id| cards::tech_value(id, state, idx, &w, 1.0, None), rec, report, &vctx);
         check_named_table("gov_value", |id| cards::gov_value(id, state, idx, &w, None), rec, report, &vctx);
 
-        // `wonder_potential` inherits the same `WONDER_CULTURE_GAP_CARDS` gap
-        // as `card_potential` (its board-aware branch calls the same
-        // `board_yields::board_yields` swap diff) whenever the wonder
-        // actually IN PROGRESS is one of the two gap cards -- skipped here,
-        // not compared, for the reason `check_named_table` skips them.
-        let wonder_name = state.players[idx as usize].wonder;
-        let wonder_has_gap = !wonder_name.is_none() && WONDER_CULTURE_GAP_CARDS.contains(&wonder_name.name());
-        let mut checks = vec![
+        // `wonder_potential` used to be skipped whenever the wonder actually
+        // in progress was Hollywood or Internet, inheriting `board_yields`'s
+        // unpriced-completion-culture gap through the same swap diff. That
+        // gap closed 2026-08-05 (`effects::building_output` is ported), so
+        // this is an ordinary comparison like the three beside it.
+        let checks = [
             ("hand_potential", cards::hand_potential(state, idx, &w)),
             ("hand_mil_potential", cards::hand_mil_potential(state, idx, &w)),
             ("rival_hand_potential", cards::rival_hand_potential(state, idx, &w)),
+            ("wonder_potential", cards::wonder_potential(state, idx, &w)),
         ];
-        if !wonder_has_gap {
-            checks.push(("wonder_potential", cards::wonder_potential(state, idx, &w)));
-        }
         for (label, got) in checks {
             report.checked += 1;
             let want = rec.get(label).and_then(Json::as_f64).unwrap_or(f64::NAN);
