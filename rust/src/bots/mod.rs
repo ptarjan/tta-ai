@@ -107,10 +107,28 @@
 //!   fabricate by hand -- for free, by construction, with no pool, no
 //!   "used" flag and no reset to write. `bots/quiescent.rs` calls
 //!   [`crate::apply::apply`] directly and needs no rng parameter to do it.
+//!
+//! ## `engine/bots/__init__.py`'s own `_pick_journalled`/`USE_JOURNAL`
+//!
+//! `GreedyBot.pick` (`engine/bots/__init__.py`, now ported to
+//! [`greedy::GreedyBot`]) branches on `USE_JOURNAL` exactly like every other
+//! search bot above, calling a `_pick_journalled` that is line-for-line the
+//! same search as the copy path with `journal.begin`/`journal.rollback`
+//! swapped in for `fastcopy.copy_state`. Recorded here, by name, because
+//! `bots/__init__.py` is the last module of `engine/bots/` with real
+//! gameplay content and is about to stop existing anywhere to grep: the
+//! reasoning is identical to every case above -- no `journal.rs` exists in
+//! this port, `GameState::clone` is the one search mechanism, so there is
+//! nothing left for `USE_JOURNAL` to select between. `greedy.rs`'s own top
+//! doc comment gives the point-by-point account of what else `pick` dropped
+//! alongside it (the per-candidate `try`/`except`, and `self.rng`/`seed`/
+//! `name`, which -- unlike every bot above -- `GreedyBot.pick` never even
+//! read through a `best is None` fallback in the first place).
 
 pub mod board_yields;
 pub mod book;
 pub mod counting;
+pub mod greedy;
 pub mod neural;
 pub mod pending;
 pub mod plan;
