@@ -2306,4 +2306,39 @@ mod tests {
             "the one-time effect is never undone"
         );
     }
+
+    /// A single player can win every colonization auction in the game without
+    /// `colonies` overflowing. §11 has no rule capping how many colonies one
+    /// player may hold, and `card_table.rs` prints exactly 12 territory cards
+    /// for the whole game (6 Age I + 6 Age II, `count: [1, 1, 1]` each) --
+    /// nobody else ever needs to contest an auction for one player to end up
+    /// holding all 12. This is not hypothetical: production's trained 4p
+    /// champion hits exactly this (`gain_colony` pushing a 9th colony into a
+    /// `CardList<8>`, `debug_assert!` message "CardList<8> overflow",
+    /// 2026-08-06) because its policy rarely contests colonization. Before
+    /// the `colonies: CardList<8>` -> `CardList<12>` fix this panics on the
+    /// 9th push; confirmed by reverting the field and re-running.
+    #[test]
+    fn one_player_can_win_every_colonization_auction_in_the_game() {
+        let all_territories = [
+            "Vast Territory (I)",
+            "Wealthy Territory (I)",
+            "Inhabited Territory (I)",
+            "Strategic Territory (I)",
+            "Historic Territory (I)",
+            "Developed Territory (I)",
+            "Vast Territory (II)",
+            "Wealthy Territory (II)",
+            "Inhabited Territory (II)",
+            "Strategic Territory (II)",
+            "Historic Territory (II)",
+            "Developed Territory (II)",
+        ];
+        assert_eq!(all_territories.len(), 12, "every territory card in the base game");
+        let mut state = blank_state(2);
+        for name in all_territories {
+            gain_colony(&mut state, 0, card(name));
+        }
+        assert_eq!(state.players[0].colonies.len(), 12);
+    }
 }

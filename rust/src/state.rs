@@ -330,7 +330,20 @@ impl<const N: usize> CardList<N> {
 
     #[inline]
     pub fn push(&mut self, id: CardId) {
-        debug_assert!((self.len as usize) < N, "CardList<{N}> overflow");
+        // A real `assert!`, not `debug_assert!` (2026-08-06, after the
+        // `colonies: CardList<8>` overflow crashed the 4p league): the
+        // `self.items[self.len as usize] = id` line below is safe Rust array
+        // indexing, so release builds ALREADY bounds-check it -- that check
+        // is what actually fired in production ("index out of bounds: the
+        // len is 8 but the index is 8"), not this line, which compiles out
+        // under `panic = "abort"` + no `debug-assertions`. So this `assert!`
+        // adds no NEW safety net, only a message that names the struct
+        // (`CardList<{N}> overflow`) instead of a bare index; measured via
+        // `tests/suite/bench_playout.rs` (3x500 4p games, `assert!` vs
+        // `debug_assert!` in an otherwise-identical release build): within
+        // noise, ~475 games/s either way. Not worth losing the diagnosis
+        // time back for.
+        assert!((self.len as usize) < N, "CardList<{N}> overflow");
         self.items[self.len as usize] = id;
         self.len += 1;
     }
@@ -387,7 +400,15 @@ pub struct PlayerState {
     /// The wonder under construction and how many steps are paid for.
     pub wonder: CardId,
     pub wonder_steps: u8,
-    pub completed_wonders: CardList<8>,
+    /// Append-only (see the doc on [`Self::destroyed_wonders`]) and unique per
+    /// card -- `card_table.rs` prints exactly one copy of each of the 16 base-
+    /// game wonders (`count: [1, 1, 1]` on every `CardType::Wonder` entry, all
+    /// ages, checked 2026-08-06), so one player completing every wonder in the
+    /// game (nobody else ever builds one) is the worst case, not 8 of them.
+    /// `CardList<8>` overflowed here in the wild via the sibling field
+    /// [`Self::colonies`] (see its own doc); raised alongside it rather than
+    /// waiting for a second incident to prove the same math.
+    pub completed_wonders: CardList<16>,
     /// Destroyed wonders still count toward the row take surcharge (§2.3).
     ///
     /// Always 0 in the 2015 base game, and that is correct, not a gap. Nothing
@@ -405,8 +426,26 @@ pub struct PlayerState {
     pub tactic: CardId,
     /// Tactic still in my play area rather than public.
     pub tactic_exclusive: bool,
-    pub colonies: CardList<8>,
-    pub flipped_wonders: CardList<8>,
+    /// Territory cards won at colonization auctions (§11.5), append-only --
+    /// nothing here removes an entry (`Annex` moves one to a NEW owner via
+    /// [`crate::interact::lose_colony`] on the LOSING side and a fresh
+    /// `push` on the gaining side, it never shrinks the winner's own list).
+    /// `card_table.rs` prints exactly 12 territory cards total for the whole
+    /// game (6 Age I + 6 Age II, `count: [1, 1, 1]` each, checked 2026-08-06)
+    /// -- there is no rule capping how many one player may hold, so the true
+    /// worst case is one player winning every colonization auction in the
+    /// game. CONFIRMED REACHABLE, not hypothetical: this is the field that
+    /// overflowed `CardList<8>` in production (`interact::gain_colony`,
+    /// 2026-08-06) -- the trained 4p champion's policy contests colonization
+    /// auctions so rarely that a single player routinely wins 9+ of the 12
+    /// against it. See `gain_colony`'s own test module for the regression
+    /// test.
+    pub colonies: CardList<12>,
+    /// Always a subset of [`Self::completed_wonders`] (`interact.rs`'s
+    /// `Special::FlipCompletedWonder` handler only pushes a wonder here that
+    /// is already IN `completed_wonders`), so it shares that field's 16-wonder
+    /// capacity rather than needing its own separate bound.
+    pub flipped_wonders: CardList<16>,
     /// §2.5/§9.1: every age a leader has EVER been taken in, across the
     /// whole game -- bit `card.age as u8` set the moment a leader of that
     /// age is taken (`take_card`), never cleared, even once that leader is
@@ -474,7 +513,26 @@ pub struct PlayerState {
     pub politics_done: bool,
     /// At most one tactic play/copy per phase.
     pub tactic_action_used: bool,
-    pub taken_this_turn: CardList<8>,
+    /// Reset at the start of MY next turn (`game.rs`/`economy.rs`), so unlike
+    /// [`Self::colonies`]/[`Self::completed_wonders`] this does NOT need a
+    /// whole-game bound -- but 8 is still too tight for one accumulation
+    /// window. Stackable civil-action sources that survive to the SAME
+    /// window (checked against every nonzero `civil_actions` in
+    /// `card_table.rs`, 2026-08-06): government max 7 (Republic/Communism/
+    /// Democracy) + best same-icon SpecialTech +2 (Civil Service; Code of
+    /// Laws/Justice System are the same Law icon so §7.6 keeps only one) +
+    /// both civil-action wonders +2 (Pyramids, Kremlin -- wonders aren't
+    /// icon-gated against each other) + Hammurabi's once-per-turn MA-as-CA
+    /// conversion +1 (`costs::spare_ca`) = 12 in a single turn if every
+    /// civil action that turn is spent taking an `Action`-kind card from the
+    /// row. On top of that, International Agreement (`card_table.rs`, one
+    /// copy in the whole game) grants the strongest player a ONE-TIME
+    /// `optional_take_cards_with_civil_actions: 5` side pool
+    /// (`interact::offer_take_row`) that is not charged against
+    /// `civil_actions` at all, so it can land in the same window as a
+    /// player's own maxed-out turn (it fires off another player's Politics
+    /// Phase reveal, before this player's own next-turn reset). 12 + 5 = 17.
+    pub taken_this_turn: CardList<17>,
     /// Civil actions spent THIS TURN reaching into the card row (§2.3 slot cost
     /// plus the wonder surcharge / Hammurabi discount). Nothing in the rules
     /// reads it, but the evaluator cannot see how a civil action was spent, and
