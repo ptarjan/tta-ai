@@ -53,6 +53,8 @@
 //! moot anyway, since a recent encoder-width change (1907 -> 1906) already
 //! invalidated every checkpoint that predates this module.
 
+use super::encode::ENCODING_DIM;
+
 /// NUMERICAL GUARD, not a model claim -- see Python's own extensive comment
 /// on this constant (`neural_net.py:31-41`) for the full "this is a linear
 /// normaliser on the regression target, not the league's tanh squash width"
@@ -434,6 +436,18 @@ fn parse_checkpoint(bytes: &[u8]) -> Result<(ValueNet, Vec<(String, f64)>), Stri
         return Err(format!("checkpoint version {version} is not supported (this build reads only version {CHECKPOINT_VERSION})"));
     }
     let in_dim = r.u32()? as usize;
+    // The encoder's width changed once already (1907 -> 1906) with nothing
+    // checking that a checkpoint's `in_dim` and the encoder's current width
+    // still agreed -- a stale checkpoint parsed cleanly and produced a
+    // `ValueNet` whose first mismatched `forward` call panicked deep inside
+    // `linear`'s arithmetic instead of failing loudly here, at load time,
+    // by name. Mirrors `rankdata::read_shard`'s `dim != ENCODING_DIM` guard.
+    if in_dim != ENCODING_DIM {
+        return Err(format!(
+            "checkpoint in_dim {in_dim} does not match this build's encoder width {ENCODING_DIM} -- \
+             this checkpoint was trained against a different encoder, do not load it as-is"
+        ));
+    }
     let hidden = r.u32()? as usize;
     let n_blocks = r.u32()? as usize;
 
@@ -611,12 +625,18 @@ mod tests {
     /// every field a distinct value, so a bug that swaps two same-shaped
     /// fields (e.g. `fc1_w`/`fc2_w`, or block 0 with block 1) would fail
     /// this rather than hide behind coincidentally-equal test fixtures.
+    ///
+    /// `in_dim` is [`ENCODING_DIM`], not some small placeholder, because
+    /// `load_checkpoint` now refuses any other width (see
+    /// `a_checkpoint_saved_at_one_encoder_width_refuses_to_load_at_another`
+    /// below) -- every test that round-trips through `load_checkpoint` needs
+    /// a net this check accepts.
     fn sample_net_for_round_trip() -> ValueNet {
         let mk = |base: f64, n: usize| (0..n).map(|i| base + i as f64 * 0.01).collect::<Vec<f64>>();
         ValueNet {
-            in_dim: 4,
+            in_dim: ENCODING_DIM,
             hidden: 3,
-            stem_w: mk(1.0, 12),
+            stem_w: mk(1.0, 3 * ENCODING_DIM),
             stem_b: mk(2.0, 3),
             stem_ln_gamma: mk(3.0, 3),
             stem_ln_beta: mk(4.0, 3),
@@ -696,6 +716,39 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let err = load_checkpoint(&path).unwrap_err();
         assert!(err.contains("truncated"), "{err}");
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    /// The bug this check exists to make impossible: the encoder's width
+    /// changed once already (1907 -> 1906) with nothing checking that a
+    /// checkpoint's `in_dim` and the encoder's current width still agreed,
+    /// so a stale checkpoint parsed cleanly and produced a `ValueNet`
+    /// carrying the wrong `in_dim` -- the mismatch only surfaced later, as
+    /// an `assert_eq!` panic deep inside `forward`, instead of a clear
+    /// error at load time. Hand-assemble a checkpoint whose header claims a
+    /// width one wider than [`ENCODING_DIM`] (rather than reusing
+    /// `sample_net_for_round_trip`, which is now pinned at the real width)
+    /// and confirm `load_checkpoint` refuses it by name rather than
+    /// misinterpreting the byte stream or returning a mis-sized net.
+    #[test]
+    fn a_checkpoint_saved_at_one_encoder_width_refuses_to_load_at_another() {
+        let mut net = sample_net_for_round_trip();
+        let bad_dim = ENCODING_DIM + 1;
+        // Give the net the bad width and matching-length weight vectors so
+        // `save_checkpoint` (which has no opinion on `in_dim`) writes a
+        // well-formed file; the check under test lives entirely in load.
+        net.in_dim = bad_dim;
+        net.stem_w = vec![0.0; net.hidden * bad_dim];
+        let dir = std::env::temp_dir().join(format!("ttanet_test_dim_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wrong_width.ckpt");
+        save_checkpoint(&path, &net, &[]).unwrap();
+        let err = load_checkpoint(&path).unwrap_err();
+        assert!(
+            err.contains(&bad_dim.to_string()) && err.contains(&ENCODING_DIM.to_string()),
+            "error should name both widths, got: {err}"
+        );
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
     }
