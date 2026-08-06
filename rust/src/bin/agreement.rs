@@ -68,38 +68,43 @@
 //! Columns, in order:
 //!
 //! 1. `game_id`
-//! 2. `players` (2/3/4)
-//! 3. `age` (`A`/`I`/`II`/`III`/`IV` -- `GameState::age_civil` at the
+//! 2. `tier` (BGO's own skill ladder for this game -- `Prince`/`King`/
+//!    `Warlord`/`Emperor`, `index.tsv`'s `level` column, already parsed by
+//!    `corpus::GameMeta::tier`; NOT a proxy -- no stand-in like score or
+//!    game length is used when this column is genuinely absent, see
+//!    `docs/AGREEMENT.md`)
+//! 3. `players` (2/3/4)
+//! 4. `age` (`A`/`I`/`II`/`III`/`IV` -- `GameState::age_civil` at the
 //!    decision point, the engine's own structural age tracker, not a
 //!    re-parse of the journal's own age column)
-//! 4. `round` (`GameState::round`)
-//! 5. `lineno` (the journal line this decision was translated from -- go
+//! 5. `round` (`GameState::round`)
+//! 6. `lineno` (the journal line this decision was translated from -- go
 //!    back to `sources/bgo/journals/<game_id>.tsv` with this to see the raw
 //!    human text, or feed `game_id`/this to a future "print the board at
 //!    this point" tool built on the same `Decision::state` snapshot)
-//! 6. `category` (see [`Category`] below)
-//! 7. `agreed` (`true`/`false` -- did the bot's own #1 ranked move equal the
+//! 7. `category` (see [`Category`] below)
+//! 8. `agreed` (`true`/`false` -- did the bot's own #1 ranked move equal the
 //!    human's)
-//! 8. `human_rank` (1-indexed position of the human's actual move in the
+//! 9. `human_rank` (1-indexed position of the human's actual move in the
 //!    bot's own ranked order, or the literal text `uncounted` -- see
 //!    [`Category`]'s sibling note: this should never actually print
 //!    `uncounted` in practice, since `human_move` is always drawn from
 //!    `legal_moves` by construction, but the column exists per this
 //!    project's own instruction rather than silently asserting instead)
-//! 9. `legal_count` (size of the legal-move list at this point -- context
-//!    for how meaningful "rank 3 of 4" vs "rank 3 of 40" is)
-//! 10. `discard_tainted` (`true`/`false` -- see the module doc's "Discard
+//! 10. `legal_count` (size of the legal-move list at this point -- context
+//!     for how meaningful "rank 3 of 4" vs "rank 3 of 40" is)
+//! 11. `discard_tainted` (`true`/`false` -- see the module doc's "Discard
 //!     caveat")
-//! 11. `human_move` (`{:?}` of the `Move` the human actually played)
-//! 12. `bot_top_move` (`{:?}` of the bot's own #1 ranked move)
-//! 13. `human_score` (the bot's own `evaluate` score for the human's move)
-//! 14. `bot_top_score` (the bot's own `evaluate` score for its #1 move)
+//! 12. `human_move` (`{:?}` of the `Move` the human actually played)
+//! 13. `bot_top_move` (`{:?}` of the bot's own #1 ranked move)
+//! 14. `human_score` (the bot's own `evaluate` score for the human's move)
+//! 15. `bot_top_score` (the bot's own `evaluate` score for its #1 move)
 //!
 //! Example line (fields separated by real tabs, shown here with visible gaps
 //! for readability):
 //!
 //! ```text
-//! 7523818  2  I  7  107  other  false  3  5  false  Bid { n: 3 }  BidPass  12.04  14.87
+//! 7523818  Emperor  2  I  7  107  bid  false  3  5  false  Bid { n: 3 }  BidPass  12.04  14.87
 //! ```
 
 use std::collections::HashMap;
@@ -124,22 +129,35 @@ use tta::Move;
 /// `Move` variant must be placed here explicitly rather than silently
 /// falling into `Other`.
 ///
+/// `Build` covers `Move::Build` AND `Move::Develop`/`Move::Upgrade` --
+/// revised from phase 1's original mapping (which put `Develop`/`Upgrade` in
+/// `Other`) after the phase-2 brief's own review: developing a technology or
+/// upgrading a farm/mine/unit is a building action under TTA's rules (§3,
+/// §4), not a structurally different decision, so folding them in gives
+/// `build` its true volume instead of splintering it across three buckets.
+///
+/// `Bid` is a first-class category (also new in phase 2, split out of
+/// `Other`) specifically BECAUSE `docs/HUMAN_PLAY.md`'s census flags "4p bot
+/// barely contests colonization auctions" as a live, named finding -- that
+/// claim can only be tested at the move level (does the bot's own ranking
+/// actually disfavour bidding, or does something else block it) if `Bid`/
+/// `BidPass` decisions are visible as their own bucket rather than buried in
+/// `Other` alongside unrelated things.
+///
 /// What actually lands in `Other`, given `replay.rs`'s current coverage
-/// (see its own module doc for what it does and does not translate): technology
-/// development (`Develop`), unit/production upgrades (`Upgrade`), a leader's
-/// own destroy/disband effect (`Destroy`), playing a plain action card
-/// (`PlayAction` -- distinct from the `FreeCivil`-granting `PlayAction` that
-/// immediately precedes a `Build`, which is still recorded as its own
-/// decision point, separately, and separately bucketed as `Build`),
-/// territory-auction bidding (`Bid`/`BidPass`), and four narrow
-/// `Pending::Choice` resolutions folded into one journal line
+/// (see its own module doc for what it does and does not translate): a
+/// leader's own destroy/disband effect (`Destroy`), playing a plain action
+/// card (`PlayAction` -- distinct from the `FreeCivil`-granting `PlayAction`
+/// that immediately precedes a `Build`, which is still recorded as its own
+/// decision point, separately, and separately bucketed as `Build`), and
+/// three narrow `Pending::Choice` resolutions folded into one journal line
 /// (`FreeBuild`/`FreeCivil`/`FoodOrRes`/`DestroyOwn` -- see
-/// [`categorize_choice`]). None of these map cleanly onto this brief's nine
-/// named buckets; none is currently reached via any OTHER `ChoiceKind`
-/// either (`GainBlock`/`DiscardMilitary`/`Raid`/`Annex`/`Infiltrate`/
-/// `TakeRow`/`WarTech`/`PlunderSplit` are all resolved by `replay_common.rs`
-/// via `apply::apply` directly, never through the recorded `try_apply` path
-/// -- see that module's doc).
+/// [`categorize_choice`]). None of these map cleanly onto this brief's named
+/// buckets; none is currently reached via any OTHER `ChoiceKind` either
+/// (`GainBlock`/`DiscardMilitary`/`Raid`/`Annex`/`Infiltrate`/`TakeRow`/
+/// `WarTech`/`PlunderSplit` are all resolved by `replay_common.rs` via
+/// `apply::apply` directly, never through the recorded `try_apply` path --
+/// see that module's doc).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Category {
     TakeCard,
@@ -150,6 +168,7 @@ enum Category {
     AggressionOrWar,
     Pact,
     Tactics,
+    Bid,
     EndTurn,
     Other,
 }
@@ -165,6 +184,7 @@ impl Category {
             Category::AggressionOrWar => "aggression_or_war",
             Category::Pact => "pact",
             Category::Tactics => "tactics",
+            Category::Bid => "bid",
             Category::EndTurn => "end_turn",
             Category::Other => "other",
         }
@@ -215,21 +235,18 @@ fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
     use Move::*;
     match mv {
         Take { .. } => Category::TakeCard,
-        Build { .. } => Category::Build,
+        Build { .. } | Develop { .. } | Upgrade { .. } => Category::Build,
         Pop | PopFree => Category::IncreasePopulation,
         PlayLeader { .. } | WonderStep { .. } => Category::LeaderOrWonderStep,
         Revolution { .. } | PolPass => Category::PoliticalAction,
         War { .. } | Aggression { .. } => Category::AggressionOrWar,
         OfferPact { .. } => Category::Pact,
         PlayTactic { .. } | CopyTactic { .. } => Category::Tactics,
+        Bid { .. } | BidPass => Category::Bid,
         EndTurn => Category::EndTurn,
         Choose { .. } => categorize_choice(pre_move_pending),
-        Develop { .. }
-        | Upgrade { .. }
-        | Destroy { .. }
+        Destroy { .. }
         | PlayAction { .. }
-        | Bid { .. }
-        | BidPass
         | CancelPact { .. }
         | PrepareEvent { .. }
         | RemoveLeaderYellow
@@ -256,7 +273,7 @@ fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
 /// rather than recomputed by the caller, so `bot.rank_moves` (a full 1-ply
 /// search over every candidate) runs exactly once per decision point, not
 /// twice.
-fn print_decision(game_id: &str, d: &Decision, bot: &WeightedBot) -> bool {
+fn print_decision(game_id: &str, tier: &str, d: &Decision, bot: &WeightedBot) -> bool {
     let ranked = bot.rank_moves(&d.state, &d.legal_moves);
     let category = categorize(d.state.pending.top(), d.human_move);
     let human_rank = ranked.iter().position(|&(mv, _)| mv == d.human_move);
@@ -276,7 +293,7 @@ fn print_decision(game_id: &str, d: &Decision, bot: &WeightedBot) -> bool {
         None => ("none".to_string(), f64::NAN),
     };
     println!(
-        "{game_id}\t{}\t{:?}\t{}\t{}\t{}\t{agreed}\t{human_rank_field}\t{}\t{}\t{:?}\t{bot_top_move}\t{}\t{bot_top_score}",
+        "{game_id}\t{tier}\t{}\t{:?}\t{}\t{}\t{}\t{agreed}\t{human_rank_field}\t{}\t{}\t{:?}\t{bot_top_move}\t{}\t{bot_top_score}",
         d.state.num_players,
         d.state.age_civil,
         d.state.round,
@@ -329,7 +346,7 @@ fn run(index_path: &str, journals_dir: &str, weights_dir: &str, ids: &[String]) 
         let n = result.decisions.len();
         let mut agreed_n = 0usize;
         for d in &result.decisions {
-            if print_decision(&meta.id, d, bot) {
+            if print_decision(&meta.id, meta.tier.as_str(), d, bot) {
                 agreed_n += 1;
             }
         }
@@ -396,13 +413,17 @@ mod tests {
     }
 
     #[test]
-    fn categorize_buckets_develop_upgrade_destroy_and_bid_as_other() {
-        assert_eq!(categorize(None, Move::Develop { card: card("Bronze") }), Category::Other);
-        assert_eq!(categorize(None, Move::Upgrade { from: card("Bronze"), to: card("Iron") }), Category::Other);
+    fn categorize_buckets_develop_upgrade_as_build_bid_as_bid_and_the_rest_as_other() {
+        // Revised in phase 2: Develop/Upgrade are building actions under
+        // TTA's rules, and Bid/BidPass get their own bucket so the
+        // colonization-auction census finding is testable at the move
+        // level -- see the module doc above `Category` for the rationale.
+        assert_eq!(categorize(None, Move::Develop { card: card("Bronze") }), Category::Build);
+        assert_eq!(categorize(None, Move::Upgrade { from: card("Bronze"), to: card("Iron") }), Category::Build);
+        assert_eq!(categorize(None, Move::Bid { n: 3 }), Category::Bid);
+        assert_eq!(categorize(None, Move::BidPass), Category::Bid);
         assert_eq!(categorize(None, Move::Destroy { card: card("Bronze") }), Category::Other);
         assert_eq!(categorize(None, Move::PlayAction { card: card("Reserves (I)") }), Category::Other);
-        assert_eq!(categorize(None, Move::Bid { n: 3 }), Category::Other);
-        assert_eq!(categorize(None, Move::BidPass), Category::Other);
     }
 
     /// A `Move::Choose` resolving an open `PactOffer` pending is bucketed as
