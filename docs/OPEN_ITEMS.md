@@ -73,6 +73,20 @@ deliberately, so the league would climb them. It never has, on any of the
 three live champions. Is this worth a dedicated Python-league push now, or
 does it wait for Rust to get its own self-play loop?
 
+**Should the Rust evaluator get a `has_unit` cliff feature?** Commit
+`2713037` on `origin/has-unit-ab` adds 9 lines to `engine/bots/weighted.py`
+on the argument that owning your *first* military unit is a cliff, not a
+slope: a player at zero units is dropped from every aggression auction
+before they get a decision, so unit #1 is worth far more than unit #5, and
+the linear `unit_workers` coordinate cannot express that. It was parked
+pending a 3p/4p no-harm A/B — the offline-batch workflow that has since
+been retired in favour of landing on master and reading the league runs.
+It lives only in Python, so it dies with the `engine/` tree unless it is
+ported. Three ways out: port it into `rust/src/bots/weighted/` seeded at
+0.0 and let the league price it; port it live at the branch's value; or
+drop the branch. This is a call about what the bot *values*, so it is not
+an engineering decision.
+
 ## Open engineering items
 
 ### Card pricing (mirrored unfixed into Rust — cite is `engine/bots/weighted.py`
