@@ -27,6 +27,7 @@ pub mod effects;
 pub mod events;
 pub mod fixtures;
 pub mod game;
+pub mod harness;
 pub mod interact;
 pub mod moves;
 pub mod rng;

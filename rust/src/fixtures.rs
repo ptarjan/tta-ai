@@ -78,6 +78,89 @@ impl Json {
             _ => None,
         }
     }
+
+    /// Build an object from `(key, value)` pairs, in the order given --
+    /// `Json::Obj` keeps insertion order (see this type's doc comment), so
+    /// that order is exactly what [`Json::to_string`] prints. Callers that
+    /// want `harness::record`'s JSONL to read like the Python original's
+    /// dataclass-field order should pass pairs in that order.
+    pub fn obj(fields: Vec<(&str, Json)>) -> Json {
+        Json::Obj(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
+    /// The write side of this module: turn a [`Json`] back into text.
+    /// [`harness::record`]'s append-only game log is the reason this exists
+    /// -- `serde_json` is off the table (`Cargo.toml`'s `[dependencies]` is
+    /// deliberately empty), and a JSONL writer needs SOME serializer, so this
+    /// reader grows the matching writer rather than a second, parallel one
+    /// living in `harness` alone.
+    pub fn to_string(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
+    fn write(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        match self {
+            Json::Null => out.push_str("null"),
+            Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Json::Num(n) => {
+                // Every number this codebase writes (seeds, plies, scores,
+                // rounded scores) is either a whole number or was rounded to
+                // a fixed number of decimals before it got here -- so
+                // printing an integer as an integer (not "41.0") is the
+                // right default, and anything with a fractional part falls
+                // through to Rust's own shortest round-tripping `f64`
+                // formatting, which `f64::from_str` reads back exactly.
+                if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e15 {
+                    write!(out, "{}", *n as i64).unwrap();
+                } else {
+                    write!(out, "{n}").unwrap();
+                }
+            }
+            Json::Str(s) => write_json_string(out, s),
+            Json::Arr(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    item.write(out);
+                }
+                out.push(']');
+            }
+            Json::Obj(fields) => {
+                out.push('{');
+                for (i, (k, v)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_json_string(out, k);
+                    out.push(':');
+                    v.write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn write_json_string(out: &mut String, s: &str) {
+    use std::fmt::Write as _;
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 #[derive(Debug)]
@@ -355,5 +438,26 @@ mod tests {
         assert!(parse_json("{").is_err());
         assert!(parse_json("[1,]").is_err());
         assert!(parse_json("nul").is_err());
+    }
+
+    /// [`harness::record`]'s whole append-only log rests on this round-trip:
+    /// what [`Json::to_string`] writes, [`parse_json`] must read back
+    /// unchanged in every way that matters (object key order is the one
+    /// exception `Json::Obj`'s own equality does not preserve, since a
+    /// `Vec<(String, Json)>` compares positionally).
+    #[test]
+    fn writing_then_parsing_a_json_value_round_trips() {
+        let v = Json::obj(vec![
+            ("a", Json::Num(41.0)),
+            ("b", Json::Str("quote \" and \\ and \nnewline".to_string())),
+            ("c", Json::Arr(vec![Json::Bool(true), Json::Bool(false), Json::Null])),
+            ("d", Json::Num(-1.5)),
+        ]);
+        let text = v.to_string();
+        assert_eq!(parse_json(&text).unwrap(), v);
+        // Whole numbers print bare, the way `json.dumps` prints a Python
+        // int -- a re-scored log comparing `"c": 41` against `"c": 41.0`
+        // should never see a difference that is only Rust's formatting.
+        assert!(text.contains("\"a\":41"), "{text}");
     }
 }

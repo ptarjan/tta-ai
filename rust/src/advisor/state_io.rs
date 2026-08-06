@@ -430,7 +430,10 @@ fn parse_num<T: std::str::FromStr>(tok: &str, key: &str) -> Result<T, String> {
     tok.trim().parse::<T>().map_err(|_| format!("{key}: {tok:?} is not a number"))
 }
 
-fn age_str(a: Age) -> &'static str {
+/// `pub(crate)`: `harness::mirror`'s board-level desync check prints/parses
+/// an age the same way a snapshot line does, and a second copy of this match
+/// is exactly the kind of two-registries drift this project keeps finding.
+pub(crate) fn age_str(a: Age) -> &'static str {
     match a {
         Age::A => "A",
         Age::I => "I",
@@ -440,7 +443,7 @@ fn age_str(a: Age) -> &'static str {
     }
 }
 
-fn parse_age(s: &str) -> Result<Age, String> {
+pub(crate) fn parse_age(s: &str) -> Result<Age, String> {
     match s {
         "A" => Ok(Age::A),
         "I" => Ok(Age::I),
