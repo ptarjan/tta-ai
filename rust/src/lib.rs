@@ -18,6 +18,7 @@ pub mod cards;
 pub mod combat;
 pub mod corpus;
 pub mod costs;
+pub mod discard_solver;
 pub mod legal;
 pub mod economy;
 pub mod effects;

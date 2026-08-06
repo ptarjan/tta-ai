@@ -68,8 +68,11 @@
 //!
 //! - **Discard** (§6.6 hand-limit, and any other forced military discard):
 //!   BGO's journal logs only a count (`"<Color> discards N cards"`), never
-//!   which cards -- `corpus.rs`'s own doc establishes this. Genuinely
-//!   unrecoverable; this file stops the game there rather than guess.
+//!   which cards. NOT given up on: `discard_solver::DiscardSolver` resolves
+//!   this by constraint propagation over the rest of the journal -- see that
+//!   module's doc and `docs/REPLAY.md`'s "Military discard: solved, not
+//!   given up on" section for the full argument and the honest solved-vs-
+//!   chosen-vs-forced-collision accounting.
 //! - **Aggression defense** with any committed defense cards: BGO logs only
 //!   a count (`"<Color> defends N Defense card(s) played"`), never which
 //!   ones. Zero committed cards is unambiguous (`DefendDone` immediately);
@@ -98,6 +101,7 @@ use tta::corpus::{
     self, actor_and_rest, build_card_index, classify, longest_known_card_prefix, ActionClass,
     Classified, Color, GameMeta, LineOutcome,
 };
+use tta::discard_solver::{DiscardSolver, FutureNeed};
 use tta::moves::PactSide;
 use tta::state::{ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
 use tta::{apply, costs, game, legal, CardId, CardType, Move};
@@ -187,6 +191,15 @@ struct Replayer<'a> {
     colonize_approximated: bool,
     /// Number of actionable (non-bookkeeping) journal lines consumed.
     actions_consumed: usize,
+    /// The journal `Line::lineno` currently being resolved, set once per
+    /// loop iteration in `replay_game` before `resolve_intervening` runs.
+    /// `DiscardSolver::choose` needs this to tell a FUTURE named play
+    /// (still in hand right now, so not a valid discard candidate) from a
+    /// PAST one (already left the hand, so it isn't excluded) -- see that
+    /// module's doc. `0` (no line has "already happened") is a safe initial
+    /// value: every real journal line number is >= 2 (`parse_lines` skips
+    /// the header).
+    current_lineno: usize,
     /// Whether seat `i` has ever been credited a `"draws N military
     /// card(s)"` clause yet (parsed off their own `EndTurn` lines as they
     /// are applied). BGO deals no military cards at all until a player's
@@ -206,6 +219,12 @@ struct Replayer<'a> {
     /// `resolve_intervening`'s `ChoiceKind::GainBlock` handling and
     /// `prescan_gain_produces`'s doc comment.
     gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
+    /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
+    /// over the rest of the journal -- see `discard_solver`'s module doc and
+    /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
+    /// section. Also tallies the solved/chosen/forced-collision counts this
+    /// game's replay reports.
+    discard_solver: DiscardSolver,
 }
 
 /// A placeholder Event-kind card used to satisfy `Move::PrepareEvent`'s
@@ -228,6 +247,7 @@ impl<'a> Replayer<'a> {
         num_players: u8,
         event_reveals: VecDeque<CardId>,
         gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
+        future_military_needs: HashMap<u8, Vec<FutureNeed>>,
     ) -> Self {
         // The seed is thrown away semantically -- every field it determines
         // (deck order, starting row/hand contents) is SIMULATED filler this
@@ -241,8 +261,10 @@ impl<'a> Replayer<'a> {
             event_reveals,
             colonize_approximated: false,
             actions_consumed: 0,
+            current_lineno: 0,
             has_drawn_military: [false; 4],
             gain_produces,
+            discard_solver: DiscardSolver::new(future_military_needs),
         }
     }
 
@@ -359,6 +381,47 @@ impl<'a> Replayer<'a> {
                         .iter()
                         .position(|o| matches!(o, ChoiceOption::Word(Keyword::Skip)))
                         .ok_or_else(|| MismatchKind::StuckPending("FreeBuild choice has no Skip option".into()))?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    continue;
+                }
+                // A `Pending::Choice(DiscardMilitary)` (`interact::
+                // discard_excess_military`, `apply.rs`'s implementation of
+                // §6.6 step 1) blocks EVERY further action by the player it
+                // is open for -- their own next move AND, if they are not
+                // `decider`, whoever else is trying to act while it sits
+                // unresolved (the "reached through a different code path"
+                // shape `docs/REPLAY.md` used to report as unrecoverable).
+                // Drained here, ahead of the decider-equality check below,
+                // the same way `GainBlock`/`FreeBuild` are: BGO's journal
+                // never names which card was discarded (only a count -- see
+                // `discard_solver`'s module doc), but the identity does not
+                // need to be journal-verified to be a LEGAL choice --
+                // `c.options` is already the engine's own set of currently-
+                // held candidates. `DiscardSolver::choose` narrows which of
+                // those candidates is least likely to contradict a LATER
+                // named play by this same player, and reports which
+                // epistemic bucket (solved / chosen / forced collision) the
+                // pick falls into for `docs/REPLAY.md`'s honest accounting.
+                if matches!(c.kind, ChoiceKind::DiscardMilitary) {
+                    let opts: Vec<CardId> = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .map(|o| match o {
+                            ChoiceOption::Card(id) => *id,
+                            other => panic!("DiscardMilitary choice offered a non-card option {other:?}"),
+                        })
+                        .collect();
+                    let (n, certainty) = self.discard_solver.choose(c.player, self.current_lineno, &opts);
+                    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                        eprintln!(
+                            "DEBUG discard: player {} line {} picked {} of {} candidates ({certainty:?})",
+                            c.player,
+                            self.current_lineno,
+                            opts[n].get().name,
+                            opts.len()
+                        );
+                    }
                     apply::apply(&mut self.state, Move::Choose { n: n as u8 });
                     continue;
                 }
@@ -760,6 +823,39 @@ fn prescan_gain_produces(lines: &[Line]) -> HashMap<u8, VecDeque<(bool, i32)>> {
     out
 }
 
+/// Pre-scans the whole journal once for every point where a player is
+/// observed playing a NAMED card out of their own military hand --
+/// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
+/// `CopyTactic`, `"adopts existing tactics ..."`, which copies an
+/// opponent's already-played tactic rather than consuming the actor's own
+/// hand card -- see `apply_one`'s `ActionClass::PlayTactic` arm, which draws
+/// the same distinction). Feeds `discard_solver::DiscardSolver`: a card
+/// observed being played AFTER a given discard decision was, by definition,
+/// still in that player's hand at the time of the discard, so it cannot
+/// have been the card discarded there -- see that module's doc for the full
+/// argument this pre-scan supplies the raw facts for.
+fn prescan_future_military_needs(
+    lines: &[Line],
+    card_index: &HashMap<&'static str, CardId>,
+) -> HashMap<u8, Vec<FutureNeed>> {
+    let mut out: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
+    for line in lines {
+        let LineOutcome::Action(Classified { class, card: Some(card) }) = classify(card_index, line.text) else {
+            continue;
+        };
+        let Some((actor, rest)) = actor_and_rest(line.text) else { continue };
+        let consumes_own_hand_card = match class {
+            ActionClass::DeclareWar | ActionClass::PlayAggression | ActionClass::ProposePact => true,
+            ActionClass::PlayTactic => !rest.starts_with("adopts existing tactics "),
+            _ => false,
+        };
+        if consumes_own_hand_card {
+            out.entry(actor.seat()).or_default().push(FutureNeed { lineno: line.lineno, card });
+        }
+    }
+    out
+}
+
 /// Line indices to skip entirely because they are a `TakeCard` undone by a
 /// same-actor, same-card `PutBack` -- BGO's client-side undo (`corpus.rs`'s
 /// module doc: "~8% of raw takes are a human undoing their own take within
@@ -834,6 +930,12 @@ struct GameResult {
     colonize_approximated: bool,
     engine_scores: Option<Vec<i32>>,
     index_scores: Vec<i32>,
+    /// Counts from this game's `DiscardSolver` -- see that module's doc and
+    /// `docs/REPLAY.md` for why these three are reported separately rather
+    /// than folded into one "discards handled" number.
+    discards_solved: u32,
+    discards_chosen: u32,
+    discards_forced_collision: u32,
 }
 
 fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'static str, CardId>) -> GameResult {
@@ -841,7 +943,8 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
     let event_reveals = prescan_event_reveals(&lines, card_index);
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
-    let mut r = Replayer::new(card_index, meta.players, event_reveals, gain_produces);
+    let future_military_needs = prescan_future_military_needs(&lines, card_index);
+    let mut r = Replayer::new(card_index, meta.players, event_reveals, gain_produces, future_military_needs);
 
     let mut mismatch: Option<Mismatch> = None;
     let mut completed = false;
@@ -854,6 +957,7 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
         if putback_skips.contains(&i) {
             continue;
         }
+        r.current_lineno = line.lineno;
         let outcome = classify(card_index, line.text);
         let LineOutcome::Action(Classified { class, card }) = outcome else {
             continue; // bookkeeping / unclassified: no move to apply
@@ -959,6 +1063,9 @@ fn replay_game(meta: &GameMeta, journal_text: &str, card_index: &HashMap<&'stati
         colonize_approximated: r.colonize_approximated,
         engine_scores,
         index_scores: meta.scores.clone(),
+        discards_solved: r.discard_solver.solved,
+        discards_chosen: r.discard_solver.chosen,
+        discards_forced_collision: r.discard_solver.forced_collisions,
     }
 }
 
@@ -1256,9 +1363,16 @@ fn apply_one(
         ActionClass::PutBack => Err(MismatchKind::UnrecoverableHiddenInfo(
             "unpaired BGO client-side undo (\"puts X back in the row\" with no matching preceding take)".into(),
         )),
-        ActionClass::Discard => Err(MismatchKind::UnrecoverableHiddenInfo(
-            "military hand discard: BGO logs only a count, never which card(s)".into(),
-        )),
+        // The card(s) BGO logs only a count for ("<Color> discards N
+        // cards") are already resolved by the time `apply_one` reaches this
+        // line: `resolve_intervening`'s `ChoiceKind::DiscardMilitary` branch
+        // drains any open discard pending for `actor` BEFORE this line's own
+        // translation runs (same "auto-drain ahead of the decider check" as
+        // `GainBlock`/`FreeBuild` -- see that branch's doc, and
+        // `discard_solver`'s module doc for how the card is picked). This
+        // arm is therefore a pure validation checkpoint, like `PlayEvent`/
+        // `WinWar`/`WinAuction`/`Colonize` above.
+        ActionClass::Discard => Ok(()),
         ActionClass::EndTurn => r.try_apply(Move::EndTurn),
     }
 }
@@ -1307,6 +1421,9 @@ fn run(index_path: &str, journals_dir: &str, ids: &[String]) -> Result<(), Strin
     let mut n_score_match = 0usize;
     let mut n_score_checked = 0usize;
     let mut n_approx = 0usize;
+    let mut discards_solved = 0u32;
+    let mut discards_chosen = 0u32;
+    let mut discards_forced_collision = 0u32;
 
     for id in ids {
         let Some(meta) = by_id.get(id.as_str()) else {
@@ -1323,6 +1440,9 @@ fn run(index_path: &str, journals_dir: &str, ids: &[String]) -> Result<(), Strin
         };
         let result = replay_game(meta, &text, &card_index);
         print_result(&result);
+        discards_solved += result.discards_solved;
+        discards_chosen += result.discards_chosen;
+        discards_forced_collision += result.discards_forced_collision;
         if result.completed {
             n_completed += 1;
             if result.colonize_approximated {
@@ -1346,6 +1466,12 @@ fn run(index_path: &str, journals_dir: &str, ids: &[String]) -> Result<(), Strin
         ids.len()
     );
     println!("{n_score_match}/{n_score_checked} completed games' final scores matched index.tsv (sorted multiset comparison).");
+    let total_discards = discards_solved + discards_chosen + discards_forced_collision;
+    println!(
+        "Military discards resolved: {total_discards} ({discards_solved} solved uniquely, \
+         {discards_chosen} chosen arbitrarily among valid candidates, {discards_forced_collision} \
+         forced collisions -- see docs/REPLAY.md's discard_solver section)."
+    );
     Ok(())
 }
 
@@ -1361,6 +1487,13 @@ fn print_result(g: &GameResult) {
         a.sort_unstable();
         b.sort_unstable();
         print!(" scores engine={engine:?} index={:?} match={}", g.index_scores, a == b);
+    }
+    let total_discards = g.discards_solved + g.discards_chosen + g.discards_forced_collision;
+    if total_discards > 0 {
+        print!(
+            " discards={total_discards} (solved={} chosen={} forced_collision={})",
+            g.discards_solved, g.discards_chosen, g.discards_forced_collision
+        );
     }
     println!();
     if let Some(m) = &g.mismatch {
