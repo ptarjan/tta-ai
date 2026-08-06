@@ -118,26 +118,32 @@ re-discovers them by hand.
   wrong means the bot maximises a rival's position on that decision. Fixed
   and now the pervasive convention: `rust/src/state.rs::decider()` is used
   throughout `rust/src/bots/`.
+- **Aggression: Plunder's food/resource split is the attacker's choice, not
+  the engine's.** FAQ p.7: the split between the two banks belongs to the
+  aggressor; the engine used to drain resources first, unconditionally.
+  Totals and the victim's cap were always right — only the mix was wrong.
+  Fixed by opening a real pending decision, the same shape as `WarTech`/
+  `TakeRow`: `interact::offer_plunder_split`/`ChoiceKind::PlunderSplit`,
+  called from `combat::finish_aggression`, valued by the book bot in
+  `bots/book.rs` via the same `prod_value` `GainBlock` already uses.
+- **Annex and Infiltrate must not be legal against a target that fails
+  their printed target clause** (Annex: no colony to steal; Infiltrate: no
+  leader and no unfinished wonder to remove) — playing either anyway cost
+  the card and a military action and resolved to nothing. This was
+  previously left alone as ambiguous; it settles once you read the card's
+  own printed target field rather than only the rulebook prose:
+  `data/cards_military_actions.json` gives Annex's target as "one opponent
+  who owns at least one colony" and Infiltrate's as "one opponent with a
+  leader in play or a wonder under construction" (digital-edition card
+  text; Infiltrate's wonder-loss reading also confirmed by FAQ p.11). A
+  target that fails the card's own printed target clause is not a legal
+  target, the same way one that beats the attacker's strength isn't.
+  `rust/src/legal.rs::aggression_target_qualifies` gates `politics_moves`
+  on the same `Special::StealColony`/`Special::RemoveFromGame` data
+  `combat::finish_aggression`'s resolution already reads, so the check and
+  the resolution can't drift onto two different notions of "this card".
 
-## 2. Known rules gaps — genuine, deliberately left unfixed
-
-Recorded so nobody "fixes" these accidentally or re-derives that they're
-open. Not verified against current Rust beyond confirming the general shape
-still applies (combat/events logic is otherwise a faithful port); revisit
-before assuming either is still unaddressed if working in this area.
-
-- **Plunder's food/resource split is chosen greedily by the engine, not by
-  the attacker.** FAQ p.7 says the aggressor chooses the mix; totals and
-  the victim's cap are right, only the mix isn't a decision. Low impact.
-- **Annex and Infiltrate don't enforce their printed target requirement**
-  (a colony to steal / a leader or unfinished wonder to remove) — playing
-  either against a target that can't pay is legal, costs the card and a
-  military action, and resolves to nothing. Deliberately not changed: the
-  printed rules don't clearly settle whether this is illegal, and changing
-  `legal_moves` without a firm citation was judged worse than a rare void
-  play.
-
-## 3. Validation methodology — durable, applies to any future audit
+## 2. Validation methodology — durable, applies to any future audit
 
 These are lessons about *how to validate this engine*, not about any one
 bug. They cost real time to learn and are cheap to re-state.
@@ -189,7 +195,7 @@ bug. They cost real time to learn and are cheap to re-state.
   change at the weight your own reasoning best defends, not pinned inert
   pending an A/B; if the best-reasoned setting is "off," don't land it.
 
-## 4. Evaluator/search architecture — structural blind spots
+## 3. Evaluator/search architecture — structural blind spots
 
 The Python bot-evaluator architecture (a linear feature-weight dot product,
 `WeightedBot` = 1-ply, `PlanBot`/`QuiescentBot` = beam/quiescence on top of
@@ -284,7 +290,7 @@ Python-era measurement found it.
   in this feature basis, before concluding the mechanic itself is
   mispriced.
 
-## 5. Verdict per source doc
+## 4. Verdict per source doc
 
 - **SCORE_AUDIT.md** — real content: nine confirmed scoring-rule bugs (§1
   above), the corpus-validates-only-what-it-varies finding, and the
@@ -297,7 +303,7 @@ Python-era measurement found it.
   diagnosis (pacts/colonies/wars). Kept. Per-generation win-rate numbers,
   specific game counts, and the multi-page "why the champions never play
   pacts" investigation narrative are dropped; the structural lesson
-  survives in §4 above.
+  survives in §3 above.
 - **COVERAGE_AUDIT.md** — real content: two more confirmed engine bugs
   (revolution's action-carryover cap, one-per-name wrongly gating action
   cards) and the colonization-sacrifice-is-a-choice finding (later fixed).
@@ -313,7 +319,7 @@ Python-era measurement found it.
   captured elsewhere. Dropped in full.
 - **UNCOVERED_TYPES.md** — real content: the military-discard-FIFO bug
   (already captured under COMBAT_AUDIT's fix) and the general "half-priced
-  card" lesson (§4 above). Kept (folded into §4). The special-tech/
+  card" lesson (§3 above). Kept (folded into §3). The special-tech/
   production-building take-rate tables and the specific weight-scan numbers
   are dropped.
 - **WAR_RATE_CENSUS.md** — an explicitly partial, ~20x-undersized,
@@ -322,11 +328,11 @@ Python-era measurement found it.
   arm only... every number below is a small-n point estimate"). Nothing
   durable; the census-instrument design note (separate the bot's own
   decisions from its search's trial evaluations when counting) is already
-  captured in §3. Dropped in full.
+  captured in §2. Dropped in full.
 - **AGGRESSION_RATE.md** — real content: the general shape "a rate measured
   under a 1-ply bot is not a fact about a deeper-searching bot" and the
   quiesce-before-scoring-your-own-pending-decision fix pattern, both folded
-  into §4 above. The specific before/after game counts, digest hashes, and
+  into §3 above. The specific before/after game counts, digest hashes, and
   the extensive determinization/leak investigation (interesting but fully
   Python/`tools/gate.sh`-specific machinery, since deleted) are dropped.
 - **AGGRESSION_STATUS.md** — a short, explicitly-stale re-measurement note;
@@ -335,7 +341,7 @@ Python-era measurement found it.
   are the majority and correct; multi-card defences are the ones given up)
   is a reasonable prior, unconfirmed against the current bot." Dropped.
 - **WASTED_ACTIONS.md** — real content: the `end_turn`-flattery structural
-  bias and the card-identity-blindness root cause, both folded into §4
+  bias and the card-identity-blindness root cause, both folded into §3
   above, including the non-obvious result that fixing the visible
   `end_turn` bias in isolation made the bot measurably *worse*. All 4p
   numbers in the source doc were self-flagged as measured against a known
@@ -344,7 +350,7 @@ Python-era measurement found it.
   architecture lesson and the observation that `_card_yields`-style
   per-card tables are the wrong hook for military-deck cards priced by
   resolution (aggressions/wars) or already gated out entirely (pacts at
-  2p), both folded into §4. Also recorded two live-but-unfixed Python-era
+  2p), both folded into §3. Also recorded two live-but-unfixed Python-era
   bugs (`_c_pact_offer` overwriting rather than appending to a pact list;
   a book-bot pact-response reading a context key the offer handler never
   wrote) — both are Python-specific paths in deleted code and were not

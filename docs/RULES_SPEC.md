@@ -120,7 +120,7 @@ Unspent MAs at end of turn each draw 1 military card (max 3) — §6.7. Red toke
 
 5.4 **Play an aggression** (brown card, "Aggression:" in name) [CoL p.4]:
 1. Reveal; pay its military action cost; declare the rival.
-2. Illegal if: a pact forbids attacking them, or the rival's strength ≥ yours (include bonuses that trigger when you attack them; exclude pact bonuses that end if you attack).
+2. Illegal if: a pact forbids attacking them, or the rival's strength ≥ yours (include bonuses that trigger when you attack them; exclude pact bonuses that end if you attack). Annex and Infiltrate print their own narrower target clause and are additionally illegal against a rival who fails it: Annex requires "one opponent who owns at least one colony"; Infiltrate requires "one opponent with a leader in play or a wonder under construction" [digital-edition card text, `data/cards_military_actions.json`'s `target` field; Infiltrate's wonder-loss reading confirmed by FAQ p.11, "an incomplete Wonder is lost ... due to the Infiltrate Aggression"]. No other base-game aggression prints a narrower target than "one opponent".
 3. If you and rival have a pact that ends on attack, remove it now.
 4. Defense: rival may play military bonus cards (add printed DEFENSE value, top half; cards then discarded) and/or discard any other military cards face down for +1 strength each. Total cards played+discarded ≤ defender's military action total. NO unit sacrificing by either side (2015 change) [RB p.24].
 5. If defender's total ≥ attacker's strength: aggression fails, discard it, no effect (ties favor the defender; only the attacker can win an aggression) [FAQ p.16].

@@ -136,28 +136,53 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
 /// does, not off the printed name, so a rule and its legality check cannot
 /// drift onto two different notions of "this card".
 ///
+/// This used to be recorded as a genuinely open question (was the printed
+/// rules text clear enough to make a targetless Annex/Infiltrate illegal, or
+/// just wasteful?) because the rulebook prose alone doesn't say. It settles
+/// once you read the CARD ITSELF rather than the rulebook: both cards print
+/// their legal target as part of the card, not as a free-form "choose an
+/// opponent" -- `data/cards_military_actions.json`'s `"target"` field, taken
+/// from the digital edition's own card text (`"source": "digital-edition
+/// card text (ANNEX/INFILTRATE)"`, Infiltrate's wonder-loss reading also
+/// confirmed by `faq_v15.pdf` p.11, "an incomplete Wonder is lost ... due to
+/// the Infiltrate Aggression"), reads:
+///   Annex:      "one opponent who owns at least one colony"
+///   Infiltrate: "one opponent with a leader in play or a wonder under
+///                construction"
+/// A target that doesn't meet the printed target clause is not a legal
+/// target for the card, the same way a target that beats the attacker's
+/// strength isn't -- both are targeting restrictions printed ON the card,
+/// not separate "does it do anything" questions. That is the citation this
+/// gate rests on; it is not inferred from what the resolution code happens
+/// to do with an empty option list.
+///
 /// Every other aggression card is unconditionally offerable: Raid degrades
 /// to "nothing to destroy" through its OWN empty-option auto-resolve rather
 /// than needing a legality gate (it still spends the card fairly -- a raid
 /// against an empty tableau is a real, if wasted, choice a human player can
 /// make too, and `destroyUrbanBuildings` is not gated on `q` having urban
-/// buildings by the rulebook either); Plunder/Enslave/Spy's gains are capped
-/// at zero rather than refused. Annex and Infiltrate are different: without
-/// this gate they are LEGAL AND RESOLVE TO NOTHING, which is the defect this
-/// function exists to close.
+/// buildings by the rulebook either, nor does either card's printed target
+/// clause require one); Plunder/Enslave/Spy's gains are capped at zero
+/// rather than refused, and neither prints a target clause narrower than
+/// "one opponent". Annex and Infiltrate are different: without this gate
+/// they are LEGAL AND RESOLVE TO NOTHING, which is the defect this function
+/// exists to close.
 fn aggression_target_qualifies(card: &Card, q: &PlayerState) -> bool {
     // Annex ("Aggression: Annex", `Special::StealColony(n)` with `n != 0`
-    // per `combat::finish_aggression`'s own `if n != 0` guard): needs a
-    // colony in the victim's play area to steal.
+    // per `combat::finish_aggression`'s own `if n != 0` guard): printed
+    // target is "one opponent who owns at least one colony" (see doc
+    // comment above) -- needs a colony in the victim's play area to steal.
     let steals_a_colony =
         card.special.iter().any(|sp| matches!(sp, Special::StealColony(n) if *n != 0));
     if steals_a_colony && q.colonies.is_empty() {
         return false;
     }
     // Infiltrate ("Aggression: Infiltrate", `Special::RemoveFromGame`):
-    // needs a leader in play OR an unfinished wonder to remove --
-    // `interact::run_item`'s `QueueItem::Infiltrate` offers exactly those
-    // two options and nothing else.
+    // printed target is "one opponent with a leader in play or a wonder
+    // under construction" (see doc comment above) -- needs a leader in play
+    // OR an unfinished wonder to remove. `interact::run_item`'s
+    // `QueueItem::Infiltrate` offers exactly those two options and nothing
+    // else, matching the printed clause.
     let removes_leader_or_wonder = card.special.contains(&Special::RemoveFromGame);
     if removes_leader_or_wonder && q.leader.is_none() && q.wonder.is_none() {
         return false;
