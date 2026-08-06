@@ -48,25 +48,43 @@ impl PyRandom {
     /// CPython's C-level `random_seed` (`_randommodule.c`) takes
     /// `PyNumber_Absolute(seed)` for an int seed BEFORE splitting it into
     /// 32-bit limbs -- a negative seed is seeded identically to its positive
-    /// magnitude. None of the engine's current call sites pass a seed
-    /// outside `i64` range (they are `u64` game seeds combined with small
-    /// turn/round offsets), so that is the width accepted here; widen this
-    /// signature rather than silently truncating if that ever changes.
-    pub fn new(seed: i64) -> Self {
-        let n: u64 = seed.unsigned_abs();
+    /// magnitude.
+    ///
+    /// Width is `i128`, not `i64`: every call site folds a `u64` game seed
+    /// through a couple of small fixed multipliers (`state.seed * 1_000_003`
+    /// in `game::rng_for`, `state.seed * 7919` in `economy::deck_rng`) plus
+    /// tiny `u16` turn/round offsets, which tops out around 84 bits of
+    /// magnitude (`u64::MAX` is 64 bits, `1_000_003` is 20). `i128` has 127
+    /// bits of magnitude, so there are ~43 bits -- about 13 decimal orders of
+    /// magnitude -- of permanent headroom: the ceiling is fixed by
+    /// `state.seed`'s type (`u64`) and these constants being compile-time
+    /// literals, not by anything that grows at runtime (a long-running climb
+    /// generation counter included -- it is folded into `state.seed` via
+    /// `u64` wrapping arithmetic before it ever reaches here, so it is
+    /// already capped at `u64::MAX`). `i64` was tried first and is what
+    /// overflowed in production (see `game::rng_for`'s doc comment); widen
+    /// again rather than silently truncating if a call site ever needs a key
+    /// bigger than a `u64` times a `u32`-ish constant.
+    pub fn new(seed: i128) -> Self {
+        let n: u128 = seed.unsigned_abs();
 
         // `init_by_array`'s key is `n` split into little-endian 32-bit
         // limbs, sized as `ceil(bit_length(n) / 32)` -- EXCEPT a zero seed,
         // which CPython still keys with a single zero limb rather than an
         // empty key (`_randommodule.c`: `keyused = bits == 0 ? 1 : ...`).
-        // `n.leading_zeros()` is 64 for `n == 0`, so `bits` is naturally 0
+        // `n.leading_zeros()` is 128 for `n == 0`, so `bits` is naturally 0
         // and the `keyused` formula below falls out without a special case.
-        let bits = 64 - n.leading_zeros() as usize;
+        //
+        // Four 32-bit limbs cover the full 128-bit magnitude range (this is
+        // the generalization of the old two-limb, `i64`-only version -- for
+        // any `n` that fits in 64 bits, `keyused` is still at most 2 and
+        // `key[0..2]` is filled identically, so already-representable seeds
+        // draw byte-identical streams to before this widening).
+        let bits = 128 - n.leading_zeros() as usize;
         let keyused = if bits == 0 { 1 } else { (bits - 1) / 32 + 1 };
-        let mut key = [0u32; 2];
-        key[0] = n as u32;
-        if keyused == 2 {
-            key[1] = (n >> 32) as u32;
+        let mut key = [0u32; 4];
+        for (i, limb) in key.iter_mut().enumerate().take(keyused) {
+            *limb = (n >> (32 * i)) as u32;
         }
 
         let mut rng = PyRandom { state: [0; N], index: N };
@@ -258,12 +276,12 @@ pub fn shuffle_cards(rng: &mut PyRandom, cards: &mut [CardId]) {
 /// has -- [`get`](Self::get) builds the stream at most once and hands out
 /// the same instance on every later call.
 pub struct LazyRandom {
-    seed: i64,
+    seed: i128,
     inner: Option<PyRandom>,
 }
 
 impl LazyRandom {
-    pub fn new(seed: i64) -> Self {
+    pub fn new(seed: i128) -> Self {
         LazyRandom { seed, inner: None }
     }
 
@@ -448,7 +466,7 @@ mod tests {
         for &(seed, expected) in FIXTURES {
             let n = expected.len();
             let mut cards: Vec<CardId> = (0..n as u16).map(CardId).collect();
-            let mut rng = PyRandom::new(seed);
+            let mut rng = PyRandom::new(i128::from(seed));
             shuffle_cards(&mut rng, &mut cards);
             let got: Vec<u16> = cards.iter().map(|c| c.0).collect();
             assert_eq!(got, expected, "seed={seed} len={n}");
@@ -576,6 +594,32 @@ mod tests {
             built.get().genrand_uint32(),
             next_from_original,
             "built() must continue the wrapped stream, not reseed it"
+        );
+    }
+
+    /// The widening pin: `PyRandom::new` used to take `i64`; the key-limb
+    /// loop it now uses (`i128`, up to four 32-bit limbs) is a
+    /// generalization that must fill `key[0..2]` identically to the old
+    /// hardcoded two-limb version for any seed that fit in the old range.
+    /// `12345` is an ordinary small seed well inside that range (it is also
+    /// one of `FIXTURES`' seeds, but this test checks the RAW MT19937 words
+    /// directly rather than a shuffle outcome, so a bug that only showed up
+    /// after the words `shuffle` never reads cannot hide from it). The
+    /// expected words below were captured from this same widened
+    /// implementation and cross-checked against `matches_cpython_exactly`'s
+    /// CPython-derived fixture for seed 12345, which shuffles from the same
+    /// stream -- so this is not just "whatever the code prints today", it is
+    /// anchored to real CPython output one call removed.
+    #[test]
+    fn a_small_seed_within_the_old_i64_range_still_draws_the_same_raw_words_after_the_i128_widening(
+    ) {
+        let mut rng = PyRandom::new(12345i128);
+        let words: Vec<u32> = (0..6).map(|_| rng.genrand_uint32()).collect();
+        assert_eq!(
+            words,
+            vec![1_789_368_711, 3_146_859_322, 43_676_229, 3_522_623_596, 3_544_234_957, 3_448_207_591],
+            "a small seed's raw MT19937 word stream must not change just because \
+             PyRandom::new's parameter widened from i64 to i128"
         );
     }
 }

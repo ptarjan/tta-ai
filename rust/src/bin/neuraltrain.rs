@@ -223,7 +223,7 @@ fn shuffle_indices(rng: &mut PyRandom, v: &mut [usize]) {
 /// the first `val_frac` fraction as validation.
 fn split_rows(n: usize, val_frac: f64, seed: i64) -> (Vec<usize>, Vec<usize>) {
     let mut idx: Vec<usize> = (0..n).collect();
-    let mut rng = PyRandom::new(seed);
+    let mut rng = PyRandom::new(seed.into());
     shuffle_indices(&mut rng, &mut idx);
     let k = ((n as f64) * val_frac).round() as usize;
     let k = k.clamp(if n > 0 { 1 } else { 0 }, n);

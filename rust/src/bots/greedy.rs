@@ -693,7 +693,7 @@ pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
                 },
                 stats: plan::Stats::default(),
                 counters: pending::Counters::default(),
-                rng: PyRandom::new(player_seed),
+                rng: PyRandom::new(player_seed.into()),
             },
         });
     }

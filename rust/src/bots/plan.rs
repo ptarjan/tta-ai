@@ -153,18 +153,20 @@ pub(crate) fn determinize_current_events(state: &mut GameState, rng: &mut PyRand
 /// `random.Random(state.seed * 7919 + state.turn * 31 + me)`: `pick`'s own
 /// per-decision determinize rng, freshly re-seeded every call (unlike the
 /// caller-owned, call-to-call-persistent `rng` parameter `pick` uses for the
-/// pending-decision branch). Checked arithmetic, not wrapping -- mirrors
-/// `economy::deck_rng`/`game::rng_for`'s identical justification: Python's
-/// ints are unbounded, so a seed big enough to overflow would draw a
-/// DIFFERENT MT19937 stream there than any `i64` could here.
+/// pending-decision branch). Checked arithmetic in `i128`, not wrapping --
+/// mirrors `economy::deck_rng`/`game::rng_for`'s identical justification
+/// (see `game::rng_for`'s doc comment for why `i128`, not `i64`, is the
+/// permanent-headroom width for a `u64` seed times a small fixed
+/// multiplier): Python's ints are unbounded, so a seed big enough to
+/// overflow would draw a DIFFERENT MT19937 stream there than any
+/// fixed-width Rust integer could here.
 pub(crate) fn plan_rng(state: &GameState, me: u8) -> PyRandom {
-    let seed = i64::try_from(state.seed)
-        .ok()
-        .and_then(|s| s.checked_mul(7919))
-        .and_then(|s| s.checked_add(state.turn as i64 * 31))
-        .and_then(|s| s.checked_add(me as i64))
+    let seed = i128::from(state.seed)
+        .checked_mul(7919)
+        .and_then(|s| s.checked_add(state.turn as i128 * 31))
+        .and_then(|s| s.checked_add(me as i128))
         .expect(
-            "game seed * 7919 + turn * 31 + me overflows i64; Python's unbounded ints would \
+            "game seed * 7919 + turn * 31 + me overflows i128; Python's unbounded ints would \
              seed a different MT19937 stream -- widen rng::PyRandom::new rather than wrapping",
         );
     PyRandom::new(seed)

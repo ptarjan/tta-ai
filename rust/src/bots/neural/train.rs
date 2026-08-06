@@ -1177,7 +1177,7 @@ impl ThreadWorkspace {
             preds_b: vec![0.0; chunk_cap],
             dva: vec![0.0; chunk_cap],
             dvb: vec![0.0; chunk_cap],
-            rng: PyRandom::new(seed),
+            rng: PyRandom::new(seed.into()),
         }
     }
 }
@@ -1250,7 +1250,7 @@ impl Trainer {
             conv_a: vec![0.0; in_dim],
             conv_b: vec![0.0; in_dim],
             conv_v: vec![0.0; in_dim],
-            rng: PyRandom::new(seed),
+            rng: PyRandom::new(seed.into()),
             dropout_p,
             workspaces,
             threads,
@@ -1451,7 +1451,7 @@ pub fn predict(net: &ValueNet, x: &[f64]) -> f64 {
 /// `kaiming_uniform_` with `a = sqrt(5)` reduces to exactly this bound for
 /// a `Linear` layer), and `nn.LayerNorm`'s default `gamma = 1, beta = 0`.
 pub fn random_init(in_dim: usize, hidden: usize, blocks: usize, seed: i64) -> ValueNet {
-    let mut rng = PyRandom::new(seed);
+    let mut rng = PyRandom::new(seed.into());
     let uniform = |rng: &mut PyRandom, n: usize, fan_in: usize| -> Vec<f64> {
         let bound = 1.0 / (fan_in as f64).sqrt();
         (0..n).map(|_| (rng.random() * 2.0 - 1.0) * bound).collect()
@@ -1537,8 +1537,8 @@ mod tests {
     fn rank_loss_for(net: &ValueNet, xa: &[f64], xb: &[f64], dropout_p: f64, seed: i64) -> f64 {
         let mut cache_a = ForwardCache::zeros(net);
         let mut cache_b = ForwardCache::zeros(net);
-        let mut rng_a = PyRandom::new(seed);
-        let mut rng_b = PyRandom::new(seed + 1);
+        let mut rng_a = PyRandom::new(seed.into());
+        let mut rng_b = PyRandom::new((seed + 1).into());
         let va = forward_train(net, xa, dropout_p, Some(&mut rng_a), &mut cache_a);
         let vb = forward_train(net, xb, dropout_p, Some(&mut rng_b), &mut cache_b);
         rank_pair_loss(va, vb).0
@@ -1546,7 +1546,7 @@ mod tests {
 
     fn value_loss_for(net: &ValueNet, xv: &[f64], target: f64, dropout_p: f64, seed: i64) -> f64 {
         let mut cache = ForwardCache::zeros(net);
-        let mut rng = PyRandom::new(seed);
+        let mut rng = PyRandom::new(seed.into());
         let pred = forward_train(net, xv, dropout_p, Some(&mut rng), &mut cache);
         smooth_l1(pred, target).0
     }
@@ -1645,8 +1645,8 @@ mod tests {
         let mut cache_b = ForwardCache::zeros(&net);
         let mut scratch = BackScratch::zeros(hidden);
         let mut grad = ValueNetGrad::zeros_like(&net);
-        let mut rng_a = PyRandom::new(seed);
-        let mut rng_b = PyRandom::new(seed + 1);
+        let mut rng_a = PyRandom::new(seed.into());
+        let mut rng_b = PyRandom::new((seed + 1).into());
         let va = forward_train(&net, &xa, dropout_p, Some(&mut rng_a), &mut cache_a);
         let vb = forward_train(&net, &xb, dropout_p, Some(&mut rng_b), &mut cache_b);
         let (_, dva, dvb) = rank_pair_loss(va, vb);
@@ -1675,7 +1675,7 @@ mod tests {
         let mut cache = ForwardCache::zeros(&net);
         let mut scratch = BackScratch::zeros(hidden);
         let mut grad = ValueNetGrad::zeros_like(&net);
-        let mut rng = PyRandom::new(seed);
+        let mut rng = PyRandom::new(seed.into());
         let pred = forward_train(&net, &xv, dropout_p, Some(&mut rng), &mut cache);
         let (_, dpred) = smooth_l1(pred, target);
         backward_train(&net, &cache, &xv, dpred, &mut grad, &mut scratch);
@@ -1703,8 +1703,8 @@ mod tests {
         let mut cache_b = ForwardCache::zeros(&net);
         let mut scratch = BackScratch::zeros(hidden);
         let mut grad = ValueNetGrad::zeros_like(&net);
-        let mut rng_a = PyRandom::new(seed);
-        let mut rng_b = PyRandom::new(seed + 1);
+        let mut rng_a = PyRandom::new(seed.into());
+        let mut rng_b = PyRandom::new((seed + 1).into());
         let va = forward_train(&net, &xa, dropout_p, Some(&mut rng_a), &mut cache_a);
         let vb = forward_train(&net, &xb, dropout_p, Some(&mut rng_b), &mut cache_b);
         let (_, dva, dvb) = rank_pair_loss(va, vb);

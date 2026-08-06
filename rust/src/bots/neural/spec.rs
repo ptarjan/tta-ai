@@ -427,14 +427,14 @@ impl Contender {
                 net,
                 cfg: *cfg,
                 stats: neural_bot::Stats::default(),
-                rng: PyRandom::new(seed),
+                rng: PyRandom::new(seed.into()),
             },
             Contender::NeuralPlan { net, cfg, .. } => Player::NeuralPlan {
                 net,
                 cfg: *cfg,
                 stats: neural_plan::Stats::default(),
                 counters: pending::Counters::default(),
-                rng: PyRandom::new(seed),
+                rng: PyRandom::new(seed.into()),
             },
         }
     }
@@ -469,7 +469,7 @@ fn build_classical(
                 cfg,
                 stats: plan::Stats::default(),
                 counters: pending::Counters::default(),
-                rng: PyRandom::new(seed),
+                rng: PyRandom::new(seed.into()),
             }
         }
     }

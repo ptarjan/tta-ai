@@ -93,7 +93,7 @@ struct Search {
 
 impl Search {
     fn new(seed: i64) -> Search {
-        Search { rng: PyRandom::new(seed) }
+        Search { rng: PyRandom::new(seed.into()) }
     }
 
     fn random(&mut self) -> f64 {

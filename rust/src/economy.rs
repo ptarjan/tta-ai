@@ -437,18 +437,20 @@ pub fn discard_civil(state: &mut GameState, card: CardId) {
 /// `end_of_turn` at all, which is why this port's [`end_of_turn`] takes no
 /// rng parameter (see its doc comment).
 ///
-/// `state.seed` is a `u64` and `PyRandom` takes an `i64` (see `rng.rs`: "None
-/// of the engine's current call sites pass a seed outside `i64` range").
+/// `state.seed` is a `u64` and `PyRandom` takes an `i128` -- see `rng.rs`'s
+/// doc comment on `PyRandom::new` for why `i128` is permanent headroom for a
+/// `u64` seed times a small fixed multiplier (`i64` was tried first and
+/// overflowed in production; `game::rng_for`'s doc comment has the numbers).
 /// Python's ints are unbounded, so a seed large enough to overflow would draw
-/// a DIFFERENT shuffle there than any `i64` could here -- that is a silent
-/// divergence, so it is asserted rather than wrapped or truncated.
+/// a DIFFERENT shuffle there than any fixed-width Rust integer could here --
+/// that is a silent divergence, so it is asserted rather than wrapped or
+/// truncated.
 fn deck_rng(state: &GameState) -> PyRandom {
-    let seed = i64::try_from(state.seed)
-        .ok()
-        .and_then(|s| s.checked_mul(7919))
-        .and_then(|s| s.checked_add(state.turn as i64))
+    let seed = i128::from(state.seed)
+        .checked_mul(7919)
+        .and_then(|s| s.checked_add(state.turn as i128))
         .expect(
-            "game seed * 7919 + turn overflows i64; Python's unbounded ints would seed a \
+            "game seed * 7919 + turn overflows i128; Python's unbounded ints would seed a \
              different MT19937 stream -- widen rng::PyRandom::new rather than wrapping",
         );
     PyRandom::new(seed)

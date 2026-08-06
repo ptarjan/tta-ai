@@ -188,10 +188,22 @@ fn next_age(a: Age) -> Option<Age> {
 /// `engine/game.py::_rng_for` with `rng=None` -- see this module's
 /// "Randomness" note for why that is the only reachable branch.
 ///
-/// Checked arithmetic, not wrapping: Python's ints are unbounded, so a seed
-/// big enough to overflow would draw a DIFFERENT MT19937 stream there than
-/// any `i64` could here. That is a silent divergence, so it is asserted.
-/// (`economy::deck_rng` makes the same call for the same reason.)
+/// Checked arithmetic in `i128`, not wrapping: Python's ints are unbounded,
+/// so a seed big enough to overflow would draw a DIFFERENT MT19937 stream
+/// there than any fixed-width Rust integer could here -- that is a silent
+/// divergence, so it is asserted rather than wrapped. `i128` (not `i64`) is
+/// the width: `state.seed` is a `u64`, which climb.rs's search folds a
+/// generation counter into via `u64`-wrapping arithmetic before it ever
+/// reaches a `GameState` -- so by the time it lands here it is already
+/// capped at `u64::MAX` (~1.8e19), no matter how long a climb runs.
+/// `u64::MAX * 1_000_003` is ~1.8e25, i.e. about 84 bits; `i128` has 127
+/// bits of magnitude, so this has ~43 bits (about 13 decimal orders of
+/// magnitude) of headroom that can never be exhausted by this formula. That
+/// margin is why `i64` was the wrong width in production: it has only 63
+/// bits, comfortably less than the ~84 this formula needs once `state.seed`
+/// gets large, and it overflowed for real in a long-running climb (see
+/// `git log` around this line for the incident). (`economy::deck_rng` makes
+/// the same call, at a smaller multiplier, for the same reason.)
 ///
 /// Returns a [`LazyRandom`], not a built [`PyRandom`]: every caller of this
 /// function reaches it on a path that MIGHT reshuffle a deck or pile several
@@ -210,13 +222,12 @@ fn next_age(a: Age) -> Option<Age> {
 /// keeping its own copy of the formula -- see that function's doc comment
 /// for why the two used to disagree and why that was ever an accepted gap.
 pub(crate) fn rng_for(state: &GameState) -> LazyRandom {
-    let s = i64::try_from(state.seed)
-        .ok()
-        .and_then(|s| s.checked_mul(1_000_003))
-        .and_then(|s| s.checked_add(state.turn as i64 * 97))
-        .and_then(|s| s.checked_add(state.round as i64))
+    let s = i128::from(state.seed)
+        .checked_mul(1_000_003)
+        .and_then(|s| s.checked_add(state.turn as i128 * 97))
+        .and_then(|s| s.checked_add(state.round as i128))
         .expect(
-            "seed * 1000003 + turn * 97 + round overflows i64; Python's unbounded ints would \
+            "seed * 1000003 + turn * 97 + round overflows i128; Python's unbounded ints would \
              seed a different MT19937 stream -- widen rng::PyRandom::new rather than wrapping",
         );
     LazyRandom::new(s)
@@ -344,9 +355,11 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         "Through the Ages is a 2-4 player game, got {num_players}"
     );
     let n = num_players as usize;
-    let mut rng = PyRandom::new(
-        i64::try_from(seed).expect("game seed does not fit in i64; see rng::PyRandom::new"),
-    );
+    // `i128::from(u64)` is total (never fails): `PyRandom::new` takes `i128`
+    // precisely so this and every other `state.seed`-derived construction
+    // never need a fallible conversion -- see `rng::PyRandom::new`'s doc
+    // comment for why `i128` is permanent headroom for a `u64` seed.
+    let mut rng = PyRandom::new(i128::from(seed));
 
     let despotism = named("Despotism");
     let mut players: [PlayerState; MAX_PLAYERS] =
@@ -1007,6 +1020,36 @@ pub fn step(state: &mut GameState, mv: Move) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The overflow that killed a live `climb` run for real: `climb.rs`
+    /// folds its generation counter into `state.seed` (a `u64`) via
+    /// `u64`-wrapping arithmetic, and once that folded value's magnitude
+    /// crosses roughly `i64::MAX / 1_000_003`, `rng_for`'s old `i64`-only
+    /// checked-arithmetic chain overflowed and `.expect()`-panicked --
+    /// fatal, because the release profile is `panic = "abort"`.
+    /// `i64::MAX` itself is exactly representable in `i64` (so the OLD code's
+    /// `i64::try_from` step succeeded) but `* 1_000_003` overflows `i64` by
+    /// three-plus orders of magnitude, so this seed reproduces the exact
+    /// failing shape, not just an out-of-range one. See this test's sibling
+    /// below for the even more extreme case, and see `rng_for`'s doc comment
+    /// for why `i128` is permanent headroom rather than a bigger version of
+    /// the same problem.
+    #[test]
+    fn rng_for_does_not_panic_when_seed_times_1_000_003_overflows_i64() {
+        let s = new_game(2, i64::MAX as u64);
+        let _ = rng_for(&s); // must not panic
+    }
+
+    /// The full extreme: `state.seed` is a `u64`, so `u64::MAX` is a value a
+    /// caller can legitimately hand `new_game`/`rng_for` -- it does not even
+    /// fit in an `i64` at all (the OLD code's `i64::try_from` step returned
+    /// `None` immediately, before ever reaching the multiply). `i128` holds
+    /// it with room to spare.
+    #[test]
+    fn rng_for_does_not_panic_at_the_largest_possible_u64_seed() {
+        let s = new_game(2, u64::MAX);
+        let _ = rng_for(&s); // must not panic
+    }
 
     #[test]
     fn new_game_deals_the_row_and_the_starting_tableaux() {

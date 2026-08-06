@@ -437,7 +437,7 @@ pub fn play_and_record(
     let mut bots: Vec<_> = (0..players as usize)
         .map(|i| teacher.seat((seed as i64).wrapping_mul(131).wrapping_add(i as i64)))
         .collect();
-    let mut rng = PyRandom::new(seed.wrapping_mul(7919).wrapping_add(17) as i64);
+    let mut rng = PyRandom::new((seed.wrapping_mul(7919).wrapping_add(17) as i64).into());
     let mut state = game::new_game(players, seed);
 
     let mut pairs = Vec::new();
