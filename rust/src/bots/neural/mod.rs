@@ -28,3 +28,4 @@ pub mod bot;
 pub mod encode;
 pub mod net;
 pub mod plan;
+pub mod rankdata;
