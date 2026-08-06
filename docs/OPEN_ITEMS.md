@@ -76,39 +76,3 @@ above, and is closed. What's still true: the weight defaults to 0.0
 
 Next action: nothing broken to fix. If it's worth pricing, seed it away
 from 0.0 and let a league run try it.
-
-## 5. No Rust test enumerates the coordinate registries
-
-Python's `tests/test_coordinate_registry.py` asserted, in both directions,
-that every weight had a live reader and every reader had a declared weight,
-with a `KNOWN_DEAD` allow-list ratchet for the exceptions. That test, and
-the concept, died with the Python engine -- a repo grep for
-`KNOWN_DEAD`/`coordinate_registry` in `rust/src/` today finds only two
-prose mentions of the retired Python tool (`horizon.rs:77`,
-`features.rs:230`), no actual enumeration. Per-coordinate guarantees now
-live piecemeal in named unit tests (items 1-4 above are examples), which is
-strictly weaker: nothing fails if a `WeightKey` variant is added with no
-reader, or a reader is added with no matching variant. This is the repo's
-headline recurring bug class (a guarantee asserted in one place, absent in
-another, nothing failing when they disagree) and it is currently unguarded
-here. `#![allow(dead_code)]` at `rust/src/lib.rs:14` (item 6) compounds it:
-dead-code warnings are the compiler-level version of half this same check,
-and they are switched off.
-
-Next action: write a Rust test that walks every `WeightKey` variant and
-asserts it has at least one call site (and, ideally, the reverse), mirroring
-the shape of the Python ratchet rather than inventing a new design.
-
-## 6. `#![allow(dead_code)]` at `rust/src/lib.rs:14` is ready to come off
-
-Its own comment says "delete this line once `effects` and `actions` are
-ported." `effects` is a real, substantial module (`rust/src/effects.rs`,
-1839 lines) and the Python `actions.py` responsibilities now live across
-`apply.rs`/`legal.rs`/`moves.rs`, none of them stubs. Both preconditions
-read as met.
-
-Next action: queued, not done here -- another agent may currently own
-`rust/src/lib.rs`. Removing the line and letting the compiler's own
-warnings surface whatever is actually unused is a good companion to item 5's
-registry test (they'd likely turn up some of the same gaps from opposite
-directions).

@@ -29,13 +29,17 @@
 //! top doc comment for the handful of Python-only mechanisms (the journalled
 //! search path, a per-candidate exception guard, `load_weights`/
 //! `save_weights`) it deliberately does not carry, and why. This was the last
-//! unported piece of `engine/bots/weighted.py`.
+//! unported piece of `engine/bots/weighted.py`. [`registry`] is not a port of
+//! anything -- it is this crate's replacement for the retired Python
+//! `tests/test_coordinate_registry.py` (docs/OPEN_ITEMS.md item 5), a
+//! `#[cfg(test)]`-only module with no production code of its own.
 
 pub mod cards;
 pub mod eval;
 pub mod events;
 pub mod features;
 pub mod horizon;
+pub mod registry;
 pub mod rivals;
 pub mod row;
 pub mod weights;
