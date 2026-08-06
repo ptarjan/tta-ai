@@ -269,6 +269,260 @@ what a bug looks like, so it was checked against the raw `grep` counts
 before being written down as a real finding rather than a copy-paste
 error.
 
+## Bot vs. human play-rate census: the first external anchor (2026-08-06)
+
+`docs/HAZARDS.md`'s "no external anchor" hazard says the bot's only strength
+signal is beating its own frozen ancestors -- it never plays against, or gets
+measured against, anything outside this repo. This section still does not
+close that hazard (the bot does not play the human corpus, and nothing here
+scores one against the other), but it is the first time the two have been
+put side by side at all: `rust/src/bin/botcensus.rs` instruments BOT
+self-play to count the exact same 26 [`ActionClass`]es `corpuscensus.rs`
+counts over the human corpus, with the same two normalisations (per game,
+per player-turn), so the columns below are a genuine apples-to-apples
+comparison, not two differently-defined numbers that happen to have similar
+names.
+
+### Method and caveats
+
+- **Structural counting, not text.** `botcensus.rs` reads real engine state
+  (the `Move` chosen, the `Pending` decision stack, `PlayerState` fields) --
+  it never goes through a journal. Most classes fall straight out of the
+  `Move` the bot picked; four (`PlayEvent`, `WinAuction`, `Colonize`,
+  `WinWar`) don't correspond to a single `Move` at all and are detected from
+  state transitions instead -- see `botcensus.rs`'s own module doc for
+  exactly how, and for a bug that method caught in itself (below).
+- **Definitions were matched to the human side's, not re-derived.** Where
+  `corpuscensus.rs` had to make a judgement call (Barbarossa-as-BuildUnit's
+  human-side analogue doesn't exist so there is nothing to match; Bach's
+  upgrade is bookkeeping on the human side because BGO's text glues the
+  leader's name to the verb with no space, so `botcensus.rs` excludes
+  `Move::BachTheater` too, for consistency rather than completeness), the
+  bot side copies the same call. Full list of exclusions and the reasoning
+  for each is in `botcensus.rs`'s module doc.
+- **Self-play mirror match, production weights.** Every seat plays
+  `BotKind::Weighted` (the kind `climb.rs`'s arena actually plays) loaded
+  from `experiments/rust_champion_{2,3,4}p.json` -- the current champion
+  vectors the league is climbing, gitignored, not committed here. This is
+  **three separately-trained vectors**, one per player count, not one
+  policy that generalises across table sizes -- a pattern that holds at one
+  player count and inverts at another (several below) is as likely to be
+  "this vector found a different local optimum" as "player count changes
+  what's correct." Every bot seat also plays against an IDENTICAL copy of
+  itself, where the human's opponents are a real, mixed BGO population (any
+  skill, human variance, actual negotiation) -- a difference could be the
+  bot's behaviour, the mirror-match setting, or the corpus's population;
+  this section flags divergences, it does not adjudicate which side caused
+  each one.
+- **Sample sizes**: bot n=300 (2p) / 300 (3p) / 150 (4p) games; human n=692
+  (2p) / 133 (3p) / 186 (4p) games (same corpus as above).
+- **Comparing against "strong" humans**: the census's own tier table above
+  (BGO's own Prince/King/Warlord/Emperor skill ladder) already found skill
+  moves almost nothing in these rates (war 0.33->0.59, tactic 5.14->5.77,
+  pact flat) -- but that table isn't crossed with player count, so there is
+  no "strong 2p human" row to read off directly. Given the tier table's own
+  finding that skill barely matters here, the all-tier per-player-count
+  numbers used below are a reasonable stand-in for "strong human," flagged
+  as an approximation rather than silently assumed.
+- **`put card back`** has no bot-side number at all (not 0.000) -- there is
+  no "undo a take" `Move` in this engine, because it is not a rules action,
+  only a BGO client misclick correction. The bot cannot misclick.
+- **A bug this method caught in itself**: the first version of `Colonize`
+  detection diffed `PlayerState::colonies` length, which also grows when a
+  war/aggression's `Annex` spoil steals an EXISTING colony from a rival --
+  not a fresh colonization. That inflated 2p's bot colonize rate 6x
+  (`colonize` >> `win territory auction`, which the human corpus's own
+  "most surprising number" section established should be near-equal).
+  Caught by the same suspicious-equality check that section used, fixed by
+  crediting `Colonize` in lockstep with `WinAuction` instead (a won auction
+  always completes into exactly one colonize -- `interact::colonize`'s own
+  `assert!` guarantees it) -- see `botcensus.rs`'s module doc for the full
+  account. Left in this doc as a demonstration that the "most surprising
+  number" cross-check is worth re-running on any new instrumentation, not
+  just trusted once.
+
+### 2-player: bot vs. human (n=300 bot games, n=692 human games)
+
+| action class | bot /game | human /game | ratio (bot/human) |
+|---|---|---|---|
+| take card from row | 47.667 | 74.51 | 0.64x |
+| build building | 20.680 | 12.97 | 1.59x |
+| build unit | 5.893 | 12.21 | 0.48x |
+| **build wonder stage** | 0.183 | 12.37 | **0.01x** |
+| increase population | 13.000 | 17.78 | 0.73x |
+| **upgrade unit** | 0.000 | 3.06 | **0.00x** |
+| upgrade production (farm/mine) | 8.970 | 15.46 | 0.58x |
+| develop technology | 9.067 | 23.67 | 0.38x |
+| elect leader | 6.720 | 7.37 | 0.91x |
+| **change government** | 2.157 | 0.51 | **4.23x** |
+| **play tactic** | 25.390 | 4.24 | **5.99x** |
+| **declare war** | 0.000 | 0.51 | **0.00x** |
+| **win war** | 0.000 | 0.50 | **0.00x** |
+| **play aggression** | 0.033 | 1.39 | **0.02x** |
+| propose pact | 0.000 | 0.00 | -- (both structurally 0 at 2p) |
+| accept pact | 0.000 | 0.00 | -- (both structurally 0 at 2p) |
+| **colonize** | 0.107 | 3.01 | **0.04x** |
+| discard | 24.957 | 18.26 | 1.37x |
+| **bid** | 0.640 | 6.43 | **0.10x** |
+| **win territory auction** | 0.097 | 3.01 | **0.03x** |
+| destroy | 5.290 | 2.15 | 2.46x |
+| **disband** | 6.433 | 0.99 | **6.50x** |
+| pass | 24.307 | 19.16 | 1.27x |
+| play event | 11.353 | 14.76 | 0.77x |
+| play action card | 16.760 | 13.42 | 1.25x |
+| put card back | N/A (no such `Move`) | 6.20 | -- |
+| player-turns (denominator) | 38.82 | 37.81 | 1.03x |
+
+### 3-player: bot vs. human (n=300 bot games, n=133 human games)
+
+| action class | bot /game | human /game | ratio (bot/human) |
+|---|---|---|---|
+| take card from row | 55.840 | 95.41 | 0.59x |
+| build building | 8.220 | 21.59 | 0.38x |
+| build unit | 13.457 | 15.14 | 0.89x |
+| build wonder stage | 6.057 | 17.67 | 0.34x |
+| increase population | 18.213 | 26.25 | 0.69x |
+| **upgrade unit** | 13.083 | 3.90 | **3.36x** |
+| **upgrade production (farm/mine)** | 1.153 | 21.26 | **0.05x** |
+| develop technology | 8.970 | 31.08 | 0.29x |
+| elect leader | 8.270 | 10.82 | 0.76x |
+| change government | 1.213 | 0.91 | 1.33x |
+| **play tactic** | 19.240 | 5.86 | **3.28x** |
+| **declare war** | 1.763 | 0.48 | **3.67x** |
+| **win war** | 1.623 | 0.47 | **3.45x** |
+| **play aggression** | 4.877 | 1.63 | **2.99x** |
+| **propose pact** | 7.813 | 0.94 | **8.31x** |
+| **accept pact** | 3.910 | 0.87 | **4.49x** |
+| colonize | 1.100 | 3.44 | 0.32x |
+| discard | 30.063 | 28.55 | 1.05x |
+| bid | 8.827 | 7.15 | 1.24x |
+| win territory auction | 1.000 | 3.44 | 0.29x |
+| destroy | 2.153 | 3.11 | 0.69x |
+| disband | 0.523 | 1.57 | 0.33x |
+| pass | 31.577 | 31.10 | 1.02x |
+| play event | 15.743 | 19.29 | 0.82x |
+| play action card | 19.197 | 15.40 | 1.25x |
+| put card back | N/A (no such `Move`) | 6.80 | -- |
+| player-turns (denominator) | 59.72 | 53.76 | 1.11x |
+
+### 4-player: bot vs. human (n=150 bot games, n=186 human games)
+
+| action class | bot /game | human /game | ratio (bot/human) |
+|---|---|---|---|
+| take card from row | 86.133 | 130.01 | 0.66x |
+| build building | 25.773 | 28.93 | 0.89x |
+| build unit | 21.960 | 24.57 | 0.89x |
+| build wonder stage | 27.973 | 24.66 | 1.13x |
+| increase population | 33.293 | 38.54 | 0.86x |
+| **upgrade unit** | 0.773 | 7.23 | **0.11x** |
+| upgrade production (farm/mine) | 23.567 | 30.30 | 0.78x |
+| develop technology | 33.667 | 44.24 | 0.76x |
+| elect leader | 12.987 | 14.25 | 0.91x |
+| **change government** | 0.013 | 1.41 | **0.01x** |
+| **play tactic** | 41.180 | 9.29 | **4.43x** |
+| **declare war** | 4.193 | 0.61 | **6.87x** |
+| **win war** | 3.960 | 0.58 | **6.83x** |
+| **play aggression** | 10.393 | 3.01 | **3.45x** |
+| **propose pact** | 19.600 | 2.84 | **6.90x** |
+| accept pact | 4.900 | 2.64 | 1.86x |
+| colonize | 5.013 | 5.58 | 0.90x |
+| discard | 63.773 | 35.92 | 1.78x |
+| bid | 8.813 | 13.45 | 0.66x |
+| win territory auction | 4.973 | 5.58 | 0.89x |
+| destroy | 1.873 | 4.34 | 0.43x |
+| disband | 1.207 | 2.13 | 0.57x |
+| pass | 44.880 | 46.56 | 0.96x |
+| play event | 23.427 | 27.47 | 0.85x |
+| play action card | 12.393 | 19.67 | 0.63x |
+| put card back | N/A (no such `Move`) | 9.39 | -- |
+| player-turns (denominator) | 98.27 | 73.69 | 1.33x |
+
+### Where the bot is far off -- the candidate blind spots
+
+Bolded rows above are >=3x or <=0.15x; grouped here by theme since several
+are the same underlying pattern showing up across the tables, not 78
+independent facts.
+
+**1. The 2p champion barely fights or expands -- likely a real gap.** At 2p
+the bot declares war in **0 of 300 games**, plays aggression at 2% of the
+human rate, bids in auctions at 10%, wins territories at 3%, and builds a
+wonder stage at 1.5% of the human rate. Humans at 2p aren't passive either
+(0.51 wars/game, 3.01 colonizations/game) -- this reads as the 2p vector
+having converged on an unusually insular, build-only equilibrium (its
+`build building` rate is 1.6x human, consistent with redirecting effort
+inward) rather than a principled strategy, since it skips essentially every
+other avenue of expansion at once rather than substituting one for another.
+Worth investigating as a genuine 2p champion weakness, not written off as
+"humans play more aggressively than necessary."
+
+**2. 3p/4p do the opposite: 3-7x human war/aggression rates.** `declare war`
+is 3.67x human at 3p and 6.87x at 4p; `win war` tracks it almost exactly
+(the near-1:1 declare/win ratio the human corpus itself noted holds for the
+bot too); `play aggression` is ~3x human at both. Paired with finding 1,
+this is not "the bot is more/less aggressive than humans" as a single fact
+-- it is three separately-trained vectors that landed on three different
+military postures, which argues these are per-vector local optima the
+training process found, not a stable "bot playstyle." The 3p/4p rates could
+be a genuine edge self-play discovered against a population that behaves
+identically to itself (no bluffing, no real betrayal cost) and might not
+transfer as cleanly against the more cautious mixed-skill humans in the
+corpus -- plausible but unverified; flagged, not claimed.
+
+**3. Pact proposals succeed far less often than humans' do.** Computing
+propose:accept as a hit rate: humans land **~93%** of proposed pacts at both
+3p (0.87/0.94) and 4p (2.64/2.84) -- consistent with people only proposing
+deals they're fairly sure will be taken. The bot's hit rate is **~50%** at 3p
+(3.91/7.81) and **~25%** at 4p (4.90/19.60) -- it proposes 6-8x the human
+rate but a large majority go nowhere at 4p. This is the most interpretable
+finding in the whole census: `OfferPact` is a 1-ply linear-evaluator move
+(no search, no opponent modelling), so it can look attractive in isolation
+without the evaluator checking whether the identical-policy opponent would
+actually accept it -- a plausible, checkable hypothesis for a real
+inefficiency (spending actions on proposals that don't land), not
+necessarily "the bot is more diplomatic."
+
+**4. `play tactic` is the one divergence that's consistent across ALL THREE
+player counts** (5.99x / 3.28x / 4.43x) -- every other large divergence
+flips sign or vanishes somewhere. Because it's stable across three
+independently-trained vectors, this reads as a genuine, robust bot
+preference rather than training noise: tactics are a strong, cheap,
+low-downside defensive investment, and the bot may simply be correct to lean
+on them harder than a human corpus that skews toward casual play. Tentative
+read: **defensible**, not a blind spot -- but the most testable one, since
+"does higher tactic rate correlate with the champion's actual win rate"
+is answerable from existing league data without a new experiment.
+
+**5. `upgrade unit` and `upgrade production` swing wildly and inconsistently
+by player count** (upgrade unit: 0.00x / 3.36x / 0.11x; upgrade production:
+0.58x / 0.05x / 0.78x) with no direction that holds across player counts.
+Read as per-vector idiosyncrasy (see the method caveat above) rather than a
+real finding -- training likely never rewarded upgrade RATE directly, only
+final score, so different vectors found different, roughly-equally-good
+paths to spending resources.
+
+**6. `change government` also swings hard (4.23x at 2p, 0.01x at 4p)** for
+the same reason as (5): no consistent direction across player counts, so
+treated as per-vector idiosyncrasy rather than a signal.
+
+**7. `take card from row` is consistently ~35-40% below human at every
+player count** (0.64x / 0.59x / 0.66x) -- the one broadly-below-human rate
+that IS stable across all three vectors, alongside (4)'s stable
+above-human one. Player-turn counts are close to human's (`player-turns`
+ratio 1.03x-1.33x, i.e. bot games are the same length or a bit longer), so
+this is not "shorter games, naturally fewer takes" -- the bot is spending a
+consistently larger share of its actions on other things. Plausible and
+not obviously wrong (taking cards you don't act on is exactly BGO humans'
+~8% self-corrected "put back" behaviour, which the bot cannot exhibit
+at all, and hand-limit pressure differs from a human's), but consistent
+enough across three vectors to be worth a closer look rather than dismissing
+as noise.
+
+**Not flagged as concerning**: `discard` running higher at 4p (1.78x)
+tracks directly from finding 2 (far more war/aggression means far more
+military cards drawn and discarded) -- an expected consequence, not an
+independent gap. `destroy`/`disband` move in different directions at
+different counts with no consistent story, same treatment as (5)/(6).
+
 ## Human play does not cluster into archetypes (a corpus fact)
 
 k-means over twelve behavioural axes (wonders, stages, takes, tier-3 rate,
