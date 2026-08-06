@@ -72,9 +72,13 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    two are independent by construction.
 7. **The training proxy is not known to track shipped strength.**
    [`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) runs the check that says whether it does, from its
-   own cron entry.  Before quoting any arm's progress as strength, run
-   `python3 -m experiments.proxy_check --report` and
-   `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.
+   own cron entry.  Before quoting any arm's progress as strength, read
+   `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.  The
+   `experiments/proxy_check` module that produced those lines was Python and
+   is gone; the log it wrote is still the record, and the hazard it names --
+   a training proxy that is not known to track shipped strength -- is
+   unchanged and unresolved by the port.  Re-establishing the check against
+   `neuraleval`/`arena` is open work.
 8. **A generation can complete ZERO games and nothing used to notice.**
    `experiments/arena.py`'s `_play` catches every exception per game on purpose —
    one engine bug must not kill a 40-hour tournament — so a bug that kills

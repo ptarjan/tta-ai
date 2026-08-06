@@ -4,6 +4,27 @@ Read [`docs/NEURAL_LOOP_NULL.md`](NEURAL_LOOP_NULL.md) first. In one line: the o
 operator was the identity, so 41 hours of compute re-measured a single no-op 74
 times. This document is the replacement, and the measurements that justify it.
 
+> **The pipeline is Rust now (2026-08-06).** Every stage below used to be a
+> Python script importing `engine/`; all of them have been ported and the
+> Python is deleted. The DESIGN in this document is unchanged -- the same
+> improvement operator, the same two gate arms, the same kill conditions --
+> so read it as written and substitute the commands from this table. Section
+> 9 records what genuinely changed.
+>
+> | stage | was | is |
+> |---|---|---|
+> | stage 0 teacher | `plan_teacher_gen.py` | `rankdata --teacher plan:CHAMP,width=8` |
+> | generation | `neural_gen_plan.py` | `rankdata --teacher nplan:BEST,width=8,nodes=1200` |
+> | training | `neural_train_rank.py` | `neuraltrain` |
+> | gate arm A | `neural_eval.py` x8 shards | `neuraleval --a nplan:cand --b nplan:best` |
+> | gate arm B | `neural_eval.py` x8 shards | `neuraleval --a nplan:cand --b plan:CHAMP,width=8` |
+> | shard pooling | `pool_summary.py` | *retired -- there are no shards* |
+> | the bots | `engine/bots/neural_plan.py` | `rust/src/bots/neural/plan.rs` |
+>
+> The driver is still `experiments/neural_search_loop.sh`, still under the
+> `tta_neural_loop` Scheduled Task, and still holds every lock, heartbeat and
+> atomic-install guarantee section 8 describes.
+
 ## 1. The lever, measured on this net
 
 `engine/bots/neural_plan.py` (`NeuralPlanBot`) is PlanBot's whole-turn beam with
@@ -370,3 +391,84 @@ wrong offset and execute garbage. Write the new content to a temp file in the
 same directory and `mv` it over the original; the rename swaps the inode and the
 running bash keeps reading the old one to completion. The change takes effect on
 the next relaunch, not immediately.
+
+---
+
+## 9. What the Rust port changed (2026-08-06)
+
+Four things, none of them the design.
+
+**1. The checkpoints are not torch files.** `neuraltrain` writes this repo's
+own format (`rust/src/bots/neural/net.rs`); nothing can confuse it with a
+`.pt`. The loop's paths are `.ckpt`, so a box still holding a Python-era
+`checkpoints/best_search.pt` will not pick it up: stage 0 fires and the
+lineage restarts from the frozen champion. That is correct rather than
+unfortunate, and there is deliberately no converter — a lineage half of whose
+provenance is torch and half is not is exactly what §5.2's comment-row
+convention exists to stop someone plotting straight through. The loop writes
+that comment row into `curve.tsv` itself, once, on first run.
+
+**2. No fan-out, so no `pool_summary.py`.** The eight-worker fan-out over
+disjoint `--seed0` ranges existed because CPython could not use the box any
+other way. One Rust process with `--threads` does the whole match. Everything
+that existed to reassemble those shards — `ci_cluster`, `se_cluster`, `chi2`,
+`overdispersed`, and the forty lines of comment warning against dividing
+`ci_cluster` by 1.96 — is gone with the cause.
+
+**3. The interval clusters on the deal, not the shard.** `neuraleval` reports
+`se=` from `rust/src/stats.rs`, clustered on the deal. This is a strictly
+finer clustering of the same games (a shard contained whole deals; a deal is
+the smallest unit the seat pairing makes independent) and it is computed from
+the games themselves rather than from six summary numbers. It is published
+*separately* from `ci=` for the same reason `pool_summary.py` published
+`se_cluster` separately from `ci_cluster`: `ci` already carries a `t_{k-1}`
+critical value, so a caller reconstructing an SE by dividing it leaves
+`t_{k-1}/1.96` behind. Arm B reads `se=` directly and divides nothing.
+
+Because it is a *different estimator*, the incumbent baseline moved to a
+differently named file, `loop2/anchor_best_deal.txt`. A shard-clustered SE
+must not be read into a deal-clustered floor and there is no arithmetic that
+converts one to the other; a new name makes that impossible rather than
+merely discouraged. The file is simply absent on the first run and is seeded
+by measuring the incumbent once, exactly as §5.1's seeding path already did.
+
+**4. Value rows come from the beam's own leaves.** §3 argued that the value
+rows must be the positions the beam actually prices. In Python that was a
+`_score_many` override on a `NeuralPlanBot` subclass; in Rust it is
+`bots::plan::Bank`, an explicit collection hook on both beams whose `push`
+takes a closure, so an ordinary `pick` pays nothing for it. `rankdata` reports
+which distribution a run used on its DONE line (`values=search-leaves` or
+`values=pre-move-state`), so a shard's distribution is a recorded fact rather
+than something a reader has to infer from which script wrote it.
+
+### `DISAGREE` abstains rather than reporting zero
+
+§6 makes `DISAGREE < 0.02` a pre-registered kill condition. A teacher with no
+net cannot take a 1-ply argmax to compare its search against, so `rankdata`
+prints `DISAGREE=NA`, never `0.0000`, and the driver refuses to test an `NA`
+against the threshold. "The search never overruled the net" and "there was no
+net to overrule" are two different facts, one of which is a reason to stop the
+run, and a bare zero cannot tell them apart.
+
+### The gaming guard is retired
+
+`experiments/gpu_guard.py` freed VRAM by hard-killing torch. There is no GPU
+and no torch in this pipeline, so it has nothing to detect and nothing to
+kill. `register_tasks.ps1` now *deregisters* `tta_gpu_guard` rather than
+registering it. The `PAUSE` flag it used to write survives as an operator
+control — the loop still reads it before every worker launch, so `touch PAUSE`
+parks training and deleting the file resumes it. Automatic CPU politeness is
+what it always actually was: the task's Priority 7, inherited by every child,
+plus the loop's `--threads` budget, which leaves cores for the hill-climb
+league.
+
+### Two bugs the port found by running the driver
+
+* `sfield` used `-\?`, a GNU sed extension. BSD sed reads it as a literal `?`,
+  so on any non-GNU box **every** field parsed as empty and every measurement
+  looked like a run that had produced no games — a portability bug wearing
+  the exact costume of a real failure, hidden all along by the desktop's GNU
+  sed. A bracket expression means the same thing to both.
+* The driver `cd`'d to a hard-coded `~/tta-ai`, which is why it had never been
+  run anywhere else. It now resolves the repo from its own location, as
+  `experiments/rust_league.sh` already did.

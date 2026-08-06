@@ -99,17 +99,24 @@ these for the reasoning.*
 | doc | answers |
 |---|---|
 | [`PYPY.md`](PYPY.md) | Should the trainer run on PyPy, and the undo/journal stack that replaced copy-per-candidate.  Long; the methodology is the durable part.  Carries a dated correction at the top. |
-| [`DESKTOP_QUIET.md`](DESKTOP_QUIET.md) | Keeping training invisible on the owner's gaming PC, and keeping the GPU guard alive.  The operational manual for that box. |
+| [`DESKTOP_QUIET.md`](DESKTOP_QUIET.md) | Keeping training invisible on the owner's gaming PC.  The operational manual for that box.  Carries a dated note at the top: the GPU guard is retired (there is no GPU in the pipeline), but the windowless-launch machinery it sat beside is unchanged and still load-bearing. |
 
 ## Elsewhere in the repo
 
-[`engine/PROGRESS.md`](../engine/PROGRESS.md), [`experiments/PROGRESS.md`](../experiments/PROGRESS.md) and
-[`data/PROGRESS.md`](../data/PROGRESS.md) are per-package build logs. `advisor/`
-and `harness/` (Python) were deleted once `rust/src/advisor/` and
-`rust/src/harness/` fully replaced them, so `advisor/PROGRESS.md` is gone too.
-`experiments/PROGRESS.md` predates the Rust port and documents only the old
-Python toolchain (hillclimb.py, the league_*p/ ladders, arena.py) — read it as
-history, not as a current build log. [`analysis/frozen/README.md`](../analysis/frozen/README.md)
+[`experiments/PROGRESS.md`](../experiments/PROGRESS.md) and
+[`data/PROGRESS.md`](../data/PROGRESS.md) are per-package build logs.
+`experiments/PROGRESS.md` predates the Rust port and documents only the old Python toolchain
+(hillclimb.py, the league_*p/ ladders, arena.py) — read it as history, not as a
+current build log.
+
+**There is no Python left in this repo.** `engine/`, `tests/`, the Python half
+of `experiments/` and `tools/gate.sh` were deleted on 2026-08-06 once the last
+thing depending on them — the neural self-play loop — had every stage ported to
+a Rust binary; `advisor/` and `harness/` had gone earlier for the same reason.
+So `engine/PROGRESS.md` and `advisor/PROGRESS.md` are gone with their packages.
+Docs that quote a `python3 ...` command in a "how to reproduce" block are
+recording how a past measurement *was* taken and have been left as written;
+they are history, not instructions. [`analysis/frozen/README.md`](../analysis/frozen/README.md)
 records which frozen weight vectors are trustworthy and which are quarantined —
 read it before quoting any frozen-champion number.
 

@@ -49,9 +49,9 @@ Concretely:
   for one point of culture production, and the ratio to its own ceiling) and
   takes-per-age **with their denominators** — decisions seen, decisions where a
   take was legal, and the take rate given one was offered.
-* **Unit tests are cheap and are still expected.**  `python3.13 -m pytest`.
-  Tests are how the last two real bugs on this project were found; they are not
-  what the rule is about.
+* **Unit tests are cheap and are still expected.**  `cd rust && cargo test
+  --profile difftest`.  Tests are how the last two real bugs on this project
+  were found; they are not what the rule is about.
 * **Every rate reported anywhere must carry its denominator.**  A rate of zero
   has two causes that look identical in a table — *never chosen* and *never
   offered* — and `docs/OPEN_ITEMS.md` item 2.17 was closed on the wrong one of

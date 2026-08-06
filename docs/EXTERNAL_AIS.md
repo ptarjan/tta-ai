@@ -655,7 +655,7 @@ deliberately:
 | **1 — advised seat, coarse opponents** | full state snapshot + ranked candidate list + move played at every one of *our* decisions; opponents reported only as the cheap visible fields (card taken, culture, science, strength, new techs/wonders) | ~1.5–2× | Win rate and score margin of *our bot* vs the app AI; our bot's decisions in real (non-self-play) positions; override rate. **This is the tier to actually run.** |
 | **2 — full transcription** | every opponent action replayed through the engine as a real move, so the app AI's *policy* is captured | ~3×, and needs new code | Move-level agreement/disagreement with the app AI: the disagreement catalogue. Worth doing for a handful of games only. |
 
-Tier 2 needs a change the advisor deliberately does not have today: [`advisor/README.md`](../advisor/README.md)
+Tier 2 needs a change the advisor deliberately does not have today: `advisor/README.md` (deleted with the Python advisor; `rust/src/advisor/` replaced it)
 is explicit that "**Opponents' turns are *not* replayed as moves; you report the
 result**". Someone would have to add an opponent-move entry path that pushes rival
 actions through `engine.actions` — which also means resolving the hidden information the

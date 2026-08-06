@@ -47,95 +47,109 @@ Then, by area:
 ## Layout
 
 ```
-rust/         the live implementation: engine, bots, self-play, the hill-climb
-              league, the advisor and the app harness (rust/src/bin/)
-engine/       the original Python rules engine and bot family -- superseded by
-              rust/ for everything except one thing: it is still a live
-              runtime dependency of the GPU neural-training loop
-              (experiments/neural_search_loop.sh), which has not been ported
-tools/        tools/gate.sh (the Python verification gate for engine/) and its
-              two dependencies; everything else here was one-off and is gone
-experiments/  the live Rust league (rust_league.sh) plus the still-Python,
-              still-live neural self-play/training loop and its GPU-box
-              deploy scripts (deploy/); the old Python hill-climb league is
-              gone -- rust/src/bin/climb.rs replaced it
-tests/        the Python unit suite -- kept because it covers engine/, which
-              is still live (see above)
+rust/         the implementation. All of it: engine, bots, self-play, the
+              hill-climb league, the neural net's forward pass AND its
+              backprop trainer, the advisor and the app harness
+              (rust/src/bin/)
+experiments/  the two live drivers -- rust_league.sh (cron, the hill-climb
+              league) and neural_search_loop.sh (Scheduled Task on the
+              desktop, the neural loop) -- plus the champion vectors those
+              read and the Windows deploy scripts (deploy/)
+tools/        hidden_launch.vbs and wincheck.ps1, the Windows launcher that
+              keeps Scheduled Tasks windowless and the check that proves it;
+              plus the two fingerprint JSONs, kept as the recorded behaviour
+              of the retired Python engine
 data/         card data, derived from the sources in docs/SOURCES.md
 docs/         see docs/README.md
+sources/      the human game-log corpus
 analysis/     analysis/frozen/ only: reference champion vectors the neural
-              loop and several docs load by that path; everything else here
-              was one-off and is gone
+              loop and several docs load by that path
 ```
 
-**Most of the Python in this repo is dead and has been deleted** (`advisor/`,
-`harness/`, `exp_quiesce/`, most of `tools/`, `analysis/` and `experiments/`) —
-`rust/` is the current implementation of the engine, every bot, self-play, the
-hill-climb league, the advisor and the app harness. What survives under
-`engine/`, `tests/`, `tools/gate.sh` and part of `experiments/` is not legacy:
-it is a still-running Python/torch GPU training loop for the neural net
-(scheduled on the desktop training box, see [`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md)
-and [`docs/NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md)) that has not
-been ported. Do not delete `engine/` without porting that loop first.
+**There is no Python left in this repo.** `engine/` (20,100 lines), `tests/`
+(25,240), the Python half of `experiments/` (2,681) and `tools/gate.sh` +
+`bug_audit.py` (1,334) are gone, along with `pytest.ini` and `ruff.toml`. The
+last thing holding them was the neural self-play loop, which was a live
+unattended pipeline calling six Python stages; every stage of it is now a Rust
+binary. The one `.py` file that remains is
+`sources/github_chellmuth_tta_cards.py`, which is archived third-party corpus,
+not our code.
 
 Build the Rust binaries with `cd rust && cargo build --release`; they land in
-`rust/target/release/` (`arena`, `climb`, `selfplay`, `advisor`, `harness`).
+`rust/target/release/`:
 
-The bots live in `engine/bots/`: `GreedyBot` (`__init__.py`), `WeightedBot`
-(`weighted.py`, the linear evaluator), `QuiescentBot` (`quiescent.py`),
-`PlanBot` (`plan.py`, the beam search), the book bots (`book.py`) and the
-neural family (`neural_*.py`). [`docs/BOT_ROSTER.md`](docs/BOT_ROSTER.md) says what each is for.
+| binary | what it does |
+|---|---|
+| `arena` | duel two weight vectors, seat-paired, deal-clustered interval |
+| `neuraleval` | duel two arbitrary bot specs, either side a net checkpoint |
+| `climb` | the hill-climbing league |
+| `selfplay` | play N games and tally by bot and by seat |
+| `rankdata` | generate value-net training shards from a teacher's self-play |
+| `neuraltrain` | train the value net (backprop, AdamW, ranking + value loss) |
+| `advisor` | interactive "what should I play next" |
+| `harness` | interactive app-mirroring session |
+
+The bots live in `rust/src/bots/`: `GreedyBot` (`greedy.rs`), `WeightedBot`
+(`weighted/`, the linear evaluator), `QuiescentBot` (`quiescent.rs`),
+`PlanBot` (`plan.rs`, the beam search), the book bots (`book.rs`) and the
+neural family (`neural/`). [`docs/BOT_ROSTER.md`](docs/BOT_ROSTER.md) says
+what each is for.
 
 ---
 
 ## Running things
 
-Verify a change before committing — static checks, the unit suite, and the
-eight-arm fingerprint digests:
+Verify a change before committing:
 
 ```bash
-bash tools/gate.sh            # full: tests + both fingerprints, plain and paranoid
-bash tools/gate.sh --fast     # tests + narrow fingerprint only (inner loop)
+cd rust && cargo test --profile difftest
 ```
 
-Just the tests:
-
-```bash
-python3 -m unittest discover -s tests
-```
-
-Play a game through the app harness (Rust; see `rust/src/bin/harness.rs`):
+Play a game through the app harness:
 
 ```bash
 rust/target/release/harness --players 3 --difficulty hard --app-version 2.4.1
 ```
 
-Evaluate one bot against another, seat-balanced (either the Python wrapper,
-still live, or the Rust binary directly):
+Evaluate one weight vector against another, seat-balanced:
 
 ```bash
-python3 -m experiments.evaluate --a champion_4p.json --b greedy --games 120 --players 4
 rust/target/release/arena --a challenger.json --b experiments/champion_4p.json --games 240 --threads 6
 ```
 
-The self-play league is Rust now and is kept alive from cron by
-`experiments/rust_league.sh`, which launches all three player counts (`climb`,
-`rust/src/bin/climb.rs`). The separate, still-Python neural self-play/training
-loop (`experiments/neural_search_loop.sh`) runs unattended on the desktop GPU
-box; see [`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md).
+Evaluate any two bot specs, including value-net checkpoints, seat-balanced.
+A spec is `KIND[:PATH][,KEY=VALUE]...`; `neural:` is the net's 1-ply argmax
+and `nplan:` is the whole-turn beam with the net as its leaf:
+
+```bash
+rust/target/release/neuraleval --a nplan:checkpoints/cand.ckpt,width=8 \
+    --b plan:analysis/frozen/champion_2p.json,width=8 --games 240 --threads 6
+```
+
+A `KEY` the `KIND` does not read is an error rather than a no-op — a silently
+ignored `width=` measures a different bot than the one you asked for.
+
+The self-play league is kept alive from cron by `experiments/rust_league.sh`,
+which launches all three player counts (`climb`). The neural self-play and
+training loop (`experiments/neural_search_loop.sh`) runs unattended on the
+desktop box under a Scheduled Task; see
+[`docs/DESKTOP_QUIET.md`](docs/DESKTOP_QUIET.md) and
+[`docs/NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md).
 
 ---
 
 ## Two rules that have each already cost real work
 
-**The fingerprint gate is not optional.** Eight arms — NARROW/WIDE
-(GreedyBot), WNARROW/WWIDE (WeightedBot), QNARROW/QWIDE (QuiescentBot),
-PNARROW/PWIDE (PlanBot) — hash a fixed batch of games per bot. A digest that
-moves means behaviour changed; a digest that moves *unexpectedly* is a bug the
-logs cannot show you after the fact. **Never re-derive a failing digest to make
-the gate pass.** Explain why it moved first, on a clean clone, attributing each
-moved arm to a specific cause. The derivation discipline is written down in
-[`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0.
+**A behaviour change must be explained, not absorbed.** The eight-arm
+fingerprint gate that used to enforce this hashed a fixed batch of games per
+bot under the Python engine, and retired with it; `cargo test --profile
+difftest` is the gate now. The discipline it existed to impose has not
+retired: when a test that pins measured behaviour starts failing, **never
+re-derive the expected value to make it pass.** Explain what moved and why
+first, attributing it to a specific cause. That rule was written down after it
+was broken, in
+[`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale)
+§9.0, and it is about people, not about Python.
 
 **Do not run any git command in a working checkout while the league arms are
 running** — not `pull`, not `checkout`, not `stash`, not even `status`. It

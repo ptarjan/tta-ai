@@ -6,6 +6,35 @@ window every few minutes. This records what was actually wrong, what was
 changed, and — because a previous report on this same subsystem was wrong —
 exactly how each claim was verified.
 
+> **The GPU guard is retired (2026-08-06); everything else here still
+> stands.** `experiments/gpu_guard.py` freed VRAM by hard-killing our torch
+> `python.exe` when a foreign process appeared on the card. The training
+> pipeline has no GPU and no torch in it any more — it is CPU Rust — so the
+> guard has nothing to detect and nothing to kill, and it has been deleted
+> along with `guard_task.xml` and `run_guard.cmd`.
+>
+> **What survives, and it is most of it.** The `PAUSE` flag is still read by
+> `experiments/neural_search_loop.sh` before every worker launch, so it is now
+> an *operator* control with no automatic writer: `touch PAUSE` parks
+> training, deleting the file resumes it. Automatic politeness is what it
+> always actually was — the loop task's `<Priority>7</Priority>`
+> (below-normal, **inherited by every child process**) plus the loop's own
+> `--threads` budget, which leaves cores for the hill-climb league. Neither of
+> those was ever the guard's doing.
+>
+> **The windowless machinery in §1.1 and §2 is unchanged and is still
+> load-bearing**: `tools/hidden_launch.vbs`, `tools/wincheck.ps1`, the
+> explicit `<Duration>` on every trigger, and the reap-by-PID rule. Sections
+> 1.2 and 1.3 are the reasons those exist and are still worth reading; §3.1's
+> guard-detection test is now a historical record of a subsystem that no
+> longer runs.
+>
+> **One manual step on the desktop.** `register_tasks.ps1` now issues
+> `schtasks /delete /tn tta_gpu_guard /f` instead of registering it, so the
+> next redeploy cleans the box. Until that redeploy happens, the already-
+> registered task will fire every five minutes against a script that no longer
+> exists. Either redeploy or run that one command by hand.
+
 ## 1. What was broken
 
 ### 1.1 Every launch flashed a console (the popup storm)

@@ -308,7 +308,7 @@ this commit** — everything learned earlier about military tempo was fitted to 
 half its Age I tactics, so champions and league tables either side of `7d40f53` cannot be
 compared and a champion carried across the boundary carries weights tuned to a deck that
 no longer exists. The climbs were left running rather than killed; restarting them is the
-user's call. See [`engine/PROGRESS.md`](../engine/PROGRESS.md) for the digest re-baseline and the same warning.
+user's call. See `engine/PROGRESS.md` (deleted with `engine/` on 2026-08-06; read it in git history) for the digest re-baseline and the same warning.
 
 Applying the fix also surfaced a latent engine bug (fixed in `5898006`, the commit before
 it): `effects.compute()` clamped only the happiness rating at zero, so Age III

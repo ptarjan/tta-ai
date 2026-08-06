@@ -447,7 +447,7 @@ isolates exactly that one file — and repeated twice:
 Rep-to-rep spread is under 2%, so these are real. The 4p number is the one
 that matters: the hill climbs are 4p-heavy, and **greedy 4p went 0.99 ->
 1.32 games/cpu-s, a 33% throughput gain — one third more games per CPU-second
-for free.** In [`engine/PROGRESS.md`](../engine/PROGRESS.md) terms the greedy 4p cell moved 1.01
+for free.** In `engine/PROGRESS.md` terms (that file went with `engine/`; git history has it) the greedy 4p cell moved 1.01
 (c8a70a4) -> 1.32.
 
 Why 1.33x end-to-end and not 1.55x: Amdahl. If copy were 64% of runtime, a
