@@ -1,0 +1,353 @@
+# Distilled audits: score, combat, coverage, and bot-blindness findings
+
+Distilled 2026-08-06 from ten audit docs (SCORE_AUDIT, COMBAT_AUDIT,
+COVERAGE_AUDIT, SYSTEM_COVERAGE, UNCOVERED_TYPES, WAR_RATE_CENSUS,
+AGGRESSION_RATE, AGGRESSION_STATUS, WASTED_ACTIONS, EVENT_SEEDING; ~7,000
+lines, all `git rm`'d). Full narrative, per-run numbers and champion-specific
+weight tables are in git history — search commit messages for the doc names
+above.
+
+**Provenance note.** All ten source docs were written against the Python
+engine (`engine/*.py`, `tests/*.py`), deleted 2026-08-06 in favour of the
+Rust port under `rust/src/`. Every rules/engine finding below was re-checked
+against current `rust/src/` and is kept only where the equivalent logic still
+exists there (paths given). Behavioural numbers (take-rates, census tables,
+champion weight vectors, A/B win rates) describe specific long-gone
+Python-era bot generations and are **not** carried forward — the game rules
+outlive a bot generation, a win rate does not.
+
+---
+
+## 1. Rules bugs found and fixed (still true of the game; verified live in `rust/src/`)
+
+Each of these was a real divergence from the printed 2015 base-game rules,
+confirmed against the rulebook/FAQ, fixed, and the fix is present in the
+current Rust engine. Not re-derived here — just recorded so nobody
+re-discovers them by hand.
+
+- **Card scoring "produced by X" means the source, not the whole rating.**
+  `Impact of Agriculture` and `Impact of Industry` score what farms/mines
+  *produce*, not the player's food/resource rating (which can include
+  pact bonuses etc.). Engine's `building_output`/`mine_resources`/
+  `farm_food` (`rust/src/effects.rs`) implement the source-only reading.
+  Lesson: any card phrased "the X produced by their Y" needs the
+  building-output path, not the flat rating.
+- **Unstaffed buildings produce nothing.** A tech card with no worker on it
+  is a technology, not a building; per-building leader bonuses (best
+  lab/library, best theater, etc.) must require a worker. Settled by three
+  independent sources (card text, FAQ v1.5 p.9 on the Transcontinental
+  Railroad, and a 150-game BGO corpus check: 7303/7600 vs 7275/7600 in
+  favour of the staffed reading). `rust/src/effects.rs`'s `building_output`
+  table is the single reader all such modifiers now go through.
+- **A ruined wonder (Ravages of Time) stops producing entirely**, including
+  for Michelangelo's happy-face culture and St. Peter's happy-source count.
+  `rust/src/effects.rs` filters flipped/ruined wonders out of every reader
+  (`happy_source_count` and the completed-wonder iteration both exclude
+  ruins now).
+- **St. Peter's Basilica counts a colony as a happy source**, on the same
+  terms as the government and leader cards (both already counted; a colony
+  card is a card too). `happy_source_count` (`rust/src/effects.rs`) walks
+  `p.colonies`.
+- **A second air force must double the *outdated* army's (smaller) bonus**
+  when armies of mixed age exist, not always the fresh one's.
+- **"The players with the most/least X" affects every tied player, not
+  one.** `playersWithMostHappyFaces` (Immigration) and
+  `playersWithMostDiscontentWorkers` (Civil Unrest) are printed plural,
+  per Code of Laws p.7. `rust/src/events.rs`'s `apply_tied_targets`
+  implements the tied-multi-target reading explicitly (as opposed to the
+  six genuinely-singular `strongestPlayer`/`weakestPlayer` keys).
+- **Winston Churchill's military leader option is restricted**: the 3
+  science/3 resources may only fund military-unit technologies/builds, not
+  spent freely. `rust/src/apply.rs::h_churchill` branches on
+  `ChurchillChoice::{Culture,Military}`.
+- **Bill Gates pays his end-of-lab culture when he leaves play**, not only
+  at game end (card text: "removed from the game **or** the game ends").
+- **War over Technology's victor may take blue special technologies instead
+  of science**, up to the strength advantage, at their printed (not
+  discounted) cost, choosing freely how to split — this is a genuine
+  player *decision*, not a formula. Implemented via
+  `rust/src/interact.rs::war_tech_spoils` on the existing pending-choice
+  machinery (all bots that clone+apply+evaluate get the choice for free;
+  BookBot needed an explicit preference). Confirmed against ~40 archived
+  BGO journals whose resolved spoils sum exactly to the strength advantage
+  across mixed cards+science.
+- **A war declaration must cancel a pact that ends on attack**, exactly as
+  an aggression already did (`rust/src/combat.rs::cancel_attack_pacts`,
+  called from both `h_war` and `start_aggression`). Missing this let a
+  Promise-of-Military-Protection pact's +4 strength survive into the very
+  war it should have been cancelled by.
+- **Aggression legality must exclude *both* sides' pact-conferred strength**
+  when the pact ends on attack, not just the attacker's — otherwise
+  attacking a Military Alliance partner (+3 both sides) needed a 6-point
+  edge instead of 1. `rust/src/combat.rs`'s `attack_strength`/
+  `defense_strength` (mirrors, sharing `_doomed_pact_strength`) fixed this.
+- **A resignation to 2 players must not strip pacts from hand or the
+  current-age deck** — that's a *setup* rule (no pacts in a 2p deck), not a
+  dynamic one keyed on live player count. Only future-age decks re-trim.
+- **Revolution must carry over spent/unspent civil and military actions as
+  an update against the new government's totals, not a cap** against the
+  old ones — a revolution from Despotism (2 MA) to Monarchy (3 MA) with
+  nothing spent must leave 3 MA available, not 2. Same bug mirrored for
+  Robespierre's civil-action side. `rust/src/apply.rs::h_revolution`.
+- **The one-name-per-technology rule does not apply to yellow action
+  cards** (which have no science cost and aren't technologies) — several
+  action cards exist in 2-3 copies and holding one must not block taking
+  another. Gated on `CardType::Action` being excluded, `rust/src/legal.rs`.
+- **`buildDiscount` reduces cost by the best single applicable age entry,
+  not the sum of all of them** — the ages on one card are mutually
+  exclusive (a building has exactly one age). `rust/src/effects.rs`'s
+  `build_discount` is a flat per-age array (`Stats::build_discount`), not
+  an accumulator.
+- **Colonization: which units to sacrifice for the bid is the colonizing
+  player's choice**, not an engine-picked greedy default (cheapest unit /
+  bonus cards first) — CoL §11.3. This was fixed after the original audits
+  by turning it into a real pending decision
+  (`send_unit`/`send_bonus`/`send_done`); the old greedy behaviour is kept
+  only as an explicit BookBot policy.
+- **The end-of-turn military hand-limit discard is the player's decision**,
+  not FIFO. Rulebook: "Only step requiring a decision." A blind
+  oldest-first discard was measured (Python era) to throw away the single
+  best defence card on ~20-40% of over-limit turns. `rust/src/interact.rs`
+  now suspends `end_of_turn` and resolves the choice through
+  `discard_options`/a real pending decision (`rust/src/economy.rs`,
+  `rust/src/combat.rs`).
+- **A bot must evaluate a pending decision from the seat that actually owns
+  it** (`state.decider()`), not from `state.current` — the two differ
+  whenever a pending choice (pact accept/refuse, a colony bid, a defence)
+  belongs to someone other than the player whose turn it is. Getting this
+  wrong means the bot maximises a rival's position on that decision. Fixed
+  and now the pervasive convention: `rust/src/state.rs::decider()` is used
+  throughout `rust/src/bots/`.
+
+## 2. Known rules gaps — genuine, deliberately left unfixed
+
+Recorded so nobody "fixes" these accidentally or re-derives that they're
+open. Not verified against current Rust beyond confirming the general shape
+still applies (combat/events logic is otherwise a faithful port); revisit
+before assuming either is still unaddressed if working in this area.
+
+- **Plunder's food/resource split is chosen greedily by the engine, not by
+  the attacker.** FAQ p.7 says the aggressor chooses the mix; totals and
+  the victim's cap are right, only the mix isn't a decision. Low impact.
+- **Annex and Infiltrate don't enforce their printed target requirement**
+  (a colony to steal / a leader or unfinished wonder to remove) — playing
+  either against a target that can't pay is legal, costs the card and a
+  military action, and resolves to nothing. Deliberately not changed: the
+  printed rules don't clearly settle whether this is illegal, and changing
+  `legal_moves` without a firm citation was judged worse than a rare void
+  play.
+
+## 3. Validation methodology — durable, applies to any future audit
+
+These are lessons about *how to validate this engine*, not about any one
+bug. They cost real time to learn and are cheap to re-state.
+
+- **A corpus validates a formula only over the inputs it can produce.** A
+  100%-agreement row is a statement about the *inputs measured*, not proof
+  the formula is right. Textbook case: `Impact of Agriculture` scored
+  66/66 against 1,011 human games while implementing the wrong formula
+  (rating instead of farm production) — because at 2 players every pact is
+  removed from the game, and a pact's food symbol is the *only* thing in
+  the base game that puts food on the board from outside a farm. The two
+  readings were identically equal in every game in a 2p-only corpus, so no
+  amount of that data could have separated them. Before trusting a
+  percentage from a replay corpus, ask what inputs produced it and whether
+  they could distinguish the hypothesis you actually care about from the
+  alternative.
+- **A swap-diff pricer (put a card on the board, diff `compute()`) is exact
+  over whatever the stats struct tracks, and silently blind to anything
+  that lives outside it** (e.g. token grants that bypass the stats struct
+  entirely). It "can never drift" from the rules engine, but only for the
+  fields it can see — every non-stats side-effect of a swappable card needs
+  an explicit rider.
+- **Reverting a fix and re-measuring, one at a time, is the only reliable
+  way to attribute a behavioural or fingerprint change** — reasoning about
+  which fix "should" move a given metric is repeatedly wrong in this
+  project's own history (a fix predicted inert moved a metric because of
+  which player count it plays at; a fix predicted common turned out rare).
+  Attribute, don't reason.
+- **Before quoting an instrument's number, verify the instrument can move**
+  — i.e. that it would report differently if the thing it's supposedly
+  measuring were absent. Two separate "spectacular" findings in this
+  project's history turned out to be measuring something that couldn't
+  vary (a peek that was common-mode across all candidates and so cancelled
+  out of every argmax; a leak-rate counter that was identical whether or
+  not the leak was fixed because it counted "did this draw a card" instead
+  of "was the card it drew the true one"). A negative control — show the
+  number moves when you deliberately break the thing — is cheap and is
+  what separates a result from an artifact.
+- **Every rate needs its denominator stated alongside it**, and specifically
+  "never chosen" vs "never offered" must be distinguished — a bare
+  take-rate of 0% is ambiguous between "the bot refuses this" and "this was
+  never legal here," and conflating them has produced wrong conclusions
+  more than once in this project.
+- **Standing rule for changes to this evaluator/engine**: land on master and
+  read the real training-league runs; do not validate with offline paired
+  A/B batches or replay a fixed fingerprint set (both compete with training
+  for the same cores, and a digest-gate approach was deliberately replaced
+  by richer logging when the Python `tools/gate.sh` was retired). Ship a
+  change at the weight your own reasoning best defends, not pinned inert
+  pending an A/B; if the best-reasoned setting is "off," don't land it.
+
+## 4. Evaluator/search architecture — structural blind spots
+
+The Python bot-evaluator architecture (a linear feature-weight dot product,
+`WeightedBot` = 1-ply, `PlanBot`/`QuiescentBot` = beam/quiescence on top of
+the same feature set) is carried into the Rust port essentially unchanged —
+`rust/src/bots/weighted/` has the same `hand_potential`/`card_potential`/
+`row_pressure`/`deferred_credit`/`event_scoring_margin` names and shapes as
+the Python original, and `rust/src/bots/{plan,quiescent}.rs` are the same
+search structures. The following are therefore standing architectural risks
+to check for, not closed Python-era findings — verify current behaviour
+before assuming either the bug or its fix is in whatever state the
+Python-era measurement found it.
+
+- **A 1-ply evaluator cannot see any move whose payoff is deferred to
+  another player's decision**, and every tie in this project breaks toward
+  the lowest-indexed/do-nothing candidate. This is the single mechanism
+  behind three independent-looking symptoms in the Python-era bots: never
+  offering a pact (the pact object doesn't exist until the partner accepts,
+  so the offering trial state shows only "one fewer hand card"), never
+  bidding first in a colony auction while rivals remain (a bid only
+  resolves the auction, hence becomes visible, once you're the sole
+  remaining bidder), and never declaring war profitably when the payoff
+  lands a full turn later at resolution. The general fix pattern used here
+  — `deferred_credit`/`auction_committed`-style terms that credit the
+  *expected* value of an outstanding self-initiated pending decision, and
+  a "drain the pending stack before scoring" pass (quiescence) before a
+  bot prices its own real decision the same way it prices nodes inside its
+  own search — is the shape to reach for again if this class of bug
+  resurfaces. A related, easy-to-reintroduce bug: draining/quiescing must
+  determinize hidden piles first (deck order *and* the face-down future
+  events queue, which is public in age-order but not in identity) — a
+  drain that peeks the real next card is a latent information leak even
+  though it's provably common-mode (identical across every candidate, so
+  it doesn't change any single decision) *until* some future feature makes
+  candidates draw differing amounts, at which point it becomes live and
+  nothing will fail to flag it.
+- **Card-identity blindness**: if the evaluator reduces "what's in my hand"
+  to a bare count and a sum of age levels, two completely different cards
+  produce an identical feature vector, so every take/develop/play of a
+  civil card prices near zero regardless of the card. In the Python
+  history this was the dominant cause of the bot "wasting" civil actions
+  (not an `end_turn`-scored-too-early search artifact, which is real but
+  fighting it directly measurably made play *worse* — the fix that worked
+  was giving the evaluator a way to tell a good card from a bad one via a
+  discounted preview of its own effects, `hand_potential`). If a future
+  audit finds a bot inexplicably passing instead of playing/taking an
+  obviously good card, check whether the relevant card category has an
+  identity-bearing feature before assuming the search or the weight is
+  the problem.
+- **`end_turn` (and any other move that runs a full production/end-of-turn
+  phase inside its own trial state) is structurally flattered** relative to
+  every other candidate in a 1-ply comparison, because its child state has
+  already banked income the other candidates haven't. A flat additive bias
+  constant cannot correct this because the flattery scales with the
+  player's economy and the game phase (small early, large in Age III/IV).
+  Don't "fix" it by retuning that bias in isolation — in this project doing
+  so (with the card-identity fix *not* also present) reliably made the bot
+  weaker, because the bias was incidentally acting as a confidence filter
+  on an evaluator that otherwise couldn't tell a good move from noise.
+- **Adding a new 0.0-default weight for one side of an already-priced
+  trade does not leave a card "neutral" or "inert" — it biases it, in the
+  direction of whichever side you just made visible.** A card whose cost is
+  priced through a trained weight and whose benefit sits behind a 0.0
+  default reads as pure cost and gets systematically avoided (measured:
+  all 12 base-game special technologies priced net-negative under a
+  trained vector, six of them taken zero times in 40 games); the mirror
+  case (cost at 0.0, benefit trained) makes a card read as too cheap and
+  over-taken. "Inert" is a true claim about a *previously-trained weight
+  vector being numerically unchanged*; it is not a true claim about the
+  *card*. Before adding a one-sided 0.0-default feature, check whether the
+  other side of that same card's trade is already priced.
+- **The forecast and the actual payout should be one function, not two.**
+  Wherever a search wants to *estimate* a future scoring event (e.g. "what
+  will the pending Age III `Impact of ...` events pay out right now"), route
+  it through the exact same code the engine uses to actually pay it
+  (`pending_final_events`/`final_event_culture`-style split in
+  `rust/src/events.rs`) rather than restating the formula in the
+  evaluator. A second copy of a scoring formula living in the bot layer is
+  this project's single most repeated bug shape (it recurred at least five
+  times across the Python-era history: build discount, hand double-counting,
+  population cost, a ranking tie-break block, and Hollywood/Internet's
+  building-output logic).
+- **A linear (weighted-sum) evaluator cannot express diminishing returns or
+  "I have enough of X, I need Y instead."** Two options that trade off the
+  same way in every position (e.g., a mine's resource_rate constant always
+  beating a farm's food_rate constant) will be resolved the same way
+  *always*, in every game state, by construction — no amount of retraining
+  fixes this without either a nonlinear term or separate features that
+  can flip sign with context (e.g., an explicit horizon/lateness
+  multiplier). If an audit finds a mechanic taken 0% of the time despite
+  being legal constantly and priced non-negatively, check whether it's
+  losing a fixed linear comparison to a mechanic that's *never* worse
+  in this feature basis, before concluding the mechanic itself is
+  mispriced.
+
+## 5. Verdict per source doc
+
+- **SCORE_AUDIT.md** — real content: nine confirmed scoring-rule bugs (§1
+  above), the corpus-validates-only-what-it-varies finding, and the
+  swap-diff blind-spot finding. Kept. The 23-card-type-by-type table,
+  fingerprint-digest hashes, and the BGO-corpus percentage tables are
+  Python-era measurement detail; dropped.
+- **COMBAT_AUDIT.md** — real content: three confirmed war/aggression/pact
+  bugs, the War-over-Technology decision implementation, the military
+  discard-as-decision fix, and the 1-ply-can't-see-deferred-payoff
+  diagnosis (pacts/colonies/wars). Kept. Per-generation win-rate numbers,
+  specific game counts, and the multi-page "why the champions never play
+  pacts" investigation narrative are dropped; the structural lesson
+  survives in §4 above.
+- **COVERAGE_AUDIT.md** — real content: two more confirmed engine bugs
+  (revolution's action-carryover cap, one-per-name wrongly gating action
+  cards) and the colonization-sacrifice-is-a-choice finding (later fixed).
+  Kept. The large per-mechanic take-rate census and the dead/live-feature
+  variance tables describe one Python-era champion generation and are
+  dropped entirely.
+- **SYSTEM_COVERAGE.md** — nothing durable beyond what's captured above.
+  It is a point-in-time behavioural census of Python-era champions
+  (wonder/war/colony/tech rates vs. a human corpus) that the doc's own
+  banner-style caveats already mark as superseding *and being superseded
+  by* several even-earlier documents — i.e., a census of a census.
+  Nothing here is a rules fact, a fix, or a methodology lesson not already
+  captured elsewhere. Dropped in full.
+- **UNCOVERED_TYPES.md** — real content: the military-discard-FIFO bug
+  (already captured under COMBAT_AUDIT's fix) and the general "half-priced
+  card" lesson (§4 above). Kept (folded into §4). The special-tech/
+  production-building take-rate tables and the specific weight-scan numbers
+  are dropped.
+- **WAR_RATE_CENSUS.md** — an explicitly partial, ~20x-undersized,
+  single-arm, single-player-count run that answers none of its own
+  questions ("no monotonic trend... not strong evidence of anything," "one
+  arm only... every number below is a small-n point estimate"). Nothing
+  durable; the census-instrument design note (separate the bot's own
+  decisions from its search's trial evaluations when counting) is already
+  captured in §3. Dropped in full.
+- **AGGRESSION_RATE.md** — real content: the general shape "a rate measured
+  under a 1-ply bot is not a fact about a deeper-searching bot" and the
+  quiesce-before-scoring-your-own-pending-decision fix pattern, both folded
+  into §4 above. The specific before/after game counts, digest hashes, and
+  the extensive determinization/leak investigation (interesting but fully
+  Python/`tools/gate.sh`-specific machinery, since deleted) are dropped.
+- **AGGRESSION_STATUS.md** — a short, explicitly-stale re-measurement note;
+  its own banner says the tool and the champion path it used are gone.
+  Nothing durable beyond "the qualitative shape (rules-declined aggressions
+  are the majority and correct; multi-card defences are the ones given up)
+  is a reasonable prior, unconfirmed against the current bot." Dropped.
+- **WASTED_ACTIONS.md** — real content: the `end_turn`-flattery structural
+  bias and the card-identity-blindness root cause, both folded into §4
+  above, including the non-obvious result that fixing the visible
+  `end_turn` bias in isolation made the bot measurably *worse*. All 4p
+  numbers in the source doc were self-flagged as measured against a known
+  degenerate weight vector; not carried forward regardless.
+- **EVENT_SEEDING.md** — real content: the forecast-should-equal-payout
+  architecture lesson and the observation that `_card_yields`-style
+  per-card tables are the wrong hook for military-deck cards priced by
+  resolution (aggressions/wars) or already gated out entirely (pacts at
+  2p), both folded into §4. Also recorded two live-but-unfixed Python-era
+  bugs (`_c_pact_offer` overwriting rather than appending to a pact list;
+  a book-bot pact-response reading a context key the offer handler never
+  wrote) — both are Python-specific paths in deleted code and were not
+  re-checked against Rust; not carried forward as an open item since
+  there's nothing to point at anymore. The A/B win-rate tables and weight
+  scans are dropped.
