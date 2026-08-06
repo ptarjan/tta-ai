@@ -623,14 +623,32 @@ class BookBot:
         12-rule list ever referenced `("churchill", ...)`), not a strategy
         call, so it is fixed here.
 
-        WHICH of the two flavours to take *is* a strategy call: culture is
-        unconditional value, but the military discount
-        (`p.mil_discount`/`p.mil_sci_discount`) is wiped at end of turn
-        (`economy.end_of_turn`) and so is entirely wasted if this rule fires
-        on a turn nothing military gets bought or upgraded afterwards.
-        Predicting that would need to peek at rules this bot has not run
-        yet this turn -- a real optimisation, not a bug fix -- so this
-        always takes the risk-free flavour instead."""
+        WHICH of the two flavours to take is a strategy call, and it is
+        DECIDED, not deferred: **this bot always takes culture.**  Not a
+        placeholder -- don't "improve" it into a conditional here.
+
+        The military flavour (`p.mil_discount`/`p.mil_sci_discount`) is
+        wiped at end of turn (`economy.end_of_turn`), so it pays only if
+        something military gets bought or upgraded afterwards.  Whether
+        that happens is not knowable from inside a single rule: this rule
+        fires 13th, meaning nothing else wanted the turn *yet*, but taking
+        the discount can itself unlock a purchase rules 1-12 then make on
+        the next call.  Pricing that requires looking ahead at what the
+        discount would buy -- exactly the lookahead this bot exists to do
+        without.  Three culture a turn from Age III to the end is worth
+        more than an occasionally-unlocked military purchase, and it can
+        never be worth zero, which the military flavour frequently is.
+
+        `bots.weighted` is where the conditional belongs, and it should be
+        STRUCTURAL rather than a tuned discount for "restricted-ness":
+        price the military flavour as only the part that can actually be
+        spent before it expires -- science short of a military unit tech
+        this player would research, resources short of a military unit it
+        would build, each capped at 3 -- through the existing science/
+        resource weights, against 3x the culture weight.  When nothing
+        military is pending that comes out at exactly 0 and culture wins
+        with no constant to tune.  See `board_yields._churchill`, which
+        already floors the card at +3 culture for the same reason."""
         cands = by_kind.get("churchill")
         if not cands:
             return None
