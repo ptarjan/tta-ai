@@ -1,5 +1,0 @@
-ARM hand_mil_potential=0.125 vs 0.0 (champion_2p), 2p, 8 disjoint blocks
-n=800  win 50.56% +/- 3.46pp  z=+0.32
-margin -0.15  culture 146.7 vs 146.8
-blocks: [51.0, 55.0, 46.5, 49.0, 47.0, 52.5, 48.0, 55.5]
-MDE at 80% power, alpha=.05 two-sided: 4.95pp
