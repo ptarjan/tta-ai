@@ -180,11 +180,12 @@ logged in this run and the archived 1-ply run (704 opponent-checks):
 | +60 … +90 | 0.919 | 0.722 | 0.500 |
 
 A margin of +85 buys ~97% at 2p and ~50% at 4p, because at 4p you have to beat
-the *best* of three draws, not the mean of one. [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md)
-already measured the extreme of this ("at 4p win share cannot tell that a bot
-with every weight set to zero is worse than the champion at all") and it is why
-the gate tier is scored on margin. So some of the apparent 2p-vs-4p
-catastrophe is metric shape.
+the *best* of three draws, not the mean of one. The now-deleted
+`docs/LEAGUE_TRAINING.md` (Python-era pool trainer, git history) already
+measured the extreme of this ("at 4p win share cannot tell that a bot with
+every weight set to zero is worse than the champion at all") and it is why
+that trainer's gate tier was scored on margin. So some of the apparent
+2p-vs-4p catastrophe is metric shape.
 
 **But it does not explain this finding**, because the paired *margin* test is
 metric-independent and still gives the 2p vector +33.8 ± 7.0 culture points at
@@ -416,7 +417,7 @@ Why this one:
 Two things to be careful about, both explicit:
 
 1. **This is not the warm-start [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) and
-   [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) forbid.** That prohibition is about
+   the now-deleted `docs/LEAGUE_TRAINING.md` (git history) forbid.** That prohibition is about
    `experiments/champion_4p.json`, the pre-horizon-fix vector with
    `science = −6.089` that `arena.refuse_if_degenerate_champion` hard-refuses.
    `champion_2p.json` is the opposite: an externally validated vector at 97.5%

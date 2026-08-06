@@ -670,8 +670,9 @@ against the **frozen gen-222 snapshot**, before the league pool existed. The
 | champion, 1-ply | **72.1% ± 4.8%** | **51.6% ± 5.1%** |
 | champion, quiescent | **78.0% ± 4.2%** | **57.9% ± 4.8%** |
 
-So the league training in [`docs/LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) did what it was for: the
-2p champion went from losing to a rule list to beating it comfortably.
+So the league training the now-deleted `docs/LEAGUE_TRAINING.md` documented
+(Python-era pool trainer, git history) did what it was for: the 2p champion
+went from losing to a rule list to beating it comfortably.
 
 **But this is no longer an external yardstick, and it should not be read as
 one.** `experiments/hillclimb_pool.build_pool` puts `book`, `book2` and every

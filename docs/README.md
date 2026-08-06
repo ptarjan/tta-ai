@@ -70,8 +70,8 @@ these for the reasoning.*
 | doc | answers |
 |---|---|
 | [`TRAINING_RUN.md`](TRAINING_RUN.md) | The running operational log of the live arms.  **Read newest entry first; later entries supersede earlier ones inline.**  This is where "what is training right now" is recorded. |
-| [`LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) | How the *Python* pool-based league trainer worked: tiers, gate veto, ablation, restart safety, the weight guard. That pool/tier/ablation machinery has no Rust equivalent — the live league is the much simpler mirror-plus-anchor-veto climb in `rust/src/bin/climb.rs` (see its own module doc for the departures). Kept as history, not as the current mechanism reference. |
-| [`PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) | The continuous monitor that asks whether the thing the league trains on predicts the strength of the thing we would ship. |
+| [`RUST_LEAGUE.md`](RUST_LEAGUE.md) | The current mechanism reference: what `rust/src/bin/climb.rs` and `experiments/rust_league.sh` actually run today — three arms, mirror-vs-champion duels, the anchor drift veto, the stop sentinel. Replaces the deleted `LEAGUE_TRAINING.md`. |
+| [`PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) | Carries a 2026-08-06 banner: the Python monitor it describes (`proxy_check.py` / `proxy_watch.sh`) is gone and nothing today re-checks whether the league's proxy target predicts ship-policy strength. Kept for its §8 finding — 918 generations of proxy-approved 3p accepts moved the ship-policy score backwards. |
 | [`TRANSFER_TEST.md`](TRANSFER_TEST.md) | The decisive negative result: a quiescent-trained vector does not transfer to PlanBot, it *inverts*. |
 | [`STRENGTH_CHECK.md`](STRENGTH_CHECK.md) | The first external yardstick — a hand-written book bot beating the trained champion.  Headline numbers stale; the method and the diagnosis are not. |
 | [`BOT_ROSTER.md`](BOT_ROSTER.md) | The 47,520-game round-robin across 12 entrants.  Predates PlanBot and QuiescentBot; 4p rows quarantined. |
@@ -109,6 +109,12 @@ ablation — exactly the inference `docs/HAZARDS.md` says is never valid. Its
 still-true content (the (1+λ) ES description, restart-safety mechanics) is
 long superseded by the current Rust trainer (`rust/trainer/`); nothing in it
 was worth keeping in place of that code. It remains in git history.
+
+`docs/LEAGUE_TRAINING.md` was deleted the same sweep (2026-08-06): its tier
+system, gate veto and ablation cursor were all `experiments/hillclimb_league.py`
+/ `hillclimb_pool.py`, both gone with the rest of the Python toolchain, and
+grepping `rust/src/` for any of the three returns nothing. `RUST_LEAGUE.md`
+above is its replacement, describing the actually-current mechanism.
 
 **There is no Python left in this repo.** `engine/`, `tests/`, the Python half
 of `experiments/` and `tools/gate.sh` were deleted on 2026-08-06 once the last

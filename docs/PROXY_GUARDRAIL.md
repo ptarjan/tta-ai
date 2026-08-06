@@ -1,5 +1,22 @@
 # The proxy guardrail: is the number the league climbs the number we ship?
 
+> **BANNER 2026-08-06: the machinery this describes is gone; the §8 finding
+> is not.** `experiments/proxy_check.py`, `experiments/proxy_watch.sh` and
+> the `*/20 * * * *` cron entry that ran them were Python and were deleted
+> with `engine/` and the Python half of `experiments/` on 2026-08-06 — the
+> current tree has no `.py` files outside one unrelated data-source script,
+> no `blend`/`own_share` league objective anywhere, and no continuous
+> ship-policy monitor in `rust/`. Nothing today checks whether the Rust
+> `climb` league's win-share-vs-anchor accept criterion predicts strength
+> under a deeper search policy; that gap is currently unmonitored. What
+> survives and is still worth reading: [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md)
+> and [`docs/PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) — the findings
+> this monitor was built to watch for — are unaffected by the deletion; and
+> §8 below's replicated result — the 3p arm's ship-policy strength fell
+> **−76.6 ± 17.8** culture over 918 generations of proxy-approved accepts —
+> is a real, otherwise-unrecorded finding about what an unguarded proxy
+> target can do.
+
 Date: 2026-07-29. Code: `experiments/proxy_check.py`,
 `experiments/proxy_watch.sh` (cron, every 20 min),
 `tests/test_proxy_check.py`. Output: `experiments/logs/proxy_check.log` and
