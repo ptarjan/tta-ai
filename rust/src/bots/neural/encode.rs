@@ -2,8 +2,9 @@
 //!
 //! Ports `engine/bots/neural_encode.py` (419 lines) -- read that file's own
 //! module doc comment first (reproduced only in part below); it is the
-//! design rationale -- what is legal to encode and why (docs/
-//! INFORMATION_AUDIT.md's card-counting ruling), which fields are public vs
+//! design rationale -- what is legal to encode and why (the card-counting
+//! ruling in docs/EVALUATOR_HISTORY.md, "Military discard pile legibility"),
+//! which fields are public vs
 //! private per seat, and the deliberate omissions (deck ORDER, a rival's
 //! military-hand CONTENTS, other players' event seeds) -- and is not
 //! restated here.
@@ -298,7 +299,7 @@ const PLAYER_SCALARS: usize = 56;
 pub const PLAYER_BLOCK_DIM: usize = PLAYER_SCALARS + 5 * CARD_VEC_DIM;
 
 /// Append player `idx`'s block to `out`. See Python's `_player_block` for the
-/// full field-by-field rationale (docs/INFORMATION_AUDIT.md); this is a
+/// full field-by-field rationale (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict); this is a
 /// direct arithmetic port, not restated here.
 ///
 /// `full = (idx == me_idx)` gates the two fields private to a seat: the

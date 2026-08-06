@@ -130,8 +130,9 @@ impl Default for QuiescenceConfig {
 
 /// Instrumentation, mirroring `QuiescentBot.stats`. A future caller
 /// (`census.rs`, not ported -- `engine/bots/census.py` has no Rust
-/// counterpart yet either) reads this the way `docs/DEEPER_SEARCH.md`'s
-/// Python measurements read `bot.stats`: to prove quiescence actually fired
+/// counterpart yet either) reads this the way the deleted Python-era
+/// measurements (see `docs/ANALYSIS_HISTORY.md`, DEEPER_SEARCH.md verdict)
+/// read `bot.stats`: to prove quiescence actually fired
 /// rather than trusting that it did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {

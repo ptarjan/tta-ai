@@ -44,7 +44,7 @@ and the override rate is the product.
 ## 2. What you type, and what you must not
 
 The expensive part of a human-in-the-loop game is transcription.
-[`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) measured that the evaluator is blind to most of
+[`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) records that the evaluator was measured blind to most of
 what a conscientious operator would type in. So the harness does not have a
 hardcoded input list — it **derives** one by perturbing the live position and
 watching whether the bot's decision moves (`rust/src/harness/fields.rs`).

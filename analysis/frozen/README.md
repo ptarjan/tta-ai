@@ -71,7 +71,7 @@ here and must use a vector that carries the card-row weights.
 
 ## `champion_4p.DEGENERATE.json` — retired, deliberately kept
 
-This file is the vector `docs/TRAINING_RUN.md` says never to warm-start from
+This file is a vector that must never be warm-started from
 (`science = -6.08883`; measured (Python-era, in the now-deleted
 `docs/CULTURE_GAP.md` — see `docs/EVALUATOR_HISTORY.md`'s "Superseded without
 independent content" note, or git history for the specific number) at

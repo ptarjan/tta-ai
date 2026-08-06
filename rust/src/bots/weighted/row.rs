@@ -304,7 +304,7 @@ fn rival_desire(
 /// forward-only cursor ([`visible_row`]), and cards that were not visible
 /// when the decision started are SKIPPED. Without that check this function
 /// is the mechanism of the `end_turn` information leak
-/// (docs/INFORMATION_AUDIT.md 6.1).
+/// (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict).
 ///
 /// `ctx: None` (a caller that has not built one, or the degraded no-context
 /// path) masks nothing and considers no rivals, as leaky as Python's
@@ -726,8 +726,8 @@ mod tests {
     /// `row_urgency` collapses two leaders about to be swept off the row to
     /// "the better one, plus `hand_swap_extra` times the rest" -- the same
     /// bug `hand_total`'s doc comment describes (cards.rs), just for the row
-    /// instead of the hand (docs/CARD_BLINDNESS.md 13.10.1: "row_pressure's
-    /// row_urgency -- yes, and NOT fixed here"). Reuses `hand_swap_extra`:
+    /// instead of the hand (docs/ANALYSIS_HISTORY.md, CARD_BLINDNESS.md verdict:
+    /// "row_pressure's row_urgency -- yes, and NOT fixed here"). Reuses `hand_swap_extra`:
     /// the free parameter is the same question either way -- the incremental
     /// worth of a spare single-slot card beyond the one you would actually
     /// play, whether the spare arrives via the row or the hand. Built with

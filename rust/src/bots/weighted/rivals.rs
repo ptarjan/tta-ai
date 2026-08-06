@@ -71,7 +71,8 @@ use super::weights::{WeightKey, Weights, PHASE_KEYS};
 /// Every one of these is on the table in the physical 2015 base game -- the
 /// stocks sit in front of their owner, the workers stand on the cards, the
 /// colony and wonder cards are face up -- so all of it is legal under the
-/// standing rule in docs/INFORMATION_AUDIT.md section 0c.
+/// standing rule recorded in docs/EVALUATOR_HISTORY.md ("Military discard
+/// pile legibility": "Card counting is legal. All public info can be used.").
 ///
 /// `max` over rivals throughout, matching `rival_free_ca` and friends, so
 /// each term means the same thing at 2p, 3p and 4p. The exception is
@@ -724,7 +725,8 @@ pub fn weakest_rival(state: &GameState, idx: u8) -> Option<u8> {
 /// the board expresses a point of strength through FOUR features
 /// (`strength`, `strength_rel`, `strength_deficit`, `strength_lead`), and a
 /// card pricer that only looks up `w[strength]` under-counts a unit's gain by
-/// 2.3x-7x depending on the board (docs/CARD_BLINDNESS.md 11.5.1). See
+/// 2.3x-7x depending on the board (docs/ANALYSIS_HISTORY.md, CARD_BLINDNESS.md
+/// verdict). See
 /// Python's own docstring (`engine/bots/weighted.py:950`) for the exact
 /// derivative of each of the four channels; not reproduced here.
 ///

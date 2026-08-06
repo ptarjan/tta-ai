@@ -444,8 +444,8 @@ pub fn features(
     f.set(WeightKey::MaLeft, f64::from(p.military_actions));
     // Civil actions spent THIS turn reaching into the row (GAP 1) -- a
     // separate channel from `ca_left` on purpose; see Python's own comment
-    // (docs/INFORMATION_AUDIT.md section 0) for why conflating the two used
-    // to score paying 3 CA for a card as a GAIN.
+    // (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict) for why
+    // conflating the two used to score paying 3 CA for a card as a GAIN.
     f.set(WeightKey::TakeCostPaid, f64::from(p.ca_spent_taking));
 
     // --- military
@@ -490,7 +490,8 @@ pub fn features(
     f.set(WeightKey::WonderStagesPerAction, f64::from(s.wonder_stages - 1));
     f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
 
-    // --- board side of the card-pricing keys (docs/CARD_BLINDNESS.md): the
+    // --- board side of the card-pricing keys (docs/ANALYSIS_HISTORY.md,
+    // CARD_BLINDNESS.md verdict): the
     // same key on both sides, the way `civil_actions` already is -- the
     // cards-valuation layer (unowned, `cards.rs`) prices a card in HAND
     // through these keys, and this prices the effect once it is on the

@@ -38,7 +38,7 @@
 //! does" -- which DOES thread both through, precisely to stop a quiesce-drain
 //! deep in the beam from pricing an opponent's pick off a row a trial
 //! `end_turn` has already replenished with the real deck's next cards
-//! (docs/INFORMATION_AUDIT.md). The claim and the code disagreed; fixed in
+//! (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict). The claim and the code disagreed; fixed in
 //! `neural_plan.py` (`pick`/`_beam`/`_one_ply_neural`/`_quiesce` now thread
 //! `root_row`/`root_counts` the same way `plan.py` always has) and in this
 //! port by construction: [`pick`] computes `ctx` via `rival_context` once at
@@ -55,7 +55,8 @@
 //! the identical three-call resolution `war_value` performs and then
 //! [`super::encode::encode`]s the result, so both searches price the move
 //! class through the same underlying combat resolution
-//! (docs/PLAN_WAR_LOOKAHEAD.md, docs/EVALUATOR_HISTORY.md: "two searches that
+//! (docs/EVALUATOR_HISTORY.md, "The 1-ply/quiescent-trained vector did not
+//! transfer to PlanBot's search": "two searches that
 //! disagree about one move class do not share an evaluator").
 //!
 //! ## No `Option<f64>`/`try`-`except` anywhere in the leaf path

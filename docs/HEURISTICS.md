@@ -266,7 +266,7 @@ as likely as not to be a passenger.** So wherever this document says *"the AI
 taught itself to value X"*, read it as *"here is a hypothesis somebody could
 test"*, never as *"therefore you should do X"*. Where grade 1 or grade 2 backs it
 up as well, say so; where a claim rests on grade 3 alone, discount it.
-(Full working: [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md).)
+(Full working: [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md), OPENING_AUDIT.md verdict.)
 
 **How strong is the thing giving you advice?** Weaker than a hand-written list —
 see [Read this first](#read-this-first-our-ai-is-not-a-strong-player). Within the
@@ -806,7 +806,7 @@ explanation has been deleted rather than softened.**
 So: **do not open with a wonder because "that is what the 4-player AI does".**
 There is no player-count effect and no measured benefit. The honest statement is
 that our 4-player AI happens to like wonders, everywhere, because of one sign
-flip nobody tested. (Full working: [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md).) **[not evidence]**
+flip nobody tested. (Full working: [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md), OPENING_AUDIT.md verdict.) **[not evidence]**
 
 What *does* survive is the rules argument, which stands on its own and has
 nothing to do with the AI: a wonder goes **directly into play sideways and never

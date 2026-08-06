@@ -157,7 +157,8 @@ pub enum YieldKind {
     /// gain because of it.
     Cost,
     /// The short `culture`/`science` spelling (a wonder's per-turn rate,
-    /// docs/CARD_BLINDNESS.md's headline omission) -- scaled by
+    /// the headline omission docs/ANALYSIS_HISTORY.md's CARD_BLINDNESS.md
+    /// entry describes) -- scaled by
     /// `card_rate_credit`, resolved once by [`sum_yields`]'s caller and
     /// threaded through as the `credit` argument, so the A/B against the
     /// pre-fix pricing is one knob.
@@ -236,7 +237,7 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
     // the card's top level in Python (never in `production`) and folded into
     // `effects.strength` here -- see this module's top doc comment. Ten
     // cards; all ten priced as pure cost before this bucket existed
-    // (docs/CARD_BLINDNESS.md).
+    // (docs/ANALYSIS_HISTORY.md, CARD_BLINDNESS.md verdict).
     if kind.is_unit() {
         push(out, WeightKey::Strength, eff.strength as i32, YieldKind::Unit);
     }
@@ -297,7 +298,8 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
         // the short `culture`/`science` spelling: per-turn RATE gains,
         // separated from the flat-gain bucket only so `card_rate_credit` can
         // switch them off and recover the exact pre-fix (silently dropped)
-        // pricing for the A/B -- docs/CARD_BLINDNESS.md's headline fix.
+        // pricing for the A/B -- docs/ANALYSIS_HISTORY.md's CARD_BLINDNESS.md
+        // entry, the headline fix.
         push(out, WeightKey::CultureRate, eff.culture as i32, YieldKind::Rate);
         push(out, WeightKey::ScienceRate, eff.science as i32, YieldKind::Rate);
 
@@ -1578,7 +1580,7 @@ pub fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
 /// {Michelangelo, Julius Caesar, Homer} sums three replacements (two of them
 /// ruinous) when the truthful answer is the one you would actually play. See
 /// `engine/bots/weighted.py:2962`'s docstring for the measured cost of this
-/// (docs/CARD_BLINDNESS.md sections 13.5.2/13.8) -- not reproduced here.
+/// (docs/ANALYSIS_HISTORY.md, CARD_BLINDNESS.md verdict) -- not reproduced here.
 ///
 /// So each slot contributes the BEST card in the hand for it, plus
 /// `hand_swap_extra` times the rest (a spare leader is not worthless -- you
@@ -1785,7 +1787,8 @@ mod tests {
         yields_of(name).into_iter().filter(|&(k, _, _)| k == key).map(|(_, a, _)| a).sum()
     }
 
-    /// The headline fix docs/CARD_BLINDNESS.md exists to describe: Eiffel
+    /// The headline fix docs/ANALYSIS_HISTORY.md's CARD_BLINDNESS.md entry
+    /// describes: Eiffel
     /// Tower's short-spelling `culture` reads as `culture_rate`, not as
     /// nothing.
     #[test]
@@ -2164,7 +2167,7 @@ mod tests {
     /// free_civil_action` field -- see `action_value`'s own doc comment for
     /// why reading the wrong one would silently zero this branch on every
     /// card that has it. `Rich Land` carries `freeCivilAction` (build a farm
-    /// or mine free) per `docs/CARD_BLINDNESS.md`.
+    /// or mine free) per docs/ANALYSIS_HISTORY.md's CARD_BLINDNESS.md entry.
     #[test]
     fn action_value_prices_the_free_civil_action_special_not_the_dead_field() {
         let Some(id) = CardId::by_name("Rich Land") else { return };

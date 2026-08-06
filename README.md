@@ -32,12 +32,13 @@ Then, by area:
   (card-data provenance, at its end), [`EXPERT_STRATEGY.md`](docs/EXPERT_STRATEGY.md)
   (published human consensus, gathered independently of our bots).
 - **The bot** — [`BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md),
-  [`DEEPER_SEARCH.md`](docs/DEEPER_SEARCH.md),
-  [`INFORMATION_AUDIT.md`](docs/INFORMATION_AUDIT.md),
   [`docs/AUDIT_HISTORY.md`](docs/AUDIT_HISTORY.md) (rules bugs found and
   fixed, plus standing evaluator blind spots),
   [`docs/EVALUATOR_HISTORY.md`](docs/EVALUATOR_HISTORY.md) (why specific
-  evaluator constants and pricing routes are shaped the way they are).
+  evaluator constants and pricing routes are shaped the way they are),
+  [`docs/ANALYSIS_HISTORY.md`](docs/ANALYSIS_HISTORY.md) (distilled search
+  and card-pricing investigations, incl. whether 1-ply deferred-payoff and
+  card-identity blindness are still live today).
 - **Training** — [`RUST_LEAGUE.md`](docs/RUST_LEAGUE.md) (the current
   mechanism reference for the live league, `rust/src/bin/climb.rs`, see
   Layout below),

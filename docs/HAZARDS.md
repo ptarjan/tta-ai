@@ -47,7 +47,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    indistinguishable from a random walk (KS p=0.14-0.80) even though the same
    champion beats its own drift-siblings 0.94-0.99.  The improvement lives in
    joint structure, not in any single coordinate.  "`culture_rate_early` = 0.000"
-   is not a strategic statement.  Corollary, from [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md): **"the
+   is not a strategic statement.  Corollary, from [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md): **"the
    AI moved this weight, therefore it matters" is never a valid inference unless
    somebody ablated it.**  Mutations move ~19 weights at once and are accepted on
    one bundle-level test.
@@ -141,8 +141,8 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `experiments/frozen/champion_4p_strengthcheck.json` reproduce all 62
   informative weights of that vector bit-for-bit.  **Every 4p number measured
   against them is quarantined** — they are left in place in
-  [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md), [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) and
-  [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) so they stay auditable, not because they are
+  [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)
+  so they stay auditable, not because they are
   facts.  See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
 * **(Historical -- describes the retired Python trainer.)** `experiments/
   league_state/` held the **live** champion and ladder; `experiments/
@@ -231,7 +231,8 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   null**.  Before opening a new channel onto an existing weight, ask what has
   ever constrained that weight; if the answer is "nothing", expect the first
   measurement to be a regression *of the weight*, and check it against
-  `DEFAULT_WEIGHTS`.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1452-3p-on-the-archived-champion-a-large-unambiguous-regression) §14.5.2.
+  `DEFAULT_WEIGHTS`.  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §3 (the general "0.0-default biases,
+  it does not stay neutral" lesson) and [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) (CARD_BLINDNESS.md verdict).
 * **A card whose cost is priced while its gain sits at 0.0 is biased, not
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases
@@ -242,7 +243,8 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `card_potential` at zero — the bias removed, nothing added — moved "is this
   the best card on the row" only from 1 in 437 to 20 in 437.  A card worth
   exactly nothing is still not a card worth taking, so a fix that only removes
-  the sign will read as a null.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) §14.1c.
+  the sign will read as a null.  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §3 and
+  [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) (CARD_BLINDNESS.md verdict).
 * **A swap diff is exact over `Stats` and blind to everything else**, and it
   *replaces* the static table rather than supplementing it — so any key the static
   path priced that the diff cannot see is silently dropped.  Taj Mahal's blue

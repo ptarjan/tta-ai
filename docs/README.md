@@ -38,28 +38,16 @@ as of this writing.
 
 | doc | answers |
 |---|---|
-| [`DEEPER_SEARCH.md`](DEEPER_SEARCH.md) | Quiescence: resolving the pending-decision stack before scoring. Budgets, costs, why `LEVELS=1` and not 2, why QuiescentBot cannot be the training challenger. |
-| [`INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) | *What can the evaluator actually see?* Field-by-field measurement of information gaps, and the row-leak fix. Carries a 4p-numbers-quarantined banner; read it. |
-| [`PLAN_WAR_LOOKAHEAD.md`](PLAN_WAR_LOOKAHEAD.md) | Giving the beam a war lookahead, and what it did and did not fix. |
 | [`AUDIT_HISTORY.md`](AUDIT_HISTORY.md) | Distilled 2026-08-06 from ten deleted rules/combat/coverage audit docs (~7,000 lines). §1: rules bugs found and fixed, verified live against `rust/src/`. §2: validation methodology lessons (what a corpus can and cannot prove). §3: standing evaluator/search architectural blind spots (1-ply deferred-payoff blindness, card-identity blindness, `end_turn` flattery, linear-evaluator limits) — read before assuming a Python-era bug is still live or still fixed. §4: per-source-doc verdict, for finding what was dropped and why. |
 | [`EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) | Distilled 2026-08-06 from ten deleted evaluator-history docs. Dated entries on: fitted-vs-measured model constants, the rate-horizon fix, government pricing, the dominance guard (theft must never help), the transfer-test negative result (a vector trained under one search can invert under another), the book-bot external yardstick and the anchor-gate it motivated, and a closed-items list of coordinate-registry fixes. Companion to `BOT_ARCHITECTURE.md`: that doc is the current-state reference, this one is how each piece got that way. |
+| [`ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) | Distilled 2026-08-06 from eight deleted search/card-pricing/training-history docs (~10,300 lines: quiescence and the pending-decision stack, per-card blindness census, information-visibility audit, and three since-superseded training-run write-ups). Leads with a directly re-verified answer to "are 1-ply deferred-payoff blindness and card-identity blindness still live in `rust/src/` today" — read that before anything else in the file. |
 | [`NEURAL.md`](NEURAL.md) | The value net: what it is, the encoder and its versioning, how training data is generated (and the pre-2026-08-06 leak that invalidates older results), the two self-play loop generations found so far (v1's 41-hour null, v2's search-backed design with its promotion arms and kill conditions), and the desktop training box's operating notes. |
-
-## Card pricing and coverage
-
-| doc | answers |
-|---|---|
-| [`CARD_BLINDNESS.md`](CARD_BLINDNESS.md) | The originating finding (`_card_yields` silently dropped culture/science) plus absorbed sections on military/unit pricing, the per-card play-rate census across all 236 cards, board-aware pricing for leaders/actions/governments, and technology pricing. The largest doc in the tree; use its own internal section headers to jump around rather than reading start to end. |
 
 ## Training, league and strength
 
 | doc | answers |
 |---|---|
-| [`TRAINING_RUN.md`](TRAINING_RUN.md) | The running operational log of the live arms. **Read newest entry first; later entries supersede earlier ones inline.** This is where "what is training right now" is recorded. |
 | [`RUST_LEAGUE.md`](RUST_LEAGUE.md) | The current mechanism reference: what `rust/src/bin/climb.rs` and `experiments/rust_league.sh` actually run today — three arms, mirror-vs-champion duels, the anchor-drift veto, the stop sentinel, and which champion file on disk is actually live vs. a stale Python-era snapshot. |
-| [`TWOP_PROFILE.md`](TWOP_PROFILE.md) | What a since-superseded 2p champion actually did (won by suppression, not scoring) — carries a banner marking the specific champion gone; the causal method survives. |
-| [`FOURP_GAP.md`](FOURP_GAP.md) | Why an earlier 4p lineage (since discarded) converged somewhere actively bad, and the matched-generation control method used to show it wasn't just "needs more generations." |
-| [`OPENING_AUDIT.md`](OPENING_AUDIT.md) | "4p champions open with a wonder" — real behaviour, but one hitchhiking weight, worth nothing. The canonical demonstration that a moved weight is not evidence. |
 
 ## Humans: corpus, baselines, imitation, outside sources
 
@@ -111,6 +99,18 @@ repointed every dangling cross-reference this cull created, across `docs/`,
 `docs/PYPY.md`, `docs/LEAGUE_TRAINING.md` and `experiments/PROGRESS.md` were
 deleted in earlier 2026-08-06 passes for the same reason (pure Python-era
 history, no live code path); see git history.
+
+**2026-08-06: a second pass** distilled eight more analysis/investigation
+docs (`CARD_BLINDNESS.md`, `INFORMATION_AUDIT.md`, `DEEPER_SEARCH.md`,
+`FOURP_GAP.md`, `OPENING_AUDIT.md`, `TRAINING_RUN.md`, `TWOP_PROFILE.md`,
+`PLAN_WAR_LOOKAHEAD.md`; ~10,291 lines, 63% of what remained in `docs/` at
+the time) into one new file, [`ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md),
+deleting all eight originals. Every claim carried forward was re-verified
+against current `rust/src/` rather than trusted from the old prose — see
+that file's own provenance note and its headline section for the two
+findings (1-ply deferred-payoff blindness, card-identity blindness) that
+mattered most to get right. Cross-references this cull created were
+repointed across `docs/`, `rust/src/`, `README.md` and `analysis/frozen/README.md`.
 
 Older housekeeping entries from the 2026-07-30/31 doc consolidation (which
 merged card-pricing, scoring and combat satellite docs into
