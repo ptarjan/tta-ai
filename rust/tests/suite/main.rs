@@ -23,4 +23,5 @@ mod common;
 
 mod bench_playout;
 mod board_yields;
+mod card_coverage;
 mod random_game;
