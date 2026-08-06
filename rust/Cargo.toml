@@ -5,10 +5,12 @@ edition = "2021"
 description = "Through the Ages (base 2015) engine — native Rust rewrite"
 publish = false
 
-# DELIBERATELY EMPTY.  See DESIGN.md rule 2: the card data is generated into
-# `src/card_table.rs` by `tools/gen_cards.py` and checked in, so the engine
-# parses no JSON, allocates nothing at start-up, and pulls in no serde.  A
-# dependency here is a decision, not a convenience -- justify it in the commit.
+# DELIBERATELY EMPTY.  See DESIGN.md rule 2: the card data lives baked into
+# `src/card_table.rs`, checked in, so the engine parses no JSON, allocates
+# nothing at start-up, and pulls in no serde.  (`card_table.rs`'s own test
+# module still parses `data/*.json` at TEST time, via the hand-rolled reader
+# in `src/fixtures.rs` -- not a `[dependencies]` entry either.)  A dependency
+# here is a decision, not a convenience -- justify it in the commit.
 [dependencies]
 
 [profile.release]

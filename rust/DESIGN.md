@@ -17,11 +17,15 @@ lookups, so the port only pays off if the lookups go away.
 A name is an I/O concern: it appears when parsing `data/*.json`, when printing,
 and nowhere else. Any `HashMap<String, _>` in the engine is a bug.
 
-**2. Static data is generated, not parsed.** `tools/gen_cards.py` reads the
-same `data/*.json` the Python engine reads and emits `src/card_table.rs`, which
-is checked in. The core crate therefore has **zero dependencies** and does no
-start-up work. Regenerating is a build step you run when the card data changes,
-and the diff is reviewable.
+**2. Static data is baked in, not parsed at start-up.** `src/card_table.rs`'s
+`CARDS` table is checked in, hand-verified against `data/*.json` by
+`card_table.rs`'s own `#[cfg(test)]` module rather than parsed at start-up. The
+core crate therefore has **zero dependencies** and does no start-up work. (The
+base game's 236 cards are frozen forever -- the expansion is out of scope by
+standing decision -- so the `tools/gen_cards.py` generator that originally
+produced this table has served its purpose and been deleted; the test is what
+keeps `data/*.json` and `card_table.rs` from silently drifting apart now that
+nothing regenerates the second from the first.)
 
 **3. State is flat, fixed-size and `Clone`.** No `Vec` inside the per-turn hot
 path, no `HashMap`, no `Option<Box<_>>` chains. A `GameState` clone must be a
