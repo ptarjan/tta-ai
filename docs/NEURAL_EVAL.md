@@ -53,6 +53,21 @@ tar/scp path in the desktop-compute-node memo.
 
 ### The state encoder (`engine/bots/neural_encode.py`, torch-free)
 
+> **Width note, added 2026-08-06 (not a rewrite of the section below, which
+> predates the Rust port and is otherwise left as history).** The dimension
+> grew from the 1897 this section quotes to 1907 at some point before the
+> Rust port. The Rust encoder (`rust/src/bots/neural/encode.rs`) then
+> deliberately dropped it to **1906**: `state.scoring_events` was a
+> write-never field in both engines (a permanently-0 feature), and removing
+> it from the Rust encoder's `GLOBAL_DIM` dropped the total by one
+> (`encode.rs`'s `encoding_dim_matches_python` test, and its own comment,
+> record this). Python's `neural_encode.py` was not touched by that fix and
+> — as of `engine/`'s 2026-08-06 deletion — is gone, so there is no live
+> Python encoder left to disagree with the Rust one; the 1906/1907 split is
+> now purely historical. This paragraph is the authority `encode.rs` cites
+> for that number; it previously (and incorrectly) cited `docs/OPEN_ITEMS.md`,
+> which has never recorded an encoder width.
+
 A flat `list[float]` of length **1897**, from one player's viewpoint. Kept
 torch-free on purpose so the engine's stdlib tests and `tools/gate.sh` run it on
 the Mac (torch-less); 7 unit tests in `tests/test_neural_encode.py` cover shape,

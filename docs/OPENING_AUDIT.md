@@ -54,7 +54,7 @@ taught itself. Tested directly, it is indistinguishable from null.
 The reason is structural, not bad luck: mutations move **19 weights at once** and
 are accepted on a single 48-game win-rate test. Acceptance says *the bundle*
 beat the incumbent; it says **nothing** about any individual weight in it. With
-~78 weights, 8 accepted bundles at 4p, and no per-weight ablation ever run, most
+~78 weights (the Python evaluator's count at the time), 8 accepted bundles at 4p, and no per-weight ablation ever run, most
 individual weight moves in our champions have never been tested at all.
 
 So: **"the AI moved this weight, therefore it matters" is not a valid inference

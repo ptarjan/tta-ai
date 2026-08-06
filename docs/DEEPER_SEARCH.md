@@ -243,7 +243,8 @@ n is reported both ways.
 Weights: 2p uses the live league champion (`league_state/champion_2p.json`,
 gen 337, read-only copy). **3p and 4p use the DEFAULT weight vector**, because
 those arms restarted clean and their champions are 4 and 8 generations old —
-5 and 21 of 82 weights differ from default. That is stated because it matters:
+5 and 21 of the 82 weights the (now-retired) Python evaluator had at the time
+differ from default. That is stated because it matters:
 the 3p/4p A/B is quiescence against an *untrained* baseline, and the untrained
 baseline is bad at things quiescence does not fix (section 5).
 
@@ -601,9 +602,12 @@ technical answer.
   of **its own turn**, let alone an opponent's reply. Branching factor is
   around 30, and the whole search is `argmax` over those 30, at ~7,000
   evaluations per player-game.
-* **Evaluation: a hand-written linear function.** 60 features, 82 weights (the
-  base set plus ten early/late phase pairs, plus one deliberately non-linear
-  `hand_potential` term), fitted by (1+λ) hill climbing against a pool.
+* **Evaluation: a hand-written linear function.** 60 features, 82 weights at
+  the time of this write-up (the base set plus ten early/late phase pairs,
+  plus one deliberately non-linear `hand_potential` term), fitted by (1+λ)
+  hill climbing against a pool. This describes the pre-rewrite Python
+  evaluator; the Rust port's equivalent table (`rust/src/bots/weighted/
+  weights.rs`) has grown to 133 keys.
 * **No tree machinery, because there is no tree.** No alpha-beta, no
   transposition table, no move ordering, no iterative deepening, no null-move,
   no LMR. None of it applies to a one-level `argmax`.
@@ -687,7 +691,7 @@ What can be said honestly, then:
   dead heat, and `CultureBot` is a priority list a person can hold in their
   head.
 * The 3p and 4p arms restarted clean and are running at essentially default
-  weights — 5 and 21 of 82 weights moved. At those table sizes the bot ends
+  weights — 5 and 21 of the then-82 weights moved. At those table sizes the bot ends
   **three turns in four with civil actions unspent** (section 5.1). Those are
   not strong players by any standard.
 * Until this branch, no champion at any table size had ever declared a war
@@ -719,8 +723,9 @@ classical search is deliberately last.
    or a better evaluation, before buying more search. Cost: days of feature
    work plus a re-climb. Highest value/cost ratio available today, by a
    distance.
-2. **A learned value function.** Replace the 82-weight linear form with a small
-   network trained to regress final culture (or win probability) from self-play
+2. **A learned value function.** Replace the (then-82-weight, now 133-weight)
+   linear form with a small network trained to regress final culture (or win
+   probability) from self-play
    — the AlphaZero-family answer, and the only path to genuinely strong play.
    The blocker is not the model, it is throughput: a game costs 0.5–2 cpu-s in
    CPython today, so 10^5–10^6 self-play games is one to three CPU-months.

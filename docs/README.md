@@ -70,9 +70,7 @@ these for the reasoning.*
 | doc | answers |
 |---|---|
 | [`TRAINING_RUN.md`](TRAINING_RUN.md) | The running operational log of the live arms.  **Read newest entry first; later entries supersede earlier ones inline.**  This is where "what is training right now" is recorded. |
-| [`LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) | How the pool-based league trainer works: tiers, gate veto, ablation, restart safety, the weight guard.  The mechanism reference. |
-| [`LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md) | Why the accept metric is `blend` (own culture + a win-share tiebreak), and why gating on win rate would *not* have fixed the theft bug. |
-| [`LEAGUE_POOL.md`](LEAGUE_POOL.md) | Opponent-pool saturation weighting: "an opponent the champion beats 98% of the time is not an opponent, it is a bill." |
+| [`LEAGUE_TRAINING.md`](LEAGUE_TRAINING.md) | How the *Python* pool-based league trainer worked: tiers, gate veto, ablation, restart safety, the weight guard. That pool/tier/ablation machinery has no Rust equivalent — the live league is the much simpler mirror-plus-anchor-veto climb in `rust/src/bin/climb.rs` (see its own module doc for the departures). Kept as history, not as the current mechanism reference. |
 | [`PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) | The continuous monitor that asks whether the thing the league trains on predicts the strength of the thing we would ship. |
 | [`TRANSFER_TEST.md`](TRANSFER_TEST.md) | The decisive negative result: a quiescent-trained vector does not transfer to PlanBot, it *inverts*. |
 | [`STRENGTH_CHECK.md`](STRENGTH_CHECK.md) | The first external yardstick — a hand-written book bot beating the trained champion.  Headline numbers stale; the method and the diagnosis are not. |
@@ -89,8 +87,8 @@ these for the reasoning.*
 |---|---|
 | [`HUMAN_BASELINE.md`](HUMAN_BASELINE.md) | What strong humans actually do, from 1,011 BGO games.  The human side is the reference; the bot side is stale (see its banner). |
 | [`BGO_CORPUS.md`](BGO_CORPUS.md) | The scrape: method, yield, limits, and what the journals can and cannot tell you. |
-| [`BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md) | Fitting the weight vector to human move choices — and why behaviour cloning recovers *how* to play but can never recover *what for*. |
-| [`HUMAN_BOTS.md`](HUMAN_BOTS.md) | The four corpus-fitted human archetypes now in the pool, and the negative result underneath them (human play is not discrete archetypes). |
+| [`BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md) | Fitting the weight vector to human move choices — and why behaviour cloning recovers *how* to play but can never recover *what for*. Python tooling (`tools/bgo_fit.py`) is gone; carries a 2026-08-06 banner, finding kept as history. |
+| [`HUMAN_BOTS.md`](HUMAN_BOTS.md) | The negative result that human play does not cluster into discrete archetypes. The `human` pool-opponent tier this was built for is gone with the Python pool; carries a 2026-08-06 banner. |
 | [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md) | Every external opponent and data source that was investigated, and why almost all of them are dead ends.  Mostly a record of *negative* results — read before re-attempting any of them. |
 | [`APP_HARNESS.md`](APP_HARNESS.md) | The operator's manual for playing the trained bot against the official app's Hard AI by hand.  The only externally calibrated anchor available. |
 
@@ -102,11 +100,15 @@ these for the reasoning.*
 
 ## Elsewhere in the repo
 
-[`experiments/PROGRESS.md`](../experiments/PROGRESS.md) and
-[`data/PROGRESS.md`](../data/PROGRESS.md) are per-package build logs.
-`experiments/PROGRESS.md` predates the Rust port and documents only the old Python toolchain
-(hillclimb.py, the league_*p/ ladders, arena.py) — read it as history, not as a
-current build log.
+[`data/PROGRESS.md`](../data/PROGRESS.md) is a per-package build log.
+`experiments/PROGRESS.md` (dated 2026-07-26) was deleted 2026-08-06: it
+documented only the pre-Rust Python toolchain (hillclimb.py, the league_*p/
+ladders, arena.py, all since removed), quoted a stale weight count, and its
+"what the search is favoring" section drew weight-drift conclusions without
+ablation — exactly the inference `docs/HAZARDS.md` says is never valid. Its
+still-true content (the (1+λ) ES description, restart-safety mechanics) is
+long superseded by the current Rust trainer (`rust/trainer/`); nothing in it
+was worth keeping in place of that code. It remains in git history.
 
 **There is no Python left in this repo.** `engine/`, `tests/`, the Python half
 of `experiments/` and `tools/gate.sh` were deleted on 2026-08-06 once the last

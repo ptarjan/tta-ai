@@ -1,5 +1,16 @@
 # Behaviour cloning from the BGO human corpus (2026-07-27)
 
+> **BANNER 2026-08-06: the tooling this used is gone; the finding is not.**
+> `tools/bgo_moves.py`, `tools/bgo_fit.py` and `weighted.evaluate`'s Python
+> conditional-logit fit were all deleted with `engine/` and the Python half
+> of `experiments/` on 2026-08-06. There is no Rust behaviour-cloning
+> pipeline today. The result — human move agreement and playing strength are
+> monotonically *anti-correlated* for a linear weighted evaluator, so
+> cloning recovers *how* humans play but not *what for* — is a durable
+> negative finding about that class of evaluator, not about the deleted
+> code, and is worth reading before anyone proposes cloning again against
+> the current Rust `WeightedBot` or the neural bot.
+
 Branch: `behaviour-clone`. New: `tools/bgo_moves.py` (move-level replayer),
 `tools/bgo_fit.py` (conditional-logit fit), `tests/test_bgo_moves.py` (14
 tests). Nothing in `engine/` is touched and `tools/gate.sh` is GATE PASS with
@@ -495,8 +506,9 @@ No effect on either. The skew is real and it is not the explanation.
 
 The brief asked for a read on [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md) §8.3(c) — gate the league
 on own culture rather than margin. **That decision was taken while this branch
-was running**: [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md) switched the accept criterion to own
-final culture with win share as a tiebreak. So this is corroboration, not a
+was running**: the now-deleted `docs/LEAGUE_OBJECTIVE.md` (Python-era, git
+history) switched the accept criterion to own final culture with win share as
+a tiebreak. So this is corroboration, not a
 recommendation, and it is worth recording because it is independent of the
 1,632-game rescoring that gated that change.
 
@@ -506,9 +518,9 @@ clone 108.3 [98.6,118.2], champion 69.0 [59.2,77.8] — 39 points apart with
 clear CIs. Margin head to head: the champion beats the clone by 30.3 ± 5.0 at
 1 ply and 70.0 ± 4.1 under quiescence. At 1 ply the two produce almost the same
 own culture (104.6 vs 110.5, overlapping) and **the champion's entire margin
-over the clone is transfer, not production** — which is [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)
-§1's arithmetic showing up in a pair of vectors neither of us designed for the
-purpose.
+over the clone is transfer, not production** — which is the same arithmetic
+the now-deleted `docs/LEAGUE_OBJECTIVE.md` §1 made explicit, showing up in a
+pair of vectors neither of us designed for the purpose.
 
 One caution in the other direction, since this document is not in the business
 of only confirming things. A gate on own culture would rank the *pure* clone

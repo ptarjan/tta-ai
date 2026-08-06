@@ -215,7 +215,7 @@ NONNEG = frozenset(k for k, v in DEFAULT_WEIGHTS.items() if v > 0)
 It only clamps weights whose **default is positive**. Its own comment says
 "Every legitimately negative term already has a negative default and is
 therefore untouched — `rival_*` … included." *Untouched* is the bug: the guard
-is one-sided, so **25 of the 78 weights** — every one with a negative default —
+is one-sided, so **25 of the (then) 78 Python-era weights** — every one with a negative default —
 can invert freely and nothing logs a thing. The full unprotected set is
 `auction_bid, consumption, corruption_loss, culture_early, culture_rate_late,
 discontent, end_turn_bias, food_rate_late, hand_value_late, pop_cost,
@@ -762,7 +762,10 @@ here on. Measured effect on the one champion that already carries an inversion:
 null at ±0.024 win rate / ±3.2 culture points, n=400. The defect it prevents is
 exact and reproduced to three decimals. It costs ~15 lines, carries a
 recurrence test that fails 5 ways against the old guard, and closes a hole
-through which 25 of 82 weights could invert unlogged. The one judgement call in
+through which 25 of the (then) 78 Python-era weights could invert unlogged
+(this passage previously said "82" here against "78" earlier in this doc for
+the same finding; 78 is the one that matches the named 25-weight list above).
+The one judgement call in
 it — exempting the ten phase multipliers, because their sign is not
 gauge-invariant — is argued in §7 and in the code, not silent.
 

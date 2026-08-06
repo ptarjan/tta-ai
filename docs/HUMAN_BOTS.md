@@ -1,5 +1,18 @@
 # Human-derived pool opponents (2026-07-27)
 
+> **BANNER 2026-08-06: the machinery this describes is gone; the corpus
+> finding is not.** `engine/bots/human/`, `tools/bgo_cluster.py`,
+> `tools/human_fit.py` and the `human` pool tier in `hillclimb_pool.py` /
+> `hillclimb_league.py` were all Python and were deleted with `engine/` and
+> the Python half of `experiments/` on 2026-08-06. The Rust league
+> (`rust/src/bin/climb.rs`) has no opponent pool of any kind — mutant vs.
+> champion mirror plus a fixed anchor — so there is no live equivalent of a
+> "human bot" pool opponent to point this at. What survives and is still
+> worth reading: §1's negative result that the 1,011-game BGO corpus does
+> not cluster into discrete human archetypes (k-means barely beats a
+> permutation null) — that is a fact about the corpus, independent of any
+> bot implementation.
+
 Branch `human-bots`. New code: `engine/bots/human/`, `tools/bgo_cluster.py`,
 `tools/human_fit.py`, `experiments/human_exploit.py`,
 `experiments/human_strength.py`, `tests/test_human_bots.py`, plus a `human`

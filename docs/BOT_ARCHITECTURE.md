@@ -32,7 +32,8 @@ Five measured results, in order of how much they should change what happens next
    the CPU. §3.
 2. **The champion's evaluation does not out-predict counting culture.** Pairwise
    ranking accuracy on held-out games: evaluate 0.698 +/- 0.029, raw `culture`
-   0.701 +/- 0.029. 344 generations, 82 weights, no better than one number. §2.3b.
+   0.701 +/- 0.029. 344 generations, 82 weights at the time (Python evaluator;
+   the Rust port's table is now 133 keys), no better than one number. §2.3b.
 3. **A better predictor is a worse policy, monotonically.** A ridge fit on the
    same 80 features reaches 0.812 ranking accuracy and wins **0 of 400**. A
    lambda ladder with a working control (lam -> infinity reproduces the champion
@@ -158,7 +159,8 @@ champion has never seen it.
 ### 2.2 The trained champion's zeros are a compensation fingerprint — VERIFIED
 
 MEASURED (read of `experiments/league_state/champion_2p.json`, the live arm at
-**generation 344**): **13 of 82 weights are at exactly 0.0**.
+**generation 344**): **13 of the then-82 (Python-era) weights are at exactly
+0.0**.
 
 ```
 ca_left  civil_actions  colonies  corruption_loss  culture_rate_early
@@ -317,7 +319,7 @@ row):
 
 | scorer | 955 pairs | 1,938 pairs | 2,940 pairs |
 |---|---|---|---|
-| the trained champion's `evaluate` (gen 344, 82 weights, ~57 features) | 0.6984 +/- 0.0291 | 0.6796 +/- 0.0208 | **0.6694 +/- 0.0170** |
+| the trained champion's `evaluate` (gen 344, 82 weights then, ~57 features) | 0.6984 +/- 0.0291 | 0.6796 +/- 0.0208 | **0.6694 +/- 0.0170** |
 | `culture` — one number | 0.7005 +/- 0.0291 | 0.6863 +/- 0.0207 | **0.6786 +/- 0.0169** |
 | `culture + 5 * culture_rate` — two numbers | 0.7037 +/- 0.0290 | 0.6904 +/- 0.0206 | **0.6949 +/- 0.0166** |
 | **ridge fit on the SAME 80 columns** | 0.7843 +/- 0.0261 | 0.7430 +/- 0.0195 | **0.8116 +/- 0.0141** |

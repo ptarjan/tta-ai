@@ -359,7 +359,8 @@ production the short way" can both be true, and appear to be.
   search has more chances to discover the value of a card through rollout
   rather than through the leaf evaluation, so the effect could shrink there.
   Untested.
-* **The champion was trained blind.** Its 78 weights were fitted while
+* **The champion was trained blind.** Its 78 weights (the Python evaluator's
+  count at the time) were fitted while
   `card_potential` under-reported these cards. Feeding it better information
   helps immediately, but the *right* comparison — a champion retrained with
   the fix against a champion retrained without it — needs a league run and is
@@ -687,8 +688,9 @@ impossible. §5's **+10.39 is a duel margin against a weakened opponent**, not
 production. In the mirror, where both arms play the same field, credit1's own
 culture is **146.47 vs 143.88, +2.58 [+1.53, +3.64]**, p<1e-4. Real, in the
 same direction, and a quarter the size. The margin is inflated because the
-credit0 arm is *also* being made worse by facing a stronger opponent —
-[`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)'s point that a stolen point moves the margin twice
+credit0 arm is *also* being made worse by facing a stronger opponent — the
+point the since-deleted `docs/LEAGUE_OBJECTIVE.md` (Python-era league
+objective, git history) made: a stolen point moves a lead-based margin twice
 and a produced point once.
 
 #### The one real wonder change: finish discipline, from a general term
@@ -2528,6 +2530,9 @@ numbers only, and will not be told.
 
 `arena.refuse_if_degenerate_champion` compares weight files by **exact
 content**. `analysis/frozen/champion_4p.json` is **76 of 78 weights identical**
+(78 was the frozen snapshot's weight count at that vocabulary generation —
+see [`analysis/frozen/README.md`](../analysis/frozen/README.md) for the
+78→99→112 growth history that predates the Rust port's current 133-key table)
 to `experiments/champion_4p.json` — the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) says
 never to warm-start from — differing only in `colonies` and `pacts`, and
 keeping the thing that makes it degenerate: **`science = -6.0888`**. It

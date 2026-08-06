@@ -1,5 +1,18 @@
 # Aggression is live; defence is where it still loses (2026-08-04)
 
+> **BANNER 2026-08-06: the measurement tool and the champion path below are
+> gone; the aggression/defence rules they measured are not.** `tools/
+> aggression_census.py` was Python and was deleted with `engine/` on
+> 2026-08-06, and `experiments/league_state/` (the pool-based league's state
+> directory) no longer exists — the live league is the Rust `climb` binary,
+> which writes `experiments/champion_{2,3,4}p.json` directly, no
+> `league_state/` involved. The combat/aggression/defence rules this
+> measured are unchanged in `rust/src/combat.rs` and `rust/src/events.rs`,
+> so the qualitative findings below (rules-declined aggressions are the
+> majority and correct, multi-card defences are the ones given up) are
+> reasonable priors for the current bot but have not been re-measured
+> against it.
+
 Re-measurement of the question [`docs/AGGRESSION_RATE.md`](AGGRESSION_RATE.md)
 (2026-07-30) and [`docs/WAR_RATE_CENSUS.md`](WAR_RATE_CENSUS.md) (2026-07-31)
 left open, against **today's** 2p champion rather than the ones those

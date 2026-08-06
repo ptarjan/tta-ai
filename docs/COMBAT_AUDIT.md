@@ -1313,7 +1313,7 @@ that produces a strictly-dominated successor state get picked.
 The champions have been trained on a game in which the entire diplomacy
 and aggression layer never fires. That is not an engine correctness bug —
 the rules are implemented — but it *is* a training-distribution bug: the
-78 weights were optimised in a world where politics is "pass or seed an
+78 weights (the Python evaluator's count at the time) were optimised in a world where politics is "pass or seed an
 event", so any weight relating to pacts, colonies, aggression defence or
 war is untrained noise, and the derived human-facing advice in
 [`docs/HEURISTICS.md`](HEURISTICS.md) cannot say anything about the political game.

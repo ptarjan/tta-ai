@@ -223,7 +223,9 @@ opponent rather than the margin over the mean, and the constant is
 `LEAD_SCALE`.  The scale reasoning above is unchanged (it is a statement about
 dispersion, not about which opponent the differential is taken against) but
 the sd it is derived from was measured on the mean margin and has not been
-re-derived for the lead.  See [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#5-lead_scale-the-one-free-choice-measured-per-player-count) §5.
+re-derived for the lead. (Detail was in the now-deleted `docs/LEAGUE_OBJECTIVE.md`
+§5 — Python-era objective, git history; the current Rust `climb` binary does
+not use a `LEAD_SCALE` tanh blend at all, see its own module doc.)
 
 ### The gate veto — the aggregate is not allowed to hide a loss
 
@@ -265,8 +267,9 @@ about any individual weight**. `wonder_remaining` is a trained weight that
 measures at 27.6% ± 6.3% against a 25% null — indistinguishable from nothing.
 
 Every `--ablate-every` generations (default 25) the trainer takes the next
-`--ablate-k` weights off a rotating cursor (all 82 weights are covered in
-turn, the cursor persists across restarts), **zeroes that one weight** in the
+`--ablate-k` weights off a rotating cursor (all 82 weights — the Python
+evaluator's count at the time this was written — were covered in turn, the
+cursor persists across restarts), **zeroes that one weight** in the
 champion, and plays the result against the pool's gate opponents, paired
 against the unablated champion on identical seeds. The champion's reference
 games are played once and shared by every weight in the cycle.
@@ -710,7 +713,11 @@ Option 2 shipped: gate tiers score on `margin_share(m) = 0.5·(1+tanh(m/120))`,
 everything else stays on win share. `--gate-metric winshare` reverts.
 **SUPERSEDED 2026-07-30** — the per-tier split is gone (a weighted mean over
 rows in different units is not a number) and every tier now scores on
-`lead_share`, the lead over the *best* opponent. [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md).
+`lead_share`, the lead over the *best* opponent (detail was in the now-deleted
+`docs/LEAGUE_OBJECTIVE.md`, git history). **This entire tiered-pool mechanism
+is itself since superseded**: the current Rust `climb` binary
+(`rust/src/bin/climb.rs`) dropped the pool, the tiers and this objective
+altogether in favour of mirror self-play plus a fixed-anchor veto.
 The paragraphs below are kept as the record of why a dense culture signal was
 needed at all, which is unchanged.
 `arena.duel` did **not** already return what was needed — it returned only the

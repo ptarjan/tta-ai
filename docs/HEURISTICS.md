@@ -1,12 +1,18 @@
 # Heuristics for human players
 
 
-> **CAVEAT 2026-07-30: this document describes champions that no longer exist.**
+> **CAVEAT 2026-07-30 (numbers re-verified 2026-08-06): this document describes
+> champions that no longer exist.**
 > The 3p and 4p champions it was written from were wiped and restarted, and even
-> the surviving 2p lineage's live weights contradict some of its headline advice —
-> 13 weights are clamped to exactly 0.0 (including `civil_actions`, `ca_left`,
-> `uprising`, `leader`, each contradicting a specific claim here) while the largest
-> live term is `end_turn_bias = −14.44`, a pure artefact correction.  The
+> the surviving 2p lineage's weights have moved on and contradict some of this
+> document's headline advice. Re-checked directly against the committed
+> `experiments/champion_2p.json` (gen 209): none of `civil_actions` (1.0210),
+> `ca_left` (0.0438), `uprising` (−14.0476) or `leader` (3.4251) are clamped to
+> 0.0 — in fact **zero** of that file's 78 weights are exactly 0.0 — and its
+> largest-magnitude term is `end_turn_bias = −8.2834`, not the −14.44 an
+> earlier version of this caveat quoted. Numbers this specific go stale fast;
+> re-read them yourself with `python3 -c "import json; w = json.load(open('experiments/champion_2p.json'))['weights']; print(w['end_turn_bias'], sum(1 for v in w.values() if v == 0.0))"`
+> rather than trusting this paragraph indefinitely. The
 > document's own evidence grading ([rules] / [confirmed] / [strong] / [mixed] /
 > [provisional] / [thin] / [not evidence]) is the right way to read it: the
 > [rules] and [confirmed] material is durable, the self-play-derived material is a

@@ -335,10 +335,11 @@ games, and it means §8.3-8.5 are not measuring an engine change.
 ### 8.3 The replication: gen 918 vs gen 821 at 2x the n
 
 Both vectors under `plan:width=8`, seat-rotated on the same deals, zero engine
-errors. `blend` is the league's own accept objective
-([`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md): `own_share` centred 100, scale 120, alpha 0.15 on
-win share), scored per game for the challenger minus the defenders' mean and
-clustered by deal.
+errors. `blend` was the Python league's own accept objective (the now-deleted
+`docs/LEAGUE_OBJECTIVE.md`, git history: `own_share` centred 100, scale 120,
+alpha 0.15 on win share — since replaced by the Rust `climb` binary's plain
+win-share-plus-anchor-veto design), scored per game for the challenger minus
+the defenders' mean and clustered by deal.
 
 | | n | culture margin | +/- (game) | +/- (deal) | own culture | opp culture | win share (null 33.3%) | d(blend) |
 |---|---|---|---|---|---|---|---|---|
@@ -349,8 +350,9 @@ clustered by deal.
 game-clustered and **−7.6** deal-clustered, both below the file's own −5
 threshold. Own culture and win share move the *same* way — 70.9 against 86.9
 and 24.4% against a 33.3% null — so this is not a margin artefact dressed up as
-a regression, which is the specific failure [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md#1-what-each-number-in-the-objective-is) §1 exists
-to prevent. The league's own `blend` objective agrees at −0.069 ± 0.039.
+a regression, which is the specific failure the now-deleted
+`docs/LEAGUE_OBJECTIVE.md` §1 existed to prevent. The league's own `blend`
+objective agrees at −0.069 ± 0.039.
 
 ### 8.4 Bracketing it: not one bad accept
 

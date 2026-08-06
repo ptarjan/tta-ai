@@ -409,7 +409,7 @@ seat advantage is:
 #### The frozen-champion upside artifact, checked not asserted
 
 A frozen-champion A/B systematically flatters a new feature that only ever
-adds value: the other 78 weights were fitted without it, so the bot collects
+adds value: the other 78 weights (the Python evaluator's count at the time) were fitted without it, so the bot collects
 the upside at full price and pays no downside. That is a real effect and it is
 the reason to be suspicious of a positive here.
 

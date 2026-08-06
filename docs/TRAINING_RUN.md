@@ -62,7 +62,8 @@ So the arm starts from
     experiments/hall_of_fame/oneply_2p_gen00355.json, which is already a
     `hall` pool opponent)
 
-verified key-by-key in place: all 82 of P's weights identical in the live
+verified key-by-key in place: all 82 (the Python evaluator's weight count at
+the time) of P's weights identical in the live
 `champion_2p.json`, the 7 newer features at `DEFAULT_WEIGHTS` (the same fill
 [`docs/TRANSFER_TEST.md`](TRANSFER_TEST.md#7-limits--what-this-does-not-establish) §7 describes), `ladder_2p/gen00000.json` equal to the
 champion, gen 0.
@@ -142,9 +143,12 @@ merely rarer — single trained weights are not interpretable anyway
 
 ### Two other changes landed the same day
 
-* **[`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md)** — the pool now downweights opponents by their
-  measured win rate and deepens the self-ladder (`--past-k 6`, newest-biased).
-  15 of the 2p arm's 18 opponents were between 87.5% and 100%.
+* **the now-deleted `docs/LEAGUE_POOL.md`** (Python-era, git history) — the
+  pool then downweighted opponents by their measured win rate and deepened
+  the self-ladder (`--past-k 6`, newest-biased). 15 of the 2p arm's 18
+  opponents were between 87.5% and 100%. The Rust `climb` binary that runs
+  the live league today has no pool at all — it duels the mirror plus a
+  fixed anchor.
 * **[`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md)** — every few accepted champions, the new
   champion is played under `plan:width=8` against the previously validated one
   and against `book`, and the result is appended to a time series that answers

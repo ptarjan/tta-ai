@@ -76,13 +76,17 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    It resumes, silently.  To genuinely restart clean, move the state dir aside
    first.
 
-6. **A saturated pool is not a strong bot.**  Since 2026-07-29 the pool
-   downweights opponents by their measured win rate and skips them in the
-   acceptance rotation ([`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md)).  Read the `[pool] informative
-   ...` line: at 2p, 8 of 18 opponents are inert.  "The champion beats the pool"
-   says less than it used to, not more.  If the `informative` line ever reads a
-   small number **and** the `tier share` line moves, something is wrong — those
-   two are independent by construction.
+6. **A saturated pool is not a strong bot.**  This applied to the Python
+   league (2026-07-29 through the 2026-08-06 removal of `engine/`): the pool
+   downweighted opponents by their measured win rate and skipped them in the
+   acceptance rotation (the now-deleted `docs/LEAGUE_POOL.md`, git history).
+   Read the `[pool] informative ...` line: at 2p, 8 of 18 opponents were
+   inert.  "The champion beats the pool" said less than it used to, not more.
+   **The current Rust `climb` binary has no pool at all** — mutant vs.
+   champion mirror plus a fixed anchor veto — so this trap does not apply to
+   it, but the underlying lesson (a beatable-but-uninformative opponent
+   inflates apparent strength) is worth keeping in mind for any future
+   pool-style design.
 7. **The training proxy is not known to track shipped strength.**
    [`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) runs the check that says whether it does, from its
    own cron entry.  Before quoting any arm's progress as strength, read

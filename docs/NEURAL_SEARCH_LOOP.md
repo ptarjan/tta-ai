@@ -121,7 +121,8 @@ Every child in both new generators is applied to a determinized copy.
 ## 4. Stage 0: bootstrap from the strongest bot on record
 
 `plan:champion_2p` scores 189.0 culture in a 2p mirror and 213.4 against BookBot
-([`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md), [`docs/LEAGUE_OBJECTIVE.md`](LEAGUE_OBJECTIVE.md)) against a human mean of
+([`docs/BEHAVIOUR_CLONE.md`](BEHAVIOUR_CLONE.md), and the now-deleted
+`docs/LEAGUE_OBJECTIVE.md`) against a human mean of
 159.5 -- the only configuration in this repo that clears the human. The value
 net had never seen a single state that bot evaluates.
 

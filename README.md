@@ -35,8 +35,9 @@ Then, by area:
   [`BOT_ROSTER.md`](docs/BOT_ROSTER.md),
   [`DEEPER_SEARCH.md`](docs/DEEPER_SEARCH.md),
   [`INFORMATION_AUDIT.md`](docs/INFORMATION_AUDIT.md).
-- **Training** — [`LEAGUE_TRAINING.md`](docs/LEAGUE_TRAINING.md),
-  [`LEAGUE_OBJECTIVE.md`](docs/LEAGUE_OBJECTIVE.md),
+- **Training** — [`LEAGUE_TRAINING.md`](docs/LEAGUE_TRAINING.md) (Python-era
+  mechanism reference; the live league is now `rust/src/bin/climb.rs`, see
+  Layout below),
   [`NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md),
   [`MODEL_CONSTANTS.md`](docs/MODEL_CONSTANTS.md).
 - **Human-facing output** — [`HEURISTICS.md`](docs/HEURISTICS.md) (carries a
