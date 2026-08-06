@@ -1430,6 +1430,26 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
             // No policy here in Python either -- always option 0.
             best.consider(0, 0.0);
         }
+        ChoiceKind::PlunderSplit { .. } => {
+            // Same shape as `GainBlock` (both offer `ChoiceOption::Gain`),
+            // so the same valuation applies: price each split by this
+            // book's own food/resources marginal value instead of a fixed
+            // "resources first" order (FAQ p.7 -- the split is the
+            // attacker's choice).
+            for (i, o) in opts.iter().enumerate() {
+                if let ChoiceOption::Gain(g) = o {
+                    let prod = Production {
+                        food: g.food,
+                        resources: g.resources,
+                        science: 0,
+                        culture: 0,
+                        happy: 0,
+                        strength: 0,
+                    };
+                    best.consider(i, prod_value(prod, ctx));
+                }
+            }
+        }
     }
     Move::Choose { n: best.i as u8 }
 }

@@ -201,12 +201,18 @@ fn apply_resources_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32) 
 /// food (unlimited, floored at zero). Mirrors `engine/events.py::
 /// _food_or_resources`.
 ///
-/// This is [`apply_gains`]'s OWN helper for its (unreachable, see this
-/// module's top doc comment) bare `foodAndOrResources` key -- but it is very
-/// much live for real: `combat::finish_aggression`'s `takeFromOpponent.
-/// foodAndOrResources` theft (`events.py:656-659`, Aggression: Plunder) calls
-/// this exact private function too, so it is `pub(crate)` rather than
-/// private, and there is one copy, not two drifting in and out of step.
+/// This is [`apply_gains`]'s helper for its bare `foodAndOrResources` key --
+/// reachable through the `gain`/`lose` blocks beside `strongestPlayers`/
+/// `weakestPlayers` (Foray/Raiders), see this module's top doc comment.
+///
+/// It is `pub(crate)` rather than private for history, not a current second
+/// caller: `combat::finish_aggression`'s Aggression: Plunder theft used to
+/// route through this exact function too, hardcoding "resources first" for
+/// BOTH sides of the theft. FAQ p.7 says that split is the ATTACKER's
+/// choice, so Plunder now goes through `interact::offer_plunder_split`
+/// instead -- a real decision, not this fixed order. This function is
+/// unchanged and still correct for the cases that ARE a fixed order (an
+/// event's own gain/lose block has no "attacker" to ask).
 pub(crate) fn food_or_resources(p: &mut PlayerState, amount: i32, sign: i32) {
     let amount = amount.max(0) as u16;
     if sign > 0 {

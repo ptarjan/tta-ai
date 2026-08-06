@@ -248,10 +248,11 @@ where
 ///
 /// `resolve_war_outcome` is no longer total: "War over Technology" leaves
 /// the victor a decision (steal blue technologies instead of science, Code
-/// of Laws p.3), so [`crate::interact::settle_war_spoils`] takes the spoils
-/// as science before scoring. That prices this lookahead exactly as it was
-/// priced before the choice existed, and it is a LOWER bound rather than a
-/// guess -- see that function's own doc comment.
+/// of Laws p.3), so [`crate::interact::settle_war_spoils`] settles the
+/// spoils -- preferring the priciest affordable steal over science -- before
+/// scoring. That is still an approximation rather than the real chooser's
+/// preference, but it is the ceiling `war_tech_options` can offer for the
+/// budget rather than the floor -- see that function's own doc comment.
 pub fn war_value<E>(state: &GameState, idx: u8, eval: &E) -> f64
 where
     E: Fn(&GameState, u8) -> f64,
@@ -529,13 +530,17 @@ mod tests {
         assert_eq!(state.players[0].culture, 0);
     }
 
-    /// Mirrors `test_war_over_technology_is_priced_at_its_science_value`:
     /// "War over Technology" leaves the victor a live choice
-    /// (`ChoiceKind::WarTech`) that `war_value` must settle as science
-    /// before scoring, rather than pricing the position with the choice
-    /// still open (which would price it as if the war meant nothing).
+    /// (`ChoiceKind::WarTech`) that `war_value` must settle before scoring,
+    /// rather than pricing the position with the choice still open (which
+    /// would price it as if the war meant nothing). With a stealable
+    /// technology on the table, `settle_war_spoils` takes the steal (the
+    /// ceiling `war_tech_options` can offer), and only whatever advantage is
+    /// left over lands as science -- it is no longer priced as pure science
+    /// the way `test_war_over_technology_is_priced_at_its_science_value`
+    /// (the Python test this once mirrored bit-for-bit) assumed.
     #[test]
-    fn war_value_settles_a_war_over_technology_choice_as_science() {
+    fn war_value_settles_a_war_over_technology_choice_by_stealing_then_taking_leftover_science() {
         let mut state = game::new_game(2, 77);
         let war = war_card("War over Technology");
         state.players[0].war_declared_by_me = war;
@@ -569,7 +574,8 @@ mod tests {
 
         interact::settle_war_spoils(&mut probe);
         assert!(probe.pending.is_empty());
-        assert!(probe.players[0].science > 0, "settling as science must move some science");
+        assert!(probe.players[0].techs.has(code_of_laws), "the affordable steal must be taken");
+        assert!(probe.players[0].science > 0, "leftover advantage must still land as science");
         assert_eq!(looked, culture(&probe, 0));
 
         // and the position asked about is untouched.

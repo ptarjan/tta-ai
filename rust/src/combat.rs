@@ -435,16 +435,16 @@ pub fn finish_aggression(state: &mut GameState, ctx: &crate::state::Defense) -> 
         card.get().special.iter().find(|s| matches!(s, Special::TakeFromOpponent(_)))
     {
         if block.food_and_or_resources != 0 {
-            let before_f = state.players[defender as usize].food;
-            let before_r = state.players[defender as usize].resources;
-            events::food_or_resources(
-                &mut state.players[defender as usize],
+            // FAQ p.7: the ATTACKER chooses how the take splits between food
+            // and resources -- it is not a fixed "resources first" order, so
+            // this opens `interact::offer_plunder_split` rather than draining
+            // one bank before the other unconditionally.
+            interact::offer_plunder_split(
+                state,
+                attacker,
+                defender,
                 block.food_and_or_resources as i32,
-                -1,
             );
-            let moved = (before_f - state.players[defender as usize].food) as i32
-                + (before_r - state.players[defender as usize].resources) as i32;
-            events::food_or_resources(&mut state.players[attacker as usize], moved, 1);
         }
         if block.science != 0 {
             let moved = (block.science as u16).min(state.players[defender as usize].science);

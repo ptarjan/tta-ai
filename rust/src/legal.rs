@@ -129,6 +129,42 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
     !p.leader.is_none() && p.leader.get().name == name
 }
 
+/// Whether target `q` has anything an aggression `card` could actually take
+/// -- the qualification `combat::finish_aggression`'s own per-`Special`
+/// dispatch never checks before enqueueing (see this function's call site
+/// for the citation). Read off the SAME `Special` variants that dispatch
+/// does, not off the printed name, so a rule and its legality check cannot
+/// drift onto two different notions of "this card".
+///
+/// Every other aggression card is unconditionally offerable: Raid degrades
+/// to "nothing to destroy" through its OWN empty-option auto-resolve rather
+/// than needing a legality gate (it still spends the card fairly -- a raid
+/// against an empty tableau is a real, if wasted, choice a human player can
+/// make too, and `destroyUrbanBuildings` is not gated on `q` having urban
+/// buildings by the rulebook either); Plunder/Enslave/Spy's gains are capped
+/// at zero rather than refused. Annex and Infiltrate are different: without
+/// this gate they are LEGAL AND RESOLVE TO NOTHING, which is the defect this
+/// function exists to close.
+fn aggression_target_qualifies(card: &Card, q: &PlayerState) -> bool {
+    // Annex ("Aggression: Annex", `Special::StealColony(n)` with `n != 0`
+    // per `combat::finish_aggression`'s own `if n != 0` guard): needs a
+    // colony in the victim's play area to steal.
+    let steals_a_colony =
+        card.special.iter().any(|sp| matches!(sp, Special::StealColony(n) if *n != 0));
+    if steals_a_colony && q.colonies.is_empty() {
+        return false;
+    }
+    // Infiltrate ("Aggression: Infiltrate", `Special::RemoveFromGame`):
+    // needs a leader in play OR an unfinished wonder to remove --
+    // `interact::run_item`'s `QueueItem::Infiltrate` offers exactly those
+    // two options and nothing else.
+    let removes_leader_or_wonder = card.special.contains(&Special::RemoveFromGame);
+    if removes_leader_or_wonder && q.leader.is_none() && q.wonder.is_none() {
+        return false;
+    }
+    true
+}
+
 /// `engine/economy.py::pop_cost` -- the `state`/`p`-reading wrapper around
 /// `economy::pop_food_cost`'s pure formula. Not in `economy.rs` itself:
 /// that module predates `effects.rs` and deliberately left this one wrapper
@@ -252,6 +288,20 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
                         continue;
                     }
                     if combat::defense_strength(state, p, q) >= combat::attack_strength(state, p, q) {
+                        continue;
+                    }
+                    // Annex/Infiltrate against a target they cannot affect
+                    // are legal moves that resolve to nothing: `combat::
+                    // finish_aggression` enqueues `QueueItem::Annex`/
+                    // `Infiltrate` off `Special::StealColony`/
+                    // `Special::RemoveFromGame` unconditionally, and
+                    // `interact::run_item` builds an EMPTY option list for
+                    // a victim with no colony (Annex) or no leader and no
+                    // unfinished wonder (Infiltrate) -- `push_choice` drops
+                    // an empty list silently, so the card is spent, the
+                    // military action is spent, and nothing happens. Gate
+                    // it here instead of offering a move with no effect.
+                    if !aggression_target_qualifies(card, q) {
                         continue;
                     }
                     moves.push(Move::Aggression { card: id, target: q.idx });
@@ -1253,6 +1303,84 @@ mod tests {
         let state = one_player_state(p);
         let moves = politics_moves(&state, &state.players[0]);
         assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+    }
+
+    // ------------------------------------------------- annex / infiltrate targeting
+
+    /// Shared rig for the four tests below: attacker holds `agg` with
+    /// military actions to spare and a decisive strength edge (3 Warriors
+    /// against a target with 0 combat-relevant tech), so the ONLY thing
+    /// that can suppress `Move::Aggression` is `aggression_target_qualifies`
+    /// -- every other gate (cost, strength, pacts) is deliberately slack.
+    fn attacker_ready_to_win(agg: CardId) -> PlayerState {
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = agg.get().military_action_cost as i8 + 2;
+        p.hand_military.push(agg);
+        p.techs.insert(card("Warriors"), TechSlot { workers: 3, stored: 0 });
+        p
+    }
+
+    /// Annex ("stealColony") against a colonyless target is legal today and
+    /// resolves to nothing: `combat::finish_aggression` enqueues
+    /// `QueueItem::Annex` off `Special::StealColony` unconditionally, and
+    /// `interact::run_item` builds an EMPTY option list for a victim with no
+    /// colonies -- `push_choice` drops an empty list silently, so the card
+    /// and the military action are spent for no effect. This is the
+    /// regression test for that: `one_player_state`'s fillers start with no
+    /// colonies, so target 1 has nothing to annex.
+    #[test]
+    fn annex_is_not_offered_against_a_target_with_no_colony() {
+        let annex = card("Aggression: Annex");
+        let state = one_player_state(attacker_ready_to_win(annex));
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+    }
+
+    /// The positive control: a target actually holding a colony makes the
+    /// exact same move legal again -- this is a targeting gate, not a
+    /// blanket ban on Annex.
+    #[test]
+    fn annex_is_offered_against_a_target_holding_a_colony() {
+        let annex = card("Aggression: Annex");
+        let mut state = one_player_state(attacker_ready_to_win(annex));
+        state.players[1].colonies.push(card("Vast Territory (I)"));
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::Aggression { card: annex, target: 1 }));
+    }
+
+    /// Infiltrate ("removeFromGame") against a player with no leader and no
+    /// unfinished wonder is the same shape of defect: `interact::run_item`'s
+    /// `QueueItem::Infiltrate` offers the `Leader` option only when a leader
+    /// is in play and the `Wonder` option only when a wonder is under
+    /// construction, so with neither the option list is empty and the move
+    /// resolves to nothing.
+    #[test]
+    fn infiltrate_is_not_offered_against_a_player_with_nothing_to_steal() {
+        let infiltrate = card("Aggression: Infiltrate");
+        let state = one_player_state(attacker_ready_to_win(infiltrate));
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+    }
+
+    /// Positive control #1: a leader in play is enough on its own.
+    #[test]
+    fn infiltrate_is_offered_against_a_target_with_a_leader() {
+        let infiltrate = card("Aggression: Infiltrate");
+        let mut state = one_player_state(attacker_ready_to_win(infiltrate));
+        state.players[1].leader = card("Aristotle");
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }));
+    }
+
+    /// Positive control #2: an unfinished wonder is enough on its own, with
+    /// no leader in play at all.
+    #[test]
+    fn infiltrate_is_offered_against_a_target_with_an_unfinished_wonder() {
+        let infiltrate = card("Aggression: Infiltrate");
+        let mut state = one_player_state(attacker_ready_to_win(infiltrate));
+        state.players[1].wonder = card("Pyramids");
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }));
     }
 
     // ---------------------------------------------------------------- war

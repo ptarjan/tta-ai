@@ -811,6 +811,12 @@ pub enum ChoiceKind {
     TakeRow { budget: i16 },
     /// `_c_war_tech`: War over Technology spoils (§5.7).
     WarTech { victim: u8, budget: i16 },
+    /// Aggression: Plunder's "take up to N food and/or resources" (§5.4.6).
+    /// FAQ p.7: the SPLIT between the two banks is the attacker's choice,
+    /// not a fixed order -- `options` (built by `interact::
+    /// plunder_split_options`) is every way to reach the maximum takeable
+    /// total, one `ChoiceOption::Gain` per split. `victim` is who pays it.
+    PlunderSplit { victim: u8 },
 }
 
 /// An open `choice`: somebody must pick one of `options`.

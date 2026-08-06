@@ -63,9 +63,9 @@ use crate::effects;
 use crate::legal;
 use crate::moves::{Move, MoveList};
 use crate::state::{
-    CardList, Choice, ChoiceKind, ChoiceOption, Colonize, Defense, GameState, Keyword,
-    OptionList, Pending, PlayerState, QueueItem, MAX_FORCE, MAX_HAND, MAX_PLAYERS, MAX_TABLEAU,
-    ROW_SIZE,
+    CardList, Choice, ChoiceKind, ChoiceOption, Colonize, Defense, GainOption, GameState,
+    Keyword, OptionList, Pending, PlayerState, QueueItem, MAX_FORCE, MAX_HAND, MAX_PLAYERS,
+    MAX_TABLEAU, ROW_SIZE,
 };
 
 // ------------------------------------------------------------- plumbing
@@ -539,6 +539,24 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
             }
             other => wrong_option(&choice.kind, other),
         },
+        ChoiceKind::PlunderSplit { victim } => {
+            let ChoiceOption::Gain(g) = opt else { wrong_option(&choice.kind, opt) };
+            // The defender's loss is unconditional (§5.4.6 losses are never
+            // blue-token limited -- see `events::food_or_resources`'s
+            // `sign < 0` arm, which this mirrors). The attacker's gain IS
+            // blue-token limited, so a full bank can still cap what actually
+            // crosses over even though the defender's share is already gone;
+            // that half-degenerate outcome is inherited from the pre-choice
+            // code (`events::food_or_resources`'s `sign > 0` arm) rather than
+            // introduced by this fix.
+            let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
+            let v = &mut state.players[victim as usize];
+            v.food = v.food.saturating_sub(food);
+            v.resources = v.resources.saturating_sub(res);
+            let pl = &mut state.players[p as usize];
+            economy::gain_food(pl, food);
+            economy::gain_resources(pl, res);
+        }
     }
 }
 
@@ -660,30 +678,90 @@ fn steal_special_tech(state: &mut GameState, victor: u8, loser: u8, id: CardId) 
     crate::apply::put_special_in_play(state, victor, id);
 }
 
-/// Take any outstanding War over Technology spoils as SCIENCE.
+/// Settle any outstanding War over Technology spoils by taking the BEST
+/// AFFORDABLE option, not by hardcoding science.
 ///
 /// For LOOKAHEAD callers only: they resolve a declared war on a scratch state
 /// and score the position immediately, so a decision left hanging would price
-/// the war at nothing at all. Science is the option the card names first and
-/// the only one the engine had before this choice existed, so a war is priced
-/// at its science value -- a LOWER bound on the spoils, since a victor only
-/// ever steals when its own evaluator prefers the cards to the science.
+/// the war at nothing at all. There is no real chooser here to consult, so
+/// this cannot reproduce the victor's actual preference -- but it no longer
+/// has to settle for the floor either.
 ///
-/// KNOWN, PERMANENT, ONE-SIDED BIAS, carried over from `interact.
-/// settle_war_spoils` verbatim: every search that prices a declared War over
-/// Technology sees the SCIENCE branch and never the steal, so it sees the
-/// floor of the card and never its ceiling. The bots will keep
-/// under-declaring that war in exactly the positions where the choice was
-/// worth implementing. A lower bound beats the zero it replaces, so this
-/// ships -- but anyone measuring the choice and finding nothing has measured
-/// THIS, not the choice.
+/// `war_tech_options`' own doc comment fixes a total order on the steal
+/// options: "most expensive first", i.e. the option that spends the most of
+/// the advantage leads. Option 0 (`WAR_TECH_SCIENCE_IDX`) is science; option
+/// 1, when present, is that most-expensive affordable steal. Taking it
+/// whenever it exists prices the war at a permanent blue technology instead
+/// of one-time science, which is the ceiling `war_tech_options` can offer for
+/// that budget -- a tighter bound than always taking the floor.
+///
+/// This WAS "science unconditionally": every search that priced a declared
+/// War over Technology saw only the science branch and never the steal, so
+/// it saw the floor of the card and never its ceiling, biasing every bot
+/// pricing that war one-sided low. Preferring the steal removes that bias in
+/// the direction the FAQ actually allows ("some or all", p.8) rather than
+/// hardcoding the option the card lists first.
 pub fn settle_war_spoils(state: &mut GameState) {
-    while matches!(
-        state.pending.top(),
-        Some(Pending::Choice(Choice { kind: ChoiceKind::WarTech { .. }, .. }))
-    ) {
-        apply_pending(state, Move::Choose { n: WAR_TECH_SCIENCE_IDX });
+    loop {
+        let n_options = match state.pending.top() {
+            Some(Pending::Choice(Choice { kind: ChoiceKind::WarTech { .. }, options, .. })) => {
+                options.len()
+            }
+            _ => break,
+        };
+        // Index 0 is always science (`WAR_TECH_SCIENCE_IDX`); index 1, when
+        // present, is the priciest affordable steal (`war_tech_options`'
+        // order). Prefer it -- see the doc comment above for why.
+        let n = if n_options > 1 { 1 } else { WAR_TECH_SCIENCE_IDX };
+        apply_pending(state, Move::Choose { n });
     }
+}
+
+// -------------------------------------------------------- Aggression: Plunder
+
+/// Every way to split Aggression: Plunder's "take up to `printed` food
+/// and/or resources" (§5.4.6) between the two banks, capped at what the
+/// defender actually has.
+///
+/// `total` is `min(printed, defender.resources + defender.food)`: the exact
+/// cap the pre-choice code already enforced (`events::food_or_resources`'
+/// two-step drain), which this fix does not touch -- ONLY the mix was wrong,
+/// not the amount. Every split that reaches `total` is offered; a split that
+/// reaches less than `total` is never in the attacker's interest (more is
+/// strictly better, since there is no reason for the victim to keep any of
+/// it) and was never reachable before this choice existed either, so it is
+/// not manufactured here.
+///
+/// Ordered most resources first, matching the "resources first" order the
+/// pre-choice code always took: option 0 is that old default, so the
+/// convention every other choice in this module follows (index 0 is the
+/// blind fallback) holds here too.
+fn plunder_split_options(defender: &PlayerState, printed: i32) -> OptionList {
+    let mut opts = OptionList::new();
+    let total = printed.min(defender.resources as i32 + defender.food as i32).max(0);
+    if total == 0 {
+        return opts;
+    }
+    // `r` is resources taken; food taken is always `total - r`, so this is a
+    // total order over splits, not a search: the range is exactly the `r`
+    // values for which BOTH banks can supply their share of `total`.
+    let r_max = (defender.resources as i32).min(total);
+    let r_min = (total - defender.food as i32).max(0);
+    let mut r = r_max;
+    while r >= r_min {
+        opts.push(ChoiceOption::Gain(GainOption { food: (total - r) as i16, resources: r as i16 }));
+        r -= 1;
+    }
+    opts
+}
+
+/// Open the attacker's Plunder split decision (FAQ p.7: the split is the
+/// ATTACKER's choice, not a fixed "resources first" order). A single
+/// feasible split -- e.g. the defender holds only one of the two banks --
+/// auto-resolves rather than manufacturing a decision with one option.
+pub fn offer_plunder_split(state: &mut GameState, attacker: u8, defender: u8, printed: i32) {
+    let opts = plunder_split_options(&state.players[defender as usize], printed);
+    push_choice(state, attacker, ChoiceKind::PlunderSplit { victim: defender }, opts, true);
 }
 
 // -------------------------------------------------- International Agreement
@@ -1773,8 +1851,7 @@ mod tests {
         assert!(war_tech_options(&state, 0, 1, 5).is_empty());
     }
 
-    /// `WAR_TECH_SCIENCE_IDX` is a promise about option 0, and
-    /// `settle_war_spoils` is built on it.
+    /// `WAR_TECH_SCIENCE_IDX` is a promise about option 0.
     #[test]
     fn war_tech_science_is_always_option_zero() {
         let mut state = blank_state(2);
@@ -1786,10 +1863,33 @@ mod tests {
             c.options.get(WAR_TECH_SCIENCE_IDX as usize),
             Some(ChoiceOption::Word(Keyword::Science))
         );
+    }
+
+    /// `settle_war_spoils` is the LOOKAHEAD-only stand-in for the victor's
+    /// real choice (see its doc comment): with a stealable technology on
+    /// offer it must take that steal -- the ceiling `war_tech_options` can
+    /// offer for the budget -- and only fall back to science for whatever
+    /// budget is left over, not hardcode science for the whole advantage.
+    ///
+    /// This is the regression test for the one-sided bias described on
+    /// `settle_war_spoils`: before the fix it always chose
+    /// `WAR_TECH_SCIENCE_IDX` and this player would have ended with 6
+    /// science and Masonry untouched.
+    #[test]
+    fn settle_war_spoils_prefers_stealing_a_technology_over_taking_science() {
+        let mut state = blank_state(2);
+        let masonry = card("Masonry"); // techCost 3
+        state.players[1].techs.insert(masonry, TechSlot::default());
+        state.players[1].science = 10;
+        war_tech_spoils(&mut state, 0, 1, 6);
         settle_war_spoils(&mut state);
         assert!(state.pending.is_empty());
-        assert_eq!(state.players[0].science, 6);
-        assert_eq!(state.players[1].science, 4);
+        assert!(state.players[0].techs.has(masonry), "the steal must be taken, not skipped");
+        assert!(!state.players[1].techs.has(masonry));
+        // Masonry costs 3 of the 6-point advantage; the remaining 3 has
+        // nothing left to steal, so it lands as science.
+        assert_eq!(state.players[0].science, 3);
+        assert_eq!(state.players[1].science, 7);
     }
 
     /// FAQ p.8's cap: the victor cannot take more science than the loser has.
@@ -1831,6 +1931,59 @@ mod tests {
         war_tech_spoils(&mut state, 0, 1, 7);
         assert!(state.pending.is_empty());
         assert_eq!(state.players[0].science, 4);
+    }
+
+    // -------------------------------------------------------------- plunder
+
+    /// FAQ p.7: the split between food and resources is the ATTACKER's
+    /// choice, not a fixed "resources first" order. With the defender
+    /// holding both banks, "take up to 3" has three genuine ways to reach
+    /// the full 3 (3 resources, 2+1, or 1+2), and this pins that all three
+    /// are actually offered -- before this fix the engine only ever
+    /// produced the first of them.
+    #[test]
+    fn plunder_offers_the_attacker_a_real_split_choice_instead_of_resources_first() {
+        let mut state = blank_state(2);
+        state.players[1].food = 2;
+        state.players[1].resources = 5;
+        // Headroom so the attacker's own blue-token bank is not itself the
+        // bottleneck -- this test is about the SPLIT, not the gain cap.
+        state.players[0].blue_total = 20;
+        start_defense(&mut state, 0, 1, card("Aggression: Plunder (I)"), 5);
+        let Some(Pending::Choice(c)) = state.pending.top() else { panic!("no decision opened") };
+        assert!(matches!(c.kind, ChoiceKind::PlunderSplit { victim: 1 }));
+        assert_eq!(
+            c.options.as_slice(),
+            &[
+                ChoiceOption::Gain(GainOption { food: 0, resources: 3 }),
+                ChoiceOption::Gain(GainOption { food: 1, resources: 2 }),
+                ChoiceOption::Gain(GainOption { food: 2, resources: 1 }),
+            ]
+        );
+        // Choosing the food-heavy split must actually move FOOD, not
+        // resources -- pinning that the mix is a real decision rather than
+        // window dressing over the old hardcoded order.
+        apply_pending(&mut state, Move::Choose { n: 2 });
+        assert!(state.pending.is_empty());
+        assert_eq!(state.players[1].food, 0);
+        assert_eq!(state.players[1].resources, 4);
+        assert_eq!(state.players[0].food, 2);
+        assert_eq!(state.players[0].resources, 1);
+    }
+
+    /// A single feasible split (the defender holds only one of the two
+    /// banks) is not a real decision, so it auto-resolves without opening
+    /// one -- `push_choice`'s own `auto` contract.
+    #[test]
+    fn plunder_with_only_one_bank_available_auto_resolves() {
+        let mut state = blank_state(2);
+        state.players[1].resources = 5;
+        state.players[1].food = 0;
+        state.players[0].blue_total = 20;
+        start_defense(&mut state, 0, 1, card("Aggression: Plunder (I)"), 5);
+        assert!(state.pending.is_empty(), "only one split reaches the cap -- no decision to open");
+        assert_eq!(state.players[1].resources, 2);
+        assert_eq!(state.players[0].resources, 3);
     }
 
     // ------------------------------------------------------------- defense
