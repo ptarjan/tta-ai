@@ -331,11 +331,18 @@ impl Pool {
     }
 }
 
-fn norm(s: &str) -> String {
+// `pub(crate)`, not private: `advisor::advisor`'s `parse_move` needs these
+// same three primitives to fuzzy-match a human's typed move argument against
+// ONE already-known candidate string (a legal move's own card name, or a
+// bare keyword like Churchill's "culture"/"military") -- a narrower job than
+// [`resolve_card`]'s "find the one match in a whole pool", which is why it
+// calls these directly instead of going through `resolve_card` again.
+
+pub(crate) fn norm(s: &str) -> String {
     s.chars().flat_map(|c| c.to_lowercase()).filter(|c| c.is_ascii_alphanumeric()).collect()
 }
 
-fn initials(name: &str) -> String {
+pub(crate) fn initials(name: &str) -> String {
     name.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
         .filter_map(|w| w.chars().next())
@@ -346,7 +353,7 @@ fn initials(name: &str) -> String {
 /// Is `needle` a subsequence of `hay` (both already normalised)? Mirrors
 /// Python's `it = iter(hay); all(ch in it for ch in needle)` -- the
 /// generator's progressive consumption of `it` IS the subsequence check.
-fn is_subseq(needle: &str, hay: &str) -> bool {
+pub(crate) fn is_subseq(needle: &str, hay: &str) -> bool {
     let mut it = hay.chars();
     needle.chars().all(|ch| it.by_ref().any(|h| h == ch))
 }
@@ -471,7 +478,13 @@ fn split_strict(text: &str) -> Vec<String> {
 /// whitespace splits UNLESS the whole string is itself one (multi-word) card
 /// name in `pool` -- so `deal bro irr alc` still splits three ways but
 /// `deal Hanging Gardens` does not. Mirrors `_split_cards`.
-fn split_cards(text: &str, pool: Option<Pool>) -> Vec<String> {
+///
+/// `pub`, not `pub(crate)`: `bin/advisor.rs`'s console (a separate crate
+/// that only depends on this one) needs the identical split for its "new
+/// cards dealt" prompt, for the same reason `patch`'s `deal` verb does -- it
+/// is the same human typing the same shorthand at a different prompt, not a
+/// different grammar.
+pub fn split_cards(text: &str, pool: Option<Pool>) -> Vec<String> {
     let text = text.trim();
     if text.is_empty() {
         return Vec::new();

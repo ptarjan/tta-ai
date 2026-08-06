@@ -578,7 +578,14 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
 /// `(0, 0)` if `p`'s leader is not Barbarossa -- callers only reach this
 /// after `leader_is(p, "Frederick Barbarossa")`, so that fallback never
 /// actually fires; it exists so the function stays total.
-fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
+///
+/// `pub(crate)`: `advisor::describe`'s cost note for [`crate::moves::Move::
+/// Barbarossa`] needs the exact same two numbers Python's advisor read off
+/// the now-deleted `COMBO_FOOD_DISCOUNT`/`COMBO_RESOURCE_DISCOUNT`
+/// constants -- this function is what replaced them, so the advisor reuses
+/// it rather than re-deriving the discount from the leader's `Special` list
+/// a second time.
+pub(crate) fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
     let mut food = 0;
     let mut resources = 0;
     if !p.leader.is_none() {
