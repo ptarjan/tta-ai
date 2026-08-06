@@ -13,6 +13,20 @@ publish = false
 # here is a decision, not a convenience -- justify it in the commit.
 [dependencies]
 
+# This file is ALSO the workspace root (a package manifest can be both --
+# ordinary Cargo layout, not a virtual workspace). `trainer/` is the one
+# authorised exception to the empty-`[dependencies]` rule above: GPU training
+# on a real ML crate (candle), Paul's explicit decision 2026-08-06 -- see
+# DESIGN.md's "GPU training: the one dependency exception" section for the
+# reasoning. It takes a path dependency on THIS package rather than folding
+# into it, specifically so that rule stays enforceable here: `cargo test` (no
+# `-p`/`--workspace`) run from this directory builds and tests only the `tta`
+# package the way it always has, pulling in none of `trainer`'s dependencies
+# -- Cargo's default-package behaviour when invoked inside a workspace
+# member's own directory, not something this file has to opt into.
+[workspace]
+members = ["trainer"]
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -1,0 +1,34 @@
+[package]
+name = "gputrain"
+version = "0.1.0"
+edition = "2021"
+description = "GPU training for tta's value net -- the one dependency exception, see ../DESIGN.md"
+publish = false
+
+# The exception: a real autodiff/GPU crate, taken by PATH dependency on the
+# core crate rather than folded into it, so `tta`'s own `[dependencies]`
+# (rust/Cargo.toml) stays empty -- see this crate's own `src/lib.rs` doc
+# comment and ../DESIGN.md's "GPU training" section for the reasoning.
+#
+# Versions are PINNED (`=`), not ranged: an ML crate updating out from under
+# a training run is exactly the "no library update can quietly change
+# behaviour" property DESIGN.md's rule 2 protects for the engine, and while
+# this crate is the authorised exception to taking the dependency at all, it
+# is not an exception to that property -- a bump here is a deliberate,
+# reviewed decision, not something `cargo update` does silently.
+[dependencies]
+tta = { path = ".." }
+candle-core = "=0.11.0"
+candle-nn = "=0.11.0"
+
+[features]
+default = []
+# CUDA needs `nvcc` on PATH at build time (candle-kernels compiles CUDA
+# kernels) plus the CUDA toolkit's headers/libs -- NOT just the driver
+# `nvidia-smi` reports. Default features stay CPU-only so this crate builds
+# on a machine with no NVIDIA GPU at all (this Mac mini, development/CI).
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[[bin]]
+name = "gputrain"
+path = "src/main.rs"
