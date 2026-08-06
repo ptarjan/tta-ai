@@ -113,3 +113,4 @@ pub mod book;
 pub mod counting;
 pub mod pending;
 pub mod quiescent;
+pub mod weighted;
