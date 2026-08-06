@@ -35,6 +35,15 @@ Three deliberate differences from ``PlanBot``, all forced by the evaluator:
    candidates at 2p (docs/DEEPER_SEARCH.md 3.1) and keeping it identical to
    PlanBot's makes ``nplan:CKPT`` vs ``plan:VECTOR`` an honest evaluator-only
    A/B.  It is also the same on both sides of any candidate-vs-best gate.
+   This DOES include threading the search root's ``root_row``/``root_counts``
+   down into every quiesce-drain ``rival_context`` call, the same information-
+   leak guard ``PlanBot._quiesce`` documents on its own ``root_row`` parameter
+   -- fixed 2026-08-05: this class used to call ``rival_context(st, d)`` with
+   neither, which is not what "identical to PlanBot's" a few lines up
+   promised, and let a quiesce-drain deep in the beam price an opponent's pick
+   off a row a trial ``end_turn`` had already replenished with the real
+   deck's next cards, rather than the row the actual decider could see.  See
+   ``tests/test_neural_plan.py::test_quiesce_forwards_root_row_and_root_counts``.
 
 The evaluator is injected (anything with ``.value(list_of_encodings) ->
 list[float]``, i.e. an :class:`engine.bots.neural_net.NeuralValue`), so this
@@ -177,6 +186,18 @@ class NeuralPlanBot:
             return moves[0]
         me = state.decider()
         self.decisions += 1
+        # Computed once at the root (from `state`, never from a determinized
+        # copy) and threaded down to every quiesce-drain inside `_beam`/
+        # `_one_ply_neural` below -- `rival_context`'s own doc comment: this
+        # is what stops a quiesce-drain deep in the beam from pricing an
+        # opponent's pick off a row a trial `end_turn` has already
+        # replenished. Mirrors `PlanBot.pick`'s identical `ctx` computation;
+        # this class did not have it until 2026-08-05 (see this module's top
+        # doc comment, point 3).
+        try:
+            ctx = rival_context(state, me)
+        except Exception:
+            ctx = dict(_NO_CTX)
 
         # Not my ordinary turn: there is no turn to plan, so fall back to the
         # 1-ply neural pick at a common horizon of "now" (this is exactly what
@@ -195,8 +216,10 @@ class NeuralPlanBot:
             return pending.fallback_pick(
                 self, state,
                 plain=lambda: self._one_ply_neural(root, moves, me),
-                quiet=lambda: self._one_ply_neural(root, moves, me,
-                                                   quiet=True))
+                quiet=lambda: self._one_ply_neural(
+                    root, moves, me, quiet=True,
+                    root_row=ctx.get("root_row"),
+                    root_counts=ctx.get("root_counts")))
 
         totals, seen = {}, {}
         drng = random.Random((state.seed or 0) * 7919 + state.turn * 31 + me)
@@ -204,7 +227,10 @@ class NeuralPlanBot:
             root = copy_state(state)
             if self.determinize:
                 _determinize(root, drng)
-            for mv, v in self._beam(root, moves, me).items():
+            beam = self._beam(root, moves, me,
+                               root_row=ctx.get("root_row"),
+                               root_counts=ctx.get("root_counts"))
+            for mv, v in beam.items():
                 totals[mv] = totals.get(mv, 0.0) + v
                 seen[mv] = seen.get(mv, 0) + 1
         if not totals:
@@ -220,7 +246,8 @@ class NeuralPlanBot:
                 bi, bv = i, v
         return moves[bi]
 
-    def _one_ply_neural(self, state, moves, me, quiet=False):
+    def _one_ply_neural(self, state, moves, me, quiet=False,
+                         root_row=None, root_counts=None):
         """One ply, batched.  ``quiet`` drains the pending stack per candidate.
 
         ``quiet=True`` is the neural mirror of ``PlanBot._one_ply_quiet``: it
@@ -228,6 +255,9 @@ class NeuralPlanBot:
         its own beam (see ``_beam``), so a real decision is priced the way a
         searched one is.  See `engine.bots.pending` for why that matters and
         what skipping it measured.
+
+        ``root_row``/``root_counts`` are threaded straight through to
+        ``_quiesce`` -- see that method's own doc comment.
         """
         states, valid = [], []
         for mv in moves:
@@ -235,7 +265,8 @@ class NeuralPlanBot:
             try:
                 actions.apply(t, mv, _TRIAL)
                 if quiet:
-                    self._quiesce(t)
+                    self._quiesce(t, root_row=root_row,
+                                  root_counts=root_counts)
             except Exception:
                 continue
             states.append(t)
@@ -251,8 +282,12 @@ class NeuralPlanBot:
                 best, bv = mv, v
         return best if best is not None else moves[0]
 
-    def _beam(self, root, moves, me):
-        """{first_move: best terminal leaf value reachable through it}."""
+    def _beam(self, root, moves, me, root_row=None, root_counts=None):
+        """{first_move: best terminal leaf value reachable through it}.
+
+        ``root_row``/``root_counts`` are threaded straight through to
+        ``_quiesce`` -- see that method's own doc comment.
+        """
         self.searches += 1
         budget = self.MAX_NODES
         frontier = [(root, None)]
@@ -273,7 +308,8 @@ class NeuralPlanBot:
                         actions.apply(t, mv, _TRIAL)
                     except Exception:
                         continue
-                    self._quiesce(t)
+                    self._quiesce(t, root_row=root_row,
+                                  root_counts=root_counts)
                     gen_states.append(t)
                     gen_first.append(mv if first is None else first)
                 if budget <= 0:
@@ -296,8 +332,20 @@ class NeuralPlanBot:
             frontier = [(t, f) for _v, t, f in nxt[:self.width]]
         return best
 
-    def _quiesce(self, st, cap=12):
-        """Drain the pending stack with plain LINEAR 1-ply picks (see 3 above)."""
+    def _quiesce(self, st, cap=12, root_row=None, root_counts=None):
+        """Drain the pending stack with plain LINEAR 1-ply picks (see 3 above).
+
+        ``root_row``/``root_counts`` are the search ROOT's visible card row
+        and counting outlook, threaded down from ``pick`` (via ``_beam``/
+        ``_one_ply_neural``) so the opponent picks made in here price the
+        same information the real decider could see -- not information a
+        trial ``end_turn`` deep in the beam has already changed. Mirrors
+        ``PlanBot._quiesce``'s identical parameters and identical reasoning;
+        this method did not have them until 2026-08-05 (see this module's
+        top doc comment, point 3) -- a plain ``rival_context(st, d)`` here
+        let a quiesce-drain price an opponent's pick off a row this search
+        should not be able to see yet.
+        """
         w = self.drain_weights
         n = 0
         while st.pending and n < cap and not st.game_over:
@@ -313,7 +361,7 @@ class NeuralPlanBot:
                     return
                 continue
             try:
-                dctx = rival_context(st, d)
+                dctx = rival_context(st, d, root_row, root_counts)
             except Exception:
                 dctx = dict(_NO_CTX)
             best, bv = None, None

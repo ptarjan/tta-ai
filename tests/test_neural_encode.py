@@ -49,6 +49,42 @@ class TestNeuralEncode(unittest.TestCase):
         st = game.new_game(3, seed=11)
         self.assertEqual(E.encode(st, 0), E.encode(st, 0))
 
+    def test_government_civil_military_grant_is_encoded(self):
+        # Regression for the 2026-08-05 fix: a government's civil/military
+        # action grant lives in TOP-LEVEL card fields (`civilActions`/
+        # `militaryActions`), not inside the generic `effects` dict --
+        # `card_vec` used to silently read 0.0 for every government because
+        # it only ever looked in `effects`. Despotism grants civilActions=4,
+        # militaryActions=2; EFF_KEYS index 0/1 sit right after the type
+        # one-hot (23) + level (1) + PROD_KEYS (6) = offset 30/31.
+        v = E.card_vec("Despotism")
+        # EFF_KEYS starts right after the type one-hot, the level slot and
+        # PROD_KEYS -- computed directly rather than importing private
+        # constants, matching this test file's existing style.
+        eff_start = 23 + 1 + 6
+        self.assertGreater(v[eff_start + 0], 0.0, "civilActions must not be the silent-zero bug")
+        self.assertGreater(v[eff_start + 1], 0.0, "militaryActions must not be the silent-zero bug")
+        self.assertAlmostEqual(v[eff_start + 0], 4.0 / 4.0)
+        self.assertAlmostEqual(v[eff_start + 1], 2.0 / 4.0)
+
+    def test_territory_permanent_effects_are_encoded(self):
+        # Regression for the 2026-08-05 fix: a colonization territory prints
+        # its permanent yellow/blue-token and strength grant in
+        # `permanentEffects`, not the generic `effects` dict -- same shape as
+        # the government fix above.
+        eff_start = 23 + 1 + 6
+        v = E.card_vec("Vast Territory (I)")
+        self.assertNotEqual(v[eff_start + 12], 0.0, "yellowTokens must not be the silent-zero bug")
+        self.assertNotEqual(v[eff_start + 13], 0.0, "blueTokens must not be the silent-zero bug")
+
+        sv = E.card_vec("Strategic Territory (I)")
+        self.assertNotEqual(sv[eff_start + 7], 0.0, "permanentEffects.strength must not be the silent-zero bug")
+
+        hv = E.card_vec("Historic Territory (II)")
+        # "happiness" in the data, EFF_KEYS index 6 ("happy") -- a key-NAME
+        # mismatch on top of the dict-location mismatch the other three fix.
+        self.assertNotEqual(hv[eff_start + 6], 0.0, "permanentEffects.happiness must not be the silent-zero bug")
+
     def test_row_cost_matches_engine(self):
         self.assertEqual(tuple(E._ROW_COST), tuple(actions.ROW_COST))
 

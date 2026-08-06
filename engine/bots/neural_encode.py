@@ -115,8 +115,44 @@ def card_vec(name):
             v[o + i] = float(val) / 4.0
     o += len(PROD_KEYS)
     eff = card.get("effects") or {}
+    # A colonization territory (§11.5) prints its PERMANENT grant in a
+    # `permanentEffects` dict, not the generic `effects` dict every other
+    # card's grant lives in.  The base data's whole `permanentEffects`
+    # vocabulary is exactly these four keys (verified across `data/*.json`,
+    # 2026-08-05): `blueTokens`/`yellowTokens`/`strength` share their name
+    # with an EFF_KEYS entry; `happiness` does not (EFF_KEYS spells it
+    # `happy`, matching the generic `effects` dict's own naming) -- both
+    # halves of `_PERM_FALLBACK` below exist for exactly that reason.
+    perm = card.get("permanentEffects") or {}
     for i, k in enumerate(EFF_KEYS):
         val = eff.get(k)
+        if val is None and k in ("civilActions", "militaryActions"):
+            # BUG FIX (2026-08-05): a government prints its civil/military
+            # action grant as a TOP-LEVEL card field (`engine/effects.py`
+            # reads `gov.get("civilActions")`/`gov.get("militaryActions")`
+            # directly, `effects.py:420-421`), never inside the generic
+            # `effects` dict every other card's grant lives in -- so without
+            # this fallback every one of the 8 base-game governments read as
+            # a silent 0.0 here (verified: `db.by_name["Despotism"]["effects"]
+            # == {}` even though it grants civilActions=4/militaryActions=2),
+            # exactly the "coordinate silently stuck at zero" bug shape
+            # docs/OPEN_ITEMS.md's `wonder_stages_per_action` already names.
+            # See tests/test_neural_encode.py::
+            # test_government_civil_military_grant_is_encoded.
+            val = card.get(k)
+        if val is None and k in ("blueTokens", "yellowTokens", "strength", "happy"):
+            # BUG FIX (2026-08-05): see the comment on `perm` above -- a
+            # territory's permanent blue/yellow-token, strength or happiness
+            # grant used to read as a silent 0.0 here for the identical
+            # reason the government fix above exists. `happy` reads
+            # `permanentEffects["happiness"]` (the data's own name for this
+            # key there, verified: `db.by_name["Historic Territory (II)"]
+            # ["permanentEffects"] == {"happiness": 2}`, its top-level
+            # `effects` is `{}`); the other three share their name directly.
+            # A unit/tactic's OWN top-level bare `strength` (the trailing
+            # `card_vec` slot below, a different column) is unaffected --
+            # units/tactics never print `permanentEffects` at all.
+            val = perm.get("happiness" if k == "happy" else k)
         if isinstance(val, (int, float)) and val is not True:
             v[o + i] = float(val) / 4.0
     o += len(EFF_KEYS)

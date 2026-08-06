@@ -149,6 +149,55 @@ class TestNeuralPlanBot(unittest.TestCase):
             self.assertIn(bot.pick(st, moves), moves)
 
 
+class TestQuiesceRootRowThreading(unittest.TestCase):
+    """Regression for the 2026-08-05 fix: `_quiesce` used to call
+    `rival_context(st, d)` with neither `root_row` nor `root_counts`, even
+    though `_beam`/`_one_ply_neural`/`pick` all claimed (in this module's own
+    top doc comment) to keep this identical to `PlanBot._quiesce`, which DOES
+    thread both through. Built directly with a forced oversized-hand discard
+    decision (mirrors `rust/src/bots/quiescent.rs`'s own `resolve_drains_a_
+    real_pending_choice_to_quiet` test) rather than hunting for a state where
+    one arises naturally, and a monkeypatched `rival_context` that records
+    what it was called with -- the only way to observe a value threaded four
+    calls deep without reconstructing the whole beam's internals.
+    """
+
+    def test_quiesce_forwards_root_row_and_root_counts(self):
+        from engine import cards as C, interact
+        from engine.bots import neural_plan as NP
+
+        st = game.new_game(2, seed=6)
+        db = C.db()
+        extra = [c["name"] for c in db.cards if c.get("type") == "aggression"][:4]
+        st.players[0].hand_military.extend(extra)
+        forced = interact.discard_excess_military(st, st.players[0])
+        self.assertTrue(forced, "the hand was built oversized on purpose")
+        self.assertTrue(st.pending, "an oversized hand must open a discard decision")
+
+        sentinel_row = tuple(st.card_row)
+        sentinel_counts = ("SENTINEL_COUNTS",)
+        seen = []
+        real_rival_context = NP.rival_context
+
+        def spy(state, idx, root_row=None, root_counts=None):
+            seen.append((root_row, root_counts))
+            return real_rival_context(state, idx, root_row, root_counts)
+
+        bot = NeuralPlanBot(FakeValue(), seed=1)
+        NP.rival_context = spy
+        try:
+            bot._quiesce(st, root_row=sentinel_row, root_counts=sentinel_counts)
+        finally:
+            NP.rival_context = real_rival_context
+
+        self.assertTrue(st.pending == [] or not st.pending,
+                         "a real discard decision must resolve within the default cap")
+        self.assertTrue(seen, "rival_context must have been called at least once")
+        for row, counts in seen:
+            self.assertEqual(row, sentinel_row, "root_row must be forwarded, not recomputed from st")
+            self.assertEqual(counts, sentinel_counts, "root_counts must be forwarded, not recomputed from st")
+
+
 class TestNplanSpec(unittest.TestCase):
     """`nplan:` must PARSE without torch; only make_bot needs it."""
 

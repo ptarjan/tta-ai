@@ -1,0 +1,30 @@
+//! The neural stack: a value network scoring a flat board encoding, and the
+//! two search bots built on it. Ports `engine/bots/neural_encode.py` (419
+//! lines), `engine/bots/neural_net.py` (152), `engine/bots/neural_plan.py`
+//! (332) and `engine/bots/neural_bot.py` (98) -- the last bot code left in
+//! Python. Split one file per Python module, matching `bots::weighted`'s own
+//! precedent.
+//!
+//! * [`encode`] -- `neural_encode.py`: the torch-free flat-`Vec<f64>` board
+//!   encoding every other module here feeds. Reuses `bots::weighted::
+//!   features::sweep_tableau`, `costs::row_cost` and `combat::pacts_for`
+//!   rather than restating them; see its own top doc comment.
+//! * [`net`] -- `neural_net.py`: the value network's forward-pass ARITHMETIC
+//!   only (`Cargo.toml`'s `[dependencies]` is deliberately empty -- no torch,
+//!   no ndarray). See its own top doc comment for what is deliberately not
+//!   ported (checkpoint I/O) and why this module has no Python oracle to
+//!   differential-test against at all (torch is unavailable both to the
+//!   Python module on its host machine and to this differential-testing
+//!   environment).
+//! * [`bot`] -- `neural_bot.py`: `NeuralBot`, the 1-ply search built on
+//!   [`net::ValueNet`].
+//! * [`plan`] -- `neural_plan.py`: `NeuralPlanBot`, the whole-turn beam
+//!   search built on it. Reuses `bots::plan`'s determinize/quiesce/pending
+//!   machinery rather than forking a second copy; see its own top doc
+//!   comment for the one place the two beams genuinely differ (batched
+//!   per-ply scoring, not per-candidate).
+
+pub mod bot;
+pub mod encode;
+pub mod net;
+pub mod plan;

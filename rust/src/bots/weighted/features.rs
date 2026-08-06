@@ -104,65 +104,52 @@ impl Default for Features {
 /// The best level seen so far for each of Python's `_BEST_TYPES` -- the
 /// "tech curve" coordinates. A named struct, not a `HashMap<CardType, u8>`:
 /// exactly seven fields, all written by one exhaustive `match` in
-/// [`features`], so a card type this project adds later that should join
+/// [`sweep_tableau`], so a card type this project adds later that should join
 /// `_BEST_TYPES` is a new field and a new match arm, not a silently-absent
 /// map entry.
 #[derive(Clone, Copy, Debug, Default)]
-struct BestTypes {
-    farm: u8,
-    mine: u8,
-    lab: u8,
-    temple: u8,
-    theater: u8,
-    library: u8,
-    arena: u8,
+pub struct BestTypes {
+    pub farm: u8,
+    pub mine: u8,
+    pub lab: u8,
+    pub temple: u8,
+    pub theater: u8,
+    pub library: u8,
+    pub arena: u8,
 }
 
-/// `features(state, idx, ctx=None, w=None, priced_only=False)`.
+/// One pass over a player's tableau: worker counts by category, summed tech
+/// levels, the special-tech count, and the best level per [`BestTypes`] slot.
 ///
-/// `ctx`, when `Some`, MUST be a [`RivalContext`] built for this exact `idx`
-/// -- typically the caller's own root-level context, reused across every
-/// candidate move of a search (see [`rivals::rival_context`]'s own doc
-/// comment on why that reuse matters). `None` computes one on the spot.
+/// Shared between [`features`] (below) and `bots::neural::encode::
+/// player_block` -- Python has this exact loop TWICE, once in
+/// `weighted.py::features()` and once in `neural_encode.py::_player_block`,
+/// never factored together (`neural_encode.py`'s own top doc comment: "This
+/// module has NO numpy/torch dependency on purpose", it was written to be
+/// import-cycle-free of `weighted.py` rather than to share code with it).
+/// This port closes that duplication instead of restating it a second time.
 ///
-/// `w` is read for exactly one purpose: the `priced_only` speed switch below
-/// (Python's own docstring on this function explains why -- `evaluate`
-/// multiplies every entry by its weight and skips falsy ones, so
-/// `event_scoring_margin` -- fifteen final-event formulas, profiled at 22%
-/// of total evaluation time -- is worth skipping outright when the weight
-/// vector prices it at 0.0 and only the speed of the search, not the
-/// completeness of an instrument, is asked for). Nothing else in this
-/// function reads `w`.
-///
-/// `priced_only` must stay OFF for anything reading the complete vector as
-/// an instrument (the coordinate registry, the census, a differential test)
-/// -- feeding a `priced_only` vector to a dead-coordinate check would make
-/// the check see its own switch, not the model. See Python's own docstring
-/// for the full argument.
-///
-/// The rate horizon is deliberately NOT applied to any RATE coordinate here
-/// (`culture_rate`, `science_rate`, `food_rate`, `resource_rate`):
-/// `features()` reports the BOARD -- a civilisation producing 5 culture a
-/// turn produces 5 culture a turn however much game is left -- and the
-/// horizon is a property of what that production is WORTH, which lives in
-/// `evaluate`/`feature_marginal` (unowned), not here. See Python's own note
-/// on this (`tests/test_build_fresh.py` caught the first cut of the horizon
-/// change doing this the wrong way round).
-pub fn features(
-    state: &GameState,
-    idx: u8,
-    ctx: Option<&RivalContext>,
-    w: Option<&Weights>,
-    priced_only: bool,
-) -> Features {
-    let p = &state.players[idx as usize];
-    let s = effects::compute(state, p);
+/// [`TableauSweep::tech_levels`] does NOT include the player's government's
+/// level -- `features()` adds `p.government.level()` itself, immediately
+/// after calling this, exactly as Python's `weighted.features()` does.
+/// `neural_encode.py::_player_block` does NOT add it (checked: no
+/// `tech_levels += ...government...` line exists there), so callers that
+/// want the neural encoder's number must NOT add it either -- a genuine,
+/// deliberate difference between the two Python encoders, not a bug, and
+/// preserved by leaving the addition outside this shared function rather
+/// than folding it in.
+pub struct TableauSweep {
+    pub workers: i32,
+    pub prod_workers: i32,
+    pub urban_workers: i32,
+    pub unit_workers: i32,
+    pub tech_levels: i32,
+    pub special_techs: i32,
+    pub best_unit: u8,
+    pub best: BestTypes,
+}
 
-    // ------------------------------------------------------ tableau sweep
-    // One pass over every developed technology: worker counts by category,
-    // summed tech levels, the special-tech count, and -- independently, not
-    // as a side branch of the category dispatch below, exactly matching
-    // Python's two separate `if`s -- the best level per `_BEST_TYPES` slot.
+pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
     let mut workers = 0i32;
     let mut prod_workers = 0i32;
     let mut urban_workers = 0i32;
@@ -219,6 +206,65 @@ pub fn features(
 
         workers += slot.workers as i32;
     }
+
+    TableauSweep { workers, prod_workers, urban_workers, unit_workers, tech_levels, special_techs, best_unit, best }
+}
+
+/// `features(state, idx, ctx=None, w=None, priced_only=False)`.
+///
+/// `ctx`, when `Some`, MUST be a [`RivalContext`] built for this exact `idx`
+/// -- typically the caller's own root-level context, reused across every
+/// candidate move of a search (see [`rivals::rival_context`]'s own doc
+/// comment on why that reuse matters). `None` computes one on the spot.
+///
+/// `w` is read for exactly one purpose: the `priced_only` speed switch below
+/// (Python's own docstring on this function explains why -- `evaluate`
+/// multiplies every entry by its weight and skips falsy ones, so
+/// `event_scoring_margin` -- fifteen final-event formulas, profiled at 22%
+/// of total evaluation time -- is worth skipping outright when the weight
+/// vector prices it at 0.0 and only the speed of the search, not the
+/// completeness of an instrument, is asked for). Nothing else in this
+/// function reads `w`.
+///
+/// `priced_only` must stay OFF for anything reading the complete vector as
+/// an instrument (the coordinate registry, the census, a differential test)
+/// -- feeding a `priced_only` vector to a dead-coordinate check would make
+/// the check see its own switch, not the model. See Python's own docstring
+/// for the full argument.
+///
+/// The rate horizon is deliberately NOT applied to any RATE coordinate here
+/// (`culture_rate`, `science_rate`, `food_rate`, `resource_rate`):
+/// `features()` reports the BOARD -- a civilisation producing 5 culture a
+/// turn produces 5 culture a turn however much game is left -- and the
+/// horizon is a property of what that production is WORTH, which lives in
+/// `evaluate`/`feature_marginal` (unowned), not here. See Python's own note
+/// on this (`tests/test_build_fresh.py` caught the first cut of the horizon
+/// change doing this the wrong way round).
+pub fn features(
+    state: &GameState,
+    idx: u8,
+    ctx: Option<&RivalContext>,
+    w: Option<&Weights>,
+    priced_only: bool,
+) -> Features {
+    let p = &state.players[idx as usize];
+    let s = effects::compute(state, p);
+
+    // ------------------------------------------------------ tableau sweep
+    // See `sweep_tableau`'s own doc comment: shared with `bots::neural::
+    // encode`, which is why the government-level addition below stays a
+    // separate line rather than folding into the shared function.
+    let sweep = sweep_tableau(p);
+    let TableauSweep {
+        workers,
+        prod_workers,
+        urban_workers,
+        unit_workers,
+        mut tech_levels,
+        special_techs,
+        best_unit,
+        best,
+    } = sweep;
     tech_levels += p.government.level() as i32;
 
     // ---------------------------------------------------------- pacts (§5.9)

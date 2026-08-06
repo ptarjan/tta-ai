@@ -129,7 +129,7 @@ pub fn determinize(state: &mut GameState, rng: &mut PyRandom) {
 /// `economy::deck_rng`/`game::rng_for`'s identical justification: Python's
 /// ints are unbounded, so a seed big enough to overflow would draw a
 /// DIFFERENT MT19937 stream there than any `i64` could here.
-fn plan_rng(state: &GameState, me: u8) -> PyRandom {
+pub(crate) fn plan_rng(state: &GameState, me: u8) -> PyRandom {
     let seed = i64::try_from(state.seed)
         .ok()
         .and_then(|s| s.checked_mul(7919))
@@ -368,7 +368,12 @@ fn beam(
 }
 
 /// `best[mv] = max(best.get(mv), v)`, first-insertion order preserved.
-fn update_best(best: &mut Vec<(Move, f64)>, mv: Move, v: f64) {
+///
+/// `pub(crate)`: also called by [`super::neural::plan::beam`], which needs
+/// the identical "keep the max terminal value reached through each root
+/// candidate" accumulation Python's own `neural_plan.py::_beam` spells with
+/// the same `best.get(f)`/`v > best[f]` shape `plan.py::_beam` uses.
+pub(crate) fn update_best(best: &mut Vec<(Move, f64)>, mv: Move, v: f64) {
     match best.iter_mut().find(|(m, _)| *m == mv) {
         Some(entry) if v > entry.1 => entry.1 = v,
         Some(_) => {}
@@ -460,7 +465,15 @@ fn one_ply_quiet(
 /// calls [`eval::evaluate`] directly). See `quiescent.rs`'s own top doc
 /// comment: it is deliberately generic FOR a caller with no `weighted.rs` to
 /// call; that caller now exists, and calls it directly instead.
-fn quiesce(
+///
+/// `pub(crate)`: also called directly by [`super::neural::plan`], which
+/// drains its own beam's pending decisions with the SAME plain-LINEAR
+/// 1-ply pick this function already implements (`neural_plan.py`'s own
+/// `_quiesce` is -- after a 2026-08-05 fix that made it actually true --
+/// documented as "exactly as PlanBot._quiesce does"). Calling this function
+/// instead of forking a second copy is what makes that "exactly" durable
+/// rather than a comment two files can silently drift apart under.
+pub(crate) fn quiesce(
     st: &mut GameState,
     w: &Weights,
     root_row: Option<&CardList<ROW_SIZE>>,
