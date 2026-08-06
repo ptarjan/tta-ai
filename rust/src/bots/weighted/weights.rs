@@ -1,5 +1,5 @@
 //! `engine/bots/weighted.py` lines 3548-4103: the weight vector `evaluate`
-//! is linear over -- 131 named knobs, almost all defaulting to 0.0 so a new
+//! is linear over -- 132 named knobs, almost all defaulting to 0.0 so a new
 //! channel changes nothing until the league climbs it away from zero. See
 //! that Python range's own extensive per-weight commentary for the "why"
 //! behind each fitted number; it is the source of the rationale and is
@@ -168,6 +168,7 @@ pub enum WeightKey {
     CardBoardGovernment,
     CardBoardAction,
     CardBoardWonder,
+    CardBoardBonus,
     HandSwapExtra,
     CardRateCredit,
     UnitStrengthCredit,
@@ -210,7 +211,7 @@ pub enum WeightKey {
 macro_rules! weight_key_table {
     ( $( $variant:ident => $name:literal, $default:expr );+ $(;)? ) => {
         impl WeightKey {
-            /// Every key, in declaration order -- the one place all 131 are
+            /// Every key, in declaration order -- the one place all 132 are
             /// listed together outside the enum declaration itself.
             pub const ALL: &'static [WeightKey] = &[ $( WeightKey::$variant, )+ ];
 
@@ -328,6 +329,11 @@ weight_key_table! {
     CardBoardGovernment => "card_board_government", 0.0;
     CardBoardAction => "card_board_action", 0.0;
     CardBoardWonder => "card_board_wonder", 0.0;
+    // The military-deck sibling of the other four `board_credit_key` offsets
+    // -- see `cards.rs::board_credit_key`'s own doc comment for why a
+    // Military Bonus card (`defenseBonus`/`colonizationBonus`) needed one
+    // too. 0.0, matching every other per-type offset's default.
+    CardBoardBonus => "card_board_bonus", 0.0;
     HandSwapExtra => "hand_swap_extra", 0.0;
     CardRateCredit => "card_rate_credit", 1.0;
     UnitStrengthCredit => "unit_strength_credit", 0.0;
@@ -422,7 +428,7 @@ impl WeightKey {
     /// convention -- is what keeps them together; see
     /// `tests::phase_key_shares_its_base_keys_group`.
     ///
-    /// Deliberately NO `_ =>` wildcard arm: all 131 variants are named here
+    /// Deliberately NO `_ =>` wildcard arm: all 132 variants are named here
     /// by hand. Python's `group_of` raises `KeyError` rather than falling
     /// through to a "?" label for exactly this reason -- its own docstring
     /// records that a silent fallback is how four features (including
@@ -442,7 +448,7 @@ impl WeightKey {
 
             UrbanLimit | GovActionCost | NoAggression | RestrictedResources
             | CardBoardCredit | CardBoardLeader | CardBoardGovernment | CardBoardAction
-            | CardBoardWonder => WeightGroup::Board,
+            | CardBoardWonder | CardBoardBonus => WeightGroup::Board,
 
             HandCivil | HandValue | HandValueEarly | HandValueLate | HandPotential
             | HandMilitary | HandMilValue | HandMilPotential | HandSwapExtra => {

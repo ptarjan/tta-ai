@@ -469,14 +469,41 @@ pub fn sum_yields(triples: &[CardYield], w: &Weights, credit: f64) -> f64 {
 /// `_BOARD_CREDIT_KEYS`/`_board_credit_key`: the per-type offset on top of
 /// `card_board_credit` for a card whose pricing is board-aware
 /// ([`board_yields::is_swap_type`] for leader/government/wonder, plus
-/// action). `None` for every other type -- there is nothing to offset.
+/// action, plus the military-deck's Bonus class). `None` for every other
+/// type -- there is nothing to offset.
+///
+/// Deliberately exhaustive over every [`CardType`] variant, NOT a `match`
+/// with a trailing `_ => None` -- docs/OPEN_ITEMS.md's own account of why
+/// `Bonus` needed a branch here is exactly the bug shape a wildcard arm
+/// invites: a card category present in [`CardType`] but silently absent
+/// from this registry, with nothing failing when they disagree until
+/// someone asks why a whole class prices as if it isn't there
+/// (`row_pressure` was blind to `class:bonus` for precisely this reason).
+/// Adding a category later is a compile error here until a human decides
+/// its credit key on purpose, matching `WeightKey::group`'s own reasoning
+/// in `weights.rs` for banning the same wildcard shape. See also
+/// `tests::board_credit_key_is_exhaustive_and_only_none_for_types_with_no_board_credit_concept`.
 pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
+    use CardType::*;
     match id.get().kind {
-        CardType::Leader => Some(WeightKey::CardBoardLeader),
-        CardType::Government => Some(WeightKey::CardBoardGovernment),
-        CardType::Action => Some(WeightKey::CardBoardAction),
-        CardType::Wonder => Some(WeightKey::CardBoardWonder),
-        _ => None,
+        Leader => Some(WeightKey::CardBoardLeader),
+        Government => Some(WeightKey::CardBoardGovernment),
+        Action => Some(WeightKey::CardBoardAction),
+        Wonder => Some(WeightKey::CardBoardWonder),
+        Bonus => Some(WeightKey::CardBoardBonus),
+
+        // No board-aware pricing concept exists for these today -- a build
+        // (Farm/Mine/urban/unit/SpecialTech) is priced by `tech_value`
+        // gated on `tech_board_credit` directly, never through this
+        // per-type OFFSET table at all (see `card_potential`'s dispatch,
+        // which returns before ever calling this function for a levelled
+        // type). The military-deck classes besides Bonus (Tactic,
+        // Aggression, War, Pact, Territory) and Event price at 0.0 in both
+        // engines today (docs/OPEN_ITEMS.md: "four whole card classes...
+        // price at exactly 0.0") -- nothing to offset until one of them
+        // grows a board-aware pricing function of its own.
+        Farm | Mine | Lab | Temple | Library | Arena | Theater | Infantry | Cavalry | Artillery
+        | Air | SpecialTech | Tactic | Aggression | War | Pact | Territory | Event => None,
     }
 }
 
@@ -1570,12 +1597,45 @@ mod tests {
     // ------------------------------------------------------- board plumbing
 
     #[test]
-    fn board_credit_key_covers_exactly_the_four_board_priced_types() {
+    fn board_credit_key_covers_exactly_the_five_board_priced_types() {
         assert_eq!(board_credit_key(CardId::by_name("Julius Caesar").unwrap()), Some(WeightKey::CardBoardLeader));
         assert_eq!(board_credit_key(CardId::by_name("Despotism").unwrap()), Some(WeightKey::CardBoardGovernment));
         assert_eq!(board_credit_key(CardId::by_name("Reserves (I)").unwrap()), Some(WeightKey::CardBoardAction));
         assert_eq!(board_credit_key(CardId::by_name("Colossus").unwrap()), Some(WeightKey::CardBoardWonder));
+        assert_eq!(
+            board_credit_key(CardId::by_name("Military Bonus (defense 2 / colonization 1)").unwrap()),
+            Some(WeightKey::CardBoardBonus)
+        );
         assert_eq!(board_credit_key(CardId::by_name("Warriors").unwrap()), None);
+    }
+
+    /// The structural guarantee `board_credit_key`'s own doc comment
+    /// promises: every [`CardType`] a real card in the data actually carries
+    /// gets an explicit decision from `board_credit_key`, either a
+    /// dedicated [`WeightKey`] or a documented `None` -- never silence.
+    /// [`CardType::ALL`] doesn't exist (there is no need for one elsewhere
+    /// in this crate), so this iterates every card in [`crate::card_table::CARDS`]
+    /// and checks its type is one `board_credit_key`'s `match` names, which
+    /// -- since that `match` is exhaustive with no wildcard arm -- can only
+    /// ever fail to compile, not fail to run; this test instead pins the
+    /// SPECIFIC set of types that resolve to `Some`, so a future edit that
+    /// silently drops one back to `None` (or adds one without updating this
+    /// list) is caught here rather than only by a compiler that has nothing
+    /// to say about which existing arm changed.
+    #[test]
+    fn every_card_types_board_credit_key_membership_is_pinned() {
+        fn expects_some(kind: CardType) -> bool {
+            matches!(kind, CardType::Leader | CardType::Government | CardType::Action | CardType::Wonder | CardType::Bonus)
+        }
+        for card in crate::card_table::CARDS {
+            let id = CardId::by_name(card.name).unwrap();
+            let got = board_credit_key(id);
+            if expects_some(card.kind) {
+                assert!(got.is_some(), "{}: {:?} must have a board_credit_key", card.name, card.kind);
+            } else {
+                assert!(got.is_none(), "{}: {:?} must not have a board_credit_key", card.name, card.kind);
+            }
+        }
     }
 
     #[test]

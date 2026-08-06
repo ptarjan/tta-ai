@@ -16,7 +16,7 @@
 //! are `GreedyBot` and nothing else) -- its whole job is to hold still while
 //! evaluator changes move the other six, so its 19 weights are FROZEN ON
 //! PURPOSE and must never be "synced" with `weighted::weights::WeightKey`
-//! (131 keys, a dozen shared names with genuinely different values --
+//! (132 keys, a dozen shared names with genuinely different values --
 //! `culture_rate` is 6.0 here, 5.0 there -- and no promise the two vocabularies
 //! agree on anything beyond spelling). [`GreedyKey`] is therefore a second,
 //! separate fieldless enum, built the same way `weighted::weights::WeightKey`
