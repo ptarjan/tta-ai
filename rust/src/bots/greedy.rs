@@ -635,6 +635,42 @@ impl Bot {
 /// for why that is a hard error here rather than Python's silent
 /// `GreedyBot` fallback.
 pub fn make_bots(spec: &str, num_players: u8, seed: i64) -> Result<Vec<Bot>, String> {
+    let seats = make_seats(spec, num_players, weighted::weights::Weights::default())?;
+    Ok(build_bots(&seats, seed))
+}
+
+/// One seat's assignment: which kind sits there, and which weight vector its
+/// evaluator reads.
+///
+/// The kind and its weights travel together in one struct rather than in two
+/// lists indexed by seat, because the arena's whole job is to sit two
+/// DIFFERENT vectors of the SAME kind at one table -- and two parallel lists
+/// is exactly the shape that lets a result table report the challenger's
+/// score under the champion's name. See [`Bot::kind`] for the same argument
+/// applied to reading a seat back out.
+#[derive(Clone, Debug)]
+pub struct Seat {
+    pub kind: BotKind,
+    /// Ignored by [`BotKind::Random`] and [`BotKind::Greedy`], which have no
+    /// linear evaluator to read it -- `GreedyBot` scores with its own
+    /// separate feature set, and `RandomBot` scores nothing at all.
+    pub weights: weighted::weights::Weights,
+}
+
+/// Parse a spec into one [`Seat`] per player, all sharing `weights`.
+///
+/// This is where the comma-separated spec is cycled round-robin over the
+/// seats; it stays the ONLY place that parses one.
+///
+/// # Errors
+/// If `spec` names an unrecognized kind -- see this module's top doc comment
+/// for why that is a hard error here rather than Python's silent
+/// `GreedyBot` fallback.
+pub fn make_seats(
+    spec: &str,
+    num_players: u8,
+    weights: weighted::weights::Weights,
+) -> Result<Vec<Seat>, String> {
     let mut kinds = Vec::new();
     for part in spec.split(',') {
         kinds.push(BotKind::from_str(part)?);
@@ -642,29 +678,43 @@ pub fn make_bots(spec: &str, num_players: u8, seed: i64) -> Result<Vec<Bot>, Str
     if kinds.is_empty() {
         return Err("make_bots: spec has no kinds".to_string());
     }
+    Ok((0..num_players)
+        .map(|i| Seat { kind: kinds[(i as usize) % kinds.len()], weights })
+        .collect())
+}
 
-    let mut out = Vec::with_capacity(num_players as usize);
-    for i in 0..num_players {
-        let kind = kinds[(i as usize) % kinds.len()];
-        let player_seed = seed.wrapping_mul(131).wrapping_add(i64::from(i));
-        out.push(match kind {
+/// Build the bots for an already-decided table.
+///
+/// Seeding is per seat (`seed * 131 + i`, as Python's `make_bots` does), so
+/// two seats of the same kind at one table do not draw the same numbers.
+pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
+    let mut out = Vec::with_capacity(seats.len());
+    for (i, seat) in seats.iter().enumerate() {
+        let player_seed = seed.wrapping_mul(131).wrapping_add(i as i64);
+        out.push(match seat.kind {
             BotKind::Random => Bot::Random(RandomBot::new(player_seed as u64)),
             BotKind::Greedy => Bot::Greedy(GreedyBot::default()),
-            BotKind::Weighted => Bot::Weighted(weighted::eval::WeightedBot::default()),
+            BotKind::Weighted => {
+                Bot::Weighted(weighted::eval::WeightedBot::new(seat.weights))
+            }
             BotKind::Quiescent => Bot::Quiescent {
                 cfg: quiescent::QuiescenceConfig::default(),
-                weights: weighted::weights::Weights::default(),
+                weights: seat.weights,
                 stats: quiescent::Stats::default(),
             },
             BotKind::Plan => Bot::Plan {
-                cfg: plan::PlanConfig { width: 2, ..plan::PlanConfig::default() },
+                cfg: plan::PlanConfig {
+                    width: 2,
+                    weights: seat.weights,
+                    ..plan::PlanConfig::default()
+                },
                 stats: plan::Stats::default(),
                 counters: pending::Counters::default(),
                 rng: PyRandom::new(player_seed),
             },
         });
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]

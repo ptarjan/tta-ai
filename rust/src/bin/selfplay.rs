@@ -31,7 +31,9 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use tta::bots::greedy::{make_bots, BotKind};
+use tta::bots::greedy::{build_bots, make_seats, BotKind};
+use tta::bots::weighted::eval::load_weights;
+use tta::bots::weighted::weights::Weights;
 use tta::game::{self, MOVE_CAP};
 
 // ====================================================================== args
@@ -43,7 +45,7 @@ struct Args {
     games: usize,
     players: u8,
     /// Comma-separated bot kinds, cycled round-robin over the seats by
-    /// [`make_bots`]. Not split into a `Vec<BotKind>` here: `make_bots` owns
+    /// [`make_seats`]. Not split into a `Vec<BotKind>` here: `make_seats` owns
     /// the parse, and duplicating it would be exactly the two-registries bug
     /// this project keeps finding.
     bots: String,
@@ -52,6 +54,11 @@ struct Args {
     rotate: bool,
     /// Print a line per game as well as the summary.
     verbose: bool,
+    /// The vector every evaluator seat plays. One vector for the whole table
+    /// here on purpose: this binary measures a champion against other KINDS,
+    /// and a champion against another VECTOR is the arena's job, not this
+    /// one's.
+    weights: Weights,
 }
 
 impl Default for Args {
@@ -64,6 +71,7 @@ impl Default for Args {
             threads: 1,
             rotate: true,
             verbose: false,
+            weights: Weights::default(),
         }
     }
 }
@@ -75,6 +83,8 @@ usage: selfplay [options]
   --players N     2, 3 or 4 (default 3)
   --bots SPEC     comma-separated bot kinds, cycled over seats (default weighted)
   --seed N        base seed; game g uses seed+g (default 1)
+  --weights PATH  champion JSON every evaluator seat plays (default: the
+                  built-in defaults)
   --threads N     games in parallel (default 1)
   --no-rotate     pin the spec to seats instead of rotating it per game
   --verbose       print a line per game
@@ -99,6 +109,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--bots" => a.bots = value(flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
+            "--weights" => a.weights = load_weights(std::path::Path::new(&value(flag)?))?,
             "--threads" => a.threads = parse_num(&value(flag)?, flag)?,
             "--no-rotate" => a.rotate = false,
             "--verbose" | "-v" => a.verbose = true,
@@ -127,7 +138,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     // Fail on a bad spec here rather than inside a worker thread, where the
     // panic would be one of `threads` identical messages.
-    make_bots(&a.bots, a.players, 0)?;
+    make_seats(&a.bots, a.players, a.weights)?;
     Ok(Some(a))
 }
 
@@ -172,8 +183,9 @@ fn play_one(args: &Args, index: usize) -> GameOutcome {
     let seed = args.seed.wrapping_add(index as u64);
     let spec =
         if args.rotate { rotated_spec(&args.bots, index) } else { args.bots.clone() };
-    // `make_bots` was validated in `parse_args`; rotation only reorders it.
-    let mut bots = make_bots(&spec, args.players, seed as i64).expect("spec already validated");
+    // The spec was validated in `parse_args`; rotation only reorders it.
+    let seats = make_seats(&spec, args.players, args.weights).expect("spec already validated");
+    let mut bots = build_bots(&seats, seed as i64);
 
     let mut state = game::new_game(args.players, seed);
     let outcome = game::play_game(&mut state, MOVE_CAP, |s, _legal| {

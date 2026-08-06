@@ -62,17 +62,33 @@
 //!    decided, with its own citation trail, twice elsewhere in this exact
 //!    crate before this module existed.
 //!
-//! ## `load_weights`/`save_weights`: NOT ported
+//! ## `load_weights`/`save_weights`: ported, once the league needed them
 //!
-//! Both are pure JSON I/O (`weighted.py` 4519-4553) with no rule-level
-//! content beyond calling [`dominance_repair`] on the way in, and nothing in
-//! this crate parses JSON outside test-only fixture loading (`Cargo.toml`'s
-//! `[dependencies]` is deliberately empty -- "the engine parses no JSON,
-//! allocates nothing at start-up, and pulls in no serde"). There is no
-//! champion-JSON-loading binary anywhere in this crate yet for either
-//! function to serve; `dominance_repair` itself -- the rule-level content
-//! `load_weights` exists to apply -- is fully ported below and is what a
-//! future loader should call.
+//! These were parked as "not ported" while nothing in this crate could ask
+//! for a champion by name: they are pure JSON I/O (`weighted.py` 4519-4553)
+//! whose only rule-level content is calling [`dominance_repair`] on the way
+//! in, and `Cargo.toml`'s `[dependencies]` is deliberately empty. Both facts
+//! still hold -- what changed is that the native trainer has to read the
+//! champion vector the Python league produced and write the one it accepts,
+//! so the functions now have a caller. No dependency was added for them:
+//! [`crate::fixtures::parse_json`] is the reader the fixture loader already
+//! carries, and [`save_weights`] emits its own text. The engine still parses
+//! no JSON on any hot path -- a champion is read once at start-up.
+//!
+//! Two deliberate differences from Python, both in the "fix things as you
+//! port" spirit rather than parity:
+//!
+//! * An unknown weight name is an ERROR, not a silently-carried extra dict
+//!   entry. Python's `w.update(d["weights"])` accepts any key and `evaluate`
+//!   then ignores it, so a typo in a hand-edited champion is invisible and
+//!   costs you the weight you thought you had set. [`Weights`] has no room
+//!   for an unrepresentable key, and the honest thing to do with one is say
+//!   so. [`RETIRED_KEYS`] stay silently dropped -- every champion on disk
+//!   predates their removal, so they are expected, not a mistake.
+//! * [`save_weights`] writes every [`WeightKey`], not just the keys that
+//!   happened to be in the file it loaded. A champion written here is a
+//!   complete vector, which is what stops "the key was missing so it silently
+//!   read as its default" from being a way to lose a trained value.
 
 use crate::apply;
 use crate::moves::{Move, MoveList};
@@ -84,7 +100,7 @@ use super::features::{self, Features};
 use super::horizon;
 use super::rivals::{self, RivalContext};
 use super::row;
-use super::weights::{Weights, WeightKey, PHASE_KEYS};
+use super::weights::{Weights, WeightKey, PHASE_KEYS, RETIRED_KEYS};
 
 // ------------------------------------------------------------- evaluation
 
@@ -464,6 +480,136 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
     (out, viol)
 }
 
+// ------------------------------------------------------------------- io
+
+/// Parse a champion vector out of already-read JSON text.
+///
+/// Split from [`load_weights`] so that the parsing rules are testable
+/// without a file on disk, and so a caller holding a champion in memory
+/// (a league that just received one over a pipe) does not have to write it
+/// out to read it back.
+///
+/// Accepts either the wrapper shape the trainer writes (`{"weights": {...},
+/// "gen": 41, ...}`) or a bare `{name: value}` map, matching Python's
+/// `d.get("weights", d)`. Missing keys keep their default, [`RETIRED_KEYS`]
+/// are dropped, unknown keys are an error, and [`dominance_repair`] is
+/// applied on the way out -- see this module's top doc comment for why the
+/// repair belongs here rather than only in the trainer.
+pub fn parse_weights(text: &str) -> Result<Weights, String> {
+    let doc = crate::fixtures::parse_json(text).map_err(|e| format!("{e:?}"))?;
+    let map = match doc.get("weights") {
+        Some(w) => w,
+        None => &doc,
+    };
+    let fields = match map {
+        crate::fixtures::Json::Obj(fields) => fields,
+        _ => return Err("champion JSON is not an object".to_string()),
+    };
+
+    let mut w = Weights::defaults();
+    for (name, value) in fields {
+        if RETIRED_KEYS.contains(&name.as_str()) {
+            continue;
+        }
+        let key = WeightKey::by_name(name)
+            .ok_or_else(|| format!("unknown weight {name:?}"))?;
+        let v = value
+            .as_f64()
+            .ok_or_else(|| format!("weight {name:?} is not a number"))?;
+        if !v.is_finite() {
+            return Err(format!("weight {name:?} is not finite"));
+        }
+        w.set(key, v);
+    }
+    Ok(dominance_repair(&w).0)
+}
+
+/// Read a champion vector from disk. See [`parse_weights`].
+pub fn load_weights(path: &std::path::Path) -> Result<Weights, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_weights(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Render a champion vector as the JSON text [`parse_weights`] reads back.
+///
+/// `extra` is the trainer's bookkeeping (`gen`, `players`, `sigma`,
+/// `since_accept`) written alongside the vector, exactly as Python's
+/// `save_weights(**extra)` does. It is `(name, f64)` rather than a general
+/// JSON value because every field any caller has ever written is a number,
+/// and a general value would need a serialiser for shapes nothing emits.
+///
+/// Keys are sorted and the indent is one space, matching the files already
+/// in `experiments/`, so a champion rewritten by the native trainer produces
+/// a readable diff against the one the Python league wrote rather than
+/// reformatting the whole file.
+pub fn weights_json(w: &Weights, extra: &[(&str, f64)]) -> String {
+    let mut names: Vec<&'static str> = WeightKey::ALL.iter().map(|k| k.name()).collect();
+    names.sort_unstable();
+
+    let mut top: Vec<(String, String)> = extra
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), fmt_num(*v)))
+        .collect();
+    let mut body = String::from("{\n");
+    for (i, name) in names.iter().enumerate() {
+        let key = WeightKey::by_name(name).expect("name came from WeightKey::ALL");
+        let sep = if i + 1 == names.len() { "\n" } else { ",\n" };
+        body.push_str(&format!("  \"{name}\": {}{sep}", fmt_num(w.get(key))));
+    }
+    body.push_str(" }");
+    top.push(("weights".to_string(), body));
+    top.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out = String::from("{\n");
+    for (i, (k, v)) in top.iter().enumerate() {
+        let sep = if i + 1 == top.len() { "\n" } else { ",\n" };
+        out.push_str(&format!(" \"{k}\": {v}{sep}"));
+    }
+    out.push('}');
+    out
+}
+
+/// Write a champion vector where [`load_weights`] will read it back.
+///
+/// Writes to a sibling `.tmp` and renames, as Python does: the league reads
+/// the champion file while the trainer is writing the next one, and a
+/// half-written vector that still parses is the failure this avoids.
+pub fn save_weights(
+    path: &std::path::Path,
+    w: &Weights,
+    extra: &[(&str, f64)],
+) -> Result<(), String> {
+    for (name, v) in extra {
+        if !v.is_finite() {
+            return Err(format!("{name:?} is not finite"));
+        }
+    }
+    for &k in WeightKey::ALL {
+        if !w.get(k).is_finite() {
+            return Err(format!("weight {:?} is not finite", k.name()));
+        }
+    }
+    let tmp = path.with_extension("tmp");
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+    }
+    std::fs::write(&tmp, weights_json(w, extra)).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `f64` as JSON. Rust's `Display` already emits the shortest text that
+/// round-trips, but writes an integral value as `1` rather than `1.0`; both
+/// are valid JSON numbers and both read back as the same `f64`, so this
+/// exists only to keep the non-finite case unreachable at the one place
+/// that formats a weight.
+fn fmt_num(v: f64) -> String {
+    debug_assert!(v.is_finite(), "callers reject non-finite before formatting");
+    format!("{v}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,5 +835,88 @@ mod tests {
         let (out, viol) = dominance_repair(&w);
         assert_eq!(out.get(WeightKey::WonderStagesPerAction), 4.25);
         assert!(viol.iter().all(|v| v.weight != WeightKey::WonderStagesPerAction));
+    }
+
+    // ------------------------------------------------------------------ io
+
+    #[test]
+    fn a_champion_round_trips_through_text() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::Culture, 1.75);
+        w.set(WeightKey::Science, -0.125);
+        let back = parse_weights(&weights_json(&w, &[("gen", 41.0)])).unwrap();
+        for &k in WeightKey::ALL {
+            assert_eq!(back.get(k), w.get(k), "{} did not round-trip", k.name());
+        }
+    }
+
+    /// The wrapper the trainer writes and a bare `{name: value}` map are both
+    /// champion files in the wild; Python's `d.get("weights", d)` reads
+    /// either, and so must this.
+    #[test]
+    fn both_the_wrapped_and_the_bare_shape_load() {
+        let wrapped = parse_weights(r#"{"gen": 3, "weights": {"culture": 2.5}}"#).unwrap();
+        let bare = parse_weights(r#"{"culture": 2.5}"#).unwrap();
+        assert_eq!(wrapped.get(WeightKey::Culture), 2.5);
+        assert_eq!(bare.get(WeightKey::Culture), 2.5);
+    }
+
+    /// A key the file leaves out keeps its default rather than reading as
+    /// zero -- the whole reason the loader starts from `Weights::defaults()`.
+    #[test]
+    fn an_absent_key_keeps_its_default() {
+        let w = parse_weights(r#"{"culture": 2.5}"#).unwrap();
+        assert_eq!(w.get(WeightKey::Science), WeightKey::Science.default_weight());
+    }
+
+    /// Every champion on disk still carries the twelve retired names. They
+    /// are expected, so they are dropped in silence -- not rejected.
+    #[test]
+    fn retired_keys_load_without_complaint() {
+        let text = format!(r#"{{"{}": 9.0, "culture": 2.5}}"#, RETIRED_KEYS[0]);
+        let w = parse_weights(&text).unwrap();
+        assert_eq!(w.get(WeightKey::Culture), 2.5);
+    }
+
+    /// The one deliberate divergence from Python: a name nothing reads is a
+    /// typo, and a typo that loads silently costs you the weight you meant
+    /// to set. See this module's top doc comment.
+    #[test]
+    fn an_unknown_key_is_an_error_rather_than_a_silent_no_op() {
+        let err = parse_weights(r#"{"cultrue": 2.5}"#).unwrap_err();
+        assert!(err.contains("cultrue"), "{err}");
+    }
+
+    /// The repair is applied on load and not only in the trainer, because a
+    /// champion file is read by the arena and by every tool as well.
+    #[test]
+    fn loading_repairs_a_rule_level_violation() {
+        let key = BENEFIT_GATES[0];
+        let text = format!(r#"{{"{}": -3.0}}"#, key.name());
+        assert_eq!(parse_weights(&text).unwrap().get(key), 0.0);
+    }
+
+    #[test]
+    fn a_non_number_weight_is_an_error() {
+        assert!(parse_weights(r#"{"culture": "2.5"}"#).is_err());
+        assert!(parse_weights(r#"[1, 2]"#).is_err());
+    }
+
+    /// `save_weights` writes through a temporary and renames; both the
+    /// rename and the round-trip through a real file are worth one test.
+    #[test]
+    fn save_then_load_a_real_file() {
+        let dir = std::env::temp_dir().join("tta_weights_io_test");
+        let path = dir.join("champion.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut w = Weights::defaults();
+        w.set(WeightKey::CivilActions, 3.5);
+        save_weights(&path, &w, &[("gen", 7.0), ("players", 3.0)]).unwrap();
+        assert!(!path.with_extension("tmp").exists(), "temp file was left behind");
+        let back = load_weights(&path).unwrap();
+        assert_eq!(back.get(WeightKey::CivilActions), 3.5);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"gen\": 7"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
