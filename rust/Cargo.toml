@@ -27,7 +27,23 @@ inherits = "release"
 
 # Debug assertions stay ON in the differential-testing profile: the port's
 # whole safety net is "the invariant fired at ply 41", and an invariant
-# compiled out is an invariant that cannot fire.
+# compiled out is an invariant that cannot fire. LTO and codegen-units are
+# relaxed here relative to [profile.release]: this profile is the test path,
+# not the self-play benchmark that `lto = "fat"`/`codegen-units = 1` are
+# justified for. An earlier measurement on the OLD 16-separate-binaries
+# layout found relaxing LTO made no difference (120s vs 120s either way):
+# with 16 binaries on 6 cores the machine was codegen-bound regardless of
+# link settings. That result does not carry over now that `tests/` builds
+# as a single `suite` binary and the link is squarely on the critical path.
+# Measured on this box, single `tests/suite` binary, warm dependency cache
+# (`cargo test --release` vs `cargo test --profile difftest`):
+#   cold `--no-run`:                          72s  -> 24s
+#   incremental `--no-run` (touch one file):  77s  -> 24s
+#   end-to-end incremental (build + run):     85s  -> 42s
+# `cargo test --profile difftest` is the fast path for everyday test runs;
+# `cargo test --release` still exists and still passes identically.
 [profile.difftest]
 inherits = "release"
 debug-assertions = true
+lto = false
+codegen-units = 16

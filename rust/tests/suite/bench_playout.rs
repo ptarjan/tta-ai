@@ -37,19 +37,17 @@
 //! of single-threaded CPU, not milliseconds. MUST be run against a release
 //! build -- a debug build has no optimizations and the number is meaningless:
 //!
-//!   cargo test --release --test bench_playout -- --ignored --nocapture --test-threads=1
+//!   cargo test --release --test suite -- bench_playout::bench_random_playouts --ignored --nocapture --test-threads=1
 //!
 //! Game count and starting seed are env-configurable so tuning them doesn't
 //! require a fresh `lto = "fat"` rebuild:
-//!   TTA_BENCH_GAMES=300 TTA_BENCH_SEED0=0 cargo test --release --test bench_playout -- --ignored --nocapture --test-threads=1
+//!   TTA_BENCH_GAMES=300 TTA_BENCH_SEED0=0 cargo test --release --test suite -- bench_playout::bench_random_playouts --ignored --nocapture --test-threads=1
 
 use std::time::Instant;
 
 use tta::cards::CARDS;
 
-mod common;
-
-use common::{play_random, Played};
+use crate::common::{play_random, Played};
 
 // ------------------------------------------------------------- the bench
 

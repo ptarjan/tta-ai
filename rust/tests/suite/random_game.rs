@@ -30,9 +30,7 @@ use tta::game;
 use tta::moves::Move;
 use tta::state::{GameState, Phase};
 
-mod common;
-
-use common::{play_random, Played, Rng};
+use crate::common::{play_random, Played, Rng};
 
 // ------------------------------------------------------------ the driver
 
