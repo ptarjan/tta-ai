@@ -144,7 +144,7 @@ class TheMultiplierIsDerivedAndFalls(unittest.TestCase):
     def test_it_is_high_at_the_deal_and_low_at_the_end(self):
         for n in (2, 3, 4):
             st = G.new_game(n, seed=11)
-            deal = W.horizon_scale(st, n, _on())
+            deal = W.horizon_scale(st, n)
             self.assertGreater(deal, 1.5, f"{n}p at the deal")
             self.assertLess(deal, 2.1, f"{n}p at the deal")
 
@@ -158,7 +158,7 @@ class TheMultiplierIsDerivedAndFalls(unittest.TestCase):
             bots = [WeightedBot(seed=seed * 3 + i) for i in range(n)]
             seq = []
             while not st.game_over and len(seq) < 4000:
-                seq.append(W.horizon_scale(st, n, _on()))
+                seq.append(W.horizon_scale(st, n))
                 G.apply(st, bots[st.decider()](st), rng)
             self.assertGreater(len(seq), 200)
             q = len(seq) // 4
@@ -179,7 +179,7 @@ class TheMultiplierIsDerivedAndFalls(unittest.TestCase):
             bots = [WeightedBot(seed=seed * 5 + i) for i in range(n)]
             seq = []
             while not st.game_over and len(seq) < 4000:
-                seq.append(W.horizon_scale(st, n, _on()))
+                seq.append(W.horizon_scale(st, n))
                 G.apply(st, bots[st.decider()](st), rng)
             mean = sum(seq) / len(seq)
             self.assertGreater(mean, 0.6, f"{n}p mean {mean:.3f}")
@@ -253,6 +253,31 @@ class TheHorizonIsReadByMoreThanOneFeature(unittest.TestCase):
         # ...and the PRICE of a rate is inflated early and discounted late
         self.assertGreater(W.rate_multiplier(early, w), 1.3)
         self.assertLess(W.rate_multiplier(late, w), 0.8)
+
+
+class DeadCodeFoundWhilePortingToRust(unittest.TestCase):
+    """Two dead-code artifacts found 2026-08-05 while porting this module to
+    Rust (`rust/src/bots/weighted/horizon.rs`) and fixed HERE, in the Python
+    original, per the repo owner's ruling that a fix found while porting
+    belongs in both engines -- not carried forward in Rust alone for shape
+    fidelity, which would turn the differential dump into noise."""
+
+    def test_row_constant_was_removed(self):
+        """`_ROW = actions.ROW_SIZE` used to sit next to `_SWEEP`/
+        `AGE_IV_ROUNDS` in the horizon section.  Unlike those two, nothing in
+        this file -- or anywhere else in the tree, grepped -- ever read it.
+        Was: a real constant nobody consumed. Now: gone, not ported."""
+        self.assertFalse(hasattr(W, "_ROW"))
+
+    def test_horizon_scale_no_longer_accepts_an_unread_weights_argument(self):
+        """`horizon_scale(state, n=None, w=None)` never read `w` in its
+        body -- `rate_multiplier` and three tests in this file all built a
+        full weight dict just to hand it to a parameter the function
+        discarded. Was: a parameter with no effect on the return value. Now:
+        the signature only carries what it uses."""
+        import inspect
+        params = list(inspect.signature(W.horizon_scale).parameters)
+        self.assertEqual(params, ["state", "n"])
 
 
 if __name__ == "__main__":

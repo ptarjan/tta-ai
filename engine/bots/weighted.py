@@ -1112,9 +1112,14 @@ AGE_IV_ROUNDS = 2.0      # RULE-DERIVED, 12.3: Age IV is this round or the next
 # copy cannot rot.
 _SWEEP = {2: 3, 3: 2, 4: 1}
 
-# Row width, RULE-DERIVED (RULES_SPEC 2.1, `actions.ROW_SIZE`).  Spelled here
-# rather than imported so the supply arithmetic below reads as one block.
-_ROW = actions.ROW_SIZE
+# DEAD-CODE FIX (2026-08-05): this module used to also define `_ROW =
+# actions.ROW_SIZE` here ("row width... spelled here so the supply arithmetic
+# below reads as one block").  Nothing below it -- or anywhere else in this
+# file -- ever read `_ROW`; grepping the whole tree for the name turns up only
+# its own definition.  Removed rather than ported, on the repo owner's ruling
+# that a dead artifact found while porting gets fixed in both engines, not
+# carried forward for shape fidelity.  `tests/test_rate_horizon.py::
+# DeadCodeFoundWhilePortingToRust` pins this so it cannot grow back unnoticed.
 
 # FITTED PRIOR, and the ONLY fitted number left in the horizon: cards taken off
 # the row per replenish before this game has produced any evidence of its own.
@@ -1387,11 +1392,17 @@ RATE_KEYS = frozenset((
 ))
 
 
-def horizon_scale(state, n=None, w=None):
+def horizon_scale(state, n=None):
     """`rounds_left`, normalised so an average-moment decision scores 1.0.
 
     Mean ~1.0 over a game by construction; ~1.9 at the deal and ~0.09 on the
     last turn.  Never negative, because `rounds_left` never is.
+
+    DEAD-PARAMETER FIX (2026-08-05): used to also take `w=None` and never
+    read it -- the body never referenced `w`, so `rate_multiplier` and three
+    tests built a full weight dict only to hand it to a parameter that
+    discarded it.  Dropped; see `tests/test_rate_horizon.py::
+    DeadCodeFoundWhilePortingToRust`.
     """
     rl = rounds_left(state, n)
     ref = 0.5 * (rl + max(0.0, state.round - 1.0) + 1.0)
@@ -1410,7 +1421,7 @@ def rate_multiplier(state, w, n=None):
     c = w.get("rate_horizon", 0.0) if w is not None else 0.0
     if not c:
         return 1.0
-    return max(0.0, 1.0 + c * (horizon_scale(state, n, w) - 1.0))
+    return max(0.0, 1.0 + c * (horizon_scale(state, n) - 1.0))
 
 
 def features(state, idx, ctx=None, w=None, priced_only=False):
