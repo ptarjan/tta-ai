@@ -61,8 +61,10 @@ usage: advisor [options]
   --players N     2, 3 or 4 (default 3)
   --seat N        your seat, 0 = start player (default 0)
   --seed N        deal seed, only used for a fresh game (default 0)
-  --weights PATH  bot weight JSON (default: experiments/champion_<N>p.json,
-                   falling back to the built-in defaults if that is missing)
+  --weights PATH  bot weight JSON (default: experiments/rust_champion_<N>p.json,
+                   the live league's own output -- gitignored, so a fresh
+                   clone falls back to the built-in defaults if that is
+                   missing)
   --load PATH     resume from a snapshot file instead of dealing fresh
   --help
 ";

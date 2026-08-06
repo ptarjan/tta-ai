@@ -131,7 +131,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
 ## Radioactive files and vectors
 
-* **Never warm-start 4p from `experiments/champion_4p.json`** (the top-level
+* **Never warm-start 4p from `analysis/frozen/python_champion_4p_gen133_2026-07-26.json`** (the top-level
   file, not the one under `league_state/`).  It holds 8-9 sign-inverted weights
   including `science = −6.089`, and collapses the win rate to 9.7% +/- 2.7%.
   `refuse_if_degenerate_champion` now tests **provenance over the informative
@@ -144,17 +144,24 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   [`docs/BOT_ROSTER.md`](BOT_ROSTER.md), [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md), [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) and
   [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) so they stay auditable, not because they are
   facts.  See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
-* `experiments/league_state/` holds the **live** champion and ladder.
-  `experiments/champion_{2,3,4}p.json` and `experiments/league_4p/` are stale
-  snapshots from an earlier run.  Confusing them once produced a false "the 4p
-  arm has plateaued" conclusion when it was in fact the least-converged arm.
-  **Any weight snapshot taken for measurement must be copied to `/tmp` first and
-  must come from `league_state/`.**
+* **(Historical -- describes the retired Python trainer.)** `experiments/
+  league_state/` held the **live** champion and ladder; `experiments/
+  champion_{2,3,4}p.json` and `experiments/league_4p/` were stale snapshots
+  from an earlier run. Confusing them once produced a false "the 4p arm has
+  plateaued" conclusion when it was in fact the least-converged arm. That
+  trainer and `league_state/` are both gone now (`engine/` was deleted
+  2026-08-06); the equivalent live/stale trap for the current Rust league is
+  `experiments/rust_champion_{2,3,4}p.json` (live) vs. the frozen snapshots
+  under `analysis/frozen/` (stale) -- see
+  [`docs/RUST_LEAGUE.md`](RUST_LEAGUE.md#which-champion-file-is-live). The
+  underlying lesson holds either way: **any weight snapshot taken for
+  measurement must be copied to `/tmp` first and must come from the live
+  file, never a frozen one.**
 * `experiments/baselines.jsonl` carries no timestamp, generation or seed on any
   row.  Do not quote it; re-run `experiments/evaluate.py`.
 * Three tools (`tools/quiesce_bench.py`, `tools/no_credit_check.py`,
   `tools/behaviour_counts.py`) have historically defaulted to the invalidated
-  `experiments/champion_4p.json` and printed plausible numbers for a crippled
+  `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` and printed plausible numbers for a crippled
   vector without erroring.  `tools/culture_probe.py` defaults to the live
   `league_state/` path and is the pattern to copy.
 
@@ -371,8 +378,10 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 ## Git and multi-agent working
 
 * **Never `git add -A` in this repo.**  A live hillclimb continuously rewrites
-  `experiments/champion_*.json`, `generations_*.jsonl` and `league_*/`.  Stage
-  explicit paths only.  Copy `champion_*.json` to `/tmp` before analysing it.
+  `experiments/rust_champion_*.json` (all three are gitignored, but logs and
+  other run state under `experiments/` are not) and `generations_*.jsonl`.
+  Stage explicit paths only.  Copy the live champion file to `/tmp` before
+  analysing it.
 * **Do not `git checkout -b` in a shared working tree.**  This has already
   happened: every agent that subsequently committed in that tree landed on the
   feature branch without noticing, while `git push origin master` kept pushing an

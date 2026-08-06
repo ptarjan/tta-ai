@@ -1,7 +1,7 @@
 //! `arena` -- duel two weight vectors and say whether one is actually better.
 //!
 //! ```text
-//! arena --a challenger.json --b experiments/champion_3p.json --games 240 --threads 6
+//! arena --a challenger.json --b experiments/rust_champion_3p.json --games 240 --threads 6
 //! ```
 //!
 //! The measurement itself lives in [`tta::arena`], which is also what the

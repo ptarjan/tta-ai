@@ -115,7 +115,7 @@ rust/target/release/harness --players 3 --difficulty hard --app-version 2.4.1
 Evaluate one weight vector against another, seat-balanced:
 
 ```bash
-rust/target/release/arena --a challenger.json --b experiments/champion_4p.json --games 240 --threads 6
+rust/target/release/arena --a challenger.json --b experiments/rust_champion_4p.json --games 240 --threads 6
 ```
 
 Evaluate any two bot specs, including value-net checkpoints, seat-balanced.

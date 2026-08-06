@@ -5,14 +5,28 @@
 > champions that no longer exist.**
 > The 3p and 4p champions it was written from were wiped and restarted, and even
 > the surviving 2p lineage's weights have moved on and contradict some of this
-> document's headline advice. Re-checked directly against the committed
-> `experiments/champion_2p.json` (gen 209): none of `civil_actions` (1.0210),
-> `ca_left` (0.0438), `uprising` (−14.0476) or `leader` (3.4251) are clamped to
-> 0.0 — in fact **zero** of that file's 78 weights are exactly 0.0 — and its
-> largest-magnitude term is `end_turn_bias = −8.2834`, not the −14.44 an
-> earlier version of this caveat quoted. Numbers this specific go stale fast;
-> re-read them yourself with `python3 -c "import json; w = json.load(open('experiments/champion_2p.json'))['weights']; print(w['end_turn_bias'], sum(1 for v in w.values() if v == 0.0))"`
-> rather than trusting this paragraph indefinitely. The
+> document's headline advice. **A previous version of this caveat re-checked
+> that claim against the wrong file** — `experiments/champion_2p.json`
+> (now archived at `analysis/frozen/python_champion_2p_gen209_2026-07-26.json`),
+> the last snapshot the *retired Python trainer* ever wrote, 78 keys, untouched
+> since 2026-07-26. The bot actually being trained and shipped is the Rust
+> league's `experiments/rust_champion_2p.json` — gitignored, so it exists only
+> in a working checkout, rewritten every few minutes (see
+> [`docs/RUST_LEAGUE.md`](RUST_LEAGUE.md#which-champion-file-is-live)) — and it
+> disagrees with the stale file on more than the version number: as of
+> 2026-08-06 (gen ~1153, 130 weights), `uprising` is **+4.46**, not the stale
+> file's −14.05 — the sign itself has flipped. None of `civil_actions`
+> (~1.9), `ca_left` (~0.27), `uprising` or `leader` (~8.8) are clamped to 0.0,
+> and zero of the live vector's 130 weights are exactly 0.0. `end_turn_bias`
+> is deep negative (roughly −25 to −27 across the last few generations
+> watched) and is the largest-magnitude *trained* term — `best_theater` sits
+> above it only because it is pinned at the trainer's own ±60 clamp, an
+> artifact of the search bound rather than a preference. This paragraph will
+> itself go stale within minutes of being written; don't trust the numbers,
+> re-derive them from the live file in a working checkout:
+> `python3 -c "import json; d = json.load(open('experiments/rust_champion_2p.json')); w = d['weights']; print('gen', d['gen'], 'keys', len(w), w['end_turn_bias'], sum(1 for v in w.values() if v == 0.0))"`
+> (that command only works in a checkout that has actually run the league —
+> the file won't exist in a fresh clone). The
 > document's own evidence grading ([rules] / [confirmed] / [strong] / [mixed] /
 > [provisional] / [thin] / [not evidence]) is the right way to read it: the
 > [rules] and [confirmed] material is durable, the self-play-derived material is a

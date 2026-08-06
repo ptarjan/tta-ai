@@ -7,7 +7,7 @@ carries a `file:line`. Anything I could not verify says so.
 > vector it was measured against — `analysis/frozen/champion_4p.json`, now
 > renamed `analysis/frozen/champion_4p.DEGENERATE.json`, and its twin
 > `experiments/frozen/champion_4p_strengthcheck.json` — reproduces **all 62
-> informative weights** of `experiments/champion_4p.json` bit-for-bit,
+> informative weights** of `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` bit-for-bit,
 > including `science = −6.08883`. That is the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md)
 > says never to warm-start from and that [`docs/CULTURE_GAP.md`](CULTURE_GAP.md#8f-are-existing-champions-invalidated-yes--3p-and-4p-decisively) §8f measured at
 > **20.1% against a 25% null** — a bot that loses to random seating.
@@ -923,7 +923,7 @@ Three details that are the whole correctness argument:
   exactly the deep nodes that have one.
 
 Measured against the **live** 3p champion (`experiments/league_state/champion_3p.json`,
-gen 1149, `row_bargain_forgone` 1.5164 — *not* the stale `experiments/champion_3p.json`
+gen 1149, `row_bargain_forgone` 1.5164 — *not* the stale `analysis/frozen/python_champion_3p_gen152_2026-07-26.json`
 export, gen 152, which has no row weights at all and would have shown a fake zero):
 
 ```
@@ -1092,7 +1092,7 @@ Both runs are the same command against the same **snapshot** of the live
 champion (gen 1166, copied to a fixed file — the league rewrites that file
 mid-run, and 6.2's 0.005 was measured at gen 1149, which is why the "before"
 here reads 0.003: the residual's size is a function of the row weights, and
-they move). `experiments/champion_3p.json` remains a stale export with no row
+they move). `analysis/frozen/python_champion_3p_gen152_2026-07-26.json` remains a stale export with no row
 weights that would show a fake zero.
 
 ```
@@ -1192,7 +1192,7 @@ count, at the n run here.** Numbers and the size of "detectable" below.
 * **Live champions, snapshotted first.** `experiments/league_state/champion_2p.json`
   (**gen 24**) and `champion_3p.json` (**gen 1169**), copied to `/tmp` before use
   because the arms rewrite them every generation. *Not*
-  `experiments/champion_3p.json`, which is a stale gen-152 export with **no row
+  `analysis/frozen/python_champion_3p_gen152_2026-07-26.json`, which is a stale gen-152 export with **no row
   weights at all** and would have shown a fake zero.
 * **The architecture must match the arm that fitted the weights**, or the run
   measures a searcher gap instead of the leak. Read off the live processes: the
@@ -1380,7 +1380,7 @@ training arms and another agent. Wall clock is not quoted anywhere because
 * Architectures were read off the **live processes**, not guessed:
   `ps ax | grep hillclimb_league` shows `--candidate-bot plan:width=2` on the 2p
   arm and `--candidate-bot quiescent:levels=1` on 3p and 4p. **4p was not run.**
-* `experiments/champion_3p.json` (no `league_state/`) was **not** used. It is a
+* `analysis/frozen/python_champion_3p_gen152_2026-07-26.json` (no `league_state/`) was **not** used. It is a
   gen-152 export with 78 keys and no row weights at all; running against it would
   have produced a confident zero that meant nothing.
 

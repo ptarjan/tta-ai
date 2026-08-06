@@ -4,6 +4,11 @@ sources/*.pdf
 docs/rulebook.pdf
 experiments/results.jsonl
 experiments/champion.json
+# The Rust league's live champions (docs/RUST_LEAGUE.md) -- rewritten every
+# few minutes by `climb`. Was assumed already-ignored (analysis/frozen/
+# README.md, docs/HAZARDS.md's "never git add -A") but had no actual pattern
+# here; a bare `git add experiments/` would have committed one.
+experiments/rust_champion_*.json
 experiments/logs/
 experiments/baselines.jsonl
 experiments/league_state/

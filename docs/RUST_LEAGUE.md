@@ -75,3 +75,34 @@ the arms are running; it kills them.** Work from a clone instead.
 anchor standing, accept/veto). `experiments/logs/rust_league.log` is the
 supervisor's own relaunch log, and `experiments/logs/rust_league_{K}p.log` is
 each arm's stdout/stderr.
+
+## Which champion file is live?
+
+**`experiments/rust_champion_{2,3,4}p.json` — these three, and only these
+three.** They are what `climb` (via `experiments/rust_league.sh`) checkpoints
+every accepted generation, `save_weights`-formatted (sorted keys, `gen`/
+`sigma`/`since_accept`/`vs_anchor` alongside the vector). They are listed in
+`.gitignore`, so they exist **only in a working checkout that has run the
+league** — a fresh `git clone` will not have them, and neither will a
+worktree that has never run `climb`.
+
+Everything else with "champion" in its name is historical: `experiments/
+champion_{2,3,4}p.json` was the last-ever snapshot from the retired Python
+trainer (78 keys, frozen 2026-07-26) and now lives at `analysis/frozen/
+python_champion_{2,3,4}p_..._2026-07-26.json`; the other files under
+`analysis/frozen/` are earlier snapshots of the *current* Rust lineage, each
+named for the generation and key count it was cut at (see that directory's
+own `README.md`). None of them update themselves — only the three
+`rust_champion_*.json` files do.
+
+**A version note, not a bug:** the live champion files can carry fewer
+weight keys than `WeightKey::ALL` in `rust/src/bots/weighted/weights.rs` —
+130 vs. 133 as of 2026-08-06 — because the process writing them is running
+whatever commit the working checkout was built from when it was last
+(re)started, and `weights.rs` has grown three keys (`has_unit`,
+`card_board_bonus`, `wonder_board_credit`) on `master` since. `save_weights`
+itself always writes every key in `WeightKey::ALL` for the binary that calls
+it (`rust/src/bots/weighted/eval.rs::a_champion_round_trips_through_text`
+round-trips all of them); the three missing keys simply have not been
+written yet by *this* run. They will appear, seeded at their defaults, the
+next generation after the checkout is updated and the league is restarted.

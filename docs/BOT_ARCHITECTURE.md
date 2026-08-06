@@ -175,12 +175,14 @@ happened to be present in whatever was loaded — a champion file is always a
 complete vector.
 
 Two files matter for "which weights are actually being played" and they
-are **not interchangeable**: `experiments/champion_{2,3,4}p.json` (78 keys,
-committed, July, Python-era) is a **stale snapshot**. The **live** champions
-are `experiments/rust_champion_{2,3,4}p.json` (130 keys, gitignored — they
-exist only on the training box, not in a fresh clone). If a doc, tool or
-your own assumption conflates the two, it is wrong; check the file that is
-actually being read by whatever you're running.
+are **not interchangeable**: the retired Python trainer's last snapshot (78
+keys, July, moved 2026-08-06 to `analysis/frozen/python_champion_{2,3,4}p_
+..._2026-07-26.json` — see that directory's `README.md`) is a **stale
+snapshot**. The **live** champions are `experiments/rust_champion_{2,3,4}p.json`
+(130 keys, gitignored — they exist only on the training box, not in a fresh
+clone; see [`docs/RUST_LEAGUE.md`](RUST_LEAGUE.md#which-champion-file-is-live)).
+If a doc, tool or your own assumption conflates the two, it is wrong; check
+the file that is actually being read by whatever you're running.
 
 ## 4. The horizon: how much game is left
 
@@ -326,9 +328,10 @@ otherwise describes. `neuraltrain` runs entirely in Rust, no `torch`.
   reshuffled) so a beam cannot read cards the player has not legally seen;
   `det=0` exists only as a leak-measuring A/B, never a real playing
   configuration.
-* `experiments/champion_*.json` (78 keys, committed) is a stale Python-era
-  snapshot, not the live vector. `experiments/rust_champion_*.json` (130
-  keys, gitignored, training-box only) is live. Do not conflate them.
+* The retired Python trainer's last committed snapshot (78 keys, now
+  `analysis/frozen/python_champion_*_..._2026-07-26.json`) is a stale
+  Python-era snapshot, not the live vector. `experiments/rust_champion_*.json`
+  (130 keys, gitignored, training-box only) is live. Do not conflate them.
 * Card/board pricing goes through `board_yields.rs`'s swap-and-diff pattern
   and `feature_marginal`, never a hand-written value table — a table drifts
   from the rules the moment a leader or wonder effect changes.

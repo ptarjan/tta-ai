@@ -48,14 +48,22 @@ use crate::state::{GameState, Phase, ROW_SIZE};
 /// falling back to the built-in defaults. Returns the bot plus a source
 /// string for the console banner. Mirrors `load_bot`.
 ///
-/// `path`, when `None`, defaults to `experiments/champion_{n}p.json`
-/// relative to the current directory -- the same convention `arena`/`climb`
-/// use for every weights path they take (there is no `__file__`-relative
-/// "repo root" in a compiled binary the way Python's `ROOT` computes one; a
-/// human runs this from the repo root exactly as the other tools document).
+/// `path`, when `None`, defaults to `experiments/rust_champion_{n}p.json` --
+/// the file the running Rust league (`climb`, via `experiments/
+/// rust_league.sh`) actually writes, gitignored so it exists only in a
+/// working checkout, never in a fresh clone (see `docs/RUST_LEAGUE.md`).
+/// This used to default to the committed `experiments/champion_{n}p.json`,
+/// a Python-era snapshot last touched 2026-07-26 and since moved to
+/// `analysis/frozen/` -- silently advising off that frozen, superseded
+/// vector instead of the league's current champion was exactly the trap
+/// this default now avoids. Relative to the current directory -- the same
+/// convention `arena`/`climb` use for every weights path they take (there
+/// is no `__file__`-relative "repo root" in a compiled binary the way
+/// Python's `ROOT` computes one; a human runs this from the repo root
+/// exactly as the other tools document).
 pub fn load_bot(num_players: u8, path: Option<&Path>) -> (WeightedBot, String) {
-    let default_path =
-        std::path::PathBuf::from("experiments").join(format!("champion_{num_players}p.json"));
+    let default_path = std::path::PathBuf::from("experiments")
+        .join(format!("rust_champion_{num_players}p.json"));
     let path_buf = path.map(|p| p.to_path_buf()).unwrap_or(default_path);
     if !path_buf.exists() {
         return (WeightedBot::default(), "built-in default weights".to_string());

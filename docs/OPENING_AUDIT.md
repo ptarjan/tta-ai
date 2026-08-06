@@ -446,9 +446,10 @@ Ordered by how much they would change what the documents say.
 ## How to reproduce
 
 ```bash
-# snapshot first -- the live hill climbs rewrite experiments/champion_*.json
-cp experiments/champion_4p.json /tmp/ch4.json
-cp experiments/champion_2p.json /tmp/ch2.json
+# these are frozen Python-era snapshots now (analysis/frozen/README.md), not
+# live-rewritten -- copied to /tmp anyway for a stable, throwaway local path
+cp analysis/frozen/python_champion_4p_gen133_2026-07-26.json /tmp/ch4.json
+cp analysis/frozen/python_champion_2p_gen209_2026-07-26.json /tmp/ch2.json
 
 # by-seat opening (stops after round 1; add --full for whole games)
 python3 analysis/opening_by_seat.py --players 4 --games 400 --champion /tmp/ch4.json

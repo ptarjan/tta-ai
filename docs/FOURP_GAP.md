@@ -418,7 +418,7 @@ Two things to be careful about, both explicit:
 
 1. **This is not the warm-start [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) and
    the now-deleted `docs/LEAGUE_TRAINING.md` (git history) forbid.** That prohibition is about
-   `experiments/champion_4p.json`, the pre-horizon-fix vector with
+   `analysis/frozen/python_champion_4p_gen133_2026-07-26.json`, the pre-horizon-fix vector with
    `science = −6.089` that `arena.refuse_if_degenerate_champion` hard-refuses.
    `champion_2p.json` is the opposite: an externally validated vector at 97.5%
    ± 1.1% vs `book` at 2p and 57.4–57.9% at 4p. Note `hillclimb_league.run`

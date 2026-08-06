@@ -2533,7 +2533,7 @@ content**. `analysis/frozen/champion_4p.json` is **76 of 78 weights identical**
 (78 was the frozen snapshot's weight count at that vocabulary generation —
 see [`analysis/frozen/README.md`](../analysis/frozen/README.md) for the
 78→99→112 growth history that predates the Rust port's current 133-key table)
-to `experiments/champion_4p.json` — the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) says
+to `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` — the vector [`docs/TRAINING_RUN.md`](TRAINING_RUN.md) says
 never to warm-start from — differing only in `colonies` and `pacts`, and
 keeping the thing that makes it degenerate: **`science = -6.0888`**. It
 passes the guard silently. `tools/card_census.py` now warns on ≥95%

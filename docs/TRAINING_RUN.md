@@ -323,7 +323,7 @@ Check with `python3 tools/drift_sim.py` for the null and
 
 1. **`--init default` is IGNORED once the state dir holds a champion.** It
    RESUMES. To start genuinely clean you must move `experiments/league_state/`
-   aside first. `experiments/champion_4p.json` (the old top-level file, not the
+   aside first. `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` (the old top-level file, not the
    one in `league_state/`) holds a degenerate vector with `science=-6.089` —
    never warm-start from it.
 2. **`--candidate-bot` is NOT persisted.** The architecture is a property of

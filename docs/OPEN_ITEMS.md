@@ -14,7 +14,9 @@ burns -- on the live board-aware path (`gov_value`, gated on
 `gov_board_credit`; `feature_key` at `cards.rs:817` maps it to
 `WeightKey::GovActionCost`). The coded default is 0.0 (`weights.rs:335`), and
 this item previously claimed it was "absent from all three live champions,"
-citing `experiments/champion_{2,3,4}p.json` -- but that file is a stale
+citing `experiments/champion_{2,3,4}p.json` (since moved to `analysis/
+frozen/python_champion_{2,3,4}p_..._2026-07-26.json`, see that directory's
+`README.md`) -- but that file is a stale
 Jul-26 snapshot (78 weight keys, no `gov_action_cost` entry at all, untouched
 since) from before the coordinate existed in the schema, not the live
 champion. The Rust league's actual output (`experiments/rust_champion_
@@ -64,8 +66,10 @@ earlier version of this item claimed the feature itself computes 0.0 as a
 bug; that claim was checked, refuted with the constructed counterexample
 above, and is closed. The weight's default is 0.0 (`weights.rs:324`), and
 this item then claimed it "stays there on all three live champions,"
-citing `experiments/champion_{2,3,4}p.json` -- the same stale Jul-26
-snapshot item 1 was corrected against, not the live champion. The Rust
+citing `experiments/champion_{2,3,4}p.json` (see item 1's note above -- since
+moved to `analysis/frozen/python_champion_{2,3,4}p_..._2026-07-26.json`) --
+the same stale Jul-26 snapshot item 1 was corrected against, not the live
+champion. The Rust
 league's actual output (`experiments/rust_champion_{2,3,4}p.json`, gen
 1083/777/241) reads -0.073/-0.249/0.101 -- drifted well off 0.0, same as
 `gov_action_cost`. The `wonders`-group mutation op was tried in 85 of 1069
