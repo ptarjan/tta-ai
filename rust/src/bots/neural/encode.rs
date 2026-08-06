@@ -813,24 +813,21 @@ mod tests {
     /// the one-line guard that fires first and fastest if the two ever
     /// disagree about the vector's LENGTH.
     ///
-    /// Deliberately 1906, not 1907, as of `docs/OPEN_ITEMS.md`'s
-    /// `state.scoring_events` deletion: that field was write-never in both
-    /// engines (a permanently-0 neural feature), so removing it here drops
-    /// `GLOBAL_DIM` by one. Python's `neural_encode.py` still carries the
-    /// same dead feature -- deleting it there is explicitly out of scope for
-    /// this fix (docs/OPEN_ITEMS.md only asked for the dead FIELD to go, and
-    /// only in this crate) -- so Python's `encoding_dim()` is still 1907
-    /// today. This is a KNOWN, ONE-DIMENSION cross-engine divergence, not a
-    /// bug in this guard: it will self-heal back to matching the moment
-    /// Python's own `scoring_events` deletion lands, at which point this
-    /// literal goes back to 1907 (or Python's new number) and this comment
-    /// should be trimmed back down to the single pinned-value form above.
-    /// Neither engine has a training loop that loads a checkpoint across the
-    /// language boundary today (`docs/OPEN_ITEMS.md`: "Rust owns no
-    /// self-play runner, league, or training loop yet"), so nothing live
-    /// depends on the two matching AT THIS MOMENT -- but any cached Rust
-    /// encoder output or checkpoint from before this change is now the
-    /// wrong shape and must be regenerated, not patched.
+    /// Deliberately 1906, not 1907, per the "Width note" in
+    /// `docs/NEURAL_EVAL.md`'s encoder section (that doc, not
+    /// `docs/OPEN_ITEMS.md`, is the authority for this number -- OPEN_ITEMS
+    /// never recorded an encoder width): `state.scoring_events` was a
+    /// write-never field in both engines (a permanently-0 neural feature),
+    /// so removing it here drops `GLOBAL_DIM` by one. Python's
+    /// `neural_encode.py` was never touched by that fix, and as of the
+    /// Python `engine/` tree's 2026-08-06 deletion no longer exists at all,
+    /// so the 1906/1907 split is now purely historical, not a live
+    /// cross-engine divergence needing reconciliation. Neither engine ever
+    /// had a training loop that loaded a checkpoint across the language
+    /// boundary, so nothing live depended on the two matching even before
+    /// Python was deleted -- but any cached Rust encoder output or
+    /// checkpoint from before this change is the wrong shape and must be
+    /// regenerated, not patched.
     #[test]
     fn encoding_dim_matches_python() {
         assert_eq!(ENCODING_DIM, 1906, "must match engine.bots.neural_encode.encoding_dim() once scoring_events is deleted there too");
