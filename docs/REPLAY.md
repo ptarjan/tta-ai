@@ -1471,3 +1471,109 @@ Service`) and the three apparent text gaps are terser paraphrases of the same
 rule (Development of Markets, Iconoclasm, Impact of Technology). That is a
 real negative result and worth recording so nobody re-runs it: the remaining
 `replaystats` buckets are not more missing card abilities.
+
+## Eighth pass: the hidden-`PrepareEvent` wall, closed — BGO logs every preparation
+
+The premise every earlier pass built on ("BGO's journal never logs who
+prepared an event") was simply **wrong**, and it cost this binary a lot. Every
+preparation is one journal line:
+
+```text
+Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; ...
+```
+
+which names **who** (the line's actor), **which age of card** they prepared
+(`apply::h_prepare_event` scores exactly `card.level()`, so the culture clause
+IS the age — never 0 anywhere in the corpus, Age A events being setup-only),
+and **what the reveal turned up**. 17,889 `"plays event"` lines, 17,889
+`"Current event:"` clauses, never one without the other.
+
+`replay.rs` had been guessing forward instead: a hidden `PrepareEvent` at
+every Politics decision no line explained, satisfied by popping the next
+observed reveal off a FIFO. Most of those decisions are ordinary passes, so
+events fired turns early for the wrong player (2p game `7522647`: Development
+of Science at round 4, journal says round 10) and everything downstream
+desynchronised.
+
+### The pile model, verified against the whole corpus
+
+`rust/src/event_plan.rs` now solves the record as one whole-game constraint
+problem. BGO logs each recycle (`"Future events are now current events."`,
+rendered before the `"Current event:"` clause on the line whose pop emptied
+the pile — i.e. `reveal_current_event`'s own TRAILING recycle), which cuts the
+reveal sequence into piles. Each pile is by construction exactly the cards
+prepared while the previous one was consumed, so:
+
+> the multiset of ages revealed in pile `b+1` must equal the multiset of
+> `"scores N culture"` values on the preparations made during pile `b`.
+
+Over the 1,011 games that holds in **3,291 of 3,291** windows (2,283 complete
+piles exact, 1,008 truncated final piles consistent), with the setup pile
+measuring `num_players + 2` in every game. Nothing is fitted; a violation is
+`MismatchKind::EventPlanInfeasible` and stops the game. **Zero games hit it.**
+
+What stays underdetermined: within one pile and one age the recycle shuffle
+destroys the order, so which same-age preparation became which same-age reveal
+is unrecoverable — and irrelevant, since the pile is a set and the reveal
+ORDER is read from the journal. Tie-break is positional; the only state it can
+touch is `seeded_by`. The setup pile and every recycle are now GROUNDED to the
+journal's reveal order (contents from the engine, only the never-logged
+shuffle order replaced), which turns the pre-reveal "is the right card on
+top?" check into a real test of the model rather than a re-forcing of it.
+
+Also fixed in passing: territory families recur across ages under one printed
+name (`"Vast Territory"` at Age I AND Age II) and `card_table.rs`
+disambiguates with a `" (I)"`/`" (II)"` suffix BGO never prints — but BGO does
+print the age in the same clause, so the lookup uses both now. The old prescan
+silently resolved to whichever age came first.
+
+### ENGINE BUG: Julius Caesar's once-per-game was spent by DECLINING it
+
+Chasing the residual `PolPass` bucket turned up a real rules bug. Printed text
+(`sources/bga_throughtheages_material.inc.php`): *"After you play a political
+action, you may play another political action. This ability can be used only
+once per game."* `apply::end_politics` got both halves wrong — it spent the
+once-per-game whenever the second political action resolved, **including when
+that action was a pass**, and it armed a second action after a pass as the
+FIRST action, which the text does not grant.
+
+The discriminating evidence is game `7523338`: the same player is offered and
+declines the second political action on rounds 3, 4, 5 and 7 and still holds
+the ability, which is impossible under the old model. (The corpus-wide counts
+— 142 player-games with exactly one double, no offer ever recurring after a
+double is used — corroborate but do not discriminate: they are consistent with
+once-per-game either way.) `end_politics` now takes a
+`PoliticalAction::Played/Passed`. Python has the same bug; the printed card is
+the oracle.
+
+Two consequences for `replay.rs`, both fixed with the engine change:
+
+- a human who declines the second action leaves BGO's `"passes Political
+  Phase"` line wherever they clicked it, routinely AFTER some of their own
+  Action-phase lines — which the engine cannot make legal until politics
+  closes. Such a line is now that pass's late confirmation, tracked per seat
+  and consumed one-for-one.
+- the `"plays event"` line is skipped as a confirmation, so its preparation is
+  applied at the NEXT line — which with Caesar armed is routinely that same
+  player's own pass line. An owed preparation now outranks
+  `resolve_intervening`'s explicit-political-line fast path, instead of the
+  pass being applied as the FIRST political action and the preparation being
+  stranded at the head of the queue (game `7522650`).
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | seventh pass | this pass |
+|---|---|---|
+| mean rounds reached (of 19.27) | 5.90 | **6.37** |
+| decisions in Age II or later | 4.6% | **5.5%** |
+| `StuckPending: decider != expected actor` | 94 | **14** |
+| `IllegalMove: PolPass` | 64 | **9** |
+| `EventPlanInfeasible` | — | **0** |
+| games completed | 0 | 0 |
+
+Still 0 complete, so `analysis/index.tsv`'s final scores remain un-cross-
+checked. The two residual politics stops are no longer event attribution:
+`7523338` line 174 is an aggression's spoils `Choose` left unresolved, and
+`7523657` line 143 is a colonize force left undrained when the acting player
+IS the decider (`auto_drain_colonize` only runs on the `decider != expected
+actor` branch). Both are in other buckets' territory.
