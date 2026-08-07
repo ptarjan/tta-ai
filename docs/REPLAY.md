@@ -6768,3 +6768,187 @@ confirming zero completed-game regressions -- the usual "a stall bucket
 count moving is not proof of correctness on its own" caveat applies to
 every downstream number in the table above exactly as it has in every
 prior pass; only the completed-game ID diff is a strong claim here.
+
+## Final scores: 0/76 exact matches traced to the replayer's hand-tracking gap, NOT a scoring-formula bug
+
+`replaystats` (this file's own `bin/replaystats.rs`) now cross-checks every
+completed game's `game::scores` against `index.tsv`'s own recorded final
+scores (sorted per-game multiset compare, so a seat/column ordering mismatch
+between the engine and `index.tsv` cannot be confused for a real error --
+see that binary's own module doc). On the current 1,011-game corpus: 76/76
+completed games flip `state.game_over`, and **0/76 score exactly**. The 160
+non-matching player-scores have mean delta -9.11 (engine minus `index.tsv`),
+a long negative tail to -48 and a shorter positive one to +21.
+
+**The bottom-line answer, first, because it is the one thing worth reading
+this section for**: this is a **REPLAYER bug, not an engine bug**. `game::
+scores`, `game::finish_game`, `economy::end_of_turn`'s culture-accrual step,
+and `events::evaluate_final_events` were all read in full against
+`RULES_SPEC.md` §12.5 and found correct -- ordering, clamping, and the Bill
+Gates leader-bonus special case all matched the rulebook and this file's own
+existing tests. **A self-play game (`game::play_game`) tracks its own hands
+exactly and never goes through the machinery below at all**, so there is no
+reason to believe self-play climb has been optimising against a wrong
+scoring objective. The residual doubt, stated plainly rather than smoothed
+over: this was checked by fully decomposing TWO of the 76 mismatching
+games end to end (both reconciled to zero residual, see below) plus the new
+structural instrument covering the rest (`politics_false_skips`, below) --
+it directly implicates 16/76. The other 60/76 were NOT individually
+decomposed; they are presumed to be the same `hand_military` under-tracking
+class (the still-open "920 remaining OVERCOUNT-direction divergences" `docs/
+REPLAY.md`'s own prior section on `d4ad0f5` names as unclosed) manifesting
+as a wrong-amount PrepareEvent rather than a fully-dropped one, but that is
+an inference from the shared root cause and this pass's own time budget,
+not a second independent confirmation.
+
+### The mechanism, traced start to finish on `7522166`
+
+Picked as the minimal repro: 2p, 76 actions from game-over, `civil_deck_
+premature_advance` flagged at line 314 (an already-known, already-
+instrumented gap -- see below for why that flag is NOT the dominant cause
+across the other 75 games). Engine scores `[162, 163]` (sum 325) against
+`index.tsv`'s real `[211, 187]` (sum 398) -- a game-total deficit of 73,
+fully reconciled below to zero residual.
+
+The real journal's last 15 lines (`sources/bgo/index.tsv`'s companion
+journal, `7522166.tsv`) show the real game's own end-of-game announcement:
+
+```
+Orange IV 19  End of game Check the journal to get the final impacts effects :;
+              Impact of Architecture; Impact of Variety; Impact of Progress; Impact of Strength;
+              WINNER IS ... AS ORANGE (211 PTS); 2nd is ... AS PURPLE (187 pts)
+Purple IV 19  Bill Gates scoring Purple scores 9 culture
+Purple IV 19  Impact of Strength ... Orange scores 10 culture
+Purple IV 19  Impact of Progress ... Orange scores 26 culture; Purple scores 10 culture
+Purple IV 19  Impact of Variety ... Orange scores 22 culture; Purple scores 12 culture
+Purple IV 19  Impact of Architecture ... Orange scores 18 culture; Purple scores 15 culture
+```
+
+This binary's own reconstruction, instrumented with a one-off `eprintln!`
+inside `events::evaluate_final_events` (not landed -- diagnostic only) to
+print `state.past_events`/`current_events`/`future_events` right before it
+runs, shows it firing a COMPLETELY DIFFERENT set of four cards: `Impact of
+Industry`, `Impact of Happiness`, `Impact of Agriculture`, `Impact of
+Competition` -- only the leader bonus (Bill Gates, `game::end_of_game_
+bonus`, handled separately from the event deck and unaffected) matches the
+real game.
+
+**Why the set differs**: `Impact of Happiness` was NOT still pending in the
+real game -- it was drawn and resolved MID-GAME, at journal line 331
+(`"Purple plays event Purple scores 3 culture; Current event:; III / Impact
+of Happiness; ...; Orange scores 10 culture; Purple scores 14 culture"`).
+This binary's own `event_plan::solve` correctly parses that line and builds
+a `Preparation { lineno: 331, actor: 1 (Purple), revealed: Impact of
+Happiness, ... }` entry in `plan.preparations` -- confirmed via
+`REPLAY_DEBUG_ALL`, which shows 14 of the game's 15 real preparations
+successfully claimed via `Replayer::resolve_political_decision`, and this
+15th one never claimed at all (no `resolve_political_decision` call is ever
+logged for `decider=1` past round 18). `ActionClass::PlayEvent` lines are
+treated as pure confirmations (`apply_one`'s `PlayEvent => Ok(())` arm,
+"resolved automatically when the triggering `PrepareEvent` was inferred") --
+so when the real `PrepareEvent` is never inferred, the confirmation line is
+silently a no-op: neither the 3-culture reveal bonus nor `Impact of
+Happiness`'s own 10/14 effect ever lands on either player, AND the card is
+never popped off `state.current_events`, so it survives to fire a SECOND
+time at game end via `evaluate_final_events` -- computed against the WRONG
+(end-of-game) board state, alongside three other cards that are also wrong
+because the correct four (`Strength`/`Progress`/`Variety`/`Architecture`)
+never got the chance to become "the last four standing" the way the real
+game's draw order made them.
+
+**Root cause, confirmed directly**: added a one-off `eprintln!` inside
+`game::auto_skip_politics` (not landed) and re-ran. It fires for Purple at
+round 18 with:
+
+```
+hand_military = [("Shock Troops", Tactic), ("Mechanized Army", Tactic),
+                 ("War over Culture", War), ("War over Culture", War)]
+```
+
+Zero `CardType::Event`/`Territory` cards -- so `legal::legal_moves` offers
+only `Move::PolPass` (`legal.rs::politics_moves` only ever pushes
+`PrepareEvent` for a card actually present in `hand_military`, confirmed
+correct against the rule and left untouched), `auto_skip_politics` closes
+the phase (`state.phase = Phase::Actions`) BEFORE the per-line replay loop
+(`Replayer::resolve_intervening`) ever gets a chance to check whether
+Purple owes a preparation, and the real preparation is stranded. This is
+the exact `hand_military` under-tracking class `d4ad0f5`'s discard-phase
+oracle instruments (62.6% -> 85.9% agreement, still 941/1011 games with at
+least one divergence) -- not a new bug, a NEW, higher-stakes SYMPTOM of the
+same one: previously it was only visible as a wrong discard count; here it
+silently drops a real game action and corrupts the final score. **This
+pass deliberately did not touch `hand_military` reconstruction itself** --
+`d4ad0f5` landed minutes before this pass started, is explicitly still-open
+work (see its own "concrete next step" section, immediately above this
+one), and its own commit message documents a prior attempt at this exact
+area regressing the stall bucket 171 -> 305. Colliding with in-flight work
+on shared, fragile state was judged higher-risk than the value of a rushed
+second fix here.
+
+**Full reconciliation, zero residual** (this repro's own 73-point deficit,
+accounted for completely): -27 from the dropped mid-game `Impact of
+Happiness` (Orange +10, Purple +3 reveal +14 effect, all silently no-op'd)
+plus -46 from the wrong final-four-card substitution (real non-leader final
+total 76 + 37 = 113; this binary's 14 + 26 + 14 + 13 = 67; 67 - 113 = -46).
+-27 + -46 = -73, exactly the observed `sum(engine) - sum(index)` for this
+game. Bill Gates' leader bonus (`game::end_of_game_bonus`) matched exactly
+on both sides (+9 to Purple) and is confirmed uninvolved.
+
+### Second repro, same shape: `7522625`
+
+Real final events (from the journal's own "End of game" line): `Impact of
+Balance`, `Impact of Progress`, `Impact of Happiness`, `Impact of
+Architecture`. This binary's reconstruction instead fires `Impact of
+Agriculture`, `Impact of Progress`, `Impact of Industry`, `Impact of
+Competition` -- only `Impact of Progress` shared, the identical "wrong SET,
+not just a wrong total" signature as `7522166`. Not fully decomposed to a
+zero-residual reconciliation for lack of remaining budget, but corroborates
+that this is not a `7522166`-specific coincidence.
+
+### `civil_deck_premature_advance` overlap: real, but a MINORITY cause
+
+`7522166` happens to also be one of the (separately, already-instrumented)
+`civil_deck_premature_advance` games. Checked whether that flag predicts the
+final-score mismatches directly: of the 76 score-checked games, only
+**11/76** are also flagged `civil_deck_premature_advance` -- so while it is
+plausibly involved in `7522166` specifically (an `Age III` vs `Age IV` civil
+deck desync a few lines before the stranded preparation could easily shift
+which political options `legal_moves` considers), it is not the dominant
+mechanism across the other 65 mismatching games, which have NO civil-age
+desync flagged at all. The dominant mechanism is `hand_military` under-
+tracking broadly (of which a civil-age desync is one, but not the only,
+trigger), consistent with `d4ad0f5`'s own 941/1011-games-still-divergent
+number.
+
+### New structural instrument: `GameResult::politics_false_skips`
+
+Added the same always-on shape as `civil_deck_premature_advance`: counts,
+per game, how many times `game::auto_skip_politics` closed a player's
+Politics phase while `event_plan::solve`'s own plan says that player had a
+real preparation waiting whose journal line had already been reached
+(`Replayer::resolve_intervening`, checked every loop iteration, flagged at
+most once per `plan.preparations` index via `false_skip_flagged_prep` so
+the loop's own up-to-200-iteration retries against a stuck decision cannot
+inflate the count). Corpus-wide (1,011 games): **53 false skips across 50
+games**. Cross-referenced directly against the 76 score-checked games: **16/
+76** have at least one `politics_false_skips > 0` -- a DIRECT, mechanism-
+confirmed subset of the 0/76 mismatches (not an estimate). The other 60/76
+are presumed the same `hand_military`-under-tracking family manifesting
+differently (e.g. a WRONG but still type-matching card being offered/
+consumed, rather than a phase that closes entirely) -- see the residual-
+doubt paragraph at the top of this section for why that is an inference,
+not a second confirmation. This is a detector, not a fix: it makes the gap
+visible in `replaystats`'s own output (a new `politics false-skips: N
+across M games` line) without touching the shared, fragile `hand_military`
+machinery `d4ad0f5` is already mid-repair on.
+
+### What was NOT investigated this pass
+
+Any fix to `hand_military` reconstruction itself (deliberately, to avoid
+colliding with `d4ad0f5`'s own in-flight follow-up); a full card-by-card
+reconciliation of `7522625` (only the wrong-final-set signature was
+confirmed, not a zero-residual accounting like `7522166`'s); whether any of
+the 60/76 score-mismatched games NOT flagged by `politics_false_skips` have
+a genuinely different (non-hand-tracking) cause -- plausible but unchecked,
+since every game actually decomposed this pass fit the same mechanism
+cleanly.

@@ -480,6 +480,18 @@ struct Replayer<'a> {
     /// checkable, and how much of THAT is right" coverage stat.
     discard_oracle_checked: u32,
     discard_oracle_agreed: u32,
+    /// A structural "false skip" instrument -- see [`GameResult::
+    /// politics_false_skips`]'s own doc for the full mechanism this counts.
+    /// Incremented at most once per `plan.preparations` entry (tracked via
+    /// [`Replayer::false_skip_flagged_prep`]), not once per
+    /// `resolve_intervening` loop iteration, so a decision the loop revisits
+    /// many times before making progress is not over-counted.
+    politics_false_skips: u32,
+    /// The `next_prep` index already counted toward `politics_false_skips`,
+    /// if any -- prevents [`Replayer::resolve_intervening`]'s own retry loop
+    /// (up to 200 iterations against the SAME unresolved decision) from
+    /// inflating the count past one per genuine false skip.
+    false_skip_flagged_prep: Option<usize>,
 }
 
 /// Overwrite the current-events pile with `reveal_order` -- the journal's
@@ -556,6 +568,8 @@ impl<'a> Replayer<'a> {
             discard_oracle_divergence: None,
             discard_oracle_checked: 0,
             discard_oracle_agreed: 0,
+            politics_false_skips: 0,
+            false_skip_flagged_prep: None,
         }
     }
 
@@ -600,6 +614,27 @@ impl<'a> Replayer<'a> {
                 return Ok(());
             }
             let decider = self.state.decider();
+            // Structural "false skip" instrument -- see [`GameResult::
+            // politics_false_skips`]'s own doc for the mechanism this
+            // detects: the journal's own solved plan says `decider` has a
+            // real preparation waiting (its line has already been reached),
+            // but this reconstruction's `state.phase` is no longer
+            // `Politics` for them -- meaning `game::auto_skip_politics`
+            // already fired against a `hand_military` this binary under-
+            // tracked, closing the phase before `resolve_political_decision`
+            // ever got a chance to claim it. Checked every loop iteration
+            // (cheap: two field reads and an `Option` compare) but flagged
+            // at most once per `next_prep` value via `false_skip_flagged_prep`.
+            if let Some(prep) = self.plan.preparations.get(self.next_prep) {
+                if prep.actor == decider
+                    && prep.lineno <= self.current_lineno
+                    && self.state.phase != Phase::Politics
+                    && self.false_skip_flagged_prep != Some(self.next_prep)
+                {
+                    self.politics_false_skips += 1;
+                    self.false_skip_flagged_prep = Some(self.next_prep);
+                }
+            }
             if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
                 eprintln!(
                     "DEBUG resolve_intervening loop: lineno={} decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
@@ -3593,6 +3628,33 @@ pub struct GameResult {
     /// regression shows up in `replaystats`'s own summary instead of
     /// needing this investigation re-run from scratch).
     pub civil_deck_premature_advance: Option<PrematureCivilAdvance>,
+    /// A structural "false skip" instrument, the same always-on shape as
+    /// [`civil_deck_premature_advance`](Self::civil_deck_premature_advance):
+    /// how many times, in this game, `game::auto_skip_politics` closed a
+    /// player's Politics phase (leaving `state.phase != Politics`) while the
+    /// journal's own solved event-preparation plan (`event_plan::solve`)
+    /// says that SAME player had a real preparation waiting whose line had
+    /// already been reached. This is the mechanism traced from the
+    /// zero-matching final-score cross-check above: a false skip means the
+    /// upcoming `"<Color> plays event ... Current event: ..."` line can
+    /// never reach [`Replayer::resolve_political_decision`] (the game is no
+    /// longer in `Phase::Politics` for them), so it falls through
+    /// `apply_one`'s `ActionClass::PlayEvent => Ok(())` arm as a silent
+    /// no-op instead -- neither the reveal's own culture bonus nor its
+    /// effect ever lands on either player, AND the card is never popped off
+    /// `current_events`, so it wrongly fires a SECOND time (with the wrong
+    /// amount, computed against end-of-game state instead of the turn it
+    /// really resolved on) via `events::evaluate_final_events`. Root cause
+    /// is `hand_military` under-tracking (the same class of gap
+    /// `d4ad0f5`'s discard-phase oracle instruments, not a NEW one this
+    /// counts) leaving zero `CardType::Event`/`Territory` cards in the
+    /// player's reconstructed hand at the moment `game::start_turn` calls
+    /// `auto_skip_politics`, even though the real hand had one. Zero on a
+    /// game this reconstruction gets exactly right; a nonzero count here
+    /// names the SAME games the final-score cross-check will show a
+    /// nonzero delta on, without re-deriving the mechanism from scratch --
+    /// see `docs/REPLAY.md`'s "Final scores" section.
+    pub politics_false_skips: u32,
 }
 
 /// Ground-truth evidence (never a rules reimplementation) that the PRIMARY,
@@ -4536,6 +4598,7 @@ pub fn replay_game(
         discard_oracle_checked: r.discard_oracle_checked,
         discard_oracle_agreed: r.discard_oracle_agreed,
         civil_deck_premature_advance,
+        politics_false_skips: r.politics_false_skips,
     }
 }
 

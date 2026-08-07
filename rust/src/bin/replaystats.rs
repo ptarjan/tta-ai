@@ -153,6 +153,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // per game, capped, so a full-corpus run doesn't dump hundreds of lines.
     let mut n_premature: u32 = 0;
     let mut premature_examples: Vec<String> = Vec::new();
+    // `GameResult::politics_false_skips` -- see that field's own doc and
+    // `docs/REPLAY.md`'s "Final scores" section: a false skip is the
+    // mechanism traced from the final-score cross-check above, named
+    // structurally rather than re-derived per game.
+    let mut n_false_skips_total: u64 = 0;
+    let mut n_games_with_false_skip: u32 = 0;
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -191,6 +197,10 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                     meta.id, p.lineno, p.reconstructed_age, p.journal_age
                 ));
             }
+        }
+        if result.politics_false_skips > 0 {
+            n_false_skips_total += result.politics_false_skips as u64;
+            n_games_with_false_skip += 1;
         }
 
         for d in &result.decisions {
@@ -318,6 +328,22 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         println!("  {ex}");
     }
     println!();
+
+    // `GameResult::politics_false_skips` -- docs/REPLAY.md's "Final scores"
+    // section: the mechanism traced from the final-score cross-check above.
+    // A false skip means `game::auto_skip_politics` closed a player's
+    // Politics phase while the journal's own solved plan says they had a
+    // real preparation waiting, so its "plays event" line falls through as
+    // a silent no-op instead of reaching `resolve_political_decision` --
+    // dropping its culture and leaving the card un-popped to fire again,
+    // wrongly, via `events::evaluate_final_events`. Zero would mean this
+    // reconstruction never under-tracks a hand badly enough to starve a
+    // real political decision; nonzero names the same games the final-score
+    // cross-check shows a nonzero delta on.
+    println!(
+        "politics false-skips (a real event/territory preparation the journal shows, silently dropped because \
+         auto_skip_politics closed the phase first): {n_false_skips_total} across {n_games_with_false_skip} games\n"
+    );
     println!("## Stop-reason histogram, ranked by count\n");
     println!("| count | mean round reached | reason | example |");
     println!("|---|---|---|---|");
