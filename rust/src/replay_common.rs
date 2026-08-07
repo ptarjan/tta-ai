@@ -380,6 +380,10 @@ struct Replayer<'a> {
     /// twelfth; every test that doesn't care leaves this at its `Default`
     /// (empty), same as it would if this field didn't exist.
     produces_grants: HashMap<u8, VecDeque<(i16, i16)>>,
+    /// [`Self::produces_grants`]'s LOSS-side mirror -- see
+    /// `prescan_spends_grants`'s doc. Same "set directly after construction"
+    /// convention, same reason.
+    spends_grants: HashMap<u8, VecDeque<(i16, i16)>>,
     /// Per-attacker FIFO of `is_wonder` flags pulled off every
     /// journal-observed Infiltrate resolution line (`"concedes defeat"` OR
     /// `"Operation successful"`, both prefixes carry the same `"<Card> is
@@ -529,6 +533,7 @@ impl<'a> Replayer<'a> {
             gain_produces,
             plunder_splits,
             produces_grants: HashMap::new(),
+            spends_grants: HashMap::new(),
             infiltrates,
             lose_pop_destroys,
             raid_destroys,
@@ -1333,16 +1338,35 @@ impl<'a> Replayer<'a> {
                 let post = &self.state.players[i as usize];
                 let delta_food = post.food as i32 - pre_food as i32;
                 let delta_res = post.resources as i32 - pre_res as i32;
-                if delta_food < 0 || delta_res < 0 || (delta_food == 0 && delta_res == 0) {
-                    continue;
-                }
-                let total = delta_food + delta_res;
-                if let Some(q) = self.produces_grants.get_mut(&i) {
-                    if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
-                        let (jf, jr) = q.remove(pos).expect("position just found by iter()");
-                        let p = &mut self.state.players[i as usize];
-                        p.food = (pre_food as i32 + jf as i32).max(0) as u16;
-                        p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
+                // `events::food_or_resources` never mixes signs within one
+                // call (its gain arm only ever adds, its loss arm only ever
+                // subtracts -- see that function's own body), so a real
+                // correction candidate is either both deltas >= 0 (a
+                // `StrongestPlayers` gain, corrected against
+                // `produces_grants`) or both <= 0 (a `WeakestPlayers` loss,
+                // corrected against `spends_grants`, added here -- see that
+                // FIFO's own doc for why the ORIGINAL version of this loop,
+                // which unconditionally skipped every negative delta, only
+                // ever corrected the gain half).
+                if delta_food > 0 || delta_res > 0 {
+                    let total = delta_food + delta_res;
+                    if let Some(q) = self.produces_grants.get_mut(&i) {
+                        if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
+                            let (jf, jr) = q.remove(pos).expect("position just found by iter()");
+                            let p = &mut self.state.players[i as usize];
+                            p.food = (pre_food as i32 + jf as i32).max(0) as u16;
+                            p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
+                        }
+                    }
+                } else if delta_food < 0 || delta_res < 0 {
+                    let total = -(delta_food + delta_res);
+                    if let Some(q) = self.spends_grants.get_mut(&i) {
+                        if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
+                            let (jf, jr) = q.remove(pos).expect("position just found by iter()");
+                            let p = &mut self.state.players[i as usize];
+                            p.food = (pre_food as i32 - jf as i32).max(0) as u16;
+                            p.resources = (pre_res as i32 - jr as i32).max(0) as u16;
+                        }
                     }
                 }
             }
@@ -2821,6 +2845,86 @@ fn prescan_produces_grants(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> 
     out
 }
 
+/// [`parse_produces_grant_line`]'s LOSS-side mirror: `Special::WeakestPlayers`
+/// events (Raiders, Crime Wave) resolve their own `Special::Lose(food_and_or_
+/// resources)` block the identical way -- a real, sequential, per-player
+/// choice ("`<Color> choses first`" on the triggering event line), not
+/// `events::food_or_resources`'s fixed "resources first" formula.
+///
+/// REPLAYER BUG (found extending the `IllegalMove: Build` bucket's
+/// `resources_short` trace, `docs/REPLAY.md`'s handoff, game `7522886`
+/// round 6/7): `resolve_political_decision`'s existing correction loop
+/// already GATES on both `Special::StrongestPlayers`/`WeakestPlayers` and
+/// both `Special::Gain`/`Lose`, but its own delta check
+/// (`delta_food < 0 || delta_res < 0`) unconditionally skips every NEGATIVE
+/// delta -- so a loss (`WeakestPlayers`) never actually got corrected, only
+/// gains did. Confirmed via full arithmetic reconciliation against a THIRD,
+/// independent number (not just the two conflicting clauses on the
+/// triggering event line): game `7522886`'s Orange enters round 7 with 3
+/// resources (round 7's own "now 3" end-of-turn total minus round 7's own
+/// spending, both journal-observed), fully untouched by the preceding
+/// Raiders line's "Orange loses 2 resources and/or food" -- Orange's OWN
+/// resolution line, `"Orange spends 2 food"`, put the whole loss on food,
+/// the exact opposite of `events::food_or_resources`'s "resources first".
+///
+/// Same clause-parsing loop and same "no trailing victim clause" gate as
+/// [`parse_produces_grant_line`] (a bare, standalone loss line never takes
+/// anything from another player either, so nothing ever follows the
+/// actor's own clause(s)), just matching `"spends "` instead of
+/// `"produces "`. `corpus::classify` already resolves a standalone
+/// `"<Color> spends N food"` line to `LineOutcome::Bookkeeping` (the same
+/// catch-all `"spends "` prefix an ordinary action's OWN embedded `"spends"`
+/// clause never reaches, since `actor_and_rest`'s `rest` for a real action
+/// line starts with the action's own verb, e.g. `"builds Warrior Orange
+/// spends 2 resources"` -- `strip_prefix("spends ")` on THAT rest correctly
+/// fails), so this is safe to scan the whole journal for without a second,
+/// separate classification pass.
+fn parse_spends_grant_line(text: &str) -> Option<(Color, i16, i16)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let mut food: i16 = 0;
+    let mut resources: i16 = 0;
+    let mut cursor = rest.strip_prefix("spends ")?;
+    loop {
+        let digits_end = cursor.find(|c: char| !c.is_ascii_digit())?;
+        if digits_end == 0 {
+            return None;
+        }
+        let n: i16 = cursor[..digits_end].parse().ok()?;
+        let tail = &cursor[digits_end..];
+        if let Some(t) = tail.strip_prefix(" resources").or_else(|| tail.strip_prefix(" resource")) {
+            resources = n;
+            cursor = t;
+        } else if let Some(t) = tail.strip_prefix(" food") {
+            food = n;
+            cursor = t;
+        } else {
+            return None;
+        }
+        let continuation = format!("; {} spends ", actor.as_str());
+        match cursor.strip_prefix(continuation.as_str()) {
+            Some(t2) => cursor = t2,
+            None => break,
+        }
+    }
+    if !cursor.is_empty() {
+        return None;
+    }
+    Some((actor, food, resources))
+}
+
+/// Pre-scans every [`parse_spends_grant_line`] match into a per-actor FIFO,
+/// mirroring [`prescan_produces_grants`]. Consumed the same way, for the
+/// negative-delta (loss) half of the same correction loop.
+fn prescan_spends_grants(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> {
+    let mut out: HashMap<u8, VecDeque<(i16, i16)>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, food, resources)) = parse_spends_grant_line(line.text) {
+            out.entry(actor.seat()).or_default().push_back((food, resources));
+        }
+    }
+    out
+}
+
 /// The resolving line for an Aggression: Infiltrate attack that actually
 /// removed something -- BGO prints this shape under EITHER of two leading
 /// phrases (confirmed by pairing every real corpus `"plays Infiltrate
@@ -3466,6 +3570,7 @@ pub fn replay_game(
     r.record_decisions = record_decisions;
     r.produces_grants = prescan_produces_grants(&lines);
     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
+    r.spends_grants = prescan_spends_grants(&lines);
 
     // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
     // total" handoff): per-actor running sum of every `TakeCard` line's own
@@ -6043,6 +6148,46 @@ mod tests {
         assert_eq!(r.state.players[0].food, 7, "5 + the journal's own 2 food, not the deterministic 0");
         assert_eq!(r.state.players[0].resources, 6, "5 + the journal's own 1 resource, not the deterministic 3");
         assert!(r.produces_grants[&0].is_empty(), "the journal-observed split is consumed, not left for a later event");
+    }
+
+    /// [`foray_resolves_the_journals_own_food_or_resources_split_not_the_
+    /// deterministic_guess`]'s LOSS-side mirror (game `7522886`, chasing the
+    /// `IllegalMove: Build` bucket's `resources_short` sub-bucket,
+    /// `docs/REPLAY.md`'s handoff): `Special::WeakestPlayers` (Raiders,
+    /// Crime Wave) resolves its own `Lose(food_and_or_resources)` block
+    /// through the SAME `events::food_or_resources` deterministic guess,
+    /// and the correction loop's ORIGINAL version unconditionally skipped
+    /// every negative delta -- so this half never got corrected at all,
+    /// even though the gate already covered `WeakestPlayers`/`Lose`. On a
+    /// fresh 2p `Replayer::new`, both players start with identical
+    /// (zero) strength; `resolve_count_targets`'s `weakestPlayers` branch
+    /// runs `protect_current_from_bad_tie` (a LOSS is a bad outcome), which
+    /// moves the revealer (player 0, `order[0]`) to the BACK among ties --
+    /// so the single 2p `weakest_count` target is player 1, not player 0.
+    #[test]
+    fn raiders_resolves_the_journals_own_food_or_resources_loss_split_not_the_deterministic_guess() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Raiders; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.players[1].food = 5;
+        r.state.players[1].resources = 5;
+        // The journal's own resolution: all 2 as food, protecting resources
+        // entirely -- the deterministic formula would instead drain
+        // resources first (5 -> 3, food untouched).
+        r.spends_grants.insert(1, VecDeque::from([(2, 0)]));
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(r.state.players[1].food, 3, "5 - the journal's own 2 food, not the deterministic 0");
+        assert_eq!(r.state.players[1].resources, 5, "resources untouched, not the deterministic 3");
+        assert!(r.spends_grants[&1].is_empty(), "the journal-observed split is consumed, not left for a later event");
     }
 
     /// The correction above must NOT fire for an ordinary event with no
