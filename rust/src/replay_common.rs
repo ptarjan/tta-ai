@@ -3638,34 +3638,136 @@ fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
 /// case this project's own style guide reserves arrays for over a hash
 /// table.
 ///
-/// Built ONLY from lines classified as a real player decision, and NOT
-/// `EndTurn` -- this checker's own first pass, run against the full corpus,
-/// false-positived on nearly every game's very first Age A -> I transition
-/// (`docs/REPLAY.md`'s "civil deck model" handoff has the full trace, game
-/// `7523818` line 8): BGO logs the NEXT player's own "Action Phase begins"
-/// marker for their round-2 turn (already tagged the new age) at the SAME
-/// timestamp as, and BEFORE, the PREVIOUS player's own trailing "End turn
-/// ... scores: ..." line for the round that just ended (still tagged the
-/// OLD age/round, correctly describing when it happened) -- so file order
-/// is not a reliable total order exactly at a real transition, only within
-/// a single, real, non-`EndTurn` decision. Every buggy divergence this
-/// instrument exists to catch (`7523449`) persists across many such real
-/// decisions, not just one trailing summary line, so this restriction loses
-/// no real positive
+/// Built ONLY from lines classified as a real player decision, excluding two
+/// classes that are structurally end-of-turn WRAP-UP, not a fresh decision,
+/// and can both trail a LATER-tagged marker in file order despite finishing
+/// the OLD age's own business:
+///
+/// - `EndTurn` -- this checker's own first pass, run against the full
+///   corpus, false-positived on nearly every game's very first Age A -> I
+///   transition (`docs/REPLAY.md`'s "civil deck model" handoff has the full
+///   trace, game `7523818` line 8): BGO logs the NEXT player's own "Action
+///   Phase begins" marker for their round-2 turn (already tagged the new
+///   age) at the SAME timestamp as, and BEFORE, the PREVIOUS player's own
+///   trailing "End turn ... scores: ..." line for the round that just ended
+///   (still tagged the OLD age/round, correctly describing when it
+///   happened).
+/// - `Discard` -- the SAME shape, one step removed: `apply_one`'s own
+///   `ActionClass::Discard` arm resolves an outstanding `DiscardMilitary`
+///   pending, and its own doc comment is explicit that draining the LAST
+///   queued discard can itself finish the actor's end of turn and advance
+///   `state.current` -- i.e. this line can be the actual TRIGGER for a real
+///   age transition, not just adjacent to one. Confirmed on game `7522652`
+///   line 430 (`"Green discards 2 cards"`, tagged age `III` round `16`):
+///   BGO logs both players' `"Last turn Game ends..."` §12.3 notices
+///   (already tagged `IV`) at the SAME timestamp, two lines EARLIER in the
+///   file, purely an export-ordering artifact -- this checker's second pass
+///   false-positived here the same way the first pass did on `EndTurn`.
+///
+/// File order is therefore not a reliable total order exactly at a real
+/// transition, only within a single, real, non-wrap-up decision. Every
+/// buggy divergence this instrument exists to catch (`7523449`) persists
+/// across many such real decisions, not just one trailing line, so this
+/// restriction loses no real positive
 /// (`last_real_decision_line_for_age_ignores_an_end_turn_trailer_still_
-/// tagged_the_old_age` and `last_real_decision_line_for_age_still_sees_a_
-/// real_decision_tagged_the_old_age`, below, pin both halves).
+/// tagged_the_old_age`, `last_real_decision_line_for_age_ignores_a_discard_
+/// resolution_trailer_still_tagged_the_old_age`, and `last_real_decision_
+/// line_for_age_still_sees_a_real_decision_tagged_the_old_age`, below, pin
+/// all three).
 fn last_real_decision_line_for_age(journal: &[Line], card_index: &HashMap<&'static str, CardId>) -> [Option<usize>; 5] {
     let mut last: [Option<usize>; 5] = [None; 5];
     for (i, line) in journal.iter().enumerate() {
         let Some(age) = parse_age(line.age) else { continue };
         let LineOutcome::Action(Classified { class, .. }) = classify(card_index, line.text) else { continue };
-        if class == ActionClass::EndTurn {
+        if matches!(class, ActionClass::EndTurn | ActionClass::Discard) {
             continue;
         }
         last[age as usize] = Some(i);
     }
     last
+}
+
+/// Comfortably above the largest single-line draw this file's own turn loop
+/// can trigger (`ROW_SIZE`, one full `game::replenish`), with headroom for
+/// the rare case `resolve_intervening` drains more than one stalled turn
+/// while processing a single line. `top_up_civil_deck` maintains this as a
+/// floor, never a target -- it only ever tops UP, and only when under it.
+const CIVIL_DECK_SAFETY_FLOOR: usize = 2 * crate::state::ROW_SIZE;
+
+/// Keep `state.civil_deck` from ever running out ON ITS OWN during replay --
+/// the fix for `docs/REPLAY.md`'s "civil deck model" handoff, which the
+/// module doc's own history explains in full. Short version: this
+/// reconstruction's civil ROW is forced card-by-card from each observed
+/// "takes ... in hand" line (`Replayer::ground_row_slot`), never drawn
+/// through `civil_deck` -- so `civil_deck`'s own SIZE was never anything
+/// more than an approximation, and that approximation was shown to drift in
+/// BOTH directions: it can lag the true deck's depletion (an Age I card
+/// still legally in a full hand many rounds after the real BGO client had
+/// already antiquated it away -- the original `HandFull` handoff), and it
+/// can run dry EARLY (`game::deal`'s own embedded `advance_age` firing a
+/// full turn before the journal's own age column agrees -- game `7523449`,
+/// the "Second `IllegalMove: Pop` pass" handoff).
+///
+/// Both directions trace to the SAME irreducible information gap, not two
+/// separate bugs: BGO's journal states the exact civil-action COST a Take
+/// paid, which narrows the real row slot to a same-cost TIER
+/// (`costs::row_cost`'s three price bands) but never to the exact slot
+/// within it -- and at every player count the CHEAPEST tier (slots 0-4)
+/// straddles `game::replenish`'s own mandatory-sweep boundary (`sweep_n` is
+/// 3, 2, or 1 for 2/3/4 players, always inside that band). Which side of
+/// that boundary the real card sat on determines whether ITS OWN vacancy
+/// gets absorbed for free by the next mandatory sweep or costs an extra
+/// draw -- and that is genuinely unrecoverable from a cost-tier observation
+/// alone, not a gap this file's own parsing can close (confirmed empirically:
+/// `Replayer::ground_row_slot` reports a same-cost TIE, several candidate
+/// slots that all reproduce the journal's own stated cost, on very nearly
+/// every single Take in the corpus).
+///
+/// Rather than let an irreducibly approximate SIZE keep the power to fire
+/// `game::advance_age` early OR late, this keeps `civil_deck` topped up with
+/// extra, never-observed filler drawn from the SAME age's own card pool
+/// (`game::build_deck`, reshuffled -- statistically the same shape of
+/// filler `game::deal` already uses, just more of it) so `deal`'s embedded
+/// trigger becomes structurally UNREACHABLE during replay: the floor is
+/// checked every line, before anything on that line can draw, and is always
+/// comfortably above what one line's worth of engine activity can consume.
+/// `catch_up_civil_age`, reading `Line::age` directly, becomes the ONE
+/// mechanism left standing for every civil age transition during replay --
+/// not a primary approximation plus a corrective snap-forward that can
+/// disagree with each other, which is what let `7523449`'s early advance
+/// slip past the original snap-forward-only fix (it only ever moves the age
+/// UP TO the journal's column, so it structurally cannot have caused an
+/// EARLY advance -- see `docs/REPLAY.md`).
+///
+/// Self-play is untouched: this function's only call site is this file's own
+/// per-line loop, and `game::deal`/`game::advance_age`/`game::replenish`
+/// keep exactly their existing behaviour, still correct for a real game
+/// whose `civil_deck` empties in real time with no lag possible.
+fn top_up_civil_deck(state: &mut GameState) {
+    if state.civil_deck.len() >= CIVIL_DECK_SAFETY_FLOOR {
+        return;
+    }
+    // §12.3: Age IV has no civil deck at all (`game::advance_age`'s own
+    // `nxt == Age::IV` branch empties it outright and it is never dealt
+    // from again) -- nothing to top up, and `game::build_deck(Age::IV,
+    // true, _)` would just return an empty list.
+    if state.age_civil == crate::cards::Age::IV {
+        return;
+    }
+    let mut rng = game::rng_for(state);
+    let mut reserve = game::build_deck(state.age_civil, true, game::live_count(state));
+    crate::rng::shuffle_cards(rng.get(), reserve.as_mut_slice());
+    while state.civil_deck.len() < CIVIL_DECK_SAFETY_FLOOR {
+        // `reserve` is one age's own full card pool -- comfortably larger
+        // than the floor at every player count (checked by
+        // `top_up_civil_deck_reserve_batch_is_never_smaller_than_the_floor`,
+        // below). Stopping rather than looping forever if that ever stopped
+        // holding is more useful than an infinite loop: the `debug_assert`
+        // at this function's call site is what actually catches the
+        // regression.
+        let Some(card) = reserve.pop() else { break };
+        state.civil_deck.push(card);
+    }
 }
 
 /// Replay one game's journal through the real engine. `record_decisions`
@@ -3749,6 +3851,27 @@ pub fn replay_game(
         // `catch_up_civil_age`'s own doc for why this must be deferred
         // while an earlier line's work is still outstanding.
         catch_up_civil_age(&mut r.state, line.age);
+        // Keep `civil_deck` from ever running dry ON ITS OWN -- see
+        // `top_up_civil_deck`'s own doc. Must run every line, not just when
+        // low: cheap (one length compare) when it's a no-op, which is
+        // almost always.
+        top_up_civil_deck(&mut r.state);
+        // The checked half of the invariant `top_up_civil_deck` exists to
+        // provide: turns "the floor always holds" from a hope into
+        // something that fails LOUDLY (`difftest`/`cargo test` both run
+        // with `debug-assertions = true`, `Cargo.toml`) the moment a future
+        // change reopens the two-mechanisms-fighting bug this closes,
+        // instead of silently reintroducing it. Safe under `panic = "abort"`
+        // (`Cargo.toml`'s own note on why a stray `debug_assert` on a
+        // diagnostic path is dangerous): this one is a direct consequence of
+        // the line just above it, not a speculative check on unrelated
+        // state, so it is exactly as reliable as `top_up_civil_deck` itself.
+        debug_assert!(
+            r.state.age_civil == crate::cards::Age::IV || r.state.civil_deck.len() >= CIVIL_DECK_SAFETY_FLOOR,
+            "top_up_civil_deck left civil_deck under its own floor ({} < {CIVIL_DECK_SAFETY_FLOOR}) at line {}",
+            r.state.civil_deck.len(),
+            line.lineno
+        );
         // Structural divergence instrument (docs/REPLAY.md "civil deck
         // model" handoff), kept on permanently rather than removed once the
         // fix landed: `catch_up_civil_age` above only ever moves
@@ -5391,11 +5514,33 @@ mod tests {
         assert_eq!(last[crate::cards::Age::I as usize], None, "\"Action Phase begins\" is Bookkeeping, not a decision");
     }
 
-    /// A real, non-`EndTurn` decision genuinely still tagged the OLD age
+    /// The exact shape traced on real game `7522652` line 430: BGO logs
+    /// both players' `"Last turn Game ends..."` §12.3 notices (already
+    /// tagged the new age `IV`) BEFORE Green's own `"discards N cards"`
+    /// line resolving the outstanding military discard that finishes
+    /// Green's end of turn -- still, correctly, tagged the OLD age `III`.
+    /// `ActionClass::Discard`'s own doc (`apply_one`) is explicit that
+    /// resolving the last queued discard can itself trigger the real
+    /// transition, so this line is exactly as much a wrap-up trailer as an
+    /// `EndTurn` line, not a fresh mid-age decision.
+    #[test]
+    fn last_real_decision_line_for_age_ignores_a_discard_resolution_trailer_still_tagged_the_old_age() {
+        let card_index = build_card_index();
+        let journal = [
+            line(2, "III", "Purple takes Pyramids in hand Purple uses 2 civil action"),
+            line(3, "IV", "Last turn Game ends at the end of the starting round"),
+            line(4, "III", "Green discards 2 cards"),
+        ];
+        let last = last_real_decision_line_for_age(&journal, &card_index);
+        assert_eq!(last[crate::cards::Age::III as usize], Some(0), "the Take, not the later-indexed Discard trailer");
+    }
+
+    /// A real, non-wrap-up decision genuinely still tagged the OLD age
     /// AFTER this reconstruction has already moved on IS the bug this
     /// instrument exists to catch -- confirms the exclusion above is
-    /// narrow (only `EndTurn`), not a blanket "ignore anything after the
-    /// first new-age line" that would also hide a real divergence.
+    /// narrow (only `EndTurn`/`Discard`), not a blanket "ignore anything
+    /// after the first new-age line" that would also hide a real
+    /// divergence.
     #[test]
     fn last_real_decision_line_for_age_still_sees_a_real_decision_tagged_the_old_age() {
         let card_index = build_card_index();
@@ -5454,6 +5599,71 @@ mod tests {
 
         assert_eq!(r.state.age_civil, crate::cards::Age::II);
         assert_eq!(r.state.players[0].yellow_bank, yellow_before - 2, "§12.2.4");
+    }
+
+    #[test]
+    fn top_up_civil_deck_is_a_no_op_once_already_at_the_floor() {
+        let mut state = game::new_game(2, 1);
+        state.civil_deck = CardList::new();
+        for _ in 0..CIVIL_DECK_SAFETY_FLOOR {
+            state.civil_deck.push(CardId::by_name("Bronze").unwrap());
+        }
+        let before = state.civil_deck.as_slice().to_vec();
+        top_up_civil_deck(&mut state);
+        assert_eq!(state.civil_deck.as_slice(), before.as_slice());
+    }
+
+    /// The actual bug this function exists to prevent (`docs/REPLAY.md`'s
+    /// "civil deck model" handoff, game `7523449`): `game::deal`'s own
+    /// embedded `advance_age` trigger fires the moment `civil_deck.pop()`
+    /// empties it. A deck below the floor must be topped back up to it.
+    #[test]
+    fn top_up_civil_deck_refills_a_low_deck_up_to_the_floor() {
+        let mut state = game::new_game(2, 1);
+        state.age_civil = crate::cards::Age::I;
+        state.civil_deck = CardList::new();
+        state.civil_deck.push(CardId::by_name("Bronze").unwrap());
+        assert!(state.civil_deck.len() < CIVIL_DECK_SAFETY_FLOOR);
+
+        top_up_civil_deck(&mut state);
+
+        assert!(
+            state.civil_deck.len() >= CIVIL_DECK_SAFETY_FLOOR,
+            "left at {} cards, floor is {CIVIL_DECK_SAFETY_FLOOR}",
+            state.civil_deck.len()
+        );
+    }
+
+    /// §12.3: Age IV has no civil deck at all (`game::advance_age`'s own
+    /// `nxt == Age::IV` branch empties it outright and never refills it) --
+    /// `top_up_civil_deck` must leave that alone rather than manufacture a
+    /// deck for an age that structurally has none.
+    #[test]
+    fn top_up_civil_deck_does_not_touch_age_iv_which_has_no_civil_deck_at_all() {
+        let mut state = game::new_game(2, 1);
+        state.age_civil = crate::cards::Age::IV;
+        state.civil_deck = CardList::new();
+        top_up_civil_deck(&mut state);
+        assert!(state.civil_deck.is_empty());
+    }
+
+    /// Every real age's own civil-card pool is comfortably larger than the
+    /// floor at every player count -- pinned directly (not just relied on)
+    /// so a future change to either the floor or the card data fails here
+    /// first, with a clear message, instead of surfacing as `top_up_civil_
+    /// deck`'s silent "reserve ran out early" `break`.
+    #[test]
+    fn top_up_civil_deck_reserve_batch_is_never_smaller_than_the_floor() {
+        for n in 2..=4usize {
+            for age in [crate::cards::Age::I, crate::cards::Age::II, crate::cards::Age::III] {
+                let deck = game::build_deck(age, true, n);
+                assert!(
+                    deck.len() >= CIVIL_DECK_SAFETY_FLOOR,
+                    "{age:?} civil deck at {n}p is only {} cards, floor is {CIVIL_DECK_SAFETY_FLOOR}",
+                    deck.len()
+                );
+            }
+        }
     }
 
     #[test]
