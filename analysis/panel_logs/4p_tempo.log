@@ -1,0 +1,16 @@
+games        120
+players      4
+bots         weighted,tempo,tempo,tempo (rotated)
+seeds        1..120
+mean moves   643.9
+elapsed      18.7s  (6.4 games/s)
+
+bot           games  win rate  mean cult  resigned
+tempo           360      3.8%       98.6         0
+weighted        120     88.8%      255.7         0
+
+seat          games  win rate  mean cult
+0               120     22.9%      134.3
+1               120     28.3%      142.9
+2               120     26.7%      140.3
+3               120     22.1%      133.8

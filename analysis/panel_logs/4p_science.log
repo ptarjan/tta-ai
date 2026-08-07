@@ -1,0 +1,16 @@
+games        120
+players      4
+bots         weighted,science,science,science (rotated)
+seeds        1..120
+mean moves   629.2
+elapsed      17.2s  (7.0 games/s)
+
+bot           games  win rate  mean cult  resigned
+science         360      5.0%       93.9         0
+weighted        120     85.0%      222.8         0
+
+seat          games  win rate  mean cult
+0               120     24.2%      124.7
+1               120     26.9%      131.9
+2               120     24.4%      130.0
+3               120     24.4%      117.7

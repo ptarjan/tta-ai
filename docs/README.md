@@ -22,9 +22,12 @@ not a human reader. Terseness and accuracy beat narrative.
 There is no current whole-system behavioural census (the old `SYSTEM_COVERAGE.md`
 was deleted 2026-08-06 as a point-in-time census of a bot generation that no
 longer exists, with nothing durable to carry forward — see
-[`AUDIT_HISTORY.md`](AUDIT_HISTORY.md)'s verdict on it). If you need to know
-"how good is the bot right now", run it — there is no doc that answers that
-as of this writing.
+[`AUDIT_HISTORY.md`](AUDIT_HISTORY.md)'s verdict on it). For "how good is
+the champion against real strategies", see [`PANEL.md`](PANEL.md) — but
+read its closing note first: the champion file it measured is a live
+league output, overwritten continuously, so any such number is a snapshot,
+not a fixed fact. For anything finer-grained than that, run it; there is no
+whole-system behavioural census as of this writing.
 
 ## The game itself
 
@@ -49,6 +52,7 @@ as of this writing.
 | doc | answers |
 |---|---|
 | [`RUST_LEAGUE.md`](RUST_LEAGUE.md) | The current mechanism reference: what `rust/src/bin/climb.rs` and `experiments/rust_league.sh` actually run today — three arms, mirror-vs-champion duels, the anchor-drift veto, the stop sentinel, and which champion file on disk is actually live vs. a stale Python-era snapshot. |
+| [`PANEL.md`](PANEL.md) | *How good is the champion right now, against real strategies rather than itself?* Round-robin: trained champion vs all 7 `VARIANTS.md` archetypes, 2p/3p/4p, n=120/cell, Wilson CIs. 2026-08-06 answer: beats every archetype at every player count (66.7%-96.7%), culture is the toughest matchup; also documents that the live champion file is a moving target, so this and any other point measurement of it is a snapshot, not a fixed number. |
 
 ## Humans: corpus, baselines, imitation, outside sources
 
