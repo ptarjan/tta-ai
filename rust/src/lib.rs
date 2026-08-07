@@ -22,6 +22,7 @@ pub mod discard_solver;
 pub mod legal;
 pub mod economy;
 pub mod effects;
+pub mod event_plan;
 pub mod events;
 pub mod fixtures;
 pub mod game;
