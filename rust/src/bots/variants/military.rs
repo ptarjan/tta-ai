@@ -144,24 +144,37 @@ mod tests {
     use crate::bots::variants::{Archetype, VariantBot};
     use crate::game;
 
-    /// Rule 1: MilitaryBot's target strength is at or above the strongest
-    /// rival at the table (top-2), unlike the default `Floor` stance (which
-    /// only matches `ctx.mil_target`, itself derived from the SECOND
-    /// strongest at 3-4p, and never exceeds it by more than `mil_margin`).
-    /// Revert `PROFILE.mil_stance` to `MilStance::Floor` and this fails,
-    /// because the floor's `ctx.mil_target` for a lone 2p rival is exactly
-    /// that rival's strength with no guaranteed slack once `mil_margin`
-    /// is small.
+    /// Rule 1: with a real strength gap on the table, MilitaryBot's `Top2`
+    /// target is strictly higher than the SAME profile's target would be
+    /// under the shared `Floor` stance (margin reset to the default's 0,
+    /// every other knob -- `age_strength_floor`, `econ_first_until_age` --
+    /// held identical so only rule 1 can move the result). At game start
+    /// every player is equally weak (strength 0), where `AGE_STRENGTH_FLOOR`'s
+    /// Age I floor (10) alone already dominates both stances' outputs, so
+    /// this test gives the rival a real army first -- see
+    /// `crate::state::Tableau::insert`'s use in `effects.rs`'s own tests for
+    /// the same construction pattern. Revert `PROFILE.mil_stance`/
+    /// `mil_margin` to the shared default's and this fails.
     #[test]
     fn military_bot_keeps_its_strength_at_or_above_the_table_maximum() {
         let mut state = game::new_game(2, 3);
-        // Age I: past the `econ_first_until_age: Some(0)` gate, so
-        // `mil_goal` is really exercising the `Top2` stance under test.
         state.age_civil = crate::cards::Age::I;
+        // Every player starts with 1 Warrior already in the tableau, so bump
+        // its worker count rather than `insert` a duplicate.
+        let warriors = crate::cards::CardId::by_name("Warriors").expect("Warriors is the starting infantry");
+        state.players[1].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 15;
         let ctx = Ctx::new(&state, 0, 2, Default::default());
-        let goal = super::super::mil_goal(&state, &state.players[0], &ctx, &super::PROFILE);
-        let rival_strength = crate::effects::state_stats(&state, &state.players[1]).strength;
-        assert!(goal >= rival_strength, "top-2 goal ({goal}) must be at least the sole rival's strength ({rival_strength})");
+        let military_goal = super::super::mil_goal(&state, &state.players[0], &ctx, &super::PROFILE);
+        let floor_profile = super::Profile {
+            mil_stance: super::super::MilStance::Floor,
+            mil_margin: super::super::Pc::flat(0),
+            ..super::PROFILE
+        };
+        let floor_goal = super::super::mil_goal(&state, &state.players[0], &ctx, &floor_profile);
+        assert!(
+            military_goal > floor_goal,
+            "MilitaryBot's top-2 target ({military_goal}) should exceed the same profile's floor-stance target ({floor_goal}) against a real strength gap"
+        );
     }
 
     /// Rule 5: among two otherwise-equal aggression choices, MilitaryBot's
