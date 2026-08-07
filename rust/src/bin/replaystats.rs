@@ -123,6 +123,8 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
 
     let mut buckets: HashMap<String, Bucket> = HashMap::new();
     let mut n_games = 0u32;
+    let mut bid_ceilings_grounded: u32 = 0;
+    let mut n_bid_ceiling_games: u32 = 0;
     let mut n_completed = 0u32;
     let mut round_reached_sum = 0u64;
     let mut rounds_total_sum = 0u64;
@@ -148,6 +150,10 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
             eprintln!("DEBUG game={}", meta.id);
         }
         let result = replay_game(meta, &text, &card_index, true);
+        bid_ceilings_grounded += result.bid_ceilings_grounded;
+        if result.bid_ceilings_grounded > 0 {
+            n_bid_ceiling_games += 1;
+        }
 
         for d in &result.decisions {
             decisions_total += 1;
@@ -223,9 +229,14 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         rounds_total_sum as f64 / n_games.max(1) as f64
     );
     println!(
-        "decisions recorded: {decisions_total} ({:.1}% in Age II or later)\n",
+        "decisions recorded: {decisions_total} ({:.1}% in Age II or later)",
         100.0 * decisions_age_two_plus as f64 / decisions_total.max(1) as f64
     );
+    // Reported, never folded into the numbers above: each of these is a
+    // hand slot whose identity was deduced from a logged bid rather than
+    // read off a line naming the card -- see
+    // `replay_common::Replayer::ground_bid_ceiling`.
+    println!("hand cards grounded from a bid's own force ceiling: {bid_ceilings_grounded} (in {n_bid_ceiling_games} games)\n");
     println!("## Stop-reason histogram, ranked by count\n");
     println!("| count | mean round reached | reason | example |");
     println!("|---|---|---|---|");

@@ -163,7 +163,7 @@ pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
-use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase};
+use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND};
 use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
@@ -314,6 +314,12 @@ struct Replayer<'a> {
     /// Whether any colonization in this game was resolved by the
     /// approximate auto-drain rather than a verified sacrifice match.
     colonize_approximated: bool,
+    /// How many SIMULATED filler cards this game had to be converted into
+    /// military bonus cards to make a journal-logged bid legal -- see
+    /// [`Replayer::ground_bid_ceiling`]. Reported rather than swallowed:
+    /// each one is a hand slot whose identity was deduced from a bid rather
+    /// than read off a line naming the card.
+    bid_ceilings_grounded: u32,
     /// Every `"<Color> colonizes ..."` line's own sacrifice list, in journal
     /// order -- see [`prescan_colonize_sacrifices`]. The front is the
     /// outcome of the auction currently in progress; it is popped when that
@@ -404,6 +410,7 @@ impl<'a> Replayer<'a> {
             next_prep: 0,
             auto_passed: [0; 4],
             colonize_approximated: false,
+            bid_ceilings_grounded: 0,
             colonize_sacrifices,
             actions_consumed: 0,
             current_lineno: 0,
@@ -819,6 +826,80 @@ impl<'a> Replayer<'a> {
             );
         }
         Ok(())
+    }
+
+    /// Raise `actor`'s colonization ceiling to at least `n` by grounding
+    /// military bonus cards into the SIMULATED filler in their hand, so the
+    /// bid the journal records as legal actually is. Returns whether it
+    /// could -- `false` leaves the caller's honest mismatch report intact.
+    ///
+    /// §11.2 caps a bid at the bidder's own maximum colonization force, and
+    /// BGO enforces that cap in its own client: a human cannot click a bid
+    /// they could not pay. A logged `"<Color> bids N"` is therefore a
+    /// JOURNAL FACT about a hand this binary cannot see -- their max force
+    /// was at least `N` -- in exactly the sense a `"Defense card +6 played"`
+    /// clause is a journal fact about their hand. Nothing about it is a
+    /// guess, and nothing here uses private information: the bid is public,
+    /// shouted at the table.
+    ///
+    /// What IS a choice is which filler cards to overwrite and with what,
+    /// and this keeps that claim as small as the fact allows:
+    ///
+    /// - Only cards already in hand are converted, never added. The hand's
+    ///   SIZE is modelled exactly (every draw and discard is logged), so
+    ///   growing it to explain a bid would trade a known fact for a guess.
+    ///   Running out of filler is the honest `false`.
+    /// - Only cards `DiscardSolver::needed_after` does not rule out -- an
+    ///   identity the journal later shows this player PLAYING is one of the
+    ///   few hand slots that is not filler at all.
+    /// - Fewest cards, then smallest printed value: the smallest bonus that
+    ///   closes the gap outright, else the largest available (which is what
+    ///   makes progress). Every extra or larger card claimed would be a
+    ///   detail about a hidden hand that the bid does not actually pin down.
+    /// - Never a card newer than the military deck's own current age. A
+    ///   player can hold an OLD bonus card, never a future one.
+    fn ground_bid_ceiling(&mut self, actor: u8, n: u8) -> bool {
+        let mut values: Vec<(i16, CardId)> = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .filter(|id| id.kind() == CardType::Bonus && id.get().age <= self.state.age_military)
+            .map(|id| (id.get().effects.colonization_bonus, id))
+            .collect();
+        values.sort_unstable_by_key(|&(value, _)| value);
+        if values.is_empty() {
+            return false;
+        }
+        let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+        for _ in 0..MAX_HAND {
+            let ceiling = crate::interact::max_force(&self.state, &self.state.players[actor as usize]);
+            let short = n as i32 - ceiling;
+            if short <= 0 {
+                return true;
+            }
+            // Worst defender first, the same "burn the least valuable card"
+            // convention `interact::discard_options` and `cook_pool` sort by
+            // -- a filler slot has no identity of its own, so the only
+            // meaningful ordering is which real card it would hurt least to
+            // turn out not to have been.
+            let mut filler: Vec<CardId> = self.state.players[actor as usize]
+                .hand_military
+                .as_slice()
+                .iter()
+                .copied()
+                .filter(|id| id.kind() != CardType::Bonus && !needed_later.contains(id))
+                .collect();
+            filler.sort_by_key(|id| (crate::interact::defense_points(*id), id.name()));
+            let Some(&victim) = filler.first() else { return false };
+            let (_, replacement) = values
+                .iter()
+                .find(|&&(value, _)| value as i32 >= short)
+                .copied()
+                .unwrap_or_else(|| *values.last().expect("checked non-empty above"));
+            let hand = &mut self.state.players[actor as usize].hand_military;
+            hand.remove_first(victim);
+            hand.push(replacement);
+            self.bid_ceilings_grounded += 1;
+        }
+        false
     }
 
     /// Ground the bonus cards the journal says the auction currently on top
@@ -1937,6 +2018,8 @@ pub struct GameResult {
     pub completed: bool,
     pub mismatch: Option<Mismatch>,
     pub colonize_approximated: bool,
+    /// See [`Replayer::bid_ceilings_grounded`].
+    pub bid_ceilings_grounded: u32,
     pub engine_scores: Option<Vec<i32>>,
     pub index_scores: Vec<i32>,
     /// Counts from this game's `DiscardSolver` -- see that module's doc and
@@ -2441,6 +2524,7 @@ pub fn replay_game(
         completed: completed && mismatch.is_none(),
         mismatch,
         colonize_approximated: r.colonize_approximated,
+        bid_ceilings_grounded: r.bid_ceilings_grounded,
         engine_scores,
         index_scores: meta.scores.clone(),
         discards_solved: r.discard_solver.solved,
@@ -2585,50 +2669,30 @@ fn free_civil_action_move(
     }
 }
 
-/// Distinguishes a genuine engine/parser disagreement on a rejected `"<Color>
-/// bids N"` line from this file's own documented "`hand_military` is
-/// SIMULATED filler for essentially its entire content" gap (this module's
-/// top doc comment, and `docs/REPLAY.md`'s "military-hand cards are never
-/// named at draw time" finding): a military bonus card enters a real
-/// player's hand via an anonymous end-of-turn draw and is never grounded to
-/// its true identity unless the journal later shows it PLAYED (`interact::
-/// bonus_pool` -- read by [`interact::max_force`], the auction ceiling --
-/// reads `p.hand_military` directly, so an unplayed real bonus card this
-/// binary never observed is invisible to it). §11.3's colonization force is
-/// therefore only a LOWER bound here, not an exact figure, for any bidder
-/// who might be holding one.
+/// Whether a rejected `"<Color> bids N"` line is rejected SPECIFICALLY
+/// because this binary's own colonization ceiling for that bidder is too
+/// low, returning that ceiling. `None` (keep the original `IllegalMove`)
+/// for every other shape: a bid that is not a genuine raise over the
+/// standing one, a bid by somebody who is not the auction's current
+/// decider, an auction that has already closed by the time this line is
+/// reached. Those are different problems and deserve their own honest
+/// report rather than being folded in here.
 ///
-/// Returns `Some(UnrecoverableHiddenInfo)` only when the rejection is
-/// SPECIFICALLY explained by that gap: `n` is a genuine raise (exceeds the
-/// auction's current high bid, so it is not some other kind of malformed
-/// bid) against the correct, currently-deciding bidder (`actor == a.
-/// player`, so this is not an acting-player mismatch), and it exceeds this
-/// binary's own computed ceiling. Returns `None` (keep the original
-/// `IllegalMove`) for every other shape, including the auction having
-/// already closed by the time this line is reached -- that is a different,
-/// already-documented gap (the colonize-sacrifice auto-drain approximation
-/// consuming more of an earlier winner's own units than the journal's own
-/// `"Sacrificed Units:"` line says it spent, see [`Replayer::
-/// auto_drain_colonize`]), not this one, and deserves its own honest
-/// `IllegalMove` / `StuckPending` report rather than being folded in here.
-fn bid_ceiling_mismatch(r: &Replayer, actor: u8, n: u8) -> Option<MismatchKind> {
+/// The ceiling can be too low because `interact::max_force` reads
+/// `p.hand_military` directly, and a military BONUS card enters a real
+/// player's hand via an anonymous end-of-turn draw: unless the journal
+/// later shows it played, this binary is holding SIMULATED filler in that
+/// slot (see the module doc's "RECONSTRUCTED vs SIMULATED"). §11.3's
+/// colonization force is therefore only a LOWER bound for any bidder who
+/// might be holding one -- which [`Replayer::ground_bid_ceiling`] then
+/// raises, from the bid itself.
+fn bid_exceeds_ceiling(r: &Replayer, actor: u8, n: u8) -> Option<i32> {
     let Some(Pending::Auction(a)) = r.state.pending.top() else { return None };
-    if a.player != actor {
-        return None;
-    }
-    if n as i32 <= a.bid as i32 {
+    if a.player != actor || n as i32 <= a.bid as i32 {
         return None;
     }
     let ceiling = crate::interact::max_force(&r.state, &r.state.players[a.player as usize]);
-    if n as i32 <= ceiling {
-        return None;
-    }
-    Some(MismatchKind::UnrecoverableHiddenInfo(format!(
-        "colonization bid of {n} exceeds this binary's computed force ceiling ({ceiling}) for \
-         the correctly-resolved bidder -- a military bonus card sitting unplayed in their hand \
-         is SIMULATED filler, not a reconstructed identity, until the journal shows it played \
-         (not a parser gap: the bidder and the auction are both correctly resolved)"
-    )))
+    (n as i32 > ceiling).then_some(ceiling)
 }
 
 /// Translates one already-classified, already-actor-resolved journal line
@@ -3089,7 +3153,19 @@ fn apply_one(
                 .ok_or_else(|| MismatchKind::ParserGap("could not parse bid amount".into()))?;
             match r.try_apply(Move::Bid { n }, true) {
                 Err(MismatchKind::IllegalMove { attempted, legal_moves }) => {
-                    Err(bid_ceiling_mismatch(r, actor, n).unwrap_or(MismatchKind::IllegalMove { attempted, legal_moves }))
+                    let Some(ceiling) = bid_exceeds_ceiling(r, actor, n) else {
+                        return Err(MismatchKind::IllegalMove { attempted, legal_moves });
+                    };
+                    if !r.ground_bid_ceiling(actor, n) {
+                        return Err(MismatchKind::UnrecoverableHiddenInfo(format!(
+                            "colonization bid of {n} exceeds this binary's computed force ceiling \
+                             ({ceiling}) for the correctly-resolved bidder, and their whole \
+                             military hand converted to the best bonus card the deck's current age \
+                             prints still does not reach it -- so this is a genuine contradiction, \
+                             not the ordinary hidden-hand gap"
+                        )));
+                    }
+                    r.try_apply(Move::Bid { n }, true)
                 }
                 other => other,
             }
@@ -3558,19 +3634,17 @@ mod tests {
 
     /// `is_pure_confirmation_line`'s membership is what routes `PlayEvent`,
     /// `WinAuction`, and `Colonize` lines around `resolve_intervening`
-    /// REGRESSION (real BGO game `7523818`, and 94 others like it in the
-    /// 1,011-game corpus -- `bid_ceiling_mismatch`'s own doc comment).
-    /// Player 0 starts (`game::new_game`, round 1, before any end-of-turn
-    /// draw) with exactly one Warriors worker and an empty military hand --
-    /// `interact::max_force` computes exactly 1 for them. A bid of 3
-    /// against a standing high bid of 2 is a real raise this binary cannot
-    /// afford under its own reconstructed state, but it must not be
-    /// reported as the same `IllegalMove` an actual engine defect would
-    /// produce: the true cause this binary can never rule out is a military
-    /// bonus card sitting unplayed (and therefore unidentified) in the
-    /// bidder's hand.
+    /// The residual, genuinely-contradictory shape: player 0 starts
+    /// (`game::new_game`, round 1, before any end-of-turn draw) with
+    /// exactly one Warriors worker and an EMPTY military hand, so
+    /// `interact::max_force` computes exactly 1 and
+    /// [`Replayer::ground_bid_ceiling`] has no filler card to convert. A
+    /// bid of 3 against a standing high bid of 2 is then unreachable under
+    /// any hand at all -- reported as `UnrecoverableHiddenInfo` (a
+    /// contradiction between the journal and this binary's own state), not
+    /// as the plain `IllegalMove` an engine defect would produce.
     #[test]
-    fn a_bid_that_exceeds_this_binarys_own_force_ceiling_is_reported_as_hidden_info_not_illegal_move() {
+    fn a_bid_no_possible_hand_could_have_paid_for_stays_an_honest_mismatch() {
         let card_index = build_card_index();
         let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
@@ -3593,7 +3667,7 @@ mod tests {
         );
     }
 
-    /// Companion to the test above: reverting `bid_ceiling_mismatch` to
+    /// Companion to the test above: reverting `bid_exceeds_ceiling` to
     /// `None` (i.e. deleting the reclassification and always keeping
     /// `try_apply`'s own `IllegalMove`) must turn this same fixture back
     /// into a plain `IllegalMove` -- confirming the test actually exercises
@@ -4328,5 +4402,82 @@ mod tests {
         r.ground_auction_winner_hand();
 
         assert!(r.state.players[1].hand_military.is_empty(), "a different auction's winnings stay hidden");
+    }
+
+    /// §11.2 caps a bid at the bidder's own maximum colonization force and
+    /// BGO enforces that cap client-side, so a logged bid is PROOF the
+    /// bidder could pay it. Player 0 can send exactly their starting
+    /// Warrior (force 1) out of everything this binary can see, and the
+    /// journal has them raising to 3 -- the missing 2 has to be sitting in
+    /// the SIMULATED filler of their military hand, so it is grounded there
+    /// and the bid goes through as a real, legal engine move.
+    #[test]
+    fn a_logged_bid_is_taken_as_proof_the_bidder_held_the_force_to_pay_it() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.age_military = crate::Age::I;
+        let territory = card_index["Vast Territory (I)"];
+        let filler = card_index["Aggression: Raid (I)"];
+        r.state.players[0].hand_military = CardList::new();
+        for _ in 0..3 {
+            r.state.players[0].hand_military.push(filler);
+        }
+        assert_eq!(crate::interact::max_force(&r.state, &r.state.players[0]), 1, "one starting Warrior, no bonus cards");
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[0, 1], 0, 2, Some(1), 0)));
+
+        apply_one(&mut r, 0, ActionClass::Bid, None, "bids 3", "Orange bids 3", None).expect("the logged bid is legal");
+
+        let Some(Pending::Auction(a)) = r.state.pending.top() else { panic!("the auction is still open") };
+        assert_eq!(a.bid, 3, "the human's own bid was applied through the engine");
+        assert_eq!(r.state.players[0].hand_military.len(), 3, "hand SIZE is modelled exactly and must not grow");
+        // Age I is the newest bonus card the military deck could have dealt
+        // -- two +1s, not one +2, because a +2 card does not exist yet.
+        let bonuses = crate::interact::bonus_pool(&r.state.players[0]);
+        assert_eq!(bonuses.len(), 2);
+        assert!(bonuses.as_slice().iter().all(|id| id.get().age == crate::Age::I), "never a card newer than the deck");
+        assert_eq!(r.bid_ceilings_grounded, 2, "reported, not swallowed");
+    }
+
+    /// The claim is kept as small as the bid actually pins down: once the
+    /// deck has reached age II, a shortfall of 2 is one +2 card, not two
+    /// +1s. Fewest cards first, then smallest printed value.
+    #[test]
+    fn grounding_a_bid_claims_the_fewest_and_smallest_bonus_cards_that_close_the_gap() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_military = crate::Age::III; // every bonus card is available
+        let filler = card_index["Aggression: Raid (I)"];
+        r.state.players[0].hand_military = CardList::new();
+        for _ in 0..3 {
+            r.state.players[0].hand_military.push(filler);
+        }
+
+        assert!(r.ground_bid_ceiling(0, 3), "one Warrior plus one +2 card reaches 3");
+
+        let bonuses = crate::interact::bonus_pool(&r.state.players[0]);
+        assert_eq!(bonuses.len(), 1, "one card claimed, not two");
+        assert_eq!(bonuses.as_slice()[0].get().effects.colonization_bonus, 2, "the smallest that closes the gap");
+    }
+
+    /// A hand card the journal later shows this player PLAYING is one of
+    /// the few military-hand slots that is NOT filler -- overwriting it
+    /// would contradict a fact the journal already states. Same predicate
+    /// (`DiscardSolver::needed_after`) a forced hand-limit discard uses,
+    /// called rather than re-implemented.
+    #[test]
+    fn grounding_a_bid_never_overwrites_a_hand_card_the_journal_shows_played_later() {
+        let card_index = build_card_index();
+        let raid = card_index["Aggression: Raid (I)"];
+        let mut needs: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
+        needs.insert(0, vec![FutureNeed { lineno: 900, card: raid }]);
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), needs, VecDeque::new());
+        r.state.age_military = crate::Age::III;
+        r.current_lineno = 100; // the play is still ahead of us
+        r.state.players[0].hand_military = CardList::new();
+        r.state.players[0].hand_military.push(raid);
+
+        assert!(!r.ground_bid_ceiling(0, 3), "the only hand card is spoken for");
+        assert!(r.state.players[0].hand_military.contains(raid), "and is left exactly where it was");
     }
 }

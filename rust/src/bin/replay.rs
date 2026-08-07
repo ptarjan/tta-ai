@@ -91,6 +91,9 @@ fn print_result(g: &GameResult) {
     if g.colonize_approximated {
         print!(" (colonize approximated)");
     }
+    if g.bid_ceilings_grounded > 0 {
+        print!(" ({} hand card(s) grounded from a bid's force ceiling)", g.bid_ceilings_grounded);
+    }
     if let Some(engine) = &g.engine_scores {
         let mut a = engine.clone();
         let mut b = g.index_scores.clone();

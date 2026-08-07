@@ -107,6 +107,29 @@ impl DiscardSolver {
         DiscardSolver { future_needs, solved: 0, chosen: 0, forced_collisions: 0 }
     }
 
+    /// Every card `actor` is observed playing out of their own military
+    /// hand at some journal line AFTER `at_lineno` -- so, every identity
+    /// that provably still sits in their hand right now and must not be
+    /// spent, overwritten or otherwise assumed away by anything resolving a
+    /// hidden hand card at this point.
+    ///
+    /// Exposed (rather than left inline in [`DiscardSolver::choose`])
+    /// because a forced discard is not the only place this file's replayer
+    /// has to pick which of a player's SIMULATED hand cards to consume:
+    /// `replay_common`'s colonization-bid grounding asks the identical
+    /// question. Same predicate, one copy -- and unlike `choose`, this is a
+    /// pure query and moves none of the solved/chosen/forced-collision
+    /// counters, which mean "a forced DISCARD was resolved" specifically.
+    pub fn needed_after(&self, actor: u8, at_lineno: usize) -> HashSet<CardId> {
+        self.future_needs
+            .get(&actor)
+            .into_iter()
+            .flatten()
+            .filter(|need| need.lineno > at_lineno)
+            .map(|need| need.card)
+            .collect()
+    }
+
     /// Which of `options` (the distinct card identities
     /// `interact::discard_options` currently offers `actor`, in that
     /// function's own worst-defender-first order) to discard, given the
@@ -119,14 +142,7 @@ impl DiscardSolver {
     /// `interact::push_choice`'s own callers already keep).
     pub fn choose(&mut self, actor: u8, at_lineno: usize, options: &[CardId]) -> (usize, DiscardCertainty) {
         assert!(!options.is_empty(), "DiscardSolver::choose called with no candidates to pick from");
-        let needed_later: HashSet<CardId> = self
-            .future_needs
-            .get(&actor)
-            .into_iter()
-            .flatten()
-            .filter(|need| need.lineno > at_lineno)
-            .map(|need| need.card)
-            .collect();
+        let needed_later = self.needed_after(actor, at_lineno);
         let safe: Vec<usize> = (0..options.len()).filter(|&i| !needed_later.contains(&options[i])).collect();
         match safe.len() {
             0 => {

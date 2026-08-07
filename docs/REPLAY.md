@@ -2491,3 +2491,51 @@ whichever pass next reduces the discard-arbitrary-choice bucket (see
 `docs/REPLAY.md`'s `discard_solver` section) -- the cleaner the
 reconstructed hand, the more this comparison will actually test scoring
 rather than hidden-info noise.
+
+## Sixteenth pass: REPLAYER -- a logged bid IS evidence about the bidder's hidden hand
+
+The rest of the colonization-bid bucket (55 games after the sacrifice fix
+above). Every one had the same shape: a small shortfall (1-6) against a
+bidder holding 3-8 unrevealed military cards. The `UnrecoverableHiddenInfo`
+label was still reading the situation backwards.
+
+§11.2 caps a bid at the bidder's own maximum colonization force, and BGO
+enforces that cap in its own client -- a human cannot click a bid they could
+not pay. So `"<Color> bids N"` is a JOURNAL FACT about a hand this binary
+cannot see: their max force was at least `N`. It is public information,
+shouted at the table, in exactly the sense a `"Defense card +6 played"`
+clause is.
+
+`Replayer::ground_bid_ceiling` converts SIMULATED filler in the bidder's
+hand into military bonus cards until the ceiling clears, keeping the claim
+as small as the fact allows:
+
+- Cards are CONVERTED, never added. Hand size is modelled exactly (every
+  draw and discard is logged); growing it to explain a bid would trade a
+  known fact for a guess. Running out of filler is an honest failure.
+- Never a card `DiscardSolver::needed_after` rules out -- an identity the
+  journal later shows this player playing is one of the few hand slots that
+  is not filler at all. Same predicate the forced-discard solver uses,
+  called rather than re-implemented.
+- Fewest cards, then smallest printed value.
+- Never a bonus card newer than the military deck's own current age.
+
+Reported, not swallowed: `GameResult::bid_ceilings_grounded` counts every
+converted slot, and both `replay` and `replaystats` print it. Corpus-wide
+that is **78 hand cards across 55 games**, against 152,073 recorded
+decisions.
+
+Two games survive as genuine contradictions -- no hand at all reaches the
+logged bid. Both are downstream of an unrelated replayer gap outside this
+pass's bucket: `"Barbarossa enlists a <Unit>"` (Frederick Barbarossa's
+combined pop-increase-and-build, 425 lines across 135 corpus games) is
+classified `Bookkeeping` and dropped in `corpus.rs`, so the unit is never
+built and the bidder's army is short for the rest of the game.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached (of 19.27) | 10.41 | **10.55** |
+| decisions in Age II or later | 37.8% | **38.8%** |
+| `UnrecoverableHiddenInfo: colonization bid ...` | 55 | **2** |
