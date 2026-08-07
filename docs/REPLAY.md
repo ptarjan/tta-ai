@@ -1465,10 +1465,14 @@ attributed.
 ### Also in this bucket, but NOT budget shortfalls (re-triaged, left alone)
 
 15 of the original 143 turned out not to be action-economy problems at
-all -- the failing `Take` was blocked by a live `Pending` (a colonize
-`Bid`, an un-drained 2-option `Choice`), which other passes own. The 17
-residual `IllegalMove: Take` games are the honest remainder of the
-shortfall shape: 11 are still Hammurabi-replacement turns now short by
-TWO (a second, separate cause stacked on the one fixed here), and 6
-replaced Moses/Aristotle/Homer instead. Reproducible with
-`REPLAY_DEBUG=1`.
+all: the acting player had ample civil actions (4-6, against an observed
+cost of 1-3) and `legal_moves` offered no `Take` because the whole move
+list was a live `Pending` -- a colonize `Bid { n }` list, or an
+un-drained 2-option `Choose`. Those belong to the colonize-bidding and
+stale-pending threads other passes own, not to this one, and they are
+**exactly the 17 games left in the bucket** (15 of the 17 are that
+identified set; `7522905` and `7523281` were newly reached and not
+triaged). In other words the budget-shortfall shape this bucket was
+named for is now fully accounted for: fixed (Finding 1), or moved into
+the Taj Mahal `ParserGap` bucket above, or pushed deeper into other
+categories. Reproducible with `REPLAY_DEBUG=1`.
