@@ -467,3 +467,159 @@ cargo run --profile difftest --bin agreement -- \
    not a lookahead-depth one. This is a 15-game check, not a full-sample
    one — worth confirming at larger n before treating it as settled, but it
    is evidence, not a guess.
+
+## The fix: an in-progress wonder is worth what it has EARNED (2026-08-06)
+
+The "dominant pattern" section above diagnosed a 1-ply evaluator that books
+an immediate building's payoff and discounts a longer-payoff investment's.
+This section is the change made on the back of it, and its measured effect.
+
+### The mechanism, exactly
+
+`bots/weighted/cards.rs::wonder_potential` is the ONLY term in the evaluator
+that knows WHICH wonder you are building (every other wonder coordinate --
+`wonder_progress`, `wonder_remaining`, `wonder_stages_left` -- is arithmetic
+on outstanding resources and cannot tell Colossus from the Great Wall). It
+returned the value of the **finished** wonder from the moment the card
+entered play, and returned that same number unchanged until the wonder
+completed. Two consequences, both wrong in the same direction:
+
+* **Taking a wonder was priced as though it were already built.** Under the
+  rules an unfinished wonder scores nothing (RULES_SPEC 12), so this booked
+  a payoff that had not been bought yet.
+* **Paying for a stage bought nothing through it.** A term that is constant
+  across the candidate set at a decision point cannot order that set. So a
+  `WonderStep` was left to be priced by `wonder_progress`/`wonder_remaining`
+  alone -- fitted scalars with no connection to what the wonder DOES -- while
+  an ordinary `Build`'s culture/science yield was booked in full, immediately,
+  through the same `culture_rate`/`science_rate` weights a finished wonder
+  would eventually feed.
+
+That is this document's headline finding restated as one line of code.
+
+### What replaced it — computed, not fitted
+
+`bots/weighted/horizon.rs::WonderOutlook::earned_share` replaces the
+previously-implicit factor of `1.0` with a board reading:
+
+| factor | computed as | what it means |
+|---|---|---|
+| `paid_fraction` | `progress / (progress + remaining)` | an unfinished wonder scores nothing, so its value is bought stage by stage and each stage earns its pro-rata share |
+| `collect_fraction` | `(rounds_left - turns_to_finish) / rounds_left` | how much of the rest of the game you would actually own the finished wonder for |
+
+Every input is a board fact: the wonder's printed stage costs, how many are
+built, the resources banked, this player's actual resource production
+(`effects::compute`), and `horizon::rounds_left` — the **same** rounds-left
+notion the rest of the evaluator already uses, deliberately not a second one
+(this codebase's defining bug class is a rule implemented in one place and
+missed in a sibling).
+
+**No new weight, and no new tunable constant.** `wonder_potential` and
+`card_board_credit` keep exactly the meaning the league trained them with —
+what a *finished* wonder is worth relative to everything else — and only the
+"…and you have it already, forever" assumption they were multiplied by
+changed. A scalar bonus could not have represented "this pays off in four
+turns", which is why thousands of generations of training never fixed it.
+
+Both factors move on exactly the move that ought to move them: paying a stage
+of cost `c` raises `paid_fraction` by `c / total` and closes the resource
+shortfall by `2c` (the outstanding cost falls by `c` and so does the bank it
+is netted against), so `collect_fraction` rises too.
+
+`features.rs`'s inline wonder block moved into `horizon::wonder_outlook` in
+the same change so that `features()` and `wonder_potential` read ONE
+definition of "how far from finishing am I". That refactor was verified
+byte-identical on all 18,714 decision points below before the behavioural
+change went in.
+
+### Measured effect
+
+Sample: **300 games** (100 × 2p, 100 × 3p, 100 × 4p — the first 100 of each
+player count in `index.tsv` order, no cherry-picking), **18,714 decision
+points**, champion weights `rust_champion_{2,3,4}p.json`. Larger than the
+150-game sample the rest of this document uses, which is why the baseline
+here reads 27.3% rather than 26.4%; before and after are the same 300 games
+scored the same way, so the deltas are apples-to-apples.
+
+| slice | before | after | delta |
+|---|---|---|---|
+| **all decisions** | 5,103/18,714 = 27.3% | 5,137/18,714 = 27.5% | +0.2pp |
+| 2p | 1,534/4,842 = 31.7% | 1,553/4,842 = 32.1% | +0.4pp |
+| 3p | 1,595/6,283 = 25.4% | 1,636/6,283 = 26.0% | +0.7pp |
+| 4p | 1,974/7,589 = 26.0% | 1,948/7,589 = 25.7% | −0.3pp |
+| **`leader_or_wonder_step`** | 373/2,329 = 16.0% | 412/2,329 = 17.7% | **+1.7pp** |
+| — `WonderStep` | 207/1,385 = 14.9% | 252/1,385 = **18.2%** | **+3.2pp** |
+| — — `WonderStep` 2p | 63/377 = 16.7% | 73/377 = 19.4% | +2.7pp |
+| — — `WonderStep` 3p | 98/456 = 21.5% | 135/456 = **29.6%** | **+8.1pp** |
+| — — `WonderStep` 4p | 46/552 = 8.3% | 44/552 = 8.0% | −0.4pp |
+| — `PlayLeader` | 166/944 = 17.6% | 160/944 = 16.9% | −0.6pp |
+| **`increase_population`** | 171/1,784 = 9.6% | 181/1,784 = 10.1% | +0.6pp |
+| `build` | 388/1,939 = 20.0% | 390/1,939 = 20.1% | +0.1pp |
+| `take_card` | 458/5,699 = 8.0% | 423/5,699 = 7.4% | −0.6pp |
+| `end_turn` | 2,497/3,552 = 70.3% | 2,497/3,552 = 70.3% | 0.0pp |
+| `political_action` | 386/1,110 = 34.8% | 386/1,110 = 34.8% | 0.0pp |
+
+And the pattern this document is named for, measured directly — the share of
+`WonderStep` decision points where the bot's own #1 pick is a plain build:
+**59.1% → 56.5%** overall, **68.6% → 61.6%** at 3p.
+
+### Honest reading of those numbers
+
+* **The targeted effect is real and it is where it was predicted to be.**
+  `WonderStep` moved +3.2pp on n=1,385 (SE ≈ 1.0pp) and 3p moved +8.1pp on
+  n=456 (SE ≈ 2.1pp). Nothing else in the evaluator changed.
+* **`take_card` paid for part of it: −0.6pp on n=5,699.** This is a direct,
+  expected consequence, not a mystery: taking a wonder from the row no longer
+  books the finished wonder's value on the spot, so the bot reaches for row
+  wonders less eagerly. Whether that is a net improvement is genuinely
+  unclear — pricing a just-taken wonder at zero is *rule-correct* but it also
+  strips the option value of having somewhere to convert resources. This is
+  the honest weak point of the change.
+* **4p barely moved, for a legible reason.** The 4p champion is much less
+  trained (gen 719 vs 2,848/3,911) and its effective coefficient on the
+  identity-aware wonder value is `card_board_credit × wonder_potential =
+  −0.229 × −0.364 ≈ +0.08`, twenty times smaller than 2p's ≈ 0.74. Scaling a
+  channel the vector barely uses does not move play. The channel is now the
+  right SHAPE at 4p; pricing it is the league's job.
+* **`PlayLeader` did not improve, and should not have been expected to.**
+  A leader's effects land on the board the turn it is elected, so
+  `effects::compute` books them immediately — there is no deferred payoff for
+  this change to find. The leader half of the `leader_or_wonder_step` gap has
+  a different cause (the 2p champion prices `leader` at −2.80, and electing
+  costs a civil action) and remains open.
+* **Overall agreement moved +0.2pp, and that is the right size.** Agreement
+  is a diagnostic, not the objective — maximising it would cap the bot at the
+  skill of a mixed-ability human corpus. `WonderStep` is 7% of decisions, so
+  a category effect of +3.2pp *should* show up as roughly +0.2pp overall. A
+  large overall jump from a change this narrow would have been evidence of
+  overfitting, not of a fix.
+
+### Throughput
+
+No measurable cost. Release build, min of 3 interleaved runs on a box also
+running the training league:
+
+* `agreement` over the identical 18,714 decision points (the same work
+  scored both ways): **9.27s before, 9.31s after**.
+* `arena` weighted self-play, 3p, 120 games, single-threaded: **16.68s
+  before, 16.52s after**.
+
+Both are inside run-to-run noise. The one extra `effects::compute` the new
+reading needs is offset by two new early-outs on the same path (no wonder in
+progress at all, and a wonder whose earned share is exactly zero, which skips
+`board_yields`' own two `effects::compute` calls).
+
+### What this does NOT fix
+
+1. **Population.** `increase_population` moved +0.6pp as a side effect and is
+   still only 10.1%. A free worker's payoff genuinely IS delayed — it is
+   worth what the building it eventually staffs produces, for as long as the
+   game lasts — and that is computable from `board_yields::build_fresh`, but
+   it was not attempted here.
+2. **Leaders**, per above.
+3. **`rate_horizon` is fitted backwards at 2p** (−0.183): via
+   `horizon::rate_multiplier` that makes the 2p champion value a per-turn
+   rate MORE late in the game than early, which is the opposite of the
+   computable truth. Untouched here — it affects builds and wonders alike, so
+   it is not the discriminator this analysis was chasing — but it is another
+   instance of a fitted scalar standing where a computed quantity belongs.
