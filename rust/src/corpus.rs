@@ -60,7 +60,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::{CardId, CardType, CARDS};
+use crate::{Age, CardId, CardType, CARDS};
 
 // ---------------------------------------------------------------------
 // Card name dictionary
@@ -192,6 +192,63 @@ pub fn longest_known_card_prefix<'a>(
         }
     }
     None
+}
+
+/// Nine card families -- the six free-civil-action cards this bore, plus
+/// Territories, Aggressions and Military Bonuses -- print the SAME name once
+/// per age with a stronger effect each time (`Rich Land`'s printed
+/// `resourceDiscount` is 1/2/3/4 across its four copies). BGO's journal text
+/// never carries an age tag (`"takes Rich Land in hand"` reads identically
+/// for all four), so [`build_card_index`]'s bare-name key necessarily picks
+/// ONE of them -- whichever age happens to iterate first when the map is
+/// built (`HashMap::or_insert`), whether or not that is the copy actually in
+/// play.
+///
+/// The journal DOES imply a bound, though: nothing newer than the civil
+/// deck's current age can be in anyone's hand or row. Given any card in the
+/// same name family as `named` (typically [`build_card_index`]'s arbitrary
+/// pick), returns the sibling at the highest age not exceeding
+/// `at_or_below` -- the closest available approximation of "the copy BGO is
+/// actually dealing right now" -- or `named` itself if every sibling is
+/// somehow newer (shouldn't happen for a real journal line, but this is a
+/// total function, not a partial one).
+///
+/// Found by replaying a real 2p game (`7523044`): this binary priced
+/// "Orange builds Alchemy using Urban Growth" one resource too high because
+/// it had resolved "Urban Growth" to its Age A copy (`resourceDiscount: 1`)
+/// while the copy actually in Orange's hand -- taken from the Age I civil
+/// row, `docs/REPLAY.md`'s "SIMULATED" row content notwithstanding, a fact
+/// this function did not yet exist to use -- was the Age I copy
+/// (`resourceDiscount: 2`). The same misattribution then hid the Age I
+/// copy's WIDER free-civil-action option set from `legal::free_action_moves`,
+/// which was being asked about the wrong card's discount entirely.
+pub fn best_age_sibling(named: CardId, at_or_below: Age) -> CardId {
+    let base = named.get().base_name;
+    let mut best = named;
+    for i in 0..CARDS.len() {
+        let id = CardId(i as u16);
+        let c = id.get();
+        if c.base_name != base || c.age as u8 > at_or_below as u8 {
+            continue;
+        }
+        if c.age as u8 > best.get().age as u8 || best.get().age as u8 > at_or_below as u8 {
+            best = id;
+        }
+    }
+    best
+}
+
+/// Every card sharing `named`'s family (same `base_name`, `named` itself
+/// included), in no particular order. The full candidate set
+/// [`best_age_sibling`] picks its single best-guess answer from -- for a
+/// caller that has a STRONGER signal than "not newer than the current age"
+/// (e.g. a `"using <Card>"` line's own observed payment, which pins the
+/// discount -- and so the age -- exactly, `replay_common.rs`'s
+/// `resolve_named_card_by_effect`), searching every sibling for one whose
+/// printed numbers match the observed line beats guessing.
+pub fn family_siblings(named: CardId) -> Vec<CardId> {
+    let base = named.get().base_name;
+    (0..CARDS.len()).map(|i| CardId(i as u16)).filter(|id| id.get().base_name == base).collect()
 }
 
 // ---------------------------------------------------------------------
@@ -1321,5 +1378,48 @@ mod tests {
         assert_eq!(Color::Purple.seat(), 1);
         assert_eq!(Color::Green.seat(), 2);
         assert_eq!(Color::Grey.seat(), 3);
+    }
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    #[test]
+    fn build_card_index_resolves_a_recurring_family_name_to_its_earliest_age() {
+        // Not the fix -- the BUG this file's age-resolution helpers exist to
+        // work around. `HashMap::or_insert` keeps whichever age iterates
+        // first in `CARDS` (construction order, Age A before Age I before
+        // ...), so a bare journal name like `"Urban Growth"` (no age tag --
+        // BGO never prints one) always lands on Age A here. Pinned so a
+        // future change to `CARDS`'s construction order fails loudly instead
+        // of silently flipping which age every OTHER caller has to correct
+        // for.
+        let index = idx();
+        assert_eq!(*index.get("Urban Growth").unwrap(), card("Urban Growth (A)"));
+    }
+
+    #[test]
+    fn best_age_sibling_picks_the_highest_age_not_newer_than_the_bound() {
+        let a = card("Urban Growth (A)");
+        assert_eq!(best_age_sibling(a, Age::A), card("Urban Growth (A)"));
+        assert_eq!(best_age_sibling(a, Age::I), card("Urban Growth (I)"));
+        assert_eq!(best_age_sibling(a, Age::II), card("Urban Growth (II)"));
+        assert_eq!(best_age_sibling(a, Age::III), card("Urban Growth (III)"));
+    }
+
+    #[test]
+    fn best_age_sibling_is_a_no_op_for_a_card_with_no_same_name_siblings() {
+        // Bronze (Age A only) has no same-named sibling at any other age --
+        // every bound must return Bronze itself, not wander onto an
+        // unrelated card.
+        let bronze = card("Bronze");
+        assert_eq!(best_age_sibling(bronze, Age::III), bronze);
+    }
+
+    #[test]
+    fn family_siblings_finds_every_age_of_a_recurring_action_card_and_nothing_else() {
+        let mut names: Vec<&str> = family_siblings(card("Rich Land (A)")).iter().map(|id| id.get().name).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Rich Land (A)", "Rich Land (I)", "Rich Land (II)"]);
     }
 }

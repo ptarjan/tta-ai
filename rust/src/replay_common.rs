@@ -135,14 +135,14 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::corpus::{
-    actor_and_rest, classify, longest_known_card_prefix, ActionClass, Classified, Color, GameMeta,
-    LineOutcome,
+    actor_and_rest, best_age_sibling, classify, family_siblings, longest_known_card_prefix, ActionClass, Classified,
+    Color, GameMeta, LineOutcome,
 };
 pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
-use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
+use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase};
 use crate::{apply, costs, economy, game, legal, CardId, Move};
 
 // ---------------------------------------------------------------------
@@ -1247,6 +1247,89 @@ fn trailing_produces(text: &str) -> Option<(bool, i32)> {
     }
 }
 
+/// The LAST `"gets N science"` clause anywhere in `text` -- Breakthrough's
+/// own bonus, glued onto the SAME line as the `"using Breakthrough"` develop
+/// it orders (`"<Color> discovers <Tech> using Breakthrough <Color> loses N
+/// science; <Color> gets M science"`). Unlike Urban Growth/Rich Land/
+/// Efficient Upgrade, Breakthrough's per-age difference (RB p.15, confirmed
+/// against `sources/bga_throughtheages_material.inc.php`) is NOT a resource
+/// discount at all -- it develops at full science price and then scores a
+/// flat bonus (2 for the Age I copy, 3 for Age II) -- so this is the signal
+/// [`resolve_named_card_by_effect`] matches against `Card::effects::
+/// gain_science` for that one card, parallel to [`trailing_produces`] for
+/// Frugality's `gain_food`.
+fn trailing_gets_science(text: &str) -> Option<i32> {
+    let p = text.rfind(" gets ")?;
+    let rest = &text[p + " gets ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    rest[digits_end..].starts_with(" science").then_some(n)
+}
+
+/// Resolves which age-sibling of `named` (`corpus::build_card_index`'s
+/// necessarily arbitrary same-name pick -- see `best_age_sibling`'s doc
+/// comment) actually produced `wanted`'s observed cost on THIS journal line,
+/// by solving for the discount the payment implies and matching it against
+/// `corpus::family_siblings`' printed `resourceDiscount`/`gainScience`.
+/// This is strictly stronger evidence than `best_age_sibling`'s "not newer
+/// than the current age" guess (an earlier `ActionClass::TakeCard` line
+/// necessarily used, `age_civil` being all it had) or a bare hand search
+/// (which can only find whatever that earlier guess put there) -- exact
+/// evidence beats both, so it is tried FIRST; the hand search remains as a
+/// fallback for the rare case a clamped-at-zero payment (`(cost -
+/// discount).max(0)`) is consistent with more than one sibling's discount,
+/// or the observed-cost clause is missing/unparseable altogether.
+fn resolve_named_card_by_effect(state: &GameState, p: &PlayerState, named: CardId, wanted: Move, raw_text: &str) -> CardId {
+    let solved = match wanted {
+        Move::Build { card } => total_paid_for_build(raw_text)
+            .and_then(|paid| Some(costs::build_cost_for(state, p, card)? - paid))
+            .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed)),
+        Move::Upgrade { from, to } => total_paid_for_build(raw_text)
+            .map(|paid| costs::upgrade_cost(state, p, from, to) - paid)
+            .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed)),
+        // Breakthrough's science bonus is the SAME clause whichever half of
+        // its "develop a technology OR pay for a revolution" order (RB
+        // p.15, `legal::free_action_moves`'s own `DevelopTechnology` arm
+        // comment) the human took -- confirmed corpus-wide: `"<Color>
+        // revolutions using Breakthrough ... <Color> gets N science"` reads
+        // exactly like the develop case.
+        Move::Develop { .. } | Move::Revolution { .. } => trailing_gets_science(raw_text)
+            .and_then(|bonus| family_siblings(named).into_iter().find(|id| id.get().effects.gain_science as i32 == bonus)),
+        _ => None,
+    };
+    solved.unwrap_or_else(|| {
+        p.hand_civil
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|id| id.get().base_name == named.get().base_name)
+            .unwrap_or(named)
+    })
+}
+
+/// If `p`'s civil hand holds a DIFFERENT age-sibling of `correct`'s name
+/// family than `correct` itself, swap it for `correct` -- a no-op when
+/// `correct` is already there (the common case) or no sibling is in hand at
+/// all (nothing to correct). This is `ground_row_slot`'s "grounding"
+/// philosophy applied one step later: a `TakeCard` line is necessarily
+/// age-blind (`best_age_sibling`'s doc comment), but a LATER `"plays"`/
+/// `"using"` line's own printed numbers can pin the exact card down
+/// (`resolve_named_card_by_effect`) -- when that disagrees with the earlier
+/// guess, the guess was wrong, and correcting the hand entry now is more
+/// honest than either silently keeping the wrong card or refusing to notice.
+fn correct_hand_family(p: &mut PlayerState, correct: CardId) {
+    if p.hand_civil.contains(correct) {
+        return;
+    }
+    if let Some(wrong) = p.hand_civil.as_slice().iter().copied().find(|id| id.get().base_name == correct.get().base_name) {
+        p.hand_civil.remove_first(wrong);
+        p.hand_civil.push(correct);
+    }
+}
+
 /// Pre-scans every standalone `"<Color> produces ..."` line in the journal
 /// into a per-seat FIFO (see `parse_standalone_produces`'s doc comment for
 /// why this shape means a `ChoiceKind::GainBlock` resolution). FIFO order
@@ -1691,15 +1774,33 @@ fn free_civil_action_move(
         return Ok(false);
     };
     let after_using = &rest[using_pos + " using ".len()..];
-    let Some((discount_card, _)) = longest_known_card_prefix(r.card_index, after_using) else {
+    let Some((named_card, _)) = longest_known_card_prefix(r.card_index, after_using) else {
         return Ok(false);
     };
+    // `named_card` is `corpus::build_card_index`'s arbitrary pick among
+    // same-named cards (the journal's "using <Card>" text never carries an
+    // age tag, and four of these six cards recur once per age with a bigger
+    // `resourceDiscount`/`gainScience` each time). Re-resolve to whichever
+    // age this LINE's own observed cost actually implies -- see
+    // `resolve_named_card_by_effect`'s doc comment for why that beats both
+    // the arbitrary pick and a bare hand search.
+    let discount_card =
+        resolve_named_card_by_effect(&r.state, &r.state.players[actor as usize], named_card, wanted, rest);
     let grants_free_civil = discount_card
         .get()
         .special
         .iter()
         .any(|s| matches!(s, crate::cards::Special::FreeCivilAction(_)));
-    if !grants_free_civil || !r.state.players[actor as usize].hand_civil.contains(discount_card) {
+    if !grants_free_civil {
+        return Ok(false);
+    }
+    // The evidence above can name a sibling different from whatever an
+    // earlier `ActionClass::TakeCard` line (necessarily age-blind at the
+    // time, see `best_age_sibling`'s doc) put in hand -- correct that now,
+    // the same "ground it the instant a slot/card is taken OR PLAYED"
+    // philosophy the module doc states for every other observed fact.
+    correct_hand_family(&mut r.state.players[actor as usize], discount_card);
+    if !r.state.players[actor as usize].hand_civil.contains(discount_card) {
         return Ok(false);
     }
     r.try_apply(Move::PlayAction { card: discount_card }, true)?;
@@ -1767,6 +1868,13 @@ fn apply_one(
     match class {
         ActionClass::TakeCard => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("take with no resolved card".into()))?;
+            // `card` may be `corpus::build_card_index`'s arbitrary same-name
+            // pick (`best_age_sibling`'s own doc comment) -- re-resolve to
+            // the highest age not newer than the civil deck's current age,
+            // the best available reading of "the copy actually in the row"
+            // for the nine card families BGO's journal text never tags with
+            // an age. A no-op for every other card (only one age exists).
+            let card = best_age_sibling(card, r.state.age_civil);
             let cost = observed_take_cost(raw_text);
             let slot = r.ground_row_slot(actor, card, Some(cost)).ok_or_else(|| {
                 MismatchKind::ParserGap(format!(
@@ -1911,10 +2019,66 @@ fn apply_one(
         }
         ActionClass::ChangeGovernment => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("revolution with no resolved card".into()))?;
+            // RB p.15: Breakthrough may spend its order on a revolution
+            // instead of a develop (`legal::free_action_moves`'s own
+            // `DevelopTechnology` arm) -- BGO phrases that the same "using
+            // <Card>" way as an ordered Build/Upgrade/Develop
+            // (`"<Color> revolutions using Breakthrough Change government
+            // to ..."`), previously unhandled here entirely (this arm never
+            // even looked for a "using" clause, so every such line failed
+            // as a bare, illegally-free `Move::Revolution`).
+            if free_civil_action_move(r, actor, rest, Move::Revolution { card }, card)? {
+                return Ok(());
+            }
             r.try_apply(Move::Revolution { card }, true)
         }
         ActionClass::PlayActionCard => {
-            let card = card.ok_or_else(|| MismatchKind::ParserGap("play-action with no resolved card".into()))?;
+            let named = card.ok_or_else(|| MismatchKind::ParserGap("play-action with no resolved card".into()))?;
+            // Same age ambiguity `free_civil_action_move`'s "using <Card>"
+            // sites resolve via `resolve_named_card_by_effect`: Frugality
+            // and Engineering Genius are the two `FreeCivilActionValue`s
+            // with no card to disambiguate in a "using" clause (that
+            // function's own doc comment), so BGO glues their WHOLE order
+            // onto THIS "plays <Card> <effect>" line instead -- but each
+            // still states its own age-dependent number right there:
+            // Frugality's post-Pop bonus (`"produces N food"`, matched
+            // against `gain_food`) or Engineering Genius's wonder-stage
+            // discount (implied by this line's own `"spends N resources"`
+            // against the stage's undiscounted cost). Gated on
+            // `FreeCivilAction` + the specific kind so this never touches
+            // an unrelated action card's (Patriotism's, Reserves', ...)
+            // OWN same-shaped clauses.
+            let kind = named
+                .get()
+                .special
+                .iter()
+                .find_map(|s| match s {
+                    crate::cards::Special::FreeCivilAction(v) => Some(legal::free_action_kind_of(*v)),
+                    _ => None,
+                });
+            let p = &r.state.players[actor as usize];
+            let solved = match kind {
+                Some(legal::FreeActionKind::IncreasePopulation) => trailing_produces(raw_text)
+                    .filter(|(is_resources, _)| !is_resources)
+                    .and_then(|(_, n)| family_siblings(named).into_iter().find(|id| id.get().effects.gain_food as i32 == n)),
+                Some(legal::FreeActionKind::BuildOneWonderStage) if !p.wonder.is_none() => {
+                    let stage_cost = costs::wonder_stage_cost(&r.state, p, 1);
+                    total_paid_for_build(raw_text)
+                        .map(|paid| stage_cost - paid)
+                        .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed))
+                }
+                _ => None,
+            };
+            let card = solved.unwrap_or_else(|| {
+                r.state.players[actor as usize]
+                    .hand_civil
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .find(|id| id.get().base_name == named.get().base_name)
+                    .unwrap_or(named)
+            });
+            correct_hand_family(&mut r.state.players[actor as usize], card);
             r.try_apply(Move::PlayAction { card }, true)?;
             // Reserves (`Special::GainFoodOrResources`) opens a
             // `ChoiceKind::FoodOrRes` the instant it's played, with no
@@ -2146,6 +2310,7 @@ fn target_actor_color(seat: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::CardList;
     use crate::CardType;
 
     #[test]
@@ -2221,6 +2386,52 @@ mod tests {
     #[test]
     fn trailing_produces_is_none_with_no_produces_clause_at_all() {
         assert_eq!(trailing_produces("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    #[test]
+    fn trailing_gets_science_reads_breakthroughs_own_bonus_clause() {
+        // The age signal `resolve_named_card_by_effect` matches Breakthrough
+        // siblings against: 2 for the Age I copy, 3 for Age II
+        // (`sources/bga_throughtheages_material.inc.php`).
+        let text = "discovers Iron using Breakthrough Orange loses 5 science; Orange gets 2 science";
+        assert_eq!(trailing_gets_science(text), Some(2));
+        let text3 = "revolutions using Breakthrough Change government to Constitutional Monarchy; \
+                     6 science points spent; Grey loses 6 science; Grey gets 3 science";
+        assert_eq!(trailing_gets_science(text3), Some(3));
+    }
+
+    #[test]
+    fn trailing_gets_science_ignores_an_unrelated_gets_clause() {
+        // `"gets N civil action"` (a leader/event grant) must not be
+        // mistaken for Breakthrough's science bonus.
+        assert_eq!(trailing_gets_science("Orange elects Hammurabi Orange gets 1 civil action"), None);
+    }
+
+    #[test]
+    fn correct_hand_family_swaps_a_wrong_age_sibling_for_the_evidence_backed_one() {
+        // The scenario `free_civil_action_move`/`ActionClass::PlayActionCard`
+        // hit for real (`7523044`, `7522665`): an earlier `TakeCard` line
+        // guessed Frugality's Age A copy (`best_age_sibling`'s necessarily
+        // age-blind default), but THIS line's own `"produces 2 food"` proves
+        // it was really the Age I copy -- the hand entry has to be corrected,
+        // not just the move about to be played.
+        let mut state = game::new_game(2, 1);
+        let p = &mut state.players[0];
+        p.hand_civil = CardList::new();
+        p.hand_civil.push(CardId::by_name("Frugality (A)").unwrap());
+        correct_hand_family(p, CardId::by_name("Frugality (I)").unwrap());
+        assert!(p.hand_civil.contains(CardId::by_name("Frugality (I)").unwrap()));
+        assert!(!p.hand_civil.contains(CardId::by_name("Frugality (A)").unwrap()));
+    }
+
+    #[test]
+    fn correct_hand_family_is_a_no_op_once_the_right_card_is_already_in_hand() {
+        let mut state = game::new_game(2, 1);
+        let p = &mut state.players[0];
+        p.hand_civil = CardList::new();
+        p.hand_civil.push(CardId::by_name("Frugality (II)").unwrap());
+        correct_hand_family(p, CardId::by_name("Frugality (II)").unwrap());
+        assert_eq!(p.hand_civil.as_slice(), &[CardId::by_name("Frugality (II)").unwrap()]);
     }
 
     #[test]
