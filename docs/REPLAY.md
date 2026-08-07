@@ -3768,3 +3768,159 @@ reach these gates' own failure points and get past them too) but neither
 was traced. The 36-ish "no `REJECT` line" sub-bucket (a stale/cross-actor
 `Pending::Choice` blocking the Take, per the previous handoff's own
 diagnosis) was also not re-measured this pass.
+
+## Build/Upgrade/WonderStep handoff continued: an ENGINE bug found and fixed
+## (Homer's discount had no per-turn cap), Cultural Heritage/Revolutionary
+## Idea checked and fixed, cross-bucket re-verification against the
+## age-lag fix, one new lead left (game 7521984)
+
+Picked up the previous pass's own handoff two sections above: the
+`mil_discount` lead (game `7521819` round 4/6) and the two unchecked
+families (Cultural Heritage, Revolutionary Idea).
+
+### The `mil_discount` lead: NOT a mil_discount bug at all -- resolved two
+### different ways, one of them a real ENGINE bug
+
+Instrumented every `mil_discount +=`/`-=`/`=0` call site
+(`REPLAY_DEBUG_ALL`, `apply.rs`/`costs.rs`/`economy.rs`) and traced game
+`7521819` round 4 first: the flagged line ("Orange builds Warrior Orange
+loses 1 military resource; Orange spends 1 resource") turned out to be
+fully explained by Homer (elected the line before) -- `costs.rs`'s own
+`homer_unit_discount` doc comment already established BGO reuses the exact
+same `"loses N military resource"` phrasing for Homer's discount as for
+the Patriotism-style `mil_discount` pool. Not a `mil_discount` bug at all,
+and not a bug of any kind at that specific line.
+
+The REAL bug was one round later, round 6: Orange (still Homer-led)
+upgrades Warrior->Swordsmen TWICE in the same turn. The journal shows the
+FIRST upgrade discounted (`"loses 1 military resource"`) and the SECOND at
+full price (`"spends 1 resource"`, no discount at all). `costs::
+homer_unit_discount` had no per-turn cap -- it returned 1 for every single
+unit build/upgrade, unconditionally, for as long as Homer was leader.
+Confirmed against the leader's own official text
+(`sources/bga_throughtheages_material.inc.php`): "On your turn, you have
+an **extra 1 resource** for building and upgrading military units" -- an
+extra 1 resource per turn, not per action. Swept the full 1,011-game
+corpus for every turn with Homer active and 2+ same-turn unit
+build/upgrade lines: 45 such turns, the `"loses N military resource"`
+clause on AT MOST ONE of them every single time (35 on the first action;
+10 where the first action was already free via an unrelated mechanism and
+the discount showed up on the next one instead) -- 0 counterexamples.
+
+**This is an ENGINE bug, not a replayer parsing gap** (unlike the
+Patriotism/Reserves fixes above): `legal.rs`'s own affordability check
+reads `costs::homer_unit_discount` directly, so self-play/training games
+with Homer as leader were letting the bot double- (or triple-, ...) dip
+this discount within a single turn -- something no real opponent's engine
+permits. Fixed (commit `ea372e7`): a new `p.homer_used_this_turn` flag
+(`state.rs`, same shape as `churchill_used`/`bach_upgrade_used`/
+`ocean_liners_used` right above it), reset in `economy::end_of_turn`,
+gating `homer_unit_discount`; `spend_homer_unit_discount` now takes `&mut
+PlayerState` and sets the flag, but only when the discount actually
+reduced a nonzero payment (matching the 10 "first action was already free"
+corpus cases above -- a fully-free build must not burn the turn's
+allowance). New tests confirmed red/green by reverting:
+`do_build_homers_discount_applies_only_once_per_turn` and
+`a_second_same_turn_unit_build_one_resource_short_is_illegal_once_homers_allowance_is_spent`
+(`apply.rs`), plus `end_of_turn_resets_the_per_turn_state` extended.
+Repro game `7521819` itself: was `IllegalMove: Build` at round 10 before
+this fix; now runs to round 15 (a different, StuckPending stop in a
+different bucket), confirming the fix in isolation, not just aggregate
+counts.
+
+### Cultural Heritage / Revolutionary Idea: same age-sibling shape,
+### fixed (commit `4db14b7`)
+
+Both flagged by the previous pass as unchecked. Neither has any `Special`
+at all (`special: &[]`, plain `gainScience`/`gainCulture` `CardEffects`),
+so neither routes through the existing `kind` match, and a wrong
+take-time age guess (`best_age_sibling`, age-blind) would silently apply
+the wrong age's science/culture gain when later played -- the SAME "no
+kind match, `solved` stays `None`, trust whatever the take-time guess put
+in hand" gap the Patriotism/Reserves fixes closed for their own families.
+Fixed with a new `.or_else()` branch, gated on `base_name` (a bare
+`gainScience` number has no self-gating signal the way Patriotism's
+"military resource" text or Reserves' `Special` does, so an ungated
+version could misfire on an unrelated card with a coincidentally-matching
+"gets N science" clause), reusing the existing `trailing_gets_science`
+helper (already used for Breakthrough's `Develop`/`Revolution` case) rather
+than writing a new parser. Two new tests, both confirmed red/green by
+reverting.
+
+### Cross-bucket re-verification against the Take/HandFull worker's
+### age-lag fix (`8edfea7`), per their own report
+
+The Take/HandFull worker found `state.age_civil` was lagging real draws
+and flagged that `best_age_sibling`/every age-gated cost path in THIS
+bucket could share the root cause. Rebased onto their fix (clean rebase,
+no conflicts) and re-verified rather than assumed:
+
+- **Re-measured the bucket on the rebased tree**: `IllegalMove: Build` 67,
+  `Upgrade` 55, `WonderStep` 56 (down sharply from this pass's own earlier
+  109/80/81 baseline, taken before the age-lag fix landed -- consistent
+  with their report that the lag was a large SHARED cause). Games
+  completed 14 (down from 18, same drop they reported and explained: more
+  games now run past the stale-hand block and surface OTHER, real,
+  pre-existing bugs sooner).
+- **Verified the Patriotism/Reserves fixes are still correct and still
+  necessary**, not just "still passing their own unit tests": temporarily
+  disabled both `.or_else()` clauses (`if false { ... } else { None }`,
+  reverted after) and re-ran the full corpus on the age-fixed tree.
+  Without them: Build 81, Upgrade 59, WonderStep 62. With them (current):
+  67/55/56. That is -14/-4/-6 attributable to these two fixes SPECIFICALLY
+  even with `age_civil` now correct -- confirms the age-lag fix and the
+  take-time-guess fix are two independent bug classes that both produce a
+  wrong age-sibling, exactly as flagged, and neither supersedes the other.
+- **Re-ran the `mil_discount` lead's own repro game (`7521819`) on the
+  rebased tree first**, before trusting the investigation above: it still
+  needed the Homer fix (the lead did not evaporate under the age fix) --
+  confirmed by re-tracing after rebasing, then landing the fix as
+  described above.
+
+### New lead, not chased this pass: game `7521984`'s `IllegalMove:
+### Upgrade`, possibly an uprising misfire
+
+The Take/HandFull worker's own handoff named this as the pre-existing
+`Upgrade`-bucket bug their fix now exposes a few lines earlier (round 8,
+`"Purple upgrades Agriculture to Irrigation"`, resources short: sim has 1,
+journal implies the human had enough to spend 2). Traced one level
+further this pass: sim's Purple has `resources=1` heading into round 8
+because round 7's END-OF-TURN PRODUCTION step never ran --
+`REPLAY_DEBUG_ALL`'s `uprising check` print shows `uprising=true`
+(`discontent=2 > workers_free=1`, RULES_SPEC.md §6.3's own trigger), which
+per `economy::end_of_turn`'s own step-2 skips the entire Production Phase
+(score/corruption/production/consumption all skipped, RB p.24). But the
+REAL journal's round-7 End Turn line for Purple shows completely NORMAL
+production (`"2 food - consumption: 1 (now 6); 3 resources (now 4)"`) --
+no uprising happened in the real game.
+
+Two live hypotheses, NEITHER confirmed (ran out of pass budget chasing
+this): (1) Purple's `happy`/`discontent` computation is wrong at this
+point (an unmodeled happy source, or a stale worker-placement count --
+same *shape* of bug as the age-lag fix, different field); or (2) upstream
+of the uprising check, the SAME end-of-turn attempt opens a
+`Pending::Choice(DiscardMilitary)` for Purple that the real journal does
+NOT have (it says `"No Discard Phase"` at this exact point) -- the trace
+shows this choice gets resolved via the discard-solver's "arbitrary" path
+at journal line 107 with `decider=1 expected_actor=0` (an actor
+MISMATCH), meaning it may be consuming a journal line that actually
+belongs to Orange's turn, corrupting sync from there. Worth determining
+which of the two by checking Purple's military hand size against the
+journal's own count right before this point, and RE-READING (not
+re-deriving) `discontent`'s inputs (`s.happy`, `p.yellow_bank`,
+`p.workers_free`) against a hand-computed value from the real tableau.
+Same instrumentation approach as this pass's `mil_discount` trace
+(`REPLAY_DEBUG_ALL`, single-game `replay` binary) should work directly --
+no new diagnostic facility needed.
+
+### Measurement (`replaystats`, full 1,011-game corpus, cumulative state
+### at the end of this pass, including the age-lag fix from the other
+### worker)
+
+| | before the age-lag fix | after age-lag fix + this pass's fixes |
+|---|---|---|
+| games completed | 18 | 14 (explained above, not a regression) |
+| mean rounds reached | 10.94 | 11.07 |
+| `IllegalMove: Build` | 109 | **67** |
+| `IllegalMove: Upgrade` | 80 | **55** |
+| `IllegalMove: WonderStep` | 81 | **56** |
