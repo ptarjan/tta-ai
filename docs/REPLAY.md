@@ -1320,3 +1320,146 @@ triaged). In other words the budget-shortfall shape this bucket was
 named for is now fully accounted for: fixed (Finding 1), or moved into
 the Taj Mahal `ParserGap` bucket above, or pushed deeper into other
 categories. Reproducible with `REPLAY_DEBUG=1`.
+
+## Seventh pass: the Taj Mahal anomaly, SETTLED -- it is a printed card ability the engine never had
+
+The sixth pass closed its section with the only thing left in the take
+bucket that was not attributed: **181 of Taj Mahal's 317 corpus takes (57%)
+cost less than the cheapest row position plus that player's own wonder
+surcharge allows**, 150 of them free outright, with the one strong signal
+being that 149 of those 150 fall in a turn where the player elected a
+leader. It is not a replayer bug, not a BGO quirk, and not the surcharge.
+
+### The mechanism: Taj Mahal's own 2015 card text
+
+> **"If you replaced your leader this turn, taking this wonder costs you 2
+> civil actions less."**
+
+That clause is printed on the card in *A New Story of Civilization* and was
+missing from `data/cards_wonders_leaders.json` entirely (the entry carried
+only "+3 culture production, +1 blue token", which is the whole of the 2006
+card). Two independent sources already in `sources/`, neither of them this
+corpus:
+
+- **`sources/bga_throughtheages_material.inc.php`, card id 98** -- Board
+  Game Arena's own implementation of the 2015 edition. The sentence above is
+  its `text` field verbatim, alongside `'culture' => 3` and `'tokendelta' =>
+  array('blue' => 1)`.
+- **`sources/namu_wonders.txt`** -- the Korean wiki's new-edition entry:
+  "(New Edition) Score increase rate +3, blue tokens +1. If you switched
+  leaders this turn, take 2 fewer actions to draw this card", and separately
+  "The play of picking up Michelangelo cheaply as Hammurabi and then using
+  Michelangelo as a hero to pick up the Taj Mahal for free or for 1 token is
+  quite intense" -- i.e. the free take is a known, deliberate line of play,
+  not an artifact.
+
+This is the ONLY thing in the base game that can make a wonder take cost
+zero. Michelangelo's waiver cancels the surcharge but can never go below the
+row's own minimum of 1; Hammurabi's `leaderTakeCivilActionDiscount` is
+leaders-only. Taj Mahal's is a flat subtraction off the whole cost and
+routinely hits the `max(0)` clamp.
+
+### The population, and how completely the clause explains it
+
+All 317 Taj Mahal takes in the 1,011-game corpus, cross-tabulated by whether
+the acting player had already replaced a leader earlier in that same turn
+(the journal's `"<Colour> elects <New> <Old> dies"` shape -- a *first* leader
+prints no `dies` clause and is not a replacement):
+
+| earlier in the turn | takes | free (no cost clause) | paid |
+|---|---|---|---|
+| replaced a leader | 184 | **149** | 35 |
+| elected a FIRST leader (no replacement) | 8 | 0 | 8 |
+| no election at all | 125 | 1 | 124 |
+
+The single free take in the bottom row (`7523665`) is a journal ordering tie,
+not a counterexample: its line and the replacement that licenses it carry the
+**same timestamp to the second**, and the same turn contains a `"puts Taj
+Mahal back in the row"` printed *before* the take it undoes. BGO's journal is
+sorted by a one-second-resolution timestamp and is not stably ordered within
+a second.
+
+Scoring every take against the two models -- implied row position must be 1,
+2 or 3, and a free take is consistent whenever the model's cost lands at or
+below 0 -- with Michelangelo's waiver applied where he is in play:
+
+| | violations of the 1/2/3 row-position bound |
+|---|---|
+| sixth pass's model (`row + surcharge`) | **181 of 317 (57%)** |
+| with Taj Mahal's printed clause | **1 of 317 (0.3%)** |
+
+The 35 paid takes made after a replacement are not counterexamples either:
+under the clause they simply imply a more expensive row slot (cost + 2 -
+surcharge), and their implied positions land inside 1-3.
+
+**The negative control the corpus supplies for free**: of ~6,700 takes of the
+other fifteen wonders, **zero** carry no cost clause -- including the 129
+Taj-Mahal-adjacent case of a wonder taken on the line immediately after an
+election. Whatever this is, it is printed on exactly one card, and the data
+says so before the card text does.
+
+Two secondary facts fall out of the same table, both consistent with the
+clause being a real and known line of play: Taj Mahal is taken in a turn
+containing an election **64%** of the time, against 7.5-27% for every other
+wonder; and this is the only wonder whose takes cluster in rounds 4-7 behind
+an Age I leader swap.
+
+### Finding (ENGINE BUG, confirmed, fixed, tested)
+
+`costs::take_cost` and `costs::can_take_gated` both priced the row without
+the clause, so `legal::legal_moves` refused to offer a Taj Mahal take the
+human could demonstrably afford -- the `ParserGap: Taj Mahal's take cost ...`
+bucket the sixth pass deliberately grew to 81 games.
+
+**Fixed** by giving the card its ability in the data
+(`takeCivilActionDiscountIfLeaderReplacedThisTurn: 2` ->
+`Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn`, the only card in
+the base game that carries it) and reading it in both pricing paths off the
+card **sitting in the row**, gated on a new per-turn
+`PlayerState::replaced_leader_this_turn` (set in `apply::h_play_leader` only
+when a leader was actually swapped out, cleared in `economy::end_of_turn`
+beside `hammurabi_replaced_this_turn`, which it is strictly weaker than).
+
+**Tests**, all four confirmed to fail with the fix reverted and pass with it:
+`costs::tests::taking_taj_mahal_costs_two_civil_actions_less_when_a_leader_was_replaced_this_turn`
+(2 -> 0, the clamp case),
+`costs::tests::taking_taj_mahal_from_an_expensive_slot_after_a_replacement_still_costs_the_remainder`
+(3 -> 1, proving it is a flat subtraction and not a surcharge waiver),
+`costs::tests::move_generation_offers_taj_mahal_with_no_civil_actions_left_after_a_replacement`
+(the `can_take_gated` half -- wiring only `take_cost` leaves the move
+ungenerated), and
+`apply::tests::playing_a_first_leader_into_an_empty_slot_is_not_a_replacement_but_swapping_one_is`.
+Two more pass either way, on purpose, pinning the negative controls:
+`no_wonder_other_than_taj_mahal_is_discounted_by_a_leader_replacement` and
+`taking_taj_mahal_costs_full_price_when_no_leader_was_replaced_this_turn`.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | sixth pass | seventh pass (this one) |
+|---|---|---|
+| mean rounds reached (of 19.27 played) | 5.71 | **5.84** |
+| decisions recorded in Age II or later | 3.5% | **3.9%** |
+| decision points recorded | 67,574 | **69,720** |
+| `ParserGap: Taj Mahal's take cost ...` | 81 | **0 (bucket gone)** |
+
+Every other bucket grew, which is this file's usual pattern and not a
+regression: `StuckPending: decider != expected actor` 137 -> 148,
+`IllegalMove: PlayAction` 113 -> 122, `Pop` 110 -> 117, `WonderStep` 102 ->
+111, `Build` 94 -> 103, `Upgrade` 58 -> 63, `Take` 17 -> 22. The 81 games
+that used to stop on Taj Mahal now run past it into whatever was next.
+
+### What this says about the method, and what to do next
+
+The clause was sitting in `sources/` the whole time, in two files, and no
+prior pass looked -- every pass instead reasoned from the corpus about what
+mechanic *could* produce a free take. What made the difference here was
+running the search in both directions at once: the corpus said "only this
+one card, only after a leader swap, and by 2", which is specific enough to
+recognise the right sentence the moment you read it.
+
+That generalises directly: **the card data is a plausible suspect whenever a
+single named card misbehaves**, and it is cheap to check. The obvious next
+move out of this pass is a systematic diff of every card's printed text in
+`sources/bga_throughtheages_material.inc.php` against `data/*.json`, looking
+for any other mechanical clause that was dropped the way this one was --
+Taj Mahal is unlikely to be the only entry whose 2015 text gained a rule.
