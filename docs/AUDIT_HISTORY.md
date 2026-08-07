@@ -444,10 +444,32 @@ structure, not an instance of the bug shape. Not touched.
 
 ### 5.5 Age/era-dependent lookups
 
-Not exhaustively swept this pass (time-boxed after 5.1-5.4 above); flagged
-as the one family in the original candidate list not yet checked
-group-by-group. `discard_leader_unless_current_age`'s single reader
-(`leader.get().age != state.age_civil`, `events.rs`) was the only
-age-comparison site touched incidentally while reading `apply_player_block`
-end to end and looked correct. Left open for a future pass rather than
-claimed clean.
+Follow-up pass closing the one family 5.1-5.4 left open. Every field that
+carries an "age" meaning (`state.age_civil`, `state.age_military`,
+`state.current_events_age`, a card's own printed `age`, `Line::age` in the
+replayer) was enumerated, then every reader of each was grepped and read.
+One group per candidate family, verdict per group. Full negative: every
+group below is a single funnel or a verified-consistent sibling set, no
+divergence found, nothing fixed.
+
+| group | sites | verdict |
+|---|---|---|
+| Age transition funnel | `game::advance_age` (`game.rs:524-557`, sets `age_civil`+`age_military` together, rebuilds both decks, runs `antiquate`+the -2 `yellow_bank` deduction); `game::antiquate` (`game.rs:572-627`, cutoff = the age param `advance_age` passes it, single loop over hands/leader/wonder/pacts); `game::force_civil_age_at_least` (`game.rs:722-731`, the replayer's only hook, loops calling the SAME `advance_age`) | **clean**: one function performs every age-linked mutation (deck swap, antiquation, yellow-token loss); the replayer's catch-up path and the live-game path are provably the same code, not two formulas that could drift |
+| `age_civil` vs `age_military` as two fields | `advance_age` (`game.rs:537-538`) is the ONLY non-test site that writes either; both are always set to the identical value in the same statement pair | **clean**: the two fields cannot diverge in a reachable game state, so a reader consulting the "wrong" one of the pair is a documentation nit, not a live bug |
+| "No military draw in Age IV" gate | `economy::end_of_turn` step 4 (`economy.rs:678`, `state.age_military != Age::IV`); `interact::apply_immediate_effects` for territories (`interact.rs:1489`, same condition); `events::draw_military` (`events.rs:1168`, `== Age::IV` early-return, same polarity inverted) | **clean**, genuine sibling group, all three read `age_military` (never `age_civil`) with matching polarity |
+| Age-keyed discard piles (`civil_discard`, `civil_removed`, `discarded_military`) | `economy::discard_civil`/`discard_military` (`economy.rs:461-473`, key = card's own age, falling back to the matching current-age field only for `CardId::NONE`); `game::replenish`'s row-sweep (`game.rs:472`, card's own age); `antiquate`'s calls into the two `economy::discard_*` functions; `economy::draw_military`'s reshuffle (`economy.rs:512`, keys the CURRENT age's own pile by `age_military`, correctly — only the age in progress can reshuffle) | **clean**, one semantic ("the card's own age when known, else the age in progress") applied identically everywhere |
+| Leader one-per-age gate (`taken_leader_ages` bitmask) | Sole writer `apply.rs:545`; two readers `costs::can_take_gated` (`costs.rs:372`) and the diagnostic-only `costs::take_rejection` (`costs.rs:457`), both `gate.taken_leader_ages & (1 << (card.age as u8))` | **clean**, and already the target structural shape: `costs.rs`'s own `take_rejection_agrees_with_can_take_gated` test pins the two readers against each other on every fixture, so a future divergence between them would already be a test failure, not a silent bug |
+| Per-age build-discount table (`Stats::build_discount: [i32; 5]`) | Sole producer `effects::compute`/`state_stats` (`effects.rs:1047`, indexed by `card.age as usize`); sole consumer `costs::build_cost_for` (`costs.rs:506`). Every build/upgrade cost call site (`apply.rs:645`, `legal.rs:456/497/686/734/740/981`) goes through `build_cost_for`/`build_cost_net`/`upgrade_cost_net` — confirmed no second inline formula remains after `a008990`'s `legal.rs` refactor | **clean**, single source of truth, no sibling to diverge |
+| "Belongs to the current/older age" cutoffs that look similar but are different rules | Uprising's `discard_leader_unless_current_age` (`events.rs:1216`, `leader.get().age != state.age_civil` — discards a leader that does NOT match the current age exactly); `antiquate`'s hand/leader/wonder/pact culls (`game.rs:581/592/601/608/625`, `card.get().age as u8 < cutoff` — discards anything OLDER than the age that just ended) | **clean**: verified against RULES_SPEC.md and the card text that these are genuinely two different predicates (`!=` vs `<`), not the same rule reimplemented two ways with one side wrong |
+| Raid / `DestroyUrbanBuildings` age cutoffs | Producers: `combat::resolve_aggression` (`combat.rs:478-487`, one `QueueItem::Raid` enqueued per age in the card's own printed list) and `events`'s "destroy one urban building of each opponent" (`events.rs:1305-1314`, `max_age: Age::IV` used as a "no cap" sentinel); sole consumer `interact.rs:994-999` (`id.level() <= max_lv`) | **clean**: RULES_SPEC 5.5 confirms Raid II/III destroy TWO buildings under two INDEPENDENT age caps (e.g. "one of Age I or older AND one of Age II or older") — enqueuing one `Raid` per printed age, each with its own `<=` cutoff, is the correct rule, not a duplicated/diverged cutoff |
+| `FlipWonder`/`FreeBuild` age filters | Single producer (`events.rs`) / single consumer (`interact.rs:935-955` and `interact.rs:848-905` respectively) for each | **clean**, no second implementation exists to disagree with the first |
+| Neural-encoder and advisor I/O age fields | `push_onehot_age` (`bots/neural/encode.rs:436`) is the ONE function encoding `age_civil`, `age_military` AND `current_events_age` (`encode.rs:446-448`); `advisor::state_io`'s `age_str`/`parse_age` (`state_io.rs:436/446`) round-trip all three, and the civil/military `"age=X/Y"` split-on-`/` order (`state_io.rs:966-968`) matches the dump order (`state_io.rs:652-653`) exactly | **clean** |
+| `current_events_age` | Sole writer `events::sync_current_events_age` (`events.rs:613-616`); readers are only the encoder and the advisor dump/load pair above | **clean**, no independent recomputation anywhere |
+| `best_age_sibling`'s coupling to `state.age_civil` (flagged by name in this pass's brief as a "documented coupling" to check) | `replay_common.rs:3971` is the ONLY call site in the whole tree | **clean**: there is no second age-blind card-name disambiguator for it to silently disagree with |
+
+`game::force_civil_age_at_least`'s replayer-side deferral (the "run the age
+catch-up only once `state.pending`/`state.queue` are both drained" fix) was
+landed by a concurrent pass as commit `62befa4` while this inventory was
+being built; re-checked here only for the specific question this section
+asks (single funnel, no duplicate age-transition logic) and found to still
+hold — not re-touched.
