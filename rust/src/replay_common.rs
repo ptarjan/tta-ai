@@ -4704,7 +4704,7 @@ mod tests {
     #[test]
     fn a_patriotism_play_line_resolves_the_age_sibling_from_its_own_bonus_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let patriotism_a = CardId::by_name("Patriotism (A)").expect("in the table");
@@ -4740,7 +4740,7 @@ mod tests {
     #[test]
     fn a_reserves_play_line_resolves_the_age_sibling_from_its_own_gain_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let reserves_ii = CardId::by_name("Reserves (II)").expect("in the table");
