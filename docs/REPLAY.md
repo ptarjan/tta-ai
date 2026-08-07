@@ -1768,3 +1768,28 @@ open.
 | `IllegalMove: Bid` | 103 | **8** |
 | `UnrecoverableHiddenInfo: colonization bid ...` | 0 | **95** |
 | mean rounds reached / decisions Age II+ | unchanged (95 are a reclassification, not a fix) | unchanged |
+
+## Twelfth pass: REPLAYER BUG -- `resolve_intervening` treated "decider == expected_actor" as "nothing left to resolve," even with a live `Pending::Colonize`/`Pending::Auction` still open for that same player
+
+Root cause of 79 of the 178 `IllegalMove: Take` stops (44% of that bucket) and a chunk of the still-open `IllegalMove: Bid` gap. `resolve_intervening`'s job is to auto-resolve anything standing between "control returned to `state.current`" and the next real journal line; its one shortcut, `if decider == expected_actor { ...; return Ok(()); }`, was written for the ordinary case (a live political decision) and silently applied to two others it was never meant to cover:
+
+- A **`Pending::Colonize`** has no real `Move` anywhere in the journal's vocabulary at all -- this file always auto-drains it (`Replayer::auto_drain_colonize`). `decider == expected_actor` here just means the colonizer also happens to be up next for something unrelated (their own `Take`, on 72 games; found first on `7523355`, where Purple's own colonize sits undrained right up to their own next `Take Scientific Method` line) -- not that there is nothing to resolve.
+- A **`Pending::Auction`** still owed a real `Bid`/`BidPass` from `decider`, but the very next journal line is unrelated (7 games) -- because that decision is FORCED (their own `interact::max_force` ceiling no longer clears the standing bid) and BGO's UI auto-passes with no click to log, the same shape as `Pending::Defense`'s forced 0-defender `DefendDone`. Root-caused on `7523347`: a 4-way auction where the second-to-last bidder, already outbid past their own ceiling, has no "passes" line anywhere in the journal at all.
+
+Both are now handled explicitly, ahead of the shortcut, mirroring the `Pending::Choice(GainBlock/FreeBuild/DiscardMilitary)` cases already there: `Colonize` always drains; `Auction` defers to the real line only when the upcoming line actually is that decider's own `Bid`/`Pass`, otherwise auto-passes ONLY if `BidPass` is provably their sole legal move, and fails loudly (`StuckPending`) if a real raise was still available -- never guessing a human's decision. New tests pinning each shape, confirmed to fail with the fix reverted.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached (of 19.27) | 8.51 | **9.11** |
+| decisions in Age II or later | 23.1% | **28.2%** |
+| `IllegalMove: Take` | 178 | **148** |
+| games completed | 0 | 0 |
+
+Closing this wall exposed the usual next ones (small increases across every
+other bucket, including the `UnrecoverableHiddenInfo: colonization bid`
+count above -- more games now reach a real bid decision at all). Two new
+honest `StuckPending` reasons appeared (15 games total) where a bidder
+genuinely owed a real, un-loggable decision this file correctly refuses to
+guess at, rather than silently mis-resolving as before.

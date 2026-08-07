@@ -542,6 +542,61 @@ impl<'a> Replayer<'a> {
                     continue;
                 }
             }
+            // A live `Pending::Colonize` has no real `Move` anywhere in the
+            // journal vocabulary -- `docs/REPLAY.md`'s "gives up on"
+            // section: this file always auto-drains the sacrifice
+            // sequence, never grounds it to a real observed choice. Unlike
+            // the `Pending::Choice` cases above there is therefore no
+            // `matches_upcoming` escape hatch to check: `decider ==
+            // expected_actor` does NOT mean "nothing left to resolve" the
+            // way it does for a live political decision, it just means the
+            // colonizer also happens to be up next for something else
+            // entirely (their own Take/Build/... line, found on real games
+            // `7523355`/`7523090`/`7523072` and 69 others in the corpus),
+            // which cannot be legal while the colonize is still open. Drain
+            // unconditionally, same as the pre-existing fallback below did
+            // for the `decider != expected_actor` case -- this subsumes it.
+            if matches!(self.state.pending.top(), Some(Pending::Colonize(_))) {
+                self.auto_drain_colonize()?;
+                continue;
+            }
+            // A live `Pending::Auction` DOES have real `Move`s in the
+            // journal (`Bid`/`BidPass`, `ActionClass::Bid`/`Pass`) -- but
+            // only for the CURRENT decider's OWN upcoming response. When
+            // `decider == expected_actor` and the upcoming line is one of
+            // those, defer to it exactly like the `Pending::Choice` cases
+            // above. Otherwise the auction still owes a decision from
+            // `decider`, but the very next journal line is unrelated to it
+            // entirely -- which only happens when that decision is FORCED
+            // (their own `interact::max_force` ceiling no longer clears the
+            // standing bid, so `BidPass` is their only legal move) and
+            // BGO's UI auto-passes them with no click to log, the same
+            // "forced, single legal option, no journal trace" shape as
+            // `Pending::Defense`'s forced 0-defender `DefendDone` --
+            // confirmed against real game `7523347` (a 4-way auction where
+            // the second-to-last bidder's own concluding pass, having
+            // already been outbid past their own ceiling, is never logged
+            // at all). If more than `BidPass` is legally available here,
+            // this is a genuine unexplained gap, not a forced pass -- this
+            // binary must not silently pick a real decision for a human, so
+            // it fails loudly instead of guessing.
+            if matches!(self.state.pending.top(), Some(Pending::Auction(_))) {
+                let real_response = decider == expected_actor && matches!(upcoming.0, ActionClass::Bid | ActionClass::Pass);
+                if !real_response {
+                    let legal = legal::legal_moves(&self.state);
+                    if legal.as_slice() == [Move::BidPass] {
+                        apply::apply(&mut self.state, Move::BidPass);
+                        continue;
+                    }
+                    return Err(MismatchKind::StuckPending(format!(
+                        "auction decider {decider} owes a real bid/pass decision ({} legal moves) but \
+                         the upcoming line ({:?}) is neither, and more than BidPass is legally available \
+                         -- not a forced pass",
+                        legal.as_slice().len(),
+                        upcoming.0,
+                    )));
+                }
+            }
             if decider == expected_actor {
                 let own_politics_decision = self.state.phase == Phase::Politics && self.state.pending.is_empty();
                 // A preparation whose own line is already behind us outranks
@@ -571,12 +626,11 @@ impl<'a> Replayer<'a> {
                         .ok_or_else(|| MismatchKind::StuckPending("PactOffer choice has no Refuse option".into()))?;
                     apply::apply(&mut self.state, Move::Choose { n: n as u8 });
                 }
-                Some(Pending::Auction(_)) => {
-                    apply::apply(&mut self.state, Move::BidPass);
-                }
-                Some(Pending::Colonize(_)) => {
-                    self.auto_drain_colonize()?;
-                }
+                // Handled unconditionally above, before the `decider ==
+                // expected_actor` check -- both `continue` or `return Err`
+                // from there, so neither can still be on top by this point.
+                Some(Pending::Auction(_)) => unreachable!("Pending::Auction is drained above this match"),
+                Some(Pending::Colonize(_)) => unreachable!("Pending::Colonize is drained above this match"),
                 Some(Pending::Defense(_)) => {
                     // A live defense should always be resolved inline right
                     // after the triggering Aggression (see
@@ -2960,12 +3014,22 @@ mod tests {
     /// winner) as its actor. If `resolve_intervening` is (wrongly) called
     /// for that confirmation line -- i.e. if a future edit ever removes
     /// `WinAuction` from `is_pure_confirmation_line` -- `decider() (0) !=
-    /// expected_actor (1)` sends it straight to the generic
-    /// `Pending::Auction` auto-drain fallback, which synthesizes a FAKE
-    /// `Move::BidPass` for player 0 on the spot: this test confirms that is
-    /// exactly what the fallback does when reached directly, which is why
-    /// `replay_game`'s main loop must never reach it for a `WinAuction`
-    /// line at all (skipping the call, as `is_pure_confirmation_line`
+    /// expected_actor (1)` sends it straight into the `Pending::Auction`
+    /// handling above, which (since `decider != expected_actor`, so this is
+    /// not player 0's own real response) applies a FAKE `Move::BidPass` for
+    /// player 0 on the spot: this test confirms that is exactly what
+    /// happens when reached directly. Before `bid_ceiling_mismatch`'s
+    /// sibling fix (`Pending::Colonize` now drains unconditionally, not
+    /// only once `decider` happens to stop matching `expected_actor`), the
+    /// consequence was silent: player 1's newly-opened colonize sat
+    /// undrained and this call still reported `Ok`. Now it drains
+    /// immediately, control returns to `state.current` (player 0, who
+    /// never really acted), and `decider (0) != expected_actor (1)` with an
+    /// empty, non-Politics pending surfaces as a loud `StuckPending` --
+    /// worse in the sense that it stops a game, but honest instead of
+    /// silently corrupting one, and it is still exactly why
+    /// `replay_game`'s main loop must never reach this call for a
+    /// `WinAuction` line at all (skipping it, as `is_pure_confirmation_line`
     /// makes it do, leaves the auction's `player: 0` genuinely pending for
     /// their own real, upcoming line to resolve instead).
     #[test]
@@ -2978,10 +3042,12 @@ mod tests {
             .find(|id| id.kind() == CardType::Territory)
             .expect("the base game table has at least one Territory card");
         // Mirrors the real shape found on `7522652`: player 1 already placed
-        // the high bid (4), and player 0 (`active[1]`, `pos: 1`) is the
-        // still-outstanding decider -- if they ALSO pass, player 1 becomes
-        // the sole active bidder holding the high bid and wins outright.
-        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 4, Some(1), 0)));
+        // the high bid (1 -- a fresh round-1 player's own starting Warrior is
+        // their entire force, `interact::max_force` == 1), and player 0
+        // (`active[1]`, `pos: 1`) is the still-outstanding decider -- if they
+        // ALSO pass, player 1 becomes the sole active bidder holding the
+        // high bid and wins outright.
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 1, Some(1), 0)));
         r.state.phase = Phase::Actions;
         assert_eq!(r.state.decider(), 0); // player 0's own bid/pass is still outstanding
 
@@ -2990,16 +3056,114 @@ mod tests {
         // if it were not excluded from this call entirely.
         let result = r.resolve_intervening(1, (ActionClass::WinAuction, Some(territory)), false);
 
-        assert!(result.is_ok());
-        // Player 0's own decision was fabricated and consumed sight-unseen:
-        // with only player 1 left active, the auction auto-resolves them as
-        // the winner and immediately opens THEIR colonize pending -- there
-        // is no longer anything for player 0's real, still-unread
-        // "passes"/"bids" line to apply to. Exactly the bug this file's
-        // `is_pure_confirmation_line` exclusion prevents in the real
-        // per-line loop.
-        assert_ne!(r.state.decider(), 0);
+        // Player 0's own decision was fabricated and consumed sight-unseen,
+        // and player 1's colonize (now correctly auto-drained) leaves
+        // control back with player 0 (`state.current`, untouched by any of
+        // this) -- who this call was never actually resolving a path
+        // toward, hence the loud failure.
+        assert!(matches!(result, Err(MismatchKind::StuckPending(_))), "expected StuckPending, got {result:?}");
+        assert!(r.state.pending.is_empty(), "the fabricated colonize should still have drained to completion");
+    }
+
+    /// REGRESSION (real BGO game `7523355`, and 71 others like it in the
+    /// 1,011-game corpus): a `Pending::Colonize` has no real `Move` anywhere
+    /// in the journal's vocabulary, so `decider == expected_actor` must
+    /// never be read as "nothing left to resolve" while one is open --
+    /// the colonizer can genuinely be up next for something else entirely
+    /// (here, their own `Take`), which cannot be legal until the colonize
+    /// itself drains.
+    #[test]
+    fn resolve_intervening_drains_the_colonizers_own_pending_colonize_even_when_they_are_also_next_up_for_something_unrelated(
+    ) {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        // A second unit type (on top of player 0's starting Warrior) so the
+        // very first colonize decision genuinely has TWO answers
+        // (`SendUnit { card: Warriors }` or `SendUnit { card: Swordsmen }`)
+        // and `interact::colonize`'s own single-option auto-resolve
+        // (`colonize_auto`) cannot silently finish it before
+        // `resolve_intervening` is ever called -- matching the real shape
+        // (multiple still-open sacrifice options) found on `7523355` and
+        // the corpus generally.
+        r.state.players[0]
+            .techs
+            .insert(CardId::by_name("Swordsmen").expect("base game card"), crate::state::TechSlot { workers: 1, stored: 0 });
+        crate::interact::colonize(&mut r.state, 0, territory, 1);
         assert!(matches!(r.state.pending.top(), Some(Pending::Colonize(_))));
+        assert_eq!(r.state.decider(), 0);
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        assert!(r.state.pending.is_empty(), "the colonize should have drained fully, unblocking the Take");
+    }
+
+    /// REGRESSION (real BGO game `7523347`, a 4-player auction): once a
+    /// bidder is outbid past their own `interact::max_force` ceiling,
+    /// `BidPass` is their only legal move and BGO's UI auto-passes them
+    /// with no click to log at all -- the same shape as `Pending::Defense`'s
+    /// forced 0-defender `DefendDone`. `resolve_intervening` must apply
+    /// that forced pass even when `decider == expected_actor`, rather than
+    /// assuming a matching decider means the upcoming (unrelated) line will
+    /// resolve it.
+    #[test]
+    fn resolve_intervening_auto_passes_a_bidder_whose_own_ceiling_no_longer_clears_the_standing_bid() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        // Player 1 gets a second unit (so THEY can actually pay a winning
+        // bid of 2 once player 0 is forced out -- otherwise this fixture
+        // would trip the unrelated "colonize force can never reach the
+        // bid" case instead of the one under test). Player 0's own ceiling
+        // stays at 1 (their starting Warrior alone); the standing bid is
+        // already 2, above it, so `BidPass` is their only legal move at
+        // this decision -- but the upcoming line is their own unrelated
+        // `Take`, not a `Bid`/`Pass` line at all.
+        r.state.players[1]
+            .techs
+            .insert(CardId::by_name("Swordsmen").expect("base game card"), crate::state::TechSlot { workers: 1, stored: 0 });
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[0, 1], 0, 2, Some(1), 0)));
+        r.state.phase = Phase::Actions;
+        assert_eq!(r.state.decider(), 0);
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "expected Ok (a forced pass), got {result:?}");
+        // Player 0 has passed; player 1 is now the sole active bidder and
+        // wins outright, opening THEIR colonize -- which also drains
+        // unconditionally (the sibling fix above), so nothing is left
+        // pending for player 0's real Take line to be blocked by.
+        assert!(r.state.pending.is_empty(), "player 1's resulting colonize should also have drained");
+    }
+
+    /// Companion to the two tests above: an auction decider who genuinely
+    /// still has a real raise available (more than `BidPass` is legal) must
+    /// never be silently auto-passed -- that would be guessing a human's
+    /// decision, not resolving a forced one. This must surface as a loud
+    /// `StuckPending`, not a fabricated `Ok`.
+    #[test]
+    fn resolve_intervening_refuses_to_guess_when_a_real_raise_is_still_available() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        // Player 0's own ceiling is 1; the standing bid is 0 (nobody has
+        // bid yet), so raising to 1 is a real, legal option -- not forced.
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[0, 1], 0, 0, None, 0)));
+        r.state.phase = Phase::Actions;
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(matches!(result, Err(MismatchKind::StuckPending(_))), "expected StuckPending, got {result:?}");
     }
 
     /// REGRESSION (the whole point of `event_plan`; the shape that broke
