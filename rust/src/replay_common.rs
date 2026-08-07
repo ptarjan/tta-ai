@@ -3550,6 +3550,34 @@ fn apply_one(
                             .any(|s| matches!(s, crate::cards::Special::GainFoodOrResources(v) if *v as i32 == n))
                     })
                 })
+            })
+            // Cultural Heritage (`gainScience` 1/2 for age A/I) and
+            // Revolutionary Idea (`gainScience` 4/6 for age II/III): neither
+            // has a `FreeCivilAction`/other `Special` at all (`special:
+            // &[]`), and neither prints "military resource" or a
+            // food/resources "produces" clause, so none of the three
+            // clauses above ever fire for them -- the SAME "no kind match,
+            // `solved` stays `None`, trust whatever `best_age_sibling`
+            // guessed at take time" gap the Patriotism/Reserves fixes
+            // closed for their own families (`docs/REPLAY.md`'s
+            // Build/Upgrade/WonderStep handoff named these two as
+            // unchecked). Reuses `trailing_gets_science` (already used for
+            // Breakthrough's `Move::Develop`/`Move::Revolution` case) --
+            // corpus-confirmed it does not confuse Cultural Heritage's
+            // trailing "<Color> scores 4 culture" clause with the "<Color>
+            // gets N science" one before it (`rfind(" gets ")` only ever
+            // sees the "gets" clause, "scores" has no "gets" substring).
+            // Gated on `base_name`, unlike Patriotism/Reserves above, which
+            // gate implicitly through their own `Special`/text shape --
+            // there is no such self-gating signal for a bare `gainScience`
+            // number, so an ungated version could misfire on an unrelated
+            // card that happens to print a coincidentally-matching "gets N
+            // science" clause.
+            .or_else(|| {
+                matches!(named.get().base_name, "Cultural Heritage" | "Revolutionary Idea")
+                    .then(|| trailing_gets_science(raw_text))
+                    .flatten()
+                    .and_then(|n| family_siblings(named).into_iter().find(|id| id.get().effects.gain_science as i32 == n))
             });
             let card = solved.unwrap_or_else(|| {
                 r.state.players[actor as usize]
@@ -5233,6 +5261,77 @@ mod tests {
         assert_eq!(p.resources, 3, "Age II's printed gain (3), not Age III's wrong one (4)");
         assert!(!p.hand_civil.contains(reserves_iii), "the wrong age guess was corrected, not played as-is");
         assert!(!p.hand_civil.contains(reserves_ii), "the corrected card was then played (removed), not left in hand");
+    }
+
+    /// REGRESSION, same shape as the Patriotism/Reserves tests above --
+    /// this pass's own task: `docs/REPLAY.md`'s Build/Upgrade/WonderStep
+    /// handoff explicitly named Cultural Heritage and Revolutionary Idea as
+    /// the two remaining age-scaled action-card families never checked.
+    /// Cultural Heritage has no `Special` at all (`gainScience`/
+    /// `gainCulture` only), so nothing routes it through the `kind` match,
+    /// and a wrong take-time age guess would silently apply the WRONG age's
+    /// science/culture gain.
+    #[test]
+    fn a_cultural_heritage_play_line_resolves_the_age_sibling_from_its_own_science_clause_not_the_earlier_take_guess() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
+        let heritage_a = CardId::by_name("Cultural Heritage (A)").expect("in the table");
+        let heritage_i = CardId::by_name("Cultural Heritage (I)").expect("in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.civil_actions = 4;
+            p.hand_civil = CardList::new();
+            // The earlier take-time guess put the WRONG age-sibling in hand
+            // (Age I: gainScience 2, gainCulture 2) when the real card is
+            // Age A (gainScience 1, gainCulture 4, matching the line's own
+            // "gets 1 science; scores 4 culture" evidence below).
+            p.hand_civil.push(heritage_i);
+        }
+
+        let raw = "Orange plays Cultural Heritage Orange gets 1 science; Orange scores 4 culture";
+        let out = apply_one(&mut r, 0, ActionClass::PlayActionCard, Some(heritage_a), "plays Cultural Heritage Orange gets 1 science; Orange scores 4 culture", raw, None);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert_eq!(p.science, 1, "Age A's printed science gain (1), not Age I's wrong one (2)");
+        assert_eq!(p.culture, 4, "Age A's printed culture gain (4), not Age I's wrong one (2)");
+        assert!(!p.hand_civil.contains(heritage_i), "the wrong age guess was corrected, not played as-is");
+        assert!(!p.hand_civil.contains(heritage_a), "the corrected card was then played (removed), not left in hand");
+    }
+
+    /// Same shape, Revolutionary Idea's side: no culture clause at all
+    /// (`gainScience` only, 4 vs 6 for age II/III), pinning that
+    /// `trailing_gets_science`'s reuse here does not depend on a
+    /// following "scores" clause being present.
+    #[test]
+    fn a_revolutionary_idea_play_line_resolves_the_age_sibling_from_its_own_science_clause_not_the_earlier_take_guess() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2;
+        let idea_ii = CardId::by_name("Revolutionary Idea (II)").expect("in the table");
+        let idea_iii = CardId::by_name("Revolutionary Idea (III)").expect("in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.civil_actions = 4;
+            p.hand_civil = CardList::new();
+            // The earlier take-time guess put the WRONG age-sibling in hand
+            // (Age III, gainScience 6) when the real card is Age II
+            // (gainScience 4, matching the line's own "gets 4 science"
+            // evidence below).
+            p.hand_civil.push(idea_iii);
+        }
+
+        let raw = "Orange plays Revolutionary Idea Orange gets 4 science";
+        let out = apply_one(&mut r, 0, ActionClass::PlayActionCard, Some(idea_ii), "plays Revolutionary Idea Orange gets 4 science", raw, None);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert_eq!(p.science, 4, "Age II's printed gain (4), not Age III's wrong one (6)");
+        assert!(!p.hand_civil.contains(idea_iii), "the wrong age guess was corrected, not played as-is");
+        assert!(!p.hand_civil.contains(idea_ii), "the corrected card was then played (removed), not left in hand");
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
