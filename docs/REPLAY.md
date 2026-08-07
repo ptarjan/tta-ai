@@ -6199,3 +6199,159 @@ divergences dropped from 992 to 941 games, oracle agreement 62.6% ->
    card was never drawn at all, so there is no filler to sacrifice and the
    old net-zero wash still applies) or whether an entirely different
    mechanism is now the dominant one.
+
+## `Take`/`HandFull` handoff, closed with a SECOND full negative: a third independent from-scratch trace (including matched Take/PutBack pairs) confirms hand size and limit are both exactly right -- every remaining lead now funnels back to the previously-reverted `>=`/`>` boundary, NOT touched per standing instruction
+
+Picked up the still-open `HandFull` lead from the "Cost-cluster pass" section
+above (`Take` 129, `HandFull` 109 of 123 named rejections corpus-wide as of
+`38bcaa5`, unchanged in shape from the prior pass's 109/123). Assigned
+explicitly to rule out a MISSING POP -- a card the real player no longer
+held that this reconstruction's `hand_civil` still carries -- as the
+remaining explanation, since the limit side (`civil_hand_limit`) was already
+independently cross-checked against the official card source twice over.
+
+**Re-verified the starting point first, on latest `master` (`38bcaa5`, the
+concurrent civil-age-drift instrument landed since `cfe7d9f`)**: both of the
+prior pass's own worked examples (`7523357` line 442, `7523003` line 222)
+reproduce byte-for-byte identically under the enriched `TAKE REJECT` debug
+line -- the age-drift instrumentation that landed in between does not touch
+this bucket at all (confirmed, not assumed: `REPLAY_DEBUG=1 ./target/
+difftest/replay` against both game IDs, diffed against the prior pass's own
+quoted output).
+
+**Method** (per the brief's own instruction, and this doc's repeated
+lesson: don't reimplement the rules in a side script, trace by hand against
+the raw journal text): for `hand_civil` to be right, EVERY push must trace
+to a real `"takes X in hand"` line and every card that should have LEFT by
+the failure point must trace to a real play/develop/discover/revolution
+line, a `"using Y"` free-civil-action discount play, a leader replacement,
+OR a matched `Take`+`PutBack` client-side-undo pair (`corpus.rs`'s
+`ActionClass::PutBack` -- BGO logs a human's own take-back as a second
+journal line; `replay_common.rs`'s own doc: "a matched Take/PutBack pair is
+never applied to the engine at all"). Re-derived this by hand from the raw
+`.tsv`, line by line, for a THIRD example not covered by either prior
+pass's trace, deliberately picked to stress-test the matched-pair and
+free-civil-action paths the first two examples barely touched:
+
+**Game `7522481` line 189** (`"Purple takes Engineering Genius in hand"`,
+2p, Purple, round 11, government Monarchy, leader Isaac Newton not yet
+elected -- `hand_civil_size=6`, `civil_hand_limit=6`): re-derived Purple's
+ENTIRE civil-hand history from scratch across 182 prior journal lines,
+tracking every push (`"takes"`), the four known pop sites (leader replace,
+develop, revolution, play-action -- none used this game), every
+`"using <Card>"` free-civil-action discount play (three: `"builds
+Philosophy using Urban Growth"` line 35, `"plays Engineering Genius"` line
+50 ordering a wonder-stage build, `"upgrades Bronze to Iron using Rich
+Land"` line 142 -- all three correctly pop their discount card), and TWO
+matched `Take`+`PutBack` pairs (`"takes Knights"`/`"puts Knights back"`
+lines 89-90, `"takes Patriotism"`/`"puts Patriotism back"` lines 164-165,
+plus a THIRD at lines 185-187 for a re-taken `Engineering Genius`). The
+hand-derived-by-hand result at line 189, independent of this binary's own
+bookkeeping: `["Swordsmen", "Cavalrymen", "Efficient Upgrade (II)",
+"Reserves (II)", "Organized Religion", "Isaac Newton"]` -- **six cards,
+exactly matching this binary's own `hand_civil` dump, in composition (not
+just count)**. `civil_hand_limit`: Monarchy's own printed `CA=6`
+(cross-checked again against `sources/bga_throughtheages_material.inc.php`)
+plus zero hand-limit bonus (only Pyramids is completed, which grants none;
+Library of Alexandria, the one card in the whole data set with
+`civil_hand_limit: 1`, is not in play) = 6, matching exactly.
+
+**Result: THIRD independent trace, THIRD exact match, zero discrepancy.**
+Combined with the prior pass's two examples (`7523357`, pure `hand_civil`
+provenance, no matched pairs; `7523003`, one free-civil-action pop), this
+now covers every hand-mutating mechanism this codebase models (all four
+pop sites, three flavors of `"using <Card>"` free-civil-action play, and
+three matched Take/PutBack undo pairs) with zero counterexamples across
+three separately-chosen games. The 98-game push/pop provenance audit two
+passes back (`docs/REPLAY.md`, "HandFull handoff, closed with a full
+negative") already established this structurally (`hand_civil` has exactly
+one push site, four pop sites, 517 accounted pairs); this pass adds
+line-by-line agreement against the raw journal text itself, independent of
+this binary's own bookkeeping, on a THIRD game chosen specifically to
+exercise the two mechanisms (`PutBack`, `"using"` free-civil-action plays)
+the provenance audit's own push/pop-count method could not directly see
+into. **The missing-pop hypothesis is now ruled out as thoroughly as this
+project's own standing methods allow.**
+
+**Also ruled out this pass, cleanly, with counter-evidence from the SAME
+two examples**: the previous handoff's own suggested "last civil action of
+the turn" carve-out (take something you're about to immediately spend your
+final CA playing down). `7523357` line 442 is followed by `"Green builds
+Knights"` (a DIFFERENT card, not the one just taken) with the turn
+continuing after; `7522481` line 189 fires with `civil_actions=2` still
+unspent (`gate_have=2` in the `TAKE REJECT` dump) -- two CAs left, nowhere
+near the turn's last action. Both counterexamples independently kill this
+theory; not pursued further.
+
+**Also re-verified, independently, this pass**: the "action cards might be
+exempt from the hand limit" theory this pass's own worked example initially
+suggested (`7523003`'s rejected hand is 3/4 action cards: two `Rich Land`,
+one `Urban Growth`) -- checked against `docs/RULES_SPEC.md` §6.7 ("civil
+hand limit = civil action total ... enforced only when taking cards", no
+type exception stated) and independently against outside community sources
+(BoardGameGeek rules-question threads on this exact mechanic): "action cards
+are civil cards ... they follow the same hand limit rules as other civil
+cards when drafted from the card row -- they are not exempt." `7523357`'s
+own hand (`["Frugality (II)", "Wave of Nationalism", "Riflemen", "Coal",
+"Journalism", "Military Build-Up", "Rich Land (II)"]`) is majority
+TECHNOLOGY cards anyway, independently falsifying the theory even without
+the outside sources. Ruled out.
+
+**Where this leaves the bucket**: every avenue this doc's own accumulated
+method can reach is now exhausted with a negative result. Hand size is
+provably right (three independent from-scratch traces). The limit is
+provably right (government `CA` and every hand-limit-granting card's bonus
+cross-checked against `sources/bga_throughtheages_material.inc.php` on all
+three examples spanning Despotism, Constitutional Monarchy, and Monarchy).
+No carve-out for imminent replay, no action-card exemption. **Every
+remaining explanation funnels back to `costs::take_gate`'s `hand_full =
+hand_size_civil() >= civil_hand_limit` itself** -- exactly the comparison a
+previous pass changed to `>` (commit `b8f84aa`, RULES_SPEC updated to
+match, 70 games fixed, corpus-wide **first-ever full game completions** --
+8 of 1,011), then reverted the same day (`9d02057`) on the strength of
+`docs/RULES_SPEC.md`'s own `>=` citation plus outside community
+cross-checks. This pass's own outside-source check (previous paragraph)
+independently reproduces that same `>=` reading ("at or above the limit,
+you may not add another civil card ... by any means") -- so the textbook
+rule, cross-checked twice now by two different passes, really does appear
+to be `>=`, and yet three separately hand-verified real games each show a
+human taking a card with their hand ALREADY at that exact boundary, with no
+error or undo logged afterward. **Per this project's explicit standing
+instruction this pass did NOT re-open or re-touch that comparison** --
+still `>=`, unchanged, per the hard rule this brief and the prior revert
+both state. Not fixed.
+
+**A structural note for whoever next has standing to revisit the "settled"
+call**: `costs::take_gate`/`can_take_gated`/`take_rejection` are the SAME
+shared function serving both `legal::legal_moves` (what the self-play
+engine believes is legal, and therefore what it trains bots against) and
+this replayer's own `try_apply` gate (what a real, already-happened BGO
+game is allowed to have done). Those are two different jobs with two
+different costs of being wrong: a bot that believes it can exceed the real
+rule's hand limit would be training against a rule no live opponent
+actually enforces (bad); a replayer that refuses to reproduce a game a real
+human actually played (the entire 109-game `HandFull` bucket, now the
+single largest named stall in the corpus) is failing at its one job today.
+If BGO's own live server enforcement genuinely is `>` rather than the
+rulebook's textbook `>=` -- plausible; BGO is a digital implementation, not
+the rulebook itself, and this project has already found one confirmed
+digital-vs-rulebook mismatch this pass (Shakespeare's Library/Theater
+discount, `753b7ba`) -- then the SELF-PLAY-facing gate and the
+REPLAYER-facing gate arguably have license to diverge on purpose (train
+bots against the stricter textbook `>=`; replay real BGO games against
+BGO's own observed `>`), which `costs::take_gate` being one shared function
+cannot express today. That would be a deliberate architectural decision
+(a second, replayer-only gate, or a documented parameter), not a
+one-line comparison flip re-litigated on corpus evidence alone -- exactly
+the distinction the previous revert's own coordinator review drew a line
+at. This pass surfaces the evidence and the shape of that decision but does
+not make it.
+
+### Measurement (`replaystats`, full 1,011-game corpus, `38bcaa5`)
+
+No code changed this pass (the standing instruction blocked the one lever
+every trace points at) -- re-measured anyway to confirm the corpus is
+otherwise unchanged from this pass's own starting point: 58/1,011 games
+complete, `IllegalMove: Take` 129, `HandFull` share unchanged (109/123
+named rejections). No regression, no improvement -- expected for an
+investigate-only pass.
