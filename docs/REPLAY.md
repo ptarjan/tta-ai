@@ -1712,3 +1712,59 @@ this file: closing one wall exposes the next one, visible as small increases
 across `Pop`/`Take`/`Bid`/`Build`/`Destroy`/`WonderStep`/`Upgrade`/`Develop`
 and a few others). None of those buckets belong to this pass and none were
 touched.
+
+## Eleventh pass: `IllegalMove: Bid` (103 games) -- 95 reclassified as honest hidden info, not fixed; 8 left open with a different, already-known cause
+
+Not an engine bug. `interact::max_force`'s ceiling depends on `bonus_pool`,
+which reads `p.hand_military` directly -- and this file's own top doc
+comment already establishes that hand is SIMULATED filler for essentially
+its entire content: a military bonus card enters a real player's hand via
+an anonymous end-of-turn draw and is never grounded to its true identity
+unless the journal later shows it PLAYED. A bidder can genuinely be holding
+one this binary has never observed, so its computed ceiling is a LOWER
+bound, not an exact figure. Sub-histogram of the 103 (by shape, not by
+mechanic -- there is only one mechanic here):
+
+| shape | count | 
+|---|---|
+| a real raise (`n` > current high bid) that exceeds this binary's own computed ceiling by 1-6 (mode 1) | 95 |
+| the auction itself is missing (`legal_moves` shows ordinary Action-phase moves, no `Pending::Auction` at all) | 7 |
+| a `Pending::Colonize` from a DIFFERENT, still-open auction is on top | 1 |
+
+The 95: confirmed by direct inspection (`REPLAY_DEBUG`) that the bidder's
+reconstructed hand at the failure point holds zero `Bonus`-type cards in
+every case, while the attempted bid consistently exceeds the computed
+ceiling by a small amount (1-6, matching "one or two hidden bonus cards
+worth 1-3 each," not a large or systematic offset that would indicate a
+missed rule). `bid_ceiling_mismatch` (`replay_common.rs`) now reports these
+as `MismatchKind::UnrecoverableHiddenInfo` instead of `IllegalMove` --
+narrowly, only when the bid is a genuine raise against the correctly
+identified bidder and exceeds their own computed ceiling, so an actual
+engine defect elsewhere still reports as `IllegalMove` unchanged. This is a
+RECLASSIFICATION, not a fix: these games still stop in the same place: it
+replaces a label that implied "possible engine bug" with the honest reason,
+matching this file's own `UnrecoverableHiddenInfo: build cost mismatch`
+bucket's precedent.
+
+The remaining 8 are NOT the same bug. Traced one (`7521428`) end to end:
+`interact::start_auction` correctly computes the eventual bidder's force as
+0 and silently files the territory to `past_events`, skipping the auction
+entirely -- and the true player, per the journal, really did have 0 units
+built at that exact moment... EXCEPT that two colonize auctions earlier in
+the SAME game, `Replayer::auto_drain_colonize` (the already-documented
+"does NOT verify which units were spent" approximation) always picks the
+engine's cheapest offered `SendUnit` first, which is not necessarily the
+unit the real human sacrificed. Over multiple colonizations this can
+deplete a cheap unit type (Warriors) that the real player still had in
+hand by choosing bonus cards instead. Fixing this needs the same
+`"Sacrificed Units:; ..."`-grounding this file's own "gives up on" section
+already flags as unimplemented, not something new to this pass -- left
+open.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| `IllegalMove: Bid` | 103 | **8** |
+| `UnrecoverableHiddenInfo: colonization bid ...` | 0 | **95** |
+| mean rounds reached / decisions Age II+ | unchanged (95 are a reclassification, not a fix) | unchanged |

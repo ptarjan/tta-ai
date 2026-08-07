@@ -1922,6 +1922,52 @@ fn free_civil_action_move(
     }
 }
 
+/// Distinguishes a genuine engine/parser disagreement on a rejected `"<Color>
+/// bids N"` line from this file's own documented "`hand_military` is
+/// SIMULATED filler for essentially its entire content" gap (this module's
+/// top doc comment, and `docs/REPLAY.md`'s "military-hand cards are never
+/// named at draw time" finding): a military bonus card enters a real
+/// player's hand via an anonymous end-of-turn draw and is never grounded to
+/// its true identity unless the journal later shows it PLAYED (`interact::
+/// bonus_pool` -- read by [`interact::max_force`], the auction ceiling --
+/// reads `p.hand_military` directly, so an unplayed real bonus card this
+/// binary never observed is invisible to it). §11.3's colonization force is
+/// therefore only a LOWER bound here, not an exact figure, for any bidder
+/// who might be holding one.
+///
+/// Returns `Some(UnrecoverableHiddenInfo)` only when the rejection is
+/// SPECIFICALLY explained by that gap: `n` is a genuine raise (exceeds the
+/// auction's current high bid, so it is not some other kind of malformed
+/// bid) against the correct, currently-deciding bidder (`actor == a.
+/// player`, so this is not an acting-player mismatch), and it exceeds this
+/// binary's own computed ceiling. Returns `None` (keep the original
+/// `IllegalMove`) for every other shape, including the auction having
+/// already closed by the time this line is reached -- that is a different,
+/// already-documented gap (the colonize-sacrifice auto-drain approximation
+/// consuming more of an earlier winner's own units than the journal's own
+/// `"Sacrificed Units:"` line says it spent, see [`Replayer::
+/// auto_drain_colonize`]), not this one, and deserves its own honest
+/// `IllegalMove` / `StuckPending` report rather than being folded in here.
+fn bid_ceiling_mismatch(r: &Replayer, actor: u8, n: u8) -> Option<MismatchKind> {
+    let Some(Pending::Auction(a)) = r.state.pending.top() else { return None };
+    if a.player != actor {
+        return None;
+    }
+    if n as i32 <= a.bid as i32 {
+        return None;
+    }
+    let ceiling = crate::interact::max_force(&r.state, &r.state.players[a.player as usize]);
+    if n as i32 <= ceiling {
+        return None;
+    }
+    Some(MismatchKind::UnrecoverableHiddenInfo(format!(
+        "colonization bid of {n} exceeds this binary's computed force ceiling ({ceiling}) for \
+         the correctly-resolved bidder -- a military bonus card sitting unplayed in their hand \
+         is SIMULATED filler, not a reconstructed identity, until the journal shows it played \
+         (not a parser gap: the bidder and the auction are both correctly resolved)"
+    )))
+}
+
 /// Translates one already-classified, already-actor-resolved journal line
 /// into the `Move`(s) it represents and applies them. `rest` is the text
 /// right after `"<Color> "` (what `tta::corpus::classify_after_actor`
@@ -2290,7 +2336,12 @@ fn apply_one(
                 .and_then(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit() && !c.is_ascii_digit()).parse::<u8>().ok())
                 .or_else(|| rest.strip_prefix("bids ").and_then(|s| s.split_whitespace().next()).and_then(|s| s.parse::<u8>().ok()))
                 .ok_or_else(|| MismatchKind::ParserGap("could not parse bid amount".into()))?;
-            r.try_apply(Move::Bid { n }, true)
+            match r.try_apply(Move::Bid { n }, true) {
+                Err(MismatchKind::IllegalMove { attempted, legal_moves }) => {
+                    Err(bid_ceiling_mismatch(r, actor, n).unwrap_or(MismatchKind::IllegalMove { attempted, legal_moves }))
+                }
+                other => other,
+            }
         }
         ActionClass::WinAuction => Ok(()), // automatic settlement of Pending::Auction; validation checkpoint only
         ActionClass::Pass => {
@@ -2746,6 +2797,62 @@ mod tests {
 
     /// `is_pure_confirmation_line`'s membership is what routes `PlayEvent`,
     /// `WinAuction`, and `Colonize` lines around `resolve_intervening`
+    /// REGRESSION (real BGO game `7523818`, and 94 others like it in the
+    /// 1,011-game corpus -- `bid_ceiling_mismatch`'s own doc comment).
+    /// Player 0 starts (`game::new_game`, round 1, before any end-of-turn
+    /// draw) with exactly one Warriors worker and an empty military hand --
+    /// `interact::max_force` computes exactly 1 for them. A bid of 3
+    /// against a standing high bid of 2 is a real raise this binary cannot
+    /// afford under its own reconstructed state, but it must not be
+    /// reported as the same `IllegalMove` an actual engine defect would
+    /// produce: the true cause this binary can never rule out is a military
+    /// bonus card sitting unplayed (and therefore unidentified) in the
+    /// bidder's hand.
+    #[test]
+    fn a_bid_that_exceeds_this_binarys_own_force_ceiling_is_reported_as_hidden_info_not_illegal_move() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        r.state.phase = Phase::Actions;
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        assert_eq!(
+            crate::interact::max_force(&r.state, &r.state.players[0]),
+            1,
+            "fixture assumption: a fresh player 0 can send exactly their starting Warrior"
+        );
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[0, 1], 0, 2, Some(1), 0)));
+
+        let result = apply_one(&mut r, 0, ActionClass::Bid, None, "bids 3", "Orange bids 3", None);
+
+        assert!(
+            matches!(result, Err(MismatchKind::UnrecoverableHiddenInfo(_))),
+            "expected UnrecoverableHiddenInfo, got {result:?}"
+        );
+    }
+
+    /// Companion to the test above: reverting `bid_ceiling_mismatch` to
+    /// `None` (i.e. deleting the reclassification and always keeping
+    /// `try_apply`'s own `IllegalMove`) must turn this same fixture back
+    /// into a plain `IllegalMove` -- confirming the test actually exercises
+    /// the new code path rather than passing for an unrelated reason.
+    #[test]
+    fn without_the_reclassification_the_same_fixture_would_be_a_bare_illegal_move() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        r.state.phase = Phase::Actions;
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[0, 1], 0, 2, Some(1), 0)));
+
+        let result = r.try_apply(Move::Bid { n: 3 }, true);
+
+        assert!(matches!(result, Err(MismatchKind::IllegalMove { .. })), "expected a bare IllegalMove, got {result:?}");
+    }
+
     /// entirely in `replay_game`'s main loop -- this pins the exact set so
     /// a future edit that silently drops one back into the "must call
     /// resolve_intervening" path is caught here rather than only as a
