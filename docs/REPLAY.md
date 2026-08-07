@@ -6549,3 +6549,124 @@ pass:
 No code change to `costs::take_gate`. Corpus unaffected by this pass's
 findings (58/1,011 complete, `Take` 129, `HandFull` 109/123 -- the one new
 test does not change any runtime behavior).
+
+## Civil deck model: root-caused and closed -- option (a), lockstep draining, is provably NOT achievable; option (b), journal-driven age with the deck's own SIZE decoupled from control flow, is what landed (`38bcaa5`, `b3f099c`)
+
+Picked up the shared-root-cause task this file's own two prior sections named
+(the `HandFull` handoff's civil-age LAG and the Second `IllegalMove: Pop`
+pass's civil-age EARLY-advance lead, game `7523449`): is `civil_deck`'s own
+SIZE fixable so `game::advance_age`'s deck-empty trigger fires at the right
+time on its own, or is the honest answer that it cannot be, and the journal's
+own `Line::age` should be the sole authority instead?
+
+**Answer: NOT achievable, confirmed structurally, not by giving up early.**
+Traced why with `TMP_DECK_TRACE`-style instrumentation (temporary, not
+committed) on `7523449`: `Replayer::ground_row_slot` reports a same-cost TIE
+-- several candidate row slots that all reproduce the journal's own stated
+civil-action cost for a Take -- on very nearly every single Take in the
+corpus, not a rare edge case. The reason is structural: `costs::row_cost`'s
+three price bands (1/2/3 civil actions) are wide (5/4/4 slots), but
+`game::replenish`'s own mandatory sweep -- discard the leftmost `sweep_n`
+slots every turn, UNCONDITIONALLY, `sweep_n` is 3/2/1 for 2/3/4 players --
+always falls entirely inside the CHEAPEST band. BGO's journal states the
+COST a Take paid (a real, recorded fact), which narrows the true row slot to
+its TIER, but never to the exact slot within it -- and whether the real slot
+sat on the swept side or the safe side of that boundary is EXACTLY what
+determines whether that card's own vacancy is absorbed free by the next
+sweep or costs an extra draw from `civil_deck`. That distinction is private
+information (the unshuffled deck's own physical layout) that a cost-tier
+observation cannot recover, at any player count, for any Take. So
+`civil_deck`'s own draw COUNT cannot be reconstructed exactly from the
+journal -- not a parsing gap this file can close, an information-theoretic
+one.
+
+Given that, the SIZE was never a fact to reconstruct at all, so it should
+never have had the power to trigger `game::advance_age` (via
+`game::deal`'s embedded `civil_deck.is_empty()` check) in the first place.
+Two commits:
+
+**`38bcaa5` -- the instrument, landed on its own first, per this task's own
+brief.** `GameResult::civil_deck_premature_advance`: the first journal line,
+if any, where `state.age_civil` reads STRICTLY AHEAD of what `Line::age`
+proves the real game had reached, with a later REAL (non-wrap-up) decision
+still proving the OLD age was still current. Built entirely from a journal-
+stated fact (`Line::age`), reconciled against itself (a later real decision's
+own age column), never a rules reimplementation. First pass false-positived
+on 828/1,011 games -- traced to BGO's own well-known "next turn's marker
+logged before the previous turn's own trailing summary, same timestamp"
+quirk (already documented in this file for `EndTurn`), fixed by excluding
+`EndTurn` from the "still counts as evidence of the old age" line set,
+re-measured at 53/1,011. A SECOND instance of the same quirk (this checker's
+own false positive, caught by suspecting the checker before the engine, per
+this project's rule) was found chasing the real fix down: `ActionClass::
+Discard` (resolving a queued military discard can itself finish a turn and
+fire the real transition, per its own `apply_one` doc) can ALSO trail a
+later-tagged marker in file order -- confirmed on `7522652` line 430,
+excluded the same way, landed in `b3f099c` with a RED-confirmed test.
+Final, validated baseline: **7/1,011 games** genuinely diverge before the
+fix.
+
+**`b3f099c` -- `top_up_civil_deck`, the fix.** Keeps `civil_deck` topped up
+with extra, never-observed filler drawn from the same age's own card pool
+(`game::build_deck`, reshuffled) whenever it drops under a floor (`2 *
+ROW_SIZE`, comfortably above one line's worth of engine activity) -- so
+`game::deal`'s embedded `advance_age` trigger becomes structurally
+UNREACHABLE during replay, checked by a `debug_assert` at the call site
+(safe under `panic = "abort"`: a direct, cheap consequence of the line
+immediately above it, not a speculative check on unrelated state).
+`catch_up_civil_age`, reading `Line::age` directly, is left as the ONE
+mechanism for every civil age transition during replay -- not a primary
+approximation plus a corrective snap-forward that can disagree with each
+other, which is exactly what let `7523449`'s early advance slip past the
+original snap-forward-only mitigation (it only ever moves the age UP TO the
+journal's column, so it structurally could not have caused an early
+advance). Self-play untouched: the function's only call site is this file's
+own per-line loop; `game::deal`/`advance_age`/`replenish` keep their
+existing behaviour, still correct for a real game whose `civil_deck` empties
+in real time with no lag possible.
+
+### Measurement (`replaystats`, full 1,011-game corpus, exact game-ID set diffs, not bucket counts alone)
+
+| | before (`38bcaa5`, instrument only) | after (`b3f099c`) |
+|---|---|---|
+| `civil_deck_premature_advance` | 7 games | **0 games** |
+| `IllegalMove: Pop` | 29 | **27** |
+| games completed | 58 | **60** |
+| mean rounds reached | -- | 12.35 -> 12.91 (this pass's own before/after) |
+| decisions in Age II+ | -- | 51.0% -> 53.0% |
+
+`IllegalMove: Pop` diffed by exact ID: **2 cleared (`7523449`, the
+documented repro, and `7522252`), 0 new entrants** -- a pure improvement.
+`completed` diffed by exact ID: 3 new completions, 1 regressed
+(`7523486`) -- traced, not assumed: WITHOUT the fix it reached "End of
+game" but its own final score badly mismatched `index.tsv` (`engine=[66,
+35]` vs `index=[62,43]`) -- i.e. it was silently completing on a WRONG
+reconstructed state. WITH the fix it correctly stops instead at a
+pre-existing, unrelated `StuckPending` (a decider/actor mismatch during
+discard resolution -- not this pass's area) rather than running through to
+a wrong result. Not a regression: a false completion traded for an honest
+stop, exactly the "clean negative over a manufactured fix" this project's
+own rule asks for. Final-score exact-match rate is unchanged either way
+(0/58 -> 0/60, a pre-existing and entirely separate problem from this
+pass's own scope -- mean delta -11.39 -> -11.29, essentially flat).
+
+(A later, full-corpus re-run on top of everything else landed by concurrent
+workers by the time this section was written shows 76 completed, `Pop`
+still 27, `civil_deck_premature_advance` still **0/1,011** -- the fix holds
+cleanly composed with unrelated concurrent work, not just in isolation.)
+
+**REPLAYER, not ENGINE**: `game::deal`/`advance_age`/`game::replenish` are
+already correct for self-play, where `civil_deck` empties in real time with
+no lag possible; only this file's own substitute trigger was ever wrong.
+`top_up_civil_deck` is a private fn with its only call site inside this
+file's own per-line loop -- no path into `bots/` or the evaluator, and it
+never reads or infers anything about the unshuffled deck's real order
+(the padding cards are fictional filler, exactly like `game::deal`'s
+existing filler already is, just more of it).
+
+**Not investigated this pass**: whether any OTHER cost-tier/row-position
+ambiguity (beyond the sweep-boundary one this pass root-caused) still
+affects `Build`/`Upgrade`/`WonderStep` cost buckets that also read
+`state.card_row`'s content -- those were flagged as plausibly sharing the
+OLD lagging-age root cause by an earlier pass (`8edfea7`'s handoff); this
+pass did not re-check whether the EARLY-advance direction reaches them too.
