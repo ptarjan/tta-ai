@@ -718,6 +718,21 @@ impl<'a> Replayer<'a> {
                 }
                 self.state.card_row[i] = saved;
             }
+            // The journal told us exactly what this take cost, and NO
+            // available slot reproduces it under this binary's own cost
+            // formula (`costs::take_cost`) -- placing the card in whichever
+            // slot happens to be cheapest anyway (the old behaviour here)
+            // silently commits to a WRONG cost, which then reliably shows up
+            // several lines later as a much harder to diagnose "budget
+            // shortfall" `IllegalMove` once the difference compounds
+            // (confirmed against a real 2p game, `7523353`: a Wonder take
+            // this binary priced 1 CA too high, because a same-turn-
+            // completed wonder's take-surcharge did not match the human's
+            // OWN paid cost -- see `docs/REPLAY.md`'s open questions).
+            // Failing HERE instead is the honest report: a genuine cost
+            // disagreement between this binary's model and the observed
+            // journal, not a slot-placement guess.
+            return None;
         }
         let i = *ungrounded.first()?;
         self.state.card_row[i] = card;
@@ -1533,9 +1548,16 @@ fn apply_one(
         ActionClass::TakeCard => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("take with no resolved card".into()))?;
             let cost = total_action_cost(raw_text);
-            let slot = r
-                .ground_row_slot(actor, card, cost)
-                .ok_or_else(|| MismatchKind::ParserGap("no ungrounded row slot available to take from".into()))?;
+            let slot = r.ground_row_slot(actor, card, cost).ok_or_else(|| {
+                MismatchKind::ParserGap(match cost {
+                    Some(want) => format!(
+                        "{}'s take cost per the journal is {want} civil action(s), but no available \
+                         row slot reproduces that under this binary's own cost formula",
+                        card.get().name
+                    ),
+                    None => "no ungrounded row slot available to take from".into(),
+                })
+            })?;
             r.try_apply(Move::Take { slot }, true)?;
             // The slot's REFILL (whatever `deal()` just drew into it) is
             // unobserved SIMULATED filler again -- ungroundeding it lets a
