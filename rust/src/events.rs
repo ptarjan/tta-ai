@@ -1318,6 +1318,15 @@ fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
             state.players[idx as usize].food, state.players[idx as usize].resources, s.food, s.resources,
             state.players[idx as usize].yellow_bank
         );
+        if std::env::var("REPLAY_DEBUG_TECHS").is_ok() {
+            for (id, slot) in state.players[idx as usize].techs.iter() {
+                let card = id.get();
+                eprintln!(
+                    "  TECH idx={idx} name={} kind={:?} workers={} production.food={}",
+                    card.name, card.kind, slot.workers, card.production.food
+                );
+            }
+        }
     }
     let corr = economy::corruption(economy::blue_available(&state.players[idx as usize]));
     let paid = economy::pay_resources(&mut state.players[idx as usize], corr);

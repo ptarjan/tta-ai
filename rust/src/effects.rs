@@ -1895,6 +1895,56 @@ mod tests {
         assert_eq!(s1.culture, 2);
     }
 
+    // ------------------------------------------------------------- purity
+
+    /// `state_stats` is a pure function of `(state, player)` -- it must
+    /// return the identical `Stats` for the identical player regardless of
+    /// which seat is `state.current`, and regardless of the round/turn/phase
+    /// counters. This is worth pinning explicitly: a corpus investigation
+    /// (game 7523350, Age II event "Economic Progress" firing
+    /// `events::extra_production` mid-turn for a non-current player) turned
+    /// up an apparent 3-vs-4 food discrepancy between that event's call site
+    /// and the SAME player's ordinary end-of-turn production one round
+    /// earlier, and the working hypothesis was that `state_stats`, called on
+    /// a player who is not `state.current`, was somehow perturbed by
+    /// corruption/blue-token bookkeeping mid-`resolve_event`. Direct
+    /// replay-log reconstruction (with a temporary tech/worker dump at both
+    /// call sites) showed the hypothesis was wrong: both call sites computed
+    /// s.food=4 for the identical board, and 4 (not the journal's printed
+    /// "3") is what reconciles the player's own recorded food stock across
+    /// that round (8 entering, +4 production, -1 consumption = 11, matching
+    /// the journal's "(now 11)" exactly) -- a clean negative, not an engine
+    /// bug. This test pins the purity property itself, independent of that
+    /// one game: `compute`'s only whole-`GameState` read is `apply_pacts`,
+    /// scoped to pacts `p` is a party to (see the pacts tests above); there
+    /// is no `state.current`/`state.round`/`state.turn` read anywhere in
+    /// this module.
+    #[test]
+    fn state_stats_is_independent_of_which_player_is_state_current() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        p0.techs.insert(card("Irrigation"), TechSlot { workers: 2, stored: 0 });
+        p0.completed_wonders.push(card("Colossus"));
+        let p1 = blank_player(1, card("Despotism"));
+        let mut state = two_player_state(p0, p1);
+
+        state.current = 0;
+        state.round = 3;
+        state.turn = 5;
+        let s_current = compute(&state, &state.players[0]);
+
+        state.current = 1; // p0 is now NOT the current player
+        state.round = 16;
+        state.turn = 40;
+        let s_not_current = compute(&state, &state.players[0]);
+
+        assert_eq!(
+            s_current, s_not_current,
+            "compute(state, p0) must not depend on state.current/round/turn"
+        );
+        assert_eq!(s_current.food, 4, "sanity: 2 workers on Irrigation (2 food/worker)");
+    }
+
     // ---------------------------------------------------- ids_round_trip
 
     #[test]
