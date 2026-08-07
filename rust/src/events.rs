@@ -640,8 +640,8 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
     // applied here; see that struct's own doc comment.
     if state.last_round {
         if let Some(sub) = last_round_substitute(card) {
-            apply_single_target(state, &order, RankStat::Strength, true, sub.strongest_player);
-            apply_single_target(state, &order, RankStat::Strength, false, sub.weakest_player);
+            apply_single_target(state, &order, RankStat::Strength, true, true, sub.strongest_player);
+            apply_single_target(state, &order, RankStat::Strength, false, false, sub.weakest_player);
             return;
         }
     }
@@ -690,6 +690,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
         &order,
         RankStat::Strength,
         true,
+        true, // a bonus for the strongest -- favoring the current player means picking them FIRST
         event_block(card, |sp| match sp {
             Special::StrongestPlayer(b) => Some(b),
             _ => None,
@@ -700,6 +701,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
         &order,
         RankStat::Strength,
         false,
+        false, // a penalty for the weakest -- favoring the current player means picking them LAST (see apply_single_target's doc)
         event_block(card, |sp| match sp {
             Special::WeakestPlayer(b) => Some(b),
             _ => None,
@@ -710,6 +712,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
         &order,
         RankStat::Culture,
         true,
+        true, // National Pride (the only base-game card): a bonus for the most-cultured, favor current-first
         event_block(card, |sp| match sp {
             Special::PlayerWithMostCulture(b) => Some(b),
             _ => None,
@@ -720,6 +723,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
         &order,
         RankStat::Culture,
         false,
+        true, // Terrorism (the only base-game card): "destroys one urban building of each OPPONENT" is a bonus for the least-cultured target, favor current-first
         event_block(card, |sp| match sp {
             Special::PlayerWithLeastCulture(b) => Some(b),
             _ => None,
@@ -841,13 +845,50 @@ pub(crate) fn rank_players(state: &GameState, order: &[u8], stat: RankStat, best
 /// player in `order` gets `block`. `order` is never empty by the time this
 /// is called (`resolve_event` returns early otherwise), so there is always
 /// exactly one target.
+///
+/// `favor_current` is the direction half of §5.3's tie-break ("ties broken
+/// in favor of the current player, then proximity in clockwise order after
+/// the current player" -- `docs/RULES_SPEC.md`). `order` (`order_from`,
+/// `resolve_event`'s own doc) is ALREADY clockwise starting from the
+/// revealer/current player, and `rank_players`'s sort is stable, so being
+/// "favored" by going FIRST among ties is exactly `order` as given -- correct
+/// for an effect that's good for its target (`true`: `StrongestPlayer`,
+/// `PlayerWithMostCulture`, `PlayerWithLeastCulture` -- every base-game card
+/// using the last two is a bonus for its target, Terrorism included: "the
+/// player with least culture destroys one urban building of EACH opponent").
+/// Being favored by a BAD effect (`false`: `WeakestPlayer` -- every base-game
+/// card is a penalty) means the opposite: picked LAST among ties, i.e.
+/// protected as long as anyone else ties with them -- reversing `order`
+/// first achieves exactly that (`rank_players`'s stable sort then keeps ties
+/// in the REVERSED relative order, so the tied player who was originally
+/// LAST/farthest-clockwise-from-current now sorts first).
+///
+/// ENGINE BUG, found chasing the `IllegalMove: Pop` bucket and confirmed by
+/// measurement, not reasoning, against the corpus (`docs/REPLAY.md`): every
+/// `WeakestPlayer` call previously used the SAME `true`-shaped (un-reversed)
+/// order `StrongestPlayer` correctly uses. Of 63 genuine strength ties on a
+/// `WeakestPlayer` card across the 1,011-game corpus, the un-reversed pick
+/// matched the journal's real target exactly ONCE; the reversed pick (what
+/// this parameter now does for `false`) matched 62 of 63. A real human
+/// playing a well-timed-current-turn "prepare an event" was therefore
+/// wrongly, repeatedly targeted by a penalty tie the rules protect them
+/// from -- and, since `resolve_event` runs identically in real self-play,
+/// not just in this replayer, every bot game paid the same wrong penalty.
 fn apply_single_target(
     state: &mut GameState,
     order: &[u8],
     stat: RankStat,
     best: bool,
+    favor_current: bool,
     block: EventBlock,
 ) {
+    let reversed: Vec<u8>;
+    let order = if favor_current {
+        order
+    } else {
+        reversed = order.iter().rev().copied().collect();
+        &reversed
+    };
     let ranked = rank_players(state, order, stat, best);
     if let Some(&q) = ranked.first() {
         apply_player_block(state, q, &block);
@@ -1579,6 +1620,56 @@ mod tests {
         state.players = players;
         state.current_events = ce;
         state
+    }
+
+    /// ENGINE BUG regression (`apply_single_target`'s own doc comment, found
+    /// chasing the `IllegalMove: Pop` bucket, confirmed against the corpus:
+    /// 62/63 of real, genuine `WeakestPlayer` strength ties). §5.3's "ties
+    /// broken in favor of the current player" protects the current player
+    /// from a PENALTY -- they must be picked LAST among tied players, not
+    /// first.
+    #[test]
+    fn apply_single_target_with_favor_current_false_spares_the_current_player_among_ties() {
+        // Three players, all strength 0 (nothing built) -- a genuine 3-way
+        // tie with no need to hand-equalize anything.
+        let mut state = multi_player_state(
+            3,
+            &[blank_player(0, card("Despotism")), blank_player(1, card("Despotism")), blank_player(2, card("Despotism"))],
+            &[],
+        );
+        state.current = 1;
+        let order = order_from(&state, state.current); // [1, 2, 0]
+        let block = EventBlock { science: 5, ..EventBlock::EMPTY };
+
+        apply_single_target(&mut state, &order, RankStat::Strength, false, false, block);
+
+        assert_eq!(state.players[1].science, 0, "the current player must be spared a tied penalty");
+        // The tied player farthest from `current` going clockwise (last in
+        // `order`) is the one who actually gets it.
+        assert_eq!(state.players[0].science, 5, "seat 0 is last in [1, 2, 0], so it is the protected-last target");
+        assert_eq!(state.players[2].science, 0);
+    }
+
+    /// The mirror of the regression above: a BONUS still favors the current
+    /// player by picking them FIRST among ties -- unchanged behaviour,
+    /// pinned so a future edit to `apply_single_target` can't quietly flip
+    /// this one too.
+    #[test]
+    fn apply_single_target_with_favor_current_true_picks_the_current_player_among_ties() {
+        let mut state = multi_player_state(
+            3,
+            &[blank_player(0, card("Despotism")), blank_player(1, card("Despotism")), blank_player(2, card("Despotism"))],
+            &[],
+        );
+        state.current = 1;
+        let order = order_from(&state, state.current); // [1, 2, 0]
+        let block = EventBlock { science: 5, ..EventBlock::EMPTY };
+
+        apply_single_target(&mut state, &order, RankStat::Strength, true, true, block);
+
+        assert_eq!(state.players[1].science, 5, "the current player must win a tied bonus");
+        assert_eq!(state.players[0].science, 0);
+        assert_eq!(state.players[2].science, 0);
     }
 
     #[test]
