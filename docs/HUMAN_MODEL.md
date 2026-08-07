@@ -236,33 +236,42 @@ simple"); the toy-data and normalizer unit tests in `human_policy.rs` are
 what actually pin the optimizer's correctness, not this run's specific
 numbers.
 
-### Result: 48.8% held-out top-1 accuracy — nearly double the 26.4% reference
+### Result: 48.8% held-out top-1 accuracy — a PAIRED comparison against `WeightedBot`
 
-| split | k/n | rate |
+**"Paired" means this**: `WeightedBot::rank_moves` (the real, currently-fielded
+champion evaluator — `experiments/rust_champion_{2,3,4}p.json`, the same
+weights the training league plays with) was scored, via `bin/agreement.rs`
+unmodified, on the EXACT SAME 8,548 held-out decisions from the EXACT SAME
+152 held-out games this baseline was evaluated on (`human_policy::
+is_held_out`'s game-id split) — not `AGREEMENT.md`'s own headline number,
+which comes from a different 150-game, all-tier sample. Both models see the
+identical decision set, decision for decision; the two counts below are
+directly comparable, and this is a stronger check than the doc originally
+reported (2026-08-06, see the retraction note under "Per move category"
+below for the mistake this caught).
+
+| model | k/n | rate |
 |---|---|---|
 | **this baseline, held-out** | **4,172/8,548** | **48.8%** |
-| reference (`AGREEMENT.md`, trained `WeightedBot` vs. human, all tiers) | 2,493/9,428 | 26.4% (95% CI 25.6–27.3%) |
+| `WeightedBot`, PAIRED on the identical 8,548 held-out decisions | 2,491/8,548 | 29.1% |
+| (`AGREEMENT.md`'s own headline, different 150-game all-tier sample — kept for context only, NOT paired) | 2,493/9,428 | 26.4% (95% CI 25.6–27.3%) |
 
-**Read this comparison carefully — it is not apples-to-apples on every
-axis**, though the direction and size of the gap are real:
+The reference bot is optimized to WIN games; this baseline is optimized to
+IMITATE the exact human move. They are not the same objective, and a higher
+imitation-accuracy number is exactly what training FOR that objective should
+produce — it is not evidence the baseline is a stronger PLAYER (see "Why
+this exists" above).
 
-- The reference number comes from a DIFFERENT sample (all four tiers,
-  150 games, decision-level, no train/held-out split — it was never fit to
-  the data at all, since `WeightedBot`'s weights come from self-play, not
-  from this corpus). This baseline's number is genuinely held-out (by game).
-- The reference bot is optimized to WIN games; this baseline is optimized
-  to IMITATE the exact human move. They are not the same objective, and a
-  higher imitation-accuracy number is exactly what training FOR that
-  objective should produce — it is not evidence the baseline is a
-  stronger PLAYER (see "Why this exists" above).
-- `bin/humandata.rs`'s defensive "human_move not found in legal_moves" skip
-  branch never fired on the full 716-game extraction run — every recorded
-  decision's `human_move` was confirmed present in its own `legal_moves`
-  list, so no decisions were silently dropped for that reason.
+`bin/humandata.rs`'s defensive "human_move not found in legal_moves" skip
+branch never fired on the full 716-game extraction run — every recorded
+decision's `human_move` was confirmed present in its own `legal_moves` list,
+so no decisions were silently dropped for that reason.
 
 **Verdict: this baseline models human play more usefully than the reference
-bot does, on this metric.** It beats the 26.4% reference by a wide,
-credible margin.
+bot does, on this metric.** It beats `WeightedBot`, PAIRED on the identical
+held-out decisions, by a wide, credible margin (48.8% vs 29.1%) — the
+headline holds up, and slightly more cleanly than the original unpaired
+26.4% comparison suggested.
 
 ### Per discard-taint
 
@@ -294,46 +303,85 @@ finding that neither player count nor tier is a strong confound here.
 
 ### Per move category — where it actually works, and where it does not
 
-| category | k/n | rate | reference (`AGREEMENT.md`) |
-|---|---|---|---|
-| end_turn | 1,517/1,580 | 96.0% | 66.3% |
-| political_action | 544/564 | 96.5% | 30.4% |
-| increase_population | 521/730 | 71.4% | 11.7% |
-| leader_or_wonder_step | 760/1,101 | 69.0% | 14.0% |
-| other | 405/951 | 42.6% | 36.9% |
-| build | 205/822 | 24.9% | 22.4% |
-| take_card | 211/2,646 | 8.0% | 7.5% |
-| tactics | 5/125 | 4.0% | 38.5% |
-| aggression_or_war | 2/11 | 18.2% | 37.5% |
-| bid | 2/11 | 18.2% | 50.0% |
-| pact | 0/7 | 0.0% | 39.5% |
+**RETRACTION (2026-08-06), read this before the table**: the first version
+of this section compared this baseline's per-category accuracy against
+`AGREEMENT.md`'s quoted per-category numbers — a DIFFERENT, easier, 150-game
+all-tier sample, not the same decisions this baseline was evaluated on. On
+that unpaired comparison, `tactics`/`aggression_or_war`/`bid`/`pact` all
+looked substantially WORSE than the reference. Once `WeightedBot` was scored
+PAIRED, on this baseline's exact 8,548 held-out decisions (see "Result,"
+above), that claim did not survive for `aggression_or_war` and `bid`
+specifically — both are within noise of each other at n=11, and the
+`AGREEMENT.md` numbers those two rows were originally compared to (37.5%,
+50.0%) turn out to come from an easier sample, not a fact about
+`WeightedBot` that held on this baseline's own held-out games. This mistake
+is left visible rather than quietly fixed, because the underlying lesson —
+an unpaired comparison against a differently-sampled reference number can
+invert a per-category finding, even when the overall headline direction
+survives — is worth the next agent seeing directly. `build`, `tactics` and
+`pact` DO hold up as real (if thin) baseline weaknesses under the paired
+comparison — see below.
 
-**This is the single most important table in this document — read it before
-trusting the 48.8% headline.** The gains are concentrated in exactly the
+| category | baseline k/n | baseline rate | `WeightedBot`, PAIRED k/n | paired rate |
+|---|---|---|---|---|
+| end_turn | 1,517/1,580 | 96.0% | 1,177/1,580 | 74.5% |
+| political_action | 544/564 | 96.5% | 203/564 | 36.0% |
+| increase_population | 521/730 | 71.4% | 110/730 | 15.1% |
+| leader_or_wonder_step | 760/1,101 | 69.0% | 215/1,101 | 19.5% |
+| other | 405/951 | 42.6% | 327/945\* | 34.6% |
+| build | 205/822 | 24.9% | 283/822 | 34.4% |
+| take_card | 211/2,646 | 8.0% | 155/2,646 | 5.9% |
+| tactics | 5/125 | 4.0% | 18/125 | 14.4% |
+| pact | 0/7\* | 0.0% | 2/13\* | 15.4% |
+| aggression_or_war | 2/11 | 18.2% | 1/11 | 9.1% |
+| bid | 2/11 | 18.2% | 0/11 | 0.0% |
+
+\* `other`/`pact` `n` differs by a handful of decisions between the two
+columns because the two binaries' category boundaries are not quite
+identical: `human_policy::categorize` (this baseline's categorizer) folds a
+`Move::Choose` that accepts/refuses a pact offer into `other`, since this
+extraction path does not thread the pre-move `Pending` snapshot needed to
+recover that context (documented in `categorize`'s own doc comment);
+`bin/agreement.rs::categorize_choice` DOES thread that snapshot and buckets
+the same decision as `pact`. Same underlying decisions, different bucket —
+not a data error, just two categorizers that were never required to agree
+down to this one edge case.
+
+**Read the table like this.** The gains are concentrated in exactly the
 categories `AGREEMENT.md`'s own headline finding calls the reference bot's
 weakest spot: `end_turn`/`political_action`/`increase_population`/
 `leader_or_wonder_step` are the "when to stop building and do something with
 deferred payoff" decisions a 1-ply hand-tuned evaluator systematically gets
 wrong (`AGREEMENT.md`'s "the dominant pattern" section) — this baseline,
-fit directly to human choices, closes most of that gap. `take_card`
-(8.0% vs 7.5%) is essentially UNCHANGED — both models are near-blind to
-WHICH row card a human takes, for the documented reason
+fit directly to human choices, closes most of that gap, and the paired
+`WeightedBot` numbers confirm the gap is real (74.5%/36.0%/15.1%/19.5%, not
+the higher unpaired reference numbers). `take_card` (8.0% vs paired 5.9%) is
+essentially UNCHANGED between the two models — both are near-blind to WHICH
+row card a human takes, the documented `features()`-encoding limitation
 (`HUMAN_PLAY.md`'s "the clone still misses badly on takes... the evaluator
-has no feature that distinguishes one row card from another" — a limitation
-of the shared `features()` encoding this baseline inherits verbatim, not a
-new one). **`tactics`/`aggression_or_war`/`bid`/`pact` are all substantially
-WORSE than the reference, at very thin n (7–125 held-out decisions each)** —
-this is exactly the population `AGREEMENT.md` already flagged as thin and
-heavily discard-tainted (100% tainted for `bid`/`aggression_or_war` in that
-sample; not re-measured per-category here, but nothing about this dataset's
-extraction changes that structural fact), and this baseline's card-identity
-blindness likely hits WHICH tactic/pact/target card even harder than it hits
-`take_card`, since these categories are lower-volume to begin with. **Read
-these four rows as a real, unresolved weakness, not statistical noise to be
-waved away** — and note they are precisely the categories the "why this
-exists" motivation cares about most (a sparring partner needs to actually
-declare war and contest auctions, not just imitate the aggregate rate
-correctly).
+has no feature that distinguishes one row card from another") this baseline
+inherits verbatim, not a new gap.
+
+**What survives as a real baseline weakness, paired**: `build` (24.9% vs
+34.4%, n=822), `tactics` (4.0% vs 14.4%, n=125), and `pact` (0.0% vs 15.4%,
+n=7 vs 13, see the category-boundary note above) are all genuinely WORSE
+than `WeightedBot` on the identical held-out decisions. All three are worth
+taking seriously despite `build`'s and `tactics`' larger n — but `pact`'s
+n=7-13 is thin enough that a couple of decisions either way would move the
+rate substantially.
+
+**What does NOT survive, and must be read as near-noise, not a finding**:
+`aggression_or_war` (2/11 vs 1/11) and `bid` (2/11 vs 0/11) are both n=11 —
+a single decision flipping either way changes the rate by ~9 points. Do not
+read "baseline 18.2% vs bot 9.1%/0.0%" as "the baseline is better at war/
+auctions"; read it as "this dataset does not contain enough
+`aggression_or_war`/`bid` decisions, paired or not, to say anything about
+either model's relative skill there." These are exactly the categories the
+"why this exists" motivation cares about most (a sparring partner needs to
+actually declare war and contest auctions) — and the honest finding is that
+neither this baseline nor the reference bot's behaviour on them can be
+distinguished from noise on this corpus, not that either one is clearly
+better or worse.
 
 ## Verdict: worth continuing to Stage Two, with two named caveats
 
@@ -348,17 +396,24 @@ above, neither hidden:
 1. **This is an early-game model.** 99.4% of the data is Age A/I; Age III/IV
    (where a base-game score is decided) is entirely absent. Nothing here
    licenses a claim about late-game imitation.
-2. **The exact categories the "why this exists" motivation cares about most
-   — `aggression_or_war`, `bid`, `pact`, and (for reaching them at all)
-   `tactics` — are this baseline's weakest, on its thinnest and most tainted
-   data.** A sparring partner built on this baseline as-is would likely still
-   under-declare war and under-contest auctions relative to a genuinely
-   strong human, for a different reason than the self-play league does today
-   (card-identity blindness plus data thinness, not "never learns to," but
-   the practical symptom — a bot that rarely fights — could look similar).
-   Before wiring this into the training league, either accept this
-   limitation explicitly, or invest in the two things most likely to move
-   these four rows: a card-identity-aware feature (closing the same gap
-   `take_card` already has) and/or importance-weighting the rare categories
-   during training so a full-batch gradient descent does not implicitly
-   treat 46 aggression decisions as noise against 12,595 take_card ones.
+2. **`build`, `tactics`, and `pact` are genuinely worse than `WeightedBot`,
+   paired on identical held-out decisions** (24.9% vs 34.4%, n=822; 4.0% vs
+   14.4%, n=125; 0.0% vs 15.4%, n=7–13 — see "Per move category," above, and
+   its retraction note on what did NOT hold up: `aggression_or_war` and
+   `bid` are n=11 each and must be read as noise, not a finding, in either
+   direction). `tactics`/`pact` most likely share `take_card`'s
+   card-identity blindness (the shared `features()` encoding has no
+   coordinate that distinguishes one specific tactic/pact card from
+   another), and their thinness (125/54 decisions total, corpus-wide) means
+   this baseline has seen very little of either to begin with. `bid`/
+   `aggression_or_war` cannot currently be judged AT ALL on this corpus —
+   not "the baseline is fine there," but "there is not enough data, paired
+   or not, to know." Before wiring this into the training league: either
+   accept `build`/`tactics`/`pact` as known, real gaps, or invest in a
+   card-identity-aware feature (closing the same gap `take_card` already
+   has) and/or importance-weighting the rare categories during training so a
+   full-batch gradient descent does not implicitly treat 46 aggression
+   decisions as noise against 12,595 take_card ones — and separately, treat
+   `bid`/`aggression_or_war` as simply UNMEASURED rather than weak, until a
+   larger or differently-sampled corpus can move their n past the
+   noise floor.
