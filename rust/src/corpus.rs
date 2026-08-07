@@ -454,6 +454,22 @@ pub enum ActionClass {
     /// (mirrors how `EndTurn` lines, the other no-leading-colour shape, are
     /// handled).
     RemoveLeaderYellow,
+    /// Christopher Columbus's leader ability exercised as a political action
+    /// (`Move::ColumbusColonize`): "As a political action, you may remove
+    /// Columbus from play to colonize a territory in your hand without
+    /// sacrificing any units" (`bga_throughtheages_material.inc.php`). BGO
+    /// logs it as `"Christopher Columbus discovers <Age> / <Territory>"` --
+    /// no leading actor colour (previously silently swallowed as
+    /// `Bookkeeping` by `classify`'s "known card name leads the line" catch-
+    /// all, since "Christopher Columbus" is itself a known card name) AND,
+    /// unlike `RemoveLeaderYellow`'s Alexander line, no trailing consequence
+    /// clause naming the actor either -- the ONLY line in the whole corpus
+    /// that needs column 2 (`Line::color`) read at all. Found chasing the
+    /// `IllegalMove: Pop` bucket: dropping this move silently skipped the
+    /// colonized territory's `effects.yellow_tokens`/`immediate_effects`
+    /// grants, drifting `pop_cost` for the rest of the game (`docs/
+    /// REPLAY.md`).
+    ColumbusColonize,
 }
 
 impl ActionClass {
@@ -488,6 +504,7 @@ impl ActionClass {
         ActionClass::PutBack,
         ActionClass::EndTurn,
         ActionClass::RemoveLeaderYellow,
+        ActionClass::ColumbusColonize,
     ];
 
     pub fn label(self) -> &'static str {
@@ -520,6 +537,7 @@ impl ActionClass {
             ActionClass::PutBack => "put card back (take-back upper bound)",
             ActionClass::EndTurn => "end turn (player-turn denominator)",
             ActionClass::RemoveLeaderYellow => "Alexander the Great: remove for a yellow token",
+            ActionClass::ColumbusColonize => "Christopher Columbus: remove to colonize a territory",
         }
     }
 }
@@ -558,6 +576,7 @@ pub fn card_expected(class: ActionClass) -> bool {
             | ActionClass::Disband
             | ActionClass::PlayActionCard
             | ActionClass::PutBack
+            | ActionClass::ColumbusColonize
     )
 }
 
@@ -670,6 +689,24 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
     // it already does for the other no-leading-colour shape, `EndTurn`.
     if text.starts_with("Alexander dies after building his great Empire") {
         return LineOutcome::Action(Classified { class: ActionClass::RemoveLeaderYellow, card: None });
+    }
+    // Christopher Columbus's leader ability ("Christopher Columbus discovers
+    // <Age> / <Territory>") -- see `ActionClass::ColumbusColonize`'s own doc
+    // comment. Must be checked before this function's own generic "a known
+    // card name leads the line" `Bookkeeping` catch-all below, since
+    // "Christopher Columbus" is itself a card name and would otherwise match
+    // there first and silently swallow the whole line, exactly as it did
+    // before this was found.
+    if let Some(rest) = text.strip_prefix("Christopher Columbus discovers ") {
+        let card = rest.find(" / ").and_then(|slash| {
+            let age = rest[..slash].trim();
+            let name = rest[slash + " / ".len()..].trim();
+            index
+                .get(format!("{name} ({age})").as_str())
+                .or_else(|| index.get(name))
+                .copied()
+        });
+        return LineOutcome::Action(Classified { class: ActionClass::ColumbusColonize, card });
     }
     // J. S. Bach's leader ability (a free tech upgrade each round) is the
     // one line BGO prints with NO space at all between the leader's name
@@ -1375,6 +1412,39 @@ mod tests {
         };
         assert_eq!(c.class, ActionClass::RemoveLeaderYellow);
         assert!(c.card.is_none());
+    }
+
+    #[test]
+    fn columbus_discovery_line_is_a_columbus_colonize_action_not_bookkeeping() {
+        // Regression: "Christopher Columbus" is itself a known card name, so
+        // this line used to match the generic "known card name leads the
+        // line" `Bookkeeping` catch-all and get silently dropped, discarding
+        // the colonized territory's yellow_tokens/immediate_effects grants
+        // and drifting pop_cost for the rest of the game -- the SAME shape
+        // as the Alexander regression above, found chasing the same
+        // `IllegalMove: Pop` bucket.
+        let index = idx();
+        let line = "Christopher Columbus discovers I / Vast Territory";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::ColumbusColonize);
+        assert_eq!(c.card, index.get("Vast Territory (I)").copied());
+    }
+
+    #[test]
+    fn columbus_discovery_line_resolves_the_age_tagged_card_not_the_bare_name() {
+        // The same territory family recurs across ages under one printed
+        // name (`Vast Territory` at both Age I and Age II) -- BGO's "<Age> /
+        // <Name>" clause disambiguates exactly the way `event_plan::
+        // current_event_age_and_name`'s own doc explains for the identical
+        // shape on event-reveal lines.
+        let index = idx();
+        let line = "Christopher Columbus discovers II / Vast Territory";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.card, index.get("Vast Territory (II)").copied());
     }
 
     #[test]

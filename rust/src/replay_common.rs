@@ -163,6 +163,15 @@ use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
 /// One journal row, still borrowing from the file's text.
 struct Line<'a> {
     lineno: usize,
+    /// Column 2, `player_colour` -- BGO's OWN attribution of the line,
+    /// present on every row (verified: this is the "the data was on every
+    /// line all along" shape, `docs/REPLAY.md`'s eighth pass). Kept as the
+    /// raw field rather than a parsed `Color` because a handful of rows
+    /// (system messages) print something other than a colour here, and
+    /// only the callers that actually need it (currently just the
+    /// no-leading-colour `ColumbusColonize` shape) should have to decide
+    /// what to do about that.
+    color: &'a str,
     age: &'a str,
     round: &'a str,
     text: &'a str,
@@ -178,7 +187,7 @@ fn parse_lines(journal_text: &str) -> Vec<Line<'_>> {
         if fields.len() != 5 {
             continue; // malformed row, same tolerance corpuscensus uses
         }
-        out.push(Line { lineno: i + 1, age: fields[2], round: fields[3], text: fields[4] });
+        out.push(Line { lineno: i + 1, color: fields[1], age: fields[2], round: fields[3], text: fields[4] });
     }
     out
 }
@@ -1715,6 +1724,46 @@ pub fn replay_game(
                 r.actions_consumed += 1;
                 continue;
             }
+            // Christopher Columbus's leader ability, the one line in the
+            // whole corpus with NEITHER a leading colour NOR a trailing
+            // consequence clause naming the actor (`corpus::ActionClass::
+            // ColumbusColonize`'s own doc) -- column 2 (`Line::color`) is
+            // the only place the actor is. Also a political action, so
+            // `next_line_explains_own_politics: true`, same reasoning as
+            // `RemoveLeaderYellow` just above.
+            if class == ActionClass::ColumbusColonize {
+                let Some(actor_color) = Color::parse(line.color) else {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("column 2 {:?} is not a known colour", line.color))));
+                    break 'lines;
+                };
+                let actor = actor_color.seat();
+                if actor >= meta.players {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
+                    break 'lines;
+                }
+                let Some(territory) = card else {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("Columbus discovery line's territory did not resolve to a known card".into())));
+                    break 'lines;
+                };
+                // This "discovers" line is routinely the FIRST evidence of
+                // which real territory sits in the actor's military hand --
+                // territories arrive via the automatic end-of-turn draw, not
+                // an observed "takes ... in hand" line, so `p.hand_military`
+                // still holds `new_game`'s SIMULATED filler for that slot
+                // until grounded here, same as `DeclareWar`/`PlayAggression`/
+                // `ProposePact` already ground their own military card right
+                // before playing it.
+                r.ground_military_hand(actor, territory);
+                if let Err(kind) = r
+                    .resolve_intervening(actor, (class, None), true)
+                    .and_then(|()| r.try_apply(Move::ColumbusColonize { card: territory }, true))
+                {
+                    mismatch = Some(mk_mismatch(line, kind));
+                    break 'lines;
+                }
+                r.actions_consumed += 1;
+                continue;
+            }
             mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("action line has no leading colour and is not EndTurn".into())));
             break 'lines;
         };
@@ -2206,10 +2255,13 @@ fn apply_one(
                 if std::env::var("REPLAY_DEBUG").is_ok() {
                     let p = &r.state.players[actor as usize];
                     eprintln!(
-                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} pending={:?} raw={:?}",
+                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} leader={} government={} pending={:?} raw={:?}",
                         p.food, p.yellow_bank, p.civil_actions,
                         crate::economy::pop_cost(&r.state, p), r.state.round, r.state.num_players,
-                        r.current_lineno, p.one_time_discount.pop_food, r.state.pending.top(), raw_text
+                        r.current_lineno, p.one_time_discount.pop_food,
+                        if p.leader.is_none() { "none" } else { p.leader.get().name },
+                        p.government.get().name,
+                        r.state.pending.top(), raw_text
                     );
                 }
                 Err(MismatchKind::IllegalMove {
@@ -2530,14 +2582,17 @@ fn apply_one(
         }
         ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
         // Unreachable: the dispatch loop in `replay_game` special-cases
-        // `RemoveLeaderYellow` before it ever reaches this function, the
-        // same way it special-cases `EndTurn` -- both are the only two
-        // `ActionClass`es whose journal line carries no leading actor
-        // colour, so both need the actor resolved before `apply_one`'s
-        // normal `actor` parameter (already committed to by then) would
-        // even be correct.
+        // `RemoveLeaderYellow` and `ColumbusColonize` before either ever
+        // reaches this function, the same way it special-cases `EndTurn` --
+        // all three are `ActionClass`es whose journal line carries no
+        // leading actor colour, so all three need the actor resolved before
+        // `apply_one`'s normal `actor` parameter (already committed to by
+        // then) would even be correct.
         ActionClass::RemoveLeaderYellow => {
             Err(MismatchKind::ParserGap("RemoveLeaderYellow should have been resolved before apply_one".into()))
+        }
+        ActionClass::ColumbusColonize => {
+            Err(MismatchKind::ParserGap("ColumbusColonize should have been resolved before apply_one".into()))
         }
     }
 }
@@ -3320,6 +3375,44 @@ mod tests {
             Some(1),
             "Bronze (staffed with 2 workers as a starting tech) must lose exactly one"
         );
+    }
+
+    /// REPLAYER BUG (found chasing the `IllegalMove: Pop` bucket): a
+    /// territory named in a `"Christopher Columbus discovers <Age> /
+    /// <Territory>"` line is routinely the FIRST evidence of that specific
+    /// card at all -- territories arrive via the automatic end-of-turn
+    /// draw, not an observed `"takes ... in hand"` line, so `p.
+    /// hand_military` still holds `new_game`'s SIMULATED filler until
+    /// grounded, same as `DeclareWar`/`PlayAggression`/`ProposePact`
+    /// already ground their own card right before playing it
+    /// (`ground_military_hand`'s own doc). Without grounding first,
+    /// `Move::ColumbusColonize` is illegal (the territory isn't really in
+    /// hand) even though the human's move was perfectly legal -- this
+    /// alone was a 123-game bucket (`IllegalMove: ColumbusColonize`) the
+    /// instant the line stopped being silently dropped as bookkeeping.
+    #[test]
+    fn a_columbus_colonize_line_grounds_the_territory_before_applying_it() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        // `Move::ColumbusColonize` is a POLITICAL action (`legal::
+        // politics_moves`, not `action_moves`), same as `RemoveLeaderYellow`.
+        r.state.phase = Phase::Politics;
+        r.state.players[0].leader = CardId::by_name("Christopher Columbus").expect("Christopher Columbus is in the table");
+        let territory = CardId::by_name("Vast Territory (I)").expect("Vast Territory (I) is in the table");
+
+        // The fictional per-round deal did not happen to include this
+        // specific territory, so the move is illegal until grounded.
+        assert!(!r.state.players[0].hand_military.contains(territory), "test setup: must start ungrounded");
+        assert!(matches!(
+            r.try_apply(Move::ColumbusColonize { card: territory }, true),
+            Err(MismatchKind::IllegalMove { .. })
+        ));
+
+        r.ground_military_hand(0, territory);
+
+        assert!(r.try_apply(Move::ColumbusColonize { card: territory }, true).is_ok());
+        assert!(r.state.players[0].colonies.contains(territory));
+        assert!(r.state.players[0].leader.is_none(), "Columbus is spent removing himself to colonize for free");
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
