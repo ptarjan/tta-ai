@@ -392,6 +392,82 @@ pub fn can_take(state: &GameState, p: &PlayerState, idx: usize, budget: Option<i
     can_take_gated(state, p, idx, &take_gate(state, p, budget), None)
 }
 
+/// Diagnostic classification of WHICH check inside [`can_take_gated`]
+/// rejected a take, for the `IllegalMove: Take` corpus bucket
+/// (`docs/REPLAY.md`'s Take/Bid handoff). Not consumed by any legality
+/// path -- `can_take_gated` remains the sole source of truth for what IS
+/// legal -- this exists purely to NAME the rejecting gate so the replayer
+/// can report it instead of a bare "illegal move" and a full-state dump.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TakeRejection {
+    /// The row slot itself is empty.
+    EmptySlot,
+    /// A wonder's (surcharge- and leader-discount-adjusted) cost exceeds
+    /// `gate.have`.
+    WonderBudget,
+    /// The wonder is affordable but `p` already has one in progress.
+    WonderInProgress,
+    /// A non-wonder's (leader-discount-adjusted) cost exceeds `gate.have`.
+    Budget,
+    /// `gate.hand_full`: civil hand already at `civil_hand_limit`.
+    HandFull,
+    /// A leader of this age was already taken this game.
+    LeaderAgeTaken,
+    /// The exact card is already in hand, on the tech board, or is the
+    /// current government (technologies/governments/leaders are one-per-name;
+    /// action cards are exempt, see `can_take_gated`).
+    DuplicateCard,
+}
+
+/// Mirrors `can_take_gated`'s branch order EXACTLY (same `state`/`p`/`idx`/
+/// `gate` inputs) so the two can never silently drift -- enforced every test
+/// run by `take_rejection_agrees_with_can_take_gated` below, which checks
+/// `take_rejection(..).is_none() == can_take_gated(..)` for every fixture in
+/// this module's `can_take*` tests. Returns `None` iff the take is legal.
+pub fn take_rejection(
+    state: &GameState,
+    p: &PlayerState,
+    idx: usize,
+    gate: &TakeGate,
+) -> Option<TakeRejection> {
+    let id = state.card_row[idx];
+    if id.is_none() {
+        return Some(TakeRejection::EmptySlot);
+    }
+    let card = id.get();
+    let mut cost = row_cost(idx);
+    if card.kind == CardType::Wonder {
+        cost += gate.surcharge;
+        cost -= leader_replacement_take_discount(card, p);
+        if cost > gate.have {
+            return Some(TakeRejection::WonderBudget);
+        }
+        return if p.wonder.is_none() { None } else { Some(TakeRejection::WonderInProgress) };
+    }
+    if card.kind == CardType::Leader {
+        cost -= gate.leader_discount;
+    }
+    if cost > gate.have {
+        return Some(TakeRejection::Budget);
+    }
+    if gate.hand_full {
+        return Some(TakeRejection::HandFull);
+    }
+    if card.kind == CardType::Leader {
+        return if gate.taken_leader_ages & (1 << (card.age as u8)) == 0 {
+            None
+        } else {
+            Some(TakeRejection::LeaderAgeTaken)
+        };
+    }
+    if card.kind != CardType::Action
+        && (p.hand_civil.contains(id) || p.techs.has(id) || id == p.government)
+    {
+        return Some(TakeRejection::DuplicateCard);
+    }
+    None
+}
+
 // ------------------------------------------------------------- build/tech costs
 
 /// Resource cost to build a worker onto technology `id`, or `None` if `id`
@@ -1064,6 +1140,76 @@ mod tests {
             !can_take(&state, &state.players[0], 0, None),
             "that age's leader was already taken"
         );
+    }
+
+    /// `take_rejection` mirrors `can_take_gated`'s branch order by
+    /// construction; this pins that the two never drift by re-running EVERY
+    /// scenario the `can_take*` tests above already built (budget, hand-full,
+    /// duplicate tech, wonder-in-progress, leader-age) and checking
+    /// `take_rejection(..).is_none()` agrees with `can_take_gated(..)` on
+    /// each. A future edit to one function without the other trips this.
+    #[test]
+    fn take_rejection_agrees_with_can_take_gated_on_every_gate() {
+        fn check(state: &GameState, p: &PlayerState, idx: usize) {
+            let gate = take_gate(state, p, None);
+            let legal = can_take_gated(state, p, idx, &gate, None);
+            let rejection = take_rejection(state, p, idx, &gate);
+            assert_eq!(rejection.is_none(), legal, "idx={idx} rejection={rejection:?}");
+        }
+
+        // Budget: affordable vs. one short (row_cost(9) == 3).
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        state.card_row[9] = card("Bronze");
+        check(&state, &state.players[0], 9);
+        state.players[0].civil_actions = 2;
+        check(&state, &state.players[0], 9);
+
+        // Hand full.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        for _ in 0..4 {
+            p.hand_civil.push(card("Irrigation"));
+        }
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Selective Breeding");
+        check(&state, &state.players[0], 0);
+
+        // Duplicate technology vs. exempt action card.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        p.hand_civil.push(card("Irrigation"));
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Irrigation");
+        state.card_row[1] = card("Rich Land (A)");
+        state.players[0].hand_civil.push(card("Rich Land (A)"));
+        check(&state, &state.players[0], 0);
+        check(&state, &state.players[0], 1);
+
+        // Wonder in progress.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        check(&state, &state.players[0], 0);
+        state.players[0].wonder = card("Pyramids");
+        check(&state, &state.players[0], 0);
+
+        // Leader age already taken.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        let mut state = one_player_state(p);
+        let leader_slot = card("Napoleon Bonaparte");
+        state.card_row[0] = leader_slot;
+        check(&state, &state.players[0], 0);
+        state.players[0].taken_leader_ages = 1u8 << (leader_slot.get().age as u8);
+        check(&state, &state.players[0], 0);
+
+        // Empty slot.
+        let p = blank_player(0, card("Despotism"));
+        let state = one_player_state(p);
+        check(&state, &state.players[0], 0);
     }
 
     // ------------------------------------------------------- build_cost_for

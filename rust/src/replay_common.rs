@@ -2727,6 +2727,33 @@ fn apply_one(
                     card.get().name
                 ))
             })?;
+            // `IllegalMove: Take` diagnostic (docs/REPLAY.md's Take/Bid
+            // handoff): a slot was found whose `take_cost` reproduces the
+            // journal's own stated cost, but `try_apply` may still reject it
+            // -- name WHICH `costs::take_rejection` gate fires, using the
+            // engine's own gate/cost functions directly (not a
+            // reimplementation), rather than leaving only the generic
+            // "illegal move" dump `try_apply` already prints.
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                let p = &r.state.players[actor as usize];
+                let gate = costs::take_gate(&r.state, p, None);
+                if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate) {
+                    eprintln!(
+                        "DEBUG TAKE REJECT: card={} slot={slot} reason={reason:?} our_take_cost={} \
+                         journal_cost={cost} gate_have={} civil_actions={} military_actions={} \
+                         leader={} hand_civil_size={} civil_hand_limit={} hand_civil={:?}",
+                        card.get().name,
+                        costs::take_cost(&r.state, p, slot as usize),
+                        gate.have,
+                        p.civil_actions,
+                        p.military_actions,
+                        if p.leader.is_none() { "none" } else { p.leader.get().name },
+                        p.hand_size_civil(),
+                        costs::civil_hand_limit(&r.state, p),
+                        p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
+                    );
+                }
+            }
             r.try_apply(Move::Take { slot }, true)?;
             // The slot's REFILL (whatever `deal()` just drew into it) is
             // unobserved SIMULATED filler again -- ungroundeding it lets a
