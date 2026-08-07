@@ -1752,12 +1752,48 @@ pub fn hand_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
 /// charge for stages already paid.
 ///
 /// Scaled by nothing of its own beyond `card_rate_credit`/`card_board_credit`
-/// -- `wonder_potential` (the WEIGHT, [`WeightKey::WonderPotential`]) is
-/// `eval.rs`'s (unowned) concern, applied to this function's return value,
-/// not inside it.
+/// and the DELAYED-PAYOFF discount below -- `wonder_potential` (the WEIGHT,
+/// [`WeightKey::WonderPotential`]) is `eval.rs`'s (unowned) concern, applied
+/// to this function's return value, not inside it.
+///
+/// ## The delayed-payoff discount ([`horizon::WonderOutlook::earned_share`])
+///
+/// This function used to return the SAME number whether the wonder was
+/// freshly taken from the row or one stage from completion -- it booked
+/// 100% of a FINISHED wonder's value from the moment the card entered play.
+/// Two things follow from that, and both are wrong in the same direction:
+/// taking a wonder is priced as if it were already built, and every stage
+/// that actually pays for it is then priced at nothing, because the term
+/// contributes an identical constant to every candidate move at the decision
+/// point. Meanwhile an ordinary building's yield is booked in full the turn
+/// it lands. That asymmetry is `docs/AGREEMENT.md`'s "build-now bias" in one
+/// line: at the exact points a human advanced a wonder, the bot's own top
+/// pick was a plain build 59% of the time.
+///
+/// [`horizon::WonderOutlook::earned_share`] replaces that implicit `1.0` with
+/// a computed one -- how much of the wonder is paid for, times how much of
+/// the remaining game you would actually own it for, both read off the board
+/// (outstanding stage costs, this player's resource production,
+/// [`horizon::rounds_left`]). No new weight and no new tunable constant: the
+/// league's `wonder_potential`/`card_board_credit` pricing keeps exactly the
+/// meaning it was trained with -- what a finished wonder is worth -- and only
+/// the "and you have it already, forever" assumption it was multiplied by
+/// changes.
 pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
     let p = &state.players[idx as usize];
+    // Checked before anything is computed: this function is on the evaluator's
+    // hot path and runs once per candidate move, but most players are not
+    // building a wonder at most moments, and `effects::state_stats` below is
+    // a full `effects::compute` that those positions must not pay for.
     if p.wonder.is_none() {
+        return 0.0;
+    }
+    let outlook = horizon::wonder_outlook(state, p, effects::state_stats(state, p).resources)
+        .expect("p.wonder is not none, so there is an outlook");
+    let discount = outlook.earned_share();
+    if discount == 0.0 {
+        // Nothing to price, and (more usefully) nothing to pay `board_yields`'
+        // own two `effects::compute` calls for.
         return 0.0;
     }
     let credit = w.get(WeightKey::CardRateCredit);
@@ -1765,12 +1801,12 @@ pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
     let name = p.wonder;
     if board != 0.0 {
         if let Some(swap) = board_yields::board_yields(name, state, idx) {
-            return board * gains_only_board_sum(&swap, w);
+            return discount * board * gains_only_board_sum(&swap, w);
         }
     }
     let mut buf = Vec::new();
     card_yields(name, &mut buf);
-    gains_only_sum(&buf, w, credit)
+    discount * gains_only_sum(&buf, w, credit)
 }
 
 /// `hand_mil_potential`: summed [`card_potential`] over the MILITARY hand.
@@ -2378,21 +2414,91 @@ mod tests {
     }
 
     /// `wonder_potential` never charges the stage cost -- `gains_only_sum`'s
-    /// whole reason to exist. A wonder in progress prices at exactly the sum
-    /// of its GAIN triples, with `card_board_credit` at 0.0 so the static
-    /// (non-swap) path is exercised.
+    /// whole reason to exist. A wonder in progress prices at the sum of its
+    /// GAIN triples (times the earned share, see below), with
+    /// `card_board_credit` at 0.0 so the static (non-swap) path is exercised.
+    ///
+    /// Compared against the cost-inclusive sum scaled by the SAME earned
+    /// share, so this pins only the cost-exclusion this test is named for and
+    /// stays independent of the delayed-payoff discount the three tests below
+    /// pin separately. Built on a part-paid wonder: at zero stages paid the
+    /// earned share is zero and both sides would be zero, which would make
+    /// this test vacuous rather than false.
     #[test]
     fn wonder_potential_never_charges_the_stage_cost() {
-        let mut state = crate::game::new_game(2, 47);
+        let state = wonder_in_progress(2);
         let w = Weights::default();
-        let colossus = CardId::by_name("Colossus").unwrap();
-        state.players[0].wonder = colossus;
+        let colossus = state.players[0].wonder;
         let got = wonder_potential(&state, 0, &w);
         let mut buf = Vec::new();
         card_yields(colossus, &mut buf);
         assert!(buf.iter().any(|&(_, _, k)| k == YieldKind::Cost), "Colossus must carry a stage-cost triple");
-        let with_cost = sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
+        let share = horizon::wonder_outlook(&state, &state.players[0], effects::state_stats(&state, &state.players[0]).resources)
+            .expect("a wonder is in progress")
+            .earned_share();
+        let with_cost = share * sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
         assert!(got > with_cost, "wonder_potential={got} must exceed the cost-inclusive sum={with_cost}");
+    }
+
+    /// Colossus, one stage in, with enough production and game left to
+    /// finish comfortably -- the fixture the three delayed-payoff tests
+    /// below vary one thing at a time from. Player 0 gets a real resource
+    /// income (Bronze staffed with the two workers a fresh deal starts with)
+    /// so `turns_to_finish` is a finite, small number rather than the
+    /// zero-production degenerate case.
+    fn wonder_in_progress(steps: u8) -> crate::state::GameState {
+        let mut state = crate::game::new_game(2, 47);
+        let bronze = CardId::by_name("Bronze").unwrap();
+        let p = &mut state.players[0];
+        p.wonder = CardId::by_name("Colossus").unwrap();
+        p.wonder_steps = steps;
+        // Bronze is already in every starting tableau; staff it rather than
+        // inserting a duplicate, which `Tableau::insert` rejects outright.
+        p.techs.get_mut(bronze).expect("Bronze is in the starting tableau").workers = 2;
+        p.resources = 0;
+        state
+    }
+
+    /// THE DELAYED-PAYOFF PROPERTY (docs/AGREEMENT.md): paying for a stage of
+    /// the wonder you are building must make the evaluator's own valuation of
+    /// that wonder go UP. Before the `earned_share` change this was flat --
+    /// `wonder_potential` returned the value of the FINISHED wonder from the
+    /// moment the card entered play, so it contributed an identical constant
+    /// to every candidate move and a `WonderStep` bought exactly nothing
+    /// through it. That is why the bot's own top pick was a plain build at
+    /// 59% of the decision points where a real human advanced a wonder.
+    #[test]
+    fn advancing_a_wonder_by_one_stage_raises_the_value_the_evaluator_books_for_it() {
+        let w = Weights::default();
+        let one = wonder_potential(&wonder_in_progress(1), 0, &w);
+        let two = wonder_potential(&wonder_in_progress(2), 0, &w);
+        assert!(one > 0.0, "a part-built wonder must be worth something, got {one}");
+        assert!(two > one, "paying a stage must raise the wonder's booked value: {one} -> {two}");
+    }
+
+    /// The other half of the same property: a wonder whose card has only just
+    /// been taken has PAID for none of itself, so none of a finished wonder's
+    /// value has been earned yet. Under the rules an unfinished wonder scores
+    /// nothing, so booking it at full value the turn it is taken (what a
+    /// constant `1.0` share amounts to) both over-rewards taking one and
+    /// leaves no gradient at all for the stages that pay it off.
+    #[test]
+    fn a_wonder_whose_first_stage_is_unpaid_has_earned_none_of_its_value() {
+        assert_eq!(wonder_potential(&wonder_in_progress(0), 0, &Weights::default()), 0.0);
+    }
+
+    /// A wonder the game will end before you can finish is worth nothing,
+    /// however good the finished article would be -- the same "0-for-58"
+    /// fact `wonder_overrun` reports as a linear feature, applied here to the
+    /// identity-aware value rather than left for a weight to notice.
+    /// `final_round_end` pins `horizon::rounds_left` to exactly 1 and zero
+    /// production makes the outstanding stages unpayable in that one round.
+    #[test]
+    fn a_wonder_that_cannot_be_finished_before_the_game_ends_is_priced_at_nothing() {
+        let mut state = wonder_in_progress(1);
+        state.players[0].techs = crate::state::Tableau::new(); // no production at all
+        state.final_round_end = Some(state.round);
+        assert_eq!(wonder_potential(&state, 0, &Weights::default()), 0.0);
     }
 
     /// `rival_hand_potential` is 0.0 with no live rivals holding a civil

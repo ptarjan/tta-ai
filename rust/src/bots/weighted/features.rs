@@ -71,13 +71,6 @@ use super::weights::{WeightKey, Weights};
 /// one source of truth either way.
 const N: usize = WeightKey::ALL.len();
 
-/// NUMERICAL GUARD, not a model claim (mirrors Python's `_TURNS_CAP`):
-/// `wonder_turns_to_finish` is a ratio that blows up as resource production
-/// approaches zero. 20 turns is already past "never" for a 20-round game, so
-/// nothing inside the cap is shaped by it -- it only keeps an infinity from
-/// reaching the linear evaluator.
-const TURNS_CAP: f64 = 20.0;
-
 /// The raw feature vector `evaluate` (unowned) prices -- Python's `features()`
 /// return value, as an array. See this module's top doc comment for why.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -307,36 +300,16 @@ pub fn features(
     // --------------------------------------------------------- wonders
     // How far in, and whether it can possibly be finished -- see Python's
     // own extensive comment on this block (`engine/bots/weighted.py:1530`)
-    // for the "0-for-58" motivation; not reproduced here.
-    let mut progress = 0i32;
-    let mut remaining = 0i32;
-    let mut stages_left = 0.0f64;
-    let mut turns_to_finish = 0.0f64;
-    let mut overrun = 0.0f64;
-    if !p.wonder.is_none() {
-        let stages = p.wonder.get().stages;
-        // Clamped defensively: Python's list slicing cannot go out of range,
-        // Rust's cannot either without this -- `wonder_steps` never exceeds
-        // `stages.len()` in a legal state, but nothing here should panic if
-        // it somehow did.
-        let built = (p.wonder_steps as usize).min(stages.len());
-        progress = stages[..built].iter().map(|&st| i32::from(st)).sum();
-        remaining = stages[built..].iter().map(|&st| i32::from(st)).sum();
-        if remaining > 0 {
-            stages_left = (stages.len() - built) as f64;
-            // Turns of the player's WHOLE resource output the wonder still
-            // owes, net of what is already banked. Scale-free, so it means
-            // the same thing to an Age A economy and an Age III one.
-            let owed = f64::from(remaining) - f64::from(p.resources);
-            if owed > 0.0 {
-                turns_to_finish = (owed / f64::from(s.resources).max(1.0)).min(TURNS_CAP);
-                // ...and the part of that the game will not last long enough
-                // to pay. This is the 0-for-58 detector.
-                let n = horizon::live_count(state);
-                overrun = (turns_to_finish - horizon::rounds_left(state, n)).max(0.0);
-            }
-        }
-    }
+    // for the "0-for-58" motivation; not reproduced here. The arithmetic
+    // itself lives in [`horizon::wonder_outlook`], which `cards::
+    // wonder_potential` also reads: two copies of "how far from finishing
+    // this wonder am I" is exactly this codebase's defining bug class, so
+    // there is one.
+    let outlook = horizon::wonder_outlook(state, p, s.resources);
+    let (progress, remaining, stages_left, turns_to_finish, overrun) = match outlook {
+        Some(o) => (o.progress, o.remaining, o.stages_left, o.turns_to_finish, o.overrun),
+        None => (0, 0, 0.0, 0.0, 0.0),
+    };
 
     let hand_value: f64 = p.hand_civil.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
     let hand_mil_value: f64 = p.hand_military.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();

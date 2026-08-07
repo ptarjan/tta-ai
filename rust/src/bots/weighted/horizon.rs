@@ -71,7 +71,7 @@
 
 use crate::cards::Age;
 use crate::game;
-use crate::state::GameState;
+use crate::state::{GameState, PlayerState};
 
 use super::weights::{WeightKey, Weights};
 
@@ -252,6 +252,160 @@ pub fn rate_multiplier(state: &GameState, weights: &Weights, n: usize) -> f64 {
     (1.0 + c * (horizon_scale(state, n) - 1.0)).max(0.0)
 }
 
+// ------------------------------------------------ the wonder under construction
+//
+// The horizon question a wonder asks is not "how many rounds are left" but
+// "how many rounds am I going to OWN this thing for" -- and both halves of
+// that (when it finishes, when the game ends) are computable from the board,
+// so neither is a weight's job. This section owns that one computation for
+// every caller; see [`WonderOutlook`]'s own doc comment.
+
+/// NUMERICAL GUARD, not a model claim (mirrors Python's `_TURNS_CAP`):
+/// [`WonderOutlook::turns_to_finish`] is a ratio that blows up as resource
+/// production approaches zero. 20 turns is already past "never" for a
+/// 20-round game, so nothing inside the cap is shaped by it -- it only keeps
+/// an infinity from reaching the linear evaluator.
+///
+/// Lived in `features.rs` until the wonder arithmetic moved here; it is part
+/// of the same computation, so it moved with it rather than being restated.
+const TURNS_CAP: f64 = 20.0;
+
+/// Everything the evaluator can KNOW about the wonder a player is part-way
+/// through, read off the board rather than fitted.
+///
+/// Every field is a computed board fact. The one that did not exist before
+/// is [`WonderOutlook::collect_fraction`]: the share of the rest of the game
+/// this wonder would actually be standing, and therefore producing, for. A
+/// wonder is not worth what it prints -- it is worth what it prints for as
+/// long as you have it, and paying a stage BUYS that time. Nothing in the
+/// evaluator used to represent that: `wonder_progress`/`wonder_remaining`
+/// are identity-blind stocks (they know how many resources a wonder still
+/// owes, not what completing it would DO), and `cards::wonder_potential` is
+/// identity-aware but progress-blind (it returns the same number whether you
+/// are one stage in or one stage from the end). See `docs/AGREEMENT.md`'s
+/// "delayed payoff" section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WonderOutlook {
+    /// Resources already sunk into the stages built so far.
+    pub progress: i32,
+    /// Resources the unbuilt stages still owe.
+    pub remaining: i32,
+    /// Stages not yet built. `0.0` once nothing is outstanding.
+    pub stages_left: f64,
+    /// Turns of this player's WHOLE resource output the wonder still owes,
+    /// net of what is already banked -- scale-free, so it means the same
+    /// thing to an Age A economy and an Age III one. Capped at
+    /// [`TURNS_CAP`]; `0.0` when the outstanding cost is already in the bank.
+    pub turns_to_finish: f64,
+    /// The part of [`WonderOutlook::turns_to_finish`] the game will not last
+    /// long enough to pay -- the "0-for-58" detector.
+    pub overrun: f64,
+    /// [`rounds_left`] at this position, carried so a caller never has to
+    /// recompute (or, worse, re-derive) a second notion of it.
+    pub rounds_left: f64,
+    /// Rounds the finished wonder would actually be on the board for:
+    /// `rounds_left - turns_to_finish`, floored at zero. Rises every time a
+    /// stage is paid (paying a stage of cost `c` moves the outstanding cost
+    /// down by `c` AND the bank down by `c`, so the shortfall closes by
+    /// `2c`), and rises when resource production rises.
+    pub collect_rounds: f64,
+}
+
+impl WonderOutlook {
+    /// [`WonderOutlook::collect_rounds`] as a share of the game that is left
+    /// -- `1.0` for a wonder that can be finished out of the bank right now,
+    /// `0.0` for one the game will end before you finish. Dimensionless on
+    /// purpose: it multiplies a value that is already in evaluator points, so
+    /// it changes WHEN that value is collected without re-pricing WHAT it is
+    /// worth. [`rounds_left`] is never below `1.0`, so this never divides by
+    /// zero.
+    pub fn collect_fraction(&self) -> f64 {
+        self.collect_rounds / self.rounds_left
+    }
+
+    /// The share of this wonder's total printed cost that has actually been
+    /// paid: `progress / (progress + remaining)`. `0.0` for a wonder just
+    /// taken from the row, `1.0` for one whose last stage is bought.
+    ///
+    /// This is the OTHER half of the delayed payoff, and the one the
+    /// evaluator was missing outright: an unfinished wonder scores nothing
+    /// under the rules (RULES_SPEC 12: only completed wonders count), so its
+    /// value is not owned on the turn the card is taken -- it is bought,
+    /// stage by stage, and each stage buys its own pro-rata share of it.
+    /// Booking the whole value up front (which is what a constant `1.0` here
+    /// amounts to) makes TAKING a wonder look maximally good and then makes
+    /// every stage that pays for it look worth nothing at all, since the term
+    /// contributes the identical number to every candidate move from then on.
+    ///
+    /// Every wonder in the base game prints at least one stage with a nonzero
+    /// cost, so the denominator is positive whenever [`wonder_outlook`]
+    /// returned `Some`; the guard is there so a data edit that printed a
+    /// free wonder could not produce a NaN inside the evaluator.
+    pub fn paid_fraction(&self) -> f64 {
+        let total = self.progress + self.remaining;
+        if total > 0 { f64::from(self.progress) / f64::from(total) } else { 1.0 }
+    }
+
+    /// What share of a FINISHED wonder's value an in-progress one has
+    /// actually earned on this board: how much of it is paid for
+    /// ([`WonderOutlook::paid_fraction`]) times how much of the rest of the
+    /// game you would own it for ([`WonderOutlook::collect_fraction`]).
+    ///
+    /// Both factors are computed board facts, and both move on exactly the
+    /// move that ought to move them: paying a stage of cost `c` raises the
+    /// first by `c / total` and the second by closing the resource shortfall
+    /// by `2c` (the outstanding cost falls by `c` and so does the bank it is
+    /// netted against). Nothing here is fitted -- the weight that says how
+    /// much a finished wonder is worth relative to everything else is
+    /// [`super::weights::WeightKey::WonderPotential`], applied by `eval.rs`
+    /// to the value this scales, and it is unchanged.
+    pub fn earned_share(&self) -> f64 {
+        self.paid_fraction() * self.collect_fraction()
+    }
+}
+
+/// [`WonderOutlook`] for `p`'s wonder under construction, or `None` when
+/// there is no wonder in progress.
+///
+/// `resource_rate` is `effects::compute(state, p).resources` -- passed in
+/// rather than recomputed, because every caller already holds a `Stats` for
+/// this player and `effects::compute` is not free. Taking the one `i32` it
+/// needs (rather than `&Stats`) also keeps this module free of a dependency
+/// on `effects`, which it otherwise has no use for.
+pub fn wonder_outlook(state: &GameState, p: &PlayerState, resource_rate: i32) -> Option<WonderOutlook> {
+    if p.wonder.is_none() {
+        return None;
+    }
+    let stages = p.wonder.get().stages;
+    // Clamped defensively: `wonder_steps` never exceeds `stages.len()` in a
+    // legal state, but nothing here should panic if it somehow did.
+    let built = (p.wonder_steps as usize).min(stages.len());
+    let progress: i32 = stages[..built].iter().map(|&st| i32::from(st)).sum();
+    let remaining: i32 = stages[built..].iter().map(|&st| i32::from(st)).sum();
+    let rounds_left = rounds_left(state, live_count(state));
+
+    let mut stages_left = 0.0;
+    let mut turns_to_finish = 0.0;
+    let mut overrun = 0.0;
+    if remaining > 0 {
+        stages_left = (stages.len() - built) as f64;
+        let owed = f64::from(remaining) - f64::from(p.resources);
+        if owed > 0.0 {
+            turns_to_finish = (owed / f64::from(resource_rate).max(1.0)).min(TURNS_CAP);
+            overrun = (turns_to_finish - rounds_left).max(0.0);
+        }
+    }
+    Some(WonderOutlook {
+        progress,
+        remaining,
+        stages_left,
+        turns_to_finish,
+        overrun,
+        rounds_left,
+        collect_rounds: (rounds_left - turns_to_finish).max(0.0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +480,74 @@ mod tests {
             let state = G::new_game(n, 12);
             assert!(rounds_left(&state, live_count(&state)) >= 1.0, "{n}p");
         }
+    }
+
+    /// No wonder in progress means there is no outlook to report -- `None`,
+    /// not a zero-filled struct a caller could mistake for a real reading.
+    #[test]
+    fn a_player_with_no_wonder_in_progress_has_no_outlook_at_all() {
+        let state = G::new_game(2, 20);
+        assert_eq!(wonder_outlook(&state, &state.players[0], 3), None);
+    }
+
+    /// Both factors of [`WonderOutlook::earned_share`] are shares, so their
+    /// product is one too: whatever the board, the evaluator can book at most
+    /// 100% of a finished wonder's value and never a negative amount of it.
+    /// Swept over every stage count and a range of resource incomes rather
+    /// than asserted at one point, because this is the invariant that keeps
+    /// the discount a DISCOUNT and not a second, unbounded multiplier.
+    #[test]
+    fn the_earned_share_of_a_wonder_is_always_between_none_of_it_and_all_of_it() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").unwrap();
+        let stages = pyramids.get().stages.len() as u8;
+        for steps in 0..=stages {
+            for rate in [0, 1, 4, 20] {
+                for banked in [0, 5, 99] {
+                    let mut state = G::new_game(2, 21);
+                    state.players[0].wonder = pyramids;
+                    state.players[0].wonder_steps = steps;
+                    state.players[0].resources = banked;
+                    let o = wonder_outlook(&state, &state.players[0], rate).expect("a wonder is in progress");
+                    let share = o.earned_share();
+                    assert!(
+                        (0.0..=1.0).contains(&share),
+                        "steps={steps} rate={rate} banked={banked}: share {share} out of [0, 1]"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Paying a stage closes the resource shortfall by TWICE the stage cost
+    /// -- the outstanding cost falls by it and so does the bank it is netted
+    /// against -- so `turns_to_finish` strictly falls and `collect_rounds`
+    /// strictly rises on exactly the move that earns it. Pinned with a
+    /// deliberately slow economy (1 resource a turn) so the shortfall is
+    /// large enough for the change to be visible rather than rounding away.
+    #[test]
+    fn paying_a_stage_buys_more_rounds_of_owning_the_finished_wonder() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").unwrap();
+        let outlook_at = |steps: u8| {
+            let mut state = G::new_game(2, 22);
+            state.players[0].wonder = pyramids;
+            state.players[0].wonder_steps = steps;
+            state.players[0].resources = 0;
+            wonder_outlook(&state, &state.players[0], 1).expect("a wonder is in progress")
+        };
+        let before = outlook_at(0);
+        let after = outlook_at(1);
+        assert!(
+            after.turns_to_finish < before.turns_to_finish,
+            "turns_to_finish must fall: {} -> {}",
+            before.turns_to_finish,
+            after.turns_to_finish
+        );
+        assert!(
+            after.collect_rounds > before.collect_rounds,
+            "collect_rounds must rise: {} -> {}",
+            before.collect_rounds,
+            after.collect_rounds
+        );
     }
 
     /// `live_count` clamps to the 2-4 range even for a state with more seats
