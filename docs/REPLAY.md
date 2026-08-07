@@ -4967,6 +4967,7 @@ grow-vs-swap question this pass exhausted or the sibling-bucket root cause
 own sibling root cause (`Barbarians`'s tie-break) was landed as an ENGINE
 bug fix by a concurrent worker mid-pass, see that section above this one.
 
+<<<<<<< HEAD
 ## Game `7521984` lead: CLOSED (already fixed upstream, no action needed)
 
 Picked up the standing assignment: game `7521984`'s `IllegalMove: Upgrade`
@@ -5155,3 +5156,152 @@ reveal) through 207 (Orange's own round-7 `End turn`) in
 `sources/bgo/journals`-equivalent `/private/tmp/bgojournals/journals/
 7522886.tsv` -- this trace is already fully reconciled and does not need
 re-deriving, only implementing against.
+
+## HandFull handoff, closed with a full negative: every card in every rejected hand has sound provenance -- no replayer bug found, `>=` gate untouched
+
+Picked up the "third, larger-sample per-card provenance trace" the
+"result, corpus-wide, the remaining 78 `HandFull` need a different cause"
+section above explicitly left open, after that section's own
+`ca_total`-undercount check came back clean and argued (correctly, this
+pass confirms) AGAINST the provenance direction being fruitful. Did the
+trace anyway, per this task's own explicit brief, rather than taking that
+steer as settled -- a negative result confirmed twice, independently, is
+worth more than a steer taken on faith.
+
+**Re-measured first, as instructed, before trusting the stale 78/79
+number**: a dozen unrelated commits landed mid-pass (`62befa4` deferring
+`game::force_civil_age_at_least` while a pending choice is still open,
+among others -- see this doc's own commit log). Full corpus, HEAD at
+`5aa032f`: 48 games completing (was 29/30), mean rounds 12.14, and the
+`HandFull` gate count itself moved from 78 to **98**
+(`REPLAY_DEBUG`'s `reason=HandFull` count, not a bucket-histogram row --
+same measurement convention every prior `HandFull` section in this doc
+used). This is a SIZE change from deeper replay reaching more rejections,
+not a shape change -- re-verified below that `hand_civil_size ==
+civil_hand_limit` exactly still holds for all 98, same as every prior
+pass found for its own smaller count.
+
+**Method**: no side script reimplementing game rules (the exact trap a
+much earlier `HandFull` pass's own accumulator fell into, per this task's
+standing warning). Instead, three layers of cross-checked, purely
+observational tooling, all reading the engine's own already-computed
+state:
+
+1. **`REPLAY_DEBUG`'s existing `costs::take_rejection` dump** gives the
+   exact rejected hand (`hand_civil`, already age-disambiguated card
+   names) and the exact journal `lineno` of the rejection, for all 98
+   games in one corpus pass.
+2. **`REPLAY_DEBUG_ALL`'s existing `DEBUG APPLY_ONE ENTRY` dump** (one
+   line per journal line actually dispatched, printing `hand_civil_before`
+   for that line's own actor) gives a literal, already-resolved trace of
+   every add/remove `hand_civil` underwent for that actor, in order. Diffing
+   consecutive same-actor entries (`hand_civil_before[k+1] -
+   hand_civil_before[k]`) recovers, for every card ever held, the EXACT
+   journal line that added it and the exact line (if any) that removed it
+   -- fully sidestepping the age-sibling ambiguity that sank an earlier
+   attempt at this same check (see below).
+3. **A raw-journal cross-check**, independent of the engine's own
+   classification, scanning for any `"<Color> plays "` (excluding `"plays
+   event"`, a global board trigger unrelated to any specific hand card)/
+   `"elects "`/`"discovers "`/`"revolutions ... Change government to "`
+   line for the SAME actor, in the window between a card's diffed
+   acquisition line and the rejection line, that the diff-based trace
+   (step 2) does NOT already show as a removal at that exact line number.
+
+**Two dead ends hit and fixed while building this, both worth naming
+explicitly since they are exactly the "checker disagrees with engine, so
+suspect the checker" shape this task warned about**:
+
+- **First attempt matched a bare `"<Color> plays Reserves ..."`/`"<Color>
+  discovers Iron ..."` line against ANY card of that base name currently
+  or ever held by that actor, without checking WHICH age-sibling instance
+  the bare (age-blind) journal text refers to.** This produced ~25 false
+  "unaccounted disposal" hits, almost all on the nine free-civil-action
+  families (`Rich Land`, `Urban Growth`, `Engineering Genius`,
+  `Breakthrough`, `Reserves`, `Patriotism`, `Frugality`, `Cultural
+  Heritage`, `Revolutionary Idea`) plus ordinary techs like `Iron`/
+  `Knights` a DIFFERENT player of the same game had also taken and
+  developed. Root cause: these action-card families can legally be held
+  in TWO copies at once (`costs::can_take_gated`'s `DuplicateCard` check
+  explicitly exempts `CardType::Action`), and a bare `"plays Reserves"`
+  line never says which of two same-named copies (sometimes different
+  ages) got used -- the engine's own `resolve_named_card_by_effect`/
+  `correct_hand_family` (`replay_common.rs`) already disambiguate this
+  correctly at replay time; a naive text-only checker cannot. Fixed by
+  reading the diff (step 2 above) instead of re-deriving age from the row
+  age column, which is exactly the same "trust the engine's own resolved
+  identity, not a re-derived approximation" precedent this doc's own
+  age-lag fix (`8edfea7`) already established. Confirmed on `7522267`:
+  `"Purple plays Reserves"` at line 167 is the engine's own
+  `PlayActionCard card=Some("Reserves (I)")` -- it disposes the age-I
+  copy, leaving the age-II copy (taken separately, later) genuinely and
+  correctly still in the final rejected hand.
+- **Second attempt trusted `DEBUG APPLY_ONE ENTRY`'s own `card=` field for
+  `TakeCard` lines directly as the pushed identity.** Wrong: that field is
+  printed from `apply_one`'s own function argument, captured BEFORE the
+  `TakeCard` arm's internal `best_age_sibling(card, r.state.age_civil)`
+  re-resolution runs, so it can show the classifier's default (often the
+  Age-A sibling) even when the card that actually lands in `hand_civil`
+  moments later is a different age. Fixed by reading `hand_civil_before`
+  diffs instead of the `card=` field for identity (same fix as above,
+  same lesson: the diff over real state beats any single printed field
+  when a field's OWN doc doesn't guarantee it reflects the post-adjustment
+  value).
+
+**Result, full 98-game `HandFull` set, after both fixes**: every one of
+517 (card, held-instance) pairs across all 98 rejected hands has a
+verified acquisition line (0 "never acquired" cases -- the number of
+`TakeCard` diff-events for a given name is never less than the number
+currently held) AND zero unaccounted disposal-shaped lines (0/517
+flagged by the independent raw-journal cross-check, step 3). A separate
+full reconstruction check (replay every diffed add/remove for each actor
+from scratch and confirm it lands exactly on the engine's own printed
+rejected hand) also came back with zero mismatches across all 98 games --
+the engine's own `hand_civil` bookkeeping is internally consistent with
+itself, and independently, sound against the raw journal text.
+
+**This is a genuine, doubly-cross-checked structural finding, not just an
+absence of counterexamples**: `hand_civil` has exactly one push site
+(`apply.rs::take_card`, already established) and exactly four pop sites
+in the whole tree -- `h_play_leader`, `h_develop`, `h_revolution`,
+`h_play_action` (plus `h_resign`'s full wipe on resignation, and
+`game::antiquate`'s age cull, both irrelevant here: none of these 98
+games' rejected actors have resigned, and 5.5's sibling-rule sweep
+(`docs/AUDIT_HISTORY.md`) already re-confirmed the age-transition funnel
+is a single, undivergeable code path). **No aggression, event, or
+"discard" mechanic anywhere in this codebase ever touches `hand_civil`**
+-- grepped exhaustively (`grep -n "hand_civil\." src/*.rs`, unchanged
+across this pass's own re-check against the dozen new commits) -- which
+matches the actual rules: the civil hand is fully private and immune to
+opponent interference; only USING a card (play/develop/revolt/elect) or
+outliving its age (antiquate) removes it. The `"Discard Phase N military
+card(s) must be discarded"` stated-fact oracle a concurrent pass is
+building for the MILITARY hand (this doc, `IllegalMove: Pop`/actor-mismatch
+sections above) has **no civil analogue to build**: grepped every journal
+for any civil-hand-size/limit fact BGO ever prints in-band, and there is
+none -- `"Discard Phase"` is exclusively a military-hand phase; the ONLY
+"civil"-adjacent text in any journal is the ordinary `"uses N civil
+action"` cost clause, already fully consumed by the `ca_total` check two
+sections up.
+
+**Conclusion: the provenance-trace direction is now closed, not just
+under-explored.** Combined with the four earlier eliminations (the `>=`
+rule itself, filler/phantom cards, stale age-lagged cards, `ca_total`
+undercount) and this pass's own two independent zero results (diff-based
+acquisition/disposal trace, and a from-scratch reconstruction check), all
+five explanations this bucket has ever had are now checked and closed.
+**`RULES_SPEC.md`'s `>=` gate remains untouched**, per every prior
+handoff's explicit instruction -- nothing in this pass's findings
+supports loosening it, and the task's own standing "a clean negative is a
+valid result" applies in full: the hand is not too big for any reason
+this reconstruction can see, and the limit is not too small. The two
+explanations that were already flagged as living OUTSIDE the replayer
+(BGO client-side leniency at the exact `>=` boundary, or a rule subtlety
+this doc has mis-scoped -- e.g. whether some other, not-yet-modeled source
+of hand-limit capacity applies) are the only ones left; both are outside
+this file's own reach (the first needs BGO's own source/behaviour, not
+this journal corpus; the second needs a rules citation this pass did not
+find). No code change landed this pass -- this is a documentation-only
+handoff. `HandFull`'s own count (98) will keep moving as other buckets'
+fixes land and let more games run deeper into it; that is expected and is
+not, by itself, evidence of anything new.
