@@ -4966,3 +4966,192 @@ grow-vs-swap question this pass exhausted or the sibling-bucket root cause
 (`PlunderSplit`'s resource-cap drift) still left open above -- `LosePop`'s
 own sibling root cause (`Barbarians`'s tie-break) was landed as an ENGINE
 bug fix by a concurrent worker mid-pass, see that section above this one.
+
+## Game `7521984` lead: CLOSED (already fixed upstream, no action needed)
+
+Picked up the standing assignment: game `7521984`'s `IllegalMove: Upgrade`
+at round 8 (`discontent=2 > workers_free=1` firing an uprising the real
+journal never had). Independently traced it to the exact same root cause
+`62befa4` ("REPLAYER: defer force_civil_age_at_least while a pending
+choice/deferred effect is still open") fixes: `force_civil_age_at_least`
+(called once per journal line, unconditionally, off that line's own age
+column) was running `advance_age`'s §12.2.4 "-2 yellow_bank" population
+loss for EVERY player one whole age transition early, whenever the
+PRECEDING line's own end-of-turn was still suspended on a `DiscardMilitary`
+choice -- exactly `7521984`'s own shape (Purple's round-7 end-of-turn opens
+a `DiscardMilitary` choice the real journal never needed, `"No Discard
+Phase"`; the very next line is Orange's round-8 `"passes Political Phase"`,
+already tagged age `II`; forcing the age-and-penalty there ran the
+population loss on Purple BEFORE her own suspended uprising check had used
+the pre-transition `yellow_bank`).
+
+Was independently re-deriving this exact fix (own `catch_up_civil_age`
+method, own two tests) when the workspace was re-synced onto a fresh
+`origin/master` that already had `62befa4` landed, apparently found via a
+different repro (`7522648`, chasing the `IllegalMove: Pop` bucket) by
+another pass. Confirmed both fixes are the same mechanism (mine gated on
+`state.pending.is_empty()` alone; the landed one gates on
+`state.pending.is_empty() && state.queue.is_empty()`, a strict superset --
+no functional gap). Discarded my own copy rather than land a duplicate.
+
+**Verified the fix against `7521984` specifically** (not just trusting the
+aggregate count): `replay` now runs it to round 14 / 199 actions (up from
+the round-8 `IllegalMove: Upgrade` stop) before hitting a *different*,
+later `StuckPending: decider 0 != expected actor 1, phase Actions, no
+pending` on a `"Purple discards 1 card"` line -- the discard-phase-count
+bucket explicitly owned by another live worker per this pass's brief. This
+lead is CLOSED; nothing further to do here.
+
+## New lead found chasing "attack the next-largest Build/Upgrade/WonderStep
+## sub-bucket": the strongest/weakest-civilization "and/or" gain/lose block
+## is a real per-player CHOICE, not the deterministic formula this binary
+## implements -- likely explains roughly half of `IllegalMove: Build`'s
+## `resources_short` sub-bucket (NOT fixed this pass, documented instead)
+
+Re-measured the full corpus after the `62befa4` re-sync (`replaystats`,
+1,011 games): 48 completed, mean round 12.14. Current
+`Build`/`Upgrade`/`WonderStep` counts: `Build` 102 (now the largest of the
+three, up from this doc's earlier 67 baseline -- expected exposure, not a
+regression, per the "closing one wall exposes the next" pattern), `Upgrade`
+57, `WonderStep` 51. Per the standing instruction, attacked `Build`, the
+current largest.
+
+**Sub-categorised all 102 `IllegalMove: Build` games** (`REPLAY_DUMP_BUCKET`
+for the game IDs, then `REPLAY_DEBUG=1 ./replay` per game, reading each
+`try_apply fail`'s own `resources=`/`workers_free=` fields against the same
+line's `costs::build_cost_for` print -- the existing diagnostics named in
+this pass's brief, nothing new built):
+
+| sub-bucket | count | shape |
+|---|---|---|
+| `resources_short` | 62 | `resources < build_cost_for(card)` -- the build's OWN cost is right (otherwise it would already be an `UnrecoverableHiddenInfo: build cost mismatch`, a *different*, already-working bucket that fires when the journal's stated cost disagrees with `build_cost_for`), but this reconstruction's `p.resources` is short by 1-3. |
+| `workers_free_zero_but_resources_ok` | 31 | Same shape this doc's earlier passes already ruled out as a DIFFERENT, unexplained bug (`workers_free == 0` while `resources` is plentiful) -- not re-chased this pass, still open. |
+| other | 9 | Not yet sub-categorised. |
+
+**Traced the `resources_short` sub-bucket's root cause on game `7522886`
+end to end**, and it is a real, confirmed **ENGINE BUG**, not a replayer
+parsing gap:
+
+Round 6 end (`"End turn Orange scores: ...; 3 resources (now 3)"`, a
+running total, trustworthy) leaves Orange with 3 resources, matched exactly
+by this binary's own `end_of_turn POST` print. Grey's very next political
+action reveals `Raiders` (`"Each of the two weakest civilizations lose a
+total of 2 resources and/or food.; Green and Orange each lose 2 resources
+and/or food; Green choses first"`) -- **the player-SELECTION half of this
+is confirmed correct**: added a one-line `REPLAY_DEBUG_ALL` print inside
+`events::resolve_count_targets`'s `weakestPlayers` branch (reverted after
+confirming, not shipped) showing this binary's own computed strengths
+`[Grey=2, Orange=0, Purple=1, Green=1]` and its resulting `targets=[Orange,
+Green, Purple, Grey]` -- `[Orange, Green]` for `weakest_count=2` matches the
+journal's own `"Green and Orange"` exactly. The already-landed
+`d9e52c6`/`a008990` tie-break fix (this Raiders/Crime Wave/Barbarians/
+Uncertain Borders sibling-rule sweep) is doing its job; this is not that
+bug reappearing.
+
+**The SPLIT is wrong.** `events::food_or_resources` (called by
+`apply_gains_block`'s `food_and_or_resources` arm, which is what
+`resolve_count_targets` uses for every `strongestPlayers`/`weakestPlayers`
+block) is a fixed, deterministic formula: "drains resources first, floors
+at zero, spills into food" for a loss (the mirror for a gain). Its own doc
+comment cites `§5.4.6/§11.5` and explicitly contrasts it with Plunder's
+FAQ-p.7-established real choice. But the SAME journal that names Orange and
+Green as targets also logs their OWN, DIFFERENT resolutions immediately
+after: `"Green spends 1 food; Green spends 1 resource"` (a genuine 1/1
+SPLIT of the identical total-2 loss) and `"Orange spends 2 food"` (ALL
+food, zero resources -- the exact opposite of "resources first"). The
+Foray gain two lines earlier shows the same shape on the GAIN side:
+`"Purple produces 3 resources"` vs `"Grey produces 3 food"` for an
+identical "gains a total of 3 resources and/or food" block. **The literal
+word in the journal is "choses" (chooses)** -- `"Green choses first"` /
+`"Purple choses first"` -- this is BGO rendering a real, sequential,
+per-player CHOICE (each affected player independently picks their own
+food/resources split, in `targets`-order, same shape as `ChoiceKind::
+PlunderSplit` but self-directed rather than an attacker choosing for a
+victim), not a deterministic formula. This binary's fixed "resources first"
+substitute is measurably wrong whenever a player's actual choice disagrees
+with it, and per this trace, real players clearly do NOT all default to
+"protect food, drain resources" -- Orange did the opposite.
+
+**Confirmed by full arithmetic reconciliation, not just the raw clause
+text** (the `"3 food" proven wrong against the log's own running total`
+caveat this pass's brief opens with applies to `EventBlock` clause text
+in general, so this was checked against a THIRD, independent number, not
+just the two conflicting clauses): round 7's own end-of-turn line
+(`"3 resources (now 3)"`) proves Orange's PRE-production round-7 resources
+were `3 - 3 = 0`; round 7's own spending (`"Orange builds Warrior ...
+spends 1 resource"` [Homer-discounted] + `"Orange builds Warrior ... spends
+2 resources"` [full price] = 3 total) proves Orange ENTERED round 7 with
+`0 + 3 = 3` resources -- i.e. Orange's resources were completely untouched
+by the Raiders loss the round before, exactly matching `"Orange spends 2
+food"` (all-food) and contradicting this binary's own "resources first"
+computation (which drains 3 -> 1 immediately on the Raiders line, then
+correctly tracks 1 -> 0 -> **fails needing 2 for the second Warrior**,
+exactly the corpus stop).
+
+**This also means an EXISTING doc comment in this file's own source is
+wrong** and should be corrected whenever this is picked up:
+`replay_common.rs`'s `parse_plunder_split_line` doc (~line 2438) calls
+Foray/Refugees' "and/or" grant "a DIFFERENT and deterministic kind" of
+"produces" line, contrasting it with Plunder's real choice -- that
+characterization is what this trace falsifies. The line-SHAPE
+distinction the comment draws (no trailing victim `"spends"` clause) is
+still correct and still needed for parsing; only the "deterministic"
+claim is wrong.
+
+**Scale check, not full proof for every instance**: of the 62
+`resources_short` games, 50 have a `Foray`/`Raiders`/`Crime Wave`/
+`Refugees` event somewhere in their own journal (`grep` over
+`Current event:; [AI]+ / (Foray|Raiders|Crime Wave|Refugees)`) -- a strong
+correlation, not a confirmed cause for all 50 individually (some events
+may be far from the eventual failure point, or coincidental). Extrapolating
+loosely, this ONE mechanism could plausibly explain something on the order
+of half of `IllegalMove: Build`'s `resources_short` sub-bucket alone, and
+is very likely NOT specific to `Build` -- any bucket downstream of a
+`strongestPlayers`/`weakestPlayers` "and/or" gain/lose block (`Upgrade`,
+`Develop`, `PlayAction`, `WonderStep`'s own resource-shortfall shapes) is a
+plausible sibling, unmeasured this pass.
+
+**NOT fixed this pass -- deliberately, not from lack of trying.** A correct
+fix needs one of two shapes, both larger than this pass's remaining budget
+could safely implement AND confirm-by-revert-test in one sitting:
+
+1. **Real engine choice**: give `resolve_count_targets`'s `food_and_or_
+   resources` arm a genuine `Pending::Choice`, opened per targeted player
+   in `targets` order (matching `"<Color> choses first"`), offering every
+   valid food/resources split summing to the block's total -- structurally
+   the same shape `interact::offer_plunder_split` already builds (reuse its
+   `ChoiceOption::Gain` split-enumeration, generalised to a self-directed
+   decider instead of an attacker). Needs: a new `ChoiceKind` (or a
+   `PlunderSplit`-shaped variant with `victim` optional/self), self-play's
+   own default answering policy for when nobody scripted a real choice
+   (existing "resources first" behaviour is a safe, compatible default --
+   climb is paused, so bot-policy quality here is not urgent), AND the
+   replayer's own `resolve_intervening` arm to drain it -- reading the
+   REAL split off the observed `"<Color> produces/spends N food[; N
+   resources]"` lines this file already parses the GAIN half of
+   (`parse_standalone_produces`) but not yet the LOSS half (`"spends"`,
+   standalone, no leading action verb -- needs its own parser, mirroring
+   `parse_standalone_produces`'s exact "whole line, no other clauses" care
+   so it cannot misfire on an ordinary build/develop's own embedded
+   `"spends"` clause).
+2. **Replayer-only post-hoc correction** (smaller, does not touch
+   self-play/engine, ONLY improves reconstruction fidelity): since `events::
+   food_or_resources`'s split is a pure, deterministic function of
+   (total, sign, the player's OWN food/resources at that instant), the
+   replayer can recompute exactly what the engine already did the instant
+   it reads the player's own observed `"produces"/"spends"` line, diff it
+   against the real split, and apply just the delta (move tokens between
+   `p.food`/`p.resources`, net zero) -- no new `Pending`/`ChoiceKind`, no
+   self-play change. Needs the same new "standalone spends" parser as
+   option 1, plus recognising WHICH recent bookkeeping lines are this
+   family's own gain/loss (distinguishing a `strongestPlayers`/
+   `weakestPlayers` block's "and/or" resolution from an ordinary flat
+   `gainFood`/`gainResources` event, which prints the identical
+   `"<Color> produces N food"` shape for a DIFFERENT, genuinely
+   deterministic reason and must NOT be corrected).
+
+Whoever picks this up next: start from game `7522886`, lines 189 (`Raiders`
+reveal) through 207 (Orange's own round-7 `End turn`) in
+`sources/bgo/journals`-equivalent `/private/tmp/bgojournals/journals/
+7522886.tsv` -- this trace is already fully reconciled and does not need
+re-deriving, only implementing against.
