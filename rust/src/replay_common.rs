@@ -3308,6 +3308,26 @@ fn apply_one(
             .or_else(|| {
                 trailing_gets_military_resource(raw_text)
                     .and_then(|n| family_siblings(named).into_iter().find(|id| id.get().effects.resources_for_military_units as i32 == n))
+            })
+            // Reserves (`Special::GainFoodOrResources`, no `FreeCivilAction`
+            // either) prints its own age-dependent magnitude (2/3/4 for
+            // Age I/II/III) right there in the SAME trailing "produces N
+            // food/resources" clause `ChoiceKind::FoodOrRes` resolution
+            // below already parses for the food-vs-resources KIND -- the
+            // magnitude `n` it also returns pins the CARD identity down the
+            // same way, and was sitting unused before this fix: whichever
+            // age-sibling the earlier `"takes Reserves in hand"` line
+            // guessed (age-blind, `best_age_sibling`'s doc comment) got
+            // played and its OWN (possibly wrong) gain applied instead.
+            .or_else(|| {
+                trailing_produces(raw_text).and_then(|(_, n)| {
+                    family_siblings(named).into_iter().find(|id| {
+                        id.get()
+                            .special
+                            .iter()
+                            .any(|s| matches!(s, crate::cards::Special::GainFoodOrResources(v) if *v as i32 == n))
+                    })
+                })
             });
             let card = solved.unwrap_or_else(|| {
                 r.state.players[actor as usize]
@@ -4708,6 +4728,42 @@ mod tests {
         // WRONG guess being gone, not as the right one still sitting there.
         assert!(!p.hand_civil.contains(patriotism_i), "the wrong age guess was corrected, not played as-is");
         assert!(!p.hand_civil.contains(patriotism_a), "the corrected card was then played (removed), not left in hand");
+    }
+
+    /// REGRESSION, same shape as the Patriotism one above (found chasing
+    /// the same cluster): Reserves' `Special::GainFoodOrResources` also
+    /// scales by age (2/3/4 for I/II/III) with no `FreeCivilAction` special
+    /// to route through the `kind` match, and its own trailing `"produces N
+    /// food/resources"` clause -- already parsed for the food-vs-resources
+    /// CHOICE below -- was going unused for the CARD identity, so a wrong
+    /// take-time age guess granted the wrong-age amount.
+    #[test]
+    fn a_reserves_play_line_resolves_the_age_sibling_from_its_own_gain_clause_not_the_earlier_take_guess() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
+        let reserves_ii = CardId::by_name("Reserves (II)").expect("in the table");
+        let reserves_iii = CardId::by_name("Reserves (III)").expect("in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.civil_actions = 4;
+            p.hand_civil = CardList::new();
+            // The earlier take-time guess put the WRONG age-sibling in hand
+            // (Age III, gainFoodOrResources 4) when the real card is Age II
+            // (gainFoodOrResources 3, matching the line's own "produces 3
+            // resources" evidence below).
+            p.hand_civil.push(reserves_iii);
+        }
+
+        let raw = "Orange plays Reserves Orange produces 3 resources";
+        let out = apply_one(&mut r, 0, ActionClass::PlayActionCard, Some(reserves_ii), "plays Reserves Orange produces 3 resources", raw, None);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert_eq!(p.resources, 3, "Age II's printed gain (3), not Age III's wrong one (4)");
+        assert!(!p.hand_civil.contains(reserves_iii), "the wrong age guess was corrected, not played as-is");
+        assert!(!p.hand_civil.contains(reserves_ii), "the corrected card was then played (removed), not left in hand");
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
