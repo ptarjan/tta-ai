@@ -4453,10 +4453,12 @@ fn apply_one(
                 let p = &r.state.players[actor as usize];
                 let gate = costs::take_gate(&r.state, p, None);
                 if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate) {
+                    let s = effects::state_stats(&r.state, p);
                     eprintln!(
                         "DEBUG TAKE REJECT: lineno={} age_civil={:?} card={} slot={slot} reason={reason:?} our_take_cost={} \
                          journal_cost={cost} gate_have={} civil_actions={} military_actions={} \
-                         leader={} hand_civil_size={} civil_hand_limit={} hand_civil={:?} raw_text={raw_text:?}",
+                         leader={} government={} hand_civil_size={} civil_hand_limit={} s_civil_actions={} s_civil_hand_limit={} \
+                         completed_wonders={:?} hand_civil={:?} raw_text={raw_text:?}",
                         r.current_lineno,
                         r.state.age_civil,
                         card.get().name,
@@ -4465,8 +4467,12 @@ fn apply_one(
                         p.civil_actions,
                         p.military_actions,
                         if p.leader.is_none() { "none" } else { p.leader.get().name },
+                        p.government.get().name,
                         p.hand_size_civil(),
                         costs::civil_hand_limit(&r.state, p),
+                        s.civil_actions,
+                        s.civil_hand_limit,
+                        p.completed_wonders.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
                         p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
                     );
                 }

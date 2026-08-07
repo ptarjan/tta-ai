@@ -5730,3 +5730,209 @@ correction loop's delta-sign branch to use it. New test confirmed red
 against the old unconditional skip. Full corpus, set-diffed by exact game
 ID: 49 -> 57 completed, 8 gained, 0 lost. `IllegalMove: Build` 109 -> 88,
 `Upgrade` 59 -> 32, `WonderStep` 54 -> 36.
+
+## Cost-cluster pass: one shared disease confirmed and fixed (Trade Routes food-as-resource fold), one ENGINE bug fixed (Shakespeare built-not-developed gate), and the dominant remaining member (`IllegalMove: Take`'s `HandFull` sub-bucket) investigated to a well-evidenced open lead, NOT fixed
+
+Assigned the largest aggregate failure cluster: `IllegalMove: Take`/`Build`/
+`Upgrade`/`WonderStep` plus the `UnrecoverableHiddenInfo: build cost
+mismatch` and `ParserGap: <card>'s take cost` tails, with an explicit
+instruction to establish FIRST whether these are one disease or several.
+
+**Verdict: at least two distinct diseases inside this cluster**, not one and
+not four. Bucketed by signature per the standing method
+(`REPLAY_DUMP_BUCKET`, `REPLAY_DEBUG`'s `TAKE REJECT` dump) before forming
+any theory, per this doc's own prior lessons.
+
+### Disease 1 (found and FIXED, commit `753b7ba`): Trade Routes Agreement's food-as-resource conversion was parsed off ONE clause short on Build/Upgrade/WonderStep lines
+
+The `build cost mismatch` tail's single-card names (Warriors, Printing
+Press, Knights, Swordsmen, Drama, Philosophy, Religion, Bread and Circuses,
+Bronze, Agriculture, Alchemy, Movies, Journalism, Organized Religion -- 14
+distinct names, ~39 games) were exactly the "gift" the brief promised:
+almost every one of them shared the identical two-clause journal shape
+`"<Color> builds/upgrades X <Color> spends N resource(s); <Color> spends 1
+food"`. Traced end to end on game `7523070` (round 6, `"Green builds
+Warrior Green spends 1 resource; Green spends 1 food"` for a 2-resource
+Warrior): Green is Trade Routes Agreement side A (`"Green proposes Trade
+Routes Agreement to Orange Green is A; ... Once per round A can use 1 food
+instead of 1 resource"`, line 80), and had 6 resources in hand at the time
+-- not short, this is a deliberate once-per-round conversion, not a
+shortfall workaround. `total_paid_for_build` (the function backing the
+`want`/`got` mismatch check) read only the FIRST `"spends"` clause, silently
+dropping the food clause and under-counting the true payment by exactly the
+converted amount -- exactly the "multiple `spends` clauses on one journal
+line, checker reads only the first" bug shape the brief called out, and the
+build/upgrade/wonder-stage mirror of the ALREADY-fixed `IncreasePopulation`
+food-then-resource fold (`spent_resource_after_food`,
+`Move::TradeResourceAsFood`).
+
+Fix: new `spent_food_after_resource` (reads the trailing food clause,
+whatever precedes it) and a shared `convert_trade_food_shortfall` helper
+(mirrors `IncreasePopulation`'s existing `TradeResourceAsFood` fold, applies
+`Move::TradeFoodAsResource` the OTHER direction, gated on the journal's own
+stated total matching this binary's own cost EXACTLY so a genuinely wrong
+cost still surfaces honestly rather than being masked -- same safety gate
+the Pop fix established), wired into `Build`/`Upgrade`/`WonderStep` alike so
+the rule lives in ONE place, not three. Also fixed the SAME-pass Shakespeare
+Library/Theater discount bug below in the same commit (unrelated mechanism,
+same cluster).
+
+**Pitfall hit and fixed before landing**: the first version called
+`costs::wonder_stage_cost` unconditionally in the WonderStep arm, and its
+`debug_assert!(!p.wonder.is_none())` fired on game `7522899` (a
+reconstruction whose state had already diverged enough to think no wonder
+was in progress at that line) -- under `[profile.difftest]`'s INHERITED
+`panic = "abort"` (it `inherits = "release"` and never overrides `panic`),
+this aborted the ENTIRE corpus run, not just that one game, exactly the
+standing warning this project's brief carries. Guarded behind
+`!p.wonder.is_none()` first; a reconstruction that's already wrong there
+just falls through to its previous, honest `IllegalMove` instead.
+
+Measured, set-diffed by exact game ID, full 1,011-game corpus (base
+`df5cfa0`, after a concurrent worker's `food_or_resources` loss-side fix):
+completed games 57 -> 58 (`7521742` newly completes, **zero regressions** --
+`comm -23`/`comm -13` on the sorted completed-ID lists confirmed this
+exactly, not by count alone). `build cost mismatch` tail: 14 distinct card
+names (~39 games) -> 3 (`Journalism`, `Organized Religion`, `Movies`, all
+sharing a DIFFERENT, separate `"using Urban Growth"` shape -- NOT chased
+this pass, a plausible next lead but small, 3 games). `IllegalMove: Build`
+88 -> 94, `Upgrade` 32 -> 34 (both grew -- expected exposure from games
+running deeper, not a regression, per this doc's own standing pattern).
+`WonderStep` 36 -> 34. `Take` unaffected (civil-action cost, not resource
+cost).
+
+### Disease 2 (found and FIXED, same commit): William Shakespeare's Library/Theater discount checked "developed" instead of "built" -- ENGINE BUG
+
+Chasing one of the 3 residual `build cost mismatch` outliers turned up an
+unrelated second bug on game `7520718`: Orange developed Printing Press (a
+Library-kind tech, `"discovers"`, paying its science cost) at round 13 but
+did not BUILD one (place a worker, pay its resource cost) until round 15;
+in between, at round 14, Orange correctly paid FULL price for a Drama
+(Theater) build per the journal, but this binary's `costs::build_cost_for`
+computed a Shakespeare-discounted price one build too early. Root cause:
+`build_cost_for`'s (and `tech_cost`'s, same pattern, the develop-cost side
+of the identical leader ability) `has_library`/`has_theater` checks tested
+mere presence in `p.techs` (every DEVELOPED technology, worker or not) --
+developing and building are two separate payments (RULES_SPEC §3.5 vs
+§3.7) and Shakespeare's own text needs the counterpart building actually IN
+PLAY. `effects.rs`'s sibling Shakespeare ability
+(`CulturePerLibraryTheaterPair`, via its own `workers_on` helper) already
+gated on `slot.workers > 0` correctly -- this cost-side check was the one
+place that didn't match it.
+
+**ENGINE BUG, confirmed**: `costs::build_cost_for`/`costs::tech_cost` are
+shared by `legal.rs` (legality) and `apply.rs` (application), so this
+corrupted both self-play legality and training whenever Shakespeare was in
+play with a developed-but-unbuilt Library or Theater -- exactly the
+highest-value kind of cost bug this project's brief calls out. Fixed by
+adding `&& slot.workers > 0` to all four checks (build-cost Library check,
+build-cost Theater check, tech-cost Theater check, tech-cost Library
+check); two new regression tests
+(`build_cost_for_shakespeare_ignores_a_library_that_is_developed_but_not_built`,
+`tech_cost_shakespeare_ignores_a_theater_that_is_developed_but_not_built`),
+both confirmed RED against the reverted pre-fix code, then green.
+
+### Disease 3 (investigated, NOT fixed -- open lead): `IllegalMove: Take`'s `HandFull` sub-bucket, now the cluster's dominant remaining member
+
+Post-fix corpus counts: `Take` 129 (up from the brief's 119 baseline --
+unrelated growth, see the concurrent `food_or_resources` fix's own report),
+now clearly the largest of the four `IllegalMove` buckets (`Build` 94,
+`Upgrade` 34, `WonderStep` 34). Bucketed the REJECTION REASON, not just the
+move kind, via the existing `REPLAY_DEBUG`/`TAKE REJECT` dump
+(`costs::take_rejection`, already purpose-built for exactly this): of 123
+named rejections corpus-wide, 109 are `HandFull`, 12 `Budget`, 1 each
+`WonderInProgress`/`WonderBudget`. `HandFull` is overwhelmingly the
+dominant shape inside the dominant bucket.
+
+**Enriched the existing `TAKE REJECT` debug line** (this commit) with
+`government`, `s_civil_actions`/`s_civil_hand_limit` (the two
+`effects::state_stats` components `costs::civil_hand_limit` sums) and
+`completed_wonders`, per the standing "use diagnostics that already exist"
+method -- this is a refinement of an existing print, not a new instrument.
+
+**The pattern, confirmed corpus-wide**: `hand_civil_size == civil_hand_limit`
+in ALL 109 `HandFull` rejections, never strictly greater (expected under the
+SETTLED `>=` gate, but confirms every one is a boundary case, not a wild
+overcount). Government distribution: 70 Despotism, 17 Monarchy, 14
+Constitutional Monarchy, 4 Theocracy, 3 Republic, 1 Democracy -- i.e. the
+STARTING government alone accounts for nearly two thirds, and 5 of the 109
+have `completed_wonders: []` (zero wonders, zero leader/pact complexity at
+all). This rules out any theory that needs a leader/wonder/pact edge case as
+the general explanation.
+
+**Traced two full examples end to end, by hand, against the journal's own
+recorded actions (not just the failing line):**
+
+1. Game `7523357` line 442 (`"Green takes Scientific Method"`, hand size 7,
+   limit 7): government IS genuinely Constitutional Monarchy at this point
+   (Green really did `"discovers Constitutional Monarchy"` at round 9, no
+   separate `"revolutions"` line needed -- RULES_SPEC §3 item 9 confirms
+   developing a government via the ordinary `"discovers"` action, paying the
+   HIGHER science cost, **IS** the peaceful government change; the SEPARATE
+   `"X revolutions Change government to Y"` line is only the VIOLENT path,
+   paying the LOWER cost and burning all CAs. This doc's author initially
+   suspected an auto-switch bug here and it was a false lead -- ruled out).
+   Base `s_civil_actions=6` (Constitutional Monarchy's own printed `CA=6`,
+   cross-checked exactly against `sources/bga_throughtheages_material.inc.php`)
+   plus `s_civil_hand_limit=1` (Library of Alexandria's printed "1 extra
+   civil card in hand", built and completed round 5, also cross-checked
+   against the same source) = limit 7, matching this binary's computation
+   exactly. Manually re-derived Green's full civil-hand history from the
+   journal's own take/discover/play lines (all 7 cards accounted for, none
+   of them played/discovered/discarded before line 442) -- hand really is 7
+   by the journal's own record too. No leader-effect explains the gap
+   (leader shows `none`: Joan of Arc, elected round 6, is apparently
+   ALREADY dead by round 12's `Iconoclasm` -- but Joan of Arc grants no
+   CA/hand-limit bonus either way, so this is a dead end for THIS bug, not
+   pursued further here).
+2. Game `7523003` line 222 (`"Green takes Swordsmen"`, hand size 4, limit
+   4): pure Despotism (`CA=4`), zero wonders, zero pacts (grepped the whole
+   journal for `"Green proposes"` -- none), leader Michelangelo (no
+   CA/hand-limit effect). Hand `["Urban Growth (I)", "Drama", "Rich Land
+   (I)", "Rich Land (I)"]` -- the duplicate `Rich Land (I)` is real, not a
+   double-count bug (`count: [2,2,2]` in `card_table.rs`, confirmed against
+   the same official source: two genuine physical copies at every player
+   count). Manually re-derived Green's full hand history again: all 4 cards
+   independently confirmed against the journal's own take/build/discover
+   lines, including which of two ambiguous `"Urban Growth"` copies a
+   `"using Urban Growth"` line consumed (does not change the COUNT either
+   way). The just-colonized `"Strategic Territory"` (line 220, one line
+   before the failure) grants only `+2 strength` and a one-time military
+   card bonus, no CA/hand-limit effect (cross-checked against the official
+   source).
+
+**Conclusion: ruled out, corpus-wide or on these two examples specifically**:
+government mis-identification, wonder-bonus mis-modeling, leader-ability
+mis-modeling, pacts, colony/territory bonuses, `hidden_civil` interference
+(always 0 in every replayer construction site, confirmed by grep), and
+double-counting of legitimate same-named multi-copy action cards. The base
+CA/hand-limit numbers for every government and wonder involved were
+cross-checked against `sources/bga_throughtheages_material.inc.php` and
+matched this binary's `card_table.rs` exactly in every case checked.
+
+**NOT fixed.** Both worked examples show this binary's computed hand size
+AND its computed limit both independently correct against the journal's own
+recorded actions and the official card data -- yet the real BGA game
+allowed the take anyway. Per the standing instruction, `RULES_SPEC.md`'s
+hand-limit rule and `costs::take_gate`'s `>=` are SETTLED and were NOT
+touched or second-guessed. Whoever picks this up next: the two example
+games above are already fully reconciled and do not need re-deriving, only
+extending -- a good next step is checking whether BGA's REAL rule differs
+from RULES_SPEC's text in some narrow way `HandFull`'s prior (military-hand,
+different bucket, already fixed) passes did not need to consider, e.g.
+whether the take is legal specifically when it's the LAST civil action the
+player will spend this turn (a "you may exceed the limit by exactly the
+card you're about to immediately play down" carve-out), or whether
+`civil_hand_limit` should be evaluated against a DIFFERENT snapshot of
+`ca_total` than `effects::state_stats` currently returns. The enriched
+`TAKE REJECT` debug line (this commit) already gives government/wonder/CA
+breakdown for free on every future rejection.
+
+### What was NOT investigated this pass
+
+`Budget` (12) and the two `Wonder*` (1 each) `Take` sub-reasons; the
+`ParserGap: <card>'s take cost` tail (Engineering, Reserves, Satellites,
+Civil Service, Internet, Multimedia, Air Forces, Tanks, Engineering Genius
+-- 9 games, all single-card, a plausible "gift" lead per the brief's own
+framing but not opened this pass); the residual 3-game `"using Urban
+Growth"` `build cost mismatch` shape.
