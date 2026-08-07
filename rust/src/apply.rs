@@ -281,6 +281,8 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::ColumbusColonize { card } => h_columbus_colonize(state, idx, card),
         Move::Barbarossa { card } => h_barbarossa(state, idx, card),
         Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to),
+        Move::TradeFoodAsResource => h_trade_food_as_resource(state, idx),
+        Move::TradeResourceAsFood => h_trade_resource_as_food(state, idx),
 
         // Responses to an open decision. Unreachable: the `state.pending`
         // branch at the top of this function has already taken them. Getting
@@ -1277,6 +1279,33 @@ fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
     end_politics(state, idx, PoliticalAction::Played);
 }
 
+/// Trade Routes Agreement, side A's half (§5.9): convert 1 stored food into
+/// 1 resource. Not a civil/military action (the printed text names none),
+/// so unlike every handler around it this one does not touch `p.
+/// civil_actions`/`p.military_actions` at all -- `legal::action_moves` is
+/// the only legality gate, via `economy::trade_food_as_resource_remaining`.
+/// `economy::gain_resources`, not a bare `+= 1`: the blue-token bank caps
+/// every gain the same way regardless of source (`economy.rs`'s own doc
+/// comment on `gain_food`/`gain_resources`), and this conversion is not
+/// exempt from that cap just because it looks like a straight trade.
+fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
+    let p = &mut state.players[idx as usize];
+    debug_assert!(p.food >= 1, "h_trade_food_as_resource: caller must ensure 1 food (legality check)");
+    p.food -= 1;
+    economy::gain_resources(p, 1);
+    p.trade_food_as_resource_used_this_turn += 1;
+}
+
+/// The [`h_trade_food_as_resource`] twin for Trade Routes' OTHER direction
+/// ("Civilization B can use 1 resource as 1 food during its turn").
+fn h_trade_resource_as_food(state: &mut GameState, idx: u8) {
+    let p = &mut state.players[idx as usize];
+    debug_assert!(p.resources >= 1, "h_trade_resource_as_food: caller must ensure 1 resource (legality check)");
+    p.resources -= 1;
+    economy::gain_food(p, 1);
+    p.trade_resource_as_food_used_this_turn += 1;
+}
+
 /// Christopher Columbus, as a political action: remove him from the game to
 /// colonize `card` (a territory from hand) with no military sacrifice.
 /// Mirrors `engine/actions.py::_h_columbus_colonize` +
@@ -1422,6 +1451,8 @@ mod tests {
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
             replaced_leader_this_turn: false,
+            trade_food_as_resource_used_this_turn: 0,
+            trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -1560,6 +1591,58 @@ mod tests {
         assert_eq!(state.players[0].civil_actions, 4, "no CA spent");
         assert_eq!(state.players[0].workers_free, 1);
         assert!(state.players[0].ocean_liners_used);
+    }
+
+    // ------------------------------------------- Trade Routes Agreement
+
+    #[test]
+    fn h_trade_food_as_resource_converts_1_food_into_1_resource_and_spends_no_action() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.military_actions = 3;
+        p.food = 5;
+        p.resources = 2;
+        p.blue_total = 20; // room for the gained resource
+        let mut state = one_player_state(p);
+        h_trade_food_as_resource(&mut state, 0);
+        let q = &state.players[0];
+        assert_eq!(q.food, 4, "1 food spent");
+        assert_eq!(q.resources, 3, "1 resource gained");
+        assert_eq!(q.civil_actions, 4, "not a civil action");
+        assert_eq!(q.military_actions, 3, "not a military action either");
+        assert_eq!(q.trade_food_as_resource_used_this_turn, 1);
+        assert_eq!(q.trade_resource_as_food_used_this_turn, 0, "the OTHER direction's counter is untouched");
+    }
+
+    #[test]
+    fn h_trade_resource_as_food_converts_1_resource_into_1_food() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.food = 2;
+        p.resources = 5;
+        p.blue_total = 20; // room for the gained food
+        let mut state = one_player_state(p);
+        h_trade_resource_as_food(&mut state, 0);
+        let q = &state.players[0];
+        assert_eq!(q.food, 3);
+        assert_eq!(q.resources, 4);
+        assert_eq!(q.trade_resource_as_food_used_this_turn, 1);
+    }
+
+    #[test]
+    fn h_trade_food_as_resource_is_capped_by_the_blue_token_bank_like_any_other_gain() {
+        // `economy::gain_resources` (not a bare `+= 1`): a player with no
+        // free blue tokens converts the food away but gains nothing back,
+        // exactly like any other over-cap "gain" in this engine -- proves
+        // this handler did not bypass the shared capacity check by hand-
+        // rolling the arithmetic instead of calling it.
+        let mut p = blank_player(0, card("Despotism"));
+        p.food = 1;
+        p.resources = 0;
+        p.blue_total = 0; // no capacity for the gained resource at all
+        let mut state = one_player_state(p);
+        h_trade_food_as_resource(&mut state, 0);
+        assert_eq!(state.players[0].food, 0, "the food is still spent");
+        assert_eq!(state.players[0].resources, 0, "but there is nowhere to store the gain");
     }
 
     /// THE REGRESSION, fixed 2026-08-05: Development of Civil Life's

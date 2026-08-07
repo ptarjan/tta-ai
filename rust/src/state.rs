@@ -598,6 +598,23 @@ pub struct PlayerState {
     /// candidate discounts exhausts ALL THREE, via [`OneTimeDiscount::exhaust`].
     pub one_time_discount: OneTimeDiscount,
 
+    /// Trade Routes Agreement (§5.9, `PactBlock::food_as_resource`/
+    /// `resource_as_food`, `bga_throughtheages_material.inc.php`: "Civilization
+    /// A can use 1 food as 1 resource during its turn" / "Civilization B can
+    /// use 1 resource as 1 food during its turn"). These count conversions
+    /// ALREADY SPENT this turn, one counter per direction because a player
+    /// can hold both allowances at once (they are party to more than one
+    /// pact -- see `docs/RULES_SPEC.md` §5.9: "You may be party to many
+    /// pacts but have only one in your own area"). Legal only while `<
+    /// effects::state_stats(..).food_as_resource`/`resource_as_food`, which
+    /// sums every live pact's grant, so two copies of the same-direction
+    /// grant (from two different partners) really do allow two conversions.
+    /// Cleared in `economy::end_of_turn`, same as `replaced_leader_this_turn`.
+    pub trade_food_as_resource_used_this_turn: u8,
+    /// The `resource_as_food` twin of the field above (Trade Routes' OTHER
+    /// direction: spend a resource to gain food).
+    pub trade_resource_as_food_used_this_turn: u8,
+
     pub resigned: bool,
 }
 

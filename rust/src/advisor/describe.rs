@@ -93,6 +93,8 @@ pub fn cost_note(state: &GameState, p: &crate::state::PlayerState, mv: Move) -> 
         Move::Aggression { card, .. } | Move::War { card, .. } => {
             format!("{} military action(s)", card.get().military_action_cost)
         }
+        Move::TradeFoodAsResource => "1 food".to_string(),
+        Move::TradeResourceAsFood => "1 resource".to_string(),
         Move::PopFree
         | Move::Destroy { .. }
         | Move::Churchill { .. }
@@ -256,6 +258,8 @@ pub fn describe_move(state: &GameState, mv: Move, board: Option<&Board>) -> Stri
             card.name()
         ),
         Move::SendDone => "FORCE COMPLETE (send it and take the colony)".to_string(),
+        Move::TradeFoodAsResource => format!("TRADE ROUTES: convert 1 food into 1 resource{t}"),
+        Move::TradeResourceAsFood => format!("TRADE ROUTES: convert 1 resource into 1 food{t}"),
     }
 }
 

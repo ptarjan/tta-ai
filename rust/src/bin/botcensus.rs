@@ -243,7 +243,7 @@ fn classify_move(mv: Move) -> Option<BotClass> {
         PopFree | BachTheater { .. } | CancelPact { .. } | PrepareEvent { .. }
         | RemoveLeaderYellow | Defend { .. } | DefendDone | SendUnit { .. }
         | SendBonus { .. } | SendDiscard { .. } | SendDone | Choose { .. }
-        | Churchill { .. } | Resign => None,
+        | Churchill { .. } | Resign | TradeFoodAsResource | TradeResourceAsFood => None,
     }
 }
 

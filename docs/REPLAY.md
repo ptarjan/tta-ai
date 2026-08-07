@@ -1577,3 +1577,32 @@ checked. The two residual politics stops are no longer event attribution:
 `7523657` line 143 is a colonize force left undrained when the acting player
 IS the decider (`auto_drain_colonize` only runs on the `decider != expected
 actor` branch). Both are in other buckets' territory.
+
+### ENGINE BUG: Trade Routes Agreement's food<->resource substitution was computed and discarded
+
+Found chasing the `IllegalMove: Pop` bucket (166 games, `docs/RULES_SPEC.md`
+§5.9). `effects::compute` already summed the pact's grant into
+`Stats.food_as_resource`/`resource_as_food` ("Civilization A can use 1 food
+as 1 resource during its turn" / the B-side mirror,
+`bga_throughtheages_material.inc.php`), but nothing ever read those two
+fields — no payment path could use them, and `bots/board_yields.rs` valued
+the pact at zero. Fixed engine-side with two new opt-in moves
+(`Move::TradeFoodAsResource`/`TradeResourceAsFood` — not folded silently into
+`Pop`/`Build`/`Upgrade`'s own cost, since this is the player's choice, not an
+automatic discount) and a per-turn allowance
+(`PlayerState::trade_*_used_this_turn`, cleared in `economy::end_of_turn`
+like `replaced_leader_this_turn`). Confirmed against real games (7522168,
+7521605, 7523242, 7523541: a human visibly paying part of a Pop cost in
+resources). `rust/src/costs.rs::tech_cost` has no resource component to
+substitute into, so `develop`/technology payment is untouched by design, not
+by omission.
+
+Also root-caused but deliberately NOT fixed here — it belongs to the
+`PlayAction`/Frugality/Engineering Genius bucket, not this one:
+`corpus.rs::build_card_index` collapses every multi-age action card to its
+EARLIEST age variant whenever BGO's journal text carries no age suffix (it
+never does) — e.g. resolving a real Frugality (I) play as Frugality (A),
+understating its own `gainFood`. That single root cause explains roughly 123
+of the 166 `IllegalMove: Pop` failures as a downstream symptom (wrong food
+carried forward from an earlier turn's mis-resolved card), not a
+population-cost bug at all — worth knowing before re-measuring this bucket.

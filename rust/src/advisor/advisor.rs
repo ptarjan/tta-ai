@@ -202,6 +202,8 @@ fn move_kind(m: &Move) -> &'static str {
         EndTurn => "end_turn",
         PolPass => "pol_pass",
         Resign => "resign",
+        TradeFoodAsResource => "trade_food_as_resource",
+        TradeResourceAsFood => "trade_resource_as_food",
     }
 }
 
@@ -303,7 +305,7 @@ fn move_tokens(state: &GameState, m: Move) -> Vec<ArgToken> {
             ChurchillChoice::Military => "military",
         })],
         Pop | PopFree | RemoveLeaderYellow | EndTurn | PolPass | Resign | BidPass
-        | DefendDone | SendDone => vec![],
+        | DefendDone | SendDone | TradeFoodAsResource | TradeResourceAsFood => vec![],
     }
 }
 

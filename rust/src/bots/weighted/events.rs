@@ -608,6 +608,8 @@ mod tests {
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
             replaced_leader_this_turn: false,
+            trade_food_as_resource_used_this_turn: 0,
+            trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,

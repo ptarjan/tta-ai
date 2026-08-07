@@ -260,7 +260,9 @@ fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
         | SendDiscard { .. }
         | SendDone
         | Churchill { .. }
-        | Resign => Category::Other,
+        | Resign
+        | TradeFoodAsResource
+        | TradeResourceAsFood => Category::Other,
     }
 }
 

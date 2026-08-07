@@ -154,6 +154,33 @@ pub fn pop_cost(state: &GameState, p: &PlayerState) -> Option<i32> {
     pop_food_cost(s.pop_food_discount, p.yellow_bank, p.one_time_discount.pop_food as i32)
 }
 
+// ------------------------------------------------- Trade Routes Agreement
+
+/// Trade Routes Agreement, side A's half (§5.9, `bga_throughtheages_
+/// material.inc.php`: "Civilization A can use 1 food as 1 resource during
+/// its turn"): how many food-to-resource conversions `p` may still make
+/// THIS turn. Sums every live pact's grant (`effects::state_stats`'s
+/// `food_as_resource`, itself the sum of every pact's `PactBlock::
+/// food_as_resource` -- a player party to two such grants, from two
+/// different partners, really does get two conversions, per `state.rs`'s
+/// own doc comment on the two `*_used_this_turn` counters) and subtracts
+/// however many `p` has already spent this turn. Never negative: spending
+/// cannot outrun the grant because [`crate::apply`]'s handler is the only
+/// writer of the counter and `legal::action_moves` is the only place that
+/// may call it, both gated on this being `> 0` first.
+pub fn trade_food_as_resource_remaining(state: &GameState, p: &PlayerState) -> i32 {
+    let s = effects::state_stats(state, p);
+    (s.food_as_resource - p.trade_food_as_resource_used_this_turn as i32).max(0)
+}
+
+/// The [`trade_food_as_resource_remaining`] twin for Trade Routes' OTHER
+/// direction ("Civilization B can use 1 resource as 1 food during its
+/// turn").
+pub fn trade_resource_as_food_remaining(state: &GameState, p: &PlayerState) -> i32 {
+    let s = effects::state_stats(state, p);
+    (s.resource_as_food - p.trade_resource_as_food_used_this_turn as i32).max(0)
+}
+
 /// Unhappy workers: how far the player's happiness falls short of what §6.1/
 /// §6.3 demands for the population already born. Never negative.
 pub fn discontent(state: &GameState, p: &PlayerState) -> i32 {
@@ -625,6 +652,8 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.hammurabi_used = false;
     p.hammurabi_replaced_this_turn = false;
     p.replaced_leader_this_turn = false;
+    p.trade_food_as_resource_used_this_turn = 0;
+    p.trade_resource_as_food_used_this_turn = 0;
     p.churchill_used = false;
     p.bach_upgrade_used = false;
     p.ocean_liners_used = false;
@@ -696,7 +725,7 @@ fn end_of_turn_leader_bonus(state: &mut GameState, idx: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{OneTimeDiscount, PactList, Phase, TechSlot, MAX_HAND};
+    use crate::state::{OneTimeDiscount, Pact, PactList, Phase, TechSlot, MAX_HAND};
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.
@@ -742,6 +771,8 @@ mod tests {
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
             replaced_leader_this_turn: false,
+            trade_food_as_resource_used_this_turn: 0,
+            trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -1175,6 +1206,73 @@ mod tests {
         st
     }
 
+    // ------------------------------------------ Trade Routes Agreement
+
+    /// Gives player `idx` side `a_side` (`true` = side A, "1 food as 1
+    /// resource"; `false` = side B, "1 resource as 1 food") of a Trade
+    /// Routes Agreement with the other player in `duel()`.
+    fn give_trade_routes(st: &mut GameState, idx: u8, a_side: bool) {
+        let other = 1 - idx;
+        let (a, b) = if a_side { (idx, other) } else { (other, idx) };
+        st.players[idx as usize].pacts.push(Pact {
+            card: card("Trade Routes Agreement"),
+            owner: idx,
+            partner: other,
+            a,
+            b,
+        });
+    }
+
+    #[test]
+    fn trade_food_as_resource_remaining_is_zero_with_no_pact() {
+        let st = duel();
+        assert_eq!(trade_food_as_resource_remaining(&st, &st.players[0]), 0);
+        assert_eq!(trade_resource_as_food_remaining(&st, &st.players[0]), 0);
+    }
+
+    #[test]
+    fn trade_food_as_resource_remaining_reads_side_a_of_the_pact() {
+        let mut st = duel();
+        give_trade_routes(&mut st, 0, true);
+        // Side A gets "1 food as 1 resource", never the other direction.
+        assert_eq!(trade_food_as_resource_remaining(&st, &st.players[0]), 1);
+        assert_eq!(trade_resource_as_food_remaining(&st, &st.players[0]), 0);
+        // The OTHER party, side B, gets the mirror image.
+        assert_eq!(trade_food_as_resource_remaining(&st, &st.players[1]), 0);
+        assert_eq!(trade_resource_as_food_remaining(&st, &st.players[1]), 1);
+    }
+
+    #[test]
+    fn trade_food_as_resource_remaining_is_used_up_by_the_per_turn_counter() {
+        let mut st = duel();
+        give_trade_routes(&mut st, 0, true);
+        st.players[0].trade_food_as_resource_used_this_turn = 1;
+        assert_eq!(trade_food_as_resource_remaining(&st, &st.players[0]), 0);
+    }
+
+    #[test]
+    fn trade_food_as_resource_remaining_stacks_across_two_different_partners() {
+        // §5.9: "you may be party to many pacts but have only one in your
+        // own area" -- a player can hold their OWN Trade Routes Agreement
+        // (side A here) and ALSO be named as a party (side A again, from a
+        // DIFFERENT partner's own held copy) in someone else's, stacking the
+        // grant to 2 conversions this turn. `duel()` only seats two players,
+        // so this exercises the stacking via two SEPARATE pact entries
+        // between the same pair rather than a third seat -- `apply_pacts`
+        // sums every pact `p.idx` is party to regardless of partner, so the
+        // arithmetic under test is identical either way.
+        let mut st = duel();
+        give_trade_routes(&mut st, 0, true);
+        st.players[1].pacts.push(Pact {
+            card: card("Trade Routes Agreement"),
+            owner: 1,
+            partner: 0,
+            a: 0,
+            b: 1,
+        });
+        assert_eq!(trade_food_as_resource_remaining(&st, &st.players[0]), 2);
+    }
+
     // -------------------------------------------------- discontent/uprising
 
     #[test]
@@ -1443,6 +1541,8 @@ mod tests {
             p.mil_discount = 4;
             p.mil_sci_discount = 3;
             p.taken_this_turn.push(card("Agriculture"));
+            p.trade_food_as_resource_used_this_turn = 1;
+            p.trade_resource_as_food_used_this_turn = 1;
         }
         assert!(end_of_turn(&mut st, 0));
 
@@ -1459,6 +1559,11 @@ mod tests {
         assert_eq!(p.mil_discount, 0);
         assert_eq!(p.mil_sci_discount, 0);
         assert!(p.taken_this_turn.is_empty());
+        assert_eq!(
+            p.trade_food_as_resource_used_this_turn, 0,
+            "Trade Routes' per-turn conversion allowance refreshes with every other once-per-turn flag"
+        );
+        assert_eq!(p.trade_resource_as_food_used_this_turn, 0);
     }
 
     #[test]

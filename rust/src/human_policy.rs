@@ -183,7 +183,9 @@ pub fn categorize(mv: Move) -> Category {
         | SendDiscard { .. }
         | SendDone
         | Churchill { .. }
-        | Resign => Category::Other,
+        | Resign
+        | TradeFoodAsResource
+        | TradeResourceAsFood => Category::Other,
     }
 }
 

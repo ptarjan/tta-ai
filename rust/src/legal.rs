@@ -415,6 +415,19 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         moves.push(Move::PopFree);
     }
 
+    // Trade Routes Agreement (§5.9): an optional currency conversion, not a
+    // civil/military action and not folded into any OTHER move's own cost --
+    // see `moves.rs`'s doc comment on `Move::TradeFoodAsResource`/
+    // `TradeResourceAsFood` for why this stays two standalone moves the
+    // player opts into rather than a silent discount `pop_cost`/`build_cost_
+    // for`/`upgrade_cost` would apply on their behalf.
+    if economy::trade_food_as_resource_remaining(state, p) > 0 && p.food >= 1 {
+        moves.push(Move::TradeFoodAsResource);
+    }
+    if economy::trade_resource_as_food_remaining(state, p) > 0 && p.resources >= 1 {
+        moves.push(Move::TradeResourceAsFood);
+    }
+
     // --- loop invariant: the name-sorted tableau, computed once (see
     // `tableau_names_sorted`'s doc comment for why no `by_type`/`higher`/
     // `urban_workers` maps are precomputed alongside it).
@@ -1024,6 +1037,8 @@ mod tests {
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
             replaced_leader_this_turn: false,
+            trade_food_as_resource_used_this_turn: 0,
+            trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -1520,6 +1535,70 @@ mod tests {
         p2.food = 1; // one short
         let state2 = one_player_state(p2);
         assert!(!action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Pop));
+    }
+
+    // ------------------------------------------------- Trade Routes Agreement
+
+    #[test]
+    fn trade_food_as_resource_move_needs_the_pact_and_a_spare_food() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        let mut state = one_player_state(p);
+        // No pact at all yet: not offered even with food in hand.
+        state.players[0].food = 1;
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeFoodAsResource));
+
+        // Side A of Trade Routes Agreement, but no food to convert.
+        state.players[0].pacts.push(crate::state::Pact {
+            card: card("Trade Routes Agreement"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        state.players[0].food = 0;
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeFoodAsResource));
+
+        // Both the pact and a spare food: legal, and it is not a civil
+        // action (still offered with `civil_actions == 0`).
+        state.players[0].food = 1;
+        state.players[0].civil_actions = 0;
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeFoodAsResource));
+        // Side A never gets the OTHER direction.
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeResourceAsFood));
+    }
+
+    #[test]
+    fn trade_resource_as_food_move_needs_side_b_and_a_spare_resource() {
+        let mut state = one_player_state(blank_player(0, card("Despotism")));
+        state.players[0].pacts.push(crate::state::Pact {
+            card: card("Trade Routes Agreement"),
+            owner: 0,
+            partner: 1,
+            a: 1, // player 0 is side B here
+            b: 0,
+        });
+        state.players[0].resources = 0;
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeResourceAsFood));
+
+        state.players[0].resources = 1;
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeResourceAsFood));
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeFoodAsResource));
+    }
+
+    #[test]
+    fn trade_food_as_resource_move_is_not_offered_once_this_turns_allowance_is_spent() {
+        let mut state = one_player_state(blank_player(0, card("Despotism")));
+        state.players[0].pacts.push(crate::state::Pact {
+            card: card("Trade Routes Agreement"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        state.players[0].food = 1;
+        state.players[0].trade_food_as_resource_used_this_turn = 1;
+        assert!(!action_moves(&state, &state.players[0]).as_slice().contains(&Move::TradeFoodAsResource));
     }
 
     #[test]

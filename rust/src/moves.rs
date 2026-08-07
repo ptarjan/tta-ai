@@ -90,6 +90,22 @@ pub enum Move {
     /// actions.py` `("bach_theater", from_name, to_name)`). The only
     /// cross-type upgrade in the game -- see `legal::bach_moves`.
     BachTheater { from: CardId, to: CardId },
+    /// Trade Routes Agreement, side A's half ("Civilization A can use 1 food
+    /// as 1 resource during its turn"): convert 1 stored food into 1
+    /// resource, subject to the blue-token bank same as any other gain. NOT
+    /// folded into `Move::Build`/`Move::Upgrade`'s own cost the way an
+    /// action-card discount is -- this is the player's OWN choice, spendable
+    /// whenever they hold the live grant, not gated on the action it will
+    /// eventually help pay for (`legal::action_moves`, `economy::
+    /// trade_food_as_resource_remaining`/`trade_resource_as_food_remaining`'s
+    /// own doc comments). No action-point cost (the printed text is not a
+    /// civil/military action).
+    TradeFoodAsResource,
+    /// Trade Routes Agreement, side B's half ("Civilization B can use 1
+    /// resource as 1 food during its turn"): the mirror image of
+    /// [`Move::TradeFoodAsResource`], converting 1 stored resource into 1
+    /// food.
+    TradeResourceAsFood,
 
     // ---- responses to a decision somebody else opened (engine::interact) ----
     /// Commit `n` military strength to a colonization auction.
@@ -156,7 +172,8 @@ impl Move {
             Upgrade { from: _, to } | BachTheater { from: _, to } => Some(to),
             Take { .. } | WonderStep { .. } | Pop | PopFree | CancelPact { .. } | Bid { .. }
             | BidPass | DefendDone | SendDone | Choose { .. } | Churchill { .. } | EndTurn
-            | PolPass | Resign | RemoveLeaderYellow => None,
+            | PolPass | Resign | RemoveLeaderYellow | TradeFoodAsResource
+            | TradeResourceAsFood => None,
         }
     }
 
