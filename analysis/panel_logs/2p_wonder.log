@@ -1,0 +1,14 @@
+games        120
+players      2
+bots         weighted,wonder (rotated)
+seeds        1..120
+mean moves   264.8
+elapsed      5.3s  (22.5 games/s)
+
+bot           games  win rate  mean cult  resigned
+weighted        120     85.0%      197.5         0
+wonder          120     15.0%      117.2         0
+
+seat          games  win rate  mean cult
+0               120     51.7%      156.7
+1               120     48.3%      158.1

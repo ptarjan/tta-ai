@@ -1,0 +1,15 @@
+games        120
+players      3
+bots         weighted,infra,infra (rotated)
+seeds        1..120
+mean moves   388.8
+elapsed      7.0s  (17.2 games/s)
+
+bot           games  win rate  mean cult  resigned
+infra           240      1.7%       87.3         0
+weighted        120     96.7%      214.3         0
+
+seat          games  win rate  mean cult
+0               120     33.3%      135.6
+1               120     34.2%      119.9
+2               120     32.5%      133.5

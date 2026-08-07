@@ -1,0 +1,14 @@
+games        120
+players      2
+bots         weighted,military (rotated)
+seeds        1..120
+mean moves   249.7
+elapsed      4.5s  (26.6 games/s)
+
+bot           games  win rate  mean cult  resigned
+military        120     12.5%       58.9         0
+weighted        120     87.5%      151.3         0
+
+seat          games  win rate  mean cult
+0               120     54.2%      106.1
+1               120     45.8%      104.1
