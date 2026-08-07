@@ -26,6 +26,7 @@ pub mod events;
 pub mod fixtures;
 pub mod game;
 pub mod harness;
+pub mod human_policy;
 pub mod interact;
 pub mod moves;
 pub mod replay_common;
