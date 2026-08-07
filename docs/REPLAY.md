@@ -1794,52 +1794,23 @@ honest `StuckPending` reasons appeared (15 games total) where a bidder
 genuinely owed a real, un-loggable decision this file correctly refuses to
 guess at, rather than silently mis-resolving as before.
 
-## Thirteenth pass: ENGINE BUG -- the civil hand limit blocked a take at exactly the limit, not one over
-
-The rest of `IllegalMove: Take` (148 games), sub-categorised by what
-`legal_moves()` offered instead of the attempted `Take`:
-
-| shape | count |
-|---|---|
-| no `Take` offered at all, but the player has civil actions to spend | 115 |
-| a `Take` IS offered, just not for the attempted slot | 33 |
-
-Of the 115, 70 had `civil_actions > 0` and `hand_civil_size == civil_hand_limit`
-EXACTLY -- never one card over. `costs::take_gate`'s `hand_full` used to be
-`hand_size >= civil_hand_limit`, implementing this project's own §2.5
-paraphrase ("may not take if hand >= limit") literally. Traced one
-(`7522618`) by hand-reconstructing the player's entire civil hand from the
-raw journal, card by card, including a same-turn `Take`+`PutBack` undo pair
-and several action cards that turn out to be single-use PER COPY (not
-reusable, contrary to this project's prior assumption) -- the reconstructed
-hand and limit both landed on exactly 8, matching this binary's own
-rejection, and the human still took a 9th card anyway. All 70 games show
-the identical exact-boundary shape, zero counterexamples. Changed the
-comparison to strictly `>` (`docs/RULES_SPEC.md` §2.5 updated to match) --
-BGO's own implementation only blocks once the hand is already over the
-limit, not merely at it. New test pins the corrected boundary at both
-sides, confirmed to fail with the fix reverted. Does not affect bot
-economics (`bots/board_yields.rs` reads `Stats.civil_hand_limit` directly
-for scoring deltas, not this gate).
-
-The remaining 33 ("wrong slot") and the 45 still-unexplained "no Take"
-cases are unexplored -- left open, not diagnosed this pass.
-
-### Measurement (`replaystats`, full 1,011-game corpus)
-
-| | before this pass | after |
-|---|---|---|
-| mean rounds reached (of 19.27) | 9.11 | **9.67** |
-| decisions in Age II or later | 28.2% | **32.7%** |
-| `IllegalMove: Take` | 148 | **83** |
-| games completed | 0 | **8** |
-
-**8 of 1,011 sampled games now replay to completion with every human move
-legal** -- the first time this project has ever reached `state.game_over`
-on a real game. `analysis/index.tsv` holds these games' real final scores;
-cross-checking `game::scores(&state)` against them is the next natural
-step and was not done this pass (out of scope: this pass owned Take/Bid,
-not scoring).
+**A `>=` -> `>` change to `costs::take_gate`'s hand-limit comparison landed
+and was reverted the same day** (70 of the remaining `IllegalMove: Take`
+games showed `hand_civil_size == civil_hand_limit` exactly, zero
+counterexamples, which read at the time like a boundary-off-by-one). Coordinator
+review caught it: RULES_SPEC §2.5 and independent community sources both
+read `>=`, and a wrong loosening of `legal_moves()` is worse than the stall
+it fixes. Verification of the two more likely explanations (simulated hand
+filler; an undercounted CA total) was attempted but not completed cleanly
+in the time available -- a hand-rolled journal-arithmetic cross-check kept
+producing false "exceeds" signals that dissolved on inspection into script
+bugs (unpaired `Take`/`PutBack` undo lines, military-vs-civil-build text
+confusion, and the "Development of Civilization" event's one-time free
+civil action, which this project's own `costs::civil_life_ca_free`
+already models but a quick Python reimplementation did not). Left open for
+whoever picks up `IllegalMove: Take` next: the two live leads are worth
+checking with the REAL engine's own cost functions instrumented, not a
+reimplementation.
 
 ## Fourteenth pass: `IllegalMove: Pop` -- two more silently-dropped leader lines, Trade Routes wired into Pop, and one ENGINE BUG (WeakestPlayer's tie-break was backwards)
 
