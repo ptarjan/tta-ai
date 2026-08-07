@@ -350,6 +350,27 @@ struct Replayer<'a> {
     /// `prescan_plunder_splits`'s doc and `resolve_intervening`'s
     /// `ChoiceKind::PlunderSplit` handling, which drains it.
     plunder_splits: HashMap<u8, VecDeque<(i16, i16)>>,
+    /// Per-actor FIFO of `(line index, card)` pulled off every
+    /// journal-observed `"<Color> destroys <Card>"` line, pre-scanned once
+    /// per game -- see `prescan_lose_pop_destroys`'s doc and
+    /// `resolve_intervening`'s `ChoiceKind::LosePop` handling, which drains
+    /// it ONLY for the out-of-journal-order case (a `LosePop` pending left
+    /// open for a player who isn't `expected_actor`, e.g. opened as a side
+    /// effect of a DIFFERENT player's political-phase event reveal). The
+    /// ordinary same-line case (`c.player == expected_actor` and the
+    /// upcoming line already IS that player's own `"destroys"` line) still
+    /// defers to `apply_one`'s existing `Destroy | Disband` arm, exactly
+    /// like before -- this FIFO/its `claimed_destroy_lines` companion exist
+    /// purely to avoid double-applying a destroy line consumed early here.
+    lose_pop_destroys: HashMap<u8, VecDeque<(usize, CardId)>>,
+    /// Journal line INDICES (matching the main loop's own `journal.iter().
+    /// enumerate()` index, not `Line::lineno`) already applied early by
+    /// `resolve_intervening`'s `ChoiceKind::LosePop` out-of-order drain
+    /// (see `lose_pop_destroys`) -- checked by `replay_game`'s main loop
+    /// exactly like `putback_skips`, so that line is not translated AGAIN
+    /// as an ordinary `Move::Destroy` once the main loop's own pointer
+    /// reaches it.
+    claimed_destroy_lines: std::collections::HashSet<usize>,
     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
     /// over the rest of the journal -- see `discard_solver`'s module doc and
     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
@@ -393,6 +414,7 @@ impl<'a> Replayer<'a> {
         plan: EventPlan,
         gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
         plunder_splits: HashMap<u8, VecDeque<(i16, i16)>>,
+        lose_pop_destroys: HashMap<u8, VecDeque<(usize, CardId)>>,
         future_military_needs: HashMap<u8, Vec<FutureNeed>>,
         colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     ) -> Self {
@@ -422,6 +444,8 @@ impl<'a> Replayer<'a> {
             current_lineno: 0,
             gain_produces,
             plunder_splits,
+            lose_pop_destroys,
+            claimed_destroy_lines: std::collections::HashSet::new(),
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
             decisions: Vec::new(),
@@ -471,7 +495,8 @@ impl<'a> Replayer<'a> {
             let decider = self.state.decider();
             if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
                 eprintln!(
-                    "DEBUG resolve_intervening loop: decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
+                    "DEBUG resolve_intervening loop: lineno={} decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
+                    self.current_lineno,
                     self.state.pending.top()
                 );
             }
@@ -637,6 +662,76 @@ impl<'a> Replayer<'a> {
                         return Ok(());
                     }
                     self.resolve_one_discard_choice(&c);
+                    continue;
+                }
+                // A `Pending::Choice(LosePop)` (a forced "lose 1 population"
+                // with no free worker to absorb it, `interact::run_item`'s
+                // `QueueItem::LosePop` arm) is resolved by `apply_one`'s
+                // `Destroy | Disband` arm ALREADY (mirroring `DestroyOwn`)
+                // when it is `expected_actor`'s own pending and the upcoming
+                // line IS their own `"destroys"` line -- same `matches_
+                // upcoming` shape as `DiscardMilitary` just above, deferred
+                // there rather than duplicated here.
+                //
+                // The gap this closes: the event that forces the loss can
+                // fire as a SIDE EFFECT of resolving a DIFFERENT player's
+                // political decision (`resolve_political_decision`, a few
+                // lines below, reached via the `None`/politics branch at the
+                // bottom of this loop when this function is catching up
+                // through outstanding political turns before `expected_
+                // actor`'s own) -- e.g. an event like Refugees/Pestilence
+                // that penalises "the weakest civilization", which need not
+                // be whoever is currently deciding anything. That leaves a
+                // LosePop pending open for `c.player`, genuinely unrelated
+                // to `expected_actor`'s own upcoming line, with `c.player`'s
+                // own resolving `"destroys"` line sitting SOMEWHERE ELSE in
+                // the journal (found on real games `7521344` -- opened
+                // resolving player 3's own political reveal while player 1
+                // was up next for an unrelated `Destroy`; that player's own
+                // resolution, `"Grey destroys Religion"`, doesn't appear
+                // until several lines later). Drained here from `lose_pop_
+                // destroys` (`prescan_lose_pop_destroys`'s doc explains why
+                // a popped entry is validated against the live choice's own
+                // options and skipped, not trusted by position, exactly like
+                // `PlunderSplit` -- an entry that doesn't match belongs to
+                // that same player's own unrelated voluntary `Destroy`/
+                // `DestroyOwn` choice, left alone for its own normal
+                // in-order processing). The claimed line's OWN index is
+                // recorded in `claimed_destroy_lines` so the main loop does
+                // not translate it a second time once its own pointer
+                // reaches it (see that field's doc) -- unlike `PlunderSplit`
+                // (`Bookkeeping`, always skipped by the main loop already) a
+                // `"destroys"` line is an ordinary action line the main loop
+                // would otherwise process again, double-applying the same
+                // destroy.
+                if matches!(c.kind, ChoiceKind::LosePop) {
+                    let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Destroy;
+                    if matches_upcoming {
+                        return Ok(());
+                    }
+                    let q = self.lose_pop_destroys.entry(c.player).or_default();
+                    let n = loop {
+                        let Some(&(line_idx, card)) = q.front() else {
+                            return Err(MismatchKind::StuckPending(format!(
+                                "LosePop choice open for player {} but no journal-observed destroy line \
+                                 left to resolve it with",
+                                c.player
+                            )));
+                        };
+                        if let Some(idx) =
+                            c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                        {
+                            q.pop_front();
+                            self.claimed_destroy_lines.insert(line_idx);
+                            break idx;
+                        }
+                        // Belongs to this same player's own unrelated,
+                        // separately-resolved voluntary destroy (see this
+                        // block's own doc) -- not this choice's answer, skip
+                        // past it and keep looking.
+                        q.pop_front();
+                    };
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
                     continue;
                 }
             }
@@ -1931,6 +2026,30 @@ fn prescan_plunder_splits(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> {
     out
 }
 
+/// Pre-scans the whole journal once for every `"<Color> destroys <Card>"`
+/// line (`ActionClass::Destroy`), per-actor, paired with its own INDEX into
+/// `lines` -- see `Replayer::lose_pop_destroys`'s doc and `resolve_
+/// intervening`'s `ChoiceKind::LosePop` handling, which drains this FIFO
+/// (validated against the live choice's own options, exactly like
+/// `prescan_plunder_splits`) only for the out-of-journal-order case. Every
+/// entry here is a real, ordinary action line the main replay loop would
+/// otherwise translate on its own when reached in order (unlike a
+/// `Bookkeeping`-classified line) -- the line index travels with the card so
+/// `resolve_intervening` can record it in `claimed_destroy_lines` the
+/// instant an entry is actually consumed, and the main loop skips it there
+/// rather than double-applying the same destroy.
+fn prescan_lose_pop_destroys(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<(usize, CardId)>> {
+    let mut out: HashMap<u8, VecDeque<(usize, CardId)>> = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let LineOutcome::Action(Classified { class: ActionClass::Destroy, card: Some(card) }) = classify(card_index, line.text) else {
+            continue;
+        };
+        let Some((actor, _)) = actor_and_rest(line.text) else { continue };
+        out.entry(actor.seat()).or_default().push_back((i, card));
+    }
+    out
+}
+
 /// Pre-scans the whole journal once for every point where a player is
 /// observed playing a NAMED card out of their own military hand --
 /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
@@ -2230,6 +2349,7 @@ pub fn replay_game(
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
     let plunder_splits = prescan_plunder_splits(&lines);
+    let lose_pop_destroys = prescan_lose_pop_destroys(&lines, card_index);
     let future_military_needs = prescan_future_military_needs(&lines, card_index);
     let colonize_sacrifices = prescan_colonize_sacrifices(&lines, card_index);
 
@@ -2257,7 +2377,16 @@ pub fn replay_game(
     // record is a whole-game fact, so a contradiction in it invalidates
     // every turn, not just the one that exposed it.
     let journal: &[Line] = if mismatch.is_some() { &[] } else { &lines };
-    let mut r = Replayer::new(card_index, meta.players, plan, gain_produces, plunder_splits, future_military_needs, colonize_sacrifices);
+    let mut r = Replayer::new(
+        card_index,
+        meta.players,
+        plan,
+        gain_produces,
+        plunder_splits,
+        lose_pop_destroys,
+        future_military_needs,
+        colonize_sacrifices,
+    );
     r.record_decisions = record_decisions;
 
     'lines: for (i, line) in journal.iter().enumerate() {
@@ -2325,6 +2454,13 @@ pub fn replay_game(
             break;
         }
         if putback_skips.contains(&i) {
+            continue;
+        }
+        // Already applied early, out of journal order, by `resolve_
+        // intervening`'s `ChoiceKind::LosePop` handling (`claimed_destroy_
+        // lines`'s own doc) -- translating it again here would double-apply
+        // the same destroy.
+        if r.claimed_destroy_lines.contains(&i) {
             continue;
         }
         r.current_lineno = line.lineno;
@@ -3866,7 +4002,7 @@ mod tests {
     #[test]
     fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
         r.state.players[0].food = 0; // ...not enough food to spend it
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
@@ -3875,7 +4011,7 @@ mod tests {
     #[test]
     fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
@@ -3895,7 +4031,7 @@ mod tests {
     #[test]
     fn a_bid_no_possible_hand_could_have_paid_for_stays_an_honest_mismatch() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -3924,7 +4060,7 @@ mod tests {
     #[test]
     fn without_the_reclassification_the_same_fixture_would_be_a_bare_illegal_move() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -3982,7 +4118,7 @@ mod tests {
     fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4033,7 +4169,7 @@ mod tests {
     fn resolve_intervening_returns_ok_once_the_game_is_over_even_though_decider_moved_on_and_no_longer_matches(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Mirrors the shape `finish_game` leaves behind: the round already
         // wrapped to the next seat (`state.current`, here player 0) before
         // the game-over check ran, nothing is pending, and the player this
@@ -4068,7 +4204,7 @@ mod tests {
     #[test]
     fn set_last_round_is_reachable_from_this_module_for_the_journals_last_turn_line() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.round = 9;
         r.state.current = r.state.start_player; // BGO logs one "Last turn" line per surviving player; whichever this module reads first pins `current` to that seat.
         game::set_last_round(&mut r.state);
@@ -4086,7 +4222,7 @@ mod tests {
     fn resolve_intervening_drains_the_colonizers_own_pending_colonize_even_when_they_are_also_next_up_for_something_unrelated(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4123,7 +4259,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_passes_a_bidder_whose_own_ceiling_no_longer_clears_the_standing_bid() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4161,7 +4297,7 @@ mod tests {
     #[test]
     fn resolve_intervening_refuses_to_guess_when_a_real_raise_is_still_available() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4191,7 +4327,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10; // well past the one preparation's own line
         // `new_game` opens in the Action phase (round 1 has no politics);
         // this is the ordinary later-round shape.
@@ -4223,7 +4359,7 @@ mod tests {
         )
         .expect("a one-preparation journal is consistent");
         let prepared = plan.preparations[0].card;
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10;
         r.state.phase = Phase::Politics;
 
@@ -4252,7 +4388,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].leader = crate::CardId::by_name("Julius Caesar").expect("Caesar is in the table");
         r.state.phase = Phase::Politics;
         r.current_lineno = 6; // the "plays event" line on 5 has gone by
@@ -4278,7 +4414,7 @@ mod tests {
     #[test]
     fn a_passes_line_that_arrives_after_this_file_already_passed_for_that_player_is_a_confirmation() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Politics;
         r.resolve_political_decision(0).expect("nothing in the plan, so a pass");
         assert_eq!(r.auto_passed[0], 1);
@@ -4308,7 +4444,7 @@ mod tests {
     #[test]
     fn a_destroys_line_resolves_a_lose_pop_pending_the_same_way_as_destroy_own() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Bronze is one of the starting techs (`game::START_TECHS`), already
         // staffed with 2 workers -- no need to insert it.
         let bronze = CardId::by_name("Bronze").expect("Bronze is in the table");
@@ -4332,6 +4468,89 @@ mod tests {
         );
     }
 
+    /// The gap the six-pending-kind pass's checkpoint left open for
+    /// `LosePop` (`docs/REPLAY.md`): a still-open `LosePop` pending for a
+    /// DIFFERENT player than `expected_actor` (found on real game
+    /// `7521344` -- player 3's own political-phase event reveal opened a
+    /// `LosePop` for player 3 while player 1 was up next for an unrelated
+    /// `Destroy`) used to fall through to the generic `Some(Pending::
+    /// Choice(c)) => StuckPending("no auto-resolution ...")` catch-all.
+    /// `resolve_intervening` now drains it from `lose_pop_destroys`
+    /// (out-of-journal-order lookahead, same tier as `GainBlock`/
+    /// `PlunderSplit`/`DiscardMilitary`) and records the claimed line index
+    /// so the main replay loop does not translate it a second time.
+    #[test]
+    fn resolve_intervening_drains_a_lose_pop_pending_open_for_a_different_player_than_expected_actor() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        // Player 1's own `LosePop`, exactly like the existing `DestroyOwn`-
+        // shaped test above, but for the OTHER seat -- `expected_actor`
+        // (below) is player 0, a different player entirely.
+        r.state.players[1].workers_free = 0;
+        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 1, n: 1 });
+        crate::interact::run_queue(&mut r.state);
+        assert!(
+            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.player == 1 && matches!(c.kind, ChoiceKind::LosePop)),
+            "player 1 has no free worker, so a real choice must be open for THEM: {:?}",
+            r.state.pending.top()
+        );
+        let warriors = CardId::by_name("Warriors").expect("Warriors is a starting tech");
+        // A real journal-observed `"<Color> destroys Warriors"` line for
+        // player 1, at line index 3 -- `expected_actor` (0)'s own upcoming
+        // line is unrelated (`TakeCard`), so this can only be resolved by
+        // the out-of-order lookahead, not the `matches_upcoming` same-line
+        // case the pre-existing `DestroyOwn`-shaped test already covers.
+        r.lose_pop_destroys.insert(1, VecDeque::from([(3usize, warriors)]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the LosePop choice must be fully resolved, not left open");
+        assert_eq!(
+            r.state.players[1].techs.get(warriors).map(|s| s.workers),
+            Some(0),
+            "Warriors (staffed with 1 worker as a starting tech) must lose its only worker"
+        );
+        assert!(
+            r.claimed_destroy_lines.contains(&3),
+            "the claimed line index must be recorded so the main loop does not re-translate it"
+        );
+    }
+
+    /// Companion to the test above: a queued `lose_pop_destroys` entry that
+    /// does NOT match the live choice's own options (this same player's own
+    /// separately-resolved, unrelated voluntary destroy -- see `prescan_
+    /// lose_pop_destroys`'s doc) must be skipped, not trusted by position,
+    /// and must NOT be recorded in `claimed_destroy_lines` since it still
+    /// needs its own normal in-order processing later.
+    #[test]
+    fn resolve_intervening_skips_a_lose_pop_destroy_entry_that_does_not_match_the_live_choices_options() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.players[1].workers_free = 0;
+        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 1, n: 1 });
+        crate::interact::run_queue(&mut r.state);
+        let warriors = CardId::by_name("Warriors").expect("Warriors is a starting tech");
+        // Iron is not one of player 1's starting techs at all -- not among
+        // this LosePop choice's own options, so it must be skipped past
+        // rather than mistakenly treated as the answer.
+        let iron = CardId::by_name("Iron").expect("Iron is in the table");
+        r.lose_pop_destroys.insert(1, VecDeque::from([(2usize, iron), (3usize, warriors)]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty());
+        assert_eq!(r.state.players[1].techs.get(warriors).map(|s| s.workers), Some(0));
+        assert!(r.claimed_destroy_lines.contains(&3), "the real, matching entry must be claimed");
+        assert!(
+            !r.claimed_destroy_lines.contains(&2),
+            "the skipped, non-matching entry must NOT be claimed -- it still needs its own normal processing"
+        );
+    }
+
     /// REPLAYER BUG (found chasing the `IllegalMove: Pop` bucket): a
     /// territory named in a `"Christopher Columbus discovers <Age> /
     /// <Territory>"` line is routinely the FIRST evidence of that specific
@@ -4348,7 +4567,7 @@ mod tests {
     #[test]
     fn a_columbus_colonize_line_grounds_the_territory_before_applying_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // `Move::ColumbusColonize` is a POLITICAL action (`legal::
         // politics_moves`, not `action_moves`), same as `RemoveLeaderYellow`.
         r.state.phase = Phase::Politics;
@@ -4381,7 +4600,7 @@ mod tests {
     #[test]
     fn a_barbarossa_enlist_line_applies_the_free_pop_increase_and_the_unit_build() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let warriors = CardId::by_name("Warriors").expect("Warriors is in the table");
@@ -4422,7 +4641,7 @@ mod tests {
     #[test]
     fn a_bach_upgrade_line_applies_the_cross_family_theater_conversion() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let theology = CardId::by_name("Theology").expect("in the table");
@@ -4510,7 +4729,7 @@ mod tests {
     fn resolve_intervening_reports_a_stuck_pending_for_a_colonize_confirmation_line_once_control_has_already_returned_to_a_different_player(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4620,7 +4839,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(knights), SacrificeClause::Bonus(bonus2)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         // `new_game` already deals every player a Warriors tableau card.
         r.state.players[0].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
         r.state.players[0].techs.insert(knights, crate::state::TechSlot { workers: 1, stored: 0 });
@@ -4661,7 +4880,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(card_index["Warriors"]), SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
 
@@ -4687,7 +4906,7 @@ mod tests {
             clauses: vec![SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         let elsewhere = card_index["Vast Territory (I)"];
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(elsewhere, &[1, 0], 1, 3, Some(1), 0)));
@@ -4707,7 +4926,7 @@ mod tests {
     #[test]
     fn a_logged_bid_is_taken_as_proof_the_bidder_held_the_force_to_pay_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.age_military = crate::Age::I;
         let territory = card_index["Vast Territory (I)"];
@@ -4738,7 +4957,7 @@ mod tests {
     #[test]
     fn grounding_a_bid_claims_the_fewest_and_smallest_bonus_cards_that_close_the_gap() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.age_military = crate::Age::III; // every bonus card is available
         let filler = card_index["Aggression: Raid (I)"];
         r.state.players[0].hand_military = CardList::new();
@@ -4764,7 +4983,7 @@ mod tests {
         let raid = card_index["Aggression: Raid (I)"];
         let mut needs: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
         needs.insert(0, vec![FutureNeed { lineno: 900, card: raid }]);
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), needs, VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), needs, VecDeque::new());
         r.state.age_military = crate::Age::III;
         r.current_lineno = 100; // the play is still ahead of us
         r.state.players[0].hand_military = CardList::new();

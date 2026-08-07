@@ -3014,3 +3014,92 @@ The remaining `Budget` (19), `WonderInProgress` (3), and the 45 "no
 REJECT line" cases are unexamined this pass — re-run the `REPLAY_DEBUG`
 grep above first since the counts have already moved once from this same
 fix and may move again as other buckets land.
+
+## Six-pending-kind pass, continued: `LosePop` resolved -- REPLAYER
+
+Picked up the mid-pass checkpoint above (`PlunderSplit` done; `Raid`,
+`TakeRow`, `LosePop`, `LoseColony`, `FlipWonder` still open). Took the
+checkpoint's own advice and picked `LosePop` next (`DestroyOwn`-shaped,
+already partially wired).
+
+**The remaining gap was NOT what the checkpoint guessed.** It framed this as
+"the resolving line exists but may be reached out of journal order relative
+to whichever OTHER player's line `resolve_intervening` is currently trying
+to reach" -- true, but the mechanism is more specific: a `LosePop` pending
+for player D can open as a SIDE EFFECT of resolving a totally DIFFERENT
+player's political decision (`resolve_political_decision`, called from this
+function's own `None`/politics branch while catching up through outstanding
+political turns before `expected_actor`'s own can proceed) -- e.g. an event
+like Refugees/Pestilence that penalises "the weakest civilization", which
+need not be whoever is currently deciding anything. Confirmed on two real
+games: `7521344` (player 3's own political reveal opens a `LosePop` for
+player 3 while player 1 is up next for an unrelated `Destroy` -- player 3's
+own resolution, `"Grey destroys Religion"`, doesn't appear until several
+journal lines later) and `7522639` (same shape, but `decider == expected_
+actor` for the OWNER of the pending too -- the gap isn't only a
+cross-player one: it also hit `expected_actor`'s own pending when their very
+next line ISN'T the resolving destroy, e.g. `DevelopTechnology` intervenes
+first).
+
+**Fix**: new `prescan_lose_pop_destroys`/`Replayer::lose_pop_destroys`, a
+per-actor FIFO of `(line index, card)` off every journal `"<Color> destroys
+<Card>"` line (mirroring `prescan_gain_produces`/`prescan_plunder_splits`),
+drained by a new `ChoiceKind::LosePop` arm in `resolve_intervening` --
+added at the SAME unconditional tier as `GainBlock`/`PlunderSplit`/
+`DiscardMilitary` (ahead of the `decider == expected_actor` shortcut, not
+gated on it), with the SAME `matches_upcoming` escape hatch `DiscardMilitary`
+uses (`c.player == expected_actor && upcoming.0 == ActionClass::Destroy`
+defers to `apply_one`'s pre-existing `DestroyOwn | LosePop` check, unchanged)
+and the SAME validate-against-`c.options`-and-skip pattern `PlunderSplit`
+uses for a popped entry that doesn't match (this player's own unrelated,
+separately-resolved voluntary destroy).
+
+**New trap, not present in `PlunderSplit`'s shape**: unlike a Plunder
+resolution line (`Bookkeeping`-classified, always skipped by the main
+per-line loop) a `"destroys"` line is an ordinary `ActionClass::Destroy`
+action line the main loop WILL translate again when its own pointer reaches
+it -- draining the FIFO early, out of order, would double-apply the same
+destroy the second time the main loop got there. Fixed with a new
+`Replayer::claimed_destroy_lines: HashSet<usize>` (line INDEX, matching the
+main loop's own `journal.iter().enumerate()` index, not `Line::lineno`),
+recorded the instant an entry is actually consumed (not for skipped,
+non-matching entries -- those still need their own normal in-order
+processing later) and checked by the main loop exactly like the pre-existing
+`putback_skips`, right next to it.
+
+Two new tests (`resolve_intervening_drains_a_lose_pop_pending_open_for_a_
+different_player_than_expected_actor`, `resolve_intervening_skips_a_lose_
+pop_destroy_entry_that_does_not_match_the_live_choices_options`), both
+confirmed red (`StuckPending: no auto-resolution for pending choice
+LosePop`) with the new `ChoiceKind::LosePop` arm stubbed out to `if false &&
+...`, then green again once restored.
+
+**Full corpus (`replaystats`, 1011 games), measured immediately before and
+after this fix, nothing else changed**: mean rounds reached 10.98 -> 10.90,
+Age II+ decisions 41.8% -> 41.3%, completed games 17 -> 17 (unchanged). The
+old `StuckPending: no auto-resolution for pending choice LosePop` bucket (4
+games) is gone; a NEW, more specific `StuckPending: LosePop choice open for
+player # but no journal-observed destroy line left to resolve it with`
+bucket appeared (20 games). **This is the SAME "honest relabelling" trade-off
+`PlunderSplit`'s own section documents, just running in the opposite
+direction on the headline numbers**: previously, the `decider == expected_
+actor` shortcut silently returned `Ok(())` for a `LosePop` pending whenever
+the very next line WASN'T the matching destroy (most of these 20 cases),
+letting the replay continue for a while on top of an incorrectly-cleared
+pending before failing later, elsewhere, on a symptom far from the real
+cause -- which is exactly why 20 is bigger than the previous pass's small
+sample-based estimate of 2. Traced one (`7522639` line 116) by hand: the
+`LosePop` choice opens with 6 real options (a genuine, unresolvable
+ambiguity, not a single-option auto-resolve case) but the player who owns it
+never has ANY `"destroys"` line anywhere later in this specific journal --
+plausibly the SAME kind of upstream player-ranking drift the "Seventeenth
+pass" section documents for an unrelated `yellow_bank`/food-production
+chase (this game's own weakest/strongest computation may already be corrupted
+by that separate, already-tracked bug by this point), not a gap in this
+kind's own parsing. Not fixed here -- per this project's own precedent, an
+honest stop with no fabricated guess is correct behavior, not a regression,
+even though the corpus summary numbers move slightly the "wrong" way.
+
+Remaining four kinds (`Raid`, `TakeRow`, `LoseColony`, `FlipWonder`) still
+open -- see the checkpoint above for `TakeRow`'s and `Raid`'s own concrete
+next-step notes, both unaffected by this change.
