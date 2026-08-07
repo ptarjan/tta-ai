@@ -3416,3 +3416,48 @@ own CA arithmetic for the turn).
 
 **`WonderInProgress` (3): unexamined, small, next up if anyone has budget
 left.**
+
+## Six-pending-kind pass, continued: `TakeRow` resolved -- REPLAYER
+
+Picked up the checkpoint's own "cheapest remaining kind, needs NO new
+prescan" pointer, exactly as designed there: International Agreement's
+`ChoiceKind::TakeRow { budget }` (`interact::offer_take_row`) picks
+`card_row` slots one at a time, and BGO logs each pick with the SAME
+`"<Color> takes <Card> in hand <Color> uses N civil action"` text an
+ordinary `Move::Take` uses.
+
+Two-part fix, both exactly as the checkpoint specified:
+1. `resolve_intervening` gets a new `ChoiceKind::TakeRow` arm, same
+   unconditional tier as `FreeBuild` right above it (and the SAME shape --
+   `matches_upcoming` defers to `apply_one` when `c.player == expected_actor`
+   and the upcoming `TakeCard` line's card is still among the choice's own
+   `Slot` options; otherwise auto-select `Word(Stop)` and keep draining, the
+   same "no journal trace for a silent decline" precedent already used for
+   Politics-phase passes and `FreeBuild`). This one `Stop`-fallback covers
+   BOTH the `decider == expected_actor`-but-different-action case AND the
+   `decider != expected_actor` `StuckPending` case in one arm -- no
+   lookahead/prescan needed, unlike `LosePop`.
+2. `apply_one`'s `ActionClass::TakeCard` arm gets a new check (mirroring the
+   pre-existing `DestroyOwn | LosePop` check in `Destroy | Disband`): if a
+   `TakeRow` pending sits on top after `ground_row_slot` resolves the
+   observed card to a slot, translate into `Move::Choose` naming that slot's
+   option instead of a bare `Move::Take` (illegal while any pending sits
+   open).
+
+Three new tests (the `resolve_intervening` defer case, its `Stop` auto-
+decline companion, and the `apply_one` `Choose`-not-bare-`Take` translation),
+each confirmed red (with its own code path stubbed to `if false { ... }` /
+`if false && ...`) before being restored green.
+
+**Full corpus (`replaystats`, 1011 games), measured immediately before and
+after, nothing else changed**: mean rounds 10.90 -> 10.95, Age II+ decisions
+41.3% -> 41.6%, completed games 17 -> 17. The `StuckPending: no auto-
+resolution for pending choice TakeRow` bucket (9 games at this pass's start)
+is gone entirely -- unlike `LosePop`, no new `TakeRow`-specific bucket
+appeared to replace it (consistent with there being no lookahead/prescan
+step that could itself run out of evidence).
+
+Remaining kinds after this fix: `Raid`, `LoseColony`, `FlipWonder` (per the
+checkpoint above), plus a SIXTH kind, `Infiltrate`, flagged mid-pass by the
+concurrent Take-bucket worker as sharing the identical `decider ==
+expected_actor` gap -- see the section below.

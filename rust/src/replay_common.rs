@@ -624,6 +624,45 @@ impl<'a> Replayer<'a> {
                     apply::apply(&mut self.state, Move::Choose { n: n as u8 });
                     continue;
                 }
+                // A `Pending::Choice(TakeRow { .. })` (International
+                // Agreement: spend up to `budget` civil actions taking row
+                // cards one at a time, `interact::offer_take_row`) is BGO's
+                // journal-logged the exact SAME way an ordinary `Move::Take`
+                // is -- `"<Color> takes <Card> in hand <Color> uses N civil
+                // action"` -- and, like `FreeBuild` just above, a human
+                // DECLINING it (picking `Word(Stop)`) leaves no journal
+                // trace at all (the same "no journal trace for a silent
+                // decline" precedent already established for Politics-phase
+                // passes and `FreeBuild`). If the upcoming line is
+                // `expected_actor`'s own take of a card that's still among
+                // this choice's own `Slot` options, stop here and let
+                // `apply_one`'s `TakeCard` arm (below) resolve it as a
+                // `Choose`, not a bare `Take` (illegal while this pending
+                // sits open); otherwise assume `Stop` and keep draining --
+                // covers the `decider != expected_actor` `StuckPending`
+                // shape too, exactly like `FreeBuild`'s own fallback (see
+                // `docs/REPLAY.md`'s six-pending-kind pass).
+                if let ChoiceKind::TakeRow { .. } = c.kind {
+                    let matches_upcoming = c.player == expected_actor
+                        && upcoming.0 == ActionClass::TakeCard
+                        && upcoming.1.is_some_and(|want| {
+                            c.options
+                                .as_slice()
+                                .iter()
+                                .any(|o| matches!(o, ChoiceOption::Slot(slot) if self.state.card_row[*slot as usize] == want))
+                        });
+                    if matches_upcoming {
+                        return Ok(());
+                    }
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)))
+                        .ok_or_else(|| MismatchKind::StuckPending("TakeRow choice has no Stop option".into()))?;
+                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    continue;
+                }
                 // A `Pending::Choice(DiscardMilitary)` (`interact::
                 // discard_excess_military`, `apply.rs`'s implementation of
                 // §6.6 step 1) blocks EVERY further action by the player it
@@ -3013,6 +3052,35 @@ fn apply_one(
                     card.get().name
                 ))
             })?;
+            // International Agreement's `Pending::Choice(TakeRow)` left open
+            // for `actor` (`resolve_intervening`'s `ChoiceKind::TakeRow`
+            // handling stopped here on purpose, deferring to this arm, which
+            // has the parsed card -- see its own doc). BGO logs each pick
+            // the same `"takes ... in hand ... uses N civil action"` way an
+            // ordinary `Move::Take` uses, but a bare `Take` is illegal while
+            // this pending sits open (`legal::legal_moves`'s pending gate
+            // offers only `Choose`) -- translate into the option naming this
+            // same slot instead.
+            if let Some(Pending::Choice(c)) = r.state.pending.top() {
+                if matches!(c.kind, ChoiceKind::TakeRow { .. }) {
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Slot(s) if *s == slot))
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "open TakeRow choice does not offer slot {slot} ({})",
+                                card.get().name
+                            ))
+                        })?;
+                    r.try_apply(Move::Choose { n: n as u8 }, true)?;
+                    // Same refill-ungrounding as the ordinary `Move::Take`
+                    // path just below -- see that comment for why.
+                    r.row_grounded[slot as usize] = false;
+                    return Ok(());
+                }
+            }
             // `IllegalMove: Take` diagnostic (docs/REPLAY.md's Take/Bid
             // handoff): a slot was found whose `take_cost` reproduces the
             // journal's own stated cost, but `try_apply` may still reject it
@@ -4568,6 +4636,111 @@ mod tests {
         assert!(
             !r.claimed_destroy_lines.contains(&2),
             "the skipped, non-matching entry must NOT be claimed -- it still needs its own normal processing"
+        );
+    }
+
+    /// `TakeRow` (International Agreement, `docs/REPLAY.md`'s six-pending-
+    /// kind pass checkpoint): when the upcoming line is `expected_actor`'s
+    /// own take of a card still among the open choice's own `Slot` options,
+    /// `resolve_intervening` must defer (return `Ok(())` without touching
+    /// the pending) exactly like `FreeBuild`, leaving `apply_one`'s
+    /// `TakeCard` arm to translate it into the right `Choose` -- NOT auto-
+    /// select `Stop` here, which would wrongly discard a real observed pick.
+    #[test]
+    fn resolve_intervening_defers_a_take_row_pending_when_the_upcoming_take_matches_one_of_its_slots() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let iron = CardId::by_name("Iron").expect("Iron is in the table");
+        r.state.card_row[2] = iron;
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Slot(2));
+        options.push(ChoiceOption::Word(Keyword::Stop));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options }));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, Some(iron)), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::TakeRow { .. })),
+            "deferring must leave the pending untouched for apply_one to resolve: {:?}",
+            r.state.pending.top()
+        );
+    }
+
+    /// Companion: when the upcoming line does NOT match any of the open
+    /// `TakeRow` choice's `Slot` options (a different actor's own line, or
+    /// this same actor's line but for an unrelated action/card), a human
+    /// DECLINING the row leaves no journal trace -- `resolve_intervening`
+    /// must auto-select `Word(Stop)` and keep going, the same "no journal
+    /// trace for a silent decline" precedent `FreeBuild` already uses.
+    #[test]
+    fn resolve_intervening_auto_declines_a_take_row_pending_via_stop_when_the_upcoming_line_does_not_match() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let iron = CardId::by_name("Iron").expect("Iron is in the table");
+        r.state.card_row[2] = iron;
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Slot(2));
+        options.push(ChoiceOption::Word(Keyword::Stop));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options }));
+
+        // Player 0's own next line is an EndTurn, not a take of Iron (or
+        // anything else) -- there is nothing to defer to.
+        let result = r.resolve_intervening(0, (ActionClass::EndTurn, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            r.state.pending.is_empty(),
+            "auto-declining via Stop must fully close the choice, not leave it open: {:?}",
+            r.state.pending.top()
+        );
+    }
+
+    /// `apply_one`'s `TakeCard` arm must translate an observed take into a
+    /// `Choose` naming the matching `Slot` option when a `TakeRow` pending
+    /// sits open, mirroring the pre-existing `DestroyOwn | LosePop` check in
+    /// the `Destroy | Disband` arm -- a bare `Move::Take` is illegal while
+    /// ANY pending sits open (`legal::legal_moves`'s pending gate), so
+    /// without this the take would be reported as `IllegalMove: Take`
+    /// instead of correctly clearing the choice.
+    #[test]
+    fn apply_one_resolves_a_take_row_pending_via_choose_instead_of_a_bare_take() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let iron = CardId::by_name("Iron").expect("Iron is in the table");
+        // Already grounded in slot 2 -- `ground_row_slot`'s first (trusted)
+        // branch then returns that slot directly, independent of the
+        // observed cost text, exactly like a normal prior `Take` would have
+        // left it.
+        r.state.card_row[2] = iron;
+        r.row_grounded[2] = true;
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Slot(2));
+        options.push(ChoiceOption::Word(Keyword::Stop));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options }));
+
+        let out = apply_one(
+            &mut r,
+            0,
+            ActionClass::TakeCard,
+            Some(iron),
+            "takes Iron in hand Orange uses 1 civil action",
+            "Orange takes Iron in hand Orange uses 1 civil action",
+            None,
+        );
+
+        assert!(out.is_ok(), "{out:?}");
+        assert!(
+            r.state.players[0].hand_civil.as_slice().contains(&iron),
+            "Iron must actually land in hand: {:?}",
+            r.state.players[0].hand_civil.as_slice()
+        );
+        assert!(
+            !r.row_grounded[2],
+            "the slot's refill must be ungrounded again, exactly like the ordinary Move::Take path"
         );
     }
 
