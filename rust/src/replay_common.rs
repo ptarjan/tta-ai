@@ -3476,6 +3476,36 @@ pub struct GameResult {
     /// reconstruction matched exactly.
     pub discard_oracle_checked: u32,
     pub discard_oracle_agreed: u32,
+    /// The FIRST line, if any, where this reconstruction's own
+    /// `state.age_civil` read strictly ahead of what the journal's `Line::
+    /// age` column proves the real game had reached -- see
+    /// `PrematureCivilAdvance`'s own doc and `docs/REPLAY.md`'s "civil deck
+    /// model" handoff. `None` on every game that never diverges (the
+    /// intended state after `top_up_civil_deck` landed; kept as a
+    /// structural, always-on instrument rather than removed, so a future
+    /// regression shows up in `replaystats`'s own summary instead of
+    /// needing this investigation re-run from scratch).
+    pub civil_deck_premature_advance: Option<PrematureCivilAdvance>,
+}
+
+/// Ground-truth evidence (never a rules reimplementation) that the PRIMARY,
+/// deck-empty-triggered `game::advance_age` call inside `game::deal` fired
+/// before the journal itself says the real game reached that age --
+/// distinct from (and unreachable-by-construction after) the CORRECTIVE
+/// `catch_up_civil_age`/`game::force_civil_age_at_least` path, which only
+/// ever moves `state.age_civil` UP TO a line's own stated age, never past
+/// it. Built from `Line::age`, a column BGO stamps on every single row, not
+/// from any derived/approximated fact.
+#[derive(Debug, Clone, Copy)]
+pub struct PrematureCivilAdvance {
+    /// 1-based journal line number at which the divergence was first
+    /// observed (matches `Decision::lineno`/`Mismatch::lineno`'s
+    /// numbering).
+    pub lineno: usize,
+    /// What the journal's own age column said, at that line.
+    pub journal_age: crate::cards::Age,
+    /// What this reconstruction's `state.age_civil` already was.
+    pub reconstructed_age: crate::cards::Age,
 }
 
 /// A journal line class that is BGO's after-the-fact CONFIRMATION that
@@ -3578,6 +3608,43 @@ fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
     }
 }
 
+/// The LAST journal line index still tagged each age -- ground truth for
+/// `civil_deck_premature_advance`'s "is there still more of the OLD age to
+/// come" check. Indexed by `Age as usize` (five ages, `A` through `IV`)
+/// rather than a `HashMap`: a fixed, exhaustive, tiny domain is exactly the
+/// case this project's own style guide reserves arrays for over a hash
+/// table.
+///
+/// Built ONLY from lines classified as a real player decision, and NOT
+/// `EndTurn` -- this checker's own first pass, run against the full corpus,
+/// false-positived on nearly every game's very first Age A -> I transition
+/// (`docs/REPLAY.md`'s "civil deck model" handoff has the full trace, game
+/// `7523818` line 8): BGO logs the NEXT player's own "Action Phase begins"
+/// marker for their round-2 turn (already tagged the new age) at the SAME
+/// timestamp as, and BEFORE, the PREVIOUS player's own trailing "End turn
+/// ... scores: ..." line for the round that just ended (still tagged the
+/// OLD age/round, correctly describing when it happened) -- so file order
+/// is not a reliable total order exactly at a real transition, only within
+/// a single, real, non-`EndTurn` decision. Every buggy divergence this
+/// instrument exists to catch (`7523449`) persists across many such real
+/// decisions, not just one trailing summary line, so this restriction loses
+/// no real positive
+/// (`last_real_decision_line_for_age_ignores_an_end_turn_trailer_still_
+/// tagged_the_old_age` and `last_real_decision_line_for_age_still_sees_a_
+/// real_decision_tagged_the_old_age`, below, pin both halves).
+fn last_real_decision_line_for_age(journal: &[Line], card_index: &HashMap<&'static str, CardId>) -> [Option<usize>; 5] {
+    let mut last: [Option<usize>; 5] = [None; 5];
+    for (i, line) in journal.iter().enumerate() {
+        let Some(age) = parse_age(line.age) else { continue };
+        let LineOutcome::Action(Classified { class, .. }) = classify(card_index, line.text) else { continue };
+        if class == ActionClass::EndTurn {
+            continue;
+        }
+        last[age as usize] = Some(i);
+    }
+    last
+}
+
 /// Replay one game's journal through the real engine. `record_decisions`
 /// gates [`Decision`] snapshotting (see the module doc) -- `false` for
 /// `replay`'s own binary, `true` for `agreement.rs`'s move-agreement
@@ -3650,12 +3717,40 @@ pub fn replay_game(
     // is never a free action) rather than a rules reimplementation.
     let mut ca_take_spend_this_turn: Vec<i32> = vec![0; meta.players as usize];
 
+    let last_line_index_for_age = last_real_decision_line_for_age(journal, card_index);
+    let mut civil_deck_premature_advance: Option<PrematureCivilAdvance> = None;
+
     'lines: for (i, line) in journal.iter().enumerate() {
         // Catch this reconstruction's `state.age_civil` up to what the
         // journal's own age column already proves happened -- see
         // `catch_up_civil_age`'s own doc for why this must be deferred
         // while an earlier line's work is still outstanding.
         catch_up_civil_age(&mut r.state, line.age);
+        // Structural divergence instrument (docs/REPLAY.md "civil deck
+        // model" handoff), kept on permanently rather than removed once the
+        // fix landed: `catch_up_civil_age` above only ever moves
+        // `age_civil` UP TO this line's own stated age, never past it, so
+        // reading STRICTLY AHEAD here can only mean the PRIMARY, deck-
+        // empty-triggered `advance_age` inside `game::deal` fired early --
+        // and `last_line_index_for_age` rules out the harmless case of this
+        // simply being the age's own true last line (nothing left in the
+        // journal still tagged the old age). Recorded once, first
+        // occurrence only.
+        if civil_deck_premature_advance.is_none() {
+            if let Some(claimed) = parse_age(line.age) {
+                if r.state.age_civil > claimed {
+                    if let Some(last) = last_line_index_for_age[claimed as usize] {
+                        if i < last {
+                            civil_deck_premature_advance = Some(PrematureCivilAdvance {
+                                lineno: line.lineno,
+                                journal_age: claimed,
+                                reconstructed_age: r.state.age_civil,
+                            });
+                        }
+                    }
+                }
+            }
+        }
         // REPLAYER BUG: BGO's own journal states §12.3's "Age IV began ->
         // this round or the next is last" fact in-band ("Last turn Game ends
         // at the end of the starting round", one line per surviving player,
@@ -4209,6 +4304,7 @@ pub fn replay_game(
         discard_oracle_divergence: r.discard_oracle_divergence,
         discard_oracle_checked: r.discard_oracle_checked,
         discard_oracle_agreed: r.discard_oracle_agreed,
+        civil_deck_premature_advance,
     }
 }
 
@@ -5244,6 +5340,49 @@ mod tests {
         // case a future caller ever feeds it raw, unfiltered text.
         assert_eq!(parse_age("age"), None);
         assert_eq!(parse_age(""), None);
+    }
+
+    fn line<'a>(lineno: usize, age: &'a str, text: &'a str) -> Line<'a> {
+        Line { lineno, color: "Orange", age, round: "1", text }
+    }
+
+    /// The exact shape traced on real game `7523818` line 8 (`docs/REPLAY.md`
+    /// "civil deck model" handoff): BGO logs the NEXT player's own "Action
+    /// Phase begins" marker (already tagged the new age) BEFORE the
+    /// PREVIOUS player's own trailing "End turn ... scores: ..." line for
+    /// the round that just ended (still, correctly, tagged the OLD age).
+    /// `last_real_decision_line_for_age`'s job is to see PAST that stale
+    /// trailer -- the last REAL decision still tagged "A" is the `Take` at
+    /// index 0, not the `EndTurn` at index 2.
+    #[test]
+    fn last_real_decision_line_for_age_ignores_an_end_turn_trailer_still_tagged_the_old_age() {
+        let card_index = build_card_index();
+        let journal = [
+            line(2, "A", "Purple takes Pyramids in hand Purple uses 2 civil action"),
+            line(3, "I", "Action Phase begins"),
+            line(4, "A", "End turn Purple scores:; ; 0 culture (now 0)"),
+            line(5, "A", "No Discard Phase"),
+        ];
+        let last = last_real_decision_line_for_age(&journal, &card_index);
+        assert_eq!(last[crate::cards::Age::A as usize], Some(0), "the Take, not the later-indexed EndTurn trailer");
+        assert_eq!(last[crate::cards::Age::I as usize], None, "\"Action Phase begins\" is Bookkeeping, not a decision");
+    }
+
+    /// A real, non-`EndTurn` decision genuinely still tagged the OLD age
+    /// AFTER this reconstruction has already moved on IS the bug this
+    /// instrument exists to catch -- confirms the exclusion above is
+    /// narrow (only `EndTurn`), not a blanket "ignore anything after the
+    /// first new-age line" that would also hide a real divergence.
+    #[test]
+    fn last_real_decision_line_for_age_still_sees_a_real_decision_tagged_the_old_age() {
+        let card_index = build_card_index();
+        let journal = [
+            line(2, "A", "Purple takes Pyramids in hand Purple uses 2 civil action"),
+            line(3, "I", "Orange takes Hammurabi in hand Orange uses 1 civil action"),
+            line(4, "A", "Purple takes Colossus in hand Purple uses 3 civil action"),
+        ];
+        let last = last_real_decision_line_for_age(&journal, &card_index);
+        assert_eq!(last[crate::cards::Age::A as usize], Some(2));
     }
 
     /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,

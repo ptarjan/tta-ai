@@ -146,6 +146,11 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // journal's own cross-validated discard count -- FIRST divergence only,
     // per the same function's own doc.
     let mut discard_oracle_divergences: Vec<String> = Vec::new();
+    // `GameResult::civil_deck_premature_advance` -- see that field's own
+    // doc and `docs/REPLAY.md`'s "civil deck model" handoff. One example
+    // per game, capped, so a full-corpus run doesn't dump hundreds of lines.
+    let mut n_premature: u32 = 0;
+    let mut premature_examples: Vec<String> = Vec::new();
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -171,6 +176,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                  (hand_military_len {} limit {})",
                 meta.id, d.lineno, d.round, d.age, d.actor, d.journal_excess, d.reconstructed_excess, d.hand_len, d.limit
             ));
+        }
+        if let Some(p) = &result.civil_deck_premature_advance {
+            n_premature += 1;
+            if premature_examples.len() < 10 {
+                premature_examples.push(format!(
+                    "{} line {}: reconstructed age {:?} ahead of journal's own {:?}",
+                    meta.id, p.lineno, p.reconstructed_age, p.journal_age
+                ));
+            }
         }
 
         for d in &result.decisions {
@@ -276,6 +290,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     }
     println!();
 
+    // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
+    // deck model" handoff. Zero here is the invariant `top_up_civil_deck`
+    // is meant to guarantee; a nonzero count is this instrument catching a
+    // regression, not a new investigation needed from scratch.
+    println!("civil-age premature advances (this reconstruction's own age_civil read ahead of the journal's Line::age column, with more of the OLD age still to come): {n_premature} games");
+    for ex in &premature_examples {
+        println!("  {ex}");
+    }
+    println!();
     println!("## Stop-reason histogram, ranked by count\n");
     println!("| count | mean round reached | reason | example |");
     println!("|---|---|---|---|");

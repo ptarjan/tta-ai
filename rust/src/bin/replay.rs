@@ -109,6 +109,12 @@ fn print_result(g: &GameResult) {
         );
     }
     println!();
+    if let Some(p) = &g.civil_deck_premature_advance {
+        println!(
+            "    civil_deck_premature_advance: line {} reconstructed {:?} ahead of journal's own {:?}",
+            p.lineno, p.reconstructed_age, p.journal_age
+        );
+    }
     if let Some(m) = &g.mismatch {
         println!(
             "    line {} (age {} round {}): {}",
