@@ -1311,3 +1311,164 @@ shortfalls whose turn replaced a NON-Hammurabi Age A leader (Moses,
 Aristotle, Homer -- 5 games) and which Finding 1 therefore does not explain.
 Those two shapes belong to the stale-pending and colonize threads other
 passes own; the budget-shortfall bucket itself is closed.
+## Sixth pass: the civil-action-budget bucket, root-caused to a THIRD engine bug -- and the wonder-surcharge rules question settled against the corpus
+
+This pass had one job: the largest single stop bucket, `IllegalMove: Take`
+at **143 of 1,011 games** (`rust/src/bin/replaystats.rs`, the ranked
+histogram every number below comes from). The whole bucket was reported as
+a civil-action budget shortfall -- the replayer believing the human had no
+civil actions left while the journal shows them taking a card anyway.
+
+| | fifth pass | sixth pass (this one) |
+|---|---|---|
+| mean rounds reached (of 19.27 played) | 5.41 | **5.72 after the engine fix, 5.71 after the replayer fix** |
+| decisions recorded in Age II or later | 2.4% | **3.5%** |
+| `IllegalMove: Take` | 143 | **17** |
+| `ParserGap: Taj Mahal's take cost ...` | 8 | 81 (see below -- this GREW on purpose) |
+
+### Finding 1 (ENGINE BUG, confirmed, fixed, tested): Hammurabi's MA-as-CA conversion was forfeited by replacing him mid-turn
+
+`costs::pay_ca` spends Hammurabi's once-per-turn conversion **lazily** --
+it only reaches for a military action once the printed civil-action pool
+runs dry -- and both it and `costs::spare_ca` gated the conversion on
+`p.leader` still BEING Hammurabi. A player who spent their last printed
+civil action ON the leader replacement therefore lost the conversion
+before ever being offered it.
+
+The rulebook is explicit that this is legal (RB, "Replacing a Leader",
+transcribed in `sources/ubg_the-second-round.txt`): **"You are allowed to
+use the benefit of a leader and then replace him or her on the same
+turn."** Hammurabi's own 2015 text is "On your turn, you may use one
+military action as one civil action" (`sources/namu_heroes.txt`,
+`data/cards_wonders_leaders.json`).
+
+**The corpus evidence, which is what found it.** Of the 143 games in the
+bucket, 109 stopped **short by exactly one civil action** against a cost
+the journal itself printed -- and **103 of those 109 are turns in which
+the human replaced Hammurabi**, against Hammurabi being only 39%
+(577/1495) of all Age A leader replacements corpus-wide. 107 of the 109
+still had a military action in hand to convert. A leader-agnostic cause
+(e.g. the replacement refund being mis-netted, the standing alternative
+hypothesis) predicts 39%, not 94.5%.
+
+**Fixed** with `PlayerState::hammurabi_replaced_this_turn`, set in
+`apply::h_play_leader` when the leader being replaced is Hammurabi and
+cleared alongside `hammurabi_used` in `economy::end_of_turn`;
+`costs::hammurabi_conversion_available` is now the single source of truth
+both `spare_ca` and `pay_ca` read. `take_gate`'s SEPARATE
+`leaderTakeCivilActionDiscount` deliberately still keys off the live
+leader -- that one is a continuous in-play effect, not a once-per-turn
+use. **Test**: `apply::tests::replacing_hammurabi_mid_turn_keeps_his_
+military_action_as_civil_action_conversion_for_the_rest_of_the_turn`,
+confirmed to fail with the `h_play_leader` flag reverted (`left: 1,
+right: 2`) and pass after.
+
+This one fix took the bucket from 143 to 57 games, mean rounds from 5.41
+to 5.72, and the Age II+ decision share from 2.4% to 3.5%.
+
+### The wonder take-surcharge: SETTLED. The rule is exactly as modeled -- a wonder completed EARLIER THE SAME TURN still counts
+
+The fifth pass left this open on two contradicting games, with `7523353`
+suggesting the `+1 CA per already-completed wonder` surcharge (§2.4)
+might not apply to a wonder completed earlier in the same turn. Two data
+points are not a ruling, so this pass measured the whole population:
+**every wonder take in all 1,011 journals that carries an explicit cost
+clause, 6,757 of them**, excluding takes made with Michelangelo in play
+(his printed text waives the surcharge). Summing BOTH cost clauses on the
+line (`"uses N civil action; ... uses N military action"` -- a Hammurabi
+conversion splits a take's cost across two clauses, and reading only the
+civil one manufactures fake violations) and subtracting each player's
+completed-wonder count leaves the implied ROW POSITION cost, which the
+rules confine to 1, 2 or 3:
+
+| implied position cost | Model A: every completed wonder counts (current engine) | Model B: wonders completed earlier the same turn are exempt |
+|---|---|---|
+| -1 (impossible) | 10 | 5 |
+| 0 (impossible) | 21 | 22 |
+| 1 | 4758 | 4421 |
+| 2 | 1604 | 1885 |
+| 3 | 364 | 415 |
+| 4 (impossible) | 0 | **9** |
+| **violations** | **31 (0.46%)** | 36 (0.53%) |
+
+Model A -- what the engine already does -- is consistent with **6,726 of
+6,757** real human wonder takes. Model B is not merely no better, it is
+**affirmatively refuted**: it implies 9 takes cost more civil actions
+than the most expensive row position exists to charge. So the surcharge
+counts a wonder completed earlier the same turn, `costs::take_cost` is
+right, and **nothing was changed here**.
+
+And the residual is not about the surcharge at all: **all 31 of Model A's
+violations are Taj Mahal**, and 22 of the 31 involve no same-turn
+completion whatsoever, so the same-turn theory would not have explained
+them either. Every other wonder in the game -- Pyramids, Hanging Gardens,
+Colossus, Library of Alexandria, Great Wall, St. Peter's Basilica,
+Universitas Carolina, and all the Age II-IV wonders -- is 100% consistent
+across all 6,726 of its takes.
+
+### Finding 2 (replayer, not engine): a take line with NO cost clause cost ZERO actions -- it is not an unknown cost
+
+`ground_row_slot` took `Option<i32>` for the journal's stated cost and
+read a missing `"uses N ... action"` clause as "unknown", falling through
+to its "first ungrounded slot" path -- a silent guess at which slot the
+human paid for, the exact shape the fifth pass removed for the
+known-cost case.
+
+No clause means zero, and there is a printed card ability that produces
+zero. Of the corpus's 88,432 take lines, **483 carry no clause at all**,
+and **1,639 of the 1,641 no-civil-clause lines fall in game-age I** --
+Hammurabi's window. 333 of the 483 are LEADER takes and **every single
+one of the 333 has Hammurabi in play**: his
+`leaderTakeCivilActionDiscount` cancels the 1 CA of a leader sitting in
+one of the row's five cheapest slots. The engine already priced this
+correctly; only the replayer could not read it. **Test**:
+`replay_common::tests::a_take_line_with_no_uses_clause_at_all_cost_zero_
+actions_not_an_unknown_cost`.
+
+Mean rounds and the Age II+ share are FLAT across this change (5.72 ->
+5.71, 3.5% -> 3.5%) and that is the honest report: it trades a lucky
+guess for a truthful stop rather than buying depth. What it does buy is
+attribution -- `IllegalMove: Take` drops 57 -> 17, and the Taj Mahal
+anomaly stops hiding inside mis-grounded row slots.
+
+### Open, with a documented population: Taj Mahal is priced below anything the rules allow, and only Taj Mahal
+
+The single biggest remaining thread out of this bucket, and the reason
+the `ParserGap: Taj Mahal` bucket deliberately grew from 8 games to 81.
+**181 of the corpus's 317 Taj Mahal takes (57%) cost less than the
+cheapest row position plus this player's own wonder surcharge**:
+
+- **150 with no cost clause at all**, i.e. 0 civil actions -- impossible
+  for a wonder, whose cheapest possible take is 1. Reconstructing the CA
+  ledger by hand for four of them (`7521302` r4, `7521361` r5, `7521377`
+  r4, `7523353` r5) confirms the action really was free: in each, every
+  OTHER civil-costing action that turn already exactly consumes the
+  government's printed budget plus every identified bonus, with nothing
+  left for the Taj Mahal.
+- **31 more with an explicit clause below the minimum**, the Model A
+  violations above.
+
+The one strong signal found: **149 of the 150 clause-less Taj Mahal takes
+happen in a turn in which that player elected a leader**, usually on the
+line immediately before. Candidate explanations checked and rejected: it
+is not Michelangelo's surcharge waiver (only 49 of the 150 have him, and
+his waiver cannot take a cost below 1 anyway); it is not Hammurabi's
+leader-take discount (Taj Mahal is a wonder, not a leader, and these
+players' leaders are Age I ones); it is not BGO omitting the surcharge
+generally (takes costing 4+ CA occur, and no row position charges 4); and
+it is not a general clause-omission bug, since 6,726 other wonder takes
+price perfectly. **Not diagnosed, not guessed at.** The next pass should
+start here: whatever this is, it is card-specific, it is worth 81 games,
+and it is the only thing left in the take bucket that is not already
+attributed.
+
+### Also in this bucket, but NOT budget shortfalls (re-triaged, left alone)
+
+15 of the original 143 turned out not to be action-economy problems at
+all -- the failing `Take` was blocked by a live `Pending` (a colonize
+`Bid`, an un-drained 2-option `Choice`), which other passes own. The 17
+residual `IllegalMove: Take` games are the honest remainder of the
+shortfall shape: 11 are still Hammurabi-replacement turns now short by
+TWO (a second, separate cause stacked on the one fixed here), and 6
+replaced Moses/Aristotle/Homer instead. Reproducible with
+`REPLAY_DEBUG=1`.
