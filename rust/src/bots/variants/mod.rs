@@ -155,7 +155,12 @@ pub(crate) enum MilStance {
     /// "Top 2 military position": match the strongest rival.
     Top2,
     /// Same target as `Top2`; the aggression this stance is named for comes
-    /// from a bigger `mil_margin`, not a different target formula.
+    /// from a bigger `mil_margin`, not a different target formula. Unused by
+    /// every current archetype (none of the six ported profiles set it --
+    /// `MilitaryBot` uses `Top2`), kept so this enum matches the Python
+    /// knob's full domain rather than silently narrowing it; a future
+    /// archetype may want it.
+    #[allow(dead_code)]
     Aggro,
 }
 
