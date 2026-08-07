@@ -1300,6 +1300,25 @@ pub struct GameResult {
     pub decisions: Vec<Decision>,
 }
 
+/// A journal line class that is BGO's after-the-fact CONFIRMATION that
+/// something already resolved, carrying no state of its own to apply --
+/// `apply_one`'s handling of both is a bare `Ok(())`. `resolve_intervening`
+/// must NOT be called for one of these: its job is to clear a path to
+/// whatever `expected_actor` needs to do NEXT, and both confirmation shapes
+/// are logged by BGO BEFORE the real action that causes them (`PlayEvent`
+/// before the qualifying players' own `FreeBuild`/`GainBlock` picks;
+/// `WinAuction` before the last active bidder's own `"passes"`/`"bids"`
+/// line) -- calling it anyway makes `resolve_intervening` try to fast-forward
+/// PAST that still-genuinely-pending decision using a fallback meant for
+/// cases where the journal never logs it at all (`FreeBuild`'s "assume
+/// Skip", the `Pending::Auction` auto-`BidPass`), silently consuming a real
+/// human decision the very next line was about to supply. See the two call
+/// sites' own doc comments (above the single call to this function in
+/// `replay_game`'s main loop) for the specific real games each was found on.
+fn is_pure_confirmation_line(class: ActionClass) -> bool {
+    matches!(class, ActionClass::PlayEvent | ActionClass::WinAuction)
+}
+
 /// Replay one game's journal through the real engine. `record_decisions`
 /// gates [`Decision`] snapshotting (see the module doc) -- `false` for
 /// `replay`'s own binary, `true` for `agreement.rs`'s move-agreement
@@ -1427,7 +1446,38 @@ pub fn replay_game(
         // can itself finish `actor`'s end of turn and advance `state.
         // current`, making the generic `decider == expected_actor` exit
         // test fail even though nothing went wrong).
-        if class != ActionClass::PlayEvent {
+        //
+        // `ActionClass::WinAuction` (`"X wins <Territory> Winning bid is
+        // N"`) is the SAME shape as `PlayEvent` above, for the SAME reason:
+        // it is BGO's journal-side CONFIRMATION that a colonize auction
+        // already concluded, not an action with its own state to apply --
+        // `apply_one`'s `WinAuction` arm is a bare `Ok(())`. The auction
+        // itself is driven entirely by the real `Bid`/`BidPass` ("bids
+        // N"/"passes") lines, and BGO's own journal orders the "wins"
+        // confirmation BEFORE the final bidder's own explicit pass that
+        // actually causes it (observed on real games with identical
+        // one-second timestamps on both lines -- the same "not stably
+        // ordered within a second" artifact `docs/REPLAY.md`'s Taj Mahal
+        // section already documents for a different pair of lines).
+        // Calling `resolve_intervening` for THIS line was actively harmful
+        // for the identical reason `PlayEvent` was excluded: its job is to
+        // clear a path to whatever `expected_actor` (here, the auction's
+        // WINNER, parsed from the "wins" line's own text) needs next -- and
+        // since the true decider is still the LAST ACTIVE BIDDER, not the
+        // winner, it fell through to the `Pending::Auction` auto-drain
+        // fallback and synthesized a FAKE `Move::BidPass` for that bidder on
+        // the spot, consuming the pending before their own real, upcoming
+        // "passes"/"bids" line was ever read -- which then had nothing left
+        // to apply and reported `decider != expected_actor` instead. Found
+        // by replaying real BGO games (`7522652`, `7523072`): 59 of this
+        // bucket's 148 stops shared this exact shape. Skipping the call
+        // here, exactly like `PlayEvent`, defers the auction's real
+        // resolution to the next real `Bid`/`BidPass` line, which has the
+        // correct `upcoming` to match against; the pre-existing
+        // `Pending::Auction` auto-drain fallback is untouched and still
+        // covers a game where the final bidder's own pass is genuinely never
+        // logged at all.
+        if !is_pure_confirmation_line(class) {
             if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
                 mismatch = Some(mk_mismatch(line, kind));
                 break 'lines;
@@ -2151,5 +2201,72 @@ mod tests {
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
+    }
+
+    /// `is_pure_confirmation_line`'s membership is what routes both
+    /// `PlayEvent` and `WinAuction` lines around `resolve_intervening`
+    /// entirely in `replay_game`'s main loop -- this pins the exact set so
+    /// a future edit that silently drops either back into the "must call
+    /// resolve_intervening" path is caught here rather than only as a
+    /// re-regression in the full corpus run.
+    #[test]
+    fn is_pure_confirmation_line_is_true_only_for_play_event_and_win_auction() {
+        assert!(is_pure_confirmation_line(ActionClass::PlayEvent));
+        assert!(is_pure_confirmation_line(ActionClass::WinAuction));
+        assert!(!is_pure_confirmation_line(ActionClass::Pass));
+        assert!(!is_pure_confirmation_line(ActionClass::Bid));
+        assert!(!is_pure_confirmation_line(ActionClass::Discard));
+        assert!(!is_pure_confirmation_line(ActionClass::Colonize));
+    }
+
+    /// REGRESSION (found by replaying real BGO games `7522652`/`7523072`):
+    /// pins the exact failure mode `is_pure_confirmation_line` exists to
+    /// avoid. A colonize auction still has an active bidder (`player: 0`)
+    /// who has not yet bid or passed -- the real journal's next line is
+    /// THEIR OWN explicit "passes"/"bids" text, but BGO prints the "X wins"
+    /// confirmation line first, naming a DIFFERENT player (the eventual
+    /// winner) as its actor. If `resolve_intervening` is (wrongly) called
+    /// for that confirmation line -- i.e. if a future edit ever removes
+    /// `WinAuction` from `is_pure_confirmation_line` -- `decider() (0) !=
+    /// expected_actor (1)` sends it straight to the generic
+    /// `Pending::Auction` auto-drain fallback, which synthesizes a FAKE
+    /// `Move::BidPass` for player 0 on the spot: this test confirms that is
+    /// exactly what the fallback does when reached directly, which is why
+    /// `replay_game`'s main loop must never reach it for a `WinAuction`
+    /// line at all (skipping the call, as `is_pure_confirmation_line`
+    /// makes it do, leaves the auction's `player: 0` genuinely pending for
+    /// their own real, upcoming line to resolve instead).
+    #[test]
+    fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
+    ) {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        let territory = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Territory)
+            .expect("the base game table has at least one Territory card");
+        // Mirrors the real shape found on `7522652`: player 1 already placed
+        // the high bid (4), and player 0 (`active[1]`, `pos: 1`) is the
+        // still-outstanding decider -- if they ALSO pass, player 1 becomes
+        // the sole active bidder holding the high bid and wins outright.
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 4, Some(1), 0)));
+        r.state.phase = Phase::Actions;
+        assert_eq!(r.state.decider(), 0); // player 0's own bid/pass is still outstanding
+
+        // Called (wrongly) as if resolving a path toward player 1 -- the
+        // shape a `WinAuction` line naming the eventual winner would create
+        // if it were not excluded from this call entirely.
+        let result = r.resolve_intervening(1, (ActionClass::WinAuction, Some(territory)), false);
+
+        assert!(result.is_ok());
+        // Player 0's own decision was fabricated and consumed sight-unseen:
+        // with only player 1 left active, the auction auto-resolves them as
+        // the winner and immediately opens THEIR colonize pending -- there
+        // is no longer anything for player 0's real, still-unread
+        // "passes"/"bids" line to apply to. Exactly the bug this file's
+        // `is_pure_confirmation_line` exclusion prevents in the real
+        // per-line loop.
+        assert_ne!(r.state.decider(), 0);
+        assert!(matches!(r.state.pending.top(), Some(Pending::Colonize(_))));
     }
 }
