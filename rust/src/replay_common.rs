@@ -533,7 +533,18 @@ impl<'a> Replayer<'a> {
             }
             if decider == expected_actor {
                 let own_politics_decision = self.state.phase == Phase::Politics && self.state.pending.is_empty();
-                if !own_politics_decision || next_line_explains_own_politics {
+                // A preparation whose own line is already behind us outranks
+                // the line about to be translated, even when that line is
+                // this player's own explicit political action: BGO's
+                // `"plays event"` line is skipped as a confirmation
+                // (`is_pure_confirmation_line`), so the preparation it
+                // records is applied here, at the next line -- and Julius
+                // Caesar's declined SECOND action makes that next line
+                // routinely the player's own `"passes Political Phase"`.
+                // Without this the pass would be applied as the FIRST
+                // political action and the preparation would be stranded.
+                let owed_preparation = own_politics_decision && self.claimable_preparation(decider).is_some();
+                if !own_politics_decision || (next_line_explains_own_politics && !owed_preparation) {
                     return Ok(());
                 }
                 self.resolve_political_decision(decider)?;
@@ -589,6 +600,17 @@ impl<'a> Replayer<'a> {
         Err(MismatchKind::StuckPending("resolve_intervening did not converge in 200 steps".into()))
     }
 
+    /// The next solved preparation, if it is `decider`'s and the journal
+    /// line it was read off has already been reached. `None` means this
+    /// player's political decision, whatever it was, was not a preparation.
+    fn claimable_preparation(&self, decider: u8) -> Option<crate::event_plan::Preparation> {
+        self.plan
+            .preparations
+            .get(self.next_prep)
+            .filter(|p| p.actor == decider && p.lineno <= self.current_lineno)
+            .copied()
+    }
+
     /// Resolve a Politics-phase decision for `decider` that no journal line
     /// has explicitly claimed. There are exactly two possibilities and the
     /// journal distinguishes them outright, so nothing here is guessed:
@@ -604,12 +626,7 @@ impl<'a> Replayer<'a> {
     /// pulled forward onto an EARLIER turn on which they really did pass,
     /// which is precisely the failure the old forward guess made.
     fn resolve_political_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
-        let claimed = self
-            .plan
-            .preparations
-            .get(self.next_prep)
-            .filter(|p| p.actor == decider && p.lineno <= self.current_lineno)
-            .copied();
+        let claimed = self.claimable_preparation(decider);
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             eprintln!(
                 "DEBUG resolve_political_decision decider={decider} round={} lineno={} claims={claimed:?}",
@@ -2429,6 +2446,39 @@ mod tests {
         assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
         assert_eq!(r.state.future_events.as_slice(), &[prepared]);
         assert_eq!(r.state.players[0].culture, 2);
+    }
+
+    /// REGRESSION (BGO game `7522650`): the `"plays event"` line is skipped
+    /// as a confirmation, so the preparation it records is applied at the
+    /// NEXT line -- and with Julius Caesar armed, that next line is
+    /// routinely the same player's own `"passes Political Phase"` for the
+    /// declined SECOND action. The explicit-political-line fast path used to
+    /// win, applying the pass as the player's FIRST political action and
+    /// stranding the preparation at the head of the queue, which then
+    /// blocked every later event in the game.
+    #[test]
+    fn an_owed_preparation_outranks_this_players_own_explicit_pass_line() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        r.state.players[0].leader = crate::CardId::by_name("Julius Caesar").expect("Caesar is in the table");
+        r.state.phase = Phase::Politics;
+        r.current_lineno = 6; // the "plays event" line on 5 has gone by
+
+        // `true` = the line about to be translated is player 0's own
+        // explicit "passes Political Phase".
+        r.resolve_intervening(0, (ActionClass::Pass, None), true).expect("resolvable");
+
+        assert_eq!(r.next_prep, 1, "the preparation is applied, not skipped past");
+        assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
+        // Caesar leaves the phase open, so the pass line still has its own
+        // real decision to land on.
+        assert_eq!(r.state.phase, Phase::Politics);
     }
 
     /// Julius Caesar offers a SECOND political action after the first one
