@@ -159,6 +159,11 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // structurally rather than re-derived per game.
     let mut n_false_skips_total: u64 = 0;
     let mut n_games_with_false_skip: u32 = 0;
+    // `GameResult::politics_false_skips_unrecovered` -- the TRUE damage
+    // signal (that field's own doc, and `politics_false_skips`'s, explain
+    // why the two are not the same number on purpose). Should read 0.
+    let mut n_false_skips_unrecovered_total: u64 = 0;
+    let mut n_games_with_unrecovered_false_skip: u32 = 0;
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -201,6 +206,10 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         if result.politics_false_skips > 0 {
             n_false_skips_total += result.politics_false_skips as u64;
             n_games_with_false_skip += 1;
+        }
+        if result.politics_false_skips_unrecovered > 0 {
+            n_false_skips_unrecovered_total += result.politics_false_skips_unrecovered as u64;
+            n_games_with_unrecovered_false_skip += 1;
         }
 
         for d in &result.decisions {
@@ -333,16 +342,23 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // section: the mechanism traced from the final-score cross-check above.
     // A false skip means `game::auto_skip_politics` closed a player's
     // Politics phase while the journal's own solved plan says they had a
-    // real preparation waiting, so its "plays event" line falls through as
-    // a silent no-op instead of reaching `resolve_political_decision` --
-    // dropping its culture and leaving the card un-popped to fire again,
-    // wrongly, via `events::evaluate_final_events`. Zero would mean this
-    // reconstruction never under-tracks a hand badly enough to starve a
-    // real political decision; nonzero names the same games the final-score
-    // cross-check shows a nonzero delta on.
+    // real preparation waiting. `resolve_intervening` now RECOVERS every
+    // one of these on the spot (reopens the phase, claims the preparation
+    // through the same path an on-time one uses) -- so this is a raw
+    // occurrence count for the still-open `hand_military` under-tracking
+    // gap, kept nonzero ON PURPOSE as that gap's own regression signal.
+    // **A nonzero value here is NOT damage** -- see `politics_false_skips`'s
+    // own doc before treating a change in this number as a regression.
+    // `politics_false_skips_unrecovered`, printed right after, is the real
+    // "did the recovery itself break" signal and should stay at 0.
     println!(
-        "politics false-skips (a real event/territory preparation the journal shows, silently dropped because \
-         auto_skip_politics closed the phase first): {n_false_skips_total} across {n_games_with_false_skip} games\n"
+        "politics false-skips (a real event/territory preparation the journal shows; RECOVERED in place, this is \
+         an occurrence count for the still-open hand_military gap, not damage -- see GameResult::politics_false_skips's own doc): \
+         {n_false_skips_total} across {n_games_with_false_skip} games"
+    );
+    println!(
+        "politics false-skips left UNRECOVERED (the true damage signal -- should be 0): \
+         {n_false_skips_unrecovered_total} across {n_games_with_unrecovered_false_skip} games\n"
     );
     println!("## Stop-reason histogram, ranked by count\n");
     println!("| count | mean round reached | reason | example |");

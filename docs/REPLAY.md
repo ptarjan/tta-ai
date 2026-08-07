@@ -6952,3 +6952,70 @@ the 60/76 score-mismatched games NOT flagged by `politics_false_skips` have
 a genuinely different (non-hand-tracking) cause -- plausible but unchecked,
 since every game actually decomposed this pass fit the same mechanism
 cleanly.
+
+### `politics_false_skips` fixed in place: the phase is reopened and the stranded preparation claimed, not just counted
+
+Follow-up pass, same corpus, master moved to `aa46e70` then `57158dc` (the
+`politics_false_skips` instrument above) before this landed. **This is a
+REPLAYER bug, not an engine bug** -- `game::auto_skip_politics` itself is
+untouched; self-play's own hand tracking is exact and never trips the
+condition this fix reacts to, so self-play's behaviour is unchanged by
+construction (nothing in `game.rs`/`apply.rs` was edited).
+
+**The fix**: `Replayer::resolve_intervening`'s own false-skip detection
+block (added by the previous pass, `resolve_common.rs` ~line 623) used to
+only count the occurrence. It now reopens `state.phase = Phase::Politics`
+(and clears `politics_done` for that player) and calls `resolve_political_
+decision` on the spot -- the SAME claim path any on-time preparation goes
+through, including its existing "pop one card of unknown provenance"
+grounding (`ground_bid_ceiling`'s convention). Guarded on `state.pending.
+is_empty()`: `state.decider()` reads the pending's own player when pending
+is non-empty, and `prep.actor == decider` can coincidentally match a
+decider who is mid an UNRELATED pending choice -- recovering immediately in
+that case routed `apply::apply(PrepareEvent)` through the pending-first
+branch instead of the real handler (`IllegalMove: PrepareEvent`, caught by
+the corpus run itself, one game, before this guard was added). A genuine
+recovery failure past that guard propagates as a loud `Mismatch` via `?`,
+same as every other unresolved decision this file refuses to guess at --
+never silently swallowed.
+
+Also added `GameResult::politics_false_skips_unrecovered`, printed
+alongside `politics_false_skips` by `replaystats`: increments only when the
+reopen-and-claim attempt itself fails. **`politics_false_skips` itself
+keeps its original "detected" meaning and is expected to STAY NONZERO** --
+it is the still-open `hand_military` under-tracking gap's own occurrence
+counter, kept as that gap's regression signal on purpose. Read `politics_
+false_skips_unrecovered` (should be 0) for the true damage signal, or a new
+`IllegalMove`/`StuckPending` bucket, or a worse score delta -- not a change
+in `politics_false_skips` itself. Both fields' own doc comments repeat this
+for whoever reads the struct directly.
+
+Test: `resolve_intervening_reopens_a_politics_phase_auto_skip_wrongly_
+closed_and_claims_the_stranded_preparation` (`replay_common.rs`), confirmed
+RED by reverting the fix and rerunning before landing.
+
+**Measured, full 1,011-game corpus, `replaystats`, before/after on the SAME
+current-master baseline** (measured fresh on `57158dc`, NOT the `-9.25`/
+`8a27975` figure in the "Final scores" section above -- 19 more games
+completed by the time this pass started, which shifts the scored
+population; see the coordinator hand-off that flagged this):
+
+| | before (`57158dc`) | after (this fix) |
+|---|---|---|
+| completed games | 95 | 98 |
+| exact score matches | 0/95 | 0/98 |
+| score-delta mean (engine − index.tsv) | -10.54 | -7.15 |
+| exact-zero player-scores | 8/202 | 9/208 |
+| `politics_false_skips` | 60 across 57 games | 58 across 56 games |
+| `politics_false_skips_unrecovered` | (field did not exist) | 0 across 0 games |
+| lib tests | 1124 | 1125 |
+
+The residual -7.15 mean gap is EXPECTED, not a sign the fix is incomplete:
+`politics_false_skips` only ever directly implicated 16 of the 76
+score-mismatched games from the prior pass's own cross-reference (see
+"New structural instrument" above); the other 60 are still the unproven
+`hand_military`-under-tracking family (a wrong-but-type-matching card,
+not a fully dropped phase), which this pass deliberately did not touch --
+same "avoid colliding with `d4ad0f5`'s in-flight work" reasoning the prior
+pass gave. Driving the remaining delta to 0 needs the `hand_military`
+reconstruction gap itself fixed, not another pass over this mechanism.

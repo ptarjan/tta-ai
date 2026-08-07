@@ -492,6 +492,12 @@ struct Replayer<'a> {
     /// (up to 200 iterations against the SAME unresolved decision) from
     /// inflating the count past one per genuine false skip.
     false_skip_flagged_prep: Option<usize>,
+    /// See [`GameResult::politics_false_skips_unrecovered`] -- the TRUE
+    /// damage signal, as opposed to `politics_false_skips`'s raw occurrence
+    /// count. Every `politics_false_skips` detection now attempts an
+    /// immediate recovery (`resolve_intervening`'s own doc); this only
+    /// increments on the rare case that recovery itself fails.
+    politics_false_skips_unrecovered: u32,
 }
 
 /// Overwrite the current-events pile with `reveal_order` -- the journal's
@@ -570,6 +576,7 @@ impl<'a> Replayer<'a> {
             discard_oracle_agreed: 0,
             politics_false_skips: 0,
             false_skip_flagged_prep: None,
+            politics_false_skips_unrecovered: 0,
         }
     }
 
@@ -625,14 +632,78 @@ impl<'a> Replayer<'a> {
             // ever got a chance to claim it. Checked every loop iteration
             // (cheap: two field reads and an `Option` compare) but flagged
             // at most once per `next_prep` value via `false_skip_flagged_prep`.
-            if let Some(prep) = self.plan.preparations.get(self.next_prep) {
+            if let Some(prep) = self.plan.preparations.get(self.next_prep).copied() {
                 if prep.actor == decider
                     && prep.lineno <= self.current_lineno
                     && self.state.phase != Phase::Politics
                     && self.false_skip_flagged_prep != Some(self.next_prep)
+                    // `game::auto_skip_politics` only EVER fires with
+                    // `state.pending` empty (`game.rs::start_turn`/
+                    // `interact.rs`'s own `QueueItem::AutoSkipPolitics` arm
+                    // both gate the call on it) -- but by the time THIS loop
+                    // iteration reaches here, an unrelated pending choice for
+                    // some OTHER decision can have opened since (this file
+                    // drains many kinds of pending one iteration at a time).
+                    // `decider` above is `state.decider()`, which reads
+                    // `pending.top()`'s own player when pending is non-empty
+                    // -- so `prep.actor == decider` can coincidentally match
+                    // a decider who is mid an UNRELATED pending choice, not
+                    // actually free to answer their political decision yet.
+                    // Recovering right now would call `resolve_political_
+                    // decision` -> `apply::apply(PrepareEvent)` while that
+                    // pending is still open, which routes through `apply::
+                    // apply`'s own pending-first branch instead of the real
+                    // `h_prepare_event` handler -- confirmed on the corpus
+                    // (`IllegalMove: PrepareEvent`, one game, before this
+                    // guard). Skipping for now (not flagging/counting either
+                    // -- this iteration hasn't actually failed anything) and
+                    // re-checking next iteration, once whatever drained the
+                    // pending above has run, is correct: this exact
+                    // condition is re-evaluated fresh every iteration.
+                    && self.state.pending.is_empty()
                 {
                     self.politics_false_skips += 1;
                     self.false_skip_flagged_prep = Some(self.next_prep);
+                    // THE FIX (this block used to be a detector only):
+                    // `game::auto_skip_politics` already closed `decider`'s
+                    // Politics phase against this reconstruction's own
+                    // under-tracked `hand_military` -- see the comment above
+                    // for the mechanism. `game::auto_skip_politics` itself is
+                    // never called from this file (only from `game.rs`/
+                    // `interact.rs`, both self-play's own code paths, whose
+                    // hand tracking is exact and never trips this condition
+                    // at all), so reopening the phase HERE cannot change
+                    // self-play's behaviour by one bit -- it is a pure
+                    // replay-side revert of a mistake replay-side under-
+                    // tracking caused.
+                    //
+                    // Reopened AND claimed right here, synchronously, rather
+                    // than just reopening `phase` and hoping the ordinary
+                    // `own_politics_decision`/`claimable_preparation` path a
+                    // few lines below happens to reach it before something
+                    // else changes `decider` first: `resolve_political_
+                    // decision` is the SAME call any on-time preparation
+                    // goes through (it grounds the missing card into
+                    // `hand_military` itself, `ground_bid_ceiling`'s own
+                    // "pop one card of unknown provenance" convention -- not
+                    // a parallel mechanism), and `?` here means a genuine
+                    // recovery failure (the grounding itself hitting a real
+                    // `IllegalMove`/`EventPlanInfeasible`) surfaces as a
+                    // loud, specific `Mismatch` for this game, exactly like
+                    // every other decision this file cannot resolve -- never
+                    // silently swallowed. Measured clean across the full
+                    // corpus: zero games hit this `?` (see `docs/REPLAY.md`).
+                    // Counted separately into `politics_false_skips_
+                    // unrecovered` (the TRUE damage signal -- see that
+                    // field's own doc) before propagating, so a game that
+                    // dies here still reports how far it got.
+                    self.state.phase = Phase::Politics;
+                    self.state.players[decider as usize].politics_done = false;
+                    if let Err(kind) = self.resolve_political_decision(decider) {
+                        self.politics_false_skips_unrecovered += 1;
+                        return Err(kind);
+                    }
+                    continue;
                 }
             }
             if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
@@ -3649,12 +3720,45 @@ pub struct GameResult {
     /// `d4ad0f5`'s discard-phase oracle instruments, not a NEW one this
     /// counts) leaving zero `CardType::Event`/`Territory` cards in the
     /// player's reconstructed hand at the moment `game::start_turn` calls
-    /// `auto_skip_politics`, even though the real hand had one. Zero on a
-    /// game this reconstruction gets exactly right; a nonzero count here
-    /// names the SAME games the final-score cross-check will show a
-    /// nonzero delta on, without re-deriving the mechanism from scratch --
-    /// see `docs/REPLAY.md`'s "Final scores" section.
+    /// `auto_skip_politics`, even though the real hand had one.
+    ///
+    /// **Read this before "fixing" a nonzero value here (a note for a
+    /// reader six months out, this author included):** as of the fix
+    /// described in `docs/REPLAY.md`'s "Final scores" section,
+    /// `resolve_intervening` RECOVERS every one of these occurrences
+    /// immediately, in place -- reopening `Phase::Politics` and calling
+    /// `resolve_political_decision` right there, the exact same claim path
+    /// an on-time preparation goes through. **A nonzero count here is NOT
+    /// damage.** It is a raw occurrence counter for the still-open
+    /// `hand_military` under-tracking gap itself (kept, on purpose, as a
+    /// regression signal for THAT gap -- redefining it to read zero after
+    /// this fix would have thrown that signal away for a tidier-looking
+    /// number). If you are hunting for damage, look at
+    /// [`politics_false_skips_unrecovered`](Self::politics_false_skips_unrecovered)
+    /// instead (the true "recovery actually failed" count, which SHOULD be
+    /// investigated if nonzero), or at a new `IllegalMove`/`StuckPending`
+    /// bucket / a worse final-score delta -- not at this field moving.
+    /// Measured on the full corpus the fix landed against: this field 60
+    /// across 57 games, `politics_false_skips_unrecovered` 0, mean
+    /// final-score delta -10.54 -> -7.15, exact zeros 8 -> 9 (see
+    /// `docs/REPLAY.md`).
     pub politics_false_skips: u32,
+    /// The TRUE damage signal, as opposed to `politics_false_skips`'s raw
+    /// occurrence count (read that field's own doc first -- it explains why
+    /// the two are not the same thing on purpose). Increments only when
+    /// [`Replayer::resolve_intervening`]'s own immediate recovery attempt
+    /// -- reopening `Phase::Politics` and calling `resolve_political_
+    /// decision` on the spot -- itself fails (a genuine `IllegalMove`/
+    /// `EventPlanInfeasible`, not the ordinary "auto_skip closed the phase
+    /// on schedule" case). That failure also propagates as this game's own
+    /// `Mismatch` (this file never silently swallows a real error), so a
+    /// nonzero value here always coincides with an early stop for that
+    /// game -- this field exists purely so `replaystats`'s own corpus-wide
+    /// summary can distinguish "the gap still bites but is recovered" (the
+    /// `politics_false_skips` case) from "the recovery itself broke"
+    /// without re-deriving which is which from the raw mismatch bucket
+    /// table. Zero across the full corpus as of the fix landing.
+    pub politics_false_skips_unrecovered: u32,
 }
 
 /// Ground-truth evidence (never a rules reimplementation) that the PRIMARY,
@@ -4599,6 +4703,7 @@ pub fn replay_game(
         discard_oracle_agreed: r.discard_oracle_agreed,
         civil_deck_premature_advance,
         politics_false_skips: r.politics_false_skips,
+        politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
     }
 }
 
@@ -6811,6 +6916,57 @@ mod tests {
             r.state.players[0].hand_military.contains(filler_a) || r.state.players[0].hand_military.contains(filler_b),
             "the one remaining card must be one of the two original fillers, not the just-prepared card"
         );
+    }
+
+    /// FIX (`docs/REPLAY.md`'s "Final scores" section, the mechanism traced
+    /// on real games `7522166`/`7522625`): `game::auto_skip_politics` can
+    /// close a player's Politics phase (`phase = Actions`, `politics_done =
+    /// true`) BEFORE their real, journal-observed preparation is ever read,
+    /// when this reconstruction's own `hand_military` is under-tracked and
+    /// missing the exact Event/Territory card the real human held (a known,
+    /// separate gap -- `legal::legal_moves` then offers only `PolPass`).
+    /// This simulates exactly that: `state.phase`/`politics_done` set as if
+    /// `game::auto_skip_politics` already ran (which happens synchronously,
+    /// deep inside a PRIOR `apply::apply` call this test never needs to
+    /// drive, via `game::advance_turn` -> `game::start_turn`), with a
+    /// solved plan proving player 0's preparation line has already been
+    /// reached. Before this fix, the phase stayed closed forever: the
+    /// player's own `"plays event"` line is a pure confirmation
+    /// (`is_pure_confirmation_line(ActionClass::PlayEvent)`) that never
+    /// itself calls `resolve_intervening`, so nothing was left to notice
+    /// `Phase::Politics` had already been abandoned, and the preparation
+    /// was silently dropped (never popped off `current_events`, later
+    /// firing a second, wrong-amount time via `events::
+    /// evaluate_final_events`). `resolve_intervening` must detect this --
+    /// the identical signal `GameResult::politics_false_skips` already
+    /// counts -- and reopen the phase so the ordinary, already-trusted
+    /// `resolve_political_decision` path (which grounds the missing card
+    /// into `hand_military` itself, `ground_bid_ceiling`'s own "pop one
+    /// card of unknown provenance" convention) claims it exactly like any
+    /// on-time preparation would.
+    #[test]
+    fn resolve_intervening_reopens_a_politics_phase_auto_skip_wrongly_closed_and_claims_the_stranded_preparation() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10; // well past the preparation's own line (5)
+        r.state.phase = Phase::Actions;
+        r.state.players[0].politics_done = true;
+        assert_eq!(r.state.decider(), 0);
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        assert_eq!(r.politics_false_skips, 1, "the false skip must still be counted, exactly as before this fix");
+        assert_eq!(r.next_prep, 1, "the stranded preparation must be claimed, not left stranded forever");
+        assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
+        assert_eq!(r.state.players[0].culture, 2, "the real preparation's own culture score must land");
+        assert_eq!(r.state.phase, Phase::Actions, "politics is closed again once the claimed preparation resolves, same as any on-time one");
     }
 
     /// Companion: with NO filler in hand at all (an edge case `new_game`
