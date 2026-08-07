@@ -191,7 +191,38 @@ pub fn take_cost(state: &GameState, p: &PlayerState, idx: usize) -> i32 {
     } else if card.kind == CardType::Leader && leader_is(p, "Hammurabi") {
         cost -= 1;
     }
+    cost -= leader_replacement_take_discount(card, p);
     cost.max(0)
+}
+
+/// Taj Mahal's own printed 2015 ability, read off the card SITTING IN THE ROW
+/// rather than off anything in play: "If you replaced your leader this turn,
+/// taking this wonder costs you 2 civil actions less."
+/// (`Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn`, the only card
+/// in the base game that carries it.)
+///
+/// Unlike Michelangelo's waiver -- which only cancels the wonder surcharge and
+/// so can never take a take below the row's own 1 -- this one is a flat
+/// subtraction off the whole cost, and it routinely reaches the `max(0)`
+/// clamp: it is the ONLY way a wonder take in this game costs zero civil
+/// actions. That is not an inference; it is what real players do. Across the
+/// 1,011-game BGO corpus, 150 of Taj Mahal's 317 takes carry no cost clause at
+/// all (BGO prints one only for a nonzero cost) and 149 of those 150 sit in a
+/// turn where that player had already replaced a leader -- while no other
+/// wonder is ever taken for free even once in ~6,700 takes. See
+/// `docs/REPLAY.md`'s seventh pass.
+#[inline]
+fn leader_replacement_take_discount(card: &Card, p: &PlayerState) -> i32 {
+    if !p.replaced_leader_this_turn {
+        return 0;
+    }
+    card.special
+        .iter()
+        .find_map(|s| match s {
+            Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(n) => Some(*n as i32),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 /// Blue special-technology category (max one per icon in play, §7.6).
@@ -316,6 +347,11 @@ pub fn can_take_gated(
     let mut cost = row_cost(idx);
     if card.kind == CardType::Wonder {
         cost += gate.surcharge;
+        // Taj Mahal's printed take discount (see `leader_replacement_take_
+        // discount`) can drive this below zero, unlike every other adjustment
+        // here -- and an affordability test that compares a NEGATIVE cost
+        // against `have` still answers correctly, so no clamp is needed.
+        cost -= leader_replacement_take_discount(card, p);
         if cost > gate.have {
             return false;
         }
@@ -644,6 +680,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -867,6 +904,69 @@ mod tests {
         state.card_row[0] = card("Napoleon Bonaparte"); // leader, slot cost 1
         let p = &state.players[0];
         assert_eq!(take_cost(&state, p, 0), 0, "1 - 1 floored at 0, not -1");
+    }
+
+    /// Taj Mahal's printed 2015 clause, and the reason it matters: it is the
+    /// only thing in the base game that can make a wonder take cost NOTHING.
+    /// The row's cheapest slot is 1 and the wonder surcharge only ever adds,
+    /// so 1 (slot) + 1 (one completed wonder) - 2 = 0.
+    #[test]
+    fn taking_taj_mahal_costs_two_civil_actions_less_when_a_leader_was_replaced_this_turn() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Pyramids"));
+        p.replaced_leader_this_turn = true;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Taj Mahal"); // slot cost 1, surcharge 1
+        assert_eq!(take_cost(&state, &state.players[0], 0), 0);
+    }
+
+    /// The discount is a flat subtraction off the WHOLE cost, not a waiver of
+    /// the surcharge alone: from an expensive slot it still leaves something
+    /// to pay.
+    #[test]
+    fn taking_taj_mahal_from_an_expensive_slot_after_a_replacement_still_costs_the_remainder() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.replaced_leader_this_turn = true;
+        let mut state = one_player_state(p);
+        state.card_row[10] = card("Taj Mahal"); // slot cost 3, no surcharge
+        assert_eq!(take_cost(&state, &state.players[0], 10), 1);
+    }
+
+    #[test]
+    fn taking_taj_mahal_costs_full_price_when_no_leader_was_replaced_this_turn() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Pyramids"));
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Taj Mahal");
+        assert_eq!(take_cost(&state, &state.players[0], 0), 2);
+    }
+
+    /// The negative control the corpus itself provides: no OTHER wonder is
+    /// ever taken for free, in ~6,700 real human wonder takes.
+    #[test]
+    fn no_wonder_other_than_taj_mahal_is_discounted_by_a_leader_replacement() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.replaced_leader_this_turn = true;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        assert_eq!(take_cost(&state, &state.players[0], 0), 1);
+    }
+
+    /// `can_take_gated` prices the row independently of `take_cost` (it is
+    /// move-generation's own affordability check), so the discount has to be
+    /// wired into BOTH or `legal_moves` will refuse to offer a take the
+    /// player can afford.
+    #[test]
+    fn move_generation_offers_taj_mahal_with_no_civil_actions_left_after_a_replacement() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Pyramids"));
+        p.replaced_leader_this_turn = true;
+        p.civil_actions = 0;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Taj Mahal");
+        let p = &state.players[0];
+        let gate = take_gate(&state, p, None);
+        assert!(can_take_gated(&state, p, 0, &gate, None));
     }
 
     // -------------------------------------------------------- special_icon

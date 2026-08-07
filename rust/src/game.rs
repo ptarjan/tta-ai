@@ -286,6 +286,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         ca_spent_taking: 0,
         hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
         churchill_used: false,
         bach_upgrade_used: false,
         ocean_liners_used: false,

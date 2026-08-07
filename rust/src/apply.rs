@@ -734,6 +734,11 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         if old.get().name == "Hammurabi" {
             state.players[idx as usize].hammurabi_replaced_this_turn = true;
         }
+        // Taj Mahal's own printed 2015 text reads the fact of a replacement
+        // regardless of WHO was replaced ("If you replaced your leader this
+        // turn, taking this wonder costs you 2 civil actions less"), so it
+        // gets its own, weaker flag rather than reusing Hammurabi's.
+        state.players[idx as usize].replaced_leader_this_turn = true;
         on_leave_play(&mut state.players[idx as usize], old);
         let is_homer = old.get().name == "Homer";
         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
@@ -1382,6 +1387,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -1936,6 +1942,34 @@ mod tests {
         assert_eq!(p.civil_actions, 0);
         assert_eq!(p.military_actions, 0, "the second action was paid with the military token");
         assert!(p.hammurabi_used, "and the once-per-turn conversion is now spent");
+    }
+
+    /// Taj Mahal's 2015 clause says "replaced", and the BGO corpus agrees to
+    /// the case: of the 8 Taj Mahal takes made in a turn whose only election
+    /// put a FIRST leader into an empty slot, every single one was charged
+    /// full price -- while 149 of the 150 free takes follow a replacement.
+    #[test]
+    fn playing_a_first_leader_into_an_empty_slot_is_not_a_replacement_but_swapping_one_is() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 2; // one for each leader played below
+        p.hand_civil.push(card("Hammurabi"));
+        p.hand_civil.push(card("Aristotle"));
+        let mut state = one_player_state(p);
+
+        h_play_leader(&mut state, 0, card("Hammurabi"));
+        assert!(
+            !state.players[0].replaced_leader_this_turn,
+            "an empty leader slot means there was nobody to replace"
+        );
+
+        h_play_leader(&mut state, 0, card("Aristotle"));
+        assert!(state.players[0].replaced_leader_this_turn);
+
+        crate::economy::end_of_turn(&mut state, 0);
+        assert!(
+            !state.players[0].replaced_leader_this_turn,
+            "the discount is scoped to the turn of the replacement, not the rest of the game"
+        );
     }
 
     // -------------------------------------------------------------- churchill

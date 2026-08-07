@@ -553,6 +553,15 @@ pub struct PlayerState {
     /// rules let them keep. Cleared with `hammurabi_used` in
     /// `economy::end_of_turn`.
     pub hammurabi_replaced_this_turn: bool,
+    /// SOME leader was in play this turn and has since been replaced by a new
+    /// one (`apply::h_play_leader`) -- the condition Taj Mahal's printed 2015
+    /// text reads: "If you replaced your leader this turn, taking this wonder
+    /// costs you 2 civil actions less." Strictly weaker than
+    /// `hammurabi_replaced_this_turn` (which names WHO was replaced, because
+    /// only Hammurabi's benefit survives him); both are per-turn and both are
+    /// cleared in `economy::end_of_turn`. Playing a FIRST leader onto an empty
+    /// slot is not a replacement and does not set this.
+    pub replaced_leader_this_turn: bool,
     pub churchill_used: bool,
     pub bach_upgrade_used: bool,
     pub ocean_liners_used: bool,

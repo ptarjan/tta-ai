@@ -1097,6 +1097,12 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         | ResourcesForMilitaryUnitsPerStrongerCivilization(_)
         | RevolutionUsesMilitaryActionsInstead
         | ScienceOnTechCardTake(_)
+        // Taj Mahal's "if you replaced your leader this turn, taking this
+        // wonder costs you 2 civil actions less": priced by `costs::
+        // take_cost`/`can_take_gated` off the card sitting in the ROW, not by
+        // anything a card in play produces -- `compute()` never sees it,
+        // because a Taj Mahal that has been taken no longer has a take cost.
+        | TakeCivilActionDiscountIfLeaderReplacedThisTurn(_)
         | TheaterResourceDiscountIfLibrary(_)
         | TheaterScienceDiscountIfLibrary(_)
         | TheaterTechScienceDiscount(_)
@@ -1397,6 +1403,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,

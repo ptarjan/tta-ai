@@ -167,6 +167,7 @@ pub enum Special {
     StrengthPerUnitType(i16),
     StrongestPlayer(EventBlock),
     StrongestPlayers([i16; 3]),
+    TakeCivilActionDiscountIfLeaderReplacedThisTurn(i16),
     TakeFromOpponent(TakeFromOpponentBlock),
     TheaterResourceDiscountIfLibrary(i16),
     TheaterScienceDiscountIfLibrary(i16),
@@ -1352,7 +1353,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[],
+        special: &[Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(2)],
         stages: &[2, 4, 2],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -5608,6 +5609,9 @@ mod baked_table_matches_source_data {
                     Special::StrengthPerTempleOrGovernmentHappy(as_int(Some(val), &what()))
                 }
                 "strengthPerUnitType" => Special::StrengthPerUnitType(as_int(Some(val), &what())),
+                "takeCivilActionDiscountIfLeaderReplacedThisTurn" => {
+                    Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(as_int(Some(val), &what()))
+                }
                 "theaterResourceDiscountIfLibrary" => {
                     Special::TheaterResourceDiscountIfLibrary(as_int(Some(val), &what()))
                 }

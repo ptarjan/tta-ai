@@ -624,6 +624,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.tactic_action_used = false;
     p.hammurabi_used = false;
     p.hammurabi_replaced_this_turn = false;
+    p.replaced_leader_this_turn = false;
     p.churchill_used = false;
     p.bach_upgrade_used = false;
     p.ocean_liners_used = false;
@@ -740,6 +741,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
