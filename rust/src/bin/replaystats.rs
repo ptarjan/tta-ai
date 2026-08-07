@@ -37,6 +37,7 @@ fn bucket_key(kind: &MismatchKind) -> String {
         MismatchKind::UnrecoverableHiddenInfo(s) => format!("UnrecoverableHiddenInfo: {}", normalize(s)),
         MismatchKind::StuckPending(s) => format!("StuckPending: {}", normalize(s)),
         MismatchKind::ParserGap(s) => format!("ParserGap: {}", normalize(s)),
+        MismatchKind::EventPlanInfeasible(s) => format!("EventPlanInfeasible: {}", normalize(s)),
         MismatchKind::IllegalMove { attempted, .. } => {
             format!("IllegalMove: {}", move_kind(attempted))
         }

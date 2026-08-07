@@ -610,7 +610,7 @@ fn events_rng(state: &GameState) -> crate::rng::LazyRandom {
 
 /// Points `state.current_events_age` at the next card to be revealed.
 /// Mirrors `engine/events.py::_sync_current_events_age`.
-fn sync_current_events_age(state: &mut GameState) {
+pub(crate) fn sync_current_events_age(state: &mut GameState) {
     if let Some(&top) = state.current_events.as_slice().last() {
         state.current_events_age = top.get().age;
     }

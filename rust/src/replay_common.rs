@@ -67,30 +67,42 @@
 //!   against anything and never claimed to be historically accurate; only
 //!   its EXISTENCE (there was some card there, costing some action) is real.
 //!
-//! # Event/Territory preparation: the one inference this file makes
+//! # Event/Territory preparation: solved from the journal, not inferred
 //!
-//! `Move::PrepareEvent` (the political action that queues a drawn Event or
-//! Territory card to fire later) has NO journal line of its own --
-//! `corpus.rs`'s module doc already establishes this for `corpuscensus.rs`'s
-//! purposes; it matters much more here, because replay cannot progress past
-//! a Politics-phase decision without resolving it somehow. Every
-//! `PrepareEvent` call causes exactly one `events::reveal_current_event`
-//! (`rust/src/events.rs`), so this file pre-scans each journal once,
-//! collecting the exact card named in every `"...Current event:; <Age> /
-//! <Name>; ..."` line (`event_reveals`, FIFO). Whenever a player's Politics
-//! decision cannot be explained by an explicit textual action (pass,
-//! revolution, war, aggression, pact offer), this file infers a hidden
-//! `PrepareEvent`, grants that player a placeholder Event-kind card (its
-//! identity is never checked against anything -- see SIMULATED above), and
-//! forces `state.current_events` to reveal exactly the next journal-observed
-//! event/territory so the resolution the journal shows next lines up.
+//! `Move::PrepareEvent` (the political action that puts an Event or
+//! Territory card on the future-events pile and reveals the top of the
+//! current-events pile) used to be treated here as unrecoverable hidden
+//! information: this file GUESSED forward, inferring a preparation at every
+//! Politics decision no journal line explained, and popping the next
+//! observed reveal off a FIFO to satisfy it. That premise was wrong, and one
+//! wrong guess (a player who simply passed) desynchronised every event after
+//! it.
 //!
-//! This reproduces the right cards firing in the right ORDER, but NOT on the
-//! historically correct turn and NOT by the historically correct preparer:
-//! both are permanently unrecoverable from BGO's journal format (it never
-//! logs preparation, only firing). `docs/REPLAY.md` states this plainly as
-//! a boundary on what a later agreement analysis may claim about political
-//! decisions specifically.
+//! BGO logs every preparation, as one line:
+//!
+//! ```text
+//! Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; ...
+//! ```
+//!
+//! which names the preparer (the line's actor), the AGE of the card they
+//! prepared (`apply::h_prepare_event` scores exactly `card.level()`), and
+//! what the reveal turned up. [`crate::event_plan`] solves the whole game's
+//! record from those lines before the first line is replayed -- including
+//! which specific card each preparation put on the pile, pinned by the
+//! constraint that each pile IS the set of cards prepared into the previous
+//! one. See that module's doc for the constraint, its corpus-wide
+//! verification, and the one thing that stays underdetermined.
+//!
+//! What this file then does per decision is not an inference at all:
+//! `resolve_political_decision` consumes the next solved preparation when it
+//! belongs to this decider and its line has been reached, and otherwise
+//! applies `Move::PolPass`. The setup pile and every recycle are grounded to
+//! the journal's own reveal order (`set_current_events`) -- the pile
+//! CONTENTS come from the engine, only the never-logged shuffle order is
+//! replaced -- so the "is the right card on top?" check before each
+//! preparation is a real test of the model rather than a re-forcing of the
+//! answer, and it stops the game (`MismatchKind::EventPlanInfeasible`) when
+//! it fails.
 //!
 //! # What this file gives up on, and why
 //!
@@ -128,9 +140,10 @@ use crate::corpus::{
 };
 pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
+use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
 use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
-use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
+use crate::{apply, costs, economy, game, legal, CardId, Move};
 
 // ---------------------------------------------------------------------
 // Journal line
@@ -187,6 +200,12 @@ pub enum MismatchKind {
     /// This binary could not parse a field the journal text was expected to
     /// carry (a target colour, an action-point cost, a bid amount, ...).
     ParserGap(String),
+    /// The journal's own event record could not be reconciled with the
+    /// events pile model -- see [`crate::event_plan`]. Its own doc explains
+    /// why this is the interesting failure: the constraint holds in every
+    /// one of the corpus's 3,291 pile windows, so a violation means one of
+    /// the models around it is wrong, not that the solve needs loosening.
+    EventPlanInfeasible(String),
 }
 
 pub struct Mismatch {
@@ -245,10 +264,13 @@ struct Replayer<'a> {
     /// is REAL (observed) rather than SIMULATED filler from `new_game`'s
     /// fictional deal. See the module doc's "RECONSTRUCTED vs SIMULATED".
     row_grounded: [bool; 13],
-    /// FIFO of the exact card revealed by each `"...Current event:; ..."`
-    /// line, pre-scanned once per game. See the module doc's "Event/
-    /// Territory preparation" section.
-    event_reveals: VecDeque<CardId>,
+    /// Every event preparation in the game -- who made it, which age of card
+    /// they put on the future-events pile, and what their reveal turned up --
+    /// solved once per game from the journal by [`crate::event_plan::solve`].
+    /// See the module doc's "Event/Territory preparation" section.
+    plan: EventPlan,
+    /// Index into `plan.preparations` of the next one still to be applied.
+    next_prep: usize,
     /// Whether any colonization in this game was resolved by the
     /// approximate auto-drain rather than a verified sacrifice match.
     colonize_approximated: bool,
@@ -263,19 +285,6 @@ struct Replayer<'a> {
     /// value: every real journal line number is >= 2 (`parse_lines` skips
     /// the header).
     current_lineno: usize,
-    /// Whether seat `i` has ever been credited a `"draws N military
-    /// card(s)"` clause yet (parsed off their own `EndTurn` lines as they
-    /// are applied). BGO deals no military cards at all until a player's
-    /// FIRST end-of-turn draw; before that, their military hand is
-    /// genuinely empty, so a Politics-phase decision with no explicit
-    /// textual action is a forced, trivially-logged-or-not pass -- NOT a
-    /// hidden `PrepareEvent` (which needs an Event/Territory card in hand
-    /// that cannot possibly exist yet). Without this check the inference in
-    /// `resolve_hidden_politics_decision` mistakes round 2's forced pass for
-    /// a real preparation, consuming the wrong entry off `event_reveals`
-    /// and misattributing every event downstream -- found by testing
-    /// against a real 2p game (`docs/REPLAY.md`).
-    has_drawn_military: [bool; 4],
     /// Per-seat FIFO of `(is_resources, amount)` pulled off every
     /// standalone `"<Color> produces N food"` / `"<Color> produces N
     /// resources"` bookkeeping line, pre-scanned once per game -- see
@@ -301,25 +310,28 @@ struct Replayer<'a> {
     decisions: Vec<Decision>,
 }
 
-/// A placeholder Event-kind card used to satisfy `Move::PrepareEvent`'s
-/// hand requirement when this binary infers a hidden preparation. Its
-/// identity is never checked against anything (see module doc): the engine
-/// only needs SOME Event/Territory-kind card in the decider's military hand
-/// to make `PrepareEvent` legal at all, and this file immediately overrides
-/// `current_events` with the journal-observed card that must actually be
-/// revealed. Picked once, lazily, from `tta::CARDS`.
-fn filler_event_card() -> CardId {
-    (0..crate::CARDS.len() as u16)
-        .map(CardId)
-        .find(|id| id.kind() == CardType::Event)
-        .expect("the base game table has at least one Event card")
+/// Overwrite the current-events pile with `reveal_order` -- the journal's
+/// own order for the cards that pile is going to turn up. The pile is
+/// popped from the END (`events::reveal_current_event`), so the first card
+/// to be revealed has to sit last. This is GROUNDING in the module doc's
+/// sense, and the only kind of state this file writes by hand: the pile's
+/// contents come from the engine (the setup deal, or `recycle_future_events`
+/// moving the future pile over), and only the shuffle ORDER -- fictional in
+/// a reconstruction, since the real one was never logged -- is replaced by
+/// the observed one.
+fn set_current_events(state: &mut GameState, reveal_order: &[CardId]) {
+    state.current_events = crate::state::CardList::new();
+    for &card in reveal_order.iter().rev() {
+        state.current_events.push(card);
+    }
+    crate::events::sync_current_events_age(state);
 }
 
 impl<'a> Replayer<'a> {
     fn new(
         card_index: &'a HashMap<&'static str, CardId>,
         num_players: u8,
-        event_reveals: VecDeque<CardId>,
+        plan: EventPlan,
         gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
         future_military_needs: HashMap<u8, Vec<FutureNeed>>,
     ) -> Self {
@@ -327,16 +339,23 @@ impl<'a> Replayer<'a> {
         // (deck order, starting row/hand contents) is SIMULATED filler this
         // binary overwrites the instant a slot/hand entry is observed. It is
         // fixed (not random) purely so a run is reproducible byte-for-byte.
-        let state = game::new_game(num_players, 0xC0FFEE);
+        let mut state = game::new_game(num_players, 0xC0FFEE);
+        // The one exception, grounded up front rather than lazily: the
+        // setup current-events pile. `new_game` deals `num_players + 2`
+        // RANDOM Age A cards there; the journal names every one it ever
+        // turns up, in order, so the real pile is known before the first
+        // line is read. `current_events` is popped from the END, so reveal
+        // order is stored reversed.
+        set_current_events(&mut state, &plan.setup_pile);
         Replayer {
             card_index,
             state,
             row_grounded: [false; 13],
-            event_reveals,
+            plan,
+            next_prep: 0,
             colonize_approximated: false,
             actions_consumed: 0,
             current_lineno: 0,
-            has_drawn_military: [false; 4],
             gain_produces,
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
@@ -506,7 +525,7 @@ impl<'a> Replayer<'a> {
                 if !own_politics_decision || next_line_explains_own_politics {
                     return Ok(());
                 }
-                self.resolve_hidden_politics_decision(decider)?;
+                self.resolve_political_decision(decider)?;
                 continue;
             }
             match self.state.pending.top().cloned() {
@@ -546,7 +565,7 @@ impl<'a> Replayer<'a> {
                 }
                 None => {
                     if self.state.phase == Phase::Politics && decider != expected_actor {
-                        self.resolve_hidden_politics_decision(decider)?;
+                        self.resolve_political_decision(decider)?;
                     } else {
                         return Err(MismatchKind::StuckPending(format!(
                             "decider {decider} != expected actor {expected_actor}, phase {:?}, no pending",
@@ -559,46 +578,96 @@ impl<'a> Replayer<'a> {
         Err(MismatchKind::StuckPending("resolve_intervening did not converge in 200 steps".into()))
     }
 
-    /// Resolves a Politics-phase decision for `decider` that has no
-    /// explicit textual action. Two real causes look identical in the
-    /// journal (nothing is logged either way): a genuinely forced pass
-    /// (no military-hand card exists to do anything else with -- true
-    /// before `decider`'s first `"draws N military card(s)"` credit, see
-    /// `has_drawn_military`'s doc) and a hidden `PrepareEvent`. This
-    /// disambiguates using that one text-derivable fact rather than
-    /// guessing; see the module doc's "Event/Territory preparation"
-    /// section for the inference itself once it applies.
-    fn resolve_hidden_politics_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
+    /// Resolve a Politics-phase decision for `decider` that no journal line
+    /// has explicitly claimed. There are exactly two possibilities and the
+    /// journal distinguishes them outright, so nothing here is guessed:
+    /// either this player's next `"plays event"` line has already gone by
+    /// (they PREPARED an event -- see [`crate::event_plan`], which solved
+    /// who, when, and which card before the first line was read), or they
+    /// passed, which BGO logs sometimes and omits sometimes.
+    ///
+    /// The preparation queue is consumed strictly in journal order. The
+    /// front entry is claimed only when it belongs to `decider` AND its own
+    /// line has already been reached (`lineno <= current_lineno`) -- the
+    /// second half is what keeps a player's LATER preparation from being
+    /// pulled forward onto an EARLIER turn on which they really did pass,
+    /// which is precisely the failure the old forward guess made.
+    fn resolve_political_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
+        let claimed = self
+            .plan
+            .preparations
+            .get(self.next_prep)
+            .filter(|p| p.actor == decider && p.lineno <= self.current_lineno)
+            .copied();
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             eprintln!(
-                "DEBUG resolve_hidden_politics_decision decider={decider} has_drawn_military={} round={}",
-                self.has_drawn_military[decider as usize], self.state.round
+                "DEBUG resolve_political_decision decider={decider} round={} lineno={} claims={claimed:?}",
+                self.state.round, self.current_lineno,
             );
         }
-        if !self.has_drawn_military[decider as usize] {
+        let Some(prep) = claimed else {
             return self.try_apply(Move::PolPass, false);
+        };
+        self.next_prep += 1;
+
+        // The card the pile is about to turn up must already be on top of
+        // it -- the setup pile and every recycle are grounded from the
+        // journal, so this is a real check on the pile model, not a
+        // re-forcing of the answer.
+        let on_top = self.state.current_events.as_slice().last().copied();
+        if on_top != Some(prep.revealed) {
+            return Err(MismatchKind::EventPlanInfeasible(format!(
+                "line {}: the journal reveals {:?} here, but the current-events pile has {:?} on top",
+                prep.lineno,
+                prep.revealed.get().name,
+                on_top.map(|c| c.get().name),
+            )));
         }
-        let filler = filler_event_card();
-        self.state.players[decider as usize].hand_military.push(filler);
-        if let Some(want) = self.event_reveals.pop_front() {
-            // `current_events.pop()` takes from the END (see `CardList`), so
-            // pushing `want` last guarantees it is exactly what
-            // `events::reveal_current_event` reveals for this PrepareEvent.
-            self.state.current_events.push(want);
-        }
-        let mv = Move::PrepareEvent { card: filler };
+
+        self.state.players[decider as usize].hand_military.push(prep.card);
+        let mv = Move::PrepareEvent { card: prep.card };
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv) {
             return Err(MismatchKind::IllegalMove {
-                attempted: format!("{mv:?} (inferred hidden preparation for player {decider})"),
+                attempted: format!("{mv:?} (journal-observed preparation by player {decider}, line {})", prep.lineno),
                 legal_moves: format!("{:?}", legal.as_slice()),
             });
         }
         apply::apply(&mut self.state, mv);
+
+        // This reveal emptied the pile, so `reveal_current_event` has
+        // already recycled the future pile into it -- with the right CARDS
+        // (they are the ones `event_plan` solved) but a fictional shuffle
+        // order. Replace that order with the journal's own.
+        if prep.ends_batch {
+            let next = self.plan.next_batch_reveals(self.next_prep - 1);
+            // Multiset difference, not a set one: a deck can hold two
+            // copies of the same card.
+            let mut leftover: Vec<CardId> = self.state.current_events.as_slice().to_vec();
+            for card in &next {
+                let Some(at) = leftover.iter().position(|c| c == card) else {
+                    return Err(MismatchKind::EventPlanInfeasible(format!(
+                        "line {}: the journal's next pile turns up {:?}, which the engine's recycled pile {:?} \
+                         does not contain",
+                        prep.lineno,
+                        card.get().name,
+                        self.state.current_events.as_slice().iter().map(|c| c.get().name).collect::<Vec<_>>(),
+                    )));
+                };
+                leftover.swap_remove(at);
+            }
+            // Cards the game ended before revealing are never popped, so
+            // they go under the observed ones and their order is arbitrary.
+            let mut order = next;
+            order.extend_from_slice(&leftover);
+            set_current_events(&mut self.state, &order);
+        }
+
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             eprintln!(
-                "DEBUG PrepareEvent applied for decider={decider} want_revealed={:?} -> pending_top={:?} current_events={:?} future_events={:?}",
-                self.state.past_events.as_slice().last(),
+                "DEBUG PrepareEvent applied for decider={decider} prepared={:?} revealed={:?} -> pending_top={:?} current_events={:?} future_events={:?}",
+                prep.card.get().name,
+                prep.revealed.get().name,
                 self.state.pending.top(),
                 self.state.current_events.as_slice(),
                 self.state.future_events.as_slice(),
@@ -1074,34 +1143,20 @@ fn defends_count(text: &str) -> Option<i32> {
     rest[..digits_end].parse().ok()
 }
 
-/// The event/territory name out of `"...Current event:; <Age> / <Name>; ..."`.
-fn current_event_name(text: &str) -> Option<&str> {
-    let p = text.find("Current event:; ")?;
-    let rest = &text[p + "Current event:; ".len()..];
-    let slash = rest.find(" / ")?;
-    let after_slash = &rest[slash + 3..];
-    let end = after_slash.find(';').unwrap_or(after_slash.len());
-    Some(after_slash[..end].trim())
-}
-
 // ---------------------------------------------------------------------
-// Pre-scan: the event/territory reveal FIFO
+// Pre-scan: the event preparation record
 // ---------------------------------------------------------------------
 
-fn prescan_event_reveals(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> VecDeque<CardId> {
-    let mut out = VecDeque::new();
-    for line in lines {
-        if let Some((_, rest)) = actor_and_rest(line.text) {
-            if rest.starts_with("plays event") {
-                if let Some(name) = current_event_name(line.text) {
-                    if let Some(&id) = card_index.get(name) {
-                        out.push_back(id);
-                    }
-                }
-            }
-        }
-    }
-    out
+/// Every `"<Color> plays event ..."` line as `(lineno, actor seat, text)` --
+/// the raw input [`crate::event_plan::solve`] turns into a solved plan.
+fn prescan_plays_event_lines<'t>(lines: &[Line<'t>]) -> Vec<(usize, u8, &'t str)> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (color, rest) = actor_and_rest(line.text)?;
+            rest.starts_with("plays event").then(|| (line.lineno, color.seat(), line.text))
+        })
+        .collect()
 }
 
 /// `"<Color> produces N food"` / `"<Color> produces N resources"` -- a
@@ -1344,17 +1399,38 @@ pub fn replay_game(
     record_decisions: bool,
 ) -> GameResult {
     let lines = parse_lines(journal_text);
-    let event_reveals = prescan_event_reveals(&lines, card_index);
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
     let future_military_needs = prescan_future_military_needs(&lines, card_index);
-    let mut r = Replayer::new(card_index, meta.players, event_reveals, gain_produces, future_military_needs);
-    r.record_decisions = record_decisions;
 
     let mut mismatch: Option<Mismatch> = None;
     let mut completed = false;
 
-    'lines: for (i, line) in lines.iter().enumerate() {
+    // Solved before the first line is read, because it is a whole-game
+    // constraint problem, not a per-decision one -- see `event_plan`'s
+    // module doc. An infeasible journal stops the game at the line that
+    // contradicts the pile model rather than being softened into a guess.
+    let plan = match crate::event_plan::solve(&prescan_plays_event_lines(&lines), card_index, meta.players) {
+        Ok(plan) => plan,
+        Err(err) => {
+            let lineno = match err {
+                crate::event_plan::EventPlanError::NoCultureClause { lineno }
+                | crate::event_plan::EventPlanError::UnknownRevealedCard { lineno, .. }
+                | crate::event_plan::EventPlanError::BatchAgeMismatch { lineno, .. } => lineno,
+            };
+            let at = lines.iter().find(|l| l.lineno == lineno);
+            mismatch = at.map(|l| mk_mismatch(l, MismatchKind::EventPlanInfeasible(err.to_string())));
+            EventPlan::default()
+        }
+    };
+    // Nothing is replayed at all when the plan is infeasible: the event
+    // record is a whole-game fact, so a contradiction in it invalidates
+    // every turn, not just the one that exposed it.
+    let journal: &[Line] = if mismatch.is_some() { &[] } else { &lines };
+    let mut r = Replayer::new(card_index, meta.players, plan, gain_produces, future_military_needs);
+    r.record_decisions = record_decisions;
+
+    'lines: for (i, line) in journal.iter().enumerate() {
         if line.text.starts_with("End of game") {
             completed = true;
             break;
@@ -1378,9 +1454,6 @@ pub fn replay_game(
                 {
                     mismatch = Some(mk_mismatch(line, kind));
                     break 'lines;
-                }
-                if line.text.contains("draws ") && line.text.contains(" military card") {
-                    r.has_drawn_military[actor as usize] = true;
                 }
                 r.actions_consumed += 1;
                 continue;
@@ -1498,7 +1571,7 @@ pub fn replay_game(
             }
         }
 
-        let next_text = lines.get(i + 1).map(|l| l.text);
+        let next_text = journal.get(i + 1).map(|l| l.text);
         let result = apply_one(&mut r, actor, class, card, rest, line.text, next_text);
         match result {
             Ok(()) => {
@@ -2030,6 +2103,7 @@ fn target_actor_color(seat: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CardType;
 
     #[test]
     fn total_action_cost_sums_a_civil_and_a_military_clause_on_one_line() {
@@ -2176,17 +2250,6 @@ mod tests {
         assert_eq!(defends_count("Purple builds Bronze Purple spends 2 resources"), None);
     }
 
-    #[test]
-    fn current_event_name_extracts_the_bare_name_between_the_slash_and_the_semicolon() {
-        let text = "Purple plays event Purple scores 1 culture; Current event:; \
-                     A / Development of Agriculture; Each civilization gains 2 food.";
-        assert_eq!(current_event_name(text), Some("Development of Agriculture"));
-    }
-
-    #[test]
-    fn current_event_name_is_none_when_there_is_no_current_event_clause() {
-        assert_eq!(current_event_name("Orange builds Bronze Orange spends 2 resources"), None);
-    }
 
     /// REGRESSION (found by replaying the real BGO corpus at scale, game
     /// `7522949`): `civil_life_move` used to return `Some(Move::Pop)`
@@ -2202,7 +2265,7 @@ mod tests {
     #[test]
     fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
         r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
         r.state.players[0].food = 0; // ...not enough food to spend it
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
@@ -2211,7 +2274,7 @@ mod tests {
     #[test]
     fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
@@ -2254,7 +2317,7 @@ mod tests {
     fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -2284,6 +2347,65 @@ mod tests {
         assert!(matches!(r.state.pending.top(), Some(Pending::Colonize(_))));
     }
 
+    /// REGRESSION (the whole point of `event_plan`; the shape that broke
+    /// real 2p game `7522647`, where "Development of Science" fired at
+    /// round 4 instead of round 10 because a preparation was invented for a
+    /// player who had simply passed). A Politics decision by a player whose
+    /// journal shows NO `"plays event"` line of their own here must not
+    /// touch the preparation queue at all.
+    #[test]
+    fn a_politics_decision_by_a_player_the_journal_never_shows_preparing_consumes_no_event() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 1, "Purple plays event Purple scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        r.current_lineno = 10; // well past the one preparation's own line
+        // `new_game` opens in the Action phase (round 1 has no politics);
+        // this is the ordinary later-round shape.
+        r.state.phase = Phase::Politics;
+        assert_eq!(r.state.decider(), 0);
+
+        r.resolve_political_decision(0).expect("player 0 simply passes");
+
+        // The queue is untouched and no event resolved: the preparation on
+        // line 5 belongs to player 1, and stays theirs.
+        assert_eq!(r.next_prep, 0);
+        assert!(r.state.past_events.as_slice().is_empty());
+        assert_eq!(r.state.players[0].culture, 0);
+        assert_eq!(r.state.phase, Phase::Actions);
+    }
+
+    /// The other half of the same property: the player the journal DOES
+    /// name prepares exactly the solved card, reveals exactly the card the
+    /// journal's own `"Current event:"` clause names, and scores exactly
+    /// the culture BGO logged (which is where the prepared card's age was
+    /// read from in the first place).
+    #[test]
+    fn the_player_the_journal_names_prepares_the_solved_card_and_reveals_the_logged_one() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let prepared = plan.preparations[0].card;
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(r.next_prep, 1);
+        assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
+        assert_eq!(r.state.future_events.as_slice(), &[prepared]);
+        assert_eq!(r.state.players[0].culture, 2);
+    }
+
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
     /// pins the other failure mode `is_pure_confirmation_line` avoids for
     /// `Colonize`. Unlike `WinAuction`, nothing is left pending here at all
@@ -2303,7 +2425,7 @@ mod tests {
     fn resolve_intervening_reports_a_stuck_pending_for_a_colonize_confirmation_line_once_control_has_already_returned_to_a_different_player(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
