@@ -187,6 +187,24 @@ struct Line<'a> {
     text: &'a str,
 }
 
+/// Column 3 of the journal (`Line::age`) spells the age exactly like
+/// [`crate::cards::Age`]'s own variant names -- checked against every
+/// distinct value in the full 1,011-game corpus (`cut -f3 *.tsv | sort
+/// -u`: `A`, `I`, `II`, `III`, `IV`, plus the header row, which never
+/// reaches here). `None` for anything else rather than a guess -- an
+/// unrecognised value should not silently skip the age catch-up below.
+fn parse_age(s: &str) -> Option<crate::cards::Age> {
+    use crate::cards::Age;
+    match s {
+        "A" => Some(Age::A),
+        "I" => Some(Age::I),
+        "II" => Some(Age::II),
+        "III" => Some(Age::III),
+        "IV" => Some(Age::IV),
+        _ => None,
+    }
+}
+
 fn parse_lines(journal_text: &str) -> Vec<Line<'_>> {
     let mut out = Vec::new();
     for (i, line) in journal_text.lines().enumerate() {
@@ -2538,6 +2556,23 @@ pub fn replay_game(
     r.record_decisions = record_decisions;
 
     'lines: for (i, line) in journal.iter().enumerate() {
+        // REPLAYER BUG: this reconstruction's own `civil_deck` can lag the
+        // true deck's depletion (`game::force_civil_age_at_least`'s own doc
+        // -- `Replayer::ground_row_slot` forces row identities directly
+        // rather than draining `civil_deck` through the ordinary `deal`
+        // path in lockstep with every real draw), which delays
+        // `game::advance_age`'s normal civil_deck-empty trigger and, with
+        // it, `antiquate`'s hand cull -- BGO's own journal states the true
+        // civil age in-band on every line (column 3), so read that
+        // authoritative fact and catch this reconstruction's age up to it
+        // BEFORE processing the line, the same "read what BGO already
+        // states rather than approximate it" precedent `set_last_round`
+        // (below) already established for §12.3's last-round fact. A
+        // no-op on every line where this reconstruction's own age already
+        // matches or leads (the overwhelmingly common case).
+        if let Some(age) = parse_age(line.age) {
+            game::force_civil_age_at_least(&mut r.state, age);
+        }
         // REPLAYER BUG: BGO's own journal states §12.3's "Age IV began ->
         // this round or the next is last" fact in-band ("Last turn Game ends
         // at the end of the starting round", one line per surviving player,
@@ -3143,6 +3178,14 @@ fn apply_one(
     raw_text: &str,
     next_text: Option<&str>,
 ) -> Result<(), MismatchKind> {
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        let p = &r.state.players[actor as usize];
+        eprintln!(
+            "DEBUG APPLY_ONE ENTRY: actor={actor} class={class:?} card={:?} raw_text={raw_text:?} hand_civil_before={:?}",
+            card.map(|c| c.get().name),
+            p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
+        );
+    }
     match class {
         ActionClass::TakeCard => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("take with no resolved card".into()))?;
@@ -3202,9 +3245,11 @@ fn apply_one(
                 let gate = costs::take_gate(&r.state, p, None);
                 if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate) {
                     eprintln!(
-                        "DEBUG TAKE REJECT: card={} slot={slot} reason={reason:?} our_take_cost={} \
+                        "DEBUG TAKE REJECT: lineno={} age_civil={:?} card={} slot={slot} reason={reason:?} our_take_cost={} \
                          journal_cost={cost} gate_have={} civil_actions={} military_actions={} \
-                         leader={} hand_civil_size={} civil_hand_limit={} hand_civil={:?}",
+                         leader={} hand_civil_size={} civil_hand_limit={} hand_civil={:?} raw_text={raw_text:?}",
+                        r.current_lineno,
+                        r.state.age_civil,
                         card.get().name,
                         costs::take_cost(&r.state, p, slot as usize),
                         gate.have,
@@ -3903,6 +3948,24 @@ mod tests {
     use super::*;
     use crate::state::CardList;
     use crate::CardType;
+
+    #[test]
+    fn parse_age_reads_every_roman_numeral_the_journal_actually_prints() {
+        assert_eq!(parse_age("A"), Some(crate::cards::Age::A));
+        assert_eq!(parse_age("I"), Some(crate::cards::Age::I));
+        assert_eq!(parse_age("II"), Some(crate::cards::Age::II));
+        assert_eq!(parse_age("III"), Some(crate::cards::Age::III));
+        assert_eq!(parse_age("IV"), Some(crate::cards::Age::IV));
+    }
+
+    #[test]
+    fn parse_age_is_none_for_the_header_rows_own_literal_column_name() {
+        // `parse_lines` already drops the header line before any `Line` is
+        // built, but this stays a defined `None` rather than a guess in
+        // case a future caller ever feeds it raw, unfiltered text.
+        assert_eq!(parse_age("age"), None);
+        assert_eq!(parse_age(""), None);
+    }
 
     #[test]
     fn total_action_cost_sums_a_civil_and_a_military_clause_on_one_line() {

@@ -682,6 +682,54 @@ pub(crate) fn set_last_round(state: &mut GameState) {
     state.last_round = state.round >= end;
 }
 
+/// Bring `state.age_civil` up to at least `target` (§12.2), running every
+/// intervening [`advance_age`] exactly as a real deck-driven transition
+/// would -- antiquation, the two-unborn-population deduction, and the deck
+/// rebuild all included.
+///
+/// `pub(crate)`, its only outside caller is `replay_common.rs`'s BGO
+/// journal replayer -- the SAME reason [`set_last_round`] exists (see its
+/// own doc, directly above): `Replayer::ground_row_slot` forces row
+/// identities to match each observed "takes ... in hand" line directly
+/// rather than draining `civil_deck` through the ordinary `deal` path, so
+/// this binary's own `civil_deck` can go an entire replayed turn -- or
+/// several -- without emptying even once the true deck already had, one
+/// undercounted refill at a time (a `TakeRow` free take, a `PutBack`
+/// client-side undo, ... every place a real draw can happen without this
+/// reconstruction popping `civil_deck` in lockstep). The result is
+/// `advance_age`'s normal trigger firing LATE relative to the real game --
+/// which means `antiquate` firing late too, so a hand can go on holding an
+/// Age I card the real human's own hand lost several rounds (and one or
+/// two age transitions) earlier, inflating this reconstruction's hand size
+/// against a `civil_hand_limit` the real game already had it correctly
+/// under. Traced against real games from the `IllegalMove: Take`/
+/// `HandFull` bucket (`docs/REPLAY.md`): every rejected `Take` in a
+/// 108-game sample held at least one card whose own age was more than one
+/// age behind the journal's OWN age column at that exact line -- a card
+/// `antiquate` should already have discarded.
+///
+/// BGO's journal states the true civil age in-band on every single line
+/// (column 3, `Line::age`) -- reading that authoritative fact and running
+/// the IDENTICAL formula the engine itself would have (exactly
+/// `set_last_round`'s own precedent) is correct; approximating the true
+/// deck's depletion timing from this reconstruction's own undercounted
+/// draws is not. A bounded loop (not a single call): the journal can jump
+/// more than one age between two consecutive lines this file actually
+/// reads (an entire age with zero of its own cards ever named in a
+/// "takes"/"discovers"/... line this parser stops on), and every
+/// intervening age's own antiquation must still run, not just the final
+/// one's.
+pub(crate) fn force_civil_age_at_least(state: &mut GameState, target: Age) {
+    let mut rng = rng_for(state);
+    while state.age_civil < target {
+        let before = state.age_civil;
+        advance_age(state, &mut rng);
+        if state.age_civil == before {
+            break; // already at Age IV, `advance_age` is a no-op -- stop rather than loop forever.
+        }
+    }
+}
+
 // =============================================================== turn loop
 
 /// Start-of-Turn sequence + politics phase entry (§5.0).
@@ -1255,6 +1303,60 @@ mod tests {
         assert!(s.civil_removed[Age::A as usize].contains(age_a_card), "and recorded");
         assert_eq!(s.players[0].yellow_bank, 16, "§12.2.4");
         assert_eq!(s.players[1].yellow_bank, 16);
+    }
+
+    /// The bug `force_civil_age_at_least` exists to close (`docs/REPLAY.md`'s
+    /// `HandFull` handoff): this reconstruction's own `civil_deck` can lag
+    /// the true deck's depletion (`Replayer::ground_row_slot` forces row
+    /// identities directly rather than draining `civil_deck` through the
+    /// ordinary `deal` path in lockstep with every real draw), so
+    /// `advance_age`'s normal civil_deck-empty trigger -- and with it
+    /// `antiquate`'s hand cull -- can fire late relative to what the
+    /// journal's own age column already proves happened. Catching the age
+    /// up from the journal directly must run the SAME antiquation a real
+    /// deck-driven transition would, not skip it: an Age A card sitting in
+    /// hand while the journal has already reached Age III must be culled,
+    /// exactly as if two ordinary `advance_age` calls had fired in
+    /// sequence, not just the age counter moved.
+    #[test]
+    fn force_civil_age_at_least_antiquates_every_intervening_age_not_just_the_final_one() {
+        let mut s = new_game(2, 11);
+        s.age_civil = Age::A;
+        let age_a_card = named("Bronze");
+        let age_ii_card = named("Coal");
+        s.players[0].hand_civil.push(age_a_card);
+        s.players[0].hand_civil.push(age_ii_card);
+
+        force_civil_age_at_least(&mut s, Age::III);
+
+        assert_eq!(s.age_civil, Age::III, "catches up through every intervening age, not just one step");
+        assert_eq!(
+            s.players[0].hand_civil.as_slice(),
+            &[age_ii_card],
+            "the Age A card is culled (it is older than EVERY age that ended on the way to III); \
+             the Age II card survives (never older than the age that just ended)"
+        );
+        assert!(s.civil_removed[Age::A as usize].contains(age_a_card), "the cull is recorded, same as an ordinary advance_age");
+    }
+
+    /// A no-op when this reconstruction's own age already matches or leads
+    /// the journal's -- the overwhelmingly common case (every line but the
+    /// first one of a new age). Must not re-run antiquation (which would
+    /// wrongly cull a card taken AFTER the transition already happened) or
+    /// panic on an already-current age.
+    #[test]
+    fn force_civil_age_at_least_is_a_no_op_when_already_caught_up() {
+        let mut s = new_game(2, 11);
+        s.age_civil = Age::II;
+        let card = named("Coal");
+        s.players[0].hand_civil.push(card);
+
+        force_civil_age_at_least(&mut s, Age::II);
+        assert_eq!(s.age_civil, Age::II);
+        assert_eq!(s.players[0].hand_civil.as_slice(), &[card], "nothing culled by a no-op catch-up");
+
+        force_civil_age_at_least(&mut s, Age::I); // even a LOWER target: never runs backwards
+        assert_eq!(s.age_civil, Age::II, "age never moves backwards");
     }
 
     /// §12.3: reaching Age IV as the start player makes THIS round the last;
