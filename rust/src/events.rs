@@ -1195,9 +1195,27 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
         let per = block.civil_actions_per_discontent_worker as i32;
         let loss = -per * economy::discontent(state, &state.players[idx as usize]);
         if loss > 0 {
+            // ENGINE BUG (docs/REPLAY.md Take/Bid handoff, 2026-08): this used
+            // to ALSO bump `p.ca_penalty_next_turn` -- double-charging the
+            // loss, once here and again at `idx`'s own NEXT `economy::
+            // end_of_turn` reset a turn later. Direct subtraction alone is
+            // the whole effect: by the time this block runs (`resolve_event`/
+            // `apply_player_block`, always mid SOME player's Political
+            // Phase), every OTHER player's `p.civil_actions` already holds
+            // their own pre-loaded, not-yet-spent allotment for their own
+            // next turn (their last `end_of_turn` reset ran when their
+            // previous Actions phase ended, strictly before this event could
+            // fire) -- so subtracting from it right now already IS "lose N
+            // CA on your next turn" for them, and for the revealer it is
+            // "immediately" per the card's own text. `p.ca_penalty_next_turn`
+            // is Rebellion's ONLY writer (grepped `data/*.json`), so this
+            // does not touch any other card. Confirmed against game
+            // 7522661's raw journal: Rebellion's own text there literally
+            // reads "Purple loses 4 civil actions on his next turn", and
+            // Purple's reconstructed civil_actions was 1 (of a 5 total) for
+            // exactly the one turn the human's journal shows, not two.
             let p = &mut state.players[idx as usize];
             p.civil_actions = (p.civil_actions as i32 - loss).max(0) as i8;
-            p.ca_penalty_next_turn = p.ca_penalty_next_turn.saturating_add(loss.min(i8::MAX as i32) as i8);
         }
     }
     // `oneTimeDiscount` -- gated on "any of the three sub-amounts nonzero"
@@ -1676,6 +1694,34 @@ mod tests {
         assert_eq!(state.players[1].science, 5, "the current player must win a tied bonus");
         assert_eq!(state.players[0].science, 0);
         assert_eq!(state.players[2].science, 0);
+    }
+
+    /// ENGINE BUG regression (`apply_extras`' own doc comment on this arm,
+    /// found chasing the `IllegalMove: Take` bucket, confirmed against game
+    /// 7522661's raw journal): Rebellion ("Each civilization immediately
+    /// spends 2 civil actions ... per discontent worker") used to ALSO write
+    /// `p.ca_penalty_next_turn`, double-charging an off-turn target -- once
+    /// right here (correctly landing on their own next, not-yet-spent
+    /// allotment) and again a whole turn later when THEIR next `economy::
+    /// end_of_turn` reset ran and found the leftover penalty still sitting
+    /// there. One `apply_player_block` call must cost exactly one turn's CA,
+    /// matching the card's own printed "one turn" duration.
+    #[test]
+    fn civil_actions_per_discontent_worker_costs_exactly_one_turn_not_two() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 5;
+        p.yellow_bank = 11; // happy_required(11) == 2, happy_extra 0 -> discontent 2
+        let mut state = multi_player_state(2, &[p, blank_player(1, card("Despotism"))], &[]);
+        let block = EventBlock { civil_actions_per_discontent_worker: -2, ..EventBlock::EMPTY };
+
+        apply_player_block(&mut state, 0, &block);
+
+        assert_eq!(state.players[0].civil_actions, 1, "2 discontent workers * 2 CA lost == 4, 5 - 4 == 1");
+        assert_eq!(
+            state.players[0].ca_penalty_next_turn, 0,
+            "the loss must not ALSO be deferred to the player's next end_of_turn reset -- \
+             that would spend it twice, across two different turns"
+        );
     }
 
     #[test]
