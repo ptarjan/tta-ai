@@ -1858,9 +1858,10 @@ fn apply_one(
                 if std::env::var("REPLAY_DEBUG").is_ok() {
                     let p = &r.state.players[actor as usize];
                     eprintln!(
-                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} raw={:?}",
+                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} raw={:?}",
                         p.food, p.yellow_bank, p.civil_actions,
-                        crate::economy::pop_cost(&r.state, p), raw_text
+                        crate::economy::pop_cost(&r.state, p), r.state.round, r.state.num_players,
+                        r.current_lineno, p.one_time_discount.pop_food, raw_text
                     );
                 }
                 Err(MismatchKind::IllegalMove {
