@@ -1274,6 +1274,33 @@ impl<'a> Replayer<'a> {
         // landing on a turn where a real Foray/Raiders fired -- and even
         // then, the result is still a real, journal-observed split for that
         // player, just attributed to the wrong event.
+        //
+        // REPLAYER BUG (found chasing `IllegalMove: Pop`'s "food short by
+        // 1/2/3, cost tier right" signature, `docs/REPLAY.md`'s handoff --
+        // game `7523052` round 9): `prescan_produces_grants` fills this same
+        // per-seat queue from EVERY standalone `"<Color> produces N food[;
+        // ...]"` line in the whole journal, not just the ones this gated
+        // correction ever consumes -- an `AllPlayers`-shaped grant like
+        // Development of Markets ("gains 2 resources or 2 food, player's
+        // choice") resolves through a real `Pending::Choice`
+        // (`ChoiceKind::FoodOrRes`) that never touches `produces_grants` at
+        // all, so its own `"Purple produces 2 food"` line sits at the FRONT
+        // of Purple's queue forever once queued. Only ever PEEKING the
+        // front entry (the previous version of this loop) meant that one
+        // foreign entry permanently blocked every REAL Foray/Raiders
+        // correction for that player for the rest of the game, silently
+        // falling back to the (frequently wrong) default split every time --
+        // confirmed on `7523052`: Foray's real `"Purple produces 1 food;
+        // Purple produces 2 resources"` (round 9) never applied because an
+        // unrelated `(2, 0)` entry from round 5's Development of Markets sat
+        // in front of it with a non-matching total (2 vs this grant's 3).
+        // Scanning forward for the first entry whose OWN total matches
+        // (removing it from wherever it sits, not just the front) instead
+        // skips past a foreign entry exactly the way the sibling
+        // `PlunderSplit` consumer already does for the same reason (see
+        // `prescan_plunder_splits`'s own doc) -- leaving it un-popped and
+        // harmless (nothing else ever reads this queue) rather than letting
+        // it block every real entry queued behind it.
         if triggers_food_or_resources {
             for i in 0..n {
                 let (pre_food, pre_res) = pre_food_resources[i as usize];
@@ -1285,13 +1312,11 @@ impl<'a> Replayer<'a> {
                 }
                 let total = delta_food + delta_res;
                 if let Some(q) = self.produces_grants.get_mut(&i) {
-                    if let Some(&(jf, jr)) = q.front() {
-                        if jf as i32 + jr as i32 == total {
-                            q.pop_front();
-                            let p = &mut self.state.players[i as usize];
-                            p.food = (pre_food as i32 + jf as i32).max(0) as u16;
-                            p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
-                        }
+                    if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
+                        let (jf, jr) = q.remove(pos).expect("position just found by iter()");
+                        let p = &mut self.state.players[i as usize];
+                        p.food = (pre_food as i32 + jf as i32).max(0) as u16;
+                        p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
                     }
                 }
             }
@@ -5728,6 +5753,52 @@ mod tests {
         assert_eq!(r.state.players[0].food, 5, "Development of Settlement never touches food");
         assert_eq!(r.state.players[0].resources, 5, "Development of Settlement never touches resources");
         assert_eq!(r.produces_grants[&0].len(), 1, "the unrelated entry is left in the FIFO for its real consumer");
+    }
+
+    /// REGRESSION (chasing the `IllegalMove: Pop` bucket's residual
+    /// food-short signature after the age-advance fix, game `7523052` round
+    /// 9): `prescan_produces_grants` queues EVERY standalone `"<Color>
+    /// produces N food[; ...]"` line in the whole journal, not just the ones
+    /// this correction ever consumes -- an `AllPlayers`-shaped grant (e.g.
+    /// Development of Markets, "gains 2 resources or 2 food, player's
+    /// choice") resolves through a real `Pending::Choice` that never reads
+    /// `produces_grants` at all, so its own line sits in the FIFO forever.
+    /// Only ever peeking the FRONT entry (this correction's original
+    /// version) meant that one foreign, non-matching-total entry
+    /// permanently blocked every REAL Foray/Raiders correction for that
+    /// player behind it, for the rest of the game -- confirmed on
+    /// `7523052`, where a stray `(2, 0)` from round 5 blocked round 9's real
+    /// Foray `(1, 2)`. The fix scans forward for the first entry whose OWN
+    /// total matches, the same "skip past a foreign entry" policy the
+    /// sibling `PlunderSplit` consumer already uses.
+    #[test]
+    fn foray_skips_a_foreign_non_matching_entry_queued_ahead_of_its_own_real_split() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Foray; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.players[0].food = 5;
+        r.state.players[0].resources = 5;
+        // Front: a foreign entry from an earlier, unrelated `AllPlayers`
+        // grant (total 2, never matches this Foray's total-3 delta). Behind
+        // it: the real Foray split for THIS event (2 food, 1 resource).
+        r.produces_grants.insert(0, VecDeque::from([(2, 0), (2, 1)]));
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(r.state.players[0].food, 7, "5 + the real entry's 2 food, not the deterministic 0");
+        assert_eq!(r.state.players[0].resources, 6, "5 + the real entry's 1 resource, not the deterministic 3");
+        assert_eq!(
+            r.produces_grants[&0].as_slices().0,
+            &[(2, 0)],
+            "the foreign front entry is skipped, not consumed or reordered"
+        );
     }
 
     /// REGRESSION (BGO game `7522650`): the `"plays event"` line is skipped
