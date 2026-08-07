@@ -505,8 +505,23 @@ pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<
         // move-generation pass) and belongs inside the gate.
         cost -= effects::state_stats(state, p).build_discount[card.age as usize];
         if leader_is(p, "William Shakespeare") {
-            let has_library = p.techs.iter().any(|(t, _)| t.kind() == CardType::Library);
-            let has_theater = p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater);
+            // `workers > 0`, not mere presence in `p.techs`: Shakespeare's
+            // ability needs the counterpart building actually BUILT (a
+            // worker placed), not just its technology developed. `p.techs`
+            // holds every developed technology whether or not a worker was
+            // ever placed on it (developing a library and building one are
+            // two separate actions/payments, §3.5 vs §3.7) -- confirmed
+            // wrong against game `7520718`: Orange developed Printing Press
+            // (a Library) at round 13 but did not BUILD one until round 15,
+            // and paid full price for a Drama (Theater) build at round 14,
+            // in between -- an `UnrecoverableHiddenInfo: build cost
+            // mismatch` this reconstruction manufactured by granting the
+            // discount one build too early. `effects::output_modifier_value`'s
+            // sibling Shakespeare ability (`CulturePerLibraryTheaterPair`)
+            // already gates on `slot.workers` via its own `workers_on`
+            // helper -- this was the one place that didn't match it.
+            let has_library = p.techs.iter().any(|(t, slot)| t.kind() == CardType::Library && slot.workers > 0);
+            let has_theater = p.techs.iter().any(|(t, slot)| t.kind() == CardType::Theater && slot.workers > 0);
             if card.kind == CardType::Theater && has_library {
                 cost -= 1;
             } else if card.kind == CardType::Library && has_theater {
@@ -555,14 +570,19 @@ pub fn tech_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> 
         if leader_is(p, "J. S. Bach") {
             cost -= 2;
         }
+        // `workers > 0`: see [`build_cost_for`]'s identical Shakespeare
+        // check for why mere presence in `p.techs` is wrong here too --
+        // the SAME leader ability, the SAME "built, not just developed"
+        // requirement, gating the develop-cost discount instead of the
+        // build-cost one.
         if leader_is(p, "William Shakespeare")
-            && p.techs.iter().any(|(t, _)| t.kind() == CardType::Library)
+            && p.techs.iter().any(|(t, slot)| t.kind() == CardType::Library && slot.workers > 0)
         {
             cost -= 1;
         }
     } else if card.kind == CardType::Library
         && leader_is(p, "William Shakespeare")
-        && p.techs.iter().any(|(t, _)| t.kind() == CardType::Theater)
+        && p.techs.iter().any(|(t, slot)| t.kind() == CardType::Theater && slot.workers > 0)
     {
         cost -= 1;
     }
@@ -1382,6 +1402,23 @@ mod tests {
         assert_eq!(build_cost_for(&state, &state.players[0], card("Drama")), Some(4));
     }
 
+    /// A library the player has DEVELOPED (paid its science cost) but never
+    /// BUILT (no worker placed, `workers: 0`) must not count as "in play"
+    /// -- these are two separate actions/payments (§3.5 develop, §3.7
+    /// build) and BGO corpus game `7520718` shows a real human paying full
+    /// price for a Drama build with Printing Press developed-but-unbuilt at
+    /// the time. Regression test for the `UnrecoverableHiddenInfo: build
+    /// cost mismatch for Drama` this reconstruction manufactured before the
+    /// fix (`docs/REPLAY.md`).
+    #[test]
+    fn build_cost_for_shakespeare_ignores_a_library_that_is_developed_but_not_built() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        p.techs.insert(card("Printing Press"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Drama")), Some(4));
+    }
+
     // ----------------------------------------------------------- tech_cost
 
     #[test]
@@ -1517,6 +1554,17 @@ mod tests {
         let state = one_player_state(p);
         // Printing Press tech cost 3, minus 1 for Shakespeare + a theater in play.
         assert_eq!(tech_cost(&state, &state.players[0], card("Printing Press")), Some(2));
+    }
+
+    /// [`build_cost_for_shakespeare_ignores_a_library_that_is_developed_but_not_built`]'s
+    /// twin for the develop-cost side of the same leader ability.
+    #[test]
+    fn tech_cost_shakespeare_ignores_a_theater_that_is_developed_but_not_built() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("William Shakespeare");
+        p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert_eq!(tech_cost(&state, &state.players[0], card("Printing Press")), Some(3));
     }
 
     #[test]

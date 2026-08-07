@@ -2154,6 +2154,77 @@ fn total_paid_for_build(text: &str) -> Option<i32> {
     }
 }
 
+/// The optional trailing `"; <Color> spends N food"` clause on a
+/// build/upgrade/wonder-stage line, whatever precedes it (`"spends M
+/// resource(s)"`, `"loses M military resource"`, or both) -- Trade Routes
+/// Agreement side A's "1 food as 1 resource" grant (§5.9) folded into the
+/// SAME printed line, the mirror of [`spent_resource_after_food`]'s Pop-line
+/// shape in the OTHER direction. Found chasing the `UnrecoverableHiddenInfo:
+/// build cost mismatch` bucket (`docs/REPLAY.md`): real corpus games pay
+/// PART of a build/upgrade/wonder-stage's resource cost in converted food
+/// (e.g. game `7523070` line 143, `"Green builds Warrior Green spends 1
+/// resource; Green spends 1 food"` for a 2-resource Warrior, confirmed by
+/// full-game reconciliation that Green's resources were untouched -- the
+/// `"1 food"` is a real second payment, not a rendering quirk), and this
+/// binary's [`total_paid_for_build`] previously read only the FIRST clause,
+/// silently under-counting the true total by exactly the food amount.
+/// Searches from the LAST `" spends "` in `text`, not the first (so a
+/// resource-only line's own single clause is never misread as this one) --
+/// a build/upgrade/wonder-stage line never carries a food clause for any
+/// OTHER reason, unlike a Pop line's own food-native cost. Returns `0`, not
+/// `None`: every caller wants a plain amount to add to the resource figure,
+/// not an `Option` to unwrap.
+fn spent_food_after_resource(text: &str) -> i32 {
+    let Some(p) = text.rfind(" spends ") else { return 0 };
+    let rest = &text[p + " spends ".len()..];
+    let digits_end = match rest.find(|c: char| !c.is_ascii_digit()) {
+        Some(0) | None => return 0,
+        Some(n) => n,
+    };
+    if !rest[digits_end..].starts_with(" food") {
+        return 0;
+    }
+    rest[..digits_end].parse().unwrap_or(0)
+}
+
+/// Converts whatever shortfall Trade Routes Agreement's side-A "1 food as 1
+/// resource" grant (`Move::TradeFoodAsResource`, §5.9) explains between `p`'s
+/// CURRENT resources and `true_cost`, as that many `Move::TradeFoodAsResource`
+/// moves applied to `r` before the caller's own priced build/upgrade/
+/// wonder-stage move -- the build/upgrade/wonder-stage sibling of
+/// `ActionClass::IncreasePopulation`'s existing `Move::TradeResourceAsFood`
+/// fold, same safety gate, opposite conversion direction (see that arm's own
+/// doc comment for why the direction differs: Pop is priced in food, a
+/// build/upgrade/wonder-stage is priced in resources).
+///
+/// Gated on the journal's OWN stated total ([`total_paid_for_build`] plus
+/// [`spent_food_after_resource`]'s optional food clause) matching
+/// `true_cost` EXACTLY: if they disagree, the real bug is a mispriced cost
+/// (a missing discount, drifted resources, ...), not a missing conversion,
+/// and converting food here would only mask that bug behind a
+/// wrong-for-a-different-reason success (docs/REPLAY.md's Civil Life
+/// warning: never loosen a check just to make a mismatch disappear). A
+/// caller whose gate does not hold gets `shortfall == 0` and this is a
+/// no-op -- every existing failure mode this function does not explain is
+/// unchanged, it only ever ADDS a path to success.
+fn convert_trade_food_shortfall(r: &mut Replayer, actor: u8, raw_text: &str, true_cost: i32) -> Result<(), MismatchKind> {
+    let p = &r.state.players[actor as usize];
+    let stated = total_paid_for_build(raw_text).map(|base| base + spent_food_after_resource(raw_text));
+    let shortfall = match stated {
+        Some(stated) if stated == true_cost => true_cost - p.resources as i32,
+        _ => 0,
+    };
+    if shortfall > 0
+        && shortfall <= crate::economy::trade_food_as_resource_remaining(&r.state, p)
+        && shortfall <= p.food as i32
+    {
+        for _ in 0..shortfall {
+            r.try_apply(Move::TradeFoodAsResource, true)?;
+        }
+    }
+    Ok(())
+}
+
 /// What a `"<Colour> takes <Card> in hand ..."` line says the take cost.
 ///
 /// A take line with NO `"uses N civil/military action"` clause at all cost
@@ -4447,7 +4518,7 @@ fn apply_one(
                 return Ok(());
             }
             if let (Some(want), Some(got)) = (
-                total_paid_for_build(raw_text),
+                total_paid_for_build(raw_text).map(|base| base + spent_food_after_resource(raw_text)),
                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
             ) {
                 if want != got {
@@ -4458,6 +4529,7 @@ fn apply_one(
                         card.get().name
                     )));
                 }
+                convert_trade_food_shortfall(r, actor, raw_text, got)?;
             }
             r.try_apply(Move::Build { card }, true)
         }
@@ -4466,6 +4538,33 @@ fn apply_one(
             let after_builds = rest.strip_prefix("builds ").ok_or_else(|| MismatchKind::ParserGap("wonder-stage line missing 'builds '".into()))?;
             let steps = wonder_stage_count(after_builds).ok_or_else(|| MismatchKind::ParserGap("could not parse wonder stage count".into()))?;
             let _ = card; // the wonder itself is implicit in state (under construction)
+            // Same Trade Routes fold as the ordinary Build arm just above
+            // (`convert_trade_food_shortfall`'s own doc) -- a wonder stage is
+            // priced in resources exactly like any other build, and BGO folds
+            // the conversion into this line the identical way (e.g. game
+            // `7523070` line 166, `"Green builds 1 stage of Taj Mahal Green
+            // spends 1 resource; Green spends 1 food"`). No `want != got`
+            // pre-check here (unlike Build): `convert_trade_food_shortfall`'s
+            // own internal gate already refuses to act unless the journal's
+            // stated total exactly matches this binary's own cost, so an
+            // unrelated wonder-cost bug still surfaces as the ordinary
+            // `IllegalMove` it always has, not a manufactured pass.
+            //
+            // Gated on `p.wonder` actually being set FIRST:
+            // `costs::wonder_stage_cost` panics otherwise (a `debug_assert`,
+            // and this binary's `difftest` profile inherits `panic = "abort"`
+            // from `[profile.release]`, so a stray panic here would abort the
+            // WHOLE corpus run rather than just this one game/line -- see
+            // this crate's own standing warning on that). A reconstruction
+            // whose state has already diverged enough that it thinks no
+            // wonder is under construction here was never going to complete
+            // this line correctly anyway; skipping the conversion and falling
+            // through to the ordinary `try_apply` reproduces its previous,
+            // honest failure instead of a hard abort.
+            if !r.state.players[actor as usize].wonder.is_none() {
+                let true_cost = costs::wonder_stage_cost(&r.state, &r.state.players[actor as usize], steps);
+                convert_trade_food_shortfall(r, actor, raw_text, true_cost)?;
+            }
             r.try_apply(Move::WonderStep { steps }, true)
         }
         ActionClass::IncreasePopulation => {
@@ -4569,6 +4668,12 @@ fn apply_one(
             if free_civil_action_move(r, actor, rest, Move::Upgrade { from, to }, to)? {
                 return Ok(());
             }
+            // Same Trade Routes fold as `ActionClass::BuildBuilding`'s Build
+            // arm (`convert_trade_food_shortfall`'s own doc) -- an upgrade is
+            // priced in resources exactly like a build, and BGO folds the
+            // conversion into this line the identical way.
+            let true_cost = costs::upgrade_cost(&r.state, &r.state.players[actor as usize], from, to);
+            convert_trade_food_shortfall(r, actor, raw_text, true_cost)?;
             r.try_apply(Move::Upgrade { from, to }, true)
         }
         // J. S. Bach's leader ability -- same "<From> to <To>" shape as an
@@ -5654,6 +5759,32 @@ mod tests {
         assert_eq!(total_paid_for_build("Purple builds Bronze Purple spends 2 resources"), Some(2));
         // Neither clause present at all (e.g. a fully free build): None.
         assert_eq!(total_paid_for_build("Purple builds 1 stage of Pyramids"), None);
+    }
+
+    #[test]
+    fn spent_food_after_resource_reads_a_trailing_food_clause_after_a_resource_clause() {
+        // Real corpus shape, game `7523070` line 143: a 2-resource Warrior
+        // paid 1 native resource + 1 Trade-Routes-converted food.
+        assert_eq!(spent_food_after_resource("Green builds Warrior Green spends 1 resource; Green spends 1 food"), 1);
+    }
+
+    #[test]
+    fn spent_food_after_resource_ignores_a_lone_resource_clause() {
+        assert_eq!(spent_food_after_resource("Purple builds Bronze Purple spends 2 resources"), 0);
+    }
+
+    #[test]
+    fn spent_food_after_resource_is_zero_with_no_spends_clause_at_all() {
+        assert_eq!(spent_food_after_resource("Purple builds 1 stage of Pyramids"), 0);
+    }
+
+    #[test]
+    fn spent_food_after_resource_reads_the_trailing_clause_even_before_a_wonder_completed_marker() {
+        // Real corpus shape, game `7522613` line 176.
+        assert_eq!(
+            spent_food_after_resource("Green builds 1 stage of St. Peter's Basilica Green spends 3 resources; Green spends 1 food; ; Wonder completed"),
+            1
+        );
     }
 
     #[test]
