@@ -66,7 +66,7 @@ Source citations also use `[CoL p.N]` = sources/cge_code_of_laws.pdf page N (the
 
 2.4 **Wonder surcharge**: taking a wonder costs the depicted 1–3 CA **plus 1 CA per wonder you have already completed** (destroyed wonders, e.g. via Ravages of Time, count as completed) [RB p.6, CoL p.5,12]. The wonder goes directly into play sideways as your unfinished wonder (never to hand); you may not take a wonder while you have an unfinished one [RB p.6].
 
-2.5 **Taking limits** (non-wonder): may not take a card if civil cards in hand ≥ civil action total (hand limit, checked only when taking); may not take a technology with the same name as one in your hand or in play; may not take a second leader of the same age (ever, even if the first left play) [RB p.6,9, CoL p.5].
+2.5 **Taking limits** (non-wonder): may not take a card if civil cards in hand > civil action total (hand limit, checked only when taking) -- corrected from `≥` (`docs/REPLAY.md`'s thirteenth pass): the printed rule may read `≥`, but BGO's own implementation, which this project reconstructs, only blocks once the hand is already OVER the limit, not merely at it -- falsified against 70 real games where a human took a card with hand size already equal to the limit; may not take a technology with the same name as one in your hand or in play; may not take a second leader of the same age (ever, even if the first left play) [RB p.6,9, CoL p.5].
 
 2.6 Cards taken are public knowledge (open civil cards convention) [RB p.7].
 <!-- SECTION COMPLETE -->

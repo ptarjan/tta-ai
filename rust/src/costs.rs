@@ -311,7 +311,19 @@ pub fn take_gate(state: &GameState, p: &PlayerState, budget: Option<i32>) -> Tak
     // `hand_size_civil`, not `hand_civil.len()`: §2.5 counts CARDS, and the
     // app harness can hold a rival's hand as a bare count (`hidden_civil`)
     // without names. Identical to `hand_civil.len()` in self-play.
-    let hand_full = p.hand_size_civil() as i32 >= civil_hand_limit(state, p);
+    //
+    // ENGINE BUG, fixed here: strictly GREATER than the limit, not `>=`.
+    // `docs/RULES_SPEC.md` §2.5 (this project's own paraphrase of RB p.6,9)
+    // reads "may not take if hand >= limit", and this used to implement
+    // that literally -- but every one of 70 real BGO takes in the
+    // 1,011-game corpus that this comparison rejected had `hand_civil_size
+    // == civil_hand_limit` EXACTLY (never one card over), and every one is
+    // a real human's own logged take that BGO itself accepted at that exact
+    // hand size. Falsifies the `>=` paraphrase directly against BGO's own
+    // behaviour: this file's job is to reconstruct what BGO actually did,
+    // not referee against a possibly-imprecise transcription of the
+    // printed rule (`docs/REPLAY.md`'s thirteenth pass).
+    let hand_full = p.hand_size_civil() as i32 > civil_hand_limit(state, p);
     TakeGate { have, hand_full, surcharge, leader_discount, taken_leader_ages: p.taken_leader_ages }
 }
 
@@ -1009,16 +1021,22 @@ mod tests {
     }
 
     #[test]
-    fn can_take_blocks_on_a_full_civil_hand() {
+    fn can_take_allows_a_hand_exactly_at_the_civil_hand_limit_but_blocks_one_over() {
+        // ENGINE BUG (docs/REPLAY.md's thirteenth pass): the gate used to
+        // block at `hand == limit` (`>=`), but 70 real BGO games show a
+        // human successfully taking a card with their hand already AT the
+        // limit -- it only actually blocks once hand is already OVER it.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 10;
         for _ in 0..4 {
-            p.hand_civil.push(card("Irrigation")); // fills to the 4 CA limit
+            p.hand_civil.push(card("Irrigation")); // AT the 4 CA limit, not over
         }
         let mut state = one_player_state(p);
         state.card_row[0] = card("Selective Breeding");
-        let p = &state.players[0];
-        assert!(!can_take(&state, p, 0, None), "hand at civil_hand_limit");
+        assert!(can_take(&state, &state.players[0], 0, None), "hand exactly at civil_hand_limit is still takeable");
+
+        state.players[0].hand_civil.push(card("Philosophy")); // now one OVER the limit
+        assert!(!can_take(&state, &state.players[0], 0, None), "hand one over civil_hand_limit blocks");
     }
 
     #[test]
