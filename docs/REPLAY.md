@@ -3461,3 +3461,72 @@ Remaining kinds after this fix: `Raid`, `LoseColony`, `FlipWonder` (per the
 checkpoint above), plus a SIXTH kind, `Infiltrate`, flagged mid-pass by the
 concurrent Take-bucket worker as sharing the identical `decider ==
 expected_actor` gap -- see the section below.
+
+## Six-pending-kind pass, continued: `Infiltrate` resolved -- REPLAYER
+## (sixth kind, flagged mid-pass by the concurrent Take-bucket worker)
+
+The Take-bucket worker reported (via `mcp__discord__message_agent`) that 37
+of its own `IllegalMove: Take` bucket had a legal take blocked by an open
+`Pending::Choice` of exactly this pass's kinds, for the SAME player
+attempting the take -- and separately flagged a SIXTH kind sharing the
+identical gap, `Infiltrate` (Aggression: Infiltrate, "remove your rival's
+leader or incomplete wonder from play"), not in this pass's original
+five-kind list. Folded in here rather than starting a new pass, per the
+task's own "exhaustive match" preference.
+
+**Journal evidence, more subtle than it first looked.** `"<Attacker> plays
+Infiltrate against <Victim> ..."` is `ActionClass::PlayAggression`, handled
+normally, but its resolution (which of the victim's leader/wonder is
+removed) is glued onto a LATER, `Bookkeeping`-classified `"concedes
+defeat"`/`"Operation successful"` line the main loop already skips outright
+-- `resolve_aggression_defense` (called right after `Move::Aggression`)
+only drains a live `Pending::Defense`, returning `Ok(())` immediately for
+anything else, so an `Infiltrate` pending is left open exactly like
+`PlunderSplit` was. Two real complications found by pairing every real
+corpus `"plays Infiltrate against"` line with whatever resolves it,
+downstream (a throwaway Python correlation script, not committed -- same
+five-minute shape as this file's other ad hoc corpus checks):
+1. **Two different LEADING phrases carry the identical trailing shape.**
+   Usually the VICTIM's own line carries both: `"concedes defeat <Card> is
+   killed; <Attacker> scores N culture"` (leader) or `"...is destroyed;
+   ..."` (wonder). But when the victim has genuinely nothing to answer with
+   (mirroring `Pending::Defense`'s own forced 0-defender shape), BGO splits
+   it: a BARE `"concedes defeat"` from the victim (nothing to parse) is
+   immediately followed by the ATTACKER's own `"Operation successful <Card>
+   is killed/destroyed; <Attacker> scores N culture"` line carrying the
+   real information. `parse_infiltrate_line` reads BOTH prefixes uniformly
+   (checked unambiguous: no other line in the sampled corpus contains "is
+   killed"/"is destroyed" at all, and nothing else ever leads with
+   "Operation successful") -- the bare half simply parses to `None` and
+   contributes nothing, which is correct: the split's actual information
+   lives entirely on the OTHER line, wherever it lands.
+2. **The same auto-resolve-contamination trap `PlunderSplit` already
+   found.** A victim with only a leader OR only a wonder (not both) never
+   opens a real `Pending` at all (`push_choice`'s own auto-resolve-if-len-1
+   rule) -- but BGO still prints the identical resolving text for that
+   deterministic outcome. Same fix: `resolve_intervening`'s new
+   `ChoiceKind::Infiltrate` arm (added right after `PlunderSplit`, same
+   unconditional tier, safe from double-consumption for the same reason --
+   `Bookkeeping` lines are never separately consumed by the main loop)
+   drains a per-attacker `infiltrates: HashMap<u8, VecDeque<bool>>` FIFO
+   (`is_wonder`), validating each popped entry against the live choice's
+   own options and skipping (not trusting position) past any that don't
+   match.
+
+Four parser tests plus two `resolve_intervening` tests (drain + skip-on-
+mismatch, mirroring `PlunderSplit`'s own pair), all confirmed red (`if false
+&& ...`) before being restored green.
+
+**Full corpus (`replaystats`, 1011 games), measured on the SAME rebased tree
+immediately before and after this fix (stash/pop, nothing else changed)**:
+mean rounds 10.99 -> 11.01, Age II+ decisions 41.8% -> 42.0%, completed games
+18 -> 19. The `StuckPending: no auto-resolution for pending choice Infiltrate`
+occurrences are gone (folded into the Take bucket's own count before this
+fix, per the concurrent worker's report -- not separately tracked in this
+pass's own histograms before landing).
+
+All SIX pending kinds `resolve_intervening` used to silently defer via the
+`decider == expected_actor` shortcut are now resolved: `PlunderSplit`,
+`LosePop`, `TakeRow`, `Infiltrate` (this pass) plus `Raid`/`LoseColony`/
+`FlipWonder` still open -- see the HANDOFF section below for their status
+and concrete next steps.
