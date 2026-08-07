@@ -975,6 +975,29 @@ fn total_paid_for_build(text: &str) -> Option<i32> {
     }
 }
 
+/// What a `"<Colour> takes <Card> in hand ..."` line says the take cost.
+///
+/// A take line with NO `"uses N civil/military action"` clause at all cost
+/// **zero** actions -- it is not an unknown. BGO prints the clause for every
+/// non-zero cost, and a row take genuinely costs 0 whenever Hammurabi's
+/// printed `leaderTakeCivilActionDiscount` ("when you take a new leader from
+/// the card row, it costs 1 less civil action") cancels the 1 CA of a leader
+/// sitting in one of the row's five cheapest slots. Measured over the whole
+/// 1,011-game corpus: of 88,432 take lines, 483 carry no clause, and 333 of
+/// those are LEADER takes -- **every single one with Hammurabi in play**.
+/// (The other 150 are all Taj Mahal, an unexplained card-specific anomaly
+/// this file deliberately does NOT paper over -- see `docs/REPLAY.md`; with
+/// this function returning 0 for them they now fail as an honest
+/// `ParserGap` naming the cost mismatch instead of silently landing in
+/// whatever slot happened to be free.)
+///
+/// Treating "no clause" as `None` -- the old behaviour -- made
+/// [`Replayer::ground_row_slot`] fall through to its "first ungrounded slot"
+/// path, i.e. a silent guess at which slot the human actually paid for.
+fn observed_take_cost(text: &str) -> i32 {
+    total_action_cost(text).unwrap_or(0)
+}
+
 fn total_action_cost(text: &str) -> Option<i32> {
     let mut total = 0i32;
     let mut found = false;
@@ -1577,16 +1600,13 @@ fn apply_one(
     match class {
         ActionClass::TakeCard => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("take with no resolved card".into()))?;
-            let cost = total_action_cost(raw_text);
-            let slot = r.ground_row_slot(actor, card, cost).ok_or_else(|| {
-                MismatchKind::ParserGap(match cost {
-                    Some(want) => format!(
-                        "{}'s take cost per the journal is {want} civil action(s), but no available \
-                         row slot reproduces that under this binary's own cost formula",
-                        card.get().name
-                    ),
-                    None => "no ungrounded row slot available to take from".into(),
-                })
+            let cost = observed_take_cost(raw_text);
+            let slot = r.ground_row_slot(actor, card, Some(cost)).ok_or_else(|| {
+                MismatchKind::ParserGap(format!(
+                    "{}'s take cost per the journal is {cost} civil action(s), but no available \
+                     row slot reproduces that under this binary's own cost formula",
+                    card.get().name
+                ))
             })?;
             r.try_apply(Move::Take { slot }, true)?;
             // The slot's REFILL (whatever `deal()` just drew into it) is
@@ -1960,6 +1980,16 @@ mod tests {
     fn total_action_cost_reads_a_single_civil_clause() {
         let text = "Orange takes Engineering Genius in hand Orange uses 1 civil action";
         assert_eq!(total_action_cost(text), Some(1));
+    }
+
+    #[test]
+    fn a_take_line_with_no_uses_clause_at_all_cost_zero_actions_not_an_unknown_cost() {
+        // Hammurabi's printed leader-take discount cancels the 1 CA of a
+        // leader in one of the five cheapest row slots, and BGO then prints
+        // no cost clause at all. 333 such lines in the corpus, every one
+        // with Hammurabi in play -- see `observed_take_cost`.
+        assert_eq!(observed_take_cost("Orange takes Michelangelo in hand"), 0);
+        assert_eq!(observed_take_cost("Orange takes Alchemy in hand Orange uses 2 civil action"), 2);
     }
 
     #[test]
