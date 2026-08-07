@@ -290,6 +290,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         trade_food_as_resource_used_this_turn: 0,
         trade_resource_as_food_used_this_turn: 0,
         churchill_used: false,
+        homer_used_this_turn: false,
         bach_upgrade_used: false,
         ocean_liners_used: false,
         caesar_double_politics_used: false,

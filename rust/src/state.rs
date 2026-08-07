@@ -565,6 +565,31 @@ pub struct PlayerState {
     pub churchill_used: bool,
     pub bach_upgrade_used: bool,
     pub ocean_liners_used: bool,
+    /// Homer's "extra 1 resource for building and upgrading military units"
+    /// (`sources/bga_throughtheages_material.inc.php`'s own leader text,
+    /// "On your turn, you have an extra 1 resource for building and
+    /// upgrading military units") -- ONE resource per turn, not one per
+    /// build/upgrade action. `costs::homer_unit_discount` previously applied
+    /// unconditionally to every single unit build/upgrade in a turn (fixed
+    /// once, from a post-payment gain to a pre-payment discount, in the
+    /// commit `costs.rs`'s own doc comment on `homer_unit_discount`
+    /// describes -- but that fix never added a per-turn cap, so a player
+    /// with Homer who built/upgraded TWO units in one turn got the discount
+    /// TWICE). Corpus-confirmed wrong: real BGO journals with Homer active
+    /// and 2+ same-turn unit build/upgrade lines show the `"loses N
+    /// military resource"` clause on AT MOST ONE of them (measured across
+    /// the full 1,011-game corpus: 45 such turns, 0 with the clause on more
+    /// than one action -- see `costs::spend_homer_unit_discount`'s own test
+    /// for the minimal repro, real game `7521819` round 6: Orange upgrades
+    /// Warrior->Swordsmen TWICE in the same turn, only the FIRST shows
+    /// `"loses 1 military resource"`, the second pays full price with
+    /// `"spends 1 resource"`). This is an ENGINE-facing bug, not a replayer
+    /// one: `legal.rs`'s own affordability check reads
+    /// `costs::homer_unit_discount` too, so an un-capped discount let the
+    /// engine consider builds/upgrades legal that a real human opponent
+    /// could not actually afford. Cleared alongside the other once-per-turn
+    /// flags above in `economy::end_of_turn`.
+    pub homer_used_this_turn: bool,
     pub caesar_double_politics_used: bool,
     /// Julius Caesar's once-per-game second political action: set while the
     /// FIRST political action of a turn has left the politics phase open for

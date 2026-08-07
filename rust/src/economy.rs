@@ -691,6 +691,10 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.churchill_used = false;
     p.bach_upgrade_used = false;
     p.ocean_liners_used = false;
+    // Homer's once-per-turn resource (§`costs::homer_unit_discount`'s own
+    // doc comment) refreshes for next turn, same lifetime as the other
+    // once-per-turn flags immediately above.
+    p.homer_used_this_turn = false;
     p.politics_done = false;
     p.caesar_second_politics = false;
     // Backstop for Joan of Arc's look: `apply::end_politics` clears it when
@@ -700,6 +704,9 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.peeked_event = CardId::NONE;
     p.taken_this_turn = CardList::new();
     // §3.11: action-card discount pools expire at end of turn.
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && p.mil_discount != 0 {
+        eprintln!("DEBUG mil_discount site=end_of_turn idx={idx} reset {} -> 0", p.mil_discount);
+    }
     p.mil_discount = 0;
     // Churchill's ring-fenced science, same lifetime.
     p.mil_sci_discount = 0;
@@ -808,6 +815,7 @@ mod tests {
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
+            homer_used_this_turn: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
             caesar_double_politics_used: false,
@@ -1572,6 +1580,7 @@ mod tests {
             p.churchill_used = true;
             p.bach_upgrade_used = true;
             p.ocean_liners_used = true;
+            p.homer_used_this_turn = true;
             p.mil_discount = 4;
             p.mil_sci_discount = 3;
             p.taken_this_turn.push(card("Agriculture"));
@@ -1590,6 +1599,7 @@ mod tests {
         assert!(!p.churchill_used);
         assert!(!p.bach_upgrade_used);
         assert!(!p.ocean_liners_used);
+        assert!(!p.homer_used_this_turn, "Homer's once-per-turn resource refreshes with every other once-per-turn flag");
         assert_eq!(p.mil_discount, 0);
         assert_eq!(p.mil_sci_discount, 0);
         assert!(p.taken_this_turn.is_empty());

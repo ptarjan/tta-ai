@@ -613,6 +613,7 @@ mod tests {
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
+            homer_used_this_turn: false,
             caesar_double_politics_used: false,
             skip_next_politics: false,
             caesar_second_politics: false,

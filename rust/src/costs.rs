@@ -605,24 +605,27 @@ pub fn is_unit(id: CardId) -> bool {
     id.kind().is_unit()
 }
 
-/// Homer: builds or upgrades a military unit for 1 resource less, every
-/// time, unconditionally -- not a spendable per-turn pool like
-/// `p.mil_discount` (§3.11's Patriotism/Wave of Nationalism/Military
-/// Build-Up grant), just a standing leader identity check, mirroring
-/// `docs/HEURISTICS.md`'s own summary: "+1 happy face, plus a resource
-/// whenever you build a unit". Previously modeled as a POST-payment
-/// resource GAIN (`apply::on_build_unit`, called after the full price was
-/// already charged) rather than a discount applied BEFORE the affordability
-/// check -- mathematically identical when resources are plentiful, but
-/// WRONG at the margin: a player with exactly `raw_cost - 1` resources was
-/// illegally rejected by `legal::legal_moves`, even though real BGO humans
-/// are observed completing exactly this build (found by replaying a real 4p
-/// game, `7523341`: Homer-led Purple builds a Warrior with `resources == 1`
-/// against a raw cost of 2, journal-confirmed via `"loses 1 military
-/// resource; spends 1 resource"`, the SAME "military resource" phrasing
-/// `docs/REPLAY.md`'s Finding B already established for `p.mil_discount`).
+/// Homer: builds or upgrades a military unit for 1 resource less, ONCE PER
+/// TURN -- `p.homer_used_this_turn` gates it, not just a standing leader
+/// identity check. The official leader text (`sources/
+/// bga_throughtheages_material.inc.php`) is "On your turn, you have an
+/// extra 1 resource for building and upgrading military units" -- AN extra
+/// 1 resource (singular), not one per build/upgrade action. A previous pass
+/// fixed this from a POST-payment resource GAIN (`apply::on_build_unit`,
+/// called after the full price was already charged) to a discount applied
+/// BEFORE the affordability check -- correct at the margin (a player with
+/// exactly `raw_cost - 1` resources was illegally rejected by
+/// `legal::legal_moves` under the old model even though real BGO humans are
+/// observed completing exactly this build, `7523341`) -- but that fix never
+/// added a per-turn cap, so a player who built/upgraded TWO units in the
+/// SAME turn got the discount TWICE. Corpus-confirmed wrong (full
+/// 1,011-game corpus: every turn with Homer active and 2+ same-turn unit
+/// build/upgrade lines shows the `"loses N military resource"` clause on AT
+/// MOST ONE of them, 45/45 turns, 0 counterexamples) -- see
+/// [`spend_homer_unit_discount`]'s own test for the minimal real-game
+/// repro (`7521819` round 6).
 pub fn homer_unit_discount(p: &PlayerState, id: CardId) -> i32 {
-    if is_unit(id) && leader_is(p, "Homer") {
+    if is_unit(id) && leader_is(p, "Homer") && !p.homer_used_this_turn {
         1
     } else {
         0
@@ -690,15 +693,32 @@ pub fn spend_mil_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
     }
     let used = (p.mil_discount as i32).min(raw);
     p.mil_discount -= used as i16;
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && used != 0 {
+        eprintln!("DEBUG mil_discount site=spend_mil_discount(id={id:?}) -= {used} -> {}", p.mil_discount);
+    }
     raw - used
 }
 
-/// Applies [`homer_unit_discount`] at payment time -- takes `&PlayerState`,
-/// not `&mut`, unlike [`spend_mil_discount`]/[`spend_mil_sci_discount`],
-/// because there is no pool to decrement: Homer's discount is available
-/// again on every single unit build/upgrade, not consumed by using it once.
-pub fn spend_homer_unit_discount(p: &PlayerState, id: CardId, raw: i32) -> i32 {
-    (raw - homer_unit_discount(p, id)).max(0)
+/// Applies [`homer_unit_discount`] at payment time and, unlike the OLD
+/// version of this function, now DOES mutate `p`: the once-per-turn nature
+/// of Homer's discount (this module's own `homer_unit_discount` doc
+/// comment) means using it has to be recorded somewhere, exactly like
+/// [`spend_mil_discount`]/[`spend_mil_sci_discount`] above -- the only
+/// difference is the "pool" is a single-use flag
+/// (`p.homer_used_this_turn`), not a decrementable count. Only marks it used
+/// when the discount is ACTUALLY the thing that reduced `raw` (an already-
+/// free build, `raw == 0`, e.g. a Rich Land/Urban Growth free civil build,
+/// leaves the once-per-turn allowance untouched for a LATER real payment
+/// this same turn -- corpus-confirmed: `homer_unit_discount`'s own doc
+/// comment's 45-turn sweep found 10 turns where the FIRST unit action of
+/// the turn carried no cost clause at all and the discount showed up on the
+/// SECOND instead).
+pub fn spend_homer_unit_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
+    let discount = homer_unit_discount(p, id);
+    if discount > 0 && raw > 0 {
+        p.homer_used_this_turn = true;
+    }
+    (raw - discount).max(0)
 }
 
 // ============================================================== tests ====
@@ -760,6 +780,7 @@ mod tests {
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
+            homer_used_this_turn: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
             caesar_double_politics_used: false,

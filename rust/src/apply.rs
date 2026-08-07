@@ -669,7 +669,7 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     }
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], id, cost);
-        cost = costs::spend_homer_unit_discount(&state.players[idx as usize], id, cost);
+        cost = costs::spend_homer_unit_discount(&mut state.players[idx as usize], id, cost);
         if !civil_life_free {
             if costs::is_unit(id) {
                 state.players[idx as usize].military_actions -= 1;
@@ -706,7 +706,7 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
     let mut cost = (base - discount).max(0);
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], lo, cost);
-        cost = costs::spend_homer_unit_discount(&state.players[idx as usize], lo, cost);
+        cost = costs::spend_homer_unit_discount(&mut state.players[idx as usize], lo, cost);
         if costs::is_unit(lo) {
             state.players[idx as usize].military_actions -= 1;
         } else {
@@ -979,6 +979,9 @@ fn h_churchill(state: &mut GameState, idx: u8, choice: ChurchillChoice) {
         ChurchillChoice::Military => {
             p.mil_sci_discount += 3;
             p.mil_discount += 3;
+            if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                eprintln!("DEBUG mil_discount site=h_churchill idx={idx} += 3 -> {}", p.mil_discount);
+            }
         }
     }
 }
@@ -1114,6 +1117,12 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
         // branch too.
         p.military_actions = p.military_actions.saturating_add(eff.military_actions as i8);
         p.mil_discount += eff.resources_for_military_units;
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() && eff.resources_for_military_units != 0 {
+            eprintln!(
+                "DEBUG mil_discount site=h_play_action(card={:?}) idx={idx} += {} -> {}",
+                card.name, eff.resources_for_military_units, p.mil_discount
+            );
+        }
     }
 
     // The two per-player-count action-card magnitudes (Endowment for the
@@ -1154,6 +1163,14 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
             }
         }
         state.players[idx as usize].mil_discount += (per * n) as i16;
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() && per * n != 0 {
+            eprintln!(
+                "DEBUG mil_discount site=h_play_action(ResourcesForMilitaryUnitsPerStrongerCivilization,card={:?}) idx={idx} += {} -> {}",
+                card.name,
+                per * n,
+                state.players[idx as usize].mil_discount
+            );
+        }
     }
 
     // §3.11: the ordered action resolves FIRST, and only THEN the card's own
@@ -1491,6 +1508,7 @@ mod tests {
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
             churchill_used: false,
+            homer_used_this_turn: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
             caesar_double_politics_used: false,
@@ -1821,6 +1839,69 @@ mod tests {
         assert!(
             legal::legal_moves(&state).as_slice().contains(&Move::Build { card: card("Swordsmen") }),
             "Homer's discount must make this build affordable and legal at exactly resources == raw_cost - 1"
+        );
+    }
+
+    /// REGRESSION (real game `7521819`, round 6, 2p, found chasing the
+    /// Build/Upgrade/WonderStep "resources short by 1-2" cluster): Homer's
+    /// own leader text (`sources/bga_throughtheages_material.inc.php`) is
+    /// "On your turn, you have an extra 1 resource for building and
+    /// upgrading military units" -- AN extra 1 resource, singular, not one
+    /// per build/upgrade action. The journal shows Orange (Homer-led)
+    /// upgrading Warrior->Swordsmen TWICE in the same turn: the FIRST prints
+    /// `"loses 1 military resource"` (Homer's discount applied), the SECOND
+    /// prints only `"spends 1 resource"` (full price, no discount at all).
+    /// Before this fix `homer_unit_discount` had no per-turn cap and
+    /// unconditionally returned 1 for every unit build/upgrade while Homer
+    /// was leader, so this binary silently gave a Homer-led player TWICE the
+    /// resources a real human opponent could ever get -- an ENGINE bug
+    /// (`legal::legal_moves` reads the same function for affordability, so
+    /// this also made illegal double-builds look legal), not merely a
+    /// replayer parsing gap.
+    #[test]
+    fn do_build_homers_discount_applies_only_once_per_turn() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Homer");
+        p.military_actions = 3;
+        p.resources = 6; // Swordsmen's raw cost is 3, needed twice = 6 with no discount at all
+        p.workers_free = 2;
+        p.techs.insert(card("Swordsmen"), TechSlot { workers: 0, stored: 0 });
+        let mut state = one_player_state(p);
+
+        do_build(&mut state, 0, card("Swordsmen"), 0, false);
+        assert_eq!(state.players[0].resources, 4, "first build this turn: Homer's discount applies (6 - (3 - 1) = 4)");
+        assert!(state.players[0].homer_used_this_turn, "the once-per-turn allowance is now spent");
+
+        do_build(&mut state, 0, card("Swordsmen"), 0, false);
+        assert_eq!(
+            state.players[0].resources, 1,
+            "second build in the SAME turn pays the full raw cost (4 - 3 = 1), not a second discount (which would leave 2)"
+        );
+    }
+
+    /// Same regression as the discount-amount test above, but for
+    /// `legal::legal_moves`'s affordability check specifically -- the
+    /// exact mirror of `a_player_with_exactly_one_resource_short_...` above,
+    /// showing the SAME "1 short" scenario is properly rejected once this
+    /// turn's Homer allowance is already spent.
+    #[test]
+    fn a_second_same_turn_unit_build_one_resource_short_is_illegal_once_homers_allowance_is_spent() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Homer");
+        p.homer_used_this_turn = true; // already used earlier this same turn
+        p.military_actions = 2;
+        p.resources = 2; // one short of Swordsmen's raw cost of 3
+        p.workers_free = 1;
+        p.techs.insert(card("Swordsmen"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert_eq!(
+            costs::build_cost_net(&state, &state.players[0], card("Swordsmen")),
+            Some(3),
+            "no discount left this turn -- full raw cost"
+        );
+        assert!(
+            !legal::legal_moves(&state).as_slice().contains(&Move::Build { card: card("Swordsmen") }),
+            "1 short with no discount left this turn must be illegal, unlike the fresh-turn case above"
         );
     }
 
