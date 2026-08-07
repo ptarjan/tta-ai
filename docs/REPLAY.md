@@ -5508,3 +5508,208 @@ rather than specific to this game, would plausibly also explain some of the
 remaining 16 food-short games (the same `yellow_bank` value drives both the
 Pop-cost tier and the food-consumption rate, exactly the compounding shape
 both of this pass's fixes turned out to be).
+
+## The discard-phase hand-size oracle: landed, validated, and USED -- a sharp, corpus-wide signature for the pre-existing hand-SIZE undercount, root cause still open
+
+Picked up exactly where the previous pass's own "concrete, unused lead"
+left off: `corpus::classify` (`corpus.rs:658`, now with the new code around
+it) matched every `"Discard Phase N military card(s) must be discarded"` /
+`"No Discard Phase"` line and threw the count `N` away as bare
+`LineOutcome::Bookkeeping`. That count is PUBLIC, legal-to-use information
+stating exactly how many cards a player's hand-military reconstruction
+OUGHT to need to discard at that turn -- a direct oracle for the hand-size
+drift this file's last several passes have chased indirectly, several
+rounds after the fact, via `StuckPending`.
+
+### Validated before trusting it -- a live caveat from a concurrent worker paid off
+
+Mid-pass, the coordinator relayed a live finding from a different worker on
+this project: a DIFFERENT journal field (a food total) turned out to be
+descriptive RENDERING text that could disagree with the engine's own
+correct value by one -- not every printed number in this journal is a
+recorded fact. Checked directly, per the coordinator's own suggested
+method, before building anything further on this lead:
+
+- **BGO logs the discard-phase fact TWICE, independently, every turn**: the
+  `"Discard Phase N ..."`/`"No Discard Phase"` announcement, and a separate,
+  unambiguously-real-action `"<Color> discards N cards"` resolution line
+  (`corpus::classify` already recognised THIS shape too, as
+  `ActionClass::Discard` -- and, same bug, independently, also threw its own
+  count away, `card: None`, since resolving `Pending::Choice(DiscardMilitary)`
+  never needed the number). Corpus-wide, a pure-text reconciliation of the
+  two (no Rust replay involved) found they agree on 45,590 of 46,009 (99.1%)
+  individual `(actor, round)` entries; the 0.9% that disagree are not spread
+  evenly -- concentrated in patterns consistent with the ALREADY-documented
+  "BGO logs the true final turn's End-of-turn lines twice" artifact
+  (`replay_game`'s own `EndTurn` handling), not a third, independent flaw.
+- **On real game `7522614`** (one of the games that currently replays clean
+  through to `state.game_over`): every one of its 30 announcement/resolution
+  pairs agree with EACH OTHER end to end, AND the resolution line's own
+  count (a real action, not descriptive text) disagrees with THIS BINARY's
+  own reconstruction at round 4 specifically -- Orange's real hand needed
+  exactly 1 discard there (both BGO renderings independently say so); this
+  binary's own `hand_military_len` computes 2 short of the true limit at
+  that checkpoint, entering `discard_excess_military`'s loop TWICE and
+  evicting a card the real game never touched.
+
+This is decisive: the journal field is corroborated by an independent,
+unarguably-real action, on a game this binary otherwise replays correctly
+end to end, and it disagrees with THIS BINARY's own state -- not with
+itself. `prescan_discard_phase_oracle` (`replay_common.rs`) encodes this
+validation as a permanent GATE, not a one-off check: an `(actor, round)`
+entry only enters the trusted oracle map when both journal renderings
+agree; the ~0.9% that don't are silently dropped (not reported as a hand-
+size divergence, since a journal self-inconsistency is not evidence about
+this binary's own reconstruction).
+
+### The instrument, landed on its own (commit `805c9ac`)
+
+`Replayer::check_discard_phase_oracle` is called from the `EndTurn` dispatch
+arm, at the exact point (right after `resolve_intervening` succeeds, right
+before `try_apply(Move::EndTurn, ...)`) where `hand_military.len()` is
+guaranteed to equal exactly what `interact::discard_excess_military` --
+the very next thing that runs, as step 1 of `economy::end_of_turn` -- is
+about to read, mirroring that function's own `limit` formula exactly
+(`military_actions + military_hand_limit`). Read-only: never mutates
+`self.state`, only this struct's own oracle bookkeeping. `GameResult` gained
+three new fields (`discard_oracle_divergence` -- the FIRST diverging
+checkpoint only, `discard_oracle_checked`, `discard_oracle_agreed`);
+`replaystats` prints a new "Discard-phase hand-size oracle" report section.
+
+**Confirmed behaviour-preserving** before landing: the stop-reason histogram
+(every bucket's count and reason string) is byte-identical between a run
+before this instrument and a run after it -- this changes no replay
+decision, it only observes. Seven new tests (`replay_common.rs`), full-
+sentence names, covering the parser shapes and the agree/disagree gating
+logic directly (`discard_phase_oracle_drops_an_entry_where_the_two_journal_
+renderings_disagree` pins the exact validation property above).
+
+### Corpus-wide result: a very sharp, very early, very consistent OVERCOUNT
+
+Run against the corpus (1,011 games, tree at commit `805c9ac`):
+**28,694 checkpoints had a trusted journal count to check against; 17,970
+(62.6%) matched exactly. 992/1,011 games (98.1%) have at least one
+checkpoint disagree.** Bucketing the FIRST divergence per game by
+signature:
+
+| round of first divergence | count | share |
+|---|---|---|
+| 3 | 101 | 10.2% |
+| **4** | **769** | **77.5%** |
+| 5 | 98 | 9.9% |
+| 6 | 17 | 1.7% |
+| 7-12 | 7 | 0.7% |
+
+Rounds 3-5 alone account for 968/992 (97.6%) of every first divergence in
+the whole corpus -- this is not a diffuse "hand tracking drifts eventually"
+problem, it is a sharp, early, near-universal signature. The divergence's
+own sign and size:
+
+| `reconstructed_excess - journal_excess` | count |
+|---|---|
+| +1 | 660 |
+| +2 | 304 |
+| +3 | 26 |
+| +4 | 2 |
+
+**Always positive** (this binary's own reconstruction is never LOWER than
+the journal at the first divergence, only higher) -- a systematic OVERCOUNT,
+not noise scattered around zero. By actor: Orange 584, Purple 363, Green 40,
+Grey 5 -- roughly proportional to how often each seat appears across 2p/3p/4p
+games in the corpus (not concentrated in one seat, ruling out a "only the
+first-to-move player" theory).
+
+### Two games hand-traced end to end -- draws and the limit are BOTH confirmed correct, and the paradox is real
+
+`7522614` (Orange, first divergence round 4: journal excess 0, this binary
+computes 2, `hand_military_len=4 limit=2`): every `economy::end_of_turn`
+`draw_military_step` print for rounds 2 and 3 (`military_actions_unused=2
+n_drawn=2`, both) matches the journal's own `"draws 2 military cards"`
+EXACTLY -- the draw side is not the cause, confirmed independently a second
+time (the Sixteenth pass already ruled this out for a different game).
+`military_actions=2` at this checkpoint is Despotism's own base value
+(`RULES_SPEC.md` 1.2/8.1: "4 CA, 2 MA", matching `effects::Stats::default`'s
+own tested value, `military_hand_limit=0` since no card/government grants
+extra) -- the LIMIT formula is also not the cause, confirmed directly
+against the rulebook rather than assumed. No `DeclareWar`/`PlayAggression`/
+`ProposePact`/`PlayTactic` reveal or any other `hand_military`-mutating call
+fires for this player before round 4's checkpoint (checked against every
+non-test `hand_military.push` site in the engine, `interact.rs`/`combat.rs`/
+`legal.rs`/`economy.rs`/`events.rs` -- none apply here). So `hand=4` is
+EXACTLY what this binary's own draws predict (0 + 2 + 2), and yet the real
+game only needed 1 discard at this checkpoint (both BGO renderings agree),
+implying the true hand was 3, not 4. **Draws are right, the limit is right,
+and the hand is still one too many -- this is the open paradox, not yet
+resolved.**
+
+`7523353` (Orange, first divergence round 5, not round 4 -- this game's
+rounds 2/3 each only draw 1 card, not 2, because the player spent 1 of their
+2 military actions on a `"takes ... uses 1 military action"` civil-hand
+Take that round, correctly reducing THIS binary's own `military_actions_
+unused` and its draw count to match -- confirms the draw-reduction-from-MA-
+spending mechanic is ALSO already modelled correctly): pre-draw hand reaches
+3 only at round 5 (1+1+1), one round later than `7522614`'s game, but the
+SAME shape once it does -- `hand_military_len=3 limit=2`, this binary
+computes excess 1, journal says 0, implying true hand is 2, not 3. Tested
+and FALSIFIED the "current turn's unused military-action spending also
+lowers THIS turn's discard limit, not just the draw count" theory directly
+against this game (round 5 has no MA-spending line at all, so that theory
+predicts no divergence here -- it still diverges).
+
+### What was ruled out chasing the mechanism (do not re-check these)
+
+- **The draw count formula** (`economy::end_of_turn`'s `military_actions.
+  clamp(0,3)` / `military_actions_unused`) -- confirmed exact against the
+  journal's own printed counts on two separate games this pass, a third
+  confirmation after the Sixteenth pass's own.
+- **The military hand limit formula** (`military_actions + military_hand_
+  limit`) -- confirmed exact against `RULES_SPEC.md`'s own cited Despotism
+  values, not merely assumed unchanged from a previous pass.
+- **A single-seat artifact** (e.g. "only the player who moves first is
+  wrong") -- the actor breakdown above is proportional to seat frequency
+  across the corpus, not concentrated in seat 0.
+- **The current turn's own military-action spending changing THAT turn's
+  discard limit** (as opposed to just its draw count) -- falsified directly
+  on `7523353` round 5 (no MA spent that turn, still diverges).
+- **A pure-Python, journal-only reconstruction with a FIXED `limit=2`**
+  as a cross-check tool: diverges rapidly and unboundedly by round 15+ in
+  BOTH games sampled, because `military_actions` genuinely grows over the
+  game (government changes, techs, wonders) and a fixed baseline does not
+  track it -- this is a dead end for validating rounds much past the
+  opening, NOT evidence the round-4/5 signature itself is spurious (this
+  binary's own Rust-computed `limit`, which DOES track government changes
+  via `effects::state_stats`, is what the real oracle check above uses, and
+  IT stays right far more often after the opening rounds -- 62.6% overall
+  agreement despite 98% of games having failed at least once early).
+- **Deliberately NOT re-litigated**: whether BGO's real step order is
+  discard-before-production/draw or the reverse -- `RULES_SPEC.md` section 9
+  already marks this "RESOLVED" with rulebook/Chronicle-of-Life/FAQ page
+  citations, and the raw journal's own TEXTUAL line order (`"Discard Phase
+  N"` sometimes before, `"No Discard Phase"` sometimes after, the following
+  `"End turn"` line in the SAME game) is a UI-submission artifact, not
+  evidence of engine step order -- do not use it to argue for reordering
+  `economy::end_of_turn`'s steps.
+
+### Concrete next step for whoever picks this up: audit the FIRST few rounds card-by-card on a minimal repro, not the whole engine
+
+`7522614` is about as clean a repro as this project gets: 2 players, no
+military plays, no reveals, no events before the first divergence, draws
+and limit both independently confirmed correct, and the paradox is fully
+isolated to "4 real draws should be exactly 4 real cards, and the real
+game's own two independent facts say otherwise." The next move is a
+card-by-card audit of what `interact::discard_options`/`DiscardSolver`/
+`ground_*` do NOT touch here (none of them fire before round 4 in this
+game) versus what a closer reading of BGO's OWN client behaviour around
+the very first military draw might reveal -- e.g. whether Age A (round 1,
+which never draws) secretly reserves or pre-assigns something that Age I's
+first draw (round 2) should NOT re-grant, or whether `draw_military`'s
+reshuffle/seed logic has an off-by-one specific to a fresh age's first call
+that a larger, noisier game would never expose as cleanly. The oracle
+(`REPLAY_DUMP`-free -- just run `replaystats` and read the new "Discard-
+phase hand-size oracle" section, or grep the divergence list for a specific
+game) makes any future theory falsifiable in minutes rather than a full
+pass: land a candidate fix, rerun `replaystats`, and check whether the
+992-game divergence count and the round-4 concentration actually drop,
+using the same exact-game-ID-set-diff discipline the actor-mismatch
+bucket's own passes established (a raw count drop is not automatically
+progress; diff the sets).
