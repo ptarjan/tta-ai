@@ -164,7 +164,7 @@ use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
 use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND};
-use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
+use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
 // Journal line
@@ -446,6 +446,28 @@ struct Replayer<'a> {
     /// "Decision recording" section. Drained into [`GameResult::decisions`]
     /// at the end of [`replay_game`].
     decisions: Vec<Decision>,
+    /// Cross-validated `(actor seat, round) -> true hand-military excess`
+    /// truth from [`prescan_discard_phase_oracle`] -- see that function's
+    /// own doc and the module doc's "Discard-phase hand-size oracle"
+    /// section. Set directly by [`replay_game`] after construction (like
+    /// `produces_grants`), not threaded through [`Replayer::new`]'s own
+    /// parameter list, for the same reason that field gives.
+    discard_phase_oracle: HashMap<(u8, String), u32>,
+    /// The FIRST `(actor, round)` checkpoint (in journal order) where this
+    /// game's own reconstructed military-hand excess disagreed with
+    /// [`discard_phase_oracle`]'s truth -- see
+    /// [`Replayer::check_discard_phase_oracle`]. `None` either because the
+    /// game never diverged, or because it stopped (a `Mismatch`) before any
+    /// checkpoint disagreed.
+    discard_oracle_divergence: Option<DiscardOracleDivergence>,
+    /// How many `(actor, round)` checkpoints had a cross-validated journal
+    /// entry to compare against (`discard_oracle_checked`) and how many of
+    /// those this binary's own reconstruction matched exactly
+    /// (`discard_oracle_agreed`) -- copied into [`GameResult`] at the end of
+    /// [`replay_game`], the oracle's own "how much of the game is even
+    /// checkable, and how much of THAT is right" coverage stat.
+    discard_oracle_checked: u32,
+    discard_oracle_agreed: u32,
 }
 
 /// Overwrite the current-events pile with `reveal_order` -- the journal's
@@ -516,6 +538,10 @@ impl<'a> Replayer<'a> {
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
             decisions: Vec::new(),
+            discard_phase_oracle: HashMap::new(),
+            discard_oracle_divergence: None,
+            discard_oracle_checked: 0,
+            discard_oracle_agreed: 0,
         }
     }
 
@@ -1578,6 +1604,54 @@ impl<'a> Replayer<'a> {
         }
     }
 
+    /// Cross-checks this binary's own reconstructed military-hand excess for
+    /// `actor` against [`discard_phase_oracle`](Self::discard_phase_oracle)'s
+    /// cross-validated journal truth for the exact `(actor, line.round)`
+    /// checkpoint -- see this file's "Discard-phase hand-size oracle" module
+    /// doc. Called from the `EndTurn` dispatch arm right AFTER
+    /// `resolve_intervening` and right BEFORE `try_apply(Move::EndTurn, ..)`
+    /// -- the one point in the whole replay where `self.state.players[actor]
+    /// .hand_military` is guaranteed to be exactly what `interact::
+    /// discard_excess_military` (step 1 of `economy::end_of_turn`, the very
+    /// next thing that runs) is about to read, mirroring that function's own
+    /// `limit` formula exactly (`military_actions + military_hand_limit`).
+    ///
+    /// A silent no-op when the oracle has no trusted entry for this
+    /// checkpoint -- most commonly the `game_over`-guarded duplicate
+    /// trailing "End turn" line for the true final turn (this function is
+    /// not even called on that path, see the call site), or a round whose
+    /// two journal renderings disagreed with EACH OTHER and so were dropped
+    /// by `prescan_discard_phase_oracle` rather than trusted either way.
+    /// Read-only with respect to `self.state` -- never mutates game state,
+    /// only this struct's own oracle bookkeeping fields.
+    fn check_discard_phase_oracle(&mut self, actor: u8, line: &Line) {
+        let Some(&journal_excess) = self.discard_phase_oracle.get(&(actor, line.round.to_string())) else {
+            return;
+        };
+        let p = &self.state.players[actor as usize];
+        let s = effects::state_stats(&self.state, p);
+        let limit = s.military_actions + s.military_hand_limit;
+        let hand_len = p.hand_military.len();
+        let reconstructed_excess = (hand_len as i32 - limit).max(0) as u32;
+        self.discard_oracle_checked += 1;
+        if reconstructed_excess == journal_excess {
+            self.discard_oracle_agreed += 1;
+            return;
+        }
+        if self.discard_oracle_divergence.is_none() {
+            self.discard_oracle_divergence = Some(DiscardOracleDivergence {
+                lineno: line.lineno,
+                round: line.round.to_string(),
+                age: line.age.to_string(),
+                actor: Color::parse(line.color).map(Color::as_str).unwrap_or("?"),
+                journal_excess,
+                reconstructed_excess,
+                hand_len,
+                limit,
+            });
+        }
+    }
+
     /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
     /// -- `c` must be that pending's own snapshot, read by the caller just
     /// before calling this (`resolve_intervening` and `resolve_discard`
@@ -2533,6 +2607,136 @@ fn prescan_plunder_splits(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> {
     out
 }
 
+// ---------------------------------------------------------------------
+// Discard-phase hand-size oracle
+// ---------------------------------------------------------------------
+//
+// `corpus::classify` matches BGO's own `"Discard Phase N military card(s)
+// must be discarded"` / `"No Discard Phase"` announcement (§6.6 step 1's
+// modal, opened for EVERY player EVERY turn, not just when a real discard is
+// needed) and classifies it as bare `LineOutcome::Bookkeeping` -- the count
+// `N` was never parsed anywhere in this file. This is PUBLIC, legal-to-use
+// information (an on-screen phase announcement, not a rival's hand or deck
+// order) that states, in the journal's own words, exactly how many cards
+// this binary's reconstruction OUGHT to need to discard at that turn,
+// independent of whatever `hand_military.len()` happens to compute --
+// `docs/REPLAY.md`'s "concrete, unused lead" section this implements.
+//
+// Validated before use, per this task's own "measure first" instruction
+// (a sibling investigation on this project found a DIFFERENT journal field,
+// a food total, was descriptive RENDERING text that could be off by one
+// against the engine's own correct value -- not every printed number is a
+// recorded fact). Two independent pieces of evidence rule that out here:
+//
+// 1. BGO logs this fact TWICE per turn: the announcement itself, and a
+//    separate, unambiguously-a-real-action `"<Color> discards N cards"`
+//    resolution line the modal resolves into (`corpus::classify` already
+//    recognises this second shape as `ActionClass::Discard`, but -- same
+//    bug, independently -- throws ITS OWN count away too, `card: None`,
+//    since resolving `Pending::Choice(DiscardMilitary)` only needs to know
+//    THAT a discard happened, not how many). Corpus-wide, these two
+//    independent renderings of the same fact agree on 45,590 of 46,009
+//    (99.1%) individual `(actor, round)` entries; nearly all of the
+//    remainder is concentrated in a handful of games rather than spread
+//    evenly, consistent with the ALREADY-documented "BGO logs the true
+//    final turn's End-of-turn lines twice" artifact (`replay_game`'s own
+//    `EndTurn` handling, above) rather than a third, unrelated flaw in one
+//    of the two fields. [`prescan_discard_phase_oracle`] uses this
+//    agreement as a validity GATE, not just a one-off check: only an entry
+//    where both renderings agree is trusted.
+// 2. On real game `7522614` (one of the 29 games that currently replay
+//    clean through to `state.game_over`), EVERY one of its 30
+//    announcement/resolution pairs agree with each other, AND the
+//    resolution line's own count (a real, unambiguous action, not
+//    descriptive text) disagrees with this binary's own reconstruction at
+//    round 4 -- Orange's real hand needed exactly 1 discard there (both
+//    BGO renderings say so); this binary's own `hand_military_len` computes
+//    2 short of the true limit, entering `discard_excess_military`'s loop
+//    TWICE and evicting a card the real game never touched. This is
+//    decisive: the journal field is corroborated by an independent,
+//    unarguably-real action on a game this binary otherwise gets right end
+//    to end, and it disagrees with THIS BINARY's own state, not with itself.
+fn parse_discard_phase_announcement(text: &str) -> Option<u32> {
+    if text == "No Discard Phase" {
+        return Some(0);
+    }
+    let rest = text.strip_prefix("Discard Phase ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: u32 = rest[..digits_end].parse().ok()?;
+    let tail = &rest[digits_end..];
+    (tail == " military card must be discarded" || tail == " military cards must be discarded").then_some(n)
+}
+
+/// BGO's own `"<Color> discards N card(s)"` resolution line -- the real,
+/// state-changing confirmation [`parse_discard_phase_announcement`]'s modal
+/// resolves into. `corpus::classify` already recognises this shape
+/// (`ActionClass::Discard`) but discards its own count (`card: None`, and no
+/// numeric field on `Classified` to carry it even if it wanted to) since
+/// resolving `Pending::Choice(DiscardMilitary)` never needed the number --
+/// re-parsed here, independently, purely as this oracle's own cross-check.
+fn parse_discard_count_line(text: &str) -> Option<(Color, u32)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let rest = rest.strip_prefix("discards ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: u32 = rest[..digits_end].parse().ok()?;
+    let tail = &rest[digits_end..];
+    (tail == " card" || tail == " cards").then_some((actor, n))
+}
+
+/// Builds [`Replayer::discard_phase_oracle`] -- see this section's own
+/// module doc above for why an entry is only trusted when
+/// [`parse_discard_phase_announcement`] and [`parse_discard_count_line`]
+/// independently agree (both zero counts as "No Discard Phase" with no
+/// matching resolution line at all). Keyed by the journal's own `round`
+/// column text verbatim (not re-parsed to a number) -- the same string
+/// [`Replayer::check_discard_phase_oracle`] reads off the `EndTurn` line's
+/// own `Line::round` to look an entry up, so the two never need to agree on
+/// a numeric parse, only on being the same slice of text.
+fn prescan_discard_phase_oracle(lines: &[Line]) -> HashMap<(u8, String), u32> {
+    let mut announced: HashMap<(u8, String), u32> = HashMap::new();
+    let mut actual: HashMap<(u8, String), u32> = HashMap::new();
+    for line in lines {
+        if let Some(n) = parse_discard_phase_announcement(line.text) {
+            if let Some(actor) = Color::parse(line.color) {
+                announced.insert((actor.seat(), line.round.to_string()), n);
+            }
+        }
+        if let Some((actor, n)) = parse_discard_count_line(line.text) {
+            *actual.entry((actor.seat(), line.round.to_string())).or_insert(0) += n;
+        }
+    }
+    let mut out = HashMap::with_capacity(announced.len());
+    for (key, n) in announced {
+        if actual.get(&key).copied().unwrap_or(0) == n {
+            out.insert(key, n);
+        }
+    }
+    out
+}
+
+/// One journal-cross-validated hand-size fact this binary's own
+/// reconstruction disagreed with -- see [`GameResult::discard_oracle_
+/// divergence`] and this file's "Discard-phase hand-size oracle" module doc.
+pub struct DiscardOracleDivergence {
+    pub lineno: usize,
+    pub round: String,
+    pub age: String,
+    pub actor: &'static str,
+    /// BGO's own cross-validated truth (see [`prescan_discard_phase_oracle`]).
+    pub journal_excess: u32,
+    /// This binary's own reconstruction at the same checkpoint:
+    /// `max(0, hand_military.len() as i32 - (military_actions + military_hand_limit))`.
+    pub reconstructed_excess: u32,
+    pub hand_len: usize,
+    pub limit: i32,
+}
+
 /// Foray/Raiders' own `Special::StrongestPlayers`/`WeakestPlayers` "gains/
 /// loses a total of N resources and/or food (their choice)" resolution line:
 /// `"<Color> produces <N> food; <Color> produces <M> resources"` (either
@@ -3085,6 +3289,18 @@ pub struct GameResult {
     /// `replay_game` was called with `record_decisions: true`. See the
     /// module doc's "Decision recording" section.
     pub decisions: Vec<Decision>,
+    /// See [`Replayer::discard_oracle_divergence`] and this file's
+    /// "Discard-phase hand-size oracle" module doc: the FIRST `(actor,
+    /// round)` checkpoint where this game's own reconstructed military-hand
+    /// excess disagreed with BGO's own cross-validated `"Discard Phase N
+    /// ..."` count.
+    pub discard_oracle_divergence: Option<DiscardOracleDivergence>,
+    /// See [`Replayer::discard_oracle_checked`]/[`Replayer::
+    /// discard_oracle_agreed`] -- how many checkpoints had a trusted journal
+    /// entry to compare against, and how many of those this binary's own
+    /// reconstruction matched exactly.
+    pub discard_oracle_checked: u32,
+    pub discard_oracle_agreed: u32,
 }
 
 /// A journal line class that is BGO's after-the-fact CONFIRMATION that
@@ -3249,6 +3465,7 @@ pub fn replay_game(
     );
     r.record_decisions = record_decisions;
     r.produces_grants = prescan_produces_grants(&lines);
+    r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
 
     // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
     // total" handoff): per-actor running sum of every `TakeCard` line's own
@@ -3367,6 +3584,21 @@ pub fn replay_game(
                     if r.state.game_over {
                         Ok(())
                     } else {
+                        // Right here, `self.state.players[actor].hand_military`
+                        // is EXACTLY what `interact::discard_excess_military`
+                        // (the very next thing `try_apply` below runs, as step
+                        // 1 of `economy::end_of_turn`) is about to read -- the
+                        // one checkpoint in the whole file where this binary's
+                        // own reconstructed military-hand size can be compared
+                        // against BGO's own stated truth for free, before a
+                        // drift becomes a `StuckPending` several rounds later.
+                        // See [`Replayer::check_discard_phase_oracle`]'s own
+                        // doc and the module doc's "Discard-phase hand-size
+                        // oracle" section. Skipped on the `game_over` branch
+                        // above (BGO's documented duplicate trailing "End
+                        // turn" line for the true final turn) -- nothing left
+                        // to check against a state that already finished.
+                        r.check_discard_phase_oracle(actor, line);
                         r.try_apply(Move::EndTurn, true)
                     }
                 }) {
@@ -3798,6 +4030,9 @@ pub fn replay_game(
         discards_chosen: r.discard_solver.chosen,
         discards_forced_collision: r.discard_solver.forced_collisions,
         decisions: r.decisions,
+        discard_oracle_divergence: r.discard_oracle_divergence,
+        discard_oracle_checked: r.discard_oracle_checked,
+        discard_oracle_agreed: r.discard_oracle_agreed,
     }
 }
 
@@ -5034,6 +5269,93 @@ mod tests {
             None
         );
         assert_eq!(parse_produces_grant_line("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    /// Real corpus shapes for BGO's own §6.6-step-1 announcement, singular
+    /// and plural, `"No Discard Phase"`, and the largest real value observed
+    /// corpus-wide (`14`, game-independent -- just the parser's own upper
+    /// range) -- see the "Discard-phase hand-size oracle" module doc.
+    #[test]
+    fn parse_discard_phase_announcement_reads_every_real_corpus_shape() {
+        assert_eq!(parse_discard_phase_announcement("No Discard Phase"), Some(0));
+        assert_eq!(parse_discard_phase_announcement("Discard Phase 1 military card must be discarded"), Some(1));
+        assert_eq!(parse_discard_phase_announcement("Discard Phase 2 military cards must be discarded"), Some(2));
+        assert_eq!(parse_discard_phase_announcement("Discard Phase 14 military cards must be discarded"), Some(14));
+    }
+
+    #[test]
+    fn parse_discard_phase_announcement_rejects_unrelated_text() {
+        assert_eq!(parse_discard_phase_announcement("Action Phase begins"), None);
+        assert_eq!(parse_discard_phase_announcement("Orange discards 1 card"), None);
+        // Malformed/truncated shapes must not be mistaken for a real one.
+        assert_eq!(parse_discard_phase_announcement("Discard Phase military card must be discarded"), None);
+        assert_eq!(parse_discard_phase_announcement("Discard Phase 2 military cards must be"), None);
+    }
+
+    /// The `"<Color> discards N card(s)"` resolution line -- singular/plural,
+    /// and rejecting a line that merely starts the same way (`"discards"` is
+    /// also the verb for civil-hand-limit debug text elsewhere, so the
+    /// trailing shape has to be checked exactly, not just the prefix).
+    #[test]
+    fn parse_discard_count_line_reads_singular_and_plural() {
+        assert_eq!(parse_discard_count_line("Orange discards 1 card"), Some((Color::Orange, 1)));
+        assert_eq!(parse_discard_count_line("Purple discards 4 cards"), Some((Color::Purple, 4)));
+    }
+
+    #[test]
+    fn parse_discard_count_line_rejects_unrelated_text() {
+        assert_eq!(parse_discard_count_line("No Discard Phase"), None);
+        assert_eq!(parse_discard_count_line("Orange discards Legion"), None);
+        assert_eq!(parse_discard_count_line("Orange passes Political Phase"), None);
+    }
+
+    /// Builds a bare `Line` for [`prescan_discard_phase_oracle`]'s own
+    /// tests -- only the four fields that function reads matter to it.
+    fn oracle_test_line<'a>(color: &'a str, round: &'a str, text: &'a str) -> Line<'a> {
+        Line { lineno: 0, color, age: "I", round, text }
+    }
+
+    /// The ordinary, overwhelmingly common case: the announcement and the
+    /// resolution line agree, so the entry is trusted and carries the
+    /// announced count through.
+    #[test]
+    fn discard_phase_oracle_trusts_an_entry_where_both_journal_renderings_agree() {
+        let lines = [
+            oracle_test_line("Orange", "4", "Discard Phase 1 military card must be discarded"),
+            oracle_test_line("Orange", "4", "End turn Orange scores:; ; 1 culture (now 1)"),
+            oracle_test_line("Orange", "4", "Orange discards 1 card"),
+        ];
+        let oracle = prescan_discard_phase_oracle(&lines);
+        assert_eq!(oracle.get(&(Color::Orange.seat(), "4".to_string())), Some(&1));
+    }
+
+    /// `"No Discard Phase"` with no matching resolution line at all is its
+    /// own agreement case (announced 0, actual 0 by absence) -- must be
+    /// trusted, not dropped for "missing" a resolution line.
+    #[test]
+    fn discard_phase_oracle_trusts_a_no_discard_phase_entry_with_no_resolution_line() {
+        let lines = [oracle_test_line("Purple", "7", "No Discard Phase")];
+        let oracle = prescan_discard_phase_oracle(&lines);
+        assert_eq!(oracle.get(&(Color::Purple.seat(), "7".to_string())), Some(&0));
+    }
+
+    /// The real, documented failure mode this gate exists for: BGO's two
+    /// independent renderings of the same fact disagree (the announcement
+    /// says 1, the later resolution line says 2 -- the exact shape found on
+    /// real game `7521072` round 6). Neither is trusted; the entry must be
+    /// ABSENT from the oracle, not silently resolved to one side or the
+    /// other, so [`Replayer::check_discard_phase_oracle`] skips it rather
+    /// than reporting a false divergence caused by a journal
+    /// self-inconsistency instead of a real reconstruction bug.
+    #[test]
+    fn discard_phase_oracle_drops_an_entry_where_the_two_journal_renderings_disagree() {
+        let lines = [
+            oracle_test_line("Orange", "6", "Discard Phase 1 military card must be discarded"),
+            oracle_test_line("Orange", "6", "End turn Orange scores:; ; 0 culture (now 4)"),
+            oracle_test_line("Orange", "6", "Orange discards 2 cards"),
+        ];
+        let oracle = prescan_discard_phase_oracle(&lines);
+        assert_eq!(oracle.get(&(Color::Orange.seat(), "6".to_string())), None);
     }
 
     /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7522658`

@@ -137,6 +137,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // seated) -- a systematic non-zero skew here (rather than a spread
     // straddling zero) would name a scoring bug directly.
     let mut score_deltas: Vec<i32> = Vec::new();
+    // `Replayer::check_discard_phase_oracle`'s own coverage stat -- see
+    // `replay_common`'s "Discard-phase hand-size oracle" module doc and
+    // `docs/REPLAY.md`'s "concrete, unused lead" section this implements.
+    let mut discard_oracle_checked_total = 0u64;
+    let mut discard_oracle_agreed_total = 0u64;
+    // One formatted line per game whose reconstruction disagreed with the
+    // journal's own cross-validated discard count -- FIRST divergence only,
+    // per the same function's own doc.
+    let mut discard_oracle_divergences: Vec<String> = Vec::new();
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -153,6 +162,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         bid_ceilings_grounded += result.bid_ceilings_grounded;
         if result.bid_ceilings_grounded > 0 {
             n_bid_ceiling_games += 1;
+        }
+        discard_oracle_checked_total += result.discard_oracle_checked as u64;
+        discard_oracle_agreed_total += result.discard_oracle_agreed as u64;
+        if let Some(d) = &result.discard_oracle_divergence {
+            discard_oracle_divergences.push(format!(
+                "{} line {} (round {} age {}, {}): journal's cross-validated excess {}, this binary computes {} \
+                 (hand_military_len {} limit {})",
+                meta.id, d.lineno, d.round, d.age, d.actor, d.journal_excess, d.reconstructed_excess, d.hand_len, d.limit
+            ));
         }
 
         for d in &result.decisions {
@@ -240,6 +258,24 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // read off a line naming the card -- see
     // `replay_common::Replayer::ground_bid_ceiling`.
     println!("hand cards grounded from a bid's own force ceiling: {bid_ceilings_grounded} (in {n_bid_ceiling_games} games)\n");
+
+    println!("## Discard-phase hand-size oracle\n");
+    println!(
+        "{discard_oracle_checked_total} `(actor, round)` checkpoints had a cross-validated journal count to check \
+         this binary's own reconstructed military-hand excess against (see `replay_common`'s \"Discard-phase \
+         hand-size oracle\" module doc and `docs/REPLAY.md`); {discard_oracle_agreed_total} ({:.1}%) matched exactly.",
+        100.0 * discard_oracle_agreed_total as f64 / discard_oracle_checked_total.max(1) as f64
+    );
+    println!(
+        "{}/{n_games} games sampled had at least one checkpoint disagree (FIRST divergence only, one line per \
+         game -- walk each back from here to find where the drift actually starts):\n",
+        discard_oracle_divergences.len()
+    );
+    for line in &discard_oracle_divergences {
+        println!("- {line}");
+    }
+    println!();
+
     println!("## Stop-reason histogram, ranked by count\n");
     println!("| count | mean round reached | reason | example |");
     println!("|---|---|---|---|");
