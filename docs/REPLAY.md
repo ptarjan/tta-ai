@@ -2917,3 +2917,100 @@ signal that should track `yellow_bank` exactly:
    (~55 games) sub-buckets mentioned two sections up remain completely
    untouched -- still worth checking whether they share a cause with each
    other before assuming three separate bugs exist.
+
+## Take/Bid handoff continued: gate-by-gate breakdown, one ENGINE bug fixed, HandFull left open (2026-08, urgent checkpoint)
+
+Picked up the Take/Bid handoff above. Per its own advice, instrumented the
+ENGINE directly instead of reimplementing take-cost rules in a script:
+`costs::TakeRejection`/`costs::take_rejection` (new, mirrors
+`can_take_gated`'s exact branch order, cross-checked by a test against every
+existing `can_take*` fixture) names WHICH gate rejects a take, and
+`replay_common.rs`'s `TakeCard` handler dumps it under `REPLAY_DEBUG`
+(`DEBUG TAKE REJECT: card=... reason=... our_take_cost=... journal_cost=...
+gate_have=... civil_actions=... hand_civil_size=... civil_hand_limit=...
+hand_civil=[...]`). Run: `REPLAY_DEBUG=1 ./target/difftest/replaystats
+sources/bgo/index.tsv /tmp/bgo-journals/journals 2>debug.txt`, then `grep -o
+"reason=[A-Za-z]*" debug.txt | sort | uniq -c`.
+
+**Gate breakdown of the 245 `IllegalMove: Take`** (before any fix this pass):
+`HandFull` 157, `Budget` 37, `WonderInProgress` 3, `WonderBudget` 3 — leaving
+45 with NO `DEBUG TAKE REJECT` line at all, meaning `take_rejection` says the
+move IS legal by the take-gate's own logic and something else (a stale
+pending/phase mismatch) blocks it instead — not yet investigated, matches the
+old handoff's "some other pending still blocks it" sub-bucket.
+
+**ENGINE BUG fixed, commit `24cb8bf`**: Rebellion's
+`civil_actions_per_discontent_worker` handler in `events.rs::apply_extras`
+was double-charging its own penalty — once via an immediate
+`p.civil_actions -=`, and AGAIN a whole turn later via `p.ca_penalty_next_turn`
+(consumed by `economy::end_of_turn`'s reset). Confirmed against game
+7522661's raw journal, which literally prints "Purple loses 4 civil actions
+on his next turn" — singular. Fix removes the redundant deferred write (kept
+the immediate subtraction, which is provably correct: by the time this block
+runs, every off-turn player's `p.civil_actions` already holds their
+pre-loaded NEXT turn's allotment, since their own last `end_of_turn` reset
+already ran). New test
+`civil_actions_per_discontent_worker_costs_exactly_one_turn_not_two`,
+confirmed red/green by reverting. Corpus effect: Take 245→239, the `Budget`
+sub-bucket within it 37→19 (WonderBudget 3→0 too — same shape, wonders pay CA
+same as everything else), mean rounds 10.41→10.57, Age II+ decisions
+37.8%→38.8%, completed games 13→14. `ca_penalty_next_turn`/its
+`economy::end_of_turn` consumer are now dead in practice (Rebellion was the
+field's only writer, grepped `data/*.json` for
+`civilActionsPerDiscontentWorker`) — left in place since the reset formula
+is still correct machinery and removing the field is a bigger, riskier
+mechanical change (~9 zero-initializer call sites); flagging for a future
+cleanup pass rather than doing it under this checkpoint's time pressure.
+
+**HandFull (157, the majority) — investigated, NOT fixed, explicit
+instruction is not to guess here.** Hand-traced two full cases end-to-end
+against raw journals with zero shortcuts (every hand card's `takes`/
+build/discover/upgrade history individually verified present-or-absent, CA
+total independently re-derived from government+wonder+tech card JSON, not
+from the engine's own number):
+- Game 7523354 line 219 (`Purple takes Air Forces`, the task's own example):
+  hand_civil_size=6, civil_hand_limit=6 (Despotism 4 + Pyramids 1 + Code of
+  Laws 1, confirmed built by line 98). All 6 hand cards individually
+  journal-confirmed present with no build/discover between their `takes` and
+  line 219.
+- Game 7523073 line 127 (`Purple takes Cartography`): hand_civil_size=5,
+  civil_hand_limit=5 (Despotism 4 + Library of Alexandria's `civilHandLimit:
+  1`, a SEPARATE bonus from `civilActions` — confirmed via `costs::
+  civil_hand_limit`'s existing two-field design). All 5 hand cards
+  individually confirmed present, including catching my own transient
+  tracing error (conflating this game's Irrigation/Alchemy history with the
+  other example game) before trusting the result.
+
+Both cases: hand == limit exactly, engine correctly computed both numbers
+independently two different ways, and the REAL human still took a card,
+directly contradicting `RULES_SPEC.md` §2.5/§6.7's `>=`-blocks reading. This
+is the SAME shape the previous pass found in 70 games and could not fully
+account for; now confirmed via full provenance tracing (not just symptom
+counting) in 2/2 cases with zero counterexamples across the full 157.
+
+**Explicit instruction from the task brief: do not change the `>=` gate
+without new evidence, and even strong evidence is "a finding to report, not
+a change to make" if it disagrees with the rulebook — so this fix was
+deliberately NOT applied**, despite passing the bar the previous handoff
+set ("dump how many hand cards are synthesised vs journal-observed, and our
+CA total vs what the journal's own `uses N civil action` lines imply" — done,
+for 2 cases, both clean). Flagging this up rather than shipping it.
+
+**Concrete next step for whoever picks this up**: either (a) get explicit
+sign-off to loosen `costs::take_gate`'s `hand_full` to strict `>` given this
+now-doubled evidence (2 fully-traced, zero-counterexample cases plus the
+previous pass's 70), scored over the full corpus before trusting it, or (b)
+if the rule must stay `>=`, look for a THIRD explanation neither pass has
+tested: BGO's own client might be buggy/lenient at exactly the boundary (a
+real digital-implementation quirk, not a rulebook-vs-engine disagreement) —
+in which case the correct fix is not a rule change at all but modeling BGO's
+actual (possibly non-canonical) accepted behavior, which changes the
+argument against loosening the gate. Either way, don't re-derive the CA math
+from scratch — `costs::civil_hand_limit`'s two-field design (`civil_actions`
++ `civil_hand_limit` bonus, added but never combined inside `effects::
+compute`) is correct and both traces above confirm it independently.
+
+The remaining `Budget` (19), `WonderInProgress` (3), and the 45 "no
+REJECT line" cases are unexamined this pass — re-run the `REPLAY_DEBUG`
+grep above first since the counts have already moved once from this same
+fix and may move again as other buckets land.
