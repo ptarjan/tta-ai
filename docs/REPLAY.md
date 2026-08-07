@@ -4190,3 +4190,307 @@ quirk).
 attempt to accept `Raid`'s "spends 6 resource" line as if it meant
 "produces" (contradicts `RULES_SPEC.md` 5.5's explicit rule that the
 attacker only ever gains).
+
+## Actor-mismatch handoff: `WinWar` fixed (216 -> ~171), the dominant
+## remaining sub-shape (discard-triggered, ~130 games) traced to a real
+## hand-SIZE-inflating grounding bug -- diagnosed, a fix attempted and
+## REVERTED after corpus-wide regression, two more distinct root causes
+## found in the sibling `PlunderSplit`/`LosePop` buckets, neither fixed
+
+Picked up the largest and deepest bucket in the whole corpus:
+`StuckPending: decider != expected actor ..., phase Actions, no pending`
+(216 games, mean stop round 13.5 -- deep into Age II/III), plus the three
+buckets flagged as plausibly the same defect seen from the other side:
+`PlunderSplit` (32), `LosePop` (24), `DestroyOwn` (5). **They are NOT one
+bug** -- the unifying hypothesis was tested early and explicitly falsified;
+this pass found at least THREE distinct, unrelated root causes across the
+four buckets, one of them fixed, two diagnosed but deliberately left open.
+Read the "Method" section before re-deriving any of this from scratch.
+
+### Fixed and landed: `WinWar` needed `is_pure_confirmation_line`, exactly like `WinAuction`
+
+`game::start_turn`'s own doc says war resolution (`combat::
+resolve_war_outcome`/`apply_war_spoils`) fires automatically at the START
+of the ATTACKER'S NEXT TURN -- not from the journal's `"<Color> wins War
+over ..."` line, which `apply_one`'s `WinWar` arm already treats as a bare
+`Ok(())` "validation checkpoint only". `resolve_intervening` was still
+being called for that line, sending `expected_actor` to the line's named
+WINNER (attacker or defender, whichever the strength favoured) while
+`decider()` was still mid a completely different player's turn, with
+nothing pending to explain the gap.
+
+Confirmed on real game `7523809` line 342: `"Orange wins War over
+Culture"` carries the IDENTICAL timestamp as, and is printed one line
+BEFORE, an unrelated Purple's own trailing `"End turn"` line, with no
+`EndTurn` in between -- the exact "not stably ordered within a second"
+artifact already documented and fixed for `WinAuction`/Taj Mahal. Added
+`WinWar` to `is_pure_confirmation_line` (commit `0207194`), mirroring the
+`WinAuction` fix exactly. Two new tests in `replay_common.rs` (one pins
+the exact confirmation-line set, confirmed red with `WinWar` removed then
+restored green; one documents `resolve_intervening`'s own `StuckPending`
+if ever called directly for this line shape).
+
+**Measurement, isolated to this one commit** (before any other change this
+pass): the bucket drops **216 -> 167** (59 of the 216 shared this exact
+shape); completed games **24 -> 28**; mean rounds 11.27 -> 11.34; decisions
+172808 -> 174551 (45.4% -> 45.9% Age II+). Clean win, no regression by any
+measure (completed count only went UP). **REPLAYER bug, not ENGINE**:
+`game::start_turn`'s own war-resolution timing was already correct; only
+this reconstruction's journal-line interpretation was wrong.
+
+A concurrent worker's unrelated fix (`deea9a0`, Foray/Raiders) landed via
+rebase mid-pass; **current landed-tree numbers, this exact commit
+(`dfc0299`)**: 1011 games, 29 completed, mean rounds 11.48, 177645
+decisions (46.7% Age II+), actor-mismatch bucket at **171**, `PlunderSplit`
+at 41, `LosePop` at 26, `DestroyOwn` at 5.
+
+### Method: instrumented the engine directly, per the standing instruction
+
+Two new `REPLAY_DEBUG_ALL`-gated prints, both landed (commit `dfc0299`,
+pure diagnostics, zero behaviour change, safe to keep):
+- `interact::discard_excess_military`: prints `idx`, hand length, the
+  computed limit and its two summands, and the hand's own contents, every
+  time it is called (not just when a discard actually fires).
+- `economy::end_of_turn`'s draw-military step: prints `idx`, unused
+  military actions, and cards actually drawn.
+
+These, plus the pre-existing `REPLAY_DEBUG_ALL` trace already covering
+`resolve_intervening`'s loop (expected actor, decider, upcoming line,
+pending top) and `resolve_one_discard_choice`'s own pick, were enough to
+fully trace every finding below without writing a single standalone
+script. `REPLAY_DUMP_BUCKET` (substring-matched against the bucket key)
+plus `comm` on two sorted game-ID lists was the tool used to confirm the
+reverted fix's regression was real, not noise -- see below.
+
+### Stall-signature distribution built for the 216-game actor-mismatch bucket (pre-`WinWar`-fix)
+
+`REPLAY_DUMP_BUCKET="phase Actions, no pending"`, then grouping the raw
+journal text of the stalling line by its leading verb:
+
+| count | shape | outcome this pass |
+|---|---|---|
+| 87 | `"<Color> discards 1 card"` | root-caused (hand-SIZE drift), NOT fixed -- see below |
+| 59 | `"<Color> wins War over ..."` | **FIXED** (`WinWar` confirmation-line, above) |
+| 34 | `"<Color> discards 2 cards"` | same root cause as the 87, above |
+| 12 | `"<Color> disbands <Unit>"` | not investigated this pass |
+| 10 | `"<Color> discards 3 cards"` | same root cause as the 87 |
+| 6 | `"<Color> destroys <Card>"` | not investigated this pass |
+| ~8 | assorted singles (`Pop`, `Develop`, 1 discards-5) | not investigated this pass |
+
+The discard-shaped rows (87+34+10+1 = 132 of the original 216, before
+`WinWar`) are the single largest sub-signature in the whole bucket -- far
+bigger than `WinWar`'s 59. They are STILL the largest chunk of the
+post-fix 171.
+
+### The unifying hypothesis, tested and falsified
+
+The brief's hypothesis was that all four assigned buckets share ONE root
+cause, the same shape as the seven already-fixed `ChoiceKind`s: "a choice
+opens as a side effect of a different player's action, and the resolving
+journal line is read out of order." Traced one concrete example from each
+of the three still-open buckets (`7523355` for the discard shape,
+`7523350` for `PlunderSplit`, `7522639` for `LosePop`) with
+`REPLAY_DEBUG_ALL`. **All three are real, but they are three DIFFERENT
+bugs**, in three different subsystems:
+
+1. **Discard shape (largest, ~130 games): `Replayer::ground_military_hand`
+   inflates hand SIZE.** Diagnosed in full, fix attempted, REVERTED. See
+   its own section below.
+2. **`PlunderSplit` (41 games): a FOOD/RESOURCE economy drift, not a
+   military-hand or ordering bug at all.** See its own section below.
+3. **`LosePop` (26 games), at least on the one game sampled: an EVENT
+   CONDITION evaluation mismatch (`Barbarians`'s "weakest civilization"
+   tie-break), not a turn-order or grounding bug.** See its own section
+   below. Not confirmed as the sole cause of the whole bucket -- one
+   sample only.
+
+None of these three is "a resolution line read out of order" -- the
+`resolve_intervening` machinery this multi-session pass has been fixing
+kind-by-kind is not where any of them live. **Do not keep hunting for a
+fourth `ChoiceKind`-shaped fix here** -- the remaining work is in hand
+tracking, resource tracking, and event-condition evaluation respectively.
+
+### Root cause 1 (diagnosed, fix REVERTED): `ground_military_hand` grows hand SIZE instead of replacing filler
+
+`Replayer::ground_military_hand(actor, card)` (`replay_common.rs`,
+`~1474`) is called the instant a player's military-hand card identity is
+first revealed by `DeclareWar`/`PlayAggression`/`ProposePact`/
+`PlayTactic`/`ColumbusColonize`. Before this pass it was a bare:
+
+```rust
+if !hand.contains(card) { hand.push(card); }
+```
+
+This ADDS a new slot instead of REPLACING one of `new_game`'s SIMULATED
+filler cards that, by construction, is not this real identity -- the true
+hand never changed size, only which identity sits in one of its slots.
+`ground_bid_ceiling` (a sibling grounder, for bonus cards specifically)
+already established the correct pattern for this exact problem, with its
+own doc AND a dedicated test (`a_logged_bid_is_taken_as_proof_the_bidder_
+held_the_force_to_pay_it`, asserting `"hand SIZE is modelled exactly and
+must not grow"`): find a "filler" victim already in hand (not needed for
+a later observed play, per `DiscardSolver::needed_after`), `remove_first`
+it, then `push` the real identity. `ground_military_hand` was the one
+remaining grounder that still just pushed.
+
+**Confirmed mechanism, traced on real game `7523355`** (`REPLAY_DEBUG_ALL`
+on `discard_excess_military`'s new print, cross-checked against every
+`"Purple draws/discards"` line in the raw journal by hand):
+- Draw counts are NOT the cause -- ruled out first. Every one of this
+  game's `economy::end_of_turn` draw-step counts (the new `draw_military_
+  step` print) matches the journal's own printed `"draws N military
+  cards"` EXACTLY, every single round from 2 through 12. The military
+  draw step is not where the drift comes from.
+- The true Purple never discards before round 10 (`"No Discard Phase"` on
+  every earlier round's own line, explicit both ways -- BGO never leaves
+  a discard silent, unlike `FreeBuild`/`GainBlock`'s "decline leaves no
+  trace" precedent). This reconstruction's Purple hits its own computed
+  `military_hand_limit` and force-discards as early as round 4 -- SIX
+  rounds before the real game ever needed to.
+- Because `resolve_intervening`'s `ChoiceKind::DiscardMilitary` "anything
+  else" branch drains ANY open discard unconditionally, using
+  `DiscardSolver`'s own ARBITRARY "Chosen" pick (there is no journal line
+  it is reading to justify WHEN a discard should fire, only WHICH card,
+  by design -- see the `discard_solver` module doc), these premature
+  pendings get silently resolved at journal lines that are not discard
+  lines AT ALL: `"discard: player 1 line 147 picked ... (Chosen)"` fired
+  while the line actually being translated was `"Orange passes Political
+  Phase"`; another fired at `"Orange bids 6"`. Five phantom forced
+  discards happen this way before round 10's first REAL one.
+- By round 12, the reconstruction's hand has been silently trimmed back
+  under the limit by these phantom discards, so when the REAL forced
+  discard is due (`"Purple discards 2 cards"`, matching a real `"Discard
+  Phase 2 military cards must be discarded"` line), no pending ever
+  reopens -- exactly the `decider != expected actor ... no pending` shape.
+
+**Fix attempted**: replace `ground_military_hand`'s bare push with the
+`ground_bid_ceiling` "swap a filler victim" pattern (excluding `Bonus`-
+type cards from the victim pool, same as `ground_bid_ceiling`; excluding
+cards `DiscardSolver::needed_after` already knows are needed for a later
+observed War/Aggression/Pact/Tactic play). Compiled clean, all 1084
+existing tests passed unmodified, and it DID fix the one traced example
+(`7523355`'s round-4 phantom discard at line 58 disappeared).
+
+**REVERTED after corpus-wide measurement showed a net regression.** Not a
+naive count comparison -- diffed the EXACT game-ID sets in the bucket
+before/after (`REPLAY_DUMP_BUCKET` + `comm`), per the standing instruction
+to verify a count change rather than assume "deeper play, different bug":
+the bucket grew **167 -> 204** (38 games newly IN the bucket, only 1
+newly OUT), and sampling five of the newly-added games directly against
+the unfixed binary found real harm, not exposure -- e.g. game `7522054`
+flipped from a full **COMPLETE** replay (302 actions, real engine scores
+computed) to a brand-new mid-game stall at round 19; games `7521671`/
+`7521724` now stop at round 4/5 instead of round 6/7 they previously
+reached (FEWER actions consumed, not more). Total corpus decisions also
+fell slightly (174551 -> 173485) -- a real regression, not a shift.
+
+**Working theory for why the naive fix regresses, not chased further this
+pass**: `DiscardSolver::needed_after` only protects a card needed by a
+LATER `DeclareWar`/`PlayAggression`/`ProposePact`/`PlayTactic` (its own
+`future_military_needs` prescan's scope). It knows nothing about a card a
+LATER `LosePop`/`PlunderSplit`/`Raid`/`Infiltrate`/`LoseColony`/
+`FlipWonder` FIFO also expects to still find in that exact identity --
+swapping such a card out as a "victim" would silently break one of THOSE
+resolutions instead, trading one bug for another. There is also a SECOND,
+inconsistent `hand_military.push` site this pass found but did not touch:
+`resolve_political_decision`'s own `self.state.players[decider as
+usize].hand_military.push(prep.card)` (`~1214`, granting the card a
+player is preparing an event with) -- fixing `ground_military_hand` alone
+while this sibling site still bare-pushes may itself be part of the
+regression (a filler victim `ground_military_hand` swapped out could be
+exactly the card THIS site later assumes is still present in its
+original, un-swapped slot). **Next attempt should fix both sites
+together** and extend the "needed later" check to cover every FIFO this
+file maintains, not just `DiscardSolver`'s.
+
+**Ruled out**: the military draw-count formula (`economy::end_of_turn`'s
+`military_actions.clamp(0,3)`) -- confirmed exact against the journal's
+own printed counts, not the source of the drift.
+
+### Root cause 2 (diagnosed, NOT fixed): `PlunderSplit`'s cap is capped by a drifted food/resource economy, not a missing FIFO entry
+
+Traced game `7523350`'s stop (line 326, bucket example) with
+`REPLAY_DEBUG_ALL`. The live `Pending::Choice(PlunderSplit)` reached at
+the stall offers four options -- `(food, resources)` pairs `(0,3) (1,2)
+(2,1) (3,0)` -- every one summing to **3**. But the journal's own
+"Plunder against Purple" line (`~323`) prints `"Your rival loses a total
+of up to 7 resource and/or food"`, and its real resolution line (`~325`,
+correctly parsed by `parse_plunder_split_line` -- confirmed by hand
+against that function's own test table) is `"Orange produces 7 resources;
+Purple spends 7 resources"` -- a **7**-total split. The FIFO's one real
+entry, `(food: 0, resources: 7)`, never matches ANY of the live choice's
+four (food+resources=3) options, so the validate-and-skip loop (built for
+the legitimate "this entry belongs to an earlier, already-auto-resolved
+single-option split" case) discards it as non-matching, finds the FIFO
+then empty, and reports `StuckPending` -- even though the real resolving
+line genuinely is sitting right there in the journal.
+
+`interact::offer_plunder_split`'s own cap is meant to be `min(printed
+value, what the VICTIM actually has to give)` -- but Purple's OWN
+end-of-turn line one turn earlier (`~321`) prints `food: 13 (now 13),
+resources: 24 (now 24)` -- nowhere near small enough to justify a cap of
+3. This points at a genuine food/resource-economy drift in THIS
+reconstruction's own tracking of Purple's stock at the moment the split
+is offered (same FAMILY of issue, not the same bug, as the already-
+documented "yellow-bank/food drift" lead from the Seventeenth pass,
+`7522625`) -- OR a bug in `offer_plunder_split`'s own cap computation
+(possibly reading the wrong player's stock, or a stale/mismodelled field).
+**Not chased further this pass** -- this is a resource-tracking
+investigation, not a `resolve_intervening`/grounding one, and is likely
+adjacent to territory other workers (Build/Upgrade/WonderStep,
+`IllegalMove: Pop`) are already independently poking at from the "cost
+mismatch" angle. Concrete next step: instrument `interact::
+offer_plunder_split`'s own cap computation directly (which field, whose
+stock) and cross-check against the SAME end-of-turn `resources`/`food`
+prints this pass already added for the discard investigation.
+
+### Root cause 3 (diagnosed on one sample, NOT fixed): `LosePop`'s `Barbarians` event may mis-evaluate a tied "weakest civilization"
+
+Traced game `7522639`'s stop with `REPLAY_DEBUG_ALL`. The triggering
+event line reads (verbatim, BGO's own text): `"Barbarians: If the
+civilization with the most culture points is one of the two weakest
+civilizations it loses 1 population. **No effect**"` -- the real game
+explicitly states the condition did NOT fire. This reconstruction's own
+`apply_single_target` trace for the SAME reveal shows a strength TIE (3
+vs 3) between the two 2p players, and (per `RULES_SPEC.md` 5.3's tie-break
+rule, "ties broken in favor of the current player") resolves that tie by
+picking the current player (Purple, who also happens to hold the most
+culture, 15 vs 3) as qualifying, so the condition fires and a `LosePop`
+pending opens for Purple -- which the real journal's own `"No effect"`
+contradicts. No later `"<Color> destroys ..."` line exists for it because,
+per BGO, none was ever needed.
+
+**Not confirmed as an engine bug vs. a replayer misread of the tie-break
+rule** -- `RULES_SPEC.md` 5.3's tie-break language is written for
+"strongest/weakest" SELECTION among multiple candidates for an effect,
+and it is not yet verified here whether a TIE for "the weakest" should
+still let the current player qualify as uniquely weakest, or whether BGO
+(and the true rule) treats a strength tie as nobody being uniquely
+weakest for a condition that requires a strict designation. **Flag this
+loudly rather than guess**: if BGO is right, this is a genuine ENGINE
+bug (the compiled tie-break would misplay this exact position against a
+human); if the tie-break rule is right and BGO's client differs, this is
+a BGO-specific quirk to document and route around in the replayer only.
+Needs a `RULES_SPEC.md`/CoL-p.7-literate pass, not a guess -- only one
+example sampled, and this pass did not check whether it explains the
+other 25 games in the bucket or is one of several distinct causes there
+too.
+
+### What was NOT investigated this pass (open, no lead)
+
+- The 12 `"<Color> disbands <Unit>"` and 6 `"<Color> destroys <Card>"`
+  actor-mismatch sub-shapes (from the pre-fix 216-game signature table
+  above) -- not sampled at all.
+- Whether `LosePop`'s `Barbarians` finding generalises to the bucket's
+  other 25 games, or whether they have their own distinct causes each.
+- `DestroyOwn`'s 5-game bucket -- not sampled this pass.
+
+### Cross-bucket note
+
+Root cause 2 (`PlunderSplit`'s resource-cap drift) and, less directly,
+root cause 3 (`Barbarians`'s tie-break) both look adjacent to territory
+other workers are independently chasing under `IllegalMove: Pop`/`Build`/
+`Upgrade`'s own "cost mismatch"/"unmodeled discount source" framing --
+flagged to the coordinator via `mcp__discord__message_agent` rather than
+raced on, per the standing instruction that duplicated work has cost this
+effort before.
