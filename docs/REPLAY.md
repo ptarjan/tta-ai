@@ -2539,3 +2539,103 @@ built and the bidder's army is short for the rest of the game.
 | mean rounds reached (of 19.27) | 10.41 | **10.55** |
 | decisions in Age II or later | 37.8% | **38.8%** |
 | `UnrecoverableHiddenInfo: colonization bid ...` | 55 | **2** |
+## Six-pending-kind pass (dedicated owner, per-kind, incremental): `PlunderSplit`
+## resolved -- REPLAYER, 10.41->10.53 mean rounds, 37.8%->38.4% Age II+, 13->14
+## completed
+
+Picked up the handoff two sections above: `resolve_intervening`'s
+`decider == expected_actor` branch returns `Ok(())` **regardless of what's
+still pending**, so `PlunderSplit`/`Raid`/`TakeRow`/`LosePop`/`LoseColony`/
+`FlipWonder` were all silently treated as resolved even when a real decision
+sat open. Doing this one kind at a time, each its own commit with its own
+full-corpus before/after measurement (this project's standing rule for this
+shared function).
+
+**`PlunderSplit` (Aggression: Plunder's attacker-chosen food/resources
+split) -- RESOLVED.** The resolving line is real and present in the corpus:
+`"<Attacker> produces <N> food; <Attacker> produces <M> resources; <Victim>
+spends <N> food; <Victim> spends <M> resources"` (either clause omitted
+entirely when its amount is 0, singular `"1 resource"` vs plural `"N
+resources"` both occur). `corpus::classify` files this whole shape as
+`Bookkeeping` (correct for census purposes) and `replay_game`'s main loop
+skips any `Bookkeeping` line outright -- so this evidence was never even
+looked at, let alone used to resolve the choice. New `parse_plunder_split_
+line`/`prescan_plunder_splits` (`replay_common.rs`) read it into a
+per-attacker-seat FIFO, and `resolve_intervening` drains a
+`Pending::Choice(PlunderSplit)` unconditionally (same tier as `GainBlock`/
+`FreeBuild`/`DiscardMilitary`, before the `decider == expected_actor` check),
+matching the popped `(food, resources)` against the choice's own `Gain`
+options.
+
+**Two traps found chasing this, both worth flagging for whoever does the
+next kind:**
+1. **A same-shaped-but-unrelated line exists and must NOT match.** Foray/
+   Refugees' `Special::WeakestPlayers`/`StrongestPlayers` "and/or" grant
+   (`events::food_or_resources`, sign > 0) prints the IDENTICAL `"<Color>
+   produces X food; <Color> produces Y resources"` shape -- but it is a
+   DETERMINISTIC computation (resources first, food for the remainder,
+   capped by blue tokens), never a `Pending::Choice` at all, and critically
+   never has a following victim `"spends"` clause (nothing is taken FROM
+   anyone). That trailing `"; <OtherColor> spends "` is therefore the
+   signature `parse_plunder_split_line` requires to tell the two apart --
+   confirmed against real corpus lines of both shapes (game `7521158`'s
+   Foray line has none; every Plunder resolution sampled does). Skipping
+   this check would have meant occasionally feeding a Foray grant into a
+   live PlunderSplit choice as if it were the attacker's answer.
+2. **A single-option `PlunderSplit` never opens a `Pending` at all**
+   (`interact::offer_plunder_split`'s `auto: true`, matching `push_choice`'s
+   own auto-resolve-if-len-1 rule) -- but BGO still logs the resolving
+   `"produces .../spends ..."` line for that deterministic outcome exactly
+   like a real multi-option choice. A naive per-attacker FIFO popped
+   strictly in journal order would therefore hand a LATER genuine choice the
+   WRONG split whenever an earlier auto-resolved one for the same attacker
+   sits ahead of it in the queue. Fixed by validating each popped entry
+   against the live choice's own `options` and skipping (not trusting
+   position) past any that don't match -- the entry belongs to an earlier
+   silent auto-resolution the queue can't otherwise distinguish.
+
+**Singular/plural bug caught by re-measuring, not by review**: the first
+landed version used `tail.strip_prefix(" resource")` before checking the
+plural `" resources"` -- since `"resources"` starts with `"resource"`, this
+silently left a stray `"s"` glued onto the parse cursor and broke every
+resources-valued split. Went undetected by `cargo test` (the unit tests only
+covered singular/plural in isolation, never back-to-back parsing continuing
+past a resources-clause) and only surfaced as a NEW `StuckPending` bucket
+(48 occurrences) in the full-corpus measurement -- exactly why this
+project's rule is measure the corpus, not trust the diff. Fixed and a
+regression test added that parses a real multi-clause corpus line end to
+end (`parse_plunder_split_line_reads_every_real_corpus_split_shape`).
+
+**24 `StuckPending: PlunderSplit ... no journal-observed Plunder resolution
+left` remain, and are legitimate, not a fixable gap in this parsing.**
+Traced one to ground truth (game `7522629` line 186, single-game repro via a
+one-line `index.tsv`): the journal's own resolving line is `"Purple produces
+3 food; Purple produces 2 resources; Orange spends 3 food; Orange spends 2
+resources"` (sums to 5, matching the card's printed "up to 5"), but this
+binary's own reconstructed `Pending::Choice(PlunderSplit)` at that point
+only offers options summing to 3 (`REPLAY_DEBUG_ALL`'s `resolve_intervening
+loop` trace: `options: [Gain(food:0,res:3), Gain(food:1,res:2),
+Gain(food:2,res:1), Gain(food:3,res:0)]`) -- the defender's own reconstructed
+food+resources total has already drifted low by the time this Plunder
+resolves, from some EARLIER, unrelated state-tracking gap (candidate: the
+"Good Harvest" event a few lines earlier, `"Each civilization produces food
+immediately"` -- not traced further, out of this kind's scope). Correctly
+refusing to guess a split the choice doesn't actually offer (rather than
+picking the closest option) turns what used to be silent, wrong corruption
+into an honest, loud stop -- exactly the "honest relabelling" the prior
+handoff predicted. **Do not "fix" this by loosening the option match** --
+the real bug, if there is one, is upstream in food/resources tracking, not
+in this choice's resolution.
+
+Full-corpus (`replaystats`, 1011 games): **mean rounds 10.41 -> 10.53,
+decisions in Age II+ 37.8% -> 38.4%, games completed 13 -> 14.** `IllegalMove:
+Take` 245 -> 230, `Pop` 96 -> 88, `PlayAction` 48 -> 42, `Develop` 41 -> 38,
+`Aggression` 25 -> 24 all dropped (real fixes, not just later stops);
+`Build`/`WonderStep` rose slightly (90->107 combined-ish), consistent with
+games reaching further and surfacing previously-unreached failures, not a
+regression -- per this project's own "read mean rounds / Age II+ % /
+completed, not raw counts" rule.
+
+Remaining five kinds (`Raid`, `TakeRow`, `LosePop`, `LoseColony`,
+`FlipWonder`) not yet attempted this pass -- see the six-kind table two
+sections above for their journal-evidence status as of before this pass.
