@@ -168,33 +168,67 @@ fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
 }
 
 /// Close the politics phase after ONE political action -- or after two.
+/// Whether the political phase that is ending had a political action PLAYED
+/// in it, or was passed. Only [`end_politics`] cares, and only for Julius
+/// Caesar -- see its own doc for why the distinction is the whole rule.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PoliticalAction {
+    Played,
+    Passed,
+}
+
 /// Mirrors `engine/actions.py::_end_politics`, and is now the single place
 /// every political handler in this file ends its phase, exactly as every
 /// `_h_*` handler in `actions.py` routes through `_end_politics` rather than
 /// setting `politics_done`/`phase` itself.
 ///
-/// Julius Caesar, *"once per game, you may take two political actions in
-/// your politics phase"*: while he is `idx`'s leader and the once-per-game is
-/// unspent, the FIRST call of a turn leaves the phase open instead of
-/// closing it (`caesar_second_politics = true`, an early return -- `phase`
-/// stays `Politics`, `politics_done` stays `false`, so `legal_moves` offers
-/// the politics list again to the SAME player); the SECOND call spends the
-/// once-per-game and closes as normal. Passing on the second action
-/// (`h_pol_pass`, same as any other handler routing through here) still
-/// closes it, matching Python: declining action two never re-arms it.
+/// Julius Caesar's printed text is *"After you play a political action, you
+/// may play another political action. This ability can be used only once per
+/// game."* (BGA's own 2015 implementation, `sources/
+/// bga_throughtheages_material.inc.php`). Both halves of that sentence are
+/// load-bearing, and `action` is what lets this function honour them:
+///
+/// - the second action is offered only after a political action was actually
+///   PLAYED -- passing is not playing one, so a pass never arms it;
+/// - the once-per-game is spent only when the second action is actually
+///   USED. "You MAY play another" means declining costs nothing, so a pass on
+///   action two closes the phase and leaves the ability available for a later
+///   turn.
+///
+/// While the ability is armed (`caesar_second_politics`), the first call of
+/// the turn returns early: `phase` stays `Politics` and `politics_done` stays
+/// `false`, so `legal_moves` offers the politics list again to the SAME
+/// player.
+///
+/// ENGINE BUG, fixed 2026-08-06 (found by replaying the BGO human corpus):
+/// this used to spend the once-per-game on ANY second call, including a
+/// decline, and to arm the second action after a pass. The corpus contradicts
+/// both outright -- in game `7523338` one player is offered and declines the
+/// second action on rounds 3, 4, 5 and 7 and still holds the ability, no
+/// player anywhere in the 1,011-game corpus takes two political actions in
+/// more than one turn, and no player who has actually used the double is
+/// ever offered it again (0 of 142). Python has the same bug; the printed
+/// card is the oracle, not Python.
 ///
 /// Also clears Joan of Arc's `peeked_event` -- "the knowledge is scoped to
 /// the politics phase the card scopes it to" (`engine/events.py::
 /// peek_top_event`'s doc comment) -- which does not fire on Caesar's early
 /// return either, matching Python's `_end_politics` clearing it only on the
 /// branch that actually closes the phase.
-fn end_politics(state: &mut GameState, idx: u8) {
+fn end_politics(state: &mut GameState, idx: u8, action: PoliticalAction) {
     let game_over = state.game_over;
     let p = &mut state.players[idx as usize];
     if p.caesar_second_politics {
         p.caesar_second_politics = false;
-        p.caesar_double_politics_used = true;
-    } else if leader_is(p, "Julius Caesar") && !p.caesar_double_politics_used && !p.resigned && !game_over {
+        if action == PoliticalAction::Played {
+            p.caesar_double_politics_used = true;
+        }
+    } else if action == PoliticalAction::Played
+        && leader_is(p, "Julius Caesar")
+        && !p.caesar_double_politics_used
+        && !p.resigned
+        && !game_over
+    {
         p.caesar_second_politics = true;
         return;
     }
@@ -952,7 +986,7 @@ fn h_war(state: &mut GameState, idx: u8, id: CardId, target: u8) {
     state.players[idx as usize].war_declared_by_me = id;
     state.players[idx as usize].war_target = target;
     state.players[target as usize].wars_declared_on_me[idx as usize] = id;
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
 }
 
 /// §5.4: pay cost, discard, compute strength, cancel any doomed pact.
@@ -972,7 +1006,7 @@ fn h_aggression(state: &mut GameState, idx: u8, card: CardId, target: u8) {
     // second action is still open, `end_politics` leaves `phase` at
     // `Politics` instead -- matching Python, which calls `_end_politics`
     // here unconditionally too and lets that same early return apply.)
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
     let atk = combat::start_aggression(state, idx, card, target);
     crate::interact::start_defense(state, idx, target, card, atk);
 }
@@ -991,7 +1025,7 @@ fn h_offer_pact(state: &mut GameState, idx: u8, card: CardId, target: u8, side: 
         PactSide::B => (target, idx),
         PactSide::A | PactSide::Unspecified => (idx, target),
     };
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
     let mut options = crate::state::OptionList::new();
     options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Accept));
     options.push(crate::state::ChoiceOption::Word(crate::state::Keyword::Refuse));
@@ -1193,7 +1227,7 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
 }
 
 fn h_pol_pass(state: &mut GameState, idx: u8) {
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Passed);
 }
 
 /// §5.2: play an event/territory card from the hand into `future_events`,
@@ -1221,12 +1255,12 @@ fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
     state.future_events.push(card);
     state.seeded_by[card.0 as usize] = idx;
     events::reveal_current_event(state);
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
 }
 
 fn h_cancel_pact(state: &mut GameState, idx: u8, owner: u8) {
     state.players[owner as usize].pacts.retain(|pact| !pact.is_party(idx));
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
 }
 
 /// Alexander the Great, as a political action: remove him from the game for
@@ -1240,7 +1274,7 @@ fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
         state.players[idx as usize].leader = CardId::NONE;
     }
     grant_yellow(&mut state.players[idx as usize], 1);
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
 }
 
 /// Christopher Columbus, as a political action: remove him from the game to
@@ -1262,7 +1296,7 @@ fn h_columbus_colonize(state: &mut GameState, idx: u8, card: CardId) {
     }
     state.players[idx as usize].hand_military.remove_first(card);
     crate::interact::gain_colony(state, idx, card);
-    end_politics(state, idx);
+    end_politics(state, idx, PoliticalAction::Played);
 }
 
 /// Ports `engine/actions.py::_h_resign` up to (not including) `game.after_
@@ -2636,6 +2670,70 @@ mod tests {
         p.techs.insert(card("Bread and Circuses"), TechSlot { workers: 1, stored: 0 }); // arena, strength 1
         let gained = wonder_completion_culture(&p, card("Internet"));
         assert_eq!(gained, 6);
+    }
+
+    // --------------------------------------------------------- Julius Caesar
+
+    /// ENGINE BUG REGRESSION (`docs/REPLAY.md`, found by replaying BGO game
+    /// `7523338`, where the same player is offered and declines the second
+    /// political action on rounds 3, 4, 5 and 7 and still holds the
+    /// ability). The printed card is *"After you play a political action,
+    /// you MAY play another political action. This ability can be used only
+    /// once per game."* -- declining is not using it, so the once-per-game
+    /// survives a decline.
+    #[test]
+    fn declining_julius_caesars_second_political_action_does_not_spend_the_once_per_game() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Julius Caesar");
+        let mut state = one_player_state(p);
+        state.phase = Phase::Politics;
+
+        // Turn one: a real political action arms the second one...
+        end_politics(&mut state, 0, PoliticalAction::Played);
+        assert!(state.players[0].caesar_second_politics);
+        assert_eq!(state.phase, Phase::Politics, "the phase stays open for action two");
+        // ...and the player declines it.
+        end_politics(&mut state, 0, PoliticalAction::Passed);
+        assert!(!state.players[0].caesar_second_politics);
+        assert_eq!(state.phase, Phase::Actions);
+        assert!(
+            !state.players[0].caesar_double_politics_used,
+            "a declined second action must leave the once-per-game available"
+        );
+
+        // Turn two: the offer comes again, and taking it really does spend it.
+        state.phase = Phase::Politics;
+        state.players[0].politics_done = false;
+        end_politics(&mut state, 0, PoliticalAction::Played);
+        assert!(state.players[0].caesar_second_politics);
+        end_politics(&mut state, 0, PoliticalAction::Played);
+        assert!(state.players[0].caesar_double_politics_used, "using it spends it");
+        assert_eq!(state.phase, Phase::Actions);
+
+        // Turn three: spent, so no second action is offered at all.
+        state.phase = Phase::Politics;
+        state.players[0].politics_done = false;
+        end_politics(&mut state, 0, PoliticalAction::Played);
+        assert!(!state.players[0].caesar_second_politics);
+        assert_eq!(state.phase, Phase::Actions);
+    }
+
+    /// The other half of the same sentence: the ability triggers off having
+    /// PLAYED a political action. Passing is not playing one, so a passed
+    /// politics phase never opens a second action -- corroborated by the
+    /// corpus, which has no turn anywhere with two political passes in it.
+    #[test]
+    fn passing_the_political_phase_never_arms_julius_caesars_second_action() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Julius Caesar");
+        let mut state = one_player_state(p);
+        state.phase = Phase::Politics;
+
+        end_politics(&mut state, 0, PoliticalAction::Passed);
+
+        assert!(!state.players[0].caesar_second_politics);
+        assert!(!state.players[0].caesar_double_politics_used);
+        assert_eq!(state.phase, Phase::Actions);
     }
 
     // ----------------------------------------------------------- on_enter/leave
