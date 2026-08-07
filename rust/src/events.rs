@@ -1224,7 +1224,22 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
         // `resolve_event` passed down to `apply_player_block` (which starts
         // at the REVEALER) -- mirrors Python's own `_order_from(state,
         // state.current)` here exactly (`events.py:340`).
-        let fresh_order = order_from(state, state.current);
+        //
+        // ENGINE BUG (same shape as `d9e52c6`'s `conditional_target`/
+        // `resolve_count_targets` fix): Uncertain Borders' own text is "the
+        // STRONGEST civilization takes 1 yellow token from WEAKEST
+        // civilization's yellow bank" -- landing in the "weakest" slot here
+        // is a penalty (you lose a token) exactly like every other
+        // `RankStat::Strength, false` selection in this module, so a
+        // strength tie must protect the current player via
+        // `protect_current_from_bad_tie`, not hand them the token loss
+        // first. This one call site is a separate function from
+        // `resolve_event`'s dispatch table (it runs from inside
+        // `apply_player_block`, once the STRONGEST player is already
+        // decided) and was never covered by that fix. The reference Python
+        // (`engine/events.py:340-342`) has the identical unreversed-order
+        // bug -- it is not an oracle here, RULES_SPEC.md 5.3 is.
+        let fresh_order = protect_current_from_bad_tie(&order_from(state, state.current));
         let weakest = rank_players(state, &fresh_order, RankStat::Strength, false);
         if let Some(&victim) = weakest.iter().find(|&&q| q != idx) {
             let take = (block.take_yellow_tokens_from_weakest.max(0) as u8)
@@ -1814,6 +1829,41 @@ mod tests {
         resolve_event(&mut state, card("Barbarians"), 1); // seat 1 (Purple) reveals
 
         assert_eq!(state.queue.pop_front(), Some(QueueItem::LosePop { player: 1, n: 1 }));
+    }
+
+    /// ENGINE BUG regression (sibling of the two Barbarians regressions
+    /// above -- same bug shape, found sweeping for other uncovered
+    /// "weakest" selectors after `d9e52c6`): Uncertain Borders' "the
+    /// strongest civilization takes 1 yellow token from weakest
+    /// civilization's yellow bank" ranked its victim with an unreversed
+    /// order, so on a genuine strength tie the CURRENT player -- not
+    /// whoever else was tied -- lost the token. Three players: p0
+    /// unambiguously strongest (takes the token); p1 and p2 tied weakest;
+    /// p2 is `state.current`. §5.3's tie-break must protect p2 (the current
+    /// player) from the penalty, leaving p1 as the victim.
+    #[test]
+    fn uncertain_borders_spares_the_current_player_from_a_tied_weakest_token_loss() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        let mut p2 = blank_player(2, card("Despotism"));
+        p0.strength_extra = 5; // unambiguously strongest
+        p1.strength_extra = 1;
+        p2.strength_extra = 1; // genuine tie with p1 for weakest
+        p1.yellow_bank = 5;
+        p2.yellow_bank = 5;
+        let mut state = multi_player_state(3, &[p0, p1, p2], &[]);
+        state.current = 2; // p2 is the current player -- must be protected
+
+        resolve_event(&mut state, card("Uncertain Borders"), 0);
+
+        assert_eq!(
+            state.players[1].yellow_bank, 4,
+            "the non-current tied player (p1) must be the one who loses a yellow token"
+        );
+        assert_eq!(
+            state.players[2].yellow_bank, 5,
+            "the current player (p2) must be spared from a tied weakest-token-loss selection"
+        );
     }
 
     /// ENGINE BUG regression (`apply_extras`' own doc comment on this arm,

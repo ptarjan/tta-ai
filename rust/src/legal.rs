@@ -441,16 +441,21 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     let disc = p.mil_discount as i32;
 
     // build
+    //
+    // Cost goes through `costs::build_cost_net` -- the SAME per-unit
+    // mil_discount/Homer-discount formula `apply::on_build_unit` charges at
+    // payment time -- rather than re-deriving `(cost - disc - homer_disc)`
+    // here by hand. Two sites computing the same net cost independently is
+    // exactly the shape that let Homer's discount go once-per-BUILD instead
+    // of once-per-TURN (`costs::homer_unit_discount`'s own doc comment);
+    // routing legality through the charge path's own function makes that
+    // class of divergence impossible to reintroduce here.
     if p.workers_free > 0 {
         for id in names.iter().copied().filter(|id| id.kind().takes_workers()) {
             let kind = id.kind();
-            let cost = match costs::build_cost_for(state, p, id) {
-                Some(c) => c,
-                None => continue,
-            };
+            let Some(cost) = costs::build_cost_net(state, p, id) else { continue };
             if kind.is_unit() {
-                let homer_disc = costs::homer_unit_discount(p, id);
-                if res < (cost - disc - homer_disc).max(0) || !have_ma {
+                if res < cost || !have_ma {
                     continue;
                 }
             } else {
@@ -469,7 +474,8 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         }
     }
 
-    // upgrade
+    // upgrade -- same single-source-of-truth reasoning as the build loop
+    // above, via `costs::upgrade_cost_net`.
     for lo in names.iter().copied().filter(|id| id.kind().takes_workers()) {
         if p.techs.workers(lo) == 0 {
             continue;
@@ -483,17 +489,12 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         } else if !have_ca {
             continue;
         }
-        let lo_cost = costs::build_cost_for(state, p, lo).unwrap_or(0);
         let higher = names
             .iter()
             .copied()
             .filter(|id| id.kind() == lo_kind && *id != lo && id.level() > lo.level());
         for hi in higher {
-            let hi_cost = costs::build_cost_for(state, p, hi).unwrap_or(0);
-            let mut cost = (hi_cost - lo_cost).max(0);
-            if unit {
-                cost = (cost - disc - costs::homer_unit_discount(p, lo)).max(0);
-            }
+            let cost = costs::upgrade_cost_net(state, p, lo, hi);
             if res >= cost {
                 moves.push(Move::Upgrade { from: lo, to: hi });
             }

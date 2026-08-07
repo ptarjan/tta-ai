@@ -357,3 +357,97 @@ Python-era measurement found it.
   re-checked against Rust; not carried forward as an open item since
   there's nothing to point at anymore. The A/B win-rate tables and weight
   scans are dropped.
+
+## 5. Sibling-rule sweep (2026-08-07): "fixed in one place, silently absent in a sibling"
+
+Prompted by `d9e52c6` (Barbarians'/Raiders'/Crime Wave's weakest-cutoff
+tie-break, factored into `events::protect_current_from_bad_tie`): a targeted
+search for every OTHER place the same shape could recur — a rule
+re-implemented in more than one function, fixed in one, never propagated to
+its siblings, with nothing to catch the divergence. Inventory below, one
+group per candidate family, each with a verdict.
+
+### 5.1 Player-selection predicates (strongest/weakest/most/least), `rust/src/events.rs`
+
+Every function that ranks players by a stat and picks one or more, as of
+this sweep:
+
+| site | selection | tie-break used | verdict |
+|---|---|---|---|
+| `apply_single_target` (`events.rs:893`) | `strongestPlayer`/`weakestPlayer`/`playerWithMostCulture`/`playerWithLeastCulture`, singular | `protect_current_from_bad_tie` when `favor_current=false` (weakest) | correct (fixed pre-`d9e52c6`, the original fix this sweep generalizes from) |
+| `apply_tied_targets` (`events.rs:928`) | `playersWithMostHappyFaces`/`playersWithMostDiscontentWorkers`, ALL tied players | none — RULES_SPEC 5.3: "most/least: all tied civs affected, no tie-break" | **clean**: no tie-break applies here by rule, so the absence of one is correct, not an oversight |
+| `conditional_target`'s culture pick (`events.rs:947`) | Barbarians' "player with most culture" (stage 1 of 2) | unreversed (favor current), same convention as `PlayerWithMostCulture` above | **clean**: this stage's outcome is not itself the penalty; it only sets up stage 2 |
+| `conditional_target`'s weakest cutoff (`events.rs:962`) | Barbarians' "among the two weakest" (stage 2 of 2) | `protect_current_from_bad_tie` | fixed in `d9e52c6` |
+| `resolve_count_targets`'s `strongestPlayers` (`events.rs:996`) | top-N strongest, benefit | unreversed (favor current) | **clean**, correct convention |
+| `resolve_count_targets`'s `weakestPlayers` (`events.rs:1022`) | bottom-N weakest, penalty (Raiders, Crime Wave) | `protect_current_from_bad_tie` | fixed in `d9e52c6` |
+| `apply_player_block`'s `take_yellow_tokens_from_weakest` (`events.rs:1222`, Uncertain Borders: "the strongest civilization takes 1 yellow token from weakest civilization's yellow bank") | single weakest, penalty (victim loses a token) | was unreversed — **the exact `d9e52c6` shape, uncovered by that fix because this is a separate function reached from inside `apply_player_block`, not `resolve_event`'s own dispatch table** | **ENGINE BUG, fixed this pass.** Now routes through `protect_current_from_bad_tie` like every other weakest-penalty selection. Regression test `uncertain_borders_spares_the_current_player_from_a_tied_weakest_token_loss` (confirmed red pre-fix, green post-fix). Corpus: 29→30 completed games, zero games lost (exact ID diff — game `7522606` newly completes), full 1,011-game `replaystats` pass. |
+
+Combat's own tie rule (§FAQ p.16: "ties favor the defender; only the
+attacker can win an aggression") is a different, single deterministic
+2-party comparison in `combat.rs::resolve_war_outcome` — not this
+selection-with-ordering shape, not duplicated, not touched.
+
+### 5.2 Cost and affordability, `rust/src/legal.rs` vs `rust/src/costs.rs`
+
+`legal.rs`'s `action_moves` build/upgrade legality loop computed its own
+inline copy of the unit discount formula (`(cost - p.mil_discount -
+homer_unit_discount(p, id)).max(0)`) instead of calling `costs::
+build_cost_net`/`costs::upgrade_cost_net` — the exact functions
+`apply::on_build_unit` calls at charge time. The two formulas were
+byte-for-byte identical today (verified: full test suite and the full
+1,011-game corpus completed-game-ID set are unchanged before/after), so
+this was a **clean negative, not a live bug** — but it is precisely the
+structural shape that let Homer's once-per-turn discount go
+once-per-*build* in an earlier pass (`costs::homer_unit_discount`'s own doc
+comment: found because a build_cost_net-style formula existed in only one
+of the two places that needed it). Refactored both loops to call `costs::
+build_cost_net`/`costs::upgrade_cost_net` directly, so a future discount
+added to the charge path's formula cannot silently miss the legality path
+(or vice versa) — the two can no longer diverge because there is only one
+formula left to read.
+
+Everywhere else checked (`take_cost`/`can_take`, `tech_cost_net` used
+identically by both `legal.rs`'s three call sites and `costs.rs`'s own
+charge path, Barbarossa's/Bach's own dedicated discount functions which
+apply to non-unit costs Homer/`mil_discount` never touch): single source of
+truth already, no duplication found.
+
+### 5.3 Per-turn/once-per-game limiters, `rust/src/state.rs` flags
+
+Every `_used`/`_used_this_turn` flag (`tactic_action_used`,
+`hammurabi_used`, `hammurabi_replaced_this_turn`,
+`replaced_leader_this_turn`, `churchill_used`, `bach_upgrade_used`,
+`ocean_liners_used`, `homer_used_this_turn`,
+`caesar_double_politics_used`, `trade_food_as_resource_used_this_turn`,
+`trade_resource_as_food_used_this_turn`) was grepped for every read and
+write site. **Clean**: each flag has exactly one gate site (`legal.rs` or
+`costs.rs`) and one set site (`apply.rs`/`costs.rs`/`economy.rs`), and
+`economy::end_of_turn` resets all eleven in a single unbroken block
+(`economy.rs:695-707`) — no flag is missing from that block, so none can
+leak past its turn. Homer's own once-per-turn cap (`costs.rs:608-626`'s doc
+comment) already documents a prior instance of this exact shape being found
+and fixed; nothing further to fix here.
+
+### 5.4 Duplicated `match` over the same enum in two files
+
+Checked `Special`'s dispatch: `effects::apply_special` is a single,
+deliberately-exhaustive match with NO wildcard arm (`effects.rs:911`, its
+own comment: "Adding a 93rd variant to the generated enum breaks this match
+at compile time, which is the entire point") that assigns every variant to
+exactly one canonical handler location by comment convention (`effects.rs`
+itself / `combat.rs` / `events.rs` / "handled elsewhere"). The many other
+`match sp { ... }` sites across `events.rs`/`combat.rs`/`effects.rs` are
+`find_map`/filter lookups for ONE specific variant each (`Special::Gain`,
+`Special::StrongestPlayer`, etc.), not competing exhaustive enumerations —
+this is already the `d9e52c6`-style "make divergence a compile error"
+structure, not an instance of the bug shape. Not touched.
+
+### 5.5 Age/era-dependent lookups
+
+Not exhaustively swept this pass (time-boxed after 5.1-5.4 above); flagged
+as the one family in the original candidate list not yet checked
+group-by-group. `discard_leader_unless_current_age`'s single reader
+(`leader.get().age != state.age_civil`, `events.rs`) was the only
+age-comparison site touched incidentally while reading `apply_player_block`
+end to end and looked correct. Left open for a future pass rather than
+claimed clean.
