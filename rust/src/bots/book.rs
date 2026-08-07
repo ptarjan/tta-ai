@@ -96,6 +96,23 @@
 //! miss -- a typo becomes a `cargo test` failure that runs on every commit,
 //! not a silently-defaulted rank discovered by a strength regression months
 //! later.
+//!
+//! ## `pub(crate)` widenings for `bots::variants`
+//!
+//! `bots::variants` (the `engine/bots/variants/` port) is BookBot's v2 rule
+//! list with a per-archetype knob profile bolted on -- literally a subclass
+//! in Python. Rust has no inheritance, so it cannot subclass this module;
+//! instead it reuses the pieces that are identical across every archetype
+//! (the rank tables, [`leader_rank`], [`wonder_value`], [`gov_value`],
+//! [`action_card_value`], [`best_level_in`], the small lookup helpers, and
+//! [`BookBot::pending_pick`] for the pending-decision phase, which no Python
+//! variant overrides either) and writes its own profile-aware replacements
+//! for the handful of rules that a profile actually changes (`prod_value`,
+//! `card_value`, `best_build`/`best_develop`/`best_take`, `r_wonder_step`,
+//! `r_military_floor`, `r_population`, `r_upgrade`, `r_play_leader`,
+//! `r_revolution`, `politics`). The items below were widened from
+//! module-private to `pub(crate)` for exactly this reuse, no wider -- nothing
+//! outside this crate's `bots` tree needs them.
 use crate::card_table::{FreeCivilActionValue, Special};
 use crate::cards::{CardId, CardType, Production};
 use crate::costs;
@@ -155,7 +172,7 @@ const WONDER_RANK: &[(&str, f64)] = &[
 ];
 
 /// Special technologies, by the size of the permanent bonus.
-const SPECIAL_RANK: &[(&str, f64)] = &[
+pub(crate) const SPECIAL_RANK: &[(&str, f64)] = &[
     ("Code of Laws", 9.0),
     ("Masonry", 8.0),
     ("Warfare", 7.0),
@@ -163,7 +180,7 @@ const SPECIAL_RANK: &[(&str, f64)] = &[
 ];
 
 /// Tactics we would rather hold than not, in strength order.
-const TACTIC_RANK: &[(&str, f64)] = &[
+pub(crate) const TACTIC_RANK: &[(&str, f64)] = &[
     ("Medieval Army", 6.0),
     ("Heavy Cavalry", 5.0),
     ("Legion", 4.0),
@@ -173,7 +190,7 @@ const TACTIC_RANK: &[(&str, f64)] = &[
 
 /// Rank on the same ~0-10 scale v1 uses, derived from tournament CA-spend and
 /// win-correlation annotations (`docs/EXPERT_STRATEGY.md`). Ages A/I/II.
-const V2_LEADER_RANK: &[(&str, f64)] = &[
+pub(crate) const V2_LEADER_RANK: &[(&str, f64)] = &[
     ("Hammurabi", 9.0),
     ("Aristotle", 8.0),
     ("Alexander the Great", 5.5),
@@ -196,7 +213,7 @@ const V2_LEADER_RANK: &[(&str, f64)] = &[
 /// Homer is the clearest 2p-vs-multiplayer split in the source. Default
 /// (an unlisted player count) is `6.0`, matching Python's
 /// `V2_HOMER.get(ctx.nplayers, 6.0)`.
-fn v2_homer(nplayers: u8) -> f64 {
+pub(crate) fn v2_homer(nplayers: u8) -> f64 {
     match nplayers {
         2 => 5.0,
         3 => 7.5,
@@ -205,7 +222,7 @@ fn v2_homer(nplayers: u8) -> f64 {
     }
 }
 
-const V2_WONDER_RANK: &[(&str, f64)] = &[
+pub(crate) const V2_WONDER_RANK: &[(&str, f64)] = &[
     ("Library of Alexandria", 9.0),
     ("Pyramids", 8.5),
     ("Colossus", 3.0),
@@ -217,13 +234,13 @@ const V2_WONDER_RANK: &[(&str, f64)] = &[
 ];
 
 /// Cards strong players essentially never pay for (`docs/EXPERT_STRATEGY.md`).
-const V2_NEVER_TAKE: &[&str] =
+pub(crate) const V2_NEVER_TAKE: &[&str] =
     &["Stock Pile", "Patriotism (A)", "Cultural Heritage (A)", "Frugality (A)", "Frugality (I)"];
 
 /// The card row charges 1 CA for slots 1-5, 2 for 6-9, 3 for 10-13. 76% of
 /// tournament Age I picks were made at 1 CA and only 2.5% at 3 CA, so the
 /// price ladder is convex, not linear. Default (any other cost) is `12.0`.
-fn v2_price_ladder(cost: i32) -> f64 {
+pub(crate) fn v2_price_ladder(cost: i32) -> f64 {
     match cost {
         0 => 0.0,
         1 => 1.0,
@@ -236,7 +253,7 @@ fn v2_price_ladder(cost: i32) -> f64 {
 /// `rank_of(TABLE, id, default)` -- the read side of every name-keyed rank
 /// table above. Linear scan over a handful of entries; see this module's top
 /// doc comment for why this is name-keyed rather than `CardId`-keyed.
-fn rank_of(table: &[(&str, f64)], id: CardId, default: f64) -> f64 {
+pub(crate) fn rank_of(table: &[(&str, f64)], id: CardId, default: f64) -> f64 {
     let name = id.name();
     table.iter().find(|&&(n, _)| n == name).map_or(default, |&(_, v)| v)
 }
@@ -249,7 +266,7 @@ fn rank_of(table: &[(&str, f64)], id: CardId, default: f64) -> f64 {
 ///
 /// # Panics
 /// If `card_table.rs` has no card named `name`.
-fn card(name: &str) -> CardId {
+pub(crate) fn card(name: &str) -> CardId {
     CardId::by_name(name).unwrap_or_else(|| panic!("bots::book: no card named {name:?}"))
 }
 
@@ -400,7 +417,7 @@ fn prod_value(prod: Production, ctx: &Ctx) -> f64 {
 /// empirical tournament CA-spend ordering, with the two conditional leaders
 /// the sources insist on (Leonardo needs a lab/library, Columbus needs a
 /// colony) and the one value the sources split by player count (Homer).
-fn leader_rank(id: CardId, ctx: &Ctx, p: Option<&PlayerState>) -> f64 {
+pub(crate) fn leader_rank(id: CardId, ctx: &Ctx, p: Option<&PlayerState>) -> f64 {
     if ctx.version < 2 {
         return rank_of(LEADER_RANK, id, 5.0);
     }
@@ -429,7 +446,7 @@ fn leader_rank(id: CardId, ctx: &Ctx, p: Option<&PlayerState>) -> f64 {
 }
 
 /// Rank, discounted by how many resources the wonder still costs.
-fn wonder_value(id: CardId, ctx: &Ctx) -> f64 {
+pub(crate) fn wonder_value(id: CardId, ctx: &Ctx) -> f64 {
     let card = id.get();
     let stages = card.stages;
     let total: i32 = stages.iter().map(|&s| s as i32).sum();
@@ -501,12 +518,12 @@ fn card_value(_state: &GameState, p: &PlayerState, ctx: &Ctx, id: CardId) -> f64
     // match every other `_r_*`/`_best_*` call site's shape.
 }
 
-fn best_level_in(p: &PlayerState, typ: CardType) -> i32 {
+pub(crate) fn best_level_in(p: &PlayerState, typ: CardType) -> i32 {
     p.techs.iter().filter(|&(id, _)| id.kind() == typ).map(|(id, _)| id.level() as i32).max().unwrap_or(-1)
 }
 
 /// Governments are bought for actions, not for their culture.
-fn gov_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
+pub(crate) fn gov_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
     let c = id.get();
     let cur = p.government.get();
     let gain_ca = c.effects.civil_actions as i32 - cur.effects.civil_actions as i32;
@@ -531,7 +548,7 @@ fn free_civil_action_of(id: CardId) -> Option<FreeCivilActionValue> {
 
 /// Action cards are tempo: worth taking only if the free action is one you
 /// were going to spend a civil action on anyway.
-fn action_card_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
+pub(crate) fn action_card_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
     let eff = &id.get().effects;
     let mut v = 0.0;
     v += eff.gain_culture as f64 * if !ctx.late { 1.0 } else { 2.0 };
@@ -625,7 +642,7 @@ impl BookBot {
         }
     }
 
-    fn pending_pick(&self, state: &GameState, moves: &[Move]) -> Move {
+    pub(crate) fn pending_pick(&self, state: &GameState, moves: &[Move]) -> Move {
         let p_idx = state.actor().idx;
         let p = &state.players[p_idx as usize];
         let ctx = Ctx::new(state, p_idx, self.version, self.tunables);

@@ -516,6 +516,18 @@ impl GreedyBot {
 /// `make_bots` kind strings. See this module's top doc comment for the one
 /// deliberate difference from Python (`from_str` rejects an unrecognized
 /// name instead of silently building a [`GreedyBot`]).
+///
+/// `Book` and the six variant archetypes (`Culture`/`Military`/`Science`/
+/// `Wonder`/`Infra`/`Tempo`) have no Python `make_bots` string to mirror --
+/// Python's own `make_bots` (`engine/bots/__init__.py`) never grew a `"book"`
+/// or variant-name branch; `BookBot`/`make_variant` are only ever
+/// constructed directly by `experiments/roster_match.py` and similar
+/// benchmark scripts, never through the generic registry. They are added
+/// here anyway (not just as bare structs) because this port's `bots::book`/
+/// `bots::variants` were themselves unreachable by name from any binary
+/// before this change -- see `bots::variants`'s own top doc comment -- and a
+/// bot with no name string is a bot no `--bots`/`--kind` flag can ever
+/// select for a league or a smoke measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BotKind {
     Random,
@@ -523,11 +535,30 @@ pub enum BotKind {
     Weighted,
     Quiescent,
     Plan,
+    Book,
+    Culture,
+    Military,
+    Science,
+    Wonder,
+    Infra,
+    Tempo,
 }
 
 impl BotKind {
-    pub const ALL: &'static [BotKind] =
-        &[BotKind::Random, BotKind::Greedy, BotKind::Weighted, BotKind::Quiescent, BotKind::Plan];
+    pub const ALL: &'static [BotKind] = &[
+        BotKind::Random,
+        BotKind::Greedy,
+        BotKind::Weighted,
+        BotKind::Quiescent,
+        BotKind::Plan,
+        BotKind::Book,
+        BotKind::Culture,
+        BotKind::Military,
+        BotKind::Science,
+        BotKind::Wonder,
+        BotKind::Infra,
+        BotKind::Tempo,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -536,6 +567,31 @@ impl BotKind {
             BotKind::Weighted => "weighted",
             BotKind::Quiescent => "quiescent",
             BotKind::Plan => "plan",
+            BotKind::Book => "book",
+            BotKind::Culture => "culture",
+            BotKind::Military => "military",
+            BotKind::Science => "science",
+            BotKind::Wonder => "wonder",
+            BotKind::Infra => "infra",
+            BotKind::Tempo => "tempo",
+        }
+    }
+
+    /// The [`super::variants::Archetype`] this kind names, if it is one of
+    /// the six variant archetypes. `pub(crate)`: `bots::neural::spec` needs
+    /// this too (its own `build_classical`), not just this module's
+    /// `build_bots`.
+    pub(crate) const fn archetype(self) -> Option<super::variants::Archetype> {
+        match self {
+            BotKind::Culture => Some(super::variants::Archetype::Culture),
+            BotKind::Military => Some(super::variants::Archetype::Military),
+            BotKind::Science => Some(super::variants::Archetype::Science),
+            BotKind::Wonder => Some(super::variants::Archetype::Wonder),
+            BotKind::Infra => Some(super::variants::Archetype::Infra),
+            BotKind::Tempo => Some(super::variants::Archetype::Tempo),
+            BotKind::Random | BotKind::Greedy | BotKind::Weighted | BotKind::Quiescent | BotKind::Plan | BotKind::Book => {
+                None
+            }
         }
     }
 }
@@ -568,6 +624,13 @@ pub enum Bot {
     Weighted(weighted::eval::WeightedBot),
     Quiescent { cfg: quiescent::QuiescenceConfig, weights: weighted::weights::Weights, stats: quiescent::Stats },
     Plan { cfg: plan::PlanConfig, stats: plan::Stats, counters: pending::Counters, rng: PyRandom },
+    /// `version: 2` (the empirical tournament tier list) -- the same
+    /// generation every [`super::variants::VariantBot`] is built on, and the
+    /// one `experiments/roster_match.py`'s Python-era benchmark used.
+    Book(super::book::BookBot),
+    /// One of the six roster archetypes; see [`BotKind::archetype`] for
+    /// which [`BotKind`] carries which [`super::variants::Archetype`].
+    Variant(super::variants::VariantBot),
 }
 
 impl Bot {
@@ -589,6 +652,15 @@ impl Bot {
             Bot::Weighted(_) => BotKind::Weighted,
             Bot::Quiescent { .. } => BotKind::Quiescent,
             Bot::Plan { .. } => BotKind::Plan,
+            Bot::Book(_) => BotKind::Book,
+            Bot::Variant(v) => match v.archetype {
+                super::variants::Archetype::Culture => BotKind::Culture,
+                super::variants::Archetype::Military => BotKind::Military,
+                super::variants::Archetype::Science => BotKind::Science,
+                super::variants::Archetype::Wonder => BotKind::Wonder,
+                super::variants::Archetype::Infra => BotKind::Infra,
+                super::variants::Archetype::Tempo => BotKind::Tempo,
+            },
         }
     }
 
@@ -605,6 +677,8 @@ impl Bot {
                 quiescent::pick(cfg, stats, state, moves, &eval)
             }
             Bot::Plan { cfg, stats, counters, rng } => plan::pick(cfg, stats, counters, rng, state, moves),
+            Bot::Book(bot) => bot.choose(state, moves),
+            Bot::Variant(bot) => bot.choose(state, moves),
         }
     }
 }
@@ -695,6 +769,15 @@ pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
                 counters: pending::Counters::default(),
                 rng: PyRandom::new(player_seed.into()),
             },
+            BotKind::Book => Bot::Book(super::book::BookBot { version: 2, tunables: super::book::V2Tunables::default() }),
+            BotKind::Culture
+            | BotKind::Military
+            | BotKind::Science
+            | BotKind::Wonder
+            | BotKind::Infra
+            | BotKind::Tempo => Bot::Variant(super::variants::VariantBot::new(
+                seat.kind.archetype().expect("BotKind::archetype covers every variant BotKind"),
+            )),
         });
     }
     out
@@ -883,13 +966,7 @@ mod tests {
     }
 
     fn matches_name(b: &Bot) -> &'static str {
-        match b {
-            Bot::Random(_) => "random",
-            Bot::Greedy(_) => "greedy",
-            Bot::Weighted(_) => "weighted",
-            Bot::Quiescent { .. } => "quiescent",
-            Bot::Plan { .. } => "plan",
-        }
+        b.kind().name()
     }
 
     #[test]

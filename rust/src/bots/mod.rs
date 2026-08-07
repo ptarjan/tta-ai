@@ -133,6 +133,7 @@ pub mod neural;
 pub mod pending;
 pub mod plan;
 pub mod quiescent;
+pub mod variants;
 pub mod weighted;
 
 use crate::moves::{Move, MoveList};

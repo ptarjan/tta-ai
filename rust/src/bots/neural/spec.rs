@@ -170,9 +170,20 @@ impl Knob {
             | (Kind::Classical(BotKind::Plan), Knob::EndTurnBias) => false,
             // Quiescence search determinizes nothing and has no beam.
             (Kind::Classical(BotKind::Quiescent), _) => false,
+            // Every other classical (non-search) kind -- Random/Greedy/
+            // Weighted, plus `book`/`bots::variants`'s rule-based roster --
+            // reads no search knob at all: none of them beam, determinize a
+            // trial, or read a war-lookahead depth.
             (Kind::Classical(BotKind::Random), _)
             | (Kind::Classical(BotKind::Greedy), _)
-            | (Kind::Classical(BotKind::Weighted), _) => false,
+            | (Kind::Classical(BotKind::Weighted), _)
+            | (Kind::Classical(BotKind::Book), _)
+            | (Kind::Classical(BotKind::Culture), _)
+            | (Kind::Classical(BotKind::Military), _)
+            | (Kind::Classical(BotKind::Science), _)
+            | (Kind::Classical(BotKind::Wonder), _)
+            | (Kind::Classical(BotKind::Infra), _)
+            | (Kind::Classical(BotKind::Tempo), _) => false,
             // The 1-ply neural bot: determinization and the end-turn bias are
             // its only two knobs (`NeuralBotConfig`'s only two fields besides
             // `allow_resign`, which no caller has ever varied).
@@ -472,6 +483,19 @@ fn build_classical(
                 rng: PyRandom::new(seed.into()),
             }
         }
+        // `book`/the six variant archetypes: no search knob applies (see
+        // `Knob::applies_to`'s classical catch-all arm), so `width`/
+        // `determinize`/`war` are all ignored here exactly as they already
+        // are for `Random`/`Greedy`/`Weighted` above.
+        BotKind::Book => ClassicalPlayer::Book(crate::bots::book::BookBot { version: 2, tunables: crate::bots::book::V2Tunables::default() }),
+        BotKind::Culture
+        | BotKind::Military
+        | BotKind::Science
+        | BotKind::Wonder
+        | BotKind::Infra
+        | BotKind::Tempo => ClassicalPlayer::Variant(crate::bots::variants::VariantBot::new(
+            kind.archetype().expect("BotKind::archetype covers every variant BotKind"),
+        )),
     }
 }
 
@@ -487,6 +511,8 @@ pub enum ClassicalPlayer {
     Weighted(weighted::eval::WeightedBot),
     Quiescent { cfg: quiescent::QuiescenceConfig, weights: Weights, stats: quiescent::Stats },
     Plan { cfg: plan::PlanConfig, stats: plan::Stats, counters: pending::Counters, rng: PyRandom },
+    Book(crate::bots::book::BookBot),
+    Variant(crate::bots::variants::VariantBot),
 }
 
 /// The positions a search actually PRICED at one decision, in whatever form
@@ -559,6 +585,8 @@ impl Player<'_> {
                 ClassicalPlayer::Plan { cfg, stats, counters, rng } => {
                     plan::pick(cfg, stats, counters, rng, state, moves)
                 }
+                ClassicalPlayer::Book(b) => b.choose(state, moves),
+                ClassicalPlayer::Variant(b) => b.choose(state, moves),
             },
             Player::Neural { net, cfg, stats, rng } => {
                 neural_bot::pick(cfg, net, stats, rng, state, moves)
@@ -596,6 +624,8 @@ impl Player<'_> {
             | Player::Classical(ClassicalPlayer::Greedy(_))
             | Player::Classical(ClassicalPlayer::Weighted(_))
             | Player::Classical(ClassicalPlayer::Quiescent { .. })
+            | Player::Classical(ClassicalPlayer::Book(_))
+            | Player::Classical(ClassicalPlayer::Variant(_))
             | Player::Neural { .. } => (self.pick_from(state, moves), Leaves::NoSearch),
         }
     }
@@ -619,6 +649,8 @@ impl Player<'_> {
                     | Player::Classical(ClassicalPlayer::Greedy(_))
                     | Player::Classical(ClassicalPlayer::Weighted(_))
                     | Player::Classical(ClassicalPlayer::Quiescent { .. })
+                    | Player::Classical(ClassicalPlayer::Book(_))
+                    | Player::Classical(ClassicalPlayer::Variant(_))
                     | Player::Neural { .. } => false,
                 };
                 let mut wars = 0u64;
