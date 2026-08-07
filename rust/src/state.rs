@@ -541,6 +541,18 @@ pub struct PlayerState {
     /// two channels, not one `ca_left`.
     pub ca_spent_taking: u8,
     pub hammurabi_used: bool,
+    /// Hammurabi was in play during THIS turn and has since been replaced by
+    /// a new leader (`apply::h_play_leader`). His once-per-turn MA-as-CA
+    /// conversion survives that replacement for the rest of the turn:
+    /// the rulebook is explicit that "you are allowed to use the benefit of a
+    /// leader and then replace him or her on the same turn" (RB, "Replacing a
+    /// Leader"), so the conversion was always reachable BEFORE the swap, and
+    /// `costs::pay_ca` only reaches for it lazily -- once the civil-action
+    /// pool runs dry, which is typically after the swap. Without this flag a
+    /// player who replaces Hammurabi mid-turn silently forfeits an action the
+    /// rules let them keep. Cleared with `hammurabi_used` in
+    /// `economy::end_of_turn`.
+    pub hammurabi_replaced_this_turn: bool,
     pub churchill_used: bool,
     pub bach_upgrade_used: bool,
     pub ocean_liners_used: bool,

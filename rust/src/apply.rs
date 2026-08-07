@@ -722,6 +722,18 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
     state.players[idx as usize].hand_civil.remove_first(id);
     let old = state.players[idx as usize].leader;
     if !old.is_none() {
+        // "You are allowed to use the benefit of a leader and then replace
+        // him or her on the same turn" (RB, "Replacing a Leader"). For every
+        // other leader that is automatic -- their benefit was already applied
+        // to whatever it touched. Hammurabi's MA-as-CA conversion is the one
+        // benefit this engine spends LAZILY (`costs::pay_ca` only reaches for
+        // it once the civil-action pool runs dry), so without remembering
+        // that he was here this turn, a player who replaces him mid-turn
+        // loses an action the rules let them keep. See
+        // `PlayerState::hammurabi_replaced_this_turn`.
+        if old.get().name == "Hammurabi" {
+            state.players[idx as usize].hammurabi_replaced_this_turn = true;
+        }
         on_leave_play(&mut state.players[idx as usize], old);
         let is_homer = old.get().name == "Homer";
         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
@@ -1369,6 +1381,7 @@ mod tests {
             taken_this_turn: CardList::new(),
             ca_spent_taking: 0,
             hammurabi_used: false,
+            hammurabi_replaced_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
@@ -1890,6 +1903,39 @@ mod tests {
         // Paid 1 CA to play, then refunded 1 CA for replacing -> net unchanged.
         assert_eq!(state.players[0].civil_actions, 1);
         assert!(state.civil_removed[Age::A as usize].contains(card("Hammurabi")), "Hammurabi is Age A");
+    }
+
+    #[test]
+    fn replacing_hammurabi_mid_turn_keeps_his_military_action_as_civil_action_conversion_for_the_rest_of_the_turn(
+    ) {
+        // RB, "Replacing a Leader": "You are allowed to use the benefit of a
+        // leader and then replace him or her on the same turn." Hammurabi's
+        // benefit is a once-per-turn MA-as-CA conversion that this engine
+        // spends LAZILY (`costs::pay_ca` only reaches for it once the civil
+        // pool is empty), so a player who spends their last printed civil
+        // action ON the replacement would silently forfeit it. Found by
+        // replaying the BGO human corpus: 103 of the 109 games whose
+        // reconstruction stopped one civil action short of what the human
+        // demonstrably spent are turns in which the human replaced Hammurabi
+        // (against Hammurabi being only 39% of all Age A leader replacements
+        // corpus-wide) -- see `docs/REPLAY.md`.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1; // last printed civil action, about to be spent
+        p.military_actions = 1;
+        p.leader = card("Hammurabi");
+        p.hand_civil.push(card("Aristotle"));
+        let mut state = one_player_state(p);
+        h_play_leader(&mut state, 0, card("Aristotle"));
+        let p = &state.players[0];
+        // Paid 1 CA to play, refunded 1 CA for replacing -> 1 printed action
+        // left, PLUS Hammurabi's conversion, which the swap must not eat.
+        assert_eq!(p.civil_actions, 1);
+        assert_eq!(costs::spare_ca(p), 2, "Hammurabi's conversion survives his own replacement");
+        let mut p = state.players[0].clone();
+        costs::pay_ca(&mut p, 2);
+        assert_eq!(p.civil_actions, 0);
+        assert_eq!(p.military_actions, 0, "the second action was paid with the military token");
+        assert!(p.hammurabi_used, "and the once-per-turn conversion is now spent");
     }
 
     // -------------------------------------------------------------- churchill

@@ -102,16 +102,30 @@ pub fn civil_hand_limit(state: &GameState, p: &PlayerState) -> i32 {
     s.civil_actions + s.civil_hand_limit
 }
 
+/// Whether Hammurabi's once-per-turn "use one military action as one civil
+/// action" conversion is still available to `p` right now.
+///
+/// The entitlement is per TURN, not per instant: `p.
+/// hammurabi_replaced_this_turn` keeps it alive after Hammurabi has been
+/// swapped out for a new leader, because the rulebook explicitly allows
+/// using a leader's benefit and then replacing him on the same turn (see
+/// that field's doc comment). Every other consumer of the conversion --
+/// including `take_gate`'s SEPARATE `leaderTakeCivilActionDiscount`, which
+/// is a continuous in-play effect and not a once-per-turn use -- still keys
+/// off the live leader.
+#[inline]
+fn hammurabi_conversion_available(p: &PlayerState) -> bool {
+    (leader_is(p, "Hammurabi") || p.hammurabi_replaced_this_turn)
+        && !p.hammurabi_used
+        && p.military_actions > 0
+}
+
 /// Civil actions available right now, counting Hammurabi's once-per-turn
 /// MA-as-CA conversion. Unlike Python's `spare_ca`, `state` is dropped from
 /// the signature: the Python body never reads it either (it only reads raw
 /// per-turn pools off `p`, not `effects.state_stats`).
 pub fn spare_ca(p: &PlayerState) -> i32 {
-    let extra = if leader_is(p, "Hammurabi") && !p.hammurabi_used && p.military_actions > 0 {
-        1
-    } else {
-        0
-    };
+    let extra = i32::from(hammurabi_conversion_available(p));
     p.civil_actions as i32 + extra
 }
 
@@ -151,11 +165,7 @@ pub fn pay_ca(p: &mut PlayerState, n: i32) {
     let used = (p.civil_actions as i32).min(n);
     p.civil_actions -= used as i8;
     let mut remaining = n - used;
-    if remaining > 0
-        && leader_is(p, "Hammurabi")
-        && !p.hammurabi_used
-        && p.military_actions > 0
-    {
+    if remaining > 0 && hammurabi_conversion_available(p) {
         p.military_actions -= 1;
         p.hammurabi_used = true;
         remaining -= 1;
@@ -633,6 +643,7 @@ mod tests {
             taken_this_turn: CardList::new(),
             ca_spent_taking: 0,
             hammurabi_used: false,
+            hammurabi_replaced_this_turn: false,
             churchill_used: false,
             bach_upgrade_used: false,
             ocean_liners_used: false,
