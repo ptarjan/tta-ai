@@ -3530,3 +3530,64 @@ All SIX pending kinds `resolve_intervening` used to silently defer via the
 `LosePop`, `TakeRow`, `Infiltrate` (this pass) plus `Raid`/`LoseColony`/
 `FlipWonder` still open -- see the HANDOFF section below for their status
 and concrete next steps.
+
+## HANDOFF (checkpoint): four of six pending kinds done, `Raid`/`LoseColony`/`FlipWonder` remain
+
+Forced checkpoint (coordinator-requested, this session ran long). Status of
+all six kinds `resolve_intervening`'s `decider == expected_actor` shortcut
+used to silently defer, regardless of what was still pending:
+
+- **`PlunderSplit`, `LosePop`, `TakeRow`, `Infiltrate`: DONE**, landed,
+  measured, pushed. See their own sections above for the full detail; do not
+  re-investigate these.
+- **`Raid`, `LoseColony`, `FlipWonder`: NOT started this session** beyond
+  the investigation already written up in the "Six-pending-kind pass:
+  `PlunderSplit`... HANDOFF" section well above (search for "Second most
+  concrete: `Raid`" and "`LoseColony`/`FlipWonder`: hardest" in this file) --
+  that investigation is UNCHANGED and still the best starting point. Current
+  corpus counts (`replaystats`, full 1011 games, on top of all four landed
+  fixes): `Raid` 14, `FlipWonder` 4, `LoseColony` 3.
+
+**New tool available for whoever picks these up**: `replaystats` now
+supports `REPLAY_DUMP_BUCKET=<substring>` (env var) to print EVERY game/
+line/text in a matching bucket to stderr, not just the histogram's one
+example -- e.g. `REPLAY_DUMP_BUCKET=Raid ./target/difftest/replaystats
+sources/bgo/index.tsv /tmp/bgo-journals/journals 2>&1 | grep '^DUMP'`. Used
+throughout this session to correlate single-game repros; much faster than
+re-deriving game IDs from `REPLAY_DEBUG_ALL` output by hand.
+
+**Restated, so it isn't lost**: `Raid`'s two journal shapes (Terrorism
+event's `"Terrorists destroy a <Color> <Building>"`, currently `Bookkeeping`
+and special-cased by name in `corpus::classify`; Aggression: Raid card's
+`"Raid casualties <N1> <Building1>[; <N2> <Building2>]; <Attacker> produces
+<M> resources"`, currently `Unclassified`) both need a GLOBAL (not
+per-player, Terrorism's line never names the attacker) prescan, same
+validate-and-skip pattern as `PlunderSplit`/`LosePop`/`Infiltrate`'s FIFOs
+-- by now there are FOUR worked examples of this exact pattern in this file
+to copy from, `PlunderSplit`'s being the clearest first read. `LoseColony`/
+`FlipWonder` are flagged "hardest, NOT recommended next" in that same
+section -- their resolving text is glued INSIDE `resolve_political_
+decision`/`PrepareEvent` machinery, not a freestanding later line, and no
+one has yet re-read that call site to check whether it's simpler to resolve
+inline from there instead of a prescan FIFO. Start with `Raid` first.
+
+**Full corpus (`replaystats`, 1011 games) after all four landed fixes**:
+mean rounds reached 11.03, decisions recorded 162453 (42.1% in Age II+),
+completed games 19 (from the very first baseline this session took --
+before ANY of this session's four fixes, on top of `PlunderSplit` alone --
+10.98 mean rounds, 161637 decisions/41.8%, 17 completed).
+
+**No ENGINE bugs found this session** -- all four kinds were pure replayer
+gaps (the resolving journal evidence exists; this file just wasn't reading
+or trusting it). Two ENGINE bugs landed in the meantime by OTHER concurrent
+workers on this same shared function's neighbourhood (Robespierre/
+Breakthrough revolution CA double-charge, `815b94f`; Homer's leader
+discount applied per-build instead of once per turn, `ea372e7`) -- neither
+touched by this pass, picked up only via `git rebase`.
+
+**Cross-bucket causes reported, not fixed, per standing instruction**: the
+Infiltrate discovery (37 Take-bucket failures, and the sixth kind itself)
+was reported to the Take-bucket worker via `mcp__discord__message_agent`
+rather than fixed by that worker directly -- it landed here instead, in this
+function's own dedicated ownership, exactly as the standing "shared code
+gets a dedicated owner" rule prescribes.
