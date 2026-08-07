@@ -742,7 +742,7 @@ impl<'a> Replayer<'a> {
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 let p = &self.state.players[self.state.current as usize];
                 eprintln!(
-                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?}",
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} card_row={:?}",
                     self.state.current,
                     p.civil_actions,
                     p.military_actions,
@@ -750,6 +750,10 @@ impl<'a> Replayer<'a> {
                     if p.leader.is_none() { "none" } else { p.leader.get().name },
                     self.state.phase,
                     self.state.pending.top(),
+                    p.hand_size_civil(),
+                    costs::civil_hand_limit(&self.state, p),
+                    p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
+                    (0..13).map(|i| if self.state.card_row[i].is_none() { "-".to_string() } else { self.state.card_row[i].get().name.to_string() }).collect::<Vec<_>>(),
                 );
             }
             return Err(MismatchKind::IllegalMove {
@@ -1413,28 +1417,47 @@ fn mk_mismatch(line: &Line, kind: MismatchKind) -> Mismatch {
     }
 }
 
-/// If `rest` (the `"builds ..."` line, text after the actor's colour) names
+/// If `rest` (an action's own journal text, e.g. `"builds ..."`/
+/// `"discovers ..."`/`"upgrades ..."`, text after the actor's colour) names
 /// a `"using <Card>"` discount source that is a `FreeCivilAction`-granting
 /// Action card currently in `actor`'s hand, plays it (`Move::PlayAction`)
-/// and returns the `Move::Choose` that resolves the resulting
-/// `Pending::Choice(FreeCivil)` onto building `built_card` -- the caller
-/// applies that returned move. Returns `Ok(None)` when there is no such
-/// discount source named (falls back to a plain `Move::Build`) rather than
-/// when there IS one but something about it fails to resolve (that's an
-/// `Err`, not a silent fallback -- see the module doc's "gives up on" list
-/// for why this file never guesses).
-fn free_civil_build_move(
+/// and resolves the ordered action onto `wanted`, returning `Ok(true)` once
+/// fully applied. Returns `Ok(false)` when there is no such discount source
+/// named at all (the caller falls back to a plain, full-price `Move`)
+/// rather than when there IS one but something about it fails to resolve
+/// (that's an `Err`, not a silent fallback -- see the module doc's "gives up
+/// on" list for why this file never guesses).
+///
+/// Shared by every ordered-action shape that BGO phrases as `"<target
+/// action> ... using <Card>"` -- i.e. every `FreeCivilActionValue` that
+/// needs a specific CARD named to disambiguate which of possibly several
+/// tableau cards the order applies to: `Move::Build` (Rich Land/Urban
+/// Growth), `Move::Upgrade` (Rich Land/Urban Growth/Efficient Upgrade --
+/// found corpus-wide as `"upgrades X to Y using ..."`, previously
+/// unhandled), `Move::Develop` (Breakthrough). The other two
+/// `FreeCivilActionValue`s (`IncreasePopulation`, `BuildOneWonderStage`)
+/// have no card to disambiguate -- BGO phrases those as `"plays <Card>
+/// <effect>"` instead, glued onto the SAME line as the `PlayAction`, which
+/// `ActionClass::PlayActionCard`'s own handler resolves directly rather
+/// than through this "using" search (see its module doc comment there).
+///
+/// `landed_in_techs`: the `CardId` that should be sitting in `actor`'s
+/// `techs` tableau once `wanted` has actually happened (the built/
+/// upgraded-to/developed card) -- used ONLY to disambiguate the "no pending
+/// opened" case below, never to decide `wanted` itself.
+fn free_civil_action_move(
     r: &mut Replayer,
     actor: u8,
     rest: &str,
-    built_card: CardId,
-) -> Result<Option<Move>, MismatchKind> {
+    wanted: Move,
+    landed_in_techs: CardId,
+) -> Result<bool, MismatchKind> {
     let Some(using_pos) = rest.find(" using ") else {
-        return Ok(None);
+        return Ok(false);
     };
     let after_using = &rest[using_pos + " using ".len()..];
     let Some((discount_card, _)) = longest_known_card_prefix(r.card_index, after_using) else {
-        return Ok(None);
+        return Ok(false);
     };
     let grants_free_civil = discount_card
         .get()
@@ -1442,35 +1465,54 @@ fn free_civil_build_move(
         .iter()
         .any(|s| matches!(s, crate::cards::Special::FreeCivilAction(_)));
     if !grants_free_civil || !r.state.players[actor as usize].hand_civil.contains(discount_card) {
-        return Ok(None);
+        return Ok(false);
     }
     r.try_apply(Move::PlayAction { card: discount_card }, true)?;
-    let Some(Pending::Choice(c)) = r.state.pending.top() else {
-        return Err(MismatchKind::StuckPending(format!(
-            "played {} for its free-civil-action discount but no Choice pending opened",
+    match r.state.pending.top() {
+        Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::FreeCivil { .. }) => {
+            let n = c
+                .options
+                .as_slice()
+                .iter()
+                .position(|o| matches!(o, ChoiceOption::Move(m) if *m == wanted))
+                .ok_or_else(|| {
+                    MismatchKind::ParserGap(format!(
+                        "{}'s free-civil-action options {:?} do not include {wanted:?}",
+                        discount_card.get().name,
+                        c.options.as_slice(),
+                    ))
+                })?;
+            r.try_apply(Move::Choose { n: n as u8 }, true)?;
+            Ok(true)
+        }
+        // `interact::push_choice`'s own `auto` behaviour never opens a
+        // pending at all when there is exactly ONE candidate -- it applies
+        // that candidate immediately instead (`push_choice`'s doc comment).
+        // Since the journal already tells us the human's real target
+        // (`wanted`), the common case here IS that immediate auto-resolve,
+        // not a genuine gap -- confirmed, not assumed, by checking the
+        // target card actually landed where `wanted` would have put it,
+        // so an engine auto-pick that silently diverged from the journal
+        // (a real bug) still surfaces as an error rather than being
+        // swallowed here.
+        // `landed_in_techs` covers every ordinary Build/Upgrade/Develop
+        // target, but a Government card develops into `p.government`
+        // instead of `techs` (`apply::h_develop`'s own dispatch) -- the one
+        // shape `DevelopTechnology`'s call site can hit (Breakthrough may
+        // also pay for a revolution, `legal::free_action_moves`'s own
+        // comment), so it is checked here too rather than special-cased per
+        // caller.
+        _ if r.state.players[actor as usize].techs.has(landed_in_techs)
+            || r.state.players[actor as usize].government == landed_in_techs =>
+        {
+            Ok(true)
+        }
+        _ => Err(MismatchKind::StuckPending(format!(
+            "played {} for its free-civil-action discount, but no Choice pending opened and \
+             {wanted:?} was not auto-resolved either",
             discount_card.get().name
-        )));
-    };
-    if !matches!(c.kind, ChoiceKind::FreeCivil { .. }) {
-        return Err(MismatchKind::StuckPending(format!(
-            "played {} but the pending choice is {:?}, not FreeCivil",
-            discount_card.get().name,
-            c.kind
-        )));
+        ))),
     }
-    let n = c
-        .options
-        .as_slice()
-        .iter()
-        .position(|o| matches!(o, ChoiceOption::Move(Move::Build { card }) if *card == built_card))
-        .ok_or_else(|| {
-            MismatchKind::ParserGap(format!(
-                "{}'s free-civil-action options do not include building {}",
-                discount_card.get().name,
-                built_card.get().name
-            ))
-        })?;
-    Ok(Some(Move::Choose { n: n as u8 }))
 }
 
 /// Translates one already-classified, already-actor-resolved journal line
@@ -1537,8 +1579,8 @@ fn apply_one(
             // never a bare `Move::Build`, which the engine plainly charges
             // full price (found by testing against a real 2p game;
             // `docs/REPLAY.md`).
-            if let Some(mv) = free_civil_build_move(r, actor, rest, card)? {
-                return r.try_apply(mv, true);
+            if free_civil_action_move(r, actor, rest, Move::Build { card }, card)? {
+                return Ok(());
             }
             if let (Some(want), Some(got)) = (
                 total_paid_for_build(raw_text),
@@ -1593,10 +1635,34 @@ fn apply_one(
             let after_upgrades = rest.strip_prefix("upgrades ").ok_or_else(|| MismatchKind::ParserGap("upgrade line missing 'upgrades '".into()))?;
             let from = upgrade_from_card(r.card_index, after_upgrades)
                 .ok_or_else(|| MismatchKind::ParserGap("could not parse upgrade source card".into()))?;
+            // `"upgrades X to Y using <Card>"` -- Rich Land/Urban Growth
+            // (`BuildOrUpgradeFarmOrMine`/`BuildOrUpgradeUrbanBuilding`) and
+            // Efficient Upgrade (`UpgradeFarmMineOrUrbanBuilding`) all order
+            // a farm/mine/urban-building upgrade the SAME "using" way an
+            // ordered Build does -- found corpus-wide (hundreds of
+            // occurrences of e.g. `"upgrades Bronze to Iron using Rich
+            // Land"`/`"... using Efficient Upgrade"`), previously handled
+            // only for `Move::Build`. `UpgradeUnit` targets never carry a
+            // "using" clause (no `FreeCivilActionValue` covers unit
+            // upgrades), so this is always `Ok(false)` for that arm and the
+            // bare `Move::Upgrade` below fires as before.
+            if free_civil_action_move(r, actor, rest, Move::Upgrade { from, to }, to)? {
+                return Ok(());
+            }
             r.try_apply(Move::Upgrade { from, to }, true)
         }
         ActionClass::DevelopTechnology => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("develop with no resolved card".into()))?;
+            // `"discovers X using Breakthrough"` -- the same ordered-action
+            // shape as an ordered Build/Upgrade, previously unhandled here
+            // (found by replaying a real 4p game: Breakthrough left in
+            // `hand_civil` after its own "using" line, silently inflating
+            // the reconstructed civil-hand size past the true one and
+            // blocking a LATER, unrelated `Take` on a phantom hand-limit
+            // wall).
+            if free_civil_action_move(r, actor, rest, Move::Develop { card }, card)? {
+                return Ok(());
+            }
             r.try_apply(Move::Develop { card }, true)
         }
         ActionClass::ElectLeader => {
@@ -1640,6 +1706,34 @@ fn apply_one(
                                 "FoodOrRes options {:?} do not offer the journal-observed {}",
                                 c.options.as_slice(),
                                 if is_resources { "resources" } else { "food" }
+                            ))
+                        })?;
+                    r.try_apply(Move::Choose { n: n as u8 }, true)?;
+                } else if matches!(c.kind, ChoiceKind::FreeCivil { .. }) {
+                    // Frugality (`IncreasePopulation`) and Engineering
+                    // Genius's own wonder-stage order (`BuildOneWonderStage`)
+                    // are the two `FreeCivilActionValue`s with no card to
+                    // disambiguate, so BGO glues the WHOLE order onto this
+                    // "plays <Card> <effect>" line instead of phrasing it as
+                    // "<effect> using <Card>" the way Build/Upgrade/Develop's
+                    // orders are (see `free_civil_action_move`'s doc). Both
+                    // `legal::free_action_moves` branches for these two kinds
+                    // return at most ONE candidate move (`Move::Pop` has no
+                    // parameters; a player can only ever have one wonder in
+                    // progress) -- picking whichever of the two is present is
+                    // therefore not a guess between alternatives, only a
+                    // dispatch on which kind this card is.
+                    let n = c
+                        .options
+                        .as_slice()
+                        .iter()
+                        .position(|o| matches!(o, ChoiceOption::Move(Move::Pop) | ChoiceOption::Move(Move::WonderStep { .. })))
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "played {} for its free-civil-action discount but its options {:?} \
+                                 are neither Pop nor WonderStep",
+                                card.get().name,
+                                c.options.as_slice()
                             ))
                         })?;
                     r.try_apply(Move::Choose { n: n as u8 }, true)?;
