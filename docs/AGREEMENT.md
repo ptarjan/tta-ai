@@ -394,21 +394,51 @@ contradicts, or complicates the rate-level story.
 | Bot over-proposes pacts (6–8x human rate) but gets fewer accepted | Accepting: 77% agreement (bot usually agrees a good pact should be taken). Proposing: 17% agreement, and the bot's own alternative is NEVER another pact proposal | **Complicates sharply.** At the specific board states where a HUMAN chose to propose, the bot's own valuation essentially never independently arrives at "propose a pact" as the best move — which sits awkwardly next to a self-play rate 6–8x human's. The two are not directly comparable (self-play games visit structurally different states than this human corpus), but this is a real tension worth flagging for anyone extending this work, not a confirmation. |
 | 4p bot barely contests colonization auctions | Once a bid decision is already open, the bot mostly still wants to bid (12/13 disagreements are STILL a bid, different amount); 4p n=14 only, 100% tainted | **Contradicts the "declines to bid" framing, on thin/tainted evidence.** What little data exists points toward the census gap coming from the bot not REACHING bid decisions as often (a difference in earlier play, e.g. fewer territory auctions won or contested to begin with) rather than declining once asked. Not confirmed — n=14 at 4p specifically is too small to lean on hard. |
 
-## PlanBot subsample: skipped
+## PlanBot subsample: search does not close the gap
 
-`bots::plan::pick`/`pick_collecting` (the deeper beam-search bot) does not
-expose a `(&self, state, moves) -> Vec<(Move, f64)>`-shaped API the way
-`WeightedBot::rank_moves` does — it needs a `PlanConfig`, a mutable `Stats`
-accumulator, a mutable `pending::Counters`, and a seeded `PyRandom` threaded
-through a multi-sample beam search, and its own per-candidate scoring
-(`totals: Vec<(Move, f64, u32)>`, averaged over however many of `cfg.samples`
-determinized rounds actually sampled each candidate) is closer to what
-`rank_moves` needs than `choose` is, but still requires writing a new
-ranking-shaped wrapper plus non-trivial config/rng plumbing in `agreement.rs`
-to use it — not a drop-in bot substitution. Per this task's own "skip if
-nontrivial, don't spend a lot of time" instruction, this was not attempted
-this pass. Left as the natural next step for anyone continuing this work
-(`bots/plan.rs`'s `pick_collecting` is the concrete starting point).
+A later pass added `agreement --planbot`, a second output mode that asks
+`bots::plan::pick` (beam search over whole-turn sequences, `width: 2` — the
+same override real league play uses for `BotKind::Plan`, same champion
+weights) the same top-1 question `WeightedBot::rank_moves` answers. `plan`
+has no natural per-move ranking (it searches sequences, not individual
+candidates), so this mode reports agreement only, not a rank/score — a
+narrower, separate TSV shape sharing just the `game_id`..`human_move`
+columns.
+
+Run on 15 games (first 5 of each player count — `head -5` of the same
+`IDS` lists the main sample uses), identical games scored both ways for a
+fair comparison:
+
+| bot | k/n | rate |
+|---|---|---|
+| `WeightedBot` (1-ply ranking) | 279/1,067 | 26.2% |
+| `PlanBot` (beam search, width 2) | 271/1,067 | 25.4% |
+
+Statistically indistinguishable (difference well inside one standard error
+for n=1,067). **Search does not narrow the gap with human play** in this
+subsample — if anything the point estimate is marginally lower. This is a
+meaningful negative result for interpreting "The dominant pattern" above:
+since both a 1-ply evaluator and a width-2 beam search over that SAME
+evaluator's weights land on the same ~26% agreement, the `build`-now bias
+documented above is unlikely to be primarily a lookahead-depth problem —
+both bots share the same underlying per-position value function
+(`weighted::eval::evaluate`), and beam search just re-orders WHEN it applies
+that function, not what it values. A real fix looks more like changing the
+weights/features than searching deeper with the current ones.
+
+Regeneration:
+
+```text
+IDS15=$(for n in 2 3 4; do awk -F'\t' -v n=$n \
+    'NR>1 && $3==n{print $1}' sources/bgo/index.tsv | head -5; done)
+cd rust
+cargo run --profile difftest --bin agreement -- --planbot \
+    ../sources/bgo/index.tsv /tmp/bgo-journals/journals ../experiments \
+    $IDS15 > ../planbot.tsv 2> ../planbot.stderr
+cargo run --profile difftest --bin agreement -- \
+    ../sources/bgo/index.tsv /tmp/bgo-journals/journals ../experiments \
+    $IDS15 > ../weighted15.tsv 2> ../weighted15.stderr
+```
 
 ## What to reconsider before scaling this further
 
@@ -422,10 +452,18 @@ this pass. Left as the natural next step for anyone continuing this work
 3. **This sample never reaches Age III/IV** (`replay.rs`'s own early-stop
    ceiling, `REPLAY.md`) — none of this document's findings can speak to
    late-game play at all.
-4. **A 1-ply evaluator, not the ship policy.** `WeightedBot::choose`/
-   `rank_moves` is exactly what real games are scored with in this repo's
-   `arena`/`climb`, but `HUMAN_PLAY.md`'s own behaviour-cloning section
-   found that a conclusion drawn under one search depth need not hold under
-   another (`plan:width=8` inverted a 1-ply strength comparison). This
-   document's findings are about the 1-ply evaluator specifically, not a
-   claim about what a deeper search would prefer at the same positions.
+4. **A 1-ply evaluator, not the ship policy — but search alone does not fix
+   it.** `WeightedBot::choose`/`rank_moves` is exactly what real games are
+   scored with in this repo's `arena`/`climb`. `HUMAN_PLAY.md`'s own
+   behaviour-cloning section found that a conclusion drawn under one search
+   depth need not hold under another (`plan:width=8` inverted a 1-ply
+   strength comparison) — so this was worth checking directly rather than
+   assuming. On a 15-game subsample (see "PlanBot subsample" above), `plan`
+   (width 2, same weights) landed at 25.4% agreement vs `WeightedBot`'s
+   26.2% on the identical games — statistically indistinguishable, not an
+   improvement. Both bots share one weight vector; searching deeper over
+   that vector re-orders when it gets applied, not what it values, so the
+   `build`-now bias documented above looks like a weights/features problem,
+   not a lookahead-depth one. This is a 15-game check, not a full-sample
+   one — worth confirming at larger n before treating it as settled, but it
+   is evidence, not a guess.
