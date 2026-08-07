@@ -395,13 +395,6 @@ fn on_develop(state: &mut GameState, idx: u8) {
     }
 }
 
-/// Homer: 1 resource whenever a military unit is built/upgraded.
-fn on_build_unit(p: &mut PlayerState) {
-    if leader_is(p, "Homer") {
-        economy::gain_resources(p, 1);
-    }
-}
-
 // ---------------------------------------------------- wonder-completion culture
 
 /// Culture an Age III wonder scores on completion (§9.2). Mirrors
@@ -641,6 +634,7 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     }
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], id, cost);
+        cost = costs::spend_homer_unit_discount(&state.players[idx as usize], id, cost);
         if !civil_life_free {
             if costs::is_unit(id) {
                 state.players[idx as usize].military_actions -= 1;
@@ -657,9 +651,6 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
             .expect("do_build: card must already be developed (in the tableau)")
             .workers += 1;
         p.workers_free -= 1;
-    }
-    if costs::is_unit(id) {
-        on_build_unit(&mut state.players[idx as usize]);
     }
 }
 
@@ -680,14 +671,12 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
     let mut cost = (base - discount).max(0);
     if !free {
         cost = costs::spend_mil_discount(&mut state.players[idx as usize], lo, cost);
+        cost = costs::spend_homer_unit_discount(&state.players[idx as usize], lo, cost);
         if costs::is_unit(lo) {
             state.players[idx as usize].military_actions -= 1;
         } else {
             costs::pay_ca(&mut state.players[idx as usize], 1);
         }
-    }
-    if costs::is_unit(lo) {
-        on_build_unit(&mut state.players[idx as usize]);
     }
     let p = &mut state.players[idx as usize];
     p.resources = p.resources.saturating_sub(cost.max(0) as u16);
@@ -1618,18 +1607,48 @@ mod tests {
     }
 
     #[test]
-    fn do_build_homer_gains_a_resource_on_a_unit_build() {
+    fn do_build_homer_pays_one_resource_less_on_a_unit_build() {
         let mut p = blank_player(0, card("Despotism"));
         p.leader = card("Homer");
         p.military_actions = 2;
         p.resources = 10;
-        p.blue_total = 20; // bank room for gain_resources to actually pay out
         p.workers_free = 1;
         p.techs.insert(card("Swordsmen"), TechSlot { workers: 0, stored: 0 });
         let mut state = one_player_state(p);
         do_build(&mut state, 0, card("Swordsmen"), 0, false);
-        // Paid 10 - 3 = 7, then Homer grants 1 back via gain_resources.
+        // Swordsmen's raw cost is 3; Homer's discount is applied AT payment
+        // time now (`costs::spend_homer_unit_discount`), not as a separate
+        // post-payment gain -- net result is the same when resources are
+        // plentiful (10 - 2 == (10 - 3) + 1 == 8), but see the next test for
+        // why the two models are NOT equivalent at the margin.
         assert_eq!(state.players[0].resources, 8);
+    }
+
+    /// REGRESSION (found by replaying a real 4p BGO game, `7523341`, in
+    /// `replay.rs`'s human-corpus reconstruction): the OLD model charged the
+    /// full raw cost FIRST and only refunded Homer's resource afterward, so
+    /// a player one resource short of the raw cost was illegally rejected by
+    /// `legal::legal_moves` even though the discount should have covered the
+    /// gap. `costs::build_cost_net`/`spend_homer_unit_discount` apply the
+    /// discount BEFORE the affordability check now, matching the journal
+    /// (`"loses 1 military resource; spends 1 resource"`, exactly the
+    /// build's raw cost split between Homer's discount and the player's own
+    /// pool -- the same phrasing `docs/REPLAY.md`'s Finding B established
+    /// for `p.mil_discount`).
+    #[test]
+    fn a_player_with_exactly_one_resource_short_of_a_unit_s_raw_cost_can_still_build_it_with_homer() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Homer");
+        p.military_actions = 2;
+        p.resources = 2; // Swordsmen's raw cost is 3 -- one short without Homer
+        p.workers_free = 1;
+        p.techs.insert(card("Swordsmen"), TechSlot { workers: 0, stored: 0 });
+        let state = one_player_state(p);
+        assert_eq!(costs::build_cost_net(&state, &state.players[0], card("Swordsmen")), Some(2));
+        assert!(
+            legal::legal_moves(&state).as_slice().contains(&Move::Build { card: card("Swordsmen") }),
+            "Homer's discount must make this build affordable and legal at exactly resources == raw_cost - 1"
+        );
     }
 
     // ----------------------------------------------------------- destroy

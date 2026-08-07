@@ -483,27 +483,52 @@ pub fn is_unit(id: CardId) -> bool {
     id.kind().is_unit()
 }
 
+/// Homer: builds or upgrades a military unit for 1 resource less, every
+/// time, unconditionally -- not a spendable per-turn pool like
+/// `p.mil_discount` (§3.11's Patriotism/Wave of Nationalism/Military
+/// Build-Up grant), just a standing leader identity check, mirroring
+/// `docs/HEURISTICS.md`'s own summary: "+1 happy face, plus a resource
+/// whenever you build a unit". Previously modeled as a POST-payment
+/// resource GAIN (`apply::on_build_unit`, called after the full price was
+/// already charged) rather than a discount applied BEFORE the affordability
+/// check -- mathematically identical when resources are plentiful, but
+/// WRONG at the margin: a player with exactly `raw_cost - 1` resources was
+/// illegally rejected by `legal::legal_moves`, even though real BGO humans
+/// are observed completing exactly this build (found by replaying a real 4p
+/// game, `7523341`: Homer-led Purple builds a Warrior with `resources == 1`
+/// against a raw cost of 2, journal-confirmed via `"loses 1 military
+/// resource; spends 1 resource"`, the SAME "military resource" phrasing
+/// `docs/REPLAY.md`'s Finding B already established for `p.mil_discount`).
+pub fn homer_unit_discount(p: &PlayerState, id: CardId) -> i32 {
+    if is_unit(id) && leader_is(p, "Homer") {
+        1
+    } else {
+        0
+    }
+}
+
 /// [`build_cost_for`] after the per-turn military-build discount pool
 /// (§3.11): `p.mil_discount`, spent by [`spend_mil_discount`] once the build
-/// actually happens.
+/// actually happens -- and Homer's standing 1-resource discount
+/// ([`homer_unit_discount`]).
 pub fn build_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
     let cost = build_cost_for(state, p, id)?;
     if is_unit(id) {
-        Some((cost - p.mil_discount as i32).max(0))
+        Some((cost - p.mil_discount as i32 - homer_unit_discount(p, id)).max(0))
     } else {
         Some(cost)
     }
 }
 
-/// [`upgrade_cost`] after `p.mil_discount`, gated on `lo`'s type (matching
-/// Python exactly -- the discount pool is checked against the FROM card,
-/// not the TO card, since an upgrade is priced as "how much MORE resource
-/// to reach `hi`", and that marginal cost is what the unit-build discount
-/// pool exists to reduce).
+/// [`upgrade_cost`] after `p.mil_discount` and Homer's discount, gated on
+/// `lo`'s type (matching Python exactly -- the discount pool is checked
+/// against the FROM card, not the TO card, since an upgrade is priced as
+/// "how much MORE resource to reach `hi`", and that marginal cost is what
+/// the unit-build discount pool exists to reduce).
 pub fn upgrade_cost_net(state: &GameState, p: &PlayerState, lo: CardId, hi: CardId) -> i32 {
     let cost = upgrade_cost(state, p, lo, hi);
     if is_unit(lo) {
-        (cost - p.mil_discount as i32).max(0)
+        (cost - p.mil_discount as i32 - homer_unit_discount(p, lo)).max(0)
     } else {
         cost
     }
@@ -544,6 +569,14 @@ pub fn spend_mil_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
     let used = (p.mil_discount as i32).min(raw);
     p.mil_discount -= used as i16;
     raw - used
+}
+
+/// Applies [`homer_unit_discount`] at payment time -- takes `&PlayerState`,
+/// not `&mut`, unlike [`spend_mil_discount`]/[`spend_mil_sci_discount`],
+/// because there is no pool to decrement: Homer's discount is available
+/// again on every single unit build/upgrade, not consumed by using it once.
+pub fn spend_homer_unit_discount(p: &PlayerState, id: CardId, raw: i32) -> i32 {
+    (raw - homer_unit_discount(p, id)).max(0)
 }
 
 // ============================================================== tests ====

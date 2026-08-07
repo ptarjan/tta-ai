@@ -436,7 +436,8 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 None => continue,
             };
             if kind.is_unit() {
-                if res < (cost - disc).max(0) || !have_ma {
+                let homer_disc = costs::homer_unit_discount(p, id);
+                if res < (cost - disc - homer_disc).max(0) || !have_ma {
                     continue;
                 }
             } else {
@@ -478,7 +479,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             let hi_cost = costs::build_cost_for(state, p, hi).unwrap_or(0);
             let mut cost = (hi_cost - lo_cost).max(0);
             if unit {
-                cost = (cost - disc).max(0);
+                cost = (cost - disc - costs::homer_unit_discount(p, lo)).max(0);
             }
             if res >= cost {
                 moves.push(Move::Upgrade { from: lo, to: hi });
