@@ -122,6 +122,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         n_games += 1;
         rounds_total_sum += meta.rounds as u64;
 
+        if std::env::var("REPLAY_DEBUG").is_ok() {
+            eprintln!("DEBUG game={}", meta.id);
+        }
         let result = replay_game(meta, &text, &card_index, true);
 
         for d in &result.decisions {

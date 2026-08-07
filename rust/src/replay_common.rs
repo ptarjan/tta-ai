@@ -1038,6 +1038,25 @@ fn spent_resources(text: &str) -> Option<i32> {
     rest[..digits_end].parse().ok()
 }
 
+/// [`spent_resources`]'s twin for the food clause of a `"<Color> increases
+/// population <Color> spends N food"` line -- the ONLY clause a Pop line
+/// ever carries (Pop has no resource component; see `costs.rs`'s own doc
+/// comment on `tech_cost`/`pop_cost`), so unlike `spent_resources` this
+/// never needs to distinguish it from a sibling `"spends N resource"`
+/// clause on the same line.
+fn spent_food(text: &str) -> Option<i32> {
+    let p = text.find(" spends ")?;
+    let rest = &text[p + " spends ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    if !rest[digits_end..].starts_with(" food") {
+        return None; // "spends N resource" etc. -- not this check's business
+    }
+    rest[..digits_end].parse().ok()
+}
+
 /// The number right after `" loses "` in `text`, if the SAME clause names
 /// `"military resource"` -- e.g. `"Purple builds Warrior Purple loses 1
 /// military resource; Purple spends 1 resource"`. BGO's UI splits a unit
@@ -2074,6 +2093,56 @@ fn apply_one(
                 r.try_apply(Move::Pop, true)
             } else if legal.as_slice().contains(&Move::PopFree) {
                 r.try_apply(Move::PopFree, true)
+            } else if {
+                // Trade Routes Agreement, side B ("Civilization B can use 1
+                // resource as 1 food during its turn", §5.9): a player
+                // holding the live grant may pay PART of a Pop cost in
+                // converted resources -- BGO folds the conversion silently
+                // into the SAME "spends N food" clause as an ordinary Pop
+                // (there is no separate journal line for it, the same way
+                // the Alexander death line above turned out to carry its
+                // own actor rather than none at all -- checked directly
+                // against the raw journal before assuming otherwise). This
+                // binary's `Move::TradeResourceAsFood` already exists
+                // (docs/REPLAY.md's Trade Routes Agreement engine fix) but
+                // this handler never tried it, one-sidedly leaving every
+                // partly-resource-paid Pop illegal. Gated on the journal's
+                // OWN stated cost matching this binary's `pop_cost` exactly
+                // -- if they disagree, the fault is a mispriced pop_cost
+                // (yellow-bank drift, a missing discount, ...), not a
+                // missing conversion, and spending resources here would
+                // only mask that bug behind a wrong-for-a-different-reason
+                // success (`docs/REPLAY.md`'s Civil Life warning: never
+                // loosen a check just to make a mismatch disappear).
+                let p = &r.state.players[actor as usize];
+                let stated = spent_food(raw_text);
+                let cost = crate::economy::pop_cost(&r.state, p);
+                let shortfall = match (stated, cost) {
+                    (Some(stated), Some(cost)) if stated == cost => cost - p.food as i32,
+                    _ => 0,
+                };
+                shortfall > 0
+                    && shortfall <= crate::economy::trade_resource_as_food_remaining(&r.state, p)
+                    && shortfall <= p.resources as i32
+            } {
+                let p = &r.state.players[actor as usize];
+                let cost = crate::economy::pop_cost(&r.state, p).expect("checked above");
+                let shortfall = cost - p.food as i32;
+                for _ in 0..shortfall {
+                    r.try_apply(Move::TradeResourceAsFood, true)?;
+                }
+                let legal = legal::legal_moves(&r.state);
+                if legal.as_slice().contains(&Move::Pop) {
+                    r.try_apply(Move::Pop, true)
+                } else {
+                    // The conversion(s) landed but Pop is still not legal
+                    // (e.g. no civil action left) -- the same honest
+                    // failure as before, just past a fixed shortfall.
+                    Err(MismatchKind::IllegalMove {
+                        attempted: "Pop after TradeResourceAsFood".into(),
+                        legal_moves: format!("{:?}", legal.as_slice()),
+                    })
+                }
             } else {
                 // Neither is legal -- almost always food/yellow-bank drift
                 // from an earlier build/economy step this binary priced
@@ -2083,10 +2152,10 @@ fn apply_one(
                 if std::env::var("REPLAY_DEBUG").is_ok() {
                     let p = &r.state.players[actor as usize];
                     eprintln!(
-                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} raw={:?}",
+                        "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} pending={:?} raw={:?}",
                         p.food, p.yellow_bank, p.civil_actions,
                         crate::economy::pop_cost(&r.state, p), r.state.round, r.state.num_players,
-                        r.current_lineno, p.one_time_discount.pop_food, raw_text
+                        r.current_lineno, p.one_time_discount.pop_food, r.state.pending.top(), raw_text
                     );
                 }
                 Err(MismatchKind::IllegalMove {
@@ -2265,13 +2334,28 @@ fn apply_one(
         ActionClass::Destroy | ActionClass::Disband => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("destroy/disband with no resolved card".into()))?;
             if let Some(Pending::Choice(c)) = r.state.pending.top() {
-                if matches!(c.kind, ChoiceKind::DestroyOwn) {
+                // `ChoiceKind::LosePop` (a forced "lose 1 population" with no
+                // free worker to absorb it -- `interact::run_item`'s
+                // `QueueItem::LosePop` arm) is the SAME shape as `DestroyOwn`
+                // here: BGO logs the player's pick the same "<Color> destroys
+                // <Card>" way, and the pending's own options are the same
+                // `ChoiceOption::Card` list either kind produces
+                // (`worker_holding_options`). Previously only `DestroyOwn`
+                // was recognised, so a real LosePop resolution fell through
+                // to a bare `Move::Destroy` -- illegal while ANY pending sits
+                // open (`legal::legal_moves`'s own top-level pending gate) --
+                // reported as `IllegalMove: Destroy`. Found chasing the
+                // `IllegalMove: Pop` bucket (`docs/REPLAY.md`): a stray
+                // `LosePop` from an earlier event/aggression leaves this gap
+                // reachable on the SAME player's very next real "destroys"
+                // line, at whatever later point in the journal it appears.
+                if matches!(c.kind, ChoiceKind::DestroyOwn | ChoiceKind::LosePop) {
                     let n = c
                         .options
                         .as_slice()
                         .iter()
                         .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
-                        .ok_or_else(|| MismatchKind::ParserGap("observed destroy card not among DestroyOwn options".into()))?;
+                        .ok_or_else(|| MismatchKind::ParserGap(format!("observed destroy card not among {:?} options", c.kind)))?;
                     return r.try_apply(Move::Choose { n: n as u8 }, true);
                 }
             }
@@ -3035,6 +3119,43 @@ mod tests {
             apply_one(&mut r, 0, ActionClass::Pass, None, "passes Political Phase", "Orange passes Political Phase", None),
             Err(MismatchKind::IllegalMove { .. })
         ));
+    }
+
+    /// REPLAYER BUG (found chasing the `IllegalMove: Pop` bucket, game
+    /// `7522619`): a forced "lose 1 population" with no free worker to
+    /// absorb it (`interact::run_item`'s `QueueItem::LosePop` arm) opens a
+    /// `ChoiceKind::LosePop` pending BGO resolves with the exact same
+    /// `"<Color> destroys <Card>"` journal line as a `DestroyOwn` pending --
+    /// but this dispatch arm only ever recognised `DestroyOwn`, so a real
+    /// LosePop resolution fell through to a bare, illegal `Move::Destroy`
+    /// (illegal because `legal::legal_moves`'s pending gate offers only
+    /// `Choose` while ANY pending sits open), reported as `IllegalMove:
+    /// Destroy`.
+    #[test]
+    fn a_destroys_line_resolves_a_lose_pop_pending_the_same_way_as_destroy_own() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        // Bronze is one of the starting techs (`game::START_TECHS`), already
+        // staffed with 2 workers -- no need to insert it.
+        let bronze = CardId::by_name("Bronze").expect("Bronze is in the table");
+        r.state.players[0].workers_free = 0;
+        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 0, n: 1 });
+        crate::interact::run_queue(&mut r.state);
+        assert!(
+            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::LosePop)),
+            "no free worker, so a real choice must be open: {:?}",
+            r.state.pending.top()
+        );
+
+        let out = apply_one(&mut r, 0, ActionClass::Destroy, Some(bronze), "destroys Bronze", "Orange destroys Bronze", None);
+
+        assert!(out.is_ok(), "{out:?}");
+        assert!(r.state.pending.is_empty(), "the LosePop choice must be fully resolved, not left open");
+        assert_eq!(
+            r.state.players[0].techs.get(bronze).map(|s| s.workers),
+            Some(1),
+            "Bronze (staffed with 2 workers as a starting tech) must lose exactly one"
+        );
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
