@@ -1748,6 +1748,31 @@ fn trailing_gets_science(text: &str) -> Option<i32> {
     rest[digits_end..].starts_with(" science").then_some(n)
 }
 
+/// The `"gets N military resource"` clause anywhere in `text` -- Patriotism's
+/// own printed bonus (`"<Color> plays Patriotism <Color> gets N military
+/// resource; <Color> gets 1 military action"`), which is the ONLY
+/// disambiguating evidence for WHICH of its four age-siblings (A/I/II/III,
+/// `resourcesForMilitaryUnits` 1/2/3/4) was actually played -- `card_index`
+/// resolves a bare `"takes Patriotism in hand"` line age-blind
+/// (`best_age_sibling`'s doc comment: "highest age not exceeding the
+/// current one"), which is simply WRONG whenever the row/deck actually dealt
+/// an OLDER-age copy than that guess; confirmed against a real 2p game
+/// (`7521776`): the guessed Age I copy (`resourcesForMilitaryUnits: 2`) ate
+/// twice the discount the real Age A copy (`resourcesForMilitaryUnits: 1`)
+/// printed, silently crediting the player 1 extra resource that then
+/// compounds turn over turn into an `IllegalMove: Build`/`Upgrade`/
+/// `WonderStep` many rounds later. Unlike [`trailing_gets_science`] this
+/// cannot use `rfind(" gets ")`: Patriotism's OWN line has a SECOND, later
+/// `"gets 1 military action"` clause that would win a last-match search --
+/// so this anchors on the `" military resource"` suffix first and reads the
+/// number immediately before it instead.
+fn trailing_gets_military_resource(text: &str) -> Option<i32> {
+    let suffix_pos = text.find(" military resource")?;
+    let before = &text[..suffix_pos];
+    let gets_pos = before.rfind(" gets ")?;
+    before[gets_pos + " gets ".len()..].parse().ok()
+}
+
 /// Resolves which age-sibling of `named` (`corpus::build_card_index`'s
 /// necessarily arbitrary same-name pick -- see `best_age_sibling`'s doc
 /// comment) actually produced `wanted`'s observed cost on THIS journal line,
@@ -3137,7 +3162,17 @@ fn apply_one(
                         .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed))
                 }
                 _ => None,
-            };
+            }
+            // Patriotism (`Special::FreeCivilAction` is not set on it at
+            // all, so the `kind` match above never even tries) prints its
+            // own age-dependent `resourcesForMilitaryUnits` bonus directly
+            // on this line -- see `trailing_gets_military_resource`'s own
+            // doc comment for why this must be checked independently of
+            // `kind` rather than folded into that match.
+            .or_else(|| {
+                trailing_gets_military_resource(raw_text)
+                    .and_then(|n| family_siblings(named).into_iter().find(|id| id.get().effects.resources_for_military_units as i32 == n))
+            });
             let card = solved.unwrap_or_else(|| {
                 r.state.players[actor as usize]
                     .hand_civil
@@ -3680,6 +3715,26 @@ mod tests {
         // `"gets N civil action"` (a leader/event grant) must not be
         // mistaken for Breakthrough's science bonus.
         assert_eq!(trailing_gets_science("Orange elects Hammurabi Orange gets 1 civil action"), None);
+    }
+
+    #[test]
+    fn trailing_gets_military_resource_reads_patriotisms_own_bonus_clause_not_the_later_military_action_one() {
+        // Real corpus line (game `7521776`, round 6): a naive `rfind(" gets
+        // ")` (`trailing_gets_science`'s own approach) would land on "1
+        // military action" instead, since that clause comes LAST.
+        let text = "plays Patriotism Orange gets 1 military resource; Orange gets 1 military action";
+        assert_eq!(trailing_gets_military_resource(text), Some(1));
+    }
+
+    #[test]
+    fn trailing_gets_military_resource_reads_a_double_digit_amount() {
+        let text = "plays Patriotism Purple gets 10 military resource; Purple gets 1 military action";
+        assert_eq!(trailing_gets_military_resource(text), Some(10));
+    }
+
+    #[test]
+    fn trailing_gets_military_resource_is_none_with_no_such_clause() {
+        assert_eq!(trailing_gets_military_resource("Orange elects Hammurabi Orange gets 1 civil action"), None);
     }
 
     #[test]
@@ -4390,6 +4445,50 @@ mod tests {
         assert_eq!(p.civil_actions, 3);
         assert_eq!(p.techs.workers(theology), 0);
         assert_eq!(p.techs.workers(drama), 1);
+    }
+
+    /// REGRESSION (found chasing the Build/Upgrade/WonderStep "resources
+    /// short by a small amount" cluster, real game `7521776`): a `"takes
+    /// Patriotism in hand"` line earlier in the same game resolves the card
+    /// age-blind (`best_age_sibling`, gated only on `age_civil`) and can
+    /// land the WRONG age-sibling in `hand_civil` -- here, the Age I copy
+    /// (`resourcesForMilitaryUnits: 2`) when the row/deck actually dealt the
+    /// Age A copy (`resourcesForMilitaryUnits: 1`). Before this fix, `solved`
+    /// stayed `None` for Patriotism (it has no `FreeCivilAction` special, so
+    /// the `kind` match never even tried), so the fallback trusted the wrong
+    /// hand entry and credited `mil_discount` with DOUBLE the real bonus --
+    /// which then silently overpaid a same-turn unit build by 1 fewer
+    /// resource than the human actually spent, a shortfall that compounds
+    /// turn over turn into a much-later `IllegalMove: Upgrade` (this exact
+    /// game, round 8: `Upgrade { from: Warriors, to: Swordsmen }` rejected
+    /// with `resources=0` when the journal's own arithmetic implies 1).
+    #[test]
+    fn a_patriotism_play_line_resolves_the_age_sibling_from_its_own_bonus_clause_not_the_earlier_take_guess() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
+        let patriotism_a = CardId::by_name("Patriotism (A)").expect("in the table");
+        let patriotism_i = CardId::by_name("Patriotism (I)").expect("in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.civil_actions = 4;
+            p.hand_civil = CardList::new();
+            // The earlier take-time guess put the WRONG age-sibling in hand.
+            p.hand_civil.push(patriotism_i);
+        }
+
+        let raw = "Orange plays Patriotism Orange gets 1 military resource; Orange gets 1 military action";
+        let out = apply_one(&mut r, 0, ActionClass::PlayActionCard, Some(patriotism_a), "plays Patriotism Orange gets 1 military resource; Orange gets 1 military action", raw, None);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert_eq!(p.mil_discount, 1, "Age A's printed bonus, not Age I's double-counted one");
+        // `h_play_action` removes the played card from hand as part of
+        // playing it -- so the evidence-backed correction shows up as the
+        // WRONG guess being gone, not as the right one still sitting there.
+        assert!(!p.hand_civil.contains(patriotism_i), "the wrong age guess was corrected, not played as-is");
+        assert!(!p.hand_civil.contains(patriotism_a), "the corrected card was then played (removed), not left in hand");
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
