@@ -1458,8 +1458,16 @@ one card, only after a leader swap, and by 2", which is specific enough to
 recognise the right sentence the moment you read it.
 
 That generalises directly: **the card data is a plausible suspect whenever a
-single named card misbehaves**, and it is cheap to check. The obvious next
-move out of this pass is a systematic diff of every card's printed text in
-`sources/bga_throughtheages_material.inc.php` against `data/*.json`, looking
-for any other mechanical clause that was dropped the way this one was --
-Taj Mahal is unlikely to be the only entry whose 2015 text gained a rule.
+single named card misbehaves**, and it is cheap to check.
+
+**And it was checked, this pass, rather than left as a suggestion**: every
+card in `sources/bga_throughtheages_material.inc.php` that carries a `text`
+field (205 of them) was diffed against `data/*.json` -- all 16 wonders and
+all 24 leaders read individually, the rest filtered for an our-side text
+materially shorter than BGA's. **Taj Mahal was the only card with a
+mechanical clause missing.** The four apparent misses are name spellings
+(`J.S. Bach`, `Leonardo Da Vinci`, `Maximillien Robespierre`, `Ocean Liner
+Service`) and the three apparent text gaps are terser paraphrases of the same
+rule (Development of Markets, Iconoclasm, Impact of Technology). That is a
+real negative result and worth recording so nobody re-runs it: the remaining
+`replaystats` buckets are not more missing card abilities.
