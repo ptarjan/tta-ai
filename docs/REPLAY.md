@@ -1606,3 +1606,58 @@ understating its own `gainFood`. That single root cause explains roughly 123
 of the 166 `IllegalMove: Pop` failures as a downstream symptom (wrong food
 carried forward from an earlier turn's mis-resolved card), not a
 population-cost bug at all — worth knowing before re-measuring this bucket.
+
+## Ninth pass: free-civil-action cards (Urban Growth, Rich Land, Efficient
+## Upgrade, Breakthrough, Frugality, Engineering Genius) -- one root cause,
+## one engine bug, both replayer-side
+
+`IllegalMove: PlayAction` (the single largest bucket, 168 games) and most of
+this cluster's `ParserGap`/cost-mismatch entries turned out to be ONE bug, not
+two: nine card families (these six plus Territories/Aggressions/Military
+Bonuses) print the SAME name once per age with a stronger effect each time,
+and BGO's journal text never carries an age tag. `corpus::build_card_index`'s
+bare-name lookup (`HashMap::or_insert`) therefore always resolved to whichever
+age iterates first in `CARDS` -- Age A, in practice always wrong once a game
+is past its first age. That made both symptoms look real at once (an
+under-priced discount looks like both "too little discount" and "the option
+we needed isn't offered") without there being a second cause -- widening the
+option set, the tempting fix, would only have hidden it further. Fixed with
+`corpus::best_age_sibling`/`family_siblings` plus
+`replay_common::resolve_named_card_by_effect`, which re-resolves a card
+against the SAME journal line's own numbers (a discount's implied payment, a
+science bonus, a food bonus) wherever that evidence is available, falling
+back to "closest age not newer than the deck's current age" only when it
+isn't, and corrects an earlier `TakeCard` guess in the player's hand rather
+than trusting it blindly.
+
+**ENGINE BUG, confirmed, fixed, tested:** Breakthrough's "may spend its order
+on a revolution instead" (RB p.15) computed its own eligibility as a flat
+"no civil action spent this turn" in two places (`legal::action_card_playable`,
+`apply::h_play_action`) -- a straight port of the same simplification in the
+Python oracle, which never applies leader Maximilien Robespierre's variant
+(no MILITARY action spent instead). A Robespierre-led player who had spent a
+civil action but no military action was illegally denied the option (games
+`7523216`, `7523482`). Fixed in Rust only, deliberately diverging from Python
+(correctness over parity) -- both call sites now share `legal::
+revolt_pool_ok`, the same predicate `can_revolt` itself uses, rather than
+each keeping an independent copy (the fix is the shared function, not just
+the missing branch: three independently-recomputed copies of one rule is the
+recurring bug class here, not this one missing conditional).
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | eighth pass | this pass |
+|---|---|---|
+| mean rounds reached (of 19.27) | 6.37 | **7.83** |
+| decisions in Age II or later | 5.5% | **19.1%** |
+| `IllegalMove: PlayAction` | 168 | **57** |
+| games completed | 0 | 0 |
+
+The residual 57 `PlayAction`s and handful of `ParserGap`s are Breakthrough
+lines blocked by an unrelated open `Pending::Colonize` (one game) or a
+civil-action-count drift this pass did not chase further (one game,
+`7523341` -- Breakthrough itself now resolves to the right age; the
+remaining gap is in per-turn action-pool bookkeeping, not this cluster).
+Everything else this cluster owned -- the Urban Growth/Rich Land `ParserGap`s
+and the Urban-Growth/Rich-Land-attributed `UnrecoverableHiddenInfo` cost
+mismatches -- is gone. Still 0 complete.

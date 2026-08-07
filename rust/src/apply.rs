@@ -130,7 +130,6 @@ use crate::combat;
 use crate::costs;
 use crate::economy;
 use crate::events;
-#[cfg(test)]
 use crate::legal;
 use crate::effects;
 use crate::moves::{ChurchillChoice, Move, PactSide};
@@ -1051,17 +1050,17 @@ fn h_offer_pact(state: &mut GameState, idx: u8, card: CardId, target: u8, side: 
 /// effect magnitudes" entry.
 fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // RB p.15: Breakthrough's `develop_technology` order may spend itself on
-    // a revolution instead, gated on every civil action THIS TURN still
-    // being unspent. Python's `_h_play_action` reads `revolt_ok` before its
-    // own `pay_ca` call below -- playing the card itself must not count as
-    // "a civil action spent" for this test -- so this has to be captured
-    // here, ahead of that payment, not recomputed later inside
-    // the queue item's own resolution (which would otherwise always see the
-    // CA this card itself just cost and read `revolt_ok` as false).
-    let revolt_ok = {
-        let p = &state.players[idx as usize];
-        p.civil_actions as i32 == costs::ca_total(state, p)
-    };
+    // a revolution instead, gated on `legal::revolt_pool_ok` -- the SAME
+    // per-turn action-pool precondition an ordinary revolution needs
+    // (`legal::can_revolt`), not a separately-maintained copy of it (see
+    // `revolt_pool_ok`'s own doc comment: THAT split, not just a missing
+    // Robespierre branch, was the actual bug two independent copies of this
+    // one rule produced). Read before `pay_ca` below -- playing the card
+    // itself must not count as "a civil action spent" for this test -- so
+    // this has to be captured here, ahead of that payment, not recomputed
+    // later inside the queue item's own resolution (which would otherwise
+    // always see the CA this card itself just cost).
+    let revolt_ok = legal::revolt_pool_ok(state, &state.players[idx as usize]);
     costs::pay_ca(&mut state.players[idx as usize], 1);
     state.players[idx as usize].hand_civil.remove_first(id);
     economy::discard_civil(state, id); // one-shot: played face up, spent
@@ -2434,6 +2433,34 @@ mod tests {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4; // == ca_total(Despotism): revolt_ok must be true
         p.science = 2;
+        p.hand_civil.push(card("Breakthrough (I)"));
+        p.hand_civil.push(card("Monarchy"));
+        let mut state = one_player_state(p);
+        play_action_and_drain(&mut state, card("Breakthrough (I)"));
+        assert_eq!(state.players[0].government, card("Monarchy"), "revolution happened");
+        assert_eq!(state.players[0].science, 2, "0 left after the revolution, +2 from the card's own gainScience");
+    }
+
+    #[test]
+    fn h_play_action_breakthrough_may_spend_its_order_on_a_revolution_for_robespierre_who_already_spent_a_civil_action() {
+        // ENGINE BUG (found replaying real BGO games 7523216/7523482): this
+        // `revolt_ok` used to be a SECOND, independently-recomputed copy of
+        // `legal::can_revolt`'s own precondition, and that copy never
+        // special-cased leader Maximilien Robespierre the way `can_revolt`
+        // does (RB §8.3.4: with him, revolt eligibility is "no MILITARY
+        // action spent this turn" instead of "no civil action spent"). A
+        // Robespierre-led player who had already spent a civil action this
+        // turn -- exactly what taking Breakthrough itself, or any other
+        // civil action, does -- was illegally denied the Breakthrough
+        // revolution even though a PLAIN (non-Breakthrough) revolution would
+        // still have allowed them. Both `legal.rs::action_card_playable` and
+        // this function now read the SAME `legal::revolt_pool_ok` `can_revolt`
+        // itself calls, so there is exactly one definition of the rule.
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Maximilien Robespierre");
+        p.civil_actions = 3; // one already spent this turn (e.g. a Take)
+        p.military_actions = 3; // Despotism's 2 + Robespierre's own +1, all unspent
+        p.science = 2; // Monarchy's revolutionCost
         p.hand_civil.push(card("Breakthrough (I)"));
         p.hand_civil.push(card("Monarchy"));
         let mut state = one_player_state(p);

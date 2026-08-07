@@ -757,6 +757,31 @@ pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool
     if card.revolution_cost == 0 || (p.science as i32) < card.revolution_cost as i32 {
         return false;
     }
+    revolt_pool_ok(state, p)
+}
+
+/// The "which action pool must be untouched this turn" half of §8.3's
+/// revolution precondition -- everything `can_revolt` checks EXCEPT the
+/// target government's own science cost, which is a per-candidate test, not
+/// a per-turn one. Split out so `action_card_playable`/`apply::
+/// h_play_action` (Breakthrough's "may spend its order on a revolution
+/// instead", RB p.15) can share it: those two used to hardcode the
+/// civil-actions-unspent half only, silently dropping Robespierre's
+/// military-actions-unspent variant, which meant a Robespierre-led player
+/// who had already spent a civil action this turn (but no military action)
+/// was illegally denied the Breakthrough-funded revolution a PLAIN
+/// revolution would still have allowed them -- found by replaying two real
+/// BGO games (`7523216`, `7523482`): both "<Color> revolutions using
+/// Breakthrough ..." lines produced an option set with no `Revolution` move
+/// in it at all.
+///
+/// `pub(crate)`, not private: `apply::h_play_action` needs this SAME
+/// predicate (its own `revolt_ok` used to recompute the civil-actions-only
+/// half by hand, which is exactly how it went stale the first time -- three
+/// independently-maintained copies of one rule, one of them missing the
+/// Robespierre branch, nothing failing when they disagreed). One definition,
+/// every caller reads it.
+pub(crate) fn revolt_pool_ok(state: &GameState, p: &PlayerState) -> bool {
     if leader_is(p, "Maximilien Robespierre") {
         let s = effects::state_stats(state, p);
         return p.military_actions as i32 == s.military_actions && s.military_actions > 0;
@@ -784,9 +809,11 @@ fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool 
     }) {
         let kind = free_action_kind_of(value);
         // RB p.15: Breakthrough may spend its order on a revolution instead,
-        // which needs every civil action still unspent -- see
-        // `free_action_moves`'s `DevelopTechnology` arm.
-        let revolt_ok = p.civil_actions as i32 == costs::ca_total(state, p);
+        // gated on the SAME per-turn action-pool precondition an ordinary
+        // revolution needs (`can_revolt`'s own `revolt_pool_ok` -- see that
+        // function's doc for why this reads it rather than recomputing its
+        // own copy) -- see `free_action_moves`'s `DevelopTechnology` arm.
+        let revolt_ok = revolt_pool_ok(state, p);
         let discount = card.effects.resource_discount as i32;
         return !free_action_moves(state, p, kind, discount, revolt_ok).is_empty();
     }
@@ -2190,5 +2217,47 @@ mod tests {
         spent.science = 2;
         let state_spent = one_player_state(spent);
         assert!(!can_revolt(&state_spent, &state_spent.players[0], card("Monarchy")));
+    }
+
+    #[test]
+    fn action_card_playable_true_for_breakthrough_revolution_when_robespierre_has_spent_a_civil_action() {
+        // Robespierre changes the revolt precondition from "no CIVIL action
+        // spent this turn" to "no MILITARY action spent this turn"
+        // (`can_revolt_robespierre_pays_with_military_actions_instead`
+        // above). Breakthrough's own "may spend its order on a revolution
+        // instead" (RB p.15) must see the SAME precondition -- confirmed
+        // via `revolt_pool_ok`, not a second hand-rolled copy of it (see
+        // that function's doc comment for the bug two independent copies
+        // produced: this exact scenario -- a civil action already spent,
+        // no military action spent -- used to read `revolt_ok` as false).
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Maximilien Robespierre");
+        p.civil_actions = 3; // Despotism's 4 total, one already spent this turn
+        p.military_actions = 3; // Despotism's 2 + Robespierre's own +1, all unspent
+        p.science = 2; // Monarchy's revolutionCost
+        p.hand_civil.push(card("Monarchy"));
+        let state = one_player_state(p);
+        assert!(action_card_playable(&state, &state.players[0], card("Breakthrough (I)")));
+    }
+
+    #[test]
+    fn free_action_moves_offers_a_revolution_for_breakthrough_when_robespierre_has_spent_a_civil_action() {
+        // The move-GENERATION half of the same fix, not just "is
+        // Breakthrough playable at all" (the test above): a past fix that
+        // wired legality without generation nearly shipped broken (Taj
+        // Mahal, `docs/REPLAY.md`), so this checks the actual option list
+        // contains the `Revolution` move, not just that the list is
+        // nonempty.
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Maximilien Robespierre");
+        p.civil_actions = 3;
+        p.military_actions = 3;
+        p.science = 2;
+        p.hand_civil.push(card("Monarchy"));
+        let state = one_player_state(p);
+        let revolt_ok = revolt_pool_ok(&state, &state.players[0]);
+        assert!(revolt_ok, "no military action spent yet -- Robespierre's own precondition");
+        let moves = free_action_moves(&state, &state.players[0], FreeActionKind::DevelopTechnology, 0, revolt_ok);
+        assert!(moves.as_slice().contains(&Move::Revolution { card: card("Monarchy") }));
     }
 }
