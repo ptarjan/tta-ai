@@ -4764,3 +4764,205 @@ post-production` print, and check EACH enumerated mutation site (commit
 that window -- not by reasoning about what SHOULD run, the way this pass's
 own dead ends were caused by trusting a stale debug print instead of the one
 that reflects the turn's real final state.
+
+## Root cause 1, follow-up: the swap fix's own regression traced to ground
+## on real game `7522054` -- it exposes a SEPARATE, pre-existing hand-SIZE
+## UNDERCOUNT that the growth bug was accidentally masking; the doc's own
+## "next attempt" (fix both push sites together) tried and FALSIFIED --
+## makes it far worse (171 -> 305, not better), NOT landed; a concrete,
+## unused, journal-native lead identified for whoever picks this up next
+
+Picked up exactly where the previous pass left off: re-derived nothing,
+started from "reproduce the regression, trace `7522054` specifically."
+
+### Reproduced the regression exactly, as a method sanity check
+
+Applied the documented "swap a filler victim" fix to `ground_military_hand`
+verbatim (mirroring `ground_bid_ceiling`: exclude `Bonus`-type cards and
+`DiscardSolver::needed_after` cards from the victim pool, worst-defender-
+first). Corpus-wide, exact `REPLAY_DUMP_BUCKET` + `sort`/`comm` set diff
+against the current landed baseline (171 games, IDs saved to a file, not
+just the count): **39 games newly IN the bucket, 1 newly OUT** (`7523415`).
+`7522054` is confirmed among the 39 newly-broken -- same shape as the prior
+pass's `167 -> 204` finding, different exact numbers only because a
+concurrent Foray/Raiders fix (`deea9a0`) had already landed in between.
+Method confirmed sound before spending any further effort on it.
+
+### Traced `7522054` line by line with `REPLAY_DEBUG_ALL` -- the swap fix is not wrong, it is just no longer lucky
+
+Added a temporary debug print inside the swapped `ground_military_hand`
+(`actor`, the card being grounded, the chosen victim, the whole filler
+pool) and replayed `7522054` alone (a one-line `index.tsv` copy makes this
+trivial and fast -- no need for a full corpus pass to inspect one game).
+
+**The swap itself, for every one of the 5 times it fires in this game, has
+GENUINELY CORRECT victims.** Traced each one by hand against the raw
+journal: e.g. line 190's `"Purple plays Infiltrate against Orange"`
+requires Orange to spend a SECOND physical copy of the age-I `Military
+Bonus (defense 2 / colonization 1)` card as part of a 3-card, 5-point
+defense (`atk:13`, two `+2` Bonus spends and one `+1` flat spend = `13`
+exactly, confirmed against `interact::defense_points`/`resolve_aggression_
+defense`'s own doc) -- the simulated hand only had one physical copy of
+that value, so the swap correctly grounds a second one, evicting `"Civil
+Unrest"`. `"Civil Unrest"` never appears ANYWHERE else in this game's raw
+journal (`grep` confirmed zero other matches) -- it really is pure,
+un-observed `new_game` filler, exactly the kind of card `ground_bid_
+ceiling`'s pattern is supposed to sacrifice. Every other swap in this game
+(`Mechanized Army` for `"Aggression: Plunder (III)"`, `Aggression: Armed
+Intervention` for `"Impact of Balance"`, two more for player 1) is the same
+shape: a genuine, never-otherwise-named filler card evicted for a genuine
+reveal. **The victim selection is not the bug.**
+
+**What actually flips `7522054` from COMPLETE to STALLED**, found by diffing
+`idx=0`'s `discard_excess_military` checkpoints between the unmodified
+binary and the swapped one, side by side, round by round: at the round-19
+checkpoint (`"Orange discards 2 cards"`, journal line 365, the real
+resolution line the whole replay is heading for):
+
+| | reconstructed hand len | `military_hand_limit`+`military_actions` | excess |
+|---|---|---|---|
+| unfixed (push, current landed code) | 8 | 7 | **1** |
+| swapped (the reverted fix) | 7 | 7 | **0** |
+| truth (journal says `"discards 2 cards"`) | implied 9 | 7 | **2** |
+
+**Both reconstructions already undercount the true hand size at this exact
+round** -- the unfixed one by 1, the swapped one by 2. Neither is right.
+But `interact::discard_excess_military` only opens a `Pending::Choice
+(DiscardMilitary)` at ALL when `hand.len() > limit`: the unfixed binary's
+accidental +1 (one card, `"International Agreement"`, that the growth bug
+never lets go of, permanently, from round 12 onward -- confirmed by diffing
+every subsequent hand-content checkpoint between the two binaries, it is
+the ONLY sustained difference besides the swap's own intended targets) is
+*just* enough surplus to cross that `> limit` line and open SOME pending,
+which is all `resolve_intervening`'s `ChoiceKind::DiscardMilitary`
+"anything else" branch needs to keep the replay moving (it does not check
+the pending's own size against the journal's printed `"2 cards"` -- see the
+prior pass's own finding that this branch drains unconditionally). The
+swapped binary's cleaner, non-inflating accounting lands EXACTLY on the
+limit -- zero excess, no pending opens at all, `decider` has already rolled
+over to the other player by the time journal line 365 arrives, and that is
+the literal `decider != expected actor ..., no pending` shape this whole
+bucket is named for.
+
+**In other words: the growth bug's own over-counting was accidentally
+compensating for a second, independent, pre-existing UNDER-counting bug,**
+close enough that the two errors canceled out for this game specifically.
+Fixing the over-count alone removes the compensation without touching the
+under-count, so games sitting close to that cancellation boundary flip from
+"accidentally correct" to "newly broken." This is a REPLAYER bug either
+way (both errors are in this binary's own hand-size reconstruction, not in
+the engine's `discard_excess_military`, which was independently confirmed
+correct against §6.6 -- see its own module doc in `interact.rs`, and the
+military DRAW count was already ruled out exact by the prior pass).
+
+**The under-count predates every `ground_military_hand` call in this game
+and cannot be this function's fault.** Checked directly: `7522054`'s FIRST
+`ground_military_hand` call (either binary) fires at journal line 190,
+round 12. But the reconstruction's own `idx=0` hand already disagrees with
+the journal at ROUND 4 (line ~54, `"Legion"` discarded) -- the real
+journal's line 52 states outright `"No Discard Phase"` for that exact
+round, while this binary's own `hand_military_len=3` against `limit=2`
+forces a discard anyway, at a completely unrelated line (`"Purple builds 1
+stage of Library of Alexandria"`) via the same unconditional-drain
+mechanism described above. Confirmed byte-for-byte IDENTICAL between the
+unfixed and swapped binaries (neither had made a single grounding call yet
+at that point in the game) -- so whatever produces this round-4 hand
+oversized by (at least) one card is a THIRD bug, upstream of both the push
+and the swap, most likely in `new_game`'s own initial fictional deal size
+or in the `military_hand_limit`/`military_actions` formula's interaction
+with the very first few rounds, not in any grounding function at all. Not
+chased further this pass -- flagging it as the real next lead, below.
+
+### The prior pass's own "next attempt" theory, tried and FALSIFIED: do not fix `resolve_political_decision`'s push site the same way
+
+The prior handoff's working theory was that `resolve_political_decision`'s
+own `self.state.players[decider].hand_military.push(prep.card)` (`~1214`,
+now `~1227`) -- a second, still-bare push site granting a card being
+prepared for a future event play -- was "part of the regression" and that
+"the next attempt should fix both sites together."
+
+Tried it directly: routed `resolve_political_decision`'s push through the
+same (swapped) `ground_military_hand` instead of a bare push. Corpus-wide
+result, same exact-ID-diff method: **the bucket gets far WORSE, 171 -> 305**
+(with the military-hand swap already applied on top -- i.e. worse than the
+single-site swap's own 171 -> 209), completed games **29 -> 28**, mean
+rounds down, decisions down (177645 -> 174343). **This theory is
+falsified, not just unconfirmed -- do not retry it as written.**
+
+Working explanation, not chased further: unlike a combat-defense `Bonus`
+reveal (rare, and `ground_bid_ceiling`/`defense_bonus_card` already
+established that each `Bonus` value is genuinely unique-per-age, so a
+repeat reveal legitimately means "no-op, already have it"), a political-
+phase event PREPARATION fires roughly once per player per TURN -- far more
+often -- and there is no equivalent proof that `Tactic`-family cards are
+each a single unique physical instance the way `Bonus` cards are. Making
+this site a silent no-op whenever the card is already present (which is
+what routing it through `ground_military_hand` does) most likely papers
+over many genuine "a second physical copy of this Tactic identity was
+drawn" cases, turning what was over-counting (bare push, always grows) into
+severe under-counting at a MUCH higher frequency than the combat-defense
+site. **Do not extend the swap/no-op pattern to this site without first
+confirming, per-card, whether repeated Tactic/event identities are
+actually unique-per-age like `Bonus` cards -- this pass did not check.**
+
+### Net result this pass: reverted to the landed baseline, nothing shipped
+
+Both attempted fixes (swap-only: 171 -> 209; swap-both-sites: 171 -> 305)
+regress the corpus relative to the current landed code. Per the standing
+instruction that a drop in completions is not automatically damage but
+must be traced -- both WERE traced, on real games, and both are genuine
+regressions, not "deeper play hitting a different bug": `7522054` really
+does go from a full COMPLETE 302-action replay with real engine scores to
+a brand-new stall, for the reason detailed above, in both attempts.
+Working tree reverted to the exact landed baseline (`git checkout --
+rust/src/replay_common.rs`); rebuilt and reconfirmed byte-identical to the
+pre-pass numbers: **29 completed, mean rounds 11.48, 177645 decisions,
+actor-mismatch bucket at 171.** No commit needed for this session --
+nothing changed in the landed tree.
+
+### The concrete, unused lead for whoever picks this up next: the journal already PRINTS the true discard count, and this binary throws it away
+
+`corpus::classify` (`corpus.rs:658`) matches every `"Discard Phase N
+military card(s) must be discarded"` line -- and every `"No Discard
+Phase"` line -- and classifies BOTH as bare `LineOutcome::Bookkeeping`,
+i.e. skipped with the count `N` never parsed or looked at again anywhere
+in this file. This is PUBLIC information (an on-screen phase announcement,
+not a rival's hand or deck order -- fully legal to use per this task's own
+legality rule) that states, in the journal's own words, exactly how many
+cards this binary's reconstruction OUGHT to need to discard at that turn,
+independent of whatever this binary's own `hand_military.len()` happens to
+compute.
+
+This cannot directly force `interact::discard_excess_military` to open a
+pending (that function is real engine logic, gated on `state`'s own hand
+length vs. limit, not on anything the replayer can inject after the fact)
+-- but it is exactly the missing cross-check the round-4 and round-19
+findings above both point at: right now this binary has NO way to notice
+that its own reconstructed hand size has drifted from the truth until a
+`StuckPending` several rounds later makes it obvious. A worker chasing the
+real (pre-existing, upstream-of-grounding) hand-SIZE undercount/overcount
+bug should:
+
+1. Parse `"Discard Phase N ..."` / `"No Discard Phase"` into a per-player,
+   per-turn expected-discard-count FIFO (the same shape as every other
+   `prescan_*` function in this file), separate from the actual `"<Color>
+   discards N cards"` resolution line already used for `DiscardSolver`.
+2. Cross-check it against `interact::discard_excess_military`'s own
+   `REPLAY_DEBUG_ALL` print (`hand_military_len`, `limit`) at the matching
+   turn -- an exact, game-by-game, round-by-round oracle for whether this
+   binary's reconstructed hand size is right, BEFORE the `StuckPending`
+   several rounds later, rather than reasoning about it after the fact the
+   way this pass had to.
+3. Use it to find where the drift is actually introduced -- candidates
+   this pass did NOT check: `new_game`'s initial fictional military deal
+   size (the round-4 divergence in `7522054` predates every grounding call
+   in the game, so this is the most likely single place), and the
+   `military_hand_limit`/`military_actions` formula's own interaction with
+   early rounds (already ruled out as a DRAW-count problem by the prior
+   pass, but never checked as a LIMIT problem).
+
+This is a materially different, and more promising, lead than either the
+grow-vs-swap question this pass exhausted or the sibling-bucket root cause
+(`PlunderSplit`'s resource-cap drift) still left open above -- `LosePop`'s
+own sibling root cause (`Barbarians`'s tie-break) was landed as an ENGINE
+bug fix by a concurrent worker mid-pass, see that section above this one.
