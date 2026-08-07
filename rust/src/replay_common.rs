@@ -3978,7 +3978,7 @@ mod tests {
     fn resolve_intervening_returns_ok_once_the_game_is_over_even_though_decider_moved_on_and_no_longer_matches(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Mirrors the shape `finish_game` leaves behind: the round already
         // wrapped to the next seat (`state.current`, here player 0) before
         // the game-over check ran, nothing is pending, and the player this
@@ -4013,7 +4013,7 @@ mod tests {
     #[test]
     fn set_last_round_is_reachable_from_this_module_for_the_journals_last_turn_line() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.round = 9;
         r.state.current = r.state.start_player; // BGO logs one "Last turn" line per surviving player; whichever this module reads first pins `current` to that seat.
         game::set_last_round(&mut r.state);
@@ -4326,7 +4326,7 @@ mod tests {
     #[test]
     fn a_barbarossa_enlist_line_applies_the_free_pop_increase_and_the_unit_build() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let warriors = CardId::by_name("Warriors").expect("Warriors is in the table");
@@ -4367,7 +4367,7 @@ mod tests {
     #[test]
     fn a_bach_upgrade_line_applies_the_cross_family_theater_conversion() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let theology = CardId::by_name("Theology").expect("in the table");
