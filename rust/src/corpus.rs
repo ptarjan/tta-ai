@@ -470,6 +470,24 @@ pub enum ActionClass {
     /// grants, drifting `pop_cost` for the rest of the game (`docs/
     /// REPLAY.md`).
     ColumbusColonize,
+    /// Frederick Barbarossa's leader ability (`Move::Barbarossa`): a free
+    /// population increase immediately followed by building the named unit
+    /// with it, for 1 military action total. BGO logs it as flavour text
+    /// with no leading actor colour ("Barbarossa enlists a <Unit>; <Color>
+    /// spends N food[; <Color> loses N military resource][; <Color> spends
+    /// M resource(s)]"), the actor named only in the trailing clauses --
+    /// same no-leading-colour shape as `RemoveLeaderYellow`, handled the
+    /// same way in `replay_common::replay_game`'s special-cased dispatch.
+    /// Previously treated as pure `Bookkeeping` and silently dropped:
+    /// discarding both the yellow-bank spend and the unit build, which then
+    /// drifts every one of `yellow_bank`/`workers_free`/`resources`/`food`
+    /// for the rest of the game -- found chasing the Build/Upgrade/
+    /// WonderStep cost-mismatch cluster (`docs/REPLAY.md`).
+    Barbarossa,
+    /// J. S. Bach's leader ability (`Move::BachTheater`) -- see `classify`'s
+    /// own comment on the `"Johannes Sebastian Bachupgrades "` line for why
+    /// this used to be (wrongly) `Bookkeeping`.
+    BachTheater,
 }
 
 impl ActionClass {
@@ -505,6 +523,8 @@ impl ActionClass {
         ActionClass::EndTurn,
         ActionClass::RemoveLeaderYellow,
         ActionClass::ColumbusColonize,
+        ActionClass::Barbarossa,
+        ActionClass::BachTheater,
     ];
 
     pub fn label(self) -> &'static str {
@@ -538,6 +558,8 @@ impl ActionClass {
             ActionClass::EndTurn => "end turn (player-turn denominator)",
             ActionClass::RemoveLeaderYellow => "Alexander the Great: remove for a yellow token",
             ActionClass::ColumbusColonize => "Christopher Columbus: remove to colonize a territory",
+            ActionClass::Barbarossa => "Frederick Barbarossa: free population increase + build",
+            ActionClass::BachTheater => "J. S. Bach: Temple/Library to Theater",
         }
     }
 }
@@ -577,6 +599,8 @@ pub fn card_expected(class: ActionClass) -> bool {
             | ActionClass::PlayActionCard
             | ActionClass::PutBack
             | ActionClass::ColumbusColonize
+            | ActionClass::Barbarossa
+            | ActionClass::BachTheater
     )
 }
 
@@ -648,10 +672,17 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
     if text == "All players have joined." {
         return LineOutcome::Bookkeeping;
     }
-    if text.starts_with("Barbarossa enlists a ") {
-        // Frederick Barbarossa's leader ability (free unit each round),
-        // logged with the leader's surname as subject, not a colour.
-        return LineOutcome::Bookkeeping;
+    // Frederick Barbarossa's leader ability (a free population increase
+    // immediately spent building the named unit, `Move::Barbarossa`): BGO
+    // logs it with the leader's surname as subject, not a colour, the actor
+    // named only in the trailing "<Color> spends ..." clause(s) -- see
+    // `ActionClass::Barbarossa`'s own doc comment for why this used to be
+    // (wrongly) `Bookkeeping`.
+    if let Some(after) = text.strip_prefix("Barbarossa enlists a ") {
+        return match longest_known_card_prefix(index, after) {
+            Some((id, _)) => LineOutcome::Action(Classified { class: ActionClass::Barbarossa, card: Some(id) }),
+            None => LineOutcome::Unclassified,
+        };
     }
     if text.starts_with("Terrorists destroy a ") {
         // The Terrorism event's flavour-text destruction line
@@ -714,8 +745,32 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
     // ...". Every other shape in this file assumes single-space-delimited
     // text; this is the one confirmed exception, so it gets its own literal
     // check rather than a general fix to word-splitting for one card.
-    if text.starts_with("Johannes Sebastian Bachupgrades ") {
-        return LineOutcome::Bookkeeping;
+    // J. S. Bach's leader ability (`Move::BachTheater`): once per turn, as
+    // an action-phase action, convert a Temple/Library-family building into
+    // a Theater. BGO logs it with NO space between the leader's surname and
+    // the verb ("Johannes Sebastian Bachupgrades <From> to <To> ..."), the
+    // one confirmed exception to this file's "single-space-delimited"
+    // assumption (see the old comment this replaced). Always the CURRENT
+    // actor's own move (an action-phase action can only ever be theirs),
+    // so unlike `RemoveLeaderYellow`/`Barbarossa` above it needs no actor
+    // colour at all, trailing or otherwise -- `replay_common::replay_game`
+    // resolves the actor as `state.current`, the same way it already does
+    // for `EndTurn`. Previously `Bookkeeping` and silently dropped: losing
+    // both the resource spend and the tableau change, which then drifts
+    // `resources`/`workers_free` for the rest of the game -- found chasing
+    // the Build/Upgrade/WonderStep cost-mismatch cluster (`docs/REPLAY.md`),
+    // the same shape as `Barbarossa` just above.
+    if let Some(after) = text.strip_prefix("Johannes Sebastian Bach").and_then(|s| s.strip_prefix("upgrades ")) {
+        let Some((_from, remainder)) = longest_known_card_prefix(index, after) else {
+            return LineOutcome::Unclassified;
+        };
+        let Some(to_part) = remainder.strip_prefix(" to ") else {
+            return LineOutcome::Unclassified;
+        };
+        return match longest_known_card_prefix(index, to_part) {
+            Some((id, _)) => LineOutcome::Action(Classified { class: ActionClass::BachTheater, card: Some(id) }),
+            None => LineOutcome::Unclassified,
+        };
     }
     // A handful more no-actor-colour system/consequence lines, each cheap
     // enough to name literally: a war/aggression that rolled to no effect,
@@ -1445,6 +1500,61 @@ mod tests {
             panic!("expected an action, not bookkeeping");
         };
         assert_eq!(c.card, index.get("Vast Territory (II)").copied());
+    }
+
+    #[test]
+    fn barbarossa_enlist_line_is_a_barbarossa_action_not_bookkeeping() {
+        // Regression: this line used to be treated as flavour text and
+        // silently dropped, discarding both the free population increase
+        // and the unit build -- found chasing the Build/Upgrade/WonderStep
+        // cost-mismatch cluster (135 games / 425 lines corpus-wide).
+        let index = idx();
+        let line = "Barbarossa enlists a Warrior; Orange spends 1 food; Orange spends 1 resource";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::Barbarossa);
+        assert_eq!(c.card.unwrap().get().base_name, "Warriors");
+    }
+
+    #[test]
+    fn barbarossa_enlist_resolves_a_non_warrior_unit_too() {
+        let index = idx();
+        let line = "Barbarossa enlists a Knights; Green spends 2 food; Green spends 2 resources";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::Barbarossa);
+        assert_eq!(c.card.unwrap().get().base_name, "Knights");
+    }
+
+    #[test]
+    fn bach_upgrade_line_is_a_bach_theater_action_not_bookkeeping() {
+        // Regression: this glued-together, no-space line ("Bachupgrades",
+        // no leading colour either) used to be treated as flavour text and
+        // silently dropped, discarding the resource spend and the tableau
+        // change -- found chasing the same cost-mismatch cluster (79 games
+        // / 111 lines corpus-wide).
+        let index = idx();
+        let line = "Johannes Sebastian Bachupgrades Religion to Opera Purple spends 3 resources";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::BachTheater);
+        assert_eq!(c.card.unwrap().get().base_name, "Opera");
+    }
+
+    #[test]
+    fn bach_upgrade_line_with_no_trailing_cost_clause_still_classifies() {
+        // Free (fully-discounted) Bach upgrades print no "spends" clause at
+        // all -- the classification must not depend on one being present.
+        let index = idx();
+        let line = "Johannes Sebastian Bachupgrades Philosophy to Drama";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::BachTheater);
+        assert_eq!(c.card.unwrap().get().base_name, "Drama");
     }
 
     #[test]

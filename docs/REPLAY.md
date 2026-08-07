@@ -1937,7 +1937,132 @@ cards before any move is applied against the open auction, and
 colonizations in the corpus now replay from the journal; the other 19 fall
 back to the old approximation and still flag the game.
 
+## Build/Upgrade/WonderStep cost-mismatch cluster: sub-categorisation, and two REPLAYER fixes (Barbarossa, Bach)
+
+Owned bucket: `IllegalMove: Build`/`Upgrade`/`WonderStep` plus
+`UnrecoverableHiddenInfo: build cost mismatch` -- all "resource-payment
+shaped," ~275-300 games depending on which pass's numbers you read them
+against (other workers' fixes land concurrently and shift the raw counts
+underneath this one, per this file's own "closing one wall exposes the
+next" pattern -- read mean rounds / Age II+ %, not raw bucket counts).
+
+### Method: a scratch dump beats another round of guessing
+
+Added a throwaway `src/bin/costdebug.rs` (not committed -- delete it if you
+find it lying around) that reuses `replay_game` and prints every failing
+game in this cluster; paired with a REPLAY_DEBUG extension (kept, see
+below) that prints the ACTUAL computed cost for the attempted
+`Build`/`Upgrade`/`WonderStep` alongside the journal's own stated payment.
+Categorising all ~300 failures by (computed cost vs journal-stated payment)
+gave a clean split:
+
+| category | count (first pass) |
+|---|---|
+| cost computation matches the journal exactly, but `resources` is short by 1-5 (mode 1-2, roughly geometric) | ~180 |
+| `Build` specifically: cost matches, but `workers_free == 0` (no free worker for a fresh unit/building) | 22 |
+| `Upgrade` specifically: cost matches, but `civil_actions`/`military_actions` is 0 (a different, unexplored gate) | ~55 |
+| genuine cost MISMATCH (computed != journal) | a handful (2-3) |
+| unparsed by the scratch tool (multi-line mismatch text) | 25 |
+
+The dominant shape -- cost formula correct, `resources` short by a small,
+often-compounding amount -- says the bug is NOT in `costs.rs` at all; it is
+resource-ACCOUNTING drift from an earlier turn. Traced by extending
+`REPLAY_DEBUG_ALL` (not new ad hoc prints, per this file's own convention)
+with a per-end-of-turn `resources`/`food`/`science`/`culture` total, then
+diffing that sequence against every End Turn line's own `"N resources (now
+M)"` clause in the raw journal (BGO prints the ground truth on every single
+turn, for free) to find the FIRST round where they disagree -- much faster
+than reasoning about the failing line itself, which is usually many turns
+downstream of the real cause.
+
+### Root cause found (two sibling bugs, same shape)
+
+Two journal line shapes `corpus.rs::classify` matched only far enough to
+return `Bookkeeping` -- silently dropping the line instead of applying it.
+Both are leader abilities BGO logs under the LEADER'S name, not the
+player's colour (the same "no leading colour" shape `RemoveLeaderYellow`
+already gets special-cased for), and both already have a fully-implemented
+engine `Move` (`legal.rs`/`apply.rs`) that the bot side uses correctly --
+only the replayer never constructed it:
+
+- **`"Barbarossa enlists a <Unit>; <Color> spends N food[; <Color> loses N
+  military resource][; <Color> spends M resource(s)]"`** -- Frederick
+  Barbarossa's leader ability, a free population increase immediately spent
+  building the named unit (`Move::Barbarossa`). **135 games / 425 lines**
+  corpus-wide. Dropping it under-counts the player's `yellow_bank` spend
+  (and therefore `resources`/`food` and every `consumption`/`corruption`
+  band derived from it) for the rest of the game, compounding turn over
+  turn -- exactly the shortfall shape above.
+- **`"Johannes Sebastian Bachupgrades <From> to <To> ..."`** -- J. S.
+  Bach's leader ability, a cross-family Temple/Library -> Theater
+  conversion (`Move::BachTheater`; an ordinary `Move::Upgrade` only ever
+  offers same-family targets). **79 games / 111 lines** corpus-wide. Also
+  the one line in the whole corpus BGO glues the leader's name directly
+  onto the verb with no space at all (`corpus.rs` already had a comment
+  flagging this as the "one confirmed exception" to its space-delimited
+  assumption -- it just then threw the line away instead of parsing it).
+
+Both fixed the same way: `classify` now resolves the target card and
+returns a real `ActionClass` (`Barbarossa`, `BachTheater`); the "no leading
+colour" dispatch in `replay_game` resolves the actor (Barbarossa from the
+trailing "<Color> spends" clause, mirroring `RemoveLeaderYellow`; Bach as
+`state.current`, since an action-phase ability can only ever be the current
+player's own move, mirroring `EndTurn`) and applies the real `Move`. New
+tests in `corpus.rs` (classification) and `replay_common.rs` (the actual
+`try_apply`/`apply_one` dispatch, values mirrored from the existing
+`apply.rs` direct-engine tests) -- both confirmed to fail with the fix
+reverted (classify's two arms put back to `Bookkeeping`) before landing.
+
+REPLAYER, not ENGINE: `legal.rs`/`apply.rs` already had these right for bot
+play; only the journal parser was throwing the lines away.
+
 ### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached | 9.45 | **9.57** |
+| decisions in Age II or later | 30.8% | **31.8%** |
+
+Raw `IllegalMove: Build`/`Upgrade`/`WonderStep` counts are roughly flat
+(expected: games run deeper and surface previously-unreached failures in
+the SAME bucket, not just other buckets). Re-running the same
+cost-vs-journal categorisation after this fix shows the "`resources` short
+by a small amount" shape is still the dominant one (~170 of ~300) -- these
+two bugs were real and worth fixing, but at least one more root cause of
+the same shape remains.
+
+### Open, with a concrete next lead
+
+Traced one post-fix example (`7522625`, Purple, round II8) all the way to
+its exact turn of divergence the same way as above: the player's own
+individual "spends" clauses that turn all reconcile exactly against this
+binary's cost formulas (no bug there), but the real journal's End Turn line
+carries NO `"CORRUPTION!"` clause while this binary's reconstruction
+computes `corruption(blue_available) == 2`. `economy::corruption`'s bands
+are independently verified correct against
+`sources/bga_throughtheages_material.inc.php`'s own
+`$this->resource_corruption` table (byte-for-byte match) -- the bug, if
+there is one, is upstream in `blue_total`/`blue_used`/`Denoms`, not the
+corruption formula itself. Ruled out so far: the specific farm/mine cards
+Purple has built by that point (Bronze/Agriculture, both denomination 1 in
+this codebase's own `Denoms::of`, so building them changes nothing here);
+`blue_total` staying flat at 16 all game (no `blueTokens`-granting
+card/wonder involved in this specific example). NOT yet checked: whether
+`blue_total`'s starting value of 16 (`game.rs`) is even the right constant
+per player count, and whether some OTHER effect should be adding to it by
+this point. Left open -- ran low on context before finishing this trace;
+the `REPLAY_DEBUG_ALL` extensions this pass added (`blue_used`'s own
+denom/token breakdown, `end_of_turn`'s ENTRY/pre-corruption/POST prints)
+are enough to pick this back up without re-instrumenting anything.
+
+The `Build: workers_free == 0` (22 games) and `Upgrade: ca/ma == 0` (~55
+games) sub-buckets from the table above were NOT investigated this pass --
+untouched, no lead yet. Worth checking first whether they share a root
+cause with each other (both are "a different gate than resources blocked
+the move, despite the cost matching") before assuming they're two separate
+bugs.
+
+### Measurement, Fifteenth pass (colonize sacrifice) -- kept with its own section despite landing between two other passes' entries above
 
 | | before this pass | after |
 |---|---|---|

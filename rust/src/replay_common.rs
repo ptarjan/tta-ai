@@ -1064,7 +1064,7 @@ impl<'a> Replayer<'a> {
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 let p = &self.state.players[self.state.current as usize];
                 eprintln!(
-                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} science={} mil_discount={} card_row={:?}",
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} science={} mil_discount={} workers_free={} one_time_discount={:?} tableau={:?} card_row={:?}",
                     self.state.current,
                     p.civil_actions,
                     p.military_actions,
@@ -1079,6 +1079,9 @@ impl<'a> Replayer<'a> {
                     p.food,
                     p.science,
                     p.mil_discount,
+                    p.workers_free,
+                    p.one_time_discount,
+                    p.techs.iter().map(|(t, slot)| format!("{}x{}", t.get().name, slot.workers)).collect::<Vec<_>>(),
                     (0..13).map(|i| if self.state.card_row[i].is_none() { "-".to_string() } else { self.state.card_row[i].get().name.to_string() }).collect::<Vec<_>>(),
                 );
                 // Develop/PlayAction failures are usually a card-identity or
@@ -1098,6 +1101,31 @@ impl<'a> Replayer<'a> {
                         );
                     }
                     _ => {}
+                }
+                if let Move::Build { card } = mv {
+                    eprintln!(
+                        "DEBUG cost detail: build_cost_for({:?})={:?}",
+                        card.get().name,
+                        costs::build_cost_for(&self.state, p, card),
+                    );
+                }
+                if let Move::Upgrade { from, to } = mv {
+                    eprintln!(
+                        "DEBUG cost detail: upgrade_cost({:?}->{:?})={} (lo={:?} hi={:?})",
+                        from.get().name,
+                        to.get().name,
+                        costs::upgrade_cost(&self.state, p, from, to),
+                        costs::build_cost_for(&self.state, p, from),
+                        costs::build_cost_for(&self.state, p, to),
+                    );
+                }
+                if let Move::WonderStep { steps } = mv {
+                    eprintln!(
+                        "DEBUG cost detail: wonder_stage_cost(steps={steps})={} wonder={} wonder_steps={}",
+                        costs::wonder_stage_cost(&self.state, p, steps),
+                        if p.wonder.is_none() { "none" } else { p.wonder.get().name },
+                        p.wonder_steps,
+                    );
                 }
             }
             return Err(MismatchKind::IllegalMove {
@@ -1119,14 +1147,25 @@ impl<'a> Replayer<'a> {
                 after_arbitrary_discard,
             });
         }
+        let actor = self.state.current;
         let pending_top_before = self.state.pending.top().cloned();
         apply::apply(&mut self.state, mv);
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             let p = &self.state.players[self.state.current as usize];
             eprintln!(
-                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?} yellow_bank={} food={}",
-                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before, p.yellow_bank, p.food
+                "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?} yellow_bank={} food={} resources={}",
+                self.state.current, p.civil_actions, p.military_actions, self.state.phase, self.state.round, pending_top_before, p.yellow_bank, p.food, p.resources
             );
+            if matches!(mv, Move::EndTurn) {
+                // The actor whose turn just ended -- `self.state.current` has
+                // already advanced to the NEXT player by this point, so this
+                // must be indexed by the pre-apply `actor`, not `.current`.
+                let ap = &self.state.players[actor as usize];
+                eprintln!(
+                    "DEBUG end_turn totals: actor={actor} resources={} food={} science={} culture={}",
+                    ap.resources, ap.food, ap.science, ap.culture
+                );
+            }
         }
         Ok(())
     }
@@ -2095,6 +2134,79 @@ pub fn replay_game(
                 r.actions_consumed += 1;
                 continue;
             }
+            // Frederick Barbarossa's leader ability, also no leading colour
+            // -- the actor is named only in the trailing "<Color> spends
+            // ..." clause(s) (`corpus::classify`'s own comment on
+            // `ActionClass::Barbarossa`). Unlike Alexander's death line,
+            // this is an ACTION-PHASE action (the card text: "as an action-
+            // phase action, spend 1 military action to..."), not a
+            // political one, so `next_line_explains_own_politics: false` --
+            // the same as every ordinary Build/Take/Upgrade line reached
+            // through the normal leading-colour path below.
+            if class == ActionClass::Barbarossa {
+                let card = card.ok_or_else(|| MismatchKind::ParserGap("Barbarossa enlists with no resolved card".into()));
+                let card = match card {
+                    Ok(card) => card,
+                    Err(kind) => {
+                        mismatch = Some(mk_mismatch(line, kind));
+                        break 'lines;
+                    }
+                };
+                let Some(actor_color) = color_after(line.text, "; ") else {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("Barbarossa enlist line missing its trailing actor colour".into())));
+                    break 'lines;
+                };
+                let actor = actor_color.seat();
+                if actor >= meta.players {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
+                    break 'lines;
+                }
+                if let Err(kind) = r
+                    .resolve_intervening(actor, (class, Some(card)), false)
+                    .and_then(|()| r.try_apply(Move::Barbarossa { card }, true))
+                {
+                    mismatch = Some(mk_mismatch(line, kind));
+                    break 'lines;
+                }
+                r.actions_consumed += 1;
+                continue;
+            }
+            // J. S. Bach's leader ability, also no leading colour -- unlike
+            // Barbarossa/Alexander this needs no trailing-clause colour scan
+            // at all: an action-phase action can only ever be the CURRENT
+            // actor's own move (`corpus::classify`'s own comment on
+            // `ActionClass::BachTheater`), the same reasoning `EndTurn`
+            // already relies on just above. Routed through the shared
+            // `apply_one` (rather than inlined like `Barbarossa`) because
+            // its own `BachTheater` arm already needs the full "<From> to
+            // <To> ... [using <Card>]" parsing `rest` supplies, and
+            // duplicating that here would be a second copy of the same
+            // conditional this project's style rules single out.
+            if class == ActionClass::BachTheater {
+                let actor = r.state.current;
+                // `classify` only ever returns `BachTheater` for a line
+                // that starts with this exact prefix (its own doc comment),
+                // so this can't fail.
+                let rest = line.text.strip_prefix("Johannes Sebastian Bach").unwrap_or(line.text);
+                let explains_own_politics = false;
+                if !is_pure_confirmation_line(class) {
+                    if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
+                        mismatch = Some(mk_mismatch(line, kind));
+                        break 'lines;
+                    }
+                }
+                let next_text = journal.get(i + 1).map(|l| l.text);
+                match apply_one(&mut r, actor, class, card, rest, line.text, next_text) {
+                    Ok(()) => {
+                        r.actions_consumed += 1;
+                        continue;
+                    }
+                    Err(kind) => {
+                        mismatch = Some(mk_mismatch(line, kind));
+                        break 'lines;
+                    }
+                }
+            }
             mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("action line has no leading colour and is not EndTurn".into())));
             break 'lines;
         };
@@ -2631,6 +2743,26 @@ fn apply_one(
             }
             r.try_apply(Move::Upgrade { from, to }, true)
         }
+        // J. S. Bach's leader ability -- same "<From> to <To>" shape as an
+        // ordinary Upgrade (including the same "using <Card>" ordered-free-
+        // action wrapper, e.g. `"Bachupgrades Religion to Opera using
+        // Efficient Upgrade"`), but the MOVE is `Move::BachTheater`, not
+        // `Move::Upgrade`: Bach is what makes a cross-family Temple/Library
+        // -> Theater conversion legal at all (an ordinary `Move::Upgrade`
+        // only ever offers same-family targets, `legal.rs`'s own `higher`
+        // filter), and it separately marks `bach_upgrade_used` (once per
+        // turn) `apply::h_bach_theater` -- see `ActionClass::BachTheater`'s
+        // own doc comment for why this used to be dropped entirely.
+        ActionClass::BachTheater => {
+            let to = card.ok_or_else(|| MismatchKind::ParserGap("Bach upgrade with no resolved target card".into()))?;
+            let after_upgrades = rest.strip_prefix("upgrades ").ok_or_else(|| MismatchKind::ParserGap("Bach upgrade line missing 'upgrades '".into()))?;
+            let from = upgrade_from_card(r.card_index, after_upgrades)
+                .ok_or_else(|| MismatchKind::ParserGap("could not parse Bach upgrade source card".into()))?;
+            if free_civil_action_move(r, actor, rest, Move::BachTheater { from, to }, to)? {
+                return Ok(());
+            }
+            r.try_apply(Move::BachTheater { from, to }, true)
+        }
         ActionClass::DevelopTechnology => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("develop with no resolved card".into()))?;
             // `"discovers X using Breakthrough"` -- the same ordered-action
@@ -2922,17 +3054,24 @@ fn apply_one(
         }
         ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
         // Unreachable: the dispatch loop in `replay_game` special-cases
-        // `RemoveLeaderYellow` and `ColumbusColonize` before either ever
-        // reaches this function, the same way it special-cases `EndTurn` --
-        // all three are `ActionClass`es whose journal line carries no
-        // leading actor colour, so all three need the actor resolved before
-        // `apply_one`'s normal `actor` parameter (already committed to by
-        // then) would even be correct.
+        // `RemoveLeaderYellow`, `ColumbusColonize`, and `Barbarossa` before
+        // any of them ever reaches this function, the same way it special-
+        // cases `EndTurn` -- all four are `ActionClass`es whose journal line
+        // carries no leading actor colour, so all four need the actor
+        // resolved before `apply_one`'s normal `actor` parameter (already
+        // committed to by then) would even be correct. `BachTheater` is the
+        // one exception among the no-leading-colour classes: its actor is
+        // always just `state.current`, so the dispatch loop resolves that
+        // trivially and still routes it through this function for real (see
+        // its own arm above), rather than stubbing it out here too.
         ActionClass::RemoveLeaderYellow => {
             Err(MismatchKind::ParserGap("RemoveLeaderYellow should have been resolved before apply_one".into()))
         }
         ActionClass::ColumbusColonize => {
             Err(MismatchKind::ParserGap("ColumbusColonize should have been resolved before apply_one".into()))
+        }
+        ActionClass::Barbarossa => {
+            Err(MismatchKind::ParserGap("Barbarossa should have been resolved before apply_one".into()))
         }
     }
 }
@@ -3753,6 +3892,83 @@ mod tests {
         assert!(r.try_apply(Move::ColumbusColonize { card: territory }, true).is_ok());
         assert!(r.state.players[0].colonies.contains(territory));
         assert!(r.state.players[0].leader.is_none(), "Columbus is spent removing himself to colonize for free");
+    }
+
+    /// REGRESSION (found chasing the Build/Upgrade/WonderStep cost-mismatch
+    /// cluster, 135 games / 425 lines corpus-wide): `"Barbarossa enlists a
+    /// <Unit>; ..."` used to classify as `Bookkeeping` (`corpus.rs`) and was
+    /// never applied at all, silently dropping both the free population
+    /// increase and the unit build -- drifting `yellow_bank`/`workers_free`/
+    /// `resources` for the rest of the game. Values mirror
+    /// `apply::tests::h_barbarossa_grows_population_and_builds_a_unit_for_one_military_action`,
+    /// the direct-engine-call test this dispatch now routes to for real.
+    #[test]
+    fn a_barbarossa_enlist_line_applies_the_free_pop_increase_and_the_unit_build() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
+        let warriors = CardId::by_name("Warriors").expect("Warriors is in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.leader = CardId::by_name("Frederick Barbarossa").expect("in the table");
+            p.military_actions = 2;
+            p.civil_actions = 4;
+            p.yellow_bank = 14; // pop_cost_base(14) == 3, minus his 1 food discount == 2
+            p.food = 2;
+            p.resources = 1; // Warriors costs 2, minus his 1 resource discount == 1
+            // Warriors is a `START_TECHS` entry with 1 worker already --
+            // zero it so this is a fresh build, matching the journal text.
+            p.techs.get_mut(warriors).expect("a starting tech").workers = 0;
+        }
+
+        // Exercises the real dispatch this bug lived in: `try_apply` is what
+        // both the special no-leading-colour loop branch AND `apply_one`'s
+        // (unreachable, for this class) own arm ultimately bottom out on --
+        // `classify`'s own resolution into `ActionClass::Barbarossa` is
+        // covered separately in `corpus.rs`'s tests.
+        let out = r.try_apply(Move::Barbarossa { card: warriors }, true);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert_eq!(p.techs.workers(warriors), 1, "the new worker built the unit");
+        assert_eq!(p.yellow_bank, 13, "one token left the bank for the free pop increase");
+        assert_eq!(p.food, 0, "paid the discounted population cost");
+        assert_eq!(p.resources, 0, "paid the discounted build cost");
+        assert_eq!(p.military_actions, 1, "the ONE military action bought both halves");
+    }
+
+    /// REGRESSION (found chasing the same cluster, 79 games / 111 lines
+    /// corpus-wide): `"Johannes Sebastian Bachupgrades <From> to <To> ..."`
+    /// used to classify as `Bookkeeping` and was never applied, silently
+    /// dropping the resource spend and the tableau change. Values mirror
+    /// `apply::tests::h_bach_theater_upgrades_cross_type_pays_the_difference_and_marks_used_once`.
+    #[test]
+    fn a_bach_upgrade_line_applies_the_cross_family_theater_conversion() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
+        let theology = CardId::by_name("Theology").expect("in the table");
+        let drama = CardId::by_name("Drama").expect("in the table");
+        {
+            let p = &mut r.state.players[0];
+            p.leader = CardId::by_name("J. S. Bach").expect("in the table");
+            p.civil_actions = 4;
+            p.resources = 10;
+            p.techs.insert(theology, crate::state::TechSlot { workers: 1, stored: 0 });
+            p.techs.insert(drama, crate::state::TechSlot { workers: 0, stored: 0 });
+        }
+
+        let raw = "Johannes Sebastian Bachupgrades Theology to Drama Orange spends 1 resource";
+        let out = apply_one(&mut r, 0, ActionClass::BachTheater, Some(drama), "upgrades Theology to Drama Orange spends 1 resource", raw, None);
+
+        assert!(out.is_ok(), "{out:?}");
+        let p = &r.state.players[0];
+        assert!(p.bach_upgrade_used, "at most once per turn");
+        assert_eq!(p.civil_actions, 3);
+        assert_eq!(p.techs.workers(theology), 0);
+        assert_eq!(p.techs.workers(drama), 1);
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):

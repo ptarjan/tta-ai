@@ -374,10 +374,18 @@ pub fn tokens_for(mut amount: u16, denoms: &[u8]) -> u16 {
 pub fn blue_used(p: &PlayerState) -> u16 {
     let food_denoms = Denoms::of(&p.techs, CardType::Farm);
     let mine_denoms = Denoms::of(&p.techs, CardType::Mine);
-    let mut used =
-        tokens_for(p.food, food_denoms.as_slice()) + tokens_for(p.resources, mine_denoms.as_slice());
+    let food_tokens = tokens_for(p.food, food_denoms.as_slice());
+    let mine_tokens = tokens_for(p.resources, mine_denoms.as_slice());
+    let mut used = food_tokens + mine_tokens;
     if !p.wonder.is_none() {
         used += p.wonder_steps as u16;
+    }
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        eprintln!(
+            "DEBUG blue_used: food={} food_denoms={:?} food_tokens={food_tokens} resources={} mine_denoms={:?} mine_tokens={mine_tokens} wonder={} wonder_steps={} total={used}",
+            p.food, food_denoms.as_slice(), p.resources, mine_denoms.as_slice(),
+            if p.wonder.is_none() { "none" } else { p.wonder.get().name }, p.wonder_steps
+        );
     }
     used
 }
@@ -567,8 +575,15 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // cache in this port (see `increase_population`), so there is nothing to
     // invalidate here or at step 5.
 
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        eprintln!("DEBUG end_of_turn ENTRY: idx={idx} round={}", state.round);
+    }
+
     // ---- 1. discard excess military cards -----------------------------
     if interact::discard_excess_military(state, idx) {
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!("DEBUG end_of_turn: idx={idx} stopped at discard_excess_military");
+        }
         return false;
     }
 
@@ -580,8 +595,8 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
         let p = &state.players[idx as usize];
         eprintln!(
-            "DEBUG end_of_turn: idx={idx} s.science={} s.happy={} discontent={} workers_free={} yellow_bank={} uprising={}",
-            s.science, s.happy, discontent(state, p), p.workers_free, p.yellow_bank, uprising(state, p),
+            "DEBUG uprising check: idx={idx} yellow_bank={} happy_required={} s.happy={} s.science={} discontent={} workers_free={} uprising={}",
+            p.yellow_bank, happy_required(p.yellow_bank), s.happy, s.science, discontent(state, p), p.workers_free, uprising(state, p)
         );
     }
     if !uprising(state, &state.players[idx as usize]) {
@@ -603,6 +618,12 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
         // `pay_resources` never pays more than it was asked for, so the
         // shortfall cannot go negative.
         let corr = corruption(blue_available(p));
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG end_of_turn pre-corruption: idx={idx} resources={} food={} blue_total={} blue_used={} corr={} s.resources={} s.food={}",
+                p.resources, p.food, p.blue_total, blue_used(p), corr, s.resources, s.food
+            );
+        }
         let paid = pay_resources(p, corr);
         let short = corr - paid;
         if short > 0 {
@@ -624,6 +645,12 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
 
         // ---- 3e. resource production ----------------------------------
         gain_resources(p, s.resources as u16);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG end_of_turn POST: idx={idx} resources={} food={} science={} culture={}",
+                p.resources, p.food, p.science, p.culture
+            );
+        }
     }
 
     // ---- 4. draw military cards ---------------------------------------
