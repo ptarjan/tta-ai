@@ -1571,6 +1571,35 @@ pub fn replay_game(
                 r.actions_consumed += 1;
                 continue;
             }
+            // Alexander the Great's death line, also no leading colour --
+            // the actor is named only in the trailing "<Color> gets 1
+            // yellow token" clause (`corpus::classify`'s own comment). This
+            // IS the player's own political decision (the alternative to
+            // whatever else they might have done with their political
+            // action), so `next_line_explains_own_politics: true`, the same
+            // as `ChangeGovernment`/`Pass`/etc: `resolve_intervening` must
+            // stop and let THIS line apply rather than auto-resolving a
+            // different political move first.
+            if class == ActionClass::RemoveLeaderYellow {
+                let Some(actor_color) = color_after(line.text, "Empire ") else {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("Alexander death line missing its trailing actor colour".into())));
+                    break 'lines;
+                };
+                let actor = actor_color.seat();
+                if actor >= meta.players {
+                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
+                    break 'lines;
+                }
+                if let Err(kind) = r
+                    .resolve_intervening(actor, (class, None), true)
+                    .and_then(|()| r.try_apply(Move::RemoveLeaderYellow, true))
+                {
+                    mismatch = Some(mk_mismatch(line, kind));
+                    break 'lines;
+                }
+                r.actions_consumed += 1;
+                continue;
+            }
             mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("action line has no leading colour and is not EndTurn".into())));
             break 'lines;
         };
@@ -2269,6 +2298,16 @@ fn apply_one(
             Ok(())
         }
         ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
+        // Unreachable: the dispatch loop in `replay_game` special-cases
+        // `RemoveLeaderYellow` before it ever reaches this function, the
+        // same way it special-cases `EndTurn` -- both are the only two
+        // `ActionClass`es whose journal line carries no leading actor
+        // colour, so both need the actor resolved before `apply_one`'s
+        // normal `actor` parameter (already committed to by then) would
+        // even be correct.
+        ActionClass::RemoveLeaderYellow => {
+            Err(MismatchKind::ParserGap("RemoveLeaderYellow should have been resolved before apply_one".into()))
+        }
     }
 }
 
@@ -2358,6 +2397,16 @@ mod tests {
     #[test]
     fn color_after_is_none_when_the_marker_is_not_followed_by_a_known_colour() {
         assert_eq!(color_after("declares War over Culture on nobody", " on "), None);
+    }
+
+    #[test]
+    fn color_after_finds_the_actor_on_alexanders_leaderless_death_line() {
+        // `replay_game`'s `RemoveLeaderYellow` dispatch relies on this same
+        // helper reading the actor out of the line's OWN trailing clause,
+        // since (unlike almost every other action line) the text carries no
+        // leading colour at all.
+        let text = "Alexander dies after building his great Empire Orange gets 1 yellow token";
+        assert_eq!(color_after(text, "Empire "), Some(Color::Orange));
     }
 
     #[test]

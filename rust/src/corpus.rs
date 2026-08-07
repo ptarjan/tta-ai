@@ -445,6 +445,15 @@ pub enum ActionClass {
     PlayActionCard,
     PutBack,
     EndTurn,
+    /// Alexander the Great's leader ability exercised as a political action
+    /// (`Move::RemoveLeaderYellow`) -- BGO logs it as flavour text with no
+    /// leading actor colour ("Alexander dies after building his great
+    /// Empire <Color> gets 1 yellow token"), the actor named only in the
+    /// trailing consequence clause. See `classify`'s own comment on this
+    /// line and `replay_common::replay_game`'s special-cased dispatch
+    /// (mirrors how `EndTurn` lines, the other no-leading-colour shape, are
+    /// handled).
+    RemoveLeaderYellow,
 }
 
 impl ActionClass {
@@ -478,6 +487,7 @@ impl ActionClass {
         ActionClass::PlayActionCard,
         ActionClass::PutBack,
         ActionClass::EndTurn,
+        ActionClass::RemoveLeaderYellow,
     ];
 
     pub fn label(self) -> &'static str {
@@ -509,6 +519,7 @@ impl ActionClass {
             ActionClass::PlayActionCard => "play action card",
             ActionClass::PutBack => "put card back (take-back upper bound)",
             ActionClass::EndTurn => "end turn (player-turn denominator)",
+            ActionClass::RemoveLeaderYellow => "Alexander the Great: remove for a yellow token",
         }
     }
 }
@@ -638,14 +649,27 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
             card: None,
         });
     }
-    // Two one-off leader-death/leader-election flavour quotes BGO prints as
-    // their own line with no actor colour and no card name either
-    // (Alexander the Great's death effect, Winston Churchill's election
-    // quote). Cheap enough to name literally rather than leave unclassified.
-    if text.starts_with("Alexander dies after building his great Empire")
-        || text.starts_with("I have nothing to offer but blood, toil, tears, and sweat.")
-    {
+    // Winston Churchill's election quote: pure flavour text with no state
+    // of its own -- the actual leader change is already applied by the
+    // preceding "<Color> elects Winston Churchill" line.
+    if text.starts_with("I have nothing to offer but blood, toil, tears, and sweat.") {
         return LineOutcome::Bookkeeping;
+    }
+    // Alexander the Great's leader ability, exercised as a political action
+    // ("As a political action, you may remove Alexander from play and add 1
+    // yellow token from the box to your yellow bank" --
+    // `bga_throughtheages_material.inc.php`): BGO logs the WHOLE thing as
+    // flavour text with no leading actor colour, the actor named only in
+    // its own trailing consequence clause ("Alexander dies after building
+    // his great Empire <Color> gets 1 yellow token"). Previously treated as
+    // pure `Bookkeeping` and silently dropped -- discarding the yellow
+    // token gain it always carries, which then drifts the reconstructed
+    // yellow bank (and therefore `pop_cost`/`consumption`) for the rest of
+    // the game. This is a real `Move::RemoveLeaderYellow`, not flavour;
+    // `replay_common::replay_game` special-cases its dispatch the same way
+    // it already does for the other no-leading-colour shape, `EndTurn`.
+    if text.starts_with("Alexander dies after building his great Empire") {
+        return LineOutcome::Action(Classified { class: ActionClass::RemoveLeaderYellow, card: None });
     }
     // J. S. Bach's leader ability (a free tech upgrade each round) is the
     // one line BGO prints with NO space at all between the leader's name
@@ -1336,6 +1360,21 @@ mod tests {
         let index = idx();
         let line = "Orange thought he could play the card Frugality Not enough food";
         assert!(matches!(classify(&index, line), LineOutcome::Bookkeeping));
+    }
+
+    #[test]
+    fn alexander_death_line_is_a_remove_leader_yellow_action_not_bookkeeping() {
+        // Regression: this line used to be treated as flavour text and
+        // silently dropped, discarding the yellow token it always carries
+        // and drifting the reconstructed yellow bank for the rest of the
+        // game (found chasing the `IllegalMove: Pop` bucket).
+        let index = idx();
+        let line = "Alexander dies after building his great Empire Orange gets 1 yellow token";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::RemoveLeaderYellow);
+        assert!(c.card.is_none());
     }
 
     #[test]
