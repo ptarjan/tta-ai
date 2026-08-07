@@ -5713,3 +5713,20 @@ pass: land a candidate fix, rerun `replaystats`, and check whether the
 using the same exact-game-ID-set-diff discipline the actor-mismatch
 bucket's own passes established (a raw count drop is not automatically
 progress; diff the sets).
+
+### Follow-up: the `food_or_resources` loss-side gap above IS fixed (`1df71b9`)
+
+The "not fixed this pass" lead two sections up was picked back up the same
+session, once `b257fd7` (a concurrent worker's fix for the SAME underlying
+bug's GAIN half, chasing `IllegalMove: Pop`) landed and made the remaining
+gap small and concrete rather than requiring new choice machinery from
+scratch: `resolve_political_decision`'s correction loop already gated on
+`WeakestPlayers`/`Lose`, but its own delta check unconditionally skipped
+every NEGATIVE delta, so a loss (Raiders/Crime Wave) was never corrected,
+only a gain was. Added the mirror-image `parse_spends_grant_line`/
+`prescan_spends_grants` (same shape as the existing `produces` pair, for
+standalone `"<Color> spends N food[; N resources]"` lines) and extended the
+correction loop's delta-sign branch to use it. New test confirmed red
+against the old unconditional skip. Full corpus, set-diffed by exact game
+ID: 49 -> 57 completed, 8 gained, 0 lost. `IllegalMove: Build` 109 -> 88,
+`Upgrade` 59 -> 32, `WonderStep` 54 -> 36.
