@@ -632,6 +632,9 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
 
         // ---- 3c. food production --------------------------------------
         gain_food(p, s.food as u16);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!("DEBUG end_of_turn post-production: idx={idx} food={} yellow_bank={}", p.food, p.yellow_bank);
+        }
 
         // ---- 3d. food consumption -------------------------------------
         let need = consumption(p.yellow_bank) as u16;
