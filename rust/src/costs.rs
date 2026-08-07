@@ -1138,6 +1138,27 @@ mod tests {
         assert!(!can_take(&state, p, 0, None), "hand at civil_hand_limit");
     }
 
+    /// RULES_SPEC §2.4/§2.5: a wonder "goes directly into play sideways as
+    /// your unfinished wonder (never to hand)"; the taking-limits rule is
+    /// explicitly scoped to "(non-wonder)". `can_take_gated`'s wonder arm
+    /// returns before ever reaching `gate.hand_full` -- pin that here so a
+    /// future reordering of the branches can't silently start gating
+    /// wonders on hand size (this exact confusion was raised and checked
+    /// directly against the code during the `docs/REPLAY.md` `Take`/
+    /// `HandFull` investigation; this test is that check, permanent).
+    #[test]
+    fn can_take_a_wonder_even_with_a_full_civil_hand() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        for _ in 0..4 {
+            p.hand_civil.push(card("Irrigation")); // fills to the 4 CA limit
+        }
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Pyramids");
+        let p = &state.players[0];
+        assert!(can_take(&state, p, 0, None), "wonders bypass the civil hand limit entirely");
+    }
+
     #[test]
     fn can_take_blocks_a_second_copy_of_a_technology_but_not_an_action_card() {
         let mut p = blank_player(0, card("Despotism"));

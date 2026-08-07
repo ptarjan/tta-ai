@@ -6355,3 +6355,197 @@ otherwise unchanged from this pass's own starting point: 58/1,011 games
 complete, `IllegalMove: Take` 129, `HandFull` share unchanged (109/123
 named rejections). No regression, no improvement -- expected for an
 investigate-only pass.
+
+## `Take`/`HandFull`: the `>=`/`>` boundary is now SETTLED PERMANENTLY by primary source; the redirected civil-action-TOTAL audit also comes back clean -- both provably-correct quantities really are correct, corpus-wide, and the bucket remains genuinely open
+
+The coordinator extracted `sources/cge_code_of_laws.pdf` directly
+(`pdftotext -layout`) and settled the question the last two sections above
+kept circling back to. Recorded here so it is not re-opened a third time:
+
+> "The number of civil cards in your hand is limited by your civil action
+> total. When you are **at or above** the limit, you may not add another
+> civil card to your hand **by any means**. However, if you are above the
+> limit for some reason, you do not have to discard excess civil cards."
+> -- *Code of Laws*, official rules companion, verbatim.
+
+**`costs::take_gate`'s `hand_full = hand_size_civil() >= civil_hand_limit`
+is correct and this boundary is closed.** "At or above" plus "by any
+means" leaves no exception to construct. The `>` version (`b8f84aa`) was
+wrong despite fixing 70 games and reaching this project's first-ever full
+completions -- a reminder that a stall-bucket count moving in the right
+direction is not proof a change is RULES-correct, only that it changes
+what the corpus exercises. Do not re-touch this comparison again without a
+primary-source citation of equal or greater weight than the one above.
+
+### Redirected: audit every source that raises `state_stats(...).civil_actions` (the TOTAL `civil_hand_limit` reads), since by elimination the total, not the hand, must be the wrong side
+
+Checked every mechanism `effects::compute` sums into `stats.civil_actions`,
+and every `on_enter_play`/`on_leave_play` runtime top-up
+(`apply.rs`, the asymmetry class the coordinator named -- a value
+maintained in a decrementing runtime counter, `p.civil_actions`, separately
+from a value fully RECOMPUTED from current game state,
+`state_stats(...).civil_actions`, with nothing structurally forcing the two
+to agree):
+
+- **Government (base + card-granted CA)**: `compute` reads `p.government`
+  directly every call (`stats.civil_actions = ge.civil_actions` or the `4`
+  default) -- not cached, not staged, so a government that already changed
+  earlier this turn is reflected on every subsequent call with no lag
+  possible by construction. Cross-checked the full government table
+  against `sources/bga_throughtheages_material.inc.php`'s own `CA` field:
+  Despotism 4, Monarchy 5, Theocracy 4, Constitutional Monarchy 6, Republic
+  7, Communism 7, Fundamentalism 6, Democracy 7 -- matches `card_table.rs`
+  exactly, all eight.
+- **A government changed THIS SAME TURN (peaceful `discovers` or a violent
+  `revolutions`), immediate effect for hand-limit purposes**: the specific
+  scenario the coordinator flagged as the prime suspect. Grepped all 109
+  `HandFull` rejections against their own raw journal text for an earlier,
+  same-round, same-actor `"discovers <Government>"` or `"revolutions"` line
+  -- **zero of 109** have one. (First attempt at this grep mis-associated
+  ~30% of rows with the WRONG game -- an off-by-one in a throwaway Python
+  script pairing each `TAKE REJECT` debug line with the FOLLOWING game's
+  `STOPPED` summary instead of correctly buffering until it, not an engine
+  bug; caught by a raw-line spot-check against `7521815` before trusting
+  the first pass's result, redone correctly below.) Also checked
+  `set_government` (`apply.rs`) directly: it recomputes `p.civil_actions`
+  from a fresh `state_stats` call immediately, so even where this DID occur
+  the runtime counter would already reflect the new total -- moot here
+  since it never occurs in this bucket, but confirmed correct regardless.
+- **A leader replaced this same turn** (the corpus's own `"... dies;
+  <Color> gets 1 civil action"` phrasing the coordinator quoted): that `+1`
+  is the RB p.11 replacement REFUND (a spent action point given back, not a
+  change to the total pool) -- `h_play_leader` computes it as `total.min
+  (p.civil_actions + 1)`, clamped against a fresh `costs::ca_total` call,
+  never added to `state_stats`'s own total. Grepped the same 109 for a
+  same-round, same-actor `"elects "` line before the rejection: **zero of
+  109**. No leader-swap staleness is even exercised in this bucket.
+- **Wonders, completed vs partial**: `compute` only iterates
+  `p.completed_wonders`; `p.wonder` (in-progress) never contributes,
+  matching RULES_SPEC item 8 ("When the last stage is covered the wonder is
+  completed ... effects begin"). Only two base-game wonders carry a
+  nonzero `civil_actions` field at all (Pyramids `+1`, Kremlin `+1`,
+  confirmed by scanning every `Card { ... }` entry in `card_table.rs` for a
+  nonzero `civil_actions` field, not just the wonders -- see below). A
+  wonder completing THIS SAME TURN, before the rejected take: **6 of 109**
+  do have one (`7522265`, `7523408`, `7521213`, `7522671`, `7522705`,
+  `7523228`) -- but the wonders involved (Great Wall, Ocean Liners,
+  Universitas Carolina, cross-checked against `card_table.rs`) each carry
+  `civil_actions: 0`. None of the 6 occurrences involve a CA-granting
+  wonder. Dead end, but a real one to have checked rather than assumed.
+- **Colonies / territory cards with a permanent CA symbol**: `effects.rs`'s
+  own doc comment confirms a colony's bonuses are pre-merged into the SAME
+  `CardEffects` struct at codegen time (`gen_cards.py`), so the exhaustive
+  `card_table.rs` scan below already covers them -- there is no separate
+  code path to miss.
+- **Pacts**: `cards::PactBlock` (the struct every pact's `A`/`B`/
+  `BothPlayers` special block deserializes into, read by
+  `effects::apply_pact_block`) has NO `civil_actions` field at all --
+  `culture`, `food`, `resources`, `strength`, `military_actions`,
+  `tech_discount`, `war_immune`, `food_as_resource`, `resource_as_food`,
+  `other_party_pays_science`, `culture_per_wonder_of_other_party`, nothing
+  else. No base-game pact grants civil actions (a real rules fact, not a
+  porting gap -- `gen_cards.py` would have needed the field if any pact
+  card's text required it), so there is structurally nothing for this
+  source to miss.
+- **Exhaustive card-data scan**: every `Card { ... }` entry in
+  `card_table.rs` with a nonzero `civil_actions` field, by kind: Despotism
+  4, Monarchy 5, Theocracy 4, Constitutional Monarchy 6, Republic 7,
+  Communism 7, Fundamentalism 6, Democracy 7 (all `Government`, the base
+  value `compute` already reads specially); Code of Laws `+1`, Justice
+  System `+1`, Civil Service `+2` (all `SpecialTech`, summed via
+  `add_flat` in `compute`'s `p.techs` loop -- confirmed that loop's
+  `SpecialTech` arm, unlike its `Farm`/`Mine`/unit arms, does call
+  `add_flat`); Pyramids `+1`, Kremlin `+1` (both `Wonder`, summed via
+  `add_flat` in `compute`'s `completed_wonders` loop). **No `Leader`,
+  `Action`, `Government`-adjacent-but-not-`Government`, or other kind
+  carries a nonzero `civil_actions` field anywhere in the base game's
+  data** -- so there is no leader-granted standing CA bonus to even check
+  for a `compute`-vs-`on_enter_play` mismatch; the mechanism the coordinator
+  named (a runtime top-up with no `state_stats` counterpart) has no card
+  in the actual data set that could trigger it.
+- **`civil_life_ca_free`/`ca_penalty_next_turn`**: neither is read by
+  `costs::civil_hand_limit` at all (grepped both call sites) -- the former
+  waives ONE action's own cost (Pop/Build/Develop only, never a Take, and
+  never changes the TOTAL either way), the latter reduces next turn's
+  runtime budget (`economy.rs:701`, applied only to `p.civil_actions`, the
+  remaining-this-turn counter, never to `state_stats`). Structurally
+  incapable of affecting the hand-limit total in either direction.
+
+### The concrete test: `p.civil_actions` vs `state_stats(...).civil_actions` vs an independent, from-scratch journal reconciliation, on all three previously-traced examples
+
+The enriched `TAKE REJECT` line already prints both (`civil_actions=` is
+the runtime remaining-this-turn counter, `s_civil_actions=` is the fully
+recomputed total `civil_hand_limit` actually uses). Reconciled each against
+a by-hand sum of every `"uses N civil action"` clause in that SAME player's
+CURRENT turn (from their own `"passes Political Phase"`/`"Action Phase
+begins"` line up to the rejection), independent of this binary's own
+bookkeeping:
+
+| game | line | gov | `s_civil_actions` (total) | this-turn spend, summed from the raw journal | `s_civil_actions` − spend | `civil_actions` (runtime, this binary) |
+|---|---|---|---|---|---|---|
+| `7523003` | 222 | Despotism | 4 | 1 (pop) | 3 | **3** |
+| `7523357` | 442 | Constitutional Monarchy | 6 | 3+1+1=5 (Military Build-Up take, pop, Rich Land take) | 1 | **1** |
+| `7522481` | 189 | Monarchy | 6 | 1+3−1+1=4 (Engineering Genius take, Eiffel Tower take, `PutBack` refund, Isaac Newton take) | 2 | **2** |
+
+All three: exact agreement, three ways at once -- the runtime counter, the
+recomputed total, and an independent hand-reconciliation of the raw
+journal text. `7522481` is the sharpest of the three: it contains BOTH a
+wonder take (surcharge-priced, 3 CA) AND a matched `Take`+`PutBack` pair
+(whose journal line explicitly prints `"Purple gets 1 civil action"` for
+the refund) in the same turn, and the arithmetic still closes exactly.
+
+**Result: the civil-action TOTAL is also provably correct in all three
+examples, by the same standard of evidence (independent, from-scratch,
+against the raw journal) this project used to clear the hand-size side.**
+Both of the "one of your two provably-correct quantities must be wrong"
+quantities remain independently verified correct. The redirect closes with
+a second clean negative, not a third culprit.
+
+### Landed this pass (small, no behavior change)
+
+`can_take_a_wonder_even_with_a_full_civil_hand` (`costs.rs`): pins the
+"cheap check" the coordinator also asked for -- `can_take_gated`'s wonder
+arm already returns before ever reaching `gate.hand_full` (RULES_SPEC
+§2.4/§2.5: a wonder never enters hand, the taking-limits rule is scoped to
+"(non-wonder)"), confirmed already correct by direct code reading, now
+pinned by a test so a future reordering of the branches can't silently
+regress it. Full `cargo test --lib`: 1,114 passed (was 1,113), 0 failed.
+
+### Where this leaves the bucket
+
+Every lead named in this doc's now-three `Take`/`HandFull` passes has been
+checked and closed negative: missing pops (three independent from-scratch
+hand traces, zero discrepancies), the "last CA of the turn" carve-out
+(falsified by two counterexamples), "action cards exempt" (falsified by
+outside sources and by `7523357`'s own majority-technology hand), the
+`>=`/`>` boundary (now closed permanently by primary source), and every
+named source of a civil-action-total undercount (government/leader/wonder/
+colony/pact/one-time-discount, checked both structurally against the code
+and empirically against all 109 real corpus occurrences). **This is now a
+genuinely unexplained discrepancy between a primary-source rules citation
+and three independently, exhaustively verified real BGO games** -- not a
+sign either side of the earlier "which quantity is wrong" framing was
+right, since neither was. Two possibilities remain, neither chased this
+pass:
+
+1. **BGA's live server implementation itself diverges from the printed
+   rule in this one spot.** Not unprecedented for this project: the
+   Shakespeare Library/Theater discount (`753b7ba`, this same doc, Disease
+   2) was a CONFIRMED digital-vs-rulebook mismatch, checked against the
+   game's own `CulturePerLibraryTheaterPair` special (built, not merely
+   developed) and fixed as an ENGINE bug. If true here, this project's own
+   two goals -- train bots against the TRUE rule, replay real BGO games
+   faithfully -- would need the replayer and self-play legality to
+   deliberately diverge on this one gate, which `costs::take_gate` being a
+   single shared function cannot express today (see the architectural note
+   two sections up, still unactioned).
+2. **A fourth mechanism not yet named, in neither "hand" nor "total".**
+   E.g., something about HOW `civil_hand_limit` was worded across CoL
+   printings/errata, a distinction between "civil action total" (a fixed
+   per-turn allotment) and some OTHER quantity BGA's UI actually gates on,
+   or a rule this project's card data does not yet model at all. Nothing
+   concrete to point to -- flagged as genuinely open, not a lead.
+
+No code change to `costs::take_gate`. Corpus unaffected by this pass's
+findings (58/1,011 complete, `Take` 129, `HandFull` 109/123 -- the one new
+test does not change any runtime behavior).
