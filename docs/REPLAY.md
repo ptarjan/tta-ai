@@ -1948,3 +1948,91 @@ back to the old approximation and still flag the game.
 
 (Measured against a tree that already had the concurrent Take/Pop passes
 above landed, hence the different baseline from theirs.)
+
+## Take/Bid handoff (this worker's assignment): what's fixed, what isn't, what to try next
+
+Owned `IllegalMove: Take` and `IllegalMove: Bid` for one pass. Current
+corpus numbers as of landing: **245 `IllegalMove: Take`, 55
+`UnrecoverableHiddenInfo: colonization bid ...`, 17 `StuckPending: auction
+decider ... not a forced pass`** (all three move around as OTHER buckets'
+fixes land and push more games deeper into the journal -- re-measure before
+trusting these).
+
+**Bid -- landed, holding up:**
+- 95→55 (now, after the Fifteenth-pass colonize-sacrifice fix reduced it
+  further): a bidder's own hidden hand can legitimately contain a bonus
+  card this file never observed (military-hand cards are only grounded
+  once PLAYED, `replay_common.rs`'s own top doc comment). Reclassified
+  from `IllegalMove` to `UnrecoverableHiddenInfo` via
+  `bid_ceiling_mismatch` -- narrow, only fires for a genuine raise against
+  the correctly-identified bidder that exceeds their own computed ceiling,
+  so a real engine defect elsewhere still reports `IllegalMove`. This is
+  NOT a fix (games still stop at the same line), just an honest label.
+- REPLAYER BUG, fixed: `resolve_intervening` left a `Pending::Colonize` or
+  `Pending::Auction` open across an actor boundary whenever `decider ==
+  expected_actor` happened to also hold (it read that as "nothing to
+  resolve," true for a political decision, false here). Both now drain
+  unconditionally except when the upcoming line is genuinely that
+  decider's own `Bid`/`Pass`. This is what took Take from 178 to 148 and
+  is very likely also why Bid's `StuckPending: ... not a forced pass`
+  bucket (17 games) exists at all -- it's the SAME "decider's only legal
+  move never gets a logged click" shape as `Pending::Defense`'s forced
+  0-defender `DefendDone`, just for `BidPass` specifically. Not
+  independently re-verified against the corpus by this pass; worth a
+  sub-histogram check before assuming it's all one thing.
+- 8→? left open at handoff time: `interact::start_auction` sees force 0
+  where a real bidder had force > 0, traced to the (now-fixed) colonize
+  approximation eating units it shouldn't have. Should shrink a lot on its
+  own now that the Fifteenth pass grounds colonize sacrifices from the
+  journal -- re-measure before chasing this further.
+
+**Take -- one REAL fix landed, one attempted fix REVERTED, majority still open:**
+- REPLAYER BUG, fixed (same commit as the Bid fix above, `resolve_intervening`):
+  72 of the original 178 were a `Pending::Colonize` left open blocking the
+  SAME player's own next, unrelated action (their own Take, in this
+  bucket's case).
+- **Reverted same day, DO NOT re-attempt without new evidence**:
+  `costs::take_gate`'s `hand_full` (`hand_size >= civil_hand_limit`) looked
+  wrong from one angle -- of the "no `Take` offered at all" shape (151 of
+  245 as of this writing), the large majority show `hand_civil_size ==
+  civil_hand_limit` exactly at the failure point, zero counterexamples of
+  hand exceeding the limit. That pattern is real and worth someone
+  re-opening. But `docs/RULES_SPEC.md` §2.5 and multiple independent
+  community sources read `>=` (block AT the limit, not only over it), and
+  a wrong loosening of `legal_moves()` is worse than the stall it leaves:
+  a bot would then play a move a real BGO game would have refused it, and
+  self-play can't catch that because both sides would cheat identically.
+  Two more likely explanations were proposed and NOT cleanly ruled out in
+  the time available:
+  1. **Hand size is inflated.** Structurally unlikely but not fully
+     excluded: `p.hand_civil` is only ever pushed to at ONE production call
+     site (`apply.rs`'s `take_card`, always behind a real observed `"takes
+     X"` journal line) plus one net-zero same-turn identity swap
+     (`replay_common.rs::correct_hand_family`) -- there is no filler
+     mechanism for civil hand the way there is for military hand or row
+     slots. Re-check this claim still holds before trusting it (a
+     concurrent pass may have added a new push site).
+  2. **`civil_hand_limit` under-counts the true CA total.** The live lead:
+     a from-scratch Python cross-check (summing "uses N civil action"
+     journal clauses per round, independent of this binary's own
+     computation) kept producing apparent proof of undercounting, and each
+     one dissolved on inspection into a script bug -- an unpaired `Take`/
+     `PutBack` undo line, a military-unit build/upgrade mis-typed as
+     civil, and (the one that didn't fully resolve before time ran out)
+     the "Development of Civilization" event's one-time free civil action,
+     which `costs::civil_life_ca_free`/`OneTimeDiscount` already models
+     correctly in the real engine but a quick reimplementation did not.
+     **Next step for whoever picks this up**: don't reimplement the rules
+     in a side script again -- instrument `costs::take_gate`/`civil_hand_
+     limit` directly (a debug print of every contributing `Stats` field,
+     or a temporary `eprintln!` in `effects::compute`) against 3-5 of the
+     boundary cases and hand-verify against the raw journal line by line,
+     the way `docs/REPLAY.md`'s very first Taj Mahal trace did. That is
+     slower per-case but the ONLY way to fully account for one-time
+     discounts and ordered free actions without re-deriving `costs.rs`
+     from scratch.
+- 48 "a `Take` IS offered, just not for the attempted slot" (row-slot /
+  cost-formula mismatch) and 46 "some other pending still blocks it" (a
+  `Choice`/`Auction`/`Colonize` that reappeared, possibly a NEW pending
+  kind from a concurrent pass, e.g. `TakeRow` seen in the current
+  histogram) -- neither sub-bucket was investigated this pass at all.
