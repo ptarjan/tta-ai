@@ -839,6 +839,22 @@ pub(crate) fn rank_players(state: &GameState, order: &[u8], stat: RankStat, best
     ranked
 }
 
+/// Reverses `order` for a targeting selection where landing IN the selected
+/// set is BAD for the target (`WeakestPlayer`/`WeakestPlayers`, and
+/// Barbarians' own weakest-cutoff group in [`conditional_target`]): §5.3's
+/// tie-break ("ties broken in favor of the current player") means
+/// PROTECTING the current player from a penalty, not handing them the
+/// "weakest" label first. `order` is already clockwise starting from the
+/// current player ([`order_from`]), and [`rank_players`]'s sort is stable,
+/// so reversing first makes the current player sort LAST among any tie --
+/// least likely to fall inside a "weakest" cutoff. This is the exact
+/// reversal [`apply_single_target`] already does for its own `favor_current
+/// = false` case (`WeakestPlayer`); factored out so the same fix applies to
+/// every "weakest" selection, not just the singular one.
+fn protect_current_from_bad_tie(order: &[u8]) -> Vec<u8> {
+    order.iter().rev().copied().collect()
+}
+
 /// One of `resolve_event`'s four SINGULAR targeting keys (`strongestPlayer`/
 /// `weakestPlayer`/`playerWithMostCulture`/`playerWithLeastCulture`, plus
 /// the last-round substitute's own two): the single best-or-worst-`stat`
@@ -886,7 +902,7 @@ fn apply_single_target(
     let order = if favor_current {
         order
     } else {
-        reversed = order.iter().rev().copied().collect();
+        reversed = protect_current_from_bad_tie(order);
         &reversed
     };
     let ranked = rank_players(state, order, stat, best);
@@ -935,7 +951,15 @@ fn conditional_target(state: &mut GameState, order: &[u8], card: CardId, n: i16)
         _ => None,
     })[live_count_idx(state)];
     if among != 0 {
-        let weakest = rank_players(state, order, RankStat::Strength, false);
+        // ENGINE BUG (game 7522639): this used to rank by unreversed `order`,
+        // which on a strength tie put the CURRENT player first in the
+        // "weakest" cutoff -- backwards. §5.3's tie-break protects the
+        // current player from a penalty (see `protect_current_from_bad_tie`'s
+        // own doc, and `apply_single_target`'s identical `WeakestPlayer`
+        // fix); Barbarians' cutoff group is exactly such a penalty selection
+        // (whoever falls in it AND has the most culture loses population).
+        let protected_order = protect_current_from_bad_tie(order);
+        let weakest = rank_players(state, &protected_order, RankStat::Strength, false);
         let cutoff = (among.max(0) as usize).min(weakest.len());
         if !weakest[..cutoff].contains(&q) {
             return;
@@ -990,7 +1014,12 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
             Some(g) => (g, 1),
             None => (lose.unwrap_or(EventBlock::EMPTY), -1),
         };
-        let targets = rank_players(state, order, RankStat::Strength, false);
+        // Same tie-break fix as `conditional_target`'s weakest cutoff above:
+        // landing in the `weakestPlayers` group is a penalty (Raiders, Crime
+        // Wave -- every base-game card here prints only `lose`), so a
+        // strength tie must protect the current player, not prefer them.
+        let protected_order = protect_current_from_bad_tie(order);
+        let targets = rank_players(state, &protected_order, RankStat::Strength, false);
         for &q in targets.iter().take(weakest_count) {
             apply_gains_block(state, q, &block, sign);
         }
@@ -1727,6 +1756,55 @@ mod tests {
         assert_eq!(state.players[1].science, 5, "the current player must win a tied bonus");
         assert_eq!(state.players[0].science, 0);
         assert_eq!(state.players[2].science, 0);
+    }
+
+    /// ENGINE BUG regression (game 7522639's actual reveal: 2p, both
+    /// players strength 3, revealer holding 15 culture vs 3): `Barbarians`'s
+    /// own `conditional_target` computed its "weakest" cutoff group with the
+    /// SAME un-reversed, current-player-first tie-break that `apply_single_
+    /// target`'s `WeakestPlayer` regression above already covers for a
+    /// single target -- but `conditional_target` is a separate function
+    /// (Barbarians is the only base-game card with a top-level `target`/
+    /// `condition`/`decreasePopulation` combination) and was never fixed
+    /// alongside it. On a genuine strength tie this wrongly counted the
+    /// revealer -- who also held the most culture -- as one of "the two
+    /// weakest civilizations" (read "the weaker" in 2p) and queued a
+    /// population loss BGO's own journal says never happened ("No effect").
+    #[test]
+    fn barbarians_spares_the_current_player_from_a_tied_weakest_cutoff() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        p0.strength_extra = 3;
+        p1.strength_extra = 3; // genuine tie, like the real game's 3-vs-3
+        p1.culture = 15; // the revealer holds the most culture...
+        p0.culture = 3;
+        let mut state = multi_player_state(2, &[p0, p1], &[]);
+
+        resolve_event(&mut state, card("Barbarians"), 1); // seat 1 (Purple) reveals
+
+        assert!(
+            state.queue.is_empty(),
+            "a tied weakest cutoff must spare the current player -- no LosePop should fire"
+        );
+    }
+
+    /// The mirror of the regression above: when the most-cultured player is
+    /// UNAMBIGUOUSLY (not tied) the weakest, Barbarians must still fire --
+    /// pinned so the tie-break fix above can't quietly turn into "never
+    /// fires at all".
+    #[test]
+    fn barbarians_still_fires_when_the_most_cultured_player_is_unambiguously_weakest() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        let mut p1 = blank_player(1, card("Despotism"));
+        p0.strength_extra = 3;
+        p1.strength_extra = 1; // revealer is strictly weaker, no tie
+        p1.culture = 15; // and holds the most culture
+        p0.culture = 3;
+        let mut state = multi_player_state(2, &[p0, p1], &[]);
+
+        resolve_event(&mut state, card("Barbarians"), 1); // seat 1 (Purple) reveals
+
+        assert_eq!(state.queue.pop_front(), Some(QueueItem::LosePop { player: 1, n: 1 }));
     }
 
     /// ENGINE BUG regression (`apply_extras`' own doc comment on this arm,

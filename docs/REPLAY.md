@@ -4301,8 +4301,11 @@ bugs**, in three different subsystems:
 3. **`LosePop` (26 games), at least on the one game sampled: an EVENT
    CONDITION evaluation mismatch (`Barbarians`'s "weakest civilization"
    tie-break), not a turn-order or grounding bug.** See its own section
-   below. Not confirmed as the sole cause of the whole bucket -- one
-   sample only.
+   below -- UPDATE: confirmed as a genuine ENGINE BUG and fixed in a later
+   pass (root cause 3's own section now reflects this); not the sole
+   cause of the whole 26-game bucket, just the one sampled game's cause
+   and two sibling cards (`Raiders`, `Crime Wave`) sharing the same
+   selection code.
 
 None of these three is "a resolution line read out of order" -- the
 `resolve_intervening` machinery this multi-session pass has been fixing
@@ -4444,37 +4447,69 @@ offer_plunder_split`'s own cap computation directly (which field, whose
 stock) and cross-check against the SAME end-of-turn `resources`/`food`
 prints this pass already added for the discard investigation.
 
-### Root cause 3 (diagnosed on one sample, NOT fixed): `LosePop`'s `Barbarians` event may mis-evaluate a tied "weakest civilization"
+### Root cause 3 (diagnosed AND FIXED): `LosePop`'s `Barbarians` event mis-evaluated a tied "weakest civilization" -- ENGINE BUG, confirmed and landed
 
 Traced game `7522639`'s stop with `REPLAY_DEBUG_ALL`. The triggering
 event line reads (verbatim, BGO's own text): `"Barbarians: If the
 civilization with the most culture points is one of the two weakest
 civilizations it loses 1 population. **No effect**"` -- the real game
 explicitly states the condition did NOT fire. This reconstruction's own
-`apply_single_target` trace for the SAME reveal shows a strength TIE (3
-vs 3) between the two 2p players, and (per `RULES_SPEC.md` 5.3's tie-break
-rule, "ties broken in favor of the current player") resolves that tie by
-picking the current player (Purple, who also happens to hold the most
-culture, 15 vs 3) as qualifying, so the condition fires and a `LosePop`
-pending opens for Purple -- which the real journal's own `"No effect"`
-contradicts. No later `"<Color> destroys ..."` line exists for it because,
-per BGO, none was ever needed.
+trace for the SAME reveal shows a strength TIE (3 vs 3) between the two
+2p players, with the revealer (Purple) also holding the most culture (15
+vs 3).
 
-**Not confirmed as an engine bug vs. a replayer misread of the tie-break
-rule** -- `RULES_SPEC.md` 5.3's tie-break language is written for
-"strongest/weakest" SELECTION among multiple candidates for an effect,
-and it is not yet verified here whether a TIE for "the weakest" should
-still let the current player qualify as uniquely weakest, or whether BGO
-(and the true rule) treats a strength tie as nobody being uniquely
-weakest for a condition that requires a strict designation. **Flag this
-loudly rather than guess**: if BGO is right, this is a genuine ENGINE
-bug (the compiled tie-break would misplay this exact position against a
-human); if the tie-break rule is right and BGO's client differs, this is
-a BGO-specific quirk to document and route around in the replayer only.
-Needs a `RULES_SPEC.md`/CoL-p.7-literate pass, not a guess -- only one
-example sampled, and this pass did not check whether it explains the
-other 25 games in the bucket or is one of several distinct causes there
-too.
+**Resolved by reading the actual card text, not by guessing.** Checked
+`sources/bga_throughtheages_material.inc.php` (the BGA oracle) directly:
+the printed Barbarians text is exactly the "if the civilization with the
+most culture points is one of the two weakest, it loses 1 population"
+wording above -- there is no separate "ties mean no effect" carve-out on
+the card itself. So `RULES_SPEC.md` 5.3's general tie-break ("ties broken
+in favor of the current player") DOES apply here; the question was never
+whether the rule applies, but which DIRECTION "favor" points for a
+penalty selection.
+
+That direction was already settled and fixed once before, for a
+different function: the Fourteenth pass above found `apply_single_target`
+picking the current player FIRST among ties for `WeakestPlayer` (a
+penalty) -- backwards, confirmed by measurement (62/63 real corpus ties
+matched the reversed/protective pick). **`Barbarians` has its own,
+separate "weakest N" computation (`events::conditional_target`) that the
+Fourteenth-pass fix never touched**, and it had the exact same bug:
+ranked the weakest cutoff group by unreversed `order`, so a strength tie
+put the CURRENT player first in the "weakest" group instead of
+protecting them. Game `7522639`'s tie let Purple (the revealer, tied at
+strength 3 and holding the most culture) count as the weaker civilization
+and queued a `LosePop` BGO's own journal never issued.
+
+**A second sibling had the identical bug**: `resolve_count_targets`'s
+`weakestPlayers` branch (the plural, multi-target key -- `Raiders` and
+`Crime Wave` are the two base-game cards that use it) also ranked its
+weakest group by unreversed `order`, same defect, same fix needed. This
+is the recurring shape this project keeps finding: a rule fixed in one
+place and silently absent from a sibling that does the same kind of
+selection.
+
+**Fix**: factored the reversal `apply_single_target` already did for its
+own `favor_current = false` case into a shared `protect_current_from_bad_tie`
+helper, and applied it to both `conditional_target`'s weakest-cutoff
+group and `resolve_count_targets`'s `weakestPlayers` branch. Two new
+regression tests in `rust/src/events.rs`
+(`barbarians_spares_the_current_player_from_a_tied_weakest_cutoff`,
+`barbarians_still_fires_when_the_most_cultured_player_is_unambiguously_weakest`)
+pin both directions; confirmed red against the pre-fix code, green after.
+Re-running game `7522639` through `bin/replay` after the fix shows the
+false `LosePop` pending choice gone and the replay progressing from 94 to
+252 actions before its next (unrelated) stop. Corpus-wide, `replaystats`
+shows the `StuckPending: LosePop` bucket drop from 26 to 22 games and
+`IllegalMove: Pop` drop from 152 to 147 -- consistent with a handful of
+`Barbarians`/`Raiders`/`Crime Wave` tie games, not a bucket-wide fix (most
+of the remaining 22/147 have other causes, not sampled here).
+
+**Since `resolve_event` runs identically in real self-play, not just this
+replayer, every bot game with a genuine weakest-cutoff strength tie on
+one of these three cards paid/dodged the wrong penalty too. Flagged loudly:
+the self-play climb should be restarted to pick this fix up**, same as the
+Fourteenth pass's `WeakestPlayer` fix was.
 
 ### What was NOT investigated this pass (open, no lead)
 
