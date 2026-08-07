@@ -308,6 +308,110 @@ fn print_decision(game_id: &str, tier: &str, d: &Decision, bot: &WeightedBot) ->
 }
 
 // ---------------------------------------------------------------------
+// PlanBot secondary comparison (top-1 only -- see `run_planbot`'s doc)
+// ---------------------------------------------------------------------
+
+/// Same top-1 question as [`print_decision`], answered by [`tta::bots::plan`]
+/// (beam search over whole-turn sequences) instead of [`WeightedBot`]. This
+/// is deliberately a SEPARATE, narrower path rather than a mode of
+/// [`print_decision`]: `plan::pick` returns one move, not a priced ranking
+/// of the whole legal-move list (it beam-searches SEQUENCES, not individual
+/// candidates), so `human_rank`/`bot_top_score` have no equivalent here --
+/// forcing them into the same TSV shape would print columns that are
+/// meaningless for this bot. Output is a strict subset of `print_decision`'s
+/// columns, same order, so a consumer that only reads the shared prefix
+/// (`game_id, tier, players, age, round, lineno, category, agreed,
+/// discard_tainted`) can treat both interchangeably.
+fn print_decision_planbot(
+    game_id: &str,
+    tier: &str,
+    d: &Decision,
+    cfg: &tta::bots::plan::PlanConfig,
+    stats: &mut tta::bots::plan::Stats,
+    counters: &mut tta::bots::pending::Counters,
+    rng: &mut tta::rng::PyRandom,
+) -> bool {
+    let category = categorize(d.state.pending.top(), d.human_move);
+    let bot_move = tta::bots::plan::pick(cfg, stats, counters, rng, &d.state, &d.legal_moves);
+    let agreed = bot_move == d.human_move;
+    println!(
+        "{game_id}\t{tier}\t{}\t{:?}\t{}\t{}\t{}\t{agreed}\t{}\t{}\t{:?}\t{bot_move:?}",
+        d.state.num_players,
+        d.state.age_civil,
+        d.state.round,
+        d.lineno,
+        category.name(),
+        d.legal_moves.len(),
+        d.after_arbitrary_discard,
+        d.human_move,
+    );
+    agreed
+}
+
+/// A cheap secondary check (`docs/AGREEMENT.md`'s "does search close the
+/// gap" question): does beam search over whole-turn sequences agree with
+/// humans more often than `WeightedBot`'s single-move ranking does? Meant
+/// for a small subsample (10-20 games) -- `PlanConfig::default()`'s node
+/// budget makes this meaningfully slower per decision than `rank_moves`,
+/// which is a flat evaluate-and-sort over an already-known list.
+fn run_planbot(index_path: &str, journals_dir: &str, weights_dir: &str, ids: &[String]) -> Result<(), String> {
+    let card_index = build_card_index();
+    let games = corpus::parse_index(index_path)?;
+    let by_id: HashMap<&str, &GameMeta> = games.iter().map(|g| (g.id.as_str(), g)).collect();
+
+    let mut weights_by_players: HashMap<u8, tta::bots::weighted::weights::Weights> = HashMap::new();
+    for players in [2u8, 3, 4] {
+        let path = Path::new(weights_dir).join(format!("rust_champion_{players}p.json"));
+        weights_by_players.insert(players, load_weights(&path)?);
+    }
+
+    for id in ids {
+        let Some(meta) = by_id.get(id.as_str()) else {
+            eprintln!("{id}: not found in index.tsv");
+            continue;
+        };
+        let path = format!("{journals_dir}/{id}.tsv");
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{id}: no journal file ({e})");
+                continue;
+            }
+        };
+        let weights = *weights_by_players
+            .get(&meta.players)
+            .ok_or_else(|| format!("no champion weights loaded for {}p", meta.players))?;
+        // Same `width: 2` override real league play uses for `BotKind::Plan`
+        // (`bots/greedy.rs`'s `build_bots`) -- otherwise this would be
+        // comparing a differently-tuned search than the one actually
+        // fielded.
+        let cfg = tta::bots::plan::PlanConfig { width: 2, weights, ..tta::bots::plan::PlanConfig::default() };
+        let mut stats = tta::bots::plan::Stats::default();
+        let mut counters = tta::bots::pending::Counters::default();
+        // Seeded, not zero: a `PyRandom` stream this bot owns end-to-end for
+        // the game, exactly as `build_bots`' per-seat rng is -- reusing one
+        // fixed seed across every game would make every game's determinizer
+        // draw the identical sequence.
+        let mut rng = tta::rng::PyRandom::new(meta.id.parse::<i128>().unwrap_or(0));
+
+        let result = replay_game(meta, &text, &card_index, true);
+        let n = result.decisions.len();
+        let mut agreed_n = 0usize;
+        for d in &result.decisions {
+            if print_decision_planbot(&meta.id, meta.tier.as_str(), d, &cfg, &mut stats, &mut counters, &mut rng) {
+                agreed_n += 1;
+            }
+        }
+        let status = if result.completed { "COMPLETE" } else { "STOPPED" };
+        eprintln!(
+            "{} [{}p] {status} after {} actions -- {n} decision points recorded, {agreed_n}/{n} top-1 agreement (PlanBot)",
+            meta.id, meta.players, result.actions_consumed
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------
 
@@ -360,12 +464,25 @@ fn run(index_path: &str, journals_dir: &str, weights_dir: &str, ids: &[String]) 
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = env::args().skip(1).collect();
+    let mut argv: Vec<String> = env::args().skip(1).collect();
+    // `--planbot`: secondary comparison against `bots::plan` instead of
+    // `WeightedBot` -- see `run_planbot`'s doc. A leading flag, not a
+    // separate binary, so both modes share `main`'s own arg validation and
+    // every other file in this crate need not learn a second binary name.
+    let planbot = !argv.is_empty() && argv[0] == "--planbot";
+    if planbot {
+        argv.remove(0);
+    }
     if argv.len() < 4 {
-        eprintln!("usage: agreement <index.tsv> <journals_dir> <weights_dir> <game_id> [game_id ...]");
+        eprintln!("usage: agreement [--planbot] <index.tsv> <journals_dir> <weights_dir> <game_id> [game_id ...]");
         return ExitCode::FAILURE;
     }
-    match run(&argv[0], &argv[1], &argv[2], &argv[3..]) {
+    let result = if planbot {
+        run_planbot(&argv[0], &argv[1], &argv[2], &argv[3..])
+    } else {
+        run(&argv[0], &argv[1], &argv[2], &argv[3..])
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
