@@ -66,3 +66,24 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 16
+# Incremental compilation caches per-codegen-unit object code, so an edit
+# re-codegens only the units it actually touched -- the closest thing Rust has
+# to C's "recompile one .o and relink", and worth having precisely because this
+# crate has no external dependencies: there is nothing else in the build to
+# cache. It is off in [profile.release] (Cargo's default there) and stays off:
+# `lto = "fat"` plus `codegen-units = 1` means a single unit, so there would be
+# nothing to reuse anyway.
+#
+# Measured on this box 2026-08-07, cold clone, `--bin replaystats`, while other
+# builds were competing for cores (i.e. the realistic case, not a quiet box):
+#   cold build, [profile.release]:                   198s
+#   cold build, [profile.difftest] without this:      49s
+#   rebuild after a real edit, without this:          74s
+#   rebuild after a real edit, with this:          28-36s
+# The corpus output is byte-identical between profiles, and `replaystats` over
+# all 1011 journals actually runs slightly FASTER from difftest than release
+# (5.1s vs 6.7s), so there is no reason for analysis tooling to pay the release
+# link at all. Build the engine with `--release` when you are measuring
+# self-play strength; build the replay/analysis binaries with
+# `--profile difftest`.
+incremental = true
