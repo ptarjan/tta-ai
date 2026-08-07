@@ -6670,3 +6670,101 @@ affects `Build`/`Upgrade`/`WonderStep` cost buckets that also read
 `state.card_row`'s content -- those were flagged as plausibly sharing the
 OLD lagging-age root cause by an earlier pass (`8edfea7`'s handoff); this
 pass did not re-check whether the EARLY-advance direction reaches them too.
+
+## `Take`/`HandFull`: landed as a documented REPLAYER-ONLY divergence, not a fix -- the engine stays rulebook-correct, the replayer reproduces the real BGO implementation
+
+Every lead this file's now-four `Take`/`HandFull` passes could name has been
+checked and closed. Both quantities `costs::take_gate`'s `hand_full` gate
+reads -- civil hand size and civil action total -- are independently,
+exhaustively verified correct, corpus-wide, by three from-scratch traces
+each. The `>=`/`>` boundary is settled PERMANENTLY by primary source:
+
+> "The number of civil cards in your hand is limited by your civil action
+> total. When you are **at or above** the limit, you may not add another
+> civil card to your hand **by any means**. However, if you are above the
+> limit for some reason, you do not have to discard excess civil cards."
+> -- *Code of Laws*, official rules companion, verbatim.
+
+**`costs::take_gate`'s `hand_full = hand_size_civil() >= civil_hand_limit`
+remains correct and is NOT touched by this section.** Yet ~109 corpus games
+show BGO's own journal logging a human legally taking a civil card at
+exactly that limit. This is not a bug to fix in either direction -- it is a
+genuine, primary-source-confirmed divergence between the printed rule and
+the real BGO server's own live implementation (not unprecedented for this
+project: the Shakespeare Library/Theater discount, this same doc's Disease
+2, was a confirmed digital-vs-rulebook mismatch of the same shape). This
+project has two goals that pull apart at exactly this one gate: train bots
+against the TRUE rule (the engine, self-play legality, `legal.rs` +
+`costs::take_gate`), and replay real BGO games faithfully (the replayer,
+`replay_common.rs`). A single shared `take_gate` could not express both at
+once.
+
+**What landed**: the two jobs are now split. `costs::take_gate` and
+`legal.rs` are BYTE-IDENTICAL to before this section -- self-play legality
+is completely unaffected; `engine_legality_still_refuses_a_take_at_the_
+civil_hand_limit_after_the_replayer_hand_full_override_exists` (`costs.rs`)
+pins that a take at the limit is still refused by the engine's own
+`take_gate`/`can_take_gated`/`take_rejection` primitives directly, not by a
+reimplementation.
+
+The REPLAYER alone gets a narrow carve-out, `replay_common::Replayer::
+try_apply_take` (the new sole call site for a journal-observed `Move::
+Take`, replacing a bare `try_apply`): when `legal::legal_moves` refuses a
+take, `take_blocked_only_by_hand_full` decides whether `hand_full` is the
+ONLY reason, by calling the existing `costs::take_rejection` TWICE (never a
+bespoke reimplementation of the gate order) -- once with the real gate
+(must name `HandFull` specifically; any other named reason leaves the
+ordinary honest mismatch untouched), once more with a copy whose
+`hand_full` is forced `false` (must then return `None`, proving no OTHER
+gate -- cost, duplicate-name, one-leader-per-age, wonder rules -- also
+blocks this exact take). Only then does the replayer accept the take (via
+`apply::apply`, the same primitive an ordinary legal move goes through) and
+count it, rather than raising `IllegalMove: Take`.
+
+**Counted, never swallowed**: `Replayer::hand_full_takes_overridden` /
+`GameResult::hand_full_takes_overridden`, aggregated and printed by
+`replaystats` right next to the existing "hand cards grounded from a bid's
+own force ceiling" line, explicitly captioned with the known ~109-game
+shape so a future blowout is caught as a sign the override has gone too
+loose, not celebrated as a bigger win.
+
+Tests (`RED`-confirmed by temporarily short-circuiting `try_apply_take`'s
+new branch to `false` and re-running, then reverted): `costs.rs`'s
+`engine_legality_still_refuses_a_take_at_the_civil_hand_limit_after_the_
+replayer_hand_full_override_exists`, and four in `replay_common.rs`:
+`take_blocked_only_by_hand_full_is_true_when_hand_full_is_the_sole_
+rejecting_gate`, `..._is_false_when_a_second_gate_also_rejects_the_same_
+take` (the narrowness guarantee, via a duplicate-named row card), `..._is_
+false_when_the_cost_alone_is_unaffordable` (the short-circuit-order
+guarantee), and `try_apply_take_accepts_and_counts_a_hand_full_only_take_
+the_engine_refuses` (end-to-end against real `legal::legal_moves`). Full
+`cargo test --lib`: 1,124 passed (was 1,119), 0 failed.
+
+**Measurement (`replaystats`, full 1,011-game corpus, exact game-ID set
+diff, not bucket counts alone)**:
+
+| | before | after |
+|---|---|---|
+| games completed | 76 | **95** |
+| mean rounds reached | 12.85 | **13.39** |
+| decisions in Age II+ | 53.3% | **55.6%** |
+| `IllegalMove: Take` (bucket total) | 126 | **23** |
+| hand_full-only takes accepted | -- | **313, in 107 games** |
+
+`completed` diffed by exact game ID: **19 new completions, 0 regressed** --
+a pure improvement, every one of the 19 traced to running past a take the
+engine would have refused but the real game logged (`comm` set-diff against
+the pre-change ID list, not eyeballed). The 107-game shape of where the
+override actually fired lines up almost exactly with the ~109-game
+`HandFull` bucket this file has tracked across four passes -- the 313 total
+FIRINGS (average ~2.9 per game) is not a red flag: a game that gets past
+one hand_full-only take by definition keeps playing, and a deeper replay
+naturally exercises more turns, so more chances for the SAME rule to apply
+again to the SAME player later in the SAME game. The signal to watch is the
+game count, not the raw firing count, and it did not blow out.
+
+No other bucket's individual composition was audited this pass beyond
+confirming zero completed-game regressions -- the usual "a stall bucket
+count moving is not proof of correctness on its own" caveat applies to
+every downstream number in the table above exactly as it has in every
+prior pass; only the completed-game ID diff is a strong claim here.

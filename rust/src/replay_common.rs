@@ -338,6 +338,14 @@ struct Replayer<'a> {
     /// each one is a hand slot whose identity was deduced from a bid rather
     /// than read off a line naming the card.
     bid_ceilings_grounded: u32,
+    /// How many journal-observed `Take`s this REPLAYER accepted despite
+    /// `costs::take_gate`'s `hand_full` gate rejecting them -- see
+    /// [`take_blocked_only_by_hand_full`] and `docs/REPLAY.md`'s Take/
+    /// HandFull "genuinely unexplained discrepancy" conclusion. Reported
+    /// rather than swallowed, right next to `bid_ceilings_grounded`: each
+    /// one is a place this file knowingly diverges from self-play legality
+    /// to reproduce what the real BGO implementation actually permitted.
+    hand_full_takes_overridden: u32,
     /// Every `"<Color> colonizes ..."` line's own sacrifice list, in journal
     /// order -- see [`prescan_colonize_sacrifices`]. The front is the
     /// outcome of the auction currently in progress; it is popped when that
@@ -527,6 +535,7 @@ impl<'a> Replayer<'a> {
             auto_passed: [0; 4],
             colonize_approximated: false,
             bid_ceilings_grounded: 0,
+            hand_full_takes_overridden: 0,
             colonize_sacrifices,
             actions_consumed: 0,
             current_lineno: 0,
@@ -1938,6 +1947,79 @@ impl<'a> Replayer<'a> {
         }
         Ok(())
     }
+
+    /// Applies a journal-observed `Move::Take { slot }` exactly like
+    /// [`Self::try_apply`], EXCEPT: if the engine's own `legal::legal_moves`
+    /// rejects it, and [`take_blocked_only_by_hand_full`] confirms
+    /// `costs::take_gate`'s `hand_full` gate is the ONLY reason (every other
+    /// `costs::take_rejection` gate agrees it would otherwise be legal),
+    /// this accepts it instead of raising `IllegalMove: Take` -- see that
+    /// function's own doc and `docs/REPLAY.md`'s Take/HandFull "genuinely
+    /// unexplained discrepancy" conclusion for why. `costs::take_gate` and
+    /// `legal::legal_moves` are only ever CONSULTED here, never modified --
+    /// self-play legality is untouched by this method existing.
+    ///
+    /// If the move is illegal for ANY other reason too (or legal outright),
+    /// this defers entirely to `try_apply`, so every other `IllegalMove:
+    /// Take` mismatch this file already produces is unaffected.
+    fn try_apply_take(&mut self, actor: u8, slot: u8) -> Result<(), MismatchKind> {
+        let mv = Move::Take { slot };
+        let legal = legal::legal_moves(&self.state);
+        if !legal.as_slice().contains(&mv)
+            && take_blocked_only_by_hand_full(&self.state, &self.state.players[actor as usize], slot as usize)
+        {
+            self.hand_full_takes_overridden += 1;
+            // Same decision-recording `try_apply`'s own `record=true` path
+            // does, using the ENGINE's own (necessarily hand_full-excluding)
+            // `legal_moves` list. `humandata.rs` already handles a
+            // `human_move` absent from `legal_moves` by skipping that one
+            // data point ("human_move not found in legal_moves ...,
+            // skipping") -- the correct degradation for a move this file
+            // KNOWINGLY accepts despite the engine calling it illegal, not a
+            // new failure mode.
+            if self.record_decisions {
+                let after_arbitrary_discard =
+                    self.discard_solver.chosen > 0 || self.discard_solver.forced_collisions > 0;
+                self.decisions.push(Decision {
+                    lineno: self.current_lineno,
+                    state: self.state.clone(),
+                    legal_moves: legal.as_slice().to_vec(),
+                    human_move: mv,
+                    after_arbitrary_discard,
+                });
+            }
+            apply::apply(&mut self.state, mv);
+            return Ok(());
+        }
+        self.try_apply(mv, true)
+    }
+}
+
+/// REPLAYER-ONLY divergence from self-play legality (`docs/REPLAY.md`'s
+/// Take/HandFull handoffs): whether a journal-observed take of `slot` is
+/// illegal ONLY because `costs::take_gate`'s `hand_full` gate rejects it --
+/// settled correct by primary source (Code of Laws, verbatim: "The number
+/// of civil cards in your hand is limited by your civil action total. When
+/// you are at or above the limit, you may not add another civil card to
+/// your hand by any means.") and left untouched here -- with every OTHER
+/// `costs::take_rejection` gate (cost, duplicate-name, one-leader-per-age,
+/// wonder rules) agreeing the take would otherwise be legal.
+///
+/// Discriminated using `costs::take_rejection` itself, called TWICE, never
+/// a bespoke reimplementation of its gate logic: once with the real gate
+/// (must name `HandFull` specifically -- any other named reason is an
+/// honest mismatch this function must not touch), once more with a copy
+/// whose `hand_full` is forced `false` (must then return `None`, proving no
+/// OTHER gate also blocks this exact take). `costs::take_gate`/`legal.rs`
+/// are read, never modified, by this function or its one call site
+/// ([`Replayer::try_apply_take`]) -- self-play legality is unaffected.
+fn take_blocked_only_by_hand_full(state: &GameState, p: &PlayerState, slot: usize) -> bool {
+    let gate = costs::take_gate(state, p, None);
+    if !matches!(costs::take_rejection(state, p, slot, &gate), Some(costs::TakeRejection::HandFull)) {
+        return false;
+    }
+    let probe = costs::TakeGate { hand_full: false, ..gate };
+    costs::take_rejection(state, p, slot, &probe).is_none()
 }
 
 /// The `Move` a player OTHER than `state.decider()` is legally allowed to
@@ -3475,6 +3557,8 @@ pub struct GameResult {
     pub colonize_approximated: bool,
     /// See [`Replayer::bid_ceilings_grounded`].
     pub bid_ceilings_grounded: u32,
+    /// See [`Replayer::hand_full_takes_overridden`].
+    pub hand_full_takes_overridden: u32,
     pub engine_scores: Option<Vec<i32>>,
     pub index_scores: Vec<i32>,
     /// Counts from this game's `DiscardSolver` -- see that module's doc and
@@ -4441,6 +4525,7 @@ pub fn replay_game(
         mismatch,
         colonize_approximated: r.colonize_approximated,
         bid_ceilings_grounded: r.bid_ceilings_grounded,
+        hand_full_takes_overridden: r.hand_full_takes_overridden,
         engine_scores,
         index_scores: meta.scores.clone(),
         discards_solved: r.discard_solver.solved,
@@ -4719,7 +4804,7 @@ fn apply_one(
                     );
                 }
             }
-            r.try_apply(Move::Take { slot }, true)?;
+            r.try_apply_take(actor, slot)?;
             // The slot's REFILL (whatever `deal()` just drew into it) is
             // unobserved SIMULATED filler again -- ungroundeding it lets a
             // later take force the true next observed card into it, exactly
@@ -7992,5 +8077,106 @@ mod tests {
 
         assert!(!r.ground_bid_ceiling(0, 3), "the only hand card is spoken for");
         assert!(r.state.players[0].hand_military.contains(raid), "and is left exactly where it was");
+    }
+
+    /// `docs/REPLAY.md`'s Take/HandFull "genuinely unexplained discrepancy"
+    /// conclusion: a journal-observed take rejected ONLY by `hand_full`
+    /// (cost affordable, no wonder in progress, no duplicate name, no
+    /// leader-age conflict) is a fact about what BGO's real implementation
+    /// permitted, so `take_blocked_only_by_hand_full` must say so.
+    #[test]
+    fn take_blocked_only_by_hand_full_is_true_when_hand_full_is_the_sole_rejecting_gate() {
+        let card_index = build_card_index();
+        let r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = r;
+        r.state.players[0].government = card_index["Despotism"];
+        r.state.players[0].civil_actions = 10;
+        r.state.players[0].hand_civil = CardList::new();
+        for _ in 0..4 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]); // fills the 4-CA Despotism limit
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"];
+        assert!(
+            take_blocked_only_by_hand_full(&r.state, &r.state.players[0], 0),
+            "affordable, no duplicate, no wonder, no leader -- hand_full is the only gate in play"
+        );
+    }
+
+    /// The narrowness requirement: if a SECOND gate would also reject the
+    /// same take (here, `DuplicateCard` -- the row card is already in
+    /// hand), `take_blocked_only_by_hand_full` must say `false` and leave
+    /// the ordinary, honest `IllegalMove: Take` mismatch in place. Proven
+    /// by probing `costs::take_rejection` a second time with `hand_full`
+    /// forced off, exactly like the function under test does, never by a
+    /// parallel reimplementation of the gate order.
+    #[test]
+    fn take_blocked_only_by_hand_full_is_false_when_a_second_gate_also_rejects_the_same_take() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.players[0].government = card_index["Despotism"];
+        r.state.players[0].civil_actions = 10;
+        r.state.players[0].hand_civil = CardList::new();
+        r.state.players[0].hand_civil.push(card_index["Selective Breeding"]);
+        for _ in 0..3 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]); // fills to 4/4
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"]; // already in hand: DuplicateCard too
+        assert!(
+            !take_blocked_only_by_hand_full(&r.state, &r.state.players[0], 0),
+            "hand_full is not the ONLY blocking gate here -- must not override"
+        );
+    }
+
+    /// A take whose COST alone already exceeds the budget must not be
+    /// treated as a hand_full-only case even if the hand also happens to
+    /// be full -- `Budget` is checked (and short-circuits) before
+    /// `hand_full` in `costs::take_rejection`'s own branch order, so this
+    /// pins that `take_blocked_only_by_hand_full`'s first check (the real
+    /// gate must name `HandFull` specifically) actually does its job.
+    #[test]
+    fn take_blocked_only_by_hand_full_is_false_when_the_cost_alone_is_unaffordable() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.players[0].government = card_index["Despotism"];
+        r.state.players[0].civil_actions = 0; // cannot afford any row slot
+        r.state.players[0].hand_civil = CardList::new();
+        for _ in 0..4 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]);
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"];
+        assert!(!take_blocked_only_by_hand_full(&r.state, &r.state.players[0], 0));
+    }
+
+    /// End-to-end through the real call site: `Replayer::try_apply_take`
+    /// accepts a hand_full-only take that `legal::legal_moves` (the real
+    /// engine, untouched) refuses, applies it via `apply::apply` exactly
+    /// like an ordinary legal `Move::Take` would be, and counts it in
+    /// `hand_full_takes_overridden` -- "counted and visible", never a
+    /// silent pass.
+    #[test]
+    fn try_apply_take_accepts_and_counts_a_hand_full_only_take_the_engine_refuses() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.current = 0;
+        r.state.players[0].government = card_index["Despotism"];
+        r.state.players[0].civil_actions = 10;
+        r.state.players[0].hand_civil = CardList::new();
+        for _ in 0..4 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]);
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"];
+        assert!(
+            !legal::legal_moves(&r.state).as_slice().contains(&Move::Take { slot: 0 }),
+            "the engine, untouched, must still call this illegal"
+        );
+
+        r.try_apply_take(0, 0).expect("the replayer-only divergence accepts it");
+
+        assert_eq!(r.hand_full_takes_overridden, 1, "reported, not swallowed");
+        assert!(
+            r.state.players[0].hand_civil.contains(card_index["Selective Breeding"]),
+            "the card actually landed in hand"
+        );
     }
 }

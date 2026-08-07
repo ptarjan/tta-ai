@@ -125,6 +125,8 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     let mut n_games = 0u32;
     let mut bid_ceilings_grounded: u32 = 0;
     let mut n_bid_ceiling_games: u32 = 0;
+    let mut hand_full_takes_overridden: u32 = 0;
+    let mut n_hand_full_take_games: u32 = 0;
     let mut n_completed = 0u32;
     let mut round_reached_sum = 0u64;
     let mut rounds_total_sum = 0u64;
@@ -167,6 +169,10 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         bid_ceilings_grounded += result.bid_ceilings_grounded;
         if result.bid_ceilings_grounded > 0 {
             n_bid_ceiling_games += 1;
+        }
+        hand_full_takes_overridden += result.hand_full_takes_overridden;
+        if result.hand_full_takes_overridden > 0 {
+            n_hand_full_take_games += 1;
         }
         discard_oracle_checked_total += result.discard_oracle_checked as u64;
         discard_oracle_agreed_total += result.discard_oracle_agreed as u64;
@@ -271,7 +277,20 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // hand slot whose identity was deduced from a logged bid rather than
     // read off a line naming the card -- see
     // `replay_common::Replayer::ground_bid_ceiling`.
-    println!("hand cards grounded from a bid's own force ceiling: {bid_ceilings_grounded} (in {n_bid_ceiling_games} games)\n");
+    println!("hand cards grounded from a bid's own force ceiling: {bid_ceilings_grounded} (in {n_bid_ceiling_games} games)");
+    // `GameResult::hand_full_takes_overridden` -- `docs/REPLAY.md`'s
+    // Take/HandFull "genuinely unexplained discrepancy" conclusion: a
+    // deliberate REPLAYER-ONLY divergence from self-play legality
+    // (`costs::take_gate`'s `hand_full` gate stays rulebook-correct and
+    // untouched). Reported so this is never quietly papered over -- the
+    // known corpus shape is ~109 games' worth; a count far above that here
+    // is a signal the override (`take_blocked_only_by_hand_full`) is too
+    // loose, not confirmation it is working.
+    println!(
+        "journal-observed takes accepted despite failing ONLY the hand_full gate: {hand_full_takes_overridden} \
+         (in {n_hand_full_take_games} games; the known corpus shape is ~109 games' worth -- a much larger number \
+         here means the override is too loose)\n"
+    );
 
     println!("## Discard-phase hand-size oracle\n");
     println!(

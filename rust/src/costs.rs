@@ -1138,6 +1138,34 @@ mod tests {
         assert!(!can_take(&state, p, 0, None), "hand at civil_hand_limit");
     }
 
+    /// `docs/REPLAY.md`'s Take/HandFull handoffs settle `hand_full`'s
+    /// `>=` boundary as correct by primary source (Code of Laws, verbatim:
+    /// "The number of civil cards in your hand is limited by your civil
+    /// action total. When you are at or above the limit, you may not add
+    /// another civil card to your hand by any means.") and the REPLAYER
+    /// (`replay_common::Replayer::try_apply_take`) now deliberately accepts
+    /// a journal-observed take that only this gate rejects, reproducing
+    /// what the real BGO implementation permitted. That replayer-only
+    /// carve-out must never leak into self-play legality -- this pins,
+    /// directly against `take_gate`/`can_take_gated`/`take_rejection` (the
+    /// engine's own primitives, not a reimplementation), that a take at the
+    /// civil hand limit is still refused exactly as before.
+    #[test]
+    fn engine_legality_still_refuses_a_take_at_the_civil_hand_limit_after_the_replayer_hand_full_override_exists() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        for _ in 0..4 {
+            p.hand_civil.push(card("Irrigation")); // fills to the 4 CA limit
+        }
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Selective Breeding");
+        let p = &state.players[0];
+        let gate = take_gate(&state, p, None);
+        assert!(gate.hand_full, "civil hand at the CA limit must report hand_full");
+        assert!(!can_take_gated(&state, p, 0, &gate, None), "self-play legality must still refuse the take");
+        assert_eq!(take_rejection(&state, p, 0, &gate), Some(TakeRejection::HandFull));
+    }
+
     /// RULES_SPEC §2.4/§2.5: a wonder "goes directly into play sideways as
     /// your unfinished wonder (never to hand)"; the taking-limits rule is
     /// explicitly scoped to "(non-wonder)". `can_take_gated`'s wonder arm
