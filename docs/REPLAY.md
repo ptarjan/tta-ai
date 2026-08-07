@@ -5304,3 +5304,207 @@ find). No code change landed this pass -- this is a documentation-only
 handoff. `HandFull`'s own count (98) will keep moving as other buckets'
 fixes land and let more games run deeper into it; that is expected and is
 not, by itself, evidence of anything new.
+
+## Second `IllegalMove: Pop` pass: two more root causes found and fixed (144 -> 22), the food-text-vs-stock-delta trap avoided, one well-evidenced new lead left
+
+Picked up the bucket at 144 (this file's own prior handoff, "`IllegalMove: Pop`
+handoff: two fixes landed (184 -> 144)"), starting from that handoff's own
+"concrete unfixed lead": game `7522648` round 7's unexplained mid-turn
+`yellow_bank` drop of 2, already diagnosed but not root-caused.
+
+### Fix 1 (`replay_common.rs`, commit `62befa4`): `force_civil_age_at_least` fired before a stalled turn's own `end_of_turn` had actually completed
+
+Root-caused the `7522648` lead: `economy::end_of_turn` can be interrupted by
+`interact::discard_excess_military` (returns early, `false`, BEFORE running
+its own production/consumption steps) and only resume once the discard
+choice(s) it queued are drained by `resolve_intervening` -- which, on a
+stalled turn, happens while processing the FOLLOWING journal line, and BGO
+tags that following line with the age it actually occurred in, which is
+routinely already the NEW age. The age catch-up
+(`game::force_civil_age_at_least`, called once per line off that line's own
+age column, added in the prior pass to compensate for this reconstruction's
+`civil_deck` lagging the real one) ran unconditionally at the top of the
+replay loop's line iteration -- so it applied `advance_age`'s §12.2.4 "-2
+yellow_bank" deduction to every player BEFORE the stalled player's own
+end-of-turn food consumption had run, one whole age transition early.
+Confirmed on `7522648`: the journal's own "End turn ... 1 food - consumption:
+1" for Orange's round-7 turn requires the pre-deduction `yellow_bank` (13,
+consumption 1); this binary was computing consumption off the post-deduction
+value (11, consumption 2).
+
+Fixed by extracting the call into a new `catch_up_civil_age` helper, gated on
+both `state.pending` and `state.queue` being empty -- deferring the
+catch-up by at most one line (the very next line, once whatever was
+outstanding has drained under the OLD age, re-fires the same still-otherwise-
+unconditional call and brings `state.age_civil` up to date before anything
+belonging to the new age applies). Two new tests, both confirmed RED against
+a reverted (unconditional) version before being restored green.
+
+Corpus: `Pop` 139 -> 78 (measured against the tree this pass started from,
+which already had one concurrent worker's commit past the 144 baseline --
+see the commit message for the exact isolated numbers), games completed 29 ->
+48, mean rounds reached 11.55 -> 12.11, decisions in Age II+ 47.2% -> 49.5%.
+Set-diffed by exact game ID, not just the count: 63 games cleared, 2 new
+entrants (`7521963`, `7522909`) -- both traced end-to-end and confirmed to run
+MUCH deeper before hitting a genuinely later, different Pop shortfall (round
+11/144 actions -> round 18/271 actions; round 8/104 actions -> round 19/334
+actions), not a regression.
+
+### Fix 2 (`replay_common.rs`, commit `b257fd7`): the `produces_grants` FIFO gets permanently desynced by one foreign entry
+
+Re-bucketed the remaining 78 by the same food-short-vs-tier-mismatch
+signature the prior pass established (still ~92% food-short, ~5% tier
+mismatch, matching that pass's own finding that the split is real and not an
+artifact). Traced game `7523052` round 9 (short by 1, cost tier right) back
+to its first divergence using `economy::end_of_turn`'s own `POST` print
+against the journal's `"(now N)"` totals (never the printed per-step
+production text -- see the note on that trap below) and found: Foray's own
+grant (`"Purple produces 1 food; Purple produces 2 resources"`, journal
+round 9) never applied. `events::food_or_resources` had run its
+deterministic "resources first" guess (0 food / 3 resources) instead of the
+prior pass's own correction firing.
+
+Root cause: `prescan_produces_grants` queues EVERY standalone `"<Color>
+produces N food[; ...]"` line in the WHOLE journal into one shared per-seat
+FIFO, but only Foray/Raiders' exact `Special::StrongestPlayers`/
+`WeakestPlayers` + `Gain`/`Lose(food_and_or_resources)` shape ever consumes
+it. An `AllPlayers`-shaped grant like Development of Markets ("gains 2
+resources or 2 food, player's choice") resolves through a real
+`Pending::Choice` (`ChoiceKind::FoodOrRes`) that never reads `produces_grants`
+at all, so ITS OWN matching-shaped line sits at the front of the queue
+forever once queued. The consumer only ever PEEKED the front entry and gave
+up on a total mismatch (a deliberate safety property from the prior pass,
+to avoid consuming an unrelated entry) -- but never POPPED the mismatched
+entry either, so one foreign line permanently blocked every later, real
+Foray/Raiders correction for that player for the rest of the game. Confirmed
+on `7523052`: a stray `(2, 0)` from round 5's Development of Markets sat in
+front of round 9's real Foray `(1, 2)` split, whose total (3) never matched
+the stale entry's total (2).
+
+Fixed by scanning forward through the FIFO for the first entry whose OWN
+total matches, removing it from wherever it sits (not just the front) --
+the sibling `PlunderSplit` consumer already does exactly this, for the
+identical reason, per its own doc comment (`prescan_plunder_splits`). One new
+test, confirmed RED against the old peek-only version before being restored
+green.
+
+Corpus: `Pop` 75 -> 22 (the 78 above further reduced to 75 by an unrelated
+concurrent worker's fix landed in between -- see the git log). Set-diffed by
+exact game ID: 53 games cleared, **0 new entrants** -- a pure improvement,
+no regression trace needed. Games completed 48 -> 49, mean rounds reached
+12.14 -> 12.35, decisions in Age II+ 49.8% -> 51.0%.
+
+### The food-text-vs-stock-delta trap, and how this pass avoided it
+
+A concurrent worker (chasing `events::extra_production`) found and reported:
+**BGO's journal display text for "X food" is not always equal to the real
+production number, and is not ground truth** -- confirmed on a case where
+the printed production text was off by one but the journal's OWN recorded
+stock delta (`entering + production - consumption = "(now N)"`) reconciled
+exactly against the engine's correct value. Both fixes in this pass were
+built entirely on stock deltas and `"(now N)"` totals (the established
+method from the prior pass's own "methodology trap" section, re-used rather
+than reinvented) -- neither fix trusted a printed production-text number as
+an oracle anywhere in its reasoning, so this trap did not need retrofitting
+here. Worth restating for whoever picks up the remaining bucket: the
+distinction is between a RECORDED fact (a `"<Color> spends/produces N
+food"` clause that reconciles against other numbers in the log -- both this
+pass's fixes read exactly such clauses) and DESCRIPTIVE display text (a
+reveal line's own trailing summary, which does not have to reconcile and
+sometimes does not).
+
+### Breakdown of the 22 that remain (fresh `REPLAY_DEBUG=1` run against the landed tree, `b257fd7`)
+
+| count | signature |
+|---|---|
+| 8 | cost matches journal's stated TOTAL, `food` short by 1 |
+| 6 | same, short by 2 |
+| 2 | same, short by 3 |
+| 4 | `TIER MISMATCH`: computed `pop_cost` above the journal's stated cost |
+| 2 | `civil_actions == 0` (unchanged from the prior pass -- still believed to be the Take/Bid handoff's own open civil-action-budget question, not re-investigated this pass) |
+
+### New lead, evidenced but NOT fixed this pass: the age can still advance TOO EARLY, via the PRIMARY (non-catch-up) trigger, not the one Fix 1 addressed
+
+Traced one of the 4 remaining tier-mismatch games, `7523449` round 8 (2p),
+end-to-end: Orange's own Pop at journal line 128 is tagged age `"I"` (the
+journal's age column does not reach `"II"` until Purple's NEXT line, `132`),
+and the journal states Orange paid 3 food -- but this binary computed
+`pop_cost=4`, meaning its own `yellow_bank` had already dropped from 14 to 12
+(exactly the §12.2.4 "-2" shape again) DURING Purple's PRECEDING turn, one
+whole real turn before the journal's own age column ever says `"II"`.
+
+This is NOT Fix 1's bug re-appearing: `catch_up_civil_age` is only ever
+handed the CURRENT line's own age, and every line up to and including
+Orange's round-8 Pop is tagged `"I"` -- `force_civil_age_at_least`'s `while
+age_civil < target` loop cannot advance PAST what it is asked for, so the
+catch-up mechanism structurally cannot have caused this. That leaves the
+PRIMARY, original trigger: `game::deal()`'s own `advance_age` call, fired
+when THIS reconstruction's OWN `state.civil_deck` runs dry during an ordinary
+row refill after a `Take` -- independent of the journal's age column
+entirely. `Replayer::ground_row_slot` places a card's IDENTITY directly into
+a row slot without draining `civil_deck` (this file's own long-standing
+documented lag risk, the reason `force_civil_age_at_least`/Fix 1 exist at
+all) -- but evidently, in at least this game, the direction can run the
+OTHER way: this reconstruction's deck emptying SOONER than the real one did,
+racing ahead of the journal's own age column by at least one full turn.
+
+**Not root-caused further this pass**: the exact mechanism that makes THIS
+binary's `civil_deck` run dry early was not isolated -- candidates not yet
+checked include whether every `Take` (including ones later grounded to a
+DIFFERENT identity by a subsequent line, or ones inside an auction's own
+ceiling-grounding path) triggers exactly one `deal_row` refill the same way
+a real draw would, or whether some path calls it more than once per real
+draw. `prescan_putback_skips` was checked and ruled out as a cause -- a
+paired `Take`/`PutBack` is skipped as a matched set, never applied to the
+engine at all, so it cannot touch `civil_deck` either way.
+
+**Concrete first move for whoever picks this up**: `7523449`, round 7-8
+(2p) is a small, already-isolated repro (Orange's `yellow_bank` reads 14 at
+the round-7 `end_of_turn post-production` print, then 12 by the very next
+`applied mv=PolPass -> current=0` print at the start of round 8, with only
+Purple's own round-7 actions -- two `Take`s among them -- in between). Add a
+temporary `REPLAY_DEBUG_ALL`-gated print of `state.age_civil`/
+`state.civil_deck.len()` around `game::deal`'s own `advance_age` call site
+(`game.rs`, inside `fn deal`) and re-run this one game to catch the EXACT
+`Take` that empties this reconstruction's deck, then compare that count
+against how many real Age I cards the rulebook's own deck-size table says a
+2-player game holds.
+
+### What was RULED OUT this pass (don't re-check these)
+
+- **`interact::discard_excess_military`/the discard-resolution path as the
+  cause of a mid-turn `yellow_bank` drop** -- re-confirmed (again) never
+  touches `yellow_bank`/`food`/`resources`; the drop was always the
+  age-advance deduction landing at the wrong TIME, not a discard side effect.
+- **A blind, delta-only gate as a safe way to consume `produces_grants`** --
+  already ruled out by the prior pass (the 184 -> 281 regression); this
+  pass's fix (scan forward for a matching total, still gated on the revealed
+  card's own shape from the prior pass) does not reopen that risk, since the
+  shape gate is unchanged and only the SEARCH WIDTH inside an
+  already-shape-gated FIFO changed.
+- **`prescan_putback_skips` as a `civil_deck` desync cause** -- read in full;
+  a matched Take/PutBack pair is never applied to the engine at all (both
+  lines skipped as a set), so neither can touch `civil_deck` or trigger a
+  refill.
+- **The printed per-step production TEXT as ground truth** -- explicitly
+  avoided this pass per a concurrent worker's finding (see above); both
+  fixes here read only recorded spend/produce clauses and `"(now N)"`
+  stock totals, never a reveal line's own descriptive summary.
+
+### Final numbers, this pass
+
+| | before this pass | after |
+|---|---|---|
+| `IllegalMove: Pop` | 144 (139 on the tree this pass actually started from) | **22** |
+| mean rounds reached | 11.55 | **12.35** |
+| decisions in Age II or later | 47.2% | **51.0%** |
+| games completed | 29 | **49** |
+
+**Concrete first move for whoever picks this up**: game `7523449`'s
+early-age-advance repro, above -- it is the single largest un-diagnosed
+mechanism left in this bucket (4/22 tier-mismatch games share its
+signature) and, if it turns out to be a systemic `civil_deck`-refill bug
+rather than specific to this game, would plausibly also explain some of the
+remaining 16 food-short games (the same `yellow_bank` value drives both the
+Pop-cost tier and the food-consumption rate, exactly the compounding shape
+both of this pass's fixes turned out to be).
