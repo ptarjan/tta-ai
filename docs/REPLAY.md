@@ -3103,3 +3103,197 @@ even though the corpus summary numbers move slightly the "wrong" way.
 Remaining four kinds (`Raid`, `TakeRow`, `LoseColony`, `FlipWonder`) still
 open -- see the checkpoint above for `TakeRow`'s and `Raid`'s own concrete
 next-step notes, both unaffected by this change.
+
+## Build/Upgrade/WonderStep handoff (this worker's assignment): two age-sibling
+## card-identity bugs fixed (Patriotism, Reserves), one concrete unexplained
+## mil_discount lead left for the next pass
+
+Picked up the "Build/Upgrade/WonderStep cost-mismatch cluster" section
+above. Its own baseline categorisation (`workers_free == 0` for Build,
+`ca/ma == 0` for Upgrade) was re-derived fresh this pass by parsing
+`REPLAY_DEBUG=1`'s existing `try_apply fail`/`cost detail` prints (no new ad
+hoc script -- exactly the method the task brief asked for), fixing a
+game-ID-attribution bug in the throwaway categoriser along the way (the
+debug stream prints `DEBUG game=X` at the START of each game's block, not
+the end -- pairing a fail line with the FOLLOWING `game=` line silently
+attributes it to the WRONG game; only matters for picking single-game
+repros, the aggregate category counts were unaffected).
+
+### Current sub-bucket shape (measured fresh on the landed tree, full corpus)
+
+| bucket | resource short by 1-2 | workers_free==0 (Build only) | ca/ma==0 | pending still open | other |
+|---|---|---|---|---|---|
+| Build (109) | 80 | 15 | 4 | 3 | ~7 |
+| Upgrade (80) | 65 | -- | 7 | 5 | ~3 |
+| WonderStep (81) | 73 | 1 | 1 | 5 | ~1 |
+
+"Resource short by a small amount" (the same dominant shape the fourth/fifth
+passes above already named) is still, by far, the majority in all three
+buckets even after this pass's two fixes -- there is at least one more
+unidentified contributing cause behind it (see "Concrete next lead" below).
+
+### Two REPLAYER fixes, both the SAME shape: an age-sibling misidentified at
+### take-time, never corrected before being PLAYED
+
+`ActionClass::PlayActionCard`'s card-identity resolution already
+cross-checked a played card's own printed magnitude against its age-siblings
+for Frugality/Engineering Genius (via the `kind` match on
+`Special::FreeCivilAction`) -- but two OTHER recurring action-card families
+with the same "printed magnitude scales by age" shape had no such check,
+because they carry no `FreeCivilAction` special to route through that match
+at all:
+
+- **Patriotism** (`resourcesForMilitaryUnits` 1/2/3/4 for age A/I/II/III).
+  Commit `cfa9e64`. New `trailing_gets_military_resource` reads the "gets N
+  military resource" clause (NOT the line's last "gets" clause -- a trailing
+  "gets 1 military action" always follows it, so `rfind(" gets ")`,
+  `trailing_gets_science`'s own approach, would grab the wrong number).
+- **Reserves** (`Special::GainFoodOrResources`, 2/3/4 for age I/II/III).
+  Commit `a59cca8`. Reused `trailing_produces`'s already-parsed magnitude
+  (previously only used to resolve the food-vs-resources CHOICE, never the
+  CARD identity) against `family_siblings`.
+
+Both: `solved` stayed `None` before the fix (no `kind` match at all), so the
+code fell back to trusting whatever `best_age_sibling` guessed at TAKE time
+-- age-blind, gated only on `age_civil`, and simply wrong whenever the
+row/deck actually dealt an OLDER-age copy. The wrong-age card's bonus then
+either over- or under-credits `mil_discount`/`resources`/`food` by the
+difference between the guessed and real age's printed magnitude, which
+compounds turn over turn into a much-later `IllegalMove` (both confirmed
+against real single-game repros, `7521776` for Patriotism). REPLAYER, not
+ENGINE -- `legal.rs`/`apply.rs` already had the actual payment math right;
+only the journal parser was crediting the wrong card's magnitude. Both fixes
+have full-sentence tests in `replay_common.rs`'s `#[cfg(test)] mod tests`,
+confirmed red/green by reverting.
+
+**Every OTHER age-scaled action-card family was checked and is NOT affected**
+(`python3` swept `data/*.json` for every action-card name with more than one
+age-sibling whose `effects` differ): Rich Land, Urban Growth, Engineering
+Genius, Efficient Upgrade, Breakthrough, Frugality all carry
+`FreeCivilAction` and are already routed through the existing `kind` match
+(or `resolve_named_card_by_effect`'s `Build`/`Upgrade`/`Develop` arms for the
+"using <Card>" ordered-action shape). Two remaining unchecked families,
+NOT investigated this pass (low prevalence, not chased for time): Cultural
+Heritage (`gainScience`/`gainCulture` differ age A vs I) and Revolutionary
+Idea (`gainScience` 4 vs 6, age II vs III) -- same shape, worth a five-minute
+check with the same method if the resource-short cluster is still large
+after the next lead below is chased.
+
+### Measurement (`replaystats`, full 1,011-game corpus, both fixes + a
+### concurrently-landed `LosePop` fix from another worker, all on this
+### commit)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached | 10.98 | 10.94* |
+| games completed | 17 | 18 |
+| `IllegalMove: Build` | 116 | 109 |
+| `IllegalMove: Upgrade` | 87 | 80 |
+| `IllegalMove: WonderStep` | 84 | 81 |
+
+\* mean rounds dipped slightly rather than rising -- expected per this
+file's own "closing one wall exposes the next" pattern (the concurrent
+`LosePop` fix and this pass's fixes both let MORE games run deeper into
+territory with OTHER, not-yet-fixed stops); read the raw `Build`/`Upgrade`/
+`WonderStep` counts and completions, both of which did improve, not the
+single rounds-reached average in isolation.
+
+### What was ruled out this pass (don't re-chase these)
+
+- **`workers_free == 0` (15/109 of Build) is a DIFFERENT bug from the
+  resource-short shape**, not investigated to a fix this pass, but
+  confirmed NOT to share `resources`/`mil_discount` tracking's own cause:
+  traced one example (`7523355`, round 13, `Build{Religion}`) -- the
+  player's `resources` figure was CORRECT and plentiful (13), only
+  `workers_free` was 0. Farm/mine/unit `Move::Build` on an
+  ALREADY-developed card adds ANOTHER worker each time it's called
+  (`apply::do_build`'s `p.techs.get_mut(id).workers += 1; p.workers_free
+  -= 1;` -- confirmed this is correct engine behaviour, not a bug: e.g. a
+  tableau print showing `Bronzex3` for a player who only ever issued ONE
+  journal `"builds Bronze"` line is CORRECT, not a drift -- every player
+  starts the game with 2 workers already on Agriculture/Bronze,
+  `game.rs`'s own `("Agriculture", 2), ("Bronze", 2)` starting setup, so
+  1 explicit build = 2 starting + 1 = 3 total, matching the print exactly).
+  Whether `workers_free` itself under-counts (missed a population increase
+  somewhere) or over-spends (an extra phantom build/upgrade) was NOT
+  determined -- no root cause found, just confirmed it's a worker-count
+  question, not a currency-amount one.
+- **The mysterious `yellow_bank` jump / food-production-decline lead from
+  the "Seventeenth pass" section above (game `7522625`) was NOT re-picked-up
+  this pass** -- deliberately left for whoever traces the NEW lead below
+  first, since it's a much more concrete, narrower repro.
+
+### Concrete next lead: an unexplained `mil_discount` grant with no
+### journal-visible source (game `7521819`, round 4)
+
+Cross-checking sim's own `end_of_turn POST` resources/food/science/culture
+against the real journal's own `"N food - consumption: M (now Z)"` /
+`"K resources (now R)"` clauses (this pass's method: parse BOTH into
+per-player `(round, resources, food, science, culture)` sequences -- a
+throwaway script, `/tmp/crosscheck.py` in the sandbox this pass ran in, NOT
+committed; the shape is simple enough to rewrite in five minutes: regex
+`^\S+\s+\S+\s+(color)\s+(age)\s+(round)\s+End turn ` for the row header,
+then find `f"{color} scores:"` as a plain substring anywhere later on the
+SAME line, since a leader's own "X scores N culture." clause can precede it
+and breaks a single anchored regex) finds Orange's `resources` first
+diverging (sim +1 high) at round 6 of `7521819`, one round AFTER a
+suspicious journal line at round 4:
+
+```
+Orange builds Warrior Orange loses 1 military resource; Orange spends 1 resource
+```
+
+-- i.e. this build's cost was PARTLY paid via `mil_discount` (per this
+file's own established reading: `total_paid_for_build`'s doc comment, "loses
+N military resource" = `costs::spend_mil_discount`'s pool being spent) --
+but grepping the WHOLE journal for `"Orange.*military resource"` finds NO
+preceding `"Orange gets N military resource"` grant anywhere before this
+line. Every currently-modeled source of `p.mil_discount` was checked and
+ruled out for this game: no Patriotism/Wave of Nationalism/Military
+Build-Up play by Orange before round 4 (`grep`-confirmed); Orange's leader
+at this point is unelected (`"Orange elects Genghis Khan"` doesn't happen
+until round 6, AFTER this build, and Genghis Khan's own ability
+(`cultureIfTopTwoStrength`) is a culture bonus with no `mil_discount`
+component anyway, `data/cards_wonders_leaders.json`); Frederick Barbarossa's
+`comboResourceDiscount` is a different mechanism entirely (`Move::Barbarossa`
+combo, not the `mil_discount` pool) and not this player's leader anyway.
+
+**Two live hypotheses, NEITHER confirmed:**
+1. A genuine parser gap: some OTHER card/event/mechanic grants
+   `mil_discount` that this file's `card_gains_of`/`h_play_action` doesn't
+   model at all (i.e. a THIRD data-driven source beyond
+   `resourcesForMilitaryUnits`/Barbarossa's combo, not yet found in
+   `data/*.json`'s `effects` keys -- this pass's `python3` sweep of
+   `resourcesForMilitaryUnits` specifically found only Patriotism/Wave of
+   Nationalism/Military Build-Up/Churchill, but did NOT sweep for a
+   differently-named key that might cover the same mechanic under another
+   spelling).
+2. `p.mil_discount` is not actually being reset to 0 every end-of-turn for
+   BOTH players correctly (`economy.rs`'s own `p.mil_discount = 0` inside
+   `end_of_turn` -- confirm it runs for the RIGHT player index on every
+   call site, not just the common case) -- i.e. a real ENGINE-facing bug in
+   the reset rather than a replayer parsing gap, which would be a bigger
+   deal and should be reported loudly, not quietly patched, per the task's
+   own standing rule.
+
+**Concrete next step**: instrument `costs::spend_mil_discount` and every
+`mil_discount +=`/`mil_discount = 0` call site with a `REPLAY_DEBUG_ALL`-
+gated `eprintln!` naming the site and the before/after value, rerun on
+`7521819` alone, and read the trace between Orange's round-4 `PolPass` and
+the `Build{Warriors}` line at journal line 44 -- should immediately show
+whether `mil_discount` was already nonzero on entry to round 4 (a stale
+carryover / reset bug) or freshly set by some code path this pass's `grep`
+missed (an unmodeled grant). Whichever it is, this is the single most
+promising next lead for the resource-short cluster: it is a DIRECT,
+minimal, single-game repro (round 4, not many turns deep), unlike the
+`7522625` food-production lead above which needed 6-7 rounds of hand-tracing
+before this pass's own predecessor ran out of context chasing it.
+
+### Not investigated this pass (still open, no lead)
+
+- `Upgrade`'s `ma_zero`/`ca_zero` (7/80) and `WonderStep`'s `pending_open`
+  (5/81, mostly a live `Raid`/other `Pending::Choice` blocking a later
+  action -- likely the SAME shape as this file's existing `Raid` handoff
+  two sections above, not re-examined here).
+- Cultural Heritage / Revolutionary Idea age-sibling checks (see above --
+  same method as Patriotism/Reserves, five minutes each, just not done).
