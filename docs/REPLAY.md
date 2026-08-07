@@ -2732,3 +2732,188 @@ Full corpus at this checkpoint (`PlunderSplit` fix + concurrent
 mean rounds reached and completions were last measured per-commit above;
 re-run `replaystats` fresh before trusting a number here, none was taken
 on this exact final rebased tree before the checkpoint.
+
+## Seventeenth pass: the `7522625` corruption/blue-token lead re-localised to a YELLOW-BANK (population) drift, not blue tokens -- diagnosed but NOT fixed, checkpointed mid-trace
+
+Picked up the open lead two sections above ("Open, with a concrete next
+lead", `7522625`/Purple/round II8, `corruption(blue_available)==2` with no
+journal `CORRUPTION!` line). Cut short by an infrastructure restart mid-trace
+-- **no code was changed this pass** (tree is clean); this is a pure
+diagnosis checkpoint, written so the next worker does not re-walk the same
+40 minutes of log-reading.
+
+### The corruption symptom is downstream of a FOOD/YELLOW_BANK drift, not a blue-token bug
+
+`economy.rs::blue_used`/`blue_available`/`corruption` are all *derived* fresh
+from `p.food`/`p.resources`/`p.wonder_steps`/`p.blue_total` on every call --
+there is no separate "blue token ledger" to drift independently. So a wrong
+`corruption` value at a given instant is *necessarily* downstream of a wrong
+`p.food`/`p.resources`/`p.blue_total` at that instant, not a bug in the
+derivation itself (confirmed correct, again, this pass by inspection of
+`Denoms::of`/`tokens_for`/`blue_used`).
+
+Traced `7522625` player Purple (idx=1, 2p game) round-by-round using
+`REPLAY_DEBUG_ALL`'s `end_of_turn POST` line (`resources`/`food`/`science`/
+`culture`, the values immediately after that turn's full production phase)
+against the real journal's own `"<Color> scores:; ...; N food -
+consumption: M (now Z)"` clause for every one of Purple's `End turn` lines,
+rounds 1-8:
+
+| round | sim POST food | real "now" food | match? |
+|---|---|---|---|
+| 1-6 | 2, 2, 4, 3, 4, 2 | 2, 2, 4, 3, 4, 2 | all match exactly |
+| 7 | 3 | 2 | **first divergence: sim +1** |
+| 8 | (corr=2 fires here) | (no CORRUPTION! line) | symptom reported by the original lead |
+
+So the ACTUAL first divergence is round 7, one round before the corruption
+symptom this file previously pointed at (round 8) -- the corruption mismatch
+is a round-later *consequence* of the round-7 food drift, not itself where
+the bug lives. `s.food` (this turn's computed production, from
+`effects::state_stats`) is a flat, constant `2` in this binary's
+reconstruction for ALL of Purple's rounds 1-8 (`REPLAY_DEBUG_ALL`'s
+`blue_used`/pre-corruption prints all show `s.food=2`), which happens to be
+right for rounds 1-3 (Purple's only farm the whole game is the 2-worker
+starting `Agriculture`, `food_denoms=[1]` throughout -- confirmed no other
+Farm tech is ever built, `Bronze`/`Alchemy`/etc are Mines/Labs) but the REAL
+game's own production, reconstructed by hand from the journal's per-round
+delta clauses, is **2, 2, 2, 1, 1, 1, 0, 0** -- genuinely DECREASING despite
+Purple's population only ever growing and Agriculture never being
+destroyed/upgraded/touched. This decrease is not explained by anything this
+pass identified: no `Destroy`/`Upgrade` ever targets Agriculture, no
+uprising fires (`REPLAY_DEBUG_ALL`'s uprising-check line shows
+`uprising=false` every round), and `CardType::Farm` production is scaled
+purely by `slot.workers` in `effects::compute` with no other modifier this
+pass found. **This asymmetry (real production falls, sim production stays
+flat) was not root-caused before the checkpoint -- it is the single most
+concrete unexplained fact from this pass and the most promising next
+thread**, more promising than the yellow_bank chase below because it's a
+DIRECT read from the journal's own numbers, not an inference.
+
+### A second, harder-to-explain thread: `yellow_bank` itself silently drops by 2 during the OPPONENT's turn, with no traceable call site
+
+Cross-checking `consumption` (`economy::consumption(yellow_bank)`, bands documented
+in `economy.rs`: `>=17:0, 13-16:1, 9-12:2, 5-8:3, 1-4:4, 0:6`) against the
+real journal's own `"consumption: M"` clause gives a SECOND, independent
+signal that should track `yellow_bank` exactly:
+
+- Round 6 (both sim and real): `yellow_bank=14` (traced by hand-counting
+  every real population-increasing event up to that point: start 18, -1
+  round 2 `Take`... `increases population`, -1 round 4 `Development of
+  Settlement` event (applies to BOTH players, confirmed via
+  `events::resolve_event`'s `for &q in &order` loop -- this part of the
+  engine IS correct), -1 round 4 Frugality free-civil pop, -1 round 6
+  `increases population` = 18-4 = 14) -- `consumption(14)=1`, matches real
+  `"consumption: 1"` for both rounds 5 and 6. **Sim's own `yellow_bank`
+  matches this hand count exactly through round 6** (confirmed via
+  `REPLAY_DEBUG_ALL`'s `uprising check` line, which prints `yellow_bank`
+  directly).
+- Round 7 (real): `consumption: 2` -- requires real `yellow_bank` in
+  `[9,12]`, i.e. **at least 2 more decrements than the round-6 value of 14**,
+  despite ZERO population-related lines anywhere in Purple's OR Orange's
+  round-7 turn (checked the full journal text for both players' round 7:
+  no `increases population`, no population-granting event, no war/aggression
+  with a population effect). **Not explained.**
+- Round 7 (sim): stays at 14 the whole of Purple's own round-7
+  `end_of_turn` (confirmed via the `uprising check`/`pre-corruption` prints,
+  both read `yellow_bank=14`) -- consistent with sim's own bookkeeping (no
+  pop actions this round either), but this means sim's `consumption` used
+  for round 7's production was `1`, not the real `2` -- **a second,
+  independent confirmation that something is wrong by round 7**, corroborating
+  the food-production divergence above rather than explaining it (a
+  lower-than-real consumption number, on its own, would make sim's food
+  HIGHER than real, which is the DIRECTION we see -- but the MAGNITUDE from
+  consumption alone (extra 1 food kept) does not fully explain the round-8
+  corruption trigger without ALSO the production-side drop `7522625` shows).
+- **A separate, so-far-unexplained observation, possibly a RED HERRING**:
+  sim's OWN `yellow_bank` for Purple (idx=1) jumps from 14 to 12 sometime
+  during **Orange's** entire round-8 turn (Aggression: Raid against Purple
+  [confirmed FAILS on the tie, `combat.rs::finish_aggression`'s
+  `ctx.dfn >= ctx.atk` guard is correct and was independently re-verified
+  this pass -- `dfn` reaches exactly `11 == atk`'s `11`, so no raid effect
+  ever fires], Take, Develop, `PlayAction Urban Growth`, Take, EndTurn) --
+  `REPLAY_DEBUG_ALL`'s per-move `applied mv=... yellow_bank=...` trace shows
+  Purple's `yellow_bank` is unchanged (14) through Purple's own round-7
+  `end_of_turn`, then reads 12 at the very FIRST line of Purple's round-8
+  turn (`PolPass`), with no intervening move that should plausibly touch
+  Purple's fields. Every `yellow_bank`-mutating call site in the codebase
+  was enumerated (`grep -n "yellow_bank" src/*.rs`, excluding tests) and
+  manually checked against Orange's round-8 move list -- none obviously
+  fire: `economy::increase_population`/`lose_population` (no `Pop` move
+  either player), `apply::grant_yellow` (no card/wonder/colony gain this
+  turn), `interact::apply_card_gains`/`apply_immediate_effects` (no action
+  card with a `population` `CardGains` field played, no colony gained),
+  `interact::gain_colony`/`lose_colony` (no colonization this game yet by
+  round 8), `events.rs`'s `take_yellow_tokens_from_weakest` (no such event
+  card this game), `combat.rs`'s `War over Territory` yellow-token transfer
+  (no war declared). **This was NOT resolved before the checkpoint** -- the
+  next step is source-level instrumentation (a one-line `eprintln!` at
+  every mutation site above, gated on `REPLAY_DEBUG_ALL`, naming the call
+  site) rather than more manual log-reading, since exhaustive manual
+  cross-referencing of `resolve_intervening`'s calls for the whole of
+  Orange's round-8 turn did not surface an explanation. **Caveat**: this
+  yellow_bank jump might itself be a second, unrelated symptom of whatever
+  causes the food-production mismatch above (e.g. if `state_stats`
+  recomputation after some hidden state change also perturbs something
+  read alongside `yellow_bank` in a shared code path) rather than an
+  independent bug -- not established either way.
+
+### What is RULED OUT this pass (don't re-check these)
+
+- `economy::corruption`'s bands and `blue_used`/`blue_available`'s
+  derivation (re-confirmed correct by inspection, this pass and the prior
+  one).
+- `blue_total`'s flat starting value of 16 (`game.rs`) being wrong for this
+  game specifically -- Purple's `blue_total` never changes all game
+  (`REPLAY_DEBUG_ALL`'s `blue_used` prints show `blue_total=16` constant),
+  and no card/wonder/colony this player has grants `blueTokens`.
+- `Move::Destroy` (`h_destroy`, `apply.rs`) touching `p.resources`/`p.food`
+  when a Farm/Mine is destroyed (`Purple destroys Bronze`, round 7) -- it
+  only decrements `workers`/increments `workers_free`, confirmed by reading
+  the function; the derived `blue_used` recomputation via `Denoms::of` after
+  a destroy is a designed, correct consequence of the derivation-not-ledger
+  model, not a bug.
+- `combat.rs::finish_aggression`'s tie-handling (`dfn >= atk` returns false,
+  i.e. defender wins ties) -- correct per the observed `atk=11 dfn=11` in
+  this exact game, and the real journal independently confirms no building
+  was destroyed that turn (no `"Orange destroys ..."` line follows the
+  Raid).
+- `events::resolve_event`'s `allPlayers` loop (`for &q in &order { apply_player_block(...) }`)
+  correctly applies `Development of Settlement`'s population grant to BOTH
+  players, not just the revealer -- verified by hand-counting round 4's
+  yellow_bank change (17→16→15, matching sim exactly).
+- Development of Civil Life / "Development of Civilization" -- not present
+  anywhere in this game's journal (`grep`-confirmed), so Finding 1b/2's
+  fixes are irrelevant to this specific trace.
+
+### Concrete next step for whoever picks this back up
+
+1. **Chase the food-production decline first** (2,2,2,1,1,1,0,0 real vs flat
+   2 in sim) -- it is a DIRECT journal-derived fact, not an inference chain,
+   and it's the most likely root cause: something removes an effective
+   worker (or its production) from Purple's Agriculture over time in the
+   real game that this binary's `effects::compute` never models. Candidates
+   not yet checked: whether `Bronze`'s `Destroy` (round 7) or ANY other
+   tableau change has a side effect on a DIFFERENT card's worker count in
+   the real BGA engine that this port doesn't reproduce; whether corruption
+   ITSELF (paid in resources first, food for shortfall, per `end_of_turn`
+   step 3b) was actually firing in EARLIER rounds in the real game in a way
+   that silently reduced food we're not crediting (re-check every prior
+   round's real journal line for a `CORRUPTION!` clause this pass did not
+   look for outside round 7-8); whether the printed "N food" in BGO's own
+   `End turn` line is a NET figure (production minus something already
+   subtracted) rather than gross production, which would invalidate this
+   whole pass's arithmetic and needs checking against a SIMPLER example
+   game with an isolated, unambiguous production number before trusting
+   this diagnosis further.
+2. **Instrument every `yellow_bank`-mutating call site** (list above) with a
+   `REPLAY_DEBUG_ALL`-gated `eprintln!` naming the site, then rerun `replay`
+   on `7522625` and grep for the FIRST such print between Purple's round-7
+   `end_of_turn` and Purple's round-8 `PolPass` -- faster than more manual
+   `resolve_intervening` log reading.
+3. Do NOT assume the yellow_bank jump and the food-production decline are
+   the same bug until one of them is actually root-caused -- treat them as
+   two separate threads until proven otherwise.
+4. The `Build: workers_free == 0` (22 games) and `Upgrade: ca/ma == 0`
+   (~55 games) sub-buckets mentioned two sections up remain completely
+   untouched -- still worth checking whether they share a cause with each
+   other before assuming three separate bugs exist.
