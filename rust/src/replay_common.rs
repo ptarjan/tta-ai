@@ -1917,12 +1917,6 @@ fn spent_resources(text: &str) -> Option<i32> {
     rest[..digits_end].parse().ok()
 }
 
-/// [`spent_resources`]'s twin for the food clause of a `"<Color> increases
-/// population <Color> spends N food"` line -- the ONLY clause a Pop line
-/// ever carries (Pop has no resource component; see `costs.rs`'s own doc
-/// comment on `tech_cost`/`pop_cost`), so unlike `spent_resources` this
-/// never needs to distinguish it from a sibling `"spends N resource"`
-/// clause on the same line.
 /// The banked-science RUNNING TOTAL BGO prints in an `"End turn <Color>
 /// scores: ...; N science (now M); ..."` line -- `M`, not `N` (`N` is the
 /// per-turn production rate the line labels "science", `M` in the trailing
@@ -1942,6 +1936,16 @@ fn trailing_now_science(text: &str) -> Option<i32> {
     rest[..digits_end].parse().ok()
 }
 
+/// [`spent_resources`]'s twin for the food clause of a `"<Color> increases
+/// population <Color> spends N food"` line. An EARLIER version of this
+/// doc comment claimed food is "the ONLY clause a Pop line ever carries" --
+/// FALSE, found chasing the `IllegalMove: Pop` bucket (`docs/REPLAY.md`):
+/// a live Trade Routes Agreement grant (§5.9) lets a Pop be paid PART in
+/// converted resources, and BGO prints that as a SECOND clause on the SAME
+/// line -- `"<Color> increases population <Color> spends N food; <Color>
+/// spends M resource"` -- not folded into the food number the way an
+/// earlier pass assumed. This function still reads only the food clause;
+/// see [`spent_resource_after_food`] for the optional second one.
 fn spent_food(text: &str) -> Option<i32> {
     let p = text.find(" spends ")?;
     let rest = &text[p + " spends ".len()..];
@@ -1953,6 +1957,32 @@ fn spent_food(text: &str) -> Option<i32> {
         return None; // "spends N resource" etc. -- not this check's business
     }
     rest[..digits_end].parse().ok()
+}
+
+/// The optional SECOND `"; <Color> spends M resource(s)"` clause that
+/// follows a Pop line's own `"<Color> spends N food"` clause -- see
+/// [`spent_food`]'s doc comment for why this exists and the real corpus
+/// shape it reads (thousands of occurrences, e.g. game `7522658` line 289:
+/// `"Purple increases population Purple spends 2 food; Purple spends 1
+/// resource"`). Searches from the SECOND `" spends "` in `text` (the
+/// first is always the food clause `spent_food` reads), not the first, so
+/// this never re-reads the food clause's own number as if it were a
+/// resource amount. Returns `0`, not `None`, when there is no second
+/// clause -- every caller wants a plain amount to add to the food figure,
+/// not an `Option` to unwrap.
+fn spent_resource_after_food(text: &str) -> i32 {
+    let Some(first) = text.find(" spends ") else { return 0 };
+    let after_first = first + " spends ".len();
+    let Some(second_rel) = text[after_first..].find(" spends ") else { return 0 };
+    let rest = &text[after_first + second_rel + " spends ".len()..];
+    let digits_end = match rest.find(|c: char| !c.is_ascii_digit()) {
+        Some(0) | None => return 0,
+        Some(n) => n,
+    };
+    if !rest[digits_end..].starts_with(" resource") {
+        return 0;
+    }
+    rest[..digits_end].parse().unwrap_or(0)
 }
 
 /// The number right after `" loses "` in `text`, if the SAME clause names
@@ -4049,25 +4079,27 @@ fn apply_one(
                 // Trade Routes Agreement, side B ("Civilization B can use 1
                 // resource as 1 food during its turn", §5.9): a player
                 // holding the live grant may pay PART of a Pop cost in
-                // converted resources -- BGO folds the conversion silently
-                // into the SAME "spends N food" clause as an ordinary Pop
-                // (there is no separate journal line for it, the same way
-                // the Alexander death line above turned out to carry its
-                // own actor rather than none at all -- checked directly
-                // against the raw journal before assuming otherwise). This
-                // binary's `Move::TradeResourceAsFood` already exists
-                // (docs/REPLAY.md's Trade Routes Agreement engine fix) but
-                // this handler never tried it, one-sidedly leaving every
-                // partly-resource-paid Pop illegal. Gated on the journal's
-                // OWN stated cost matching this binary's `pop_cost` exactly
-                // -- if they disagree, the fault is a mispriced pop_cost
-                // (yellow-bank drift, a missing discount, ...), not a
-                // missing conversion, and spending resources here would
-                // only mask that bug behind a wrong-for-a-different-reason
-                // success (`docs/REPLAY.md`'s Civil Life warning: never
-                // loosen a check just to make a mismatch disappear).
+                // converted resources -- BGO logs that as a SECOND clause on
+                // the SAME line, not folded into the food number (an
+                // earlier version of this comment assumed otherwise and was
+                // wrong -- see `spent_food`'s own doc comment, found chasing
+                // the `IllegalMove: Pop` bucket, `docs/REPLAY.md`): `"<Color>
+                // increases population <Color> spends N food; <Color> spends
+                // M resource"`. This binary's `Move::TradeResourceAsFood`
+                // already exists (docs/REPLAY.md's Trade Routes Agreement
+                // engine fix) but this handler never tried it, one-sidedly
+                // leaving every partly-resource-paid Pop illegal. Gated on
+                // the journal's OWN stated TOTAL (food clause plus the
+                // second resource clause, if any) matching this binary's
+                // `pop_cost` exactly -- if they disagree, the fault is a
+                // mispriced pop_cost (yellow-bank drift, a missing discount,
+                // ...), not a missing conversion, and spending resources
+                // here would only mask that bug behind a
+                // wrong-for-a-different-reason success (`docs/REPLAY.md`'s
+                // Civil Life warning: never loosen a check just to make a
+                // mismatch disappear).
                 let p = &r.state.players[actor as usize];
-                let stated = spent_food(raw_text);
+                let stated = spent_food(raw_text).map(|f| f + spent_resource_after_food(raw_text));
                 let cost = crate::economy::pop_cost(&r.state, p);
                 let shortfall = match (stated, cost) {
                     (Some(stated), Some(cost)) if stated == cost => cost - p.food as i32,
@@ -4895,6 +4927,26 @@ mod tests {
             None
         );
         assert_eq!(parse_produces_grant_line("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7522658`
+    /// line 289): a live Trade Routes Agreement grant lets a Pop be paid
+    /// PART in converted resources, and BGO logs that as a SECOND `"spends
+    /// M resource"` clause on the SAME line as the food clause -- an
+    /// earlier version of `spent_food`'s own doc comment claimed Pop "has
+    /// no resource component" and was simply wrong, confirmed against
+    /// thousands of real corpus lines with exactly this shape.
+    /// `spent_resource_after_food` must read that second clause, not the
+    /// food clause's own number, and must return `0` (not panic or find the
+    /// food number again) when there is no second clause at all.
+    #[test]
+    fn spent_resource_after_food_reads_the_second_clause_not_the_first() {
+        assert_eq!(spent_resource_after_food("Purple increases population Purple spends 2 food; Purple spends 1 resource"), 1);
+        assert_eq!(spent_resource_after_food("Green increases population Green spends 3 food; Green spends 1 resource"), 1);
+        // An ordinary Pop with no conversion -- only one "spends" clause.
+        assert_eq!(spent_resource_after_food("Grey increases population Grey spends 3 food"), 0);
+        // A line with no "spends" clause at all.
+        assert_eq!(spent_resource_after_food("Orange passes Political Phase"), 0);
     }
 
     /// Real corpus shapes for Infiltrate's resolution (`docs/REPLAY.md`'s

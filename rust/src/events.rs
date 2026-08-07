@@ -1283,6 +1283,13 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
 /// function has this exact sequence hardcoded, never reading `order`
 /// (`gen_cards.py`'s `EVENT_BLOCK_IGNORED_KEYS` census).
 fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        eprintln!(
+            "DEBUG extra_production BEFORE: idx={idx} food={} resources={} s.food={} s.resources={} yellow_bank={}",
+            state.players[idx as usize].food, state.players[idx as usize].resources, s.food, s.resources,
+            state.players[idx as usize].yellow_bank
+        );
+    }
     let corr = economy::corruption(economy::blue_available(&state.players[idx as usize]));
     let paid = economy::pay_resources(&mut state.players[idx as usize], corr);
     state.players[idx as usize].food = state.players[idx as usize].food.saturating_sub(corr - paid);
@@ -1297,6 +1304,12 @@ fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
         p.food = 0;
     }
     economy::gain_resources(&mut state.players[idx as usize], s.resources.max(0) as u16);
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        eprintln!(
+            "DEBUG extra_production AFTER: idx={idx} food={} resources={}",
+            state.players[idx as usize].food, state.players[idx as usize].resources
+        );
+    }
 }
 
 /// Event effects that require this player to choose (§5.3). Mirrors
