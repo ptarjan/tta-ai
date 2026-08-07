@@ -1064,7 +1064,7 @@ impl<'a> Replayer<'a> {
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 let p = &self.state.players[self.state.current as usize];
                 eprintln!(
-                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} mil_discount={} card_row={:?}",
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} science={} mil_discount={} card_row={:?}",
                     self.state.current,
                     p.civil_actions,
                     p.military_actions,
@@ -1077,9 +1077,28 @@ impl<'a> Replayer<'a> {
                     p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
                     p.resources,
                     p.food,
+                    p.science,
                     p.mil_discount,
                     (0..13).map(|i| if self.state.card_row[i].is_none() { "-".to_string() } else { self.state.card_row[i].get().name.to_string() }).collect::<Vec<_>>(),
                 );
+                // Develop/PlayAction failures are usually a card-identity or
+                // affordability question specifically -- surface the exact
+                // CardId this binary attempted, whether it's really in
+                // `hand_civil` (a wrong age sibling would fail this even
+                // though a same-named card IS present above), and this
+                // binary's own computed science price for it.
+                match mv {
+                    Move::Develop { card } | Move::PlayAction { card } => {
+                        eprintln!(
+                            "DEBUG develop/play detail: card={:?} age={:?} in_hand_civil={} tech_cost_net={:?}",
+                            card,
+                            card.get().age,
+                            p.hand_civil.as_slice().contains(&card),
+                            costs::tech_cost_net(&self.state, p, card),
+                        );
+                    }
+                    _ => {}
+                }
             }
             return Err(MismatchKind::IllegalMove {
                 attempted: format!("{mv:?}"),
@@ -1242,6 +1261,25 @@ fn spent_resources(text: &str) -> Option<i32> {
 /// comment on `tech_cost`/`pop_cost`), so unlike `spent_resources` this
 /// never needs to distinguish it from a sibling `"spends N resource"`
 /// clause on the same line.
+/// The banked-science RUNNING TOTAL BGO prints in an `"End turn <Color>
+/// scores: ...; N science (now M); ..."` line -- `M`, not `N` (`N` is the
+/// per-turn production rate the line labels "science", `M` in the trailing
+/// `"(now M)"` is the authoritative post-turn total after every gain/spend
+/// this whole turn, including event/leader-ability clauses the rate alone
+/// never reflects -- confirmed against the raw corpus). Investigation-only
+/// helper (`REPLAY_DEBUG`'s end-turn science drift check) for chasing
+/// science-payment mismatches upstream of the actual spend -- see the
+/// `IllegalMove: Develop`/`PlayAction` buckets this exists for.
+fn trailing_now_science(text: &str) -> Option<i32> {
+    let p = text.find(" science (now ")?;
+    let rest = &text[p + " science (now ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    rest[..digits_end].parse().ok()
+}
+
 fn spent_food(text: &str) -> Option<i32> {
     let p = text.find(" spends ")?;
     let rest = &text[p + " spends ".len()..];
@@ -1959,6 +1997,32 @@ pub fn replay_game(
                     mismatch = Some(mk_mismatch(line, kind));
                     break 'lines;
                 }
+                // Investigation aid for the `IllegalMove: Develop`/
+                // `PlayAction` buckets (both "science payment" shaped):
+                // BGO's own end-turn line prints the banked-science RUNNING
+                // TOTAL (`trailing_now_science`'s doc), which is ground
+                // truth this binary can check itself against for free,
+                // every single turn, not just at the eventual spend that
+                // finally trips over a shortfall many lines later. NOTE:
+                // this fires BEFORE a deferred `resume_end_turn` (a queued
+                // military discard) has actually run -- a discard-blocked
+                // turn reads as a false "drift" here that resolves itself a
+                // few lines later; cross-check against the LATER
+                // `free_civil_action_move`/`try_apply` science reading
+                // before trusting a single one of these in isolation.
+                if std::env::var("REPLAY_DEBUG").is_ok() {
+                    if let Some(want) = trailing_now_science(line.text) {
+                        let got = r.state.players[actor as usize].science as i32;
+                        if want != got {
+                            eprintln!(
+                                "DEBUG end-turn science drift: actor={actor} journal says (now {want}), \
+                                 this binary computes {got} (delta {}) at {:?}",
+                                got - want,
+                                line.text,
+                            );
+                        }
+                    }
+                }
                 r.actions_consumed += 1;
                 continue;
             }
@@ -2272,6 +2336,15 @@ fn free_civil_action_move(
                 .iter()
                 .position(|o| matches!(o, ChoiceOption::Move(m) if *m == wanted))
                 .ok_or_else(|| {
+                    if std::env::var("REPLAY_DEBUG").is_ok() {
+                        let p = &r.state.players[actor as usize];
+                        eprintln!(
+                            "DEBUG free_civil_action_move gap: wanted={wanted:?} landed_in_techs={landed_in_techs:?} science={} hand_civil={:?} tech_cost_net(landed)={:?}",
+                            p.science,
+                            p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
+                            costs::tech_cost_net(&r.state, p, landed_in_techs),
+                        );
+                    }
                     MismatchKind::ParserGap(format!(
                         "{}'s free-civil-action options {:?} do not include {wanted:?}",
                         discount_card.get().name,

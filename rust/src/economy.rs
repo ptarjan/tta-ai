@@ -577,6 +577,13 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // ---- 2. uprising check --------------------------------------------
     // Python emits a log line here (`state.emit(...)`); `GameState` has no
     // journal/emit sink and the string is not read by anything.
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        let p = &state.players[idx as usize];
+        eprintln!(
+            "DEBUG end_of_turn: idx={idx} s.science={} s.happy={} discontent={} workers_free={} yellow_bank={} uprising={}",
+            s.science, s.happy, discontent(state, p), p.workers_free, p.yellow_bank, uprising(state, p),
+        );
+    }
     if !uprising(state, &state.players[idx as usize]) {
         // ---- 3a. score science and culture ----------------------------
         {

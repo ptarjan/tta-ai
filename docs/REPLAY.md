@@ -2036,3 +2036,224 @@ trusting these).
   `Choice`/`Auction`/`Colonize` that reappeared, possibly a NEW pending
   kind from a concurrent pass, e.g. `TakeRow` seen in the current
   histogram) -- neither sub-bucket was investigated this pass at all.
+
+## `IllegalMove: Develop` / `IllegalMove: PlayAction` handoff (this worker's
+## assignment): one root cause independently confirmed (already fixed by a
+## concurrent pass), one NEW un-fixed pattern found and characterized, no
+## code fix landed this pass -- diagnostics only
+
+Owned the two "science-payment shaped" buckets (the journal prints the
+exact science paid on the develop/play line, so every failure names its own
+expected-vs-computed pair) plus their handful of `ParserGap` siblings
+(`Breakthrough (I)`/`(II)`, `Urban Growth (I)`/`(II)`/`(III)` "free-civil-
+action options ... do not include" gaps). Corpus numbers as of landing:
+**41 `IllegalMove: Develop`, 48 `IllegalMove: PlayAction`, 3 `ParserGap:
+... free-civil-action options ... do not include Build { ... }`** (all
+Urban Growth). Mean rounds 10.41, Age II+ 37.8%, 13/1011 complete --
+**unchanged by this pass**: no engine/replayer fix was authored this
+session (see "why" below). Re-measure before trusting the sub-bucket
+percentages below; they were counted against this exact baseline.
+
+**The dominant root cause this pass traced (Columbus) was ALREADY FIXED,
+independently, by a concurrent pass on the `IllegalMove: Pop` bucket
+(Fourteenth pass, item 4, this doc) before this session rebased onto it.**
+This is worth recording anyway because the trace method and the exact
+mechanism are useful precedent, and because it independently CONFIRMS that
+fix's stated justification with a second, unrelated example:
+
+- Traced game `7522302` line 160 (`Purple discovers Coal using
+  Breakthrough Purple loses 7 science; Purple gets 2 science`, the exact
+  `ParserGap: Breakthrough (I)` example this task's brief named) end to
+  end: extended `REPLAY_DEBUG` to print every `Move::EndTurn`'s
+  reconstructed science total against the journal's own `"N science (now
+  M)"` running total (`trailing_now_science`, new helper -- ground truth
+  BGO prints for free, every single turn, not just at the eventual spend
+  that trips a shortfall many lines later) and to dump the acting player's
+  full `techs` tableau with each slot's worker count on every applied move
+  (`REPLAY_DEBUG_ALL`). Bisected a real, growing science deficit (computed
+  3, true 8, by round 8) to one turn where the ONLY unaccounted event was
+  `"Christopher Columbus discovers I / Developed Territory"` -- `Developed
+  Territory (I)`'s own `immediateEffects.science: 3` (`card_table.rs`)
+  exactly closes the gap. Root cause: this line has NO leading actor
+  colour AND no trailing one either (unlike Alexander's death line), so
+  `corpus::classify`'s old "a known card name leads the line ->
+  Bookkeeping" catch-all silently swallowed it whole -- not just the
+  science, the leader removal and the territory grant too. Confirmed fixed
+  on this session's rebased tree: this exact `ParserGap` no longer appears
+  in the corpus (`Move::ColumbusColonize` now dispatches correctly, reading
+  the actor off the journal's own column-2 colour, `Line::color`, since
+  it's the one line in the whole corpus that needs it).
+- **Do not re-attempt this fix** -- it is `6179767`/Fourteenth-pass item 4
+  on `origin/master` already.
+
+**NEW, un-fixed pattern found this pass: 41/89 (46%) of the remaining
+Develop/PlayAction failures are blocked by an open `Pending::Choice` that
+`resolve_intervening` silently defers instead of resolving OR honestly
+reporting.** Sub-histogram by pending kind, gathered by extending the
+`try_apply` failure debug print (`REPLAY_DEBUG`) with the `pending_top`
+already captured, over all 89 current failures:
+
+| pending kind | count |
+|---|---|
+| `PlunderSplit` | 12 |
+| `Raid` | 10 |
+| `TakeRow` | 6 |
+| `LosePop` | 6 |
+| `LoseColony` | 3 |
+| `FlipWonder` | 4 |
+
+**Mechanism** (`replay_common.rs::resolve_intervening`): the function's
+`GainBlock`/`FreeBuild`/`DiscardMilitary` cases are drained or matched
+UNCONDITIONALLY, before the `decider == expected_actor` check even runs.
+Every OTHER `Pending::Choice` kind is not -- it falls through to `if
+decider == expected_actor { ...; return Ok(()); }`, which returns `Ok`
+**regardless of what's still pending**, on the (correct, for a live
+political decision, but NOT generally true) assumption that "decider
+matches who's supposed to act next" means "nothing left to resolve." When
+it doesn't hold -- a `PlunderSplit`/`Raid`/`TakeRow`/`LosePop`/
+`LoseColony`/`FlipWonder` choice is open for the SAME player who is also
+next up for an unrelated `Develop`/`PlayAction` line -- this returns `Ok`
+anyway, `apply_one`'s `Develop`/`PlayAction` arms have no idea a `Choice`
+is open (neither inspects `r.state.pending.top()` at all, unlike `Build`'s
+own `FreeBuild` check), and the bare `Move::Develop`/`Move::PlayAction`
+they then attempt is unconditionally illegal (`legal_moves()` only offers
+`Choose` while a `Pending::Choice` sits open). Confirmed via
+`REPLAY_DEBUG`: e.g. game `7522188` line 189 (`Orange discovers
+Constitutional Monarchy`) fails with `pending_top=Some(Choice(Choice {
+player: 0, kind: LosePop, ... }))` open for the SAME player who's
+attempting the develop.
+
+This is the SAME root-cause SHAPE as the Twelfth pass's fix
+(`resolve_intervening` treating `decider == expected_actor` as "nothing
+left to resolve" even with a live `Pending::Colonize`/`Pending::Auction`
+open) -- just for six MORE pending kinds that fix never touched, and
+surfacing here because Develop/PlayAction's own arms are exactly the ones
+with no fallback handling for an unrelated open `Choice`.
+
+**Why this pass did NOT land that fix**: `resolve_intervening` is the one
+function every bucket's dispatch runs through -- changing its core
+`decider == expected_actor` branch is cross-cutting by construction, and
+correctly distinguishing "safe to defer" (the three cases already
+unconditional above) from "must report `StuckPending` instead of silently
+returning `Ok`" for six DIFFERENT pending kinds, each with its own
+resolution shape and its own owning bucket (`LosePop`/`DestroyOwn` is
+already partially wired for the `Pop`/`Destroy` buckets per the
+Fourteenth pass; `Raid`/`TakeRow`/`FlipWonder`/`PlunderSplit`/`LoseColony`
+are not), needs full-corpus re-verification across EVERY bucket, not just
+this one -- more than this pass's remaining budget could responsibly
+cover. **Also note this would very likely convert these 41 `IllegalMove`s
+into 41 more `StuckPending: no auto-resolution for pending choice ...`s at
+the SAME line -- an honest relabelling, not a depth improvement, unless
+someone also implements the actual per-kind resolution** (reading the
+choice off its own resolving journal line, the way `LosePop`+`Destroy` and
+`FreeBuild`+`Build` already do). **Next step for whoever picks this up**:
+pick ONE pending kind (probably `LosePop`, best understood -- see the
+open lead below) and wire its resolution into `apply_one`'s `Develop`/
+`PlayAction`/etc. arms the same way `Build`'s own `FreeBuild` check does,
+rather than touching `resolve_intervening`'s shared dispatch at all.
+
+**Open lead, NOT resolved: a `LosePop` pending in game `7522188` may be
+targeting the WRONG player.** `Refugees` (`II` event, `Special::
+WeakestPlayer`) resolved at that game's line 189 with `apply_single_target`
+computing player 0 (Orange) as weakest by `RankStat::Strength` (values
+`[8, 10]`, NOT a tie -- so this is unrelated to the Fourteenth pass's
+`WeakestPlayer` tie-break fix, which only reverses ORDER among ties). The
+journal's own text at that line ("Orange gains 3 culture and 1 population;
+Purple loses 3 culture and 1 population") says PURPLE lost population, the
+opposite of what this binary computed. Two explanations, NEITHER confirmed:
+(1) this binary's own reconstructed strength for one of the two players has
+drifted from the true value by round 12 (a REPLAYER bug, likely -- strength
+depends on the whole built-unit history, easy to drift), or (2) `Refugees`'
+targeting stat is genuinely not `RankStat::Strength` (an ENGINE bug, would
+need checking against `sources/`' BGA implementation and RB p.15's exact
+text before believing it over the current, deliberately-verified-elsewhere
+`apply_single_target` machinery). **Do not assume either without checking**
+-- this is exactly the shape of claim `docs/REPLAY.md`'s "verify a
+documented impossibility" lesson warns about, just inverted (a claim
+un-checked, not a claim wrongly believed). Reproduce via `REPLAY_DEBUG_ALL`
+on game `7522188` and watch the `apply_single_target`/`rank_stat_value`
+values leading up to line 189 (both now emit `REPLAY_DEBUG_ALL` traces,
+added this pass) against a hand recount of Orange's and Purple's true
+built-unit strength from the raw journal.
+
+**Remaining 48 (pending_top=None -- no open Choice, a genuine legality/
+affordability question) split further, by whether the target card prices
+via `costs::tech_cost_net` (a real Government/tech `Move::Develop`) or not
+(an `Action` card's own `Move::PlayAction`, which `tech_cost_net` always
+reads as `None` since it isn't science-priced at all -- not itself a
+finding)**:
+
+- **23 `PlayAction` on an Action card, no pending, not investigated this
+  pass.** `action_card_playable` (`legal.rs`) gates these on `free_action_
+  moves` being non-empty for the card's own `FreeCivilActionValue` kind
+  (Frugality → `Move::Pop` affordable, Engineering Genius → a wonder stage
+  affordable, ...) OR `action_card_has_any_gain`. Worth checking whether
+  these are civil-action-budget shaped too (see next bullet) before
+  assuming a science/food-specific cause.
+- **25 `Develop` on a Government/tech card, no pending.** Split cleanly by
+  sign of `tech_cost_net(landed) - science`:
+  - **16 of the 25: `civil_actions == 0` at the failure point, and science
+    is NOT the blocker at all** -- e.g. game `7523347`, `Develop { card:
+    Iron }`, `science=14` against a `tech_cost_net` of 5 (nine to spare),
+    yet illegal because `civil_actions=0`. This is the ALREADY-DOCUMENTED,
+    still-open civil-action-budget bucket from the Take/Bid handoff notes
+    just above ("`civil_hand_limit` under-counts the true CA total" /
+    "hand size is inflated" leads) -- these 16 are mislabeled "science
+    shaped" by surface appearance only; the real cause is upstream CA
+    tracking, out of this bucket's scope, and belongs with whoever picks
+    up that handoff's own "next step."
+  - **9 of the 25: a genuine small science shortfall (deficit of 1-4)
+    with civil actions available** -- e.g. game `7522617`, `Develop {
+    card: Monarchy }`, `science=7` against a cost of 8 (short exactly 1).
+    Small, consistent deficits are exactly the Columbus bug's own shape
+    (a missed one-off grant, not a formula error) -- worth the SAME
+    per-game `REPLAY_DEBUG` end-turn science trace this pass used for
+    Columbus, on each of these 9, before assuming they share one cause.
+    Not traced this pass; flagged as the most promising remaining lead in
+    this bucket.
+
+**The 3 remaining `ParserGap: Urban Growth ... free-civil-action options
+... do not include Build { ... }` cases are NOT a card-age resolution bug**
+(this task brief's own top-priority check, per the "card-age ambiguity"
+method note) -- `resolve_named_card_by_effect` already resolves the
+correct age instance in all 3 (`Urban Growth (I)`/`(II)`/`(III)` each
+correctly matched by the line's own printed resource discount). The real
+gap: BGO phrases an urban-PRODUCTION-CHAIN upgrade (`Philosophy ->
+Alchemy`, an already-built Lab card upgrading in place) as `"builds
+Alchemy"`, the exact same verb it uses for a genuinely fresh build from
+hand -- `corpus::classify_builds` always constructs `Move::Build`, never
+considering `Move::Upgrade`, so when the target card is only reachable via
+an in-place upgrade (not sitting in `hand_civil` at all -- confirmed via
+the new `free_civil_action_move` gap debug: `hand_civil` for game
+`7523200` names `["Bread and Circuses", "Justice System", "Breakthrough
+(II)", "Cannon"]`, no `Alchemy` anywhere) the offered `FreeCivil` options
+correctly include `Upgrade { from: Philosophy, to: Alchemy }` but the
+constructed `wanted` move (`Build { card: Alchemy }`) never matches it.
+Likely fix shape: when `free_civil_action_move`'s options list contains an
+`Upgrade` targeting the same `landed_in_techs` card the `wanted` `Build`
+was aimed at, prefer that reading over reporting a gap -- not attempted
+this pass (only 3 games, low priority next to the 41-game pending-Choice
+pattern above).
+
+**Diagnostics added this pass (kept, all `REPLAY_DEBUG`/`REPLAY_DEBUG_ALL`-
+gated, zero behaviour change, `cargo test --profile difftest --lib`: 1026
+passed)**:
+- `try_apply`'s existing failure print now also prints `science`, and for
+  `Move::Develop`/`Move::PlayAction` specifically, whether the card is
+  really in `hand_civil` and its `costs::tech_cost_net`.
+- `trailing_now_science` (new helper) + an end-turn science cross-check
+  against BGO's own printed running total, at the ONE real `EndTurn`
+  dispatch site (`replay_game`'s own no-leading-colour special case, NOT
+  `apply_one`'s -- that arm is dead code, `actor_and_rest` never matches an
+  `"End turn ..."` line). **Known false-positive shape, read the doc
+  comment before trusting a single instance**: a queued military discard
+  defers `economy::end_of_turn`'s scoring step until `resume_end_turn`
+  runs on a LATER line, so this check fires (and can misfire) before that
+  resume completes whenever one is pending -- cross-check against a later
+  reading (e.g. the next real spend) before concluding a real drift.
+- `free_civil_action_move`'s own "options do not include" gap now dumps
+  `science`, `hand_civil`, and `tech_cost_net(landed_in_techs)`.
+- `economy::end_of_turn`'s uprising check now prints `s.science`,
+  `s.happy`, `discontent`, `workers_free`, `uprising` (`REPLAY_DEBUG_ALL`).
+- `events::apply_single_target` now prints `order`/`stat`/`ranked`/
+  per-player `values` (`REPLAY_DEBUG_ALL`) -- `RankStat` gained `Debug`.

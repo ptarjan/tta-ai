@@ -803,7 +803,7 @@ pub(crate) fn live_count_idx(state: &GameState) -> usize {
 /// for the `_EVENT_RANKED` targeting keys Python's `my_event_threat` reads
 /// -- reusing this module's `_rank`/`_stat_value` port rather than a second
 /// copy of the same four-branch dispatch.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum RankStat {
     Strength,
     /// Banked culture (`p.culture`) -- NOT `Stats.culture`'s per-turn RATE,
@@ -890,6 +890,12 @@ fn apply_single_target(
         &reversed
     };
     let ranked = rank_players(state, order, stat, best);
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        eprintln!(
+            "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
+            order.iter().map(|&q| rank_stat_value(state, q, stat)).collect::<Vec<_>>()
+        );
+    }
     if let Some(&q) = ranked.first() {
         apply_player_block(state, q, &block);
     }
