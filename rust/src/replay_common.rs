@@ -130,7 +130,7 @@ pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::moves::PactSide;
 use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, Phase};
-use crate::{apply, costs, game, legal, CardId, CardType, Move};
+use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
 // Journal line
@@ -757,7 +757,7 @@ impl<'a> Replayer<'a> {
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 let p = &self.state.players[self.state.current as usize];
                 eprintln!(
-                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} card_row={:?}",
+                    "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} mil_discount={} card_row={:?}",
                     self.state.current,
                     p.civil_actions,
                     p.military_actions,
@@ -768,6 +768,9 @@ impl<'a> Replayer<'a> {
                     p.hand_size_civil(),
                     costs::civil_hand_limit(&self.state, p),
                     p.hand_civil.as_slice().iter().map(|id| id.get().name).collect::<Vec<_>>(),
+                    p.resources,
+                    p.food,
+                    p.mil_discount,
                     (0..13).map(|i| if self.state.card_row[i].is_none() { "-".to_string() } else { self.state.card_row[i].get().name.to_string() }).collect::<Vec<_>>(),
                 );
             }
@@ -834,10 +837,37 @@ impl<'a> Replayer<'a> {
 /// (`docs/REPLAY.md` Finding 2), that was true: the interjecting player had
 /// already taken the card into hand normally, sometimes turns earlier, and
 /// was simply waiting for a chance to develop it.
+///
+/// Every branch below also re-checks ordinary affordability (food/
+/// resources/science, and a free worker for Build) against `actor`
+/// DIRECTLY, not through [`legal::legal_moves`] -- that function is scoped
+/// to `state.decider()`/`state.current`, which by construction is NOT
+/// `actor` here (the whole reason this helper exists). Skipping this check
+/// is not merely a missed validation: this function's caller applies its
+/// result via `apply::apply_free_civil_move` directly, bypassing
+/// `Replayer::try_apply`'s own `legal_moves` gate entirely, so an
+/// unaffordable move reaches `apply::h_pop`/`do_build`/`h_develop` with NO
+/// prior legality check at all -- those functions each end in a
+/// `debug_assert!` that a legal caller could never trip, which means an
+/// affordability drift this binary's OWN reconstruction accumulated
+/// (rather than a genuine journal-parsing gap) surfaced as a hard process
+/// PANIC instead of an honest `Mismatch`, aborting the entire run and
+/// losing every other game's data in the same batch. Found by replaying the
+/// real BGO corpus at scale (`replaystats`): game `7522949` reached this
+/// exact panic once the [`homer_unit_discount`] fix (`costs.rs`) let it run
+/// deep enough to reach a second Civil Life reveal whose banked `pop_food`
+/// discount this binary's own reconstructed `food`/`yellow_bank` could not
+/// actually cover. Returning `None` here instead routes it back through the
+/// caller's normal, `state.decider()`-gated path, which reports the SAME
+/// underlying problem as a `Mismatch` -- exactly what every other
+/// unaffordable-move shape in this file already does.
 fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<CardId>) -> Option<Move> {
     let p = &r.state.players[actor as usize];
     match class {
-        ActionClass::IncreasePopulation if p.one_time_discount.pop_food != 0 => Some(Move::Pop),
+        ActionClass::IncreasePopulation if p.one_time_discount.pop_food != 0 => {
+            let cost = economy::pop_cost(&r.state, p)?;
+            (p.food as i32 >= cost).then_some(Move::Pop)
+        }
         ActionClass::BuildBuilding if p.one_time_discount.build_resources != 0 => {
             let card = card?;
             // Civil Life only discounts a build, never grants the
@@ -845,19 +875,19 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
             // `actor`'s own tableau), and never a military unit (the
             // discount field is scoped to `URBAN_OR_PRODUCTION` cards only,
             // matching the card text's "farm, mine or urban building").
-            if !crate::costs::is_unit(card) && p.techs.get(card).is_some() {
-                Some(Move::Build { card })
-            } else {
-                None
+            if crate::costs::is_unit(card) || p.techs.get(card).is_none() || p.workers_free == 0 {
+                return None;
             }
+            let cost = costs::build_cost_for(&r.state, p, card)?;
+            (p.resources as i32 >= cost).then_some(Move::Build { card })
         }
         ActionClass::DevelopTechnology if p.one_time_discount.develop_science != 0 => {
             let card = card?;
-            if p.hand_civil.contains(card) {
-                Some(Move::Develop { card })
-            } else {
-                None
+            if !p.hand_civil.contains(card) {
+                return None;
             }
+            let cost = costs::tech_cost(&r.state, p, card)?;
+            (p.science as i32 >= cost).then_some(Move::Develop { card })
         }
         _ => None,
     }
@@ -2062,5 +2092,34 @@ mod tests {
     #[test]
     fn current_event_name_is_none_when_there_is_no_current_event_clause() {
         assert_eq!(current_event_name("Orange builds Bronze Orange spends 2 resources"), None);
+    }
+
+    /// REGRESSION (found by replaying the real BGO corpus at scale, game
+    /// `7522949`): `civil_life_move` used to return `Some(Move::Pop)`
+    /// whenever `one_time_discount.pop_food != 0`, with no food check at
+    /// all -- and its caller applies the result via
+    /// `apply::apply_free_civil_move` directly, bypassing
+    /// `Replayer::try_apply`'s own `legal_moves` gate. An unaffordable Pop
+    /// reached `apply::h_pop`'s internal `debug_assert!` with no prior
+    /// legality check, hard-panicking the whole process (and losing every
+    /// OTHER game's data in the same batch run) instead of producing an
+    /// honest `Mismatch` the way every other unaffordable-move shape in
+    /// this file does.
+    #[test]
+    fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
+        r.state.players[0].food = 0; // ...not enough food to spend it
+        assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
+    }
+
+    #[test]
+    fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, VecDeque::new(), HashMap::new(), HashMap::new());
+        r.state.players[0].one_time_discount.pop_food = 1;
+        r.state.players[0].food = 20; // plenty
+        assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
     }
 }
