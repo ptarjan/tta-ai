@@ -396,6 +396,13 @@ struct Replayer<'a> {
     /// as an ordinary `Move::Destroy` once the main loop's own pointer
     /// reaches it.
     claimed_destroy_lines: std::collections::HashSet<usize>,
+    /// GLOBAL (not per-player -- Terrorism's own destruction line never
+    /// names an attacker) FIFO of `CardId`s pulled off both journal shapes
+    /// that resolve a `Pending::Choice(Raid)` -- the Terrorism event's own
+    /// `"Terrorists destroy a <Color> <Building>"` and Aggression: Raid's
+    /// `"Raid casualties ..."` -- see `prescan_raid_destroys`'s doc and
+    /// `resolve_intervening`'s `ChoiceKind::Raid` handling, which drains it.
+    raid_destroys: VecDeque<CardId>,
     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
     /// over the rest of the journal -- see `discard_solver`'s module doc and
     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
@@ -441,6 +448,7 @@ impl<'a> Replayer<'a> {
         plunder_splits: HashMap<u8, VecDeque<(i16, i16)>>,
         infiltrates: HashMap<u8, VecDeque<bool>>,
         lose_pop_destroys: HashMap<u8, VecDeque<(usize, CardId)>>,
+        raid_destroys: VecDeque<CardId>,
         future_military_needs: HashMap<u8, Vec<FutureNeed>>,
         colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     ) -> Self {
@@ -472,6 +480,7 @@ impl<'a> Replayer<'a> {
             plunder_splits,
             infiltrates,
             lose_pop_destroys,
+            raid_destroys,
             claimed_destroy_lines: std::collections::HashSet::new(),
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
@@ -528,316 +537,394 @@ impl<'a> Replayer<'a> {
                 );
             }
             if let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
-                // A `Pending::Choice(GainBlock)` (an event's "Each
-                // civilization gains 2 resources or 2 food (player's
-                // choice)" -- e.g. "Development of Markets") is opened for
-                // EVERY player, one choice each, the instant the event
-                // resolves -- not just the player who played it. BGO logs
-                // each player's own pick as its OWN standalone bookkeeping
-                // line, `"<Color> produces N food"` / `"<Color> produces N
-                // resources"` (`corpus.rs` already treats this shape as
-                // bookkeeping -- not a distinct action -- for census
-                // purposes; `prescan_gain_produces` below re-reads it here
-                // because a real `Move::Choose` is still needed to clear the
-                // pending). Like `FreeBuild` below, this is drained
-                // regardless of whose turn it nominally is (it blocks ANY
-                // further action by that player, including their own, until
-                // resolved) -- found by testing against a real 3p game
-                // where a `WonderStep` several lines later was rejected
-                // because the actor's own still-open choice from an EARLIER
-                // event had never been cleared (`docs/REPLAY.md`).
-                if matches!(c.kind, ChoiceKind::GainBlock) {
-                    let picked = self
-                        .gain_produces
-                        .get_mut(&decider)
-                        .and_then(|q| q.pop_front())
-                        .ok_or_else(|| {
-                            MismatchKind::StuckPending(format!(
-                                "GainBlock choice open for player {decider} but no journal-observed \
-                                 \"produces\" line left to resolve it with"
-                            ))
-                        })?;
-                    let n = c
-                        .options
-                        .as_slice()
-                        .iter()
-                        .position(|o| match o {
-                            ChoiceOption::Gain(g) => {
-                                (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
-                                    || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
+                match c.kind {
+                    // A `Pending::Choice(GainBlock)` (an event's "Each
+                    // civilization gains 2 resources or 2 food (player's
+                    // choice)" -- e.g. "Development of Markets") is opened for
+                    // EVERY player, one choice each, the instant the event
+                    // resolves -- not just the player who played it. BGO logs
+                    // each player's own pick as its OWN standalone bookkeeping
+                    // line, `"<Color> produces N food"` / `"<Color> produces N
+                    // resources"` (`corpus.rs` already treats this shape as
+                    // bookkeeping -- not a distinct action -- for census
+                    // purposes; `prescan_gain_produces` below re-reads it here
+                    // because a real `Move::Choose` is still needed to clear the
+                    // pending). Like `FreeBuild` below, this is drained
+                    // regardless of whose turn it nominally is (it blocks ANY
+                    // further action by that player, including their own, until
+                    // resolved) -- found by testing against a real 3p game
+                    // where a `WonderStep` several lines later was rejected
+                    // because the actor's own still-open choice from an EARLIER
+                    // event had never been cleared (`docs/REPLAY.md`).
+                        ChoiceKind::GainBlock => {
+                        let picked = self
+                            .gain_produces
+                            .get_mut(&decider)
+                            .and_then(|q| q.pop_front())
+                            .ok_or_else(|| {
+                                MismatchKind::StuckPending(format!(
+                                    "GainBlock choice open for player {decider} but no journal-observed \
+                                     \"produces\" line left to resolve it with"
+                                ))
+                            })?;
+                        let n = c
+                            .options
+                            .as_slice()
+                            .iter()
+                            .position(|o| match o {
+                                ChoiceOption::Gain(g) => {
+                                    (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
+                                        || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
+                                }
+                                _ => false,
+                            })
+                            .ok_or_else(|| {
+                                MismatchKind::ParserGap(format!(
+                                    "GainBlock options {:?} do not offer the journal-observed {} {}",
+                                    c.options.as_slice(),
+                                    picked.1,
+                                    if picked.0 { "resources" } else { "food" }
+                                ))
+                            })?;
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(PlunderSplit)` (Aggression: Plunder's
+                    // "your rival loses a total of up to N resource and/or food
+                    // (your choice)") is opened for the ATTACKER only, but --
+                    // exactly like `GainBlock` above, and for the same reason
+                    // (`docs/REPLAY.md`'s six-pending-kind pass) -- it blocks
+                    // ANY further action by that player, including an unrelated
+                    // one several lines later, not just their own reply to the
+                    // aggression. Drained unconditionally here from
+                    // `plunder_splits` (`prescan_plunder_splits`'s doc explains
+                    // why a popped entry is VALIDATED against this choice's own
+                    // options, and skipped rather than trusted by position, if
+                    // it doesn't match -- a single-option Plunder split never
+                    // opens a pending at all, so the FIFO can contain entries
+                    // this function is never asked to consume).
+                        ChoiceKind::PlunderSplit { .. } => {
+                        let q = self.plunder_splits.entry(decider).or_default();
+                        let n = loop {
+                            let Some(&(food, resources)) = q.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "PlunderSplit choice open for player {decider} but no journal-observed \
+                                     Plunder resolution left to resolve it with"
+                                )));
+                            };
+                            if let Some(idx) = c.options.as_slice().iter().position(|o| {
+                                matches!(o, ChoiceOption::Gain(g) if g.food == food && g.resources == resources)
+                            }) {
+                                q.pop_front();
+                                break idx;
                             }
-                            _ => false,
-                        })
-                        .ok_or_else(|| {
-                            MismatchKind::ParserGap(format!(
-                                "GainBlock options {:?} do not offer the journal-observed {} {}",
-                                c.options.as_slice(),
-                                picked.1,
-                                if picked.0 { "resources" } else { "food" }
-                            ))
-                        })?;
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
-                }
-                // A `Pending::Choice(PlunderSplit)` (Aggression: Plunder's
-                // "your rival loses a total of up to N resource and/or food
-                // (your choice)") is opened for the ATTACKER only, but --
-                // exactly like `GainBlock` above, and for the same reason
-                // (`docs/REPLAY.md`'s six-pending-kind pass) -- it blocks
-                // ANY further action by that player, including an unrelated
-                // one several lines later, not just their own reply to the
-                // aggression. Drained unconditionally here from
-                // `plunder_splits` (`prescan_plunder_splits`'s doc explains
-                // why a popped entry is VALIDATED against this choice's own
-                // options, and skipped rather than trusted by position, if
-                // it doesn't match -- a single-option Plunder split never
-                // opens a pending at all, so the FIFO can contain entries
-                // this function is never asked to consume).
-                if matches!(c.kind, ChoiceKind::PlunderSplit { .. }) {
-                    let q = self.plunder_splits.entry(decider).or_default();
-                    let n = loop {
-                        let Some(&(food, resources)) = q.front() else {
-                            return Err(MismatchKind::StuckPending(format!(
-                                "PlunderSplit choice open for player {decider} but no journal-observed \
-                                 Plunder resolution left to resolve it with"
-                            )));
-                        };
-                        if let Some(idx) = c.options.as_slice().iter().position(|o| {
-                            matches!(o, ChoiceOption::Gain(g) if g.food == food && g.resources == resources)
-                        }) {
+                            // Belongs to an earlier, single-option split this
+                            // same player's Plunder already auto-resolved
+                            // silently (see the field's own doc) -- not this
+                            // choice's answer, skip past it and keep looking.
                             q.pop_front();
-                            break idx;
-                        }
-                        // Belongs to an earlier, single-option split this
-                        // same player's Plunder already auto-resolved
-                        // silently (see the field's own doc) -- not this
-                        // choice's answer, skip past it and keep looking.
-                        q.pop_front();
-                    };
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
-                }
-                // A `Pending::Choice(Infiltrate)` (Aggression: Infiltrate's
-                // "remove your rival's leader or incomplete wonder from
-                // play" -- offered only when the victim has BOTH, otherwise
-                // `push_choice`'s own auto-resolve-if-len-1 rule settles it
-                // with no `Pending` at all) is opened for the ATTACKER only,
-                // but exactly like `PlunderSplit` above -- and for the same
-                // reason -- it blocks ANY further action by that player.
-                // Flagged mid-pass by a concurrent worker (the Take bucket)
-                // as the sixth kind sharing this same gap. Drained
-                // unconditionally from `infiltrates`, validated against this
-                // choice's own options and skipped (not trusted by
-                // position) exactly like `PlunderSplit`'s own FIFO -- an
-                // auto-resolved single-option Infiltrate (victim has only a
-                // leader OR only a wonder) prints the IDENTICAL resolving
-                // text shape with no real choice behind it, so the FIFO can
-                // carry entries this function is never asked to consume.
-                if matches!(c.kind, ChoiceKind::Infiltrate { .. }) {
-                    let q = self.infiltrates.entry(decider).or_default();
-                    let n = loop {
-                        let Some(&is_wonder) = q.front() else {
-                            return Err(MismatchKind::StuckPending(format!(
-                                "Infiltrate choice open for player {decider} but no journal-observed \
-                                 Infiltrate resolution left to resolve it with"
-                            )));
                         };
-                        let want = if is_wonder { Keyword::Wonder } else { Keyword::Leader };
-                        if let Some(idx) = c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Word(w) if *w == want)) {
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(Infiltrate)` (Aggression: Infiltrate's
+                    // "remove your rival's leader or incomplete wonder from
+                    // play" -- offered only when the victim has BOTH, otherwise
+                    // `push_choice`'s own auto-resolve-if-len-1 rule settles it
+                    // with no `Pending` at all) is opened for the ATTACKER only,
+                    // but exactly like `PlunderSplit` above -- and for the same
+                    // reason -- it blocks ANY further action by that player.
+                    // Flagged mid-pass by a concurrent worker (the Take bucket)
+                    // as the sixth kind sharing this same gap. Drained
+                    // unconditionally from `infiltrates`, validated against this
+                    // choice's own options and skipped (not trusted by
+                    // position) exactly like `PlunderSplit`'s own FIFO -- an
+                    // auto-resolved single-option Infiltrate (victim has only a
+                    // leader OR only a wonder) prints the IDENTICAL resolving
+                    // text shape with no real choice behind it, so the FIFO can
+                    // carry entries this function is never asked to consume.
+                        ChoiceKind::Infiltrate { .. } => {
+                        let q = self.infiltrates.entry(decider).or_default();
+                        let n = loop {
+                            let Some(&is_wonder) = q.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "Infiltrate choice open for player {decider} but no journal-observed \
+                                     Infiltrate resolution left to resolve it with"
+                                )));
+                            };
+                            let want = if is_wonder { Keyword::Wonder } else { Keyword::Leader };
+                            if let Some(idx) = c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Word(w) if *w == want)) {
+                                q.pop_front();
+                                break idx;
+                            }
+                            // Belongs to an earlier, single-option Infiltrate
+                            // this same player already auto-resolved silently
+                            // (see the field's own doc) -- not this choice's
+                            // answer, skip past it and keep looking.
                             q.pop_front();
-                            break idx;
-                        }
-                        // Belongs to an earlier, single-option Infiltrate
-                        // this same player already auto-resolved silently
-                        // (see the field's own doc) -- not this choice's
-                        // answer, skip past it and keep looking.
-                        q.pop_front();
-                    };
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
-                }
-                // A `Pending::Choice(FreeBuild)` (an event's "each player
-                // with an unused worker may immediately build X for free"
-                // -- e.g. "Development of Religion") is left open regardless
-                // of WHOSE turn it nominally is, is not gated on `phase`,
-                // and a human DECLINING it (`Skip`) leaves no journal trace
-                // at all -- the same silent-response shape as a
-                // Politics-phase pass, just for a different pending kind.
-                // Drained here, ahead of the decider-equality check below,
-                // exactly like the Politics case: if the upcoming line is a
-                // build that matches one of its options, stop here and let
-                // `apply_one`'s Build handling resolve it (it needs the
-                // parsed card, which this function doesn't have reason to
-                // duplicate); otherwise assume `Skip` and keep draining
-                // (there can be one such pending per qualifying player,
-                // queued back to back) -- found by testing against a real
-                // 3p game (`docs/REPLAY.md`).
-                if matches!(c.kind, ChoiceKind::FreeBuild) {
-                    let matches_upcoming = decider == expected_actor
-                        && matches!(upcoming.0, ActionClass::BuildBuilding | ActionClass::BuildUnit)
-                        && upcoming.1.is_some_and(|want| {
-                            c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Card(id) if *id == want))
-                        });
-                    if matches_upcoming {
-                        return Ok(());
-                    }
-                    let n = c
-                        .options
-                        .as_slice()
-                        .iter()
-                        .position(|o| matches!(o, ChoiceOption::Word(Keyword::Skip)))
-                        .ok_or_else(|| MismatchKind::StuckPending("FreeBuild choice has no Skip option".into()))?;
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
-                }
-                // A `Pending::Choice(TakeRow { .. })` (International
-                // Agreement: spend up to `budget` civil actions taking row
-                // cards one at a time, `interact::offer_take_row`) is BGO's
-                // journal-logged the exact SAME way an ordinary `Move::Take`
-                // is -- `"<Color> takes <Card> in hand <Color> uses N civil
-                // action"` -- and, like `FreeBuild` just above, a human
-                // DECLINING it (picking `Word(Stop)`) leaves no journal
-                // trace at all (the same "no journal trace for a silent
-                // decline" precedent already established for Politics-phase
-                // passes and `FreeBuild`). If the upcoming line is
-                // `expected_actor`'s own take of a card that's still among
-                // this choice's own `Slot` options, stop here and let
-                // `apply_one`'s `TakeCard` arm (below) resolve it as a
-                // `Choose`, not a bare `Take` (illegal while this pending
-                // sits open); otherwise assume `Stop` and keep draining --
-                // covers the `decider != expected_actor` `StuckPending`
-                // shape too, exactly like `FreeBuild`'s own fallback (see
-                // `docs/REPLAY.md`'s six-pending-kind pass).
-                if let ChoiceKind::TakeRow { .. } = c.kind {
-                    let matches_upcoming = c.player == expected_actor
-                        && upcoming.0 == ActionClass::TakeCard
-                        && upcoming.1.is_some_and(|want| {
-                            c.options
-                                .as_slice()
-                                .iter()
-                                .any(|o| matches!(o, ChoiceOption::Slot(slot) if self.state.card_row[*slot as usize] == want))
-                        });
-                    if matches_upcoming {
-                        return Ok(());
-                    }
-                    let n = c
-                        .options
-                        .as_slice()
-                        .iter()
-                        .position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)))
-                        .ok_or_else(|| MismatchKind::StuckPending("TakeRow choice has no Stop option".into()))?;
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
-                }
-                // A `Pending::Choice(DiscardMilitary)` (`interact::
-                // discard_excess_military`, `apply.rs`'s implementation of
-                // §6.6 step 1) blocks EVERY further action by the player it
-                // is open for -- their own next move AND, if they are not
-                // `decider`, whoever else is trying to act while it sits
-                // unresolved (the "reached through a different code path"
-                // shape `docs/REPLAY.md` used to report as unrecoverable).
-                // Two cases:
-                //
-                // - This IS `expected_actor`'s own pending, and the line
-                //   about to be translated is their own `"discards N
-                //   cards"` line (`upcoming.0 == Discard`): defer to
-                //   `apply_one`'s `Discard` arm (via `resolve_one_discard`),
-                //   exactly like the `FreeBuild` `matches_upcoming` case
-                //   above -- NOT because it needs the parsed line (unlike
-                //   `FreeBuild` it doesn't), but because resolving the LAST
-                //   queued discard can itself finish that player's end of
-                //   turn and advance `state.current` to the NEXT player
-                //   (`interact::QueueItem::DiscardMilitary`'s own doc:
-                //   resolving it resumes `game::resume_end_turn`) -- doing
-                //   that HERE, before the decider-equality check below,
-                //   would make `decider` legitimately stop matching
-                //   `expected_actor` and get wrongly reported as a stuck
-                //   pending, even though the line was fully, correctly
-                //   consumed. Found by testing against real games where
-                //   EVERY "discards" line failed this way the moment this
-                //   branch existed unconditionally.
-                // - Anything else (a DIFFERENT player's stale discard, or
-                //   this player's discard reached from an unrelated line --
-                //   the original "different code path" shape): drain it
-                //   here, same as `GainBlock`/`FreeBuild`, since nothing
-                //   else in this file will ever get a chance to.
-                if matches!(c.kind, ChoiceKind::DiscardMilitary) {
-                    let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Discard;
-                    if matches_upcoming {
-                        return Ok(());
-                    }
-                    self.resolve_one_discard_choice(&c);
-                    continue;
-                }
-                // A `Pending::Choice(LosePop)` (a forced "lose 1 population"
-                // with no free worker to absorb it, `interact::run_item`'s
-                // `QueueItem::LosePop` arm) is resolved by `apply_one`'s
-                // `Destroy | Disband` arm ALREADY (mirroring `DestroyOwn`)
-                // when it is `expected_actor`'s own pending and the upcoming
-                // line IS their own `"destroys"` line -- same `matches_
-                // upcoming` shape as `DiscardMilitary` just above, deferred
-                // there rather than duplicated here.
-                //
-                // The gap this closes: the event that forces the loss can
-                // fire as a SIDE EFFECT of resolving a DIFFERENT player's
-                // political decision (`resolve_political_decision`, a few
-                // lines below, reached via the `None`/politics branch at the
-                // bottom of this loop when this function is catching up
-                // through outstanding political turns before `expected_
-                // actor`'s own) -- e.g. an event like Refugees/Pestilence
-                // that penalises "the weakest civilization", which need not
-                // be whoever is currently deciding anything. That leaves a
-                // LosePop pending open for `c.player`, genuinely unrelated
-                // to `expected_actor`'s own upcoming line, with `c.player`'s
-                // own resolving `"destroys"` line sitting SOMEWHERE ELSE in
-                // the journal (found on real games `7521344` -- opened
-                // resolving player 3's own political reveal while player 1
-                // was up next for an unrelated `Destroy`; that player's own
-                // resolution, `"Grey destroys Religion"`, doesn't appear
-                // until several lines later). Drained here from `lose_pop_
-                // destroys` (`prescan_lose_pop_destroys`'s doc explains why
-                // a popped entry is validated against the live choice's own
-                // options and skipped, not trusted by position, exactly like
-                // `PlunderSplit` -- an entry that doesn't match belongs to
-                // that same player's own unrelated voluntary `Destroy`/
-                // `DestroyOwn` choice, left alone for its own normal
-                // in-order processing). The claimed line's OWN index is
-                // recorded in `claimed_destroy_lines` so the main loop does
-                // not translate it a second time once its own pointer
-                // reaches it (see that field's doc) -- unlike `PlunderSplit`
-                // (`Bookkeeping`, always skipped by the main loop already) a
-                // `"destroys"` line is an ordinary action line the main loop
-                // would otherwise process again, double-applying the same
-                // destroy.
-                if matches!(c.kind, ChoiceKind::LosePop) {
-                    let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Destroy;
-                    if matches_upcoming {
-                        return Ok(());
-                    }
-                    let q = self.lose_pop_destroys.entry(c.player).or_default();
-                    let n = loop {
-                        let Some(&(line_idx, card)) = q.front() else {
-                            return Err(MismatchKind::StuckPending(format!(
-                                "LosePop choice open for player {} but no journal-observed destroy line \
-                                 left to resolve it with",
-                                c.player
-                            )));
                         };
-                        if let Some(idx) =
-                            c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
-                        {
-                            q.pop_front();
-                            self.claimed_destroy_lines.insert(line_idx);
-                            break idx;
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(FreeBuild)` (an event's "each player
+                    // with an unused worker may immediately build X for free"
+                    // -- e.g. "Development of Religion") is left open regardless
+                    // of WHOSE turn it nominally is, is not gated on `phase`,
+                    // and a human DECLINING it (`Skip`) leaves no journal trace
+                    // at all -- the same silent-response shape as a
+                    // Politics-phase pass, just for a different pending kind.
+                    // Drained here, ahead of the decider-equality check below,
+                    // exactly like the Politics case: if the upcoming line is a
+                    // build that matches one of its options, stop here and let
+                    // `apply_one`'s Build handling resolve it (it needs the
+                    // parsed card, which this function doesn't have reason to
+                    // duplicate); otherwise assume `Skip` and keep draining
+                    // (there can be one such pending per qualifying player,
+                    // queued back to back) -- found by testing against a real
+                    // 3p game (`docs/REPLAY.md`).
+                        ChoiceKind::FreeBuild => {
+                        let matches_upcoming = decider == expected_actor
+                            && matches!(upcoming.0, ActionClass::BuildBuilding | ActionClass::BuildUnit)
+                            && upcoming.1.is_some_and(|want| {
+                                c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Card(id) if *id == want))
+                            });
+                        if matches_upcoming {
+                            return Ok(());
                         }
-                        // Belongs to this same player's own unrelated,
-                        // separately-resolved voluntary destroy (see this
-                        // block's own doc) -- not this choice's answer, skip
-                        // past it and keep looking.
-                        q.pop_front();
-                    };
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
-                    continue;
+                        let n = c
+                            .options
+                            .as_slice()
+                            .iter()
+                            .position(|o| matches!(o, ChoiceOption::Word(Keyword::Skip)))
+                            .ok_or_else(|| MismatchKind::StuckPending("FreeBuild choice has no Skip option".into()))?;
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(TakeRow { .. })` (International
+                    // Agreement: spend up to `budget` civil actions taking row
+                    // cards one at a time, `interact::offer_take_row`) is BGO's
+                    // journal-logged the exact SAME way an ordinary `Move::Take`
+                    // is -- `"<Color> takes <Card> in hand <Color> uses N civil
+                    // action"` -- and, like `FreeBuild` just above, a human
+                    // DECLINING it (picking `Word(Stop)`) leaves no journal
+                    // trace at all (the same "no journal trace for a silent
+                    // decline" precedent already established for Politics-phase
+                    // passes and `FreeBuild`). If the upcoming line is
+                    // `expected_actor`'s own take of a card that's still among
+                    // this choice's own `Slot` options, stop here and let
+                    // `apply_one`'s `TakeCard` arm (below) resolve it as a
+                    // `Choose`, not a bare `Take` (illegal while this pending
+                    // sits open); otherwise assume `Stop` and keep draining --
+                    // covers the `decider != expected_actor` `StuckPending`
+                    // shape too, exactly like `FreeBuild`'s own fallback (see
+                    // `docs/REPLAY.md`'s six-pending-kind pass).
+                        ChoiceKind::TakeRow { .. } => {
+                        let matches_upcoming = c.player == expected_actor
+                            && upcoming.0 == ActionClass::TakeCard
+                            && upcoming.1.is_some_and(|want| {
+                                c.options
+                                    .as_slice()
+                                    .iter()
+                                    .any(|o| matches!(o, ChoiceOption::Slot(slot) if self.state.card_row[*slot as usize] == want))
+                            });
+                        if matches_upcoming {
+                            return Ok(());
+                        }
+                        let n = c
+                            .options
+                            .as_slice()
+                            .iter()
+                            .position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)))
+                            .ok_or_else(|| MismatchKind::StuckPending("TakeRow choice has no Stop option".into()))?;
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(DiscardMilitary)` (`interact::
+                    // discard_excess_military`, `apply.rs`'s implementation of
+                    // §6.6 step 1) blocks EVERY further action by the player it
+                    // is open for -- their own next move AND, if they are not
+                    // `decider`, whoever else is trying to act while it sits
+                    // unresolved (the "reached through a different code path"
+                    // shape `docs/REPLAY.md` used to report as unrecoverable).
+                    // Two cases:
+                    //
+                    // - This IS `expected_actor`'s own pending, and the line
+                    //   about to be translated is their own `"discards N
+                    //   cards"` line (`upcoming.0 == Discard`): defer to
+                    //   `apply_one`'s `Discard` arm (via `resolve_one_discard`),
+                    //   exactly like the `FreeBuild` `matches_upcoming` case
+                    //   above -- NOT because it needs the parsed line (unlike
+                    //   `FreeBuild` it doesn't), but because resolving the LAST
+                    //   queued discard can itself finish that player's end of
+                    //   turn and advance `state.current` to the NEXT player
+                    //   (`interact::QueueItem::DiscardMilitary`'s own doc:
+                    //   resolving it resumes `game::resume_end_turn`) -- doing
+                    //   that HERE, before the decider-equality check below,
+                    //   would make `decider` legitimately stop matching
+                    //   `expected_actor` and get wrongly reported as a stuck
+                    //   pending, even though the line was fully, correctly
+                    //   consumed. Found by testing against real games where
+                    //   EVERY "discards" line failed this way the moment this
+                    //   branch existed unconditionally.
+                    // - Anything else (a DIFFERENT player's stale discard, or
+                    //   this player's discard reached from an unrelated line --
+                    //   the original "different code path" shape): drain it
+                    //   here, same as `GainBlock`/`FreeBuild`, since nothing
+                    //   else in this file will ever get a chance to.
+                        ChoiceKind::DiscardMilitary => {
+                        let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Discard;
+                        if matches_upcoming {
+                            return Ok(());
+                        }
+                        self.resolve_one_discard_choice(&c);
+                        continue;
+                    }
+                    // A `Pending::Choice(LosePop)` (a forced "lose 1 population"
+                    // with no free worker to absorb it, `interact::run_item`'s
+                    // `QueueItem::LosePop` arm) is resolved by `apply_one`'s
+                    // `Destroy | Disband` arm ALREADY (mirroring `DestroyOwn`)
+                    // when it is `expected_actor`'s own pending and the upcoming
+                    // line IS their own `"destroys"` line -- same `matches_
+                    // upcoming` shape as `DiscardMilitary` just above, deferred
+                    // there rather than duplicated here.
+                    //
+                    // The gap this closes: the event that forces the loss can
+                    // fire as a SIDE EFFECT of resolving a DIFFERENT player's
+                    // political decision (`resolve_political_decision`, a few
+                    // lines below, reached via the `None`/politics branch at the
+                    // bottom of this loop when this function is catching up
+                    // through outstanding political turns before `expected_
+                    // actor`'s own) -- e.g. an event like Refugees/Pestilence
+                    // that penalises "the weakest civilization", which need not
+                    // be whoever is currently deciding anything. That leaves a
+                    // LosePop pending open for `c.player`, genuinely unrelated
+                    // to `expected_actor`'s own upcoming line, with `c.player`'s
+                    // own resolving `"destroys"` line sitting SOMEWHERE ELSE in
+                    // the journal (found on real games `7521344` -- opened
+                    // resolving player 3's own political reveal while player 1
+                    // was up next for an unrelated `Destroy`; that player's own
+                    // resolution, `"Grey destroys Religion"`, doesn't appear
+                    // until several lines later). Drained here from `lose_pop_
+                    // destroys` (`prescan_lose_pop_destroys`'s doc explains why
+                    // a popped entry is validated against the live choice's own
+                    // options and skipped, not trusted by position, exactly like
+                    // `PlunderSplit` -- an entry that doesn't match belongs to
+                    // that same player's own unrelated voluntary `Destroy`/
+                    // `DestroyOwn` choice, left alone for its own normal
+                    // in-order processing). The claimed line's OWN index is
+                    // recorded in `claimed_destroy_lines` so the main loop does
+                    // not translate it a second time once its own pointer
+                    // reaches it (see that field's doc) -- unlike `PlunderSplit`
+                    // (`Bookkeeping`, always skipped by the main loop already) a
+                    // `"destroys"` line is an ordinary action line the main loop
+                    // would otherwise process again, double-applying the same
+                    // destroy.
+                        ChoiceKind::LosePop => {
+                        let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Destroy;
+                        if matches_upcoming {
+                            return Ok(());
+                        }
+                        let q = self.lose_pop_destroys.entry(c.player).or_default();
+                        let n = loop {
+                            let Some(&(line_idx, card)) = q.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "LosePop choice open for player {} but no journal-observed destroy line \
+                                     left to resolve it with",
+                                    c.player
+                                )));
+                            };
+                            if let Some(idx) =
+                                c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                            {
+                                q.pop_front();
+                                self.claimed_destroy_lines.insert(line_idx);
+                                break idx;
+                            }
+                            // Belongs to this same player's own unrelated,
+                            // separately-resolved voluntary destroy (see this
+                            // block's own doc) -- not this choice's answer, skip
+                            // past it and keep looking.
+                            q.pop_front();
+                        };
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+
+                    // A `Pending::Choice(Raid)` (Aggression: Raid's "pick
+                    // the urban building(s) to destroy" AND the Terrorism
+                    // event's identical-shaped forced destruction) is
+                    // opened for the ATTACKER (Raid) or has no natural
+                    // "actor" at all (Terrorism, `corpus::classify`'s own
+                    // `"Terrorists destroy a <Color> <Building>"` case,
+                    // still `Bookkeeping` -- the destroyed card is right
+                    // there, just discarded before this fix). Both print
+                    // their resolution on a line this function never
+                    // otherwise reads, so a GLOBAL (not per-player --
+                    // Terrorism's own line never names an attacker)
+                    // `VecDeque<CardId>` prescan (`prescan_raid_destroys`)
+                    // feeds this exactly like `PlunderSplit`'s FIFO: popped
+                    // in journal order, validated against the live choice's
+                    // own options and skipped (not trusted by position)
+                    // past any entry that belongs to an EARLIER single-
+                    // candidate Raid this same or another player's turn
+                    // already auto-resolved with no `Pending` at all (same
+                    // risk `PlunderSplit`/`Infiltrate` already confirmed
+                    // real -- `push_choice`'s own auto-resolve-if-len-1
+                    // rule, `docs/REPLAY.md`'s six-pending-kind pass).
+                    ChoiceKind::Raid { .. } => {
+                        let n = loop {
+                            let Some(&card) = self.raid_destroys.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "Raid choice open for player {decider} but no journal-observed \
+                                     Raid/Terrorism destroy line left to resolve it with"
+                                )));
+                            };
+                            if let Some(idx) =
+                                c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                            {
+                                self.raid_destroys.pop_front();
+                                break idx;
+                            }
+                            // Belongs to an earlier, single-option Raid this
+                            // same game already auto-resolved silently (see
+                            // this arm's own doc) -- not this choice's
+                            // answer, skip past it and keep looking.
+                            self.raid_destroys.pop_front();
+                        };
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // Every other `ChoiceKind` is left alone HERE, on
+                    // purpose -- listed individually rather than behind a
+                    // `_` wildcard, so a future `ChoiceKind` variant fails
+                    // this match at compile time instead of silently
+                    // inheriting whatever a catch-all happened to do (the
+                    // exact shape that let all seven kinds this whole pass
+                    // is working through go quietly unresolved for as long
+                    // as they did, `docs/REPLAY.md`'s six/seven-pending-kind
+                    // passes). `LoseColony`/`FlipWonder` are the next two
+                    // kinds this same pass still owes (their own resolving
+                    // journal shapes, not yet wired in); `FreeCivil`/
+                    // `FoodOrRes`/`DestroyOwn` are the player's OWN
+                    // voluntary in-turn choice and fall through to the
+                    // `decider == expected_actor` shortcut a few lines
+                    // below, exactly like `DestroyOwn` always has; `Annex`/
+                    // `WarTech` have not been needed by any corpus game
+                    // sampled so far; `PactOffer` is handled by the bottom
+                    // match's own explicit arm (auto-`Refuse`) for the
+                    // `decider != expected_actor` case. Falling through here
+                    // for all eight is IDENTICAL to this match's predecessor
+                    // (a chain of `if` statements that simply didn't mention
+                    // them) -- no behaviour changed for any of them, only
+                    // exhaustiveness was added.
+                    ChoiceKind::LoseColony
+                    | ChoiceKind::FlipWonder
+                    | ChoiceKind::FreeCivil { .. }
+                    | ChoiceKind::FoodOrRes { .. }
+                    | ChoiceKind::DestroyOwn
+                    | ChoiceKind::Annex { .. }
+                    | ChoiceKind::PactOffer { .. }
+                    | ChoiceKind::WarTech { .. } => {}
                 }
             }
             // A live `Pending::Colonize` has no real `Move` anywhere in the
@@ -2214,6 +2301,80 @@ fn prescan_lose_pop_destroys(lines: &[Line], card_index: &HashMap<&'static str, 
     out
 }
 
+/// The Terrorism event's own destruction line -- `"Terrorists destroy a
+/// <Color> <Building>"` -- one per victim, `corpus::classify`'s existing
+/// `Bookkeeping` case (grep that string), the destroyed card discarded
+/// there today. The victim's colour is read only to skip past it to the
+/// building name: which player it belongs to is already pinned by the live
+/// `Pending::Choice(Raid)`'s own options, exactly like [`prescan_infiltrates`]
+/// doesn't need the victim's identity either.
+fn parse_terrorism_destroy_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<CardId> {
+    let after = text.strip_prefix("Terrorists destroy a ")?;
+    let (_, after_color) = actor_and_rest(after)?;
+    let (id, _) = longest_known_card_prefix(index, after_color)?;
+    Some(id)
+}
+
+/// Aggression: Raid's own resolution line -- `"Raid casualties 1
+/// <Building1>[; 1 <Building2>]; <Attacker> produces <M> resources"`, one
+/// clause per printed age tier (1 or 2 `QueueItem::Raid`s per use) --
+/// currently `Unclassified` (`corpus::classify` has no case for it at all),
+/// also unused. The resource-gain amount needs no separate parsing here --
+/// `resolve_choice`'s `ChoiceKind::Raid` arm already computes it
+/// deterministically (`printed.div_ceil(2)`) as a side effect of applying
+/// the right `Move::Choose` -- only the destroyed buildings' identities feed
+/// `resolve_intervening`'s FIFO. [`longest_known_card_prefix`]'s own matched
+/// span swallows a glued-on trailing `;` (it is part of the same
+/// whitespace-delimited word as the card name, e.g. `"Alchemy;"`) -- so the
+/// remainder after each casualty starts with a bare space, not `"; "`; the
+/// continuation check below strips that space first and looks for another
+/// `"1 "` clause, not a `"; 1 "` one.
+fn parse_raid_casualties_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<Vec<CardId>> {
+    let mut cursor = text.strip_prefix("Raid casualties ")?.strip_prefix("1 ")?;
+    let mut out = Vec::new();
+    loop {
+        let (id, rest) = longest_known_card_prefix(index, cursor)?;
+        out.push(id);
+        cursor = rest.strip_prefix(' ')?;
+        match cursor.strip_prefix("1 ") {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+    // What's left has to be the attacker's own trailing "<Color> produces
+    // <M> resources" clause -- the signature that confirms this really was
+    // a Raid casualties line and not some other "1 <Card>; 1 <Card>; ..."
+    // shape this file has never seen.
+    let (_, rest2) = actor_and_rest(cursor)?;
+    if !rest2.starts_with("produces ") {
+        return None;
+    }
+    Some(out)
+}
+
+/// Pre-scans the whole journal once for every [`parse_terrorism_destroy_line`]
+/// / [`parse_raid_casualties_line`] match into ONE GLOBAL FIFO, in journal
+/// order -- unlike every other FIFO in this file, NOT split per-player,
+/// because Terrorism's own line never names an attacker at all (only a
+/// victim, already redundant with the live choice's own `victim` field).
+/// See `Replayer::raid_destroys`'s doc and `resolve_intervening`'s
+/// `ChoiceKind::Raid` handling, which drains it (validated against the live
+/// choice's own options and skipped, not trusted by position, exactly like
+/// [`prescan_plunder_splits`] -- a single-candidate Raid also auto-resolves
+/// with no `Pending` at all, so this FIFO can carry entries `resolve_
+/// intervening` is never asked to consume).
+fn prescan_raid_destroys(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> VecDeque<CardId> {
+    let mut out = VecDeque::new();
+    for line in lines {
+        if let Some(id) = parse_terrorism_destroy_line(card_index, line.text) {
+            out.push_back(id);
+        } else if let Some(ids) = parse_raid_casualties_line(card_index, line.text) {
+            out.extend(ids);
+        }
+    }
+    out
+}
+
 /// Pre-scans the whole journal once for every point where a player is
 /// observed playing a NAMED card out of their own military hand --
 /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
@@ -2515,6 +2676,7 @@ pub fn replay_game(
     let plunder_splits = prescan_plunder_splits(&lines);
     let infiltrates = prescan_infiltrates(&lines);
     let lose_pop_destroys = prescan_lose_pop_destroys(&lines, card_index);
+    let raid_destroys = prescan_raid_destroys(&lines, card_index);
     let future_military_needs = prescan_future_military_needs(&lines, card_index);
     let colonize_sacrifices = prescan_colonize_sacrifices(&lines, card_index);
 
@@ -2550,6 +2712,7 @@ pub fn replay_game(
         plunder_splits,
         infiltrates,
         lose_pop_destroys,
+        raid_destroys,
         future_military_needs,
         colonize_sacrifices,
     );
@@ -4338,7 +4501,7 @@ mod tests {
     #[test]
     fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
         r.state.players[0].food = 0; // ...not enough food to spend it
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
@@ -4347,7 +4510,7 @@ mod tests {
     #[test]
     fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
@@ -4367,7 +4530,7 @@ mod tests {
     #[test]
     fn a_bid_no_possible_hand_could_have_paid_for_stays_an_honest_mismatch() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -4396,7 +4559,7 @@ mod tests {
     #[test]
     fn without_the_reclassification_the_same_fixture_would_be_a_bare_illegal_move() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -4454,7 +4617,7 @@ mod tests {
     fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4505,7 +4668,7 @@ mod tests {
     fn resolve_intervening_returns_ok_once_the_game_is_over_even_though_decider_moved_on_and_no_longer_matches(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         // Mirrors the shape `finish_game` leaves behind: the round already
         // wrapped to the next seat (`state.current`, here player 0) before
         // the game-over check ran, nothing is pending, and the player this
@@ -4540,7 +4703,7 @@ mod tests {
     #[test]
     fn set_last_round_is_reachable_from_this_module_for_the_journals_last_turn_line() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.round = 9;
         r.state.current = r.state.start_player; // BGO logs one "Last turn" line per surviving player; whichever this module reads first pins `current` to that seat.
         game::set_last_round(&mut r.state);
@@ -4558,7 +4721,7 @@ mod tests {
     fn resolve_intervening_drains_the_colonizers_own_pending_colonize_even_when_they_are_also_next_up_for_something_unrelated(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4595,7 +4758,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_passes_a_bidder_whose_own_ceiling_no_longer_clears_the_standing_bid() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4633,7 +4796,7 @@ mod tests {
     #[test]
     fn resolve_intervening_refuses_to_guess_when_a_real_raise_is_still_available() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4663,7 +4826,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10; // well past the one preparation's own line
         // `new_game` opens in the Action phase (round 1 has no politics);
         // this is the ordinary later-round shape.
@@ -4695,7 +4858,7 @@ mod tests {
         )
         .expect("a one-preparation journal is consistent");
         let prepared = plan.preparations[0].card;
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10;
         r.state.phase = Phase::Politics;
 
@@ -4724,7 +4887,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].leader = crate::CardId::by_name("Julius Caesar").expect("Caesar is in the table");
         r.state.phase = Phase::Politics;
         r.current_lineno = 6; // the "plays event" line on 5 has gone by
@@ -4750,7 +4913,7 @@ mod tests {
     #[test]
     fn a_passes_line_that_arrives_after_this_file_already_passed_for_that_player_is_a_confirmation() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Politics;
         r.resolve_political_decision(0).expect("nothing in the plan, so a pass");
         assert_eq!(r.auto_passed[0], 1);
@@ -4780,7 +4943,7 @@ mod tests {
     #[test]
     fn a_destroys_line_resolves_a_lose_pop_pending_the_same_way_as_destroy_own() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         // Bronze is one of the starting techs (`game::START_TECHS`), already
         // staffed with 2 workers -- no need to insert it.
         let bronze = CardId::by_name("Bronze").expect("Bronze is in the table");
@@ -4818,7 +4981,7 @@ mod tests {
     #[test]
     fn resolve_intervening_drains_a_lose_pop_pending_open_for_a_different_player_than_expected_actor() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         // Player 1's own `LosePop`, exactly like the existing `DestroyOwn`-
         // shaped test above, but for the OTHER seat -- `expected_actor`
@@ -4863,7 +5026,7 @@ mod tests {
     #[test]
     fn resolve_intervening_skips_a_lose_pop_destroy_entry_that_does_not_match_the_live_choices_options() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.players[1].workers_free = 0;
         crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 1, n: 1 });
@@ -4887,6 +5050,97 @@ mod tests {
         );
     }
 
+    /// `Raid` (Aggression: Raid / the Terrorism event): a still-open
+    /// `Pending::Choice(Raid)` used to fall through to the generic
+    /// `Some(Pending::Choice(c)) => StuckPending("no auto-resolution ...")`
+    /// catch-all, even though the destroyed building's identity is right
+    /// there in the journal -- either the Terrorism event's own
+    /// `"Terrorists destroy a <Color> <Building>"` line, or Aggression:
+    /// Raid's own `"Raid casualties ..."` line (`prescan_raid_destroys`).
+    /// `resolve_intervening` now drains it from a GLOBAL (not per-player,
+    /// since Terrorism's own line never names an attacker) FIFO, validated
+    /// against the live choice's own options.
+    #[test]
+    fn resolve_intervening_drains_a_raid_pending_from_the_global_fifo() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(alchemy));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true }, options }));
+        r.raid_destroys = VecDeque::from([alchemy]);
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the Raid choice must be fully resolved, not left open");
+        assert!(r.raid_destroys.is_empty(), "the consumed entry must be popped from the global FIFO");
+    }
+
+    /// Companion to the test above: a queued `raid_destroys` entry that does
+    /// NOT match the live choice's own options (belonging to an EARLIER
+    /// single-candidate Raid this same game already auto-resolved with no
+    /// `Pending` at all -- see `prescan_raid_destroys`'s doc) must be
+    /// skipped, not trusted by position, exactly like `PlunderSplit`'s own
+    /// FIFO.
+    #[test]
+    fn resolve_intervening_skips_a_raid_entry_that_does_not_match_the_live_choices_options() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
+        // Iron is not among this live choice's own options at all -- it
+        // belongs to an earlier, already auto-resolved single-candidate
+        // Raid this same global FIFO also carries.
+        let iron = CardId::by_name("Iron").expect("Iron is in the table");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(alchemy));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true }, options }));
+        r.raid_destroys = VecDeque::from([iron, alchemy]);
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty());
+        assert!(
+            r.raid_destroys.is_empty(),
+            "both the skipped mismatch and the real matching answer must be drained from the FIFO"
+        );
+    }
+
+    /// [`parse_terrorism_destroy_line`]: the Terrorism event's own
+    /// destruction line names the VICTIM's colour, not an attacker -- this
+    /// must still resolve the destroyed card's identity.
+    #[test]
+    fn parse_terrorism_destroy_line_reads_the_building_past_the_victims_colour() {
+        let card_index = build_card_index();
+        let scientific_method = CardId::by_name("Scientific Method").expect("Scientific Method is a known card");
+        assert_eq!(
+            parse_terrorism_destroy_line(&card_index, "Terrorists destroy a Purple Scientific Method"),
+            Some(scientific_method)
+        );
+    }
+
+    /// [`parse_raid_casualties_line`]: both the single- and double-casualty
+    /// shapes (one clause per printed age tier) must resolve every
+    /// destroyed building, in order, and stop at the trailing "<Attacker>
+    /// produces <M> resources" clause without swallowing it as a card name.
+    #[test]
+    fn parse_raid_casualties_line_reads_every_casualty_in_order() {
+        let card_index = build_card_index();
+        let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known card");
+        let opera = CardId::by_name("Opera").expect("Opera is a known card");
+        assert_eq!(
+            parse_raid_casualties_line(&card_index, "Raid casualties 1 Alchemy; Purple produces 3 resources"),
+            Some(vec![alchemy])
+        );
+        assert_eq!(
+            parse_raid_casualties_line(&card_index, "Raid casualties 1 Alchemy; 1 Opera; Orange produces 8 resources"),
+            Some(vec![alchemy, opera])
+        );
+    }
+
     /// `TakeRow` (International Agreement, `docs/REPLAY.md`'s six-pending-
     /// kind pass checkpoint): when the upcoming line is `expected_actor`'s
     /// own take of a card still among the open choice's own `Slot` options,
@@ -4897,7 +5151,7 @@ mod tests {
     #[test]
     fn resolve_intervening_defers_a_take_row_pending_when_the_upcoming_take_matches_one_of_its_slots() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         r.state.card_row[2] = iron;
@@ -4925,7 +5179,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_declines_a_take_row_pending_via_stop_when_the_upcoming_line_does_not_match() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         r.state.card_row[2] = iron;
@@ -4956,7 +5210,7 @@ mod tests {
     #[test]
     fn apply_one_resolves_a_take_row_pending_via_choose_instead_of_a_bare_take() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         // Already grounded in slot 2 -- `ground_row_slot`'s first (trusted)
@@ -5001,7 +5255,7 @@ mod tests {
     #[test]
     fn resolve_intervening_drains_an_infiltrate_pending_using_the_journal_observed_pick() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         // Player 1 (the victim) has a wonder under construction to remove --
         // observable proof that the WONDER option (not Leader) was chosen.
@@ -5042,7 +5296,7 @@ mod tests {
     #[test]
     fn resolve_intervening_skips_an_infiltrate_entry_that_does_not_match_the_live_choices_options() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let wonder = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -5084,7 +5338,7 @@ mod tests {
     #[test]
     fn a_columbus_colonize_line_grounds_the_territory_before_applying_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         // `Move::ColumbusColonize` is a POLITICAL action (`legal::
         // politics_moves`, not `action_moves`), same as `RemoveLeaderYellow`.
         r.state.phase = Phase::Politics;
@@ -5117,7 +5371,7 @@ mod tests {
     #[test]
     fn a_barbarossa_enlist_line_applies_the_free_pop_increase_and_the_unit_build() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let warriors = CardId::by_name("Warriors").expect("Warriors is in the table");
@@ -5158,7 +5412,7 @@ mod tests {
     #[test]
     fn a_bach_upgrade_line_applies_the_cross_family_theater_conversion() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let theology = CardId::by_name("Theology").expect("in the table");
@@ -5201,7 +5455,7 @@ mod tests {
     #[test]
     fn a_patriotism_play_line_resolves_the_age_sibling_from_its_own_bonus_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let patriotism_a = CardId::by_name("Patriotism (A)").expect("in the table");
@@ -5237,7 +5491,7 @@ mod tests {
     #[test]
     fn a_reserves_play_line_resolves_the_age_sibling_from_its_own_gain_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let reserves_ii = CardId::by_name("Reserves (II)").expect("in the table");
@@ -5353,7 +5607,7 @@ mod tests {
     fn resolve_intervening_reports_a_stuck_pending_for_a_colonize_confirmation_line_once_control_has_already_returned_to_a_different_player(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -5463,7 +5717,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(knights), SacrificeClause::Bonus(bonus2)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
         // `new_game` already deals every player a Warriors tableau card.
         r.state.players[0].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
         r.state.players[0].techs.insert(knights, crate::state::TechSlot { workers: 1, stored: 0 });
@@ -5504,7 +5758,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(card_index["Warriors"]), SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
 
@@ -5530,7 +5784,7 @@ mod tests {
             clauses: vec![SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         let elsewhere = card_index["Vast Territory (I)"];
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(elsewhere, &[1, 0], 1, 3, Some(1), 0)));
@@ -5550,7 +5804,7 @@ mod tests {
     #[test]
     fn a_logged_bid_is_taken_as_proof_the_bidder_held_the_force_to_pay_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.age_military = crate::Age::I;
         let territory = card_index["Vast Territory (I)"];
@@ -5581,7 +5835,7 @@ mod tests {
     #[test]
     fn grounding_a_bid_claims_the_fewest_and_smallest_bonus_cards_that_close_the_gap() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
         r.state.age_military = crate::Age::III; // every bonus card is available
         let filler = card_index["Aggression: Raid (I)"];
         r.state.players[0].hand_military = CardList::new();
@@ -5607,7 +5861,7 @@ mod tests {
         let raid = card_index["Aggression: Raid (I)"];
         let mut needs: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
         needs.insert(0, vec![FutureNeed { lineno: 900, card: raid }]);
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), needs, VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), needs, VecDeque::new());
         r.state.age_military = crate::Age::III;
         r.current_lineno = 100; // the play is still ahead of us
         r.state.players[0].hand_military = CardList::new();
