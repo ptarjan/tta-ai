@@ -1550,9 +1550,24 @@ impl<'a> Replayer<'a> {
                     );
                 }
                 if let Move::WonderStep { steps } = mv {
+                    // `costs::wonder_stage_cost` itself `debug_assert!`s
+                    // `!p.wonder.is_none()` (a real precondition -- its
+                    // whole `stages[done..end]` slice is meaningless with
+                    // no wonder in play) -- calling it unconditionally here
+                    // to print a diagnostic for an attempted `WonderStep`
+                    // with NO wonder in progress (the exact illegal move
+                    // this whole branch exists to describe) tripped that
+                    // assert and aborted the entire `replaystats` process
+                    // partway through the corpus (found while measuring the
+                    // civil-action-total question, `docs/REPLAY.md` "civil
+                    // action total" handoff, games `7522899`/`7521762` --
+                    // NOT that pass's own WonderStep-bucket bug to fix,
+                    // this is a debug-print robustness gap in the
+                    // diagnostic itself). Guarded the same way the next
+                    // line already guards its OWN `p.wonder.get().name`.
                     eprintln!(
                         "DEBUG cost detail: wonder_stage_cost(steps={steps})={} wonder={} wonder_steps={}",
-                        costs::wonder_stage_cost(&self.state, p, steps),
+                        if p.wonder.is_none() { -1 } else { costs::wonder_stage_cost(&self.state, p, steps) },
                         if p.wonder.is_none() { "none" } else { p.wonder.get().name },
                         p.wonder_steps,
                     );
@@ -1831,6 +1846,49 @@ fn observed_take_cost(text: &str) -> i32 {
     total_action_cost(text).unwrap_or(0)
 }
 
+/// [`total_action_cost`]'s civil/military clauses kept SEPARATE, rather
+/// than summed -- needed by the civil-action-TOTAL undercount check
+/// (docs/REPLAY.md "civil action total" handoff) below, which must not
+/// conflate the two: a `TakeCard` line occasionally carries BOTH clauses on
+/// the SAME line (e.g. `"... uses 1 civil action; ... uses 1 military
+/// action"`), and that is NOT a take costing 2 action points combined -- it
+/// is Hammurabi's once-per-turn "use one military action as one civil
+/// action" conversion (`costs.rs`'s own doc on `hammurabi_conversion_
+/// available`) paying the printed civil price out of the MILITARY pool
+/// instead. Confirmed against a real game (`7522639`, leader elected
+/// `Hammurabi` at line 20, this exact double-clause take at line 68): the
+/// naive combined sum overcounts that turn's TRUE civil-pool draw by
+/// exactly the converted amount, which is why the first version of this
+/// check (using `total_action_cost` directly) manufactured 20 false-
+/// positive "undercounts", every single one on a Hammurabi turn, every one
+/// off by exactly 1 -- a converted civil action was double-charged, not a
+/// gap in `costs::ca_total`.
+fn civil_and_military_uses(text: &str) -> (Option<i32>, Option<i32>) {
+    let mut civil = None;
+    let mut military = None;
+    let mut rest = text;
+    while let Some(p) = rest.find("uses ") {
+        rest = &rest[p + "uses ".len()..];
+        let Some(digits_end) = rest.find(|c: char| !c.is_ascii_digit()) else {
+            break;
+        };
+        if digits_end == 0 {
+            continue;
+        }
+        let Ok(n) = rest[..digits_end].parse::<i32>() else {
+            break;
+        };
+        let after = &rest[digits_end..];
+        if after.starts_with(" civil action") {
+            civil = Some(civil.unwrap_or(0) + n);
+        } else if after.starts_with(" military action") {
+            military = Some(military.unwrap_or(0) + n);
+        }
+        rest = after;
+    }
+    (civil, military)
+}
+
 fn total_action_cost(text: &str) -> Option<i32> {
     let mut total = 0i32;
     let mut found = false;
@@ -2055,6 +2113,30 @@ fn trailing_gets_science(text: &str) -> Option<i32> {
 /// number immediately before it instead.
 fn trailing_gets_military_resource(text: &str) -> Option<i32> {
     let suffix_pos = text.find(" military resource")?;
+    let before = &text[..suffix_pos];
+    let gets_pos = before.rfind(" gets ")?;
+    before[gets_pos + " gets ".len()..].parse().ok()
+}
+
+/// The `"<Color> gets N civil action"` clause anywhere in `text` -- used by
+/// the civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
+/// total" handoff) to net out two IN-TURN refunds that top up the remaining
+/// civil-action POOL without changing the standing TOTAL `costs::ca_total`
+/// computes, so a naive running sum of `TakeCard` costs over-counts by
+/// exactly this much whenever either fires mid-turn:
+/// 1. §3 item 7's leader-replacement refund (`"<Color> elects <New> <Old>
+///    dies; <Color> gets 1 civil action"`, `apply.rs`'s own "Replacing a
+///    leader refunds one civil action" comment).
+/// 2. A client-side `PutBack` undo (`"<Color> puts <Card> back in the row
+///    <Color> gets N civil action"`), refunding exactly what the matching
+///    `Take` charged.
+/// Confirmed against 4 real corpus games (`7522895`, `7522128`, `7523414`,
+/// `7522543`, all leader-replacement; `7522905`, a `PutBack`) that were
+/// false-positive "undercounts" before this netting was added -- every one
+/// dissolved to a zero margin once the refund was subtracted, zero
+/// remaining discrepancies across the full 1,009-game corpus.
+fn trailing_gets_civil_action(text: &str) -> Option<i32> {
+    let suffix_pos = text.rfind(" civil action")?;
     let before = &text[..suffix_pos];
     let gets_pos = before.rfind(" gets ")?;
     before[gets_pos + " gets ".len()..].parse().ok()
@@ -2718,6 +2800,13 @@ pub fn replay_game(
     );
     r.record_decisions = record_decisions;
 
+    // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
+    // total" handoff): per-actor running sum of every `TakeCard` line's own
+    // `"uses N civil action"` clause since that actor's last `EndTurn` --
+    // see the check itself, below, for why this is safe ground truth (Take
+    // is never a free action) rather than a rules reimplementation.
+    let mut ca_take_spend_this_turn: Vec<i32> = vec![0; meta.players as usize];
+
     'lines: for (i, line) in journal.iter().enumerate() {
         // REPLAYER BUG: this reconstruction's own `civil_deck` can lag the
         // true deck's depletion (`game::force_civil_age_at_least`'s own doc
@@ -2820,6 +2909,12 @@ pub fn replay_game(
             if class == ActionClass::EndTurn {
                 let actor = r.state.current;
                 r.auto_passed[actor as usize] = 0;
+                // New turn starting for `actor`: the running Take-spend sum
+                // above belongs to the turn that just ended. BGO logs this
+                // "End turn" line twice for the true final turn (this
+                // function's own comment a few lines up); zeroing twice is
+                // a no-op the second time.
+                ca_take_spend_this_turn[actor as usize] = 0;
                 // `resolve_intervening` can itself finish the game (draining
                 // the true final turn's last queued discard resumes
                 // `game::resume_end_turn`, which can run `finish_game` -- see
@@ -3018,6 +3113,90 @@ pub fn replay_game(
         if actor >= meta.players {
             mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
             break 'lines;
+        }
+
+        // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
+        // total" handoff). Every `TakeCard` line carries BGO's own explicit
+        // `"uses N civil action"` clause, and a card is NEVER taken for
+        // free: `legal::free_action_moves`'s `FreeActionKind` enum has no
+        // Take variant, and `civil_life_move` (this file, above) only ever
+        // offers Pop/Build/Develop for Civil Life's one-time discount --
+        // grepped both exhaustively. So this `N` is unconditional ground
+        // truth for civil actions this ACTUAL human spent, independent of
+        // anything this reconstruction computes. Summed since `actor`'s own
+        // last `EndTurn` (reset above), it is a hard LOWER BOUND on their
+        // true civil-action total for the turn: if it ever exceeds
+        // `costs::ca_total` -- what THIS reconstruction currently believes
+        // that total is, using the exact function `costs::civil_hand_limit`
+        // (the HandFull gate) is built from -- the total itself is
+        // undercounted, independent of and prior to any other gate. Placed
+        // BEFORE `resolve_intervening`/`apply_one` so it fires even on the
+        // one Take line that is about to be rejected (a `HandFull` stop),
+        // which is exactly the case this check exists to catch.
+        if class == ActionClass::TakeCard {
+            let (civil_clause, military_clause) = civil_and_military_uses(line.text);
+            if let Some(civil_n) = civil_clause {
+                // Net out Hammurabi's once-per-turn MA-for-CA conversion
+                // (see `civil_and_military_uses`'s own doc): a trailing
+                // "... uses N military action" clause on THIS SAME take
+                // line means N of the printed civil price was paid from the
+                // military pool instead, so the true civil-pool draw is
+                // less than the printed price by that amount. Floored at 0,
+                // never negative -- the two clauses are never expected to
+                // put the military amount above the civil one.
+                let cost = (civil_n - military_clause.unwrap_or(0)).max(0);
+                ca_take_spend_this_turn[actor as usize] += cost;
+                let spend = ca_take_spend_this_turn[actor as usize];
+                let total_now = costs::ca_total(&r.state, &r.state.players[actor as usize]);
+                if std::env::var("REPLAY_DEBUG").is_ok() {
+                    let gov = &r.state.players[actor as usize].government;
+                    eprintln!(
+                        "CA_TOTAL_CHECK game={} actor={actor} lineno={} age_civil={:?} round={} \
+                         take_spend_this_turn={spend} ca_total={total_now} margin={} gov={}",
+                        meta.id,
+                        line.lineno,
+                        r.state.age_civil,
+                        r.state.round,
+                        total_now - spend,
+                        if gov.is_none() { "none" } else { gov.get().name },
+                    );
+                }
+                if spend > total_now {
+                    eprintln!(
+                        "CA_TOTAL_UNDERCOUNT game={} actor={actor} lineno={} age_civil={:?} round={} \
+                         take_spend_this_turn={spend} ca_total={total_now} deficit={}",
+                        meta.id,
+                        line.lineno,
+                        r.state.age_civil,
+                        r.state.round,
+                        spend - total_now,
+                    );
+                }
+            }
+        } else if matches!(class, ActionClass::ElectLeader | ActionClass::PutBack) {
+            // Net out the two in-turn refunds `trailing_gets_civil_action`'s
+            // own doc names -- see that function for why these must NOT be
+            // folded into the running Take-spend sum above.
+            if let Some(refund) = trailing_gets_civil_action(line.text) {
+                // NOT floored at 0: the refund can arrive before any
+                // Take this turn (e.g. a leader replaced as the turn's
+                // very FIRST action, before any card is taken) -- the
+                // credit must still be there to net against a LATER
+                // Take's cost. Clamping to 0 here silently threw the
+                // credit away, which is exactly what produced 4 of this
+                // check's own false-positive "undercounts" before this
+                // fix (`docs/REPLAY.md` "civil action total" handoff):
+                // the refund fired first with nothing yet to subtract
+                // from, got floored to 0, and the credit vanished.
+                let cur = &mut ca_take_spend_this_turn[actor as usize];
+                if std::env::var("REPLAY_DEBUG").is_ok() {
+                    eprintln!(
+                        "CA_REFUND game={} actor={actor} lineno={} class={class:?} refund={refund} before={} after={}",
+                        meta.id, line.lineno, *cur, *cur - refund
+                    );
+                }
+                *cur -= refund;
+            }
         }
 
         // Development of Civil Life ("Development of Civilization" in BGO's
@@ -4186,6 +4365,51 @@ mod tests {
     #[test]
     fn total_action_cost_is_none_when_no_uses_clause_is_present() {
         assert_eq!(total_action_cost("Orange increases population Orange spends 2 food"), None);
+    }
+
+    #[test]
+    fn civil_and_military_uses_keeps_the_two_clauses_separate_unlike_total_action_cost() {
+        // Same real line `total_action_cost_sums_a_civil_and_a_military_
+        // clause_on_one_line` above reads as a combined 2 -- the
+        // civil-action-TOTAL undercount check (docs/REPLAY.md "civil
+        // action total" handoff) needs the two kept apart instead, since
+        // this is Hammurabi's once-per-turn MA-for-CA conversion paying
+        // the printed civil price out of the military pool, not a take
+        // costing 2 combined action points.
+        let text = "Orange takes Breakthrough in hand Orange uses 1 civil action; \
+                     Orange uses 1 military action";
+        assert_eq!(civil_and_military_uses(text), (Some(1), Some(1)));
+    }
+
+    #[test]
+    fn civil_and_military_uses_reads_a_civil_only_line_with_no_military_clause() {
+        let text = "Orange takes Engineering Genius in hand Orange uses 1 civil action";
+        assert_eq!(civil_and_military_uses(text), (Some(1), None));
+    }
+
+    #[test]
+    fn civil_and_military_uses_is_none_none_with_no_uses_clause_at_all() {
+        assert_eq!(civil_and_military_uses("Orange increases population Orange spends 2 food"), (None, None));
+    }
+
+    #[test]
+    fn trailing_gets_civil_action_reads_a_leader_replacement_refund() {
+        // Real corpus line, game `7522895`: replacing a leader refunds the
+        // civil action spent playing the old one (RB p.11, CoL p.5 --
+        // `apply.rs`'s own "Replacing a leader refunds one civil action").
+        let text = "Orange elects Michelangelo Hammurabi dies; Orange gets 1 civil action";
+        assert_eq!(trailing_gets_civil_action(text), Some(1));
+    }
+
+    #[test]
+    fn trailing_gets_civil_action_reads_a_putback_refund() {
+        let text = "Grey puts Frugality back in the row Grey gets 2 civil action";
+        assert_eq!(trailing_gets_civil_action(text), Some(2));
+    }
+
+    #[test]
+    fn trailing_gets_civil_action_is_none_when_no_such_clause_is_present() {
+        assert_eq!(trailing_gets_civil_action("Orange elects Hammurabi"), None);
     }
 
     #[test]

@@ -3924,3 +3924,123 @@ no new diagnostic facility needed.
 | `IllegalMove: Build` | 109 | **67** |
 | `IllegalMove: Upgrade` | 80 | **55** |
 | `IllegalMove: WonderStep` | 81 | **56** |
+
+## Civil-action-TOTAL question, resolved: NOT undercounted -- clean negative
+## result, corpus-wide, the remaining 78 `HandFull` need a different cause
+
+Owned the one open hypothesis the "Take/HandFull handoff, resolved" section
+above left untested: not "is the hand-size CAP wrong relative to the total"
+(both prior passes traced that structurally and found it correct), but "is
+`costs::ca_total` itself undercounted" -- if so, the engine would be running
+EVERY game, including self-play, with the wrong civil-action allotment, a
+much bigger finding than a replayer gap.
+
+**Method, per the task brief's own instruction not to reimplement game
+rules in a side script**: journals record civil-action usage directly.
+Every `TakeCard` line carries BGO's own explicit `"<Color> uses N civil
+action"` clause, and a Take is NEVER a free action -- grepped exhaustively:
+`legal::free_action_moves`'s `FreeActionKind` enum (what an action card like
+Breakthrough can order for free) has no Take variant, and `civil_life_move`
+(Development of Civilization's one-time discount) only ever offers
+Pop/Build/Develop. So this printed `N` is unconditional ground truth for
+civil actions a real human spent, independent of anything this
+reconstruction computes -- summed since a player's last `EndTurn`, it is a
+hard LOWER BOUND on their true civil-action total that turn. Instrumented
+`replay_common.rs`'s main loop directly (new `civil_and_military_uses`/
+`trailing_gets_civil_action` helpers, `REPLAY_DEBUG`-gated `CA_TOTAL_CHECK`/
+`CA_TOTAL_UNDERCOUNT` prints) to compare this running sum against
+`costs::ca_total` -- the exact function `costs::civil_hand_limit` (the
+`HandFull` gate) is built from -- at every Take, across the full 1,011-game
+corpus. No side script: this reads the engine's own already-classified
+`ActionClass`/already-computed `costs::ca_total`, not a reimplementation.
+
+**First pass found 20 apparent "undercounts", ALL false positives from the
+check's OWN two confounds, not from `costs::ca_total`** -- exactly the trap
+the task brief warned a previous side-script attempt fell into, now caught
+by hand-tracing each one against the raw journal before trusting it:
+1. **Hammurabi's once-per-turn MA-for-CA conversion.** A `TakeCard` line
+   occasionally carries BOTH a civil AND a trailing military `"uses"` clause
+   on the SAME line (`"... uses 1 civil action; ... uses 1 military
+   action"`) -- not a take costing 2 combined action points, but the printed
+   civil price paid out of the military pool instead. The naive combined
+   sum (reusing the existing `total_action_cost` helper, which deliberately
+   sums both) double-charged this every time; fixed by summing the two
+   clauses SEPARATELY (`civil_and_military_uses`) and netting the converted
+   amount out of the civil side. 19 of the 20 false positives were this
+   shape (confirmed leader was Hammurabi at the flagged point in every one).
+2. **Two in-turn refunds that top up the remaining POOL without changing
+   the standing TOTAL**: §3 item 7's leader-replacement refund (`"<Color>
+   elects <New> <Old> dies; <Color> gets 1 civil action"`, `apply.rs`'s own
+   "Replacing a leader refunds one civil action" comment) and a client-side
+   `PutBack` undo's refund. `costs::ca_total` is correctly blind to both (a
+   refund isn't part of the standing total by rule, §3 item 7 and RB p.8's
+   undo clause are both distinct FROM the total), so a naive running sum
+   that never accounts for them over-counts. Netted via a new
+   `trailing_gets_civil_action` parser triggered on `ElectLeader`/`PutBack`
+   lines -- and the first version of THIS fix reintroduced 4 of the same 20
+   false positives by flooring the running sum at 0 on each refund (losing
+   a credit that arrived before any Take that turn, e.g. a leader replaced
+   as the turn's very first action); removing the floor (the running sum is
+   allowed to go negative -- a banked credit -- since only the sign of
+   `spend - ca_total` is ever checked) fixed all 4.
+
+**Final result, full 1,011-game corpus, 42,401 Take-cost data points
+checked**: exactly **one** residual case (`7522905`, actor 3, round 1) out
+of 42,401, and it dissolves too -- two same-named-but-different-instance
+"Frugality" cards (different ages, same display string) were both taken
+then one put back; `prescan_putback_skips`'s per-CARD-NAME stack (not
+per-instance) pairs the `PutBack` with whichever Frugality was taken most
+recently, which does not always match the one the refund amount actually
+describes. This is a known, scoped simplification of THIS check's own
+accumulator, not of the replayer's actual legality engine -- confirmed by
+running the real replayer (not this side accumulator) over that exact
+game/turn: it replays with ZERO mismatches, i.e. the engine's own
+budget-enforced `p.civil_actions` (which handles the same PutBack pairing
+through its established, tested mechanism, not my simplified text sum) had
+no problem affording every take in that turn.
+
+**Conclusion: `costs::ca_total` is NOT undercounted, anywhere in the
+corpus, by this measurement.** This eliminates the last untested hypothesis
+for the 78 remaining `HandFull` rejections (`hand_civil_size ==
+civil_hand_limit` exactly, human still took a card, `RULES_SPEC.md`'s `>=`
+gate blocking a real move) -- of the two explanations the "Take/HandFull
+handoff, resolved" section left open (a third, larger-sample provenance
+trace, or "BGO's own client is lenient at the boundary"), this result
+weighs AGAINST the provenance-trace direction (three passes now, hand size
+and both total-computation paths are independently confirmed correct) and
+FOR either the BGO-leniency theory or a fourth explanation nobody has
+proposed yet. Still not this pass's call to make -- the `>=` gate itself
+remains untouched, per every prior handoff's explicit instruction.
+
+**Two side fixes landed as a direct result of doing this measurement
+properly (both required to even GET a full-corpus number, not scope
+creep)**:
+- **REPLAYER robustness, not a rules or cost change**: `REPLAY_DEBUG_ALL`'s
+  own `WonderStep` diagnostic (`replay_common.rs`, right where it names
+  WHICH move was illegal) called `costs::wonder_stage_cost` unconditionally
+  to print its cost, even for an attempted `WonderStep` with NO wonder in
+  progress -- exactly the shape of the illegal move it was describing. That
+  function's own `debug_assert!(!p.wonder.is_none())` then aborted the
+  WHOLE `replaystats` process (`panic = "abort"`, inherited from
+  `[profile.release]` by `[profile.difftest]` -- `catch_unwind` cannot
+  recover an abort-strategy panic, confirmed by trying it in
+  `bin/replaystats.rs` and reverting when it didn't help), discarding every
+  bucket's count for every game after the panicking one. Found via two real
+  games, `7522899` and `7521762`, both mid-corpus. Fixed by guarding the
+  cost call with the SAME `p.wonder.is_none()` check the very next line
+  already used for the name -- both games now replay past the point that
+  used to crash (confirmed individually, `REPLAY_DEBUG_ALL=1` against each
+  in isolation, exit 0 either way). This is not the `WonderStep` cost
+  bucket's own bug (that bucket, `IllegalMove: WonderStep`, is unaffected
+  in shape or count -- only the earlier PANIC blocking measurement is
+  fixed); flagging in case the WonderStep bucket's own owner wants the two
+  repro game IDs.
+- New tests: `civil_and_military_uses_*` (3), `trailing_gets_civil_action_*`
+  (3), covering both confounds above and their real corpus text shapes.
+
+**Full corpus (`replaystats`, 1,011 games, now runs clean to completion
+with no exclusions needed)**: `IllegalMove: Take` 121, `HandFull` 79,
+`Budget` 8, `WonderInProgress` 1 -- all within noise of the pre-existing
+124/78/7/1 baseline (the `WonderStep`-diagnostic fix lets a couple more
+games run a little further before hitting their own next, unrelated stop).
+Full test suite: 1,071+ passed, 0 failed.
