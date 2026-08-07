@@ -2898,12 +2898,33 @@ pub struct GameResult {
 ///   reached, `state.current` has already returned to whoever's turn
 ///   triggered the auction in the first place, not the colonizer, so
 ///   `decider() != expected_actor` even though nothing is actually wrong.
+/// - `WinWar`: `game::start_turn`'s own doc is explicit that war RESOLUTION
+///   (`combat::resolve_war_outcome`/`apply_war_spoils`) fires at the START
+///   OF THE ATTACKER'S NEXT TURN, not when `DeclareWar` was applied --
+///   `apply_one`'s `WinWar` arm is already a bare `Ok(())` "validation
+///   checkpoint only" precisely because the real state mutation already
+///   happened, synchronously, inside whatever earlier `advance_turn` made
+///   the attacker current. BGO's `"<Color> wins War over ..."` line names
+///   the WINNER (attacker or defender, whichever the strength comparison
+///   favoured), not necessarily the player whose turn is starting, and its
+///   timestamp routinely collides (same second) with an unrelated OTHER
+///   player's own trailing `"End turn"` line -- confirmed on real game
+///   `7523809` line 342 (`"Orange wins War over Culture"`, timestamp
+///   `13:03:27`) printed one line BEFORE Purple's own `"End turn"` line at
+///   the IDENTICAL timestamp, with no `EndTurn` in between -- the same
+///   "not stably ordered within a second" artifact already documented for
+///   `WinAuction`/Taj Mahal. Calling `resolve_intervening` for this line
+///   sent `expected_actor` to the named winner while `decider` was still
+///   whoever's turn was genuinely in progress, with no pending open to
+///   explain the gap -- the single largest identified cause of the
+///   `StuckPending: decider != expected actor ... no pending` bucket (59 of
+///   216 games, `docs/REPLAY.md`).
 ///
-/// See the three call sites' own doc comments (above the single call to
+/// See the four call sites' own doc comments (above the single call to
 /// this function in `replay_game`'s main loop) for the specific real games
 /// each was found on.
 fn is_pure_confirmation_line(class: ActionClass) -> bool {
-    matches!(class, ActionClass::PlayEvent | ActionClass::WinAuction | ActionClass::Colonize)
+    matches!(class, ActionClass::PlayEvent | ActionClass::WinAuction | ActionClass::Colonize | ActionClass::WinWar)
 }
 
 /// Replay one game's journal through the real engine. `record_decisions`
@@ -3464,6 +3485,24 @@ pub fn replay_game(
         // `Pending::Auction` auto-drain fallback is untouched and still
         // covers a game where the final bidder's own pass is genuinely never
         // logged at all.
+        //
+        // `ActionClass::WinWar` (`"X wins War over ... Attacker's strength:
+        // N; Defender's strength: M"`) is the SAME shape again, for the SAME
+        // reason, but the desync is bigger: `game::start_turn`'s own doc
+        // says war resolution fires at the START OF THE ATTACKER'S NEXT
+        // TURN, an engine-internal side effect with no journal line of its
+        // own at all -- `apply_one`'s `WinWar` arm is already a bare `Ok(())`
+        // "validation checkpoint only". BGO's `"wins War"` confirmation
+        // names the WINNER (attacker or defender, whichever the strength
+        // favoured), and can be timestamped identically to, and printed
+        // immediately BEFORE, a completely unrelated other player's own
+        // trailing `"End turn"` line, with no `EndTurn` in between --
+        // confirmed on real game `7523809` line 342. Calling `resolve_
+        // intervening` here sent `expected_actor` to the named winner while
+        // the true decider was still mid a DIFFERENT player's turn, with no
+        // pending open to explain the gap -- 59 of the 216 games in the
+        // `StuckPending: decider != expected actor ... no pending` bucket
+        // stopped on exactly this line shape (`docs/REPLAY.md`).
         if !is_pure_confirmation_line(class) {
             if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
                 mismatch = Some(mk_mismatch(line, kind));
@@ -4969,13 +5008,52 @@ mod tests {
     /// resolve_intervening" path is caught here rather than only as a
     /// re-regression in the full corpus run.
     #[test]
-    fn is_pure_confirmation_line_is_true_only_for_play_event_win_auction_and_colonize() {
+    fn is_pure_confirmation_line_is_true_only_for_play_event_win_auction_colonize_and_win_war() {
         assert!(is_pure_confirmation_line(ActionClass::PlayEvent));
         assert!(is_pure_confirmation_line(ActionClass::WinAuction));
         assert!(is_pure_confirmation_line(ActionClass::Colonize));
+        assert!(is_pure_confirmation_line(ActionClass::WinWar));
         assert!(!is_pure_confirmation_line(ActionClass::Pass));
         assert!(!is_pure_confirmation_line(ActionClass::Bid));
         assert!(!is_pure_confirmation_line(ActionClass::Discard));
+    }
+
+    /// REGRESSION (found by replaying real BGO game `7523809`): pins the
+    /// exact failure `WinWar`'s inclusion in `is_pure_confirmation_line`
+    /// exists to avoid. `game::start_turn`'s own doc: war RESOLUTION fires
+    /// automatically at the START of the attacker's NEXT turn, not from the
+    /// `"<Color> wins War over ..."` confirmation line -- which BGO can
+    /// print with the SAME timestamp as, and immediately before, a
+    /// completely unrelated OTHER player's own trailing `"End turn"` line
+    /// (no `EndTurn` in between). If `resolve_intervening` is (wrongly)
+    /// called for that confirmation line -- i.e. if a future edit ever
+    /// removes `WinWar` from `is_pure_confirmation_line` -- the line's own
+    /// named winner (here Orange, decider 0) becomes `expected_actor` while
+    /// `decider()` is still whoever's turn is genuinely in progress (Purple,
+    /// 1) with no pending open to explain the gap, producing exactly the
+    /// generic `StuckPending: decider != expected actor ... no pending` this
+    /// project spent a whole pass chasing.
+    #[test]
+    fn resolve_intervening_would_wrongly_stall_on_a_win_war_confirmation_line_reached_mid_a_different_players_turn() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        // Player 1 (Purple) is mid-turn -- some other player (0, Orange)
+        // just won a war whose resolution already applied automatically
+        // (`game::start_turn`'s own doc); nothing is pending, `decider()`
+        // is still Purple.
+        r.state.current = 1;
+        r.state.phase = Phase::Actions;
+        assert_eq!(r.state.decider(), 1);
+        // `expected_actor: 0` mirrors a `"Orange wins War over ..."` line
+        // reached while Purple (1) is still the real decider -- exactly
+        // what `replay_game`'s main loop would pass if `WinWar` were ever
+        // (wrongly) treated as needing `resolve_intervening` at all.
+        let result = r.resolve_intervening(0, (ActionClass::WinWar, None), false);
+        assert!(
+            matches!(result, Err(MismatchKind::StuckPending(_))),
+            "expected StuckPending (no pending, decider still mid-turn) when resolve_intervening IS \
+             called for a WinWar line -- confirms is_pure_confirmation_line must keep skipping it, got {result:?}"
+        );
     }
 
     /// REGRESSION (found by replaying real BGO games `7522652`/`7523072`):
