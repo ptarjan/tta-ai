@@ -2639,3 +2639,96 @@ completed, not raw counts" rule.
 Remaining five kinds (`Raid`, `TakeRow`, `LosePop`, `LoseColony`,
 `FlipWonder`) not yet attempted this pass -- see the six-kind table two
 sections above for their journal-evidence status as of before this pass.
+
+## HANDOFF (checkpoint, mid-pass): status of all six kinds, concrete next step
+
+Forced checkpoint before this session's context ran out. Status of the six
+`resolve_intervening`-deferred pending kinds this pass owns:
+
+- **`PlunderSplit`: DONE** (see the section immediately above). Landed,
+  measured, pushed (commit `b0f705a` plus two merge-fallout fixups for
+  `Replayer::new`'s new `plunder_splits` parameter colliding with concurrent
+  test additions, `29f5de0`/`9515dea`).
+- **`Raid`, `TakeRow`, `LosePop`, `LoseColony`, `FlipWonder`: NOT started**
+  this pass beyond the investigation already written up in the "NEW,
+  un-fixed pattern" section above (the six-kind table, corpus counts as of
+  before this pass: `Raid` 10, `TakeRow` 6, `LosePop` 6, `LoseColony` 3,
+  `FlipWonder` 4, in the 89-game Develop/PlayAction sample -- true corpus
+  totals are larger, see that section).
+
+**Single most concrete next step: `TakeRow` is the cheapest remaining kind
+and needs NO new prescan at all.** International Agreement's `QueueItem::
+TakeRow` choice picks row slots one at a time (`ChoiceOption::Slot(u8)`,
+plus a `Word(Stop)` to end early) and BGO logs each pick with the SAME
+`"<Color> takes <Card> in hand <Color> uses N civil action"` text an
+ordinary `Move::Take` uses -- so, exactly like `FreeBuild`'s existing
+`matches_upcoming` pattern (`resolve_intervening`, right next to where
+`PlunderSplit`'s new block now sits), the fix is:
+1. In `resolve_intervening`'s unconditional block, add a `ChoiceKind::
+   TakeRow { .. }` arm: if `decider == expected_actor`, `upcoming.0 ==
+   ActionClass::TakeCard`, and `upcoming.1`'s card matches
+   `self.state.card_row[slot]` for one of the choice's `Slot` options,
+   `return Ok(())` (defer, like `FreeBuild`). Otherwise auto-select the
+   `Word(Stop)` option and `continue` (also like `FreeBuild`'s `Skip`
+   fallback) -- covers the `decider != expected_actor` StuckPending cases
+   too, on the same "no journal trace for a silent decline" precedent
+   already established for Politics-phase passes and `FreeBuild`.
+2. In `apply_one`'s `ActionClass::TakeCard` arm, add a check for `Pending::
+   Choice(TakeRow)` on top (mirroring the existing `DestroyOwn | LosePop`
+   check in the `Destroy | Disband` arm): translate the observed card into
+   `Move::Choose { n }` for the matching `Slot` option instead of a bare
+   `Move::Take { slot }` (which is illegal while the pending sits open).
+Find `ActionClass::TakeCard`'s current handling in `apply_one` before
+starting -- not yet located this pass.
+
+**Second most concrete: `Raid`, more work but well-understood.** Two
+DIFFERENT journal shapes resolve it, neither prescanned yet:
+- Terrorism event (`no_loot: true`): `"Terrorists destroy a <Color>
+  <Building>"`, one line per victim, currently classified `Bookkeeping`
+  and special-cased by name in `corpus::classify` (grep that string) --
+  the victim's card is right there, just discarded today.
+- Aggression: Raid card (`no_loot: false`, 1-2 `QueueItem::Raid`s per use,
+  one per printed age tier): `"Raid casualties <N1> <Building1>[; <N2>
+  <Building2>]; <Attacker> produces <M> resources"` -- currently
+  `Unclassified`, also unused.
+Plan (same shape as `PlunderSplit`'s fix): a GLOBAL (not per-player, since
+Terrorism's line never names the attacker) `VecDeque<CardId>` prescan
+reading both line shapes in journal order, drained with the SAME
+validate-against-`c.options`-and-skip pattern `PlunderSplit` uses (a
+single-candidate Raid choice also auto-resolves with no `Pending`, so the
+same misalignment risk applies -- confirmed real for `PlunderSplit`, not
+yet checked for `Raid` but assume it applies). The resource-gain amount
+needs no separate parsing -- `resolve_choice`'s `ChoiceKind::Raid` arm
+already computes it deterministically (`printed.div_ceil(2)`) as a side
+effect of applying the right `Move::Choose`.
+
+**`LosePop`: partially wired already** (`ActionClass::Destroy`'s `DestroyOwn
+| LosePop` check, landed Fourteenth pass) -- only the `decider !=
+expected_actor` gap remains (2 StuckPending in the baseline sample). Same
+general shape as `Raid`'s Terrorism case: the resolving `"<Color> destroys
+<Card>"` line exists but may be reached out of journal order relative to
+whichever OTHER player's line `resolve_intervening` is currently trying to
+reach. Needs the same kind of drain-with-lookahead-or-prescan treatment;
+NOT yet designed this pass.
+
+**`LoseColony`/`FlipWonder`: hardest, NOT recommended next.** Their
+resolving text (`"<Territory> declares its independence from <Color>"` for
+`LoseColony`; not yet even located for `FlipWonder`) is GLUED onto the same
+journal line as the triggering event's own `"plays event"` preparation
+line, resolved deep inside `resolve_political_decision`/`PrepareEvent`
+machinery rather than as a freestanding later line -- a naive per-player
+prescan FIFO has a worse version of `PlunderSplit`'s auto-resolve
+misalignment problem here (an auto-resolved single-colony case's text is
+indistinguishable in shape from a real multi-colony choice's, both glued to
+the SAME kind of line, so validate-and-skip against `c.options` is the only
+know fix and hasn't been designed for this shape yet). Do not start here
+without first re-reading `resolve_political_decision`'s own code to see
+whether `current_lineno`/raw text is already accessible at the point the
+`LoseColony`/`FlipWonder` queue item resolves -- if so, resolving it
+inline (from THAT call site, not a prescan) may be simpler than a FIFO.
+
+Full corpus at this checkpoint (`PlunderSplit` fix + concurrent
+`state.game_over`/Barbarossa-Bach/colonization-bid fixes, all pushed):
+mean rounds reached and completions were last measured per-commit above;
+re-run `replaystats` fresh before trusting a number here, none was taken
+on this exact final rebased tree before the checkpoint.
