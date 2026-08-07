@@ -188,6 +188,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         let round_reached: u32 = m.round.parse().unwrap_or(0);
         round_reached_sum += round_reached as u64;
         let key = bucket_key(&m.kind);
+        if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| key.contains(&want)) {
+            eprintln!("DUMP {} line {}: {}", meta.id, m.lineno, m.raw_text);
+        }
         let b = buckets.entry(key).or_insert_with(|| Bucket {
             count: 0,
             round_sum: 0,
