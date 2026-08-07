@@ -368,6 +368,18 @@ struct Replayer<'a> {
     /// `prescan_plunder_splits`'s doc and `resolve_intervening`'s
     /// `ChoiceKind::PlunderSplit` handling, which drains it.
     plunder_splits: HashMap<u8, VecDeque<(i16, i16)>>,
+    /// Per-actor FIFO of `(food, resources)` splits pulled off every
+    /// journal-observed Foray/Raiders "and/or" grant resolution line -- see
+    /// `prescan_produces_grants`'s doc and `resolve_political_decision`'s
+    /// `PrepareEvent` handling, which corrects `events::food_or_resources`'s
+    /// deterministic guess against it. Set directly by [`replay_game`] after
+    /// construction (like `record_decisions`), not threaded through
+    /// [`Replayer::new`]'s own parameter list -- `Replayer::new` already has
+    /// enough positional parameters that the ~40 test call sites in this
+    /// file's own `#[cfg(test)]` module would all need touching for a
+    /// twelfth; every test that doesn't care leaves this at its `Default`
+    /// (empty), same as it would if this field didn't exist.
+    produces_grants: HashMap<u8, VecDeque<(i16, i16)>>,
     /// Per-attacker FIFO of `is_wonder` flags pulled off every
     /// journal-observed Infiltrate resolution line (`"concedes defeat"` OR
     /// `"Operation successful"`, both prefixes carry the same `"<Card> is
@@ -494,6 +506,7 @@ impl<'a> Replayer<'a> {
             current_lineno: 0,
             gain_produces,
             plunder_splits,
+            produces_grants: HashMap::new(),
             infiltrates,
             lose_pop_destroys,
             raid_destroys,
@@ -1220,7 +1233,69 @@ impl<'a> Replayer<'a> {
                 legal_moves: format!("{:?}", legal.as_slice()),
             });
         }
+        // Only `Special::StrongestPlayers`/`WeakestPlayers` cards whose
+        // `Gain`/`Lose` block carries a nonzero `food_and_or_resources` ever
+        // reach `events::food_or_resources`'s deterministic split (Foray,
+        // Raiders -- see `parse_produces_grant_line`'s doc comment for why
+        // that split is provably wrong on real games). Gating the whole
+        // correction below on the REVEALED CARD itself, not just an
+        // after-the-fact delta match, is load-bearing: a delta-only gate
+        // (an earlier version of this fix) matched on totals ALONE and
+        // regressed the corpus (`IllegalMove: Pop` 184 -> 281) by
+        // occasionally consuming an unrelated `ChoiceKind::GainBlock`
+        // single-clause FIFO entry -- or even a stray same-total delta from
+        // an entirely different simultaneous effect -- for a card that
+        // never called `food_or_resources` at all.
+        let triggers_food_or_resources = prep.revealed.get().special.iter().any(|sp| {
+            matches!(sp, crate::cards::Special::StrongestPlayers(_) | crate::cards::Special::WeakestPlayers(_))
+        }) && prep.revealed.get().special.iter().any(|sp| match sp {
+            crate::cards::Special::Gain(b) | crate::cards::Special::Lose(b) => b.food_and_or_resources != 0,
+            _ => false,
+        });
+        let n = self.state.num_players;
+        let pre_food_resources: Vec<(u16, u16)> = if triggers_food_or_resources {
+            (0..n).map(|i| (self.state.players[i as usize].food, self.state.players[i as usize].resources)).collect()
+        } else {
+            Vec::new()
+        };
         apply::apply(&mut self.state, mv);
+
+        // `events::food_or_resources` just applied ITS OWN deterministic
+        // guess at the split (mirroring the Python reference bot's own
+        // fixed "resources first" policy). Correct every player whose
+        // food/resources changed against the journal's OWN resolution line
+        // for that player, popped from `produces_grants` -- gated ABOVE on
+        // the revealed card actually being this shape, and HERE on the
+        // popped entry's own total matching the delta this apply just
+        // produced, so a same-shaped-but-unrelated FIFO entry (a genuine
+        // `ChoiceKind::GainBlock` single-clause pick sitting in the same
+        // per-seat queue, see that parser's own doc) can only be mistaken
+        // for this correction on a coincidental total match while ALSO
+        // landing on a turn where a real Foray/Raiders fired -- and even
+        // then, the result is still a real, journal-observed split for that
+        // player, just attributed to the wrong event.
+        if triggers_food_or_resources {
+            for i in 0..n {
+                let (pre_food, pre_res) = pre_food_resources[i as usize];
+                let post = &self.state.players[i as usize];
+                let delta_food = post.food as i32 - pre_food as i32;
+                let delta_res = post.resources as i32 - pre_res as i32;
+                if delta_food < 0 || delta_res < 0 || (delta_food == 0 && delta_res == 0) {
+                    continue;
+                }
+                let total = delta_food + delta_res;
+                if let Some(q) = self.produces_grants.get_mut(&i) {
+                    if let Some(&(jf, jr)) = q.front() {
+                        if jf as i32 + jr as i32 == total {
+                            q.pop_front();
+                            let p = &mut self.state.players[i as usize];
+                            p.food = (pre_food as i32 + jf as i32).max(0) as u16;
+                            p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
+                        }
+                    }
+                }
+            }
+        }
 
         // This reveal emptied the pile, so `reveal_current_event` has
         // already recycled the future pile into it -- with the right CARDS
@@ -2403,6 +2478,90 @@ fn prescan_plunder_splits(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> {
     out
 }
 
+/// Foray/Raiders' own `Special::StrongestPlayers`/`WeakestPlayers` "gains/
+/// loses a total of N resources and/or food (their choice)" resolution line:
+/// `"<Color> produces <N> food; <Color> produces <M> resources"` (either
+/// clause, either order, a zero-valued clause omitted entirely -- same
+/// convention [`parse_plunder_split_line`] documents). Chasing the
+/// `IllegalMove: Pop` bucket (`docs/REPLAY.md`) found this event resolution
+/// is NOT the fixed "resources first, food for the remainder" split
+/// `events::food_or_resources` (mirroring `engine/events.py::
+/// _food_or_resources`) computes -- BGO's own line for game `7523357`
+/// (Foray, round 8) reads `"Grey produces 2 food; Grey produces 1
+/// resource"` while `blue_available` had 13 tokens free, nowhere near a cap
+/// that would force ANY of it into food; the preceding `"Green and Grey
+/// each produce 3 resources and/or food; Grey choses first"` clause on the
+/// triggering event line confirms this is a genuine per-player choice, not
+/// a deterministic rule. `events::food_or_resources`'s formula is left
+/// alone (it mirrors the Python reference bot policy, and giving the ENGINE
+/// a real choice here is a bot-decision-modeling change out of this
+/// bucket's scope -- flagged, not fixed) -- this parser instead lets the
+/// REPLAYER read the human's ACTUAL split off this line and overwrite the
+/// engine's default guess with it, the same "journal is ground truth"
+/// pattern as `TradeResourceAsFood`/`ground_auction_winner_hand`.
+///
+/// Same clause-parsing loop as [`parse_plunder_split_line`], but the
+/// opposite gate on what follows: THAT parser requires a trailing victim
+/// `"; <OtherColor> spends "` clause (the signature of a real Plunder
+/// resolution); this one requires there be NONE -- a Foray/Raiders grant
+/// never takes anything from another player, so nothing ever follows the
+/// actor's own clause(s). Returns `None` for a Plunder line (a trailing
+/// `"; <OtherColor> spends "` is present) or anything else that isn't
+/// exactly one-or-two `"<Color> produces ..."` clauses for a single actor.
+fn parse_produces_grant_line(text: &str) -> Option<(Color, i16, i16)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let mut food: i16 = 0;
+    let mut resources: i16 = 0;
+    let mut cursor = rest.strip_prefix("produces ")?;
+    loop {
+        let digits_end = cursor.find(|c: char| !c.is_ascii_digit())?;
+        if digits_end == 0 {
+            return None;
+        }
+        let n: i16 = cursor[..digits_end].parse().ok()?;
+        let tail = &cursor[digits_end..];
+        // Plural checked before singular -- same trap `parse_plunder_split_
+        // line`'s own doc comment documents ("resources" starts with
+        // "resource").
+        if let Some(t) = tail.strip_prefix(" resources").or_else(|| tail.strip_prefix(" resource")) {
+            resources = n;
+            cursor = t;
+        } else if let Some(t) = tail.strip_prefix(" food") {
+            food = n;
+            cursor = t;
+        } else {
+            return None;
+        }
+        let continuation = format!("; {} produces ", actor.as_str());
+        match cursor.strip_prefix(continuation.as_str()) {
+            Some(t2) => cursor = t2,
+            None => break,
+        }
+    }
+    // A trailing victim clause means this is really a Plunder resolution --
+    // `parse_plunder_split_line`'s line to read, not this one.
+    if !cursor.is_empty() {
+        return None;
+    }
+    Some((actor, food, resources))
+}
+
+/// Pre-scans every [`parse_produces_grant_line`] match into a per-actor
+/// FIFO, mirroring [`prescan_plunder_splits`]. Consumed by the `PrepareEvent`
+/// handling in [`Replayer::resolve_political_decision`] to correct
+/// `food_or_resources`'s deterministic guess -- see that call site and
+/// [`parse_produces_grant_line`]'s own doc for why a correction, not a real
+/// `Pending::Choice`, is this bucket's fix.
+fn prescan_produces_grants(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> {
+    let mut out: HashMap<u8, VecDeque<(i16, i16)>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, food, resources)) = parse_produces_grant_line(line.text) {
+            out.entry(actor.seat()).or_default().push_back((food, resources));
+        }
+    }
+    out
+}
+
 /// The resolving line for an Aggression: Infiltrate attack that actually
 /// removed something -- BGO prints this shape under EITHER of two leading
 /// phrases (confirmed by pairing every real corpus `"plays Infiltrate
@@ -2988,6 +3147,7 @@ pub fn replay_game(
         colonize_sacrifices,
     );
     r.record_decisions = record_decisions;
+    r.produces_grants = prescan_produces_grants(&lines);
 
     // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
     // total" handoff): per-actor running sum of every `TakeCard` line's own
@@ -4716,6 +4876,27 @@ mod tests {
         assert_eq!(parse_plunder_split_line("Purple builds Bronze Purple spends 2 resources"), None);
     }
 
+    /// [`parse_produces_grant_line`]: the mirror image of the two tests
+    /// above -- must read Foray/Refugees' own "and/or" grant shape (real
+    /// corpus line, game `7523357` round 8), in every clause order/count,
+    /// and must REJECT a real Plunder resolution (the trailing victim
+    /// `"spends"` clause is exactly what distinguishes the two, same
+    /// signature `parse_plunder_split_line` checks for, inverted).
+    #[test]
+    fn parse_produces_grant_line_reads_a_forays_own_split_but_rejects_a_plunder_resolution() {
+        assert_eq!(parse_produces_grant_line("Grey produces 2 food; Grey produces 1 resource"), Some((Color::Grey, 2, 1)));
+        assert_eq!(parse_produces_grant_line("Green produces 1 food; Green produces 2 resources"), Some((Color::Green, 1, 2)));
+        assert_eq!(parse_produces_grant_line("Purple produces 3 resources"), Some((Color::Purple, 0, 3)));
+        assert_eq!(parse_produces_grant_line("Orange produces 2 food"), Some((Color::Orange, 2, 0)));
+        // A real Plunder resolution (trailing victim "spends" clause) must
+        // be left to `parse_plunder_split_line`, not double-matched here.
+        assert_eq!(
+            parse_produces_grant_line("Purple produces 3 resources; Green spends 3 resources"),
+            None
+        );
+        assert_eq!(parse_produces_grant_line("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
     /// Real corpus shapes for Infiltrate's resolution (`docs/REPLAY.md`'s
     /// six-pending-kind pass, sixth kind): a leader removed on the victim's
     /// own combined `"concedes defeat"` line, a wonder removed the same way,
@@ -5338,6 +5519,81 @@ mod tests {
         assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
         assert_eq!(r.state.future_events.as_slice(), &[prepared]);
         assert_eq!(r.state.players[0].culture, 2);
+    }
+
+    /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7523357`):
+    /// Foray's `Special::StrongestPlayers` + `Gain(food_and_or_resources:
+    /// 3)` grant resolves through `events::food_or_resources`, which mirrors
+    /// the Python reference bot's own fixed "resources first" policy -- but
+    /// the real BGO line for this exact game reads `"Grey produces 2 food;
+    /// Grey produces 1 resource"` while `blue_available` had 13 tokens free
+    /// the whole time (not a capacity effect: a genuine human choice the
+    /// deterministic formula never asks). Left uncorrected, a food-heavy
+    /// real split silently shows up as sim food short by however much the
+    /// deterministic formula put into resources instead -- for the rest of
+    /// the game, since every later `pop_cost` tier reads off the SAME
+    /// `p.food`. `resolve_political_decision`'s `PrepareEvent` handling now
+    /// overwrites the deterministic guess with the journal's own split,
+    /// popped from `produces_grants`, whenever the revealed card is this
+    /// exact shape and the popped entry's total matches what the
+    /// deterministic formula actually granted.
+    #[test]
+    fn foray_resolves_the_journals_own_food_or_resources_split_not_the_deterministic_guess() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Foray; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.players[0].food = 5;
+        r.state.players[0].resources = 5;
+        // The journal's own resolution: 2 food, 1 resource (summing to the
+        // SAME 3 total `food_and_or_resources` grants) -- the deterministic
+        // formula would instead put all 3 into resources (nothing capped:
+        // fresh `blue_total`, both players' food/resources far under it).
+        r.produces_grants.insert(0, VecDeque::from([(2, 1)]));
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(r.state.players[0].food, 7, "5 + the journal's own 2 food, not the deterministic 0");
+        assert_eq!(r.state.players[0].resources, 6, "5 + the journal's own 1 resource, not the deterministic 3");
+        assert!(r.produces_grants[&0].is_empty(), "the journal-observed split is consumed, not left for a later event");
+    }
+
+    /// The correction above must NOT fire for an ordinary event with no
+    /// `Special::StrongestPlayers`/`WeakestPlayers` + `food_and_or_resources`
+    /// shape at all -- gating on the delta alone (an earlier version of this
+    /// fix) matched on totals ALONE and regressed the corpus (`IllegalMove:
+    /// Pop` 184 -> 281) by occasionally consuming an unrelated FIFO entry
+    /// for a card that never called `events::food_or_resources`.
+    #[test]
+    fn a_produces_grants_entry_is_left_untouched_when_the_revealed_card_is_not_a_food_or_resources_grant() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.players[0].food = 5;
+        r.state.players[0].resources = 5;
+        // Development of Settlement grants a free population increase, not
+        // food/resources -- this entry belongs to an unrelated GainBlock
+        // choice elsewhere and must be left alone.
+        r.produces_grants.insert(0, VecDeque::from([(2, 1)]));
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(r.state.players[0].food, 5, "Development of Settlement never touches food");
+        assert_eq!(r.state.players[0].resources, 5, "Development of Settlement never touches resources");
+        assert_eq!(r.produces_grants[&0].len(), 1, "the unrelated entry is left in the FIFO for its real consumer");
     }
 
     /// REGRESSION (BGO game `7522650`): the `"plays event"` line is skipped

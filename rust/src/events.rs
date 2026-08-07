@@ -1038,12 +1038,31 @@ fn apply_player_block(state: &mut GameState, idx: u8, block: &EventBlock) {
 /// `gain`/`lose` block or a player-targeting block can (Refugees, Immigration,
 /// Development of Settlement).
 fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i32) {
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && (block.food != 0 || block.resources != 0 || block.food_and_or_resources != 0) {
+        eprintln!(
+            "DEBUG apply_gains_block: idx={idx} sign={sign} block.food={} block.resources={} block.food_and_or_resources={} food_before={} resources_before={} blue_available_before={}",
+            block.food, block.resources, block.food_and_or_resources, state.players[idx as usize].food, state.players[idx as usize].resources,
+            economy::blue_available(&state.players[idx as usize])
+        );
+    }
     add_clamped(&mut state.players[idx as usize].science, sign * block.science as i32);
     add_clamped(&mut state.players[idx as usize].culture, sign * block.culture as i32);
     apply_food_delta(state, idx, block.food, sign);
     apply_resources_delta(state, idx, block.resources, sign);
+    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && (block.food != 0 || block.resources != 0) {
+        eprintln!(
+            "DEBUG apply_gains_block AFTER: idx={idx} food_after={} resources_after={}",
+            state.players[idx as usize].food, state.players[idx as usize].resources
+        );
+    }
     if block.food_and_or_resources != 0 {
         food_or_resources(&mut state.players[idx as usize], block.food_and_or_resources as i32, sign);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG food_or_resources AFTER: idx={idx} food_after={} resources_after={}",
+                state.players[idx as usize].food, state.players[idx as usize].resources
+            );
+        }
     }
     if block.blue_tokens != 0 {
         let p = &mut state.players[idx as usize];
