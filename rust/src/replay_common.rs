@@ -271,6 +271,16 @@ struct Replayer<'a> {
     plan: EventPlan,
     /// Index into `plan.preparations` of the next one still to be applied.
     next_prep: usize,
+    /// Per-seat count of `Move::PolPass`es this file applied on the player's
+    /// behalf during their CURRENT turn that the journal has not yet caught
+    /// up to. BGO logs a declined political action (`"<Color> passes
+    /// Political Phase"`) at the point the human clicked it, which for
+    /// Julius Caesar's offered-and-declined SECOND action is routinely after
+    /// some of that player's own Action-phase lines -- the engine has to
+    /// close the politics phase before any of those are legal, so the pass
+    /// is applied first and its journal line arrives later as a pure
+    /// confirmation. Reset when the player's turn ends.
+    auto_passed: [u32; 4],
     /// Whether any colonization in this game was resolved by the
     /// approximate auto-drain rather than a verified sacrifice match.
     colonize_approximated: bool,
@@ -353,6 +363,7 @@ impl<'a> Replayer<'a> {
             row_grounded: [false; 13],
             plan,
             next_prep: 0,
+            auto_passed: [0; 4],
             colonize_approximated: false,
             actions_consumed: 0,
             current_lineno: 0,
@@ -606,6 +617,7 @@ impl<'a> Replayer<'a> {
             );
         }
         let Some(prep) = claimed else {
+            self.auto_passed[decider as usize] += 1;
             return self.try_apply(Move::PolPass, false);
         };
         self.next_prep += 1;
@@ -1448,6 +1460,7 @@ pub fn replay_game(
             // the actor is whoever the engine currently has as `current`.
             if class == ActionClass::EndTurn {
                 let actor = r.state.current;
+                r.auto_passed[actor as usize] = 0;
                 if let Err(kind) = r
                     .resolve_intervening(actor, (class, None), false)
                     .and_then(|()| r.try_apply(Move::EndTurn, true))
@@ -2029,10 +2042,22 @@ fn apply_one(
         ActionClass::WinAuction => Ok(()), // automatic settlement of Pending::Auction; validation checkpoint only
         ActionClass::Pass => {
             if matches!(r.state.pending.top(), Some(Pending::Auction(_))) {
-                r.try_apply(Move::BidPass, true)
-            } else {
-                r.try_apply(Move::PolPass, true)
+                return r.try_apply(Move::BidPass, true);
             }
+            // `actor`'s politics phase is already closed and this file is
+            // the one that closed it, on their behalf, earlier in this same
+            // turn -- so this line is BGO's confirmation of that very pass,
+            // logged late (see `auto_passed`'s doc). A pass has no effect
+            // beyond closing the phase, so where it lands among the
+            // player's own Action-phase lines cannot change anything. Any
+            // OTHER "passes" line with nothing to apply is still a real
+            // mismatch and still stops the game.
+            let already_closed = r.state.phase != Phase::Politics || r.state.decider() != actor;
+            if already_closed && r.auto_passed[actor as usize] > 0 {
+                r.auto_passed[actor as usize] -= 1;
+                return Ok(());
+            }
+            r.try_apply(Move::PolPass, true)
         }
         ActionClass::PlayEvent => Ok(()), // resolved automatically when the triggering PrepareEvent was inferred
         // The common case (an undo immediately following its own take) is
@@ -2404,6 +2429,33 @@ mod tests {
         assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
         assert_eq!(r.state.future_events.as_slice(), &[prepared]);
         assert_eq!(r.state.players[0].culture, 2);
+    }
+
+    /// Julius Caesar offers a SECOND political action after the first one
+    /// (`apply::end_politics`), and a human who declines it leaves BGO's
+    /// `"passes Political Phase"` line wherever they happened to click it --
+    /// which is routinely AFTER some of their own Action-phase lines, since
+    /// BGO does not make them answer before acting. The engine does: those
+    /// action lines are illegal until politics closes. So the pass is
+    /// applied first and its journal line is a late confirmation.
+    #[test]
+    fn a_passes_line_that_arrives_after_this_file_already_passed_for_that_player_is_a_confirmation() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        r.state.phase = Phase::Politics;
+        r.resolve_political_decision(0).expect("nothing in the plan, so a pass");
+        assert_eq!(r.auto_passed[0], 1);
+        assert_eq!(r.state.phase, Phase::Actions);
+
+        // The journal's own line for that same pass, read later.
+        let out = apply_one(&mut r, 0, ActionClass::Pass, None, "passes Political Phase", "Orange passes Political Phase", None);
+
+        assert!(out.is_ok(), "the pass this file already applied is confirmed, not re-applied");
+        assert_eq!(r.auto_passed[0], 0, "and it is consumed, so a SECOND stray passes line still stops the game");
+        assert!(matches!(
+            apply_one(&mut r, 0, ActionClass::Pass, None, "passes Political Phase", "Orange passes Political Phase", None),
+            Err(MismatchKind::IllegalMove { .. })
+        ));
     }
 
     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
