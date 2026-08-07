@@ -4494,3 +4494,238 @@ other workers are independently chasing under `IllegalMove: Pop`/`Build`/
 flagged to the coordinator via `mcp__discord__message_agent` rather than
 raced on, per the standing instruction that duplicated work has cost this
 effort before.
+
+## `IllegalMove: Pop` handoff: two fixes landed (184 -> 144), full breakdown of what's left, one concrete unfixed lead
+
+Picked up the bucket at 184 (mean stop round 10.1), per the earlier pass's own
+"generic food-cost drift" label -- which this pass replaced with a real,
+code-derived breakdown rather than trusting it as a conclusion.
+
+### Method
+
+The existing `REPLAY_DEBUG=1` "DEBUG Pop fail" print (`replay_common.rs`'s
+`ActionClass::IncreasePopulation` handler) already dumps `food`/`yellow_bank`/
+`civil_actions`/`pop_cost`/the raw journal line for every one of the bucket's
+failures -- no new tool was built. Ran the full corpus once with
+`REPLAY_DEBUG=1`, captured all 184 (later 152, 144) "DEBUG Pop fail" lines
+paired with their game ID (`DEBUG game=...` printed once per game), and
+bucketed by signature: does the journal's own stated payment (food clause
+plus, when present, a second resource-conversion clause -- see below) equal
+this binary's computed `pop_cost`? If yes, the mismatch is a pure `food`
+shortfall (production/consumption drift, NOT the yellow-bank tier). If no,
+it's a genuine cost-TIER mismatch (yellow-bank/token count itself is wrong).
+
+For the largest sub-groups, traced backwards from the failure using
+`REPLAY_DEBUG_ALL`'s existing `end_of_turn POST` line (`economy::end_of_turn`,
+prints `resources`/`food`/`science`/`culture` after that turn's full
+production phase) against the journal's own per-round `"N food -
+consumption: M (now Z)"` clause, round by round, to find the FIRST round
+sim and journal disagree -- the standing method this file's earlier passes
+established, reused rather than reinvented.
+
+**One methodology trap worth flagging explicitly**: `economy::end_of_turn`
+can be entered up to N times for one real turn when
+`interact::discard_excess_military` interrupts it (returns early, `false`,
+before ANY production runs) -- and `replay_common.rs`'s own "applied
+mv=EndTurn"/"end_turn totals" debug print fires on the FIRST (interrupted,
+pre-production) call, not the final one. Trusting that print as "the turn's
+final food" gives a systematically wrong trace with a phantom "drift"
+starting at whatever round first needed a discard -- burned real time on
+this before switching to `economy::end_of_turn`'s own `POST` print, which
+only fires on the call that actually completes production. If you're
+comparing sim food to the journal round-by-round, use `end_of_turn POST`,
+never the replayer's own generic per-move dump.
+
+### Fixes landed this pass (commits `deea9a0`, `5154e08`)
+
+1. **REPLAYER BUG: Foray/Raiders' "gains/loses N resources and/or food, your
+   choice" event grant was resolved via a deterministic formula
+   (`events::food_or_resources`, "resources first, food for the remainder,"
+   mirroring the Python reference BOT's own fixed policy) instead of the
+   journal's real human split.** Confirmed wrong on game `7523357` round 8:
+   engine computed 3 resources / 0 food with 13 blue tokens free the whole
+   time (not a capacity effect); the journal's own line reads `"Grey produces
+   2 food; Grey produces 1 resource"`, and the triggering event line's own
+   `"Grey choses first"` clause confirms this is a genuine per-player choice,
+   not a rule. Fixed at the REPLAYER level only (`parse_produces_grant_line`/
+   `prescan_produces_grants`, new `Replayer::produces_grants` FIFO):
+   `resolve_political_decision`'s `PrepareEvent` handling now overwrites the
+   engine's default split with the journal's own, gated on the revealed
+   card actually being a `Special::StrongestPlayers`/`WeakestPlayers` +
+   `Gain`/`Lose(food_and_or_resources != 0)` shape AND the popped FIFO
+   entry's total matching what the engine's own formula just granted.
+   `events::food_or_resources` itself is UNCHANGED -- giving the ENGINE
+   (not just the replayer's reconstruction) a real choice here is a
+   bot-decision-modeling change out of this bucket's scope, flagged not
+   fixed. **Gating on the revealed card's own effects, not just the delta
+   total, is load-bearing**: a first version of this fix gated on the delta
+   total alone and REGRESSED the corpus (`Pop` 184 -> 281) by occasionally
+   consuming an unrelated `ChoiceKind::GainBlock` FIFO entry for a card that
+   never called `food_or_resources` at all -- caught by re-measuring after
+   landing, not by review. Corpus: `Pop` 184 -> 151, mean rounds 11.27 ->
+   11.41, Age II+ 45.4% -> 46.1%, completed 24 -> 25.
+2. **REPLAYER BUG: a Pop partly paid via a live Trade Routes Agreement grant
+   (RULES_SPEC.md 5.9) logs a SECOND `"; <Color> spends M resource"` clause
+   on the SAME line as the Pop's own food clause** -- e.g. `"Purple increases
+   population Purple spends 2 food; Purple spends 1 resource"` (thousands of
+   occurrences corpus-wide). `spent_food`'s own doc comment asserted a Pop
+   line "has no resource component" -- FALSE, and the existing
+   `TradeResourceAsFood` gate (`ActionClass::IncreasePopulation`'s handler)
+   compared the food-clause-ONLY amount against `pop_cost`, so it silently
+   never fired for this real, common shape. Fixed by adding
+   `spent_resource_after_food` (reads the second clause, `0` when absent)
+   and summing it into the existing gate -- the gate's own safety property
+   (only fires when the journal's OWN total exactly matches this binary's
+   computed `pop_cost`) is unchanged. Corpus: `Pop` 152 -> 144 (measured
+   against a tree that had already picked up one concurrent commit from
+   another worker in between -- see commit `5154e08`'s own message for the
+   isolated numbers), mean rounds 11.48 -> 11.50, Age II+ 46.7% -> 46.8%,
+   completed 29 -> 29 (no drop -- these games run into a DIFFERENT wall a
+   few lines later, not a net loss).
+
+Five new tests, all in `replay_common.rs`'s `#[cfg(test)] mod tests`, each
+CONFIRMED red by reverting its own fix to a no-op and re-running before being
+restored green: the Foray correction fires and reads the journal's split; the
+negative case (an unrelated card/FIFO entry is left untouched); a
+`parse_produces_grant_line` parser unit test (accepts Foray's shape, rejects
+Plunder's); a `spent_resource_after_food` parser unit test.
+
+### Breakdown of the 144 that remain (fresh `REPLAY_DEBUG=1` run against the
+### landed tree, `d216885`)
+
+| count | signature | meaning |
+|---|---|---|
+| 85 | cost matches journal's stated TOTAL, `food` short by 1 | pure food-accounting drift, NOT a yellow-bank/tier bug |
+| 36 | same, short by 2 | same |
+| 11 | same, short by 3 | same |
+| 1 | same, short by 4 | same |
+| 5 | `TIER MISMATCH`: computed `pop_cost` one tier ABOVE the journal's stated cost (e.g. computed 4, journal says 3) | a genuine yellow-bank/token-count drift -- OUR bank is lower than the real one |
+| 3 | same, computed 5 vs stated 4 | same |
+| 2 | `civil_actions == 0`, no civil-life free-pop discount either | a civil-action-budget shortfall, same open question the Take/Bid handoff's "What remains open" section already documents -- likely the SAME root cause, not specific to Pop |
+| 1 | `pop_cost = None` (yellow_bank already fully exhausted, i.e. 0) | a genuinely empty bank -- check whether the journal's own Pop is even legal at that point, or whether this is really a `PopFree` case this binary mis-gates |
+
+**133 of 144 (92%) are the food-short shape, NOT the tier-mismatch shape.**
+This is the opposite of what the task brief's own hypothesis predicted going
+in ("a shortfall of exactly one tier points at a missing token event" was
+expected to dominate) -- worth stating plainly so the next pass doesn't
+re-assume it. The two fixes landed this pass were BOTH found by chasing
+food-short games, not tier-mismatch games, and there is no evidence yet that
+the tier-mismatch 8 share a cause with each other, let alone with the
+food-short 133 -- treat them as a SEPARATE, smaller, unstarted lead.
+
+### Concrete unfixed lead for the next worker: `yellow_bank` drifts by whole
+### units mid-turn with no Pop/event/combat move firing
+
+Traced game `7522648` round 7 (2p, actor Orange/idx 0) end-to-end:
+`economy::end_of_turn`'s own `POST` food matches the journal exactly for
+rounds 1-6, then falls 1 short at round 7 and stays 1 short through round 8
+(the eventual Pop failure at round 9 is the LAST hop of this same drift, not
+a new one). Root-caused the round-7 divergence to a **yellow_bank change
+with no attributable move**: right after that turn's own `Move::Pop`,
+`yellow_bank=13` (`consumption(13)=1`); by the time the SAME turn's
+`end_of_turn` finally completes (after being interrupted twice by
+`discard_excess_military`, see the methodology trap above),
+`yellow_bank=11` (`consumption(11)=2`) -- ONE MORE food eaten by consumption
+than the Pop-time value would predict, with nothing but two military-card
+discards in between (confirmed `discard_excess_military`/the discard
+resolution path never touch `yellow_bank` -- read the whole function, it's
+pure hand-size bookkeeping). **Not root-caused before this pass ended** --
+every `yellow_bank`-mutating call site was enumerated (`grep -n
+"yellow_bank\s*[+-]?="`, listed in the commit `d216885` message) but not
+individually checked against this game's exact turn. A
+`REPLAY_DEBUG_ALL`-gated print between `end_of_turn`'s production and
+consumption steps (`economy.rs`, right after `gain_food`) is already landed
+(commit `d216885`) so the next worker does not need to re-add it -- rerun
+`REPLAY_DEBUG_ALL=1 ./target/difftest/replay ... 7522648` and grep
+`yellow_bank=` across Orange's round-7 turn to see the exact drift point.
+
+**This is the single most promising next thread for this bucket**: it is a
+DIRECT, reproducible, single-game repro with known-good "before" and
+known-bad "after" values (13 -> 11, no attributable move), the same shape
+that resolved BOTH fixes this pass landed, and -- if it turns out to be
+generic rather than specific to this one game -- would plausibly explain a
+large share of the remaining 133 food-short games at once (yellow_bank
+drives BOTH the Pop-cost tier via `pop_cost_base` AND the food-consumption
+rate via `consumption`, so a silent extra decrement compounds through both).
+
+### What was RULED OUT this pass (don't re-check these)
+
+- **The yellow-token bank/tier theory as the DOMINANT cause.** Tested
+  directly, corpus-wide, per the task brief's own instruction: only 8/144
+  (5.6%) of the remaining bucket show a genuine cost-TIER mismatch (computed
+  `pop_cost` one tier above the journal's stated cost); 133/144 (92%) have
+  the cost tier EXACTLY RIGHT and a pure `food` shortfall instead. The
+  earlier "generic food-cost drift" label undersold how lopsided this split
+  is -- worth stating for anyone tempted to keep hunting for missing
+  token-grant events as the majority explanation.
+- **`events::food_or_resources` as a still-open bug.** Fixed (see above).
+  Its own doc comment and the new `parse_produces_grant_line` tests are the
+  reference if a similar "gains N resources and/or food" shape shows up on
+  a different card later (Raiders, the WeakestPlayers/loss twin, was NOT
+  separately traced against a real corpus example this pass -- it goes
+  through the exact same `food_or_resources` call site and should already
+  be covered by the fix, but no Raiders-specific game was walked end-to-end
+  to confirm the SIGN (loss) direction resolves correctly against a real
+  "loses"/"spends" journal line, which uses different text than Foray's
+  "produces" -- worth a quick spot-check, not re-deriving from scratch).
+- **The Trade Routes Agreement double-clause shape as a still-open bug.**
+  Fixed (see above); `spent_resource_after_food`'s own test is the
+  reference.
+- **A quick grep for sibling "engine computes a value the journal actually
+  states" call sites** (the same shape both fixes above turned out to be):
+  `food_or_resources`'s only call site was the one already fixed;
+  `choose_food`/`choose_resources` (`ChoiceKind::GainBlock`) is already
+  correctly wired to a real `Pending::Choice` reading the journal's own
+  line; the colonize-sacrifice auto-drain and `PlunderSplit` instances of
+  this same pattern were already fixed in earlier passes (see the
+  "Fifteenth pass" and six-pending-kind sections above). Not exhaustive --
+  a targeted grep across `economy.rs`/`events.rs`/`interact.rs`/`combat.rs`
+  for `"deterministic"`/`"arbitrarily"`/similar markers, not a full audit.
+- **`interact::discard_excess_military` and its discard-resolution path as
+  the yellow_bank drift's own cause** -- read in full, confirmed it never
+  touches `yellow_bank`, `p.food`, or `p.resources` at all (pure hand-size
+  bookkeeping). The drift happens SOMEWHERE in the same window but not
+  there; still open.
+- **The `civil_actions == 0` (2 games) and `pop_cost = None` (1 game)
+  sub-buckets** -- NOT investigated this pass beyond classification. The
+  first is very likely the same open civil-action-budget question the
+  Take/Bid handoff already documents (`docs/REPLAY.md`, "What remains
+  open"), not something specific to Pop -- worth checking there first
+  rather than re-deriving.
+
+### Cross-bucket note (already reported live, recorded here for the record)
+
+Chasing a lead from the actor-mismatch worker (game `7523350`,
+`StuckPending: PlunderSplit`, "the victim's food/resources pool is badly
+below what their own end-of-turn journal line states") found a THIRD,
+separate food/resource drift mechanism: `events::extra_production`
+("Economic Progress", `Special::AllPlayers` + `extra_production: true`)
+computes `effects::state_stats(state, &players[idx]).food` ONE HIGHER than
+the same player's own regular end-of-turn production for an unchanged board
+one round earlier (game `7523350`, Purple, round 17: journal's own event
+line states "3 food - consumption: 1", `s.food` reads 4 at that exact call
+site). NOT fixed here -- outside this bucket, reported to the actor-mismatch
+worker with the specific game/values, and a `REPLAY_DEBUG_ALL`-gated
+`extra_production` before/after dump is already landed (bundled in commit
+`5154e08`) as a head start for whoever picks it up. Do not re-chase this
+from the Pop bucket; it is not yet known whether it explains any of the 144
+remaining Pop games specifically.
+
+### Final numbers, this pass
+
+| | before this pass | after |
+|---|---|---|
+| `IllegalMove: Pop` | 184 | **144** |
+| mean rounds reached | 11.27 | **11.50** (measured against `d216885`, includes concurrent unrelated work from other passes) |
+| decisions in Age II or later | 45.4% | **46.8%** |
+| games completed | 24 | **29** |
+
+**Concrete first move for whoever picks this up**: reproduce the
+`yellow_bank` drift on game `7522648` (`REPLAY_DEBUG_ALL=1 ./target/difftest/replay
+sources/bgo/index.tsv /tmp/bgojournals/journals 7522648`, grep `yellow_bank=`
+across Orange's round 7) using the already-landed `end_of_turn
+post-production` print, and check EACH enumerated mutation site (commit
+`d216885`'s message has the full `grep` list) against what actually ran in
+that window -- not by reasoning about what SHOULD run, the way this pass's
+own dead ends were caused by trusting a stale debug print instead of the one
+that reflects the turn's real final state.
