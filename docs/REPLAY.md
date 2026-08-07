@@ -5936,3 +5936,266 @@ Civil Service, Internet, Multimedia, Air Forces, Tanks, Engineering Genius
 -- 9 games, all single-card, a plausible "gift" lead per the brief's own
 framing but not opened this pass); the residual 3-game `"using Urban
 Growth"` `build cost mismatch` shape.
+
+### Card-by-card audit on `7522614`: `ground_military_hand` DEFINITIVELY
+### ruled out for this repro; root cause FOUND AND FIXED
+### (`PrepareEvent`'s net-zero push, below) -- 992 -> 941 divergent games,
+### 49 -> 66 games completing
+
+Picked up the prior pass's own "concrete first move": named every card in
+Orange's `hand_military` at the round-4 checkpoint on `7522614` and traced
+each one's origin via `REPLAY_DEBUG_ALL`, rather than inferring from counts.
+
+**The four cards, individually traced**: `["Legion", "Aggression: Enslave",
+"Military Bonus (defense 2 / colonization 1)", "Uncertain Borders"]`.
+- Round-2 checkpoint (before round 2's draw): `hand=[]` (0 cards).
+- Round-2 draw (`economy.rs:689`, the ordinary `draw_military_step` site,
+  `military_actions_unused=2 n_drawn=2`): adds `Legion`, `Aggression:
+  Enslave`.
+- Round-3 checkpoint (before round 3's draw): `hand=[Legion, Aggression:
+  Enslave]` (2 cards) -- matches "No Discard Phase" trivially (2 <= limit 2).
+- Round-3 draw (same site, `unused=2 n_drawn=2`): adds `Military Bonus
+  (defense 2 / colonization 1)`, `Uncertain Borders`.
+- Round-4 checkpoint: all 4 cards present, exactly the 2+2 sum, no more no
+  less.
+
+**`ground_military_hand` (the task's hypothesis 1, the "known suspect") is
+definitively ruled out for this specific repro**, not by inference but by
+exhaustive site coverage: every non-test `hand_military.push`/
+`ground_military_hand` call site in the engine (`economy.rs:689`,
+`interact.rs:522` pact-refuse, `interact.rs:1492`/`events.rs:1173`
+event-immediate-effect draws, `replay_common.rs:1253` `PrepareEvent`
+grounding, and every `ground_military_hand` call gated on a
+`DeclareWar`/`PlayAggression`/`ProposePact`/`PlayTactic` reveal) was
+checked against the raw journal for `7522614` rounds 1-4: **zero** War/
+Aggression/Pact/Tactic reveals fire for Orange (or target Orange) before the
+round-4 checkpoint (`awk` over the raw journal for
+`war|aggress|against|defend|tactic` across rounds 1-4 returns nothing).
+There is no reveal event for the suspect mechanism to fire on -- the whole
+4-card hand is ordinary `draw_military_step` output, verified card-by-card,
+not inferred from a count.
+
+**A second candidate, chased and also ruled out**: `CardType::Event` cards
+(both the per-round "Development of X" global events AND the
+player-drawable ones like `Rebellion`/`Uncertain Borders`/`Civil Unrest`)
+share the `is_civil_row() == false` bucket with real military cards in
+`game::build_deck`, so they get shuffled into `military_deck` and are
+drawable via the ordinary `draw_military()` path -- `Uncertain Borders`
+(one of the four cards above) is exactly this type, which looked at first
+like a deck-composition bug (event cards leaking into a hand where they do
+not belong). It is not a bug: `apply.rs::h_prepare_event` (§5.2) confirms
+this is the REAL mechanic -- a player draws these event cards into their
+military hand exactly like any other military card, and may later "prepare"
+one from hand into `future_events` during a Politics Phase, banking culture
+(`state.players[idx].hand_military.remove_first(card)` there is the intended
+removal path, gated on that specific political action, which does not fire
+for Orange in this game either). Confirmed correct, not touched.
+
+**The sharper empirical signature**: cross-referencing the discard-phase
+oracle divergence list against `REPLAY_DEBUG_ALL` traces on three 2-player
+games with different draw magnitudes (`7522614`: draws 2+2=4, true hand 3;
+`7522612`/Purple: draws 1+2+3=6 at its first divergence (round 5), true
+hand 4, AND the identical shape recurs independently at that same game's
+rounds 6 and 7 with fresh draws each time, not carried-over drift;
+`7523353`/Orange: draws 1+1+1=3, true hand <=2, unverified via the
+blindly-trusted "No Discard Phase" case but consistent) fits, exactly, in
+every checkpoint tested: **every `draw_military_step` call for a player,
+except their literal first-ever one (always round 2, since round 1 never
+draws for anyone under any government), yields exactly 1 fewer real card
+than the formula/journal-draw-text says.** This is NOT a "slow leak that
+accumulates over many rounds" -- the deficit is fully present the moment it
+becomes visible (matching the coordinator's own independent derivation: with
+Despotism's real 2 MA, round 2 and round 3 checkpoints are mathematically
+uninformative regardless of ground truth, since hand can only reach 0 and 2
+against a limit of 2 -- round 4 is the first checkpoint that can show
+anything at all, so "-1 by round 4" and "-1 out of the gate" are the same
+statement, not a contradiction).
+
+A competing theory -- "the *limit* is undercounted by a flat +1, not the
+hand" -- was tested and **falsified** against `7522612`: a flat `limit+1`
+predicts a constant diff of exactly 1 between reconstructed and journal
+excess regardless of hand size, but `7522612`/Purple's round-5 checkpoint
+shows diff=2 (reconstructed excess 3, journal excess 1), which only the
+hand-side "-1 per draw after the first" theory predicts correctly (deficit
+accumulates as `x_3 + x_4 = 1 + 1 = 2` over the two draw rounds since the
+first).
+
+**The coordinator's MA-charging theory (a human action whose military-action
+cost this binary fails to charge, inflating `military_actions_unused` and
+therefore the draw count) was checked directly against `7522614` and
+does NOT apply there**: Orange's rounds 1-3 contain zero military-action-
+consuming activity of any kind -- no unit build/upgrade, no tactic play, no
+aggression/war declared by or against Orange, hence no defense either.
+Every action line in that window is a plain civil Take/Build/increase-
+population. The deficit in this specific repro fires with a completely idle
+military side, so whatever causes it cannot be *only* a missed MA-charge on
+an action Orange never took. (The theory may still be real and may explain
+OTHER games in the corpus that do have a relevant action in the window --
+that was not re-checked here for lack of budget -- but it cannot be the
+whole story, since `7522614` diverges with nothing to charge.)
+
+**Not located by draw-side review**: the draw formula
+(`military_actions.clamp(0,3)`, `economy.rs:689`), the reset-actions step
+(`economy.rs` end of `end_of_turn`, step 5), `effects::state_stats`'s
+government/tech/leader bonus computation, and the RULES_SPEC citations for
+both the draw rule (§6.6.4) and the hand-limit rule (§6.7) were all read in
+full and match the code exactly -- because the mechanism was never on the
+draw side at all. See the fix below.
+
+### FOUND AND FIXED: `resolve_political_decision`'s own `PrepareEvent` push
+### is a net-zero wash where a real player nets -1
+
+The coordinator spotted it from the trace above, not from the draw code:
+`replay_common.rs`'s `resolve_political_decision` (the handler for a
+`"<Color> plays event"` line -- §5.2, preparing an event card from hand into
+`future_events`) reads:
+
+```rust
+self.state.players[decider as usize].hand_military.push(prep.card);
+let mv = Move::PrepareEvent { card: prep.card };
+...
+apply::apply(&mut self.state, mv); // apply.rs::h_prepare_event: hand_military.remove_first(card)
+```
+
+A real player who prepares an event plays a card **they already held** --
+their hand goes from N to N-1. This binary's own `push` immediately followed
+by `apply`'s own removal of that same identity is a WASH: N -> N+1 -> N.
+Net zero, every single preparation, permanently overcounting the
+reconstructed hand by one card each time it happens -- and preparing an
+event is an ordinary Politics-phase action taken most turns by most
+players, which is exactly why `7522614`'s "-1" fires with a completely idle
+MILITARY side (no war/aggression/tactic in sight): the action responsible
+is a *civil-looking* Politics-phase click, not a military one. Confirmed on
+`7522614` directly: "Orange plays event ... Current event: A / Development
+of Crafts" is a `PrepareEvent` line inside round 4's own action phase,
+before that round's discard checkpoint -- exactly one preparation, exactly
+the `-1` the oracle demanded.
+
+**Why this also explains the multi-round recurrence on `7522612`/Purple**
+(the same shape reappearing fresh at rounds 5, 6 and 7, not carried-over
+drift): that game's Purple journal shows a `"Purple plays event ... scores
+1 culture"` line at rounds 4 and 6 too -- one preparation, one stray `+1`,
+each time, independently, matching the per-occurrence (not per-round, not
+accumulating) shape the data actually showed.
+
+**The fix** (`replay_common.rs`, `resolve_political_decision`, right before
+the existing `push`): pop exactly one card of **unknown provenance** from
+`hand_military` first -- never a card `DiscardSolver::needed_after` says
+this player is later observed playing by name (the identical "never touch a
+card with known identity" rule `ground_bid_ceiling`, a few dozen lines
+above in the same file, already uses for the same reason) -- so the whole
+push-then-apply-removal sequence lands on N-1 instead of N. Leaves the old
+net-zero behaviour alone (does not touch/underflow anything) when no
+disposable filler exists. **This is a REPLAYER-only fix**: the push site it
+touches (`resolve_political_decision`) exists only to reconstruct a hidden
+hand from a public journal during replay; the real engine's own
+`apply::h_prepare_event` (used identically in real self-play) was never
+wrong -- it already does a plain `remove_first`, which is correct against a
+REAL hand that actually had the card. The bug was replay-side bookkeeping
+inventing a phantom card to remove instead of removing a real one.
+
+**IMPORTANT, for whoever re-attempts a fix in this area**: this exact push
+site was tried once before, routed through `ground_military_hand`'s own
+swap-instead-of-grow logic, and it REGRESSED badly (the stall bucket went
+171 -> 305) -- see this file's earlier "military hand" sections. This pass
+did NOT reuse that helper; it uses the narrower `needed_after`-gated pop
+described above instead, specifically because the earlier regression's own
+diagnosis was that swapping there exposes a SEPARATE, pre-existing
+undercount elsewhere. That risk was taken seriously and MEASURED, not
+assumed away -- see the corpus numbers below.
+
+**Two new tests** (`replay_common.rs`), confirmed RED against a reverted
+version of the fix before being restored green:
+`preparing_an_event_the_player_already_held_shrinks_their_hand_by_one_not_zero`
+and its companion,
+`preparing_an_event_with_no_filler_in_hand_leaves_the_old_net_zero_behaviour_alone`.
+Full `cargo test --lib` (1104 tests): all green.
+
+### Corpus result -- judged on the oracle first, per the coordinator's own
+### instruction, not on the stall-bucket count alone
+
+| | before | after |
+|---|---|---|
+| discard-phase oracle: checkpoints matched | 17970/28694 (62.6%) | **24640/28695 (85.9%)** |
+| games with at least one oracle divergence | 992/1011 | **941/1011** |
+| games completing to `state.game_over` | 49 | **66** |
+| mean rounds reached | 12.35 | 12.29 |
+
+Set-diffed by exact game ID (not just the count, per this file's own
+standing discipline): of the 49 games completing before this fix, **3**
+(`7521328`, `7522454`, `7523090`) now stop slightly earlier -- all three at
+a NEW `StuckPending: decider != expected actor ... no pending` a few lines
+before their old stopping point, consistent with this fix occasionally
+popping a filler that turns out to have been needed for an UNTYPED future
+discard (`DiscardSolver::needed_after` only knows about cards later
+observed being PLAYED by name -- a plain `"discards N cards"` line never
+names an identity, so it cannot protect a filler a real discard will need
+later). **20** games newly complete that did not before. Net +17,
+overwhelmingly one-directional.
+
+The remaining 941 divergent games were also checked for DIRECTION, not just
+count, since introducing a NEW opposite-signed error would be exactly as
+bad as the one being fixed: of their first divergences, **920 are still
+the pre-existing OVERCOUNT direction** (reconstructed excess > journal
+excess -- the mechanism this pass did not fully close) and **21 are a NEW
+UNDERCOUNT direction** (reconstructed excess < journal excess -- this
+fix's own filler-popping now removing one card too many in a minority of
+games, plausibly the same untyped-future-discard gap noted above, or a
+game with multiple preparations draining the filler pool faster than it
+refills). 21 new undercounts against 51 fewer total divergent games and a
+23-point jump in oracle agreement is a clear net win, not a wash -- but the
+21 are a real, novel, narrower open item, not zero-cost.
+
+### What was RULED OUT this pass (don't re-check these)
+
+- **`ground_military_hand` growing hand size instead of replacing filler,
+  for `7522614` specifically** -- there is no War/Aggression/Pact/Tactic
+  reveal anywhere in the first four rounds of this game for this to fire
+  on; the entire hand is provably ordinary-draw output, checked card by
+  card, not inferred.
+- **`CardType::Event` cards in `military_deck` as a deck-composition bug**
+  -- confirmed intentional (`apply.rs::h_prepare_event`, §5.2): drawing an
+  event card to military hand and later "preparing" it into `future_events`
+  during a Politics Phase is the real game mechanic, not a leak.
+- **A flat `military_hand_limit` undercount (limit should be +1)** as an
+  alternative to a hand-size overcount -- falsified against `7522612`'s
+  round-5 numbers, which only fit a hand-side, round-cumulative "-1 per draw
+  after the first" model, not a constant limit offset.
+- **The coordinator's missed-MA-charge theory as a *complete* explanation**
+  -- correctly predicts a real, general shape (an action whose cost isn't
+  charged inflates `military_actions_unused`) and may still be real for
+  OTHER games (not re-checked this pass), but it was not `7522614`'s own
+  cause: that repro diverges with zero relevant player actions in the
+  window. The actual cause (below) turned out to be a Politics-phase action
+  that spends no military action at all.
+- **The "-1 per draw after the first" characterization as the mechanism
+  itself** -- it was always a correct DESCRIPTION of the symptom (in a
+  typical undisturbed game, one `PrepareEvent` fires roughly once per
+  round, so "one stray `+1` per preparation" and "one stray `+1` per draw
+  after the first" are nearly indistinguishable from outside), but the
+  actual trigger is the Politics-phase preparation action, not the draw
+  step -- do not go back to auditing `economy.rs`'s draw code for this.
+
+### Concrete next step for whoever picks this up
+
+The fix above closed the dominant OVERCOUNT mechanism (round-4-and-later
+divergences dropped from 992 to 941 games, oracle agreement 62.6% ->
+85.9%) but did not close everything:
+
+1. **The 21-game new UNDERCOUNT direction** (this fix popping a filler a
+   later UNTYPED discard needed) is the most concrete lead: teach
+   `DiscardSolver` (or a sibling structure) to also track cards that will
+   later be needed to SATISFY a future `"<Color> discards N cards"` line's
+   own count -- not by identity (discards don't name one), just by making
+   sure this fix's own pop never drops `hand_military`'s size low enough
+   that a later real discard requirement can no longer be met. The 3
+   regressed completions (`7521328`, `7522454`, `7523090`) are small,
+   already-isolated repros for this.
+2. **The 920 remaining OVERCOUNT-direction divergences** are the leftover
+   share of the original mechanism this pass did not fully close -- rerun
+   the same card-by-card `REPLAY_DEBUG_ALL` audit this pass used on
+   `7522614`, on a FRESH first-divergence game post-fix, to see whether a
+   second `PrepareEvent`-shaped bug remains (e.g. a preparation whose own
+   card was never drawn at all, so there is no filler to sacrifice and the
+   old net-zero wash still applies) or whether an entirely different
+   mechanism is now the dominant one.

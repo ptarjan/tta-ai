@@ -1255,6 +1255,29 @@ impl<'a> Replayer<'a> {
             )));
         }
 
+        // The real player already held this card before preparing it: their
+        // hand shrinks by exactly one (N -> N-1). Left alone, the `push`
+        // immediately below followed by `apply`'s own removal of the same
+        // identity once `Move::PrepareEvent` applies is a WASH (N -> N+1 ->
+        // N), permanently overcounting this binary's own reconstructed hand
+        // by one card per preparation -- see this file's "Discard-phase
+        // hand-size oracle" section, `7522614`'s round-4 card-by-card trace.
+        // Pop one card of UNKNOWN provenance first (never one
+        // `DiscardSolver::needed_after` says this player is later observed
+        // to play by name -- the same "never touch a card with known
+        // identity" rule `ground_bid_ceiling`, just above, already applies
+        // for the identical reason) so the whole sequence lands on N-1.
+        // Leaves the old net-zero behaviour untouched -- not a regression,
+        // an honest miss -- when no disposable filler exists.
+        let needed_later = self.discard_solver.needed_after(decider, self.current_lineno);
+        if let Some(&victim) = self.state.players[decider as usize]
+            .hand_military
+            .as_slice()
+            .iter()
+            .find(|id| !needed_later.contains(id))
+        {
+            self.state.players[decider as usize].hand_military.remove_first(victim);
+        }
         self.state.players[decider as usize].hand_military.push(prep.card);
         let mv = Move::PrepareEvent { card: prep.card };
         let legal = legal::legal_moves(&self.state);
@@ -6381,6 +6404,78 @@ mod tests {
         assert_eq!(r.state.past_events.as_slice(), &[card_index["Development of Settlement"]]);
         assert_eq!(r.state.future_events.as_slice(), &[prepared]);
         assert_eq!(r.state.players[0].culture, 2);
+    }
+
+    /// FIX (chasing the discard-phase hand-size oracle's round-4 signature,
+    /// `docs/REPLAY.md`, `7522614`): a real player who prepares an event
+    /// plays a card they ALREADY held -- their hand shrinks by one. Left
+    /// alone, `resolve_political_decision`'s own `push(prep.card)` followed
+    /// by `apply`'s removal of that same identity once `Move::PrepareEvent`
+    /// applies is a WASH (net zero), permanently overcounting this binary's
+    /// reconstructed hand by one card per preparation. With two SIMULATED
+    /// filler cards already in hand (standing in for whatever `new_game`
+    /// dealt/drew before this point, of unknown identity), preparing an
+    /// event must leave exactly one of them behind, not both.
+    #[test]
+    fn preparing_an_event_the_player_already_held_shrinks_their_hand_by_one_not_zero() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        // Two SIMULATED fillers of unknown identity, standing in for
+        // `economy::draw_military_step`'s own ordinary draws -- neither is
+        // ever named in `plan`, so `DiscardSolver::needed_after` cannot
+        // protect either one; both are fair game to sacrifice.
+        let filler_a = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Tactic).expect("a Tactic card exists");
+        let filler_b = (0..crate::CARDS.len() as u16)
+            .map(CardId)
+            .find(|id| id.kind() == CardType::Aggression)
+            .expect("an Aggression card exists");
+        r.state.players[0].hand_military.push(filler_a);
+        r.state.players[0].hand_military.push(filler_b);
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(
+            r.state.players[0].hand_military.len(),
+            1,
+            "started with 2 fillers, prepared a card the player already held: net -1, not net 0 -- \
+             hand={:?}",
+            r.state.players[0].hand_military.as_slice()
+        );
+        assert!(
+            r.state.players[0].hand_military.contains(filler_a) || r.state.players[0].hand_military.contains(filler_b),
+            "the one remaining card must be one of the two original fillers, not the just-prepared card"
+        );
+    }
+
+    /// Companion: with NO filler in hand at all (an edge case `new_game`
+    /// itself cannot actually produce, but a safe one to pin), there is
+    /// nothing to sacrifice -- the old net-zero behaviour is left alone
+    /// rather than underflowing or panicking.
+    #[test]
+    fn preparing_an_event_with_no_filler_in_hand_leaves_the_old_net_zero_behaviour_alone() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.players[0].hand_military = crate::state::CardList::new();
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation, no filler to sacrifice");
+
+        assert_eq!(r.state.players[0].hand_military.len(), 0, "nothing to pop -- the wash is a wash, not an underflow");
     }
 
     /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7523357`):
