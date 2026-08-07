@@ -3297,3 +3297,122 @@ before this pass's own predecessor ran out of context chasing it.
   two sections above, not re-examined here).
 - Cultural Heritage / Revolutionary Idea age-sibling checks (see above --
   same method as Patriotism/Reserves, five minutes each, just not done).
+
+## Take bucket handoff continued: gate-by-gate breakdown re-run, one more
+## ENGINE bug found and fixed (Robespierre + Breakthrough revolution), the
+## no-REJECT-line 37 fully explained (not mine to fix), HandFull still
+## untouched per standing instruction
+
+Re-ran the `REPLAY_DEBUG` gate breakdown against a fresh baseline (244
+`IllegalMove: Take`, mean round 11.6): `HandFull` 180, `Budget` 24,
+`WonderInProgress` 3, and 37 with no `DEBUG TAKE REJECT` line at all — i.e.
+`costs::take_rejection` says the take IS legal and something else blocks
+it.
+
+**The 37 "no REJECT line" cases are fully explained, and are NOT this
+bucket's to fix.** Correlating each one's preceding `DEBUG try_apply fail`
+line (parse the `DEBUG game=` markers plus the try_apply-failure dump under
+`REPLAY_DEBUG`, no side script needed) shows every single one has
+`pending_top=Some(Choice(Choice { kind: Raid | LoseColony | FlipWonder |
+TakeRow | Infiltrate, ... }))` open for the SAME player who's attempting the
+Take. This is the exact same `resolve_intervening` root cause the
+Develop/PlayAction handoff (above, this doc) already diagnosed in detail:
+`decider == expected_actor` is read as "nothing left to resolve" even with
+a live `Pending::Choice` open. Four of the five pending kinds
+(`Raid`/`LoseColony`/`FlipWonder`/`TakeRow`) are explicitly another
+worker's assignment per this task's brief; `Infiltrate` is a sixth kind not
+in that list, found here, and should be folded into whoever owns that fix
+since it's the identical mechanism. **Reported via `mcp__discord__
+message_agent` rather than fixed here** — this bucket only fixes what's
+actually a Take-shaped problem.
+
+**`HandFull` (180) — NOT touched, per explicit standing instruction.**
+Re-confirmed the shape holds at the new sample size: every `HandFull`
+rejection has `hand_civil_size == civil_hand_limit` exactly (never over),
+zero counterexamples. Did not re-derive the CA math from scratch or
+re-trace individual cases this pass (two prior passes already did that
+work, 2/2 clean); instead checked the STRUCTURAL sources a third time for
+completeness:
+- `civil_hand_limit`'s only bonus source in the card data
+  (`civilHandLimit`) is Library of Alexandria; every OTHER contribution
+  comes through `civil_actions`, which `effects::compute` builds from
+  government + techs + wonders + leader + colonies + pacts + events, the
+  same total `p.civil_actions` gets reset from every turn (`economy.rs`'s
+  `end_of_turn`) — so hand limit and turn allotment share one source of
+  truth by construction, not two that could drift.
+  `p.hidden_civil` (the ONE other `hand_size_civil` contributor) is never
+  written anywhere outside a zero-initializer — grepped every
+  non-test/non-init site, confirmed still true.
+- The free-civil-action-card hand-inflation bug the Ninth pass fixed
+  (`free_civil_action_move`, Breakthrough/Rich Land/Urban Growth/Efficient
+  Upgrade left in `hand_civil` after their own "using" line) is still
+  landed and still the only hand-removal gap ever found; no new one
+  turned up.
+Still recommend NOT loosening `>=` to `>` without new evidence beyond what
+two passes have already gathered (see the two explanations above this
+section) — leaving this open for whoever next has bandwidth to do the
+per-card provenance trace at a THIRD, larger sample, or to pursue the
+"BGO client is lenient at the boundary" explanation the previous pass
+raised (which would mean modeling BGO's own quirk, not changing the
+rulebook-sourced gate).
+
+**ENGINE BUG found and fixed, `Budget` 24 → 14 (Robespierre × Breakthrough
+revolution): see the commit for full detail, this is the summary.** 10 of
+the 24 `Budget` rejections had `leader=Maximilien Robespierre`; 9 of those
+10 raw journals show the SAME shape — Robespierre revolts "using
+Breakthrough" mid-turn, then a LATER civil action the journal records as
+succeeding fails here at `civil_actions=0`, exactly 1 short. Traced game
+`7523661` line 286 end-to-end (`REPLAY_DEBUG_ALL` plus a temporary
+`eprintln!` inside `h_revolution`, since removed) and hand-verified every
+civil-action cost in the turn against the raw journal text: total CA
+budget after the revolution (Democracy 7 + Pyramids 1 = 8) came up exactly
+1 short of what the turn's own actions needed (9), in EVERY case by
+exactly 1, always in the same direction.
+
+Root cause: `apply.rs::h_revolution`'s "only the pool that PAYS for the
+revolution is emptied; the other behaves exactly as in a peaceful change"
+logic (RB p.13) computes the unaffected pool's carry-over as `new_total -
+(old_total - current_remaining)`. Under Robespierre, civil is that
+unaffected pool. But when the revolution is funded via Breakthrough (RB
+p.15's exception — `legal.rs::free_action_moves`'s `DevelopTechnology` arm
+already has a comment flagging this exact subtlety), Breakthrough's own
+`Move::PlayAction` has ALREADY spent 1 CA from that same civil pool by the
+time `h_revolution` runs — and the formula has no way to distinguish that
+1 CA (which RB p.15 treats as the revolution's own declaration cost, the
+same role a bare revolution's full-pool wipe plays with no separate charge)
+from ordinary this-turn spending, so it gets double-charged.
+
+Fix: `h_revolution` now takes a `via_ordered_action: bool` (`apply_free_
+civil_move`'s call passes `true`; the bare `Move::Revolution` dispatch
+passes `false`). When true and the leader is Robespierre, `spent` is
+reduced by 1 to back out Breakthrough's own pre-spent CA. Bare revolutions
+are unaffected: RB p.15's own precondition ("all CAs must still be
+available") means civil is always fully unspent going into a bare
+revolution, so `spent` is already 0 and the compensation is a no-op — a
+dedicated test (`h_revolution_bare_robespierre_still_gets_full_new_civil_
+total_when_nothing_was_spent`) pins this. The non-Robespierre branch is
+untouched (civil is unconditionally zeroed regardless of funding method,
+matching RB p.13's base "you end with 0 available CAs this turn" — no
+double-charge is possible there since nothing is being carried over).
+
+Two tests in `apply.rs`, both CONFIRMED by reverting the fix and
+re-running (`h_revolution_via_breakthrough_does_not_charge_robespierres_
+civil_pool_for_breakthroughs_own_ca` fails 6≠7 without the fix; the bare
+one still passes, confirming the fix is narrowly scoped).
+
+**Measurement (`replaystats`, full 1,011-game corpus):** `IllegalMove:
+Take` 244 → 236, mean round reached 10.98 → 11.02, decisions recorded
+161637 → 162365, Age II+ share 41.8% → 42.1%. Full test suite: 1044
+passed, 0 failed.
+
+**What's left in `Budget` (14, down from 24):** the 10 Robespierre cases
+should now be gone or reduced (re-measure before assuming zero — some may
+have a second, independent shortfall further into the same game). The
+remaining ~14 non-Robespierre `Budget` cases are unexamined — worth
+checking whether they cluster around another leader/mechanic the same way
+Robespierre did here, using the same method (grep `reason=Budget` in the
+`REPLAY_DEBUG` trace, correlate to game IDs, hand-trace the raw journal's
+own CA arithmetic for the turn).
+
+**`WonderInProgress` (3): unexamined, small, next up if anyone has budget
+left.**

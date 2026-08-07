@@ -259,7 +259,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, 0, false),
         Move::Pop => h_pop(state, idx, false),
         Move::PopFree => h_pop_free(state, idx),
-        Move::Revolution { card } => h_revolution(state, idx, card),
+        Move::Revolution { card } => h_revolution(state, idx, card, false),
         Move::PlayLeader { card } => h_play_leader(state, idx, card),
         Move::PlayAction { card } => h_play_action(state, idx, card),
         Move::Destroy { card } => h_destroy(state, idx, card),
@@ -898,7 +898,18 @@ pub fn put_special_in_play(state: &mut GameState, idx: u8, id: CardId) {
     develop_special(state, idx, id);
 }
 
-fn h_revolution(state: &mut GameState, idx: u8, id: CardId) {
+/// `via_ordered_action`: this `Revolution` was reached through `Move::
+/// PlayAction { card: Breakthrough }`'s own ordered "develop a technology OR
+/// revolt" order (`legal::free_action_moves`'s `DevelopTechnology` arm, RB
+/// p.15/CoL p.5) rather than a bare declaration. That path's own precondition
+/// comment (`legal.rs`'s `revolt_ok`) already flags the subtlety this
+/// parameter closes: by the time this runs, Breakthrough's OWN `1 CA` has
+/// already been spent (`Move::PlayAction` -> `h_play_action`, BEFORE the
+/// order resolves) -- true even though the rulebook's "all civil actions
+/// must still be available" precondition (RB p.15) is checked against the
+/// PRE-Breakthrough pool. For a bare revolution `via_ordered_action` is
+/// always `false` and this changes nothing (see below).
+fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: bool) {
     let cost = revolution_cost(id);
     {
         let p = &mut state.players[idx as usize];
@@ -907,13 +918,36 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId) {
     }
     let robespierre = leader_is(&state.players[idx as usize], "Maximilien Robespierre");
     // §8.3.4 (RB p.13): only the pool that PAYS for the revolution is
-    // emptied; the other behaves exactly as in a peaceful change.
+    // emptied; the other behaves exactly as in a peaceful change -- i.e. its
+    // remaining amount carries over, plus/minus however the total changes
+    // for the new government (`docs/REPLAY.md`'s Take/Bid handoff, "gate-by-
+    // gate breakdown" pass).
     let old = effects::state_stats(state, &state.players[idx as usize]);
-    let spent = if robespierre {
+    let mut spent = if robespierre {
         old.civil_actions - state.players[idx as usize].civil_actions as i32
     } else {
         old.military_actions - state.players[idx as usize].military_actions as i32
     };
+    // ENGINE BUG fix (docs/REPLAY.md, this pass): when Robespierre revolts
+    // via Breakthrough, the UNAFFECTED pool is civil -- the SAME pool
+    // Breakthrough's own `PlayAction` just spent 1 CA from. That 1 CA is the
+    // cost of DECLARING the revolution under this exception (RB p.15: "may
+    // pay for the revolution with its 1 CA + revolution science cost"), the
+    // exact role a bare revolution's full-pool wipe plays with no separate
+    // charge -- it must not ALSO count as ordinary this-turn spending against
+    // the unaffected pool's carry-over, or the player ends up short by
+    // exactly 1 CA for the rest of the turn (confirmed against 9/10 raw BGO
+    // journals in the `IllegalMove: Take`/`Budget` bucket that show a
+    // Robespierre player revolting "using Breakthrough" then a LATER take
+    // the journal itself records as successful, at exactly the point this
+    // binary's reconstructed civil_actions hits 0 one card short). Not
+    // reachable for the non-Robespierre branch: civil is unconditionally
+    // zeroed there regardless of how the revolution was funded (RB p.13's
+    // base "you end with 0 available CAs this turn" already covers a
+    // Breakthrough-funded base revolution with no separate accounting).
+    if via_ordered_action && robespierre {
+        spent -= 1;
+    }
     state.players[idx as usize].government = id;
     let s = effects::state_stats(state, &state.players[idx as usize]);
     if robespierre {
@@ -1214,12 +1248,16 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
         Move::Build { card } => do_build(state, idx, card, discount, true),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
         Move::Develop { card } => h_develop(state, idx, card, true),
-        // §8.3.4: a revolution never spends a civil action to begin with
-        // (it empties a whole action pool instead), so `h_revolution` takes
-        // no `free` flag -- matching Python's `apply_free_action`, which
-        // calls `_h_revolution` exactly as the normal `Move::Revolution`
-        // handler does.
-        Move::Revolution { card } => h_revolution(state, idx, card),
+        // §8.3.4: a revolution never spends a civil action of its OWN to
+        // begin with (it empties/carries-over a whole action pool instead),
+        // so this is still the exact same `_h_revolution` Python's
+        // `apply_free_action` calls for `Move::Revolution` -- but `true` here
+        // (unlike the bare dispatch above) tells it this specific call was
+        // reached via an ordered free action (Breakthrough), whose OWN `1
+        // CA` was already spent one level up in `h_play_action` before this
+        // ran -- see `h_revolution`'s own doc comment for why that matters
+        // for Robespierre.
+        Move::Revolution { card } => h_revolution(state, idx, card, true),
         other => unreachable!(
             "free_action_moves produced a move apply_free_civil_move does not \
              expect: {other:?}"
@@ -2574,13 +2612,66 @@ mod tests {
         p.military_actions = 2; // == Despotism's full MA pool: none spent yet
         p.hand_civil.push(card("Monarchy"));
         let mut state = one_player_state(p);
-        h_revolution(&mut state, 0, card("Monarchy"));
+        h_revolution(&mut state, 0, card("Monarchy"), false);
         assert_eq!(state.players[0].government, card("Monarchy"));
         assert_eq!(state.players[0].science, 10 - 2); // Monarchy revolution_cost 2
         // Not Robespierre: civil_actions is zeroed, military_actions carries
         // the unspent-military-action count forward against Monarchy's total.
         assert_eq!(state.players[0].civil_actions, 0);
         assert_eq!(state.players[0].military_actions, 3); // Monarchy MA total, none spent yet
+    }
+
+    /// ENGINE BUG regression (docs/REPLAY.md, this pass): a Robespierre
+    /// player revolting via Breakthrough must NOT be short-changed 1 civil
+    /// action for the rest of the turn. Breakthrough's own `Move::PlayAction`
+    /// already spent 1 CA (simulated here the same way -- decrementing
+    /// `civil_actions` before calling `h_revolution`, mirroring what
+    /// `h_play_action` does one level up in the real dispatch) BEFORE the
+    /// ordered `Move::Revolution` resolves; under Robespierre civil is the
+    /// UNAFFECTED pool (military pays instead), and that 1 CA is the
+    /// revolution's own declaration cost under this exception (RB p.15),
+    /// not ordinary this-turn spending -- so it must not also be deducted
+    /// from civil's carry-over. Confirmed against 9 raw BGO journals (game
+    /// `7523661` line 286 is the traced example) where the human took one
+    /// more civil card this same turn than this binary's OLD (buggy)
+    /// reconstruction allowed.
+    #[test]
+    fn h_revolution_via_breakthrough_does_not_charge_robespierres_civil_pool_for_breakthroughs_own_ca() {
+        let mut p = blank_player(0, card("Constitutional Monarchy")); // civil_actions 6, military_actions 4
+        p.leader = card("Maximilien Robespierre");
+        p.science = 20;
+        p.civil_actions = 6 - 1; // Breakthrough's own PlayAction already spent 1 CA
+        p.military_actions = 4; // untouched by Breakthrough's (civil) cost
+        p.hand_civil.push(card("Democracy")); // civilActions 7
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Democracy"), true);
+        assert_eq!(state.players[0].government, card("Democracy"));
+        // Robespierre: military pays for the revolution, emptied entirely.
+        assert_eq!(state.players[0].military_actions, 0);
+        // Civil (unaffected) carries the FULL new total: nothing was spent
+        // this turn but Breakthrough's own declaration cost, which does not
+        // count against it.
+        assert_eq!(state.players[0].civil_actions, 7);
+    }
+
+    /// Same scenario, but the revolution is declared BARE (not via
+    /// Breakthrough): `via_ordered_action=false` must leave `spent` alone --
+    /// this is the precondition-enforced case (RB p.15: a bare revolution
+    /// requires the whole civil pool to still be unspent), so it should
+    /// behave identically to the always-passing `via_ordered_action=true`
+    /// compensation being a no-op when nothing was pre-spent.
+    #[test]
+    fn h_revolution_bare_robespierre_still_gets_full_new_civil_total_when_nothing_was_spent() {
+        let mut p = blank_player(0, card("Constitutional Monarchy"));
+        p.leader = card("Maximilien Robespierre");
+        p.science = 20;
+        p.civil_actions = 6; // full pool, unspent -- the bare-revolution precondition
+        p.military_actions = 4;
+        p.hand_civil.push(card("Democracy"));
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Democracy"), false);
+        assert_eq!(state.players[0].military_actions, 0);
+        assert_eq!(state.players[0].civil_actions, 7);
     }
 
     #[test]
