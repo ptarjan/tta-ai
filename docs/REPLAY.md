@@ -4044,3 +4044,149 @@ with no exclusions needed)**: `IllegalMove: Take` 121, `HandFull` 79,
 124/78/7/1 baseline (the `WonderStep`-diagnostic fix lets a couple more
 games run a little further before hitting their own next, unrelated stop).
 Full test suite: 1,071+ passed, 0 failed.
+
+## HANDOFF: all seven pending kinds done -- Raid/LoseColony/FlipWonder landed, one small residual Raid sub-bucket left
+
+Picked up the "four of six done, `Raid`/`LoseColony`/`FlipWonder` remain"
+checkpoint above. **All three are now landed, tested, and pushed** (commits
+`866b95e` Raid + the exhaustive-match refactor, `dfca327` LoseColony +
+FlipWonder). Do not re-investigate these three kinds from scratch.
+
+**The exhaustive-match refactor, landed alongside Raid**: `resolve_
+intervening`'s old shape -- a chain of `if matches!(c.kind, X) { ... }`
+checks for the unconditionally-drained kinds, falling through at the bottom
+to a generic `Some(Pending::Choice(c)) => StuckPending("no auto-resolution
+...")` -- is now a single `match c.kind { ... }` over every `ChoiceKind`
+variant, with NO wildcard arm. Every kind not yet given real handling
+(`FreeCivil`/`FoodOrRes`/`DestroyOwn`/`Annex`/`PactOffer`/`WarTech`) is
+listed EXPLICITLY as its own no-op arm (behaviour identical to before --
+they still fall through to the `decider == expected_actor` shortcut or the
+bottom match's `PactOffer` arm, exactly as they always did). The point: a
+FUTURE eighth `ChoiceKind` variant now fails this match at COMPILE time
+instead of silently inheriting a catch-all's behaviour -- exactly the shape
+that let all seven kinds this multi-session pass worked through go quietly
+unresolved for as long as they did (nothing ever failed loudly when a kind
+went unhandled; `StuckPending` only fired once a game actually reached that
+pending). If a future ChoiceKind variant is added and this file fails to
+build, that is this refactor working as intended -- add its own arm (even a
+`{}` no-op with a doc comment explaining why) rather than reaching for `_`.
+
+**`Raid`** (Aggression: Raid card, and the Terrorism event's identically-
+shaped forced destruction): both journal shapes -- Terrorism's `"Terrorists
+destroy a <Color> <Building>"` (`Bookkeeping`, the card discarded until
+now) and Aggression: Raid's own `"Raid casualties 1 <Building>[; 1
+<Building>]; <Attacker> produces <M> resources"` (previously
+`Unclassified`) -- feed a GLOBAL (not per-player, since Terrorism never
+names an attacker) `VecDeque<CardId>` prescan (`prescan_raid_destroys`),
+drained with the same validate-against-`c.options`-and-skip pattern
+`PlunderSplit`/`Infiltrate`/`LosePop` already use. One correction needed
+mid-session, caught by its own unit test: `longest_known_card_prefix`'s
+matched span swallows a glued-on trailing `;` (it's part of the same
+whitespace-delimited word as the card name, e.g. `"Alchemy;"`), so the
+remainder after each casualty clause starts with a bare space, not `"; "` --
+the doc comment on `parse_raid_casualties_line` spells this out so the next
+reader doesn't re-derive it.
+
+**`Raid`'s residual 2-game sub-bucket, NOT fixed, flagged not force-fit**:
+after landing the above, `replaystats` still shows 2 games (was 14 before
+this pass) with `StuckPending: Raid choice open for player # but no
+journal-observed Raid/Terrorism destroy line left to resolve it with`.
+Sampled both (`7522790`, `7522608`) via `REPLAY_DUMP_BUCKET`. Two different
+symptoms, neither understood well enough to fix without more evidence:
+- `7522608` line 333: `"Raid casualties 1 Journalism; 1 Drama; Orange
+  spends 6 resource"` -- note **"spends"**, not "produces". Every other
+  sampled `"Raid casualties"` line in the corpus (hundreds) reads
+  `"<Attacker> produces <M> resources"`. `RULES_SPEC.md` 5.5 is explicit
+  that a Raid attacker always GAINS resources (never spends) -- so this is
+  either a BGO logging quirk unique to this line, or this line is not
+  actually the Raid's own resolution at all (maybe an unrelated coincidence
+  glued on by BGO's own log formatting). `parse_raid_casualties_line`
+  correctly returns `None` for this shape rather than guessing --
+  RULEBOOK BEATS CORPUS, do not loosen the parser to accept "spends" without
+  first understanding why this one line differs from every other sample.
+- The OTHER residual game showed a tied Aggression-defense strength (e.g.
+  `"Purple strength: 4; Orange strength: 4"`) with NO following `"Attack
+  fails"` or `"Raid casualties"` line at all -- unlike a losing margin,
+  which DOES get an explicit `"Attack fails ..."` line (confirmed on
+  `7523809`). A tie may resolve as a forced, single-legal-option "attack
+  fails" the same way `Pending::Auction`'s forced `BidPass` and
+  `Pending::Defense`'s forced 0-defender case do (no journal trace for a
+  deterministic outcome) -- but this hasn't been confirmed against
+  `RULES_SPEC.md`'s own tie-breaking rule for Aggression strength
+  comparisons, and PARKED's "whether an open pending should block the whole
+  table" is adjacent territory. Worth a fresh look with `RULES_SPEC.md`
+  open, not a guess.
+
+**`LoseColony`/`FlipWonder`**: the earlier handoff's "hardest, NOT
+recommended next" verdict turned out to apply only to the AUTO-RESOLVED
+single-candidate case (glued onto the triggering `"plays event"` line,
+`push_choice`'s own auto-resolve-if-len-1 rule) -- re-checking against the
+real corpus this session (not re-deriving from theory) found that the REAL,
+multi-candidate choice each event opens resolves on its own separate,
+clean, freestanding later line the earlier passes never looked for:
+- `LoseColony`: `"<Color> loses <Territory family> (<Age numeral>)"`, e.g.
+  `"Purple loses Historic Territory (I)"` -- and that printed string is
+  already the EXACT full card `name` `build_card_index` keys by (territory
+  cards are the one family whose `name` bakes the age suffix straight in),
+  so no roman-numeral parsing was needed at all, contrary to what the
+  earlier handoff assumed would be required.
+- `FlipWonder`: `"Ravages of Time <Wonder> crumble(s)"`, no leading colour
+  in the text at all -- `Line::color` (column 2) is the only place the
+  actor is, the same shape `ColumbusColonize` already established a
+  precedent for reading. A leading `"The "` in the flavour text (present
+  for some wonders, absent for others, e.g. `"St. Peter's Basilica"`) has
+  to be stripped before `longest_known_card_prefix` runs, or the dictionary
+  lookup fails outright (`"The"` alone is never a card name).
+
+Both drain a per-actor FIFO, validated against the live choice's own
+options and skipped exactly like `Raid`/`PlunderSplit`/`Infiltrate`/
+`LosePop` -- confirmed by `grep` over the full corpus that neither
+standalone line shape ever carries a trailing `;` continuation or collides
+with its own auto-resolved shape, so in practice the skip path is
+defensive here rather than load-bearing (unlike `PlunderSplit`, where it
+fires for real). `LoseColony`/`FlipWonder` StuckPending are both fully gone
+from the histogram, 0 residual games for either.
+
+**Ten new tests this pass** (two resolve/skip pairs each for Raid/
+LoseColony/FlipWonder, plus one parser test per new line shape), all in
+`replay_common.rs`'s `#[cfg(test)] mod tests`, all CONFIRMED red (temporarily
+neutered the relevant match arm(s) to `{}` no-ops, reran, saw the generic
+`StuckPending`) before being restored green.
+
+**Full corpus measurements, isolated per commit (same rebased tree,
+immediately before/after, nothing else changed)**:
+- Exhaustive match + `Raid`: mean rounds 11.03 -> 11.16, decisions 162453
+  -> 166586 (42.1% -> 43.3% Age II+), completed 19 -> 30 (this was measured
+  BEFORE a concurrent rebase landed unrelated fixes from other workers).
+- `LoseColony` + `FlipWonder`, measured AFTER that same rebase (so the
+  "before" number here already includes the concurrent work, isolating just
+  this commit's own delta): mean rounds 11.26 -> 11.27, decisions 171395 ->
+  172808 (44.9% -> 45.4% Age II+), completed 23 -> 24.
+- **Do not naively diff the first "after" (30 completed) against the second
+  "before" (23 completed) and conclude a regression** -- that gap is
+  concurrent, unrelated work (three other workers' fixes, including the
+  `wonder_stage_cost` panic fix documented in the section just above this
+  one) landing via `git rebase` in between the two measurements, not
+  anything this pass's own commits touched. Each commit's own isolated
+  before/after (using the SAME tree, same-fix-neutered-vs-not) is the number
+  that means something.
+- **Current state, full corpus, this exact landed tree**: 24 completed
+  games, mean rounds 11.27, 172808 decisions (45.4% Age II+). The `Raid`
+  StuckPending bucket is down to 2 games (see above); `LoseColony`/
+  `FlipWonder` are both at 0.
+
+**No ENGINE bugs found by this pass.** All three kinds (`Raid`,
+`LoseColony`, `FlipWonder`) were pure replayer gaps, same shape as the four
+kinds landed earlier this multi-session pass -- the resolving journal
+evidence existed the whole time, `resolve_intervening` just wasn't reading
+or trusting it yet. The one live rule question this pass surfaced (`Raid`'s
+"spends" vs "produces" line, above) is flagged for a rulebook-literate
+follow-up, not resolved either way -- do not assume it's an engine bug or a
+parser bug without more evidence; it could be neither (a BGO client
+quirk).
+
+**Ruled out, so it isn't re-tried**: a roman-numeral parser for `LoseColony`
+(the printed line already carries the exact aged card name, see above); any
+attempt to accept `Raid`'s "spends 6 resource" line as if it meant
+"produces" (contradicts `RULES_SPEC.md` 5.5's explicit rule that the
+attacker only ever gains).
