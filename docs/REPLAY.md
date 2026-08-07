@@ -138,12 +138,15 @@ on the first real game tested.
   identities (impossible, BGO doesn't log them) or accepting an
   approximation (which the project's own standing rule — "don't guess
   hidden cards, an honest low number beats a rosy fake one" — rules out).
-- **Aggression defense** with any committed defense cards: BGO logs only a
-  count (`"<Color> defends N Defense card(s) played"`), never which. Zero
-  committed cards is unambiguous (`DefendDone` immediately, the common case
-  per the rulebook — committing defense cards is rare and costly); any
-  positive count stops the game. None of the 24 sampled games reached a
-  contested defense in this pass.
+- ~~**Aggression defense** with any committed defense cards: BGO logs only a
+  count, never which.~~ **This was false — see "Tenth pass" below.** BGO's
+  `"<Color> defends ..."` line is not a bare count; it is one clause PER
+  committed card, and every clause fully identifies its card (a printed
+  `+2`/`+4`/`+6` bonus number for the age I/II/III bonus cards, one card per
+  value; any other hand card for a plain "military card played", and which
+  one is provably irrelevant to any observable outcome). Fixed in the tenth
+  pass, `resolve_aggression_defense`/`parse_defense_clauses` in
+  `replay_common.rs`.
 - **`PutBack`** (a human undoing their own `Take` via BGO's client-side
   undo): there is no `Move` for this in the engine at all — `moves.rs`'s
   variant list has no "untake". **Fixed in this pass** for the common
@@ -1661,3 +1664,51 @@ remaining gap is in per-turn action-pool bookkeeping, not this cluster).
 Everything else this cluster owned -- the Urban Growth/Rich Land `ParserGap`s
 and the Urban-Growth/Rich-Land-attributed `UnrecoverableHiddenInfo` cost
 mismatches -- is gone. Still 0 complete.
+
+## Tenth pass: "aggression defense" (122 games) was never unrecoverable -- BGO logs one clause per committed card, not a bare count
+
+The `UnrecoverableHiddenInfo: aggression defense: N committed defense
+card(s), BGO logs only the count, never identities` bucket (122 games, the
+largest `UnrecoverableHiddenInfo` bucket in the corpus) turned out to be a
+parser bug, not real hidden information -- found by reading the raw
+`"<Color> defends ..."` lines instead of trusting this file's own prior
+claim. The old `defends_count` read only the leading digit of the FIRST
+clause and discarded the rest of the line; the rest of the line names every
+committed card. A `"Defense card +2/+4/+6 played"` clause names its printed
+bonus directly, and `data/cards_military_actions.json`'s `bonus`-type cards
+have exactly one card per value (one per age I/II/III, six functionally
+identical physical copies each) -- so the number alone is a complete,
+unambiguous identity; "which of the six" was never a real question. A
+`"military card played"` clause is any hand card with `defense_bonus == 0`
+(`interact::defense_points`'s flat +1 branch, which is every non-`Bonus`
+military-deck card) -- resolved the same way `discard_solver::DiscardSolver`
+already resolves a forced hand-limit discard, because it is the same
+underlying fact (a specific card permanently leaves the hand). When the
+replay's own fictional simulated hand happens to hold no zero-bonus
+candidate at all (observed in the real corpus, on hands as small as 1-2
+cards), a filler card is grounded instead of stopping the game: identity is
+provably irrelevant here, since every non-`Bonus` card defends for the same
+flat +1 no matter which one it is.
+
+New code: `DefenseClause`/`parse_defense_clauses`/`defense_bonus_card`/
+`flat_defense_filler` in `replay_common.rs`; `resolve_aggression_defense`
+rewritten to apply one `Move::Defend` per clause instead of returning
+`UnrecoverableHiddenInfo`. Not an engine bug -- `interact::defense_points`
+and `Pending::Defense`'s move generation were already correct; only the
+journal parser was throwing information away.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | ninth pass | this pass |
+|---|---|---|
+| mean rounds reached (of 19.27) | 7.83 | **8.18** |
+| decisions in Age II or later | 19.1% | **21.3%** |
+| `UnrecoverableHiddenInfo: aggression defense` | 122 | **0** |
+| games completed | 0 | 0 |
+
+All 122 games that used to stop here now run deeper into the same journal
+before hitting a DIFFERENT, pre-existing stop reason (the usual pattern in
+this file: closing one wall exposes the next one, visible as small increases
+across `Pop`/`Take`/`Bid`/`Build`/`Destroy`/`WonderStep`/`Upgrade`/`Develop`
+and a few others). None of those buckets belong to this pass and none were
+touched.

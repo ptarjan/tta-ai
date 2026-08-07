@@ -113,10 +113,21 @@
 //!   module's doc and `docs/REPLAY.md`'s "Military discard: solved, not
 //!   given up on" section for the full argument and the honest solved-vs-
 //!   chosen-vs-forced-collision accounting.
-//! - **Aggression defense** with any committed defense cards: BGO logs only
-//!   a count (`"<Color> defends N Defense card(s) played"`), never which
-//!   ones. Zero committed cards is unambiguous (`DefendDone` immediately);
-//!   any positive count is unrecoverable, and stops the game.
+//! - **Aggression defense** used to be listed here as unrecoverable ("BGO
+//!   logs only a count, never which cards") -- that was false, found by
+//!   reading the raw clauses instead of trusting this comment. BGO's
+//!   `"<Color> defends ..."` line is not one bare count; it is one clause
+//!   PER committed card. A `"Defense card +<n> played"` clause names its
+//!   printed bonus (2/4/6) directly, and `data/cards_military_actions.json`
+//!   has exactly one `bonus`-type card per value (one per age I/II/III), so
+//!   the number alone is the card's full identity -- the six physical
+//!   copies per age are interchangeable, so "which of the six" was never a
+//!   real question. A `"military card played"` clause is any hand card
+//!   whose `defense_bonus` is 0 (`interact::defense_points`'s flat +1
+//!   branch); resolved via `discard_solver::DiscardSolver` exactly like a
+//!   forced hand-limit discard, because it is the same fact (a specific
+//!   card permanently leaves the hand) with the same kind of residual,
+//!   honestly-counted ambiguity. See [`resolve_aggression_defense`].
 //! - **`PutBack`** (a human undoing their own `Take` via BGO's client-side
 //!   undo): there is no `Move` for this in the engine at all -- `moves.rs`'s
 //!   variant list has no "untake". Stops the game rather than hand-mutate
@@ -143,7 +154,7 @@ use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
 use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase};
-use crate::{apply, costs, economy, game, legal, CardId, Move};
+use crate::{apply, costs, economy, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
 // Journal line
@@ -184,9 +195,9 @@ fn parse_lines(journal_text: &str) -> Vec<Line<'_>> {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum MismatchKind {
-    /// A hidden piece of state (discard identity, defense-card identity,
-    /// BGO's client-side undo) genuinely cannot be recovered from the
-    /// journal; see this file's module doc.
+    /// A hidden piece of state (BGO's client-side undo, an unmodeled build
+    /// discount) genuinely cannot be recovered from the journal; see this
+    /// file's module doc.
     UnrecoverableHiddenInfo(String),
     /// The `Move` this binary constructed from the line is not present in
     /// `legal_moves()` for the reconstructed state -- either a parser gap
@@ -1161,15 +1172,46 @@ fn pact_side(text: &str, actor: Color, card_id: CardId) -> PactSide {
     }
 }
 
-/// `"<Color> defends N Defense card..."` -- the count of committed defense
-/// cards on the line right after an Aggression. `0` is unambiguous
-/// (`DefendDone`); any positive count is unrecoverable (identities never
-/// printed) -- see the module doc.
-fn defends_count(text: &str) -> Option<i32> {
+/// One committed defense card, fully identified from its own clause on the
+/// `"<Color> defends ..."` line -- see [`resolve_aggression_defense`]'s doc
+/// for why every clause resolves to an exact `defense_bonus` requirement
+/// rather than a bare count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefenseClause {
+    /// `"Defense card +<bonus> played"` -- `bonus` is 2, 4 or 6 and is the
+    /// card's own printed, unique-per-age identity.
+    Bonus(i16),
+    /// `"military card played"` -- any zero-`defense_bonus` hand card.
+    Flat,
+}
+
+/// Parse every committed-card clause out of a `"<Color> defends ..."`
+/// line, expanded to one [`DefenseClause`] per physically committed card
+/// (every clause observed in the real corpus carries a leading count of 1,
+/// but this does not assume that). `None` means `text` is not a "defends"
+/// line at all. The trailing `"<Color> strength: <n>"` bookkeeping clauses
+/// never match either card pattern, so they are simply skipped rather than
+/// needing to be located and cut off first.
+fn parse_defense_clauses(text: &str) -> Option<Vec<DefenseClause>> {
     let (_, rest) = actor_and_rest(text)?;
     let rest = rest.strip_prefix("defends ")?;
-    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
-    rest[..digits_end].parse().ok()
+    let mut out = Vec::new();
+    for clause in rest.split("; ") {
+        let mut words = clause.split_whitespace();
+        let Some(n) = words.next().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let rest_words: Vec<&str> = words.collect();
+        let one = match rest_words.as_slice() {
+            ["Defense", "card", bonus, "played"] => {
+                bonus.strip_prefix('+').and_then(|b| b.parse::<i16>().ok()).map(DefenseClause::Bonus)
+            }
+            ["military", "card", "played"] => Some(DefenseClause::Flat),
+            _ => None,
+        };
+        if let Some(one) = one {
+            out.extend(std::iter::repeat(one).take(n as usize));
+        }
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------
@@ -2312,23 +2354,125 @@ fn apply_one(
 }
 
 /// After applying an `Aggression`, resolve the victim's `Pending::Defense`
-/// using the count on the very next `"<Color> defends N ..."` bookkeeping
-/// line, if any -- 0 is `DefendDone`; a positive count is unrecoverable
-/// (identities never printed, see the module doc). If no `Pending::Defense`
-/// opened at all (the victim had nothing eligible to spend), this is a
-/// no-op. If the next line isn't a "defends" line at all, that means BGO
-/// didn't log one for a defense that DID open -- treated as 0 committed
-/// (the common case: RB, committing defense cards is rare and costly).
+/// using the very next `"<Color> defends ..."` bookkeeping line, if any. If
+/// no `Pending::Defense` opened at all (the victim had nothing eligible to
+/// spend), this is a no-op. If the next line isn't a "defends" line at all,
+/// that means BGO didn't log one for a defense that DID open -- treated as
+/// 0 committed (the common case: RB, committing defense cards is rare and
+/// costly).
+///
+/// Each [`DefenseClause`] `parse_defense_clauses` finds is applied as one
+/// `Move::Defend`, in order:
+/// - `Bonus(b)`: [`defense_bonus_card`] finds the unique card that prints
+///   `defense_bonus == b` and grounds it into the defender's hand
+///   (`Replayer::ground_military_hand` -- "grant a player the card they are
+///   observed to play", the same idiom every other journal-named play in
+///   this file already uses). This is not a guess: the age I/II/III bonus
+///   cards are the ONLY cards with a nonzero `defense_bonus`, one value
+///   each, so the printed number alone is already the card's full
+///   identity -- whether or not this binary's fictional simulated hand
+///   happened to deal that exact card is irrelevant, same as it is
+///   irrelevant for a `PlayAggression`/`DeclareWar`/`ProposePact`/
+///   `PlayTactic` line naming a card the simulated deal never dealt.
+/// - `Flat`: any currently-legal `Move::Defend` candidate with
+///   `defense_bonus == 0` qualifies (every non-`Bonus` military-deck card
+///   defends for the same flat +1, `interact::defense_points`). If the
+///   simulated hand has one, `r.discard_solver` picks among them exactly as
+///   it does for a forced hand-limit discard (same underlying fact: a
+///   specific card permanently leaves the hand), so the same solved/
+///   chosen/forced-collision honesty applies. If it has NONE (a small
+///   simulated hand can, by chance, be all `Bonus` cards -- seen in the
+///   real corpus), [`flat_defense_filler`] grounds one: since identity
+///   cannot affect any observable outcome here, this cannot be a wrong
+///   guess in the sense the rest of this file guards against, only an
+///   arbitrary bookkeeping label.
+///
+/// Every `Move::Defend`/`Move::DefendDone` here is an auto-resolution
+/// (`record: false`), matching how a 0-committed defense was already
+/// treated before this function could see any committed cards at all --
+/// see `try_apply`'s doc for what `record` distinguishes.
 fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Result<(), MismatchKind> {
     if !matches!(r.state.pending.top(), Some(Pending::Defense(_))) {
         return Ok(());
     }
-    match next_text.and_then(defends_count) {
-        Some(n) if n > 0 => Err(MismatchKind::UnrecoverableHiddenInfo(format!(
-            "aggression defense: {n} committed defense card(s), BGO logs only the count, never identities"
-        ))),
-        _ => r.try_apply(Move::DefendDone, false),
+    let clauses = next_text.and_then(parse_defense_clauses).unwrap_or_default();
+    for clause in clauses {
+        let Some(Pending::Defense(d)) = r.state.pending.top() else {
+            return Err(MismatchKind::StuckPending(
+                "aggression defense: journal names a committed card after the pending defense already closed".into(),
+            ));
+        };
+        let player = d.player;
+        let card = match clause {
+            DefenseClause::Bonus(bonus) => {
+                let id = defense_bonus_card(bonus);
+                r.ground_military_hand(player, id);
+                id
+            }
+            DefenseClause::Flat => {
+                let flat: Vec<CardId> = legal::legal_moves(&r.state)
+                    .as_slice()
+                    .iter()
+                    .filter_map(|mv| match mv {
+                        Move::Defend { card } if card.get().effects.defense_bonus == 0 => Some(*card),
+                        _ => None,
+                    })
+                    .collect();
+                if flat.is_empty() {
+                    let filler = flat_defense_filler(r.state.age_military);
+                    r.ground_military_hand(player, filler);
+                    filler
+                } else {
+                    let (idx, certainty) = r.discard_solver.choose(player, r.current_lineno, &flat);
+                    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                        eprintln!(
+                            "DEBUG aggression defense: player {player} line {} picked {} of {} flat candidates ({certainty:?})",
+                            r.current_lineno,
+                            flat[idx].get().name,
+                            flat.len()
+                        );
+                    }
+                    flat[idx]
+                }
+            }
+        };
+        r.try_apply(Move::Defend { card }, false)?;
     }
+    if matches!(r.state.pending.top(), Some(Pending::Defense(_))) {
+        r.try_apply(Move::DefendDone, false)?;
+    }
+    Ok(())
+}
+
+/// The unique card that prints `defense_bonus == bonus` (2, 4 or 6 -- one
+/// per age I/II/III; `card_table.rs` has exactly one `Bonus`-type card per
+/// value). Panics on any other input, which would mean `parse_defense_
+/// clauses` parsed a bonus number BGO's own client never actually prints.
+fn defense_bonus_card(bonus: i16) -> CardId {
+    (0..crate::CARDS.len() as u16)
+        .map(CardId)
+        .find(|id| id.kind() == CardType::Bonus && id.get().effects.defense_bonus == bonus)
+        .unwrap_or_else(|| panic!("no Bonus card prints defense_bonus {bonus}"))
+}
+
+/// A filler `CardId` for a `DefenseClause::Flat` commit whose simulated hand
+/// holds no zero-`defense_bonus` card at all. Every non-`Bonus` military-
+/// deck card type (`Tactic`/`Aggression`/`War`/`Pact`/`Territory`/`Event`)
+/// defends for the same flat +1 (`interact::defense_points`), so which one
+/// is picked cannot affect any observable outcome, only bookkeeping --
+/// mirrors `event_plan::unused_card_of_level`'s own "identity does not
+/// matter, but pick something real and age-plausible" cascade. Prefers
+/// `age` (the military deck's current age) so the filler is not
+/// anachronistic; falls back to any age if that age has no such card.
+fn flat_defense_filler(age: crate::Age) -> CardId {
+    let is_flat_military_kind = |k: CardType| {
+        matches!(k, CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Territory | CardType::Event)
+    };
+    let ids = (0..crate::CARDS.len() as u16).map(CardId);
+    ids.clone()
+        .find(|id| is_flat_military_kind(id.kind()) && id.get().age == age)
+        .or_else(|| ids.clone().find(|id| is_flat_military_kind(id.kind())))
+        .expect("the card table has at least one non-Bonus military-deck card")
 }
 
 /// `color_after`'s callers need the ACTOR's own colour (not the target's)
@@ -2543,14 +2687,31 @@ mod tests {
     }
 
     #[test]
-    fn defends_count_reads_the_committed_card_count() {
+    fn parse_defense_clauses_reads_a_single_bonus_card_and_skips_the_strength_trailer() {
         let text = "Orange defends 1 Defense card +6 played; Orange strength: 26; Purple strength: 26";
-        assert_eq!(defends_count(text), Some(1));
+        assert_eq!(parse_defense_clauses(text), Some(vec![DefenseClause::Bonus(6)]));
     }
 
     #[test]
-    fn defends_count_is_none_for_a_line_that_is_not_a_defends_line() {
-        assert_eq!(defends_count("Purple builds Bronze Purple spends 2 resources"), None);
+    fn parse_defense_clauses_reads_a_plain_military_card_as_flat() {
+        let text = "Orange defends 1 military card played; Orange strength: 8; Purple strength: 8";
+        assert_eq!(parse_defense_clauses(text), Some(vec![DefenseClause::Flat]));
+    }
+
+    #[test]
+    fn parse_defense_clauses_reads_every_clause_on_a_multi_card_defense_in_order() {
+        // Real corpus line: two age-matched bonus cards plus a flat card, in
+        // one defense.
+        let text = "Grey defends 1 Defense card +4 played; 1 Defense card +6 played; 1 military card played; Grey strength: 30; Green strength: 27";
+        assert_eq!(
+            parse_defense_clauses(text),
+            Some(vec![DefenseClause::Bonus(4), DefenseClause::Bonus(6), DefenseClause::Flat])
+        );
+    }
+
+    #[test]
+    fn parse_defense_clauses_is_none_for_a_line_that_is_not_a_defends_line() {
+        assert_eq!(parse_defense_clauses("Purple builds Bronze Purple spends 2 resources"), None);
     }
 
 
