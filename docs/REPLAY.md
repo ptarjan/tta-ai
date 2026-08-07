@@ -156,16 +156,16 @@ on the first real game tested.
   anywhere in the game (a genuine parser gap, or a BGO logging artifact)
   would still stop the game; none of the 24 sampled games hit this residual
   case in this pass.
-- **Colonization sacrifice specifics**: `"Sacrificed Units:; ..."` DOES name
-  exact identities, but resolving `Pending::Colonize`'s branching
-  `SendUnit`/`SendBonus`/`SendDiscard` choices against that list is not
-  implemented in this pass — the binary auto-drains colonization by picking
-  the engine's own first-offered option at each step until the force
-  clears. This keeps the game running and gets the reveal's own
-  culture/resource totals right, but does not verify which units were
-  spent; flagged per-game (`colonize_approximated`) whenever it fires. None
-  of the 24 sampled games reached a colonization, so this was never
-  exercised against real data in either pass.
+- **Colonization sacrifice specifics** used to be listed here as an
+  unimplemented approximation ("the binary auto-drains colonization by
+  picking the engine's own first-offered option at each step until the
+  force clears"). **No longer true** — see the fourteenth pass below. The
+  `"Sacrificed Units:; ..."` list is one clause per committed piece and is
+  now applied as real `SendUnit`/`SendBonus`/`SendDiscard` moves; only
+  James Cook's `"1 Military card +1"` clause leaves its card unnamed.
+  `Replayer::approximate_colonize` survives as the fallback for the ~2% the
+  journal's own list cannot be applied to, and still sets
+  `colonize_approximated`.
 
 ## Sample: 24 games, 8 each of 2p/3p/4p
 
@@ -1921,3 +1921,59 @@ from `advance_turn`'s own final-round wrap). All four completions have
 stays 0), so `GameResult::engine_scores` is `None` and there is still
 nothing to compare. Left open -- outside this pass's bucket -- but worth
 knowing before the next pass that reaches for `analysis/index.tsv`.
+
+## Fifteenth pass: REPLAYER BUG -- the colonization sacrifice was approximated away, and the approximation ate army units the human never spent
+
+`"colonization bid of N exceeds this binary's computed force ceiling"` was
+this corpus's third-largest bucket (121 games) and carried an
+`UnrecoverableHiddenInfo` label blaming hidden hand information. **The label
+was false**, for the third time on this project, and in the same shape as
+the previous two (event attribution, aggression defense): the journal names
+the thing the comment said it never names.
+
+`"<Color> colonizes a <Territory> Sacrificed Units:; 1 Warrior; 1
+Colonization card +2; Colonization bonus: +2; Total force: 6; ..."` is one
+clause PER COMMITTED PIECE, not a bare force total:
+
+- `"1 <Unit>"` — a sacrificed army token. Each of the ten unit cards has a
+  distinct name in exactly one age, so the name alone is a full identity
+  (BGO prints `Warriors` in the singular, and only that one).
+- `"1 Colonization card +N"` — `N` is 1, 2 or 3, and `data/
+  cards_military_actions.json` has exactly one `bonus` card per value, one
+  per age I/II/III. Same argument as `"Defense card +6 played"`.
+- `"1 Military card +1"` — James Cook's discard-for-force. The ONE piece
+  whose identity really is withheld; only its count is claimed.
+
+Two things were wrong, and the second is what actually drove the bucket:
+
+1. The sacrifice was never applied. `auto_drain_colonize` took the engine's
+   first offered move at each step, i.e. weakest unit first. A human force
+   of "one Knight plus a +3 bonus card" replayed as four sacrificed
+   Warriors — army tokens permanently gone from a board this file otherwise
+   tracks exactly. Every later colonization ceiling, military strength and
+   bid of that player was computed against a smaller army than they had.
+2. A bonus card in the winner's hand has to be grounded while the auction
+   is still OPEN. `interact::colonize` snapshots the hand into
+   `Pending::Colonize::bpool` the instant the auction settles, so anything
+   grounded later can never be sent and the engine is forced to make the
+   difference up out of units.
+
+Both are fixed: `prescan_colonize_sacrifices` reads the whole record up
+front (the `event_plan`/`prescan_future_military_needs` idiom),
+`Replayer::ground_auction_winner_hand` grounds the winner's named bonus
+cards before any move is applied against the open auction, and
+`Replayer::drain_colonize` plays the journal's own list. 818 of 837
+colonizations in the corpus now replay from the journal; the other 19 fall
+back to the old approximation and still flag the game.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached (of 19.27) | 9.45 | **9.98** |
+| decisions in Age II or later | 30.8% | **34.7%** |
+| games completed | 2 | **10** |
+| `UnrecoverableHiddenInfo: colonization bid ...` | 121 | **53** |
+
+(Measured against a tree that already had the concurrent Take/Pop passes
+above landed, hence the different baseline from theirs.)

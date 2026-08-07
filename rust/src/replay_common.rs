@@ -132,16 +132,26 @@
 //!   undo): there is no `Move` for this in the engine at all -- `moves.rs`'s
 //!   variant list has no "untake". Stops the game rather than hand-mutate
 //!   state to fake a reversal that was never a real game action.
-//! - **Colonization sacrifice specifics**: `"Sacrificed Units:; ..."` DOES
-//!   name exact identities, but resolving `Pending::Colonize`'s branching
-//!   `SendUnit`/`SendBonus`/`SendDiscard` choices against that list is not
-//!   implemented in this pass -- this file auto-drains colonization by
-//!   picking the engine's own first offered option at each step
-//!   (`colonize_moves`'s own ordering) until the force clears. This keeps
-//!   the game running and gets the CULTURE/RESOURCE totals from the
-//!   colonize card right (those come from the reveal, not the sacrifice),
-//!   but does NOT verify which units were spent -- flagged as an
-//!   approximation, not a validated step, in every game where it fires.
+//! - **Colonization sacrifice specifics** used to be listed here as an
+//!   unimplemented approximation ("this file auto-drains colonization by
+//!   picking the engine's own first offered option at each step until the
+//!   force clears"). It is now driven from the journal, exactly like an
+//!   aggression defense: `"Sacrificed Units:; 1 Warrior; 1 Colonization
+//!   card +2; ..."` is one clause PER committed piece, a unit type
+//!   (unique per age) or a printed colonization bonus (1/2/3, one card per
+//!   age I/II/III). See [`SacrificeClause`], [`prescan_colonize_
+//!   sacrifices`] and [`Replayer::drain_colonize`]. Only James Cook's
+//!   `"1 Military card +1"` discard clause leaves its card unnamed, and
+//!   only the COUNT of those is claimed.
+//!
+//!   The approximation was not cosmetic. The auto-drain spent whatever the
+//!   SIMULATED hand happened to hold, so a human force of "one Knight plus
+//!   a +3 bonus card" was reproduced as four sacrificed Warriors -- units
+//!   permanently gone from a board this file otherwise tracks exactly, and
+//!   with them the player's later military strength, their colonization
+//!   ceiling, and every bid they went on to make. [`Replayer::
+//!   approximate_colonize`] survives as the fallback for the residual ~2%
+//!   the journal's own list cannot be applied to, and still flags the game.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -304,6 +314,14 @@ struct Replayer<'a> {
     /// Whether any colonization in this game was resolved by the
     /// approximate auto-drain rather than a verified sacrifice match.
     colonize_approximated: bool,
+    /// Every `"<Color> colonizes ..."` line's own sacrifice list, in journal
+    /// order -- see [`prescan_colonize_sacrifices`]. The front is the
+    /// outcome of the auction currently in progress; it is popped when that
+    /// colonization is driven ([`Replayer::drain_colonize`]) and peeked at
+    /// while the auction is still open, to ground the winner's hidden bonus
+    /// cards before `interact::colonize` snapshots their hand into the
+    /// `Pending::Colonize` pools ([`Replayer::ground_auction_winner_hand`]).
+    colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     /// Number of actionable (non-bookkeeping) journal lines consumed.
     actions_consumed: usize,
     /// The journal `Line::lineno` currently being resolved, set once per
@@ -364,6 +382,7 @@ impl<'a> Replayer<'a> {
         plan: EventPlan,
         gain_produces: HashMap<u8, VecDeque<(bool, i32)>>,
         future_military_needs: HashMap<u8, Vec<FutureNeed>>,
+        colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     ) -> Self {
         // The seed is thrown away semantically -- every field it determines
         // (deck order, starting row/hand contents) is SIMULATED filler this
@@ -385,6 +404,7 @@ impl<'a> Replayer<'a> {
             next_prep: 0,
             auto_passed: [0; 4],
             colonize_approximated: false,
+            colonize_sacrifices,
             actions_consumed: 0,
             current_lineno: 0,
             gain_produces,
@@ -566,7 +586,7 @@ impl<'a> Replayer<'a> {
             // unconditionally, same as the pre-existing fallback below did
             // for the `decider != expected_actor` case -- this subsumes it.
             if matches!(self.state.pending.top(), Some(Pending::Colonize(_))) {
-                self.auto_drain_colonize()?;
+                self.drain_colonize()?;
                 continue;
             }
             // A live `Pending::Auction` DOES have real `Move`s in the
@@ -590,6 +610,11 @@ impl<'a> Replayer<'a> {
             // binary must not silently pick a real decision for a human, so
             // it fails loudly instead of guessing.
             if matches!(self.state.pending.top(), Some(Pending::Auction(_))) {
+                // Before ANY move is applied against this auction, whether
+                // the journal's own bid/pass below or the forced auto-pass
+                // -- either can be the one that settles it, and settling it
+                // snapshots the winner's hand. See the method's own doc.
+                self.ground_auction_winner_hand();
                 let real_response = decider == expected_actor && matches!(upcoming.0, ActionClass::Bid | ActionClass::Pass);
                 if !real_response {
                     let legal = legal::legal_moves(&self.state);
@@ -779,11 +804,121 @@ impl<'a> Replayer<'a> {
         Ok(())
     }
 
+    /// Ground the bonus cards the journal says the auction currently on top
+    /// is about to be won with, BEFORE the winning bid/pass is applied.
+    ///
+    /// The timing is forced by the engine, not chosen here: `interact::
+    /// auction_move` runs the whole colonization synchronously the moment
+    /// the auction settles, and `interact::colonize` SNAPSHOTS the winner's
+    /// military hand into `Pending::Colonize::bpool` at that instant. A
+    /// bonus card grounded any later than this could never be sent, so the
+    /// engine would be forced to make up the difference out of army units
+    /// the human never spent.
+    ///
+    /// Only fires when the queue front really belongs to THIS auction --
+    /// its actor is still a live bidder and its territory family matches the
+    /// card being auctioned. An auction every player passes produces no
+    /// `"colonizes"` line at all, and without both checks that missing entry
+    /// would silently hand a later auction's winning cards to somebody now.
+    fn ground_auction_winner_hand(&mut self) {
+        let Some(Pending::Auction(a)) = self.state.pending.top() else { return };
+        let Some(sac) = self.colonize_sacrifices.front() else { return };
+        // `base_name`, not `name`: the card table's `name` carries the age
+        // suffix (`"Vast Territory (I)"`) that BGO's journal never prints.
+        if !a.active().contains(&sac.actor) || a.card.get().base_name != sac.territory {
+            return;
+        }
+        let actor = sac.actor;
+        let mut needed: HashMap<CardId, usize> = HashMap::new();
+        for clause in &sac.clauses {
+            if let SacrificeClause::Bonus(id) = clause {
+                *needed.entry(*id).or_default() += 1;
+            }
+        }
+        let hand = &mut self.state.players[actor as usize].hand_military;
+        for (card, count) in needed {
+            let have = hand.as_slice().iter().filter(|&&id| id == card).count();
+            for _ in have..count {
+                hand.push(card);
+            }
+        }
+    }
+
+    /// Resolve the open `Pending::Colonize` against the journal's own
+    /// `"Sacrificed Units:; ..."` list -- one `Move::SendUnit` /
+    /// `Move::SendBonus` / `Move::SendDiscard` per clause, then
+    /// `Move::SendDone`.
+    ///
+    /// Falls back to [`Replayer::approximate_colonize`] (and records the
+    /// game as approximated) whenever the journal's next piece is not a
+    /// legal continuation here -- which means this binary's reconstruction
+    /// of the colonizer's army or hand has already diverged, so forcing the
+    /// move would be faking state rather than replaying it.
+    fn drain_colonize(&mut self) -> Result<(), MismatchKind> {
+        let Some(Pending::Colonize(c)) = self.state.pending.top() else { return Ok(()) };
+        let player = c.player;
+        let Some(sac) = self.colonize_sacrifices.front() else {
+            return self.approximate_colonize();
+        };
+        if sac.actor != player {
+            return self.approximate_colonize();
+        }
+        let sac = self.colonize_sacrifices.pop_front().expect("just peeked");
+        for _ in 0..64 {
+            let Some(Pending::Colonize(c)) = self.state.pending.top() else { return Ok(()) };
+            // What the journal still owes, as a multiset difference against
+            // what `colonize_auto` has already forced in on its own.
+            let mut owed: Vec<SacrificeClause> = sac.clauses.clone();
+            for &id in c.units.as_slice() {
+                remove_first_clause(&mut owed, SacrificeClause::Unit(id));
+            }
+            for &id in c.bonuses.as_slice() {
+                remove_first_clause(&mut owed, SacrificeClause::Bonus(id));
+            }
+            for _ in 0..c.discards.len() {
+                remove_first_clause(&mut owed, SacrificeClause::CookDiscard);
+            }
+            // §11.3's "at least one unit" floor is a floor on the SACRIFICE,
+            // and `interact::colonize_moves` offers nothing but units until
+            // it is met -- so a unit always has to go first when none has
+            // been committed yet.
+            let next = if c.units.is_empty() {
+                owed.iter().find(|cl| matches!(cl, SacrificeClause::Unit(_))).copied()
+            } else {
+                owed.first().copied()
+            };
+            let legal = legal::legal_moves(&self.state);
+            let mv = match next {
+                Some(SacrificeClause::Unit(card)) => Move::SendUnit { card },
+                Some(SacrificeClause::Bonus(card)) => Move::SendBonus { card },
+                // Cook's discard names no card; any candidate the engine
+                // still offers is equally consistent with the journal, which
+                // recorded only that a discard happened.
+                Some(SacrificeClause::CookDiscard) => {
+                    match legal.as_slice().iter().find(|m| matches!(m, Move::SendDiscard { .. })) {
+                        Some(&m) => m,
+                        None => return self.approximate_colonize(),
+                    }
+                }
+                None => Move::SendDone,
+            };
+            if !legal.as_slice().contains(&mv) {
+                return self.approximate_colonize();
+            }
+            apply::apply(&mut self.state, mv);
+        }
+        Err(MismatchKind::StuckPending(format!(
+            "colonize sacrifice from line {} did not resolve in 64 steps",
+            sac.lineno
+        )))
+    }
+
     /// Repeatedly pick the engine's own first-offered continuation of an
-    /// open `Pending::Colonize` until it clears. Not verified against
-    /// `"Sacrificed Units:; ..."` -- see the module doc's "gives up on"
-    /// section. Records that this game's colonize sacrifice is approximate.
-    fn auto_drain_colonize(&mut self) -> Result<(), MismatchKind> {
+    /// open `Pending::Colonize` until it clears -- the fallback for a
+    /// colonization whose journal record [`Replayer::drain_colonize`] could
+    /// not follow. Records that this game's colonize sacrifice is
+    /// approximate.
+    fn approximate_colonize(&mut self) -> Result<(), MismatchKind> {
         self.colonize_approximated = true;
         for _ in 0..64 {
             if !matches!(self.state.pending.top(), Some(Pending::Colonize(_))) {
@@ -1505,6 +1640,137 @@ fn prescan_future_military_needs(
     out
 }
 
+// ---------------------------------------------------------------------
+// Pre-scan: the colonization sacrifice record
+// ---------------------------------------------------------------------
+
+/// One thing physically committed to a colonization force, read off its own
+/// clause of a `"<Color> colonizes a <Territory> Sacrificed Units:; ..."`
+/// line. BGO writes ONE CLAUSE PER COMMITTED PIECE, exactly like the
+/// `"<Color> defends ..."` line does (see [`DefenseClause`]) -- the module
+/// doc's old claim that this file could not resolve the sacrifice was about
+/// effort, not about the journal withholding the facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SacrificeClause {
+    /// `"1 Warrior"` / `"1 Knights"` / ... -- an army unit token sacrificed
+    /// from the board. The unit type alone is a full identity: each of the
+    /// ten unit cards has a distinct name and lives in exactly one age.
+    Unit(CardId),
+    /// `"1 Colonization card +<n>"` -- `n` is 1, 2 or 3 and is the card's
+    /// own printed, unique-per-age identity, the same argument
+    /// [`DefenseClause::Bonus`] rests on.
+    Bonus(CardId),
+    /// `"1 Military card +1"` -- James Cook's discard-for-force. The card
+    /// itself is NOT named (any non-bonus hand card qualifies), so only the
+    /// COUNT of these is a journal fact.
+    CookDiscard,
+}
+
+/// The whole force one `"<Color> colonizes ..."` line records, in journal
+/// order. `lineno` is only carried for error reporting.
+#[derive(Debug, Clone)]
+struct ColonizeSacrifice {
+    lineno: usize,
+    actor: u8,
+    /// The territory's name WITHOUT its age -- BGO never prints the age, and
+    /// the six territory families each have one card per age I/II/III, so
+    /// this is a family name, not a card identity. Used only to confirm that
+    /// the queue front really belongs to the auction currently open (see
+    /// [`Replayer::ground_auction_winner_hand`]), never to pick a card.
+    territory: String,
+    clauses: Vec<SacrificeClause>,
+}
+
+/// The unit card BGO's sacrifice clause `name` refers to. BGO prints the
+/// card's own name verbatim for every unit except `Warriors`, which it
+/// writes in the singular; spelled out as a `match` rather than as
+/// de-pluralising string surgery so a future unit whose journal spelling
+/// differs fails to resolve loudly instead of being mangled into some other
+/// card.
+fn sacrificed_unit_card(name: &str, card_index: &HashMap<&'static str, CardId>) -> Option<CardId> {
+    let card_name = match name {
+        "Warrior" => "Warriors",
+        other => other,
+    };
+    let &id = card_index.get(card_name)?;
+    id.kind().is_unit().then_some(id)
+}
+
+/// The unique card that prints `colonization_bonus == bonus` (1, 2 or 3 --
+/// one per age I/II/III). `None` for any other value, which would mean BGO
+/// printed a bonus this binary's card table has no card for.
+fn colonization_bonus_card(bonus: i16) -> Option<CardId> {
+    (0..crate::CARDS.len() as u16)
+        .map(CardId)
+        .find(|id| id.kind() == CardType::Bonus && id.get().effects.colonization_bonus == bonus)
+}
+
+/// Parse every committed-piece clause out of a `"<Color> colonizes a
+/// <Territory> Sacrificed Units:; ..."` line. `None` means `text` is not a
+/// colonize line at all. Clauses this function does not recognise are
+/// SKIPPED, not errors: the same semicolon list also carries the
+/// `"Colonization bonus: +N"` state total, the `"Total force: N"`
+/// bookkeeping line, the territory's own reward clause, and BGO's
+/// deck-reshuffle notice, none of which name a committed card.
+fn parse_sacrifice_clauses(
+    text: &str,
+    card_index: &HashMap<&'static str, CardId>,
+) -> Option<(String, Vec<SacrificeClause>)> {
+    let (_, rest) = actor_and_rest(text)?;
+    let after = rest.strip_prefix("colonizes a ")?;
+    let (territory, list) = after.split_once(" Sacrificed Units:; ")?;
+    let mut out = Vec::new();
+    for clause in list.split("; ") {
+        let mut words = clause.split_whitespace();
+        let Some(n) = words.next().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let rest_words: Vec<&str> = words.collect();
+        let one = match rest_words.as_slice() {
+            ["Colonization", "card", bonus] => bonus
+                .strip_prefix('+')
+                .and_then(|b| b.parse::<i16>().ok())
+                .and_then(colonization_bonus_card)
+                .map(SacrificeClause::Bonus),
+            ["Military", "card", "+1"] => Some(SacrificeClause::CookDiscard),
+            [unit] => sacrificed_unit_card(unit, card_index).map(SacrificeClause::Unit),
+            _ => None,
+        };
+        if let Some(one) = one {
+            out.extend(std::iter::repeat(one).take(n as usize));
+        }
+    }
+    Some((territory.to_string(), out))
+}
+
+/// Drop the first occurrence of `clause` from `owed`, if it is there at
+/// all. Used to subtract what the engine has already forced into an open
+/// `Pending::Colonize` from what the journal's own clause list says the
+/// whole force was -- a multiset difference, so a force with two identical
+/// bonus cards in it only cancels one per committed copy.
+fn remove_first_clause(owed: &mut Vec<SacrificeClause>, clause: SacrificeClause) {
+    if let Some(at) = owed.iter().position(|c| *c == clause) {
+        owed.remove(at);
+    }
+}
+
+/// Every colonization in the journal, in order. One queue for the whole
+/// game rather than one per seat: the auctions themselves are strictly
+/// sequential (only one `Pending::Auction` can be open at a time), so the
+/// front of this queue is always the outcome of the auction currently in
+/// progress -- when that auction is won at all.
+fn prescan_colonize_sacrifices(
+    lines: &[Line],
+    card_index: &HashMap<&'static str, CardId>,
+) -> VecDeque<ColonizeSacrifice> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (color, _) = actor_and_rest(line.text)?;
+            let (territory, clauses) = parse_sacrifice_clauses(line.text, card_index)?;
+            Some(ColonizeSacrifice { lineno: line.lineno, actor: color.seat(), territory, clauses })
+        })
+        .collect()
+}
+
 /// Line indices to skip entirely because they are a `TakeCard` undone by a
 /// same-actor, same-card `PutBack` -- BGO's client-side undo (`corpus.rs`'s
 /// module doc: "~8% of raw takes are a human undoing their own take within
@@ -1638,6 +1904,7 @@ pub fn replay_game(
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
     let future_military_needs = prescan_future_military_needs(&lines, card_index);
+    let colonize_sacrifices = prescan_colonize_sacrifices(&lines, card_index);
 
     let mut mismatch: Option<Mismatch> = None;
     let mut completed = false;
@@ -1663,7 +1930,7 @@ pub fn replay_game(
     // record is a whole-game fact, so a contradiction in it invalidates
     // every turn, not just the one that exposed it.
     let journal: &[Line] = if mismatch.is_some() { &[] } else { &lines };
-    let mut r = Replayer::new(card_index, meta.players, plan, gain_produces, future_military_needs);
+    let mut r = Replayer::new(card_index, meta.players, plan, gain_produces, future_military_needs, colonize_sacrifices);
     r.record_decisions = record_decisions;
 
     'lines: for (i, line) in journal.iter().enumerate() {
@@ -2973,7 +3240,7 @@ mod tests {
     #[test]
     fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
         r.state.players[0].food = 0; // ...not enough food to spend it
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
@@ -2982,7 +3249,7 @@ mod tests {
     #[test]
     fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
@@ -3004,7 +3271,7 @@ mod tests {
     #[test]
     fn a_bid_that_exceeds_this_binarys_own_force_ceiling_is_reported_as_hidden_info_not_illegal_move() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -3033,7 +3300,7 @@ mod tests {
     #[test]
     fn without_the_reclassification_the_same_fixture_would_be_a_bare_illegal_move() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -3091,7 +3358,7 @@ mod tests {
     fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -3131,7 +3398,7 @@ mod tests {
     fn resolve_intervening_drains_the_colonizers_own_pending_colonize_even_when_they_are_also_next_up_for_something_unrelated(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -3168,7 +3435,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_passes_a_bidder_whose_own_ceiling_no_longer_clears_the_standing_bid() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -3206,7 +3473,7 @@ mod tests {
     #[test]
     fn resolve_intervening_refuses_to_guess_when_a_real_raise_is_still_available() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -3236,7 +3503,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10; // well past the one preparation's own line
         // `new_game` opens in the Action phase (round 1 has no politics);
         // this is the ordinary later-round shape.
@@ -3268,7 +3535,7 @@ mod tests {
         )
         .expect("a one-preparation journal is consistent");
         let prepared = plan.preparations[0].card;
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10;
         r.state.phase = Phase::Politics;
 
@@ -3297,7 +3564,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].leader = crate::CardId::by_name("Julius Caesar").expect("Caesar is in the table");
         r.state.phase = Phase::Politics;
         r.current_lineno = 6; // the "plays event" line on 5 has gone by
@@ -3323,7 +3590,7 @@ mod tests {
     #[test]
     fn a_passes_line_that_arrives_after_this_file_already_passed_for_that_player_is_a_confirmation() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Politics;
         r.resolve_political_decision(0).expect("nothing in the plan, so a pass");
         assert_eq!(r.auto_passed[0], 1);
@@ -3353,7 +3620,7 @@ mod tests {
     #[test]
     fn a_destroys_line_resolves_a_lose_pop_pending_the_same_way_as_destroy_own() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Bronze is one of the starting techs (`game::START_TECHS`), already
         // staffed with 2 workers -- no need to insert it.
         let bronze = CardId::by_name("Bronze").expect("Bronze is in the table");
@@ -3434,7 +3701,7 @@ mod tests {
     fn resolve_intervening_reports_a_stuck_pending_for_a_colonize_confirmation_line_once_control_has_already_returned_to_a_different_player(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -3453,5 +3720,171 @@ mod tests {
         let result = r.resolve_intervening(1, (ActionClass::Colonize, Some(territory)), false);
 
         assert!(result.is_err());
+    }
+
+    /// The whole point of the sacrifice record: BGO's colonize line is one
+    /// clause PER committed piece, not a bare force total. Real line from
+    /// game `7523818`, plus a second one carrying every other clause shape
+    /// the corpus contains (a repeated bonus card, a James Cook discard, and
+    /// the `"Colonization bonus:"` / `"Total force:"` / reward bookkeeping
+    /// clauses that name no card at all and must be skipped, not guessed at).
+    #[test]
+    fn a_colonize_line_names_every_sacrificed_unit_and_bonus_card_individually() {
+        let card_index = build_card_index();
+        let (territory, clauses) = parse_sacrifice_clauses(
+            "Purple colonizes a Vast Territory Sacrificed Units:; 1 Warrior; 1 Warrior; \
+             1 Colonization card +1; Total force: 4; Purple produces 3 food",
+            &card_index,
+        )
+        .expect("a colonize line parses");
+        assert_eq!(territory, "Vast Territory", "the age suffix is never printed");
+        assert_eq!(
+            clauses,
+            vec![
+                SacrificeClause::Unit(card_index["Warriors"]),
+                SacrificeClause::Unit(card_index["Warriors"]),
+                SacrificeClause::Bonus(colonization_bonus_card(1).unwrap()),
+            ]
+        );
+
+        let (_, clauses) = parse_sacrifice_clauses(
+            "Green colonizes a Strategic Territory Sacrificed Units:; 1 Knights; \
+             1 Colonization card +2; 1 Colonization card +2; 1 Military card +1; \
+             Colonization bonus: +2; Total force: 9; Green gets 2 population",
+            &card_index,
+        )
+        .expect("a colonize line parses");
+        assert_eq!(
+            clauses,
+            vec![
+                SacrificeClause::Unit(card_index["Knights"]),
+                SacrificeClause::Bonus(colonization_bonus_card(2).unwrap()),
+                SacrificeClause::Bonus(colonization_bonus_card(2).unwrap()),
+                // James Cook's discard is the ONE piece whose identity the
+                // journal really does withhold -- only its count is claimed.
+                SacrificeClause::CookDiscard,
+            ]
+        );
+
+        assert!(parse_sacrifice_clauses("Purple bids 3", &card_index).is_none(), "not a colonize line");
+    }
+
+    /// Each of the three military bonus cards prints a distinct colonization
+    /// value, so `"+N"` alone is a full card identity -- the same property
+    /// `defense_bonus_card` relies on, asserted here so a future card-table
+    /// edit that broke it could not pass silently.
+    #[test]
+    fn each_printed_colonization_bonus_value_identifies_exactly_one_card() {
+        for value in 1..=3 {
+            let matching: Vec<CardId> = (0..crate::CARDS.len() as u16)
+                .map(CardId)
+                .filter(|id| id.kind() == CardType::Bonus && id.get().effects.colonization_bonus == value)
+                .collect();
+            assert_eq!(matching.len(), 1, "colonization bonus +{value} must name exactly one card");
+            assert_eq!(colonization_bonus_card(value), Some(matching[0]));
+        }
+        assert_eq!(colonization_bonus_card(4), None, "the base game prints no +4 bonus card");
+    }
+
+    /// REGRESSION: the journal's own sacrifice list decides which units die,
+    /// not `interact::colonize_moves`'s weakest-first fallback ordering.
+    ///
+    /// The human here spent their KNIGHT and a +2 bonus card, keeping their
+    /// Warriors. The old auto-drain took the engine's first offered move at
+    /// every step, which is the weakest unit first -- it would have killed
+    /// the Warriors AND (still short of the bid) the Knights, permanently
+    /// removing an army token the human never spent and quietly lowering
+    /// every colonization ceiling and military strength that player had for
+    /// the rest of the game.
+    #[test]
+    fn a_colonization_sacrifices_exactly_the_units_the_journal_names_and_no_others() {
+        let card_index = build_card_index();
+        let warriors = card_index["Warriors"];
+        let knights = card_index["Knights"];
+        let bonus2 = colonization_bonus_card(2).unwrap();
+        let territory = card_index["Vast Territory (I)"];
+        let mut sacrifices = VecDeque::new();
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 107,
+            actor: 0,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(knights), SacrificeClause::Bonus(bonus2)],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), sacrifices);
+        // `new_game` already deals every player a Warriors tableau card.
+        r.state.players[0].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
+        r.state.players[0].techs.insert(knights, crate::state::TechSlot { workers: 1, stored: 0 });
+        r.state.players[0].hand_military = CardList::new();
+        r.state.players[0].hand_military.push(bonus2);
+
+        // Knight (2) + bonus (+2) is exactly the bid; so is Warrior +
+        // Warrior + bonus, which is what the weakest-first fallback picks.
+        crate::interact::colonize(&mut r.state, 0, territory, 4);
+        r.drain_colonize().expect("the journal's own list is legal here");
+
+        assert!(r.state.pending.is_empty(), "the force resolved");
+        assert_eq!(r.state.players[0].techs.get(warriors).map(|s| s.workers), Some(2), "the Warriors were kept");
+        assert_eq!(r.state.players[0].techs.get(knights).map(|s| s.workers), Some(0), "the Knight was sacrificed");
+        assert!(!r.state.players[0].hand_military.contains(bonus2), "the named bonus card left the hand");
+        assert!(!r.colonize_approximated, "this colonization was replayed, not approximated");
+    }
+
+    /// REGRESSION: the winner's hidden bonus cards must be grounded while
+    /// the auction is still OPEN. `interact::colonize` snapshots the hand
+    /// into `Pending::Colonize::bpool` the instant the auction settles, so a
+    /// card grounded any later can never be sent -- and the force has to be
+    /// made up out of army units the human never spent.
+    ///
+    /// Also pins the lookup to `Card::base_name`: `Card::name` carries the
+    /// age suffix (`"Vast Territory (I)"`) that BGO's journal never prints,
+    /// so matching on it makes this method silently never fire.
+    #[test]
+    fn the_auction_winners_named_bonus_cards_are_grounded_before_the_auction_settles() {
+        let card_index = build_card_index();
+        let bonus3 = colonization_bonus_card(3).unwrap();
+        let territory = card_index["Vast Territory (I)"];
+        let mut sacrifices = VecDeque::new();
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 107,
+            actor: 1,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(card_index["Warriors"]), SacrificeClause::Bonus(bonus3)],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), sacrifices);
+        r.state.players[1].hand_military = CardList::new();
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
+
+        r.ground_auction_winner_hand();
+
+        assert!(r.state.players[1].hand_military.contains(bonus3), "the winner's own named bonus card");
+        assert!(!r.state.players[0].hand_military.contains(bonus3), "nobody else's hand is touched");
+        assert!(r.colonize_sacrifices.front().is_some(), "grounding only PEEKS -- the drain still owes this entry");
+    }
+
+    /// The guard that keeps the peek honest: an auction every player passes
+    /// produces no `"colonizes"` line at all, so the queue front belongs to
+    /// some LATER auction and its cards must not be handed out now.
+    #[test]
+    fn a_queued_sacrifice_for_a_different_territory_grounds_nothing() {
+        let card_index = build_card_index();
+        let bonus3 = colonization_bonus_card(3).unwrap();
+        let mut sacrifices = VecDeque::new();
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 107,
+            actor: 1,
+            territory: "Wealthy Territory".to_string(),
+            clauses: vec![SacrificeClause::Bonus(bonus3)],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), sacrifices);
+        r.state.players[1].hand_military = CardList::new();
+        let elsewhere = card_index["Vast Territory (I)"];
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(elsewhere, &[1, 0], 1, 3, Some(1), 0)));
+
+        r.ground_auction_winner_hand();
+
+        assert!(r.state.players[1].hand_military.is_empty(), "a different auction's winnings stay hidden");
     }
 }
