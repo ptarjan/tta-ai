@@ -4608,7 +4608,7 @@ mod tests {
     #[test]
     fn a_logged_bid_is_taken_as_proof_the_bidder_held_the_force_to_pay_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.age_military = crate::Age::I;
         let territory = card_index["Vast Territory (I)"];
@@ -4639,7 +4639,7 @@ mod tests {
     #[test]
     fn grounding_a_bid_claims_the_fewest_and_smallest_bonus_cards_that_close_the_gap() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.age_military = crate::Age::III; // every bonus card is available
         let filler = card_index["Aggression: Raid (I)"];
         r.state.players[0].hand_military = CardList::new();
@@ -4665,7 +4665,7 @@ mod tests {
         let raid = card_index["Aggression: Raid (I)"];
         let mut needs: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
         needs.insert(0, vec![FutureNeed { lineno: 900, card: raid }]);
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), needs, VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), needs, VecDeque::new());
         r.state.age_military = crate::Age::III;
         r.current_lineno = 100; // the play is still ahead of us
         r.state.players[0].hand_military = CardList::new();
