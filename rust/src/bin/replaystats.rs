@@ -137,6 +137,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         if result.completed {
             n_completed += 1;
             round_reached_sum += meta.rounds as u64;
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                eprintln!("DEBUG completed: {}", meta.id);
+            }
             continue;
         }
         let Some(m) = &result.mismatch else {

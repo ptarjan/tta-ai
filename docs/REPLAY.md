@@ -1840,3 +1840,84 @@ on a real game. `analysis/index.tsv` holds these games' real final scores;
 cross-checking `game::scores(&state)` against them is the next natural
 step and was not done this pass (out of scope: this pass owned Take/Bid,
 not scoring).
+
+## Fourteenth pass: `IllegalMove: Pop` -- two more silently-dropped leader lines, Trade Routes wired into Pop, and one ENGINE BUG (WeakestPlayer's tie-break was backwards)
+
+(Landed concurrently with the Take/Bid pass just above -- the two were
+worked in parallel by different passes on different buckets, so the
+before/after numbers here are relative to THIS pass's own before/after
+runs, not to the Take pass's; see each section's own measurement table for
+what it actually held constant.)
+
+Re-measured at 175 (a freshly de-confounded number, per an earlier pass's own
+note that most of the previous count was downstream of a card-age bug since
+fixed). Four fixes, in landing order:
+
+1. **REPLAYER BUG**: "Alexander dies after building his great Empire" was
+   classified as pure flavour `Bookkeeping` and dropped -- it is really
+   `Move::RemoveLeaderYellow`, and dropping it lost the yellow token it always
+   carries, drifting `pop_cost` for the rest of the game.
+2. **REPLAYER BUG**: the Pop handler never tried `Move::TradeFoodAsResource`/
+   `TradeResourceAsFood` (Trade Routes Agreement), and `ActionClass::Destroy`
+   never recognised a `ChoiceKind::LosePop` pending (only `DestroyOwn`) --
+   both wired in, gated on the journal's own stated numbers so neither can
+   mask an unrelated mismatch.
+3. **ENGINE BUG**: `events::apply_single_target`'s tie-break used the SAME
+   current-player-first order for `WeakestPlayer` (a penalty) as
+   `StrongestPlayer` (a bonus) -- backwards for the penalty half. RULES_SPEC
+   §5.3 "ties broken in favor of the current player" is directional: favoring
+   the current player means picking them FIRST for a bonus, LAST for a
+   penalty. Settled by measurement, not argument: of 1,011 games, 63 had a
+   genuine `WeakestPlayer` strength tie; the old (un-reversed) pick matched
+   the journal's real target once, the reversed pick matches 62. Confirmed
+   correct on real self-play too, not just this replayer -- flagged and the
+   climb was halted/restarted for it.
+4. **REPLAYER BUG**: "Christopher Columbus discovers &lt;Age&gt; / &lt;Territory&gt;" (his
+   printed "remove Columbus to colonize a territory for free" ability) was
+   also silently dropped -- "Christopher Columbus" is itself a known card
+   name, so the line matched `classify`'s generic "known card name leads the
+   line" `Bookkeeping` catch-all. This is the one line in the whole corpus
+   with neither a leading colour nor a trailing consequence clause naming the
+   actor; `Line` gained a `color` field (column 2, previously parsed and
+   discarded) to read it. The territory also needed grounding into
+   `hand_military` before applying (same pattern as `DeclareWar`/
+   `PlayAggression`), since it is routinely the FIRST evidence of that exact
+   card.
+
+### Sub-histogram (rebuilt fresh each time, not inherited from the earlier pass)
+
+Before any fix: 175 failures, split roughly 24 games "pending sits open and
+blocks the actor's own Pop" (most from the WeakestPlayer bug above -- a
+tied penalty landing on the wrong, currently-acting player), ~11 the
+Alexander line, ~28 the Columbus line (all correlated 1:1 with a preceding
+"Christopher Columbus discovers" line), and the rest a long tail of small
+food/yellow-bank drift this pass did not chase further (`docs/REPLAY.md`'s
+long-standing "gives up on" list). After all four fixes: 90 remain, of
+which 56 are that same drift (`stated == our pop_cost`, but our `food` is a
+few short -- no single dominant cause; leaders/rounds/player-counts spread
+evenly, unlike the Columbus cluster), 17 are a genuinely different pending
+(`PlunderSplit`/`Raid` choices, aggression-defense territory, left alone),
+11 a residual cost-tier mismatch with no shared leader this time, and 5 a
+plain civil-action shortage from an upstream bucket.
+
+### Measurement (`replaystats`, full 1,011-game corpus, all four fixes plus a
+### concurrent worker's unrelated Colonize/Auction fix landed in between)
+
+| | before this pass | after |
+|---|---|---|
+| mean rounds reached (of 19.27) | 7.83 | **9.84** |
+| decisions in Age II or later | 19.1% | **33.9%** |
+| `IllegalMove: Pop` | 175 | **90** |
+| games completed | 0 | **4** |
+
+The four completions are the first this project has ever replayed a whole
+game with every human action legal -- but NOT, yet, anything to check
+`analysis/index.tsv`'s real final scores against: `replay_game`'s
+`completed` flag is set purely by reaching the journal's own `"End of
+game"` marker line, independent of whether the RECONSTRUCTED engine state
+ever actually flips `state.game_over` (`game::finish_game`, only called
+from `advance_turn`'s own final-round wrap). All four completions have
+`state.game_over == false` at that point (`replay`'s own `n_score_checked`
+stays 0), so `GameResult::engine_scores` is `None` and there is still
+nothing to compare. Left open -- outside this pass's bucket -- but worth
+knowing before the next pass that reaches for `analysis/index.tsv`.
