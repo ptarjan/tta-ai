@@ -3116,6 +3116,52 @@ fn is_pure_confirmation_line(class: ActionClass) -> bool {
     matches!(class, ActionClass::PlayEvent | ActionClass::WinAuction | ActionClass::Colonize | ActionClass::WinWar)
 }
 
+/// Catch `state.age_civil` up to the journal's own age column
+/// (`game::force_civil_age_at_least`'s own doc explains why this
+/// reconstruction's `civil_deck` can lag the true deck's depletion, and why
+/// reading BGO's authoritative age column is correct rather than
+/// approximating it). A no-op on every line where this reconstruction's own
+/// age already matches or leads (the overwhelmingly common case).
+///
+/// REPLAYER BUG (found chasing `IllegalMove: Pop`, game `7522648` round 7,
+/// `docs/REPLAY.md`'s handoff): BGO logs the age column per LINE, not per
+/// turn-in-progress -- a turn whose own `End turn` line is still tagged the
+/// OLD age (e.g. "I") can leave a `DiscardMilitary` choice open
+/// (`interact::discard_excess_military` returned early, `economy::
+/// end_of_turn` not yet run its own production/consumption steps) that only
+/// gets drained by `resolve_intervening` while processing the FOLLOWING
+/// line, which is already tagged the NEW age (e.g. "II"). Forcing the age
+/// (and with it `advance_age`'s §12.2.4 "-2 yellow_bank" deduction, once per
+/// surviving player) unconditionally at the top of that following line's own
+/// iteration ran it BEFORE the stalled player's own `end_of_turn` had
+/// actually completed -- so their OWN round's food consumption was computed
+/// off an already-decremented `yellow_bank`, one whole age transition early.
+/// Confirmed against game `7522648`: the journal's own "End turn ... 1 food
+/// - consumption: 1" for Orange's round-7 turn requires the PRE-deduction
+/// `yellow_bank` (13, consumption 1); this binary was computing consumption
+/// off the POST-deduction value (11, consumption 2) because the age-II line
+/// ("Purple passes Political Phase", the very next line) forced the
+/// deduction before `resolve_intervening` had drained Orange's own
+/// still-open `DiscardMilitary` choice and let `end_of_turn` finish.
+///
+/// Deferring the force-forward while ANY decision or deferred effect from an
+/// earlier line is still outstanding (`pending`/`queue` nonempty) lets that
+/// earlier work complete under the age it actually happened in; the very
+/// next line where both are empty again calls this same function (still
+/// unconditional up to that point) and brings `state.age_civil` up to date
+/// before anything that truly belongs to the new age is applied.
+/// `pending`/`queue` are empty at the top of the loop on ordinary lines
+/// (each branch's own `resolve_intervening`+`try_apply` pair drains both
+/// before the loop moves on), so this is a no-op there, same as the
+/// journal-age-already-caught-up no-op above.
+fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
+    if state.pending.is_empty() && state.queue.is_empty() {
+        if let Some(age) = parse_age(journal_age) {
+            game::force_civil_age_at_least(state, age);
+        }
+    }
+}
+
 /// Replay one game's journal through the real engine. `record_decisions`
 /// gates [`Decision`] snapshotting (see the module doc) -- `false` for
 /// `replay`'s own binary, `true` for `agreement.rs`'s move-agreement
@@ -3187,23 +3233,11 @@ pub fn replay_game(
     let mut ca_take_spend_this_turn: Vec<i32> = vec![0; meta.players as usize];
 
     'lines: for (i, line) in journal.iter().enumerate() {
-        // REPLAYER BUG: this reconstruction's own `civil_deck` can lag the
-        // true deck's depletion (`game::force_civil_age_at_least`'s own doc
-        // -- `Replayer::ground_row_slot` forces row identities directly
-        // rather than draining `civil_deck` through the ordinary `deal`
-        // path in lockstep with every real draw), which delays
-        // `game::advance_age`'s normal civil_deck-empty trigger and, with
-        // it, `antiquate`'s hand cull -- BGO's own journal states the true
-        // civil age in-band on every line (column 3), so read that
-        // authoritative fact and catch this reconstruction's age up to it
-        // BEFORE processing the line, the same "read what BGO already
-        // states rather than approximate it" precedent `set_last_round`
-        // (below) already established for §12.3's last-round fact. A
-        // no-op on every line where this reconstruction's own age already
-        // matches or leads (the overwhelmingly common case).
-        if let Some(age) = parse_age(line.age) {
-            game::force_civil_age_at_least(&mut r.state, age);
-        }
+        // Catch this reconstruction's `state.age_civil` up to what the
+        // journal's own age column already proves happened -- see
+        // `catch_up_civil_age`'s own doc for why this must be deferred
+        // while an earlier line's work is still outstanding.
+        catch_up_civil_age(&mut r.state, line.age);
         // REPLAYER BUG: BGO's own journal states §12.3's "Age IV began ->
         // this round or the next is last" fact in-band ("Last turn Game ends
         // at the end of the starting round", one line per surviving player,
@@ -4734,6 +4768,54 @@ mod tests {
         // case a future caller ever feeds it raw, unfiltered text.
         assert_eq!(parse_age("age"), None);
         assert_eq!(parse_age(""), None);
+    }
+
+    /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
+    /// `docs/REPLAY.md`'s handoff): a player's own `End turn` line can leave
+    /// a `DiscardMilitary` choice open (`economy::end_of_turn` interrupted
+    /// before its own production/consumption steps), and the very NEXT
+    /// journal line is routinely already tagged the new age. Catching the
+    /// age up right then would apply §12.2.4's "-2 yellow_bank" deduction
+    /// to a player whose OWN end-of-turn consumption for the OLD age has not
+    /// run yet, back-dating the deduction onto their still-in-progress turn.
+    #[test]
+    fn catch_up_civil_age_defers_while_a_discard_choice_from_an_earlier_line_is_still_open() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_civil = crate::cards::Age::I;
+        let yellow_before = (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank);
+
+        let mut options = crate::state::OptionList::new();
+        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
+        options.push(ChoiceOption::Card(legion));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
+
+        catch_up_civil_age(&mut r.state, "II");
+
+        assert_eq!(r.state.age_civil, crate::cards::Age::I, "must not advance while the discard is still open");
+        assert_eq!(
+            (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank),
+            yellow_before,
+            "§12.2.4's deduction must not fire before the interrupted end_of_turn resumes"
+        );
+    }
+
+    /// The other half of the fix above: once nothing is outstanding, the
+    /// SAME call still catches the age up (and runs §12.2.4's deduction) --
+    /// this is a deferral, not a skip.
+    #[test]
+    fn catch_up_civil_age_advances_once_pending_and_queue_are_both_empty() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_civil = crate::cards::Age::I;
+        assert!(r.state.pending.is_empty());
+        assert!(r.state.queue.is_empty());
+        let yellow_before = r.state.players[0].yellow_bank;
+
+        catch_up_civil_age(&mut r.state, "II");
+
+        assert_eq!(r.state.age_civil, crate::cards::Age::II);
+        assert_eq!(r.state.players[0].yellow_bank, yellow_before - 2, "§12.2.4");
     }
 
     #[test]
