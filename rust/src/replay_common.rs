@@ -403,6 +403,20 @@ struct Replayer<'a> {
     /// `"Raid casualties ..."` -- see `prescan_raid_destroys`'s doc and
     /// `resolve_intervening`'s `ChoiceKind::Raid` handling, which drains it.
     raid_destroys: VecDeque<CardId>,
+    /// Per-actor FIFO of territory `CardId`s pulled off every journal-
+    /// observed `"<Color> loses <Territory> (<Age>)"` line -- the resolution
+    /// of a REAL (multi-colony) `Pending::Choice(LoseColony)`, distinct from
+    /// the single-colony auto-resolve glued onto the triggering event's own
+    /// line -- see `prescan_lose_colonies`'s doc and `resolve_intervening`'s
+    /// `ChoiceKind::LoseColony` handling, which drains it.
+    lose_colonies: HashMap<u8, VecDeque<CardId>>,
+    /// Per-actor FIFO of wonder `CardId`s pulled off every journal-observed
+    /// `"Ravages of Time <Wonder> crumble(s)"` line -- the resolution of a
+    /// REAL (multi-wonder) `Pending::Choice(FlipWonder)`, distinct from the
+    /// single-wonder auto-resolve glued onto the triggering event's own line
+    /// -- see `prescan_flip_wonders`'s doc and `resolve_intervening`'s
+    /// `ChoiceKind::FlipWonder` handling, which drains it.
+    flip_wonders: HashMap<u8, VecDeque<CardId>>,
     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
     /// over the rest of the journal -- see `discard_solver`'s module doc and
     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
@@ -449,6 +463,8 @@ impl<'a> Replayer<'a> {
         infiltrates: HashMap<u8, VecDeque<bool>>,
         lose_pop_destroys: HashMap<u8, VecDeque<(usize, CardId)>>,
         raid_destroys: VecDeque<CardId>,
+        lose_colonies: HashMap<u8, VecDeque<CardId>>,
+        flip_wonders: HashMap<u8, VecDeque<CardId>>,
         future_military_needs: HashMap<u8, Vec<FutureNeed>>,
         colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     ) -> Self {
@@ -481,6 +497,8 @@ impl<'a> Replayer<'a> {
             infiltrates,
             lose_pop_destroys,
             raid_destroys,
+            lose_colonies,
+            flip_wonders,
             claimed_destroy_lines: std::collections::HashSet::new(),
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
@@ -894,6 +912,96 @@ impl<'a> Replayer<'a> {
                         apply::apply(&mut self.state, Move::Choose { n: n as u8 });
                         continue;
                     }
+                    // A `Pending::Choice(LoseColony)` (Independence
+                    // Declaration: "the weakest civilization loses 1 colony,
+                    // the player chooses which one") is opened for the
+                    // victim only when they hold MORE THAN ONE colony --
+                    // `push_choice`'s own auto-resolve-if-len-1 rule settles
+                    // a single-colony victim with no `Pending` at all,
+                    // printed inline on the SAME `"plays event"` line as
+                    // `"<Territory> declares its independence from
+                    // <Color>"` (glued in by `resolve_political_decision`/
+                    // `PrepareEvent` machinery -- the shape the earlier
+                    // handoff worried was unrecoverable). The REAL,
+                    // multi-colony choice resolves on its own SEPARATE
+                    // later line instead, in a different, unambiguous shape
+                    // this function never previously read: `"<Color> loses
+                    // <Territory family> (<Age numeral>)"` -- e.g. `"Purple
+                    // loses Historic Territory (I)"` -- confirmed (`grep`
+                    // over the full corpus) to always be its own clean,
+                    // single-clause line with no trailing `;` continuation,
+                    // and never to collide with the auto-resolved shape
+                    // (which never appears on its own line at all). Drained
+                    // here from a per-actor `lose_colonies` FIFO
+                    // (`prescan_lose_colonies`), validated against the live
+                    // choice's own options and skipped exactly like `Raid`'s
+                    // FIFO above, for the same "an earlier auto-resolved
+                    // single-colony case could otherwise misalign the
+                    // queue" reason.
+                    ChoiceKind::LoseColony => {
+                        let q = self.lose_colonies.entry(decider).or_default();
+                        let n = loop {
+                            let Some(&territory) = q.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "LoseColony choice open for player {decider} but no journal-observed \
+                                     \"loses <Territory>\" line left to resolve it with"
+                                )));
+                            };
+                            if let Some(idx) =
+                                c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == territory))
+                            {
+                                q.pop_front();
+                                break idx;
+                            }
+                            q.pop_front();
+                        };
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
+                    // A `Pending::Choice(FlipWonder)` (Ravages of Time:
+                    // "each player chooses one of their completed Age A/I
+                    // wonders and turns it face down") is opened for a
+                    // player only when they hold MORE THAN ONE qualifying
+                    // wonder -- the single-candidate case again auto-
+                    // resolves with no `Pending`, printed inline on the
+                    // triggering `"plays event"` line itself (`"The <Wonder>
+                    // crumble(s)"`, glued on next to `"<Color> must choose a
+                    // wonder to ravage"` for whoever still owes a real
+                    // choice). The REAL choice's own resolution is a
+                    // SEPARATE later line with a DIFFERENT leading phrase
+                    // this function never previously read: `"Ravages of
+                    // Time <Wonder> crumble(s)"` -- no leading colour in the
+                    // text at all, `Line::color` (column 2) is the only
+                    // place the actor is, the same "no leading colour"
+                    // shape `ColumbusColonize` already established a
+                    // precedent for. Confirmed (`grep` over the full
+                    // corpus) this standalone shape never carries a
+                    // trailing `;` continuation and never collides with the
+                    // auto-resolved inline shape (which is never its own
+                    // line). Drained here from a per-actor `flip_wonders`
+                    // FIFO (`prescan_flip_wonders`), validated against the
+                    // live choice's own options and skipped exactly like
+                    // `Raid`/`LoseColony` above.
+                    ChoiceKind::FlipWonder => {
+                        let q = self.flip_wonders.entry(decider).or_default();
+                        let n = loop {
+                            let Some(&wonder) = q.front() else {
+                                return Err(MismatchKind::StuckPending(format!(
+                                    "FlipWonder choice open for player {decider} but no journal-observed \
+                                     \"Ravages of Time\" line left to resolve it with"
+                                )));
+                            };
+                            if let Some(idx) =
+                                c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == wonder))
+                            {
+                                q.pop_front();
+                                break idx;
+                            }
+                            q.pop_front();
+                        };
+                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        continue;
+                    }
                     // Every other `ChoiceKind` is left alone HERE, on
                     // purpose -- listed individually rather than behind a
                     // `_` wildcard, so a future `ChoiceKind` variant fails
@@ -902,24 +1010,19 @@ impl<'a> Replayer<'a> {
                     // exact shape that let all seven kinds this whole pass
                     // is working through go quietly unresolved for as long
                     // as they did, `docs/REPLAY.md`'s six/seven-pending-kind
-                    // passes). `LoseColony`/`FlipWonder` are the next two
-                    // kinds this same pass still owes (their own resolving
-                    // journal shapes, not yet wired in); `FreeCivil`/
-                    // `FoodOrRes`/`DestroyOwn` are the player's OWN
-                    // voluntary in-turn choice and fall through to the
-                    // `decider == expected_actor` shortcut a few lines
-                    // below, exactly like `DestroyOwn` always has; `Annex`/
-                    // `WarTech` have not been needed by any corpus game
-                    // sampled so far; `PactOffer` is handled by the bottom
-                    // match's own explicit arm (auto-`Refuse`) for the
-                    // `decider != expected_actor` case. Falling through here
-                    // for all eight is IDENTICAL to this match's predecessor
-                    // (a chain of `if` statements that simply didn't mention
-                    // them) -- no behaviour changed for any of them, only
+                    // passes). `FreeCivil`/`FoodOrRes`/`DestroyOwn` are the
+                    // player's OWN voluntary in-turn choice and fall through
+                    // to the `decider == expected_actor` shortcut a few
+                    // lines below, exactly like `DestroyOwn` always has;
+                    // `Annex`/`WarTech` have not been needed by any corpus
+                    // game sampled so far; `PactOffer` is handled by the
+                    // bottom match's own explicit arm (auto-`Refuse`) for
+                    // the `decider != expected_actor` case. Falling through
+                    // here for all six is IDENTICAL to this match's
+                    // predecessor (a chain of `if` statements that simply
+                    // didn't mention them) -- no behaviour changed, only
                     // exhaustiveness was added.
-                    ChoiceKind::LoseColony
-                    | ChoiceKind::FlipWonder
-                    | ChoiceKind::FreeCivil { .. }
+                    ChoiceKind::FreeCivil { .. }
                     | ChoiceKind::FoodOrRes { .. }
                     | ChoiceKind::DestroyOwn
                     | ChoiceKind::Annex { .. }
@@ -2457,6 +2560,67 @@ fn prescan_raid_destroys(lines: &[Line], card_index: &HashMap<&'static str, Card
     out
 }
 
+/// Pre-scans the whole journal once for every `"<Color> loses <Territory>
+/// (<Age numeral>)"` line -- the REAL resolution of a multi-colony
+/// Independence Declaration `Pending::Choice(LoseColony)`, e.g. `"Purple
+/// loses Historic Territory (I)"`. Unlike a bare territory family name (the
+/// shape [`ColonizeSacrifice::territory`] reads, ambiguous across the six
+/// families' three ages each) this line prints the SAME string
+/// `build_card_index` already keys every card's own `name` field by --
+/// territory cards are the one family whose `name` bakes the age suffix
+/// straight in (`"Historic Territory (I)"`, not a bare family name plus a
+/// separately-parsed numeral) -- so a direct index lookup on the line's own
+/// trailing text resolves the exact card, no roman-numeral parsing needed.
+/// See `Replayer::lose_colonies`'s doc and `resolve_intervening`'s
+/// `ChoiceKind::LoseColony` handling, which drains this per-actor.
+fn parse_lose_colony_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<(Color, CardId)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let territory_name = rest.strip_prefix("loses ")?;
+    let &id = index.get(territory_name)?;
+    (id.kind() == CardType::Territory).then_some((actor, id))
+}
+
+fn prescan_lose_colonies(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<CardId>> {
+    let mut out: HashMap<u8, VecDeque<CardId>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, id)) = parse_lose_colony_line(card_index, line.text) {
+            out.entry(actor.seat()).or_default().push_back(id);
+        }
+    }
+    out
+}
+
+/// Pre-scans the whole journal once for every `"Ravages of Time <Wonder>
+/// crumble(s)"` line -- the REAL resolution of a multi-wonder Ravages of
+/// Time `Pending::Choice(FlipWonder)`. This is the one other shape besides
+/// `ColumbusColonize` with NO leading colour in the text at all -- `Line::
+/// color` (column 2) is the only place the actor is, read via `Color::parse`
+/// exactly like that call site. Card names never carry a leading "The " the
+/// way the journal's own flavour text does (`"The Pyramids crumble"`,
+/// `"The Library of Alexandria crumbles"`), so it is stripped first; without
+/// that, [`longest_known_card_prefix`]'s decreasing-word-count search would
+/// never find a dictionary hit at all (`"The"` alone is never a card name)
+/// and every line would silently fail to parse instead of resolving. See
+/// `Replayer::flip_wonders`'s doc and `resolve_intervening`'s
+/// `ChoiceKind::FlipWonder` handling, which drains this per-actor.
+fn parse_ravages_of_time_line(index: &HashMap<&'static str, CardId>, color: &str, text: &str) -> Option<(Color, CardId)> {
+    let actor = Color::parse(color)?;
+    let after = text.strip_prefix("Ravages of Time ")?;
+    let after = after.strip_prefix("The ").unwrap_or(after);
+    let (id, _) = longest_known_card_prefix(index, after)?;
+    (id.kind() == CardType::Wonder).then_some((actor, id))
+}
+
+fn prescan_flip_wonders(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<CardId>> {
+    let mut out: HashMap<u8, VecDeque<CardId>> = HashMap::new();
+    for line in lines {
+        if let Some((actor, id)) = parse_ravages_of_time_line(card_index, line.color, line.text) {
+            out.entry(actor.seat()).or_default().push_back(id);
+        }
+    }
+    out
+}
+
 /// Pre-scans the whole journal once for every point where a player is
 /// observed playing a NAMED card out of their own military hand --
 /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
@@ -2759,6 +2923,8 @@ pub fn replay_game(
     let infiltrates = prescan_infiltrates(&lines);
     let lose_pop_destroys = prescan_lose_pop_destroys(&lines, card_index);
     let raid_destroys = prescan_raid_destroys(&lines, card_index);
+    let lose_colonies = prescan_lose_colonies(&lines, card_index);
+    let flip_wonders = prescan_flip_wonders(&lines, card_index);
     let future_military_needs = prescan_future_military_needs(&lines, card_index);
     let colonize_sacrifices = prescan_colonize_sacrifices(&lines, card_index);
 
@@ -2795,6 +2961,8 @@ pub fn replay_game(
         infiltrates,
         lose_pop_destroys,
         raid_destroys,
+        lose_colonies,
+        flip_wonders,
         future_military_needs,
         colonize_sacrifices,
     );
@@ -4725,7 +4893,7 @@ mod tests {
     #[test]
     fn civil_life_move_does_not_offer_pop_when_the_player_cannot_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1; // banked, but...
         r.state.players[0].food = 0; // ...not enough food to spend it
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), None);
@@ -4734,7 +4902,7 @@ mod tests {
     #[test]
     fn civil_life_move_offers_pop_when_the_player_can_actually_afford_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
@@ -4754,7 +4922,7 @@ mod tests {
     #[test]
     fn a_bid_no_possible_hand_could_have_paid_for_stays_an_honest_mismatch() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -4783,7 +4951,7 @@ mod tests {
     #[test]
     fn without_the_reclassification_the_same_fixture_would_be_a_bare_illegal_move() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -4841,7 +5009,7 @@ mod tests {
     fn resolve_intervening_auto_drains_a_still_open_auction_with_a_fake_bid_pass_when_called_for_a_different_expected_actor(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4892,7 +5060,7 @@ mod tests {
     fn resolve_intervening_returns_ok_once_the_game_is_over_even_though_decider_moved_on_and_no_longer_matches(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Mirrors the shape `finish_game` leaves behind: the round already
         // wrapped to the next seat (`state.current`, here player 0) before
         // the game-over check ran, nothing is pending, and the player this
@@ -4927,7 +5095,7 @@ mod tests {
     #[test]
     fn set_last_round_is_reachable_from_this_module_for_the_journals_last_turn_line() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.round = 9;
         r.state.current = r.state.start_player; // BGO logs one "Last turn" line per surviving player; whichever this module reads first pins `current` to that seat.
         game::set_last_round(&mut r.state);
@@ -4945,7 +5113,7 @@ mod tests {
     fn resolve_intervening_drains_the_colonizers_own_pending_colonize_even_when_they_are_also_next_up_for_something_unrelated(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -4982,7 +5150,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_passes_a_bidder_whose_own_ceiling_no_longer_clears_the_standing_bid() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -5020,7 +5188,7 @@ mod tests {
     #[test]
     fn resolve_intervening_refuses_to_guess_when_a_real_raise_is_still_available() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -5050,7 +5218,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10; // well past the one preparation's own line
         // `new_game` opens in the Action phase (round 1 has no politics);
         // this is the ordinary later-round shape.
@@ -5082,7 +5250,7 @@ mod tests {
         )
         .expect("a one-preparation journal is consistent");
         let prepared = plan.preparations[0].card;
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.current_lineno = 10;
         r.state.phase = Phase::Politics;
 
@@ -5111,7 +5279,7 @@ mod tests {
             2,
         )
         .expect("a one-preparation journal is consistent");
-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].leader = crate::CardId::by_name("Julius Caesar").expect("Caesar is in the table");
         r.state.phase = Phase::Politics;
         r.current_lineno = 6; // the "plays event" line on 5 has gone by
@@ -5137,7 +5305,7 @@ mod tests {
     #[test]
     fn a_passes_line_that_arrives_after_this_file_already_passed_for_that_player_is_a_confirmation() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Politics;
         r.resolve_political_decision(0).expect("nothing in the plan, so a pass");
         assert_eq!(r.auto_passed[0], 1);
@@ -5167,7 +5335,7 @@ mod tests {
     #[test]
     fn a_destroys_line_resolves_a_lose_pop_pending_the_same_way_as_destroy_own() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // Bronze is one of the starting techs (`game::START_TECHS`), already
         // staffed with 2 workers -- no need to insert it.
         let bronze = CardId::by_name("Bronze").expect("Bronze is in the table");
@@ -5205,7 +5373,7 @@ mod tests {
     #[test]
     fn resolve_intervening_drains_a_lose_pop_pending_open_for_a_different_player_than_expected_actor() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         // Player 1's own `LosePop`, exactly like the existing `DestroyOwn`-
         // shaped test above, but for the OTHER seat -- `expected_actor`
@@ -5250,7 +5418,7 @@ mod tests {
     #[test]
     fn resolve_intervening_skips_a_lose_pop_destroy_entry_that_does_not_match_the_live_choices_options() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.players[1].workers_free = 0;
         crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 1, n: 1 });
@@ -5287,7 +5455,7 @@ mod tests {
     #[test]
     fn resolve_intervening_drains_a_raid_pending_from_the_global_fifo() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
         let mut options = crate::state::OptionList::new();
@@ -5311,7 +5479,7 @@ mod tests {
     #[test]
     fn resolve_intervening_skips_a_raid_entry_that_does_not_match_the_live_choices_options() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
         // Iron is not among this live choice's own options at all -- it
@@ -5365,6 +5533,150 @@ mod tests {
         );
     }
 
+    /// `LoseColony` (Independence Declaration, the sixth of the seven
+    /// kinds): a still-open multi-colony `Pending::Choice(LoseColony)` used
+    /// to fall through to the generic catch-all, even though the real
+    /// choice's own resolution -- `"<Color> loses <Territory> (<Age
+    /// numeral>)"`, a SEPARATE line from the single-colony auto-resolve's
+    /// `"<Territory> declares its independence from <Color>"` (glued onto
+    /// the triggering `"plays event"` line itself) -- is right there in the
+    /// journal (`prescan_lose_colonies`). `resolve_intervening` now drains
+    /// it from a per-actor FIFO, validated against the live choice's own
+    /// options.
+    #[test]
+    fn resolve_intervening_drains_a_lose_colony_pending_for_the_matching_territory() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let historic_1 = CardId::by_name("Historic Territory (I)").expect("Historic Territory (I) is a known card");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(historic_1));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::LoseColony, options }));
+        r.lose_colonies.insert(1, VecDeque::from([historic_1]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the LoseColony choice must be fully resolved, not left open");
+        assert!(r.lose_colonies.get(&1).is_none_or(|q| q.is_empty()));
+    }
+
+    /// Companion to the test above: a queued `lose_colonies` entry that does
+    /// NOT match the live choice's own options (belonging to an EARLIER
+    /// single-colony case this same player already auto-resolved with no
+    /// `Pending` at all) must be skipped, not trusted by position.
+    #[test]
+    fn resolve_intervening_skips_a_lose_colony_entry_that_does_not_match_the_live_choices_options() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let historic_1 = CardId::by_name("Historic Territory (I)").expect("Historic Territory (I) is a known card");
+        // Wealthy Territory (II) is not among this live choice's own
+        // options at all -- it belongs to an earlier, already auto-resolved
+        // single-colony case for this same player.
+        let wealthy_2 = CardId::by_name("Wealthy Territory (II)").expect("Wealthy Territory (II) is a known card");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(historic_1));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::LoseColony, options }));
+        r.lose_colonies.insert(1, VecDeque::from([wealthy_2, historic_1]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty());
+        assert!(
+            r.lose_colonies.get(&1).is_none_or(|q| q.is_empty()),
+            "both the skipped mismatch and the real matching answer must be drained"
+        );
+    }
+
+    /// `FlipWonder` (Ravages of Time, the last of the seven kinds): a still-
+    /// open multi-wonder `Pending::Choice(FlipWonder)` used to fall through
+    /// to the generic catch-all, even though the real choice's own
+    /// resolution -- `"Ravages of Time <Wonder> crumble(s)"`, a SEPARATE
+    /// line with no leading colour at all (`Line::color` is the only place
+    /// the actor is) from the single-wonder auto-resolve's `"The <Wonder>
+    /// crumble(s)"` glued onto the triggering `"plays event"` line -- is
+    /// right there in the journal (`prescan_flip_wonders`). `resolve_
+    /// intervening` now drains it from a per-actor FIFO, validated against
+    /// the live choice's own options.
+    #[test]
+    fn resolve_intervening_drains_a_flip_wonder_pending_for_the_matching_wonder() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let pyramids = CardId::by_name("Pyramids").expect("Pyramids is a known wonder");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(pyramids));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::FlipWonder, options }));
+        r.flip_wonders.insert(1, VecDeque::from([pyramids]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the FlipWonder choice must be fully resolved, not left open");
+        assert!(r.flip_wonders.get(&1).is_none_or(|q| q.is_empty()));
+    }
+
+    /// Companion to the test above: a queued `flip_wonders` entry that does
+    /// NOT match the live choice's own options (an earlier, already auto-
+    /// resolved single-wonder case for this same player) must be skipped,
+    /// not trusted by position.
+    #[test]
+    fn resolve_intervening_skips_a_flip_wonder_entry_that_does_not_match_the_live_choices_options() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let pyramids = CardId::by_name("Pyramids").expect("Pyramids is a known wonder");
+        // Colossus is not among this live choice's own options at all.
+        let colossus = CardId::by_name("Colossus").expect("Colossus is a known wonder");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(pyramids));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::FlipWonder, options }));
+        r.flip_wonders.insert(1, VecDeque::from([colossus, pyramids]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty());
+        assert!(
+            r.flip_wonders.get(&1).is_none_or(|q| q.is_empty()),
+            "both the skipped mismatch and the real matching answer must be drained"
+        );
+    }
+
+    /// [`parse_lose_colony_line`]: the territory's printed `name` already
+    /// bakes the age suffix in (`"Historic Territory (I)"`), so this must
+    /// resolve the EXACT card, not a bare family name.
+    #[test]
+    fn parse_lose_colony_line_resolves_the_exact_aged_territory_card() {
+        let card_index = build_card_index();
+        let historic_1 = CardId::by_name("Historic Territory (I)").expect("Historic Territory (I) is a known card");
+        assert_eq!(
+            parse_lose_colony_line(&card_index, "Purple loses Historic Territory (I)"),
+            Some((Color::Purple, historic_1))
+        );
+    }
+
+    /// [`parse_ravages_of_time_line`]: the actor comes from `Line::color`
+    /// (column 2), not the text itself -- and a leading "The " in the
+    /// flavour text (present for some wonders, absent for others, e.g. "St.
+    /// Peter's Basilica") must not be mistaken for part of the card name.
+    #[test]
+    fn parse_ravages_of_time_line_reads_the_actor_from_column_two_and_strips_a_leading_the() {
+        let card_index = build_card_index();
+        let library = CardId::by_name("Library of Alexandria").expect("Library of Alexandria is a known card");
+        assert_eq!(
+            parse_ravages_of_time_line(&card_index, "Purple", "Ravages of Time The Library of Alexandria crumbles"),
+            Some((Color::Purple, library))
+        );
+        let basilica = CardId::by_name("St. Peter's Basilica").expect("St. Peter's Basilica is a known card");
+        assert_eq!(
+            parse_ravages_of_time_line(&card_index, "Grey", "Ravages of Time St. Peter's Basilica crumbles"),
+            Some((Color::Grey, basilica))
+        );
+    }
+
     /// `TakeRow` (International Agreement, `docs/REPLAY.md`'s six-pending-
     /// kind pass checkpoint): when the upcoming line is `expected_actor`'s
     /// own take of a card still among the open choice's own `Slot` options,
@@ -5375,7 +5687,7 @@ mod tests {
     #[test]
     fn resolve_intervening_defers_a_take_row_pending_when_the_upcoming_take_matches_one_of_its_slots() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         r.state.card_row[2] = iron;
@@ -5403,7 +5715,7 @@ mod tests {
     #[test]
     fn resolve_intervening_auto_declines_a_take_row_pending_via_stop_when_the_upcoming_line_does_not_match() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         r.state.card_row[2] = iron;
@@ -5434,7 +5746,7 @@ mod tests {
     #[test]
     fn apply_one_resolves_a_take_row_pending_via_choose_instead_of_a_bare_take() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         // Already grounded in slot 2 -- `ground_row_slot`'s first (trusted)
@@ -5479,7 +5791,7 @@ mod tests {
     #[test]
     fn resolve_intervening_drains_an_infiltrate_pending_using_the_journal_observed_pick() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         // Player 1 (the victim) has a wonder under construction to remove --
         // observable proof that the WONDER option (not Leader) was chosen.
@@ -5520,7 +5832,7 @@ mod tests {
     #[test]
     fn resolve_intervening_skips_an_infiltrate_entry_that_does_not_match_the_live_choices_options() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         let wonder = (0..crate::CARDS.len() as u16)
             .map(CardId)
@@ -5562,7 +5874,7 @@ mod tests {
     #[test]
     fn a_columbus_colonize_line_grounds_the_territory_before_applying_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         // `Move::ColumbusColonize` is a POLITICAL action (`legal::
         // politics_moves`, not `action_moves`), same as `RemoveLeaderYellow`.
         r.state.phase = Phase::Politics;
@@ -5595,7 +5907,7 @@ mod tests {
     #[test]
     fn a_barbarossa_enlist_line_applies_the_free_pop_increase_and_the_unit_build() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let warriors = CardId::by_name("Warriors").expect("Warriors is in the table");
@@ -5636,7 +5948,7 @@ mod tests {
     #[test]
     fn a_bach_upgrade_line_applies_the_cross_family_theater_conversion() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let theology = CardId::by_name("Theology").expect("in the table");
@@ -5679,7 +5991,7 @@ mod tests {
     #[test]
     fn a_patriotism_play_line_resolves_the_age_sibling_from_its_own_bonus_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let patriotism_a = CardId::by_name("Patriotism (A)").expect("in the table");
@@ -5715,7 +6027,7 @@ mod tests {
     #[test]
     fn a_reserves_play_line_resolves_the_age_sibling_from_its_own_gain_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let reserves_ii = CardId::by_name("Reserves (II)").expect("in the table");
@@ -5752,7 +6064,7 @@ mod tests {
     #[test]
     fn a_cultural_heritage_play_line_resolves_the_age_sibling_from_its_own_science_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
         let heritage_a = CardId::by_name("Cultural Heritage (A)").expect("in the table");
@@ -5786,7 +6098,7 @@ mod tests {
     #[test]
     fn a_revolutionary_idea_play_line_resolves_the_age_sibling_from_its_own_science_clause_not_the_earlier_take_guess() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.round = 2;
         let idea_ii = CardId::by_name("Revolutionary Idea (II)").expect("in the table");
@@ -5831,7 +6143,7 @@ mod tests {
     fn resolve_intervening_reports_a_stuck_pending_for_a_colonize_confirmation_line_once_control_has_already_returned_to_a_different_player(
     ) {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         let territory = (0..crate::CARDS.len() as u16)
             .map(CardId)
             .find(|id| id.kind() == CardType::Territory)
@@ -5941,7 +6253,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(knights), SacrificeClause::Bonus(bonus2)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         // `new_game` already deals every player a Warriors tableau card.
         r.state.players[0].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
         r.state.players[0].techs.insert(knights, crate::state::TechSlot { workers: 1, stored: 0 });
@@ -5982,7 +6294,7 @@ mod tests {
             clauses: vec![SacrificeClause::Unit(card_index["Warriors"]), SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
 
@@ -6008,7 +6320,7 @@ mod tests {
             clauses: vec![SacrificeClause::Bonus(bonus3)],
         });
         let mut r =
-            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), sacrifices);
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
         r.state.players[1].hand_military = CardList::new();
         let elsewhere = card_index["Vast Territory (I)"];
         r.state.pending.push(Pending::Auction(crate::state::Auction::restore(elsewhere, &[1, 0], 1, 3, Some(1), 0)));
@@ -6028,7 +6340,7 @@ mod tests {
     #[test]
     fn a_logged_bid_is_taken_as_proof_the_bidder_held_the_force_to_pay_it() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.phase = Phase::Actions;
         r.state.age_military = crate::Age::I;
         let territory = card_index["Vast Territory (I)"];
@@ -6059,7 +6371,7 @@ mod tests {
     #[test]
     fn grounding_a_bid_claims_the_fewest_and_smallest_bonus_cards_that_close_the_gap() {
         let card_index = build_card_index();
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.age_military = crate::Age::III; // every bonus card is available
         let filler = card_index["Aggression: Raid (I)"];
         r.state.players[0].hand_military = CardList::new();
@@ -6085,7 +6397,7 @@ mod tests {
         let raid = card_index["Aggression: Raid (I)"];
         let mut needs: HashMap<u8, Vec<FutureNeed>> = HashMap::new();
         needs.insert(0, vec![FutureNeed { lineno: 900, card: raid }]);
-        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), needs, VecDeque::new());
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), needs, VecDeque::new());
         r.state.age_military = crate::Age::III;
         r.current_lineno = 100; // the play is still ahead of us
         r.state.players[0].hand_military = CardList::new();
