@@ -665,6 +665,13 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // military action a full refill of cards.
     if state.age_military != Age::IV && state.round > 1 {
         let n = state.players[idx as usize].military_actions.clamp(0, 3);
+        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            eprintln!(
+                "DEBUG draw_military_step: idx={idx} round={} military_actions_unused={} n_drawn={n}",
+                state.round,
+                state.players[idx as usize].military_actions,
+            );
+        }
         for _ in 0..n {
             match draw_military(state) {
                 Some(card) => state.players[idx as usize].hand_military.push(card),
