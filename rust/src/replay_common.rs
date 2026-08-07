@@ -437,6 +437,23 @@ impl<'a> Replayer<'a> {
         next_line_explains_own_politics: bool,
     ) -> Result<(), MismatchKind> {
         for _ in 0..200 {
+            // A queued discard drained just above (the `DiscardMilitary`
+            // branch below, most recent iteration) can itself finish the
+            // LAST player's end of turn and run `game::finish_game` as a
+            // side effect (`game::resume_end_turn`'s own doc). When that
+            // happens there is nothing left to "intervene" on -- the game is
+            // over -- but `decider` has already moved on to whoever
+            // `game::advance_turn` set `state.current` to, so the ordinary
+            // `decider == expected_actor` check below would never pass and
+            // this would report a bogus stuck pending for what is actually a
+            // clean finish. BGO logs the true final turn's own "End turn"
+            // line (and its discard/"No Discard Phase" follow-up) TWICE, so
+            // the caller sees this exact shape on the second, redundant copy
+            // -- returning `Ok(())` here lets it fall through as a no-op
+            // instead of a mismatch.
+            if self.state.game_over {
+                return Ok(());
+            }
             let decider = self.state.decider();
             if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
                 eprintln!(
@@ -2011,8 +2028,67 @@ pub fn replay_game(
     r.record_decisions = record_decisions;
 
     'lines: for (i, line) in journal.iter().enumerate() {
+        // REPLAYER BUG: BGO's own journal states §12.3's "Age IV began ->
+        // this round or the next is last" fact in-band ("Last turn Game ends
+        // at the end of the starting round", one line per surviving player,
+        // no leading actor colour -- `corpus::classify` resolves it to pure
+        // `LineOutcome::Bookkeeping`, same as every other flavour line). This
+        // binary used to just drop it. That is normally harmless -- the real
+        // trigger is `game::advance_age` emptying `state.civil_deck` -- but
+        // THIS binary's civil deck never empties on a real journal: row
+        // slots are forced to match each observed "takes ... in hand" line
+        // directly (`ground_row_slot`), not drawn through `civil_deck`, so
+        // an entire game can replay with every human move legal and this
+        // reconstruction's Age III deck still nonempty. `game::set_last_round`
+        // (now `pub(crate)` for this one call) is idempotent -- guarded by
+        // `state.final_round_end.is_some()` exactly like its `advance_age`
+        // call site -- so calling it here from the journal's own authoritative
+        // statement of the SAME fact, using this reconstruction's own
+        // (up to here, accurate) `current`/`round`/`start_player`, sets
+        // exactly what the natural deck-driven trigger would have, had it
+        // fired. Without this, `state.final_round_end` stays `None` forever on
+        // every sampled completion and `game::finish_game` -- reachable only
+        // through `advance_turn`'s `round > final_round_end` check -- can
+        // never run, so `state.game_over` never flips even on a fully legal
+        // replay to the journal's own end.
+        if line.text.starts_with("Last turn") {
+            game::set_last_round(&mut r.state);
+            continue;
+        }
+        // REPLAYER BUG (was): this used to `break` here, so nothing past
+        // "End of game" was ever replayed. But BGO logs that marker BEFORE
+        // the true last turn's own end-of-turn processing -- the trailing
+        // "Impact of <Event>" final-scoring lines and the actual "End turn
+        // <Color> scores: ..." line for the player who triggered the game
+        // end all come AFTER it (`docs/REPLAY.md`, final-score cross-check
+        // section). Breaking here meant `game::advance_turn`'s own
+        // round-wrap check -- the only thing that ever calls
+        // `game::finish_game` and flips `state.game_over` -- was never
+        // reached even on a fully-legal replay, so a completed game was
+        // undetectable except by this flag counting the journal's OWN
+        // marker line, independent of engine state (see `GameResult::
+        // engine_scores`). Now `completed` is set here but the loop keeps
+        // going: `classify` already resolves "End of game" and every
+        // "Impact of ..." line (they reprint the scoring card's own name as
+        // subject) to `LineOutcome::Bookkeeping`, and the real trailing "End
+        // turn" line takes the ordinary no-leading-colour `EndTurn` path
+        // below, exactly like every other turn's end -- so `finish_game`
+        // fires from the SAME code every mid-game end-turn already uses, not
+        // a special case. BGO also logs that final "End turn" line and its
+        // "No Discard Phase"/"discards N cards" follow-up TWICE, once
+        // mislabelled a round ahead (identical score deltas both times,
+        // confirmed across all sampled completions) -- the top-of-loop
+        // `state.game_over` check just below is what stops the second copy
+        // from ever being attempted against an already-finished game.
         if line.text.starts_with("End of game") {
             completed = true;
+            continue;
+        }
+        // Once the engine's own `finish_game` has fired, nothing after it
+        // is a real decision -- it is BGO's duplicated/trailing tail (see
+        // above). Stop reading rather than feed a finished game a move it
+        // will legally reject.
+        if r.state.game_over {
             break;
         }
         if putback_skips.contains(&i) {
@@ -2029,10 +2105,23 @@ pub fn replay_game(
             if class == ActionClass::EndTurn {
                 let actor = r.state.current;
                 r.auto_passed[actor as usize] = 0;
-                if let Err(kind) = r
-                    .resolve_intervening(actor, (class, None), false)
-                    .and_then(|()| r.try_apply(Move::EndTurn, true))
-                {
+                // `resolve_intervening` can itself finish the game (draining
+                // the true final turn's last queued discard resumes
+                // `game::resume_end_turn`, which can run `finish_game` -- see
+                // that function's own new doc). BGO logs this exact "End
+                // turn" line TWICE; applying `Move::EndTurn` a second time
+                // against an already-`game_over` state is not a real human
+                // action to replay, just this file catching up to a finish
+                // that already happened -- `legal_moves` is empty once
+                // `game_over` (`legal.rs`), so trying anyway would report a
+                // bogus `IllegalMove` for what is actually a clean end.
+                if let Err(kind) = r.resolve_intervening(actor, (class, None), false).and_then(|()| {
+                    if r.state.game_over {
+                        Ok(())
+                    } else {
+                        r.try_apply(Move::EndTurn, true)
+                    }
+                }) {
                     mismatch = Some(mk_mismatch(line, kind));
                     break 'lines;
                 }
@@ -3597,6 +3686,70 @@ mod tests {
         // toward, hence the loud failure.
         assert!(matches!(result, Err(MismatchKind::StuckPending(_))), "expected StuckPending, got {result:?}");
         assert!(r.state.pending.is_empty(), "the fabricated colonize should still have drained to completion");
+    }
+
+    /// REGRESSION (real BGO games `7522497` and 8 others of the corpus's 12
+    /// sampled completions): BGO logs the true final turn's own "End turn
+    /// <Color> scores: ..." line TWICE (`replay_game`'s own doc comment on
+    /// its "Last turn"/"End of game" handling has the full shape). The FIRST
+    /// copy leaves a `DiscardMilitary` choice open (the human's hand is over
+    /// the limit); draining that open choice happens as a side effect of
+    /// `resolve_intervening` processing the SECOND copy -- and finishing the
+    /// LAST queued discard can itself resume `game::resume_end_turn`,
+    /// wrap the round past `final_round_end`, and run `game::finish_game`
+    /// (`game::resume_end_turn`'s own doc). At that point `state.current`
+    /// has already moved on to whoever `game::advance_turn` handed the turn
+    /// to next, so `decider() != expected_actor` (the player who is not
+    /// actually owed anything -- the game is over) used to fall straight
+    /// into the `no pending` `StuckPending` arm, turning a clean finish into
+    /// a reported mismatch. `resolve_intervening` must instead recognise
+    /// `state.game_over` up front and return `Ok(())`: there is nothing left
+    /// to intervene on. Reverting the `if self.state.game_over { return
+    /// Ok(()); }` check this test pins reproduces exactly that failure.
+    #[test]
+    fn resolve_intervening_returns_ok_once_the_game_is_over_even_though_decider_moved_on_and_no_longer_matches(
+    ) {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        // Mirrors the shape `finish_game` leaves behind: the round already
+        // wrapped to the next seat (`state.current`, here player 0) before
+        // the game-over check ran, nothing is pending, and the player this
+        // call is trying to resolve a path FOR (player 1, mid their own
+        // now-irrelevant `EndTurn`) is not `state.current` any more.
+        r.state.phase = Phase::Done;
+        r.state.game_over = true;
+        r.state.current = 0;
+        assert_ne!(r.state.decider(), 1, "player 1 must no longer be the decider, or this test proves nothing");
+
+        let result = r.resolve_intervening(1, (ActionClass::EndTurn, None), false);
+
+        assert!(result.is_ok(), "a finished game has nothing left to intervene on: {result:?}");
+    }
+
+    /// REGRESSION (every one of the corpus's 12 sampled completions, before
+    /// this fix: `docs/REPLAY.md`'s final-score cross-check section). This
+    /// binary's card row is forced to match each observed "takes ... in
+    /// hand" line directly (`ground_row_slot`), not drawn through
+    /// `civil_deck`/`game::deal` -- so on a real journal its reconstructed
+    /// Age III deck can go an entire game without ever emptying, even when
+    /// the real one did, and `game::advance_age`'s own call to
+    /// `game::set_last_round` (the ONLY thing that ever sets
+    /// `state.final_round_end`, which `game::advance_turn`'s round-wrap
+    /// check needs to ever call `game::finish_game`) never fires. BGO's
+    /// journal states the same §12.3 fact directly ("Last turn Game ends at
+    /// the end of the starting round"); `replay_game` now reads it and calls
+    /// this function itself, from this module, using its own (still
+    /// accurate at that point) `current`/`round`/`start_player` -- this pins
+    /// that `set_last_round` is actually reachable and correct from here,
+    /// not just from `advance_age`'s own already-tested call site.
+    #[test]
+    fn set_last_round_is_reachable_from_this_module_for_the_journals_last_turn_line() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.round = 9;
+        r.state.current = r.state.start_player; // BGO logs one "Last turn" line per surviving player; whichever this module reads first pins `current` to that seat.
+        game::set_last_round(&mut r.state);
+        assert_eq!(r.state.final_round_end, Some(9), "the seat that triggered it IS the start player, so this round is the last");
     }
 
     /// REGRESSION (real BGO game `7523355`, and 71 others like it in the

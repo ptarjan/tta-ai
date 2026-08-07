@@ -19,6 +19,21 @@
 //! journal file (1,011 as of this writing). `sample_size` takes the first N
 //! games in `index.tsv` order -- no shuffling, matching every prior pass's
 //! "no cherry-picking" sampling convention.
+//!
+//! Also prints a final-score cross-check: for every game whose replay both
+//! reaches the journal's "End of game" marker AND actually flips
+//! `state.game_over` (`GameResult::engine_scores`, `Some` only then -- see
+//! `replay_common::replay_game`'s own doc on why those two conditions used to
+//! diverge), this compares `game::scores` against `index.tsv`'s own recorded
+//! result. Neither side is known to line engine seat `i` up with index
+//! column `i` (`corpus::GameMeta::names` is index.tsv's own column order,
+//! not seating order, and the journal never prints a player's real name --
+//! see that field's own doc), so, like `bin/replay.rs`'s existing per-game
+//! `match=` field, this compares the two SORTED score lists: an exact
+//! multiset match is not fooled by a coincidental sum collision across two
+//! different players, and for the common 2-player case a sorted pairing is
+//! also a same-rank pairing whenever both scores are informative (matches
+//! `bin/replay.rs`'s established comparison, not a new convention).
 
 use std::collections::HashMap;
 use std::env;
@@ -113,6 +128,13 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     let mut rounds_total_sum = 0u64;
     let mut decisions_total = 0u64;
     let mut decisions_age_two_plus = 0u64;
+    let mut n_score_checked = 0u32;
+    let mut n_score_exact = 0u32;
+    // One entry per non-matching player-score, `engine - index` after
+    // sorting both lists ascending (see the module doc for why sorted, not
+    // seated) -- a systematic non-zero skew here (rather than a spread
+    // straddling zero) would name a scoring bug directly.
+    let mut score_deltas: Vec<i32> = Vec::new();
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -140,6 +162,18 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 eprintln!("DEBUG completed: {}", meta.id);
             }
+            if let Some(engine) = &result.engine_scores {
+                n_score_checked += 1;
+                let mut a = engine.clone();
+                let mut b = result.index_scores.clone();
+                a.sort_unstable();
+                b.sort_unstable();
+                if a == b {
+                    n_score_exact += 1;
+                } else {
+                    score_deltas.extend(a.iter().zip(b.iter()).map(|(x, y)| x - y));
+                }
+            }
             continue;
         }
         let Some(m) = &result.mismatch else {
@@ -161,6 +195,28 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     ranked.sort_unstable_by(|a, b| b.1.count.cmp(&a.1.count));
 
     println!("# replaystats: {n_games} games sampled, {n_completed} completed to state.game_over\n");
+    println!("## Final-score cross-check\n");
+    println!(
+        "{n_score_checked}/{n_completed} completed games actually flipped state.game_over (the other \
+         {} reached the journal's own \"End of game\" marker but hit a mismatch afterward, so \
+         `game::scores` was never computed for them); {n_score_exact}/{n_score_checked} of those matched \
+         index.tsv exactly (sorted per-game score-list compare).",
+        n_completed.saturating_sub(n_score_checked)
+    );
+    if score_deltas.is_empty() {
+        if n_score_checked > 0 {
+            println!("No non-matching player-scores to report a delta distribution over.");
+        }
+    } else {
+        score_deltas.sort_unstable();
+        let sum: i64 = score_deltas.iter().map(|&d| d as i64).sum();
+        let mean = sum as f64 / score_deltas.len() as f64;
+        println!(
+            "delta distribution for the {} non-matching player-scores (engine minus index.tsv, sorted \
+             ascending, mean {mean:.2}): {score_deltas:?}\n",
+            score_deltas.len()
+        );
+    }
     println!(
         "mean rounds reached: {:.2} (mean {:.2} total rounds per sampled game)",
         round_reached_sum as f64 / n_games.max(1) as f64,

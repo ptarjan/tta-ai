@@ -2382,3 +2382,112 @@ passed)**:
   `s.happy`, `discontent`, `workers_free`, `uprising` (`REPLAY_DEBUG_ALL`).
 - `events::apply_single_target` now prints `order`/`stat`/`ranked`/
   per-player `values` (`REPLAY_DEBUG_ALL`) -- `RankStat` gained `Debug`.
+
+## Sixteenth pass: REPLAYER BUG -- `state.game_over` never flips on a clean
+## replay (two compounding causes), and the final-score cross-check is wired
+## into `replaystats`
+
+The gap the Fourteenth pass left open, closed. By this pass's start the
+corpus had grown to 12/1,011 sampled completions (a concurrent worker's
+Take/Bid work); all 12 still had `state.game_over == false`. Two independent
+REPLAYER bugs, both in `replay_common.rs`, neither in the engine:
+
+1. **This binary's card row is grounded, not drawn.** `Replayer::
+   ground_row_slot` forces each row slot to match the exact card an observed
+   "takes ... in hand" line names, rather than drawing it through
+   `civil_deck`/`game::deal`. Real `Take`s still refill through the normal
+   engine path afterward, so the deck DOES shrink over a game -- but not
+   reliably in step with the real one, and on every sampled completion this
+   reconstruction's Age III deck never actually emptied. `game::advance_age`
+   never reached its `nxt == Age::IV` branch, so its one call to
+   `game::set_last_round` (the ONLY thing that ever sets `state.
+   final_round_end`) never fired, and `game::advance_turn`'s round-wrap check
+   -- the only path to `game::finish_game` short of every player resigning --
+   had nothing to compare `state.round` against. BGO's own journal states the
+   same §12.3 fact directly and unambiguously, in two lines `corpus::classify`
+   was already dropping as pure flavour text: `"Last turn Game ends at the
+   end of the starting round"`, one per surviving player, logged the instant
+   Age IV begins. `replay_game`'s main loop now calls `game::set_last_round`
+   (widened from `fn` to `pub(crate)` for this one call) directly when it
+   sees that line, using this reconstruction's own -- at that point still
+   accurate -- `current`/`round`/`start_player` to run the IDENTICAL formula
+   `advance_age` would have. This is reading an authoritative fact the
+   journal already states, not changing what the rule computes; `game.rs`'s
+   own pre-existing test for the formula (`age_iv_sets_the_last_round_from_
+   the_seat_that_triggered_it`) is untouched.
+
+2. **The true final turn is logged twice, and the old code only handled the
+   first copy.** BGO logs `"End of game ..."` BEFORE the last turn's own
+   end-of-turn processing, not after: the final "Impact of `<Event>`"
+   scoring lines and the actual `"End turn <Color> scores: ..."` line for
+   the player whose turn ends the game both come AFTER the marker, and that
+   `"End turn"` line (plus its discard/"No Discard Phase" follow-up) is
+   itself printed TWICE, once mislabelled a round ahead (identical score
+   deltas both times, confirmed on all 12 sampled completions). The old code
+   just `break`s the instant it saw `"End of game"`, so none of this ever
+   ran and `finish_game` was never reachable even in principle. Fixed in
+   three parts, all in `replay_common.rs`: the main loop now `continue`s
+   instead of `break`ing on the marker (letting the real trailing lines
+   replay through the SAME `EndTurn` dispatch every ordinary end-of-turn
+   already uses -- `classify` already resolves `"End of game"` and every
+   `"Impact of ..."` line to `Bookkeeping`, so nothing extra was needed
+   there); `resolve_intervening` now checks `self.state.game_over` at the
+   top of its loop and returns `Ok(())` immediately once it is set (a queued
+   discard drained mid-call can itself finish the turn and run
+   `finish_game` as a side effect, which used to surface as a `decider !=
+   expected_actor` `StuckPending` once `state.current` had already moved on
+   to whoever's turn was next); and the `EndTurn` dispatch arm skips
+   `try_apply` entirely once `state.game_over` is set (rather than trying to
+   re-apply `Move::EndTurn` against a finished game, which `legal_moves`
+   would legally and correctly reject). Each of the three pieces was
+   confirmed load-bearing by reverting it alone and re-running the full
+   corpus: without (1), only 3/1,011 games even reach the marker and 0 ever
+   flip `game_over`; with (1) but not (2)/(3), 3/12 flip `game_over` and 9
+   report a bogus `StuckPending` on the duplicate line; with all three,
+   12/12.
+
+### Measurement (`replaystats`, full 1,011-game corpus, measured against the
+### tree this pass actually landed on -- rebased onto the concurrent
+### colonize-sacrifice fix above, hence 13 completions here, not the 12 this
+### pass's own three reverts-to-confirm were measured against just before)
+
+| | before this pass | after |
+|---|---|---|
+| games completed (journal's own marker) | 13 | 13 (unchanged) |
+| of those, `state.game_over` actually true | **0** | **13** |
+| mean rounds reached / decisions in Age II+ | 10.37 / 37.8% | unchanged (confirms no other bucket regressed) |
+
+(The revert-to-confirm numbers in points 1 and 2 above -- 3/1,011, 3/12,
+12/12 -- were measured one commit earlier, before rebasing onto the
+concurrent colonize-sacrifice fix; the shape they confirm is unchanged by
+the rebase, only the corpus's total completion count is.)
+
+### Final-score cross-check: wired into `replaystats`, first real numbers
+
+`bin/replaystats.rs` now prints the same sorted-score-list comparison
+`bin/replay.rs` already used per-game (neither side is known to line engine
+seat `i` up with `index.tsv` column `i` -- `corpus::GameMeta::names` is
+index.tsv's own column order, not seating order -- so an exact SORTED
+multiset match is what "the reconstructed final scores agree with the real
+ones" means here), plus a delta distribution for the games that don't:
+
+**0/13 completed games matched exactly.** Delta distribution (engine minus
+index.tsv, one entry per player per non-matching game, sorted): `[-27, -26,
+-25, -20, -16, -14, -9, -9, -6, -5, -4, -3, -2, -2, -2, 0, 0, 3, 4, 4, 6, 7,
+9, 9, 9, 20]` -- mean -3.81, spread on BOTH sides of zero (two exact 0s
+sitting alongside a same-game nonzero partner, so even those aren't quite a
+match), no single dominant magnitude or sign. Read together with how these
+13 games got this far at all: NONE needed the colonize approximation any
+more (`GameResult::colonize_approximated` -- the concurrent colonize-
+sacrifice fix landed in between and closed that source out for this exact
+set of games), yet only 3 of 739 military discards across them were
+uniquely `solved`, the other 736 `chosen` arbitrarily among valid candidates
+(`discard_solver`) -- so with colonize noise now gone, arbitrary military
+discards read as the dominant remaining hidden-information approximation,
+not a new scoring bug in `finish_game`/`events::evaluate_final_events` this
+pass can point to: no game is close to an exact match, but none is wildly
+further off than its own approximation load would predict either. Left for
+whichever pass next reduces the discard-arbitrary-choice bucket (see
+`docs/REPLAY.md`'s `discard_solver` section) -- the cleaner the
+reconstructed hand, the more this comparison will actually test scoring
+rather than hidden-info noise.

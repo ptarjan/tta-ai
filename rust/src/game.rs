@@ -651,7 +651,24 @@ fn on_leave_play(p: &mut PlayerState, id: CardId) {
 /// triggered it is the start player, the round they are in is the last one;
 /// otherwise everyone gets to finish the round AND play one more, so that
 /// nobody's civilization is scored a turn short of a rival's.
-fn set_last_round(state: &mut GameState) {
+///
+/// `pub(crate)`, its only outside caller is `replay_common.rs`'s BGO journal
+/// replayer -- `advance_age`'s own call above is normally the only trigger,
+/// but the replayer forces the card row to match each observed "takes ... in
+/// hand" line directly (`Replayer::ground_row_slot`) rather than drawing
+/// through `civil_deck`/`deal`, so its Age III deck can go an entire replayed
+/// game without ever emptying even when the real one did -- this rule would
+/// then never fire and `state.game_over` could never become detectable on a
+/// clean replay. BGO's OWN journal states the same §12.3 fact in-band, in
+/// two lines with no leading actor colour ("Last turn Game ends at the end
+/// of the starting round", one per surviving player) that `corpus::classify`
+/// previously dropped as pure flavour text -- `replay_game` now calls this
+/// directly when it sees that line, using its own (by then still accurate)
+/// `state.current`/`state.round`/`state.start_player` to run the IDENTICAL
+/// formula the engine itself would have, rather than re-deriving or
+/// approximating it. This is reading an authoritative fact the journal
+/// already states, not changing what the rule computes.
+pub(crate) fn set_last_round(state: &mut GameState) {
     if state.final_round_end.is_some() {
         return;
     }
