@@ -3591,3 +3591,180 @@ was reported to the Take-bucket worker via `mcp__discord__message_agent`
 rather than fixed by that worker directly -- it landed here instead, in this
 function's own dedicated ownership, exactly as the standing "shared code
 gets a dedicated owner" rule prescribes.
+
+## Take/HandFull handoff, resolved: this reconstruction's civil age lagged
+## the journal's own age column, delaying antiquation -- REPLAYER bug, fixed,
+## `HandFull` 180 -> 78 corpus-wide
+
+Picked up the `HandFull` (157 -> 180 across the last two handoffs above)
+lead with an explicit brief to test hypothesis (a) -- "the reconstructed
+hand is inflated" -- FIRST, since a filler-style bug was the favoured
+explanation, before touching the `>=` gate again (still forbidden: see the
+two sections above, both explicit that a previous worker reverted a `>=`
+-> `>` loosening and it must not be re-attempted on corpus evidence alone).
+
+**Re-verified the "no filler mechanism for civil hand" claim a FOURTH time,
+this time at full-corpus scale rather than n=2, and it still holds, but for
+a narrower reason than assumed.** Extended `costs::take_rejection`'s
+existing `REPLAY_DEBUG` dump (`replay_common.rs`'s `TakeCard` handler,
+commit `399b195`) with the journal line number and `r.state.age_civil` at
+each rejected Take (both cheap, both already available on `Replayer`), then
+wrote a throwaway correlation script -- **reading the engine's own printed
+state and cross-referencing it against the raw journal text, NOT
+reimplementing any game rule** (the exact trap the "Live lead" note two
+sections up warns about) -- that checked, for every card in every rejected
+`HandFull` hand, whether that same actor has an earlier develop/upgrade/
+elect/play/revolution line for that EXACT card anywhere before the
+rejection point. First pass falsely flagged 21 cases; every one dissolved
+into either (a) a substring collision (`"Engineering"` the hand card
+matching inside `"Engineering Genius"`, a different card entirely) or (b) a
+wrong journal-line anchor -- naively matching the LAST occurrence of an
+identical raw-text string (`"Purple takes Urban Growth in hand ..."`,
+repeated verbatim across ages for the nine free-civil-action families) picks
+the wrong physical occurrence when the same line text repeats. Anchoring on
+the exact `lineno` the engine itself was AT when it rejected the Take (the
+new debug field) instead of re-deriving position from text fixed this
+completely: re-run across the full corpus, ZERO of the 180 `HandFull`
+hands have a card with any earlier removal-shaped line for that actor. This
+independently reconfirms, at n=180 instead of n=2, what the structural
+"only one push site" argument already implied: nothing is pushing a card
+into `hand_civil` that a real "takes" line didn't put there, and nothing
+that plays/develops/upgrades/elects/revolts a card is failing to remove it
+from `hand_civil` either.
+
+**The actual gap was the OTHER removal path the task brief named: "the
+age-change hand-limit discard".** Cross-referenced every `HandFull` hand's
+cards against their OWN printed age (`data/cards_civil.json`) versus the
+journal's own age column (`Line::age`, already parsed, unused for this
+purpose before now) at the rejection line: 141 cards across 108 of the 180
+games were more than one age older than the journal said the game currently
+was -- e.g. an Age I `Swordsmen`/`Iron`/`Irrigation` tech still sitting in
+hand while the journal's own column reads `III`. Per RB/CoL §12.2
+(`game.rs::antiquate`, already correct and already used by self-play), a
+card that old should already have been discarded at whichever age
+transition it fell behind at. Since every `HandFull` rejection has
+`hand_civil_size == civil_hand_limit` EXACTLY (both prior passes' finding,
+re-confirmed again this pass with zero counterexamples), any ONE stale card
+is sufficient to explain a wrongly-rejected Take.
+
+**Root cause, traced end-to-end on `7523625` line 109 (`REPLAY_DEBUG_ALL`,
+a temporary per-line `hand_civil_before` dump added to `apply_one`'s own
+entry, kept -- see below): `game::advance_age`'s only trigger
+(`civil_deck.is_empty()`, checked inside `deal`) fires LATE during replay,
+because `Replayer::ground_row_slot` forces row identities to match each
+observed "takes ... in hand" line directly rather than draining
+`civil_deck` through the ordinary `deal` path in lockstep with every real
+draw** -- already flagged, for the Age-IV/last-round special case only, by
+`game.rs::set_last_round`'s own doc comment (which this pass's fix directly
+mirrors). Any place a real draw can happen without this reconstruction
+popping `civil_deck` to match (a `TakeRow` free take, a `PutBack`
+client-side undo, ...) lets this reconstruction's own deck run behind the
+true one's depletion -- and since `antiquate` only ever runs from inside
+`advance_age`, a late-triggering age transition means a late hand cull, not
+a wrong one: `7523625`'s Purple genuinely still held `Iron` un-discarded
+several rounds after the real BGO client had already antiquated it away,
+because this reconstruction's own `age_civil` hadn't caught up to `II` yet
+at the point the rejection fired.
+
+**Fix**: `game::force_civil_age_at_least(state, target)` (new,
+`pub(crate)`, same visibility precedent as `set_last_round`) loops the
+EXISTING `advance_age` until `state.age_civil >= target` -- antiquation,
+the two-unborn-population deduction, and the full deck rebuild all run
+exactly as a real deck-driven transition would, because it IS the same
+function, not a re-derived approximation. A bounded loop, not a single
+call: the journal can jump more than one age between two consecutive lines
+this parser actually stops on (an entire age with none of its own cards
+ever named in a line this file dispatches on), and every intervening age's
+own antiquation must still fire, not just the final one's -- pinned by
+`force_civil_age_at_least_antiquates_every_intervening_age_not_just_the_
+final_one`, which starts a state at `Age::A` and targets `Age::III`
+directly. Wired into `replay_common.rs`'s main loop at the top of every
+line (`parse_age(line.age)`, new, matches every value the corpus actually
+contains -- `cut -f3 *.tsv | sort -u` across all 1,011 journals is
+literally `A`/`I`/`II`/`III`/`IV` plus the header, which never reaches
+this code), reading the journal's own authoritative age fact instead of
+approximating this reconstruction's own lagging deck-depletion timing --
+the identical precedent `set_last_round` already established for §12.3's
+last-round fact, just generalised to every age transition instead of only
+the final one.
+
+Two tests in `game.rs`
+(`force_civil_age_at_least_antiquates_every_intervening_age_not_just_the_
+final_one`, confirmed red -- `left: A, right: III` -- against a temporarily
+stubbed no-op body before restoring the real implementation;
+`force_civil_age_at_least_is_a_no_op_when_already_caught_up`, confirms no
+double-antiquation and no backwards movement), plus `parse_age_*` in
+`replay_common.rs`.
+
+**REPLAYER, not ENGINE**: `advance_age`/`antiquate` were already correct
+for self-play (a normal game's own `civil_deck` empties in real time, no
+lag possible) -- only the replayer's OWN substitute trigger for calling
+them was late. No path into `bots/` or the evaluator: `force_civil_age_at_
+least` is `pub(crate)` with its only call site inside `replay_common.rs`.
+
+### Measurement (`replaystats`, full 1,011-game corpus)
+
+| | before this pass | after |
+|---|---|---|
+| `IllegalMove: Take` | 233 | **124** |
+| `HandFull` gate rejections (`REPLAY_DEBUG` breakdown) | 180 | **78** |
+| mean rounds reached | 10.98 | **11.01** |
+| decisions recorded | 161,409 | **165,106** |
+| Age II+ share | 41.8% | **43.1%** |
+
+A second per-card age check re-run against the new 78-case baseline finds
+**zero** remaining stale-age cards in any of them -- the fix's own
+correctness claim (it closes exactly the stale-antiquation shape, not a
+superset) is confirmed, not just asserted. The leftover 78 are the SAME
+shape the previous two passes already traced and reported rather than
+fixed: `hand_civil_size == civil_hand_limit` exactly, every card real and
+current, `RULES_SPEC.md`'s `>=` gate blocking a move the real human still
+made. **Still not this pass's to change** -- see the "Reverted same day"
+and "explicit instruction is not to guess here" notes two sections above,
+neither superseded by this pass's findings. The two remaining explanations
+those sections leave open (a THIRD, larger-sample per-card provenance
+trace, or the "BGO client is lenient at the boundary" theory) are both
+still live for whoever picks this up next; this pass did not investigate
+either.
+
+**Side effects on the corpus summary, checked and NOT a regression**:
+`state.game_over` completions dropped 18 -> 13 and the final-score delta
+mean got worse (-3.53 -> -12.63). Diffed the two runs' completed-game ID
+sets directly (`DEBUG completed:` under `REPLAY_DEBUG`) rather than
+assuming: 15 games that used to complete no longer do, 10 new ones now do.
+Hand-traced one regressed game (`7521984`) to its new stop point with a
+temporary `src/bin/debug_one.rs` (built, used, deleted -- not committed):
+it now stops at round 8 on an `IllegalMove: Upgrade` (`"Purple upgrades
+Agriculture to Irrigation"`) with an ordinary-looking tableau (`Agriculturex1`,
+`Irrigationx1`, cost detail matches the journal's own stated resources) --
+no antiquated or stale card anywhere in sight, i.e. a PRE-EXISTING
+`Upgrade`-bucket bug (not this pass's to fix) that this fix's own
+downstream state-timing shift (every subsequent `civil_actions`/
+`yellow_bank`/worker computation shifts once antiquation fires at the
+CORRECT time instead of a lagging one) now exposes a few lines earlier in
+this one game than before. This is the same "mean rounds can dip after a
+correct fix, because games run deeper and surface a DIFFERENT bucket's
+bug" effect this doc's own task brief warns about, just manifesting as an
+earlier stop in one already-broken game rather than a later one -- not
+evidence against this fix's own correctness, which the zero-remaining-
+stale-cards check above verifies directly.
+
+**Cross-bucket cause, reported via `mcp__discord__message_agent`, not
+fixed here**: `best_age_sibling` (used to resolve which physical copy of a
+same-name-across-ages card is meant, e.g. `Urban Growth (A)` vs `(I)` vs
+`(II)` vs `(III)`) and any cost/legality path gated on `state.age_civil`
+were ALL reading this same lagging value before this fix, not just the
+`Take` gate -- so the `Build`/`Upgrade`/`WonderStep` cost-mismatch buckets
+(explicitly another worker's assignment) plausibly share this exact root
+cause for at least some of their own failures, now corrected as a side
+effect of this fix landing. Worth a re-measurement of those buckets'
+categorisation before assuming their existing counts/shapes still hold.
+
+**Not investigated this pass, left for whoever picks up `HandFull` next**:
+the remaining `Budget` (7, down from 14) and `WonderInProgress` (1, down
+from 3) gate rejections within `IllegalMove: Take` -- both shrank as a
+side effect of this fix (fewer stale-hand-blocked games means more games
+reach these gates' own failure points and get past them too) but neither
+was traced. The 36-ish "no `REJECT` line" sub-bucket (a stale/cross-actor
+`Pending::Choice` blocking the Take, per the previous handoff's own
+diagnosis) was also not re-measured this pass.
