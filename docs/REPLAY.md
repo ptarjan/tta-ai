@@ -4967,7 +4967,6 @@ grow-vs-swap question this pass exhausted or the sibling-bucket root cause
 own sibling root cause (`Barbarians`'s tie-break) was landed as an ENGINE
 bug fix by a concurrent worker mid-pass, see that section above this one.
 
-<<<<<<< HEAD
 ## Game `7521984` lead: CLOSED (already fixed upstream, no action needed)
 
 Picked up the standing assignment: game `7521984`'s `IllegalMove: Upgrade`
