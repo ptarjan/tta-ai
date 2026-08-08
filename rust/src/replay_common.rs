@@ -520,6 +520,12 @@ struct Replayer<'a> {
     /// convention as `discard_oracle_checked`/`discard_oracle_agreed`.
     culture_oracle_checked: u32,
     culture_oracle_agreed: u32,
+    /// See [`PendingCultureCheck`]'s own doc: a culture-oracle comparison
+    /// deferred past an `EndTurn` line whose production was blocked on a
+    /// still-open discard decision. `None` the rest of the time (the common
+    /// case: an ordinary `EndTurn` compares immediately, never touching this
+    /// field at all).
+    pending_culture_check: Option<PendingCultureCheck>,
     /// A structural "false skip" instrument -- see [`GameResult::
     /// politics_false_skips`]'s own doc for the full mechanism this counts.
     /// Incremented at most once per `plan.preparations` entry (tracked via
@@ -621,6 +627,7 @@ impl<'a> Replayer<'a> {
             culture_oracle_divergence: None,
             culture_oracle_checked: 0,
             culture_oracle_agreed: 0,
+            pending_culture_check: None,
             politics_false_skips: 0,
             false_skip_flagged_prep: None,
             politics_false_skips_unrecovered: 0,
@@ -2018,6 +2025,56 @@ impl<'a> Replayer<'a> {
         }
     }
 
+    /// The actual culture-oracle compare-and-record step, shared by the
+    /// immediate path (an ordinary `EndTurn` whose production already ran)
+    /// and [`Self::flush_pending_culture_check`] (a deferred one). See
+    /// [`CultureOracleDivergence`]'s own doc.
+    fn record_culture_check(&mut self, lineno: usize, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
+        let got = self.state.players[actor_seat as usize].culture as i32;
+        self.culture_oracle_checked += 1;
+        if journal_now == got {
+            self.culture_oracle_agreed += 1;
+            return;
+        }
+        if std::env::var("REPLAY_DEBUG").is_ok() {
+            eprintln!(
+                "DEBUG end-turn culture drift: actor={actor_seat} journal says (now {journal_now}), this binary \
+                 computes {got} (delta {}) at line {lineno}",
+                got - journal_now,
+            );
+        }
+        if self.culture_oracle_divergence.is_none() {
+            self.culture_oracle_divergence = Some(CultureOracleDivergence {
+                lineno,
+                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
+                journal_now,
+                reconstructed: got,
+                last_action_class,
+            });
+        }
+    }
+
+    /// Flushes a [`PendingCultureCheck`] left by a prior `EndTurn` line
+    /// whose own production was blocked on an open discard decision -- see
+    /// that struct's own doc for why comparing immediately there would be a
+    /// false positive. Called unconditionally at the top of every line's own
+    /// dispatch (`replay_game`'s main loop): SELF-DEFERRING, not merely
+    /// one-shot -- if `actor`'s `DiscardMilitary` pending is still open (the
+    /// resolving `"<Color> discards N card(s)"` line has not been reached
+    /// yet), puts the same check straight back and tries again next line,
+    /// rather than guessing how many lines the resolution takes. A no-op
+    /// when there is nothing pending at all -- the common case, every
+    /// ordinary `EndTurn` never touches this field.
+    fn flush_pending_culture_check(&mut self) {
+        let Some(pending) = self.pending_culture_check.take() else { return };
+        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
+        {
+            self.pending_culture_check = Some(pending); // still blocked -- try again next line
+            return;
+        }
+        self.record_culture_check(pending.lineno, pending.actor_seat, pending.journal_now, pending.last_action_class);
+    }
+
     /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
     /// -- `c` must be that pending's own snapshot, read by the caller just
     /// before calling this (`resolve_intervening` and `resolve_discard`
@@ -3313,6 +3370,32 @@ pub struct CultureOracleDivergence {
     /// checkpoint.
     pub reconstructed: i32,
     pub last_action_class: Option<ActionClass>,
+}
+
+/// A culture-oracle comparison captured on an `EndTurn` line whose own
+/// `economy::end_of_turn` stopped early at `discard_excess_military`
+/// (leaving a `Pending::Choice(DiscardMilitary)` open) -- BGO's own
+/// `"(now M)"` on that SAME "End turn" line already reflects the
+/// POST-production total (BGO prints a turn's final numbers before its own
+/// follow-up `"<Color> discards N card(s)"` line, even though the discard
+/// must be resolved first per RULES_SPEC's own end-of-turn sequence), but
+/// this binary's own `state.players[actor].culture` does NOT yet, because
+/// `economy::end_of_turn`'s production steps (2-5) do not run until the
+/// discard choice is actually answered -- confirmed by trace on real game
+/// `7523350` round 5 (`docs/REPLAY.md`): comparing immediately here read a
+/// -1 "divergence" that resolved itself, unrecorded, the very next line,
+/// making this the SINGLE LARGEST bucket in the culture-oracle histogram's
+/// FIRST run and a pure REPLAYER-INSTRUMENT false positive, not a real
+/// culture bug. Deferred instead to [`Replayer::flush_pending_culture_
+/// check`], called at the top of every subsequent line's own dispatch, by
+/// which point this file's own discard-draining machinery (`resolve_
+/// intervening`'s generic pending drain, or `apply_one`'s `Discard` arm via
+/// `resolve_discard`) has already run production for real.
+struct PendingCultureCheck {
+    lineno: usize,
+    actor_seat: u8,
+    journal_now: i32,
+    last_action_class: Option<ActionClass>,
 }
 
 /// One journal-cross-validated hand-size fact this binary's own
@@ -4923,6 +5006,10 @@ pub fn replay_game(
             continue;
         }
         r.current_lineno = line.lineno;
+        // Self-deferring: a no-op unless a prior `EndTurn` line's culture
+        // checkpoint is still waiting on a discard decision to resolve --
+        // see `PendingCultureCheck`'s own doc.
+        r.flush_pending_culture_check();
         let outcome = classify(card_index, line.text);
         let LineOutcome::Action(Classified { class, card }) = outcome else {
             continue; // bookkeeping / unclassified: no move to apply
@@ -5019,28 +5106,23 @@ pub fn replay_game(
                 // wrong on, cross-validated every single "End turn" line,
                 // not derived or approximated.
                 if let Some(want) = trailing_now_culture(line.text) {
-                    let got = r.state.players[actor as usize].culture as i32;
-                    r.culture_oracle_checked += 1;
-                    if want == got {
-                        r.culture_oracle_agreed += 1;
+                    // `economy::end_of_turn` stops BEFORE running production
+                    // (steps 2-5) when it opens a discard decision -- see
+                    // `PendingCultureCheck`'s own doc for why comparing
+                    // `r.state.players[actor].culture` right here, in that
+                    // case, is a false positive: defer to the next line's
+                    // dispatch instead, by which point the discard (and the
+                    // production it was blocking) has actually run.
+                    if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary)
+                    {
+                        r.pending_culture_check = Some(PendingCultureCheck {
+                            lineno: line.lineno,
+                            actor_seat: actor,
+                            journal_now: want,
+                            last_action_class: previous_action_class,
+                        });
                     } else {
-                        if std::env::var("REPLAY_DEBUG").is_ok() {
-                            eprintln!(
-                                "DEBUG end-turn culture drift: actor={actor} journal says (now {want}), \
-                                 this binary computes {got} (delta {}) at {:?}",
-                                got - want,
-                                line.text,
-                            );
-                        }
-                        if r.culture_oracle_divergence.is_none() {
-                            r.culture_oracle_divergence = Some(CultureOracleDivergence {
-                                lineno: line.lineno,
-                                actor: Color::from_seat(actor).map(Color::as_str).unwrap_or("?"),
-                                journal_now: want,
-                                reconstructed: got,
-                                last_action_class: previous_action_class,
-                            });
-                        }
+                        r.record_culture_check(line.lineno, actor, want, previous_action_class);
                     }
                 }
                 r.actions_consumed += 1;
@@ -6674,6 +6756,61 @@ mod tests {
 
         assert_eq!(r.state.age_civil, crate::cards::Age::II);
         assert_eq!(r.state.players[0].yellow_bank, yellow_before - 2, "§12.2.4");
+    }
+
+    /// The SAME "`economy::end_of_turn` interrupted before production" shape
+    /// as `catch_up_civil_age_defers_while_a_discard_choice_from_an_earlier_
+    /// line_is_still_open` above, now for the culture-oracle instrument
+    /// (real game `7523350` round 5, `docs/REPLAY.md`'s "Culture-oracle"
+    /// section): comparing `state.players[actor].culture` against BGO's own
+    /// `"(now M)"` the INSTANT an `EndTurn` line is read is a false
+    /// positive whenever that same `EndTurn` opened a `DiscardMilitary`
+    /// pending -- production has not run yet. `flush_pending_culture_check`
+    /// must defer (not compare) while that pending is still open for the
+    /// SAME actor the check belongs to.
+    #[test]
+    fn flush_pending_culture_check_defers_while_the_actors_own_discard_choice_is_still_open() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let mut options = crate::state::OptionList::new();
+        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
+        options.push(ChoiceOption::Card(legion));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
+        // Reconstructed PRE-production culture (2), same as BGO's own PRE-
+        // production total would be if production had already run -- but it
+        // has not, so `journal_now: 3` (BGO's real post-production "(now 3)")
+        // must NOT be compared against this yet.
+        r.state.players[0].culture = 2;
+        r.pending_culture_check =
+            Some(PendingCultureCheck { lineno: 64, actor_seat: 0, journal_now: 3, last_action_class: Some(ActionClass::TakeCard) });
+
+        r.flush_pending_culture_check();
+
+        assert_eq!(r.culture_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
+        assert!(r.culture_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
+        assert!(r.pending_culture_check.is_some(), "the check must be put back, not dropped, while still blocked");
+    }
+
+    /// The other half: once the actor's `DiscardMilitary` pending is gone
+    /// (the resolving `"<Color> discards N card(s)"` line has run and
+    /// production completed for real, bringing `state.players[0].culture`
+    /// up to BGO's own post-production total), the SAME deferred check now
+    /// compares correctly -- a deferral, not a permanent skip.
+    #[test]
+    fn flush_pending_culture_check_compares_once_the_discard_resolves() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
+        r.state.players[0].culture = 3; // production has now run, matching BGO's own "(now 3)"
+        r.pending_culture_check =
+            Some(PendingCultureCheck { lineno: 64, actor_seat: 0, journal_now: 3, last_action_class: Some(ActionClass::TakeCard) });
+
+        r.flush_pending_culture_check();
+
+        assert_eq!(r.culture_oracle_checked, 1, "the deferred checkpoint must be counted once resolved");
+        assert_eq!(r.culture_oracle_agreed, 1, "3 == 3: this binary's reconstruction agrees with the journal");
+        assert!(r.culture_oracle_divergence.is_none());
+        assert!(r.pending_culture_check.is_none(), "consumed, not left pending forever");
     }
 
     #[test]

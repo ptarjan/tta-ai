@@ -7747,7 +7747,35 @@ New test `apply::tests::set_government_a_decreased_total_is_absorbed_by_already_
 
 Corpus impact (`replaystats` over the same BGO journal set): completed games 155 -> 157, discard-phase oracle held at 96.6%, divergence count 626 -> 627 (one new divergence uncovered now that a previously-masked code path is reachable/correct elsewhere -- not a regression, since completed count went UP, not down). `7523357` itself is still unaffected -- it still stops at its unrelated round-6 `SimulatorBug`/`ConsumingPlay` checkpoint, exactly as this doc's original trace predicted, so this fix's own downstream effect on that specific game remains untested by the corpus run (as flagged above).
 
-## Culture-oracle cause-classification instrument: NOT YET LANDED -- design notes for whoever picks this up
+## Culture-oracle cause-classification instrument: LANDED, dominant cause found and fixed (REPLAYER-INSTRUMENT ONLY)
+
+Landed per the design below (`replay_common.rs`'s `CultureOracleDivergence`/`PendingCultureCheck` structs, `Replayer::last_action_class`/`record_culture_check`/`flush_pending_culture_check`, `GameResult`'s three new fields, `bin/replaystats.rs`'s "## Culture oracle" section) essentially as designed, with line numbers within ~10 of the estimates below (master had moved slightly).
+
+**First census (naive always-on compare, no deferral)**: 55.6% checkpoint agreement, 990/1011 games diverged, dominant bucket `TakeCard` (359 games) -- but per this doc's own standing warning, bucket names are the SYMPTOM location (whatever action happened to precede the `EndTurn` line), not the cause. Traced 3 games (`7523350`, `7523357`, `7523347`) with `REPLAY_DEBUG_ALL` before theorizing, per the task's own mandate.
+
+**Root cause, confirmed by trace on `7523350` round 5**: `economy::end_of_turn` stops BEFORE running its own production steps (2-5) whenever `discard_excess_military` opens a `Pending::Choice(DiscardMilitary)` (`"DEBUG end_of_turn: idx=0 stopped at discard_excess_military"` in the trace) -- but BGO's own `"(now M)"` on that SAME `"End turn"` line already reflects the POST-production total (BGO prints the turn's final numbers before its own follow-up `"<Color> discards N card(s)"` line, even though the discard must resolve first per RULES_SPEC's own end-of-turn sequence). Comparing `state.players[actor].culture` immediately at that checkpoint reads a stale, PRE-production value -- a pure REPLAYER-INSTRUMENT false positive, not a real culture bug. **This exact shape (`"economy::end_of_turn interrupted before its own production/consumption steps"`) was already independently found and fixed for civil-age tracking** (`catch_up_civil_age_defers_while_a_discard_choice_from_an_earlier_line_is_still_open`, this doc's own earlier "`IllegalMove: Pop`" fix) -- the new culture-oracle instrument simply hadn't been given the same treatment yet when first landed.
+
+**Fix**: `Replayer::pending_culture_check: Option<PendingCultureCheck>` defers the comparison instead of running it immediately when the actor's own `DiscardMilitary` pending is still open; `flush_pending_culture_check`, called unconditionally at the top of the main loop's per-line dispatch, is SELF-DEFERRING (re-checks whether the SAME pending is still open every line, not a fixed one-line lookahead), consuming the deferred check for real once `resolve_intervening`'s own discard-draining machinery has actually run production. New tests `flush_pending_culture_check_defers_while_the_actors_own_discard_choice_is_still_open` / `..._compares_once_the_discard_resolves`, confirmed RED by temporarily reverting the deferral check (panics `left: 1, right: 0`), GREEN restored. Grepped for sibling copies: the only other place reading player state immediately after `EndTurn` is `trailing_now_science`'s `REPLAY_DEBUG`-gated eyeball tool, which already self-documents this exact false-positive as a known, accepted limitation of that ad hoc debug print (not a structural/counted instrument) -- left as is, out of scope.
+
+**Census, before/after this fix (same corpus, both runs on this tree)**:
+
+| metric | before fix | after fix |
+|---|---|---|
+| culture-oracle checkpoint agreement | 18996/34135 (55.6%) | 31458/34077 (92.3%) |
+| games with a first divergence | 990/1011 | 531/1011 |
+| dominant bucket | `TakeCard` (359 games) | `TakeCard` (149 games) |
+| completed games | 157 | 157 (unchanged) |
+| discard-phase hand-size oracle | 32551/33687 (96.6%) | unchanged |
+| final-score mean per-player delta | -6.32 | -6.32 (unchanged -- see below) |
+| exact-match games | 1/157 | 1/157 (unchanged) |
+
+**This is a REPLAYER-INSTRUMENT-ONLY fix, not an engine or replayer game-state bug.** The final-score cross-check is UNCHANGED (as expected): the underlying `state.players[_].culture` bookkeeping was always correct by the time production actually ran; only the NEW instrument's own checkpoint was reading it too early. Past strength measurements and completed-game correctness are unaffected. `game::play_game` (self-play) never goes through this journal-parsing machinery at all.
+
+**What remains, precisely, for whoever picks this up next**: 531/1011 games still have a first culture-oracle divergence, now ranked `TakeCard` (149) / `Discard` (126) / `WinWar` (35) / `UpgradeProduction` (32) / `BuildWonderStage` (30) / `BuildBuilding` (28) / `BuildUnit` (26) / `IncreasePopulation` (20) / `PlayActionCard` (19) / `PlayTactic` (19) / `ElectLeader` (15) / `DevelopTechnology` (12) / `UpgradeUnit` (10) / `EndTurn` (8) / `Destroy` (2). Unlike the first pass, these deltas are NOT uniformly small/negative any more (see the `WinWar`/`IncreasePopulation`/`UpgradeUnit` examples above, deltas of +8/+43/+44) -- this shape looks structurally different from the fixed false positive and has NOT been traced yet. `WinWar` at #3 is a plausible next lead: this doc's own "wrong-final-event-SET mechanism" section already documents `WinWar`-adjacent timing gaps (war resolution fires at the start of the attacker's NEXT turn, no journal line of its own). Not traced this pass -- purely a hypothesis from the bucket name, which per this doc's own standing rule is the symptom, not confirmation.
+
+---
+
+### Original design notes (superseded by "LANDED" above -- kept for history)
 
 Session goal: fix the mean per-player culture deficit (-6.36, 1/154 exact
 final scores). Ran out of the checkpoint window before writing any code --
