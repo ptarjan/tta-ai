@@ -479,7 +479,17 @@ fn happy_source_count(p: &PlayerState) -> i32 {
         // card ever carries the same special.
         let grants_this_bonus_itself =
             card.special.iter().any(|sp| matches!(sp, Special::ExtraHappyPerHappySource(_)));
-        if card.effects.happy > 0 && !grants_this_bonus_itself {
+        // Homer, tucked under a completed wonder on leader replacement,
+        // grants THAT wonder a live +1 happy face (`compute`'s own
+        // `p.homer_wonder == w` check, unconditional on the wonder's printed
+        // `effects.happy`) -- a wonder with a printed happy of 0 that is
+        // currently Homer's home still "gives you at least one happy face"
+        // right now, so it must count here too, not just wonders whose own
+        // card print happy. Without this, a player holding both St. Peter's
+        // Basilica and a Homer-boosted wonder had that wonder's live happy
+        // face silently excluded from St. Peter's own count.
+        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
+        if gives_happy_now && !grants_this_bonus_itself {
             n += 1;
         }
     }
@@ -1947,6 +1957,34 @@ mod tests {
 
         let s = compute(&state, &state.players[0]);
         assert_eq!(s.happy, 3, "Religion's +1, St. Peter's own flat +1, and +1 bonus for Religion alone");
+    }
+
+    #[test]
+    fn st_peters_basilica_counts_a_homer_tucked_wonder_as_a_happy_source_even_with_zero_printed_happy() {
+        // Colossus prints `effects.happy: 0` -- normally not a happy source
+        // at all. But Homer, tucked under it on leader replacement, grants
+        // Colossus a LIVE +1 happy face (`compute`'s own unconditional
+        // `p.homer_wonder == w` check) regardless of what the card prints.
+        // St. Peter's Basilica's bonus is keyed on "gives you at least one
+        // happy face [right now]", not on the card's printed stat, so a
+        // Homer-boosted wonder must count toward `happy_source_count` too.
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Colossus"));
+        p.completed_wonders.push(card("St. Peter's Basilica"));
+        p.homer_wonder = card("Colossus");
+        let state = two_player_state(p, blank_player(1, card("Despotism")));
+
+        let s = compute(&state, &state.players[0]);
+        // Colossus via Homer: +1. St. Peter's own flat: +1. St. Peter's
+        // bonus (1 OTHER source -- Colossus, now that it counts): +1.
+        // Total 3. Before this fix, `happy_source_count` skipped Colossus
+        // (printed happy 0), so the bonus paid 0 and this totalled 2 --
+        // the distinguishing number a same-total fix could not pass by
+        // accident.
+        assert_eq!(
+            s.happy, 3,
+            "Colossus's live Homer happy face, St. Peter's own flat +1, and +1 bonus for Colossus counting as a source"
+        );
     }
 
     // ------------------------------------------------------------- purity
