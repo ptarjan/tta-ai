@@ -735,13 +735,26 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
 /// §6.6 step 3a tail: Genghis Khan scores 3 culture per turn while his owner
 /// is at or above SECOND place in military strength.
 ///
-/// `strengths` includes the Khan's own strength, so the test is "my strength
-/// is >= the second-highest strength in the game", i.e. at most one rival
-/// out-arms me. A tie at second place still scores (`>=`). With fewer than
-/// two civilizations still in the game there is no second place and the bonus
-/// is unconditional. Note that with exactly two players left the condition is
-/// vacuously true -- `strengths[1]` is then `min(mine, theirs)` -- which is
-/// the printed rule ("top two"), not an accident of the port.
+/// `strengths` includes the Khan's own strength, so the general (3+ player)
+/// test is "my strength is >= the second-highest strength in the game", i.e.
+/// at most one rival out-arms me. A tie at second place still scores (`>=`).
+/// With fewer than two civilizations still in the game there is no second
+/// place and the bonus is unconditional.
+///
+/// A prior version of this function treated exactly-two-players as
+/// "vacuously true" for that same "top two" test -- mathematically correct
+/// in isolation (`strengths[1]` is `min(mine, theirs)`, so `mine >=
+/// strengths[1]` always holds), but the WRONG rule: the CoL rulebook's own
+/// appendix names Genghis Khan specifically, not just the general "N of M
+/// civilizations" clause: "In a two-player game, 'one of the two strongest'
+/// should be read as 'the strongest'. (You still win ties.)" -- i.e. the
+/// THRESHOLD collapses from top-2 to top-1 in a 2p game, it does not
+/// disappear. Traced against real game `7522205` (2p, `docs/REPLAY.md`'s
+/// culture-oracle TakeCard bucket): round 8, BGO's own "Genghis Khan scores
+/// 0 culture" line (Orange was NOT the stronger of the two civilizations
+/// that turn) against the old code's unconditional +3 -- an ENGINE bug, not
+/// a replayer artifact, since it would misscore any 2p game against a human
+/// the same way live.
 ///
 /// Python dispatches on the leader's NAME (`if p.leader == "Genghis Khan"`)
 /// and hardcodes the 3. This reads `Special::CultureIfTopTwoStrength(n)` off
@@ -777,7 +790,12 @@ fn end_of_turn_leader_bonus(state: &mut GameState, idx: u8) {
         n += 1;
     }
     strengths[..n].sort_unstable_by(|a, b| b.cmp(a));
-    if n < 2 || mine >= strengths[1] {
+    // CoL appendix, Genghis Khan errata: "top two" becomes "top one" when
+    // exactly two civilizations remain -- the rank-`k`-th-place cutoff is
+    // `strengths[k - 1]`, so this is `strengths[0]` (must be the outright
+    // strongest, ties won) at n == 2 instead of the general `strengths[1]`.
+    let rank_threshold = if n == 2 { 1usize } else { 2usize };
+    if n < rank_threshold || mine >= strengths[rank_threshold - 1] {
         state.players[idx as usize].culture += bonus as u16;
     }
 }
@@ -1774,10 +1792,69 @@ mod tests {
 
     #[test]
     fn genghis_khan_ignores_resigned_rivals() {
-        // Khan is last of three on paper, but the player above him has
-        // resigned, so he is second of the two still playing.
-        let mut st = khan_trio(3, 5, 4);
+        // Second of three on paper (6 vs 8 vs 3) -- scores under the general
+        // top-2-of-3 rule, since active() still counts all three. But once
+        // the WEAKEST rival (3) resigns, only two civilizations remain, and
+        // the CoL 2p errata (see `end_of_turn_leader_bonus`'s own doc)
+        // collapses the requirement from "top two" to "the strongest" --
+        // stricter, not the same. Khan (6) is still weaker than the
+        // remaining rival (8), so the bonus must now fail. This is a real
+        // distinguishing case: excluding the resigned player from the
+        // ranking (correct) gives a DIFFERENT answer than leaving them in
+        // would (still-scores), so a regression in either the exclusion or
+        // the 2p threshold collapse flips this test.
+        let mut st = khan_trio(6, 8, 3);
         st.players[2].resigned = true;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 0);
+    }
+
+    /// Two players only: the CoL rulebook's own appendix names Genghis Khan
+    /// specifically -- "In a two-player game, 'one of the two strongest'
+    /// should be read as 'the strongest'. (You still win ties.)" -- so
+    /// unlike `khan_trio`'s three-player case, "one of the two strongest" is
+    /// NOT vacuously true here; it collapses to a strict "am I the stronger
+    /// civilization" test. Traced against real game `7522205`'s
+    /// culture-oracle divergence (`docs/REPLAY.md`'s culture-oracle
+    /// TakeCard bucket): BGO's own "Genghis Khan scores 0 culture" line for
+    /// the weaker of two 2p civilizations, which the pre-fix "vacuous 2p"
+    /// code scored unconditionally (a live ENGINE bug, not a replayer
+    /// artifact -- it would misscore the same way against a human).
+    #[test]
+    fn genghis_khan_in_a_two_player_game_needs_to_be_the_strongest_not_merely_top_two() {
+        // Weaker of the two: no bonus -- the whole point of the errata.
+        let mut st = duel();
+        st.players[0].leader = card("Genghis Khan");
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[1].yellow_bank = 17;
+        st.players[1].blue_total = 11;
+        st.players[0].strength_extra = 3;
+        st.players[1].strength_extra = 5;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 0);
+
+        // Tied: still scores ("you win ties").
+        let mut st = duel();
+        st.players[0].leader = card("Genghis Khan");
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[1].yellow_bank = 17;
+        st.players[1].blue_total = 11;
+        st.players[0].strength_extra = 4;
+        st.players[1].strength_extra = 4;
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(st.players[0].culture, 3);
+
+        // Outright stronger: scores.
+        let mut st = duel();
+        st.players[0].leader = card("Genghis Khan");
+        st.players[0].yellow_bank = 17;
+        st.players[0].blue_total = 11;
+        st.players[1].yellow_bank = 17;
+        st.players[1].blue_total = 11;
+        st.players[0].strength_extra = 9;
+        st.players[1].strength_extra = 4;
         assert!(end_of_turn(&mut st, 0));
         assert_eq!(st.players[0].culture, 3);
     }
