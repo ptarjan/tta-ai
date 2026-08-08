@@ -21,7 +21,7 @@
 //! per sample, and a null of exactly `1 / players` by construction. The league
 //! archive, `build_field` and the mirror/league mode switch all go with it.
 //!
-//! # 2. An accepted champion has to still beat the anchor
+//! # 2. An accepted champion has to still beat a POOL, worst case
 //!
 //! This is the fix for the thing that actually went wrong. Every champion the
 //! Python league ever produced turned out to be far WORSE than the untuned
@@ -31,15 +31,27 @@
 //! improvements walking somewhere worse than where it started, with nothing in
 //! the loop ever asking the absolute question.
 //!
-//! So the loop asks it. The ANCHOR is a fixed vector that never changes for
-//! the life of the climb (the built-in defaults unless `--anchor` says
-//! otherwise). A promotion is vetoed when the candidate's win share against
-//! the anchor is UNAMBIGUOUSLY below the sitting champion's -- intervals
-//! disjoint, not merely a lower point estimate. That conservatism is on
-//! purpose: the gate exists to catch a slide, not to referee noise, and a
-//! veto that fires on noise would stall a healthy climb. It costs one extra
-//! duel per accepted generation, which is a rounding error against `lambda`
-//! challenge duels per generation.
+//! The first fix here was a single fixed ANCHOR (the built-in defaults): veto
+//! a promotion whose win share against it unambiguously dropped from the
+//! sitting champion's. That closed the Python failure, but a single sparring
+//! partner has its own blind spot: the 3p arm's gen1384 champion beat the
+//! anchor 78.5% (null 33.3%) while two of its own weights ran to the mutation
+//! clamp -- and it lost 11.7% to the UNRELATED 2p champion vector (same
+//! 140-key basis, a legal opponent at any table). Great against one opponent,
+//! terrible against another is exactly what a single-opponent gate cannot see.
+//!
+//! So the veto now samples a POOL each generation -- the anchor, every frozen
+//! gauntlet champion (`--gauntlet`; `experiments/rust_league.sh` passes every
+//! player count's frozen champion to every arm, so this is already
+//! cross-player-count by default), a bounded league of this arm's own past
+//! accepted selves, and the current incumbent -- and gates on the WORST
+//! comparison, not the mean: a candidate is vetoed the moment its win share
+//! against ANY sampled opponent is unambiguously below the sitting champion's
+//! against that same opponent (intervals disjoint, not merely a lower point
+//! estimate -- the same conservatism the single-anchor veto used, now applied
+//! per member). A mean across the pool would hide exactly the failure this
+//! replaces: two easy wins burying one collapse. See `--pool-k` and
+//! `--pool-games` for the sampling knobs and their cost.
 //!
 //! # 3. Freezing is enforced for every operator, not two of four
 //!
@@ -70,6 +82,15 @@ const FROZEN: &[WeightKey] = &[WeightKey::Culture];
 /// runs away takes over the evaluation regardless of what the others say.
 const CLAMP: f64 = 60.0;
 
+/// How close to `CLAMP` counts as "pinned" for [`runaway_weights`]. `0.95`
+/// (57.0 at the current `CLAMP`) is tight enough that a healthy vector
+/// bouncing around mid-range never trips it, loose enough to catch a
+/// coordinate a couple of mutation steps short of the wall rather than only
+/// one sitting exactly on it -- a pinned coordinate is the signature of the
+/// single-opponent overfit the pool veto exists to catch (this file's module
+/// doc), so it is worth flagging before it reaches the wall, not just after.
+const RUNAWAY_FRACTION: f64 = 0.95;
+
 fn movable(key: WeightKey) -> bool {
     !FROZEN.contains(&key)
 }
@@ -80,6 +101,20 @@ fn clamp(x: f64) -> f64 {
     } else {
         x
     }
+}
+
+/// Every movable weight sitting at or very near `CLAMP` -- logged loudly by
+/// the caller rather than silently clamped-and-continued, because a pinned
+/// coordinate is exactly what let the 3p arm's gen1384 champion beat its one
+/// sparring partner while collapsing against everyone else.
+fn runaway_weights(w: &Weights) -> Vec<(WeightKey, f64)> {
+    WeightKey::ALL
+        .iter()
+        .copied()
+        .filter(|k| movable(*k))
+        .map(|k| (k, w.get(k)))
+        .filter(|(_, v)| v.abs() >= CLAMP * RUNAWAY_FRACTION)
+        .collect()
 }
 
 // ==================================================================== search
@@ -379,10 +414,15 @@ impl Anchor {
 }
 
 /// The champion's standing against every frozen gauntlet member
-/// (`docs/RUST_LEAGUE.md`'s "gauntlet" section) -- purely observational,
-/// never consulted by the accept gate or the drift veto. Empty when
-/// `--gauntlet` was never passed, which keeps every existing invocation of
-/// this binary (and every test) byte-for-byte unaffected.
+/// (`docs/RUST_LEAGUE.md`'s "gauntlet" section). This function's OWN return
+/// value is purely observational -- only ever printed and logged, never
+/// consulted by the accept gate. `Config::gauntlet` itself (the raw opponent
+/// list this reads) is no longer observational-only, though: [`pool_members`]
+/// below also draws its frozen-champion members from the same list, so a
+/// `--gauntlet` flag now feeds two independent consumers -- this report, and
+/// the pool veto's sample. Empty when `--gauntlet` was never passed, which
+/// keeps every existing invocation of this binary byte-for-byte unaffected
+/// in what it MEASURES here (not in what it accepts -- see [`pool_members`]).
 fn measure_gauntlet(w: &Weights, cfg: &Config, seed_base: u64) -> Vec<(String, Anchor)> {
     cfg.gauntlet
         .iter()
@@ -408,6 +448,99 @@ fn gauntlet_due(gen: u64, every: usize) -> bool {
     every > 0 && gen % every as u64 == 0
 }
 
+// ========================================================================= pool
+
+/// One sampled opponent's verdict: the candidate's and the sitting
+/// champion's fresh standing against it, from the same generation's sample
+/// so the two are directly comparable.
+#[derive(Clone, Debug)]
+struct PoolResult {
+    name: String,
+    candidate: Anchor,
+    incumbent: Anchor,
+}
+
+/// Every opponent the accept gate may sample this generation: the fixed
+/// anchor, every frozen gauntlet member (typically every player count's
+/// champion plus the human-fit vector -- see `experiments/rust_league.sh`),
+/// a bounded league of this arm's own past accepted selves, and the current
+/// incumbent itself. A fresh `Vec` once per GENERATION, not once per game --
+/// cheap -- because the incumbent and the league both move as the climb
+/// progresses and nothing here is worth caching across that move.
+fn pool_members(cfg: &Config, league: &[(String, Weights)]) -> Vec<(String, Seat)> {
+    let mut pool = vec![("anchor".to_string(), champion_seat(&cfg.anchor, cfg))];
+    pool.extend(cfg.gauntlet.iter().cloned());
+    pool.extend(league.iter().map(|(name, w)| (name.clone(), champion_seat(w, cfg))));
+    pool.push(("incumbent".to_string(), champion_seat(&cfg.champion, cfg)));
+    pool
+}
+
+/// Duel `candidate` and the sitting champion against `k` opponents sampled
+/// from `pool`, each on `games` games at this run's table -- fresh every
+/// time, never cached, so the incumbent's standing here always matches the
+/// exact opponents this generation happened to draw. Deterministic from
+/// `seed`: sampling `k` distinct opponents and playing the games both draw
+/// from a `Search` seeded once, so the same generation seed always samples
+/// the same members and plays the same deals.
+fn play_pool(
+    candidate: &Weights,
+    cfg: &Config,
+    pool: &[(String, Seat)],
+    k: usize,
+    games: usize,
+    seed: u64,
+) -> Vec<PoolResult> {
+    let mut search = Search::new(seed as i64);
+    let indices: Vec<usize> = (0..pool.len()).collect();
+    search
+        .sample(&indices, k)
+        .into_iter()
+        .enumerate()
+        .map(|(i, idx)| {
+            let (name, opponent) = &pool[idx];
+            // Distinct, non-overlapping seed ranges per member (and between
+            // the candidate's and the incumbent's own duel against it) for
+            // the same reason `measure_gauntlet` staggers by `104_729`: two
+            // duels sharing deals would not be an independent second look.
+            let s = seed.wrapping_add(i as u64 * 104_729);
+            let candidate_a = measure_against(champion_seat(candidate, cfg), *opponent, cfg, games, s);
+            let incumbent_a =
+                measure_against(champion_seat(&cfg.champion, cfg), *opponent, cfg, games, s.wrapping_add(50_021));
+            PoolResult { name: name.clone(), candidate: candidate_a, incumbent: incumbent_a }
+        })
+        .collect()
+}
+
+/// The pool veto's whole point: gate on the WORST comparison, not the mean.
+/// Returns the name of the FIRST sampled opponent (in sample order) against
+/// which the candidate is unambiguously worse than the incumbent, or `None`
+/// if it is not clearly worse against any of them. A candidate that trounces
+/// two opponents and collapses against a third is exactly gen1384's failure
+/// mode (this file's module doc) -- averaging the three would have hidden
+/// the third behind the first two.
+fn worst_case_verdict(results: &[PoolResult]) -> Option<String> {
+    results.iter().find(|r| r.candidate.clearly_worse_than(&r.incumbent)).map(|r| r.name.clone())
+}
+
+/// Append a newly accepted champion to the league and drop the OLDEST once
+/// it is over `cap` -- a straight FIFO, not the "recent N plus a few
+/// spaced-out older ones" this change's own design note floated as a
+/// possible refinement. FIFO was chosen to keep this change small: it still
+/// bounds memory and per-generation game cost (`pool_members`'s league
+/// contribution never exceeds `cap` entries), which is the property that
+/// actually matters for affordability on a 6-core box, and a smarter
+/// eviction policy can be layered on later without touching anything else
+/// here. `cap == 0` disables the league outright.
+fn push_league(league: &mut Vec<(String, Weights)>, entry: (String, Weights), cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    league.push(entry);
+    while league.len() > cap {
+        league.remove(0);
+    }
+}
+
 // ====================================================================== args
 
 #[derive(Clone, Debug)]
@@ -428,17 +561,27 @@ struct Config {
     anchor_games: usize,
     threads: usize,
     accept_z: f64,
-    /// Frozen past opponents this run reports standing against, labelled by
-    /// filename stem. Each carries its OWN [`BotKind`] bound to its own
-    /// weights (a [`Seat`]) -- most members share `Config::kind` (the usual
-    /// "past champion" case), but a member need not: a `Human` gauntlet
-    /// entry is loaded with `human_policy::load_weights` via [`loader_for`]
-    /// and played by a `HumanBot`, never by a `WeightedBot` built from its
-    /// human-fit numbers. Observation only -- see [`measure_gauntlet`].
-    /// Never read by the accept gate or [`Anchor::clearly_worse_than`].
+    /// Frozen past opponents, labelled by filename stem, that this run BOTH
+    /// reports standing against ([`measure_gauntlet`], purely observational)
+    /// AND draws pool-veto opponents from ([`pool_members`], which gates a
+    /// promotion). Each carries its OWN [`BotKind`] bound to its own weights
+    /// (a [`Seat`]) -- most members share `Config::kind` (the usual "past
+    /// champion" case), but a member need not: a `Human` gauntlet entry is
+    /// loaded with `human_policy::load_weights` via [`loader_for`] and
+    /// played by a `HumanBot`, never by a `WeightedBot` built from its
+    /// human-fit numbers.
     gauntlet: Vec<(String, Seat)>,
     /// Games played per gauntlet member, each time the gauntlet runs.
     gauntlet_games: usize,
+    /// Opponents sampled from the pool ([`pool_members`]) each generation a
+    /// candidate is found. Worst-case, not averaged -- see this file's
+    /// module doc -- so this is "how many independent chances a candidate
+    /// gets to reveal a collapse", not a sample whose noise averages out.
+    pool_k: usize,
+    /// Games played per pool pairing (candidate vs. opponent, and
+    /// incumbent vs. the same opponent) -- one pool check costs
+    /// `2 * pool_k * pool_games` games.
+    pool_games: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -457,6 +600,12 @@ struct Args {
     /// cadence, not a duel parameter, so it lives here rather than in
     /// [`Config`] alongside `gauntlet_games`.
     gauntlet_every: usize,
+    /// Bounded number of past accepted champions [`push_league`] retains as
+    /// extra pool opponents; 0 disables the league. Run-loop state (the
+    /// league itself lives in `main`'s loop, not in [`Config`], the same way
+    /// `recent` and `hold_sigma` do) rather than a duel parameter, so it
+    /// lives here alongside `gauntlet_every`.
+    league_cap: usize,
 }
 
 impl Default for Args {
@@ -475,6 +624,18 @@ impl Default for Args {
                 accept_z: 1.2816,
                 gauntlet: Vec::new(),
                 gauntlet_games: 60,
+                // 3 opponents at 60 games/side is 360 games per pool check
+                // (`2 * pool_k * pool_games`) -- three times the old single
+                // 120-game anchor duel, paid only on generations that find a
+                // contender, and still a fraction of `lambda` screening
+                // duels (up to `lambda * max_games` = 480 at the defaults
+                // above). That is the deliberate price of the bug this
+                // change exists to fix: the 3p arm's gen1384 champion beat
+                // its one sparring partner 78.5% while losing 11.7% to an
+                // unrelated peer, and a properly powered per-member check
+                // (not a thin, noisy one) is what catches that.
+                pool_k: 3,
+                pool_games: 60,
             },
             out: PathBuf::from("champion.json"),
             log: None,
@@ -486,6 +647,7 @@ impl Default for Args {
             sigma_floor: 0.08,
             stall_kick: 15,
             gauntlet_every: 50,
+            league_cap: 6,
         }
     }
 }
@@ -507,14 +669,23 @@ usage: climb --out PATH [options]
   --min-games N      games before an early accept is allowed (default: 2x --screen)
   --max-games N      games a single challenge may spend (default 240)
   --anchor-games N   games per anchor measurement (default 120)
-  --gauntlet PATH    frozen past opponent to report standing against
-                     (repeatable; observational only, never gates a promotion)
+  --gauntlet PATH    frozen past opponent, reported on AND drawn into the
+                     accept-gate pool (repeatable; see --pool-k)
   --gauntlet-kind KIND  kind of the NEXT --gauntlet member (default: --kind,
                      i.e. same kind as the champion -- set this first when a
                      member is a different kind, e.g. --gauntlet-kind human)
   --gauntlet-games N games per gauntlet member each time it runs (default 60)
   --gauntlet-every N generations between gauntlet measurements; 0 disables
                      (default 50)
+  --pool-k N         opponents sampled from the pool (anchor + --gauntlet +
+                     league + incumbent) per accept check; a candidate is
+                     vetoed if it is unambiguously worse than the incumbent
+                     against ANY of them -- worst case, not the mean
+                     (default 3; 0 disables the pool veto)
+  --pool-games N     games per pool pairing; one check costs
+                     2 * --pool-k * --pool-games games (default 60)
+  --league-cap N     past accepted champions kept as extra pool opponents;
+                     0 disables the league (default 6)
   --threads N        games in parallel (default 1)
   --seed N           run seed (default 0)
   --sigma X          initial step size, if not resumed (default 0.25)
@@ -558,6 +729,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--gauntlet-kind" => pending_gauntlet_kind = Some(value(flag)?.parse::<BotKind>()?),
             "--gauntlet-games" => a.cfg.gauntlet_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet-every" => a.gauntlet_every = parse_num(&value(flag)?, flag)?,
+            "--pool-k" => a.cfg.pool_k = parse_num(&value(flag)?, flag)?,
+            "--pool-games" => a.cfg.pool_games = parse_num(&value(flag)?, flag)?,
+            "--league-cap" => a.league_cap = parse_num(&value(flag)?, flag)?,
             "--threads" => a.cfg.threads = parse_num(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
             "--sigma" => a.sigma = parse_num(&value(flag)?, flag)?,
@@ -605,6 +779,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     probe(a.cfg.max_games).map_err(|e| format!("--max-games: {e}"))?;
     probe(a.cfg.anchor_games).map_err(|e| format!("--anchor-games: {e}"))?;
     probe(a.cfg.gauntlet_games).map_err(|e| format!("--gauntlet-games: {e}"))?;
+    probe(a.cfg.pool_games).map_err(|e| format!("--pool-games: {e}"))?;
     if a.cfg.max_games < a.cfg.screen {
         return Err("--max-games must be at least --screen".to_string());
     }
@@ -707,6 +882,12 @@ fn main() -> ExitCode {
     let mut recent: Vec<bool> = Vec::new();
     let mut hold_sigma = 0usize;
     let start_gen = progress.gen;
+    // Past accepted champions, bounded by `--league-cap` -- see
+    // `push_league`. NOT restored on resume, same as `recent` and
+    // `hold_sigma` above: only `champion`, `gen`, `sigma` and `since_accept`
+    // are persisted in the checkpoint, and this follows that existing
+    // precedent rather than growing the checkpoint format for it.
+    let mut league: Vec<(String, Weights)> = Vec::new();
 
     while Instant::now() < deadline && progress.gen - start_gen < args.gens as u64 {
         progress.gen += 1;
@@ -747,19 +928,54 @@ fn main() -> ExitCode {
 
         let mut vetoed = false;
         let mut accepted = false;
+        let mut pool_results: Vec<PoolResult> = Vec::new();
+        let mut veto_reason: Option<String> = None;
+        let mut runaway: Vec<(WeightKey, f64)> = Vec::new();
         if let Some((m, _)) = &best {
-            // The drift veto. Measured on a different seed range than the
-            // sitting champion's standing so the two are not the same games.
-            let cand = measure_anchor(
-                &m.weights,
-                &args.cfg,
-                10_007u64.wrapping_add(progress.gen.wrapping_mul(37)),
-            );
-            if cand.clearly_worse_than(&standing) {
+            // The pool veto (this file's module doc, section 2). A fresh
+            // sample and fresh games every generation -- never cached across
+            // generations, and on a different seed range than the anchor
+            // telemetry measured below, because the incumbent and the
+            // league both move as the climb progresses.
+            let pool = pool_members(&args.cfg, &league);
+            let pool_seed = 30_029u64.wrapping_add(progress.gen.wrapping_mul(41));
+            pool_results =
+                play_pool(&m.weights, &args.cfg, &pool, args.cfg.pool_k, args.cfg.pool_games, pool_seed);
+            veto_reason = worst_case_verdict(&pool_results);
+            if veto_reason.is_some() {
                 vetoed = true;
             } else {
                 args.cfg.champion = m.weights;
-                standing = cand;
+                // Anchor telemetry only now -- the pool veto above already
+                // decided acceptance. Kept for the printed line, the
+                // checkpoint's `vs_anchor` fields, and continuity with runs
+                // that only ever read that number.
+                standing = measure_anchor(
+                    &args.cfg.champion,
+                    &args.cfg,
+                    10_007u64.wrapping_add(progress.gen.wrapping_mul(37)),
+                );
+                push_league(
+                    &mut league,
+                    (format!("gen{}", progress.gen), args.cfg.champion),
+                    args.league_cap,
+                );
+                // The runaway guard: log loudly, never silently clamp and
+                // move on. A pinned coordinate is the signature of the
+                // failure the pool veto above exists to catch, so an
+                // accepted champion that has one is worth a human's
+                // attention even though it cleared every check.
+                runaway = runaway_weights(&args.cfg.champion);
+                for (k, v) in &runaway {
+                    eprintln!(
+                        "climb: RUNAWAY [{}p] gen {} {} = {:.3} (clamp {:.1}) -- pinned coordinate",
+                        args.cfg.players,
+                        progress.gen,
+                        k.name(),
+                        v,
+                        CLAMP,
+                    );
+                }
                 accepted = true;
             }
         }
@@ -831,8 +1047,21 @@ fn main() -> ExitCode {
                     .join(",")
             )
         };
+        let pool_str = if pool_results.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " pool=[{}]{}",
+                pool_results
+                    .iter()
+                    .map(|r| format!("{}={:.3}/{:.3}", r.name, r.candidate.mean, r.incumbent.mean))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                veto_reason.as_deref().map(|r| format!(" lost_to={r}")).unwrap_or_default(),
+            )
+        };
         println!(
-            "[{}p] gen {} {} sigma={:.3} {:.1}s anchor={:.3}{} {}",
+            "[{}p] gen {} {} sigma={:.3} {:.1}s anchor={:.3}{}{} {}",
             args.cfg.players,
             progress.gen,
             verdict,
@@ -840,6 +1069,7 @@ fn main() -> ExitCode {
             secs,
             standing.mean,
             gauntlet_str,
+            pool_str,
             tried.join(" "),
         );
         if let Some(path) = &args.log {
@@ -853,10 +1083,30 @@ fn main() -> ExitCode {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
+            let pool_json: String = pool_results
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{{\"name\":\"{}\",\"candidate\":{:.4},\"incumbent\":{:.4}}}",
+                        r.name, r.candidate.mean, r.incumbent.mean,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let pool_veto_json = match &veto_reason {
+                Some(name) => format!("\"{name}\""),
+                None => "null".to_string(),
+            };
+            let runaway_json: String = runaway
+                .iter()
+                .map(|(k, v)| format!("{{\"key\":\"{}\",\"value\":{:.3}}}", k.name(), v))
+                .collect::<Vec<_>>()
+                .join(",");
             let line = format!(
                 "{{\"gen\":{},\"players\":{},\"accepted\":{},\"vetoed\":{},\"sigma\":{:.4},\
                  \"secs\":{:.1},\"since_accept\":{},\"anchor\":{:.4},\"anchor_half\":{:.4},\
-                 \"gauntlet\":[{}],\"tried\":[{}]}}\n",
+                 \"gauntlet\":[{}],\"pool\":[{}],\"pool_veto\":{},\"runaway\":[{}],\
+                 \"tried\":[{}]}}\n",
                 progress.gen,
                 args.cfg.players,
                 accepted,
@@ -867,6 +1117,9 @@ fn main() -> ExitCode {
                 standing.mean,
                 standing.half,
                 gauntlet_json,
+                pool_json,
+                pool_veto_json,
+                runaway_json,
                 tried.join(","),
             );
             // A log that cannot be written is worth saying so about once, but
@@ -1106,15 +1359,15 @@ mod tests {
         }
     }
 
-    /// The whole point of the gauntlet is that it cannot move the champion:
-    /// nothing in this file reads `Config::gauntlet` or `measure_gauntlet`'s
-    /// return value except the logging code in `main`. This test pins the
-    /// weaker but checkable half of that claim -- the accept gate's own
-    /// logic (`c.lo > cfg.null()`, [`Anchor::clearly_worse_than`]) never
-    /// takes a gauntlet result as an argument, which a type signature grep
-    /// of this file confirms and a future refactor could silently break.
+    /// `challenge` is the per-mutant local-search screen, not the pool veto
+    /// (`pool_members`/`play_pool`/`worst_case_verdict`, which DOES read
+    /// `Config::gauntlet` -- see this file's module doc, section 2, and the
+    /// updated `Config::gauntlet` doc comment). This test pins the narrower
+    /// claim that is still true post-pool-veto: `challenge`'s own signature
+    /// takes no gauntlet argument, so its verdict on a mutant cannot depend
+    /// on what `--gauntlet` flags happened to be passed.
     #[test]
-    fn gauntlet_measurement_does_not_influence_the_accept_gate() {
+    fn challenge_does_not_read_the_gauntlet_field() {
         let mut c = cfg();
         c.players = 2;
         c.gauntlet_games = 4;
@@ -1237,5 +1490,156 @@ mod tests {
             assert_eq!(got.len(), k);
             assert_eq!(got.iter().collect::<std::collections::HashSet<_>>().len(), k);
         }
+    }
+
+    // =================================================================== pool
+
+    fn anchor(mean: f64, half: f64) -> Anchor {
+        Anchor { mean, half }
+    }
+
+    fn result(name: &str, candidate: Anchor, incumbent: Anchor) -> PoolResult {
+        PoolResult { name: name.to_string(), candidate, incumbent }
+    }
+
+    /// The whole point of the pool veto: it gates on the WORST comparison,
+    /// not the mean. `friendly` and `nemesis` average to a candidate that
+    /// looks fine (0.90 and 0.10 against a 0.50 incumbent baseline both
+    /// average to 0.50) -- a mean-based gate would wave this candidate
+    /// through. The worst case must not.
+    #[test]
+    fn worst_case_verdict_fires_on_the_worst_comparison_not_the_average() {
+        let friendly = result("friendly", anchor(0.90, 0.05), anchor(0.50, 0.05));
+        let nemesis = result("nemesis", anchor(0.10, 0.05), anchor(0.50, 0.05));
+        let verdict = worst_case_verdict(&[friendly, nemesis]);
+        assert_eq!(verdict.as_deref(), Some("nemesis"), "the collapse against nemesis must gate, not average out");
+    }
+
+    /// The mirror of the test above: nothing here is unambiguously worse, so
+    /// nothing vetoes -- overlapping intervals are noise, not a regression
+    /// (same conservatism as the old single-anchor veto's
+    /// `the_veto_needs_the_intervals_to_be_disjoint`).
+    #[test]
+    fn worst_case_verdict_is_none_when_nothing_is_clearly_worse() {
+        let a = result("a", anchor(0.55, 0.05), anchor(0.50, 0.05));
+        let b = result("b", anchor(0.48, 0.05), anchor(0.50, 0.05)); // overlapping
+        assert!(worst_case_verdict(&[a, b]).is_none());
+    }
+
+    /// The veto reports the FIRST offending member in sample order, not
+    /// every offender -- one bad comparison is already a veto, and the loop
+    /// this feeds (`main`) only needs a name to log.
+    #[test]
+    fn worst_case_verdict_reports_the_first_offender_in_order() {
+        let first_bad = result("first_bad", anchor(0.05, 0.02), anchor(0.50, 0.02));
+        let second_bad = result("second_bad", anchor(0.05, 0.02), anchor(0.50, 0.02));
+        let verdict = worst_case_verdict(&[first_bad, second_bad]);
+        assert_eq!(verdict.as_deref(), Some("first_bad"));
+    }
+
+    #[test]
+    fn pool_members_includes_the_anchor_gauntlet_league_and_incumbent_in_order() {
+        let mut c = cfg();
+        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        c.gauntlet = vec![("frozen_a".to_string(), seat)];
+        let league = vec![("gen10".to_string(), Weights::defaults())];
+        let pool = pool_members(&c, &league);
+        let names: Vec<&str> = pool.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["anchor", "frozen_a", "gen10", "incumbent"]);
+    }
+
+    #[test]
+    fn pool_members_is_just_anchor_and_incumbent_with_no_gauntlet_or_league() {
+        let c = cfg();
+        let pool = pool_members(&c, &[]);
+        let names: Vec<&str> = pool.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["anchor", "incumbent"]);
+    }
+
+    /// FIFO, oldest first out -- see `push_league`'s doc comment for why a
+    /// straight FIFO was chosen over "recent N plus a few spaced-out older
+    /// ones". This pins the bound that actually matters for cost: the
+    /// league never grows past `cap` regardless of how many generations are
+    /// accepted.
+    #[test]
+    fn the_league_is_capped_and_drops_the_oldest_first() {
+        let mut league: Vec<(String, Weights)> = Vec::new();
+        for gen in 0..5 {
+            push_league(&mut league, (format!("gen{gen}"), Weights::defaults()), 3);
+        }
+        let names: Vec<&str> = league.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["gen2", "gen3", "gen4"]);
+    }
+
+    #[test]
+    fn a_zero_league_cap_keeps_no_history() {
+        let mut league: Vec<(String, Weights)> = Vec::new();
+        push_league(&mut league, ("gen1".to_string(), Weights::defaults()), 0);
+        assert!(league.is_empty(), "cap 0 must disable the league, not just shrink it");
+    }
+
+    /// `runaway_weights` is the logged-loudly half of the runaway guard
+    /// (this file's module doc, "the failure this pool veto exists to
+    /// catch"): a coordinate at or very near `CLAMP` must be reported by
+    /// name and value, and the frozen numeraire must never be reported even
+    /// if it were somehow set that high.
+    #[test]
+    fn runaway_weights_flags_only_movable_keys_at_or_near_the_clamp() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::Workers, CLAMP); // pinned exactly at the wall
+        w.set(WeightKey::Culture, CLAMP); // frozen; must never be flagged
+        let got = runaway_weights(&w);
+        let keys: Vec<WeightKey> = got.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&WeightKey::Workers), "a weight pinned at CLAMP must be flagged");
+        assert!(!keys.contains(&WeightKey::Culture), "the frozen key must never be reported as runaway");
+    }
+
+    #[test]
+    fn runaway_weights_is_empty_for_a_vector_nowhere_near_the_clamp() {
+        assert!(runaway_weights(&Weights::defaults()).is_empty());
+    }
+
+    /// The sampling half of `play_pool`'s determinism claim (module doc:
+    /// "same generation seed always samples the same members"), without
+    /// paying for any games: `Search::sample` alone must be a pure function
+    /// of its seed and its input.
+    #[test]
+    fn the_pool_sample_is_deterministic_from_its_seed() {
+        let indices: Vec<usize> = (0..8).collect();
+        let mut s1 = Search::new(777);
+        let mut s2 = Search::new(777);
+        assert_eq!(s1.sample(&indices, 3), s2.sample(&indices, 3));
+    }
+
+    /// End-to-end wiring check: sampling `k` from a pool of `n > k` members
+    /// and playing real (tiny) duels must come back with exactly `k`
+    /// distinct results, one per sampled member.
+    #[test]
+    fn play_pool_samples_k_distinct_members_and_reports_one_result_each() {
+        let mut c = cfg();
+        c.players = 2;
+        c.threads = 2;
+        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        c.gauntlet = vec![("frozen_a".to_string(), seat), ("frozen_b".to_string(), seat)];
+        let pool = pool_members(&c, &[]); // anchor, frozen_a, frozen_b, incumbent = 4 members
+        let results = play_pool(&c.champion, &c, &pool, 2, 4, 555);
+        assert_eq!(results.len(), 2);
+        let names: std::collections::HashSet<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "the sample must not repeat a member");
+        for r in &results {
+            assert!((0.0..=1.0).contains(&r.candidate.mean), "candidate share {} out of range", r.candidate.mean);
+            assert!((0.0..=1.0).contains(&r.incumbent.mean), "incumbent share {} out of range", r.incumbent.mean);
+        }
+    }
+
+    /// Requesting more opponents than the pool has must not panic -- it
+    /// samples everything there is, same as `Search::sample`'s own
+    /// documented clamp.
+    #[test]
+    fn play_pool_with_k_larger_than_the_pool_samples_everything() {
+        let c = cfg(); // anchor + incumbent = 2 members, no gauntlet or league
+        let pool = pool_members(&c, &[]);
+        let results = play_pool(&c.champion, &c, &pool, 10, 4, 1);
+        assert_eq!(results.len(), 2);
     }
 }
