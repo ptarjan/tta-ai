@@ -824,6 +824,7 @@ fn blank_state(n: u8, seed: u64) -> GameState {
         forced_winner: None,
         pending: PendingStack::new(),
         queue: Queue::new(),
+        last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
     }
 }
 

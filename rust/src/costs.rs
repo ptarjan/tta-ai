@@ -867,6 +867,7 @@ mod tests {
             forced_winner: None,
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
+            last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
         }
     }
 

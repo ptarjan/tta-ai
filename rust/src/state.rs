@@ -1438,6 +1438,19 @@ pub struct GameState {
     pub pending: PendingStack,
     /// Deferred sub-effects, resolved FIFO once `pending` empties (§5.3).
     pub queue: Queue,
+
+    /// Instrumentation only -- read by `replay_common.rs`'s culture-oracle
+    /// checkpoint, nothing in this file, `legal.rs`, `apply.rs`, `costs.rs`
+    /// or `effects.rs` reads it, exactly like `seeded_by` above. `idx`'s own
+    /// `culture` total the INSTANT `economy::end_of_turn`'s production steps
+    /// (2-5) finish for them, captured by `game::resume_end_turn` BEFORE the
+    /// immediately-following `advance_turn` call can move it further -- e.g.
+    /// a war that resolves at the START of the NEXT player's turn (§5.7),
+    /// which can add to or subtract from a culture total that was already
+    /// correct a few statements earlier. Without this, any checkpoint taken
+    /// after `resume_end_turn` returns can read a value that has already
+    /// been through a DIFFERENT player's entire start-of-turn sequence.
+    pub last_end_of_turn_culture: [Option<u16>; MAX_PLAYERS],
 }
 
 impl GameState {

@@ -410,6 +410,7 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         forced_winner: None,
         pending: PendingStack::new(),
         queue: Queue::new(),
+        last_end_of_turn_culture: [None; MAX_PLAYERS],
     };
 
     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
@@ -853,6 +854,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
         state.queue.push_back(QueueItem::EndOfTurn { player: idx });
         return;
     }
+    // Snapshot BEFORE `advance_turn` -- see `GameState::last_end_of_turn_
+    // culture`'s own doc. `advance_turn` can run the NEXT player's own
+    // `start_turn` synchronously, including a war resolving against (or
+    // for) `idx` (§5.7), which would otherwise corrupt this exact value
+    // before anything gets a chance to read it as "idx's total right after
+    // idx's own turn ended".
+    state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
     advance_turn(state, &mut rng);
 }
 

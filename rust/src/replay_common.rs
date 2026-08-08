@@ -2029,8 +2029,28 @@ impl<'a> Replayer<'a> {
     /// immediate path (an ordinary `EndTurn` whose production already ran)
     /// and [`Self::flush_pending_culture_check`] (a deferred one). See
     /// [`CultureOracleDivergence`]'s own doc.
+    ///
+    /// Reads `state.last_end_of_turn_culture[actor_seat]`, NOT the live
+    /// `state.players[actor_seat].culture` -- see that field's own doc.
+    /// Whichever path calls this, `game::resume_end_turn` has, by
+    /// construction, ALREADY run (the immediate path just finished its own
+    /// `try_apply(Move::EndTurn, ..)`; the deferred path only gets here once
+    /// `flush_pending_culture_check` has confirmed the actor's own
+    /// `DiscardMilitary` pending is gone), so the snapshot for THIS actor's
+    /// THIS turn is always fresh -- `resume_end_turn` sets it unconditionally,
+    /// synchronously, before it can call `advance_turn`. Consumed (reset to
+    /// `None`) on every read so a stale value from several turns ago can
+    /// never silently stand in for a checkpoint it does not belong to.
     fn record_culture_check(&mut self, lineno: usize, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
-        let got = self.state.players[actor_seat as usize].culture as i32;
+        let got = self.state.last_end_of_turn_culture[actor_seat as usize]
+            .take()
+            .unwrap_or_else(|| {
+                panic!(
+                    "record_culture_check called for actor {actor_seat} at line {lineno} but \
+                     resume_end_turn never snapshotted this turn's post-production culture -- \
+                     a caller reached this checkpoint before economy::end_of_turn actually ran"
+                )
+            }) as i32;
         self.culture_oracle_checked += 1;
         if journal_now == got {
             self.culture_oracle_agreed += 1;
@@ -3366,8 +3386,13 @@ pub struct CultureOracleDivergence {
     pub actor: &'static str,
     /// BGO's own "(now M)" running total -- ground truth.
     pub journal_now: i32,
-    /// This binary's own `state.players[actor].culture` at the same
-    /// checkpoint.
+    /// This binary's own reconstructed total at the same checkpoint --
+    /// `state.last_end_of_turn_culture[actor]`'s snapshot (taken by
+    /// `game::resume_end_turn` the instant production finished for `actor`,
+    /// see that field's own doc), NOT necessarily the live `state.
+    /// players[actor].culture`, which a same-call `advance_turn` cascade
+    /// (e.g. a war resolving at the start of the NEXT player's turn) can
+    /// already have moved further by the time anything reads it.
     pub reconstructed: i32,
     pub last_action_class: Option<ActionClass>,
 }
@@ -6793,15 +6818,16 @@ mod tests {
 
     /// The other half: once the actor's `DiscardMilitary` pending is gone
     /// (the resolving `"<Color> discards N card(s)"` line has run and
-    /// production completed for real, bringing `state.players[0].culture`
-    /// up to BGO's own post-production total), the SAME deferred check now
-    /// compares correctly -- a deferral, not a permanent skip.
+    /// `game::resume_end_turn` snapshotted the post-production total into
+    /// `state.last_end_of_turn_culture[0]`, exactly as it does for real),
+    /// the SAME deferred check now compares correctly -- a deferral, not a
+    /// permanent skip.
     #[test]
     fn flush_pending_culture_check_compares_once_the_discard_resolves() {
         let card_index = build_card_index();
         let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
-        r.state.players[0].culture = 3; // production has now run, matching BGO's own "(now 3)"
+        r.state.last_end_of_turn_culture[0] = Some(3); // resume_end_turn's own snapshot, matching BGO's own "(now 3)"
         r.pending_culture_check =
             Some(PendingCultureCheck { lineno: 64, actor_seat: 0, journal_now: 3, last_action_class: Some(ActionClass::TakeCard) });
 
@@ -6811,6 +6837,46 @@ mod tests {
         assert_eq!(r.culture_oracle_agreed, 1, "3 == 3: this binary's reconstruction agrees with the journal");
         assert!(r.culture_oracle_divergence.is_none());
         assert!(r.pending_culture_check.is_none(), "consumed, not left pending forever");
+        assert!(r.state.last_end_of_turn_culture[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
+    }
+
+    /// Real game `7523612` round 14 (`docs/REPLAY.md`'s "Culture oracle"
+    /// section, `WinWar`-bucket trace): Purple's own `EndTurn` opens a
+    /// `DiscardMilitary` pending exactly as the test above, but resolving it
+    /// (`game::resume_end_turn`) does NOT stop at production -- it falls
+    /// straight into `advance_turn`, which starts ORANGE's turn and resolves
+    /// a war Orange already declared on Purple, moving 15 culture from
+    /// Purple to Orange. By the time this checkpoint is ever read,
+    /// `state.players[0].culture` (Purple, seat 0 here) has ALREADY been
+    /// discounted by that war -- reading it live would report a false -15
+    /// divergence for a total that was exactly right the instant production
+    /// finished. `record_culture_check` must read the SNAPSHOT `resume_end_
+    /// turn` took before `advance_turn` ran, not the live (now war-adjusted)
+    /// total.
+    #[test]
+    fn flush_pending_culture_check_uses_the_pre_advance_turn_snapshot_not_a_later_wars_live_total() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
+        // `resume_end_turn`'s own snapshot: Purple's true post-production
+        // total, matching BGO's own "(now 64)" on the very same line.
+        r.state.last_end_of_turn_culture[0] = Some(64);
+        // The SAME `resume_end_turn` call then ran `advance_turn`, starting
+        // Orange's turn and resolving Orange's war -- Purple's LIVE culture
+        // is now 49 (64 - 15), the war's real effect, but NOT what this
+        // checkpoint (Purple's OWN end-of-turn total) is supposed to read.
+        r.state.players[0].culture = 49;
+        r.pending_culture_check =
+            Some(PendingCultureCheck { lineno: 267, actor_seat: 0, journal_now: 64, last_action_class: Some(ActionClass::WinWar) });
+
+        r.flush_pending_culture_check();
+
+        assert_eq!(r.culture_oracle_checked, 1);
+        assert_eq!(r.culture_oracle_agreed, 1, "64 == 64: the snapshot, not the war-adjusted live total, is what must be compared");
+        assert!(
+            r.culture_oracle_divergence.is_none(),
+            "must not report a false -15 divergence for a war that resolved AFTER this checkpoint's true moment"
+        );
     }
 
     #[test]
