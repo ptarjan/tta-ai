@@ -410,6 +410,160 @@ impl WeightedBot {
     }
 }
 
+// --------------------------------------------------- agreement-fit features
+//
+// `bin/agreefit.rs` (the champion-weight-vs-human-choice supervised fit,
+// `docs/AGREEMENT_FIT.md`) needs, for every legal move at a human decision
+// point, the exact per-`WeightKey` vector `evaluate` above dots against `w`
+// -- NOT a second, drifting reimplementation of `evaluate`'s arithmetic, and
+// NOT `evaluate`'s own scalar output (which only tells you the score under
+// ONE fixed `w`, not what to fit). [`linear_features`]/[`candidate_features`]
+// below share every trial-and-evaluate step [`WeightedBot::rank_moves`]
+// itself uses (same `filter_resign`, same root/`RivalContext`/
+// `determinize_current_events` construction, same `end_turn_bias` handling)
+// and read the SAME [`features::features`]/[`cards`]/[`row`]/[`events`]
+// calls [`evaluate`] itself calls -- so a champion `w` dotted against this
+// vector reproduces [`evaluate`]'s own number exactly (pinned by
+// [`tests::linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly`]),
+// and a *different* `w` dotted against it is a faithful LINEAR
+// approximation of what `evaluate` would have scored under that `w` --
+// faithful for every coordinate `evaluate`'s own `WeightKey::ALL`/
+// `PHASE_KEYS` loops price, which is most of the vector.
+//
+// One documented, deliberate gap, not hidden: ten coordinates ([`WeightKey::
+// HandPotential`], [`WeightKey::WonderPotential`], [`WeightKey::
+// HandMilPotential`], [`WeightKey::RivalHandPotential`], [`WeightKey::
+// RowUrgency`], [`WeightKey::RowBargainForgone`], [`WeightKey::RowLastCopy`],
+// [`WeightKey::MyEventThreat`], plus [`WeightKey::RateHorizon`]'s own scaling
+// of the four [`horizon::RATE_KEYS`]) are NOT linear in `w` in [`evaluate`]
+// itself -- each is priced by calling a function that takes the FULL weight
+// vector and reprices its own internal sub-terms through it (`cards::
+// hand_potential(state, idx, w)` and siblings), so the true `evaluate(state,
+// w)` is bilinear in `w` on these ten dimensions, not expressible as
+// `w . f(state)` for any single fixed `f`. [`linear_features`] resolves this
+// by freezing those ten sub-computations at a caller-supplied `freeze`
+// vector (the champion, in every real call site) rather than the `w` being
+// fit -- the OUTER gate weight (e.g. `hand_potential`'s own coordinate) is
+// still fully free and fit, only the INNER sub-pricing inside it is held at
+// the champion's numbers. `WeightKey::TacticGain`/`WeightKey::TacticShort`
+// are the one exception among the "identity-aware" group that needed no
+// freezing: `cards::tactic_terms(state, idx)` -- see [`evaluate`]'s own call
+// above -- takes no `w` at all, so both are genuinely `w`-independent
+// features already.
+
+/// The raw linear feature vector, one entry per [`WeightKey`], such that
+/// `sum_k w.get(k) * out[k as usize]` equals [`evaluate`]'s own total
+/// whenever `w == freeze` -- see this section's own doc comment for exactly
+/// which ten coordinates are only equal in that one case (frozen at
+/// `freeze`, not recomputed for a different `w`) and why.
+///
+/// `ctx` must be the SAME [`RivalContext`] `evaluate`'s own caller built for
+/// `idx` at the search root -- not recomputed per candidate, exactly as
+/// [`WeightedBot::choose`]/[`rank_moves`] themselves require (see their own
+/// doc comments).
+pub fn linear_features(state: &GameState, idx: u8, ctx: Option<&RivalContext>, freeze: &Weights) -> Vec<f64> {
+    let mut out = vec![0.0f64; WeightKey::ALL.len()];
+
+    // The board-read vector `evaluate`'s own `WeightKey::ALL` loop dots
+    // against `w` -- `w: None, priced_only: false` so every coordinate is
+    // computed regardless of which weight the CHAMPION happens to price at
+    // zero (a coordinate the champion never turned on may still be exactly
+    // what a fit needs to turn on -- see `features::features`'s own doc
+    // comment on why `priced_only` must stay off for a complete read).
+    let f = features::features(state, idx, ctx, None, false);
+    let hz = horizon::rate_multiplier(state, freeze, horizon::live_count(state));
+    for &k in WeightKey::ALL {
+        let mut v = f.get(k);
+        if v != 0.0 && horizon::RATE_KEYS.contains(&k) {
+            v *= hz;
+        }
+        out[k as usize] = v;
+    }
+
+    // The phase-blended body -- `PHASE_KEYS` members are never in
+    // `RATE_KEYS` (pinned by `horizon.rs`'s own set, `evaluate`'s `scale`
+    // guard is therefore always 1.0 here, matching `evaluate` exactly), so
+    // this is genuinely state-only, no `freeze` dependence at all.
+    let late = horizon::lateness(state);
+    let early = 1.0 - late;
+    for &k in PHASE_KEYS {
+        let v = f.get(k);
+        out[k.early() as usize] = v * early;
+        out[k.late() as usize] = v * late;
+    }
+
+    // The ten identity-aware, `freeze`-priced gates -- see this section's
+    // top doc comment.
+    out[WeightKey::HandPotential as usize] = cards::hand_potential(state, idx, freeze);
+    out[WeightKey::WonderPotential as usize] = cards::wonder_potential(state, idx, freeze);
+    out[WeightKey::HandMilPotential as usize] = cards::hand_mil_potential(state, idx, freeze);
+    let (tactic_gain, tactic_short) = cards::tactic_terms(state, idx);
+    out[WeightKey::TacticGain as usize] = tactic_gain;
+    out[WeightKey::TacticShort as usize] = tactic_short;
+    out[WeightKey::RivalHandPotential as usize] = cards::rival_hand_potential(state, idx, freeze);
+    let (row_urgency, row_bargain) = row::row_pressure(state, idx, freeze, ctx);
+    out[WeightKey::RowUrgency as usize] = row_urgency;
+    out[WeightKey::RowBargainForgone as usize] = row_bargain;
+    out[WeightKey::RowLastCopy as usize] = row::row_last_copy(state, idx, freeze, ctx);
+    out[WeightKey::MyEventThreat as usize] = events::my_event_threat(state, idx, freeze);
+
+    out
+}
+
+/// [`linear_features`] for every candidate in `moves`, sharing exactly the
+/// root-construction and per-candidate trial loop [`WeightedBot::
+/// rank_moves`] uses (same `filter_resign`, same shared root/`ctx`, same
+/// `end_turn_bias` indicator folded into the vector at [`WeightKey::
+/// EndTurnBias`]'s own slot rather than added back on afterward, so a
+/// caller's plain `w . f` already includes it) -- this is the ONE place a
+/// caller outside this module should ever build these vectors from, so
+/// `bin/agreefit.rs` never re-derives the root/ctx/trial machinery itself
+/// (this module's own top doc comment, point 2's "one shared function"
+/// requirement).
+///
+/// Returns `(move, features)` pairs in `moves`' own order (post-
+/// `filter_resign`), NOT sorted -- there is no score to sort by until a
+/// caller dots a `w` against each entry.
+pub fn candidate_features(
+    state: &GameState,
+    moves: &[Move],
+    allow_resign: bool,
+    freeze: &Weights,
+) -> Vec<(Move, Vec<f64>)> {
+    let filtered = super::super::filter_resign(moves, allow_resign);
+    let moves: &[Move] = filtered.as_slice();
+
+    let idx = state.decider();
+    let ctx = rivals::rival_context(state, idx, None, None);
+    let mut root = state.clone();
+    plan::determinize_current_events(&mut root, &mut plan::plan_rng(state, idx));
+
+    let mut out = Vec::with_capacity(moves.len());
+    for &mv in moves {
+        let mut trial = root.clone();
+        apply::apply(&mut trial, mv);
+        let mut f = linear_features(&trial, idx, Some(&ctx), freeze);
+        if matches!(mv, Move::EndTurn) {
+            f[WeightKey::EndTurnBias as usize] += 1.0;
+        }
+        out.push((mv, f));
+    }
+    out
+}
+
+/// `w . f` over the full [`WeightKey`] space -- the linear score a fitted
+/// (or champion, or zero) weight vector assigns one [`linear_features`]/
+/// [`candidate_features`] output. Not a method on [`Weights`] itself: this
+/// vocabulary (a plain `&[f64]` aligned to `WeightKey as usize`) belongs to
+/// the agreement-fit experiment, not to the champion-facing `Weights` API.
+pub fn dot(w: &Weights, f: &[f64]) -> f64 {
+    let mut total = 0.0;
+    for (i, &k) in WeightKey::ALL.iter().enumerate() {
+        total += w.get(k) * f[i];
+    }
+    total
+}
+
 // -------------------------------------------------------- dominance guard
 //
 // THE HOLE THIS CLOSES, and which side gets repaired and why: see
@@ -933,6 +1087,33 @@ mod tests {
         let state = G::new_game(2, 9);
         let bot = WeightedBot::default();
         assert!(bot.rank_moves(&state, &[]).is_empty());
+    }
+
+    // ------------------------------------------------- agreement-fit features
+
+    /// `candidate_features` dotted (via `dot`) against the SAME weight
+    /// vector it was frozen at must reproduce `rank_moves`' own scores
+    /// exactly -- the equivalence this whole approximation rests on (see
+    /// this module's own doc comment on `linear_features`).
+    #[test]
+    fn linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly() {
+        for n in [2u8, 3, 4] {
+            let state = G::new_game(n, 11);
+            let moves = crate::legal::legal_moves(&state);
+            let w = Weights::default();
+            let bot = WeightedBot::new(w);
+            let ranked = bot.rank_moves(&state, moves.as_slice());
+            let feats = candidate_features(&state, moves.as_slice(), false, &w);
+            assert_eq!(ranked.len(), feats.len(), "{n}p: candidate set must match rank_moves' own");
+            for &(mv, score) in &ranked {
+                let (_, f) = feats.iter().find(|&&(m, _)| m == mv).unwrap_or_else(|| panic!("{mv:?} missing"));
+                let linear = dot(&w, f);
+                assert!(
+                    (linear - score).abs() < 1e-6,
+                    "{n}p {mv:?}: linear={linear} evaluate={score}"
+                );
+            }
+        }
     }
 
     // ---------------------------------------------------------- dominance
