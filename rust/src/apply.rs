@@ -881,12 +881,39 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
     on_develop(state, idx);
 }
 
+/// §8.2's decrease rule ("update CA/MA totals ... if totals increased, the
+/// new tokens are available THIS turn; if decreased, return tokens (spent
+/// first)"): an increase (or no change) simply adds the new tokens to the
+/// unspent pool (`new_total - spent`), but a decrease must eat into the
+/// already-SPENT tokens before it touches the unspent (`old_remaining`)
+/// ones -- an already-spent token is "returned" (forgiven) first, and only
+/// once `spent` alone can't absorb the whole decrease does `old_remaining`
+/// shrink. §8.3.4 explicitly reuses this same rule for a revolution's
+/// unaffected pool ("behaves exactly as in a peaceful change"), so both
+/// callers below share this helper -- keep them that way.
+fn carry_over_action_pool(old_total: i32, new_total: i32, spent: i32, old_remaining: i32) -> i8 {
+    if new_total >= old_total {
+        (new_total - spent).max(0) as i8
+    } else {
+        let decrease = old_total - new_total;
+        (old_remaining - (decrease - spent).max(0)).max(0) as i8
+    }
+}
+
 /// Ports `engine/actions.py::_set_government`.
 fn set_government(state: &mut GameState, idx: u8, id: CardId) {
-    let (spent_c, spent_m, old_gov) = {
+    let (old_total_c, old_total_m, spent_c, spent_m, old_remaining_c, old_remaining_m, old_gov) = {
         let p = &state.players[idx as usize];
         let stats = effects::state_stats(state, p);
-        (costs::ca_total(state, p) - p.civil_actions as i32, stats.military_actions - p.military_actions as i32, p.government)
+        (
+            stats.civil_actions,
+            stats.military_actions,
+            stats.civil_actions - p.civil_actions as i32,
+            stats.military_actions - p.military_actions as i32,
+            p.civil_actions as i32,
+            p.military_actions as i32,
+            p.government,
+        )
     };
     // `p.government` is never `CardId::NONE` in practice (every player
     // starts on Despotism), so Python's `if p.government and ...` is really
@@ -897,8 +924,8 @@ fn set_government(state: &mut GameState, idx: u8, id: CardId) {
     state.players[idx as usize].government = id;
     let s = effects::state_stats(state, &state.players[idx as usize]);
     let p = &mut state.players[idx as usize];
-    p.civil_actions = (s.civil_actions - spent_c).max(0) as i8;
-    p.military_actions = (s.military_actions - spent_m).max(0) as i8;
+    p.civil_actions = carry_over_action_pool(old_total_c, s.civil_actions, spent_c, old_remaining_c);
+    p.military_actions = carry_over_action_pool(old_total_m, s.military_actions, spent_m, old_remaining_m);
 }
 
 /// Ports `engine/actions.py::_develop_special` (== `put_special_in_play`):
@@ -962,11 +989,9 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
     // for the new government (`docs/REPLAY.md`'s Take/Bid handoff, "gate-by-
     // gate breakdown" pass).
     let old = effects::state_stats(state, &state.players[idx as usize]);
-    let mut spent = if robespierre {
-        old.civil_actions - state.players[idx as usize].civil_actions as i32
-    } else {
-        old.military_actions - state.players[idx as usize].military_actions as i32
-    };
+    let old_remaining_c = state.players[idx as usize].civil_actions as i32;
+    let old_remaining_m = state.players[idx as usize].military_actions as i32;
+    let mut spent = if robespierre { old.civil_actions - old_remaining_c } else { old.military_actions - old_remaining_m };
     // ENGINE BUG fix (docs/REPLAY.md, this pass): when Robespierre revolts
     // via Breakthrough, the UNAFFECTED pool is civil -- the SAME pool
     // Breakthrough's own `PlayAction` just spent 1 CA from. That 1 CA is the
@@ -992,12 +1017,12 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
     if robespierre {
         let p = &mut state.players[idx as usize];
         p.military_actions = 0;
-        p.civil_actions = (s.civil_actions - spent).max(0) as i8;
+        p.civil_actions = carry_over_action_pool(old.civil_actions, s.civil_actions, spent, old_remaining_c);
         p.culture += 3;
     } else {
         let p = &mut state.players[idx as usize];
         p.civil_actions = 0;
-        p.military_actions = (s.military_actions - spent).max(0) as i8;
+        p.military_actions = carry_over_action_pool(old.military_actions, s.military_actions, spent, old_remaining_m);
     }
     if leader_is(&state.players[idx as usize], "Isaac Newton") {
         let p = &mut state.players[idx as usize];
@@ -2155,6 +2180,24 @@ mod tests {
         // already spent, per `_set_government`'s comment).
         assert_eq!(state.players[0].civil_actions, 4);
         assert_eq!(state.players[0].military_actions, 3);
+    }
+
+    #[test]
+    fn set_government_a_decreased_total_is_absorbed_by_already_spent_actions_before_touching_unspent_ones() {
+        // §8.2: "update CA/MA totals... if decreased, return tokens (spent
+        // first)". Monarchy (5 CA / 3 MA) -> Republic (7 CA / 2 MA): CA goes
+        // UP (7 - 0 spent = 7, ordinary top-up), MA goes DOWN by 1 with 1 MA
+        // already spent this turn -- the decrease is fully absorbed by that
+        // spent token, so the 2 UNSPENT MAs must survive untouched. Mirrors
+        // `docs/REPLAY.md`'s traced `7523357` round-10 numbers exactly
+        // (Orange discovers Republic with 1 of 3 Monarchy MAs already spent).
+        let mut p = blank_player(0, card("Monarchy"));
+        p.civil_actions = 5; // full, unspent
+        p.military_actions = 2; // 3 total - 1 already spent this turn
+        let mut state = one_player_state(p);
+        set_government(&mut state, 0, card("Republic"));
+        assert_eq!(state.players[0].civil_actions, 7, "CA increased: ordinary top-up");
+        assert_eq!(state.players[0].military_actions, 2, "MA decrease absorbed by the spent token, not the unspent ones");
     }
 
     #[test]
