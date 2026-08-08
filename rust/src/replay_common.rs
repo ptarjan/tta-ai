@@ -4734,6 +4734,19 @@ fn is_pure_confirmation_line(class: ActionClass) -> bool {
 /// (each branch's own `resolve_intervening`+`try_apply` pair drains both
 /// before the loop moves on), so this is a no-op there, same as the
 /// journal-age-already-caught-up no-op above.
+///
+/// That `pending`/`queue` guard is necessary but not sufficient: it only
+/// catches a turn caught MID-interruption. Game `7522064` line 328 is the
+/// gap it misses -- BGO's own un-actored "Last turn" bookkeeping line can sit
+/// ahead of a DIFFERENT player's still-fully-synchronous (`pending`/`queue`
+/// both empty) `End turn`/`discards` trailer, two lines later in the SAME
+/// old age, that this function hasn't even been asked to run yet. The
+/// caller in `replay_game`'s main loop closes that gap by only calling this
+/// function at all on an [`is_trustworthy_age_line`] line -- see that
+/// predicate's own doc for why "Last turn" and the `EndTurn`/`Discard`
+/// classes are excluded there rather than here: `catch_up_civil_age` itself
+/// has no access to a line's classification, only its age string, so the
+/// gate belongs at the call site, not inside this function.
 fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
     if state.pending.is_empty() && state.queue.is_empty() {
         if let Some(age) = parse_age(journal_age) {
@@ -4742,26 +4755,33 @@ fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
     }
 }
 
-/// The LAST journal line index still tagged each age -- ground truth for
-/// `civil_deck_premature_advance`'s "is there still more of the OLD age to
-/// come" check. Indexed by `Age as usize` (five ages, `A` through `IV`)
-/// rather than a `HashMap`: a fixed, exhaustive, tiny domain is exactly the
-/// case this project's own style guide reserves arrays for over a hash
-/// table.
+/// Whether a journal line's OWN age column is trustworthy ground truth for
+/// bounding `state.age_civil` -- shared by `last_real_decision_line_for_age`
+/// (backward check, below: "is there still more of the OLD age's real
+/// business to come") and `catch_up_civil_age`'s call site in
+/// `replay_game`'s main loop (forward check: "is it safe to force the age up
+/// to what THIS line claims"). Both need the IDENTICAL answer, or one
+/// becomes a stealth duplicate of the other's rule with its own, silently-
+/// diverging exception list -- the "hidden twin" shape this module's history
+/// keeps rediscovering (this predicate itself used to be exactly that: two
+/// copies, one only wired into the checker below).
 ///
-/// Built ONLY from lines classified as a real player decision, excluding two
-/// classes that are structurally end-of-turn WRAP-UP, not a fresh decision,
-/// and can both trail a LATER-tagged marker in file order despite finishing
-/// the OLD age's own business:
+/// Untrustworthy: `LineOutcome::Bookkeeping` (BGO's un-actored trailer
+/// lines -- "Last turn", "Discard Phase", "No Discard Phase", ... -- can be
+/// exported ahead of the still-old-age turn they trail: game `7522064` line
+/// 328's "Last turn", already tagged the new age, precedes Purple's own
+/// still-Age-III `End turn`/`discards` two lines later, so forcing off it
+/// ran §12.2.4's "-2 yellow_bank" a whole turn early and computed Purple's
+/// OWN round's food consumption off the already-decremented value) and the
+/// `EndTurn`/`Discard` action classes:
 ///
-/// - `EndTurn` -- this checker's own first pass, run against the full
-///   corpus, false-positived on nearly every game's very first Age A -> I
-///   transition (`docs/REPLAY.md`'s "civil deck model" handoff has the full
-///   trace, game `7523818` line 8): BGO logs the NEXT player's own "Action
-///   Phase begins" marker for their round-2 turn (already tagged the new
-///   age) at the SAME timestamp as, and BEFORE, the PREVIOUS player's own
-///   trailing "End turn ... scores: ..." line for the round that just ended
-///   (still tagged the OLD age/round, correctly describing when it
+/// - `EndTurn` -- false-positived on nearly every game's very first Age A ->
+///   I transition (`docs/REPLAY.md`'s "civil deck model" handoff has the
+///   full trace, game `7523818` line 8): BGO logs the NEXT player's own
+///   "Action Phase begins" marker for their round-2 turn (already tagged the
+///   new age) at the SAME timestamp as, and BEFORE, the PREVIOUS player's
+///   own trailing "End turn ... scores: ..." line for the round that just
+///   ended (still tagged the OLD age/round, correctly describing when it
 ///   happened).
 /// - `Discard` -- the SAME shape, one step removed: `apply_one`'s own
 ///   `ActionClass::Discard` arm resolves an outstanding `DiscardMilitary`
@@ -4772,25 +4792,40 @@ fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
 ///   line 430 (`"Green discards 2 cards"`, tagged age `III` round `16`):
 ///   BGO logs both players' `"Last turn Game ends..."` §12.3 notices
 ///   (already tagged `IV`) at the SAME timestamp, two lines EARLIER in the
-///   file, purely an export-ordering artifact -- this checker's second pass
-///   false-positived here the same way the first pass did on `EndTurn`.
+///   file, purely an export-ordering artifact.
 ///
 /// File order is therefore not a reliable total order exactly at a real
 /// transition, only within a single, real, non-wrap-up decision. Every
-/// buggy divergence this instrument exists to catch (`7523449`) persists
-/// across many such real decisions, not just one trailing line, so this
-/// restriction loses no real positive
+/// buggy divergence `last_real_decision_line_for_age`'s own instrument
+/// exists to catch (`7523449`) persists across many such real decisions, not
+/// just one trailing line, so this restriction loses no real positive
 /// (`last_real_decision_line_for_age_ignores_an_end_turn_trailer_still_
 /// tagged_the_old_age`, `last_real_decision_line_for_age_ignores_a_discard_
-/// resolution_trailer_still_tagged_the_old_age`, and `last_real_decision_
-/// line_for_age_still_sees_a_real_decision_tagged_the_old_age`, below, pin
-/// all three).
+/// resolution_trailer_still_tagged_the_old_age`,
+/// `last_real_decision_line_for_age_still_sees_a_real_decision_tagged_the_
+/// old_age`, and `catch_up_civil_age_is_deferred_by_a_bookkeeping_last_turn_
+/// line_that_precedes_the_old_ages_own_trailing_end_turn`, below, pin all
+/// four).
+fn is_trustworthy_age_line(outcome: LineOutcome) -> bool {
+    matches!(
+        outcome,
+        LineOutcome::Action(Classified { class, .. })
+            if !matches!(class, ActionClass::EndTurn | ActionClass::Discard)
+    )
+}
+
+/// The LAST journal line index still tagged each age -- ground truth for
+/// `civil_deck_premature_advance`'s "is there still more of the OLD age to
+/// come" check. Indexed by `Age as usize` (five ages, `A` through `IV`)
+/// rather than a `HashMap`: a fixed, exhaustive, tiny domain is exactly the
+/// case this project's own style guide reserves arrays for over a hash
+/// table. Built ONLY from [`is_trustworthy_age_line`] lines -- see its own
+/// doc for why the rest cannot be trusted to bound anything.
 fn last_real_decision_line_for_age(journal: &[Line], card_index: &HashMap<&'static str, CardId>) -> [Option<usize>; 5] {
     let mut last: [Option<usize>; 5] = [None; 5];
     for (i, line) in journal.iter().enumerate() {
         let Some(age) = parse_age(line.age) else { continue };
-        let LineOutcome::Action(Classified { class, .. }) = classify(card_index, line.text) else { continue };
-        if matches!(class, ActionClass::EndTurn | ActionClass::Discard) {
+        if !is_trustworthy_age_line(classify(card_index, line.text)) {
             continue;
         }
         last[age as usize] = Some(i);
@@ -4961,8 +4996,15 @@ pub fn replay_game(
         // Catch this reconstruction's `state.age_civil` up to what the
         // journal's own age column already proves happened -- see
         // `catch_up_civil_age`'s own doc for why this must be deferred
-        // while an earlier line's work is still outstanding.
-        catch_up_civil_age(&mut r.state, line.age);
+        // while an earlier line's work is still outstanding, and
+        // `is_trustworthy_age_line`'s doc for why an untrustworthy line
+        // (BGO's "Last turn" trailer, or an `EndTurn`/`Discard` wrap-up) must
+        // not be allowed to force the age at all, even with pending/queue
+        // both empty: game `7522064`'s "Last turn" sits ahead of a
+        // DIFFERENT, still-old-age player's own fully-synchronous `End turn`.
+        if is_trustworthy_age_line(classify(card_index, line.text)) {
+            catch_up_civil_age(&mut r.state, line.age);
+        }
         // Keep `civil_deck` from ever running dry ON ITS OWN -- see
         // `top_up_civil_deck`'s own doc. Must run every line, not just when
         // low: cheap (one length compare) when it's a no-op, which is
@@ -7024,6 +7066,58 @@ mod tests {
 
         assert_eq!(r.state.age_civil, crate::cards::Age::II);
         assert_eq!(r.state.players[0].yellow_bank, yellow_before - 2, "§12.2.4");
+    }
+
+    /// Game `7522064`'s own bug, distinct from the discard-choice shape
+    /// above: `catch_up_civil_age`'s `pending`/`queue` guard only catches a
+    /// turn caught MID-interruption. Line 328's "Last turn" trailer sits
+    /// ahead of a DIFFERENT player's own still-fully-synchronous (nothing
+    /// outstanding yet -- her `End turn` line simply has not been REACHED)
+    /// `End turn`/`discards` pair two lines later, still tagged the OLD age.
+    /// `replay_game`'s main loop closes this with the
+    /// `is_trustworthy_age_line(classify(...))` gate around its call to
+    /// `catch_up_civil_age` -- this test reproduces that exact gated
+    /// snippet directly. Reverting the gate (calling `catch_up_civil_age`
+    /// unconditionally, as the loop used to) turns the first assertion RED:
+    /// the "Last turn" line alone would force Age III -> IV and dock both
+    /// players' `yellow_bank` a whole turn before Purple's own round-17
+    /// production/consumption -- the exact desync that undercounted her
+    /// food by 1 and made a legal `Pop` look illegal.
+    #[test]
+    fn catch_up_civil_age_call_site_gate_ignores_a_last_turn_line_but_still_advances_on_the_next_real_decision() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_civil = crate::cards::Age::III;
+        assert!(r.state.pending.is_empty());
+        assert!(r.state.queue.is_empty());
+        let yellow_before = (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank);
+
+        // The exact call-site snippet in `replay_game`'s main loop, for a
+        // BGO "Last turn" trailer (Bookkeeping, tagged the NEW age).
+        let last_turn = "Last turn Game ends at the end of the starting round";
+        if is_trustworthy_age_line(classify(&card_index, last_turn)) {
+            catch_up_civil_age(&mut r.state, "IV");
+        }
+        assert_eq!(r.state.age_civil, crate::cards::Age::III, "a Last turn trailer must not force the age");
+        assert_eq!(
+            (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank),
+            yellow_before,
+            "§12.2.4 must not fire off an untrustworthy line"
+        );
+
+        // The SAME snippet, now for the next REAL decision (still tagged
+        // the new age) -- the age must still advance, or it would never
+        // advance at all.
+        let real_decision = "Purple takes Pyramids in hand Purple uses 2 civil action";
+        if is_trustworthy_age_line(classify(&card_index, real_decision)) {
+            catch_up_civil_age(&mut r.state, "IV");
+        }
+        assert_eq!(r.state.age_civil, crate::cards::Age::IV, "a genuine decision line must still force the age forward");
+        assert_eq!(
+            r.state.players[0].yellow_bank,
+            yellow_before.0 - 2,
+            "§12.2.4's deduction runs once the age is genuinely forced"
+        );
     }
 
     /// The SAME "`economy::end_of_turn` interrupted before production" shape
