@@ -7223,3 +7223,160 @@ declaring victory) is the next pass's job. `SimulatorBug`'s own corpus-wide
 count (922 games) is now this project's regression signal for that fix,
 exactly the same role `discard_oracle_divergence`'s own count already plays
 for the oracle it wraps.
+
+### FOUND AND FIXED: the `ConsumingPlay` `SimulatorBug` bucket -- `ground_military_hand`'s own net-zero wash, the exact `PrepareEvent` shape, at five more call sites
+
+Picked up exactly where the prior pass's own "What this pass deliberately
+did NOT do" section left off: `PlayTactic`/`DeclareWar`/`PlayAggression`/
+`ProposePact` (`corpus.rs::ActionClass`, dispatched in
+`replay_common.rs::apply_one`) each called `ground_military_hand(actor,
+card)` -- push-if-absent -- immediately followed by the consuming `Move`
+(`Move::PlayTactic`/`Move::War`/`Move::Aggression`/`Move::OfferPact`, each of
+whose handler does its own `hand_military.remove_first(card)` --
+`apply.rs::h_play_tactic`/`h_war`/`h_offer_pact`, `combat.rs::
+start_aggression`). When the card was NOT already in the simulated hand
+(the common case), the push and the removal cancel out: net zero instead of
+the correct -1. Confirmed by hand on the task's own repro, game `7523818`
+line 74, Purple, round 5 ("Purple sets up new tactics I / Fighting Band"):
+journal excess 0, ledger excess 0, simulator excess 1 (the phantom) before
+the fix; all three agree at 0 after.
+
+**Audited every other call site with the same push-then-consume shape, not
+just the four named ones:**
+
+- **`ColumbusColonize`** (`replay_common.rs`, the `"Christopher Columbus
+  discovers ..."` line handler): grounds the territory then applies
+  `Move::ColumbusColonize`, whose handler (`apply.rs::h_columbus_colonize`)
+  does its own `hand_military.remove_first(card)`. Identical shape. Fixed.
+- **`resolve_aggression_defense`** (one of the two sites the diagnosing
+  pass flagged as suspicious but did not open): both its `DefenseClause::
+  Bonus` and `DefenseClause::Flat`-with-no-real-candidate branches ground a
+  card then the shared `Move::Defend` application (`interact.rs::
+  defense_move`, `hand_military.remove_first(card)`) consumes it. Same
+  shape. Fixed. (Its third branch, `Flat` with a real candidate already in
+  hand via `discard_solver.choose`, needs no grounding at all -- left as a
+  plain `try_apply`, correctly.)
+- **`ground_auction_winner_hand`** (the other flagged-suspicious site):
+  grounds bonus cards the journal says the auction winner is about to
+  sacrifice, ahead of `interact::colonize`'s hand snapshot; those grounded
+  cards are consumed later, once `drain_colonize`'s own `Move::SendBonus`
+  removes them (`interact.rs::auction_move`, `hand_military.remove_first
+  (card)`). Same shape, just with the ground and the consume separated by
+  several journal lines instead of adjacent statements. Fixed with the same
+  idiom, additionally protecting this sacrifice's OWN other still-needed
+  bonus identities from being cannibalized as filler for each other (a
+  refinement the single-card sites don't need).
+
+**The fix**, everywhere: pop one card of UNKNOWN provenance from
+`hand_military` before grounding the named card (never a card
+`DiscardSolver::needed_after` says this player is later observed playing by
+name -- the same rule `ground_bid_ceiling` and the `PrepareEvent` fix
+already use), so the whole ground-then-consume sequence lands on N-1
+instead of N. Falls back to the old net-zero behaviour when no disposable
+filler exists.
+
+### Corpus result (own before/after, measured on this pass, not trusted from the prior pass's numbers)
+
+| | before (`5de000d`) | after |
+|---|---|---|
+| discard-phase oracle: checkpoints matched | 27232/31986 (85.1%) | **30439/31604 (96.3%)** |
+| games with at least one oracle divergence | 970/1011 | **646/1011** |
+| games completing to `state.game_over` | 98 | **112** |
+| mean rounds reached | 13.46 | 13.33 |
+| final-score delta mean (matched-game diffs) | -7.15 | **-6.63** |
+| `SimulatorBug`/`ConsumingPlay` ledger bucket (this pass's target) | 661 games | **63 games** |
+
+Set-diffed by exact game ID (this file's own standing discipline, not just
+the counts): of the divergent-game set, **326 games' oracle divergence
+resolved entirely** and only **2 games newly started diverging**
+(`7521932`, `7523510` -- previously matched perfectly at every checkpoint,
+now diverge somewhere; not individually traced this pass). Of the completed-
+game set, **20 games newly complete** and **6 regressed**
+(`7521565`, `7522197`, `7522412`, `7522981`, `7522984`, `7523063` -- stop a
+little earlier than before this fix; not individually traced this pass, but
+plausibly the same `DiscardSolver`-blind-spot shape the `PrepareEvent` fix's
+own 3 regressions already documented: a filler this fix's own pop sacrifices
+turns out to have been needed for a later UNTYPED discard,
+i.e. a plain `"discards N cards"` line that names no identity for
+`needed_after` to protect). Net +14 completions, a much cleaner ratio (20
+new vs. 6 regressed) than the `PrepareEvent` pass's own (20 vs. 3, but off a
+much smaller starting `SimulatorBug` share).
+
+The remaining `ConsumingPlay`-tagged rows in the ledger after this fix (63
+`SimulatorBug` + 33 `UnmodelledEvent`, both far smaller than the 661 this
+pass started from) are a residual, not fully closed -- not re-opened this
+pass for lack of remaining budget. `UnmodelledEvent`/`ConsumingPlay` grew
+from 4 to 33 games, which reads as: some games that were previously
+misclassified `SimulatorBug` (ledger and journal agreeing on a WRONG
+excess, both victims of the same wash) are now correctly split into
+`UnmodelledEvent` once the wash closed and exposed a genuinely different,
+smaller residual gap underneath -- plausible but not individually traced.
+
+### Structural follow-up: collapsed ground+consume into one atomic call, per the coordinator's explicit request
+
+The five-site shape above is the project's recurring "same rule implemented
+in N places, one gets fixed" failure, spelled out concretely: this is the
+fourth time (`PrepareEvent`, then these five call sites in one pass) the
+exact same push-then-consume wash has been found and fixed piecemeal.
+Rather than leave five independently-correct-but-independently-editable
+call sites, the composition itself is now collapsed:
+
+- `Replayer::ground_military_hand` is renamed `ground_for_consumption`,
+  documented as DELIBERATELY LOW-LEVEL, and its doc names the exact two
+  callers still allowed to call it directly.
+- A new `Replayer::consume_named_military_card(actor, card, mv, record)`
+  grounds-and-applies in one non-decomposable call. `PlayTactic`/
+  `DeclareWar`/`PlayAggression`/`ProposePact` (`apply_one`'s dispatch) and
+  both grounding branches of `resolve_aggression_defense` now call ONLY
+  this wrapper -- the bare `ground_for_consumption` call is no longer
+  reachable from any of those six call sites at all, so the specific wash
+  this pass fixed cannot be reintroduced there by a future edit that adds a
+  `ground_...` call without its paired `Move`.
+- Two callers legitimately cannot use the wrapper and still call
+  `ground_for_consumption` directly, both named at the call site and in the
+  primitive's own doc: `ColumbusColonize` (an unavoidable
+  `resolve_intervening` step sits between the ground and the consuming
+  `Move`) and `ground_auction_winner_hand` (grounds a BATCH of cards ahead
+  of a `Move::SendBonus` that may not fire until several journal lines
+  later). **The wrong composition is genuinely unwritable at the six
+  collapsed call sites, and merely discouraged-by-naming (not compiler-
+  enforced) at these two** -- Rust's module-level privacy does not give a
+  finer-grained "callable from exactly these two functions" mechanism
+  without a submodule, which was judged not worth the indirection here.
+- `action_class_grounds_and_consumes_a_card(class: ActionClass) -> bool` is
+  a new EXHAUSTIVE match (no wildcard arm) classifying every `ActionClass`
+  variant -- a new variant added to `corpus.rs` fails to compile here until
+  someone decides whether it belongs on the list. A single test,
+  `every_card_consuming_action_class_nets_hand_military_down_by_exactly_
+  one`, walks `ActionClass::ALL`, skips the `false` variants, and for each
+  `true` one (`PlayTactic`/`DeclareWar`/`PlayAggression`/`ProposePact`/
+  `ColumbusColonize`) proves the actual invariant end to end against the
+  real dispatch primitives. Confirmed RED (reverting `ground_for_
+  consumption`'s pop-filler logic back to a bare push fails exactly at
+  `PlayTactic: must net -1, not 0`) before green. Full `cargo test --lib`
+  (1140 tests): all green. The structural refactor was verified BEHAVIOUR-
+  PRESERVING by rerunning the full corpus census after it: identical
+  numbers to the behavioural-fix-only run above (96.3% oracle, 646
+  divergent, 112 completed, 63/33 `ConsumingPlay` split), confirming the
+  reorganization changed no game outcome.
+
+`ground_auction_winner_hand` keeps its own bespoke pop-then-push loop
+rather than reusing `ground_for_consumption` in a loop, because it needs an
+extra rule the single-card primitive doesn't: protecting this same
+sacrifice's OTHER still-needed bonus identities (not just `DiscardSolver::
+needed_after`'s future-play set) from being cannibalized as filler for one
+another.
+
+### What this pass did NOT do
+
+- Did not open the residual `ConsumingPlay`-tagged rows (63 `SimulatorBug`
+  + 33 `UnmodelledEvent`) or the 6 new completion regressions / 2 new
+  divergences individually -- flagged above as the concrete next leads,
+  not traced.
+- Did not touch `game.rs`, `apply.rs`, `legal.rs`, `costs.rs`, or `bots/`
+  -- confirmed empty diff on all five against `5de000d`. This is a
+  REPLAYER-only fix; self-play is byte-identical by construction.
+- Did not touch the `SimulatorBug`/`Draw`, `/PrepareEvent`, `/Discard`, or
+  `/DefenseConsume` ledger buckets, or the `UnmodelledEvent` buckets other
+  than noting `ConsumingPlay`'s own count moved (4 -> 33, plausibly
+  reclassification fallout, not independently investigated).

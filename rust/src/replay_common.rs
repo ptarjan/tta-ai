@@ -1668,10 +1668,41 @@ impl<'a> Replayer<'a> {
                 *needed.entry(*id).or_default() += 1;
             }
         }
-        let hand = &mut self.state.players[actor as usize].hand_military;
-        for (card, count) in needed {
-            let have = hand.as_slice().iter().filter(|&&id| id == card).count();
+        // Same net-zero shape as `ground_for_consumption` (see its own doc,
+        // just above): each phantom `push` below is consumed for real once
+        // `drain_colonize`'s own `Move::SendBonus` removes this identical
+        // identity from `hand_military` (`interact::auction_move`'s
+        // `Move::SendBonus` arm, `hand_military.remove_first(card)`). A real
+        // auction winner who sacrifices a bonus card they never revealed
+        // beforehand already HELD it -- their hand shrinks by one per card
+        // sacrificed, not zero. Pop one filler of unknown provenance per
+        // phantom push (never a card this same sacrifice still needs --
+        // cannibalizing one `needed` entry to manufacture another would just
+        // relocate the phantom, not remove it -- and never one
+        // `DiscardSolver::needed_after` says this player is later observed
+        // playing by name, the same rule `ground_bid_ceiling`/
+        // `ground_for_consumption` already use) so each phantom lands on
+        // N -> N-1, not N -> N. Leaves the old net-zero behaviour alone when
+        // no disposable filler exists.
+        let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+        for (&card, &count) in &needed {
+            let have = self.state.players[actor as usize]
+                .hand_military
+                .as_slice()
+                .iter()
+                .filter(|&&id| id == card)
+                .count();
             for _ in have..count {
+                let victim = self.state.players[actor as usize]
+                    .hand_military
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .find(|id| !needed.contains_key(id) && !needed_later.contains(id));
+                let hand = &mut self.state.players[actor as usize].hand_military;
+                if let Some(victim) = victim {
+                    hand.remove_first(victim);
+                }
                 hand.push(card);
             }
         }
@@ -1766,16 +1797,65 @@ impl<'a> Replayer<'a> {
         Err(MismatchKind::StuckPending("colonize force did not resolve in 64 steps".into()))
     }
 
-    /// Ensure `card` is in `actor`'s military hand, granting it directly if
-    /// the journal is the first place this binary has ever seen it (the
-    /// task's suggested approach for hidden military-hand info: "grant a
-    /// player the card they are observed to play"). A no-op if it is
-    /// already there (e.g. the fictional per-round deal happened to match).
-    fn ground_military_hand(&mut self, actor: u8, card: CardId) {
-        let hand = &mut self.state.players[actor as usize].hand_military;
-        if !hand.contains(card) {
-            hand.push(card);
+    /// Ground `card` into `actor`'s military hand -- push it if the journal
+    /// is the first place this binary has ever seen it, popping one card of
+    /// UNKNOWN provenance first (never one `DiscardSolver::needed_after`
+    /// says this player is later observed playing by name -- the same rule
+    /// `ground_bid_ceiling`, above, already uses) so the push nets N -> N-1,
+    /// not N -> N+1. A no-op if `card` is already present (e.g. the
+    /// fictional per-round deal happened to match).
+    ///
+    /// DELIBERATELY LOW-LEVEL AND PRIVATE. This function grounds a card but
+    /// does NOT consume it -- on its own it is exactly the "half of the
+    /// pair" shape that caused the bug this file is named for (`docs/
+    /// REPLAY.md`'s "Discard-phase hand-size oracle" section): call this
+    /// alone, without the very next state-mutating step being the `Move`
+    /// that removes this identical identity from `hand_military`, and the
+    /// grounding either overcounts (if nothing ever consumes it) or -- if
+    /// something eventually does, but not the very next thing -- reproduces
+    /// the same net-zero wash `PrepareEvent`'s push-then-apply-removal had,
+    /// just with more code in between to hide it.
+    ///
+    /// [`Replayer::consume_named_military_card`] is the sanctioned way to
+    /// ground-and-play a card in one atomic step; USE THAT, not this,
+    /// unless you are one of the two callers that cannot: `ColumbusColonize`
+    /// (an unavoidable `resolve_intervening` step sits between the ground
+    /// and the consuming `Move::ColumbusColonize`) and `ground_auction_
+    /// winner_hand` (grounds a whole BATCH of cards ahead of a `Move::
+    /// SendBonus` that may not fire until several journal lines later, once
+    /// `drain_colonize` gets to it) -- both are doc'd at their own call
+    /// sites as the reason they cannot use the wrapper.
+    fn ground_for_consumption(&mut self, actor: u8, card: CardId) {
+        let hand = &self.state.players[actor as usize].hand_military;
+        if hand.contains(card) {
+            return;
         }
+        let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+        let hand = &mut self.state.players[actor as usize].hand_military;
+        if let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id)) {
+            hand.remove_first(victim);
+        }
+        hand.push(card);
+    }
+
+    /// Ground `card` into `actor`'s military hand ([`Replayer::
+    /// ground_for_consumption`]) and immediately apply the `Move` that
+    /// consumes that identical identity -- the ONE call every `ActionClass`
+    /// arm that reveals-and-plays a named military card (`PlayTactic`/
+    /// `DeclareWar`/`PlayAggression`/`ProposePact`) and `resolve_aggression_
+    /// defense`'s own committed-card clauses should make. Bundling the
+    /// grounding with the consuming `Move` into a single non-decomposable
+    /// call is what makes the net-zero wash this file used to have
+    /// structurally impossible to reintroduce at these call sites: there is
+    /// no longer a bare grounding step for a future edit to leave stranded
+    /// without its consuming `Move` attached (which is exactly how the
+    /// original bug read at each of the four `ActionClass` arms -- `docs/
+    /// REPLAY.md`'s "Discard-phase hand-size oracle" section, and see
+    /// `resolve_political_decision`'s own `PrepareEvent` fix for the first
+    /// occurrence of this exact shape).
+    fn consume_named_military_card(&mut self, actor: u8, card: CardId, mv: Move, record: bool) -> Result<(), MismatchKind> {
+        self.ground_for_consumption(actor, card);
+        self.try_apply(mv, record)
     }
 
     /// Cross-checks this binary's own reconstructed military-hand excess for
@@ -4706,8 +4786,15 @@ pub fn replay_game(
                 // still holds `new_game`'s SIMULATED filler for that slot
                 // until grounded here, same as `DeclareWar`/`PlayAggression`/
                 // `ProposePact` already ground their own military card right
-                // before playing it.
-                r.ground_military_hand(actor, territory);
+                // before playing it (`Replayer::consume_named_military_card`).
+                // This call site cannot USE that atomic wrapper, though: an
+                // unavoidable `resolve_intervening` step sits between the
+                // ground and the consuming `Move::ColumbusColonize` below
+                // (auto-resolving any pending decision the grounding itself
+                // might have unblocked), so it calls the lower-level
+                // `ground_for_consumption` primitive directly -- one of the
+                // two doc'd exceptions that primitive's own comment names.
+                r.ground_for_consumption(actor, territory);
                 if let Err(kind) = r
                     .resolve_intervening(actor, (class, None), true)
                     .and_then(|()| r.try_apply(Move::ColumbusColonize { card: territory }, true))
@@ -5785,30 +5872,26 @@ fn apply_one(
             if rest.starts_with("adopts existing tactics ") {
                 r.try_apply(Move::CopyTactic { card }, true)
             } else {
-                r.ground_military_hand(actor, card);
-                r.try_apply(Move::PlayTactic { card }, true)
+                r.consume_named_military_card(actor, card, Move::PlayTactic { card }, true)
             }
         }
         ActionClass::DeclareWar => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("war with no resolved card".into()))?;
             let target = color_after(rest, " on ").ok_or_else(|| MismatchKind::ParserGap("could not parse war target colour".into()))?;
-            r.ground_military_hand(actor, card);
-            r.try_apply(Move::War { card, target: target.seat() }, true)
+            r.consume_named_military_card(actor, card, Move::War { card, target: target.seat() }, true)
         }
         ActionClass::WinWar => Ok(()), // automatic (game::resolve_war_outcome); validation checkpoint only
         ActionClass::PlayAggression => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("aggression with no resolved card".into()))?;
             let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
-            r.ground_military_hand(actor, card);
-            r.try_apply(Move::Aggression { card, target: target.seat() }, true)?;
+            r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
             resolve_aggression_defense(r, next_text)
         }
         ActionClass::ProposePact => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("pact with no resolved card".into()))?;
             let target = color_after(rest, " to ").ok_or_else(|| MismatchKind::ParserGap("could not parse pact target colour".into()))?;
             let side = pact_side(raw_text, target_actor_color(actor), card);
-            r.ground_military_hand(actor, card);
-            r.try_apply(Move::OfferPact { card, target: target.seat(), side }, true)
+            r.consume_named_military_card(actor, card, Move::OfferPact { card, target: target.seat(), side }, true)
         }
         ActionClass::AcceptPact => {
             let Some(Pending::Choice(c)) = r.state.pending.top() else {
@@ -5929,6 +6012,69 @@ fn apply_one(
     }
 }
 
+/// Whether `apply_one`'s dispatch for `class` grounds a named card into
+/// `hand_military` and then consumes that identical identity via the `Move`
+/// it applies -- i.e. whether `class` is subject to the net-zero hazard
+/// [`Replayer::consume_named_military_card`] exists to make unwritable at
+/// its own call sites (`docs/REPLAY.md`'s "Discard-phase hand-size oracle"
+/// section has the full history: `resolve_political_decision`'s
+/// `PrepareEvent` handling had this shape first, then it turned out
+/// `PlayTactic`/`DeclareWar`/`PlayAggression`/`ProposePact`/
+/// `ColumbusColonize` all had it independently too).
+///
+/// EXHAUSTIVE, NO WILDCARD ARM ON PURPOSE: a new `ActionClass` variant
+/// (`corpus.rs`) fails to compile here until someone decides which side of
+/// this list it belongs on -- the mechanism that would have caught the
+/// original bug's second, third, fourth and fifth occurrence the day each
+/// arm was written, instead of leaving them for a later audit pass to find
+/// one at a time. `replay_common::tests::
+/// every_card_consuming_action_class_nets_hand_military_down_by_exactly_one`
+/// drives its own coverage off this same function.
+///
+/// Only referenced from `#[cfg(test)]` today (deliberately kept as a plain,
+/// always-compiled `fn` rather than moved inside the test module, so the
+/// exhaustiveness check itself is not accidentally test-gated away) --
+/// `#[allow(dead_code)]` is the honest annotation for a function whose
+/// entire purpose is enforcing an invariant `cargo test` checks, not one
+/// `replaystats` itself calls at runtime.
+#[allow(dead_code)]
+fn action_class_grounds_and_consumes_a_card(class: ActionClass) -> bool {
+    match class {
+        ActionClass::PlayTactic
+        | ActionClass::DeclareWar
+        | ActionClass::PlayAggression
+        | ActionClass::ProposePact
+        | ActionClass::ColumbusColonize => true,
+
+        ActionClass::TakeCard
+        | ActionClass::BuildBuilding
+        | ActionClass::BuildUnit
+        | ActionClass::BuildWonderStage
+        | ActionClass::IncreasePopulation
+        | ActionClass::UpgradeUnit
+        | ActionClass::UpgradeProduction
+        | ActionClass::DevelopTechnology
+        | ActionClass::ElectLeader
+        | ActionClass::ChangeGovernment
+        | ActionClass::WinWar
+        | ActionClass::AcceptPact
+        | ActionClass::Colonize
+        | ActionClass::Discard
+        | ActionClass::Bid
+        | ActionClass::WinAuction
+        | ActionClass::Destroy
+        | ActionClass::Disband
+        | ActionClass::Pass
+        | ActionClass::PlayEvent
+        | ActionClass::PlayActionCard
+        | ActionClass::PutBack
+        | ActionClass::EndTurn
+        | ActionClass::RemoveLeaderYellow
+        | ActionClass::Barbarossa
+        | ActionClass::BachTheater => false,
+    }
+}
+
 /// After applying an `Aggression`, resolve the victim's `Pending::Defense`
 /// using the very next `"<Color> defends ..."` bookkeeping line, if any. If
 /// no `Pending::Defense` opened at all (the victim had nothing eligible to
@@ -5940,28 +6086,31 @@ fn apply_one(
 /// Each [`DefenseClause`] `parse_defense_clauses` finds is applied as one
 /// `Move::Defend`, in order:
 /// - `Bonus(b)`: [`defense_bonus_card`] finds the unique card that prints
-///   `defense_bonus == b` and grounds it into the defender's hand
-///   (`Replayer::ground_military_hand` -- "grant a player the card they are
-///   observed to play", the same idiom every other journal-named play in
-///   this file already uses). This is not a guess: the age I/II/III bonus
-///   cards are the ONLY cards with a nonzero `defense_bonus`, one value
-///   each, so the printed number alone is already the card's full
-///   identity -- whether or not this binary's fictional simulated hand
-///   happened to deal that exact card is irrelevant, same as it is
-///   irrelevant for a `PlayAggression`/`DeclareWar`/`ProposePact`/
-///   `PlayTactic` line naming a card the simulated deal never dealt.
+///   `defense_bonus == b` and grounds-and-commits it in one call
+///   (`Replayer::consume_named_military_card` -- the same atomic wrapper
+///   every other journal-named play in this file uses; see its own doc for
+///   why grounding and consuming must never be two separable steps here).
+///   This is not a guess: the age I/II/III bonus cards are the ONLY cards
+///   with a nonzero `defense_bonus`, one value each, so the printed number
+///   alone is already the card's full identity -- whether or not this
+///   binary's fictional simulated hand happened to deal that exact card is
+///   irrelevant, same as it is irrelevant for a `PlayAggression`/
+///   `DeclareWar`/`ProposePact`/`PlayTactic` line naming a card the
+///   simulated deal never dealt.
 /// - `Flat`: any currently-legal `Move::Defend` candidate with
 ///   `defense_bonus == 0` qualifies (every non-`Bonus` military-deck card
 ///   defends for the same flat +1, `interact::defense_points`). If the
 ///   simulated hand has one, `r.discard_solver` picks among them exactly as
 ///   it does for a forced hand-limit discard (same underlying fact: a
 ///   specific card permanently leaves the hand), so the same solved/
-///   chosen/forced-collision honesty applies. If it has NONE (a small
-///   simulated hand can, by chance, be all `Bonus` cards -- seen in the
-///   real corpus), [`flat_defense_filler`] grounds one: since identity
-///   cannot affect any observable outcome here, this cannot be a wrong
-///   guess in the sense the rest of this file guards against, only an
-///   arbitrary bookkeeping label.
+///   chosen/forced-collision honesty applies -- that card is REAL, already
+///   in hand, so a plain `try_apply` (no grounding) is correct here. If it
+///   has NONE (a small simulated hand can, by chance, be all `Bonus` cards
+///   -- seen in the real corpus), [`flat_defense_filler`] grounds-and-
+///   commits one through the same atomic wrapper: since identity cannot
+///   affect any observable outcome here, this cannot be a wrong guess in
+///   the sense the rest of this file guards against, only an arbitrary
+///   bookkeeping label.
 ///
 /// Every `Move::Defend`/`Move::DefendDone` here is an auto-resolution
 /// (`record: false`), matching how a 0-committed defense was already
@@ -5979,11 +6128,10 @@ fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Resu
             ));
         };
         let player = d.player;
-        let card = match clause {
+        match clause {
             DefenseClause::Bonus(bonus) => {
                 let id = defense_bonus_card(bonus);
-                r.ground_military_hand(player, id);
-                id
+                r.consume_named_military_card(player, id, Move::Defend { card: id }, false)?;
             }
             DefenseClause::Flat => {
                 let flat: Vec<CardId> = legal::legal_moves(&r.state)
@@ -5996,8 +6144,7 @@ fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Resu
                     .collect();
                 if flat.is_empty() {
                     let filler = flat_defense_filler(r.state.age_military);
-                    r.ground_military_hand(player, filler);
-                    filler
+                    r.consume_named_military_card(player, filler, Move::Defend { card: filler }, false)?;
                 } else {
                     let (idx, certainty) = r.discard_solver.choose(player, r.current_lineno, &flat);
                     if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
@@ -6008,11 +6155,11 @@ fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Resu
                             flat.len()
                         );
                     }
-                    flat[idx]
+                    // Already a REAL card in hand -- nothing to ground.
+                    r.try_apply(Move::Defend { card: flat[idx] }, false)?;
                 }
             }
-        };
-        r.try_apply(Move::Defend { card }, false)?;
+        }
     }
     if matches!(r.state.pending.top(), Some(Pending::Defense(_))) {
         r.try_apply(Move::DefendDone, false)?;
@@ -8327,7 +8474,7 @@ mod tests {
     /// hand_military` still holds `new_game`'s SIMULATED filler until
     /// grounded, same as `DeclareWar`/`PlayAggression`/`ProposePact`
     /// already ground their own card right before playing it
-    /// (`ground_military_hand`'s own doc). Without grounding first,
+    /// (`ground_for_consumption`'s own doc). Without grounding first,
     /// `Move::ColumbusColonize` is illegal (the territory isn't really in
     /// hand) even though the human's move was perfectly legal -- this
     /// alone was a 123-game bucket (`IllegalMove: ColumbusColonize`) the
@@ -8350,11 +8497,236 @@ mod tests {
             Err(MismatchKind::IllegalMove { .. })
         ));
 
-        r.ground_military_hand(0, territory);
+        r.ground_for_consumption(0, territory);
 
         assert!(r.try_apply(Move::ColumbusColonize { card: territory }, true).is_ok());
         assert!(r.state.players[0].colonies.contains(territory));
         assert!(r.state.players[0].leader.is_none(), "Columbus is spent removing himself to colonize for free");
+    }
+
+    /// Companion to the enumerated test below: with NO filler in hand at
+    /// all (an edge case `new_game` itself cannot actually produce, but a
+    /// safe one to pin), there is nothing to sacrifice -- the old net-zero
+    /// behaviour is left alone rather than underflowing or panicking.
+    #[test]
+    fn consuming_a_named_military_card_with_no_filler_in_hand_leaves_the_old_net_zero_behaviour_alone() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.round = 2;
+        r.state.players[0].military_actions = 2;
+        let tactic = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Tactic).expect("a Tactic card exists");
+        r.state.players[0].hand_military = CardList::new();
+
+        r.consume_named_military_card(0, tactic, Move::PlayTactic { card: tactic }, true).expect("legal once grounded");
+
+        assert_eq!(r.state.players[0].hand_military.len(), 0, "nothing to pop -- the wash is a wash, not an underflow");
+    }
+
+    /// STRUCTURAL FIX (the same "same rule fixed in one place" audit that
+    /// found `resolve_political_decision`'s `PrepareEvent` net-zero wash,
+    /// `docs/REPLAY.md` -- see that section): every `ActionClass` that
+    /// reveals-and-plays a named military card had this EXACT shape,
+    /// independently, at each of its own call sites -- `PlayTactic`/
+    /// `DeclareWar`/`PlayAggression`/`ProposePact`, plus `ColumbusColonize`.
+    /// Rather than pinning each site with its own near-duplicate test (the
+    /// shape that let the original bug sit un-audited in three siblings
+    /// after the first was fixed), this test is driven off `ActionClass`
+    /// itself: `action_class_grounds_and_consumes_a_card` is an EXHAUSTIVE
+    /// match with no wildcard arm, so a new `ActionClass` variant fails to
+    /// compile there until someone decides whether it belongs on this list
+    /// -- the mechanism that would have caught the original four-arm bug
+    /// the day the second, third and fourth arm were written, instead of
+    /// three separate follow-up passes later.
+    ///
+    /// For every variant classified `true`, this test proves the actual
+    /// invariant end to end: revealing-and-playing a card the simulated
+    /// hand does NOT already contain, with a real filler available to
+    /// sacrifice, must decrease `hand_military.len()` by exactly one -- not
+    /// zero (the wash) and not two (a double-charge).
+    #[test]
+    fn every_card_consuming_action_class_nets_hand_military_down_by_exactly_one() {
+        fn some_card(kind: CardType) -> CardId {
+            (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == kind).unwrap_or_else(|| panic!("no {kind:?} card in the table"))
+        }
+        // A plain Aggression card -- neither "Annex" (needs a target with a
+        // colony) nor "Infiltrate" (needs a target with a leader or an
+        // unfinished wonder), so `aggression_target_qualifies` accepts a
+        // bare freshly-dealt opponent (`legal::aggression_target_qualifies`).
+        fn plain_aggression_card() -> CardId {
+            (0..crate::CARDS.len() as u16)
+                .map(CardId)
+                .find(|id| {
+                    id.kind() == CardType::Aggression
+                        && !id.get().special.iter().any(|sp| {
+                            matches!(sp, crate::cards::Special::StealColony(n) if *n != 0) || matches!(sp, crate::cards::Special::RemoveFromGame)
+                        })
+                })
+                .expect("a plain (non-Annex, non-Infiltrate) Aggression card exists")
+        }
+        fn fresh_replayer<'a>(card_index: &'a HashMap<&'static str, CardId>, players: u8) -> Replayer<'a> {
+            Replayer::new(card_index, players, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new())
+        }
+        // Two SIMULATED fillers of unknown identity, standing in for
+        // whatever `new_game` actually dealt -- pushed fresh per scenario so
+        // no scenario's own named card collides with one of them.
+        fn seed_fillers(r: &mut Replayer, actor: u8, avoid: CardId) {
+            r.state.players[actor as usize].hand_military = CardList::new();
+            for kind in [CardType::Aggression, CardType::War, CardType::Pact, CardType::Tactic] {
+                let filler = some_card(kind);
+                if filler != avoid {
+                    r.state.players[actor as usize].hand_military.push(filler);
+                    if r.state.players[actor as usize].hand_military.len() >= 2 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let card_index = build_card_index();
+        for &class in ActionClass::ALL {
+            if !action_class_grounds_and_consumes_a_card(class) {
+                continue;
+            }
+            match class {
+                ActionClass::PlayTactic => {
+                    let mut r = fresh_replayer(&card_index, 2);
+                    r.state.phase = Phase::Actions;
+                    r.state.round = 2; // round 1 legally offers only Take/EndTurn (§1.9)
+                    r.state.players[0].military_actions = 2;
+                    let tactic = some_card(CardType::Tactic);
+                    seed_fillers(&mut r, 0, tactic);
+                    let before = r.state.players[0].hand_military.len();
+                    assert!(!r.state.players[0].hand_military.contains(tactic), "{class:?}: test setup must start ungrounded");
+
+                    r.consume_named_military_card(0, tactic, Move::PlayTactic { card: tactic }, true).expect("legal once grounded");
+
+                    assert_eq!(r.state.players[0].hand_military.len(), before - 1, "{class:?}: must net -1, not 0");
+                }
+                ActionClass::DeclareWar => {
+                    let mut r = fresh_replayer(&card_index, 2);
+                    r.state.phase = Phase::Politics;
+                    let war = some_card(CardType::War);
+                    r.state.players[0].military_actions = war.get().military_action_cost as i8 + 2;
+                    seed_fillers(&mut r, 0, war);
+                    let before = r.state.players[0].hand_military.len();
+                    assert!(!r.state.players[0].hand_military.contains(war), "{class:?}: test setup must start ungrounded");
+
+                    r.consume_named_military_card(0, war, Move::War { card: war, target: 1 }, true).expect("legal once grounded");
+
+                    assert_eq!(r.state.players[0].hand_military.len(), before - 1, "{class:?}: must net -1, not 0");
+                }
+                ActionClass::PlayAggression => {
+                    let mut r = fresh_replayer(&card_index, 2);
+                    r.state.phase = Phase::Politics;
+                    let agg = plain_aggression_card();
+                    r.state.players[0].military_actions = agg.get().military_action_cost as i8 + 2;
+                    // Attacker strictly stronger, defender no strength at
+                    // all -- `politics_aggression_generated_when_attacker_
+                    // is_strictly_stronger`'s own recipe (`legal.rs`).
+                    r.state.players[0].techs = crate::state::Tableau::new();
+                    r.state.players[0].techs.insert(CardId::by_name("Warriors").expect("Warriors is in the table"), crate::state::TechSlot { workers: 3, stored: 0 });
+                    r.state.players[1].techs = crate::state::Tableau::new();
+                    seed_fillers(&mut r, 0, agg);
+                    let before = r.state.players[0].hand_military.len();
+                    assert!(!r.state.players[0].hand_military.contains(agg), "{class:?}: test setup must start ungrounded");
+
+                    r.consume_named_military_card(0, agg, Move::Aggression { card: agg, target: 1 }, true).expect("legal once grounded");
+
+                    assert_eq!(r.state.players[0].hand_military.len(), before - 1, "{class:?}: must net -1, not 0");
+                }
+                ActionClass::ProposePact => {
+                    // §13 / CoL p.2: pacts are removed from the military
+                    // decks entirely at 2p (`legal::politics_offer_pact_not_
+                    // generated_at_two_players`) -- needs 3.
+                    let mut r = fresh_replayer(&card_index, 3);
+                    r.state.phase = Phase::Politics;
+                    let pact = CardId::by_name("Peace Treaty").expect("Peace Treaty is in the table");
+                    seed_fillers(&mut r, 0, pact);
+                    let before = r.state.players[0].hand_military.len();
+                    assert!(!r.state.players[0].hand_military.contains(pact), "{class:?}: test setup must start ungrounded");
+
+                    r.consume_named_military_card(0, pact, Move::OfferPact { card: pact, target: 1, side: PactSide::Unspecified }, true)
+                        .expect("legal once grounded");
+
+                    assert_eq!(r.state.players[0].hand_military.len(), before - 1, "{class:?}: must net -1, not 0");
+                }
+                ActionClass::ColumbusColonize => {
+                    // Cannot use `consume_named_military_card` (an
+                    // unavoidable `resolve_intervening` step sits between
+                    // the ground and the consuming `Move` at this call site
+                    // -- see `ground_for_consumption`'s own doc) -- exercise
+                    // the documented low-level exception directly instead.
+                    let mut r = fresh_replayer(&card_index, 2);
+                    r.state.phase = Phase::Politics;
+                    r.state.players[0].leader = CardId::by_name("Christopher Columbus").expect("in the table");
+                    let territory = CardId::by_name("Vast Territory (I)").expect("in the table");
+                    seed_fillers(&mut r, 0, territory);
+                    let before = r.state.players[0].hand_military.len();
+                    assert!(!r.state.players[0].hand_military.contains(territory), "{class:?}: test setup must start ungrounded");
+
+                    r.ground_for_consumption(0, territory);
+                    r.try_apply(Move::ColumbusColonize { card: territory }, true).expect("legal once grounded");
+
+                    assert_eq!(r.state.players[0].hand_military.len(), before - 1, "{class:?}: must net -1, not 0");
+                }
+                other => unreachable!(
+                    "{other:?} is classified as card-consuming by action_class_grounds_and_consumes_a_card                      but this test has no scenario for it -- add one alongside the classification"
+                ),
+            }
+        }
+    }
+
+    /// FIX (same audit, same shape, a third call site): `ground_auction_
+    /// winner_hand` grounds a bonus card the journal says the winner is
+    /// about to sacrifice -- and that grounding is consumed for real, just
+    /// later, once `drain_colonize`'s own `Move::SendBonus` removes the
+    /// identical identity (`interact::auction_move`). A real auction winner
+    /// who sacrifices a bonus card they never revealed beforehand already
+    /// HELD it: their hand shrinks by one per card sacrificed, not zero.
+    #[test]
+    fn sacrificing_a_grounded_auction_bonus_card_shrinks_the_hand_by_one_not_zero() {
+        let card_index = build_card_index();
+        let warriors = card_index["Warriors"];
+        let bonus3 = colonization_bonus_card(3).unwrap();
+        let territory = card_index["Vast Territory (I)"];
+        let mut sacrifices = VecDeque::new();
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 107,
+            actor: 1,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(warriors), SacrificeClause::Bonus(bonus3)],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+        // Two SIMULATED fillers of unknown identity -- neither is `bonus3`,
+        // the card the journal is about to name.
+        let filler_a = colonization_bonus_card(2).unwrap();
+        let filler_b = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Tactic).expect("a Tactic card exists");
+        r.state.players[1].hand_military = CardList::new();
+        r.state.players[1].hand_military.push(filler_a);
+        r.state.players[1].hand_military.push(filler_b);
+        r.state.players[1].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
+        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
+
+        r.ground_auction_winner_hand();
+        assert_eq!(
+            r.state.players[1].hand_military.len(),
+            2,
+            "grounding a phantom bonus card pops one filler first: 2 fillers -> 1 filler + the named \
+             card, still 2 total, not 3 -- hand={:?}",
+            r.state.players[1].hand_military.as_slice()
+        );
+        assert!(r.state.players[1].hand_military.contains(bonus3));
+
+        crate::interact::colonize(&mut r.state, 1, territory, 4);
+        r.drain_colonize().expect("the journal's own list is legal here");
+
+        assert_eq!(
+            r.state.players[1].hand_military.len(),
+            1,
+            "sacrificing the (previously phantom) bonus card must net -1 against the pre-auction hand, not 0"
+        );
     }
 
     /// REGRESSION (found chasing the Build/Upgrade/WonderStep cost-mismatch
