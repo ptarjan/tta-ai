@@ -410,6 +410,45 @@ pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
     }
 }
 
+/// A pact whose card grants `military_actions` (e.g. Open Borders
+/// Agreement's "Both civilizations gain one military action") applies to
+/// BOTH named parties the instant it is accepted -- RULES_SPEC §5.9: "Partner
+/// accepts -> pact enters your play area ... it applies immediately." Same
+/// shape and same reasoning as [`on_enter_play`]'s own civil/military-action
+/// bump: `p.military_actions` is a decrementing-only per-turn pool (`costs::
+/// pay_ca`'s twin for military), so a newly active source must top up the
+/// LIVE counter for the rest of THIS turn, not just the state-stats formula
+/// every FUTURE turn's own end-of-turn reset would already pick up on its
+/// own. Without this, a player (on EITHER side of the pact -- the offerer
+/// too, not just the accepter) who has already started their Actions phase
+/// this turn stays capped at the stale pre-pact budget, silently drawing one
+/// fewer military card at end of turn than the real game did (`docs/
+/// REPLAY.md`'s military-hand-undercount lead, traced to game `7523341`
+/// round 5).
+pub(crate) fn on_pact_accepted(state: &mut GameState, pact: &crate::state::Pact) {
+    for side in [pact.a, pact.b] {
+        let ma = effects::pact_military_actions_for(pact.card, pact, side);
+        if ma != 0 {
+            let p = &mut state.players[side as usize];
+            p.military_actions = (p.military_actions as i32 + ma).max(0) as i8;
+        }
+    }
+}
+
+/// The cancel-a-pact twin of [`on_pact_accepted`] (§5.10) -- gives back
+/// whatever headroom the pact's own `military_actions` grant added, clamped
+/// at 0 so an already-spent turn can't go negative, exactly like
+/// [`on_leave_play`]'s symmetric decrement for a card leaving play.
+pub(crate) fn on_pact_canceled(state: &mut GameState, pact: &crate::state::Pact) {
+    for side in [pact.a, pact.b] {
+        let ma = effects::pact_military_actions_for(pact.card, pact, side);
+        if ma != 0 {
+            let p = &mut state.players[side as usize];
+            p.military_actions = (p.military_actions as i32 - ma).max(0) as i8;
+        }
+    }
+}
+
 /// Aristotle: 1 science per technology card taken from the row.
 fn on_take_card(p: &mut PlayerState, id: CardId) {
     if leader_is(p, "Aristotle") && id.kind().is_developable() {
@@ -1315,7 +1354,24 @@ fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
 }
 
 fn h_cancel_pact(state: &mut GameState, idx: u8, owner: u8) {
+    // Collect what is about to be removed BEFORE `retain` clears it --
+    // `on_pact_canceled` needs each pact's own `card`/`a`/`b` to give back
+    // whatever `military_actions` it granted (§5.10's symmetric twin of
+    // §5.9's "applies immediately", see `on_pact_accepted`'s doc comment).
+    // `Pact` is `Copy` and there are at most `MAX_PACTS` of them, so a fixed
+    // stack buffer is enough -- no heap allocation for this.
+    let mut removed = [crate::state::Pact { card: CardId::NONE, owner: 0, partner: 0, a: 0, b: 0 }; crate::state::MAX_PACTS];
+    let mut n_removed = 0usize;
+    for &pact in state.players[owner as usize].pacts.as_slice() {
+        if pact.is_party(idx) {
+            removed[n_removed] = pact;
+            n_removed += 1;
+        }
+    }
     state.players[owner as usize].pacts.retain(|pact| !pact.is_party(idx));
+    for pact in &removed[..n_removed] {
+        on_pact_canceled(state, pact);
+    }
     end_politics(state, idx, PoliticalAction::Played);
 }
 

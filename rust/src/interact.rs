@@ -514,8 +514,15 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // does. Pacts you are party to but do not own live in the
                     // other owner's list and are untouched.
                     let mut pacts = crate::state::PactList::new();
-                    pacts.push(crate::state::Pact { card, owner, partner: p, a, b });
+                    let pact = crate::state::Pact { card, owner, partner: p, a, b };
+                    pacts.push(pact);
                     state.players[owner as usize].pacts = pacts;
+                    // §5.9: "it applies immediately" -- top up BOTH parties'
+                    // LIVE per-turn military-action pool right now, not just
+                    // the state-stats formula their own next end-of-turn
+                    // reset would already pick up (`apply::on_pact_accepted`'s
+                    // own doc comment).
+                    crate::apply::on_pact_accepted(state, &pact);
                 }
                 Keyword::Refuse => {
                     // Refusal returns the card to the offerer's hand.
@@ -1720,6 +1727,48 @@ mod tests {
         assert_eq!(pacts[0].card, peace);
         assert_eq!(pacts[0].owner, 0);
         assert_eq!(pacts[0].partner, 1);
+    }
+
+    /// RULES_SPEC §5.9: "Partner accepts -> pact enters your play area ...
+    /// it applies immediately." Open Borders Agreement grants BOTH parties
+    /// "one military action" -- traced from real BGO game `7523341` (`docs/
+    /// REPLAY.md`): Grey accepted this pact mid-Orange's-turn, well before
+    /// Grey's own turn began, yet Grey's end-of-turn draw still undercounted
+    /// by exactly 1 military card, because `p.military_actions` (the
+    /// decrementing-only per-turn pool `economy::draw_military_step` reads)
+    /// was never topped up to match what `effects::state_stats` already
+    /// included the instant the pact became active -- only a `SIMULATOR`
+    /// bug (`replay_common.rs`'s military-hand ledger agreed with the
+    /// journal throughout), but the SAME stale-pool mechanism would make the
+    /// real ENGINE miscompute a human's own legal military actions for the
+    /// rest of that turn too. Both the offerer (`a`) and the accepter (`b`)
+    /// must see the bump, not just whichever side happens to be `state.
+    /// current` right now.
+    #[test]
+    fn accepting_a_pact_that_grants_military_actions_tops_up_both_parties_live_pool_immediately() {
+        let mut state = blank_state(2);
+        state.players[0].military_actions = 1; // offerer: 1 already spent this turn
+        state.players[1].military_actions = 0; // accepter: fully spent this turn
+        let open_borders = card("Open Borders Agreement");
+        let mut opts = OptionList::new();
+        opts.push(ChoiceOption::Word(Keyword::Accept));
+        opts.push(ChoiceOption::Word(Keyword::Refuse));
+        push_choice(
+            &mut state,
+            1,
+            ChoiceKind::PactOffer { owner: 0, card: open_borders, a: 0, b: 1 },
+            opts,
+            false,
+        );
+        apply_pending(&mut state, Move::Choose { n: 0 });
+        assert_eq!(
+            state.players[0].military_actions, 2,
+            "offerer's live military-action pool must gain the pact's +1 THIS turn"
+        );
+        assert_eq!(
+            state.players[1].military_actions, 1,
+            "accepter's live military-action pool must gain the pact's +1 THIS turn too"
+        );
     }
 
     #[test]

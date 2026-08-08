@@ -57,7 +57,7 @@
 //! optimisation this rewrite exists to avoid. Add it later, measured.
 
 use crate::cards::{Card, CardEffects, CardId, CardType, Composition, PactBlock, Production, Special};
-use crate::state::{GameState, PlayerState, Tableau};
+use crate::state::{GameState, Pact, PlayerState, Tableau};
 
 /// A player's aggregate statistics for one recomputation. Mirrors Python's
 /// `effects.Stats` dataclass field for field.
@@ -881,6 +881,29 @@ fn apply_pacts(stats: &mut Stats, state: &GameState, p: &PlayerState) {
             }
         }
     }
+}
+
+/// The MILITARY-ACTION portion `pact`'s own card currently grants `side`
+/// (which must be `pact.a` or `pact.b`) -- the live top-up/give-back
+/// [`crate::apply::on_pact_accepted`]/[`crate::apply::on_pact_canceled`]
+/// need the instant a pact enters or leaves play, mirroring
+/// [`apply_pacts`]'s own `BothPlayers`/`A`/`B` dispatch just above but for
+/// ONE named side rather than accumulating a whole [`Stats`]. `PactBlock`
+/// has no `civil_actions` field at all (no base-game pact grants one, only
+/// `military_actions` -- e.g. Open Borders Agreement's "Both civilizations
+/// gain one military action"), so this is the only per-turn action-pool key
+/// a pact can ever move.
+pub(crate) fn pact_military_actions_for(card: CardId, pact: &Pact, side: u8) -> i32 {
+    let mut total = 0i32;
+    for &sp in card.get().special {
+        match sp {
+            Special::BothPlayers(block) => total += block.military_actions as i32,
+            Special::A(block) if side == pact.a => total += block.military_actions as i32,
+            Special::B(block) if side == pact.b => total += block.military_actions as i32,
+            _ => {}
+        }
+    }
+    total
 }
 
 // --------------------------------------------------------------- dispatch
