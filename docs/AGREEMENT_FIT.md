@@ -217,3 +217,32 @@ evidence either objective is somehow wrong.
   an **INSTRUMENT ARTIFACT** (not a bug, but a number that misleads if read
   naively) is the inflated 24.6% "zero/uniform" headline — see "Reading
   the zero floor" above.
+
+## Gauntlet result — this REVERSES the interpretation above (2026-08-08)
+
+The fitted weights were played against the champions, 600 games each (`arena`, difftest):
+
+| matchup | win rate | culture A vs best other |
+|---|---|---|
+| fitted 2p vs champion 2p | 2.7% (null 50%) | 63.9 vs 201.3 |
+| fitted 3p vs champion 3p | 0.8% (null 33.3%) | 35.1 vs 118.6 |
+| fitted 4p vs champion 4p | 0.2% (null 25%) | 71.0 vs 226.3 |
+| **defaults vs champion 2p** (control) | **9.2%** | 124.6 vs 195.5 |
+
+The human-fitted bot is **worse than untuned default weights**. Scale is not the
+explanation: the argmax of a linear dot product is scale-invariant, so the fitted
+*direction* is genuinely bad play.
+
+**Therefore:** agreement with strong humans is a negative signal for playing strength in
+this engine. Do not train, gate, or select on it. The "WEIGHTS not FEATURES" verdict above
+still holds as a statement about what the basis can *express*, but it does NOT mean the
+champion's weights are bad — the climb optimises winning, the fit optimises mimicry, and
+those land in different places.
+
+This also downgrades `docs/CHAMPION_VS_HUMANS.md`: its "short-horizon / underinvests in
+population, leaders and wonders" story was inferred entirely from human disagreement and
+should be treated as unproven. The `take_card` blind spot rests on the same frame and is
+weaker evidence than it appeared.
+
+To find real weaknesses, compare against something that beats the champion under the
+winning objective — e.g. a deeper-search bot sharing the same evaluator.
