@@ -7019,3 +7019,207 @@ not a fully dropped phase), which this pass deliberately did not touch --
 same "avoid colliding with `d4ad0f5`'s in-flight work" reasoning the prior
 pass gave. Driving the remaining delta to 0 needs the `hand_military`
 reconstruction gap itself fixed, not another pass over this mechanism.
+
+## Military hand LEDGER: the whole journal solved as a constraint system up front -- classifies WHY the 970/1011-game discard-phase-oracle divergence happens, not just that it does
+
+Picked up exactly where the prior pass's own "concrete next step" left off (this
+file's "Discard-phase hand-size oracle" section, ~85.1% agreement, 970/1011
+games with at least one first-divergence checkpoint as of `9de308f`). That
+oracle already proves WHICH `(actor, round)` checkpoints are wrong; this pass's
+job was to prove WHY, per the task's own key insight: every discard-phase
+disagreement is about hand-military **COUNT**, never card identity, and a
+count is fully determined by journal-observable events (draws state a count,
+named plays name a card, discards state a count) -- so a count drift is a
+bookkeeping bug hunt with a perfect oracle, not a card-identity search
+problem. No SAT/flow solver was built; none was needed.
+
+### The instrument: `prescan_military_hand_ledger` (`rust/src/replay_common.rs`)
+
+A single forward pass over the whole journal, built ONCE per game (same
+"set directly after construction" convention as `discard_phase_oracle`),
+producing a per-`(actor, round)` running `hand_military` SIZE purely from
+journal TEXT -- no engine state read at all. Five event classes
+(`LedgerEventKind`), each backed by a literal, previously-under-used clause
+shape:
+
+- **`Draw`**: `"<Color> draws N military card(s)"`, wherever it appears --
+  an ordinary end-of-turn draw (glued onto that round's own "End turn"
+  line), an event's immediate effect (Development of Politics' "each player
+  draws 3", Politics of Strength's "strongest draws 5"), or a colonization
+  territory reward (`apply_immediate_effects`' `imm.draw_military_cards`,
+  e.g. Strategic Territory's 5 cards) -- BGO renders all three triggers with
+  the exact same clause shape, so one clause parser
+  (`parse_military_draw_clause`) covers all of them.
+- **`Discard`**: `"<Color> discards N card(s)"`, reusing the existing
+  `parse_discard_count_line` per-CLAUSE (not just on the ordinary
+  discard-phase modal's own resolution line -- Politics of Strength's
+  "weakest civilization discards 3" resolves as this SAME standalone shape).
+- **`ConsumingPlay`**: a named `DeclareWar`/`PlayAggression`/`ProposePact`/
+  `PlayTactic` (excluding `CopyTactic`) -- the identical predicate
+  `prescan_future_military_needs` already uses for `DiscardSolver`.
+- **`PrepareEvent`**: `"<Color> plays event"` -- §5.2, pulls a card OUT of
+  hand into `future_events`. This is the SAME mechanism this file's own
+  earlier "PrepareEvent's net-zero push" section diagnosed and (partially)
+  fixed at `resolve_political_decision`.
+- **`DefenseConsume`**: a committed card on a `"<Color> defends ..."` /
+  `"<Color> tries to defend ..."` line (§5.4.4). Deliberately a FRESH parser
+  (`defense_consumed_count`), not a call to the existing
+  `parse_defense_clauses` `resolve_aggression_defense` uses live: that
+  function only recognises the `"defends "` prefix and silently reads
+  `"tries to defend"` (BGO's OTHER phrasing, used when the defender's own
+  committed force still loses) as zero committed. This ledger counts BOTH
+  phrasings on purpose -- a deliberate, documented divergence from
+  production replay behaviour, not a shared bug; changing
+  `parse_defense_clauses` itself would alter a REAL `Pending::Defense`
+  resolution, out of this instrument's "measure, do not fix" scope.
+- **`ColonizeConsume`**: reuses the existing `parse_sacrifice_clauses`
+  directly, counting only `Bonus`/`CookDiscard` clauses (units are NOT hand
+  cards).
+
+**Checkpoint timing** (the one subtlety that actually mattered): the running
+total is snapshotted right BEFORE each `"End turn"` line's own clauses are
+applied, matching exactly the moment `Replayer::check_discard_phase_oracle`
+reads `hand_military.len()`. That round's OWN draw (textually glued onto the
+SAME "End turn" line) is thereby correctly excluded from its own checkpoint.
+**Real corpus wrinkle found and fixed within this pass**: BGO's own discard
+resolution line does NOT always print after that round's "End turn" line --
+game `7523347` round 4 prints `"Discard Phase 2..."` -> `"Green discards 2
+cards"` -> `"End turn Green scores: ..."`, discard BEFORE End turn, the
+reverse of the far-more-common order. A discard whose own round has not been
+checkpointed yet is now deferred (`deferred_same_round_discard`) and flushed
+immediately after that round's own checkpoint is recorded, so which textual
+order BGO happened to pick can never change which round's checkpoint a
+discard counts against. This dropped the "ledger also disagrees, last event
+Discard" bucket from 127 to 27 games corpus-wide (see below) -- confirmed via
+a real red/green cycle (reverting the defer logic reproduces the exact
+`-2` vs `0` failure on a fixture built from this game's own real lines).
+
+### The always-on classifier: `HandLedgerVerdict` on `GameResult`
+
+At each game's FIRST discard-phase-oracle divergence (`discard_oracle_
+divergence`, unchanged), `Replayer::check_discard_phase_oracle` now ALSO
+looks up the ledger's own predicted excess at that exact checkpoint (same
+`limit` formula, already independently cross-validated against
+`RULES_SPEC.md` in an earlier pass and not re-derived here) and classifies:
+
+- **`SimulatorBug`**: the ledger's own excess matches the journal's
+  cross-validated truth, but the forward SIMULATOR's `hand_military.len()`
+  does not -- the drift is a specific mis-handled EVENT in this project's
+  own replay code, not a missing event class.
+- **`UnmodelledEvent(Option<LedgerEventKind>)`**: the ledger ALSO disagrees
+  with the journal -- an event class this project does not model even
+  reading the journal directly. Carries the most recent `LedgerEventKind`
+  for that actor as the strongest available clue to which class is missing.
+- **`NoLedgerEntry`**: defensive fallback, should be (and is) near-zero.
+
+`bin/replaystats.rs` prints a new "Military hand ledger: classifying WHY the
+discard-phase oracle diverges" table, ranked by count, one example
+game+line per bucket -- this IS the deliverable.
+
+### Corpus-wide result (1,011 games, tree at this pass's own landing commit): the drift is overwhelmingly a SIMULATOR bug, not a missing event class
+
+31,986 `(actor, round)` checkpoints had a trusted journal entry; 27,232
+(85.1%) matched exactly; 970/1011 games (95.9%) have at least one
+divergence -- unchanged from the prior pass's own numbers (this pass adds a
+classifier, it does not touch the oracle or the forward simulator). Of those
+970 games' own FIRST divergence:
+
+| games | share | verdict | last ledger event |
+|---|---|---|---|
+| 661 | 68.1% | **SimulatorBug** | `ConsumingPlay` |
+| 102 | 10.5% | SimulatorBug | `Draw` |
+| 95 | 9.8% | SimulatorBug | `PrepareEvent` |
+| 52 | 5.4% | SimulatorBug | `ColonizeConsume` |
+| 27 | 2.8% | UnmodelledEvent | `Discard` |
+| 13 | 1.3% | UnmodelledEvent | `Draw` |
+| 9 | 0.9% | SimulatorBug | `Discard` |
+| 4 | 0.4% | UnmodelledEvent | `ConsumingPlay` |
+| 3 | 0.3% | SimulatorBug | `DefenseConsume` |
+| 3 | 0.3% | UnmodelledEvent | `PrepareEvent` |
+| 1 | 0.1% | UnmodelledEvent | `ColonizeConsume` |
+
+**922/970 (95.1%) are `SimulatorBug`; only 48/970 (4.9%) are a genuinely
+unmodelled event class.** This directly answers the task's framing question:
+almost none of the corpus-wide drift is "an event this project doesn't know
+about" -- it is a small number of specific, locatable REPLAYER call sites
+whose own hand-mutation bookkeeping is wrong, repeated across many games.
+
+### Top reason, with a card-level repro: `ground_military_hand`'s grow-then-consume wash, at the FOUR named-play call sites this project's own earlier `PrepareEvent` fix never touched
+
+`ConsumingPlay` alone is 68.1% of every first divergence in the corpus --
+larger than every other bucket combined. Repro: `7523818` line 74 (Purple,
+round 5, age I): `"Purple sets up new tactics I / Fighting Band"`
+(`PlayTactic`). `apply_one`'s handler (`replay_common.rs`, `ActionClass::
+PlayTactic` arm) is:
+
+```rust
+r.ground_military_hand(actor, card);
+r.try_apply(Move::PlayTactic { card }, true)
+```
+
+`ground_military_hand` only pushes `card` if it is not ALREADY in the
+simulated hand (a no-op otherwise) -- and `Fighting Band` was not, since the
+simulated deal is fictional and does not track the real hidden hand. So this
+line pushes it, then the SAME line's `Move::PlayTactic` immediately consumes
+it: net **zero**, when the real player's hand shrank by one. Confirmed
+exactly by the numbers at this checkpoint: journal excess 0, ledger excess 0
+(agrees with journal -- a real card left Purple's real hand here), simulator
+excess 1 (one too many -- the wash). **This is the identical mechanism this
+file's own earlier "`PrepareEvent`'s net-zero push" section diagnosed and
+fixed** (commit before `9de308f`) -- but that fix only touched
+`resolve_political_decision`'s own push site. The other four call sites that
+share the exact same `ground_military_hand`-then-consume shape
+(`replay_common.rs`, search `ground_military_hand(actor` /
+`ground_military_hand(player`) were never touched:
+
+- `ActionClass::PlayTactic` (non-`CopyTactic`) -- line 5788
+- `ActionClass::DeclareWar` -- line 5795
+- `ActionClass::PlayAggression` -- line 5802
+- `ActionClass::ProposePact` -- line 5810
+
+All four are read-then-immediately-consumed in exactly the shape the
+`PrepareEvent` fix's own doc comment already names as the general pattern
+("a `ground_*` call that GROWS the hand instead of consuming a real card").
+**`SimulatorBug`/`PrepareEvent` (95 games, 9.8%) being STILL nonzero** is a
+second, independent confirmation that the existing `PrepareEvent` fix
+(gated on `DiscardSolver::needed_after`, "pop one card of unknown
+provenance first") does not close every occurrence -- the prior pass's own
+"21-game new UNDERCOUNT direction" and "concrete next step" sections already
+flagged this as open.
+
+**`SimulatorBug`/`ColonizeConsume` (52 games, 5.4%)** is very likely the
+SAME grow-then-consume shape at a THIRD location,
+`resolve_aggression_defense`'s `DefenseClause::Bonus`/`Flat` grounding AND/or
+`ground_auction_winner_hand`'s own colonize-sacrifice grounding (both call
+`ground_military_hand` then immediately spend the same card) -- plausible by
+construction, not independently card-traced this pass for lack of remaining
+budget.
+
+### `UnmodelledEvent`/`Discard` residual (27 games): likely more of the same discard-ordering artifact, not yet closed to zero
+
+Even after this pass's own checkpoint-timing fix (127 -> 27), a residual
+remains. Repro: `7522668` line 154 (round 5, age I, Grey): journal excess 4,
+ledger excess 3 (one short), simulator excess 3, last ledger event
+`Discard` at line 115. Not individually traced this pass -- plausible
+candidates worth checking first: a SECOND discard-ordering variant this
+pass's single-defer fix doesn't cover (e.g. two discard resolutions for the
+same actor/round interleaved with an intervening different-actor line), or a
+genuine double-count from `parse_discard_count_line` matching a clause this
+ledger should not have (the "weakest civilization discards" flavour-text
+clause was checked and correctly rejected -- see the "Military hand ledger"
+section above -- but this was not re-verified against `7522668` specifically).
+
+### What this pass deliberately did NOT do
+
+**No fix to `ground_military_hand`, `resolve_aggression_defense`, or any of
+the four named-play call sites above** -- per this task's explicit
+instruction, this pass is a MEASUREMENT, not a gameplay fix, exactly
+mirroring the discipline the discard-phase oracle itself was held to when it
+landed. The classification above is the deliverable; landing the actual fix
+(almost certainly: apply the same `needed_after`-gated "pop a disposable
+filler first" idiom the `PrepareEvent` fix already uses, at the four
+`ConsumingPlay` sites, then re-measure with this SAME instrument before
+declaring victory) is the next pass's job. `SimulatorBug`'s own corpus-wide
+count (922 games) is now this project's regression signal for that fix,
+exactly the same role `discard_oracle_divergence`'s own count already plays
+for the oracle it wraps.

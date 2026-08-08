@@ -480,6 +480,16 @@ struct Replayer<'a> {
     /// checkable, and how much of THAT is right" coverage stat.
     discard_oracle_checked: u32,
     discard_oracle_agreed: u32,
+    /// Text-only, per-(actor, round) `hand_military` size ledger from
+    /// [`prescan_military_hand_ledger`] -- see that function's own doc. Set
+    /// directly by [`replay_game`] after construction, same convention as
+    /// `discard_phase_oracle`.
+    military_hand_ledger: HashMap<(u8, String), LedgerCheckpoint>,
+    /// This game's FIRST discard-phase-oracle divergence classified against
+    /// [`military_hand_ledger`] -- see [`HandLedgerVerdict`] and
+    /// [`GameResult::hand_ledger_verdict`]. Set at the same point
+    /// `discard_oracle_divergence` is first set, never overwritten after.
+    hand_ledger_verdict: Option<HandLedgerVerdict>,
     /// A structural "false skip" instrument -- see [`GameResult::
     /// politics_false_skips`]'s own doc for the full mechanism this counts.
     /// Incremented at most once per `plan.preparations` entry (tracked via
@@ -574,6 +584,8 @@ impl<'a> Replayer<'a> {
             discard_oracle_divergence: None,
             discard_oracle_checked: 0,
             discard_oracle_agreed: 0,
+            military_hand_ledger: HashMap::new(),
+            hand_ledger_verdict: None,
             politics_false_skips: 0,
             false_skip_flagged_prep: None,
             politics_false_skips_unrecovered: 0,
@@ -1801,6 +1813,14 @@ impl<'a> Replayer<'a> {
             return;
         }
         if self.discard_oracle_divergence.is_none() {
+            let checkpoint = self.military_hand_ledger.get(&(actor, line.round.to_string())).copied();
+            let ledger_excess = checkpoint.map(|c| (c.raw - limit).max(0) as u32);
+            let ledger_last_event = checkpoint.and_then(|c| c.last_event);
+            self.hand_ledger_verdict = Some(match ledger_excess {
+                None => HandLedgerVerdict::NoLedgerEntry,
+                Some(le) if le == journal_excess => HandLedgerVerdict::SimulatorBug,
+                Some(_) => HandLedgerVerdict::UnmodelledEvent(ledger_last_event.map(|(kind, _)| kind)),
+            });
             self.discard_oracle_divergence = Some(DiscardOracleDivergence {
                 lineno: line.lineno,
                 round: line.round.to_string(),
@@ -1810,6 +1830,8 @@ impl<'a> Replayer<'a> {
                 reconstructed_excess,
                 hand_len,
                 limit,
+                ledger_excess: ledger_excess.unwrap_or(0),
+                ledger_last_event,
             });
         }
     }
@@ -3041,6 +3063,324 @@ pub struct DiscardOracleDivergence {
     pub reconstructed_excess: u32,
     pub hand_len: usize,
     pub limit: i32,
+    /// The SAME excess computed a THIRD, independent way: purely from
+    /// journal TEXT, via [`prescan_military_hand_ledger`], against the exact
+    /// same `limit` above (never re-derived -- the limit formula was already
+    /// cross-validated against `RULES_SPEC.md` and is not itself in
+    /// question, see this file's "military hand" sections). Lets a reader
+    /// tell apart the two ways `reconstructed_excess` can be wrong: this
+    /// value agreeing with `journal_excess` implicates the forward
+    /// simulator's OWN `hand_military` bookkeeping at a locatable event
+    /// (`ledger_last_event` names it); this value ALSO disagreeing means an
+    /// event class isn't modelled even by a pure journal reading, which
+    /// `hand_ledger_verdict`/[`GameResult::hand_ledger_verdict`] classify.
+    pub ledger_excess: u32,
+    /// The most recent [`LedgerEventKind`] [`prescan_military_hand_ledger`]
+    /// recorded for this actor strictly before this checkpoint's own "End
+    /// turn" line, and the 1-based line number it happened at -- `None` only
+    /// when this actor has no ledger-tracked event at all yet this game
+    /// (rare: the ledger sees every draw, so this is empty only in the
+    /// literal opening rounds before any draw has happened).
+    pub ledger_last_event: Option<(LedgerEventKind, usize)>,
+}
+
+/// One class of journal-observable event [`prescan_military_hand_ledger`]
+/// tracks as changing a player's `hand_military` SIZE (never identity -- see
+/// that function's own module doc for why the journal proves counts, not
+/// which card). Kept as a closed enum, not a string, so
+/// [`GameResult::hand_ledger_verdict`]'s corpus-wide histogram
+/// (`bin/replaystats.rs`) buckets by a real Rust `match`, not text
+/// normalisation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerEventKind {
+    /// `"<Color> draws N military card(s)"`, wherever it appears: an
+    /// ordinary end-of-turn draw (glued onto that round's own "End turn"
+    /// line), an event's immediate effect (Development of Politics' "each
+    /// player draws 3", Politics of Strength's "strongest draws 5"), or a
+    /// colonization territory reward (`apply_immediate_effects`'
+    /// `imm.draw_military_cards`, e.g. Strategic Territory's 5) -- all three
+    /// render with the exact same clause shape.
+    Draw,
+    /// `"<Color> discards N card(s)"` -- the discard-phase resolution
+    /// [`prescan_discard_phase_oracle`] already cross-validates the COUNT
+    /// of, reused here as a ledger event so the running total reflects it
+    /// too.
+    Discard,
+    /// A named play that consumes a card from the player's OWN hand by
+    /// identity (`DeclareWar`/`PlayAggression`/`ProposePact`/`PlayTactic`
+    /// excluding `CopyTactic`) -- the same predicate
+    /// [`prescan_future_military_needs`] uses for [`DiscardSolver`].
+    ConsumingPlay,
+    /// `"<Color> plays event"` -- §5.2's `PrepareEvent`: moves a card OUT of
+    /// hand into `future_events`, banking culture. See `docs/REPLAY.md`'s
+    /// "`PrepareEvent`'s net-zero push" section for why this is a real -1,
+    /// not a wash, and why `resolve_political_decision`'s own push-then-pop
+    /// sequence used to net to zero instead.
+    PrepareEvent,
+    /// A committed card on a `"<Color> defends ..."` / `"<Color> tries to
+    /// defend ..."` line (§5.4.4: a defender may spend a Bonus card or
+    /// discard a flat military card to raise their strength) -- EITHER
+    /// clause shape (`"N Defense card +B played"` or `"N military card
+    /// played"`) counts, one consumed card per unit of `N`. Deliberately
+    /// counted on BOTH BGO phrasings, unlike `resolve_aggression_defense`'s
+    /// own `parse_defense_clauses`, which only recognises the `"defends "`
+    /// prefix and silently reads `"tries to defend"` as zero committed --
+    /// see [`defense_consumed_count`]'s own doc for why this ledger does not
+    /// share that function (to avoid touching validated, in-use replay
+    /// logic) and does not paper over the gap either.
+    DefenseConsume,
+    /// A `Bonus`/`CookDiscard` clause on a `"<Color> colonizes ..."` line
+    /// (§11.3: a colonization sacrifice may include a colonization-bonus
+    /// card or a James Cook flat military-card discard, alongside units,
+    /// which are NOT hand cards and do not count here) -- reuses
+    /// [`parse_sacrifice_clauses`] directly rather than re-parsing.
+    ColonizeConsume,
+}
+
+/// The always-on classification of this game's FIRST discard-phase-oracle
+/// divergence (mirrors [`GameResult::civil_deck_premature_advance`]'s own
+/// "structural field, set at most once, from the first occurrence" shape) --
+/// this is the task's own deliverable: turning "the reconstruction drifted"
+/// into "drifted for THIS reason". `None` when this game never diverged, or
+/// stopped (a `Mismatch`) before any checkpoint could.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandLedgerVerdict {
+    /// The journal-only ledger reproduces the journal's own cross-validated
+    /// truth at this checkpoint exactly, while the forward SIMULATOR's own
+    /// `hand_military.len()` does not -- this implicates the simulator's own
+    /// state bookkeeping (a specific event mishandled, not a missing event
+    /// class), e.g. a `ground_*` call that GROWS the hand instead of
+    /// consuming a real card (the already-diagnosed `PrepareEvent`
+    /// net-zero-push shape, `docs/REPLAY.md`, recurring at a DIFFERENT call
+    /// site than the one already fixed).
+    SimulatorBug,
+    /// The journal-only ledger ALSO disagrees with the journal's own
+    /// cross-validated truth -- an event class this project does not model
+    /// AT ALL, even reading the journal directly (as opposed to a specific
+    /// simulator bug). Carries the most recent [`LedgerEventKind`] this
+    /// actor had before the checkpoint (`None` only if there was none yet),
+    /// the strongest available clue to WHICH class is missing: if the
+    /// ledger's own ADD/SUBTRACT bookkeeping around that event were
+    /// complete, it would have matched the journal.
+    UnmodelledEvent(Option<LedgerEventKind>),
+    /// The ledger had no entry at all for this `(actor, round)` -- should be
+    /// rare (the ledger records every `"End turn"` line unconditionally) and
+    /// is kept as its own variant, not folded into a guess, so a corpus-wide
+    /// nonzero count here is itself a finding about ledger coverage, not
+    /// silently mixed into `UnmodelledEvent`.
+    NoLedgerEntry,
+}
+
+/// BGO's own `"<Color> draws N military card(s)"` clause -- the literal
+/// journal fact backing [`LedgerEventKind::Draw`]. Same shape and parsing
+/// style as [`parse_discard_count_line`] (this file's own established
+/// pattern for a "<Color> <verb> N <noun>(s)" clause), deliberately applied
+/// per CLAUSE (the caller splits a line's full text on `"; "` first, not
+/// just once against the whole line) because a single line can carry
+/// several of these for DIFFERENT colours at once -- an event's "each
+/// player draws N military cards" immediate effect glues one
+/// `"<Color> draws N military cards"` clause per surviving player onto the
+/// SAME `"<Color> plays event ..."` line that also, separately, removes a
+/// card from the PREPARING player's own hand ([`LedgerEventKind::
+/// PrepareEvent`]).
+fn parse_military_draw_clause(text: &str) -> Option<(Color, u32)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let rest = rest.strip_prefix("draws ")?;
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: u32 = rest[..digits_end].parse().ok()?;
+    let tail = &rest[digits_end..];
+    (tail == " military card" || tail == " military cards").then_some((actor, n))
+}
+
+/// How many hand-military cards a `"<Color> defends ..."` / `"<Color> tries
+/// to defend ..."` line committed, and who committed them -- the ledger-only
+/// count backing [`LedgerEventKind::DefenseConsume`]. Deliberately a FRESH
+/// parser, not a call to [`parse_defense_clauses`] (which `resolve_
+/// aggression_defense` already uses, live, to resolve `Pending::Defense`):
+/// that function requires a literal `"defends "` prefix and returns `None`
+/// -- read by its own caller as "zero committed" -- for BGO's OTHER
+/// phrasing, `"tries to defend"` (used, empirically, when the defender's own
+/// committed force still loses the fight). This ledger counts BOTH
+/// phrasings, because the rule-mandated card loss happens either way; this
+/// is a deliberate, DOCUMENTED difference from production replay behaviour,
+/// not a shared bug -- changing `parse_defense_clauses` itself would alter
+/// `resolve_aggression_defense`'s own resolution of a REAL `Pending::
+/// Defense`, which is out of this instrument's scope (it only measures, see
+/// this file's own module doc on the discard-phase oracle for the same
+/// discipline). Same two clause shapes as `DefenseClause`, but only the
+/// COUNT is kept -- identity plays no part in a hand-SIZE ledger.
+fn defense_consumed_count(text: &str) -> Option<(Color, u32)> {
+    let (actor, rest) = actor_and_rest(text)?;
+    let clauses = match rest.strip_prefix("defends ") {
+        Some(c) => c,
+        None => rest.strip_prefix("tries to defend")?.strip_prefix("; ").unwrap_or(""),
+    };
+    let mut n = 0u32;
+    for clause in clauses.split("; ") {
+        let mut words = clause.split_whitespace();
+        let Some(count) = words.next().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let rest_words: Vec<&str> = words.collect();
+        let consumed = match rest_words.as_slice() {
+            ["Defense", "card", bonus, "played"] => bonus.starts_with('+'),
+            ["military", "card", "played"] => true,
+            _ => false,
+        };
+        if consumed {
+            n += count;
+        }
+    }
+    Some((actor, n))
+}
+
+/// This actor's running `hand_military` SIZE, per
+/// [`prescan_military_hand_ledger`], as of some point in the journal --
+/// `raw` is intentionally signed and NOT clamped at 0 (see that function's
+/// own doc: a negative running total is itself a finding, not noise to hide)
+/// -- and the most recent event that changed it, for attributing a
+/// divergence to a specific mechanism rather than just a bare number.
+#[derive(Debug, Clone, Copy)]
+struct LedgerCheckpoint {
+    raw: i32,
+    last_event: Option<(LedgerEventKind, usize)>,
+}
+
+/// A text-only, per-(actor, round) `hand_military` SIZE ledger -- the whole
+/// journal solved as a constraint system UP FRONT, rather than inferred by
+/// forward-simulating and comparing counts after the fact. See this file's
+/// "Discard-phase hand-size oracle" section for why a hand-size drift is a
+/// bookkeeping question with a perfect oracle, not a card-identity search:
+/// every event that changes `hand_military`'s SIZE (as opposed to its
+/// contents) is directly observable in the journal's own words --
+/// [`LedgerEventKind`] enumerates the five classes this function tracks,
+/// each backed by a literal clause shape, never a rules reimplementation of
+/// draw/discard FORMULAS (the existing `military_actions_unused`/
+/// `military_hand_limit` machinery is not touched or re-derived here, and
+/// was already independently cross-validated against `RULES_SPEC.md` -- see
+/// `docs/REPLAY.md`'s "military hand" sections).
+///
+/// Keyed exactly like [`prescan_discard_phase_oracle`] (`actor` seat,
+/// `Line::round` verbatim string), recorded at the identical moment
+/// [`Replayer::check_discard_phase_oracle`] reads `hand_military.len()`:
+/// the running total is snapshotted right BEFORE each `"End turn"` line's
+/// own effects are applied, so that round's OWN draw (textually glued onto
+/// the SAME "End turn" line -- `"End turn <Color> scores: ...; <Color>
+/// draws N military cards"`) is correctly excluded from ITS OWN checkpoint
+/// and instead lands in the NEXT round's running total, mirroring
+/// `economy::end_of_turn` running discard (step 1) strictly before draw
+/// (a later step) within one turn's own resolution.
+///
+/// A single pass over `lines`, in order: every line's text is split on
+/// `"; "` and each clause is tried against [`parse_military_draw_clause`]
+/// (add) and [`parse_discard_count_line`] (subtract) -- this uniformly
+/// covers an ordinary end-of-turn draw, an event's "each player
+/// draws"/"weakest discards" immediate effect, and a colonization's
+/// territory-reward draw with the SAME two clause parsers, because BGO
+/// renders all of them with the same clause shape regardless of trigger.
+/// Line-level (not clause-level) checks separately handle a named
+/// hand-consuming play (`ConsumingPlay`), a `"plays event"` preparation
+/// (`PrepareEvent`), a defense commitment (`DefenseConsume`), and a
+/// colonization sacrifice's Bonus/Cook-discard clauses (`ColonizeConsume`).
+///
+/// **A discard's own line order is NOT stable** (confirmed against real
+/// corpus text, game `7523347` round 4: `"Discard Phase 2..."` ->
+/// `"Green discards 2 cards"` -> `"End turn Green scores: ..."`, discard
+/// BEFORE End turn there, the REVERSE of the far more common `"Discard
+/// Phase..."` -> `"End turn..."` -> `"<Color> discards..."` order this
+/// function's own module doc assumes elsewhere in the corpus -- an
+/// already-documented BGO UI-submission-timing artifact, see this file's
+/// "Discard-phase hand-size oracle" module doc). A discard resolution whose
+/// OWN round has not been checkpointed yet is therefore held in
+/// `deferred_same_round_discard` rather than applied to `running`
+/// immediately, and flushed right after that round's checkpoint is
+/// recorded -- so which textual order BGO happened to pick can never change
+/// which round's checkpoint a discard counts against.
+fn prescan_military_hand_ledger(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<(u8, String), LedgerCheckpoint> {
+    let mut running: HashMap<u8, i32> = HashMap::new();
+    let mut last_event: HashMap<u8, (LedgerEventKind, usize)> = HashMap::new();
+    let mut checkpointed: std::collections::HashSet<(u8, String)> = std::collections::HashSet::new();
+    let mut deferred_same_round_discard: HashMap<(u8, String), (i32, usize)> = HashMap::new();
+    let mut out = HashMap::new();
+    for line in lines {
+        if line.text.starts_with("End turn") {
+            if let Some(actor) = Color::parse(line.color) {
+                let seat = actor.seat();
+                let key = (seat, line.round.to_string());
+                out.insert(
+                    key.clone(),
+                    LedgerCheckpoint { raw: *running.get(&seat).unwrap_or(&0), last_event: last_event.get(&seat).copied() },
+                );
+                checkpointed.insert(key.clone());
+                if let Some((n, lineno)) = deferred_same_round_discard.remove(&key) {
+                    bump_ledger(&mut running, &mut last_event, seat, n, LedgerEventKind::Discard, lineno);
+                }
+            }
+        }
+        for clause in line.text.split("; ") {
+            if let Some((color, n)) = parse_military_draw_clause(clause) {
+                bump_ledger(&mut running, &mut last_event, color.seat(), n as i32, LedgerEventKind::Draw, line.lineno);
+            }
+            if let Some((color, n)) = parse_discard_count_line(clause) {
+                let key = (color.seat(), line.round.to_string());
+                if checkpointed.contains(&key) {
+                    bump_ledger(&mut running, &mut last_event, color.seat(), -(n as i32), LedgerEventKind::Discard, line.lineno);
+                } else {
+                    let entry = deferred_same_round_discard.entry(key).or_insert((0, line.lineno));
+                    entry.0 -= n as i32;
+                }
+            }
+        }
+        if let Some((color, n)) = defense_consumed_count(line.text) {
+            if n > 0 {
+                bump_ledger(&mut running, &mut last_event, color.seat(), -(n as i32), LedgerEventKind::DefenseConsume, line.lineno);
+            }
+        }
+        if let Some((_territory, clauses)) = parse_sacrifice_clauses(line.text, card_index) {
+            let n = clauses.iter().filter(|c| !matches!(c, SacrificeClause::Unit(_))).count();
+            if n > 0 {
+                if let Some((actor, _)) = actor_and_rest(line.text) {
+                    bump_ledger(&mut running, &mut last_event, actor.seat(), -(n as i32), LedgerEventKind::ColonizeConsume, line.lineno);
+                }
+            }
+        }
+        if let LineOutcome::Action(Classified { class, .. }) = classify(card_index, line.text) {
+            if let Some((actor, rest)) = actor_and_rest(line.text) {
+                let consumes = match class {
+                    ActionClass::DeclareWar | ActionClass::PlayAggression | ActionClass::ProposePact => {
+                        Some(LedgerEventKind::ConsumingPlay)
+                    }
+                    ActionClass::PlayTactic if !rest.starts_with("adopts existing tactics ") => {
+                        Some(LedgerEventKind::ConsumingPlay)
+                    }
+                    ActionClass::PlayEvent => Some(LedgerEventKind::PrepareEvent),
+                    _ => None,
+                };
+                if let Some(kind) = consumes {
+                    bump_ledger(&mut running, &mut last_event, actor.seat(), -1, kind, line.lineno);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Applies one [`LedgerEventKind`] delta to [`prescan_military_hand_ledger`]'s
+/// two parallel per-actor running maps at once (the raw signed count and the
+/// "what happened most recently" attribution) -- pulled out purely so that
+/// function's own body reads as five clearly-separated event classes rather
+/// than five copies of the same two-line update.
+fn bump_ledger(
+    running: &mut HashMap<u8, i32>,
+    last_event: &mut HashMap<u8, (LedgerEventKind, usize)>,
+    actor: u8,
+    delta: i32,
+    kind: LedgerEventKind,
+    lineno: usize,
+) {
+    *running.entry(actor).or_insert(0) += delta;
+    last_event.insert(actor, (kind, lineno));
 }
 
 /// Foray/Raiders' own `Special::StrongestPlayers`/`WeakestPlayers` "gains/
@@ -3689,6 +4029,13 @@ pub struct GameResult {
     /// reconstruction matched exactly.
     pub discard_oracle_checked: u32,
     pub discard_oracle_agreed: u32,
+    /// See [`HandLedgerVerdict`] -- the always-on, structural classification
+    /// of `discard_oracle_divergence` (when `Some`): whether the journal-only
+    /// military-hand ledger agrees with the journal at that checkpoint
+    /// (implicating the forward simulator specifically) or also disagrees
+    /// (an unmodelled event class). `None` exactly when `discard_oracle_
+    /// divergence` is `None`.
+    pub hand_ledger_verdict: Option<HandLedgerVerdict>,
     /// The FIRST line, if any, where this reconstruction's own
     /// `state.age_civil` read strictly ahead of what the journal's `Line::
     /// age` column proves the real game had reached -- see
@@ -4083,6 +4430,7 @@ pub fn replay_game(
     r.record_decisions = record_decisions;
     r.produces_grants = prescan_produces_grants(&lines);
     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
+    r.military_hand_ledger = prescan_military_hand_ledger(&lines, card_index);
     r.spends_grants = prescan_spends_grants(&lines);
 
     // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
@@ -4701,6 +5049,7 @@ pub fn replay_game(
         discard_oracle_divergence: r.discard_oracle_divergence,
         discard_oracle_checked: r.discard_oracle_checked,
         discard_oracle_agreed: r.discard_oracle_agreed,
+        hand_ledger_verdict: r.hand_ledger_verdict,
         civil_deck_premature_advance,
         politics_false_skips: r.politics_false_skips,
         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
@@ -6197,6 +6546,227 @@ mod tests {
         ];
         let oracle = prescan_discard_phase_oracle(&lines);
         assert_eq!(oracle.get(&(Color::Orange.seat(), "6".to_string())), None);
+    }
+
+    // -----------------------------------------------------------------
+    // Military hand ledger
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn parse_military_draw_clause_reads_singular_and_plural() {
+        assert_eq!(parse_military_draw_clause("Orange draws 1 military card"), Some((Color::Orange, 1)));
+        assert_eq!(parse_military_draw_clause("Purple draws 3 military cards"), Some((Color::Purple, 3)));
+    }
+
+    /// The whole-line description clause a "Development of Politics"/
+    /// "Politics of Strength" reveal glues on ("Each player draws 3 military
+    /// cards.") must NOT be mistaken for a real per-player draw -- it has no
+    /// leading colour at all, unlike the SEPARATE `"<Color> draws N..."`
+    /// clauses the same line also carries (one per recipient), which DO
+    /// match. Confirms the caller's own clause-splitting is what makes this
+    /// distinction, not this parser alone.
+    #[test]
+    fn parse_military_draw_clause_rejects_the_no_actor_description_clause() {
+        assert_eq!(parse_military_draw_clause("Each player draws 3 military cards."), None);
+        assert_eq!(parse_military_draw_clause("Orange discards 1 card"), None);
+    }
+
+    #[test]
+    fn defense_consumed_count_reads_a_bonus_card_clause() {
+        assert_eq!(
+            defense_consumed_count("Orange defends 1 Defense card +6 played; Orange strength: 26; Purple strength: 26"),
+            Some((Color::Orange, 1))
+        );
+    }
+
+    #[test]
+    fn defense_consumed_count_reads_multiple_flat_clauses_on_a_tries_to_defend_line() {
+        // Real corpus shape (`parse_defense_clauses` -- the function this
+        // ledger deliberately does NOT share -- only recognises the
+        // "defends " prefix; "tries to defend" is BGO's OTHER phrasing, used
+        // when the defender's own committed force still loses).
+        let text = "Purple tries to defend; 1 military card played; 1 military card played; 1 military card played; \
+                     Purple strength: 18; Orange strength: 25";
+        assert_eq!(defense_consumed_count(text), Some((Color::Purple, 3)));
+    }
+
+    #[test]
+    fn defense_consumed_count_is_zero_for_a_defense_with_nothing_committed() {
+        assert_eq!(
+            defense_consumed_count("Orange defends Orange strength: 9; Purple strength: 9"),
+            Some((Color::Orange, 0))
+        );
+        assert_eq!(
+            defense_consumed_count("Purple tries to defend; Purple strength: 9; Orange strength: 15"),
+            Some((Color::Purple, 0))
+        );
+    }
+
+    #[test]
+    fn defense_consumed_count_rejects_an_unrelated_line() {
+        assert_eq!(defense_consumed_count("Orange discards 1 card"), None);
+    }
+
+    /// Real corpus shape, game `7522614` round 2-4 (`docs/REPLAY.md`'s
+    /// "Card-by-card audit" section): two ordinary end-of-turn draws (2 then
+    /// 2 more) with nothing else happening land the ledger on exactly 4 at
+    /// the round-4 checkpoint -- and, critically, round 2's OWN draw (glued
+    /// onto round 2's own "End turn" line) must NOT count toward round 2's
+    /// OWN checkpoint (recorded strictly before that line's clauses are
+    /// applied), landing in round 3's checkpoint instead. This is the
+    /// checkpoint-timing property the whole ledger depends on.
+    #[test]
+    fn military_hand_ledger_excludes_a_rounds_own_draw_from_its_own_checkpoint() {
+        let lines = [
+            oracle_test_line("Orange", "2", "No Discard Phase"),
+            oracle_test_line(
+                "Orange",
+                "2",
+                "End turn Orange scores:; ; 0 culture (now 0); 1 science (now 2); 3 food - consumption: 0 (now 5); \
+                 2 resources (now 2); Orange draws 2 military cards",
+            ),
+            oracle_test_line("Orange", "3", "No Discard Phase"),
+            oracle_test_line(
+                "Orange",
+                "3",
+                "End turn Orange scores:; ; 0 culture (now 0); 1 science (now 2); 3 food - consumption: 0 (now 6); \
+                 2 resources (now 2); Orange draws 2 military cards",
+            ),
+            oracle_test_line("Orange", "4", "Discard Phase 1 military card must be discarded"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        let seat = Color::Orange.seat();
+        assert_eq!(ledger.get(&(seat, "2".to_string())).map(|c| c.raw), Some(0));
+        assert_eq!(ledger.get(&(seat, "3".to_string())).map(|c| c.raw), Some(2));
+    }
+
+    /// §5.2 `PrepareEvent` pulls a card OUT of hand -- the ledger must count
+    /// it as a real -1, not the net-zero wash `resolve_political_decision`'s
+    /// own push-then-apply-removal sequence used to produce before its own
+    /// fix (`docs/REPLAY.md`'s "PrepareEvent's net-zero push" section). Also
+    /// covers the SAME line granting a draw to the SAME actor as one of an
+    /// event's "each player draws" recipients (Development of Politics),
+    /// confirming the two effects net additively on one line rather than one
+    /// clobbering the other.
+    #[test]
+    fn military_hand_ledger_counts_a_prepare_event_as_minus_one_even_when_the_same_line_also_draws() {
+        let lines = [
+            oracle_test_line(
+                "Green",
+                "4",
+                "Green plays event Green scores 1 culture; Current event:; A / Development of Politics; \
+                 Each player draws 3 military cards.; Orange draws 3 military cards; Green draws 3 military cards",
+            ),
+            oracle_test_line("Green", "5", "End turn Green scores:; ; 0 culture (now 1)"),
+            oracle_test_line("Orange", "5", "End turn Orange scores:; ; 0 culture (now 0)"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        // Green: -1 (prepares) + 3 (its own "each player" draw) = net +2.
+        assert_eq!(ledger.get(&(Color::Green.seat(), "5".to_string())).map(|c| c.raw), Some(2));
+        // Orange only drew (from the SAME line, as another "each player"
+        // recipient), no preparation of its own -- confirms the -1 above is
+        // scoped to the preparing actor, not applied to every drawer.
+        assert_eq!(ledger.get(&(Color::Orange.seat(), "5".to_string())).map(|c| c.raw), Some(3));
+    }
+
+    /// A named play (`DeclareWar`/`PlayAggression`/`ProposePact`/
+    /// `PlayTactic` excluding `CopyTactic`) consumes one hand card by
+    /// identity -- same predicate `prescan_future_military_needs` uses for
+    /// `DiscardSolver`, reused here as a ledger event.
+    #[test]
+    fn military_hand_ledger_counts_a_named_war_declaration_as_minus_one() {
+        let lines = [
+            oracle_test_line(
+                "Orange",
+                "6",
+                "End turn Orange scores:; ; 0 culture (now 0); 1 science (now 2); 2 food - consumption: 0 (now 5); \
+                 2 resources (now 2); Orange draws 2 military cards",
+            ),
+            oracle_test_line("Orange", "6", "No Discard Phase"),
+            oracle_test_line("Orange", "7", "Orange declares War over Culture on Purple The victor takes 5 culture"),
+            oracle_test_line("Orange", "7", "End turn Orange scores:; ; 0 culture (now 0)"),
+            oracle_test_line("Orange", "8", "End turn Orange scores:; ; 0 culture (now 0)"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        assert_eq!(ledger.get(&(Color::Orange.seat(), "8".to_string())).map(|c| c.raw), Some(1));
+    }
+
+    /// Real corpus shape, Politics of Strength's "weakest civilization
+    /// discards N" resolution: `parse_discard_count_line` is reused
+    /// per-CLAUSE, so a discard resolution that is NOT part of the ordinary
+    /// discard-phase modal (glued onto an unrelated line) is still counted.
+    #[test]
+    fn military_hand_ledger_counts_a_standalone_discard_line_not_just_the_modal_shape() {
+        let lines = [
+            oracle_test_line(
+                "Orange",
+                "5",
+                "End turn Orange scores:; ; 0 culture (now 0); 1 science (now 2); 2 food - consumption: 0 (now 5); \
+                 2 resources (now 2); Orange draws 3 military cards",
+            ),
+            oracle_test_line("Green", "5", "Orange discards 3 cards"),
+            oracle_test_line("Orange", "6", "End turn Orange scores:; ; 0 culture (now 0)"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        assert_eq!(ledger.get(&(Color::Orange.seat(), "6".to_string())).map(|c| c.raw), Some(0));
+    }
+
+    /// REGRESSION (real corpus shape, game `7523347` round 4): BGO does NOT
+    /// always print a round's own discard resolution AFTER that round's own
+    /// "End turn" line -- here it comes BEFORE (`"Discard Phase..."` ->
+    /// `"Green discards 2 cards"` -> `"End turn Green scores: ..."`), the
+    /// reverse of the far more common order the sibling test above covers.
+    /// A discard belonging to THIS SAME round must still land AFTER this
+    /// round's own checkpoint (deferred, not applied immediately), or the
+    /// checkpoint would wrongly see itself already short by the very
+    /// discard it is supposed to be checked against.
+    #[test]
+    fn military_hand_ledger_defers_a_same_round_discard_that_prints_before_its_own_end_turn_line() {
+        let lines = [
+            oracle_test_line("Green", "4", "Discard Phase 2 military cards must be discarded"),
+            oracle_test_line("Green", "4", "Green discards 2 cards"),
+            oracle_test_line("Green", "4", "End turn Green scores:; ; 0 culture (now 6)"),
+            oracle_test_line("Green", "5", "End turn Green scores:; ; 0 culture (now 6); Green draws 2 military cards"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        let seat = Color::Green.seat();
+        // Nothing drew into Green's hand before round 4's own checkpoint in
+        // this fixture, so round 4's own -2 discard must NOT show up yet --
+        // applying it early would read as an impossible negative hand.
+        assert_eq!(ledger.get(&(seat, "4".to_string())).map(|c| c.raw), Some(0));
+        // The deferred -2 must still land, one round later, once round 4's
+        // own checkpoint has been recorded.
+        assert_eq!(ledger.get(&(seat, "5".to_string())).map(|c| c.raw), Some(-2));
+    }
+
+    /// `last_event` names the most recent ledger-tracked mechanism, the
+    /// signal [`HandLedgerVerdict::UnmodelledEvent`] reports -- confirms it
+    /// tracks the RIGHT actor's own most recent event, not a global one.
+    #[test]
+    fn military_hand_ledger_last_event_is_scoped_per_actor() {
+        let lines = [
+            oracle_test_line(
+                "Orange",
+                "5",
+                "End turn Orange scores:; ; 0 culture (now 0); 1 science (now 2); 2 food - consumption: 0 (now 5); \
+                 2 resources (now 2); Orange draws 2 military cards",
+            ),
+            oracle_test_line(
+                "Purple",
+                "5",
+                "Purple defends 1 Defense card +6 played; Purple strength: 10; Orange strength: 10",
+            ),
+            oracle_test_line("Orange", "6", "End turn Orange scores:; ; 0 culture (now 0)"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        let orange = ledger.get(&(Color::Orange.seat(), "6".to_string())).unwrap();
+        assert_eq!(orange.last_event.map(|(kind, _)| kind), Some(LedgerEventKind::Draw));
     }
 
     /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7522658`

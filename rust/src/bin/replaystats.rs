@@ -41,7 +41,30 @@ use std::fs;
 use std::process::ExitCode;
 
 use tta::corpus;
-use tta::replay_common::{build_card_index, replay_game, MismatchKind};
+use tta::replay_common::{build_card_index, replay_game, HandLedgerVerdict, LedgerEventKind, MismatchKind};
+
+/// A stable, printable bucket key for [`HandLedgerVerdict`] -- collapses the
+/// carried/looked-up [`LedgerEventKind`] to its `Debug` name so the
+/// classification histogram groups by MECHANISM, not by the `Option` wrapper
+/// around it. `last_event` is passed separately (rather than read off
+/// `HandLedgerVerdict::UnmodelledEvent` alone) so `SimulatorBug` -- whose
+/// variant carries no event of its own -- can ALSO be sub-bucketed by what
+/// ledger event most recently preceded it: even though the ledger agrees
+/// with the journal there (so no event class is missing), knowing which
+/// mechanism was active right before the simulator's own state went wrong is
+/// exactly the clue needed to find the specific buggy call site.
+fn hand_ledger_verdict_key(v: &HandLedgerVerdict, last_event: Option<LedgerEventKind>) -> String {
+    match v {
+        HandLedgerVerdict::SimulatorBug => format!(
+            "SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- \
+             last ledger event was {}",
+            last_event.map(|k| format!("{k:?}")).unwrap_or_else(|| "none".to_string())
+        ),
+        HandLedgerVerdict::UnmodelledEvent(Some(kind)) => format!("UnmodelledEvent: last ledger event was {kind:?}"),
+        HandLedgerVerdict::UnmodelledEvent(None) => "UnmodelledEvent: no prior ledger event at all".to_string(),
+        HandLedgerVerdict::NoLedgerEntry => "NoLedgerEntry (ledger coverage gap)".to_string(),
+    }
+}
 
 /// A stable bucket key for one stop reason -- coarse enough to rank
 /// meaningfully, fine enough that `IllegalMove` alone (structurally the
@@ -148,6 +171,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // journal's own cross-validated discard count -- FIRST divergence only,
     // per the same function's own doc.
     let mut discard_oracle_divergences: Vec<String> = Vec::new();
+    // `GameResult::hand_ledger_verdict`'s corpus-wide histogram -- the
+    // deliverable this binary exists to compute: classifies WHY each
+    // game's first discard-phase-oracle divergence happened, not just THAT
+    // it did. One example repro line kept per bucket (the same
+    // `discard_oracle_divergences`-style formatting, first one seen wins).
+    let mut ledger_verdict_buckets: HashMap<String, (u32, String)> = HashMap::new();
     // `GameResult::civil_deck_premature_advance` -- see that field's own
     // doc and `docs/REPLAY.md`'s "civil deck model" handoff. One example
     // per game, capped, so a full-corpus run doesn't dump hundreds of lines.
@@ -193,6 +222,24 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                  (hand_military_len {} limit {})",
                 meta.id, d.lineno, d.round, d.age, d.actor, d.journal_excess, d.reconstructed_excess, d.hand_len, d.limit
             ));
+            if let Some(verdict) = &result.hand_ledger_verdict {
+                let key = hand_ledger_verdict_key(verdict, d.ledger_last_event.map(|(kind, _)| kind));
+                let example = format!(
+                    "{} line {} (round {} age {}, {}): journal excess {}, simulator excess {}, ledger excess {} \
+                     (ledger's own last event: {:?})",
+                    meta.id,
+                    d.lineno,
+                    d.round,
+                    d.age,
+                    d.actor,
+                    d.journal_excess,
+                    d.reconstructed_excess,
+                    d.ledger_excess,
+                    d.ledger_last_event.map(|(kind, lineno)| (kind, lineno))
+                );
+                let entry = ledger_verdict_buckets.entry(key).or_insert_with(|| (0, example.clone()));
+                entry.0 += 1;
+            }
         }
         if let Some(p) = &result.civil_deck_premature_advance {
             n_premature += 1;
@@ -328,6 +375,26 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     }
     println!();
 
+    // `GameResult::hand_ledger_verdict` -- the classification this binary
+    // exists to compute: for each game's FIRST discard-phase-oracle
+    // divergence above, does a PURE-JOURNAL-TEXT ledger
+    // (`replay_common::prescan_military_hand_ledger`) independently
+    // reproduce the journal's own truth at that checkpoint (implicating the
+    // forward simulator specifically, `SimulatorBug`) or does it ALSO
+    // disagree (an event class this project does not model even reading the
+    // journal directly, `UnmodelledEvent`, bucketed by the most recent
+    // ledger-tracked event for that actor)? Ranked so the dominant reason is
+    // read first, per this file's own "measure first" convention.
+    println!("## Military hand ledger: classifying WHY the discard-phase oracle diverges\n");
+    let mut ledger_ranked: Vec<(&String, &(u32, String))> = ledger_verdict_buckets.iter().collect();
+    ledger_ranked.sort_unstable_by(|a, b| b.1.0.cmp(&a.1.0));
+    println!("| games | reason | example |");
+    println!("|---|---|---|");
+    for (key, (count, example)) in &ledger_ranked {
+        println!("| {count} | {key} | {} |", example.replace('|', "\\|"));
+    }
+    println!();
+
     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
     // deck model" handoff. Zero here is the invariant `top_up_civil_deck`
     // is meant to guarantee; a nonzero count is this instrument catching a
@@ -395,6 +462,34 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hand_ledger_verdict_key_names_the_mechanism_for_simulator_bug_via_the_passed_in_last_event() {
+        // `SimulatorBug`'s own variant carries no event -- the caller passes
+        // `DiscardOracleDivergence::ledger_last_event` in separately, and
+        // the key must still name it, not fall back to a bare "SimulatorBug"
+        // that loses the one clue pointing at which call site is buggy.
+        let key = hand_ledger_verdict_key(&HandLedgerVerdict::SimulatorBug, Some(LedgerEventKind::PrepareEvent));
+        assert!(key.contains("SimulatorBug"));
+        assert!(key.contains("PrepareEvent"));
+    }
+
+    #[test]
+    fn hand_ledger_verdict_key_names_the_mechanism_for_an_unmodelled_event() {
+        let key = hand_ledger_verdict_key(&HandLedgerVerdict::UnmodelledEvent(Some(LedgerEventKind::Discard)), None);
+        assert!(key.contains("UnmodelledEvent"));
+        assert!(key.contains("Discard"));
+    }
+
+    #[test]
+    fn hand_ledger_verdict_key_distinguishes_simulator_bug_from_unmodelled_event_with_the_same_last_kind() {
+        // The two verdicts mean OPPOSITE things (ledger right vs ledger also
+        // wrong) for the exact same preceding mechanism -- must never
+        // collapse to the same bucket key.
+        let a = hand_ledger_verdict_key(&HandLedgerVerdict::SimulatorBug, Some(LedgerEventKind::Draw));
+        let b = hand_ledger_verdict_key(&HandLedgerVerdict::UnmodelledEvent(Some(LedgerEventKind::Draw)), Some(LedgerEventKind::Draw));
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn move_kind_extracts_the_variant_name_from_a_struct_style_debug_string() {
