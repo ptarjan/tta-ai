@@ -465,6 +465,18 @@ pub fn predict_top1(w: &[f64], candidates: &[Vec<f64>]) -> usize {
     best_i
 }
 
+/// Every candidate index, best human-ranked score first -- [`predict_top1`]
+/// keeps only the winner; a move-ordering PRIOR
+/// (`bots::human::choose_with_search`'s root shortlist) needs the whole
+/// order, to keep more than one candidate before handing the survivors to a
+/// real state-value search. Ties keep candidate-list order (a stable sort),
+/// matching [`predict_top1`]'s own first-candidate-wins tie-break.
+pub fn rank(w: &[f64], candidates: &[Vec<f64>]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&a, &b| dot(w, &candidates[b]).partial_cmp(&dot(w, &candidates[a])).unwrap());
+    order
+}
+
 /// Convert a vector [`train`] fit on NORMALIZED features (every candidate
 /// having gone through `norm.apply`) into an equivalent vector that ranks
 /// RAW, un-normalized features the same way [`predict_top1`] would have

@@ -646,6 +646,30 @@ pub enum Bot {
     Variant(super::variants::VariantBot),
     /// The human-imitation baseline; see [`BotKind::Human`].
     Human(HumanBot),
+    /// Real lookahead for the human-imitation baseline: a move-ordering
+    /// prior from `human_policy::predict_top1`'s ranking model on top of
+    /// [`plan::pick`]'s ordinary beam, completely unmodified -- see
+    /// [`super::human::choose_with_search`]'s own doc comment for the design
+    /// and the honesty note about what this makes the bot.
+    ///
+    /// Deliberately NOT its own [`BotKind`] ([`Bot::kind`] reports this as
+    /// plain [`BotKind::Human`]): `Seat` carries exactly one
+    /// [`weighted::weights::Weights`] slot per seat, already spent -- for
+    /// this variant -- on the vector [`plan::pick`]'s beam needs at every
+    /// node, so there is no second slot here for a human ranking vector to
+    /// travel through `make_bots`'s generic per-kind construction. Built by
+    /// hand with [`Bot::human_plan`] instead; `bin/kindmatch.rs`'s
+    /// `--a-search`/`--b-search` flags are its one caller, and the
+    /// unmodified [`BotKind::Human`]/[`HumanBot`] path above stays reachable
+    /// exactly as before so imitation-accuracy measurements (`humanpaired`)
+    /// never change meaning.
+    HumanPlan {
+        cfg: plan::PlanConfig,
+        stats: plan::Stats,
+        counters: pending::Counters,
+        rng: PyRandom,
+        human_weights: Vec<f64>,
+    },
 }
 
 impl Bot {
@@ -677,6 +701,7 @@ impl Bot {
                 super::variants::Archetype::Tempo => BotKind::Tempo,
             },
             Bot::Human(_) => BotKind::Human,
+            Bot::HumanPlan { .. } => BotKind::Human,
         }
     }
 
@@ -696,6 +721,34 @@ impl Bot {
             Bot::Book(bot) => bot.choose(state, moves),
             Bot::Variant(bot) => bot.choose(state, moves),
             Bot::Human(bot) => bot.choose(state, moves),
+            Bot::HumanPlan { cfg, stats, counters, rng, human_weights } => {
+                super::human::choose_with_search(cfg, stats, counters, rng, human_weights, state, moves)
+            }
+        }
+    }
+
+    /// Build a [`Bot::HumanPlan`] directly, bypassing [`make_seats`]/
+    /// [`build_bots`]'s one-[`weighted::weights::Weights`]-per-seat shape --
+    /// this variant needs TWO vectors (see [`Bot::HumanPlan`]'s own doc
+    /// comment): `eval_weights` is what [`plan::pick`]'s beam scores every
+    /// node with (a real gameplay evaluator vector, e.g. a frozen champion's
+    /// -- NOT a human-imitation fit), `human_weights` is
+    /// [`crate::human_policy::vector_from_weights`]'s ranking vector the
+    /// root shortlist ranks candidates with. `seed` matches
+    /// [`build_bots`]'s own per-seat formula (`seed * 131 + i`) so a caller
+    /// building one seat by hand still draws from the identical stream a
+    /// generic seat at the same table position would have.
+    pub fn human_plan(
+        eval_weights: weighted::weights::Weights,
+        human_weights: Vec<f64>,
+        seed: i64,
+    ) -> Bot {
+        Bot::HumanPlan {
+            cfg: plan::PlanConfig { weights: eval_weights, ..plan::PlanConfig::default() },
+            stats: plan::Stats::default(),
+            counters: pending::Counters::default(),
+            rng: PyRandom::new(seed.into()),
+            human_weights,
         }
     }
 }

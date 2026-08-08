@@ -38,12 +38,34 @@
 //!     --a-weights human_weights.json --b-weights champion_3p.json \
 //!     --games 480 --players 3 --threads 6
 //! ```
+//!
+//! # `--a-search`/`--b-search`: real lookahead for a `human` side
+//!
+//! Plain `--a human` is [`tta::bots::human::HumanBot`]: a pure argmax over
+//! `human_policy::predict_top1`, no search at all -- see that module's own
+//! doc comment. `--a-search` (only legal when `--a human`) swaps that side
+//! for [`tta::bots::greedy::Bot::human_plan`] instead: `human_policy`'s
+//! ranking model narrows the root to a shortlist of human-plausible moves,
+//! then [`tta::bots::plan::pick`]'s ordinary beam -- scored by the OTHER
+//! side's own weight vector, since that is the one real gameplay evaluator
+//! already loaded for this match and `Seat` has no second vector slot to
+//! carry a dedicated one -- picks among what survives. This is a HYBRID,
+//! not a stronger human imitator; see `bots::human::choose_with_search`'s
+//! own doc comment for the honesty note. Plain `--a human` (no `--search`)
+//! is completely untouched by this flag, so `humanpaired`'s imitation-
+//! accuracy numbers never change meaning.
+//!
+//! ```text
+//! kindmatch --a human --a-search --b weighted \
+//!     --a-weights human_weights.json --b-weights champion_3p.json \
+//!     --games 480 --players 3 --threads 6
+//! ```
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use tta::bots::greedy::{build_bots, BotKind, Seat};
+use tta::bots::greedy::{build_bots, Bot, BotKind, Seat};
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
 use tta::game::{self, MOVE_CAP};
@@ -63,6 +85,11 @@ struct Args {
     weights_path: Option<String>,
     a_weights_path: Option<String>,
     b_weights_path: Option<String>,
+    /// See this file's module doc comment, "`--a-search`/`--b-search`".
+    /// Only legal when the matching side's kind is [`BotKind::Human`]
+    /// ([`parse_args`] rejects any other combination).
+    a_search: bool,
+    b_search: bool,
     games: usize,
     players: u8,
     seed: u64,
@@ -79,6 +106,8 @@ impl Default for Args {
             weights_path: None,
             a_weights_path: None,
             b_weights_path: None,
+            a_search: false,
+            b_search: false,
             games: 60,
             players: 3,
             seed: 0,
@@ -96,6 +125,8 @@ usage: kindmatch --a KIND --b KIND [options]
                      override below (default: built-in defaults)
   --a-weights PATH  weight file for the --a side only (default: --weights)
   --b-weights PATH  weight file for the --b side only (default: --weights)
+  --a-search        give --a real lookahead (only legal with --a human)
+  --b-search        give --b real lookahead (only legal with --b human)
   --games N       games; rounded down to a whole number of deals (default 60)
   --players N     2, 3 or 4 (default 3)
   --seed N        base deal seed (default 0)
@@ -142,6 +173,8 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--weights" => a.weights_path = Some(value(flag)?),
             "--a-weights" => a.a_weights_path = Some(value(flag)?),
             "--b-weights" => a.b_weights_path = Some(value(flag)?),
+            "--a-search" => a.a_search = true,
+            "--b-search" => a.b_search = true,
             "--games" => a.games = parse_num(&value(flag)?, flag)?,
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
@@ -158,6 +191,12 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.threads == 0 {
         return Err("--threads must be at least 1".to_string());
+    }
+    if a.a_search && a.a != BotKind::Human {
+        return Err("--a-search is only legal when --a is human".to_string());
+    }
+    if a.b_search && a.b != BotKind::Human {
+        return Err("--b-search is only legal when --b is human".to_string());
     }
     let per_deal = a.players as usize;
     a.games -= a.games % per_deal;
@@ -200,6 +239,27 @@ fn play_one(args: &Args, index: usize) -> f64 {
         })
         .collect();
     let mut bots = build_bots(&seats, seed as i64);
+    // `--a-search`/`--b-search`: swap the flagged seat's plain, no-lookahead
+    // `Bot::Human` for `Bot::human_plan` -- built by hand, not through
+    // `build_bots`, since that variant needs a SECOND vector `Seat` has no
+    // slot for (this file's module doc comment, "`--a-search`/`--b-search`").
+    // `build_bots` above is still called first and unconditionally, so every
+    // OTHER seat's construction and seeding is byte-for-byte what it always
+    // was; only the flagged index is overwritten afterward.
+    for (i, s) in seats.iter().enumerate() {
+        let search = if i == seat { args.a_search } else { args.b_search };
+        if !search {
+            continue;
+        }
+        // The evaluator `plan::pick`'s beam scores every node with: the
+        // OTHER side's own weight vector, since that is the one real
+        // gameplay evaluator already loaded for this match (see this file's
+        // module doc comment).
+        let eval_weights = if i == seat { args.b_weights } else { args.a_weights };
+        let human_weights = human_policy::vector_from_weights(&s.weights);
+        let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
+        bots[i] = Bot::human_plan(eval_weights, human_weights, player_seed);
+    }
 
     let mut state = game::new_game(args.players, seed);
     let outcome = game::play_game(&mut state, MOVE_CAP, |s, _legal| bots[s.current as usize].pick(s));
@@ -254,8 +314,8 @@ fn main() -> ExitCode {
 
     println!("games        {} ({} games/s)", args.games, args.games as f64 / elapsed);
     println!("players      {}", args.players);
-    println!("A (rotates)  {}", args.a.name());
-    println!("B (rest)     {}", args.b.name());
+    println!("A (rotates)  {}{}", args.a.name(), if args.a_search { "+search" } else { "" });
+    println!("B (rest)     {}{}", args.b.name(), if args.b_search { "+search" } else { "" });
     println!("elapsed      {elapsed:.1}s");
     println!();
     println!(
