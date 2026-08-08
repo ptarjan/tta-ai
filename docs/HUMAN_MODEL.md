@@ -1,15 +1,25 @@
-# Human-imitation dataset and baseline policy (Stage One only)
+# Human-imitation dataset, baseline policy, and `HumanBot` (Stage Two)
 
 Companion to [`REPLAY.md`](REPLAY.md) (the reconstruction machinery) and
 [`AGREEMENT.md`](AGREEMENT.md) (the move-agreement analysis this project
 reuses ~90% of the extraction machinery from). This doc covers a DIFFERENT
 goal from either: not "does the hand-tuned bot resemble a human" but "can we
 build a DATASET and a baseline MODEL that imitates STRONG human play," as the
-first stage of a sparring-partner project (see "Why," below). **This is
-Stage One only** — the dataset and an honest baseline policy with measured
-held-out accuracy. Nothing here is wired into the training league or the
-accept gate (`rust/src/bin/climb.rs::challenge`); that is a separate,
-unmade decision.
+first stage of a sparring-partner project (see "Why," below).
+
+**2026-08-07 update (Stage Two — a genuine playable bot, not just a
+measurement):** the corpus this dataset is drawn from has deepened
+substantially since Stage One (`REPLAY.md`'s reconstruction now reaches
+55.5%+ of decisions at Age II or later, not 0.6%), so the dataset was
+regenerated, the fitted weights are now PERSISTED to disk instead of thrown
+away after printing an accuracy number, and a real `HumanBot`
+(`rust/src/bots/human.rs`) loads that file and plays via
+[`predict_top1`](../rust/src/human_policy.rs) — selectable anywhere bot kinds
+are named by string (`BotKind::Human`, e.g. `selfplay --bots human`).
+Nothing here is wired into the training league or the accept gate
+(`rust/src/bin/climb.rs::challenge`); that is still a separate, unmade
+decision — a behaviour-cloned imitation model is not meant to become a
+league contender itself (see "Why," below).
 
 ## Why this exists (read before judging the accuracy number below)
 
@@ -58,39 +68,48 @@ imitate" by construction, not a materially different data DISTRIBUTION; this
 is stated here so nobody re-derives it expecting tier to be a strong
 confound.
 
-Full-corpus extraction actually run (2026-08-06):
+Full-corpus extraction re-run (2026-08-07, on the now-deeper replay corpus —
+supersedes the 2026-08-06 numbers below the line):
 
 | | count |
 |---|---|
 | games matching tier filter | 716 |
 | games processed (journal found) | 716 |
-| decisions recorded | 41,214 |
-| dataset file size | 234 MB (`human_dataset.tsv`, sparse encoding) |
+| decisions recorded | 155,507 |
+| dataset file size | ~1.4 GB (`human_dataset.tsv`, sparse encoding; NOT committed — regenerate it, see below) |
 
-**Verdict: strong-tier data is NOT thin.** 41,214 decisions across 716 games
-is MORE volume than `AGREEMENT.md`'s own 9,428-decision, all-tier, 150-game
-reference sample — the reference sample is simply a smaller subsample of a
-much larger available corpus, not evidence that strong-tier data runs out.
+**Verdict: strong-tier data is not just NOT thin, it is now substantially
+deeper per game too.** 155,507 decisions across the same 716 games (up from
+41,214) — the same replayer, same corpus, same tier filter, but
+`REPLAY.md`'s reconstruction now carries each game much further before
+hitting unrecoverable hidden information. This is the headline change this
+update makes: see "Late-game coverage" below.
 
-### Breakdown
+*2026-08-06 run (superseded, kept for the delta): 41,214 decisions, 234 MB.*
+
+### Breakdown (2026-08-07 run)
 
 By player count:
 
 | players | decisions |
 |---|---|
-| 2p | 25,318 |
-| 3p | 5,728 |
-| 4p | 10,168 |
+| 2p | 101,242 |
+| 3p | 21,722 |
+| 4p | 32,543 |
 
 By game age at the decision point (`GameState::age_civil`, structural, not a
 journal re-parse):
 
 | age | decisions | share |
 |---|---|---|
-| A | 4,351 | 10.6% |
-| I | 36,629 | 88.9% |
-| II | 234 | 0.6% |
-| III / IV | 0 | 0% |
+| A | 3,693 | 2.4% |
+| I | 65,072 | 41.8% |
+| II | 52,119 | 33.5% |
+| III | 30,378 | 19.5% |
+| IV | 4,245 | 2.7% |
+
+**55.7% of decisions are now Age II or later** (up from 0.6% in the
+2026-08-06 run) — see "Late-game coverage," below, for what changed.
 
 By move category (same bucket definitions as `AGREEMENT.md`'s `Category`,
 restated in `human_policy::categorize` — see that function's own doc comment
@@ -102,40 +121,40 @@ still lands in `pact` correctly):
 
 | category | decisions |
 |---|---|
-| take_card | 12,595 |
-| end_turn | 7,642 |
-| leader_or_wonder_step | 5,203 |
-| build | 4,259 |
-| other | 4,391 |
-| increase_population | 3,790 |
-| political_action | 2,649 |
-| tactics | 516 |
-| bid | 69 |
-| pact | 54 |
-| aggression_or_war | 46 |
+| take_card | 39,566 |
+| build | 30,137 |
+| end_turn | 22,726 |
+| other | 20,470 |
+| leader_or_wonder_step | 12,538 |
+| increase_population | 10,760 |
+| political_action | 10,570 |
+| bid | 5,063 |
+| tactics | 2,709 |
+| aggression_or_war | 753 |
+| pact | 215 |
 
-### The late-game sampling bias — quantified
+### Late-game coverage — the gap the 2026-08-06 run flagged is now mostly closed
 
-`replay.rs`'s reconstruction stops on genuinely unrecoverable hidden
-information (mostly an interleaving/action-budget edge case now, per
-`REPLAY.md`'s fourth pass) well before most real games finish. Two ways to
-see exactly how much of a real game this captures, both measured on the
-716-game strong-tier run:
+The 2026-08-06 run above found 0% of recorded decisions at Age III/IV and
+warned that "this dataset is an early-game dataset ... its accuracy numbers
+must be read as 'does this imitate early-game human play,' not 'does this
+imitate human play.'" On the SAME 716 games with the SAME replayer, that is
+no longer true:
 
-1. **By age**: 99.4% of recorded decisions are Age A or Age I; Age II is
-   0.6%; Age III/IV — where a 2015-base-game score is actually decided — is
-   **0%**. None of this dataset's accuracy numbers can speak to late-game
-   play at all.
+1. **By age**: Age II is now 33.5% of decisions, Age III 19.5%, Age IV 2.7%
+   — **55.7% of decisions are Age II or later**, up from 0.6%. Age III/IV,
+   where a 2015-base-game score is actually decided, went from entirely
+   absent to 22.2% of the dataset.
 2. **By round, against `index.tsv`'s own ground truth**: the 716 real,
-   COMPLETED games this sample draws from averaged **19.3 rounds**
-   (`GameMeta::rounds`). The highest round any recorded decision in the SAME
-   game reached averaged **5.1 rounds** — **26.4% of the true game length**.
+   completed games averaged **19.3 rounds** (`GameMeta::rounds`, unchanged).
+   The highest round any recorded decision in the same game reached now
+   averages **13.8 rounds — 71.5% of the true game length** (up from 26.4%).
 
-Both point the same way: this dataset is an early-game (and to a much
-smaller extent, early-mid-game) dataset. A model trained on it has no
-evidence about late-game play — colonization, endgame scoring pushes, or
-late wars — and its accuracy numbers below must be read as "does this
-imitate early-game human play," not "does this imitate human play."
+This dataset still does not capture entire games end to end (28.5% of the
+average game's length is still unreached), but it is no longer fair to call
+it an early-game-only dataset — the paired comparison below now has real
+Age II/III/IV coverage to report on, which is the whole point of this
+update.
 
 ### Discard taint — quantified, not silently dropped
 
@@ -146,14 +165,18 @@ sampled discards were ever uniquely "Solved," all were "Chosen" among
 several valid candidates). Every decision downstream of one has a partly
 fictional simulated military hand.
 
-**13,404 of 41,214 decisions (32.5%) are discard-tainted**
-(`ExtractedDecision::discard_tainted`, carried straight off
-`replay_common::Decision::after_arbitrary_discard`) — close to
-`AGREEMENT.md`'s own 29.5% on its all-tier sample, so tier filtering does not
-materially change this. Every row in `human_dataset.tsv` carries this flag
-so a consumer can filter or weight it; this project makes no judgement about
-which is "more correct" to train on. The baseline model below is trained
-and evaluated on BOTH (with-and-without-taint accuracy reported separately).
+**122,478 of 155,507 decisions (78.8%) are discard-tainted** on the
+2026-08-07 run (`ExtractedDecision::discard_tainted`, carried straight off
+`replay_common::Decision::after_arbitrary_discard`) — much higher than the
+2026-08-06 run's 32.5% (itself close to `AGREEMENT.md`'s 29.5% on its
+all-tier sample). This tracks the late-game coverage change directly: a
+discard taint, once incurred, propagates forward to every later decision in
+the same game (a "partly fictional simulated military hand" stays fictional
+for the rest of the game), so a dataset that now reaches deep into Age
+II–IV accumulates far more tainted decisions per game than one that mostly
+stopped in Age A/I. Every row in `human_dataset.tsv` carries this flag so a
+consumer can filter or weight it; this project makes no judgement about
+which is "more correct" to train on.
 
 ### Legality audit: no private information read
 
@@ -191,12 +214,24 @@ also reuses `WeightedBot::rank_moves`'s own `determinize_current_events`
 guard, so a `Move::PrepareEvent` candidate is never scored against the TRUE
 top of an unpeeked event pile either.
 
+**Extended (2026-08-07) to the PLAY-time path**: `bots::human::HumanBot::choose`
+(`rust/src/bots/human.rs`) is the only new code this update adds that reads
+game state at all, and it calls `human_policy::candidate_features` directly
+— the exact same function just audited above, with no new feature-reading
+code of its own. `HumanBot` therefore inherits this audit verbatim: it reads
+no rival hand contents and no unshuffled deck order at play time, same as
+the dataset-extraction path. `human_policy::features_to_dense` (the
+sparse-to-play-time conversion `HumanBot` calls) reads coordinates off an
+already-computed `Features` value; it opens no new path to `GameState` at
+all.
+
 ## Deliverable 2: the baseline policy model
 
 ### What it is, and what it deliberately is not
 
-A single [`WeightKey`]-indexed linear vector (139-wide, the same
-representation `WeightedBot`'s own champion weights use), fit by full-batch
+A single [`WeightKey`]-indexed linear vector (140-wide as of this update —
+`WeightKey::ALL.len()`, the same representation `WeightedBot`'s own champion
+weights use), fit by full-batch
 gradient descent on a multinomial-logistic ("softmax over the legal-move
 list") loss — the standard conditional-logit model for "which of these
 labelled alternatives did the agent pick." **Not a deep net.** The brief for
@@ -219,41 +254,121 @@ document already had to establish). A future pass could extend the score to
 the full `evaluate()` shape if this baseline's accuracy justifies the extra
 complexity.
 
-### Regeneration
+### Regeneration — now TWO steps, because the weights are persisted
 
 ```text
-cargo run --profile difftest --bin humantrain -- human_dataset.tsv
+cargo run --profile difftest --bin humandata -- \
+    ../sources/bgo/index.tsv /tmp/bgo-journals/journals Warlord \
+    > ../human_dataset.tsv 2> ../human_dataset_report.txt
+cargo run --profile difftest --bin humantrain -- ../human_dataset.tsv ../analysis/frozen/human_weights.json
 ```
 
-Methodology: split BY GAME, never by decision (`human_policy::is_held_out`,
-a deterministic FNV-1a hash of the game id, ~20% held out) — positions from
-the same game are correlated (the same evolving board), so a decision-level
-split would leak the held-out evaluation and produce a meaningless number.
-A per-coordinate [`Normalizer`] is fit on the TRAIN split only and applied
-to both. 300 epochs, learning rate 0.3, L2 = 1e-4 — untuned beyond a single
-sanity pass (a real hyperparameter search was out of scope for "keep it
-simple"); the toy-data and normalizer unit tests in `human_policy.rs` are
-what actually pin the optimizer's correctness, not this run's specific
-numbers.
+`humantrain` used to print an accuracy number and throw the fitted vector
+away (GAP 1 of this update). It now writes the fitted vector to its second
+argument, in the SAME `{"name": value}` JSON convention `bots::weighted::
+eval::weights_json` uses for a champion — but through its OWN read/write
+pair, `human_policy::{save_weights,load_weights,weights_to_text,
+parse_weights_text}`, deliberately NOT `bots::weighted::eval::
+{save_weights,parse_weights}`: the champion loader applies
+`dominance_repair`, a set of gameplay-EVALUATOR monotonicity invariants a
+vector fit purely to imitate human move CHOICES was never trained to
+satisfy, and routing through it would silently rewrite whichever fitted
+coordinates violate those invariants (see `human_policy::weights_to_text`'s
+doc comment; the round-trip unit test in `human_policy.rs` pins exact
+equality specifically because the champion loader would NOT preserve it).
 
-### Result: 48.8% held-out top-1 accuracy — a PAIRED comparison against `WeightedBot`
+The saved vector is also DENORMALIZED before writing
+(`human_policy::denormalize_for_ranking`): `train` fits on features a
+[`Normalizer`] has rescaled per-coordinate, but `HumanBot` scores raw,
+un-normalized `Features` at play time (there is no train-split statistic to
+normalize against live), so the persisted vector folds each coordinate's
+`1/std` scale in before saving. The additive half of normalization
+(`-mean/std`) is a per-decision CONSTANT that cannot change an argmax over
+one decision's candidates, so it is dropped rather than persisted — exact
+for ranking, not for reading the raw score.
 
-**"Paired" means this**: `WeightedBot::rank_moves` (the real, currently-fielded
-champion evaluator — `experiments/rust_champion_{2,3,4}p.json`, the same
-weights the training league plays with) was scored, via `bin/agreement.rs`
-unmodified, on the EXACT SAME 8,548 held-out decisions from the EXACT SAME
-152 held-out games this baseline was evaluated on (`human_policy::
-is_held_out`'s game-id split) — not `AGREEMENT.md`'s own headline number,
-which comes from a different 150-game, all-tier sample. Both models see the
-identical decision set, decision for decision; the two counts below are
-directly comparable, and this is a stronger check than the doc originally
-reported (2026-08-06, see the retraction note under "Per move category"
-below for the mistake this caught).
+Methodology unchanged from Stage One: split BY GAME, never by decision
+(`human_policy::is_held_out`, a deterministic FNV-1a hash of the game id,
+~20% held out) — positions from the same game are correlated (the same
+evolving board), so a decision-level split would leak the held-out
+evaluation. A per-coordinate [`Normalizer`] is fit on the TRAIN split only
+and applied to both. 300 epochs, learning rate 0.3, L2 = 1e-4 — untuned
+beyond a single sanity pass (a real hyperparameter search remains out of
+scope); the toy-data and normalizer unit tests in `human_policy.rs` are what
+actually pin the optimizer's correctness, not any specific run's numbers.
+
+The committed snapshot this update ships is `analysis/frozen/
+human_weights.json` (fit on the 2026-08-07, 155,507-decision run below) —
+`HumanBot` needs no journal corpus or dataset file to play with it, only
+this one committed file.
+
+### Result: 39.8% held-out top-1 — a PAIRED comparison against `WeightedBot`, now WITH an age breakdown
+
+**2026-08-07 re-run, on the deeper corpus (155,507 decisions, 122,578 train /
+32,929 held-out across 564/152 games)**: held-out top-1 accuracy is now
+**13,116/32,929 = 39.8%**, down from the 2026-08-06 run's 48.8% — expected,
+not a regression: the earlier number was measured on a dataset that was
+88.9% Age I take/build/end-turn decisions (the easiest, most habitual moves
+to imitate); this run is 55.7% Age II or later, where human choices are
+harder to predict and the model has less signal, so a lower raw number on a
+genuinely harder, deeper distribution is the honest result of fixing GAP 3,
+not evidence the model got worse.
+
+**"Paired" means this**: `WeightedBot::rank_moves`, via a NEW small binary
+(`bin/humanpaired.rs`) built specifically so this comparison can never
+regress into an unpaired one again, was scored on the EXACT SAME 32,929
+held-out decisions from the EXACT SAME 152 held-out games this baseline was
+evaluated on (`human_policy::is_held_out`'s game-id split, re-derived
+straight from the journal corpus — `humanpaired` never reads
+`human_dataset.tsv`). Both models see the identical decision set, decision
+for decision.
+
+**Caveat this run could not avoid**: this checkout has no LIVE league
+champion committed anywhere (`experiments/rust_champion_*.json` is
+gitignored, regenerated-only trainer output, absent in a fresh clone), so
+`WeightedBot` here is scored with the most recent FROZEN, committed
+reference (`analysis/frozen/gauntlet/champion_{2,3,4}p_gen{1454,1384,448}
+_140key_2026-08-06.json`), not necessarily today's live league champion. The
+2026-08-06 run below used the then-live champion. Read the numbers as "a
+recent, real `WeightedBot` snapshot," not "the exact bot playing right now."
+
+| slice | HumanBot k/n | HumanBot rate | `WeightedBot` (frozen), PAIRED k/n | paired rate |
+|---|---|---|---|---|
+| **overall** | **13,116/32,929** | **39.8%** | 7,039/32,929 | 21.4% |
+| age A | 231/768 | 30.1% | 382/768 | **49.7%** |
+| age I | 5,944/13,678 | 43.5% | 3,332/13,678 | 24.4% |
+| age II | 4,322/11,367 | 38.0% | 2,121/11,367 | 18.7% |
+| age III | 2,306/6,302 | 36.6% | 1,037/6,302 | 16.5% |
+| age IV | 313/814 | 38.5% | 167/814 | 20.5% |
+
+**This is the new finding the deeper corpus makes possible.** HumanBot beats
+paired `WeightedBot` at imitating the human's actual choice in every age
+EXCEPT the opening (Age A), where `WeightedBot` is a noticeably BETTER match
+to human play (49.7% vs 30.1%) — plausibly because Age A's early moves
+(build up civil actions, first few takes) are close to a fixed, near-optimal
+opening sequence a 1-ply hand-tuned evaluator already finds, while
+HumanBot's advantage — modelling the "when to stop building and do
+something with deferred payoff" decisions `AGREEMENT.md` already flagged as
+`WeightedBot`'s weak spot — has more room to matter once the game leaves the
+opening. Age II/III/IV — entirely unmeasurable before this update — now show
+HumanBot solidly ahead (36–38% vs 16–21%), the first real evidence this
+baseline says anything about MID-to-LATE-game human imitation at all.
+
+`bin/humandata.rs`'s defensive "human_move not found in legal_moves" skip
+branch fired 60 times out of 32,989 held-out decisions on this deeper run
+(0.2%, all inside `humanpaired`'s independent re-derivation) — unlike the
+2026-08-06 run, where it never fired; a small number of decisions in the
+now-much-longer reconstructed games hit an edge case `REPLAY.md`'s
+reconstruction cannot resolve. Negligible relative to n, not silently
+dropped.
+
+**2026-08-06 run (superseded by the above; kept for the delta and because
+its own PAIRED methodology point still stands)**:
 
 | model | k/n | rate |
 |---|---|---|
-| **this baseline, held-out** | **4,172/8,548** | **48.8%** |
-| `WeightedBot`, PAIRED on the identical 8,548 held-out decisions | 2,491/8,548 | 29.1% |
+| this baseline, held-out | 4,172/8,548 | 48.8% |
+| `WeightedBot` (then-live champion), PAIRED on the identical 8,548 held-out decisions | 2,491/8,548 | 29.1% |
 | (`AGREEMENT.md`'s own headline, different 150-game all-tier sample — kept for context only, NOT paired) | 2,493/9,428 | 26.4% (95% CI 25.6–27.3%) |
 
 The reference bot is optimized to WIN games; this baseline is optimized to
@@ -262,16 +377,21 @@ imitation-accuracy number is exactly what training FOR that objective should
 produce — it is not evidence the baseline is a stronger PLAYER (see "Why
 this exists" above).
 
-`bin/humandata.rs`'s defensive "human_move not found in legal_moves" skip
-branch never fired on the full 716-game extraction run — every recorded
-decision's `human_move` was confirmed present in its own `legal_moves` list,
-so no decisions were silently dropped for that reason.
-
 **Verdict: this baseline models human play more usefully than the reference
-bot does, on this metric.** It beats `WeightedBot`, PAIRED on the identical
-held-out decisions, by a wide, credible margin (48.8% vs 29.1%) — the
+bot does, on this metric, outside the opening.** It beats `WeightedBot`,
+PAIRED on the identical held-out decisions, by a wide, credible margin in
+every age but Age A — the
 headline holds up, and slightly more cleanly than the original unpaired
 26.4% comparison suggested.
+
+### Per-slice breakdowns below are from the 2026-08-06 run — not re-verified paired on the 2026-08-07 corpus
+
+`humantrain`'s own report on the 2026-08-07 run gives HumanBot's (unpaired)
+accuracy per taint/players/tier/category — see its stdout — but a fresh
+PAIRED-vs-`WeightedBot` re-run of the tables below (only age was re-run
+paired, above) was out of scope for this pass. Read everything below as
+historical context from the shallower 2026-08-06 corpus, not a current
+finding.
 
 ### Per discard-taint
 
@@ -383,19 +503,38 @@ neither this baseline nor the reference bot's behaviour on them can be
 distinguished from noise on this corpus, not that either one is clearly
 better or worse.
 
-## Verdict: worth continuing to Stage Two, with two named caveats
+## Deliverable 3: `HumanBot` — playable, not just measured
 
-**Yes, on balance** — the data volume is not the constraint many similar
-projects hit (716 games / 41,214 decisions, not thin), the legality audit is
-clean, and the baseline beats the reference by a wide, credible, mostly
-well-explained margin on the categories that matter for general play.
+`rust/src/bots/human.rs`. `BotKind::Human` (`rust/src/bots/greedy.rs`),
+selectable anywhere a bot kind is named by string, e.g.:
 
-Two caveats a Stage Two decision must weigh, both already fully quantified
-above, neither hidden:
+```text
+cargo run --profile difftest --bin selfplay -- \
+    --games 20 --players 2 --bots human \
+    --weights ../analysis/frozen/human_weights.json
+```
 
-1. **This is an early-game model.** 99.4% of the data is Age A/I; Age III/IV
-   (where a base-game score is decided) is entirely absent. Nothing here
-   licenses a claim about late-game imitation.
+(`--weights` is loaded with `human_policy::load_weights`, not the champion
+loader, automatically, whenever `--bots` is exactly `human` — see
+`Seat::weights`'s doc comment in `bots/greedy.rs`.) `HumanBot::choose` calls
+`human_policy::candidate_features` + `predict_top1`, no new logic of its
+own; see the legality-audit extension above.
+
+## Verdict (2026-08-07): Stage Two done — `HumanBot` exists, plays, and beats `WeightedBot` paired outside the opening
+
+**Superseded verdict, kept below for history**: the original Stage One
+verdict's caveat 1 ("this is an early-game model, 99.4% of the data is Age
+A/I, Age III/IV is entirely absent") is **no longer true** — see "Late-game
+coverage," above. This update's own corpus is 55.7% Age II+, and the paired
+comparison now has real Age II/III/IV numbers (HumanBot ahead in all of
+them; `WeightedBot` still ahead in Age A — see "Result," above).
+
+Caveat 2 below is untouched — its numbers come from the 2026-08-06 corpus
+and were not re-verified paired on the deeper one this update produced (see
+"Per-slice breakdowns," above):
+
+1. ~~**This is an early-game model.**~~ Resolved 2026-08-07 — see "Late-game
+   coverage" and "Result," above.
 2. **`build`, `tactics`, and `pact` are genuinely worse than `WeightedBot`,
    paired on identical held-out decisions** (24.9% vs 34.4%, n=822; 4.0% vs
    14.4%, n=125; 0.0% vs 15.4%, n=7–13 — see "Per move category," above, and

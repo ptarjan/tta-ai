@@ -50,12 +50,14 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::bots::greedy::{BotKind, GreedyBot, RandomBot};
+use crate::bots::human::HumanBot;
 use crate::bots::pending;
 use crate::bots::plan;
 use crate::bots::quiescent;
 use crate::bots::weighted;
 use crate::bots::weighted::eval::load_weights;
 use crate::bots::weighted::weights::Weights;
+use crate::human_policy;
 use crate::legal;
 use crate::moves::Move;
 use crate::rng::PyRandom;
@@ -183,7 +185,8 @@ impl Knob {
             | (Kind::Classical(BotKind::Science), _)
             | (Kind::Classical(BotKind::Wonder), _)
             | (Kind::Classical(BotKind::Infra), _)
-            | (Kind::Classical(BotKind::Tempo), _) => false,
+            | (Kind::Classical(BotKind::Tempo), _)
+            | (Kind::Classical(BotKind::Human), _) => false,
             // The 1-ply neural bot: determinization and the end-turn bias are
             // its only two knobs (`NeuralBotConfig`'s only two fields besides
             // `allow_resign`, which no caller has ever varied).
@@ -321,9 +324,21 @@ impl Spec {
         let path = self.path.as_deref();
         match self.kind {
             Kind::Classical(kind) => {
-                let weights = match path {
-                    Some(p) => load_weights(p)?,
-                    None => Weights::defaults(),
+                // `BotKind::Human` reads its own dedicated loader
+                // (`human_policy::load_weights`), never the champion
+                // `load_weights` above -- the champion path applies
+                // `dominance_repair`, a gameplay-evaluator invariant a
+                // human-imitation fit is not constrained to satisfy (see
+                // `bots::human`'s and `human_policy::weights_to_text`'s doc
+                // comments). A `human` spec with no `:PATH` falls back to
+                // `Weights::defaults()` like every other classical kind here
+                // for uniformity, but that fallback is the hand-tuned
+                // champion default, not a meaningful human-imitation
+                // vector -- a `human` spec should always carry a path.
+                let weights = match (kind, path) {
+                    (BotKind::Human, Some(p)) => human_policy::load_weights(p)?,
+                    (_, Some(p)) => load_weights(p)?,
+                    (_, None) => Weights::defaults(),
                 };
                 Ok(Contender::Classical {
                     kind,
@@ -496,6 +511,10 @@ fn build_classical(
         | BotKind::Tempo => ClassicalPlayer::Variant(crate::bots::variants::VariantBot::new(
             kind.archetype().expect("BotKind::archetype covers every variant BotKind"),
         )),
+        // No search knob applies to `human` either (`Knob::applies_to`'s
+        // classical catch-all): `width`/`determinize`/`war` are ignored here
+        // exactly as they are for `Weighted` above.
+        BotKind::Human => ClassicalPlayer::Human(HumanBot::new(&weights)),
     }
 }
 
@@ -513,6 +532,7 @@ pub enum ClassicalPlayer {
     Plan { cfg: plan::PlanConfig, stats: plan::Stats, counters: pending::Counters, rng: PyRandom },
     Book(crate::bots::book::BookBot),
     Variant(crate::bots::variants::VariantBot),
+    Human(HumanBot),
 }
 
 /// The positions a search actually PRICED at one decision, in whatever form
@@ -587,6 +607,7 @@ impl Player<'_> {
                 }
                 ClassicalPlayer::Book(b) => b.choose(state, moves),
                 ClassicalPlayer::Variant(b) => b.choose(state, moves),
+                ClassicalPlayer::Human(b) => b.choose(state, moves),
             },
             Player::Neural { net, cfg, stats, rng } => {
                 neural_bot::pick(cfg, net, stats, rng, state, moves)
@@ -626,6 +647,7 @@ impl Player<'_> {
             | Player::Classical(ClassicalPlayer::Quiescent { .. })
             | Player::Classical(ClassicalPlayer::Book(_))
             | Player::Classical(ClassicalPlayer::Variant(_))
+            | Player::Classical(ClassicalPlayer::Human(_))
             | Player::Neural { .. } => (self.pick_from(state, moves), Leaves::NoSearch),
         }
     }
@@ -651,6 +673,7 @@ impl Player<'_> {
                     | Player::Classical(ClassicalPlayer::Quiescent { .. })
                     | Player::Classical(ClassicalPlayer::Book(_))
                     | Player::Classical(ClassicalPlayer::Variant(_))
+                    | Player::Classical(ClassicalPlayer::Human(_))
                     | Player::Neural { .. } => false,
                 };
                 let mut wars = 0u64;

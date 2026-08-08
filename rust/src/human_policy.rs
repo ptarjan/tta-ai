@@ -60,7 +60,7 @@ use crate::apply;
 use crate::bots::plan;
 use crate::bots::weighted::features::{self, Features};
 use crate::bots::weighted::rivals;
-use crate::bots::weighted::weights::WeightKey;
+use crate::bots::weighted::weights::{WeightKey, Weights};
 use crate::moves::Move;
 use crate::state::GameState;
 
@@ -212,6 +212,17 @@ pub struct ExtractedDecision {
 /// state actually triggers are set), so this roughly halves file size versus
 /// a dense CSV row for free, with no loss (a missing index reads back as
 /// 0.0, [`Features`]'s own documented default).
+/// The dense counterpart of [`features_to_sparse`] -- every coordinate, in
+/// [`WeightKey::ALL`] order, with no zero-skipping. `crate::bots::human::
+/// HumanBot` uses this at PLAY time, one candidate at a time, not the sparse
+/// text encoding above -- there is no file to keep small on that path, only
+/// a `Vec<f64>` [`predict_top1`] can score directly, so the sparse-vs-dense
+/// split is purely "which representation does the consumer need," not two
+/// competing encodings of the same thing.
+pub fn features_to_dense(f: &Features) -> Vec<f64> {
+    WeightKey::ALL.iter().map(|&k| f.get(k)).collect()
+}
+
 fn features_to_sparse(f: &Features) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (i, &k) in WeightKey::ALL.iter().enumerate() {
@@ -454,6 +465,135 @@ pub fn predict_top1(w: &[f64], candidates: &[Vec<f64>]) -> usize {
     best_i
 }
 
+/// Convert a vector [`train`] fit on NORMALIZED features (every candidate
+/// having gone through `norm.apply`) into an equivalent vector that ranks
+/// RAW, un-normalized features the same way [`predict_top1`] would have
+/// ranked the normalized ones -- what [`crate::bots::human::HumanBot`] needs,
+/// since [`candidate_features`] hands it raw [`Features`], never normalized
+/// ones (there is no train-split statistic to normalize against at play
+/// time, and there must not be one: normalizing against a live game's own
+/// candidates would be a second, ad hoc feature scale that was never fit
+/// against anything).
+///
+/// Only valid for RANKING (argmax over one decision's candidates), not for
+/// reading the score's absolute value: distributing the dot product,
+/// `w . x_norm = w . ((x - mean) / std) = sum_k (w_k / std_k) * x_k -
+/// sum_k (w_k * mean_k / std_k)`, splits it into a per-coordinate
+/// COEFFICIENT (`w_k / std_k`, computed here) and a per-decision additive
+/// CONSTANT (the second sum) that is IDENTICAL across every candidate of the
+/// same decision (it depends only on `w`/`mean`/`std`, never on the
+/// candidate `x`). A constant added to every candidate's score cannot move
+/// the argmax, so dropping it here is exact for ranking and would be wrong
+/// for anything that reads the score itself.
+pub fn denormalize_for_ranking(w: &[f64], norm: &Normalizer) -> Vec<f64> {
+    w.iter().zip(norm.std.iter()).map(|(&wk, &sk)| wk / sk).collect()
+}
+
+// ------------------------------------------------- persisted play weights
+
+/// Pack a [`train`]-fitted vector (dim [`feature_dim`], in [`WeightKey::ALL`]
+/// order) into a [`Weights`] -- the same `WeightKey`-indexed container
+/// `WeightedBot`'s champion vector already uses, reused here rather than
+/// inventing a second array-indexed-by-enum shape. Every key is written
+/// (never left at [`Weights::defaults`]'s hand-tuned champion default), so
+/// the result depends only on `v`.
+///
+/// # Errors
+/// If `v.len() != feature_dim()`.
+pub fn vector_to_weights(v: &[f64]) -> Result<Weights, String> {
+    if v.len() != WeightKey::ALL.len() {
+        return Err(format!("expected {} weights, got {}", WeightKey::ALL.len(), v.len()));
+    }
+    let mut w = Weights::default();
+    for (i, &k) in WeightKey::ALL.iter().enumerate() {
+        w.set(k, v[i]);
+    }
+    Ok(w)
+}
+
+/// The inverse of [`vector_to_weights`] -- reads every [`WeightKey`] back out
+/// in [`WeightKey::ALL`] order, the order [`train`]/[`predict_top1`] expect.
+pub fn vector_from_weights(w: &Weights) -> Vec<f64> {
+    WeightKey::ALL.iter().map(|&k| w.get(k)).collect()
+}
+
+/// Render a fitted [`Weights`] vector as a sorted `{"name": value}` JSON
+/// object -- the same dependency-free-JSON, sorted-key, one-space-indent
+/// convention `bots::weighted::eval::weights_json` already writes a champion
+/// vector in (reused, not reinvented), but WITHOUT that function's `"gen"`/
+/// `"weights"`-wrapper bookkeeping (this vector has none) and, critically,
+/// without ever routing through `bots::weighted::eval::parse_weights`'s
+/// `dominance_repair` on the way back: that repair enforces gameplay-EVALUATOR
+/// monotonicity invariants (`hi >= lo`, "a benefit weight is never negative",
+/// early/late phase pairs net non-negative) that a vector fit purely to
+/// imitate which move a human PICKED was never trained to satisfy and has no
+/// reason to. Routing this file through `parse_weights` would silently
+/// rewrite whichever fitted coordinates violate those invariants -- exactly
+/// the round-trip break [`parse_weights_text`] exists to avoid (see
+/// `a_weights_vector_round_trips_through_the_human_weights_text_encoding`
+/// below).
+pub fn weights_to_text(w: &Weights) -> String {
+    let mut names: Vec<&'static str> = WeightKey::ALL.iter().map(|k| k.name()).collect();
+    names.sort_unstable();
+    let mut out = String::from("{\n");
+    for (i, name) in names.iter().enumerate() {
+        let key = WeightKey::by_name(name).expect("name came from WeightKey::ALL");
+        let sep = if i + 1 == names.len() { "\n" } else { ",\n" };
+        out.push_str(&format!("  \"{name}\": {}{sep}", w.get(key)));
+    }
+    out.push('}');
+    out
+}
+
+/// Parse [`weights_to_text`]'s output back into a [`Weights`] -- see that
+/// function's doc comment for why this is a dedicated read path rather than
+/// `bots::weighted::eval::parse_weights`. A key absent from the JSON reads
+/// back as 0.0 (matching [`train`]'s own zero-initialized starting vector --
+/// a coordinate the fit never moved really is zero here, not
+/// `WeightKey::default_weight`'s unrelated hand-tuned champion default). An
+/// unknown key name is a hard error, same as `parse_weights`.
+pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
+    let doc = crate::fixtures::parse_json(text).map_err(|e| format!("{e:?}"))?;
+    let fields = match &doc {
+        crate::fixtures::Json::Obj(fields) => fields,
+        _ => return Err("human weights JSON is not an object".to_string()),
+    };
+    let mut w = Weights::default();
+    for &k in WeightKey::ALL {
+        w.set(k, 0.0);
+    }
+    for (name, value) in fields {
+        let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
+        let v = value.as_f64().ok_or_else(|| format!("weight {name:?} is not a number"))?;
+        if !v.is_finite() {
+            return Err(format!("weight {name:?} is not finite"));
+        }
+        w.set(key, v);
+    }
+    Ok(w)
+}
+
+/// Read a persisted human-imitation weight file from disk. See
+/// [`weights_to_text`] for why this is not `bots::weighted::eval::
+/// load_weights`.
+pub fn load_weights(path: &std::path::Path) -> Result<Weights, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_weights_text(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Write a persisted human-imitation weight file where [`load_weights`] will
+/// read it back. `humantrain`'s only I/O side effect, and the fix for GAP 1
+/// (`docs/HUMAN_MODEL.md`): the fitted vector used to be printed as an
+/// accuracy number and thrown away.
+pub fn save_weights(path: &std::path::Path, w: &Weights) -> Result<(), String> {
+    for &k in WeightKey::ALL {
+        if !w.get(k).is_finite() {
+            return Err(format!("weight {:?} is not finite", k.name()));
+        }
+    }
+    std::fs::write(path, weights_to_text(w)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +758,106 @@ mod tests {
         }
         for k in 0..dim {
             assert!((total[k] / n).abs() < 1e-9, "coord {k} mean should be ~0 after normalizing, got {}", total[k] / n);
+        }
+    }
+
+    /// [`denormalize_for_ranking`]'s whole point: scoring RAW candidates with
+    /// the denormalized vector must rank them identically to scoring
+    /// NORMALIZED candidates with the original vector -- the property that
+    /// makes it safe for `HumanBot` to skip normalizing at play time.
+    #[test]
+    fn denormalize_for_ranking_preserves_the_argmax_over_raw_candidates() {
+        let dim = 2;
+        let rows = vec![ParsedDecision {
+            game_id: "g0".to_string(),
+            tier: "Emperor".to_string(),
+            players: 2,
+            age: "A".to_string(),
+            round: 1,
+            lineno: 0,
+            category: "build".to_string(),
+            discard_tainted: false,
+            chosen_idx: 0,
+            candidates: vec![vec![10.0, 100.0], vec![20.0, 100.0], vec![5.0, 100.0]],
+        }];
+        let norm = Normalizer::fit(&rows, dim);
+        let w = vec![0.3, -0.2]; // an arbitrary fitted vector, in NORMALIZED space
+        let normalized_candidates: Vec<Vec<f64>> =
+            rows[0].candidates.iter().map(|c| norm.apply(c)).collect();
+        let expect_best = predict_top1(&w, &normalized_candidates);
+
+        let raw_w = denormalize_for_ranking(&w, &norm);
+        let got_best = predict_top1(&raw_w, &rows[0].candidates);
+        assert_eq!(got_best, expect_best);
+    }
+
+    /// A fitted vector round-trips through [`weights_to_text`]/
+    /// [`parse_weights_text`] exactly -- the property [`vector_to_weights`]'s
+    /// doc comment claims, and the property that would break if this module
+    /// ever routed through `bots::weighted::eval::parse_weights`'s
+    /// `dominance_repair` instead (deliberately not exercised here for that
+    /// reason).
+    #[test]
+    fn a_weights_vector_round_trips_through_the_human_weights_text_encoding() {
+        let dim = feature_dim();
+        // A handful of deliberately "not dominance-clean" values -- some
+        // negative where a champion vector would never be, so this test
+        // would catch a regression to the champion loader immediately.
+        let v: Vec<f64> = (0..dim).map(|i| (i as f64) * 0.37 - 12.5).collect();
+        let w = vector_to_weights(&v).unwrap();
+        let text = weights_to_text(&w);
+        let parsed = parse_weights_text(&text).unwrap();
+        assert_eq!(vector_from_weights(&parsed), v);
+    }
+
+    /// [`vector_to_weights`] rejects a vector of the wrong width rather than
+    /// silently truncating or padding it -- a caller that mismatches
+    /// `feature_dim()` has a real bug worth failing loudly on.
+    #[test]
+    fn vector_to_weights_rejects_the_wrong_width() {
+        assert!(vector_to_weights(&[0.0; 3]).is_err());
+    }
+
+    /// [`parse_weights_text`] rejects a key name it does not recognise --
+    /// the same "unknown key is a hard error" contract `parse_weights`
+    /// documents, restated here since this is a separate parser.
+    #[test]
+    fn parse_weights_text_rejects_an_unknown_key() {
+        assert!(parse_weights_text(r#"{"not_a_real_weight": 1.0}"#).is_err());
+    }
+
+    /// [`load_weights`]/[`save_weights`] round-trip through an actual file on
+    /// disk, not just the in-memory text functions -- the path `humantrain`
+    /// and `HumanBot` actually use.
+    #[test]
+    fn save_weights_then_load_weights_round_trips_through_a_real_file() {
+        let dim = feature_dim();
+        let v: Vec<f64> = (0..dim).map(|i| (i as f64 - 5.0) * 0.11).collect();
+        let w = vector_to_weights(&v).unwrap();
+        let dir = std::env::temp_dir().join(format!("human_policy_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("human_weights_roundtrip.json");
+        save_weights(&path, &w).unwrap();
+        let loaded = load_weights(&path).unwrap();
+        assert_eq!(vector_from_weights(&loaded), v);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// [`features_to_dense`] reads every coordinate in [`WeightKey::ALL`]
+    /// order with no zero-skipping -- the exact contract [`HumanBot`]
+    /// (`crate::bots::human`) depends on to hand [`predict_top1`] a `Vec<f64>`
+    /// it can score without going through the sparse text encoding at all.
+    #[test]
+    fn features_to_dense_reads_every_coordinate_in_weight_key_order() {
+        use crate::game as G;
+        let state = G::new_game(2, 11);
+        let cands = candidate_features(&state, 0, crate::legal::legal_moves(&state).as_slice());
+        for f in &cands {
+            let dense = features_to_dense(f);
+            assert_eq!(dense.len(), feature_dim());
+            for (k, &key) in WeightKey::ALL.iter().enumerate() {
+                assert_eq!(dense[k], f.get(key));
+            }
         }
     }
 }

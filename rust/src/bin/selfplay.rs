@@ -59,6 +59,14 @@ struct Args {
     /// and a champion against another VECTOR is the arena's job, not this
     /// one's.
     weights: Weights,
+    /// `--weights`'s raw path, if given -- loaded into `weights` only after
+    /// the whole command line is parsed (see [`parse_args`]'s tail), because
+    /// WHICH loader is correct depends on the final `--bots` value
+    /// (`human_policy::load_weights` for an all-`human` spec, the champion
+    /// `load_weights` otherwise -- see `bots::human`'s doc comment for why
+    /// those two are not interchangeable) and `--weights` may be typed
+    /// before `--bots` on the command line.
+    weights_path: Option<String>,
 }
 
 impl Default for Args {
@@ -72,6 +80,7 @@ impl Default for Args {
             rotate: true,
             verbose: false,
             weights: Weights::default(),
+            weights_path: None,
         }
     }
 }
@@ -84,7 +93,9 @@ usage: selfplay [options]
   --bots SPEC     comma-separated bot kinds, cycled over seats (default weighted)
   --seed N        base seed; game g uses seed+g (default 1)
   --weights PATH  champion JSON every evaluator seat plays (default: the
-                  built-in defaults)
+                  built-in defaults); loaded as a human-imitation weight
+                  file instead when --bots is exactly \"human\" (see
+                  `bots::human`'s doc comment for why the two formats differ)
   --threads N     games in parallel (default 1)
   --no-rotate     pin the spec to seats instead of rotating it per game
   --verbose       print a line per game
@@ -109,7 +120,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--bots" => a.bots = value(flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
-            "--weights" => a.weights = load_weights(std::path::Path::new(&value(flag)?))?,
+            "--weights" => a.weights_path = Some(value(flag)?),
             "--threads" => a.threads = parse_num(&value(flag)?, flag)?,
             "--no-rotate" => a.rotate = false,
             "--verbose" | "-v" => a.verbose = true,
@@ -135,6 +146,22 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.threads == 0 {
         return Err("--threads must be at least 1".to_string());
+    }
+    if let Some(path) = &a.weights_path {
+        // Which loader is correct depends on the FINAL `--bots` value, not
+        // whichever flag order the operator typed -- see `weights_path`'s
+        // own doc comment. Only an all-`human` spec gets the dedicated
+        // loader; a mixed spec (`human,weighted`) keeps the champion loader,
+        // matching this binary's pre-existing "one shared vector for the
+        // whole table" design (see `Args::weights`'s doc comment) -- there
+        // is no per-seat vector to give a mixed table's `human` seat here.
+        let all_human = a.bots.split(',').all(|k| k.trim() == "human");
+        let path = std::path::Path::new(path);
+        a.weights = if all_human {
+            tta::human_policy::load_weights(path)?
+        } else {
+            load_weights(path)?
+        };
     }
     // Fail on a bad spec here rather than inside a worker thread, where the
     // panic would be one of `threads` identical messages.

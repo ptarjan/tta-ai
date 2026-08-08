@@ -129,6 +129,7 @@ pub mod board_yields;
 pub mod book;
 pub mod counting;
 pub mod greedy;
+pub mod human;
 pub mod neural;
 pub mod pending;
 pub mod plan;

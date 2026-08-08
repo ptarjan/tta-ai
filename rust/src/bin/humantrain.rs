@@ -1,13 +1,20 @@
 //! `humantrain` -- fits [`tta::human_policy::train`]'s linear scorer on a
-//! [`tta::human_policy`] dataset (`bin/humandata.rs`'s output) and reports
+//! [`tta::human_policy`] dataset (`bin/humandata.rs`'s output), PERSISTS the
+//! fitted vector to disk (`tta::human_policy::save_weights`), and reports
 //! held-out top-1 accuracy: overall, per move category, per player count,
 //! and per BGO skill tier -- the baseline-model deliverable of
 //! `docs/HUMAN_MODEL.md`.
 //!
 //! No new modelling logic lives here -- this binary is I/O (read the TSV,
-//! split by game) and reporting (aggregate + print) around
-//! [`tta::human_policy::Normalizer`]/[`tta::human_policy::train`]/
+//! split by game, write the fitted vector) and reporting (aggregate + print)
+//! around [`tta::human_policy::Normalizer`]/[`tta::human_policy::train`]/
 //! [`tta::human_policy::predict_top1`].
+//!
+//! Persisting the weights (rather than printing an accuracy number and
+//! discarding them, as this binary used to) is what makes
+//! `tta::bots::human::HumanBot` loadable at all -- see
+//! [`tta::human_policy::save_weights`]'s doc comment for the file format and
+//! why it is not `bots::weighted::eval::save_weights`.
 //!
 //! # Methodology
 //!
@@ -16,7 +23,9 @@
 //! turn to turn), so a decision-level split would leak the held-out
 //! evaluation. A [`tta::human_policy::Normalizer`] is fit on the TRAIN split
 //! ONLY and applied to both, so held-out accuracy is never inflated by
-//! peeking the held-out set's own feature statistics.
+//! peeking the held-out set's own feature statistics. The persisted weights
+//! are fit on ALL of `train_norm` (never the held-out split) exactly as the
+//! accuracy report already measures.
 //!
 //! # Regeneration
 //!
@@ -24,7 +33,7 @@
 //! cargo run --profile difftest --bin humandata -- \
 //!     sources/bgo/index.tsv /tmp/bgo-journals/journals Warlord \
 //!     > human_dataset.tsv 2> human_dataset_report.txt
-//! cargo run --profile difftest --bin humantrain -- human_dataset.tsv
+//! cargo run --profile difftest --bin humantrain -- human_dataset.tsv human_weights.json
 //! ```
 
 use std::collections::HashMap;
@@ -71,7 +80,7 @@ impl Bucket {
     }
 }
 
-fn run(dataset_path: &str) -> Result<(), String> {
+fn run(dataset_path: &str, out_path: &str) -> Result<(), String> {
     let file = fs::File::open(dataset_path).map_err(|e| format!("{dataset_path}: {e}"))?;
     let reader = BufReader::new(file);
 
@@ -138,6 +147,19 @@ fn run(dataset_path: &str) -> Result<(), String> {
     );
     let w = human_policy::train(&train_norm, dim, &cfg);
 
+    // ---------------------------------------------------------- persist
+    // `w` was fit on NORMALIZED features; `HumanBot` scores RAW ones
+    // (`candidate_features`'s own output, matching `WeightedBot`'s play-time
+    // encoding) -- `denormalize_for_ranking` folds the normalizer's per-
+    // coordinate scale into `w` so the SAVED vector ranks raw candidates the
+    // same way `w` ranked normalized ones (see that function's doc comment
+    // for why the additive half of normalization can be dropped for ranking
+    // but not for the raw score).
+    let raw_w = human_policy::denormalize_for_ranking(&w, &norm);
+    let weights = human_policy::vector_to_weights(&raw_w)?;
+    human_policy::save_weights(std::path::Path::new(out_path), &weights)?;
+    eprintln!("wrote fitted weights to {out_path}");
+
     // ------------------------------------------------------------- report
     let mut overall = Bucket::default();
     let mut by_category: HashMap<String, Bucket> = HashMap::new();
@@ -194,11 +216,11 @@ fn run(dataset_path: &str) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
-    if argv.len() != 1 {
-        eprintln!("usage: humantrain <dataset.tsv>");
+    if argv.len() != 2 {
+        eprintln!("usage: humantrain <dataset.tsv> <out_weights.json>");
         return ExitCode::FAILURE;
     }
-    match run(&argv[0]) {
+    match run(&argv[0], &argv[1]) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

@@ -112,6 +112,7 @@ use crate::moves::Move;
 use crate::rng::PyRandom;
 use crate::state::GameState;
 
+use super::human::HumanBot;
 use super::pending;
 use super::plan;
 use super::quiescent;
@@ -542,6 +543,12 @@ pub enum BotKind {
     Wonder,
     Infra,
     Tempo,
+    /// The human-imitation baseline (`docs/HUMAN_MODEL.md`) --
+    /// [`super::human::HumanBot`], scored by `crate::human_policy::
+    /// predict_top1` under a fitted vector instead of a hand-tuned
+    /// evaluator. See [`Seat::weights`]'s doc comment for how that vector
+    /// must be loaded for this kind specifically.
+    Human,
 }
 
 impl BotKind {
@@ -558,6 +565,7 @@ impl BotKind {
         BotKind::Wonder,
         BotKind::Infra,
         BotKind::Tempo,
+        BotKind::Human,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -574,6 +582,7 @@ impl BotKind {
             BotKind::Wonder => "wonder",
             BotKind::Infra => "infra",
             BotKind::Tempo => "tempo",
+            BotKind::Human => "human",
         }
     }
 
@@ -589,9 +598,13 @@ impl BotKind {
             BotKind::Wonder => Some(super::variants::Archetype::Wonder),
             BotKind::Infra => Some(super::variants::Archetype::Infra),
             BotKind::Tempo => Some(super::variants::Archetype::Tempo),
-            BotKind::Random | BotKind::Greedy | BotKind::Weighted | BotKind::Quiescent | BotKind::Plan | BotKind::Book => {
-                None
-            }
+            BotKind::Random
+            | BotKind::Greedy
+            | BotKind::Weighted
+            | BotKind::Quiescent
+            | BotKind::Plan
+            | BotKind::Book
+            | BotKind::Human => None,
         }
     }
 }
@@ -631,6 +644,8 @@ pub enum Bot {
     /// One of the six roster archetypes; see [`BotKind::archetype`] for
     /// which [`BotKind`] carries which [`super::variants::Archetype`].
     Variant(super::variants::VariantBot),
+    /// The human-imitation baseline; see [`BotKind::Human`].
+    Human(HumanBot),
 }
 
 impl Bot {
@@ -661,6 +676,7 @@ impl Bot {
                 super::variants::Archetype::Infra => BotKind::Infra,
                 super::variants::Archetype::Tempo => BotKind::Tempo,
             },
+            Bot::Human(_) => BotKind::Human,
         }
     }
 
@@ -679,6 +695,7 @@ impl Bot {
             Bot::Plan { cfg, stats, counters, rng } => plan::pick(cfg, stats, counters, rng, state, moves),
             Bot::Book(bot) => bot.choose(state, moves),
             Bot::Variant(bot) => bot.choose(state, moves),
+            Bot::Human(bot) => bot.choose(state, moves),
         }
     }
 }
@@ -711,6 +728,15 @@ pub struct Seat {
     /// Ignored by [`BotKind::Random`] and [`BotKind::Greedy`], which have no
     /// linear evaluator to read it -- `GreedyBot` scores with its own
     /// separate feature set, and `RandomBot` scores nothing at all.
+    ///
+    /// For [`BotKind::Human`], this must be a vector loaded with
+    /// `crate::human_policy::load_weights`, NOT `bots::weighted::eval::
+    /// load_weights` -- the two loaders parse the same JSON shape but the
+    /// champion loader applies `dominance_repair`, an evaluator invariant a
+    /// human-imitation fit is not constrained to satisfy (see
+    /// `bots::human`'s and `human_policy::weights_to_text`'s doc comments).
+    /// `bin/selfplay.rs`'s `--weights` handling already picks the right
+    /// loader when `--bots` is exactly `human`.
     pub weights: weighted::weights::Weights,
 }
 
@@ -778,6 +804,7 @@ pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
             | BotKind::Tempo => Bot::Variant(super::variants::VariantBot::new(
                 seat.kind.archetype().expect("BotKind::archetype covers every variant BotKind"),
             )),
+            BotKind::Human => Bot::Human(HumanBot::new(&seat.weights)),
         });
     }
     out
