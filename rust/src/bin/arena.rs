@@ -72,15 +72,22 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
         match flag.as_str() {
             "--a" => {
                 let p = value(flag)?;
-                a.duel.a = load_weights(std::path::Path::new(&p))?;
+                a.duel.a.weights = load_weights(std::path::Path::new(&p))?;
                 a.name_a = short_name(&p);
             }
             "--b" => {
                 let p = value(flag)?;
-                a.duel.b = load_weights(std::path::Path::new(&p))?;
+                a.duel.b.weights = load_weights(std::path::Path::new(&p))?;
                 a.name_b = short_name(&p);
             }
-            "--kind" => a.duel.kind = value(flag)?.parse::<BotKind>()?,
+            // Both sides play the same kind here -- unchanged from before
+            // `Match` bound a kind to each seat; a mixed-kind table is what
+            // `bin/kindmatch.rs` is for.
+            "--kind" => {
+                let k = value(flag)?.parse::<BotKind>()?;
+                a.duel.a.kind = k;
+                a.duel.b.kind = k;
+            }
             "--games" => a.duel.games = parse_num(&value(flag)?, flag)?,
             "--players" => a.duel.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--seed" => a.duel.seed = parse_num(&value(flag)?, flag)?,
@@ -115,7 +122,7 @@ fn report(args: &Args, s: &Summary, games: usize, elapsed: f64) {
 
     println!("games        {} ({} deals x {} seats)", games, s.win.n_deals, args.duel.players);
     println!("players      {}", args.duel.players);
-    println!("kind         {}", args.duel.kind.name());
+    println!("kind         {}", args.duel.a.kind.name());
     println!("A            {}", args.name_a);
     println!("B            {}", args.name_b);
     println!("mean moves   {:.1}", s.mean_moves);

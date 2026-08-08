@@ -54,8 +54,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use tta::arena::{Match, Summary};
-use tta::bots::greedy::BotKind;
+use tta::arena::{loader_for, Match, Summary};
+use tta::bots::greedy::{BotKind, Seat};
 use tta::bots::weighted::eval::{load_weights, save_weights};
 use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
 use tta::rng::PyRandom;
@@ -302,9 +302,8 @@ fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
     while shares.len() < cfg.max_games {
         let want = batch.min(cfg.max_games - shares.len());
         let mut duel = Match {
-            a: *mutant,
-            b: cfg.champion,
-            kind: cfg.kind,
+            a: Seat { kind: cfg.kind, weights: *mutant },
+            b: Seat { kind: cfg.kind, weights: cfg.champion },
             games: want,
             players: cfg.players,
             // Every batch must be a FRESH deal range: reusing the seed would
@@ -346,22 +345,29 @@ struct Anchor {
     half: f64,
 }
 
-/// Win share (+ two-sided half-width) of `w` against `opponent` over `games`
-/// games at this run's table size. Shared by the anchor check and the
-/// gauntlet below -- both ask "how does this vector do against a fixed
-/// reference", they differ only in what the reference is and what happens
-/// with the answer: the anchor can veto a promotion, the gauntlet is only
-/// ever logged.
-fn measure_against(w: &Weights, opponent: &Weights, cfg: &Config, games: usize, seed: u64) -> Anchor {
-    let mut duel =
-        Match { a: *w, b: *opponent, kind: cfg.kind, games, players: cfg.players, seed, threads: cfg.threads };
+/// Win share (+ two-sided half-width) of seat `a` against seat `b` over
+/// `games` games at this run's table size. Shared by the anchor check and
+/// the gauntlet below -- both ask "how does this vector do against a fixed
+/// reference", they differ only in what the reference is (and its kind --
+/// the gauntlet's members are not necessarily [`Config::kind`]) and what
+/// happens with the answer: the anchor can veto a promotion, the gauntlet is
+/// only ever logged.
+fn measure_against(a: Seat, b: Seat, cfg: &Config, games: usize, seed: u64) -> Anchor {
+    let mut duel = Match { a, b, games, players: cfg.players, seed, threads: cfg.threads };
     duel.validate().expect("duel was validated at start-up");
     let s = Summary::of(&duel.play(), cfg.players as usize);
     Anchor { mean: s.win.mean, half: if s.win.half.is_finite() { s.win.half } else { 1.0 } }
 }
 
+/// The champion's seat: `cfg.kind` is the kind this whole climb mutates, so
+/// the champion (and every mutant challenging it) is always seated as that
+/// one kind -- only the gauntlet's OPPONENTS may carry a different kind.
+fn champion_seat(w: &Weights, cfg: &Config) -> Seat {
+    Seat { kind: cfg.kind, weights: *w }
+}
+
 fn measure_anchor(w: &Weights, cfg: &Config, seed: u64) -> Anchor {
-    measure_against(w, &cfg.anchor, cfg, cfg.anchor_games, seed)
+    measure_against(champion_seat(w, cfg), champion_seat(&cfg.anchor, cfg), cfg, cfg.anchor_games, seed)
 }
 
 impl Anchor {
@@ -385,7 +391,11 @@ fn measure_gauntlet(w: &Weights, cfg: &Config, seed_base: u64) -> Vec<(String, A
             // `104_729` is just a prime far bigger than any plausible member
             // count, so consecutive members' seed ranges cannot overlap.
             let seed = seed_base.wrapping_add(i as u64 * 104_729);
-            (name.clone(), measure_against(w, opponent, cfg, cfg.gauntlet_games, seed))
+            // `*opponent` carries its OWN kind (see `Config::gauntlet`'s doc
+            // comment) -- a `Human` gauntlet member plays as a `HumanBot`
+            // against the champion's `cfg.kind` seat, not as a `WeightedBot`
+            // built from human-fit numbers.
+            (name.clone(), measure_against(champion_seat(w, cfg), *opponent, cfg, cfg.gauntlet_games, seed))
         })
         .collect()
 }
@@ -418,10 +428,15 @@ struct Config {
     anchor_games: usize,
     threads: usize,
     accept_z: f64,
-    /// Frozen past champions this run reports standing against, labelled by
-    /// filename stem. Observation only -- see [`measure_gauntlet`]. Never
-    /// read by the accept gate or [`Anchor::clearly_worse_than`].
-    gauntlet: Vec<(String, Weights)>,
+    /// Frozen past opponents this run reports standing against, labelled by
+    /// filename stem. Each carries its OWN [`BotKind`] bound to its own
+    /// weights (a [`Seat`]) -- most members share `Config::kind` (the usual
+    /// "past champion" case), but a member need not: a `Human` gauntlet
+    /// entry is loaded with `human_policy::load_weights` via [`loader_for`]
+    /// and played by a `HumanBot`, never by a `WeightedBot` built from its
+    /// human-fit numbers. Observation only -- see [`measure_gauntlet`].
+    /// Never read by the accept gate or [`Anchor::clearly_worse_than`].
+    gauntlet: Vec<(String, Seat)>,
     /// Games played per gauntlet member, each time the gauntlet runs.
     gauntlet_games: usize,
 }
@@ -492,8 +507,11 @@ usage: climb --out PATH [options]
   --min-games N      games before an early accept is allowed (default: 2x --screen)
   --max-games N      games a single challenge may spend (default 240)
   --anchor-games N   games per anchor measurement (default 120)
-  --gauntlet PATH    frozen past champion to report standing against
+  --gauntlet PATH    frozen past opponent to report standing against
                      (repeatable; observational only, never gates a promotion)
+  --gauntlet-kind KIND  kind of the NEXT --gauntlet member (default: --kind,
+                     i.e. same kind as the champion -- set this first when a
+                     member is a different kind, e.g. --gauntlet-kind human)
   --gauntlet-games N games per gauntlet member each time it runs (default 60)
   --gauntlet-every N generations between gauntlet measurements; 0 disables
                      (default 50)
@@ -509,6 +527,12 @@ usage: climb --out PATH [options]
 fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     let mut a = Args::default();
     let mut start: Option<PathBuf> = None;
+    // Raw `--gauntlet` entries, resolved into `a.cfg.gauntlet` only AFTER
+    // the whole command line is parsed -- resolving a member's kind (and so
+    // which loader reads its file) needs `a.cfg.kind`'s FINAL value, which
+    // may be typed after the `--gauntlet` flags that need it.
+    let mut gauntlet_raw: Vec<(Option<BotKind>, PathBuf)> = Vec::new();
+    let mut pending_gauntlet_kind: Option<BotKind> = None;
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
         let mut value = |flag: &str| -> Result<String, String> {
@@ -529,18 +553,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--max-games" => a.cfg.max_games = parse_num(&value(flag)?, flag)?,
             "--anchor-games" => a.cfg.anchor_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet" => {
-                let p = PathBuf::from(value(flag)?);
-                let w = load_weights(&p)?;
-                // The filename stem carries the provenance (generation, key
-                // count, date -- see analysis/frozen/README.md's naming
-                // rule), which is exactly what belongs in the log next to
-                // the number, so reuse it rather than inventing a new label.
-                let label = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| p.display().to_string());
-                a.cfg.gauntlet.push((label, w));
+                gauntlet_raw.push((pending_gauntlet_kind.take(), PathBuf::from(value(flag)?)));
             }
+            "--gauntlet-kind" => pending_gauntlet_kind = Some(value(flag)?.parse::<BotKind>()?),
             "--gauntlet-games" => a.cfg.gauntlet_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet-every" => a.gauntlet_every = parse_num(&value(flag)?, flag)?,
             "--threads" => a.cfg.threads = parse_num(&value(flag)?, flag)?,
@@ -559,6 +574,22 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
 
     if let Some(p) = &start {
         a.cfg.champion = load_weights(p)?;
+    }
+    // Resolve every gauntlet member now that `a.cfg.kind` is final: a member
+    // with no `--gauntlet-kind` override plays the champion's own kind
+    // (exactly the old, single-kind behaviour), and either way the file is
+    // read with THAT kind's own loader (see `loader_for`) -- never blindly
+    // with the champion loader the way this used to work unconditionally.
+    for (kind_override, p) in gauntlet_raw {
+        let kind = kind_override.unwrap_or(a.cfg.kind);
+        let weights = loader_for(kind)(&p)?;
+        // The filename stem carries the provenance (generation, key count,
+        // date -- see analysis/frozen/README.md's naming rule), which is
+        // exactly what belongs in the log next to the number, so reuse it
+        // rather than inventing a new label.
+        let label =
+            p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+        a.cfg.gauntlet.push((label, Seat { kind, weights }));
     }
     if a.lambda == 0 {
         return Err("--lambda must be at least 1".to_string());
@@ -1064,10 +1095,8 @@ mod tests {
         let mut c = cfg();
         c.players = 2;
         c.gauntlet_games = 4; // cheap: this only checks shape, not the number
-        c.gauntlet = vec![
-            ("frozen_a".to_string(), Weights::defaults()),
-            ("frozen_b".to_string(), Weights::defaults()),
-        ];
+        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        c.gauntlet = vec![("frozen_a".to_string(), seat), ("frozen_b".to_string(), seat)];
         let got = measure_gauntlet(&c.champion, &c, 42);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].0, "frozen_a");
@@ -1089,7 +1118,7 @@ mod tests {
         let mut c = cfg();
         c.players = 2;
         c.gauntlet_games = 4;
-        c.gauntlet = vec![("frozen".to_string(), Weights::defaults())];
+        c.gauntlet = vec![("frozen".to_string(), Seat { kind: c.kind, weights: Weights::defaults() })];
         // Run it twice, once with the gauntlet populated and once without --
         // the mutant accept decision (`challenge`) must be identical either
         // way, since it never consults `c.gauntlet`.
@@ -1115,7 +1144,13 @@ mod tests {
         .unwrap();
         assert_eq!(args.cfg.gauntlet.len(), 1);
         assert_eq!(args.cfg.gauntlet[0].0, "champion_2p_gen99_140key_2026-08-06");
-        assert_eq!(args.cfg.gauntlet[0].1.get(WeightKey::Culture), Weights::defaults().get(WeightKey::Culture));
+        assert_eq!(
+            args.cfg.gauntlet[0].1.weights.get(WeightKey::Culture),
+            Weights::defaults().get(WeightKey::Culture)
+        );
+        // No `--gauntlet-kind` override, so the member plays the champion's
+        // own kind -- the old, single-kind behaviour, unchanged.
+        assert_eq!(args.cfg.gauntlet[0].1.kind, args.cfg.kind);
         std::fs::remove_file(&path).ok();
     }
 
@@ -1123,6 +1158,74 @@ mod tests {
     fn a_gauntlet_flag_pointing_at_a_missing_file_is_a_command_line_error() {
         let e = parse_args(&["--gauntlet".into(), "/nonexistent/tta/nope.json".into()]);
         assert!(e.is_err(), "{e:?}");
+    }
+
+    /// The whole point of `--gauntlet-kind`: a gauntlet member can be a
+    /// DIFFERENT kind from the champion, loaded with THAT kind's own loader
+    /// (`human_policy::load_weights`, no `dominance_repair`) rather than the
+    /// champion loader every `--gauntlet` entry used unconditionally before
+    /// this existed. Uses a `BlueFree`-over-`ResourceStock` fixture, a real
+    /// rule `DOMINATES` requires the other way around, so a champion-loader
+    /// read would come back repaired and a human-loader read would not.
+    #[test]
+    fn a_gauntlet_kind_flag_loads_that_member_with_its_own_kinds_loader() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_kind_flag");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("violating.json");
+        let mut w = Weights::defaults();
+        w.set(WeightKey::ResourceStock, 0.0);
+        w.set(WeightKey::BlueFree, 10.0);
+        tta::human_policy::save_weights(&path, &w).unwrap();
+
+        let args = parse_args(&[
+            "--gauntlet-kind".into(),
+            "human".into(),
+            "--gauntlet".into(),
+            path.to_string_lossy().into_owned(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.cfg.gauntlet.len(), 1);
+        assert_eq!(args.cfg.gauntlet[0].1.kind, BotKind::Human);
+        assert_eq!(
+            args.cfg.gauntlet[0].1.weights.get(WeightKey::ResourceStock),
+            0.0,
+            "a human gauntlet member must not have been dominance-repaired"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// `--gauntlet-kind` with no following `--gauntlet` is simply unused --
+    /// it modifies the NEXT `--gauntlet` flag only, so a plain `--gauntlet
+    /// PATH` after it (not the one it targets) falls back to the champion's
+    /// own kind exactly as if `--gauntlet-kind` had never been passed. Two
+    /// consecutive `--gauntlet` flags with only one preceding
+    /// `--gauntlet-kind` pins that the override does not leak onto the next
+    /// member.
+    #[test]
+    fn a_gauntlet_kind_override_applies_to_only_the_next_gauntlet_member() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_kind_leak");
+        std::fs::create_dir_all(&dir).unwrap();
+        let human_path = dir.join("human_member.json");
+        let champ_path = dir.join("champ_member.json");
+        tta::human_policy::save_weights(&human_path, &Weights::defaults()).unwrap();
+        save_weights(&champ_path, &Weights::defaults(), &[]).unwrap();
+
+        let args = parse_args(&[
+            "--gauntlet-kind".into(),
+            "human".into(),
+            "--gauntlet".into(),
+            human_path.to_string_lossy().into_owned(),
+            "--gauntlet".into(),
+            champ_path.to_string_lossy().into_owned(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.cfg.gauntlet.len(), 2);
+        assert_eq!(args.cfg.gauntlet[0].1.kind, BotKind::Human);
+        assert_eq!(args.cfg.gauntlet[1].1.kind, args.cfg.kind, "override leaked onto the second member");
+        std::fs::remove_file(&human_path).ok();
+        std::fs::remove_file(&champ_path).ok();
     }
 
     #[test]

@@ -722,7 +722,12 @@ pub fn make_bots(spec: &str, num_players: u8, seed: i64) -> Result<Vec<Bot>, Str
 /// is exactly the shape that lets a result table report the challenger's
 /// score under the champion's name. See [`Bot::kind`] for the same argument
 /// applied to reading a seat back out.
-#[derive(Clone, Debug)]
+///
+/// `Copy`: both fields are (`BotKind` is a plain enum, `Weights` is a fixed
+/// array of `f64`), and `arena::Match` holds one per side by value -- making
+/// a duel spec `Copy` the way it always has been should not cost a `.clone()`
+/// at every call site that builds one.
+#[derive(Clone, Copy, Debug)]
 pub struct Seat {
     pub kind: BotKind,
     /// Ignored by [`BotKind::Random`] and [`BotKind::Greedy`], which have no

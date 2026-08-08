@@ -54,6 +54,18 @@ GAUNTLET_2P=analysis/frozen/gauntlet/champion_2p_gen1454_140key_2026-08-06.json
 GAUNTLET_3P=analysis/frozen/gauntlet/champion_3p_gen1384_140key_2026-08-06.json
 GAUNTLET_4P=analysis/frozen/gauntlet/champion_4p_gen448_140key_2026-08-06.json
 
+# A fourth, DIFFERENT-KIND panel member: the human-imitation fit
+# (docs/HUMAN_MODEL.md), reported alongside the three same-kind champions
+# above. `climb`'s `--gauntlet` used to load every member with the champion
+# loader (`dominance_repair` included) under the champion's own kind, which
+# would have been silently wrong for this file -- a `dominance_repair`ed
+# human-imitation vector fed to a `WeightedBot`, not a `HumanBot` playing
+# under the vector it was actually fit under. `--gauntlet-kind` fixes that:
+# it sets the kind for the NEXT `--gauntlet` flag only, and that member is
+# loaded with ITS kind's own loader (`human_policy::load_weights`, no
+# repair) and seated as that kind -- see rust/src/arena.rs's `loader_for`.
+GAUNTLET_HUMAN=analysis/frozen/human_weights.json
+
 for PLAYERS in 2 3 4; do
     SENTINEL=$LOGDIR/stop_rust_league_${PLAYERS}p
     # `-f` matches the whole command line, so `--players N` is what
@@ -88,5 +100,6 @@ for PLAYERS in 2 3 4; do
         --gauntlet "$GAUNTLET_2P" \
         --gauntlet "$GAUNTLET_3P" \
         --gauntlet "$GAUNTLET_4P" \
+        --gauntlet-kind human --gauntlet "$GAUNTLET_HUMAN" \
         >>"$LOGDIR/rust_league_${PLAYERS}p.log" 2>&1 &
 done

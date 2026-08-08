@@ -35,7 +35,39 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::bots::greedy::{build_bots, BotKind, Seat};
 use crate::bots::weighted::weights::Weights;
 use crate::game::{self, MOVE_CAP};
+use crate::human_policy;
 use crate::stats::{self, Estimate};
+
+/// The loader a [`BotKind`]'s weight file must go through -- [`BotKind::
+/// Human`] is fit to imitate move CHOICES (`bots::human`'s doc comment) and
+/// is never `dominance_repair`-ed the way a gameplay evaluator's vector is,
+/// so it reads with [`human_policy::load_weights`] instead of the champion
+/// [`crate::bots::weighted::eval::load_weights`] every other kind uses.
+/// Exhaustive with NO wildcard arm on purpose: a future [`BotKind`] variant
+/// must fail to COMPILE here until someone decides which loader it needs,
+/// rather than silently falling through to the champion loader (which is
+/// exactly the "a value accepted by a slot that was never meant to carry it"
+/// bug this function exists to make impossible). Mirrors `bin/kindmatch.rs`'s
+/// `loader_for`, which predates this one and solves the same problem for a
+/// two-kind duel; this is the same routing decision for a `Match`/gauntlet
+/// seat, kept here because that is where [`Seat`]-bearing callers live.
+pub fn loader_for(kind: BotKind) -> fn(&std::path::Path) -> Result<Weights, String> {
+    match kind {
+        BotKind::Human => human_policy::load_weights,
+        BotKind::Random
+        | BotKind::Greedy
+        | BotKind::Weighted
+        | BotKind::Quiescent
+        | BotKind::Plan
+        | BotKind::Book
+        | BotKind::Culture
+        | BotKind::Military
+        | BotKind::Science
+        | BotKind::Wonder
+        | BotKind::Infra
+        | BotKind::Tempo => crate::bots::weighted::eval::load_weights,
+    }
+}
 
 /// One game's result from A's point of view.
 #[derive(Clone, Copy, Debug)]
@@ -60,16 +92,26 @@ impl Duel {
     }
 }
 
-/// A duel to play: two vectors, a table, and how many games of it.
+/// A duel to play: two seats, a table, and how many games of it.
+///
+/// Each side is a [`Seat`] -- a `BotKind` bound to the `Weights` loaded FOR
+/// that kind (see [`loader_for`]) -- rather than a bare vector plus one
+/// shared kind for the whole table. That used to be the design: `a: Weights,
+/// b: Weights, kind: BotKind`, with a doc comment claiming "both sides play
+/// the same KIND; only the vectors differ" and pointing a cross-kind duel at
+/// `selfplay --bots a,b` instead. The claim was only ever true of the type
+/// signature, not of what a caller could do with it -- nothing stopped
+/// handing a `Human`-fit vector into that single `Weights` slot and getting
+/// a silently wrong `WeightedBot` built from human-imitation numbers. Seat
+/// carries its own kind so that mistake can't be assembled: every seat's
+/// weights are loaded through ITS OWN kind's loader, and a same-kind table
+/// (the common case) is just the special case where `a.kind == b.kind`.
 #[derive(Clone, Copy, Debug)]
 pub struct Match {
     /// The challenger, seated one per game.
-    pub a: Weights,
+    pub a: Seat,
     /// The defender, seated in every other chair.
-    pub b: Weights,
-    /// Both sides play the same KIND; only the vectors differ. A duel across
-    /// kinds is `selfplay --bots a,b`, which tallies by kind.
-    pub kind: BotKind,
+    pub b: Seat,
     pub games: usize,
     pub players: u8,
     pub seed: u64,
@@ -80,20 +122,21 @@ impl Match {
     /// A duel of the built-in vector against itself -- the shape every caller
     /// starts from and overwrites the fields it cares about.
     pub fn new(players: u8) -> Match {
-        Match {
-            a: Weights::defaults(),
-            b: Weights::defaults(),
-            kind: BotKind::Weighted,
-            games: players as usize * 20,
-            players,
-            seed: 0,
-            threads: 1,
-        }
+        let defaults = Seat { kind: BotKind::Weighted, weights: Weights::defaults() };
+        Match { a: defaults, b: defaults, games: players as usize * 20, players, seed: 0, threads: 1 }
     }
 
     /// A's win share if the two vectors were interchangeable.
     pub fn null(&self) -> f64 {
         1.0 / self.players as f64
+    }
+
+    /// The table for a game with `self.a` in `seat` and `self.b` everywhere
+    /// else -- pulled out of [`Self::play_one`] so the seating itself (which
+    /// (kind, weights) pair lands where) is unit-testable without playing a
+    /// full game.
+    fn seats_for(&self, seat: usize) -> Vec<Seat> {
+        (0..self.players as usize).map(|i| if i == seat { self.a } else { self.b }).collect()
     }
 
     /// Reject a table this port has never been checked at, and round the game
@@ -125,9 +168,7 @@ impl Match {
             .wrapping_mul(7919)
             .wrapping_add(17);
 
-        let seats: Vec<Seat> = (0..players)
-            .map(|i| Seat { kind: self.kind, weights: if i == seat { self.a } else { self.b } })
-            .collect();
+        let seats = self.seats_for(seat);
         let mut bots = build_bots(&seats, seed as i64);
 
         let mut state = game::new_game(self.players, seed);
@@ -282,5 +323,69 @@ mod tests {
         let many = Match { games: 8, threads: 4, ..Match::new(2) }.play();
         let cultures = |ds: &[Duel]| ds.iter().map(|d| d.culture_a).collect::<Vec<_>>();
         assert_eq!(cultures(&one), cultures(&many));
+    }
+
+    // ============================================================ per-seat kind
+
+    /// Before `Match` bound each seat's kind to its own weights, it had one
+    /// `kind: BotKind` field for the WHOLE table -- every seat, A's and B's
+    /// alike, played that one kind, and only the vectors ever differed. This
+    /// pins that the common case the old shape existed for -- a single kind,
+    /// two vectors -- still seats every player with that one kind after the
+    /// rework: constructing `a` and `b` with the same `kind` must not somehow
+    /// let a per-seat table drift from that.
+    #[test]
+    fn a_same_kind_configuration_seats_every_player_with_that_one_kind() {
+        let kind = BotKind::Greedy;
+        let seat = Seat { kind, weights: Weights::defaults() };
+        for players in [2u8, 3, 4] {
+            let m = Match { a: seat, b: seat, ..Match::new(players) };
+            for i in 0..players as usize {
+                assert!(
+                    m.seats_for(i).iter().all(|s| s.kind == kind),
+                    "{players}p seat rotation {i}: not every seat was {kind:?}"
+                );
+            }
+        }
+    }
+
+    /// The capability the per-seat rework exists to add: `a` and `b` can now
+    /// be DIFFERENT kinds, and each game's table must seat the challenger's
+    /// own kind in the rotating seat and the defender's own kind everywhere
+    /// else -- not one kind for the whole table the way it silently would
+    /// have before (a `Human`-kind `b` handed a `WeightedBot`'s evaluator, or
+    /// vice versa).
+    #[test]
+    fn a_mixed_kind_match_seats_each_side_with_its_own_kind() {
+        let a = Seat { kind: BotKind::Human, weights: Weights::defaults() };
+        let b = Seat { kind: BotKind::Weighted, weights: Weights::defaults() };
+        let m = Match { a, b, ..Match::new(3) };
+        for seat in 0..3 {
+            for (i, s) in m.seats_for(seat).iter().enumerate() {
+                let want = if i == seat { BotKind::Human } else { BotKind::Weighted };
+                assert_eq!(s.kind, want, "seat rotation {seat}, table position {i}");
+            }
+        }
+    }
+
+    /// `loader_for` is a total, exhaustive match with no wildcard arm, so
+    /// every `BotKind` this crate defines resolves to exactly one of the two
+    /// real loaders -- pins that `Human` alone gets [`human_policy::
+    /// load_weights`] (no `dominance_repair`) and every other kind gets the
+    /// champion loader. This is the test that would have caught the bug this
+    /// module's doc comment describes: a gauntlet slot loading a human-fit
+    /// vector through the champion loader and silently building a
+    /// `WeightedBot` from it.
+    #[test]
+    fn loader_for_resolves_human_to_the_human_policy_loader_and_every_other_kind_to_the_champion_loader() {
+        for &kind in BotKind::ALL {
+            let got = loader_for(kind) as *const ();
+            let want = if kind == BotKind::Human {
+                human_policy::load_weights as *const ()
+            } else {
+                crate::bots::weighted::eval::load_weights as *const ()
+            };
+            assert_eq!(got, want, "{kind:?} resolved to the wrong loader");
+        }
     }
 }
