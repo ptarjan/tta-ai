@@ -7619,3 +7619,120 @@ Both were found while tracing the task's three example games above, before landi
 2. **`7523354` round 14's `SimulatorBug` (ledger agrees with journal, simulator alone is wrong) traces to a hand-size drift that predates round 13**, invisible there only because both the true and simulated counts were still under that round's own limit. Not isolated to a specific event this pass -- flagged as the next concrete lead for whoever picks up the remaining `SimulatorBug`/`ConsumingPlay` or `UnmodelledEvent`/`Draw` buckets this doc already tracks above.
 
 Also note `7523357` itself is UNCHANGED by this pass's own fix (still stops at line 173, round 6, the pre-existing `SimulatorBug`/`ConsumingPlay` divergence this doc's "`SimulatorBug`/`PrepareEvent`" section already flagged as a distinct, unfixed overcount-cohort mechanism) -- it was traced purely to confirm the pact fix's scope boundary, not because fixing it was in scope this pass.
+
+## FOUND AND FIXED: Winston Churchill's once-per-turn choice was never applied by the replayer -- the largest single, cleanly-traced cause of wrong final scores, closed corpus-wide
+
+Assigned the "WRONG FINAL SCORE for completed human games" task fresh (154
+completed games at the time, 1/154 exact, mean per-player delta -6.96 --
+the aggregate this doc's own earlier "Final scores" section already tracks
+as a `hand_military`-under-tracking symptom). Followed this doc's own
+mandated method: per-COMPONENT diagnosis before theorizing, sign/shape
+before cause, then a line-by-line trace, rulebook as oracle.
+
+### Per-component diagnosis: running culture, not just the final-event bonus
+
+Landed a temporary (then permanent) `trailing_now_culture` -- the running-
+culture twin of the existing `trailing_now_science` `REPLAY_DEBUG` drift
+check -- and diffed this reconstruction's own post-production culture
+total, round by round, against `sources/bgo`'s own `"End turn ... (now
+N)"` running total. On game `7522614` (Purple, 2p): the two totals matched
+EXACTLY for 16 straight rounds (a round-by-round diff of all zeros), then
+fell behind by EXACTLY 3 the instant `"Purple elects Winston Churchill"`
+fired and his own `"End turn Winston Churchill scores 3 culture."` prefix
+first appeared on an `"End turn"` line -- and by another 3 the very next
+occurrence -- never recovering either deficit for the rest of the game.
+This is a clean, CONSTANT per-occurrence offset, not a per-round drift or a
+proportional-to-something-else shape -- exactly what this doc's own method
+section calls out as "a missing end-game bonus" shape, just recurring
+per-turn instead of once at game end.
+
+### Root cause: BGO glues the choice onto the SAME "End turn" line, never a separate one
+
+`sources/bga_throughtheages_material.inc.php` #186 (the primary source):
+"On your turn, choose one: score 3 culture; or you have 3 science and 3
+resources for developing military unit technologies and building and
+upgrading units." The ENGINE already models this completely correctly --
+`legal.rs`'s `Move::Churchill` (`ChurchillChoice::Culture`/`Military`),
+`apply.rs`'s `h_churchill` (`p.culture += 3` / the ring-fenced pools) --
+and self-play bots choose it correctly every game. The bug is entirely in
+the REPLAYER: BGO logs the choice as a PREFIX glued onto the SAME
+no-leading-colour `"End turn"` line the replayer already special-cases for
+`Move::EndTurn` ("End turn Winston Churchill scores 3 culture.; <Color>
+scores: ..."), never as its own line, and the dispatch loop was reading
+only the trailing `"<Color> scores:"` clause -- silently dropping the +3
+every single turn a Churchill owner had him in play.
+
+Corpus-wide (every `sources/bgo` journal, plain `grep`): `"Winston
+Churchill scores"` occurs **1,049 times across 377 of the 1,011 sampled
+games** -- over a third of the whole corpus. Zero occurrences of the
+card's OTHER phrasing (the "3 science and 3 resources" military option)
+anywhere in the corpus -- every real human pick sampled is the culture
+choice, confirmed by exhaustive `grep`, not assumed.
+
+### Fix (`rust/src/replay_common.rs`, commit `0182540`)
+
+`apply_churchill_end_turn_choice`, called from the existing no-leading-
+colour `"End turn"` dispatch site (right after `check_discard_phase_
+oracle`, right before `Move::EndTurn`): detects the prefix and applies
+`Move::Churchill { choice: Culture }` first, legality-checked by
+`try_apply` the same as every other synthesized move this file inserts
+(`RemoveLeaderYellow`, `Barbarossa`, `ColumbusColonize`) -- a game that
+reaches here without Churchill actually in play, or with the choice
+already spent, fails loud rather than silently drifting culture further.
+New tests `apply_churchill_end_turn_choice_scores_3_culture_when_the_end_
+turn_line_carries_his_prefix` / `..._is_a_no_op_for_an_ordinary_end_turn_
+line`, both confirmed RED by reverting the fix and re-running (panics with
+`left: 0, right: 3`), GREEN restored. `cargo test --profile difftest
+--lib`: 1155 passed (up from 1152); full `cargo test --profile difftest`:
+all green.
+
+**This is a REPLAYER-ONLY fix.** `game::play_game` (self-play) never goes
+through this journal-parsing machinery at all -- past strength
+measurements are unaffected.
+
+### Corpus result, same-methodology before/after (own `replay`/`replaystats` run, both on this tree)
+
+| metric | before | after |
+|---|---|---|
+| completed to `state.game_over` | 154 | 154 (unchanged, as expected -- no hand-tracking touched) |
+| discard-phase hand-size oracle | 31501/32710 (96.3%) | unchanged |
+| mean per-player score delta (engine minus index.tsv, all completed games' players) | -6.96 | **-6.36** |
+| mean per-game total-score delta | -15.08 | **-13.80** |
+| exact-match games | 1/154 | 1/154 (unchanged) |
+
+Exact-match games did not move: this fix shrinks the deficit by exactly 3
+per Churchill turn (a real, measurable improvement on every affected
+game), but does not by itself flip any single game to a fully exact
+match, because the DOMINANT remaining mechanism is a different, already-
+documented bug -- see below.
+
+### What remains: the wrong-final-event-SET mechanism is still the dominant open cause, re-confirmed by trace this pass
+
+Traced three fresh games (`7522614`, `7523353`, `7523598`, none previously
+traced in this doc) with a one-off `evaluate_final_events` diagnostic
+(`events.rs`, not landed). All three: this reconstruction's own set of
+still-pending Age III scoring events at `finish_game` time is a DIFFERENT
+SET of cards than the real journal's own `"End of game"` announcement --
+the exact "wrong SET, not just a wrong total" signature this doc's "Final
+scores" section already root-caused on `7522166`/`7522625` to a stranded
+mid-game `PrepareEvent` (a `hand_military`-under-tracking symptom this
+doc's "Military hand LEDGER" and `SimulatorBug`/`PrepareEvent` sections
+already track at length, multiple partial fixes landed, none closing it).
+Confirms the mechanism is UNCHANGED by today's Churchill fix or any of the
+intervening hand-tracking passes -- still the single largest OPEN cause of
+wrong final scores, and still belongs in the hand-tracking machinery those
+sections already own, not a new fix here.
+
+One SEPARATE, smaller, NOT-fixed-this-pass observation from the same
+`sed`/`grep` sweep that found Churchill: `"Genghis Khan scores N culture."`
+uses the identical glued-prefix shape (2,099 occurrences corpus-wide) but
+needs NO replayer fix -- `effects.rs`'s `Special::CultureIfTopTwoStrength`
+is already computed automatically inside `economy::end_of_turn` (§6.6 step
+3a, not a player choice), so the engine's own running total already
+includes it; spot-checked, not a bug.
+
+### What this pass deliberately did NOT do
+
+- Did not touch the wrong-final-event-SET / `hand_military` mechanism itself -- explicitly out of scope (see above), and colliding with the in-flight hand-tracking work this doc already documents at length was judged higher-risk than the value of a rushed second fix.
+- Did not investigate the 3 `same-total-sum-but-wrong-per-player-split` games found while characterizing the delta shape (`7523598`, `7522271`, `7523185` -- a minority, 3/153 non-exact games, likely a ranking/tie-break misattribution rather than a missing-points bug) -- flagged here as a small, distinct, not-yet-traced lead for whoever picks this up next.
+- Did not touch `game.rs`, `apply.rs`, `legal.rs`, `costs.rs`, `economy.rs`, or `bots/`.
