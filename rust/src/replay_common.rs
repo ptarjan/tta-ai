@@ -163,7 +163,9 @@ pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::PactSide;
-use crate::state::{Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND};
+use crate::state::{
+    Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND, MAX_PLAYERS,
+};
 use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
 
 // ---------------------------------------------------------------------
@@ -329,6 +331,12 @@ struct Replayer<'a> {
     /// is applied first and its journal line arrives later as a pure
     /// confirmation. Reset when the player's turn ends.
     auto_passed: [u32; 4],
+    /// Per-seat count of `resolve_political_decision`'s own "no disposable
+    /// filler exists" wash, still owed a real hand_military decrement --
+    /// see that function's own doc and [`Self::repay_military_hand_
+    /// deficit`], which drains this the next time this seat's hand
+    /// genuinely grows.
+    military_hand_deficit: [u32; 4],
     /// Whether any colonization in this game was resolved by the
     /// approximate auto-drain rather than a verified sacrifice match.
     colonize_approximated: bool,
@@ -561,6 +569,7 @@ impl<'a> Replayer<'a> {
             plan,
             next_prep: 0,
             auto_passed: [0; 4],
+            military_hand_deficit: [0; 4],
             colonize_approximated: false,
             bid_ceilings_grounded: 0,
             hand_full_takes_overridden: 0,
@@ -1404,6 +1413,24 @@ impl<'a> Replayer<'a> {
             .find(|id| !needed_later.contains(id))
         {
             self.state.players[decider as usize].hand_military.remove_first(victim);
+        } else {
+            // No disposable filler exists RIGHT NOW -- confirmed on the
+            // task's own repro, game `7522634` round 3 decider 0: hand is
+            // `["Legion"]`, but `needed_later` also contains `"Legion"` (the
+            // discard solver has proven this exact identity is played by
+            // name later), so it is not a genuinely empty hand, just a
+            // fully-protected one -- the same dead end an actually-empty
+            // hand reaches. Either way the push-then-apply-removal below
+            // still washes to net zero unless something is done: the real
+            // player's hand DID shrink by one here (a real card left their
+            // hand to prepare this event), this binary's simulated one just
+            // has no disposable stand-in to sacrifice for it yet. Record a
+            // signed deficit instead of silently dropping the decrement --
+            // repaid by [`Self::repay_military_hand_deficit`] the next time
+            // this player's hand_military genuinely GROWS (a real draw),
+            // which retroactively supplies the missing victim instead of
+            // letting the drawn card inflate the hand on top of the debt.
+            self.military_hand_deficit[decider as usize] += 1;
         }
         self.state.players[decider as usize].hand_military.push(prep.card);
         let mv = Move::PrepareEvent { card: prep.card };
@@ -1858,6 +1885,36 @@ impl<'a> Replayer<'a> {
         self.try_apply(mv, record)
     }
 
+    /// Drains up to `growth` units of `actor`'s [`Self::military_hand_
+    /// deficit`] by popping one already-simulated filler card per unit
+    /// repaid -- called from [`Self::try_apply`] right after `apply::apply`
+    /// for every seat whose `hand_military` just grew for real (a genuine
+    /// draw, e.g. `Move::EndTurn`'s own end-of-turn draw), so that growth
+    /// pays back an earlier `resolve_political_decision` "no disposable
+    /// filler exists" wash instead of stacking a phantom extra card on top
+    /// of it. Never pops a card `DiscardSolver::needed_after` says this
+    /// seat is later observed playing by name, the same rule every other
+    /// filler pop in this file already follows. A no-op when there is no
+    /// deficit, the hand did not grow, or every remaining card is
+    /// protected (the deficit then stays owed, exactly like the original
+    /// wash -- this narrows the window the phantom card can exist in, it
+    /// does not claim to close it in every case).
+    fn repay_military_hand_deficit(&mut self, actor: u8, growth: u32) {
+        let owed = self.military_hand_deficit[actor as usize].min(growth);
+        if owed == 0 {
+            return;
+        }
+        let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+        for _ in 0..owed {
+            let hand = &mut self.state.players[actor as usize].hand_military;
+            let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id)) else {
+                break;
+            };
+            hand.remove_first(victim);
+            self.military_hand_deficit[actor as usize] -= 1;
+        }
+    }
+
     /// Cross-checks this binary's own reconstructed military-hand excess for
     /// `actor` against [`discard_phase_oracle`](Self::discard_phase_oracle)'s
     /// cross-validated journal truth for the exact `(actor, line.round)`
@@ -2135,7 +2192,16 @@ impl<'a> Replayer<'a> {
         }
         let actor = self.state.current;
         let pending_top_before = self.state.pending.top().cloned();
+        let hand_military_len_before: [usize; MAX_PLAYERS] =
+            std::array::from_fn(|i| self.state.players[i].hand_military.len());
         apply::apply(&mut self.state, mv);
+        for seat in 0..self.state.num_players {
+            let before = hand_military_len_before[seat as usize];
+            let after = self.state.players[seat as usize].hand_military.len();
+            if after > before {
+                self.repay_military_hand_deficit(seat, (after - before) as u32);
+            }
+        }
         if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
             let p = &self.state.players[self.state.current as usize];
             eprintln!(
@@ -7730,6 +7796,59 @@ mod tests {
             r.state.players[0].hand_military.contains(filler_a) || r.state.players[0].hand_military.contains(filler_b),
             "the one remaining card must be one of the two original fillers, not the just-prepared card"
         );
+    }
+
+    /// FIX (real repro game `7522634`, round 3, decider 0): the SAME wash
+    /// as the test just above, but with NO disposable filler at all --
+    /// `resolve_political_decision`'s own "no victim" branch used to drop
+    /// the decrement silently (net zero, permanently overcounting the
+    /// reconstructed hand). It must now record a signed deficit instead,
+    /// and a later real hand-growth (an end-of-turn draw, simulated here by
+    /// directly pushing two freshly-drawn fillers the way `try_apply`'s own
+    /// growth-detection loop would observe) must repay that debt rather
+    /// than stacking a phantom card on top of it.
+    #[test]
+    fn preparing_an_event_with_no_disposable_filler_records_a_deficit_that_a_later_draw_repays() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        // No fillers seeded at all -- the exact `7522634` round-3 shape
+        // (an empty simulated hand at that point in the real game).
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+
+        assert_eq!(
+            r.state.players[0].hand_military.len(),
+            0,
+            "no victim to sacrifice, and the prepared card itself leaves the hand again once `Move::PrepareEvent` \
+             applies -- ends back at 0, the same net-zero as before this fix"
+        );
+        assert_eq!(
+            r.military_hand_deficit[0], 1,
+            "the dropped decrement must be recorded as an owed debt, not silently lost"
+        );
+
+        // A later real draw of two cards arrives (mirrors `try_apply`'s own
+        // per-seat growth detection around `apply::apply`).
+        let drawn_a = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::War).expect("a War card exists");
+        let drawn_b = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Pact).expect("a Pact card exists");
+        r.state.players[0].hand_military.push(drawn_a);
+        r.state.players[0].hand_military.push(drawn_b);
+        r.repay_military_hand_deficit(0, 2);
+
+        assert_eq!(
+            r.state.players[0].hand_military.len(),
+            1,
+            "two cards drawn, one immediately repays the earlier wash: net +1, not +2"
+        );
+        assert_eq!(r.military_hand_deficit[0], 0, "the debt is now fully repaid");
     }
 
     /// FIX (`docs/REPLAY.md`'s "Final scores" section, the mechanism traced
