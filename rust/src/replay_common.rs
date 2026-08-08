@@ -563,6 +563,49 @@ fn set_current_events(state: &mut GameState, reveal_order: &[CardId]) {
     crate::events::sync_current_events_age(state);
 }
 
+/// The real scoringEvent cards named on the journal's own `"End of game"`
+/// line -- BGO prints this game's exact still-pending "Impact of ..." set
+/// directly (`"End of game Check the journal to get the final impacts
+/// effects :; Impact of X; Impact of Y; ...; WINNER IS ..."`), the one piece
+/// of ground truth about the unrevealed tail of the event decks this
+/// project was not yet using. Semicolon-separated; stops naturally at the
+/// `"WINNER IS"`/`"; WINNER IS"` clause, which never starts with `"Impact
+/// of"`. A card name not in `card_index` is skipped rather than panicking:
+/// this line is read for every completed game, including any future corpus
+/// entry whose event names this table does not yet cover, and a missed
+/// grounding is strictly no worse than the pre-existing fictional pile this
+/// replaces it with.
+fn parse_real_final_events(text: &str, card_index: &HashMap<&'static str, CardId>) -> Vec<CardId> {
+    text.split(';')
+        .map(str::trim)
+        .filter(|clause| clause.starts_with("Impact of"))
+        .filter_map(|name| card_index.get(name).copied())
+        .collect()
+}
+
+/// Overwrite the still-pending event piles with exactly the real cards
+/// [`parse_real_final_events`] found -- the fix for the "wrong final-event
+/// SET" mechanism `docs/REPLAY.md`'s "Final scores" section already named:
+/// `events::evaluate_final_events` reads `pending_final_events`
+/// (`current_events` chained with `future_events`), and for cards never
+/// revealed in the real game, `event_plan`'s own module doc already admits
+/// those piles are "filled with unused cards of the right age and kind"
+/// with "nothing ever validates them" -- correct for legality (deck size/
+/// age profile), silently wrong for final scoring. Which pile a card ends
+/// up in does not matter: `pending_final_events` chains both, unordered.
+/// Any non-scoring card already in either pile (a Territory this
+/// reconstruction still holds, irrelevant to `evaluate_final_events`'s own
+/// `final_scoring_block`-filtered read) is dropped along with them -- game
+/// over fires on the very next line and nothing else ever reads these piles
+/// again.
+fn ground_final_events(state: &mut GameState, real_cards: &[CardId]) {
+    state.current_events = crate::state::CardList::new();
+    state.future_events = crate::state::CardList::new();
+    for &card in real_cards {
+        state.future_events.push(card);
+    }
+}
+
 impl<'a> Replayer<'a> {
     fn new(
         card_index: &'a HashMap<&'static str, CardId>,
@@ -4456,6 +4499,15 @@ pub struct GameResult {
     pub hand_full_takes_overridden: u32,
     pub engine_scores: Option<Vec<i32>>,
     pub index_scores: Vec<i32>,
+    /// The SET of Age III event cards this reconstruction believes were
+    /// still pending (`events::pending_final_events`) when
+    /// `game::finish_game` ran -- i.e. exactly the cards
+    /// `events::evaluate_final_events` scored into `engine_scores`. `None`
+    /// under the same condition as `engine_scores` (`completed &&
+    /// state.game_over`). Diagnostic-only: lets a caller compare this
+    /// reconstruction's own final-event SET against the journal's real
+    /// "End of game" announcement without re-deriving engine state.
+    pub final_event_cards: Option<Vec<&'static str>>,
     /// Counts from this game's `DiscardSolver` -- see that module's doc and
     /// `docs/REPLAY.md` for why these three are reported separately rather
     /// than folded into one "discards handled" number.
@@ -5011,6 +5063,11 @@ pub fn replay_game(
         // from ever being attempted against an already-finished game.
         if line.text.starts_with("End of game") {
             completed = true;
+            // Ground the still-pending event piles from this line's own
+            // real final-event SET before the trailing "End turn" line's
+            // `finish_game` call reads them -- see `ground_final_events`.
+            let real_final_events = parse_real_final_events(line.text, card_index);
+            ground_final_events(&mut r.state, &real_final_events);
             continue;
         }
         // Once the engine's own `finish_game` has fired, nothing after it
@@ -5541,6 +5598,15 @@ pub fn replay_game(
     } else {
         None
     };
+    // `finish_game` does not clear `current_events`/`future_events` -- it
+    // only reads them via `events::final_event_awards` -- so recomputing
+    // that same call post-hoc reproduces exactly the SET this game's own
+    // `engine_scores` were built from, with no separate snapshot needed.
+    let final_event_cards = if completed && r.state.game_over {
+        Some(crate::events::final_event_awards(&r.state).into_iter().map(|(c, _)| c.name()).collect())
+    } else {
+        None
+    };
 
     GameResult {
         id: meta.id.clone(),
@@ -5553,6 +5619,7 @@ pub fn replay_game(
         hand_full_takes_overridden: r.hand_full_takes_overridden,
         engine_scores,
         index_scores: meta.scores.clone(),
+        final_event_cards,
         discards_solved: r.discard_solver.solved,
         discards_chosen: r.discard_solver.chosen,
         discards_forced_collision: r.discard_solver.forced_collisions,
@@ -6651,6 +6718,182 @@ mod tests {
     use super::*;
     use crate::state::CardList;
     use crate::CardType;
+
+    /// Minimal `PlayerState`, same field-literal shape `apply.rs`/
+    /// `combat.rs`/`costs.rs`/`effects.rs`/`legal.rs`/`economy.rs`/
+    /// `events.rs`/`interact.rs`/`advisor/state_io.rs`/`bots/weighted/
+    /// events.rs` each already keep their own copy of (see `GameState::
+    /// last_end_of_turn_culture`'s own doc for why: no `Default`/spread
+    /// pattern in this codebase, so every construction site is a field
+    /// literal) -- `replay_common.rs`'s own tests never needed a full
+    /// `GameState` before `ground_final_events`.
+    fn blank_player(idx: u8) -> PlayerState {
+        PlayerState {
+            idx,
+            techs: crate::state::Tableau::new(),
+            government: CardId::NONE,
+            leader: CardId::NONE,
+            wonder: CardId::NONE,
+            wonder_steps: 0,
+            completed_wonders: CardList::new(),
+            destroyed_wonders: 0,
+            homer_wonder: CardId::NONE,
+            tactic: CardId::NONE,
+            tactic_exclusive: false,
+            colonies: CardList::new(),
+            flipped_wonders: CardList::new(),
+            pacts: crate::state::PactList::new(),
+            hand_civil: CardList::<MAX_HAND>::new(),
+            hand_military: CardList::<MAX_HAND>::new(),
+            hidden_civil: 0,
+            hidden_military: 0,
+            yellow_bank: 0,
+            yellow_granted: 0,
+            workers_free: 0,
+            blue_total: 0,
+            food: 0,
+            resources: 0,
+            science: 0,
+            culture: 0,
+            culture_rate_extra: 0,
+            science_rate_extra: 0,
+            strength_extra: 0,
+            happy_extra: 0,
+            civil_actions: 0,
+            military_actions: 0,
+            politics_done: false,
+            tactic_action_used: false,
+            taken_this_turn: CardList::new(),
+            ca_spent_taking: 0,
+            hammurabi_used: false,
+            hammurabi_replaced_this_turn: false,
+            replaced_leader_this_turn: false,
+            trade_food_as_resource_used_this_turn: 0,
+            trade_resource_as_food_used_this_turn: 0,
+            churchill_used: false,
+            homer_used_this_turn: false,
+            bach_upgrade_used: false,
+            ocean_liners_used: false,
+            caesar_double_politics_used: false,
+            skip_next_politics: false,
+            caesar_second_politics: false,
+            peeked_event: CardId::NONE,
+            ca_penalty_next_turn: 0,
+            mil_discount: 0,
+            mil_sci_discount: 0,
+            one_time_discount: crate::state::OneTimeDiscount::default(),
+            resigned: false,
+            taken_leader_ages: 0,
+            war_declared_by_me: CardId::NONE,
+            war_target: 0,
+            wars_declared_on_me: [CardId::NONE; MAX_PLAYERS],
+        }
+    }
+
+    fn blank_state() -> GameState {
+        GameState {
+            num_players: 2,
+            seed: 0,
+            players: [blank_player(0), blank_player(1), blank_player(2), blank_player(3)],
+            current: 0,
+            turn: 1,
+            round: 1,
+            start_player: 0,
+            age_civil: crate::cards::Age::A,
+            age_military: crate::cards::Age::A,
+            civil_deck: CardList::new(),
+            military_deck: CardList::new(),
+            card_row: [CardId::NONE; crate::state::ROW_SIZE],
+            future_events: CardList::new(),
+            current_events: CardList::new(),
+            past_events: CardList::new(),
+            current_events_age: crate::cards::Age::A,
+            seeded_by: [crate::state::NOT_SEEDED; crate::cards::NUM_CARDS],
+            available_tactics: CardList::new(),
+            civil_discard: [CardList::new(), CardList::new(), CardList::new(), CardList::new(), CardList::new()],
+            civil_removed: [CardList::new(), CardList::new(), CardList::new(), CardList::new(), CardList::new()],
+            discarded_military: [
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+                CardList::new(),
+            ],
+            last_round: false,
+            final_round_end: None,
+            game_over: false,
+            phase: Phase::Actions,
+            forced_winner: None,
+            pending: crate::state::PendingStack::new(),
+            queue: crate::state::Queue::new(),
+            last_end_of_turn_culture: [None; MAX_PLAYERS],
+        }
+    }
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    /// The real shape of `sources/bgo` journal `7522625`'s own final line
+    /// (`docs/REPLAY.md`'s "Final scores" section): the four real pending
+    /// cards sit between "Check the journal..." and the "; WINNER IS..."
+    /// tail, which must NOT be swept in even though it also contains
+    /// semicolon-separated clauses.
+    #[test]
+    fn parse_real_final_events_extracts_the_impact_of_clauses_and_stops_before_winner_is() {
+        let card_index = build_card_index();
+        let text = "End of game Check the journal to get the final impacts effects :; Impact of Balance; Impact \
+                     of Progress; Impact of Happiness; Impact of Architecture; ; WINNER IS RICARDO LOPEZ ANTON AS \
+                     ORANGE (177 PTS); 2nd is PLAYER as Purple (165 pts)";
+        let got = parse_real_final_events(text, &card_index);
+        assert_eq!(
+            got,
+            vec![
+                card("Impact of Balance"),
+                card("Impact of Progress"),
+                card("Impact of Happiness"),
+                card("Impact of Architecture"),
+            ]
+        );
+    }
+
+    /// The other real shape (10/1,011 games in the corpus): no cards were
+    /// still pending, so BGO's own line has no "Check the journal" preamble
+    /// and no `"Impact of"` clauses at all -- must resolve to empty, not a
+    /// parse error, since an empty final-event set is a legitimate real
+    /// outcome (every scoringEvent card got drawn and resolved mid-game).
+    #[test]
+    fn parse_real_final_events_is_empty_when_the_real_game_had_no_cards_left_pending() {
+        let card_index = build_card_index();
+        let text = "End of game ; WINNER IS PLAYER AS ORANGE (102 PTS); 2nd is PLAYER2 as Purple (48 pts)";
+        assert_eq!(parse_real_final_events(text, &card_index), Vec::<CardId>::new());
+    }
+
+    /// This is the fix itself: `events::evaluate_final_events` reads
+    /// `current_events`/`future_events` (via `pending_final_events`), and
+    /// before this fix those piles held whatever the replayer's own
+    /// event-plan reconstruction guessed for cards the real game never
+    /// revealed -- a fictional set `event_plan`'s own module doc already
+    /// admits "nothing ever validates". Confirmed RED by reverting this
+    /// function to a no-op: the assertion below fails
+    /// `left: [Vast Territory (II), Impact of Industry], right: [Impact of
+    /// Balance, Impact of Progress]` (the untouched fictional pile survives
+    /// instead of being replaced).
+    #[test]
+    fn ground_final_events_replaces_both_piles_with_exactly_the_real_cards_dropping_any_fictional_leftovers() {
+        let mut state = blank_state();
+        // A fictional pile this reconstruction's own event-plan machinery
+        // might plausibly have left behind -- one non-scoring Territory
+        // card (irrelevant to final scoring either way) and one WRONG
+        // scoringEvent card that must be dropped, not merged with the real
+        // set.
+        state.current_events.push(card("Vast Territory (II)"));
+        state.current_events.push(card("Impact of Industry"));
+        let real = vec![card("Impact of Balance"), card("Impact of Progress")];
+        ground_final_events(&mut state, &real);
+        assert!(state.current_events.is_empty());
+        assert_eq!(state.future_events.as_slice(), real.as_slice());
+    }
 
     #[test]
     fn parse_age_reads_every_roman_numeral_the_journal_actually_prints() {
