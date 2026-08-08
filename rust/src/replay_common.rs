@@ -982,9 +982,27 @@ impl<'a> Replayer<'a> {
                     // `QueueItem::LosePop` arm) is resolved by `apply_one`'s
                     // `Destroy | Disband` arm ALREADY (mirroring `DestroyOwn`)
                     // when it is `expected_actor`'s own pending and the upcoming
-                    // line IS their own `"destroys"` line -- same `matches_
-                    // upcoming` shape as `DiscardMilitary` just above, deferred
-                    // there rather than duplicated here.
+                    // line IS their own `"destroys"` OR `"disbands"` line --
+                    // BGO renders the SAME LosePop resolution as `"destroys"`
+                    // when the surrendered worker-holder is a civil card and
+                    // `"disbands"` when it is a military unit (the choice's own
+                    // options mix both kinds, `worker_holding_options`) -- same
+                    // `matches_upcoming` shape as `DiscardMilitary` just above,
+                    // deferred there rather than duplicated here. Before this
+                    // fix `matches_upcoming` only recognised `Destroy`, so every
+                    // `"disbands"` resolution missed the fast path here and fell
+                    // through to the `lose_pop_destroys` FIFO below, which (same
+                    // bug, `prescan_lose_pop_destroys`) never indexed `Disband`
+                    // lines either -- the pending then either errored as "no
+                    // journal-observed destroy line" or, worse, silently stole
+                    // an unrelated LATER real `Destroy` line sharing the same
+                    // `CardId` (validated by identity only, not position),
+                    // leaving THIS line's own resolution orphaned and `state.
+                    // current` advanced past it -- the single largest confirmed
+                    // cause of the `disbands`-shaped members of the `StuckPending:
+                    // decider != expected actor ..., phase Actions, no pending`
+                    // bucket (`docs/REPLAY.md`, traced on real games `7522649`,
+                    // `7523045`, `7521377`).
                     //
                     // The gap this closes: the event that forces the loss can
                     // fire as a SIDE EFFECT of resolving a DIFFERENT player's
@@ -1018,7 +1036,8 @@ impl<'a> Replayer<'a> {
                     // would otherwise process again, double-applying the same
                     // destroy.
                         ChoiceKind::LosePop => {
-                        let matches_upcoming = c.player == expected_actor && upcoming.0 == ActionClass::Destroy;
+                        let matches_upcoming =
+                            c.player == expected_actor && matches!(upcoming.0, ActionClass::Destroy | ActionClass::Disband);
                         if matches_upcoming {
                             return Ok(());
                         }
@@ -3832,7 +3851,16 @@ fn prescan_infiltrates(lines: &[Line]) -> HashMap<u8, VecDeque<bool>> {
 fn prescan_lose_pop_destroys(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<(usize, CardId)>> {
     let mut out: HashMap<u8, VecDeque<(usize, CardId)>> = HashMap::new();
     for (i, line) in lines.iter().enumerate() {
-        let LineOutcome::Action(Classified { class: ActionClass::Destroy, card: Some(card) }) = classify(card_index, line.text) else {
+        // `Disband` alongside `Destroy`: a `LosePop` resolution renders as
+        // either verb depending on whether the surrendered worker-holder is
+        // a civil card or a military unit (see this FIFO's own consumer,
+        // `resolve_intervening`'s `ChoiceKind::LosePop` arm, for the full
+        // story) -- both must feed the SAME per-player queue, in journal
+        // order, or a `Disband` resolution the fast path missed has nothing
+        // here to fall back on either.
+        let LineOutcome::Action(Classified { class: ActionClass::Destroy | ActionClass::Disband, card: Some(card) }) =
+            classify(card_index, line.text)
+        else {
             continue;
         };
         let Some((actor, _)) = actor_and_rest(line.text) else { continue };
@@ -8180,6 +8208,53 @@ mod tests {
             r.state.players[0].techs.get(bronze).map(|s| s.workers),
             Some(1),
             "Bronze (staffed with 2 workers as a starting tech) must lose exactly one"
+        );
+    }
+
+    /// REPLAYER BUG (found chasing the `StuckPending: decider != expected
+    /// actor ..., phase Actions, no pending` bucket, real games `7522649`/
+    /// `7523045`/`7521377`, `docs/REPLAY.md`): BGO renders a `LosePop`
+    /// resolution as `"<Color> disbands <Unit>"` (not `"destroys"`) when
+    /// the surrendered worker-holder is a military unit -- the sibling test
+    /// above already confirms `apply_one`'s `Destroy | Disband` arm handles
+    /// both verbs identically once it is reached, but `resolve_intervening`'s
+    /// OWN `ChoiceKind::LosePop` fast path (which decides whether to defer
+    /// to that arm at all, for the same-line same-player case) used to check
+    /// only `upcoming.0 == ActionClass::Destroy`, so a `Disband`-shaped
+    /// upcoming line never took it -- it fell through to the
+    /// `lose_pop_destroys` FIFO fallback instead, which (same bug,
+    /// `prescan_lose_pop_destroys`) had never indexed `Disband` lines
+    /// either, so the live pending either errored immediately ("no
+    /// journal-observed destroy line") or silently stole an unrelated LATER
+    /// `Destroy` line sharing the same `CardId`, orphaning this line's own
+    /// resolution and leaving `state.current` advanced past it.
+    #[test]
+    fn resolve_intervening_defers_a_lose_pop_pending_to_apply_one_when_the_upcoming_line_is_a_matching_disband() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.players[0].workers_free = 0;
+        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::LosePop { player: 0, n: 1 });
+        crate::interact::run_queue(&mut r.state);
+        let warriors = CardId::by_name("Warriors").expect("Warriors is a starting military tech");
+        assert!(
+            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.player == 0 && matches!(c.kind, ChoiceKind::LosePop)),
+            "no free worker, so a real choice must be open: {:?}",
+            r.state.pending.top()
+        );
+
+        // Same player, and the upcoming line IS this exact pending's own
+        // resolution -- just spelled `Disband` (a military unit) instead of
+        // `Destroy` (a civil card), which the sibling `Destroy` case above
+        // already proves `apply_one` can finish correctly once reached.
+        let result = r.resolve_intervening(0, (ActionClass::Disband, Some(warriors)), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.player == 0 && matches!(c.kind, ChoiceKind::LosePop)),
+            "the fast path only defers to apply_one's own Destroy|Disband arm for the real line -- it must not \
+             consume the pending itself: {:?}",
+            r.state.pending.top()
         );
     }
 
