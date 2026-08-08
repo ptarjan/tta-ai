@@ -237,6 +237,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                     d.ledger_excess,
                     d.ledger_last_event.map(|(kind, lineno)| (kind, lineno))
                 );
+                if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| key.contains(&want)) {
+                    eprintln!("DUMP {example}");
+                }
                 let entry = ledger_verdict_buckets.entry(key).or_insert_with(|| (0, example.clone()));
                 entry.0 += 1;
             }

@@ -3215,6 +3215,29 @@ pub enum LedgerEventKind {
     /// which are NOT hand cards and do not count here) -- reuses
     /// [`parse_sacrifice_clauses`] directly rather than re-parsing.
     ColonizeConsume,
+    /// `"Christopher Columbus discovers <Age> / <Territory>"` -- Columbus's
+    /// leader ability, a political action that removes Columbus from play to
+    /// colonize a territory already sitting in the actor's OWN military hand
+    /// "without sacrificing any units" (`corpus::ActionClass::
+    /// ColumbusColonize`'s own doc, quoting `bga_throughtheages_material.inc.
+    /// php`). "Without sacrificing units" is not "without leaving the hand":
+    /// the territory card itself still moves out of `hand_military` into the
+    /// player's colonies (`apply.rs::h_columbus_colonize`'s own
+    /// `hand_military.remove_first(card)`, proven by this file's
+    /// `every_card_consuming_action_class_nets_hand_military_down_by_exactly_
+    /// one` test) -- a real -1, same shape as [`LedgerEventKind::
+    /// PrepareEvent`], just never routed through this generic dispatch
+    /// because its own journal line has NO leading actor colour at all (the
+    /// ONLY other line shape sharing that property is `"End turn"`, which
+    /// [`prescan_military_hand_ledger`] already special-cases the same way).
+    /// Found chasing the `UnmodelledEvent`/`PrepareEvent` ledger bucket
+    /// (`docs/REPLAY.md`): a missed Columbus consumption left the ledger's
+    /// own running count permanently one card too high from that point
+    /// onward, surfacing as a divergence at whatever the NEXT checkpoint
+    /// happened to be -- routinely a later `PrepareEvent`, purely because
+    /// preparations are frequent, not because `PrepareEvent` itself was ever
+    /// the actual cause.
+    ColumbusConsume,
 }
 
 /// The always-on classification of this game's FIRST discard-phase-oracle
@@ -3398,6 +3421,19 @@ fn prescan_military_hand_ledger(lines: &[Line], card_index: &HashMap<&'static st
                 }
             }
         }
+        // Columbus's own discovery line, the other no-leading-actor-colour
+        // shape (`corpus::ActionClass::ColumbusColonize`'s own doc) -- must
+        // be special-cased exactly like `"End turn"` above, since the
+        // generic `actor_and_rest`-driven dispatch below silently never
+        // fires for it at all (`actor_and_rest` requires a leading colour
+        // and this line has none). See [`LedgerEventKind::ColumbusConsume`]'s
+        // own doc for why this is a real -1, found chasing the
+        // `UnmodelledEvent`/`PrepareEvent` ledger bucket.
+        if line.text.starts_with("Christopher Columbus discovers ") {
+            if let Some(actor) = Color::parse(line.color) {
+                bump_ledger(&mut running, &mut last_event, actor.seat(), -1, LedgerEventKind::ColumbusConsume, line.lineno);
+            }
+        }
         for clause in line.text.split("; ") {
             if let Some((color, n)) = parse_military_draw_clause(clause) {
                 bump_ledger(&mut running, &mut last_event, color.seat(), n as i32, LedgerEventKind::Draw, line.lineno);
@@ -3427,23 +3463,52 @@ fn prescan_military_hand_ledger(lines: &[Line], card_index: &HashMap<&'static st
         }
         if let LineOutcome::Action(Classified { class, .. }) = classify(card_index, line.text) {
             if let Some((actor, rest)) = actor_and_rest(line.text) {
-                let consumes = match class {
-                    ActionClass::DeclareWar | ActionClass::PlayAggression | ActionClass::ProposePact => {
-                        Some(LedgerEventKind::ConsumingPlay)
-                    }
-                    ActionClass::PlayTactic if !rest.starts_with("adopts existing tactics ") => {
-                        Some(LedgerEventKind::ConsumingPlay)
-                    }
-                    ActionClass::PlayEvent => Some(LedgerEventKind::PrepareEvent),
-                    _ => None,
-                };
-                if let Some(kind) = consumes {
+                if let Some(kind) = ledger_event_kind_for_action_class(class, rest) {
                     bump_ledger(&mut running, &mut last_event, actor.seat(), -1, kind, line.lineno);
                 }
             }
         }
     }
     out
+}
+
+/// Which [`LedgerEventKind`] (if any) a `classify`d action-phase line
+/// represents, for [`prescan_military_hand_ledger`]'s generic
+/// `"<Color> <verb>..."` dispatch (the `actor_and_rest`-gated block just
+/// above). EXHAUSTIVE over every `ActionClass` variant, no wildcard arm --
+/// the same discipline `action_class_grounds_and_consumes_a_card` already
+/// established for the SIMULATOR side (this file's "structural follow-up"
+/// section) -- so a new `corpus.rs` variant fails to compile here until
+/// someone decides whether it moves a real card out of `hand_military`.
+///
+/// `ActionClass::ColumbusColonize` is deliberately classified `None` HERE
+/// even though it genuinely does consume a card
+/// (`every_card_consuming_action_class_nets_hand_military_down_by_exactly_
+/// one` proves it on the simulator side): its own journal line has NO
+/// leading actor colour at all, so `actor_and_rest` above already rejects it
+/// before this function is ever called for it -- seeing this function is
+/// therefore not what's missing for that class. It is a real
+/// [`LedgerEventKind::ColumbusConsume`], counted by
+/// [`prescan_military_hand_ledger`]'s own dedicated `"Christopher Columbus
+/// discovers "` check instead, mirroring how `"End turn"` gets its own
+/// dedicated check for the identical reason.
+fn ledger_event_kind_for_action_class(class: ActionClass, rest: &str) -> Option<LedgerEventKind> {
+    use ActionClass::*;
+    match class {
+        DeclareWar | PlayAggression | ProposePact => Some(LedgerEventKind::ConsumingPlay),
+        PlayTactic => (!rest.starts_with("adopts existing tactics ")).then_some(LedgerEventKind::ConsumingPlay),
+        PlayEvent => Some(LedgerEventKind::PrepareEvent),
+
+        // Every other class either never touches `hand_military` at all, or
+        // (`Discard`) is already counted by this file's own dedicated
+        // per-CLAUSE `parse_discard_count_line` pass above -- routing it
+        // through here too would double-count it. `ColumbusColonize`: see
+        // this function's own doc above.
+        TakeCard | BuildBuilding | BuildUnit | BuildWonderStage | IncreasePopulation | UpgradeUnit | UpgradeProduction
+        | DevelopTechnology | ElectLeader | ChangeGovernment | WinWar | AcceptPact | Colonize | Discard | Bid | WinAuction
+        | Destroy | Disband | Pass | PlayActionCard | PutBack | EndTurn | RemoveLeaderYellow | ColumbusColonize | Barbarossa
+        | BachTheater => None,
+    }
 }
 
 /// Applies one [`LedgerEventKind`] delta to [`prescan_military_hand_ledger`]'s
@@ -6839,6 +6904,38 @@ mod tests {
         let card_index = build_card_index();
         let ledger = prescan_military_hand_ledger(&lines, &card_index);
         assert_eq!(ledger.get(&(Color::Orange.seat(), "8".to_string())).map(|c| c.raw), Some(1));
+    }
+
+    /// FOUND chasing the `UnmodelledEvent`/`PrepareEvent` ledger bucket
+    /// (`docs/REPLAY.md`): `"Christopher Columbus discovers <Age> /
+    /// <Territory>"` has NO leading actor colour at all (the actor is only
+    /// in `Line::color`, exactly like `"End turn"`), so it never reached the
+    /// generic `actor_and_rest`-gated dispatch and was silently counted as
+    /// ZERO by the ledger even though `apply.rs::h_columbus_colonize`
+    /// genuinely removes the discovered territory from `hand_military`
+    /// (§`ColumbusColonize`'s own doc: "without sacrificing any units" is
+    /// not "without leaving the hand"). Real corpus shape, game `7523353`
+    /// line 167: this ledger gap alone left the ledger's own running count
+    /// permanently one card too high for the rest of that game, first
+    /// surfacing as a divergence 7 rounds later, at a checkpoint whose OWN
+    /// `last_event` was an entirely innocent `PrepareEvent`.
+    #[test]
+    fn military_hand_ledger_counts_a_columbus_discovery_as_minus_one_despite_no_leading_actor_colour() {
+        let lines = [
+            oracle_test_line(
+                "Purple",
+                "10",
+                "End turn Purple scores:; ; 0 culture (now 0); 1 science (now 2); 2 food - consumption: 0 (now 5); \
+                 2 resources (now 2); Purple draws 2 military cards",
+            ),
+            oracle_test_line("Purple", "11", "Christopher Columbus discovers I / Vast Territory"),
+            oracle_test_line("Purple", "11", "End turn Purple scores:; ; 0 culture (now 0)"),
+        ];
+        let card_index = build_card_index();
+        let ledger = prescan_military_hand_ledger(&lines, &card_index);
+        let purple = ledger.get(&(Color::Purple.seat(), "11".to_string())).unwrap();
+        assert_eq!(purple.raw, 1, "2 drawn - 1 Columbus consumption = 1, not the silently-uncounted 2");
+        assert_eq!(purple.last_event.map(|(kind, _)| kind), Some(LedgerEventKind::ColumbusConsume));
     }
 
     /// Real corpus shape, Politics of Strength's "weakest civilization

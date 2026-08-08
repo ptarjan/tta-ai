@@ -7380,3 +7380,159 @@ another.
   `/DefenseConsume` ledger buckets, or the `UnmodelledEvent` buckets other
   than noting `ConsumingPlay`'s own count moved (4 -> 33, plausibly
   reclassification fallout, not independently investigated).
+
+## FOUND AND FIXED: `UnmodelledEvent`/`PrepareEvent`'s own cause -- Columbus's leader ability has NO leading actor colour, so the ledger silently never counted its real -1
+
+Picked up the task's own two top-ranked "Military hand ledger" rows at the
+tree this pass started from (`780d00c`): 137 `SimulatorBug`/`PrepareEvent`
+and 83 `UnmodelledEvent`/`PrepareEvent`. Traced 3-5 concrete games by hand
+against raw journal text per the task's own method, rather than assuming
+the bucket NAME (`PrepareEvent`) named the cause -- and it didn't.
+
+**The trace, game `7523353` (Purple, actor 1):** a per-round `LedgerCheckpoint`
+dump (temporary instrumentation, not landed) showed `prescan_military_hand_
+ledger`'s own `raw` running count silently going ONE TOO HIGH at round 10,
+line 167 -- `"Christopher Columbus discovers I / Inhabited Territory"` --
+and staying wrong for the rest of the game, only SURFACING as a divergence
+7 rounds later once it finally pushed a checkpoint's excess over the limit.
+The divergence's own `last_event` at that point was an entirely innocent
+`PrepareEvent` (line 323) -- the bucket name was a symptom of PrepareEvent
+being the most FREQUENT event class, not the cause.
+
+**Root cause:** `corpus::ActionClass::ColumbusColonize`'s own doc already
+names this line as "the ONLY line in the whole corpus... [needing] column 2
+(`Line::color`) read at all" -- Columbus's discovery line has no leading
+`"<Color> "` prefix (`"Christopher Columbus discovers <Age> / <Territory>"`
+-- "Christopher Columbus" is itself a known card name). `prescan_military_
+hand_ledger`'s generic per-line dispatch is gated on `actor_and_rest(line.
+text)`, which requires that leading colour and therefore silently never
+fires for this line at all -- not a wildcard-arm miss, a shape the generic
+dispatch structurally cannot reach. The SIMULATOR side already handles this
+correctly (`apply.rs::h_columbus_colonize`'s `hand_military.remove_first
+(card)`, proven by the existing `every_card_consuming_action_class_nets_
+hand_military_down_by_exactly_one` test) -- "colonize... without sacrificing
+any units" (the ability's own rules text) is not "without the territory card
+leaving the hand." Only the LEDGER's independent journal-only pass had the
+gap.
+
+**The fix** (`rust/src/replay_common.rs`):
+- New `LedgerEventKind::ColumbusConsume` variant.
+- `prescan_military_hand_ledger` gets a dedicated `"Christopher Columbus
+  discovers "` check, reading the actor off `Line::color` -- the exact same
+  special-casing the function already gives `"End turn"`, the only other
+  no-leading-colour shape.
+- The old `match class { ... _ => None }` inline dispatch (a wildcard arm)
+  is pulled out into `ledger_event_kind_for_action_class(class, rest)`, an
+  EXHAUSTIVE match over every `ActionClass` variant with NO wildcard --
+  mirroring `action_class_grounds_and_consumes_a_card`'s own established
+  idiom (this file's "Structural follow-up" section, above) -- so a new
+  `corpus.rs` variant fails to compile here until someone decides whether it
+  moves a real card out of `hand_military`. `ColumbusColonize` is classified
+  `None` HERE (with a doc explaining why: it's handled by the dedicated
+  check instead, since `actor_and_rest` rejects its line before this
+  function is ever consulted for it).
+- New test `military_hand_ledger_counts_a_columbus_discovery_as_minus_one_
+  despite_no_leading_actor_colour`, `#[cfg(test)] mod tests` in
+  `replay_common.rs`. Confirmed RED by reverting the dedicated check (the
+  ledger silently stayed at the pre-Columbus count instead of -1) before
+  green. Full `cargo test --lib`: 1141/1141 (was 1140).
+
+**Is the wrong version now unwritable, or merely discouraged?** The
+exhaustive `ActionClass` match makes it IMPOSSIBLE to add a new
+hand-consuming `ActionClass` variant without this file failing to compile
+until someone classifies it -- genuinely unwritable, same guarantee
+`action_class_grounds_and_consumes_a_card` already gives the simulator
+side. The Columbus special-case itself is NOT compiler-enforced (nothing
+stops a future no-leading-colour line shape from being added without its
+own dedicated check, the same way this one was missed) -- merely
+discouraged by this section's own doc comment and by `"End turn"`'s
+sibling precedent. A stronger guarantee would need enumerating every
+no-leading-colour line shape as a closed set fed through one shared
+dispatcher; judged not worth the indirection for two known members.
+
+### Corpus effect: reclassification, not a behaviour change -- and that is expected
+
+| | before (`780d00c`) | after |
+|---|---|---|
+| discard-phase oracle: checkpoints matched | 30439/31604 (96.3%) | **30439/31604 (96.3%), unchanged** |
+| games with at least one oracle divergence | 646/1011 | **646/1011, unchanged** |
+| games completing to `state.game_over` | 112 | **112, unchanged** |
+| `UnmodelledEvent`/`PrepareEvent` | 83 | **75** |
+| `SimulatorBug`/`PrepareEvent` | 137 | **145** |
+| new `SimulatorBug`/`ColumbusConsume` | -- | **5** |
+
+Zero completed-game or divergent-game-count change is the CORRECT result,
+not a miss: `prescan_military_hand_ledger` is a read-only diagnostic pass
+over the journal text, never consulted by the forward simulator's own
+`state` -- fixing it changes what the ledger REPORTS as the cause of a
+divergence, not whether the simulator itself diverges. `SimulatorBug`/
+`PrepareEvent` growing (137 -> 145, a net across all buckets always sums to
+646) is the same "revealed, not caused" shift this file's own `ConsumingPlay`
+fix already saw (`UnmodelledEvent`/`ConsumingPlay` 4 -> 33): a Columbus
+game whose ledger ALSO happened to have a real simulator-side bug converts
+from "ledger and simulator both look wrong, indistinguishable"
+(`UnmodelledEvent`) into "ledger's now-correct, simulator's own state is
+provably the one still wrong" (`SimulatorBug`) -- more ACCURATE attribution
+of a bug this pass did not fix, not a new bug. The task's own bucket
+definitions predicted this exactly: `UnmodelledEvent` means "the ledger
+itself is also wrong"; once the ledger is fixed, whatever REMAINS wrong at
+that checkpoint has nowhere left to hide except the simulator.
+
+### `SimulatorBug`/`PrepareEvent` (now the single largest bucket, 145 games): a real, only PARTIALLY understood simulator bug -- traced, not fixed
+
+Per-round `LedgerCheckpoint` dumps (same temporary instrumentation) on
+several `SimulatorBug`/`PrepareEvent` games split into two roughly
+equal-sized, OPPOSITE-direction cohorts (74 games simulator-undercounts by
+1, 65 simulator-overcounts by 1, of 145 total after the Columbus fix) --
+two different bugs, not one:
+
+- **Overcount cohort (simulator has one card too MANY):** confirmed, via
+  game `7522634` actor 0's own per-round trace, to be `resolve_political_
+  decision`'s OWN documented "no disposable filler exists" fallback (the
+  code comment already says: "Leaves the old net-zero behaviour untouched
+  -- not a regression, an honest miss"). Concretely: round 3's `PrepareEvent`
+  fires with the SIMULATED `hand_military` still completely empty (the
+  fictional initial deal has not been grounded with anything yet) -- there
+  is no card to pop as a disposable victim, so the push-then-apply-removal
+  washes to net ZERO instead of -1, one round after the player's first real
+  military draw. The resulting +1 phantom does not cross any checkpoint's
+  `limit` for several more rounds (invisible while clipped), then surfaces
+  as a `SimulatorBug` far downstream, blamed on whatever `PrepareEvent`
+  happens to be nearest. NOT fixed this pass: the empty-hand case has no
+  candidate victim by construction (nothing to evict), and the
+  all-cards-protected case would require either evicting a card
+  `DiscardSolver::needed_after` provably still needs later (risking a NEW
+  `IllegalMove` stop downstream) or ordering `needed_after`'s set by
+  proximity to choose the least-bad victim, which the current `HashSet`
+  return type does not carry. A real corpus-wide count of this fallback's
+  own trigger sites (21, measured with temporary instrumentation, not
+  landed) is smaller than the 65-game overcount cohort, so it is A cause,
+  not necessarily the ONLY one in that cohort.
+- **Undercount cohort (simulator has one card too FEW):** traced game
+  `7523353` round 17 end-to-end (the same game the Columbus fix's own
+  headline repro came from, at a LATER, unrelated checkpoint) -- confirmed
+  the ledger and journal agree exactly (both excess 2) while the simulator
+  alone computes 1, with no `ground_for_consumption`/no-filler fallback,
+  Columbus discovery, or defense commitment visible anywhere in that
+  round's own lines. Cause NOT found this pass -- flagged as the concrete
+  next lead, not guessed at.
+
+Both cohorts are genuine REPLAYER (not engine) bugs by the task's own
+framing (a perfect oracle disagrees with the simulator's bookkeeping) --
+`game.rs`/`apply.rs`/`legal.rs`/`costs.rs`/`bots/` are untouched by this
+pass (confirmed empty diff against `780d00c`), so self-play is unaffected
+either way.
+
+### What this pass did NOT do
+
+- Did not fix either `SimulatorBug`/`PrepareEvent` cohort above (the
+  no-filler wash's fallback case, or the still-uncharacterised undercount)
+  -- traced concretely, not resolved, and flagged as the next pass's
+  clearest lead, in the same "measure honestly, don't half-fix" spirit
+  `docs/REPLAY.md`'s own prior passes are held to.
+- Did not open `SimulatorBug`/`Draw` (113), `SimulatorBug`/`Discard` (83),
+  `SimulatorBug`/`ConsumingPlay` (66, the residual from the earlier
+  five-site fix), or `UnmodelledEvent`/`Draw` (61) -- unaffected by this
+  pass's own diff, unchanged in the before/after table above modulo the
+  reclassification bleed already explained.
+- Did not touch `game.rs`, `apply.rs`, `legal.rs`, `costs.rs`, or `bots/`.
