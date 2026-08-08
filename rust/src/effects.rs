@@ -470,7 +470,16 @@ fn happy_source_count(p: &PlayerState) -> i32 {
         if p.flipped_wonders.contains(w) {
             continue;
         }
-        if w.get().effects.happy > 0 {
+        let card = w.get();
+        // St. Peter's Basilica's own printed text: "Each OTHER card or
+        // worker that gives you at least one happy face now gives you an
+        // extra 1 happy face" -- a card carrying `ExtraHappyPerHappySource`
+        // must not count its own happy toward its own bonus. Checked by
+        // special (not by name/value), so this stays correct if a future
+        // card ever carries the same special.
+        let grants_this_bonus_itself =
+            card.special.iter().any(|sp| matches!(sp, Special::ExtraHappyPerHappySource(_)));
+        if card.effects.happy > 0 && !grants_this_bonus_itself {
             n += 1;
         }
     }
@@ -1726,11 +1735,12 @@ mod tests {
         let state = one_player_state(2, p);
         let s = compute(&state, &state.players[0]);
         assert_eq!(s.culture, 2);
-        // +1 flat happy, PLUS +1 from its own `extraHappyPerHappySource`: the
-        // wonder is itself one happy source (its own printed happy is 1), so
-        // "every building/card providing happy faces provides one additional
-        // happy face" pays out on St. Peter's itself too.
-        assert_eq!(s.happy, 2);
+        // +1 flat happy, and NOTHING from its own `extraHappyPerHappySource`:
+        // the card's own printed text says "each OTHER card or worker" --
+        // St. Peter's does not count itself as one of the sources its own
+        // bonus doubles, and with nothing else in play there is no other
+        // source to pay out on.
+        assert_eq!(s.happy, 1);
     }
 
     // ------------------------------------------------------ army strength
@@ -1837,10 +1847,11 @@ mod tests {
         p.completed_wonders.push(w);
         let state = one_player_state(2, p);
         let s = compute(&state, &state.players[0]);
-        // Base happy: St. Peter's +1, the colony's +1 = 2. Two happy
-        // SOURCES (the wonder and the colony, both printing happy > 0) at
-        // +1 each via `extraHappyPerHappySource` = 2 more. Total 4.
-        assert_eq!(s.happy, 4);
+        // Base happy: St. Peter's +1, the colony's +1 = 2. Only ONE happy
+        // SOURCE counts toward `extraHappyPerHappySource` -- the colony;
+        // St. Peter's own printed text is "each OTHER card", so it excludes
+        // itself even though it also prints happy > 0. +1 more. Total 3.
+        assert_eq!(s.happy, 3);
     }
 
     // -------------------------------------------------------------- pacts
@@ -1917,6 +1928,25 @@ mod tests {
         // Player 1 reads player 0's wonder count (zero), PLUS St. Peter's
         // own +2 culture and +1 happy/extraHappyPerHappySource (1 source).
         assert_eq!(s1.culture, 2);
+    }
+
+    #[test]
+    fn st_peters_basilica_does_not_count_its_own_happy_toward_its_own_bonus() {
+        // Card's own printed text: "Each OTHER card or worker that gives you
+        // at least one happy face now gives you an extra 1 happy face." One
+        // worked Religion (production happy:1) is the only OTHER happy
+        // source: Religion's own +1, St. Peter's own flat +1, and +1 more
+        // for Religion being a qualifying "other" source = 3 total. If St.
+        // Peter's wrongly counted ITSELF as a second source, this would be 4
+        // instead -- the distinguishing number a same-total fix could not
+        // pass by accident.
+        let mut p = blank_player(0, card("Despotism"));
+        p.techs.insert(card("Religion"), TechSlot { workers: 1, stored: 0 });
+        p.completed_wonders.push(card("St. Peter's Basilica"));
+        let state = two_player_state(p, blank_player(1, card("Despotism")));
+
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.happy, 3, "Religion's +1, St. Peter's own flat +1, and +1 bonus for Religion alone");
     }
 
     // ------------------------------------------------------------- purity
