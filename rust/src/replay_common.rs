@@ -162,7 +162,7 @@ use crate::corpus::{
 pub use crate::corpus::build_card_index;
 use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
-use crate::moves::PactSide;
+use crate::moves::{ChurchillChoice, PactSide};
 use crate::state::{
     Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND, MAX_PLAYERS,
 };
@@ -2450,6 +2450,59 @@ fn spent_resources(text: &str) -> Option<i32> {
 fn trailing_now_science(text: &str) -> Option<i32> {
     let p = text.find(" science (now ")?;
     let rest = &text[p + " science (now ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    rest[..digits_end].parse().ok()
+}
+
+/// Applies Winston Churchill's once-per-turn choice
+/// (`sources/bga_throughtheages_material.inc.php` #186: "On your turn,
+/// choose one: score 3 culture; or you have 3 science and 3 resources for
+/// developing military unit technologies and building and upgrading
+/// units.") when `end_turn_text` -- the SAME no-leading-colour "End turn"
+/// line `replay_game`'s own dispatch loop is about to translate into
+/// `Move::EndTurn` (the loop's own actor, already resolved as `r.state.
+/// current`, is who this move belongs to) -- carries it as a glued-on
+/// PREFIX consequence clause: `"End turn Winston Churchill scores 3
+/// culture.; <Color> scores: ..."`. BGO never logs this as a separate
+/// line, so nothing else in this file ever sees it; a plain `Ok(())` no-op
+/// for every other "End turn" line.
+///
+/// Confirmed corpus-wide (every `sources/bgo` journal): 1,049 occurrences
+/// across 377 games, EVERY one this exact culture phrasing -- the card's
+/// "3 science and 3 resources" military option is never once observed in
+/// the corpus, so this only ever reads for `ChurchillChoice::Culture`.
+/// Applying the move here, BEFORE the caller's own `Move::EndTurn`, mirrors
+/// the real turn order: Churchill's choice is an Action-phase move, always
+/// exercised before the turn ends. `try_apply` legality-checks it the same
+/// as every other synthesized move this file inserts
+/// (`RemoveLeaderYellow`, `Barbarossa`, `ColumbusColonize`) -- a game that
+/// reaches here without Churchill actually in play, or with this turn's
+/// choice already spent, fails loud here rather than silently drifting
+/// culture for the rest of the game.
+///
+/// Before this existed, the replayer never modelled this choice at all --
+/// the +3 culture (or the ring-fenced military resources, never observed)
+/// was silently dropped every single turn a Churchill owner had him in
+/// play, undercounting `state.players[_].culture` for the rest of the
+/// game and, downstream, the final score `docs/REPLAY.md`'s own "Final
+/// scores" section already tracks at length.
+fn apply_churchill_end_turn_choice(r: &mut Replayer, end_turn_text: &str) -> Result<(), MismatchKind> {
+    if end_turn_text.starts_with("End turn Winston Churchill scores 3 culture.") {
+        r.try_apply(Move::Churchill { choice: ChurchillChoice::Culture }, true)?;
+    }
+    Ok(())
+}
+
+/// DIAGNOSTIC ONLY (temporary, this pass): [`trailing_now_science`]'s twin
+/// for the `"N culture (now M)"` clause of an `"End turn"` line, used to
+/// bisect where a completed game's running culture total first drifts from
+/// BGO's own recorded running total, ahead of `finish_game`.
+fn trailing_now_culture(text: &str) -> Option<i32> {
+    let p = text.find(" culture (now ")?;
+    let rest = &text[p + " culture (now ".len()..];
     let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
     if digits_end == 0 {
         return None;
@@ -4853,6 +4906,7 @@ pub fn replay_game(
                         // turn" line for the true final turn) -- nothing left
                         // to check against a state that already finished.
                         r.check_discard_phase_oracle(actor, line);
+                        apply_churchill_end_turn_choice(&mut r, line.text)?;
                         r.try_apply(Move::EndTurn, true)
                     }
                 }) {
@@ -4878,6 +4932,17 @@ pub fn replay_game(
                         if want != got {
                             eprintln!(
                                 "DEBUG end-turn science drift: actor={actor} journal says (now {want}), \
+                                 this binary computes {got} (delta {}) at {:?}",
+                                got - want,
+                                line.text,
+                            );
+                        }
+                    }
+                    if let Some(want) = trailing_now_culture(line.text) {
+                        let got = r.state.players[actor as usize].culture as i32;
+                        if want != got {
+                            eprintln!(
+                                "DEBUG end-turn culture drift: actor={actor} journal says (now {want}), \
                                  this binary computes {got} (delta {}) at {:?}",
                                 got - want,
                                 line.text,
@@ -6147,6 +6212,12 @@ fn apply_one(
             r.resolve_discard(actor);
             Ok(())
         }
+        // Unreachable for the same reason `RemoveLeaderYellow` above is:
+        // `EndTurn` carries no leading actor colour, so `replay_game`'s own
+        // dispatch loop special-cases it (actor resolved as `state.current`)
+        // before this function is ever called -- see that loop's own
+        // "Winston Churchill's once-per-turn choice" handling, right before
+        // its own `Move::EndTurn` application.
         ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
         // Unreachable: the dispatch loop in `replay_game` special-cases
         // `RemoveLeaderYellow`, `ColumbusColonize`, and `Barbarossa` before
@@ -8145,6 +8216,63 @@ mod tests {
         // Caesar leaves the phase open, so the pass line still has its own
         // real decision to land on.
         assert_eq!(r.state.phase, Phase::Politics);
+    }
+
+    /// `docs/REPLAY.md`'s "Winston Churchill's once-per-turn choice" section:
+    /// real game `7522614`'s running culture total (`sources/bgo`'s own
+    /// journal, `"End turn ... (now N)"`) matched this reconstruction's
+    /// EXACTLY for 16 straight rounds, then fell behind by exactly 3 the
+    /// instant Churchill was elected and his own "scores 3 culture." prefix
+    /// first appeared on an "End turn" line -- and fell behind by another 3
+    /// the very next time it appeared, never recovering either deficit for
+    /// the rest of the game. `apply_churchill_end_turn_choice` is the fix:
+    /// this test reproduces the mechanism directly, without a whole journal.
+    #[test]
+    fn apply_churchill_end_turn_choice_scores_3_culture_when_the_end_turn_line_carries_his_prefix() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.current = 0;
+        r.state.phase = Phase::Actions;
+        // Round 1 is the §1.9 "taking cards is the only legal action" round
+        // (`legal::action_moves`'s own early return) -- Churchill is an Age
+        // III leader, never in play that early in a real game, so this test
+        // sets a realistic later round rather than tripping that guard.
+        r.state.round = 17;
+        r.state.players[0].leader = crate::CardId::by_name("Winston Churchill").expect("Churchill is in the table");
+        let before = r.state.players[0].culture;
+
+        apply_churchill_end_turn_choice(
+            &mut r,
+            "End turn Winston Churchill scores 3 culture.; Orange scores:; ; 5 culture (now 56); \
+             6 science (now 17); 3 food - consumption: 3 (now 8); 5 resources (now 10)",
+        )
+        .expect("Churchill's own choice is legal on his owner's turn");
+
+        assert_eq!(r.state.players[0].culture, before + 3);
+        assert!(r.state.players[0].churchill_used, "the once-per-turn choice is spent");
+    }
+
+    /// The far more common case -- an ordinary "End turn" line with no
+    /// Churchill prefix at all -- must stay a pure no-op: nothing here
+    /// should ever score culture, spend the choice, or reject the line, for
+    /// a player who does not even have Churchill in play.
+    #[test]
+    fn apply_churchill_end_turn_choice_is_a_no_op_for_an_ordinary_end_turn_line() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.current = 0;
+        r.state.phase = Phase::Actions;
+        let before = r.state.players[0].culture;
+
+        apply_churchill_end_turn_choice(
+            &mut r,
+            "End turn Orange scores:; ; 2 culture (now 4); 2 science (now 9); \
+             1 food - consumption: 1 (now 4); 3 resources (now 5)",
+        )
+        .expect("no Churchill prefix means nothing to apply");
+
+        assert_eq!(r.state.players[0].culture, before);
+        assert!(!r.state.players[0].churchill_used);
     }
 
     /// Julius Caesar offers a SECOND political action after the first one
