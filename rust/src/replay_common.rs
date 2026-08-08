@@ -304,6 +304,156 @@ pub struct Decision {
 }
 
 // ---------------------------------------------------------------------
+// Move category -- shared by `bin/agreement.rs` and `bin/agreefit.rs`
+// ---------------------------------------------------------------------
+
+/// The nine buckets this project's phase-1 brief names, plus `Other` for
+/// every `Move` variant that doesn't fit one cleanly. Deliberately an
+/// exhaustive match over `Move` (no wildcard arm) in [`categorize`]: a new
+/// `Move` variant must be placed here explicitly rather than silently
+/// falling into `Other`.
+///
+/// Moved here from `bin/agreement.rs` (which introduced it) when
+/// `bin/agreefit.rs` needed the identical labelling for its own per-decision
+/// cache records -- a category label is a small, pure function of
+/// `(pending, Move)`, not part of either binary's own replay-walking or
+/// feature-extraction machinery, but two binaries hand-maintaining two
+/// copies of "which bucket does `Move::Take` fall in" is exactly the kind of
+/// drift this project's own house style forbids, so it lives once, in the
+/// library, alongside the [`Decision`] type both binaries already share.
+///
+/// `Build` covers `Move::Build` AND `Move::Develop`/`Move::Upgrade` --
+/// developing a technology or upgrading a farm/mine/unit is a building
+/// action under TTA's rules (§3, §4), not a structurally different
+/// decision, so folding them in gives `build` its true volume instead of
+/// splintering it across three buckets.
+///
+/// `Bid` is a first-class category, split out of `Other`, specifically
+/// BECAUSE `docs/HUMAN_PLAY.md`'s census flags "4p bot barely contests
+/// colonization auctions" as a live, named finding -- that claim can only be
+/// tested at the move level if `Bid`/`BidPass` decisions are visible as
+/// their own bucket rather than buried in `Other` alongside unrelated
+/// things.
+///
+/// What actually lands in `Other`, given `replay.rs`'s current coverage
+/// (see its own module doc for what it does and does not translate): a
+/// leader's own destroy/disband effect (`Destroy`), playing a plain action
+/// card (`PlayAction` -- distinct from the `FreeCivil`-granting `PlayAction`
+/// that immediately precedes a `Build`, which is still recorded as its own
+/// decision point, separately, and separately bucketed as `Build`), and
+/// three narrow `Pending::Choice` resolutions folded into one journal line
+/// (`FreeBuild`/`FreeCivil`/`FoodOrRes`/`DestroyOwn` -- see
+/// [`categorize_choice`]). None of these map cleanly onto this brief's named
+/// buckets; none is currently reached via any OTHER `ChoiceKind` either
+/// (`GainBlock`/`DiscardMilitary`/`Raid`/`Annex`/`Infiltrate`/`TakeRow`/
+/// `WarTech`/`PlunderSplit` are all resolved by `replay_common.rs` via
+/// `apply::apply` directly, never through the recorded `try_apply` path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Category {
+    TakeCard,
+    Build,
+    IncreasePopulation,
+    LeaderOrWonderStep,
+    PoliticalAction,
+    AggressionOrWar,
+    Pact,
+    Tactics,
+    Bid,
+    EndTurn,
+    Other,
+}
+
+impl Category {
+    pub fn name(self) -> &'static str {
+        match self {
+            Category::TakeCard => "take_card",
+            Category::Build => "build",
+            Category::IncreasePopulation => "increase_population",
+            Category::LeaderOrWonderStep => "leader_or_wonder_step",
+            Category::PoliticalAction => "political_action",
+            Category::AggressionOrWar => "aggression_or_war",
+            Category::Pact => "pact",
+            Category::Tactics => "tactics",
+            Category::Bid => "bid",
+            Category::EndTurn => "end_turn",
+            Category::Other => "other",
+        }
+    }
+}
+
+/// `Move::Choose` is a positional index into whatever `Pending::Choice` is
+/// currently open -- its OWN variant carries no hint of what kind of
+/// decision it resolves, so this reads `pending.top()` on the PRE-move state
+/// `Decision::state` snapshots (exactly what was open at record time, before
+/// the human's `Choose` cleared it) to recover that context. `PactOffer` is
+/// the only `ChoiceKind` `replay_common.rs` currently records a `Choose`
+/// decision point for AND that maps onto one of this brief's named buckets
+/// (accepting a pact); every other reachable kind falls to `Other`.
+pub fn categorize_choice(pending: Option<&Pending>) -> Category {
+    match pending {
+        Some(Pending::Choice(c)) => match c.kind {
+            ChoiceKind::PactOffer { .. } => Category::Pact,
+            ChoiceKind::GainBlock
+            | ChoiceKind::FreeCivil { .. }
+            | ChoiceKind::FoodOrRes { .. }
+            | ChoiceKind::FreeBuild
+            | ChoiceKind::DestroyOwn
+            | ChoiceKind::LosePop
+            | ChoiceKind::LoseColony
+            | ChoiceKind::FlipWonder
+            | ChoiceKind::DiscardMilitary
+            | ChoiceKind::Raid { .. }
+            | ChoiceKind::Annex { .. }
+            | ChoiceKind::Infiltrate { .. }
+            | ChoiceKind::TakeRow { .. }
+            | ChoiceKind::WarTech { .. }
+            | ChoiceKind::PlunderSplit { .. } => Category::Other,
+        },
+        // A recorded `Move::Choose` always has an open `Pending::Choice` at
+        // record time (`try_apply` only records after its own legality
+        // check passes, and `Choose` is never legal without one) -- this
+        // arm is unreachable in practice, kept only as a defensive
+        // fallback rather than a `panic!`.
+        _ => Category::Other,
+    }
+}
+
+pub fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
+    use Move::*;
+    match mv {
+        Take { .. } => Category::TakeCard,
+        Build { .. } | Develop { .. } | Upgrade { .. } => Category::Build,
+        Pop | PopFree => Category::IncreasePopulation,
+        PlayLeader { .. } | WonderStep { .. } => Category::LeaderOrWonderStep,
+        Revolution { .. } | PolPass => Category::PoliticalAction,
+        War { .. } | Aggression { .. } => Category::AggressionOrWar,
+        OfferPact { .. } => Category::Pact,
+        PlayTactic { .. } | CopyTactic { .. } => Category::Tactics,
+        Bid { .. } | BidPass => Category::Bid,
+        EndTurn => Category::EndTurn,
+        Choose { .. } => categorize_choice(pre_move_pending),
+        Destroy { .. }
+        | PlayAction { .. }
+        | CancelPact { .. }
+        | PrepareEvent { .. }
+        | RemoveLeaderYellow
+        | ColumbusColonize { .. }
+        | Barbarossa { .. }
+        | BachTheater { .. }
+        | Defend { .. }
+        | DefendDone
+        | SendUnit { .. }
+        | SendBonus { .. }
+        | SendDiscard { .. }
+        | SendDone
+        | Churchill { .. }
+        | Resign
+        | TradeFoodAsResource
+        | TradeResourceAsFood => Category::Other,
+    }
+}
+
+// ---------------------------------------------------------------------
 // Replay state
 // ---------------------------------------------------------------------
 
