@@ -41,6 +41,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use tta::corpus;
+use tta::corpus::ActionClass;
 use tta::replay_common::{build_card_index, replay_game, HandLedgerVerdict, LedgerEventKind, MismatchKind};
 
 /// A stable, printable bucket key for [`HandLedgerVerdict`] -- collapses the
@@ -63,6 +64,21 @@ fn hand_ledger_verdict_key(v: &HandLedgerVerdict, last_event: Option<LedgerEvent
         HandLedgerVerdict::UnmodelledEvent(Some(kind)) => format!("UnmodelledEvent: last ledger event was {kind:?}"),
         HandLedgerVerdict::UnmodelledEvent(None) => "UnmodelledEvent: no prior ledger event at all".to_string(),
         HandLedgerVerdict::NoLedgerEntry => "NoLedgerEntry (ledger coverage gap)".to_string(),
+    }
+}
+
+/// The culture-oracle cause histogram's own bucket key: the `Debug` name of
+/// whatever [`ActionClass`] was the last classified action line strictly
+/// before this game's first culture-oracle divergence, or a named bucket for
+/// "no prior classified action at all" (a divergence on the very first "End
+/// turn" of the game). Bucket names describe the SYMPTOM location (what
+/// happened right before the checkpoint noticed a drift), NOT necessarily
+/// the cause -- see `docs/REPLAY.md`'s "Culture-oracle" section for why the
+/// true first divergence is routinely several rounds earlier than this.
+fn action_class_bucket_key(last_action_class: Option<ActionClass>) -> String {
+    match last_action_class {
+        Some(class) => format!("{class:?}"),
+        None => "(no prior classified action this game)".to_string(),
     }
 }
 
@@ -188,6 +204,19 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // structurally rather than re-derived per game.
     let mut n_false_skips_total: u64 = 0;
     let mut n_games_with_false_skip: u32 = 0;
+    // `GameResult::culture_oracle_checked`/`culture_oracle_agreed` -- see
+    // `replay_common`'s `CultureOracleDivergence` doc and `docs/REPLAY.md`'s
+    // "Culture-oracle cause-classification instrument" section this
+    // implements: culture IS the score in this game, so this coverage stat
+    // matters as much as the discard-phase oracle's own.
+    let mut culture_oracle_checked_total = 0u64;
+    let mut culture_oracle_agreed_total = 0u64;
+    // The task's own deliverable: FIRST-divergence-per-game, ranked by the
+    // `ActionClass` of whatever the last classified action line was
+    // strictly before the diverging checkpoint. `None` keys (no prior
+    // classified action at all this game, i.e. divergence on the very first
+    // "End turn") bucket separately rather than being dropped.
+    let mut culture_cause_buckets: HashMap<String, (u32, String)> = HashMap::new();
     // `GameResult::politics_false_skips_unrecovered` -- the TRUE damage
     // signal (that field's own doc, and `politics_false_skips`'s, explain
     // why the two are not the same number on purpose). Should read 0.
@@ -243,6 +272,25 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                 let entry = ledger_verdict_buckets.entry(key).or_insert_with(|| (0, example.clone()));
                 entry.0 += 1;
             }
+        }
+        culture_oracle_checked_total += result.culture_oracle_checked as u64;
+        culture_oracle_agreed_total += result.culture_oracle_agreed as u64;
+        if let Some(d) = &result.culture_oracle_divergence {
+            let key = action_class_bucket_key(d.last_action_class);
+            let example = format!(
+                "{} line {} ({}): journal says (now {}), this binary computes {} (delta {})",
+                meta.id,
+                d.lineno,
+                d.actor,
+                d.journal_now,
+                d.reconstructed,
+                d.reconstructed - d.journal_now
+            );
+            if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| key.contains(&want)) {
+                eprintln!("DUMP {example}");
+            }
+            let entry = culture_cause_buckets.entry(key).or_insert_with(|| (0, example.clone()));
+            entry.0 += 1;
         }
         if let Some(p) = &result.civil_deck_premature_advance {
             n_premature += 1;
@@ -394,6 +442,35 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     println!("| games | reason | example |");
     println!("|---|---|---|");
     for (key, (count, example)) in &ledger_ranked {
+        println!("| {count} | {key} | {} |", example.replace('|', "\\|"));
+    }
+    println!();
+
+    // `GameResult::culture_oracle_divergence` -- culture IS the score in
+    // this game (`docs/REPLAY.md`'s "Culture-oracle" section), so this is
+    // the census's own headline instrument: BGO's "(now M)" running total is
+    // a PERFECT oracle (not derived, unlike the discard-phase excess above),
+    // cross-validated every single "End turn" line. Ranked histogram of the
+    // ActionClass immediately preceding each game's FIRST divergence -- the
+    // "cause histogram" the task exists to produce.
+    println!("## Culture oracle\n");
+    println!(
+        "{culture_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` running total to check this \
+         binary's own reconstructed `state.players[_].culture` against; {culture_oracle_agreed_total} \
+         ({:.1}%) matched exactly.",
+        100.0 * culture_oracle_agreed_total as f64 / culture_oracle_checked_total.max(1) as f64
+    );
+    println!(
+        "{}/{n_games} games sampled had at least one checkpoint disagree (FIRST divergence only, ranked by the \
+         ActionClass immediately preceding it -- a bucket name is the SYMPTOM location, not necessarily the \
+         cause; trace before theorizing):\n",
+        culture_cause_buckets.values().map(|(n, _)| *n as u64).sum::<u64>()
+    );
+    let mut culture_ranked: Vec<(&String, &(u32, String))> = culture_cause_buckets.iter().collect();
+    culture_ranked.sort_unstable_by(|a, b| b.1.0.cmp(&a.1.0));
+    println!("| games | preceding ActionClass | example |");
+    println!("|---|---|---|");
+    for (key, (count, example)) in &culture_ranked {
         println!("| {count} | {key} | {} |", example.replace('|', "\\|"));
     }
     println!();

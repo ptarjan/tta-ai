@@ -498,6 +498,28 @@ struct Replayer<'a> {
     /// [`GameResult::hand_ledger_verdict`]. Set at the same point
     /// `discard_oracle_divergence` is first set, never overwritten after.
     hand_ledger_verdict: Option<HandLedgerVerdict>,
+    /// The last classified action line's [`ActionClass`], of ANY actor,
+    /// strictly before the line currently being processed -- read (not yet
+    /// overwritten by the current line) at the top of the main dispatch
+    /// loop's `LineOutcome::Action` arm, then unconditionally overwritten
+    /// with the current line's own class. This gives every checkpoint that
+    /// reads it (the culture oracle below) "what happened right before this"
+    /// without threading a parameter through every branch that can reach
+    /// `EndTurn`.
+    last_action_class: Option<ActionClass>,
+    /// This game's FIRST culture-oracle divergence -- see
+    /// [`CultureOracleDivergence`] and [`GameResult::culture_oracle_
+    /// divergence`]. `None` either because the game's running culture total
+    /// never drifted from BGO's own "(now M)" truth, or because it stopped
+    /// (a `Mismatch`) before any checkpoint could.
+    culture_oracle_divergence: Option<CultureOracleDivergence>,
+    /// How many "End turn" checkpoints had a `"(now M)"` clause to compare
+    /// against (`culture_oracle_checked`) and how many of those this
+    /// binary's own reconstruction matched exactly (`culture_oracle_
+    /// agreed`) -- copied into [`GameResult`], same coverage-stat
+    /// convention as `discard_oracle_checked`/`discard_oracle_agreed`.
+    culture_oracle_checked: u32,
+    culture_oracle_agreed: u32,
     /// A structural "false skip" instrument -- see [`GameResult::
     /// politics_false_skips`]'s own doc for the full mechanism this counts.
     /// Incremented at most once per `plan.preparations` entry (tracked via
@@ -595,6 +617,10 @@ impl<'a> Replayer<'a> {
             discard_oracle_agreed: 0,
             military_hand_ledger: HashMap::new(),
             hand_ledger_verdict: None,
+            last_action_class: None,
+            culture_oracle_divergence: None,
+            culture_oracle_checked: 0,
+            culture_oracle_agreed: 0,
             politics_false_skips: 0,
             false_skip_flagged_prep: None,
             politics_false_skips_unrecovered: 0,
@@ -3266,6 +3292,29 @@ fn prescan_discard_phase_oracle(lines: &[Line]) -> HashMap<(u8, String), u32> {
     out
 }
 
+/// One journal-cross-validated CULTURE running-total fact this binary's own
+/// reconstruction disagreed with -- see [`GameResult::culture_oracle_
+/// divergence`]. Mirrors [`DiscardOracleDivergence`]'s shape exactly: BGO's
+/// own "End turn ... N culture (now M) ..." line states `M`, the
+/// authoritative post-turn running total, independent of this binary's own
+/// `state.players[_].culture` bookkeeping -- a perfect oracle, not a derived
+/// one, unlike the discard-phase excess above. `last_action_class` is the
+/// classification deliverable: the last classified action line's own
+/// `ActionClass`, of any actor, strictly before this checkpoint's "End turn"
+/// line -- the SYMPTOM location (this checkpoint) is usually several rounds
+/// AFTER the true cause; `last_action_class` only narrows down where to
+/// start tracing backward from, it does not claim to BE the cause.
+pub struct CultureOracleDivergence {
+    pub lineno: usize,
+    pub actor: &'static str,
+    /// BGO's own "(now M)" running total -- ground truth.
+    pub journal_now: i32,
+    /// This binary's own `state.players[actor].culture` at the same
+    /// checkpoint.
+    pub reconstructed: i32,
+    pub last_action_class: Option<ActionClass>,
+}
+
 /// One journal-cross-validated hand-size fact this binary's own
 /// reconstruction disagreed with -- see [`GameResult::discard_oracle_
 /// divergence`] and this file's "Discard-phase hand-size oracle" module doc.
@@ -4328,6 +4377,19 @@ pub struct GameResult {
     /// (an unmodelled event class). `None` exactly when `discard_oracle_
     /// divergence` is `None`.
     pub hand_ledger_verdict: Option<HandLedgerVerdict>,
+    /// See [`Replayer::culture_oracle_divergence`] and
+    /// [`CultureOracleDivergence`]: this game's FIRST "End turn" checkpoint
+    /// where this binary's own running `state.players[_].culture` disagreed
+    /// with BGO's own cross-validated `"(now M)"` running total, classified
+    /// by the `ActionClass` of whatever the last classified action line was,
+    /// strictly before the checkpoint.
+    pub culture_oracle_divergence: Option<CultureOracleDivergence>,
+    /// See [`Replayer::culture_oracle_checked`]/[`Replayer::
+    /// culture_oracle_agreed`] -- how many "End turn" lines had a `"(now
+    /// M)"` clause to compare against, and how many of those this binary's
+    /// own reconstruction matched exactly.
+    pub culture_oracle_checked: u32,
+    pub culture_oracle_agreed: u32,
     /// The FIRST line, if any, where this reconstruction's own
     /// `state.age_civil` read strictly ahead of what the journal's `Line::
     /// age` column proves the real game had reached -- see
@@ -4865,6 +4927,14 @@ pub fn replay_game(
         let LineOutcome::Action(Classified { class, card }) = outcome else {
             continue; // bookkeeping / unclassified: no move to apply
         };
+        // Captured BEFORE `r.last_action_class` is overwritten by this
+        // line's own class below -- "the last classified action line's
+        // class, of any actor, strictly before this line" is exactly what
+        // the culture oracle's `last_action_class` field wants at its own
+        // `EndTurn` checkpoint (see `CultureOracleDivergence`'s doc). Every
+        // classified line hits this unconditionally, so no `continue`
+        // branch elsewhere in the loop needs to remember to set it.
+        let previous_action_class = r.last_action_class.replace(class);
         let Some((actor_color, rest)) = actor_and_rest(line.text) else {
             // EndTurn lines start with "End turn", no leading colour --
             // the actor is whoever the engine currently has as `current`.
@@ -4938,15 +5008,38 @@ pub fn replay_game(
                             );
                         }
                     }
-                    if let Some(want) = trailing_now_culture(line.text) {
-                        let got = r.state.players[actor as usize].culture as i32;
-                        if want != got {
+                }
+                // Structural, always-on culture-oracle checkpoint -- see
+                // `CultureOracleDivergence`'s own doc. Unlike the science
+                // drift check above (still `REPLAY_DEBUG`-gated eyeball
+                // tooling for a different bucket's investigation), this is
+                // the task's own deliverable: BGO's "(now M)" running total
+                // is a perfect, always-present oracle for the exact
+                // per-player number this project is currently -6.36 mean
+                // wrong on, cross-validated every single "End turn" line,
+                // not derived or approximated.
+                if let Some(want) = trailing_now_culture(line.text) {
+                    let got = r.state.players[actor as usize].culture as i32;
+                    r.culture_oracle_checked += 1;
+                    if want == got {
+                        r.culture_oracle_agreed += 1;
+                    } else {
+                        if std::env::var("REPLAY_DEBUG").is_ok() {
                             eprintln!(
                                 "DEBUG end-turn culture drift: actor={actor} journal says (now {want}), \
                                  this binary computes {got} (delta {}) at {:?}",
                                 got - want,
                                 line.text,
                             );
+                        }
+                        if r.culture_oracle_divergence.is_none() {
+                            r.culture_oracle_divergence = Some(CultureOracleDivergence {
+                                lineno: line.lineno,
+                                actor: Color::from_seat(actor).map(Color::as_str).unwrap_or("?"),
+                                journal_now: want,
+                                reconstructed: got,
+                                last_action_class: previous_action_class,
+                            });
                         }
                     }
                 }
@@ -5361,6 +5454,9 @@ pub fn replay_game(
         discard_oracle_checked: r.discard_oracle_checked,
         discard_oracle_agreed: r.discard_oracle_agreed,
         hand_ledger_verdict: r.hand_ledger_verdict,
+        culture_oracle_divergence: r.culture_oracle_divergence,
+        culture_oracle_checked: r.culture_oracle_checked,
+        culture_oracle_agreed: r.culture_oracle_agreed,
         civil_deck_premature_advance,
         politics_false_skips: r.politics_false_skips,
         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,

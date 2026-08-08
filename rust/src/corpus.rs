@@ -296,6 +296,20 @@ impl Color {
             Color::Grey => 3,
         }
     }
+
+    /// The inverse of [`Color::seat`]: the colour BGO's fixed turn-order
+    /// convention assigns to seat `s`. `None` for any `s` outside the four
+    /// real seats (mirrors [`Color::parse`]'s own `None`-on-unrecognised
+    /// convention).
+    pub fn from_seat(s: u8) -> Option<Color> {
+        match s {
+            0 => Some(Color::Orange),
+            1 => Some(Color::Purple),
+            2 => Some(Color::Green),
+            3 => Some(Color::Grey),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
