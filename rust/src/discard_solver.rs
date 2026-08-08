@@ -155,7 +155,46 @@ impl DiscardSolver {
             }
             _ => {
                 self.chosen += 1;
-                (safe[0], DiscardCertainty::Chosen)
+                // Among several equally-legal candidates, prefer the OLDEST
+                // by printed age -- never `options`' own worst-defender-first
+                // order, which carries no age signal at all (a Bonus card's
+                // defense value and its age are unrelated).
+                //
+                // This is not a guess about which specific card the real
+                // player discarded (this module still does not claim that,
+                // see the module doc) -- it is a claim about which CHOICE a
+                // forced discard is more likely to have been. A forced
+                // discard sheds exactly one card regardless of which; a card
+                // one age transition away from `game::antiquate`'s own free
+                // cull has zero remaining upside to keeping it over a
+                // strictly newer card, so age-oldest-first is at worst
+                // neutral and often strictly the rational pick -- the same
+                // "burn the least valuable card" register `ground_bid_
+                // ceiling`'s own doc already uses, just keyed on the one
+                // piece of public information (§12.2's own age column) that
+                // `discard_options`' sort does not carry at all.
+                //
+                // This is also where `game::antiquate`'s own wrong-COUNT
+                // bug (`docs/REPLAY.md`'s "undercount cohort", game
+                // `7523353` round 17) actually lives: every individual draw
+                // is already tagged with its real draw-time age (`economy::
+                // draw_military` only ever draws from `state.military_deck`,
+                // which `game::advance_age` rebuilds to hold exactly the
+                // current age's own cards), and `hand_military`'s natural
+                // insertion order is therefore already oldest-first -- but
+                // `options` here has been re-sorted by defense value, and
+                // picking blindly off THAT order is what let a strictly
+                // NEWER, safe candidate survive an ambiguous discard ahead
+                // of an older one with better defense, leaving the wrong
+                // card in hand for a later age transition to (wrongly) cull.
+                // `min_by_key` returns the FIRST minimum on a tie, so this
+                // still falls back to `options`' own worst-defender-first
+                // order whenever ages match, changing nothing there.
+                let &best = safe
+                    .iter()
+                    .min_by_key(|&&i| options[i].get().age)
+                    .expect("safe is non-empty: this arm only runs when safe.len() > 1");
+                (best, DiscardCertainty::Chosen)
             }
         }
     }
@@ -217,6 +256,35 @@ mod tests {
         assert_eq!(idx, 0);
         assert_eq!(cert, DiscardCertainty::Chosen);
         assert_eq!(s.chosen, 1);
+    }
+
+    /// `interact::discard_options`' own presentation order is worst-
+    /// defender-first, which has no relationship to a card's age. Two
+    /// safe (neither is ever played later by name) candidates, an Age II
+    /// plain card (`defense_points` 1, the War/Aggression/Pact/Tactic/
+    /// Territory/Event fallback) and an Age I Bonus card worth 2, would put
+    /// the Age II card at `options[0]` under that order alone -- confirming
+    /// `choose` picks the OLDER one anyway is what actually closes
+    /// `docs/REPLAY.md`'s "undercount cohort" gap (game `7523353` round 17,
+    /// `game::antiquate` culling the wrong COUNT because the wrong-age
+    /// filler survived an earlier ambiguous discard): a forced discard
+    /// sheds one card regardless of which, so the card one age transition
+    /// closer to a free antiquation cull should go first.
+    #[test]
+    fn an_ambiguous_discard_prefers_the_older_candidate_over_options_own_worst_defender_first_order() {
+        let newer_worse_defender = card("War over Territory"); // Age II, defense_points 1
+        let older_better_defender = card("Military Bonus (defense 2 / colonization 1)"); // Age I, defense_points 2
+        let mut buf = [CardId::NONE; crate::state::MAX_HAND];
+        let n = crate::interact::discard_options(&[newer_worse_defender, older_better_defender], &mut buf);
+        assert_eq!(
+            buf[..n],
+            [newer_worse_defender, older_better_defender],
+            "sanity check: discard_options' own order puts the NEWER card first"
+        );
+        let mut s = solver(&[]);
+        let (idx, cert) = s.choose(0, 1, &buf[..n]);
+        assert_eq!(cert, DiscardCertainty::Chosen);
+        assert_eq!(buf[idx], older_better_defender, "age, not defense value, must decide an ambiguous discard");
     }
 
     #[test]
