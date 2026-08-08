@@ -7746,3 +7746,86 @@ Fixed by extracting a shared `carry_over_action_pool(old_total, new_total, spent
 New test `apply::tests::set_government_a_decreased_total_is_absorbed_by_already_spent_actions_before_touching_unspent_ones` reproduces this doc's own `7523357`-round-10 numbers (Monarchy 3 MA, 1 spent, -> Republic 2 MA: old formula gives 1 remaining, fixed formula gives 2). Confirmed RED against the old formula, GREEN against the fix.
 
 Corpus impact (`replaystats` over the same BGO journal set): completed games 155 -> 157, discard-phase oracle held at 96.6%, divergence count 626 -> 627 (one new divergence uncovered now that a previously-masked code path is reachable/correct elsewhere -- not a regression, since completed count went UP, not down). `7523357` itself is still unaffected -- it still stops at its unrelated round-6 `SimulatorBug`/`ConsumingPlay` checkpoint, exactly as this doc's original trace predicted, so this fix's own downstream effect on that specific game remains untested by the corpus run (as flagged above).
+
+## Culture-oracle cause-classification instrument: NOT YET LANDED -- design notes for whoever picks this up
+
+Session goal: fix the mean per-player culture deficit (-6.36, 1/154 exact
+final scores). Ran out of the checkpoint window before writing any code --
+this section is the handoff so the next worker does not re-read the same
+files.
+
+**The oracle already exists and is correct, it just isn't wired to an
+always-on classified instrument yet.** `replay_common.rs`'s
+`trailing_now_culture` (sibling of `trailing_now_science`, both near line
+2450-2511) parses BGO's own `"... N culture (now M) ..."` running total off
+every `"End turn"` line -- `M` is ground truth, independent of our own
+bookkeeping. It is currently wired ONLY behind `if std::env::var
+("REPLAY_DEBUG").is_ok()` in `replay_game`'s main dispatch loop (around
+line 4929-4951, in the `class == ActionClass::EndTurn` arm, right after
+`r.check_discard_phase_oracle(actor, line)` and
+`apply_churchill_end_turn_choice`), printing an `eprintln!` per drift and
+nothing structural.
+
+**The pattern to mirror already exists in this same file**: the
+discard-phase oracle's `DiscardOracleDivergence` struct (line ~3272),
+`HandLedgerVerdict` enum (line ~3388), and their `GameResult` fields
+(`discard_oracle_divergence`/`discard_oracle_checked`/
+`discard_oracle_agreed`/`hand_ledger_verdict`, `GameResult` struct starting
+line 4289) are the EXACT shape needed for culture: a struct capturing the
+FIRST divergence only (lineno, actor, journal value, reconstructed value),
+plus running checked/agreed counters, all copied into `GameResult` at
+construction (~line 5360) and aggregated/histogrammed in
+`bin/replaystats.rs` (see its "Military hand ledger" section, ~line 391,
+for the printed-report shape to copy for a new "Culture oracle" section).
+
+**Planned design (not yet implemented):**
+1. Add `pub struct CultureOracleDivergence { lineno, actor: &'static str,
+   journal_now: i32, reconstructed: i32, last_action_class:
+   Option<ActionClass> }` near `DiscardOracleDivergence`.
+2. Add `Replayer` fields: `last_action_class: Option<ActionClass>`,
+   `culture_oracle_checked: u32`, `culture_oracle_agreed: u32`,
+   `culture_oracle_divergence: Option<CultureOracleDivergence>` (mirrors the
+   discard-oracle fields already on `Replayer`, found near line 482-500).
+3. In the main loop, right after `let LineOutcome::Action(Classified {
+   class, card }) = outcome else { continue };` (~line 4865), capture
+   `let previous_action_class = r.last_action_class.replace(class);` --
+   this captures "the last classified action line's class, of ANY actor,
+   strictly before the current line" without needing to touch every
+   `continue` branch in the loop, because it is read from the field
+   BEFORE this line's own class overwrites it, and the field write happens
+   unconditionally on every classified line. `previous_action_class` is
+   exactly "the log line/move type immediately at or before" the culture
+   checkpoint the task spec asks for -- it is the last thing that happened
+   in this actor's own turn (or another actor's tail end) before End Turn
+   fires the checkpoint.
+4. In the `ActionClass::EndTurn` arm's existing culture check (currently
+   gated on `REPLAY_DEBUG`), make the counting/first-divergence-capture
+   ALWAYS run (keep the `eprintln!` itself gated on `REPLAY_DEBUG` if
+   desired for interactive tracing, that part is fine to leave as-is) --
+   increment `culture_oracle_checked`, and on `want != got`, if `r.
+   culture_oracle_divergence.is_none()`, set it once with `previous_action_
+   class` as the cause; else increment `culture_oracle_agreed`.
+5. Copy the three new fields into `GameResult` at its construction site
+   (~line 5360, right next to `discard_oracle_divergence`/
+   `hand_ledger_verdict`).
+6. In `bin/replaystats.rs`, add a "## Culture oracle" section: total
+   checked/agreed like the discard section (~line 364-376), then a `HashMap
+   <Option<ActionClass>, u32>` histogram over every game's `culture_oracle_
+   divergence.map(|d| d.last_action_class)`, ranked descending -- this is
+   the "cause histogram" the task asks for. `ActionClass` needs `Hash`/`Eq`
+   derived if not already (check `corpus.rs` ~line 420) or bucket by
+   `format!("{class:?}")` into the existing `String`-keyed `buckets` map
+   the file already has, same as everything else in that file's ranked
+   histogram (~line 147, 301).
+
+**Not yet done, explicitly**: no code written, no trace run, no census run,
+no cause identified. The single largest already-known lead going into this
+session (from the PREVIOUS pass, see the "wrong-final-event-SET mechanism"
+section above) is the stranded mid-game `PrepareEvent` /
+`hand_military`-under-tracking gap already documented at length elsewhere
+in this file -- worth checking whether the new culture-oracle histogram's
+largest bucket lands on `PrepareEvent`/`ConsumingPlay` before assuming it's
+a new, unrelated cause. `REPLAY_DEBUG_ALL` (distinct env var, used
+elsewhere in `events.rs`/`economy.rs`/`apply.rs`/`interact.rs`/`costs.rs`
+for verbose per-event tracing) is the flag the task's "trace 2-3 games with
+REPLAY_DEBUG_ALL" step means, not `REPLAY_DEBUG`.
