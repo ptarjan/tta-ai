@@ -54,6 +54,21 @@ GAUNTLET_2P=analysis/frozen/gauntlet/champion_2p_gen1454_140key_2026-08-06.json
 GAUNTLET_3P=analysis/frozen/gauntlet/champion_3p_gen1384_140key_2026-08-06.json
 GAUNTLET_4P=analysis/frozen/gauntlet/champion_4p_gen448_140key_2026-08-06.json
 
+# A second, much later cut of the same three lineages.  The 08-06 files above
+# are ~9000 generations stale at 2p, and on 2026-08-08 that staleness produced
+# a wrong conclusion: gen1384 was diagnosed as a bad optimum and a reseed of
+# the 3p arm was planned, when the live 3p champion had already climbed out of
+# it unaided (analysis/frozen/gauntlet/README.md records the numbers).  Keeping
+# BOTH cuts is the point -- the old ones stay as the comparable-over-time
+# ladder, the new ones give `--pool` a same-strength sparring partner rather
+# than only weak ancestors.  Pool cost does not move with member count
+# (--pool-k samples a fixed number); only the observational gauntlet grows,
+# from ~3.6 to ~6.3 games/generation amortized, which is noise next to the
+# pool check itself.
+GAUNTLET_2P_LATE=analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json
+GAUNTLET_3P_LATE=analysis/frozen/gauntlet/champion_3p_gen12364_140key_2026-08-08.json
+GAUNTLET_4P_LATE=analysis/frozen/gauntlet/champion_4p_gen4034_140key_2026-08-08.json
+
 # A fourth, DIFFERENT-KIND panel member: the human-imitation fit
 # (docs/HUMAN_MODEL.md), reported alongside the three same-kind champions
 # above. `climb`'s `--gauntlet` used to load every member with the champion
@@ -100,6 +115,9 @@ for PLAYERS in 2 3 4; do
         --gauntlet "$GAUNTLET_2P" \
         --gauntlet "$GAUNTLET_3P" \
         --gauntlet "$GAUNTLET_4P" \
+        --gauntlet "$GAUNTLET_2P_LATE" \
+        --gauntlet "$GAUNTLET_3P_LATE" \
+        --gauntlet "$GAUNTLET_4P_LATE" \
         --gauntlet-kind human --gauntlet "$GAUNTLET_HUMAN" \
         >>"$LOGDIR/rust_league_${PLAYERS}p.log" 2>&1 &
 done
