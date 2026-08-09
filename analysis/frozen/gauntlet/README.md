@@ -33,6 +33,27 @@ which this borrows.
 | `champion_2p_gen1454_140key_2026-08-06.json` | 1454 | 140 | 2026-08-06 |
 | `champion_3p_gen1384_140key_2026-08-06.json` | 1384 | 140 | 2026-08-06 |
 | `champion_4p_gen448_140key_2026-08-06.json` | 448 | 140 | 2026-08-06 |
+| `champion_2p_gen19554_140key_2026-08-08.json` | 19554 | 140 | 2026-08-08 |
+| `champion_3p_gen12364_140key_2026-08-08.json` | 12364 | 140 | 2026-08-08 |
+| `champion_4p_gen4034_140key_2026-08-08.json` | 4034 | 140 | 2026-08-08 |
+
+## These are snapshots, not "the champion"
+
+A file here is a dated past self and a legitimate sparring partner. It is
+**not** the current champion, and it goes stale fast — the lineage moved
+~9,000 generations at 2p between the two cuts above. Measure the live
+`experiments/rust_champion_*.json` before drawing any conclusion about the
+running arms.
+
+Learned the hard way on 2026-08-08: `champion_3p_gen1384` was diagnosed as a
+bad optimum (two weights pinned at `climb.rs`'s `CLAMP = 60.0`, mirror culture
+97.9 against untuned defaults' 152.8) and a plan was formed to reseed the 3p
+arm from the 2p vector on the strength of it. Re-measuring against the *live*
+3p champion overturned that completely: it had walked back off the clamp on
+its own (`pact_partner_lead` -60.00 → -4.21, `uprising` -56.79 → -0.16),
+mirrored at 149.2, and **beat** the live 2p vector at a 3p table (2p wins only
+19.5% against a 33.3% null). The reseed would have made things worse. See
+`docs/AGREEMENT_FIT.md` for the other reversal from the same day.
 
 ## What this does and does not prove
 
