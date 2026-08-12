@@ -161,3 +161,49 @@ process plus a mtime-based liveness check duplicates workers forever).
 `PAUSE` (read by `experiments/neural_search_loop.sh` before every worker
 launch) is now an operator-only control with no automatic writer: `touch
 PAUSE` parks training, delete it to resume.
+
+## The policy head (2026-08-12)
+
+A prior over LEGAL MOVES for move ordering — deliberately not another value
+net. Value-only nets have been trained and gated on this project twice and
+lost both times; this head never emits a value, and nothing downstream may
+ask it for one.
+
+Pipeline: `bots/neural/action.rs` encodes a `Move` (37 kinds, enumerated by
+an exhaustive match off `moves::Move` with no wildcard arm, so a new variant
+is a compile error rather than a silently-zeroed vector; `ACTION_DIM = 160`,
+reusing `encode::card_vec_array` so there is one per-card encoding, not two).
+`bots/neural/dump.rs` writes self-play decisions; `bin/dump_selfplay`
+generates them; `bots/neural/policy_train.rs` + `bin/policytrain` fit a
+softmax over the legal set only, cross-entropy against the champion's chosen
+move.
+
+**Legality:** the action encoder takes no `GameState` — every field it reads
+belongs to the deciding player's own `Move`. There is no path from it to a
+rival's hand.
+
+**Dump v2 is 4x smaller than v1** (~30 KB/decision -> ~7.7 KB): `f32` on
+disk, and the compact `Move` stored rather than its dense 160-float
+expansion, which is rebuilt at training time through the same
+`encode_action` so the two cannot drift. v1 would have made a real corpus
+tens of GB and it would not have fit on the mini.
+
+**First result, 97,994 self-play decisions (2p/3p/4p), split BY GAME —
+never by decision, which leaks badly because decisions inside one game are
+heavily correlated.** 87,716 train / 10,278 held-out, 3 epochs, loss still
+falling (1.276 -> 1.205 -> 1.168): the net is undertrained, not converged.
+
+| held-out | top-1 | random | top-3 | random |
+|---|---|---|---|---|
+| all (mean legal set 11.57) | 0.5850 | 0.2079 | 0.8328 | 0.4725 |
+| legal_count >= 4 | 0.5236 | 0.1005 | 0.7787 | 0.3016 |
+
+The restricted row is the one that matters — forced and near-forced
+decisions inflate the unrestricted number. 5.2x the base rate on genuinely
+open decisions, and top-3 covers 78% of them, which is the shape move
+ordering actually wants.
+
+By phase, top-1 falls early -> mid -> late (0.658 / 0.585 / 0.513). Late
+positions are where the champion's own search is doing the most work and
+where a cheap prior helps least; expect the search-integration win to come
+from early and mid ordering.
