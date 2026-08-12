@@ -207,3 +207,43 @@ By phase, top-1 falls early -> mid -> late (0.658 / 0.585 / 0.513). Late
 positions are where the champion's own search is doing the most work and
 where a cheap prior helps least; expect the search-integration win to come
 from early and mid ordering.
+
+## The disagreement teacher is a negative result (2026-08-12)
+
+The 2026-08-05 work order was: the old value-net loop's improvement
+operator was the identity (the untrained net already agreed with 0.9764 of
+its own labels), so train instead on the positions where the deeper search
+OVERRULES the net. `bin/policy_disagreement_experiment.rs` ran that against
+a control, both arms branched from one shared training prefix via
+`PolicyTrainer::snapshot`/`from_state` (net plus warm Adam moments), so
+they differ only in the final epoch.
+
+Epoch budget N=7 was chosen by early stopping on held-out top-1 — not on
+train loss, which falls forever. CONTROL is a plain 7th epoch; TEACHER is a
+7th epoch on only the 32,578/87,716 train decisions (37.1%) where the
+pre-final-epoch net's own pick disagreed with the champion's search.
+
+| held-out top-1 | control | teacher | delta |
+|---|---|---|---|
+| overall | 0.6003 | 0.5144 | -0.0859 |
+| legal_count >= 4 | 0.5378 | 0.4411 | -0.0967 |
+| early / mid / late | .668/.595/.538 | .575/.508/.460 | worse in all three |
+
+top-3 overall 0.8507 -> 0.8096 (-0.0411).
+
+**Noise-validated.** Re-branching both arms from the same snapshot under a
+different seed moved control by 0.0006 and teacher by 0.0063; the -0.0859
+delta is 13-140x run-to-run noise. This is not "helped on hard cases, hurt
+overall" — the teacher lost on the restricted slice too, by more than it
+lost overall.
+
+**Do not re-try disagreement emphasis on the policy head.** The mechanism
+that fixed nothing here is the same one proposed in `NEURAL_LOOP_NULL.md`;
+that proposal is now closed. Fine-tuning on a hard subset discards the
+distribution the head is meant to reproduce — a move-ordering prior is
+judged on the whole legal set it will actually rank, not on the tail.
+
+**What DID work: more epochs.** Held-out top-1 rose every epoch, 0.5698 ->
+0.6003 across 7, and early stopping never fired — N=7 is a compute cap, not
+a plateau. The cheapest available gain on the policy head today is simply
+training the plain objective longer.
