@@ -113,6 +113,12 @@ fn add_slices(dst: &mut [f64], src: &[f64]) {
 /// same shape, as the first/second-moment buffers `AdamW` needs per
 /// parameter (`m`/`v` in the optimizer are literally two more values of
 /// this type).
+///
+/// `Clone` (added for the disagreement-teacher experiment,
+/// `bots::neural::policy_train`) lets a caller snapshot an `AdamW`'s
+/// moments -- see that struct's own doc comment -- without giving this
+/// type interior mutability or a second, index-parallel copy of itself.
+#[derive(Clone)]
 pub(crate) struct ValueNetGrad {
     stem_w: Vec<f64>,
     stem_b: Vec<f64>,
@@ -1055,6 +1061,15 @@ pub(crate) fn rank_pair_loss(va: f64, vb: f64) -> (f64, f64, f64) {
 /// gradient's sign -- `neural_train_rank.py` constructs
 /// `torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)`,
 /// so that is the optimizer this ports, not plain `Adam`.
+///
+/// `Clone` (added for `bots::neural::policy_train`'s disagreement-teacher
+/// experiment) lets a trainer be snapshotted -- weights AND optimiser
+/// moments together, via `PolicyTrainer::snapshot`/`from_state` -- so two
+/// training runs can branch from the exact same point (moments included)
+/// rather than one branch silently restarting Adam from zero while the
+/// other keeps warm moments, which would bias any comparison between the
+/// branches.
+#[derive(Clone)]
 pub struct AdamW {
     lr: f64,
     beta1: f64,

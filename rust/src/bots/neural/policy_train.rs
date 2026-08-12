@@ -152,6 +152,30 @@ impl PolicyTrainer {
         PolicyTrainer { net, grad, adamw, caches: Vec::new(), conv: Vec::new(), scratch }
     }
 
+    /// Resume a trainer from an exact prior state -- both the weights AND
+    /// the optimiser's moments, produced by an earlier [`Self::snapshot`].
+    /// Exists for the disagreement-teacher experiment (`docs/NEURAL.md`):
+    /// two training runs that need to branch from the identical point (one
+    /// continuing the plain recipe, one switching to disagreement-weighted
+    /// decisions) must both start Adam warm from the SAME moments, not one
+    /// warm and one cold -- a cold-started branch trains measurably
+    /// differently for the first several steps for reasons that have
+    /// nothing to do with which decisions it was trained on.
+    pub fn from_state(net: ValueNet, adamw: AdamW) -> Self {
+        let grad = ValueNetGrad::zeros_like(&net);
+        let scratch = BackScratch::zeros(net.hidden);
+        PolicyTrainer { net, grad, adamw, caches: Vec::new(), conv: Vec::new(), scratch }
+    }
+
+    /// Clone this trainer's weights and optimiser moments -- NOT its
+    /// scratch buffers (`caches`/`conv`/`scratch`), which are pure working
+    /// memory reconstructed on demand ([`Self::ensure_capacity`]) and carry
+    /// no state that survives a decision boundary. Pair with
+    /// [`Self::from_state`] to branch two runs from one point in training.
+    pub fn snapshot(&self) -> (ValueNet, AdamW) {
+        (self.net.clone(), self.adamw.clone())
+    }
+
     pub fn zero_grad(&mut self) {
         self.grad.zero();
     }
@@ -211,6 +235,226 @@ impl PolicyTrainer {
 pub fn score_row(net: &ValueNet, row: &[f32]) -> f64 {
     let x: Vec<f64> = row.iter().map(|&v| v as f64).collect();
     net.forward(&x)
+}
+
+// ========================================================== epoch / measurement
+//
+// Promoted out of `bin/policytrain.rs` (which originally hand-rolled its
+// own copy of every function below) so that `bin/policytrain.rs` and
+// `bin/policy_disagreement_experiment.rs` (the control-vs-teacher
+// experiment, `docs/NEURAL.md`) measure held-out agreement through the
+// EXACT SAME CODE -- two independently-typed copies of a metric are a
+// standing risk that a future edit fixes one and not the other, which
+// would make any control/teacher comparison worthless without anyone
+// noticing.
+
+/// Fisher-Yates shuffle of `v` in place, using this crate's own seeded RNG
+/// (never the platform RNG, so a run is exactly reproducible from a seed).
+pub fn shuffle_indices(rng: &mut PyRandom, v: &mut [usize]) {
+    for i in (1..v.len()).rev() {
+        let j = ((rng.random() * (i + 1) as f64) as usize).min(i);
+        v.swap(i, j);
+    }
+}
+
+/// One decision's legal actions expanded to `state ++ action` rows -- built
+/// fresh per call, never cached across epochs (at ~7 KB/row this project's
+/// "disk is tight" constraint applies to memory too, for a corpus this
+/// size).
+pub fn rows_for(rec: &DecisionRecord) -> Vec<Vec<f32>> {
+    rec.legal.iter().map(|&mv| expand_row(&rec.state, rec.actor, mv)).collect()
+}
+
+/// One pass over `records` in a freshly shuffled order, training on every
+/// decision and returning the mean per-decision loss. `order` is caller-
+/// owned scratch (reused across epochs) sized to `records.len()`.
+pub fn train_epoch(trainer: &mut PolicyTrainer, records: &[DecisionRecord], order: &mut [usize], rng: &mut PyRandom) -> f64 {
+    shuffle_indices(rng, order);
+    let mut total_loss = 0.0;
+    for &idx in order.iter() {
+        let rec = &records[idx];
+        let rows = rows_for(rec);
+        trainer.zero_grad();
+        let (loss, _logits) = trainer.train_decision(&rows, rec.chosen as usize, 1.0);
+        trainer.optim_step();
+        total_loss += loss;
+    }
+    total_loss / order.len() as f64
+}
+
+/// Held-out agreement, reported alongside the base rate a uniform-random
+/// legal move would score -- "a number without its base rate is not a
+/// result" (calling task). `top1`/`top3` count how often the champion's
+/// actual move ranks 1st / in the top 3 BY THE NET'S OWN LOGIT ORDER;
+/// `random_top1`/`random_top3` are `mean(1/L)`/`mean(min(3,L)/L)` over the
+/// same decisions -- the exact probability a uniform-random pick from the
+/// legal set would have matched, decision by decision, not `1/mean(L)` (a
+/// different and less meaningful quantity for decisions of very different
+/// sizes).
+pub struct HeldOutReport {
+    pub n: usize,
+    pub top1: usize,
+    pub top3: usize,
+    pub random_top1: f64,
+    pub random_top3: f64,
+    pub mean_legal: f64,
+    pub n_ge4: usize,
+    pub top1_ge4: usize,
+    pub top3_ge4: usize,
+    pub random_top1_ge4: f64,
+    pub random_top3_ge4: f64,
+}
+
+impl HeldOutReport {
+    pub fn top1_rate(&self) -> f64 {
+        self.top1 as f64 / self.n as f64
+    }
+    pub fn top3_rate(&self) -> f64 {
+        self.top3 as f64 / self.n as f64
+    }
+}
+
+pub fn held_out_report(net: &ValueNet, held: &[DecisionRecord]) -> HeldOutReport {
+    let mut r = HeldOutReport {
+        n: 0,
+        top1: 0,
+        top3: 0,
+        random_top1: 0.0,
+        random_top3: 0.0,
+        mean_legal: 0.0,
+        n_ge4: 0,
+        top1_ge4: 0,
+        top3_ge4: 0,
+        random_top1_ge4: 0.0,
+        random_top3_ge4: 0.0,
+    };
+    for rec in held {
+        let l = rec.legal.len();
+        if l == 0 {
+            continue;
+        }
+        let rows = rows_for(rec);
+        let mut scored: Vec<(usize, f64)> = rows.iter().enumerate().map(|(i, row)| (i, score_row(net, row))).collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let chosen = rec.chosen as usize;
+        let rank = scored.iter().position(|&(i, _)| i == chosen).expect("chosen must be one of the scored rows");
+
+        r.n += 1;
+        r.mean_legal += l as f64;
+        let rand_top1 = 1.0 / l as f64;
+        let rand_top3 = (3.min(l)) as f64 / l as f64;
+        r.random_top1 += rand_top1;
+        r.random_top3 += rand_top3;
+        if rank == 0 {
+            r.top1 += 1;
+        }
+        if rank < 3 {
+            r.top3 += 1;
+        }
+        if l >= 4 {
+            r.n_ge4 += 1;
+            r.random_top1_ge4 += rand_top1;
+            r.random_top3_ge4 += rand_top3;
+            if rank == 0 {
+                r.top1_ge4 += 1;
+            }
+            if rank < 3 {
+                r.top3_ge4 += 1;
+            }
+        }
+    }
+    r
+}
+
+/// Bucket held-out decisions into thirds of EACH GAME's own length (early /
+/// mid / late) and report top-1 agreement per bucket -- cheap because
+/// `read_dump` preserves each game's decisions in play order and
+/// `split_by_game` only ever filters (never reorders), so a game's own
+/// decisions are still consecutive, in order, inside `held`. Returns
+/// `[(agree, total); 3]` for early/mid/late.
+pub fn phase_breakdown(net: &ValueNet, held: &[DecisionRecord]) -> [(usize, usize); 3] {
+    let mut groups: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, rec) in held.iter().enumerate() {
+        groups.entry(rec.game_id).or_default().push(i);
+    }
+    let mut buckets = [(0usize, 0usize); 3];
+    for idxs in groups.values() {
+        let len = idxs.len();
+        for (pos, &i) in idxs.iter().enumerate() {
+            let rec = &held[i];
+            if rec.legal.is_empty() {
+                continue;
+            }
+            let rows = rows_for(rec);
+            let mut best = 0usize;
+            let mut best_score = f64::NEG_INFINITY;
+            for (j, row) in rows.iter().enumerate() {
+                let s = score_row(net, row);
+                if s > best_score {
+                    best_score = s;
+                    best = j;
+                }
+            }
+            let frac = if len <= 1 { 0.0 } else { pos as f64 / (len - 1) as f64 };
+            let bucket = if frac < 1.0 / 3.0 {
+                0
+            } else if frac < 2.0 / 3.0 {
+                1
+            } else {
+                2
+            };
+            buckets[bucket].1 += 1;
+            if best == rec.chosen as usize {
+                buckets[bucket].0 += 1;
+            }
+        }
+    }
+    buckets
+}
+
+/// Indices into `records` (meant to be called with a TRAIN split only --
+/// see this function's own leakage note) where `net`'s own top-ranked
+/// legal move disagrees with `rec.chosen`, the move the CHAMPION'S SEARCH
+/// actually played. This is the entire point of the disagreement-teacher
+/// experiment (calling task, 2026-08-05 work order): the old value-net loop
+/// trained on the net's own argmax and measured 0.9764 self-agreement
+/// before a single gradient step, so its "improvement operator" was
+/// approximately the identity. Comparing against `rec.chosen` -- ground
+/// truth recorded at DUMP time by `dump.rs`, from the champion's search,
+/// never touched by `net` -- is what keeps this function out of that same
+/// trap; it would be a silent regression back into it if this ever
+/// compared against `net`'s own prediction on some OTHER record, or against
+/// a second call to `net` instead of the stored `chosen` field.
+///
+/// # Leakage
+/// This function only ever reads `records[i].legal`/`.state`/`.actor`/
+/// `.chosen` for `i` in `0..records.len()` -- it has no access to any
+/// record outside the slice a caller passes it. A caller MUST pass the
+/// TRAIN half of [`split_by_game`]'s output, never the held-out half or the
+/// pre-split whole corpus; passing anything else leaks held-out games into
+/// the emphasis set this function's output is meant to build. This module's
+/// tests exercise that boundary explicitly.
+pub fn disagreement_indices(net: &ValueNet, records: &[DecisionRecord]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, rec) in records.iter().enumerate() {
+        if rec.legal.is_empty() {
+            continue;
+        }
+        let rows = rows_for(rec);
+        let mut best = 0usize;
+        let mut best_score = f64::NEG_INFINITY;
+        for (j, row) in rows.iter().enumerate() {
+            let s = score_row(net, row);
+            if s > best_score {
+                best_score = s;
+                best = j;
+            }
+        }
+        if best != rec.chosen as usize {
+            out.push(i);
+        }
+    }
+    out
 }
 
 // ============================================================ train/held-out
@@ -543,5 +787,116 @@ mod tests {
         assert!(err.contains(&(POLICY_IN_DIM + 1).to_string()) && err.contains(&POLICY_IN_DIM.to_string()), "{err}");
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
+    }
+
+    /// [`disagreement_indices`] must compare each record's own top-scoring
+    /// legal move against `rec.chosen` -- the move the CHAMPION'S SEARCH
+    /// actually played -- and nothing else. This is the identity trap the
+    /// whole disagreement-teacher work order exists to avoid: the old
+    /// value-net loop trained on the net's own argmax and measured 0.9764
+    /// self-agreement before a single gradient step. Two records share the
+    /// SAME net and the SAME candidate rows; only their `chosen` field
+    /// differs (one set to the net's own preferred candidate, one set to
+    /// the other one), so a broken implementation that ignored `chosen`
+    /// entirely (always flags nothing, or always flags everything, or
+    /// flags by some other rule such as "index 0") would fail this
+    /// specific pairing.
+    #[test]
+    fn disagreement_indices_flags_exactly_the_records_where_chosen_differs_from_the_nets_own_top_pick() {
+        let net = random_policy_net(8, 123);
+        let probe = tiny_record(0, 0);
+        let rows = rows_for(&probe);
+        let scores: Vec<f64> = rows.iter().map(|r| score_row(&net, r)).collect();
+        let preferred: u32 = if scores[0] >= scores[1] { 0 } else { 1 };
+        let other: u32 = 1 - preferred;
+
+        let agree = DecisionRecord { chosen: preferred, ..tiny_record(1, 0) };
+        let disagree = DecisionRecord { chosen: other, ..tiny_record(2, 0) };
+        let idxs = disagreement_indices(&net, &[agree, disagree]);
+        assert_eq!(idxs, vec![1], "only the record whose `chosen` differs from the net's own top pick should be flagged");
+    }
+
+    /// [`disagreement_indices`] only ever reads the slice it is handed --
+    /// calling it with the TRAIN half of [`split_by_game`]'s output must
+    /// never surface a held-out game. Rather than trusting that property on
+    /// the function's signature alone, this test demonstrates the failure
+    /// mode it guards against: calling the SAME function with the
+    /// pre-split corpus (the bug this guards `bin/policy_disagreement_
+    /// experiment.rs`'s call site against) DOES leak held-out games for
+    /// this seed, so the first assertion is not vacuously true.
+    #[test]
+    fn disagreement_indices_on_the_train_split_never_surfaces_a_held_out_game() {
+        let net = random_policy_net(8, 5);
+        // Probe each actor's preferred candidate on this net, then set every
+        // record's `chosen` to the OTHER candidate -- guaranteeing a 100%
+        // disagreement rate (not a lucky RNG draw) so the sanity check below
+        // is deterministic rather than occasionally vacuous.
+        let preferred_for = |actor: u8| -> u32 {
+            let probe = tiny_record(0, actor);
+            let rows = rows_for(&probe);
+            let scores: Vec<f64> = rows.iter().map(|r| score_row(&net, r)).collect();
+            if scores[0] >= scores[1] { 0 } else { 1 }
+        };
+        let other0 = 1 - preferred_for(0);
+        let other1 = 1 - preferred_for(1);
+
+        let mut all_records = Vec::new();
+        for game in 0..20u32 {
+            all_records.push(DecisionRecord { chosen: other0, ..tiny_record(game, 0) });
+            all_records.push(DecisionRecord { chosen: other1, ..tiny_record(game, 1) });
+        }
+        let everything = all_records.clone();
+        let (train, held) = split_by_game(all_records, 0.3, 7);
+        assert!(!held.is_empty(), "this seed/frac must hold at least one game out for the test to mean anything");
+        let held_games: std::collections::HashSet<u32> = held.iter().map(|r| r.game_id).collect();
+
+        let idxs_train = disagreement_indices(&net, &train);
+        for &i in &idxs_train {
+            assert!(!held_games.contains(&train[i].game_id), "disagreement_indices flagged a record from a held-out game when called with the train split alone");
+        }
+
+        // Sanity check: calling it with the UNSPLIT corpus (the bug this
+        // test exists to catch at the call site) must actually produce a
+        // held-out hit for this seed, otherwise the assertion above would
+        // pass even with a leaking implementation.
+        let idxs_all = disagreement_indices(&net, &everything);
+        let leaked = idxs_all.iter().any(|&i| held_games.contains(&everything[i].game_id));
+        assert!(leaked, "sanity check failed: this net/corpus/seed produced no held-out disagreement even when queried directly, so this test cannot distinguish a leaking call from a safe one");
+    }
+
+    /// [`PolicyTrainer::snapshot`]/[`PolicyTrainer::from_state`] must
+    /// preserve BOTH the weights and the optimiser's Adam moments, not just
+    /// the weights -- the disagreement-teacher experiment relies on this to
+    /// give both the control and teacher branches equally warm-started
+    /// optimiser state. Training straight through two decisions and
+    /// training the first decision, snapshotting, then resuming for the
+    /// second decision from a FRESH `PolicyTrainer` must land on the exact
+    /// same weights either way; if `snapshot`/`from_state` dropped the Adam
+    /// moments (restarting `t`/`m`/`v` from zero), the resumed run's second
+    /// step would take a measurably different step and this would fail.
+    #[test]
+    fn resuming_a_trainer_from_a_snapshot_reproduces_uninterrupted_training() {
+        let net = random_policy_net(6, 11);
+        let rows_a = vec![tiny_row(0.0, 0.0), tiny_row(1.0, 1.0)];
+        let rows_b = vec![tiny_row(0.2, 0.3), tiny_row(0.9, 0.1), tiny_row(0.5, 0.5)];
+
+        let mut continuous = PolicyTrainer::new(net, 0.01, 1e-4);
+        continuous.zero_grad();
+        continuous.train_decision(&rows_a, 1, 1.0);
+        continuous.optim_step();
+        let (snap_net, snap_adamw) = continuous.snapshot();
+        continuous.zero_grad();
+        continuous.train_decision(&rows_b, 2, 1.0);
+        continuous.optim_step();
+
+        let mut resumed = PolicyTrainer::from_state(snap_net, snap_adamw);
+        resumed.zero_grad();
+        resumed.train_decision(&rows_b, 2, 1.0);
+        resumed.optim_step();
+
+        assert_eq!(
+            continuous.net, resumed.net,
+            "resuming from a snapshot must reproduce the same next step as training straight through -- otherwise a branch that resumes trains differently for reasons that have nothing to do with which decisions it saw"
+        );
     }
 }
