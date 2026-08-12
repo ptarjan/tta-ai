@@ -298,3 +298,42 @@ considers -- widen the beam, or admit candidates currently pruned before
 they are scored -- not the sequence in which it considers the ones it
 already sees. Only at an absurd 60 nodes does the cap bind, and that is a
 mechanism check, not a configuration anyone should run.
+
+### Falsification: the wiring is live, so the nulls are real (2026-08-12)
+
+A win rate sitting on 50% has two causes: the prior is useless, or the prior
+never actually ran. The flag-OFF path was proven byte-identical to the
+pre-integration baseline, but nothing had proven the flag-ON path DIFFERS.
+`bin/orderprobe.rs` closes that: it runs each decision's search twice from
+one position, prior off then on (cloned RNG and pending counters, so nothing
+else varies), and counts permutations and disagreements. 12 games, 2p, seed 7:
+
+| max_nodes | decisions | root list permuted | chosen move differs | capped |
+|---|---|---|---|---|
+| 4000 | 3514 | 2472 (70.35%) | 40 (1.14%) | 0 (0.00%) |
+| 60 | 3480 | 2334 (67.07%) | 100 (2.87%) | 1392 (40.00%) |
+
+The prior permutes the candidate list on ~2/3 of decisions at BOTH budgets,
+so it is live. What changes with the budget is whether that permutation can
+matter: unstarved, the search converges on the same move anyway (1.14%);
+starved, it diverges 2.5x more often (2.87%). That is exactly the shape the
+structural argument predicts.
+
+Confirmed from the other side with `PolicyOrder::set_invert` /
+`kindmatch --a-policy-invert`, which orders candidates WORST-first on purpose.
+1200 games at 60 nodes: **47.54% +/- 2.49, p = 0.0529** two-tailed. It moved
+in the predicted losing direction; the interval grazes the null and does not
+clear the tool's own two-tailed bar, so it is reported as inconclusive rather
+than dressed up with a one-tailed reading.
+
+**The closing number is the spread.** Best-first 51.08%, worst-first 47.54%
+at the ONLY budget where ordering can bind at all: the mechanism's entire
+dynamic range is about 3.5 percentage points, and it is bought at a node
+budget 66x below the live setting, where both players are crippled. At 4000
+nodes the range collapses toward zero with the disagreement rate.
+
+Ordering is therefore CLOSED, and closed for a reason worth keeping: it is
+not that the prior is bad -- it predicts the champion's move ~60% of the
+time -- it is that this search has no ordering-shaped hole to fill. Any
+future use of the policy head must change the CANDIDATE SET (widen the beam,
+or admit moves currently pruned before scoring), not the visit order.
