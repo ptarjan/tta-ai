@@ -60,12 +60,38 @@
 //!     --a-weights human_weights.json --b-weights champion_3p.json \
 //!     --games 480 --players 3 --threads 6
 //! ```
+//!
+//! # `--policy-checkpoint`/`--a-policy`/`--b-policy`: the policy head as a
+//! move-ordering prior, one side at a time
+//!
+//! [`tta::bots::neural::policy_order::PolicyOrder`] permutes `plan::pick`'s
+//! beam candidates at every node, most-preferred-by-the-net first, so a node
+//! budget that starves before every legal move is examined sees the good
+//! ones sooner (see that module's own top doc comment) -- ordering only,
+//! nothing pruned. `--policy-checkpoint PATH` loads a `TTAPOL01` checkpoint
+//! ONCE, here, at startup; `--a-policy`/`--b-policy` (only legal when the
+//! matching side's kind is `plan`) turn the prior on for that side's `Bot::
+//! Plan` seat, built by hand with [`Bot::plan_with_policy`] -- see that
+//! constructor's own doc comment for why it is a separate `Bot` variant
+//! rather than a field on `Bot::Plan` itself. Neither flag changes the OFF
+//! side at all: an untouched `Bot::Plan` from `build_bots`, byte-for-byte
+//! what every other caller of this binary already gets.
+//!
+//! ```text
+//! kindmatch --a plan --b plan --a-policy \
+//!     --policy-checkpoint control.ckpt --weights champ.json \
+//!     --games 240 --players 2 --threads 2
+//! ```
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tta::bots::greedy::{build_bots, Bot, BotKind, Seat};
+use tta::bots::neural::net::ValueNet;
+use tta::bots::neural::policy_order::PolicyOrder;
+use tta::bots::neural::policy_train::load_policy_checkpoint;
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
 use tta::game::{self, MOVE_CAP};
@@ -90,6 +116,15 @@ struct Args {
     /// ([`parse_args`] rejects any other combination).
     a_search: bool,
     b_search: bool,
+    /// See this file's module doc comment,
+    /// "`--policy-checkpoint`/`--a-policy`/`--b-policy`". Only legal when
+    /// the matching side's kind is [`BotKind::Plan`] and `--policy-
+    /// checkpoint` is also given ([`parse_args`] rejects every other
+    /// combination, including the checkpoint being given but neither flag
+    /// naming a side to use it).
+    policy_checkpoint: Option<String>,
+    a_policy: bool,
+    b_policy: bool,
     games: usize,
     players: u8,
     seed: u64,
@@ -108,6 +143,9 @@ impl Default for Args {
             b_weights_path: None,
             a_search: false,
             b_search: false,
+            policy_checkpoint: None,
+            a_policy: false,
+            b_policy: false,
             games: 60,
             players: 3,
             seed: 0,
@@ -127,6 +165,11 @@ usage: kindmatch --a KIND --b KIND [options]
   --b-weights PATH  weight file for the --b side only (default: --weights)
   --a-search        give --a real lookahead (only legal with --a human)
   --b-search        give --b real lookahead (only legal with --b human)
+  --policy-checkpoint PATH  a TTAPOL01 policy checkpoint, loaded once
+  --a-policy        order --a's beam with the policy prior (needs --a plan
+                     and --policy-checkpoint)
+  --b-policy        order --b's beam with the policy prior (needs --b plan
+                     and --policy-checkpoint)
   --games N       games; rounded down to a whole number of deals (default 60)
   --players N     2, 3 or 4 (default 3)
   --seed N        base deal seed (default 0)
@@ -175,6 +218,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--b-weights" => a.b_weights_path = Some(value(flag)?),
             "--a-search" => a.a_search = true,
             "--b-search" => a.b_search = true,
+            "--policy-checkpoint" => a.policy_checkpoint = Some(value(flag)?),
+            "--a-policy" => a.a_policy = true,
+            "--b-policy" => a.b_policy = true,
             "--games" => a.games = parse_num(&value(flag)?, flag)?,
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
@@ -197,6 +243,18 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.b_search && a.b != BotKind::Human {
         return Err("--b-search is only legal when --b is human".to_string());
+    }
+    if a.a_policy && a.a != BotKind::Plan {
+        return Err("--a-policy is only legal when --a is plan".to_string());
+    }
+    if a.b_policy && a.b != BotKind::Plan {
+        return Err("--b-policy is only legal when --b is plan".to_string());
+    }
+    if (a.a_policy || a.b_policy) && a.policy_checkpoint.is_none() {
+        return Err("--a-policy/--b-policy need --policy-checkpoint".to_string());
+    }
+    if a.policy_checkpoint.is_some() && !a.a_policy && !a.b_policy {
+        return Err("--policy-checkpoint given but neither --a-policy nor --b-policy was set".to_string());
     }
     let per_deal = a.players as usize;
     a.games -= a.games % per_deal;
@@ -222,7 +280,13 @@ fn parse_num<T: std::str::FromStr>(s: &str, flag: &str) -> Result<T, String> {
 /// Game `index`: A in seat `index % players`, deal `seed + index / players`
 /// -- identical scheme to `arena::Match::play_one`, so a run here is on the
 /// same deals a `Match` at these `--seed`/`--players` would use.
-fn play_one(args: &Args, index: usize) -> f64 {
+/// `policy_net`: the checkpoint `main` loaded ONCE, shared read-only across
+/// every worker thread and every game as an `Arc` -- see [`Bot::
+/// plan_with_policy`]'s own doc comment for why each policy-on seat below
+/// still gets its OWN `PolicyOrder` (a cheap in-memory clone of the net
+/// inside it, not a re-read of `PATH`) rather than sharing one mutable
+/// scratch space across threads.
+fn play_one(args: &Args, index: usize, policy_net: Option<&Arc<ValueNet>>) -> f64 {
     let players = args.players as usize;
     let seat = index % players;
     let seed = (args.seed.wrapping_add((index / players) as u64))
@@ -260,6 +324,21 @@ fn play_one(args: &Args, index: usize) -> f64 {
         let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
         bots[i] = Bot::human_plan(eval_weights, human_weights, player_seed);
     }
+    // `--a-policy`/`--b-policy`: swap the flagged seat's plain `Bot::Plan`
+    // for `Bot::plan_with_policy` -- same `--a-search`/`--b-search` shape
+    // just above (overwrite after the unconditional `build_bots`), but
+    // `--a`/`--b` kind is `plan` on both sides already (`parse_args`
+    // enforces it), so only the move ORDER differs from the untouched side.
+    for (i, s) in seats.iter().enumerate() {
+        let policy_on = if i == seat { args.a_policy } else { args.b_policy };
+        if !policy_on {
+            continue;
+        }
+        let net = policy_net
+            .expect("parse_args guarantees --policy-checkpoint whenever --a-policy/--b-policy is set");
+        let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
+        bots[i] = Bot::plan_with_policy(s.weights, PolicyOrder::from_net((**net).clone()), player_seed);
+    }
 
     let mut state = game::new_game(args.players, seed);
     let outcome = game::play_game(&mut state, MOVE_CAP, |s, _legal| bots[s.current as usize].pick(s));
@@ -282,12 +361,29 @@ fn main() -> ExitCode {
         }
     };
 
+    // Loaded ONCE, here, before any game or thread starts -- this module's
+    // "`--policy-checkpoint`" doc comment. `Arc` so every worker thread
+    // shares this one already-parsed net read-only; nobody mutates it
+    // (`PolicyOrder::from_net` clones it per policy-on seat instead of
+    // borrowing it mutably, so the checkpoint file itself is read exactly
+    // once no matter how many threads or games follow).
+    let policy_net: Option<Arc<ValueNet>> = match &args.policy_checkpoint {
+        Some(path) => match load_policy_checkpoint(std::path::Path::new(path)) {
+            Ok((net, _meta)) => Some(Arc::new(net)),
+            Err(e) => {
+                eprintln!("kindmatch: --policy-checkpoint: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+
     let started = Instant::now();
     let next = AtomicUsize::new(0);
     let done: Vec<Vec<(usize, f64)>> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..args.threads)
             .map(|_| {
-                let (next, args) = (&next, &args);
+                let (next, args, policy_net) = (&next, &args, &policy_net);
                 scope.spawn(move || {
                     let mut mine = Vec::new();
                     loop {
@@ -295,7 +391,7 @@ fn main() -> ExitCode {
                         if index >= args.games {
                             return mine;
                         }
-                        mine.push((index, play_one(args, index)));
+                        mine.push((index, play_one(args, index, policy_net.as_ref())));
                     }
                 })
             })
@@ -457,5 +553,81 @@ mod tests {
     /// `parse_weights`'s fallback-to-whole-doc branch).
     fn load_weights_via_champion_save(path: &std::path::Path, w: &Weights) {
         save_weights(path, w, &[]).unwrap();
+    }
+
+    /// `--policy-checkpoint`/`--a-policy` parse into the exact `Args` fields
+    /// `play_one`'s policy-overwrite loop reads -- `parse_args` never opens
+    /// the checkpoint path itself (only `main`/`play_one` do), so this test
+    /// needs no real checkpoint file on disk, just a path string.
+    #[test]
+    fn policy_checkpoint_and_a_policy_parse_into_the_matching_args_fields() {
+        let argv = vec![
+            "--a".to_string(),
+            "plan".to_string(),
+            "--b".to_string(),
+            "plan".to_string(),
+            "--policy-checkpoint".to_string(),
+            "control.ckpt".to_string(),
+            "--a-policy".to_string(),
+        ];
+        let args = parse_args(&argv).unwrap().unwrap();
+        assert_eq!(args.policy_checkpoint.as_deref(), Some("control.ckpt"));
+        assert!(args.a_policy, "--a-policy should have set a_policy");
+        assert!(!args.b_policy, "--b-policy was never passed, so b_policy must stay off");
+    }
+
+    /// With none of `--policy-checkpoint`/`--a-policy`/`--b-policy` on the
+    /// command line, every field `play_one`'s policy-overwrite loop gates on
+    /// is at its off default -- so that loop's `if !policy_on { continue }`
+    /// fires for every seat and every seat stays the plain `Bot::Plan`
+    /// `build_bots` already built: the prior is off unless a caller opts
+    /// in, exactly like [`pick_collecting`](tta::bots::plan::pick_collecting)'s
+    /// own `policy: Option<&mut PolicyOrder>` parameter being `None` by
+    /// default for every OTHER caller in this crate.
+    #[test]
+    fn omitting_every_policy_flag_leaves_the_prior_off_by_default() {
+        let args =
+            parse_args(&["--a".to_string(), "plan".to_string(), "--b".to_string(), "plan".to_string()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(args.policy_checkpoint, None);
+        assert!(!args.a_policy);
+        assert!(!args.b_policy);
+    }
+
+    /// `--a-policy` only makes sense on a `plan` seat -- `Bot::plan_with_
+    /// policy` builds a `Bot::Plan`-shaped search, so flagging a `weighted`
+    /// or `human` side for it would silently do nothing useful; rejected at
+    /// parse time instead, the same way `--a-search` is rejected for a
+    /// non-human `--a`.
+    #[test]
+    fn a_policy_is_rejected_when_a_is_not_plan() {
+        let argv = vec![
+            "--a".to_string(),
+            "weighted".to_string(),
+            "--a-policy".to_string(),
+            "--policy-checkpoint".to_string(),
+            "control.ckpt".to_string(),
+        ];
+        assert!(parse_args(&argv).is_err());
+    }
+
+    /// `--a-policy` with no `--policy-checkpoint` names a side to order but
+    /// gives it nothing to order WITH -- rejected at parse time rather than
+    /// panicking later in `play_one`'s `.expect(...)`.
+    #[test]
+    fn a_policy_without_a_policy_checkpoint_is_rejected() {
+        let argv = vec!["--a".to_string(), "plan".to_string(), "--a-policy".to_string()];
+        assert!(parse_args(&argv).is_err());
+    }
+
+    /// `--policy-checkpoint` with neither `--a-policy` nor `--b-policy` set
+    /// loads a checkpoint nothing will ever use -- rejected at parse time as
+    /// a likely-typo'd invocation, rather than silently running the OFF
+    /// path while the caller believes the prior is on.
+    #[test]
+    fn policy_checkpoint_given_with_no_side_enabled_is_rejected() {
+        let argv = vec!["--policy-checkpoint".to_string(), "control.ckpt".to_string()];
+        assert!(parse_args(&argv).is_err());
     }
 }

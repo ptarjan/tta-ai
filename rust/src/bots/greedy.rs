@@ -113,6 +113,7 @@ use crate::rng::PyRandom;
 use crate::state::GameState;
 
 use super::human::HumanBot;
+use super::neural::policy_order::PolicyOrder;
 use super::pending;
 use super::plan;
 use super::quiescent;
@@ -670,6 +671,35 @@ pub enum Bot {
         rng: PyRandom,
         human_weights: Vec<f64>,
     },
+    /// [`BotKind::Plan`]'s ordinary beam ([`plan::pick_collecting`]) with the
+    /// policy head wired in as a move-ordering prior (`neural::policy_order`'s
+    /// own top doc comment) -- the experiment `bin/kindmatch.rs`'s
+    /// `--a-policy`/`--b-policy` flags exist to run.
+    ///
+    /// Deliberately NOT its own [`BotKind`] ([`Bot::kind`] reports this as
+    /// plain [`BotKind::Plan`]: same search, same config shape, only the
+    /// move order differs) and built by hand rather than through
+    /// [`build_bots`], exactly like [`Bot::HumanPlan`]/[`Bot::human_plan`]
+    /// just above. The alternative was giving `Bot::Plan` itself an
+    /// `Option<&mut PolicyOrder>` field, which would put a lifetime
+    /// parameter on the WHOLE `Bot` enum -- every league run, every
+    /// `selfplay`/`arena` seat, every other caller that never heard of a
+    /// policy checkpoint -- for a knob only one binary's two flags use.
+    /// `policy` is therefore OWNED here, not borrowed: `PolicyOrder`'s own
+    /// doc comment asks for its checkpoint load to happen once, and it
+    /// does (`bin/kindmatch.rs` loads it once into a `ValueNet` and hands
+    /// out `Arc::clone`s), but the small in-memory net still gets cloned
+    /// into a fresh scratch-buffer `PolicyOrder` once per GAME here --
+    /// cheap (no I/O, no reload), and it buys every game its own
+    /// lock-free `&mut` scratch space instead of a `Mutex` serialising
+    /// every search node across threads.
+    PlanWithPolicy {
+        cfg: plan::PlanConfig,
+        stats: plan::Stats,
+        counters: pending::Counters,
+        rng: PyRandom,
+        policy: PolicyOrder,
+    },
 }
 
 impl Bot {
@@ -702,6 +732,7 @@ impl Bot {
             },
             Bot::Human(_) => BotKind::Human,
             Bot::HumanPlan { .. } => BotKind::Human,
+            Bot::PlanWithPolicy { .. } => BotKind::Plan,
         }
     }
 
@@ -723,6 +754,9 @@ impl Bot {
             Bot::Human(bot) => bot.choose(state, moves),
             Bot::HumanPlan { cfg, stats, counters, rng, human_weights } => {
                 super::human::choose_with_search(cfg, stats, counters, rng, human_weights, state, moves)
+            }
+            Bot::PlanWithPolicy { cfg, stats, counters, rng, policy } => {
+                plan::pick_collecting(cfg, stats, counters, rng, state, moves, &mut plan::Bank::Off, Some(policy))
             }
         }
     }
@@ -749,6 +783,24 @@ impl Bot {
             counters: pending::Counters::default(),
             rng: PyRandom::new(seed.into()),
             human_weights,
+        }
+    }
+
+    /// Build a [`Bot::PlanWithPolicy`] directly -- see that variant's own
+    /// doc comment for why it bypasses [`build_bots`]. `width: 2` mirrors
+    /// [`build_bots`]'s own [`BotKind::Plan`] override, so a policy-on seat
+    /// searches the identical beam width and node budget a policy-off
+    /// [`Bot::Plan`] seat at the same table would -- the ONLY difference
+    /// between the two is the move order the policy head bought, which is
+    /// exactly the thing `bin/kindmatch.rs`'s `--a-policy`/`--b-policy`
+    /// experiment measures.
+    pub fn plan_with_policy(weights: weighted::weights::Weights, policy: PolicyOrder, seed: i64) -> Bot {
+        Bot::PlanWithPolicy {
+            cfg: plan::PlanConfig { width: 2, weights, ..plan::PlanConfig::default() },
+            stats: plan::Stats::default(),
+            counters: pending::Counters::default(),
+            rng: PyRandom::new(seed.into()),
+            policy,
         }
     }
 }
