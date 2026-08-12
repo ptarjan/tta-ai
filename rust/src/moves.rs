@@ -15,7 +15,7 @@
 use crate::cards::CardId;
 
 /// Which side of a pact is being offered (§5.9). Empty string in Python.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PactSide {
     Unspecified,
     A,
@@ -23,7 +23,7 @@ pub enum PactSide {
 }
 
 /// Winston Churchill's once-per-turn choice.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ChurchillChoice {
     Culture,
     Military,
@@ -34,7 +34,13 @@ pub enum ChurchillChoice {
 /// a bare `(CardId, u8)` invites transposing them.
 pub type PlayerIdx = u8;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// `Hash` (added alongside `bots::neural::action`) is what lets a bare
+/// `Move` serve as [`crate::bots::neural::action::ActionId`] directly: every
+/// field here is plain-old-data (`CardId` is an index, `PlayerIdx`/`u8`/the
+/// two small enums above are already `Hash`), so two equal `Move`s hash
+/// equal and two different ones are never forced together the way a
+/// hand-rolled `u64` digest could be -- see that module's top doc comment.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Move {
     // ---- civil actions ----
     /// Take the card in row slot `slot` (0-based). Cost is by slot (§2.3).

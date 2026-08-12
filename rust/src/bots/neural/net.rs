@@ -316,6 +316,14 @@ impl<'a> Reader<'a> {
         String::from_utf8(self.take(n)?.to_vec()).map_err(|e| format!("checkpoint: meta key is not utf8: {e}"))
     }
 
+    /// Bytes not yet consumed. A single-record format like this module's own
+    /// checkpoint never needs this (it checks `pos == bytes.len()` once, at
+    /// the end); a multi-record stream like `bots::neural::dump`'s self-play
+    /// dump does, to know when to stop looping and start the next record
+    /// instead of trying to parse trailing garbage as one.
+    pub(crate) fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
+    }
 }
 
 /// Serialise `net` plus `meta` (arbitrary named numbers -- the trainer's

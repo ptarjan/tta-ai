@@ -40,7 +40,9 @@
 //!   comment for the one place the two beams genuinely differ (batched
 //!   per-ply scoring, not per-candidate).
 
+pub mod action;
 pub mod bot;
+pub mod dump;
 pub mod encode;
 pub mod eval;
 pub mod net;

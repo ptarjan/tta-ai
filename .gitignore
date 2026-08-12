@@ -9,6 +9,12 @@ experiments/champion.json
 # README.md, docs/HAZARDS.md's "never git add -A") but had no actual pattern
 # here; a bare `git add experiments/` would have committed one.
 experiments/rust_champion_*.json
+# A local, frozen COPY of the live champions above, taken once so a
+# dump_selfplay run plays a fixed set of weights even while `climb` keeps
+# rewriting the live files mid-run (bots::neural::dump's top doc comment /
+# the calling task's own instruction). Same reason as the pattern above:
+# never meant to be committed.
+experiments/policy_seed/
 experiments/logs/
 experiments/baselines.jsonl
 experiments/league_state/

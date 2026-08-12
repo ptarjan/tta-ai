@@ -201,7 +201,7 @@ pub const CARD_VEC_DIM: usize = NUM_CARD_TYPES + 1 + PROD_KEYS + EFF_KEYS + 4;
 ///
 /// Returned on the stack (`CARD_VEC_DIM` is 49 -- ~400 bytes), not heap --
 /// see this module's top doc comment on why no cache is needed either.
-fn card_vec_array(id: CardId) -> [f64; CARD_VEC_DIM] {
+pub(crate) fn card_vec_array(id: CardId) -> [f64; CARD_VEC_DIM] {
     let mut v = [0.0f64; CARD_VEC_DIM];
     if id.is_none() {
         return v;
