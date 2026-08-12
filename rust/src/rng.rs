@@ -35,6 +35,7 @@ const UPPER_MASK: u32 = 0x8000_0000;
 const LOWER_MASK: u32 = 0x7fff_ffff;
 
 /// A CPython-compatible MT19937 stream.
+#[derive(Clone)]
 pub struct PyRandom {
     state: [u32; N],
     /// Position of the next untempered word to hand out. `>= N` forces a
