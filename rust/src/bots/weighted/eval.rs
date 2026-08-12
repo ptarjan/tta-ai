@@ -681,6 +681,59 @@ pub const LOSS_GATES: &[WeightKey] = &[
 /// an upside") even though both land on the same non-negative constraint.
 pub const REDUNDANCY_NONNEG_GATES: &[WeightKey] = &[WeightKey::TechRedundancyDiscount];
 
+/// Weights that price WHAT AN UNFINISHED WONDER STILL OWES -- none of them
+/// may be positive. Every one is a non-negative magnitude that is larger the
+/// FURTHER the player is from finishing: `remaining` is the resources the
+/// unbuilt stages still owe, `stages_left` is how many of them there are,
+/// `turns_to_finish` is that debt expressed in turns of the player's whole
+/// output, and `overrun` is the part of it the game will not last long enough
+/// to pay. A positive weight scores "my wonder is further from done" as an
+/// improvement, and worse, makes PAYING A STAGE a loss: every one of these
+/// coordinates falls when a stage is bought, so a positive price on them
+/// turns `Move::WonderStep` into a move the evaluator will never choose.
+///
+/// This gate exists because the 2p arm did exactly that. Its champion priced
+/// `wonder_remaining` at **+11.51** (authored default -0.3) and
+/// `wonder_overrun` at **+1.11**, and a 200-game census of that champion
+/// found it completed **0 wonders in 400 player-games** -- it took 1106 of
+/// them, built almost no stages, and let 72% get antiquated at an age
+/// boundary. The 3p and 4p arms have all four negative and do finish wonders,
+/// which is the control: same code, same rules, opposite sign, opposite
+/// behaviour.
+///
+/// The confound that let the climb do it is the same one [`LOSS_GATES`]
+/// describes: a big expensive wonder owes more than a small one, so "still
+/// owes a lot" correlates with having reached for something valuable. That
+/// correlation has its own home already -- `cards::wonder_potential` is
+/// identity-aware and prices what completing a specific wonder would DO.
+/// These four are identity-blind stocks (see [`super::horizon::WonderOutlook`]),
+/// so they must not double as the value term. Repaired DOWN to 0.0: the
+/// league may decide an outstanding stage costs nothing, never that it pays.
+pub const WONDER_DEBT_GATES: &[WeightKey] = &[
+    WeightKey::WonderRemaining,
+    WeightKey::WonderStagesLeft,
+    WeightKey::WonderTurnsToFinish,
+    WeightKey::WonderOverrun,
+];
+
+/// Every "this weight may never be positive" gate, paired with the sentence
+/// [`dominance_repair`] logs when it fires.
+///
+/// One table rather than one `for` loop per gate list, because the loops were
+/// byte-identical apart from that sentence: a fourth gate used to mean a
+/// fourth copy, and a copy that gets forgotten is a gate that silently does
+/// not run. `bin/climb.rs`'s under-mutation guard iterates this same table,
+/// so adding a list here arms both the load-time repair and the mutation-time
+/// one at once. (The two NON-negative gates, [`BENEFIT_GATES`] and
+/// [`REDUNDANCY_NONNEG_GATES`], repair in the opposite direction and stay
+/// separate -- folding them in would need a sign field whose only job is to
+/// be read back out.)
+pub const NON_POSITIVE_GATES: &[(&[WeightKey], &str)] = &[
+    (SHORTFALL_GATES, "prices a marginal-need shortfall"),
+    (LOSS_GATES, "prices a penalty the rules impose"),
+    (WONDER_DEBT_GATES, "prices an unpaid wonder debt as an upside"),
+];
+
 /// One rule-level ordering `dominance_repair` had to fix -- Python's
 /// `{"weight": ..., "value": ..., "default": ..., "rule": ...}` dict,
 /// restated as a struct. Diagnostic only (a hillclimb log entry): nothing in
@@ -747,29 +800,18 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
         }
     }
 
-    for &k in SHORTFALL_GATES {
-        let v = out.get(k);
-        if v > 1e-12 {
-            viol.push(Violation {
-                weight: k,
-                value: v,
-                default: k.default_weight(),
-                rule: format!("{} <= 0 (prices a marginal-need shortfall)", k.name()),
-            });
-            out.set(k, 0.0);
-        }
-    }
-
-    for &k in LOSS_GATES {
-        let v = out.get(k);
-        if v > 1e-12 {
-            viol.push(Violation {
-                weight: k,
-                value: v,
-                default: k.default_weight(),
-                rule: format!("{} <= 0 (prices a penalty the rules impose)", k.name()),
-            });
-            out.set(k, 0.0);
+    for &(keys, why) in NON_POSITIVE_GATES {
+        for &k in keys {
+            let v = out.get(k);
+            if v > 1e-12 {
+                viol.push(Violation {
+                    weight: k,
+                    value: v,
+                    default: k.default_weight(),
+                    rule: format!("{} <= 0 ({why})", k.name()),
+                });
+                out.set(k, 0.0);
+            }
         }
     }
 
@@ -1215,6 +1257,46 @@ mod tests {
     }
 
     // ---------------------------------------------------------- dominance
+
+    /// The bug this gate was added for, reproduced with the champion's own
+    /// numbers rather than a token `+1.0`: the live 2p vector priced
+    /// `wonder_remaining` at +11.51 (authored default -0.3) and
+    /// `wonder_overrun` at +1.11, and a 200-game census of it completed ZERO
+    /// wonders across 400 player-games. Every wonder-debt coordinate FALLS
+    /// when a stage is paid, so pricing them positive makes `WonderStep` a
+    /// scoring loss and the bot takes wonders it will never build.
+    #[test]
+    fn the_2p_champions_positive_wonder_debt_weights_are_repaired_away() {
+        let mut w = Weights::default();
+        w.set(WeightKey::WonderRemaining, 11.510_363_264_976_004);
+        w.set(WeightKey::WonderOverrun, 1.111_842_383_161_555_8);
+
+        let (out, viol) = dominance_repair(&w);
+
+        assert_eq!(out.get(WeightKey::WonderRemaining), 0.0);
+        assert_eq!(out.get(WeightKey::WonderOverrun), 0.0);
+        assert_eq!(viol.len(), 2, "both violations reported, got {viol:?}");
+        assert!(
+            viol.iter().all(|v| v.rule.contains("unpaid wonder debt")),
+            "the log has to say WHY, got {viol:?}"
+        );
+    }
+
+    /// A key only belongs in [`WONDER_DEBT_GATES`] if its author already
+    /// treated it as a cost or left it unmeasured. A positive default would
+    /// mean the crate itself disagrees with the gate, which is a
+    /// contradiction to resolve at the source, not to repair away every load.
+    #[test]
+    fn no_gated_wonder_debt_weight_is_authored_as_an_upside() {
+        for &k in WONDER_DEBT_GATES {
+            assert!(
+                k.default_weight() <= 0.0,
+                "{} defaults to {}, contradicting its own gate",
+                k.name(),
+                k.default_weight()
+            );
+        }
+    }
 
     /// NEGATIVE CONTROL: the guard must not rewrite a vector that is already
     /// legal.

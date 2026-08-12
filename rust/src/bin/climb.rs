@@ -1402,19 +1402,23 @@ mod tests {
     #[test]
     fn no_mutant_ever_prices_a_rulebook_penalty_as_a_benefit() {
         let mut w = Weights::defaults();
-        for &k in eval::LOSS_GATES {
-            w.set(k, 9.0);
+        for &(keys, _) in eval::NON_POSITIVE_GATES {
+            for &k in keys {
+                w.set(k, 9.0);
+            }
         }
         let mut s = Search::new(2027);
         for gen in 0..300 {
             w = mutate(&w, &mut s, 0.8, None).weights;
-            for &k in eval::LOSS_GATES {
-                assert!(
-                    w.get(k) <= 1e-12,
-                    "generation {gen}: {} walked to {}, which scores a penalty as an upside",
-                    k.name(),
-                    w.get(k)
-                );
+            for &(keys, why) in eval::NON_POSITIVE_GATES {
+                for &k in keys {
+                    assert!(
+                        w.get(k) <= 1e-12,
+                        "generation {gen}: {} walked to {}, which {why}",
+                        k.name(),
+                        w.get(k)
+                    );
+                }
             }
         }
     }
