@@ -322,6 +322,25 @@ pub struct EarlyStopOutcome {
 ///
 /// # Errors
 /// If `max_epochs == 0`, so no epoch ever ran to produce a best net.
+/// One epoch's held-out top-1 against the best seen so far: whether it
+/// becomes the new BEST epoch (checkpointed at the end of the run), and
+/// whether it resets the PATIENCE counter. Split into its own function,
+/// separate from [`train_until_early_stop`]'s loop, so these two questions
+/// -- "what's the best net to keep" vs "has training stalled enough to
+/// stop" -- can be pinned down directly by a test rather than only through
+/// a full (and comparatively expensive) training run.
+struct EpochVerdict {
+    is_new_best: bool,
+    resets_patience: bool,
+}
+
+/// `min_delta` gates ONLY `resets_patience`. `is_new_best` is a plain
+/// argmax -- if `top1` beats every epoch seen so far, it IS the best,
+/// full stop, whether or not the margin clears `min_delta`.
+fn epoch_verdict(top1: f64, best_top1: f64, min_delta: f64) -> EpochVerdict {
+    EpochVerdict { is_new_best: top1 > best_top1, resets_patience: top1 > best_top1 + min_delta }
+}
+
 pub fn train_until_early_stop(
     trainer: &mut PolicyTrainer,
     train: &[DecisionRecord],
@@ -351,12 +370,15 @@ pub fn train_until_early_stop(
             "epoch {epoch}: mean train loss {mean_loss:.4}  held-out top-1 {top1:.4}  [{:.1}s]",
             t0.elapsed().as_secs_f64()
         );
-        if top1 > best_top1 + min_delta {
+        let verdict = epoch_verdict(top1, best_top1, min_delta);
+        if verdict.is_new_best {
             best_top1 = top1;
             best_epoch = epoch;
             best_net = Some(trainer.net.clone());
             best_report = Some(report);
             snapshot_before_best = Some(snapshot_before);
+        }
+        if verdict.resets_patience {
             patience_left = patience;
         } else if patience_left == 0 {
             println!("early stop: held-out top-1 has not improved by >= {min_delta} for {patience} epoch(s)");
@@ -1062,6 +1084,32 @@ mod tests {
             outcome.best_net, trainer.net,
             "the returned net must be the BEST epoch's weights, not the LAST epoch's -- trainer.net keeps mutating \
              after the best epoch (patience epochs still train) so these must differ"
+        );
+    }
+
+    /// A real bug (calling task, 2026-08-12): a smoke test showed epoch 2
+    /// scoring 0.5272 and epoch 0 scoring 0.5102, yet the run reported epoch
+    /// 0 as best, because `min_delta` was gating BOTH "is this the best
+    /// epoch" and "does this reset patience" through one shared condition.
+    /// `min_delta` must gate patience ONLY -- an epoch that improves by
+    /// less than `min_delta` still has to become the new best (a plain
+    /// argmax has no threshold), while still counting as a non-improving
+    /// epoch for patience purposes. `0.52` vs a prior best of `0.51` with
+    /// `min_delta = 0.02` is exactly that: a real (if small) improvement
+    /// that must win the "best" question and lose the "reset patience"
+    /// question, not the same answer to both.
+    #[test]
+    fn an_epoch_that_improves_by_less_than_min_delta_still_becomes_the_new_best() {
+        let verdict = epoch_verdict(0.52, 0.51, 0.02);
+        assert!(
+            verdict.is_new_best,
+            "0.52 beats the prior best of 0.51 -- it must become the new best regardless of min_delta, or a later, \
+             genuinely-better epoch never displaces an earlier lucky one"
+        );
+        assert!(
+            !verdict.resets_patience,
+            "the 0.01 gain is below min_delta=0.02, so patience must still treat this epoch as non-improving -- \
+             min_delta governs ONLY when to stop, never which net to keep"
         );
     }
 }
