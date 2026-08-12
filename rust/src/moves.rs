@@ -234,6 +234,17 @@ impl MoveList {
         &self.items[..self.len as usize]
     }
 
+    /// Mutable view of the same stack-allocated, already-populated moves --
+    /// no allocation, no length change. Exists for a move-ordering PRIOR
+    /// (`bots::neural::policy_order::PolicyOrder::order_moves`) to permute
+    /// an already-generated [`MoveList`] in place; nothing here may grow,
+    /// shrink or drop an entry -- see that function's own doc comment for
+    /// why "ordering only" is load-bearing.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [Move] {
+        &mut self.items[..self.len as usize]
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.len as usize

@@ -76,6 +76,7 @@ use crate::moves::Move;
 use crate::rng::{shuffle_cards, PyRandom};
 use crate::state::{CardList, GameState, ROW_SIZE};
 
+use super::neural::policy_order::PolicyOrder;
 use super::pending;
 use super::quiescent;
 use super::weighted::eval;
@@ -337,12 +338,19 @@ pub fn pick(
     state: &GameState,
     moves: &[Move],
 ) -> Move {
-    pick_collecting(cfg, stats, counters, rng, state, moves, &mut Bank::Off)
+    pick_collecting(cfg, stats, counters, rng, state, moves, &mut Bank::Off, None)
 }
 
 /// [`pick`], plus every position the beam priced appended to `bank`. The
 /// teacher-data generator (`bots::neural::rankdata`) is the only caller that
 /// passes anything but [`Bank::Off`]; see [`Bank`] for why it needs them.
+///
+/// `policy`: the move-ordering prior (`docs/NEURAL.md`'s "The policy head"),
+/// OFF by default -- every existing caller of [`pick`] passes `None` here
+/// (unconditionally, via [`pick`]'s own fixed-arity wrapper above), so the
+/// search takes EXACTLY today's code path unless a caller opts in by
+/// building a [`PolicyOrder`] and passing it explicitly. See [`beam`]'s own
+/// doc comment for what changes, and does not change, when it is `Some`.
 pub fn pick_collecting(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -351,6 +359,7 @@ pub fn pick_collecting(
     state: &GameState,
     moves: &[Move],
     bank: &mut Bank<GameState>,
+    mut policy: Option<&mut PolicyOrder>,
 ) -> Move {
     // `beam` below already refuses to EXPAND a `Move::Resign` candidate (see
     // its own per-move `continue`), so in the ordinary case Resign never wins
@@ -402,7 +411,7 @@ pub fn pick_collecting(
         if cfg.bot.determinize {
             determinize(&mut root, &mut drng);
         }
-        let best = beam(cfg, stats, &root, moves, me, w, &ctx, bank);
+        let best = beam(cfg, stats, &root, moves, me, w, &ctx, bank, policy.as_deref_mut());
         for (mv, v) in best {
             if let Some(entry) = totals.iter_mut().find(|(m, _, _)| *m == mv) {
                 entry.1 += v;
@@ -437,6 +446,18 @@ struct Frontier {
 /// score}` dict, restated as a `Vec` of pairs rather than a parallel
 /// `HashMap` (house style; the number of root candidates is small, so a
 /// linear scan in [`update_best`] costs nothing a hash would recover).
+///
+/// `policy`, when `Some`, reorders EVERY node's candidate list
+/// (`docs/NEURAL.md`'s policy head, most-preferred-first) before this
+/// function's own budget/quiesce/score loop below ever looks at it --
+/// [`PolicyOrder::order_moves`] permutes in place, dropping nothing, so
+/// which candidates get expanded before `budget` runs out changes, but the
+/// SET of moves reachable at unlimited budget does not. `policy: None`
+/// (every call site today, transitively from [`pick`]) takes the identical
+/// branch every one of these `match`es already had -- `mvs = moves` /
+/// `mvs = generated.as_slice()`, completely unordered -- so the flag-off
+/// path is not just "close to" today's search, it is the same code running
+/// the same comparisons in the same order.
 fn beam(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -446,6 +467,7 @@ fn beam(
     w: &Weights,
     ctx: &RivalContext,
     bank: &mut Bank<GameState>,
+    mut policy: Option<&mut PolicyOrder>,
 ) -> Vec<(Move, f64)> {
     stats.searches += 1;
     let mut budget = cfg.max_nodes;
@@ -455,11 +477,31 @@ fn beam(
     for _ply in 0..cfg.max_plies {
         let mut nxt: Vec<Frontier> = Vec::new();
         for entry in &frontier {
-            let generated;
+            let mut generated;
+            // Only the ROOT ply (`entry.first == None`) can see `moves`
+            // directly; a policy-guided root additionally needs its OWN
+            // mutable copy to permute, since `moves` is a borrowed `&[Move]`
+            // shared across every sample in `pick_collecting`'s outer loop.
+            // `MoveList` is a fixed stack array (`moves.rs::MAX_MOVES`), so
+            // this copy is not a heap allocation.
+            let mut root_ordered;
             let mvs: &[Move] = match entry.first {
-                None => moves,
+                None => match policy.as_deref_mut() {
+                    None => moves,
+                    Some(p) => {
+                        root_ordered = crate::moves::MoveList::new();
+                        for &mv in moves {
+                            root_ordered.push(mv);
+                        }
+                        p.order_moves(&entry.state, me, root_ordered.as_mut_slice());
+                        root_ordered.as_slice()
+                    }
+                },
                 Some(_) => {
                     generated = crate::legal::legal_moves(&entry.state);
+                    if let Some(p) = policy.as_deref_mut() {
+                        p.order_moves(&entry.state, me, generated.as_mut_slice());
+                    }
                     generated.as_slice()
                 }
             };
@@ -862,6 +904,167 @@ mod tests {
         let mut rng = PyRandom::new(1);
         let mv = pick(&cfg, &mut stats, &mut counters, &mut rng, &state, moves.as_slice());
         assert!(moves.as_slice().contains(&mv));
+    }
+
+    // ------------------------------------------------ policy-guided ordering
+
+    /// A [`PolicyOrder`] that scores `Move::EndTurn` strictly BELOW every
+    /// other candidate, at any state, deterministically -- built by hand
+    /// rather than trained, so these tests do not depend on a checkpoint
+    /// file existing in the checkout. Every stem weight is zero except the
+    /// `EndTurn` one-hot column, which gets a per-hidden-unit RAMP (`h + 1`,
+    /// not a uniform value): a uniform weight makes every hidden unit
+    /// identical for a given input, which `LayerNorm` then collapses to a
+    /// state-independent constant, destroying the very signal this needs.
+    /// `stem_ln_gamma = 1`/`stem_ln_beta = 0` pin `LayerNorm` to a plain
+    /// z-score so the result is determined by the ramp alone, not by
+    /// whatever `random_policy_net`'s own random init drew. Net effect:
+    /// `EndTurn` (whose one-hot column is 1) scores strictly negative;
+    /// every other move (whose one-hot column is 0, so its whole input row
+    /// through these weights is the zero vector) scores exactly 0.0 and
+    /// ties with every other non-`EndTurn` candidate.
+    fn end_turn_last_policy() -> crate::bots::neural::policy_order::PolicyOrder {
+        use crate::bots::neural::{action, encode, policy_train};
+        let hidden = 4;
+        let mut net = policy_train::random_policy_net(hidden, 0);
+        let end_turn_col = encode::ENCODING_DIM + action::move_kind_slot(&Move::EndTurn);
+        for h in 0..hidden {
+            for i in 0..net.in_dim {
+                net.stem_w[h * net.in_dim + i] = if i == end_turn_col { (h + 1) as f64 } else { 0.0 };
+            }
+            net.stem_b[h] = 0.0;
+            net.stem_ln_gamma[h] = 1.0;
+            net.stem_ln_beta[h] = 0.0;
+            net.head_w[h] = -1.0;
+        }
+        net.head_b = 0.0;
+        crate::bots::neural::policy_order::PolicyOrder::from_net(net)
+    }
+
+    /// Under a node budget too small to expand every root candidate,
+    /// [`beam`] must genuinely process a DIFFERENT set of root moves
+    /// depending on the policy prior -- proof the wiring actually reaches
+    /// the search's own budget loop, not just that `PolicyOrder::
+    /// order_moves` sorts correctly in isolation
+    /// (`policy_order.rs`'s own tests already cover that in full).
+    ///
+    /// `G::new_game(3, 5)`'s root decision offers exactly `[EndTurn, Take{0},
+    /// Take{1}, Take{2}, Take{3}, Take{4}]` in `legal_moves`' own raw order
+    /// (pinned by this test, not assumed -- the first assertion below fails
+    /// loudly if a future change to move generation reorders it, rather
+    /// than silently making the rest of this test meaningless). A budget of
+    /// 5 (one short of all 6) processes `EndTurn` under that raw order, but
+    /// [`end_turn_last_policy`] always ranks `EndTurn` last, so the same
+    /// budget can never reach it once the policy has reordered the list.
+    #[test]
+    fn policy_ordering_changes_which_root_candidates_the_search_can_afford_to_process() {
+        let state = G::new_game(3, 5);
+        let moves = crate::legal::legal_moves(&state);
+        let me = state.decider();
+        assert_eq!(
+            moves.as_slice(),
+            [
+                Move::EndTurn,
+                Move::Take { slot: 0 },
+                Move::Take { slot: 1 },
+                Move::Take { slot: 2 },
+                Move::Take { slot: 3 },
+                Move::Take { slot: 4 },
+            ],
+            "test is pinned to this exact raw root order; update the pin (and re-check the reasoning \
+             in this test's own doc comment) if move generation legitimately changed it"
+        );
+        let budget = (moves.len() - 1) as i64;
+
+        let w = Weights::default();
+        let ctx = rivals::rival_context(&state, me, None, None);
+        let cfg = PlanConfig { max_plies: 1, max_nodes: budget, ..PlanConfig::default() };
+
+        // No policy: the raw order above puts `EndTurn` first, so a budget
+        // of 5 processes it plus 4 of the 5 `Take`s.
+        let mut stats_a = Stats::default();
+        let mut bank_a = Bank::collecting();
+        let _ = beam(&cfg, &mut stats_a, &state, moves.as_slice(), me, &w, &ctx, &mut bank_a, None);
+        let end_turn_seen_a = bank_a.take().iter().any(|t| t.current != me);
+        assert!(end_turn_seen_a, "the raw order puts EndTurn first, so the unordered run must process it");
+
+        // Policy-ordered: EndTurn is ALWAYS last, so a budget one short of
+        // the full root count can never reach it.
+        let mut policy = end_turn_last_policy();
+        let mut stats_b = Stats::default();
+        let mut bank_b = Bank::collecting();
+        let _ =
+            beam(&cfg, &mut stats_b, &state, moves.as_slice(), me, &w, &ctx, &mut bank_b, Some(&mut policy));
+        let end_turn_seen_b = bank_b.take().iter().any(|t| t.current != me);
+        assert!(!end_turn_seen_b, "the policy ranks EndTurn last, so a one-short budget must never reach it");
+
+        assert_ne!(
+            end_turn_seen_a, end_turn_seen_b,
+            "policy ordering had no observable effect on which root moves the budget could reach"
+        );
+    }
+
+    /// `Some(policy)` never changes the SET of moves the search could reach
+    /// at unlimited budget: with a budget generous enough for the whole
+    /// tree, [`pick`]-through-[`pick_collecting`] with a policy loaded
+    /// still returns an offered move, for every player count -- ordering
+    /// only, nothing pruned, matching this module's calling task's hard
+    /// rule 4.
+    #[test]
+    fn pick_with_a_policy_still_returns_an_offered_move() {
+        for n in [2u8, 3, 4] {
+            let state = G::new_game(n, 3);
+            let moves = crate::legal::legal_moves(&state);
+            let cfg = PlanConfig { width: 3, max_plies: 3, max_nodes: 200, ..PlanConfig::default() };
+            let mut stats = Stats::default();
+            let mut counters = pending::Counters::default();
+            let mut rng = PyRandom::new(1);
+            let mut policy = end_turn_last_policy();
+            let mv = pick_collecting(
+                &cfg,
+                &mut stats,
+                &mut counters,
+                &mut rng,
+                &state,
+                moves.as_slice(),
+                &mut Bank::Off,
+                Some(&mut policy),
+            );
+            assert!(moves.as_slice().contains(&mv), "{n}p: {mv:?} was not offered");
+        }
+    }
+
+    /// [`pick`] (every real caller's entry point) is unaffected by this
+    /// whole module's policy-ordering machinery existing: it always passes
+    /// `None`, so its output on a fixed (state, seed) pair must match the
+    /// exact move + [`Stats`] this repo produced BEFORE `PolicyOrder` was
+    /// wired into [`beam`] -- pinned by literally running this exact
+    /// scenario against the pre-change code and copying its output here
+    /// (see the calling task's own verification step). A `stats.nodes`
+    /// match, not just the chosen move, pins the search order itself, not
+    /// merely its final answer.
+    #[test]
+    fn pick_output_on_fixed_positions_matches_the_pre_policy_order_baseline() {
+        let cases: [(u8, u64, usize, u32, i64, Move, u64); 4] = [
+            (2, 1, 4, 4, 400, Move::Take { slot: 1 }, 10),
+            (3, 7, 3, 3, 300, Move::Take { slot: 0 }, 9),
+            (4, 42, 5, 4, 500, Move::Take { slot: 2 }, 11),
+            (3, 99, 8, 6, 2000, Move::Take { slot: 2 }, 11),
+        ];
+        for (players, seed, width, max_plies, max_nodes, expected_mv, expected_nodes) in cases {
+            let state = G::new_game(players, seed);
+            let moves = crate::legal::legal_moves(&state);
+            let cfg = PlanConfig { width, max_plies, max_nodes, ..PlanConfig::default() };
+            let mut stats = Stats::default();
+            let mut counters = pending::Counters::default();
+            let mut rng = PyRandom::new(1);
+            let mv = pick(&cfg, &mut stats, &mut counters, &mut rng, &state, moves.as_slice());
+            assert_eq!(mv, expected_mv, "{players}p seed={seed}: move regressed from the pre-policy baseline");
+            assert_eq!(
+                stats.nodes, expected_nodes,
+                "{players}p seed={seed}: node count regressed from the pre-policy baseline"
+            );
+        }
     }
 
     /// Proves the shared `pending` policy is actually wired through, not

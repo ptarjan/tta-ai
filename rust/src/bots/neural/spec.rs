@@ -627,7 +627,7 @@ impl Player<'_> {
         match self {
             Player::Classical(ClassicalPlayer::Plan { cfg, stats, counters, rng }) => {
                 let mut bank = plan::Bank::collecting();
-                let mv = plan::pick_collecting(cfg, stats, counters, rng, state, moves, &mut bank);
+                let mv = plan::pick_collecting(cfg, stats, counters, rng, state, moves, &mut bank, None);
                 (mv, Leaves::States(bank.take()))
             }
             Player::NeuralPlan { net, cfg, stats, counters, rng } => {

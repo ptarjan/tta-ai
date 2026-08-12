@@ -278,20 +278,48 @@ pub const ACTION_DIM: usize =
 /// two different games, produces bit-identical output, because every input
 /// is plain-old-data and every step below is ordinary arithmetic on it (no
 /// RNG, no clock, no hash-map iteration order).
+///
+/// Allocates one fresh `Vec`; a caller scoring many candidates at one
+/// decision point (the search's move-ordering prior, `bots::neural::
+/// policy_order`) should call [`encode_action_into`] instead and reuse one
+/// buffer across the whole candidate list -- see that function's own doc
+/// comment.
 pub fn encode_action(actor: PlayerIdx, mv: Move) -> Vec<f64> {
-    let mut out = Vec::with_capacity(ACTION_DIM);
+    let mut out = vec![0.0; ACTION_DIM];
+    encode_action_into(actor, mv, &mut out);
+    out
+}
+
+/// [`encode_action`], writing into a caller-owned `out` (exactly
+/// [`ACTION_DIM`] wide) instead of allocating -- the single source of truth
+/// for the encoding; [`encode_action`] is a thin wrapper over this so the
+/// two can never drift. Exists for [`super::policy_order::PolicyOrder::
+/// order_moves`], which scores every legal move at a search node and would
+/// otherwise allocate one `Vec<f64>` per candidate in the search's hot path.
+///
+/// # Panics
+/// If `out.len() != ACTION_DIM`.
+pub fn encode_action_into(actor: PlayerIdx, mv: Move, out: &mut [f64]) {
+    assert_eq!(out.len(), ACTION_DIM, "encode_action_into: output buffer width");
+
+    let mut off = 0;
 
     let mut kind = [0.0f64; NUM_MOVE_KINDS];
     kind[move_kind_slot(&mv)] = 1.0;
-    out.extend_from_slice(&kind);
+    out[off..off + NUM_MOVE_KINDS].copy_from_slice(&kind);
+    off += NUM_MOVE_KINDS;
 
     // Primary card: `Move::card()` already resolves `Upgrade`/`BachTheater`
     // to `to` (the card actually being built), not `from` -- see its own
     // doc comment.
-    out.extend_from_slice(&card_vec_array(mv.card().unwrap_or(CardId::NONE)));
+    let primary = card_vec_array(mv.card().unwrap_or(CardId::NONE));
+    out[off..off + CARD_VEC_DIM].copy_from_slice(&primary);
+    off += CARD_VEC_DIM;
 
     let aux = decode_aux(mv);
-    out.extend_from_slice(&card_vec_array(aux.secondary));
+    let secondary = card_vec_array(aux.secondary);
+    out[off..off + CARD_VEC_DIM].copy_from_slice(&secondary);
+    off += CARD_VEC_DIM;
 
     // Target/owner, relative to `actor` rather than an absolute seat index:
     // "attack the next player" should encode the same regardless of which
@@ -306,38 +334,71 @@ pub fn encode_action(actor: PlayerIdx, mv: Move) -> Vec<f64> {
         let offset = (t as usize + MAX_PLAYERS - actor as usize) % MAX_PLAYERS;
         target[offset] = 1.0;
     }
-    out.extend_from_slice(&target);
+    out[off..off + MAX_PLAYERS].copy_from_slice(&target);
+    off += MAX_PLAYERS;
 
     let mut side = [0.0f64; 3];
     if let Some(s) = aux.side {
         side[pact_side_slot(s)] = 1.0;
     }
-    out.extend_from_slice(&side);
+    out[off..off + 3].copy_from_slice(&side);
+    off += 3;
 
     let mut churchill = [0.0f64; 2];
     if let Some(c) = aux.churchill {
         churchill[churchill_slot(c)] = 1.0;
     }
-    out.extend_from_slice(&churchill);
+    out[off..off + 2].copy_from_slice(&churchill);
+    off += 2;
 
     let mut slot = [0.0f64; ROW_SIZE];
     if let Some(s) = aux.slot {
         slot[s as usize] = 1.0;
     }
-    out.extend_from_slice(&slot);
+    out[off..off + ROW_SIZE].copy_from_slice(&slot);
+    off += ROW_SIZE;
 
-    out.push(aux.steps.map_or(0.0, |s| f64::from(s) / MAX_WONDER_STEPS));
-    out.push(aux.bid.map_or(0.0, |n| f64::from(n) / BID_SCALE));
-    out.push(aux.choose.map_or(0.0, |n| f64::from(n) / MAX_OPTIONS as f64));
+    out[off] = aux.steps.map_or(0.0, |s| f64::from(s) / MAX_WONDER_STEPS);
+    off += 1;
+    out[off] = aux.bid.map_or(0.0, |n| f64::from(n) / BID_SCALE);
+    off += 1;
+    out[off] = aux.choose.map_or(0.0, |n| f64::from(n) / MAX_OPTIONS as f64);
+    off += 1;
 
-    debug_assert_eq!(out.len(), ACTION_DIM, "encode_action() produced the wrong length");
-    out
+    debug_assert_eq!(off, ACTION_DIM, "encode_action_into() produced the wrong length");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::moves::PactSide;
+
+    /// [`encode_action_into`] must produce EXACTLY what [`encode_action`]
+    /// does, for a spread of move kinds -- it is the sole implementation
+    /// [`encode_action`] now delegates to, so any drift here would silently
+    /// change training-time encoding (`encode_action`, still called from
+    /// `policy_train::expand_row`) and search-time encoding
+    /// (`encode_action_into`, called from `policy_order::PolicyOrder::
+    /// order_moves`) differently.
+    #[test]
+    fn encode_action_into_matches_encode_action_for_a_spread_of_moves() {
+        let samples = [
+            Move::Take { slot: 2 },
+            Move::Build { card: CardId::NONE },
+            Move::WonderStep { steps: 3 },
+            Move::Aggression { card: CardId::NONE, target: 1 },
+            Move::OfferPact { card: CardId::NONE, target: 2, side: PactSide::A },
+            Move::EndTurn,
+        ];
+        for &mv in &samples {
+            for actor in 0..4u8 {
+                let want = encode_action(actor, mv);
+                let mut got = vec![0.0; ACTION_DIM];
+                encode_action_into(actor, mv, &mut got);
+                assert_eq!(got, want, "actor {actor}, {mv:?}");
+            }
+        }
+    }
 
     /// Every [`Move`] variant maps to a distinct slot in `0..NUM_MOVE_KINDS`
     /// -- the same injectivity guard `encode.rs` runs for `card_type_slot`,
