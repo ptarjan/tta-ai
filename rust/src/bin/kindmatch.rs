@@ -82,6 +82,26 @@
 //!     --policy-checkpoint control.ckpt --weights champ.json \
 //!     --games 240 --players 2 --threads 2
 //! ```
+//!
+//! # `--max-nodes`: both sides, always
+//!
+//! `plan::PlanConfig::max_nodes` (default 4000) is a search-shape knob a
+//! `plan`/`human+search`/policy-ordered seat all read; a move-ordering prior
+//! can only change which candidates a search reaches when the budget it
+//! reorders candidates for actually runs out before the tree does (see
+//! `docs/NEURAL.md`'s policy-head follow-up). `--max-nodes N` overrides it
+//! for EVERY seat this binary builds -- `--a`/`--b` alike, whichever kinds
+//! they are -- never just one side: this is a controlled comparison of move
+//! ORDER at a fixed budget, not a handicap match with two different
+//! budgets. Omitting the flag leaves every seat at `PlanConfig::default()`'s
+//! own 4000, byte-for-byte what every invocation before this flag existed
+//! got.
+//!
+//! ```text
+//! kindmatch --a plan --b plan --a-policy \
+//!     --policy-checkpoint control.ckpt --weights champ.json \
+//!     --max-nodes 400 --games 240 --players 2 --threads 2
+//! ```
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -92,6 +112,7 @@ use tta::bots::greedy::{build_bots, Bot, BotKind, Seat};
 use tta::bots::neural::net::ValueNet;
 use tta::bots::neural::policy_order::PolicyOrder;
 use tta::bots::neural::policy_train::load_policy_checkpoint;
+use tta::bots::plan;
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
 use tta::game::{self, MOVE_CAP};
@@ -125,6 +146,9 @@ struct Args {
     policy_checkpoint: Option<String>,
     a_policy: bool,
     b_policy: bool,
+    /// See this file's module doc comment, "`--max-nodes`": applied to
+    /// EVERY seat, never just one side.
+    max_nodes: i64,
     games: usize,
     players: u8,
     seed: u64,
@@ -146,6 +170,7 @@ impl Default for Args {
             policy_checkpoint: None,
             a_policy: false,
             b_policy: false,
+            max_nodes: plan::PlanConfig::default().max_nodes,
             games: 60,
             players: 3,
             seed: 0,
@@ -170,6 +195,8 @@ usage: kindmatch --a KIND --b KIND [options]
                      and --policy-checkpoint)
   --b-policy        order --b's beam with the policy prior (needs --b plan
                      and --policy-checkpoint)
+  --max-nodes N   plan::PlanConfig::max_nodes for EVERY seat, both sides
+                     (default 4000)
   --games N       games; rounded down to a whole number of deals (default 60)
   --players N     2, 3 or 4 (default 3)
   --seed N        base deal seed (default 0)
@@ -203,6 +230,27 @@ fn loader_for(kind: BotKind) -> fn(&std::path::Path) -> Result<Weights, String> 
     }
 }
 
+/// `--max-nodes`'s one write site: every [`Bot`] variant that carries a
+/// [`plan::PlanConfig`] gets `max_nodes` set on it, whatever kind it ended
+/// up as (`plan`, `human+search`, or policy-ordered `plan`) -- an exhaustive
+/// match with no wildcard arm, so a future `Bot` variant that adds its own
+/// `PlanConfig` is a compile error here instead of a silent miss. Every
+/// other kind has no node budget to set and is left untouched.
+fn set_max_nodes(bot: &mut Bot, max_nodes: i64) {
+    match bot {
+        Bot::Plan { cfg, .. } | Bot::HumanPlan { cfg, .. } | Bot::PlanWithPolicy { cfg, .. } => {
+            cfg.max_nodes = max_nodes;
+        }
+        Bot::Random(_)
+        | Bot::Greedy(_)
+        | Bot::Weighted(_)
+        | Bot::Quiescent { .. }
+        | Bot::Book(_)
+        | Bot::Variant(_)
+        | Bot::Human(_) => {}
+    }
+}
+
 fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     let mut a = Args::default();
     let mut it = argv.iter();
@@ -221,6 +269,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--policy-checkpoint" => a.policy_checkpoint = Some(value(flag)?),
             "--a-policy" => a.a_policy = true,
             "--b-policy" => a.b_policy = true,
+            "--max-nodes" => a.max_nodes = parse_num(&value(flag)?, flag)?,
             "--games" => a.games = parse_num(&value(flag)?, flag)?,
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
@@ -255,6 +304,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.policy_checkpoint.is_some() && !a.a_policy && !a.b_policy {
         return Err("--policy-checkpoint given but neither --a-policy nor --b-policy was set".to_string());
+    }
+    if a.max_nodes <= 0 {
+        return Err(format!("--max-nodes must be positive, got {}", a.max_nodes));
     }
     let per_deal = a.players as usize;
     a.games -= a.games % per_deal;
@@ -338,6 +390,12 @@ fn play_one(args: &Args, index: usize, policy_net: Option<&Arc<ValueNet>>) -> f6
             .expect("parse_args guarantees --policy-checkpoint whenever --a-policy/--b-policy is set");
         let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
         bots[i] = Bot::plan_with_policy(s.weights, PolicyOrder::from_net((**net).clone()), player_seed);
+    }
+    // `--max-nodes`: every seat, unconditionally, whichever kind it ended up
+    // as above -- see this file's module doc comment, "`--max-nodes`", for
+    // why both sides must move together.
+    for bot in bots.iter_mut() {
+        set_max_nodes(bot, args.max_nodes);
     }
 
     let mut state = game::new_game(args.players, seed);
@@ -629,5 +687,57 @@ mod tests {
     fn policy_checkpoint_given_with_no_side_enabled_is_rejected() {
         let argv = vec!["--policy-checkpoint".to_string(), "control.ckpt".to_string()];
         assert!(parse_args(&argv).is_err());
+    }
+
+    // -------------------------------------------------------- --max-nodes
+
+    /// Omitting `--max-nodes` must leave every seat at `plan::PlanConfig`'s
+    /// OWN default (4000 today), read from the real constant rather than a
+    /// copied literal -- every invocation of this binary before this flag
+    /// existed gets byte-for-byte the same search budget it always did.
+    #[test]
+    fn omitting_max_nodes_leaves_the_planconfig_default_unchanged() {
+        let args =
+            parse_args(&["--a".to_string(), "plan".to_string(), "--b".to_string(), "plan".to_string()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(args.max_nodes, plan::PlanConfig::default().max_nodes);
+    }
+
+    #[test]
+    fn max_nodes_flag_parses_into_the_matching_args_field() {
+        let argv = vec!["--max-nodes".to_string(), "400".to_string()];
+        let args = parse_args(&argv).unwrap().unwrap();
+        assert_eq!(args.max_nodes, 400);
+    }
+
+    #[test]
+    fn max_nodes_rejects_a_nonpositive_value() {
+        let argv = vec!["--max-nodes".to_string(), "0".to_string()];
+        assert!(parse_args(&argv).is_err(), "a zero node budget can never run a search");
+    }
+
+    /// [`set_max_nodes`] reaches every `plan`-shaped `Bot` variant and
+    /// leaves every other kind untouched -- the direct proof that
+    /// `--max-nodes` is not silently a no-op for whichever `Bot`
+    /// construction path a seat took (plain `build_bots`, `Bot::human_plan`,
+    /// or `Bot::plan_with_policy`).
+    #[test]
+    fn set_max_nodes_overrides_every_plan_shaped_bot_and_ignores_everything_else() {
+        let mut plan_bot = Bot::Plan {
+            cfg: plan::PlanConfig::default(),
+            stats: plan::Stats::default(),
+            counters: tta::bots::pending::Counters::default(),
+            rng: tta::rng::PyRandom::new(1),
+        };
+        set_max_nodes(&mut plan_bot, 400);
+        match plan_bot {
+            Bot::Plan { cfg, .. } => assert_eq!(cfg.max_nodes, 400),
+            _ => panic!("kind must not change"),
+        }
+
+        let mut random_bot = Bot::Random(tta::bots::greedy::RandomBot::new(1));
+        set_max_nodes(&mut random_bot, 400);
+        assert_eq!(random_bot.kind(), BotKind::Random, "a kind with no PlanConfig must be untouched");
     }
 }

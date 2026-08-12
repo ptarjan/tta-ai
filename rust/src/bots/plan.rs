@@ -229,6 +229,17 @@ pub struct Stats {
     pub nodes: u64,
     pub searches: u64,
     pub wars_priced: u64,
+    /// How many of `searches` (calls to [`beam`]) were cut short by
+    /// `cfg.max_nodes` -- `budget` reached zero before some frontier node's
+    /// candidate list was fully examined, rather than the search finishing
+    /// every ply on its own. Purely observational (nothing reads it to
+    /// change search behaviour): it exists to answer one question from the
+    /// outside -- at a given `max_nodes`, what fraction of real decisions
+    /// were actually starved? -- without instrumenting a caller by hand.
+    /// See `docs/NEURAL.md`'s policy-head follow-up section for why this
+    /// number matters: a move-ordering prior can only matter when the
+    /// budget it reorders candidates FOR genuinely runs out.
+    pub searches_capped: u64,
 }
 
 /// Pending decisions resolved per [`quiesce`] call before scoring, mirroring
@@ -542,6 +553,17 @@ fn beam(
         nxt.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         nxt.truncate(cfg.width);
         frontier = nxt;
+    }
+    // `budget <= 0` here means the search stopped because `cfg.max_nodes`
+    // ran out, not because the tree itself was exhausted (`nxt.is_empty()`
+    // with budget to spare) or `max_plies` was reached with room left --
+    // see `Stats::searches_capped`'s own doc comment for why this number is
+    // worth reading from outside. The one false positive this admits (the
+    // tree finishes on EXACTLY the last unit of budget, by coincidence, with
+    // nothing left unexamined) is a single-node-wide sliver of `max_nodes`
+    // space and not worth a second flag to exclude.
+    if budget <= 0 {
+        stats.searches_capped += 1;
     }
     best
 }
@@ -1002,6 +1024,38 @@ mod tests {
             end_turn_seen_a, end_turn_seen_b,
             "policy ordering had no observable effect on which root moves the budget could reach"
         );
+    }
+
+    /// [`Stats::searches_capped`] counts a [`beam`] call as capped exactly
+    /// when `max_nodes` genuinely cut it short (a real candidate at the root
+    /// was never examined), and NOT when a generous budget lets the same
+    /// small tree finish on its own -- reuses the fixed 6-move root from
+    /// [`policy_ordering_changes_which_root_candidates_the_search_can_afford_to_process`]
+    /// (pinned there) so "one short" (5) vs. "plenty" (100) are known
+    /// quantities, not guesses.
+    #[test]
+    fn searches_capped_counts_only_decisions_max_nodes_actually_cut_short() {
+        let state = G::new_game(3, 5);
+        let moves = crate::legal::legal_moves(&state);
+        let me = state.decider();
+        let w = Weights::default();
+        let ctx = rivals::rival_context(&state, me, None, None);
+
+        // One short of the 6 root candidates: the 6th is never scored, so
+        // this search is genuinely starved.
+        let cfg_short = PlanConfig { max_plies: 1, max_nodes: 5, ..PlanConfig::default() };
+        let mut stats_short = Stats::default();
+        let _ = beam(&cfg_short, &mut stats_short, &state, moves.as_slice(), me, &w, &ctx, &mut Bank::Off, None);
+        assert_eq!(stats_short.searches, 1);
+        assert_eq!(stats_short.searches_capped, 1, "5 nodes is one short of all 6 root moves -- must be capped");
+
+        // Far more than the 6 root candidates can ever consume at
+        // `max_plies: 1`: the tree finishes on its own, budget to spare.
+        let cfg_plenty = PlanConfig { max_plies: 1, max_nodes: 100, ..PlanConfig::default() };
+        let mut stats_plenty = Stats::default();
+        let _ = beam(&cfg_plenty, &mut stats_plenty, &state, moves.as_slice(), me, &w, &ctx, &mut Bank::Off, None);
+        assert_eq!(stats_plenty.searches, 1);
+        assert_eq!(stats_plenty.searches_capped, 0, "100 nodes is plenty for 6 root moves -- must not be capped");
     }
 
     /// `Some(policy)` never changes the SET of moves the search could reach
