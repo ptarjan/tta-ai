@@ -47,6 +47,7 @@ pub mod encode;
 pub mod eval;
 pub mod net;
 pub mod plan;
+pub mod policy_train;
 pub mod rankdata;
 pub mod spec;
 pub mod train;

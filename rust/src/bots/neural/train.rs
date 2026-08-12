@@ -113,7 +113,7 @@ fn add_slices(dst: &mut [f64], src: &[f64]) {
 /// same shape, as the first/second-moment buffers `AdamW` needs per
 /// parameter (`m`/`v` in the optimizer are literally two more values of
 /// this type).
-struct ValueNetGrad {
+pub(crate) struct ValueNetGrad {
     stem_w: Vec<f64>,
     stem_b: Vec<f64>,
     stem_ln_gamma: Vec<f64>,
@@ -124,7 +124,7 @@ struct ValueNetGrad {
 }
 
 impl ValueNetGrad {
-    fn zeros_like(net: &ValueNet) -> Self {
+    pub(crate) fn zeros_like(net: &ValueNet) -> Self {
         ValueNetGrad {
             stem_w: vec![0.0; net.hidden * net.in_dim],
             stem_b: vec![0.0; net.hidden],
@@ -136,7 +136,7 @@ impl ValueNetGrad {
         }
     }
 
-    fn zero(&mut self) {
+    pub(crate) fn zero(&mut self) {
         self.stem_w.iter_mut().for_each(|x| *x = 0.0);
         self.stem_b.iter_mut().for_each(|x| *x = 0.0);
         self.stem_ln_gamma.iter_mut().for_each(|x| *x = 0.0);
@@ -203,7 +203,7 @@ impl BlockCache {
 /// Recorded intermediates for one forward pass, reused across calls (every
 /// `Vec` is pre-sized once and overwritten in place -- no allocation in the
 /// per-row hot loop).
-struct ForwardCache {
+pub(crate) struct ForwardCache {
     stem_z: Vec<f64>,
     stem_ln_mean: f64,
     stem_ln_var: f64,
@@ -212,7 +212,7 @@ struct ForwardCache {
 }
 
 impl ForwardCache {
-    fn zeros(net: &ValueNet) -> Self {
+    pub(crate) fn zeros(net: &ValueNet) -> Self {
         ForwardCache {
             stem_z: vec![0.0; net.hidden],
             stem_ln_mean: 0.0,
@@ -273,7 +273,7 @@ fn layer_norm_into(x: &[f64], mean: f64, var: f64, gamma: &[f64], beta: &[f64], 
 /// `1.0` -- the eval-mode identity `net.rs`'s own `ValueNet::forward` uses,
 /// checked directly against it in
 /// `forward_train_at_eval_matches_value_net_forward` below.
-fn forward_train(net: &ValueNet, x: &[f64], dropout_p: f64, mut rng: Option<&mut PyRandom>, cache: &mut ForwardCache) -> f64 {
+pub(crate) fn forward_train(net: &ValueNet, x: &[f64], dropout_p: f64, mut rng: Option<&mut PyRandom>, cache: &mut ForwardCache) -> f64 {
     let hidden = net.hidden;
     linear_into(&net.stem_w, &net.stem_b, x, net.in_dim, &mut cache.stem_z);
     let (mean, var) = layer_norm_stats(&cache.stem_z);
@@ -331,7 +331,7 @@ fn forward_train(net: &ValueNet, x: &[f64], dropout_p: f64, mut rng: Option<&mut
 /// Scratch buffers backprop needs, all sized `hidden` and reused across
 /// every call within a training run -- the backward-pass analogue of
 /// [`ForwardCache`]'s "pre-sized, overwritten in place" rule.
-struct BackScratch {
+pub(crate) struct BackScratch {
     g_out: Vec<f64>,
     g_lnout: Vec<f64>,
     g_resid: Vec<f64>,
@@ -344,7 +344,7 @@ struct BackScratch {
 }
 
 impl BackScratch {
-    fn zeros(hidden: usize) -> Self {
+    pub(crate) fn zeros(hidden: usize) -> Self {
         BackScratch {
             g_out: vec![0.0; hidden],
             g_lnout: vec![0.0; hidden],
@@ -438,7 +438,7 @@ fn linear_backward_accumulate(w: &[f64], x: &[f64], dy: &[f64], in_dim: usize, d
 /// Backpropagate `dy` (`d(loss)/d(net output)`) through the forward pass
 /// recorded in `cache`, accumulating into `grad`. `x` must be the same
 /// input `forward_train` was called with to produce `cache`.
-fn backward_train(net: &ValueNet, cache: &ForwardCache, x: &[f64], dy: f64, grad: &mut ValueNetGrad, s: &mut BackScratch) {
+pub(crate) fn backward_train(net: &ValueNet, cache: &ForwardCache, x: &[f64], dy: f64, grad: &mut ValueNetGrad, s: &mut BackScratch) {
     let hidden = net.hidden;
     let last_h = cache.last_hidden();
     for j in 0..hidden {
@@ -1070,7 +1070,7 @@ impl AdamW {
     /// `lr`/`wd` are the script's `--lr`/`--wd`; `beta1`/`beta2`/`eps` are
     /// torch's own `AdamW` defaults (`0.9`, `0.999`, `1e-8`), which the
     /// script never overrides.
-    fn new(net: &ValueNet, lr: f64, wd: f64) -> Self {
+    pub(crate) fn new(net: &ValueNet, lr: f64, wd: f64) -> Self {
         AdamW {
             lr,
             beta1: 0.9,
@@ -1087,14 +1087,14 @@ impl AdamW {
     /// binary's cosine schedule (mirroring `torch.optim.lr_scheduler.
     /// CosineAnnealingLR`, which `neural_train_rank.py` wraps `AdamW` in)
     /// calls once per epoch.
-    fn set_lr(&mut self, lr: f64) {
+    pub(crate) fn set_lr(&mut self, lr: f64) {
         self.lr = lr;
     }
 
     /// One step: `param -= lr*wd*param` (decoupled decay) THEN the usual
     /// bias-corrected Adam update, matching torch's documented `AdamW`
     /// update order.
-    fn step(&mut self, net: &mut ValueNet, grad: &ValueNetGrad) {
+    pub(crate) fn step(&mut self, net: &mut ValueNet, grad: &ValueNetGrad) {
         self.t += 1;
         let (t, lr, b1, b2, eps, wd) = (self.t, self.lr, self.beta1, self.beta2, self.eps, self.wd);
         let upd = |p: &mut [f64], g: &[f64], m: &mut [f64], v: &mut [f64]| {
