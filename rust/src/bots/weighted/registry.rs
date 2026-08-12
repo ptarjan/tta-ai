@@ -150,6 +150,13 @@ mod tests {
     /// member), so this list only has to say WHY no literal reader is
     /// expected, not re-derive WHICH eight keys that is.
     const PHASE_SUFFIXED_NO_LITERAL_READER: &[WeightKey] = &[
+        // The standing hinges are reached the same indirect way the phase
+        // pairs are -- `rivals::feature_marginal` calls `key.trailing()`
+        // over `STANDING_KEYS` and never names either variant literally, so
+        // there is no literal reader to find for exactly the reason this
+        // exemption exists.
+        WeightKey::CultureRateTrailing,
+        WeightKey::ScienceRateTrailing,
         WeightKey::WorkersEarly,
         WeightKey::WorkersLate,
         WeightKey::StrengthRelEarly,
@@ -284,6 +291,13 @@ mod tests {
     /// below is the ratchet that keeps this list itself from drifting stale
     /// against `features.rs`'s own `f.set` call sites.
     const NOT_SET_BY_FEATURES: &[(WeightKey, &str)] = &[
+        // Standing hinges are MARGINAL modifiers, not board facts: they say
+        // how much more a unit of culture/science production is worth to a
+        // player who is behind, which `rivals::feature_marginal` applies on
+        // top of the base key. `features()` has nothing to write for them,
+        // exactly as it has nothing to write for the `_early`/`_late` pairs.
+        (WeightKey::CultureRateTrailing, "rivals.rs standing-hinge marginal"),
+        (WeightKey::ScienceRateTrailing, "rivals.rs standing-hinge marginal"),
         // Multipliers the card-in-hand valuation layer (cards.rs) applies
         // to a static/board yield-table ROW -- "how much to trust this
         // kind of estimate", not a board fact, so there is nothing for
@@ -306,6 +320,7 @@ mod tests {
         (WeightKey::FreeActionCredit, "cards.rs free-action multiplier"),
         (WeightKey::TerritoryCredit, "cards.rs territory multiplier"),
         (WeightKey::BonusCardCredit, "cards.rs bonus-card multiplier"),
+        (WeightKey::TechRedundancyDiscount, "cards.rs redundancy-discount multiplier"),
         // docs/OPEN_ITEMS.md item 2: the five military-deck classes' own
         // board-credit multipliers, same shape as tech/action/gov/wonder's
         // above -- "how much to trust cards::tactic_value/aggression_value/

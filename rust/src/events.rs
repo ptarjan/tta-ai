@@ -906,7 +906,7 @@ fn apply_single_target(
         &reversed
     };
     let ranked = rank_players(state, order, stat, best);
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         eprintln!(
             "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
             order.iter().map(|&q| rank_stat_value(state, q, stat)).collect::<Vec<_>>()
@@ -1067,7 +1067,7 @@ fn apply_player_block(state: &mut GameState, idx: u8, block: &EventBlock) {
 /// `gain`/`lose` block or a player-targeting block can (Refugees, Immigration,
 /// Development of Settlement).
 fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i32) {
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && (block.food != 0 || block.resources != 0 || block.food_and_or_resources != 0) {
+    if crate::debugflags::replay_debug_all() && (block.food != 0 || block.resources != 0 || block.food_and_or_resources != 0) {
         eprintln!(
             "DEBUG apply_gains_block: idx={idx} sign={sign} block.food={} block.resources={} block.food_and_or_resources={} food_before={} resources_before={} blue_available_before={}",
             block.food, block.resources, block.food_and_or_resources, state.players[idx as usize].food, state.players[idx as usize].resources,
@@ -1078,7 +1078,7 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
     add_clamped(&mut state.players[idx as usize].culture, sign * block.culture as i32);
     apply_food_delta(state, idx, block.food, sign);
     apply_resources_delta(state, idx, block.resources, sign);
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && (block.food != 0 || block.resources != 0) {
+    if crate::debugflags::replay_debug_all() && (block.food != 0 || block.resources != 0) {
         eprintln!(
             "DEBUG apply_gains_block AFTER: idx={idx} food_after={} resources_after={}",
             state.players[idx as usize].food, state.players[idx as usize].resources
@@ -1086,7 +1086,7 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
     }
     if block.food_and_or_resources != 0 {
         food_or_resources(&mut state.players[idx as usize], block.food_and_or_resources as i32, sign);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG food_or_resources AFTER: idx={idx} food_after={} resources_after={}",
                 state.players[idx as usize].food, state.players[idx as usize].resources
@@ -1327,13 +1327,13 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
 /// function has this exact sequence hardcoded, never reading `order`
 /// (`gen_cards.py`'s `EVENT_BLOCK_IGNORED_KEYS` census).
 fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         eprintln!(
             "DEBUG extra_production BEFORE: idx={idx} food={} resources={} s.food={} s.resources={} yellow_bank={}",
             state.players[idx as usize].food, state.players[idx as usize].resources, s.food, s.resources,
             state.players[idx as usize].yellow_bank
         );
-        if std::env::var("REPLAY_DEBUG_TECHS").is_ok() {
+        if crate::debugflags::replay_debug_techs() {
             for (id, slot) in state.players[idx as usize].techs.iter() {
                 let card = id.get();
                 eprintln!(
@@ -1357,7 +1357,7 @@ fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
         p.food = 0;
     }
     economy::gain_resources(&mut state.players[idx as usize], s.resources.max(0) as u16);
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         eprintln!(
             "DEBUG extra_production AFTER: idx={idx} food={} resources={}",
             state.players[idx as usize].food, state.players[idx as usize].resources

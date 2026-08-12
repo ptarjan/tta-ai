@@ -53,6 +53,21 @@
 //! replaces: two easy wins burying one collapse. See `--pool-k` and
 //! `--pool-games` for the sampling knobs and their cost.
 //!
+//! That per-member disjoint-CI test is correct but was measured to be
+//! statistically underpowered at its default cost: across 2,075 real
+//! generations the pool veto fired zero times, while 81% of ACCEPTED
+//! candidates were worse than the incumbent against at least one pool member
+//! (median deficit -0.05, worst -0.30) -- at 60 games per member the interval
+//! is simply too wide to ever go disjoint. Rather than loosen the rule into a
+//! point-estimate threshold (which would veto on noise at n=60), the check is
+//! now two-stage: stage 1 is the cheap `--pool-games` screen above, and stage
+//! 2 ([`confirm_suspects`]) replays ONLY members whose stage-1 point estimate
+//! already cleared [`POOL_CONFIRM_TRIGGER`] with `--pool-confirm-games`
+//! (several times more games), re-applying the same disjoint test to that
+//! bigger, fresh sample. A candidate is vetoed if EITHER stage's test is
+//! disjoint -- stage 1 alone can still catch an extreme case outright, stage
+//! 2 catches the moderate drift stage 1's noise was hiding.
+//!
 //! # 3. Freezing is enforced for every operator, not two of four
 //!
 //! `culture` is the numeraire -- scaling it rescales the entire objective
@@ -68,7 +83,7 @@ use std::time::{Duration, Instant};
 
 use tta::arena::{loader_for, Match, Summary};
 use tta::bots::greedy::{BotKind, Seat};
-use tta::bots::weighted::eval::{load_weights, save_weights};
+use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights};
 use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
 use tta::rng::PyRandom;
 use tta::stats;
@@ -90,6 +105,23 @@ const CLAMP: f64 = 60.0;
 /// single-opponent overfit the pool veto exists to catch (this file's module
 /// doc), so it is worth flagging before it reaches the wall, not just after.
 const RUNAWAY_FRACTION: f64 = 0.95;
+
+/// Point-estimate deficit (candidate's pool win share minus the incumbent's,
+/// stage 1) below which a member earns a much bigger second look before the
+/// veto trusts a "not disjoint" verdict. This is the fix for a measured
+/// defect: at `--pool-games`'s default of 60, a `clearly_worse_than` CI is
+/// far too wide to ever go disjoint, so the pool veto fired ZERO times across
+/// 2,075 generations of real climb logs even though 81% of accepted
+/// candidates were worse than the incumbent against at least one pool member
+/// (worst deficits reaching -0.30). Stage 1 stays cheap and catches nothing
+/// on its own in practice; stage 2 ([`confirm_suspects`]) only pays for a
+/// bigger sample -- `--pool-confirm-games` -- against members whose point
+/// estimate already looks this bad, and re-applies the SAME disjoint-CI test
+/// (see this file's module doc) to that bigger sample. `-0.05` (5 points of
+/// win share) is comfortably outside challenge-batch noise yet well inside
+/// what 60 pool games can produce from a genuinely fine candidate, so it
+/// triggers on real drift without triggering on every generation.
+const POOL_CONFIRM_TRIGGER: f64 = -0.05;
 
 fn movable(key: WeightKey) -> bool {
     !FROZEN.contains(&key)
@@ -216,7 +248,26 @@ struct Mutation {
     moved: usize,
 }
 
+/// Propose one mutant, then put it back inside the rule-level constraints.
+///
+/// The repair is applied HERE, in a wrapper, rather than at each of
+/// `mutate_raw`'s two return points, so that no future operator can add a
+/// third path that escapes it: every mutant this binary evaluates has been
+/// through `dominance_repair` by construction.
+///
+/// Without this the gates in `eval.rs` were very nearly decorative. They ran
+/// in `load_weights`, so a champion was legal the instant a process started
+/// and then drifted freely for the rest of the run -- which is exactly what
+/// the live arms did, pushing five authored-negative penalty weights
+/// (corruption, consumption, discontent, uprising, strength deficit)
+/// positive. A constraint that holds only at startup is not a constraint.
 fn mutate(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mutation {
+    let m = mutate_raw(w, s, sigma, forced);
+    let (repaired, _) = dominance_repair(&m.weights);
+    Mutation { weights: repaired, ..m }
+}
+
+fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mutation {
     let keys: Vec<WeightKey> =
         WeightKey::ALL.iter().copied().filter(|k| movable(*k)).collect();
 
@@ -522,6 +573,62 @@ fn worst_case_verdict(results: &[PoolResult]) -> Option<String> {
     results.iter().find(|r| r.candidate.clearly_worse_than(&r.incumbent)).map(|r| r.name.clone())
 }
 
+/// Stage 1 of the two-stage veto ([`POOL_CONFIRM_TRIGGER`]'s doc comment):
+/// is this member's cheap point estimate already bad enough to be worth a
+/// bigger, dedicated look? A pure predicate on the ALREADY-PLAYED stage-1
+/// result, so which members get replayed is directly testable without
+/// playing a single stage-2 game.
+fn suspect(r: &PoolResult) -> bool {
+    r.candidate.mean - r.incumbent.mean < POOL_CONFIRM_TRIGGER
+}
+
+/// Stage 2 of the two-stage veto: replay ONLY the [`suspect`] members from
+/// `stage1`, `cfg.pool_confirm_games` games a side, and hand back a fresh
+/// [`PoolResult`] for each so [`worst_case_verdict`] can re-apply the exact
+/// same disjoint-CI test to the bigger sample.
+///
+/// Deliberately stage 2 ALONE, not stage 1's games pooled with stage 2's:
+/// pooling would need the raw per-game shares concatenated before
+/// `stats::paired` runs on them, but every measurement in this file
+/// (`measure_against`, `play_pool`) already collapses a duel down to a mean
+/// and a half-width before it comes back, so there is nothing left to pool by
+/// the time a [`PoolResult`] exists. Re-running `measure_against` fresh here
+/// avoids threading raw shares through a second code path, and correctness
+/// only needs each stage's own games to be internally consistent -- which a
+/// fresh, disjoint seed range (below) already guarantees, the same rule
+/// `challenge`'s own batches and `play_pool`'s own members follow.
+fn confirm_suspects(
+    candidate: &Weights,
+    cfg: &Config,
+    pool: &[(String, Seat)],
+    stage1: &[PoolResult],
+    seed: u64,
+) -> Vec<PoolResult> {
+    stage1
+        .iter()
+        .filter(|r| suspect(r))
+        .filter_map(|r| {
+            // Recover the member's position in `pool` (not carried by
+            // `PoolResult` itself) so the seed offset matches `play_pool`'s
+            // own per-member scheme, and so a name that somehow is not in
+            // `pool` any more is skipped rather than panicking mid-veto.
+            let idx = pool.iter().position(|(name, _)| name == &r.name)?;
+            let (name, opponent) = &pool[idx];
+            let s = seed.wrapping_add(idx as u64 * 104_729);
+            let candidate_a =
+                measure_against(champion_seat(candidate, cfg), *opponent, cfg, cfg.pool_confirm_games, s);
+            let incumbent_a = measure_against(
+                champion_seat(&cfg.champion, cfg),
+                *opponent,
+                cfg,
+                cfg.pool_confirm_games,
+                s.wrapping_add(50_021),
+            );
+            Some(PoolResult { name: name.clone(), candidate: candidate_a, incumbent: incumbent_a })
+        })
+        .collect()
+}
+
 /// Append a newly accepted champion to the league and drop the OLDEST once
 /// it is over `cap` -- a straight FIFO, not the "recent N plus a few
 /// spaced-out older ones" this change's own design note floated as a
@@ -582,6 +689,13 @@ struct Config {
     /// incumbent vs. the same opponent) -- one pool check costs
     /// `2 * pool_k * pool_games` games.
     pool_games: usize,
+    /// Games per pairing in the stage-2 confirm ([`confirm_suspects`]),
+    /// several times `pool_games` so the disjoint-CI test actually has the
+    /// power `pool_games` alone does not (see [`POOL_CONFIRM_TRIGGER`]).
+    /// Paid only for members [`suspect`] flags, not the whole pool. `0`
+    /// disables stage 2 outright -- the pre-fix behaviour, kept only so a
+    /// run can A/B against it.
+    pool_confirm_games: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -636,6 +750,13 @@ impl Default for Args {
                 // (not a thin, noisy one) is what catches that.
                 pool_k: 3,
                 pool_games: 60,
+                // 300 is 5x pool_games: cheap enough to pay only for the
+                // members stage 1 already flagged (see `suspect`), and
+                // large enough to shrink the CI half-width by roughly
+                // sqrt(5) -- the difference between "never disjoint" and
+                // "resolves a real -0.05 to -0.30 deficit", which is the
+                // measured range this whole change exists to catch.
+                pool_confirm_games: 300,
             },
             out: PathBuf::from("champion.json"),
             log: None,
@@ -684,6 +805,10 @@ usage: climb --out PATH [options]
                      (default 3; 0 disables the pool veto)
   --pool-games N     games per pool pairing; one check costs
                      2 * --pool-k * --pool-games games (default 60)
+  --pool-confirm-games N  games per pairing in the stage-2 confirm, paid only
+                     for members whose --pool-games point estimate already
+                     trails the incumbent by more than 5 points of win share;
+                     0 disables stage 2 (default 300)
   --league-cap N     past accepted champions kept as extra pool opponents;
                      0 disables the league (default 6)
   --threads N        games in parallel (default 1)
@@ -731,6 +856,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--gauntlet-every" => a.gauntlet_every = parse_num(&value(flag)?, flag)?,
             "--pool-k" => a.cfg.pool_k = parse_num(&value(flag)?, flag)?,
             "--pool-games" => a.cfg.pool_games = parse_num(&value(flag)?, flag)?,
+            "--pool-confirm-games" => a.cfg.pool_confirm_games = parse_num(&value(flag)?, flag)?,
             "--league-cap" => a.league_cap = parse_num(&value(flag)?, flag)?,
             "--threads" => a.cfg.threads = parse_num(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
@@ -780,6 +906,12 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     probe(a.cfg.anchor_games).map_err(|e| format!("--anchor-games: {e}"))?;
     probe(a.cfg.gauntlet_games).map_err(|e| format!("--gauntlet-games: {e}"))?;
     probe(a.cfg.pool_games).map_err(|e| format!("--pool-games: {e}"))?;
+    // `0` is the documented "stage 2 disabled" sentinel (same convention as
+    // `--league-cap 0` and `--gauntlet-every 0`), so it must not be probed
+    // as a game count -- `Match::validate` rejects 0 games outright.
+    if a.cfg.pool_confirm_games > 0 {
+        probe(a.cfg.pool_confirm_games).map_err(|e| format!("--pool-confirm-games: {e}"))?;
+    }
     if a.cfg.max_games < a.cfg.screen {
         return Err("--max-games must be at least --screen".to_string());
     }
@@ -929,6 +1061,7 @@ fn main() -> ExitCode {
         let mut vetoed = false;
         let mut accepted = false;
         let mut pool_results: Vec<PoolResult> = Vec::new();
+        let mut confirm_results: Vec<PoolResult> = Vec::new();
         let mut veto_reason: Option<String> = None;
         let mut runaway: Vec<(WeightKey, f64)> = Vec::new();
         if let Some((m, _)) = &best {
@@ -942,6 +1075,17 @@ fn main() -> ExitCode {
             pool_results =
                 play_pool(&m.weights, &args.cfg, &pool, args.cfg.pool_k, args.cfg.pool_games, pool_seed);
             veto_reason = worst_case_verdict(&pool_results);
+            // Stage 2 (module doc, "two-stage confirm"): only when stage 1
+            // did not already veto outright, and only spent on members
+            // `suspect` flagged. A DIFFERENT seed range from `pool_seed`
+            // (below) so this stage's games are a genuinely fresh sample,
+            // not a replay of stage 1's.
+            if veto_reason.is_none() && args.cfg.pool_confirm_games > 0 {
+                let confirm_seed = 62_233u64.wrapping_add(progress.gen.wrapping_mul(59));
+                confirm_results =
+                    confirm_suspects(&m.weights, &args.cfg, &pool, &pool_results, confirm_seed);
+                veto_reason = worst_case_verdict(&confirm_results);
+            }
             if veto_reason.is_some() {
                 vetoed = true;
             } else {
@@ -1047,14 +1191,29 @@ fn main() -> ExitCode {
                     .join(",")
             )
         };
-        let pool_str = if pool_results.is_empty() {
+        // Stage 1 and stage 2 (module doc, "two-stage confirm") logged
+        // together, in that order, tagged `confirmed` -- see this pair's
+        // shared doc comment on the JSONL `pool` field below for why they
+        // share one field rather than each getting their own.
+        let pool_entries: Vec<(&PoolResult, bool)> = pool_results
+            .iter()
+            .map(|r| (r, false))
+            .chain(confirm_results.iter().map(|r| (r, true)))
+            .collect();
+        let pool_str = if pool_entries.is_empty() {
             String::new()
         } else {
             format!(
                 " pool=[{}]{}",
-                pool_results
+                pool_entries
                     .iter()
-                    .map(|r| format!("{}={:.3}/{:.3}", r.name, r.candidate.mean, r.incumbent.mean))
+                    .map(|(r, confirmed)| format!(
+                        "{}{}={:.3}/{:.3}",
+                        r.name,
+                        if *confirmed { "(confirm)" } else { "" },
+                        r.candidate.mean,
+                        r.incumbent.mean,
+                    ))
                     .collect::<Vec<_>>()
                     .join(","),
                 veto_reason.as_deref().map(|r| format!(" lost_to={r}")).unwrap_or_default(),
@@ -1083,12 +1242,22 @@ fn main() -> ExitCode {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            let pool_json: String = pool_results
+            // Existing field names (`name`/`candidate`/`incumbent`) are kept
+            // exactly as before -- a reader that only ever looked at those
+            // three still sees the same shape. `confirmed` is new and
+            // additive: `false` for the cheap stage-1 screen, `true` for a
+            // stage-2 ([`confirm_suspects`]) replay at `--pool-confirm-games`
+            // of a member stage 1 flagged (`suspect`) -- this is where "did
+            // stage 2 fire, and what did it conclude" (the caller's ask)
+            // becomes readable from the log: a `true` row next to the same
+            // `name` as a `false` row is the confirm stage's own, bigger
+            // look at exactly the member that worried stage 1.
+            let pool_json: String = pool_entries
                 .iter()
-                .map(|r| {
+                .map(|(r, confirmed)| {
                     format!(
-                        "{{\"name\":\"{}\",\"candidate\":{:.4},\"incumbent\":{:.4}}}",
-                        r.name, r.candidate.mean, r.incumbent.mean,
+                        "{{\"name\":\"{}\",\"candidate\":{:.4},\"incumbent\":{:.4},\"confirmed\":{}}}",
+                        r.name, r.candidate.mean, r.incumbent.mean, confirmed,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1160,6 +1329,9 @@ fn append(path: &Path, line: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the sign-gate test needs the module itself (`eval::LOSS_GATES`);
+    // importing it at file scope would warn as unused in a normal build.
+    use tta::bots::weighted::eval;
 
     fn cfg() -> Config {
         Args::default().cfg
@@ -1218,6 +1390,31 @@ mod tests {
             w = mutate(&w, &mut s, 0.8, None).weights;
             for &k in WeightKey::ALL {
                 assert!(w.get(k).abs() <= CLAMP, "{} ran to {}", k.name(), w.get(k));
+            }
+        }
+    }
+
+    /// The climb may not walk a penalty weight positive. `dominance_repair`
+    /// used to run only in `load_weights`, so a champion was legal at startup
+    /// and unconstrained forever after -- and the live arms duly pushed all
+    /// five `LOSS_GATES` keys positive. Drive the mutator hard from a
+    /// deliberately illegal start and assert every mutant comes back legal.
+    #[test]
+    fn no_mutant_ever_prices_a_rulebook_penalty_as_a_benefit() {
+        let mut w = Weights::defaults();
+        for &k in eval::LOSS_GATES {
+            w.set(k, 9.0);
+        }
+        let mut s = Search::new(2027);
+        for gen in 0..300 {
+            w = mutate(&w, &mut s, 0.8, None).weights;
+            for &k in eval::LOSS_GATES {
+                assert!(
+                    w.get(k) <= 1e-12,
+                    "generation {gen}: {} walked to {}, which scores a penalty as an upside",
+                    k.name(),
+                    w.get(k)
+                );
             }
         }
     }
@@ -1535,6 +1732,88 @@ mod tests {
         let second_bad = result("second_bad", anchor(0.05, 0.02), anchor(0.50, 0.02));
         let verdict = worst_case_verdict(&[first_bad, second_bad]);
         assert_eq!(verdict.as_deref(), Some("first_bad"));
+    }
+
+    // ============================================================ pool: stage 2
+
+    /// This is the measured defect itself, reproduced without playing a
+    /// single game: at `--pool-games`-sized samples the interval is wide
+    /// enough that a genuine -0.10 deficit still overlaps the incumbent's,
+    /// so `worst_case_verdict` on stage 1 alone must NOT fire -- exactly why
+    /// the pool veto fired zero times across 2,075 real generations even
+    /// though 81% of accepted candidates were worse against some member.
+    /// `suspect` must still flag it: the point estimate alone is bad enough
+    /// to be worth a bigger, dedicated look.
+    #[test]
+    fn a_stage_one_deficit_too_wide_to_be_disjoint_still_trips_the_confirm_trigger() {
+        let stage1 = result("nemesis", anchor(0.40, 0.12), anchor(0.50, 0.12));
+        assert!(
+            worst_case_verdict(std::slice::from_ref(&stage1)).is_none(),
+            "a wide stage-1 interval around a real deficit must not itself veto"
+        );
+        assert!(suspect(&stage1), "a -0.10 point estimate must trip POOL_CONFIRM_TRIGGER");
+    }
+
+    /// The two-stage veto's whole point: the SAME deficit, resampled at
+    /// stage 2's larger `--pool-confirm-games` (simulated here by a narrower
+    /// half-width, which is what more games buys), now goes disjoint and
+    /// `worst_case_verdict` fires. This is the fix -- stage 1 alone could
+    /// never see this, stage 2 does.
+    #[test]
+    fn a_confirmed_stage_two_result_vetoes_where_stage_one_alone_could_not() {
+        let stage2 = result("nemesis", anchor(0.40, 0.04), anchor(0.50, 0.04));
+        let verdict = worst_case_verdict(std::slice::from_ref(&stage2));
+        assert_eq!(verdict.as_deref(), Some("nemesis"), "the confirmed, narrower interval must veto");
+    }
+
+    /// A point estimate only mildly behind (above the trigger) must never be
+    /// flagged as a suspect -- stage 2 exists to resolve deep deficits stage
+    /// 1's noise hides, not to re-litigate every generation's ordinary
+    /// sampling wobble.
+    #[test]
+    fn suspect_does_not_flag_a_point_estimate_above_the_trigger() {
+        let mild = result("mild", anchor(0.48, 0.10), anchor(0.50, 0.10)); // -0.02
+        assert!(!suspect(&mild));
+        let ahead = result("ahead", anchor(0.55, 0.10), anchor(0.50, 0.10)); // +0.05
+        assert!(!suspect(&ahead));
+    }
+
+    /// End-to-end wiring check for `confirm_suspects`: given a stage-1
+    /// result set with one member below the trigger and one above it, only
+    /// the flagged member is replayed -- the whole cost-saving point of
+    /// making stage 2 conditional rather than universal.
+    #[test]
+    fn confirm_suspects_only_replays_members_the_stage_one_trigger_flagged() {
+        let mut c = cfg();
+        c.players = 2;
+        c.threads = 2;
+        c.pool_confirm_games = 4; // cheap: this checks shape, not the number
+        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let pool = vec![("suspect".to_string(), seat), ("fine".to_string(), seat)];
+        let stage1 = vec![
+            result("suspect", anchor(0.30, 0.10), anchor(0.50, 0.10)), // -0.20: flagged
+            result("fine", anchor(0.48, 0.10), anchor(0.50, 0.10)),    // -0.02: not flagged
+        ];
+        let confirmed = confirm_suspects(&c.champion, &c, &pool, &stage1, 999);
+        let names: Vec<&str> = confirmed.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["suspect"], "only the flagged member should have been replayed");
+        for r in &confirmed {
+            assert!((0.0..=1.0).contains(&r.candidate.mean), "share {} out of range", r.candidate.mean);
+        }
+    }
+
+    /// `confirm_suspects` is a no-op, not a panic, when stage 1 flagged
+    /// nothing -- the common case, since most generations' candidates are
+    /// not deep-negative against any member.
+    #[test]
+    fn confirm_suspects_is_empty_when_nothing_was_flagged() {
+        let mut c = cfg();
+        c.players = 2;
+        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let pool = vec![("fine".to_string(), seat)];
+        let stage1 = vec![result("fine", anchor(0.52, 0.10), anchor(0.50, 0.10))];
+        let confirmed = confirm_suspects(&c.champion, &c, &pool, &stage1, 1);
+        assert!(confirmed.is_empty());
     }
 
     #[test]

@@ -27,11 +27,11 @@ fn board_yields_never_mutates_the_state_it_was_asked_to_price() {
     let before_stats = tta::effects::state_stats(&state, &state.players[0]);
 
     let einstein = CardId::by_name("Albert Einstein").unwrap();
-    let _ = by::board_yields(einstein, &state, 0);
+    let _ = by::board_yields(einstein, &by::Baseline::at(&state, 0));
     let despotism = CardId::by_name("Despotism").unwrap();
-    let _ = by::board_yields(despotism, &state, 0);
+    let _ = by::board_yields(despotism, &by::Baseline::at(&state, 0));
     let pyramids = CardId::by_name("Pyramids").unwrap();
-    let _ = by::board_yields(pyramids, &state, 0);
+    let _ = by::board_yields(pyramids, &by::Baseline::at(&state, 0));
 
     assert_eq!(state.players[0].leader, before_leader);
     assert_eq!(state.players[0].government, before_gov);

@@ -713,7 +713,7 @@ pub fn spend_mil_discount(p: &mut PlayerState, id: CardId, raw: i32) -> i32 {
     }
     let used = (p.mil_discount as i32).min(raw);
     p.mil_discount -= used as i16;
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && used != 0 {
+    if crate::debugflags::replay_debug_all() && used != 0 {
         eprintln!("DEBUG mil_discount site=spend_mil_discount(id={id:?}) -= {used} -> {}", p.mil_discount);
     }
     raw - used

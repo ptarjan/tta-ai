@@ -507,6 +507,35 @@ fn happy_source_count(p: &PlayerState) -> i32 {
     n
 }
 
+/// [`happy_source_count`], restricted to the exact set Michelangelo's own
+/// printed card names -- "1 culture per happy face from temples, theaters
+/// and wonders" -- so his `ExtraHappyPerHappySource` interaction (see
+/// [`apply_special`]'s `CulturePerHappyFromTemplesTheatersWonders` arm) does
+/// not also pick up government/leader/Arena/Library/colony happy sources
+/// that his card excludes. Same per-source (not per-happy-point) counting
+/// rule and the same self-exclusion for whichever card carries the bonus.
+fn temple_theater_wonder_happy_source_count(p: &PlayerState) -> i32 {
+    let mut n = 0;
+    for (id, slot) in p.techs.iter() {
+        if matches!(id.kind(), CardType::Temple | CardType::Theater) && id.get().production.happy > 0 {
+            n += slot.workers as i32;
+        }
+    }
+    for &w in p.completed_wonders.as_slice() {
+        if p.flipped_wonders.contains(w) {
+            continue;
+        }
+        let card = w.get();
+        let grants_this_bonus_itself =
+            card.special.iter().any(|sp| matches!(sp, Special::ExtraHappyPerHappySource(_)));
+        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
+        if gives_happy_now && !grants_this_bonus_itself {
+            n += 1;
+        }
+    }
+    n
+}
+
 // -------------------------------------------------------- army strength
 //
 // §10: a tactic in play, plus the units it has to form armies from. Ported
@@ -1010,6 +1039,32 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // Michelangelo: happy from temples/theaters plus completed
         // (unflipped) wonders' printed happy, clamped at 0 before scaling --
         // `engine/effects.py:536` `max(0, happy)`.
+        //
+        // Two modifiers this hand-rolled recompute used to miss, both
+        // already handled correctly by `compute`'s OWN wonders loop and by
+        // `happy_source_count` (St. Peter's Basilica's own multiplier), but
+        // silently dropped here because this arm re-derives `happy` from
+        // each card's raw printed value instead of reading the
+        // already-modified running total:
+        //
+        //   1. Homer, tucked under a completed wonder on leader replacement,
+        //      grants that wonder a live +1 happy face UNCONDITIONAL on its
+        //      printed `effects.happy` (`compute`'s own `p.homer_wonder == w`
+        //      check) -- traced to BGO game 7522666 (Colossus, printed happy
+        //      0, homer-tucked, round 4): this arm read 0.
+        //   2. St. Peter's Basilica's own `ExtraHappyPerHappySource`: "each
+        //      OTHER card or worker that gives you at least one happy face
+        //      now gives you an extra 1 happy face" -- applies to Religion's
+        //      (a Temple's) live happy face same as any other qualifying
+        //      source, so Michelangelo must see the BOOSTED count, not the
+        //      raw printed one -- traced to BGO game 7522661 (Religion +
+        //      Basilica both Orange's, round 9): this arm read 2, needed 3.
+        //
+        // Both are ENGINE bugs (present in `engine/effects.py` too -- ported
+        // faithfully, not introduced here), not replayer artifacts: a live
+        // bot holding Michelangelo alongside Homer or St. Peter's Basilica
+        // would be under-scored by this binary exactly like BGO's human
+        // corpus shows it was not.
         CulturePerHappyFromTemplesTheatersWonders(v) => {
             let mut happy = happy_from(&p.techs, |k| matches!(k, CardType::Temple | CardType::Theater));
             for &w in p.completed_wonders.as_slice() {
@@ -1017,6 +1072,24 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
                     continue;
                 }
                 happy += w.get().effects.happy as i32;
+                if p.homer_wonder == w {
+                    happy += 1;
+                }
+            }
+            // `ExtraHappyPerHappySource`'s own bonus is per SOURCE (a worker
+            // or a card), not per happy point, and does not discriminate by
+            // building TYPE (`happy_source_count`'s own doc) -- so scale it
+            // by the count of temple/theater/wonder sources specifically,
+            // matching what that count would be if Michelangelo's own
+            // restricted scope were run through the same per-source rule.
+            let mut extra_per_source = 0i32;
+            for_each_output_special(p, |sp| {
+                if let Special::ExtraHappyPerHappySource(ev) = sp {
+                    extra_per_source += ev as i32;
+                }
+            });
+            if extra_per_source != 0 {
+                happy += extra_per_source * temple_theater_wonder_happy_source_count(p);
             }
             stats.culture += v as i32 * happy.max(0);
         }
@@ -1382,6 +1455,137 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
 /// Here: just `compute` -- see this module's top doc comment "Caching".
 pub fn state_stats(state: &GameState, p: &PlayerState) -> Stats {
     compute(state, p)
+}
+
+// ----------------------------------------------------------------- snapshot
+
+/// One player's [`compute`] result, carried together with the board it was
+/// computed from.
+///
+/// # Why this exists
+///
+/// [`compute`] is the most expensive function in the engine, and it is called
+/// far more often than anything about the game requires. Counted 2026-08-10
+/// over 60 self-play games: 16.7M calls, of which 14.3M arrive through
+/// [`state_stats`], from 83 separate call sites. The bulk are not the bot
+/// thinking -- they are cost and legality helpers rebuilding a player's ENTIRE
+/// statistics (government, every technology, every building, leader, wonders,
+/// pacts) in order to read a single field. `costs::tech_cost` wants
+/// `tech_discount`; `costs::build_cost_for` wants one entry of
+/// `build_discount`; `economy::discontent` wants `happy`. Each of those runs
+/// once per candidate card per move-generation pass, over a board that has not
+/// changed between candidates.
+///
+/// So the fix is not a cache -- it is to compute the thing ONCE at the point
+/// where the board is known to be fixed, and lend it to everything downstream.
+///
+/// # Why it carries the board rather than sitting beside it
+///
+/// A hoisted snapshot is only valid for the `(state, player)` it was built
+/// from, and "used the stats from a different board" is a silent wrong-answer
+/// bug, not a crash. So the snapshot OWNS the board reference: a function
+/// taking `&Snapshot` reads the state and the player back out of it, and there
+/// is no second parameter that could disagree. Passing a mismatched pair is
+/// not something a caller can express. (DESIGN.md: collapse the composition so
+/// the broken gluing cannot be written.)
+///
+/// The borrow checker does the rest: `Snapshot` holds `&'a GameState`, so the
+/// state cannot be mutated while a snapshot of it is alive. The Python
+/// engine's `_plan_key`/`_DELTA_CACHE` machinery exists entirely to make its
+/// equivalent safe by convention; here the lifetime does it, and there is
+/// nothing to invalidate because nothing is stored between calls.
+/// # Threading it through the ENGINE was measured, and lost
+///
+/// The obvious next step -- give `costs::tech_cost`, `costs::build_cost_for`,
+/// `economy::discontent` etc. snapshot-taking forms and build ONE snapshot per
+/// move-generation pass -- was implemented in full on 2026-08-10, passed all
+/// 1194 tests, and played BYTE-IDENTICALLY over 2400 games. It was then
+/// REVERTED, because back-to-back on a quiet box it measured 38.5s -> 40.8s on
+/// that workload. Two things are worth knowing before trying again:
+///
+///   * the `(state, p)` entry points are the overwhelming majority of calls,
+///     and each one then builds a snapshot it mostly does not need. Making the
+///     `stats` field lazy (`OnceCell`) restored the short-circuits and STILL
+///     measured 40.8s: the extra indirection costs about what the saved
+///     recomputes save.
+///   * `compute` is cheap per call and merely called often. 16.7M calls per 60
+///     games sounds damning, but any fix has to beat a function that is
+///     already inlined into its callers.
+///
+/// So do not re-attempt this as a pure signature change. `compute` has to get
+/// cheaper PER CALL, or its callers have to stop needing it -- calling it less
+/// often through more indirection is not the same thing.
+///
+/// A separate trap cost an hour on the day this was written, and is not about
+/// this type at all: `experiments/rust_champion_*.json` is REWRITTEN BY THE
+/// LIVE CLIMB. An A/B that reads it directly is comparing two different
+/// players if an arm promoted in between. Copy it aside first.
+pub struct Snapshot<'a> {
+    state: &'a GameState,
+    p: &'a PlayerState,
+    /// The seat the caller ASKED for. Not `p.idx`: a bot may snapshot a
+    /// hypothetical player whose own `idx` field is not where the caller is
+    /// treating it as sitting, and silently substituting `p.idx` changes which
+    /// board downstream code reads.
+    idx: u8,
+    /// Filled on FIRST USE, not at construction.
+    ///
+    /// The `(state, p)` entry points below build a snapshot on every call, and
+    /// several of themshort-circuit before they ever need the stats --
+    /// `build_cost_for` consults them only for urban buildings, `tech_cost`
+    /// returns early for a card with no printed cost. Computing eagerly made
+    /// those paths pay for a full `compute` they used to skip, and measured
+    /// ~4% SLOWER overall even though the hoisted loops got faster. Laziness
+    /// keeps both: the short-circuit stays free, and a snapshot lent across a
+    /// loop still computes once.
+    ///
+    /// `OnceCell`, not a lock: a snapshot never crosses a thread (it borrows a
+    /// `&GameState` for its whole life), so there is nothing to synchronise.
+    stats: std::cell::OnceCell<Stats>,
+}
+
+impl<'a> Snapshot<'a> {
+    /// Snapshot the player `p` AS GIVEN, which is not always
+    /// `state.players[p.idx]`.
+    ///
+    /// That distinction is the whole reason this constructor takes a borrow
+    /// rather than an index. `bots::board_yields` prices a leader, a
+    /// government or a wonder by CLONING the player, mutating the clone, and
+    /// asking the cost functions what the clone would pay -- the clone is not
+    /// in `state.players` and never will be. An index-based constructor
+    /// silently answers for the un-mutated original instead, which is not a
+    /// crash and not a test failure: it is the bot quietly pricing the wrong
+    /// board. (Measured when this type briefly did exactly that: identical
+    /// tests, identical build, 2p win rate moved 54.6% -> 48.0%.)
+    ///
+    /// So the rule is: a snapshot is of a PLAYER, and the player comes from
+    /// the caller.
+    pub fn of(state: &'a GameState, p: &'a PlayerState) -> Self {
+        Self { state, p, idx: p.idx, stats: std::cell::OnceCell::new() }
+    }
+
+    /// Snapshot the seat `idx` of `state` -- the common case, where the player
+    /// really is the one sitting in the state.
+    pub fn at(state: &'a GameState, idx: u8) -> Self {
+        let p = &state.players[idx as usize];
+        Self { state, p, idx, stats: std::cell::OnceCell::new() }
+    }
+
+    pub fn state(&self) -> &'a GameState {
+        self.state
+    }
+
+    pub fn idx(&self) -> u8 {
+        self.idx
+    }
+
+    pub fn player(&self) -> &'a PlayerState {
+        self.p
+    }
+
+    pub fn stats(&self) -> &Stats {
+        self.stats.get_or_init(|| state_stats(self.state, self.p))
+    }
 }
 
 // ============================================================== tests ====
@@ -1751,6 +1955,58 @@ mod tests {
         // bonus doubles, and with nothing else in play there is no other
         // source to pay out on.
         assert_eq!(s.happy, 1);
+    }
+
+    // -------------------------------------------------------- michelangelo
+
+    /// Regression for BGO game 7522666 round 4: Michelangelo owner replaced
+    /// Homer this turn, tucking a completed wonder (Colossus, printed happy
+    /// 0) under him. `compute`'s own wonders loop scores that tucked
+    /// wonder's LIVE +1 happy face unconditionally on its printed value; the
+    /// `CulturePerHappyFromTemplesTheatersWonders` arm used to re-derive
+    /// happy from each wonder's raw `effects.happy` only, missing it.
+    #[test]
+    fn michelangelo_scores_a_homer_tucked_wonders_live_happy_face_even_with_zero_printed_happy() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Michelangelo");
+        p.completed_wonders.push(card("Colossus"));
+        p.homer_wonder = card("Colossus");
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.culture, 1, "1 culture per happy face * Colossus's live Homer-tucked +1 happy face");
+    }
+
+    /// Regression for BGO game 7522661 round 9: Michelangelo's owner also
+    /// holds St. Peter's Basilica and a staffed Religion (a Temple). St.
+    /// Peter's own text ("each OTHER card or worker that gives you at least
+    /// one happy face now gives you an extra 1 happy face") boosts
+    /// Religion's live happy face same as it boosts `happy_source_count`
+    /// elsewhere; Michelangelo must see that boosted count, not Religion's
+    /// raw printed happy of 1.
+    #[test]
+    fn michelangelo_sees_st_peters_basilicas_extra_happy_on_a_temple_he_shares_it_with() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Michelangelo");
+        p.techs.insert(card("Religion"), TechSlot { workers: 1, stored: 0 });
+        p.completed_wonders.push(card("St. Peter's Basilica"));
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Religion's own printed happy (1) + St. Peter's own flat happy (1)
+        // + St. Peter's bonus (1 OTHER qualifying source, Religion: +1) = 3
+        // happy faces, all within Michelangelo's "temples/theaters/wonders"
+        // scope (Basilica excludes itself from its own bonus) -> 3 culture
+        // via Michelangelo. Plus Religion's own printed +1 culture (a
+        // Temple's ordinary production, nothing to do with Michelangelo) and
+        // St. Peter's own printed +2 culture. `1 (Religion) + 2 (Basilica) +
+        // 1 * 3 (Michelangelo) == 6`. Before this fix Michelangelo read only
+        // 2 happy (Religion's raw 1 + Basilica's own flat 1, missing the
+        // bonus), totalling 5.
+        assert_eq!(
+            s.culture,
+            6,
+            "Religion's own +1, Basilica's own +2, and 3 * Michelangelo's culture-per-happy (temple's raw 1 + \
+             Basilica's own flat 1 + Basilica's bonus on Religion's temple happy +1)"
+        );
     }
 
     // ------------------------------------------------------ army strength

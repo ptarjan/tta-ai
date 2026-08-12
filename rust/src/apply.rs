@@ -1043,7 +1043,7 @@ fn h_churchill(state: &mut GameState, idx: u8, choice: ChurchillChoice) {
         ChurchillChoice::Military => {
             p.mil_sci_discount += 3;
             p.mil_discount += 3;
-            if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            if crate::debugflags::replay_debug_all() {
                 eprintln!("DEBUG mil_discount site=h_churchill idx={idx} += 3 -> {}", p.mil_discount);
             }
         }
@@ -1181,7 +1181,7 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
         // branch too.
         p.military_actions = p.military_actions.saturating_add(eff.military_actions as i8);
         p.mil_discount += eff.resources_for_military_units;
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() && eff.resources_for_military_units != 0 {
+        if crate::debugflags::replay_debug_all() && eff.resources_for_military_units != 0 {
             eprintln!(
                 "DEBUG mil_discount site=h_play_action(card={:?}) idx={idx} += {} -> {}",
                 card.name, eff.resources_for_military_units, p.mil_discount
@@ -1227,7 +1227,7 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
             }
         }
         state.players[idx as usize].mil_discount += (per * n) as i16;
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() && per * n != 0 {
+        if crate::debugflags::replay_debug_all() && per * n != 0 {
             eprintln!(
                 "DEBUG mil_discount site=h_play_action(ResourcesForMilitaryUnitsPerStrongerCivilization,card={:?}) idx={idx} += {} -> {}",
                 card.name,

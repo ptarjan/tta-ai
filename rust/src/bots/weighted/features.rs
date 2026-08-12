@@ -140,6 +140,27 @@ pub struct TableauSweep {
     pub special_techs: i32,
     pub best_unit: u8,
     pub best: BestTypes,
+    /// Developed-but-unstaffed slots -- a tech in `p.techs` (so already
+    /// developed) with `slot.workers == 0` (so no physical copy staffed
+    /// yet): `do_build` is the ONLY writer of a positive `workers` count
+    /// (`apply.rs`), so a zero here means "known, not yet built", the real,
+    /// actionable "unfilled slot" the worker marginal-need axis prices --
+    /// see `features()`'s own comment on [`WeightKey::WorkerGap`]/
+    /// [`WeightKey::WorkerSurplus`]. Scoped to [`CardType::takes_workers`]
+    /// (urban + production + unit), matching every other "does this type
+    /// take a worker" check in this crate (e.g. `economy.rs`,
+    /// `board_yields::is_levelled_type`).
+    pub unbuilt_slots: i32,
+    /// The cheapest [`unbuilt_slots`](Self::unbuilt_slots) entry's printed
+    /// resource cost -- `None` when there are none. The RAW printed
+    /// `card.resource_cost`, not `costs::build_cost_for`'s discount-adjusted
+    /// figure: that function recomputes a full `effects::state_stats` per
+    /// call, and calling it once per unbuilt tableau entry here (this loop
+    /// already runs on every candidate move of the search) would multiply
+    /// the cost of an already-expensive computation by the tableau size. A
+    /// linear feature's "need" signal does not require discount-exact
+    /// precision, only the right shape.
+    pub unbuilt_min_resource_cost: Option<i32>,
 }
 
 pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
@@ -151,10 +172,19 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
     let mut special_techs = 0i32;
     let mut best_unit = 0u8;
     let mut best = BestTypes::default();
+    let mut unbuilt_slots = 0i32;
+    let mut unbuilt_min_resource_cost: Option<i32> = None;
 
     for (id, slot) in p.techs.iter() {
         let kind = id.kind();
         let lv = id.level();
+
+        if slot.workers == 0 && kind.takes_workers() {
+            unbuilt_slots += 1;
+            let cost = i32::from(id.get().resource_cost);
+            unbuilt_min_resource_cost =
+                Some(unbuilt_min_resource_cost.map_or(cost, |m: i32| m.min(cost)));
+        }
 
         match kind {
             CardType::Farm if lv > best.farm => best.farm = lv,
@@ -200,7 +230,18 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
         workers += slot.workers as i32;
     }
 
-    TableauSweep { workers, prod_workers, urban_workers, unit_workers, tech_levels, special_techs, best_unit, best }
+    TableauSweep {
+        workers,
+        prod_workers,
+        urban_workers,
+        unit_workers,
+        tech_levels,
+        special_techs,
+        best_unit,
+        best,
+        unbuilt_slots,
+        unbuilt_min_resource_cost,
+    }
 }
 
 /// `features(state, idx, ctx=None, w=None, priced_only=False)`.
@@ -257,6 +298,8 @@ pub fn features(
         special_techs,
         best_unit,
         best,
+        unbuilt_slots,
+        unbuilt_min_resource_cost,
     } = sweep;
     tech_levels += p.government.level() as i32;
 
@@ -313,6 +356,22 @@ pub fn features(
 
     let hand_value: f64 = p.hand_civil.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
     let hand_mil_value: f64 = p.hand_military.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
+
+    // The science marginal-need axis's "need": the cheapest developable
+    // technology sitting in the civil hand right now, by printed
+    // `science_cost` -- `Develop` is what science pays for (see
+    // `costs::tech_cost`'s own doc comment), so a hand with nothing
+    // developable left has no science need at all (`None` below, read as
+    // 0.0 with the rest of the marginal-need block further down). One more
+    // pass over the same bounded hand `hand_value` above already walks, not
+    // a scan of the tableau or the row.
+    let mut science_need: Option<u8> = None;
+    for &c in p.hand_civil.as_slice() {
+        if crate::bots::board_yields::is_levelled_type(c.kind()) {
+            let cost = c.get().science_cost;
+            science_need = Some(science_need.map_or(cost, |m: u8| m.min(cost)));
+        }
+    }
 
     // ----------------------------------------------------------- rivals
     // Public rival board facts the evaluator was blind to (GAP 3). `max`
@@ -390,15 +449,53 @@ pub fn features(
     f.set(WeightKey::CultureRate, f64::from(s.culture) + g(GainFeature::CultureRate));
     f.set(WeightKey::Science, f64::from(p.science) + g(GainFeature::Science));
     f.set(WeightKey::ScienceRate, f64::from(s.science) + g(GainFeature::ScienceRate));
-    f.set(WeightKey::FoodRate, f64::from(s.food) + g(GainFeature::FoodRate));
-    f.set(WeightKey::ResourceRate, f64::from(s.resources) + g(GainFeature::ResourceRate));
+    // NET rates, not gross. Corruption (§6.2) and consumption (§6.4) are
+    // exact, already-known step tables -- `economy` computes both from state
+    // the evaluator is holding -- so the rules do the arithmetic and the
+    // league is handed the answer. They used to be separate weighted
+    // coordinates, which was wrong twice over: it let a search PRICE a
+    // deduction the rulebook fixes (and it duly priced both as BENEFITS,
+    // because a big civilization pays more of each than a small one), and,
+    // because both are step functions of another weighted coordinate
+    // (`BlueFree`, `YellowBank`), a positive price inverted the cliff and
+    // made the evaluator PREFER crossing into a worse band. Netting removes
+    // the free parameter entirely: what reaches the weights is the food and
+    // resources a player will actually keep. Both keys are now retired --
+    // see `weights::RETIRED_KEYS`.
+    //
+    // Both bills are read off the PROJECTED banks, not the raw ones.
+    // `deferred_credit` exists to show a pending gain the trial state cannot,
+    // and a gain that fills the blue bank is precisely the move that tips a
+    // player over a corruption edge -- charging the old bank would hide the
+    // cost of the very move being considered.
+    let yellow_bank = f64::from(p.yellow_bank) + g(GainFeature::YellowBank);
+    let proj_blue = blue_free.max(0.0).round() as u16;
+    let proj_yellow = yellow_bank.clamp(0.0, f64::from(u8::MAX)).round() as u8;
+    let consumption = f64::from(economy::consumption(proj_yellow));
+    let corruption = f64::from(economy::corruption(proj_blue));
+    f.set(WeightKey::FoodRate, f64::from(s.food) + g(GainFeature::FoodRate) - consumption);
+    f.set(
+        WeightKey::ResourceRate,
+        f64::from(s.resources) + g(GainFeature::ResourceRate) - corruption,
+    );
     f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
     f.set(WeightKey::ResourceStock, f64::from(p.resources) + g(GainFeature::ResourceStock));
     f.set(WeightKey::BlueFree, blue_free);
-    f.set(WeightKey::CorruptionLoss, f64::from(economy::corruption(blue_have)));
-    f.set(WeightKey::Consumption, f64::from(economy::consumption(p.yellow_bank)));
+    // How much slack is left before the next band, as opposed to what the
+    // current band already costs (which is now netted into the rates above
+    // and carries no free parameter). A strong player plans a turn around
+    // this number -- spending down to exactly the edge and no further -- and
+    // without it the bot is blind to a cliff until it has already fallen off:
+    // nothing else in the vector distinguishes storing one resource at 11
+    // free blue, which costs 2 per turn forever after, from storing one at
+    // 15, which is free. Deliberately NOT sign-gated: headroom is a
+    // deterministic function of `BlueFree`/`YellowBank`, so "good all else
+    // equal" is vacuous here -- the two coordinates cannot move
+    // independently, and the league is left to price the pair.
+    f.set(WeightKey::CorruptionHeadroom, f64::from(economy::corruption_headroom(proj_blue)));
+    f.set(WeightKey::ConsumptionHeadroom, f64::from(economy::consumption_headroom(proj_yellow)));
     f.set(WeightKey::PopCost, f64::from(pop_cost));
-    f.set(WeightKey::YellowBank, f64::from(p.yellow_bank) + g(GainFeature::YellowBank));
+    f.set(WeightKey::YellowBank, yellow_bank);
     f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
     f.set(WeightKey::Workers, f64::from(workers));
     f.set(WeightKey::ProdWorkers, f64::from(prod_workers));
@@ -535,6 +632,61 @@ pub fn features(
     f.set(WeightKey::RivalMilActions, rboard.rival_mil_actions);
     f.set(WeightKey::RivalBuildingWonder, rboard.rival_building_wonder);
 
+    // --- marginal need (gap/surplus): see `WeightKey`'s own doc comment on
+    // this block (`weights.rs`) for the shape and why gap/surplus are two
+    // coordinates, never one signed difference. Every "have" side re-reads a
+    // coordinate this function already set above rather than recomputing the
+    // same expression a second time -- one true computation, not restated.
+    let food_have = f.get(WeightKey::FoodStock);
+    let food_need = f64::from(pop_cost);
+    f.set(WeightKey::FoodGap, (food_need - food_have).max(0.0));
+    f.set(WeightKey::FoodSurplus, (food_have - food_need).max(0.0));
+
+    let resource_have = f.get(WeightKey::ResourceStock);
+    let resource_need = f64::from(unbuilt_min_resource_cost.unwrap_or(0));
+    f.set(WeightKey::ResourceGap, (resource_need - resource_have).max(0.0));
+    f.set(WeightKey::ResourceSurplus, (resource_have - resource_need).max(0.0));
+
+    let science_have = f.get(WeightKey::Science);
+    let science_need_f = f64::from(science_need.unwrap_or(0));
+    f.set(WeightKey::ScienceGap, (science_need_f - science_have).max(0.0));
+    f.set(WeightKey::ScienceSurplus, (science_have - science_need_f).max(0.0));
+
+    // Culture has no absolute threshold a rule ever converts into a cost --
+    // the live pressure is competitive, so "need" is the strongest rival's
+    // culture (`rival_culture`, computed above), the same "relative to the
+    // field" shape `strength_rel`/`strength_deficit`/`strength_lead` already
+    // use for military.
+    let culture_have = f.get(WeightKey::Culture);
+    let culture_need = f64::from(rival_culture);
+    f.set(WeightKey::CultureGap, (culture_need - culture_have).max(0.0));
+    f.set(WeightKey::CultureSurplus, (culture_have - culture_need).max(0.0));
+
+    // Happiness already has a shortfall coordinate (`Discontent`, above,
+    // `max(0, -margin)`); this is only the missing surplus half of that same
+    // hinge -- uncapped, unlike `HappyMargin`'s `.min(3.0)`, which mixes the
+    // negative tail back in for reasons unrelated to this block.
+    f.set(WeightKey::HappySurplus, margin.max(0.0));
+
+    let ca_have = f.get(WeightKey::CaLeft);
+    let ca_need = f.get(WeightKey::HandCivil);
+    f.set(WeightKey::CivilActionGap, (ca_need - ca_have).max(0.0));
+    f.set(WeightKey::CivilActionSurplus, (ca_have - ca_need).max(0.0));
+
+    // Deliberately the RAW military-action pool, not `MaLeft` (capped at
+    // `board_yields::MA_DRAW_CAP` for the end-of-turn CARD-DRAW conversion --
+    // a different question from "can I play what is in my military hand
+    // this turn").
+    let ma_have = f64::from(p.military_actions);
+    let ma_need = f.get(WeightKey::HandMilitary);
+    f.set(WeightKey::MilitaryActionGap, (ma_need - ma_have).max(0.0));
+    f.set(WeightKey::MilitaryActionSurplus, (ma_have - ma_need).max(0.0));
+
+    let worker_have = f.get(WeightKey::FreeWorkers);
+    let worker_need = f64::from(unbuilt_slots);
+    f.set(WeightKey::WorkerGap, (worker_need - worker_have).max(0.0));
+    f.set(WeightKey::WorkerSurplus, (worker_have - worker_need).max(0.0));
+
     f
 }
 
@@ -542,6 +694,129 @@ pub fn features(
 mod tests {
     use super::*;
     use crate::game as G;
+
+    /// THE MOSES SHAPE (`WeightKey::FoodGap`'s own doc comment in
+    /// `weights.rs`): reducing a player's food NEED (Moses's real special,
+    /// `PopIncreaseFoodDiscount`) lowers `food_gap` -- with NO Moses-specific
+    /// code anywhere in `features()`, only the generic `economy::
+    /// pop_food_cost` read every player already goes through. Built with an
+    /// empty food stock and a yellow bank in the `pop_cost_base` == 7 band
+    /// (`economy::pop_cost_base`'s own test pins `1..=4` there) so
+    /// `food_gap` starts well above zero -- a state where it was already
+    /// 0.0 would make this test vacuous. Confirmed RED by reverting `food_
+    /// gap`'s formula to a constant `p.food` read that ignores `pop_cost`.
+    #[test]
+    fn a_reduced_food_need_lowers_the_food_gap_with_no_card_specific_code() {
+        let mut state = G::new_game(2, 51);
+        state.players[0].food = 0;
+        state.players[0].yellow_bank = 1;
+        let before = features(&state, 0, None, None, false);
+        assert!(
+            before.get(WeightKey::FoodGap) > 0.0,
+            "food_gap must be positive before any discount, got {}",
+            before.get(WeightKey::FoodGap)
+        );
+
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+        state.players[0].leader = moses;
+        let after = features(&state, 0, None, None, false);
+        assert!(
+            after.get(WeightKey::FoodGap) < before.get(WeightKey::FoodGap),
+            "Moses's PopIncreaseFoodDiscount must lower food_gap: before={} after={}",
+            before.get(WeightKey::FoodGap),
+            after.get(WeightKey::FoodGap)
+        );
+        // The surplus half of the same hinge must stay at its floor
+        // throughout -- there is no surplus to have while the gap is open.
+        assert_eq!(before.get(WeightKey::FoodSurplus), 0.0);
+        assert_eq!(after.get(WeightKey::FoodSurplus), 0.0);
+    }
+
+    /// The blindness this fixes: before `corruption_headroom` existed, two
+    /// positions paying the SAME corruption looked identical on every
+    /// coordinate that mattered for the cliff, even when one was a single
+    /// stored resource from paying more and the other had room to spare.
+    /// Sweeping stored resources must therefore produce at least one pair of
+    /// states with an equal bill and a different headroom -- and the headroom
+    /// must always be the one the bank actually implies, so the feature
+    /// cannot quietly drift away from `economy`'s table.
+    #[test]
+    fn two_positions_paying_the_same_corruption_are_still_told_apart_by_their_headroom() {
+        let mut seen: Vec<(u16, f64)> = Vec::new();
+        for stored in 0u16..=12 {
+            let mut state = G::new_game(2, 51);
+            state.players[0].resources += stored;
+            let blue = economy::blue_available(&state.players[0]);
+            let head = features(&state, 0, None, None, false).get(WeightKey::CorruptionHeadroom);
+            assert_eq!(
+                head,
+                f64::from(economy::corruption_headroom(blue)),
+                "with {stored} stored the feature must match the bank it is derived from"
+            );
+            seen.push((economy::corruption(blue), head));
+        }
+        assert!(
+            seen.iter().any(|&(bill, head)| seen
+                .iter()
+                .any(|&(b2, h2)| b2 == bill && h2 != head)),
+            "the sweep never produced two states with the same bill but different slack, \
+             so it cannot show that the cliff is now visible: {seen:?}"
+        );
+    }
+
+    /// Corruption is an EXACT rulebook deduction, so the evaluator is handed
+    /// the answer rather than a coordinate to price: crossing a corruption
+    /// band must move `resource_rate` down by exactly the resources §6.2
+    /// takes, no more and no less. Stored resources are the lever because
+    /// they occupy blue tokens without changing production, so the gross
+    /// rate is held fixed and the whole delta is attributable.
+    #[test]
+    fn crossing_a_corruption_band_costs_the_resource_rate_exactly_the_rulebook_amount() {
+        let mut state = G::new_game(2, 51);
+        let before_corr = economy::corruption(economy::blue_available(&state.players[0]));
+        let before_rate = features(&state, 0, None, None, false).get(WeightKey::ResourceRate);
+
+        state.players[0].resources += 10;
+        let after_corr = economy::corruption(economy::blue_available(&state.players[0]));
+        let after_rate = features(&state, 0, None, None, false).get(WeightKey::ResourceRate);
+
+        assert!(
+            after_corr > before_corr,
+            "the setup must actually cross a band, got {before_corr} -> {after_corr}"
+        );
+        assert_eq!(
+            before_rate - after_rate,
+            f64::from(after_corr - before_corr),
+            "resource_rate must fall by exactly the corruption incurred"
+        );
+    }
+
+    /// The food half of the same property (§6.4 consumption). Together these
+    /// two pin the reason `corruption_loss` and `consumption` are in
+    /// `weights::RETIRED_KEYS`: there is no free parameter left for a league
+    /// to price, because the rulebook's own arithmetic already reached the
+    /// weights.
+    #[test]
+    fn a_bigger_population_costs_the_food_rate_exactly_the_consumption_it_owes() {
+        let mut state = G::new_game(2, 51);
+        state.players[0].yellow_bank = 17;
+        let before_use = economy::consumption(state.players[0].yellow_bank);
+        let before_rate = features(&state, 0, None, None, false).get(WeightKey::FoodRate);
+
+        state.players[0].yellow_bank = 4;
+        let after_use = economy::consumption(state.players[0].yellow_bank);
+        let after_rate = features(&state, 0, None, None, false).get(WeightKey::FoodRate);
+
+        assert!(
+            after_use > before_use,
+            "the setup must actually raise consumption, got {before_use} -> {after_use}"
+        );
+        assert_eq!(
+            before_rate - after_rate,
+            f64::from(after_use - before_use),
+            "food_rate must fall by exactly the consumption owed"
+        );
+    }
 
     /// A fresh deal has no wonder in progress -- all three finish-discipline
     /// terms (`wonder_stages_left`/`wonder_turns_to_finish`/`wonder_overrun`)

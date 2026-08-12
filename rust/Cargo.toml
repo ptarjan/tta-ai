@@ -37,6 +37,19 @@ panic = "abort"
 # `legal_moves`.  Both are inlining-sensitive across module boundaries, which
 # is what `lto = "fat"` plus a single codegen unit are here for; measure before
 # relaxing either.
+#
+# Two further compiler levers were measured 2026-08-10 on a quiet box, same
+# fixed 2400-game arena, best of three runs:
+#   `-C target-cpu=native` (this box has AVX2/BMI2/FMA):  43.7s vs 43.4s
+#       -- no effect, and not a surprise in hindsight: this is branchy
+#       game-tree code walking small structs, with nothing to vectorise.
+#       Deliberately NOT adopted; do not re-try it without new evidence.
+#   PGO:                                                  38.4s vs 43.4s
+#       -- ~11%, the only lever that moved, because its win is block layout
+#       and inlining decisions rather than wider arithmetic. Adopted, but as
+#       `tools/build_climb_pgo.sh` rather than a setting here: Cargo cannot
+#       scope rustflags to one profile on stable, and `-Cprofile-use` applied
+#       to every build (tests included) is not what is wanted.
 
 [profile.bench]
 inherits = "release"

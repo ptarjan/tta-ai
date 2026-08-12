@@ -40,6 +40,7 @@
 //! `tests::rival_view_gating_agrees_with_player_state_gating` below pins the
 //! two never disagreeing.
 
+use crate::bots::board_yields::Baseline;
 use crate::bots::counting;
 use crate::cards::{CardId, CardType};
 use crate::costs::{self, TakeGate};
@@ -256,13 +257,17 @@ fn rival_desire(
     let mut reach = 0.0;
     let mut vals: Vec<(u8, f64)> = Vec::new();
     let mut total = 0.0;
+    // ONE baseline for the whole row: `effects::compute` for this player does
+    // not depend on which card is being priced, and it is the most expensive
+    // function in the engine.
+    let base = Baseline::at(state, view.idx);
     for &(j, nm) in visible {
         if !rival_view_can_take(view, gate, j as usize, nm) {
             continue;
         }
         reach += 1.0;
         if want_values {
-            let v = cards::card_potential(nm, w, Some(state), Some(view.idx), Some(late), scratch);
+            let v = cards::card_potential(nm, w, Some(&base), Some(late), scratch);
             if v > 0.0 {
                 vals.push((j, v));
                 total += v;
@@ -348,11 +353,13 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
     // reasoning for why that beats a keyed collection here.
     let mut doomed_slots: [Option<(f64, f64)>; 2] = [None, None];
 
+    // ONE baseline for the whole row -- see `rival_demand`.
+    let base = Baseline::at(state, idx);
     for &(i, name) in &visible {
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
             continue;
         }
-        let val = cards::card_potential(name, w, Some(state), Some(idx), Some(late), &mut scratch);
+        let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
         if val <= 0.0 {
             continue;
         }
@@ -469,11 +476,13 @@ pub fn row_last_copy(state: &GameState, idx: u8, w: &Weights, ctx: Option<&Rival
     let late = horizon::lateness(state);
     let mut scratch: Vec<CardYield> = Vec::new();
     let mut total = 0.0;
+    // ONE baseline for the whole row -- see `rival_demand`.
+    let base = Baseline::at(state, idx);
     for &(i, name) in &visible {
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
             continue;
         }
-        let val = cards::card_potential(name, w, Some(state), Some(idx), Some(late), &mut scratch);
+        let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
         if val <= 0.0 {
             continue;
         }
@@ -748,8 +757,8 @@ mod tests {
         w.set(WeightKey::HandSwapExtra, 0.0);
         let late = horizon::lateness(&state);
         let mut scratch = Vec::new();
-        let va = cards::card_potential(a, &w, Some(&state), Some(0), Some(late), &mut scratch);
-        let vb = cards::card_potential(b, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let va = cards::card_potential(a, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
+        let vb = cards::card_potential(b, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
         assert!(va > 0.0 && vb > 0.0, "va={va} vb={vb}");
         let (urgency, _) = row_pressure(&state, 0, &w, None);
         assert_eq!(urgency, va.max(vb), "hand_swap_extra=0.0 must keep only the better doomed leader's value, not the sum of both");
@@ -774,7 +783,7 @@ mod tests {
         let w = Weights::default();
         let late = horizon::lateness(&state);
         let mut scratch = Vec::new();
-        let val = cards::card_potential(name, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let val = cards::card_potential(name, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
         assert!(val > 0.0, "val={val}");
         let outlook = counting::lookup(&counting::civil_outlook(&state, 0), name, 0.0);
         let gone = (1.0 - outlook).max(0.0);

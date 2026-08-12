@@ -61,7 +61,7 @@ use crate::effects;
 use crate::state::{CardList, GameState, Pending, PlayerState, Tableau, MAX_HAND, MAX_PLAYERS, ROW_SIZE};
 
 use super::horizon;
-use super::weights::{WeightKey, Weights, PHASE_KEYS};
+use super::weights::{WeightKey, Weights, PHASE_KEYS, STANDING_KEYS};
 
 // =========================================================== rival_board
 
@@ -799,6 +799,54 @@ pub fn happy_margin_marginal(state: &GameState, idx: u8, w: &Weights) -> f64 {
 /// `_PHASE_SET` needs no port: [`horizon::PHASE_KEYS`] (four elements) is
 /// already the honest source of "which keys carry a phase pair", and a
 /// four-element linear scan is not slower than hashing into a set would be.
+/// How far behind the best rival this player is in `key`'s rating track, as
+/// a fraction in `[0.0, 1.0]`: `0.0` when level or leading, rising towards
+/// `1.0` the further behind they are.
+///
+/// Both tracks this is defined for are PUBLIC rating-track markers
+/// (RULES_SPEC 1.2: "4 rating markers: science, culture, strength,
+/// happiness"), so reading every rival's is exactly as legal as
+/// [`rival_strength`] reading the strongest one already is. No hand and no
+/// deck order is touched.
+///
+/// Normalised by the leader's own rate rather than by a tuned constant, so
+/// the number means "the leader out-produces me by this share of their
+/// output" and stays on the same scale in every age -- a 2-vs-4 culture gap
+/// in Age I and a 10-vs-20 gap in Age III both read 0.5. A player level with
+/// or ahead of the field reads exactly 0.0, which is what makes the hinge
+/// strictly an ADDITION for a trailing player and never a penalty for a
+/// leading one.
+fn trailing_fraction(key: WeightKey, state: &GameState, idx: u8) -> f64 {
+    let me = effects::state_stats(state, &state.players[idx as usize]);
+    let (mine, best) = {
+        let mut best = 0;
+        for q in state.players[..state.num_players as usize].iter() {
+            if q.idx == idx || q.resigned {
+                continue;
+            }
+            let s = effects::state_stats(state, q);
+            let v = match key {
+                WeightKey::CultureRate => s.culture,
+                WeightKey::ScienceRate => s.science,
+                _ => panic!("trailing_fraction called on a key outside STANDING_KEYS"),
+            };
+            if v > best {
+                best = v;
+            }
+        }
+        let mine = match key {
+            WeightKey::CultureRate => me.culture,
+            WeightKey::ScienceRate => me.science,
+            _ => panic!("trailing_fraction called on a key outside STANDING_KEYS"),
+        };
+        (mine, best)
+    };
+    if best <= 0 || mine >= best {
+        return 0.0;
+    }
+    f64::from(best - mine) / f64::from(best)
+}
+
 pub fn feature_marginal(
     key: WeightKey,
     state: &GameState,
@@ -814,6 +862,26 @@ pub fn feature_marginal(
         return happy_margin_marginal(state, idx, w);
     }
     let mut m = w.get(key);
+    // THE STANDING HINGE. Everything else in this function conditions the
+    // marginal on TIME (the phase blend below, the rate horizon under it);
+    // this is the one term that conditions it on POSITION. Without it a
+    // yield is worth a fixed amount no matter what the board needs, which is
+    // the "one scalar per card type cannot be right" defect: a science card
+    // has to be worth more to the player behind on science than to the one
+    // already leading it, and a flat `w.get(key)` can never say that.
+    // Because `feature_marginal` is the SINGLE definition of what one unit
+    // of a feature is worth, every card-pricing site picks this up for free
+    // and cannot disagree with `evaluate` about it -- the same guarantee the
+    // rate horizon below already relies on.
+    if STANDING_KEYS.contains(&key) {
+        let hinge = w.get(key.trailing());
+        // Gated at 0.0 by default, and the lookup below is a loop over live
+        // rivals -- skip it entirely rather than pay for a number that is
+        // about to be multiplied by zero.
+        if hinge != 0.0 {
+            m += hinge * trailing_fraction(key, state, idx);
+        }
+    }
     if PHASE_KEYS.contains(&key) {
         let late = late.unwrap_or_else(|| horizon::lateness(state));
         m += (1.0 - late) * w.get(key.early());
@@ -842,6 +910,68 @@ mod tests {
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    /// A trailing player must value the yield they are behind in MORE than a
+    /// level one does. This is the whole point of the standing hinge -- the
+    /// defect it fixes is that `feature_marginal` conditioned only on time,
+    /// so two players with identical boards but opposite standing priced a
+    /// science card identically. Asserted through `feature_marginal` rather
+    /// than `trailing_fraction` directly, because it is the marginal every
+    /// card-pricing site actually calls.
+    #[test]
+    fn a_player_behind_on_science_values_science_production_more_than_a_level_one() {
+        let mut state = crate::game::new_game(2, 1);
+        let mut w = Weights::default();
+        w.set(WeightKey::ScienceRateTrailing, 2.0);
+
+        // Level: nobody is ahead, so the hinge contributes exactly nothing and
+        // the marginal is the flat weight (times the rate horizon).
+        let level = feature_marginal(WeightKey::ScienceRate, &state, 0, &w, None, None);
+
+        // Put seat 1 ahead on science production. Seat 0 is now trailing.
+        // Philosophy is already in every starting tableau (`game.rs`'s opening
+        // setup), so this raises the rival's existing slot rather than
+        // inserting a second copy of a card they already hold.
+        state.players[1]
+            .techs
+            .get_mut(CardId::by_name("Philosophy").expect("Philosophy is a base-game card"))
+            .expect("every starting tableau holds Philosophy")
+            .workers = 3;
+        let trailing = feature_marginal(WeightKey::ScienceRate, &state, 0, &w, None, None);
+
+        assert!(
+            trailing > level,
+            "a trailing player must price science production above a level one: \
+             level={level} trailing={trailing}"
+        );
+    }
+
+    /// The hinge is strictly an addition for the player who is BEHIND, never
+    /// a penalty for the one ahead: the leader reads a trailing fraction of
+    /// exactly 0.0, so their marginal is untouched. Without this, raising the
+    /// hinge weight would quietly re-price every leading player too.
+    #[test]
+    fn the_standing_hinge_never_changes_the_marginal_of_the_player_in_front() {
+        let mut state = crate::game::new_game(2, 1);
+        let mut w = Weights::default();
+        // Philosophy is already in every starting tableau (`game.rs`'s opening
+        // setup), so this raises the rival's existing slot rather than
+        // inserting a second copy of a card they already hold.
+        state.players[1]
+            .techs
+            .get_mut(CardId::by_name("Philosophy").expect("Philosophy is a base-game card"))
+            .expect("every starting tableau holds Philosophy")
+            .workers = 3;
+
+        let flat = feature_marginal(WeightKey::ScienceRate, &state, 1, &w, None, None);
+        w.set(WeightKey::ScienceRateTrailing, 5.0);
+        let hinged = feature_marginal(WeightKey::ScienceRate, &state, 1, &w, None, None);
+
+        assert_eq!(
+            flat, hinged,
+            "the leading seat must be untouched by the hinge weight"
+        );
     }
 
     /// `rival_board` on a state with no rivals (single seat live) is all

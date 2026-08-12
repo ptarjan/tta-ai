@@ -953,7 +953,7 @@ impl<'a> Replayer<'a> {
                     continue;
                 }
             }
-            if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+            if crate::debugflags::replay_debug_all() {
                 eprintln!(
                     "DEBUG resolve_intervening loop: lineno={} decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
                     self.current_lineno,
@@ -1610,7 +1610,7 @@ impl<'a> Replayer<'a> {
     /// which is precisely the failure the old forward guess made.
     fn resolve_political_decision(&mut self, decider: u8) -> Result<(), MismatchKind> {
         let claimed = self.claimable_preparation(decider);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG resolve_political_decision decider={decider} round={} lineno={} claims={claimed:?}",
                 self.state.round, self.current_lineno,
@@ -1822,7 +1822,7 @@ impl<'a> Replayer<'a> {
             set_current_events(&mut self.state, &order);
         }
 
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG PrepareEvent applied for decider={decider} prepared={:?} revealed={:?} -> pending_top={:?} current_events={:?} future_events={:?}",
                 prep.card.get().name,
@@ -2249,7 +2249,7 @@ impl<'a> Replayer<'a> {
             self.culture_oracle_agreed += 1;
             return;
         }
-        if std::env::var("REPLAY_DEBUG").is_ok() {
+        if crate::debugflags::replay_debug() {
             eprintln!(
                 "DEBUG end-turn culture drift: actor={actor_seat} journal says (now {journal_now}), this binary \
                  computes {got} (delta {}) at line {lineno}",
@@ -2306,7 +2306,7 @@ impl<'a> Replayer<'a> {
             })
             .collect();
         let (n, certainty) = self.discard_solver.choose(c.player, self.current_lineno, &opts);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG discard: player {} line {} picked {} of {} candidates ({certainty:?})",
                 c.player,
@@ -2404,7 +2404,7 @@ impl<'a> Replayer<'a> {
     fn try_apply(&mut self, mv: Move, record: bool) -> Result<(), MismatchKind> {
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv) {
-            if std::env::var("REPLAY_DEBUG").is_ok() {
+            if crate::debugflags::replay_debug() {
                 let p = &self.state.players[self.state.current as usize];
                 eprintln!(
                     "DEBUG try_apply fail: mv={mv:?} actor(current)={} civil_actions={} military_actions={} government={} leader={} phase={:?} pending_top={:?} hand_civil_size={} civil_hand_limit={} hand_civil={:?} resources={} food={} science={} mil_discount={} workers_free={} one_time_discount={:?} tableau={:?} card_row={:?}",
@@ -2517,7 +2517,7 @@ impl<'a> Replayer<'a> {
                 self.repay_military_hand_deficit(seat, (after - before) as u32);
             }
         }
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             let p = &self.state.players[self.state.current as usize];
             eprintln!(
                 "DEBUG applied mv={mv:?} -> current={} civil_actions={} military_actions={} phase={:?} round={} pending_before={:?} yellow_bank={} food={} resources={}",
@@ -4956,11 +4956,36 @@ fn catch_up_civil_age(state: &mut GameState, journal_age: &str) {
 /// old_age`, and `catch_up_civil_age_is_deferred_by_a_bookkeeping_last_turn_
 /// line_that_precedes_the_old_ages_own_trailing_end_turn`, below, pin all
 /// four).
+///
+/// ALSO untrustworthy, found chasing the culture oracle's `WinWar` bucket on
+/// real game `7523079` (Purple's round-12 `End turn`, line 211, journal `73`
+/// vs this binary's `61`, delta -12): every [`is_pure_confirmation_line`]
+/// class, not just `EndTurn`/`Discard`. That predicate's OWN doc already
+/// establishes `WinWar`'s timestamp "routinely collides (same second) with
+/// an unrelated OTHER player's own trailing `End turn` line" and is "not
+/// stably ordered within a second" -- the exact same export-ordering
+/// artifact this function exists to guard against, just not previously
+/// wired in here. Confirmed on `7523079`: Orange's `"wins War over
+/// Territory"` (line 210) is tagged age `III` round `13` -- Orange's NEXT
+/// turn, where `game::start_turn` actually resolves the war -- but it is
+/// printed (same timestamp, `13:53:28`) one line BEFORE Purple's own still-
+/// Age-`II` round-12 `End turn` (line 211). Before this fix, that untrusted
+/// `III` tag forced `state.age_civil` up a whole turn early, running
+/// `advance_age`'s §12.2.4 "-2 yellow_bank" deduction for BOTH players
+/// before Purple's own end-of-turn ran -- `happy_required`'s band jumped
+/// from 3 to 4 off the prematurely-decremented bank, `discontent` (4 - 3)
+/// exceeded Purple's 0 free workers, `economy::end_of_turn` treated it as a
+/// genuine uprising (§6.3) and skipped step 3 (culture, science, corruption,
+/// food, resource production) entirely for a turn BGO's own journal shows
+/// producing normally -- the exact -12 culture / -2 science shortfall,
+/// reusing the one predicate rather than growing a second, silently-
+/// diverging exclusion list (this function's own history: see the "hidden
+/// twin" note on `is_trustworthy_age_line`'s sibling above).
 fn is_trustworthy_age_line(outcome: LineOutcome) -> bool {
     matches!(
         outcome,
         LineOutcome::Action(Classified { class, .. })
-            if !matches!(class, ActionClass::EndTurn | ActionClass::Discard)
+            if !matches!(class, ActionClass::EndTurn | ActionClass::Discard) && !is_pure_confirmation_line(class)
     )
 }
 
@@ -5357,7 +5382,7 @@ pub fn replay_game(
                 // few lines later; cross-check against the LATER
                 // `free_civil_action_move`/`try_apply` science reading
                 // before trusting a single one of these in isolation.
-                if std::env::var("REPLAY_DEBUG").is_ok() {
+                if crate::debugflags::replay_debug() {
                     if let Some(want) = trailing_now_science(line.text) {
                         let got = r.state.players[actor as usize].science as i32;
                         if want != got {
@@ -5593,7 +5618,7 @@ pub fn replay_game(
                 ca_take_spend_this_turn[actor as usize] += cost;
                 let spend = ca_take_spend_this_turn[actor as usize];
                 let total_now = costs::ca_total(&r.state, &r.state.players[actor as usize]);
-                if std::env::var("REPLAY_DEBUG").is_ok() {
+                if crate::debugflags::replay_debug() {
                     let gov = &r.state.players[actor as usize].government;
                     eprintln!(
                         "CA_TOTAL_CHECK game={} actor={actor} lineno={} age_civil={:?} round={} \
@@ -5634,7 +5659,7 @@ pub fn replay_game(
                 // the refund fired first with nothing yet to subtract
                 // from, got floored to 0, and the credit vanished.
                 let cur = &mut ca_take_spend_this_turn[actor as usize];
-                if std::env::var("REPLAY_DEBUG").is_ok() {
+                if crate::debugflags::replay_debug() {
                     eprintln!(
                         "CA_REFUND game={} actor={actor} lineno={} class={class:?} refund={refund} before={} after={}",
                         meta.id, line.lineno, *cur, *cur - refund
@@ -5916,7 +5941,7 @@ fn free_civil_action_move(
                 .iter()
                 .position(|o| matches!(o, ChoiceOption::Move(m) if *m == wanted))
                 .ok_or_else(|| {
-                    if std::env::var("REPLAY_DEBUG").is_ok() {
+                    if crate::debugflags::replay_debug() {
                         let p = &r.state.players[actor as usize];
                         eprintln!(
                             "DEBUG free_civil_action_move gap: wanted={wanted:?} landed_in_techs={landed_in_techs:?} science={} hand_civil={:?} tech_cost_net(landed)={:?}",
@@ -6004,7 +6029,7 @@ fn apply_one(
     raw_text: &str,
     next_text: Option<&str>,
 ) -> Result<(), MismatchKind> {
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         let p = &r.state.players[actor as usize];
         eprintln!(
             "DEBUG APPLY_ONE ENTRY: actor={actor} class={class:?} card={:?} raw_text={raw_text:?} hand_civil_before={:?}",
@@ -6066,7 +6091,7 @@ fn apply_one(
             // engine's own gate/cost functions directly (not a
             // reimplementation), rather than leaving only the generic
             // "illegal move" dump `try_apply` already prints.
-            if std::env::var("REPLAY_DEBUG").is_ok() {
+            if crate::debugflags::replay_debug() {
                 let p = &r.state.players[actor as usize];
                 let gate = costs::take_gate(&r.state, p, None);
                 if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate) {
@@ -6254,7 +6279,7 @@ fn apply_one(
                 // differently than the true game (see the module doc's
                 // "gives up on" list and `docs/REPLAY.md`'s mismatch
                 // categories), not a parser gap in THIS line.
-                if std::env::var("REPLAY_DEBUG").is_ok() {
+                if crate::debugflags::replay_debug() {
                     let p = &r.state.players[actor as usize];
                     eprintln!(
                         "DEBUG Pop fail: food={} yellow_bank={} civil_actions={} pop_cost={:?} round={} numplayers={} lineno={} otd_pop_food={} leader={} government={} pending={:?} raw={:?}",
@@ -6599,6 +6624,68 @@ fn apply_one(
             // BidPass lines and `resolve_intervening`'s auto-drain; by the
             // time a "colonizes a ..." line is reached it is a pure
             // validation checkpoint (nothing left to apply).
+            //
+            // ENGINE/REPLAYER BUG (found chasing the `WinWar` culture-oracle
+            // delta on game `7522152`): `interact::colonize`'s own
+            // `colonize_auto` can walk a `Pending::Colonize` all the way to
+            // completion by itself, with NO branching step, whenever every
+            // one of its steps happens to have exactly one legal
+            // continuation (a small unit pool with no spare bonus cards is
+            // the common shape). That path runs synchronously, inside
+            // whatever earlier `Bid`/`BidPass` line triggered the auction
+            // win -- long before `resolve_intervening`'s own `Pending::
+            // Colonize` check (which is what calls `drain_colonize`, the
+            // ONLY other place that pops `colonize_sacrifices`) ever gets a
+            // chance to see this pending open. `drain_colonize` is
+            // therefore never called for a fully-forced colonize, its
+            // `ColonizeSacrifice` entry is never popped, and it sits at the
+            // front of the per-game queue forever -- silently misattributing
+            // every LATER colonize in the same game (by any player) to the
+            // wrong entry, which flunks `drain_colonize`'s own actor check
+            // and falls back to `approximate_colonize`'s "sacrifice whatever
+            // the engine offers first" heuristic instead of the journal's
+            // real, exact choice. `approximate_colonize` can pick MORE or
+            // DIFFERENT tableau units than the human actually sacrificed,
+            // corrupting that player's own army strength for the rest of
+            // the game -- the root cause of game `7522152`'s War over
+            // Culture spoils computing an advantage of 24 instead of the
+            // journal's 5 (Purple's own `army_strength` undercounted after
+            // an earlier, wrongly-approximated colonize stripped units the
+            // real Purple still had), a 19-culture swing on the very next
+            // end-of-turn checkpoint.
+            //
+            // Fixed here, not in `interact.rs`: `colonize_sacrifices` and
+            // `drain_colonize` are this file's own replay bookkeeping, not
+            // engine state, so `interact::colonize_auto` completing a fully-
+            // forced colonize is not itself wrong -- ENGINE state ends up
+            // correct either way, `interact::colonize_moves` never offers an
+            // illegal option.
+            //
+            // Only pop when the `Pending::Colonize` is ALREADY GONE: a
+            // colonize that genuinely needs driving is, per this match arm's
+            // own original comment and confirmed by tracing game
+            // `7522152`'s SECOND (real, branching) colonize, still open
+            // `Pending::Colonize` at the moment THIS confirmation line's own
+            // `apply_one` dispatch runs -- the auction win that opened it is
+            // an earlier line, but `resolve_intervening` (the only thing
+            // that calls `drain_colonize`) does not run for a confirmation
+            // line at all (`is_pure_confirmation_line`'s own doc), so this
+            // dispatch is reached BEFORE the pending is drained, not after.
+            // Popping unconditionally here (an earlier version of this fix)
+            // stole the still-open entry out from under `drain_colonize`,
+            // which then found the queue empty and fell back to
+            // `approximate_colonize` for the exact case this fix exists to
+            // avoid. Checking `state.pending.top()` first is what tells the
+            // two cases apart: gone already means `colonize_auto` finished
+            // it with no branching (this line is the only place left that
+            // ever sees it, so pop now or leak it forever); still open means
+            // a later `resolve_intervening` iteration owns popping it via
+            // `drain_colonize`, same as before this fix existed.
+            if !matches!(r.state.pending.top(), Some(Pending::Colonize(_)))
+                && r.colonize_sacrifices.front().is_some_and(|s| s.lineno == r.current_lineno)
+            {
+                r.colonize_sacrifices.pop_front();
+            }
             let _ = card;
             Ok(())
         }
@@ -6839,7 +6926,7 @@ fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Resu
                     r.consume_named_military_card(player, filler, Move::Defend { card: filler }, false)?;
                 } else {
                     let (idx, certainty) = r.discard_solver.choose(player, r.current_lineno, &flat);
-                    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+                    if crate::debugflags::replay_debug_all() {
                         eprintln!(
                             "DEBUG aggression defense: player {player} line {} picked {} of {} flat candidates ({certainty:?})",
                             r.current_lineno,
@@ -7266,6 +7353,61 @@ mod tests {
         assert_eq!(
             r.state.players[0].yellow_bank,
             yellow_before.0 - 2,
+            "§12.2.4's deduction runs once the age is genuinely forced"
+        );
+    }
+
+    /// The exact shape traced on real game `7523079` line 210 (culture-
+    /// oracle `WinWar` bucket, Purple's round-12 `End turn` at line 211:
+    /// journal `(now 73)`, this binary `61`, delta -12): Orange's own
+    /// `"wins War over Territory"` confirmation line is tagged the
+    /// ATTACKER's own NEXT age (`III`, where `game::start_turn` actually
+    /// resolves the war -- `is_pure_confirmation_line`'s own doc), but BGO
+    /// prints it (same timestamp) one line BEFORE Purple's still-Age-`II`
+    /// `End turn`. Before this fix, `is_trustworthy_age_line` excluded only
+    /// `EndTurn`/`Discard`, so this line's `III` tag forced `state.age_civil`
+    /// up a whole turn early and ran §12.2.4's "-2 yellow_bank" deduction on
+    /// BOTH players before Purple's own end-of-turn ran -- `happy_required`'s
+    /// band jumped off the prematurely-decremented bank, a false `uprising`
+    /// (§6.3) tripped, and `economy::end_of_turn` skipped ALL of step 3
+    /// (culture/science/corruption/food/resources) for a turn BGO's journal
+    /// shows producing normally. Mirrors
+    /// `catch_up_civil_age_call_site_gate_ignores_a_last_turn_line_but_
+    /// still_advances_on_the_next_real_decision`'s own shape one line up.
+    #[test]
+    fn is_trustworthy_age_line_call_site_gate_ignores_a_winwar_confirmation_but_still_advances_on_the_next_real_decision() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_civil = crate::cards::Age::II;
+        assert!(r.state.pending.is_empty());
+        assert!(r.state.queue.is_empty());
+        let yellow_before = (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank);
+
+        // The exact call-site snippet in `replay_game`'s main loop, for a
+        // BGO WinWar confirmation line (a `is_pure_confirmation_line` class,
+        // tagged the attacker's NEW age).
+        let win_war = "Orange wins War over Territory Attacker's strength: 25; Defender's strength: 11";
+        if is_trustworthy_age_line(classify(&card_index, win_war)) {
+            catch_up_civil_age(&mut r.state, "III");
+        }
+        assert_eq!(r.state.age_civil, crate::cards::Age::II, "a WinWar confirmation line must not force the age");
+        assert_eq!(
+            (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank),
+            yellow_before,
+            "§12.2.4 must not fire off an untrustworthy WinWar line"
+        );
+
+        // The SAME snippet, now for the next REAL decision (still tagged the
+        // new age) -- the age must still advance, or it would never advance
+        // at all.
+        let real_decision = "Orange plays Raid against Purple Destroy up to 2 of your rival's urban buildings";
+        if is_trustworthy_age_line(classify(&card_index, real_decision)) {
+            catch_up_civil_age(&mut r.state, "III");
+        }
+        assert_eq!(r.state.age_civil, crate::cards::Age::III, "a genuine decision line must still force the age forward");
+        assert_eq!(
+            (r.state.players[0].yellow_bank, r.state.players[1].yellow_bank),
+            (yellow_before.0 - 2, yellow_before.1 - 2),
             "§12.2.4's deduction runs once the age is genuinely forced"
         );
     }
@@ -10308,6 +10450,90 @@ mod tests {
         assert_eq!(r.state.players[0].techs.get(knights).map(|s| s.workers), Some(0), "the Knight was sacrificed");
         assert!(!r.state.players[0].hand_military.contains(bonus2), "the named bonus card left the hand");
         assert!(!r.colonize_approximated, "this colonization was replayed, not approximated");
+    }
+
+    /// REGRESSION (found chasing the culture-oracle divergence on real game
+    /// `7522152`): a colonize whose `Pending::Colonize` has EXACTLY one legal
+    /// continuation at every step (a single available unit, no bonus/discard
+    /// cards) resolves entirely inside `interact::colonize`'s own
+    /// `colonize_auto`, with `resolve_intervening` -- the only caller of
+    /// `drain_colonize`, the only OTHER place that pops `colonize_sacrifices`
+    /// -- never getting a chance to see the `Pending::Colonize` at all. Before
+    /// this fix, that left player 0's own queue entry sitting at the front
+    /// forever, so player 1's LATER, real, branching colonize found the wrong
+    /// front entry (`sac.actor != player`) and silently fell back to
+    /// `approximate_colonize`'s "take the engine's first-offered move" rule
+    /// instead of the journal's own exact sacrifice list -- exactly the
+    /// failure `a_colonization_sacrifices_exactly_the_units_the_journal_
+    /// names_and_no_others` (above) pins for a queue that starts aligned.
+    /// `ActionClass::Colonize`'s dispatch arm (`apply_one`, called for the
+    /// `"<Color> colonizes ..."` confirmation line itself) is the one place
+    /// left that ever sees a fully-forced colonize, so popping its entry
+    /// there -- but ONLY when `Pending::Colonize` is already gone, never when
+    /// draining is still owed to a later `resolve_intervening` iteration -- is
+    /// what fixes it.
+    #[test]
+    fn a_fully_forced_colonize_pops_its_own_queue_entry_so_a_later_colonize_is_not_misattributed() {
+        let card_index = build_card_index();
+        let warriors = card_index["Warriors"];
+        let knights = card_index["Knights"];
+        let bonus2 = colonization_bonus_card(2).unwrap();
+        let territory0 = card_index["Vast Territory (I)"];
+        let territory1 = card_index["Vast Territory (II)"];
+        let mut sacrifices = VecDeque::new();
+        // Player 0's own entry: what the journal claims was sacrificed does
+        // not matter here (the forced path never reads it), but a real line
+        // always has one.
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 50,
+            actor: 0,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(warriors)],
+        });
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 200,
+            actor: 1,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(knights), SacrificeClause::Bonus(bonus2)],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+        // Player 0 has exactly one sacrificeable unit (`new_game`'s starting
+        // Warriors, strength 1) and an empty bonus/discard pool -- so a bid
+        // of 1 leaves `colonize_moves` exactly one legal move at every step
+        // (`SendUnit { Warriors }`, then `SendDone`), and `colonize_auto`
+        // walks the whole thing to completion with no external driving at all.
+        r.state.players[0].hand_military = CardList::new();
+        crate::interact::colonize(&mut r.state, 0, territory0, 1);
+        assert!(r.state.pending.is_empty(), "a single-legal-move-per-step colonize must fully auto-resolve");
+        assert_eq!(r.colonize_sacrifices.len(), 2, "nothing has popped yet -- the confirmation line has not been reached");
+
+        // Reaching player 0's own confirmation line (`ActionClass::Colonize`
+        // dispatch) is what must pop its now-stale entry.
+        r.current_lineno = 50;
+        let out = apply_one(&mut r, 0, ActionClass::Colonize, Some(territory0), "colonizes a Vast Territory", "Orange colonizes a Vast Territory Sacrificed Units:; 1 Warrior; Total force: 1", None);
+        assert!(out.is_ok(), "{out:?}");
+        assert_eq!(r.colonize_sacrifices.len(), 1, "player 0's own entry popped at its confirmation line");
+        assert_eq!(r.colonize_sacrifices.front().map(|s| s.actor), Some(1), "player 1's entry is now the front, not skipped over");
+
+        // Player 1's own colonize is real (branching: Knights vs Warriors,
+        // with a bonus card) -- it must still resolve EXACTLY against the
+        // journal's own list, not fall back to approximation now that the
+        // queue is correctly aligned.
+        r.state.players[1].techs.insert(knights, crate::state::TechSlot { workers: 1, stored: 0 });
+        r.state.players[1].hand_military = CardList::new();
+        r.state.players[1].hand_military.push(bonus2);
+        crate::interact::colonize(&mut r.state, 1, territory1, 4);
+        r.drain_colonize().expect("the journal's own list is legal here");
+
+        assert!(r.state.pending.is_empty(), "the force resolved");
+        assert_eq!(r.state.players[1].techs.get(knights).map(|s| s.workers), Some(0), "the Knight was sacrificed");
+        assert_eq!(
+            r.state.players[1].techs.get(warriors).map(|s| s.workers),
+            Some(1),
+            "the Warriors (the weakest-first fallback's pick) were kept -- this used the journal's real list, not approximation"
+        );
+        assert!(!r.colonize_approximated, "player 1's colonization was replayed exactly, not approximated");
     }
 
     /// REGRESSION: the winner's hidden bonus cards must be grounded while

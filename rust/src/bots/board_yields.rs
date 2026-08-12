@@ -681,9 +681,66 @@ fn wonder_cost(name: CardId, out: &mut Vec<Triple>) {
 
 // -------------------------------------------------------------- entry point
 
+/// The un-mutated `effects::compute` for one player, computed ONCE and lent to
+/// every card being priced against it.
+///
+/// # Why this type exists
+///
+/// Pricing a swap card is a diff: `compute` the board as it is, `compute` it
+/// with the card swapped in, subtract. The second half genuinely differs per
+/// card; the first half is the SAME for every card in a row or a hand, and
+/// [`board_yields`] used to recompute it per candidate. `effects::compute` is
+/// the most expensive function in the engine -- 25278 samples, more than twice
+/// the next entry, in a 20s profile of the live 2p climb arm -- so a 13-card
+/// hand was paying for 13 identical rebuilds of the same numbers.
+///
+/// # Why it carries the board rather than sitting beside it
+///
+/// A hoisted baseline is only correct for the `(state, player)` it was built
+/// from, and "computed for the wrong board" is a silent wrong-answer bug, not
+/// a crash. So the baseline OWNS the board reference: [`board_yields`] takes
+/// only a `&Baseline` and reads the state and index back out of it. There is
+/// no second parameter to disagree with -- passing a mismatched pair is not
+/// something the caller can express. (DESIGN.md: collapse the composition so
+/// the broken gluing cannot be written.)
+///
+/// This is not a cache: nothing is stored between calls and nothing is
+/// invalidated. It is a value the caller computes and passes down, and the
+/// borrow checker stops the state changing underneath it for as long as it
+/// lives.
+///
+/// # What it did NOT buy: nothing, measurably
+///
+/// Measured 2026-08-10, quiet box, identical 2400-game 2p arena, same PGO
+/// flags both sides, best of three: 38.9s before, 40.6s after. No speedup, and
+/// the two binaries produced byte-identical results, so the hoist provably
+/// changed no answer -- it just did not change the clock either.
+///
+/// That is worth writing down because the profile said the opposite, and the
+/// next person reading those 25278 samples will have the same idea. The likely
+/// explanation is that the eliminated half is not the half being sampled: only
+/// the `before` compute was hoisted, the `after` compute is still per card, and
+/// most `card_potential` calls never reach the board-aware path at all (they
+/// take the `credit_board == 0.0` early-out, or `board` is `None`). Before
+/// re-attacking this, COUNT how often `board_yields` is actually entered per
+/// decision -- do not infer it from the sample attribution again.
+///
+/// The refactor is kept anyway: it is strictly less work, and it made a class
+/// of silent wrong-answer bug unexpressible. It is not kept for speed.
+///
+/// # It lives in `effects.rs` now
+///
+/// This started life here, hoisted out of the per-card loops below. The same
+/// shape then turned out to be what the ENGINE needs -- `costs.rs` and
+/// `economy.rs` rebuild a player's whole statistics per candidate card too --
+/// so the type moved to [`effects::Snapshot`] and `Baseline` is an alias for
+/// it. One implementation, so the bot's notion of "the board as it stands" and
+/// the engine's cannot drift apart.
+pub type Baseline<'a> = effects::Snapshot<'a>;
+
 /// `board_yields`: `(feature, amount, kind)` triples for `name` on this
 /// board, or `None` meaning "not board-priced, use the static table".
-pub fn board_yields(name: CardId, state: &GameState, idx: u8) -> Option<Vec<Triple>> {
+pub fn board_yields(name: CardId, base: &Baseline) -> Option<Vec<Triple>> {
     if name.is_none() {
         return None;
     }
@@ -691,8 +748,9 @@ pub fn board_yields(name: CardId, state: &GameState, idx: u8) -> Option<Vec<Trip
     if !is_swap_type(typ) {
         return None;
     }
-    let p = &state.players[idx as usize];
-    let before = effects::state_stats(state, p);
+    let (state, idx) = (base.state(), base.idx());
+    let p = base.player();
+    let before = base.stats();
     let after = match typ {
         CardType::Leader => swap_stats(state, idx, |pl| pl.leader = name),
         CardType::Government => swap_stats(state, idx, |pl| pl.government = name),
@@ -700,7 +758,7 @@ pub fn board_yields(name: CardId, state: &GameState, idx: u8) -> Option<Vec<Trip
         _ => unreachable!("is_swap_type gates this to Leader/Government/Wonder"),
     };
     let mut out = Vec::new();
-    delta_triples(&before, &after, p, &mut out);
+    delta_triples(before, &after, p, &mut out);
     match typ {
         CardType::Wonder => {
             wonder_cost(name, &mut out);
@@ -738,12 +796,12 @@ pub fn board_yields(name: CardId, state: &GameState, idx: u8) -> Option<Vec<Trip
 /// 2026-08-05 once `gen_cards.py` gave both `Special` variants a real
 /// `[i16; 3]` payload): both keys were detected but the coefficient could
 /// not be recovered, so this always returned nothing.
-pub fn board_extra(name: CardId, state: &GameState, idx: u8) -> Vec<Triple> {
+pub fn board_extra(name: CardId, base: &Baseline) -> Vec<Triple> {
     if name.is_none() {
         return Vec::new();
     }
     let card = name.get();
-    let p = &state.players[idx as usize];
+    let (state, p) = (base.state(), base.player());
     let count_idx = crate::events::live_count_idx(state);
     let mut out = Vec::new();
     if let Some(t) = card.special.iter().find_map(|&s| match s {
@@ -759,7 +817,8 @@ pub fn board_extra(name: CardId, state: &GameState, idx: u8) -> Vec<Triple> {
         Special::ResourcesForMilitaryUnitsPerStrongerCivilization(t) => Some(t),
         _ => None,
     }) {
-        let mine = effects::state_stats(state, p).strength;
+        // Already computed for this player -- the whole point of `Baseline`.
+        let mine = base.stats().strength;
         let n = live_rivals(state, p)
             .into_iter()
             .filter(|q| effects::state_stats(state, q).strength > mine)

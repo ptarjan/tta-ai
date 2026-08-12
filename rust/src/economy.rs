@@ -115,6 +115,62 @@ pub fn corruption(blue_available: u16) -> u16 {
     }
 }
 
+/// The widest FINITE corruption band (`6..=10`) is five values across, so a
+/// player standing at its top can absorb four more occupied blue tokens
+/// before §6.2 charges more. Headroom is capped there for two reasons: no
+/// single turn crosses two band edges, and in the unbounded top band an
+/// uncapped headroom is just `blue_available - 11`, an affine copy of the
+/// already-priced `BlueFree` coordinate.
+const CORRUPTION_HEADROOM_CAP: u16 = 4;
+
+/// The same for consumption: the widest finite band (`13..=16`) is four
+/// values across (§6.4).
+const CONSUMPTION_HEADROOM_CAP: u8 = 3;
+
+/// How many MORE blue tokens may be occupied before corruption gets worse.
+///
+/// [`corruption`] answers "what am I paying now"; this answers "how close am
+/// I to paying more", which is the quantity a strong player actually plans a
+/// turn around -- spending down to exactly the band edge and no further.
+/// Without it a bot is blind to the cliff until it has already fallen off:
+/// storing one resource at 11 free blue costs 2 resources per turn forever
+/// after, and nothing in the state vector distinguishes that from storing one
+/// at 15.
+///
+/// Zero when already in the worst band, since there is no edge left to cross.
+pub fn corruption_headroom(blue_available: u16) -> u16 {
+    let band_floor = if blue_available >= 11 {
+        11
+    } else if blue_available >= 6 {
+        6
+    } else if blue_available >= 1 {
+        1
+    } else {
+        return 0;
+    };
+    (blue_available - band_floor).min(CORRUPTION_HEADROOM_CAP)
+}
+
+/// How much MORE population may be taken before food consumption gets worse
+/// (§6.4) -- the food-side twin of [`corruption_headroom`], and the reason
+/// taking the last cheap population is often worth a whole turn of planning.
+pub fn consumption_headroom(yellow_bank: u8) -> u8 {
+    let band_floor = if yellow_bank >= 17 {
+        17
+    } else if yellow_bank >= 13 {
+        13
+    } else if yellow_bank >= 9 {
+        9
+    } else if yellow_bank >= 5 {
+        5
+    } else if yellow_bank >= 1 {
+        1
+    } else {
+        return 0;
+    };
+    (yellow_bank - band_floor).min(CONSUMPTION_HEADROOM_CAP)
+}
+
 // ------------------------------------------------------- derived checks
 
 /// Food to increase population, given an already-known pop-food discount
@@ -380,7 +436,7 @@ pub fn blue_used(p: &PlayerState) -> u16 {
     if !p.wonder.is_none() {
         used += p.wonder_steps as u16;
     }
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         eprintln!(
             "DEBUG blue_used: food={} food_denoms={:?} food_tokens={food_tokens} resources={} mine_denoms={:?} mine_tokens={mine_tokens} wonder={} wonder_steps={} total={used}",
             p.food, food_denoms.as_slice(), p.resources, mine_denoms.as_slice(),
@@ -575,13 +631,13 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // cache in this port (see `increase_population`), so there is nothing to
     // invalidate here or at step 5.
 
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         eprintln!("DEBUG end_of_turn ENTRY: idx={idx} round={}", state.round);
     }
 
     // ---- 1. discard excess military cards -----------------------------
     if interact::discard_excess_military(state, idx) {
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!("DEBUG end_of_turn: idx={idx} stopped at discard_excess_military");
         }
         return false;
@@ -592,7 +648,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // ---- 2. uprising check --------------------------------------------
     // Python emits a log line here (`state.emit(...)`); `GameState` has no
     // journal/emit sink and the string is not read by anything.
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+    if crate::debugflags::replay_debug_all() {
         let p = &state.players[idx as usize];
         eprintln!(
             "DEBUG uprising check: idx={idx} yellow_bank={} happy_required={} s.happy={} s.science={} discontent={} workers_free={} uprising={}",
@@ -618,12 +674,12 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
         // `pay_resources` never pays more than it was asked for, so the
         // shortfall cannot go negative.
         let corr = corruption(blue_available(p));
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG end_of_turn pre-corruption: idx={idx} resources={} food={} blue_total={} blue_used={} corr={} s.resources={} s.food={}",
                 p.resources, p.food, p.blue_total, blue_used(p), corr, s.resources, s.food
             );
-            if std::env::var("REPLAY_DEBUG_TECHS").is_ok() {
+            if crate::debugflags::replay_debug_techs() {
                 for (id, slot) in p.techs.iter() {
                     let card = id.get();
                     eprintln!(
@@ -641,7 +697,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
 
         // ---- 3c. food production --------------------------------------
         gain_food(p, s.food as u16);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!("DEBUG end_of_turn post-production: idx={idx} food={} yellow_bank={}", p.food, p.yellow_bank);
         }
 
@@ -657,7 +713,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
 
         // ---- 3e. resource production ----------------------------------
         gain_resources(p, s.resources as u16);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG end_of_turn POST: idx={idx} resources={} food={} science={} culture={}",
                 p.resources, p.food, p.science, p.culture
@@ -677,7 +733,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     // military action a full refill of cards.
     if state.age_military != Age::IV && state.round > 1 {
         let n = state.players[idx as usize].military_actions.clamp(0, 3);
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG draw_military_step: idx={idx} round={} military_actions_unused={} n_drawn={n}",
                 state.round,
@@ -723,7 +779,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.peeked_event = CardId::NONE;
     p.taken_this_turn = CardList::new();
     // §3.11: action-card discount pools expire at end of turn.
-    if std::env::var("REPLAY_DEBUG_ALL").is_ok() && p.mil_discount != 0 {
+    if crate::debugflags::replay_debug_all() && p.mil_discount != 0 {
         eprintln!("DEBUG mil_discount site=end_of_turn idx={idx} reset {} -> 0", p.mil_discount);
     }
     p.mil_discount = 0;
@@ -804,6 +860,66 @@ fn end_of_turn_leader_bonus(state: &mut GameState, idx: u8) {
 mod tests {
     use super::*;
     use crate::state::{OneTimeDiscount, Pact, PactList, Phase, TechSlot, MAX_HAND};
+
+    /// Headroom is only meaningful if it agrees with the band table it claims
+    /// to describe, so it is checked AGAINST [`corruption`] rather than
+    /// against copied-out numbers: spending exactly the headroom must leave
+    /// the bill unchanged, and one more than the headroom must raise it.
+    /// Written this way the test cannot drift out of step with §6.2 -- if the
+    /// table ever changes, a hand-written expectation would silently become a
+    /// lie, whereas this fails.
+    #[test]
+    fn corruption_headroom_is_exactly_the_slack_before_the_next_band() {
+        for blue in 0u16..=30 {
+            let h = corruption_headroom(blue);
+            assert_eq!(
+                corruption(blue - h),
+                corruption(blue),
+                "with {blue} free blue, occupying its headroom of {h} must not change the bill"
+            );
+            if h < CORRUPTION_HEADROOM_CAP && blue > 0 {
+                assert!(
+                    corruption(blue - h - 1) > corruption(blue),
+                    "with {blue} free blue, occupying one past the headroom of {h} must cost more"
+                );
+            }
+        }
+    }
+
+    /// The food-side twin, checked against [`consumption`] for the same
+    /// reason (§6.4).
+    #[test]
+    fn consumption_headroom_is_exactly_the_population_left_before_food_costs_more() {
+        for bank in 0u8..=25 {
+            let h = consumption_headroom(bank);
+            assert_eq!(
+                consumption(bank - h),
+                consumption(bank),
+                "with {bank} in the yellow bank, taking its headroom of {h} must not raise the meal"
+            );
+            if h < CONSUMPTION_HEADROOM_CAP && bank > 0 {
+                assert!(
+                    consumption(bank - h - 1) > consumption(bank),
+                    "with {bank} in the yellow bank, taking one past {h} must raise the meal"
+                );
+            }
+        }
+    }
+
+    /// Standing at a band edge is the dangerous place and must read as zero
+    /// slack, not as "fine, I am still in the good band" -- that confusion is
+    /// the whole reason the bot could not plan up to the line.
+    #[test]
+    fn sitting_on_a_band_edge_reports_no_headroom_at_all() {
+        for &edge in &[11u16, 6, 1] {
+            assert_eq!(corruption_headroom(edge), 0, "{edge} free blue is an edge");
+            assert!(corruption(edge - 1) > corruption(edge), "and one below it costs more");
+        }
+        for &edge in &[17u8, 13, 9, 5, 1] {
+            assert_eq!(consumption_headroom(edge), 0, "a bank of {edge} is an edge");
+            assert!(consumption(edge - 1) > consumption(edge), "and one below it eats more");
+        }
+    }
 
     // ---- test scaffolding: PlayerState/GameState derive no Default, so a
     // full-field literal lives here once and every test builds off it.

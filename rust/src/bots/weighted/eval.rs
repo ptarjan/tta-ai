@@ -622,6 +622,65 @@ pub const BENEFIT_GATES: &[WeightKey] = &[
     WeightKey::WonderStagesPerAction,
 ];
 
+/// Weights that price a marginal-need SHORTFALL (`max(0, need - have)`,
+/// `features.rs`'s per-axis gap coordinates) -- none of them may be
+/// positive. A bigger shortfall is never an improvement under any reading of
+/// the rules a positive weight here would be scoring it as one, so unlike
+/// [`BENEFIT_GATES`] (repaired UP to zero) this repairs DOWN to zero: a
+/// climb is free to decide a shortfall does not matter (weight 0.0) or costs
+/// something (weight negative), never that it helps. The matching surplus
+/// coordinates (`food_surplus`, `worker_surplus`, ...) are deliberately NOT
+/// gated here -- whether banking more than you need is worth something or
+/// nothing is not unambiguous the way a shortfall's sign is, so the league
+/// prices it unconstrained.
+pub const SHORTFALL_GATES: &[WeightKey] = &[
+    WeightKey::FoodGap,
+    WeightKey::ResourceGap,
+    WeightKey::ScienceGap,
+    WeightKey::CultureGap,
+    WeightKey::CivilActionGap,
+    WeightKey::MilitaryActionGap,
+    WeightKey::WorkerGap,
+];
+
+/// Weights that price a PENALTY THE RULES IMPOSE -- none of them may be
+/// positive. Every feature here is a non-negative magnitude that is set
+/// larger the worse off the player is: `corruption(blue_available)` and
+/// `consumption(yellow_bank)` are the rulebook's own step tables (§6.2,
+/// §6.4), `discontent` is `max(0, -happy_margin)`, `uprising` is a 0/1
+/// indicator, `strength_deficit` is `max(0, -relative_strength)`. A positive
+/// weight scores "I am paying more corruption" or "I am facing an uprising"
+/// as an improvement, which no reading of the rules supports -- and because
+/// `corruption` and `consumption` are step functions OF another weighted
+/// coordinate (`BlueFree`, `YellowBank`), a positive weight there also
+/// inverts the cliff: at a band edge the evaluator comes to PREFER crossing
+/// into the worse band. That is a behavioural bug, not merely an odd price.
+///
+/// This gate exists because the league drifted all five positive in at least
+/// one arm despite every one of them being authored with a negative default
+/// (-0.9, -0.5, -3.0, -12.0, -0.6). The cause is confounding, not noise: a
+/// big civilization pays more corruption and more consumption than a small
+/// one, so a strictly-bad coordinate correlates with strength and a climb
+/// that only sees win rate is free to charge the correlation to the penalty.
+/// Repaired DOWN to 0.0, matching [`SHORTFALL_GATES`]: the league may decide
+/// a penalty does not matter, or costs something, never that it helps.
+pub const LOSS_GATES: &[WeightKey] = &[
+    WeightKey::Discontent,
+    WeightKey::Uprising,
+    WeightKey::StrengthDeficit,
+];
+
+/// `cards::redundancy_discount`'s gate -- never negative. A negative weight
+/// here would mean a redundant card gets MORE valuable the more of its
+/// `CardType` lane the player already covers, which is the discount's
+/// premise inverted, not just an unmeasured direction like every 0.0-default
+/// weight elsewhere in this table. Repaired down to 0.0, matching
+/// [`BENEFIT_GATES`]'s repair direction, kept as its own list rather than
+/// folded into that one: the two have different justifications ("a printed
+/// grant is never worse than not having it" vs. "redundancy cannot itself be
+/// an upside") even though both land on the same non-negative constraint.
+pub const REDUNDANCY_NONNEG_GATES: &[WeightKey] = &[WeightKey::TechRedundancyDiscount];
+
 /// One rule-level ordering `dominance_repair` had to fix -- Python's
 /// `{"weight": ..., "value": ..., "default": ..., "rule": ...}` dict,
 /// restated as a struct. Diagnostic only (a hillclimb log entry): nothing in
@@ -683,6 +742,45 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
                 value: v,
                 default: k.default_weight(),
                 rule: format!("{} >= 0 (scales a printed benefit)", k.name()),
+            });
+            out.set(k, 0.0);
+        }
+    }
+
+    for &k in SHORTFALL_GATES {
+        let v = out.get(k);
+        if v > 1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: v,
+                default: k.default_weight(),
+                rule: format!("{} <= 0 (prices a marginal-need shortfall)", k.name()),
+            });
+            out.set(k, 0.0);
+        }
+    }
+
+    for &k in LOSS_GATES {
+        let v = out.get(k);
+        if v > 1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: v,
+                default: k.default_weight(),
+                rule: format!("{} <= 0 (prices a penalty the rules impose)", k.name()),
+            });
+            out.set(k, 0.0);
+        }
+    }
+
+    for &k in REDUNDANCY_NONNEG_GATES {
+        let v = out.get(k);
+        if v < -1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: v,
+                default: k.default_weight(),
+                rule: format!("{} >= 0 (discounts a redundant card, never rewards one)", k.name()),
             });
             out.set(k, 0.0);
         }
@@ -1198,6 +1296,53 @@ mod tests {
         assert!(viol.iter().all(|v| v.weight != WeightKey::WonderStagesPerAction));
     }
 
+    /// The real drift this gate was written for: every one of these was
+    /// authored negative and the league still pushed it positive in at least
+    /// one live arm, scoring a rulebook penalty as an upside.
+    #[test]
+    fn a_penalty_priced_as_a_benefit_is_pinned_back_to_zero() {
+        let mut w = Weights::default();
+        for &k in LOSS_GATES {
+            w.set(k, 3.5);
+        }
+        let (out, viol) = dominance_repair(&w);
+        for &k in LOSS_GATES {
+            assert_eq!(out.get(k), 0.0, "{} must be repaired down to 0.0", k.name());
+            assert!(viol.iter().any(|v| v.weight == k), "{} must report a violation", k.name());
+        }
+    }
+
+    /// NEGATIVE CONTROL: the gate pins a SIGN, not a magnitude -- a penalty
+    /// the league priced as costly is left exactly where it put it.
+    #[test]
+    fn a_penalty_priced_as_a_cost_is_left_alone() {
+        let mut w = Weights::default();
+        for &k in LOSS_GATES {
+            w.set(k, -7.25);
+        }
+        let (out, viol) = dominance_repair(&w);
+        for &k in LOSS_GATES {
+            assert_eq!(out.get(k), -7.25, "{} must keep its negative price", k.name());
+            assert!(viol.iter().all(|v| v.weight != k), "{} must not report a violation", k.name());
+        }
+    }
+
+    /// Every gated key must be a coordinate that is only ever set to a
+    /// NON-NEGATIVE magnitude, or "weight <= 0" would not mean "a penalty
+    /// cannot help" -- the gate's whole justification is the feature's sign
+    /// convention, so pin the convention here rather than trusting a comment.
+    #[test]
+    fn every_loss_gate_defaults_to_a_negative_price() {
+        for &k in LOSS_GATES {
+            assert!(
+                k.default_weight() < 0.0,
+                "{} is gated as a penalty but its authored default is {}, which is not a cost",
+                k.name(),
+                k.default_weight()
+            );
+        }
+    }
+
     // ------------------------------------------------------------------ io
 
     #[test]
@@ -1228,6 +1373,62 @@ mod tests {
     fn an_absent_key_keeps_its_default() {
         let w = parse_weights(r#"{"culture": 2.5}"#).unwrap();
         assert_eq!(w.get(WeightKey::Science), WeightKey::Science.default_weight());
+    }
+
+    /// The live league champions, committed before this batch's marginal-need
+    /// and redundancy keys existed, must still load without error -- and
+    /// every one of those new keys must land at exactly its 0.0 default,
+    /// since none of the sixteen new names appear in a file written before
+    /// they existed. This is the "the climb restarts on this and the
+    /// baseline must not move silently" guarantee from this batch's own
+    /// brief: a champion loaded today must evaluate byte-identically to how
+    /// it did before this batch landed, because every new coordinate
+    /// contributes exactly `0.0 * feature == 0.0` to `evaluate`'s dot
+    /// product until the league discovers otherwise.
+    ///
+    /// Gitignored, regenerated-only files (`docs/RUST_LEAGUE.md`) -- skipped
+    /// rather than failed when a fresh checkout has not produced one yet, the
+    /// same reasoning `advisor::load_bot`'s own fallback-to-defaults uses for
+    /// a missing champion.
+    #[test]
+    fn the_live_champions_load_unchanged_with_every_new_key_at_its_zero_default() {
+        let new_keys = [
+            WeightKey::FoodGap,
+            WeightKey::FoodSurplus,
+            WeightKey::ResourceGap,
+            WeightKey::ResourceSurplus,
+            WeightKey::ScienceGap,
+            WeightKey::ScienceSurplus,
+            WeightKey::CultureGap,
+            WeightKey::CultureSurplus,
+            WeightKey::HappySurplus,
+            WeightKey::CivilActionGap,
+            WeightKey::CivilActionSurplus,
+            WeightKey::MilitaryActionGap,
+            WeightKey::MilitaryActionSurplus,
+            WeightKey::WorkerGap,
+            WeightKey::WorkerSurplus,
+            WeightKey::TechRedundancyDiscount,
+        ];
+        // A FROZEN champion, never the live `experiments/rust_champion_*.json`:
+        // those are rewritten by the running climb every time it accepts, so
+        // once the climb has priced these keys the live files legitimately
+        // carry non-zero values and a test reading them can only ever go red.
+        // The property under test is about loading a file written BEFORE the
+        // keys existed, so the fixture must be one that can never change.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../analysis/frozen/gauntlet")
+            .join("champion_3p_gen1384_140key_2026-08-06.json");
+        let w = load_weights(&path).unwrap_or_else(|e| panic!("frozen champion failed to load: {e}"));
+        for &k in &new_keys {
+            assert_eq!(k.default_weight(), 0.0, "{} must default to 0.0", k.name());
+            assert_eq!(
+                w.get(k),
+                k.default_weight(),
+                "frozen champion: {} must come back as its 0.0 default, a file written before the key existed cannot name it",
+                k.name()
+            );
+        }
     }
 
     /// Every champion on disk still carries the twelve retired names. They

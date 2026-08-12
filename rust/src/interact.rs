@@ -322,7 +322,7 @@ pub fn discard_excess_military(state: &mut GameState, idx: u8) -> bool {
             s.military_actions + s.military_hand_limit
         };
         let p = &state.players[idx as usize];
-        if std::env::var("REPLAY_DEBUG_ALL").is_ok() {
+        if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG discard_excess_military: idx={idx} hand_military_len={} limit={limit} \
                  military_actions={} military_hand_limit={} hand={:?}",

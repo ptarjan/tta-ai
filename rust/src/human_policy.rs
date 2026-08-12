@@ -575,6 +575,16 @@ pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
         w.set(k, 0.0);
     }
     for (name, value) in fields {
+        // A RETIRED name is dropped, not rejected -- exactly as
+        // `eval::load_weights` does. This loader is deliberately separate
+        // from that one (see `weights_to_text`), but "retired" is a property
+        // of the weight basis itself, not of one reader: a file written
+        // before a key was retired must stay loadable by BOTH, or retiring a
+        // key silently breaks every frozen pool member and anchor on disk
+        // while the champion files keep working.
+        if crate::bots::weighted::weights::RETIRED_KEYS.contains(&name.as_str()) {
+            continue;
+        }
         let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
         let v = value.as_f64().ok_or_else(|| format!("weight {name:?} is not a number"))?;
         if !v.is_finite() {

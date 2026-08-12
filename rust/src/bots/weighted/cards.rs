@@ -127,7 +127,7 @@
 //! * [`DELIBERATELY_UNPRICED`]/[`UNPRICED_VALUES`] -- the documented gap, see
 //!   their own doc comments below.
 
-use crate::bots::board_yields;
+use crate::bots::board_yields::{self, Baseline};
 use crate::cards::{CardId, CardType, Special};
 use crate::costs;
 use crate::effects;
@@ -1004,7 +1004,7 @@ pub fn action_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: O
         total += va.max(vb);
     }
 
-    for &(feat, amt, _kind) in &board_yields::board_extra(id, state, idx) {
+    for &(feat, amt, _kind) in &board_yields::board_extra(id, &Baseline::at(state, idx)) {
         total += amt * yield_marginal(feature_key(feat), state, idx, w, Some(late));
     }
 
@@ -1530,16 +1530,132 @@ pub fn event_prepare_value(id: CardId, state: &GameState, idx: u8, w: &Weights, 
 /// candidate move) -- cleared at the top of every branch that fills it, so a
 /// caller owns ONE buffer across a whole hand/row loop and this function
 /// never assumes what was in it on entry.
+///
+/// Which lane the redundancy discount ([`redundancy_discount`]) groups `kind`
+/// into -- `None` for a card type with no "already covered by what I own"
+/// concept. The four unit types share ONE lane (`Infantry`), matching
+/// `board_yields::best_feature`'s existing `Infantry | Cavalry | Artillery |
+/// Air => Some(Feature::BestUnit)` arm -- "any unit counts toward the same
+/// tech-curve axis" is already this crate's convention, not a new one
+/// invented for this discount. Exhaustive over every [`CardType`] variant,
+/// no wildcard `_ =>`: a card category added later must force a human to
+/// decide whether it belongs in this scope, as a compile error -- the same
+/// reasoning the reverted per-card `has_per_card_identity` used for the
+/// identical ban (see this file's `git log`).
+fn redundancy_lane(kind: CardType) -> Option<CardType> {
+    use CardType::*;
+    match kind {
+        Farm => Some(Farm),
+        Mine => Some(Mine),
+        Lab => Some(Lab),
+        Temple => Some(Temple),
+        Library => Some(Library),
+        Arena => Some(Arena),
+        Theater => Some(Theater),
+        Infantry | Cavalry | Artillery | Air => Some(Infantry),
+        // No "already covered" concept: developed at most once
+        // (SpecialTech/Government), a single per-player slot with its own
+        // dedicated swap pricing (Wonder/Leader/Government), or never
+        // "developed" at all (Action and the rest of the military deck).
+        SpecialTech | Government | Wonder | Leader | Action | Tactic | Aggression | War | Pact
+        | Bonus | Territory | Event => None,
+    }
+}
+
+/// `w[tech_redundancy_discount]` times how much of `id`'s value is already
+/// redundant, given the best level the player already owns in the SAME
+/// [`redundancy_lane`] -- Paul's own framing ("if you get Iron you don't
+/// need Coal") generalised off the `CardType` lane, never the two named
+/// cards, so it covers every substitution pair in the game, not the ones he
+/// happened to name.
+///
+/// `coverage` is 0.0 for a lane the player has nothing in (a fresh card is
+/// worth its full priced value) and rises to 1.0 once the player's best
+/// same-lane card is at least as high a LEVEL as `id` itself. Scales `base`
+/// -- `card_potential_core`'s own already-computed, board-aware answer for
+/// this exact card, passed in rather than recomputed from `card_yields`'s
+/// static table: that table's own gain/cost mix can net negative for a card
+/// `tech_value` still prices strongly positive (Coal's printed science/
+/// resource cost alone outweighs its printed production in the STATIC read,
+/// long before `tech_value`'s upgrade/staffing terms are added), so scaling
+/// off anything but the real board-aware price the caller is about to return
+/// would size this discount off the wrong number. Deliberately separate from
+/// `board_yields::tech_upgrade`'s own `best_feature` delta-over-incumbent
+/// `dev` credit (which already discounts the tech-curve-advancement term the
+/// identical way): that function's sibling `staff` term can move MULTIPLE
+/// lower-level same-lane workers onto one new card in a single hypothetical,
+/// which grows with how much the player already has in the lane rather than
+/// shrinking -- exactly the opposite of what this discount exists to
+/// guarantee at the `card_potential` level, so it needs its own,
+/// independent, always-non-positive term rather than a tweak buried inside
+/// that shared function's staffing plan.
+///
+/// 0.0 (the default weight) is a byte-for-byte no-op: nothing here runs
+/// before the `discount == 0.0` early return.
+fn redundancy_discount(id: CardId, w: &Weights, board: Option<&Baseline>, base: f64) -> f64 {
+    let discount = w.get(WeightKey::TechRedundancyDiscount);
+    if discount == 0.0 || base <= 0.0 {
+        return 0.0;
+    }
+    let Some(lane) = redundancy_lane(id.kind()) else {
+        return 0.0;
+    };
+    let Some((st, ix)) = board.map(|b| (b.state(), b.idx())) else {
+        return 0.0;
+    };
+    let lv = id.level();
+    if lv == 0 {
+        // The Age-A starting cards are never "developed" a second time --
+        // no lane comparison is meaningful, and dividing by `lv` below would
+        // divide by zero.
+        return 0.0;
+    }
+    let p = &st.players[ix as usize];
+    if p.techs.has(id) {
+        // Already developed -- dead in hand, priced 0.0 elsewhere too.
+        return 0.0;
+    }
+    let cur = p
+        .techs
+        .iter()
+        .filter(|&(owned, _)| redundancy_lane(owned.kind()) == Some(lane))
+        .map(|(owned, _)| owned.level())
+        .max()
+        .unwrap_or(0);
+    let coverage = (f64::from(cur.min(lv)) / f64::from(lv)).clamp(0.0, 1.0);
+    discount * coverage * base
+}
+
+/// Thin public wrapper over `card_potential_core` (below), plus the
+/// redundancy discount -- kept as a separate name so a board-aware additive
+/// term has one place to hook in without touching that function's dozen
+/// early returns.
 #[allow(clippy::too_many_arguments)]
+/// `board` carries the player's un-mutated `effects::compute` alongside the
+/// board it was taken from -- see [`Baseline`]. It is `Option` for the same
+/// reason the old `state`/`idx` pair was: a card can be priced with no board
+/// at all, off the static table. Callers pricing a whole row or hand build ONE
+/// `Baseline` outside their loop; that hoist is the point of the type.
 pub fn card_potential(
     id: CardId,
     w: &Weights,
-    state: Option<&GameState>,
-    idx: Option<u8>,
+    board: Option<&Baseline>,
     late: Option<f64>,
     scratch: &mut Vec<CardYield>,
 ) -> f64 {
-    if let (Some(st), Some(ix)) = (state, idx) {
+    let base = card_potential_core(id, w, board, late, scratch);
+    base - redundancy_discount(id, w, board, base)
+}
+
+fn card_potential_core(
+    id: CardId,
+    w: &Weights,
+    board: Option<&Baseline>,
+    late: Option<f64>,
+    scratch: &mut Vec<CardYield>,
+) -> f64 {
+    if let Some(b) = board {
+        let (st, ix) = (b.state(), b.idx());
         let kind = id.kind();
         let tb = w.get(WeightKey::TechBoardCredit);
         if kind.is_unit() {
@@ -1579,7 +1695,7 @@ pub fn card_potential(
             // wonder independently of `card_board_credit`/`card_board_wonder`.
             let wb = w.get(WeightKey::WonderBoardCredit);
             if wb != 0.0 {
-                if let Some(swap) = board_yields::board_yields(id, st, ix) {
+                if let Some(swap) = board_yields::board_yields(id, b) {
                     return wb * sum_board_triples(&swap, w);
                 }
             }
@@ -1615,8 +1731,10 @@ pub fn card_potential(
 
     let credit = w.get(WeightKey::CardRateCredit);
     let base = w.get(WeightKey::CardBoardCredit);
-    let board = base + board_credit_key(id).map_or(0.0, |k| w.get(k));
-    if base == 0.0 && board == 0.0 {
+    // `credit_board`, not `board`: `board` is the Baseline parameter now, and
+    // this is the WEIGHT that gates board-aware pricing, a different thing.
+    let credit_board = base + board_credit_key(id).map_or(0.0, |k| w.get(k));
+    if base == 0.0 && credit_board == 0.0 {
         // the exact pre-valuation-layer answer, and this early return is why:
         // every branch below has to be behind the gate for an A/B to stay
         // paired.
@@ -1624,19 +1742,18 @@ pub fn card_potential(
         card_yields(id, scratch);
         return sum_yields(scratch, w, credit);
     }
-    let on_board = state.is_some() && idx.is_some();
-    if on_board && board != 0.0 {
+    if let (Some(b), true) = (board, credit_board != 0.0) {
         // A swap card (leader/government/wonder) is priced ONLY by the diff
         // -- `card_yields` would count a leader's printed gain a second time
         // on top of the delta that already contains it.
-        if let Some(swap) = board_yields::board_yields(id, state.unwrap(), idx.unwrap()) {
-            return board * sum_board_triples(&swap, w);
+        if let Some(swap) = board_yields::board_yields(id, b) {
+            return credit_board * sum_board_triples(&swap, w);
         }
     }
     scratch.clear();
     card_yields(id, scratch);
     let mut total = sum_yields(scratch, w, credit);
-    // `_card_choices` rides `base`, not `board` -- it is not board-aware
+    // `_card_choices` rides `base`, not `credit_board` -- it is not board-aware
     // pricing at all (it needs no board), it rides the same knob only
     // because it needs more than a table lookup. `action_value` (above)
     // resolves a choice with no credit gating it at all, which is the fix;
@@ -1644,9 +1761,9 @@ pub fn card_potential(
     if let Some((a, b)) = card_choice(id) {
         total += base * sum_yields(&[a], w, credit).max(sum_yields(&[b], w, credit));
     }
-    if on_board && board != 0.0 {
-        let extra = board_yields::board_extra(id, state.unwrap(), idx.unwrap());
-        total += board * sum_board_triples(&extra, w);
+    if let (Some(b), true) = (board, credit_board != 0.0) {
+        let extra = board_yields::board_extra(id, b);
+        total += credit_board * sum_board_triples(&extra, w);
     }
     total
 }
@@ -1696,8 +1813,11 @@ pub fn hand_total(hand: &[CardId], state: &GameState, idx: u8, w: &Weights) -> f
     let mut slots: [Option<(f64, f64)>; 2] = [None, None];
     let late = horizon::lateness(state);
     let mut scratch = Vec::new();
+    // ONE baseline for the whole hand -- the board is the same for every card
+    // in it, and rebuilding it per card was the engine's biggest single cost.
+    let base = Baseline::at(state, idx);
     for &n in hand {
-        let v = card_potential(n, w, Some(state), Some(idx), Some(late), &mut scratch);
+        let v = card_potential(n, w, Some(&base), Some(late), &mut scratch);
         let Some(typ) = swap_slot(n, w) else {
             total += v;
             continue;
@@ -1800,7 +1920,7 @@ pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
     let board = w.get(WeightKey::CardBoardCredit);
     let name = p.wonder;
     if board != 0.0 {
-        if let Some(swap) = board_yields::board_yields(name, state, idx) {
+        if let Some(swap) = board_yields::board_yields(name, &Baseline::at(state, idx)) {
             return discount * board * gains_only_board_sum(&swap, w);
         }
     }
@@ -1822,8 +1942,10 @@ pub fn hand_mil_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
     let late = horizon::lateness(state);
     let mut total = 0.0;
     let mut scratch = Vec::new();
+    // ONE baseline for the whole military hand -- see `hand_total`.
+    let base = Baseline::at(state, idx);
     for &n in hand.as_slice() {
-        total += card_potential(n, w, Some(state), Some(idx), Some(late), &mut scratch);
+        total += card_potential(n, w, Some(&base), Some(late), &mut scratch);
     }
     total
 }
@@ -2066,17 +2188,17 @@ mod tests {
 
         let mut w = Weights::default();
         w.set(WeightKey::WonderBoardCredit, 0.0);
-        let static_price = card_potential(fsf, &w, Some(&state), Some(0), None, &mut scratch);
+        let static_price = card_potential(fsf, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
 
         w.set(WeightKey::WonderBoardCredit, 1.0);
-        let board_price = card_potential(fsf, &w, Some(&state), Some(0), None, &mut scratch);
+        let board_price = card_potential(fsf, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
 
         assert_ne!(
             static_price, board_price,
             "wonder_board_credit=1.0 must move a row wonder's price off the static-table answer"
         );
 
-        let swap = board_yields::board_yields(fsf, &state, 0).expect("First Space Flight is a swap type");
+        let swap = board_yields::board_yields(fsf, &Baseline::at(&state, 0)).expect("First Space Flight is a swap type");
         let expected = sum_board_triples(&swap, &w);
         assert_eq!(board_price, expected, "wonder_board_credit=1.0 must price exactly the board-yields swap diff");
     }
@@ -2359,6 +2481,49 @@ mod tests {
         assert_eq!(tech_value(id, &state, 0, &w, 1.0, None), 0.0);
     }
 
+    /// THE REDUNDANCY PROPERTY (`cards::redundancy_discount`'s own doc
+    /// comment has the full derivation): a player who already upgraded their
+    /// mine (Iron, level 1, over the starting Bronze, level 0) values a
+    /// FURTHER mine upgrade (Coal, level 2) far less than a player still on
+    /// the weaker starting mine, once `tech_redundancy_discount` is priced
+    /// (it defaults to 0.0, so this needs a nonzero weight to observe, the
+    /// same as every other gated valuation path in this file).
+    ///
+    /// Every base-game deal starts with Bronze (a Mine, level 0) already
+    /// developed (`game::START_TECHS`), so "no mine at all" is not a
+    /// reachable board -- Bronze-only vs Bronze-plus-Iron is the real
+    /// minimal pair. Confirmed RED by reverting `redundancy_discount` to
+    /// `0.0` unconditionally: with the discount inert, owning Iron makes
+    /// Coal MORE valuable, not less (`board_yields::tech_upgrade`'s `staff`
+    /// term moves both Bronze's AND Iron's workers onto the new Coal tile in
+    /// one hypothetical, so more accumulated lower-level workers reads as a
+    /// bigger staffing gain) -- this is the exact inversion `redundancy_
+    /// discount` exists to correct.
+    #[test]
+    fn owning_a_stronger_mine_already_makes_a_further_mine_upgrade_worth_far_less() {
+        let baseline = crate::game::new_game(2, 50);
+        let mut with_iron = baseline.clone();
+        let iron = CardId::by_name("Iron").expect("a base-game Mine tech");
+        with_iron.players[0].techs.insert(iron, crate::state::TechSlot { workers: 1, stored: 0 });
+        with_iron.players[0].workers_free = with_iron.players[0].workers_free.saturating_sub(1);
+
+        let mut w = Weights::default();
+        w.set(WeightKey::TechRedundancyDiscount, 3.0);
+        let coal = CardId::by_name("Coal").expect("a base-game Mine tech");
+        let mut scratch = Vec::new();
+        let baseline_value = card_potential(coal, &w, Some(&Baseline::at(&baseline, 0)), None, &mut scratch);
+        let with_iron_value = card_potential(coal, &w, Some(&Baseline::at(&with_iron, 0)), None, &mut scratch);
+
+        assert!(
+            baseline_value > 0.0,
+            "Coal must be worth something over the starting Bronze mine, got {baseline_value}"
+        );
+        assert!(
+            with_iron_value < baseline_value,
+            "owning Iron (a stronger mine) must lower Coal's priced value: with_iron={with_iron_value} baseline={baseline_value}"
+        );
+    }
+
     /// `gov_value` of the government already in play is exactly 0.0 --
     /// `board_yields::government_plans`'s own early return (dead in hand, not
     /// a cost or a gain).
@@ -2383,7 +2548,7 @@ mod tests {
         w.set(WeightKey::CardBoardWonder, 0.0);
         let id = CardId::by_name("Colossus").unwrap();
         let mut scratch = Vec::new();
-        let got = card_potential(id, &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(id, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         let mut buf = Vec::new();
         card_yields(id, &mut buf);
         let want = sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
@@ -2407,8 +2572,8 @@ mod tests {
         let hand = [a, b];
         let mut scratch = Vec::new();
         let late = horizon::lateness(&state);
-        let va = card_potential(a, &w, Some(&state), Some(0), Some(late), &mut scratch);
-        let vb = card_potential(b, &w, Some(&state), Some(0), Some(late), &mut scratch);
+        let va = card_potential(a, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
+        let vb = card_potential(b, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
         let total = hand_total(&hand, &state, 0, &w);
         assert_eq!(total, va.max(vb), "hand_swap_extra=0.0 must keep only the better card's value");
     }
@@ -2657,7 +2822,7 @@ mod tests {
         let w = Weights::default();
         assert_ne!(w.get(WeightKey::TacticBoardCredit), 0.0, "must be seeded nonzero to be reachable at all");
         let mut scratch = Vec::new();
-        let got = card_potential(card("Fighting Band"), &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(card("Fighting Band"), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         assert!(got > 0.0, "got={got}");
     }
 
@@ -2711,7 +2876,7 @@ mod tests {
         let w = Weights::default();
         assert_ne!(w.get(WeightKey::AggressionBoardCredit), 0.0);
         let mut scratch = Vec::new();
-        let got = card_potential(card("Aggression: Plunder (I)"), &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(card("Aggression: Plunder (I)"), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         assert!(got > 0.0, "got={got}");
     }
 
@@ -2755,7 +2920,7 @@ mod tests {
         let w = Weights::default();
         assert_ne!(w.get(WeightKey::WarBoardCredit), 0.0);
         let mut scratch = Vec::new();
-        let got = card_potential(card("War over Culture"), &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(card("War over Culture"), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         assert!(got > 0.0, "got={got}");
     }
 
@@ -2793,7 +2958,7 @@ mod tests {
         let w = Weights::default();
         assert_ne!(w.get(WeightKey::PactBoardCredit), 0.0);
         let mut scratch = Vec::new();
-        let got = card_potential(card("Open Borders Agreement"), &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(card("Open Borders Agreement"), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         assert!(got > 0.0, "got={got}");
     }
 
@@ -2821,7 +2986,7 @@ mod tests {
         let w = Weights::default();
         assert_ne!(w.get(WeightKey::EventBoardCredit), 0.0);
         let mut scratch = Vec::new();
-        let got = card_potential(card("Impact of Industry"), &w, Some(&state), Some(0), None, &mut scratch);
+        let got = card_potential(card("Impact of Industry"), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
         assert!(got > 0.0, "got={got}");
     }
 
@@ -2852,7 +3017,7 @@ mod tests {
                 if id.get().kind != kind {
                     continue;
                 }
-                let v = card_potential(id, &w, Some(&state), Some(0), None, &mut scratch);
+                let v = card_potential(id, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
                 if v != 0.0 {
                     any_nonzero = true;
                     break;

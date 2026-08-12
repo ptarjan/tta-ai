@@ -80,8 +80,8 @@ pub enum WeightKey {
     FoodStock,
     ResourceStock,
     BlueFree,
-    CorruptionLoss,
-    Consumption,
+    CorruptionHeadroom,
+    ConsumptionHeadroom,
     PopCost,
     YellowBank,
     FreeWorkers,
@@ -220,6 +220,15 @@ pub enum WeightKey {
     RivalScienceRate,
     RivalStrength,
     EndTurnBias,
+
+    /// Standing hinge on [`CultureRate`](Self::CultureRate): what one more
+    /// point of culture PRODUCTION is worth ON TOP of the flat rate, scaled
+    /// by how far behind the best rival this player currently is. Gated at
+    /// 0.0 so it changes nothing until the league prices it.
+    CultureRateTrailing,
+    /// Standing hinge on [`ScienceRate`](Self::ScienceRate). See
+    /// [`CultureRateTrailing`](Self::CultureRateTrailing).
+    ScienceRateTrailing,
     WorkersEarly,
     WorkersLate,
     StrengthRelEarly,
@@ -228,6 +237,79 @@ pub enum WeightKey {
     TechLevelsLate,
     HandValueEarly,
     HandValueLate,
+
+    // ------------------------------------------------- marginal need (gap/surplus)
+    // A card is not worth a fixed amount -- it is worth how much it closes
+    // the gap a player actually has right now (Paul's own framing: Moses is
+    // huge on turn one and irrelevant once farms are already stacked; Iron
+    // makes Coal nearly worthless; a missing Lab changes Age II priorities).
+    // A linear model over a single stock ("I have 4 farms") cannot express
+    // that -- it prices the 5th farm the same as the 1st. Putting the
+    // nonlinearity in the FEATURE instead of the weight buys diminishing
+    // returns and conditionality back for free: for each axis below,
+    // `features()` computes a live "need" off real board facts (the cost of
+    // the next population increase, unfilled worker slots, the cheapest
+    // unbuilt tech's resource cost, ...) and emits the SHORTFALL
+    // (`max(0, need - have)`) and the SURPLUS (`max(0, have - need)`) as two
+    // separate coordinates, never a single signed difference -- the climb
+    // can then price a shortfall steeply and a surplus cheaply, which is the
+    // actual shape of the game. All default 0.0 -- unmeasured by
+    // construction, same "trust nothing until the league finds it" rule
+    // every other 0.0-seeded key in this table follows.
+    //
+    // One axis this project already covers by this exact shape is
+    // deliberately NOT duplicated here: military strength relative to the
+    // strongest rival (`StrengthDeficit`/`StrengthLead`, above). Card
+    // redundancy within a `CardType` lane (Iron/Coal) is NOT already
+    // covered, despite `board_yields::tech_upgrade`'s `best_feature`
+    // delta-over-incumbent `dev` credit looking at first glance like it
+    // would be: that function's sibling `staff` term can move MULTIPLE
+    // lower-level same-lane workers onto one new card in a single
+    // hypothetical, which GROWS `card_potential`'s total with how much the
+    // player already has in the lane rather than shrinking it -- checked
+    // directly (`cards.rs::tests::
+    // owning_a_stronger_mine_already_makes_a_further_mine_upgrade_worth_far_less`),
+    // not assumed. `TechRedundancyDiscount` below is the real fix: an
+    // independent, always-non-positive term `card_potential` subtracts,
+    // gated at 0.0 like every other key here so it changes nothing until
+    // the league prices it.
+    FoodGap,
+    FoodSurplus,
+    ResourceGap,
+    ResourceSurplus,
+    ScienceGap,
+    ScienceSurplus,
+    // Culture's "need" is not an absolute threshold the way food/happiness
+    // have one (no rule ever converts a stock of culture into a cost) -- the
+    // live pressure is competitive: how far behind (or ahead of) the
+    // strongest rival's culture this player is, the same "relative to the
+    // field" shape `StrengthRel`/`StrengthDeficit`/`StrengthLead` already
+    // use for military.
+    CultureGap,
+    CultureSurplus,
+    // Happiness already has a shortfall coordinate (`Discontent`, above,
+    // `max(0, -margin)`) -- this is only the missing surplus half of that
+    // same hinge, kept as a new key rather than reshaping `HappyMargin`
+    // (which mixes the negative tail back in and is `.min(3.0)`-capped for
+    // reasons unrelated to this batch) so no existing champion's evaluation
+    // moves.
+    HappySurplus,
+    CivilActionGap,
+    CivilActionSurplus,
+    MilitaryActionGap,
+    MilitaryActionSurplus,
+    WorkerGap,
+    WorkerSurplus,
+
+    // ------------------------------------------------------------- redundancy
+    // `cards::redundancy_discount`'s gate -- how much of a card's value to
+    // discount by how well its `CardType` lane is already covered (Iron/Coal,
+    // generalised off the lane rather than the two named cards; see that
+    // function's own doc comment for the full derivation, including why
+    // `board_yields::tech_upgrade`'s existing delta-over-incumbent credit is
+    // NOT a duplicate of this). 0.0 by default, matching every other
+    // unmeasured gate in this table.
+    TechRedundancyDiscount,
 }
 
 /// Generates `WeightKey::ALL`, `WeightKey::name` and `WeightKey::
@@ -267,8 +349,8 @@ weight_key_table! {
     FoodStock => "food_stock", 0.2;
     ResourceStock => "resource_stock", 0.3;
     BlueFree => "blue_free", 0.15;
-    CorruptionLoss => "corruption_loss", -0.9;
-    Consumption => "consumption", -0.5;
+    CorruptionHeadroom => "corruption_headroom", 0.25;
+    ConsumptionHeadroom => "consumption_headroom", 0.25;
     PopCost => "pop_cost", -0.4;
     YellowBank => "yellow_bank", -0.1;
     FreeWorkers => "free_workers", 0.4;
@@ -456,6 +538,12 @@ weight_key_table! {
     RivalStrength => "rival_strength", -0.15;
     EndTurnBias => "end_turn_bias", -3.0;
 
+    // standing-hinged pairs -- see `STANDING_KEYS` below for the honest
+    // source of "which base keys get a hinge". Both gated at 0.0: landing
+    // this must not move a single game until the climb prices it.
+    CultureRateTrailing => "culture_rate_trailing", 0.0;
+    ScienceRateTrailing => "science_rate_trailing", 0.0;
+
     // phase-suffixed pairs -- see this module's top doc comment for why
     // these eight are still spelled out by hand here even though PHASE_KEYS
     // below is the honest source of "which base keys get a pair".
@@ -467,6 +555,28 @@ weight_key_table! {
     TechLevelsLate => "tech_levels_late", -0.4;
     HandValueEarly => "hand_value_early", 0.2;
     HandValueLate => "hand_value_late", -0.2;
+
+    // marginal-need gap/surplus coordinates -- see the enum declaration's
+    // own comment above this block. All 0.0: unmeasured by construction, so
+    // this is the same "trust nothing until the league finds it" default
+    // every other 0.0-seeded key above already uses, not a fitted number.
+    FoodGap => "food_gap", 0.0;
+    FoodSurplus => "food_surplus", 0.0;
+    ResourceGap => "resource_gap", 0.0;
+    ResourceSurplus => "resource_surplus", 0.0;
+    ScienceGap => "science_gap", 0.0;
+    ScienceSurplus => "science_surplus", 0.0;
+    CultureGap => "culture_gap", 0.0;
+    CultureSurplus => "culture_surplus", 0.0;
+    HappySurplus => "happy_surplus", 0.0;
+    CivilActionGap => "civil_action_gap", 0.0;
+    CivilActionSurplus => "civil_action_surplus", 0.0;
+    MilitaryActionGap => "military_action_gap", 0.0;
+    MilitaryActionSurplus => "military_action_surplus", 0.0;
+    WorkerGap => "worker_gap", 0.0;
+    WorkerSurplus => "worker_surplus", 0.0;
+
+    TechRedundancyDiscount => "tech_redundancy_discount", 0.0;
 }
 
 impl WeightKey {
@@ -511,6 +621,32 @@ impl WeightKey {
         }
     }
 
+    /// The standing-hinged partner of a [`STANDING_KEYS`] member, blended in
+    /// by `rivals::feature_marginal` as `trailing_fraction * w[k_trailing]`.
+    ///
+    /// This is the answer to "one scalar per card TYPE cannot be right": a
+    /// card's worth is its printed yields times these marginals, so once the
+    /// marginal knows the player's POSITION, a science card is automatically
+    /// worth more to a player behind on science than to the one leading it,
+    /// with no per-card weight and no archetype label anywhere. The 1011-game
+    /// BGO corpus is what says this is the right conditioning variable:
+    /// culture gained is worth ~3x more to a trailing player than a leading
+    /// one, and an Age I wonder is +15.9pp when behind on science but mildly
+    /// NEGATIVE when leading.
+    ///
+    /// # Panics
+    /// If `self` is not one of the [`STANDING_KEYS`] members -- same
+    /// reasoning as [`Self::early`]: restricting the match to exactly those
+    /// is what makes it impossible to silently read a hinge for a key that
+    /// is not standing-multiplied.
+    pub const fn trailing(self) -> WeightKey {
+        match self {
+            WeightKey::CultureRate => WeightKey::CultureRateTrailing,
+            WeightKey::ScienceRate => WeightKey::ScienceRateTrailing,
+            _ => panic!("WeightKey::trailing called on a key outside STANDING_KEYS"),
+        }
+    }
+
     /// The strategic axis this weight belongs to -- ports
     /// `experiments/summarize.py`'s `GROUPS`/`group_of` (verified key-for-key
     /// against that source in `tests::rust_grouping_agrees_with_python_groups`
@@ -533,7 +669,13 @@ impl WeightKey {
     pub const fn group(self) -> WeightGroup {
         use WeightKey::*;
         match self {
-            CivilActions | MilitaryActions | CaLeft | MaLeft | TakeCostPaid => {
+            CivilActions | MilitaryActions | CaLeft | MaLeft | TakeCostPaid
+            // The civil/military-action marginal-need pair -- hand backlog
+            // (cards queued to play) versus actions on hand to play them
+            // with, the same axis `CivilActions`/`CaLeft` and
+            // `MilitaryActions`/`MaLeft` already live in, not a new one.
+            | CivilActionGap | CivilActionSurplus | MilitaryActionGap
+            | MilitaryActionSurplus => {
                 WeightGroup::Actions
             }
 
@@ -546,14 +688,37 @@ impl WeightKey {
                 WeightGroup::Cards
             }
 
-            RateHorizon | Culture | CultureRate | Science | ScienceRate | FoodRate
-            | ResourceRate | FoodStock | ResourceStock | BlueFree | CorruptionLoss
-            | Consumption | PopCost | YellowBank | FreeWorkers | Workers | WorkersEarly
-            | WorkersLate | ProdWorkers | UrbanWorkers | UnitWorkers => WeightGroup::Economy,
+            RateHorizon | Culture | CultureRate | CultureRateTrailing | Science | ScienceRate
+            | ScienceRateTrailing | FoodRate
+            | ResourceRate | FoodStock | ResourceStock | BlueFree | CorruptionHeadroom
+            | ConsumptionHeadroom | PopCost | YellowBank | FreeWorkers | Workers | WorkersEarly
+            | WorkersLate | ProdWorkers | UrbanWorkers | UnitWorkers
+            // The marginal-need gap/surplus pairs for food, resources,
+            // science, culture and workers -- each stays in the SAME group
+            // as the raw stock/rate it is a hinged version of (food/
+            // resources/science/culture alongside `FoodStock`/`ResourceStock`/
+            // `Science`/`Culture` above, workers alongside `FreeWorkers`/
+            // `Workers`), never a new axis of its own -- see the enum
+            // declaration's own doc comment on this block.
+            // `CultureGap`/`CultureSurplus` land here, alongside `Culture`,
+            // for the identical reason `StrengthDeficit`/`StrengthLead` stay
+            // in `Military` rather than `Rivals` below even though their
+            // "need" is rival-relative too: a derived comparison for MY axis
+            // stays in that axis's own group -- `Rivals` is reserved for raw
+            // rival board facts, not comparisons computed off them. See the
+            // enum declaration's own doc comment on `CultureGap` for why
+            // culture's need is competitive rather than an absolute
+            // threshold.
+            | FoodGap | FoodSurplus | ResourceGap | ResourceSurplus | ScienceGap
+            | ScienceSurplus | CultureGap | CultureSurplus | WorkerGap | WorkerSurplus => {
+                WeightGroup::Economy
+            }
 
             EventScoringMargin | MySeededPending | MyEventThreat => WeightGroup::Events,
 
-            HappyMargin | Discontent | Uprising => WeightGroup::Happiness,
+            // `HappySurplus` alongside `Discontent` (its gap half) and
+            // `HappyMargin` -- the same axis, not a new one.
+            HappyMargin | Discontent | Uprising | HappySurplus => WeightGroup::Happiness,
 
             Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
             | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies | Pacts
@@ -565,7 +730,7 @@ impl WeightKey {
             | FreeActionCredit | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
             | RestrictedResourceCredit | TacticBoardCredit | AggressionBoardCredit
             | WarBoardCredit | PactBoardCredit | EventBoardCredit | TacticShortfallCost
-            | TacticReachCredit => WeightGroup::Priced,
+            | TacticReachCredit | TechRedundancyDiscount => WeightGroup::Priced,
 
             RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
             | RivalStrength | RivalFreeCa | RivalHandCivil | RivalWonders
@@ -698,6 +863,14 @@ pub const PHASE_KEYS: &[WeightKey] = &[
     WeightKey::HandValue,
 ];
 
+/// The base keys that carry a standing hinge -- the honest source of "which
+/// keys get a `_trailing` partner", exactly as [`PHASE_KEYS`] is for
+/// `_early`/`_late`. Culture and science first because those are the two
+/// the human corpus is clearest on: relative standing in them is what wins
+/// games, and the effect GROWS with the age (2p culture rank is worth
+/// +7.4pp at the end of Age I and +39.8pp at the end of Age III).
+pub const STANDING_KEYS: &[WeightKey] = &[WeightKey::CultureRate, WeightKey::ScienceRate];
+
 /// Weight names that USED to be [`WeightKey`] variants and were deliberately
 /// retired -- mirrors Python's `RETIRED_KEYS`. A name here is a promise that
 /// the key is GONE, not renamed; re-adding one means taking it out of this
@@ -731,6 +904,16 @@ pub const RETIRED_KEYS: &[&str] = &[
     "resource_rate_late",
     "wonder_progress_early",
     "wonder_progress_late",
+    // Retired 2026-08-09: both are EXACT rulebook step tables
+    // (`economy::corruption`, `economy::consumption`) computed from state the
+    // evaluator already holds, so they are netted straight into `FoodRate`
+    // and `ResourceRate` by `features()` and there is nothing left for a
+    // league to price. Retired rather than pinned to zero deliberately: a
+    // live `WeightKey` variant is indexable, and anything indexable can be
+    // mutated back off the rulebook's answer. Removing the variant is what
+    // makes that unwritable.
+    "corruption_loss",
+    "consumption",
 ];
 
 /// [`WeightKey::ALL`]'s length -- every [`Weights`] array is exactly this
