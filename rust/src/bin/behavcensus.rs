@@ -46,7 +46,81 @@ use tta::bots::weighted::weights::Weights;
 use tta::effects;
 use tta::game::{self, MOVE_CAP};
 use tta::moves::Move;
+use tta::state::{ChoiceKind, ChoiceOption, Keyword, Pending};
 use tta::{Age, CardId, CardType};
+
+// ---------------------------------------------------------------------
+// Wonder fate classification
+// ---------------------------------------------------------------------
+//
+// A behaviour census once read "wonders started" (distinct `CardId`s ever
+// seen in a player's `wonder` slot) minus "wonders completed" and called the
+// gap "abandoned" -- but the base game has no such verb. Every distinct
+// wonder that ever occupied the slot leaves it for exactly one of the
+// reasons below; this enum makes that closed set explicit instead of
+// inferring it from a name-set difference.
+
+/// The fate of one wonder that occupied a player's `wonder` slot at some
+/// point in a game. Exactly one variant applies to every distinct `CardId`
+/// a player-game's `wonder` slot ever held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum WonderFate {
+    /// Paid off in full; moved to `completed_wonders` (`apply::do_wonder_step`).
+    Completed,
+    /// A rival's `Infiltrate` aggression chose `Keyword::Wonder` against this
+    /// player (`interact.rs`'s `ChoiceKind::Infiltrate`, `Keyword::Wonder`
+    /// arm): the wonder is discarded and `wonder_steps` zeroed.
+    DestroyedByInfiltrate,
+    /// Cleared at an age boundary because it was older than the age that
+    /// just ended (`game::antiquate`; RULES_SPEC.md line 252/299: "an
+    /// UNFINISHED wonder of an age older than the age that just ended is
+    /// removed from play"). Legal per the base rulebook, §12.2.
+    DestroyedByAntiquation,
+    /// Left the slot for neither reason above -- a code path this census
+    /// did not anticipate. Any non-zero count here means the bucket totals
+    /// below do not explain themselves and need more digging.
+    DestroyedUnexplained,
+    /// Still occupying the slot when the game ended (unfinished, never
+    /// destroyed).
+    StillInProgress,
+}
+
+/// Tallies of [`WonderFate`] across many player-games. A struct of named
+/// counters rather than a `HashMap<WonderFate, u64>` so every fate has a
+/// fixed, always-present slot -- a fate nobody hit prints as `0`, not as a
+/// missing key.
+#[derive(Default, Clone, Copy)]
+struct WonderFateCounts {
+    completed: u64,
+    infiltrated: u64,
+    antiquated: u64,
+    unexplained: u64,
+    still_in_progress: u64,
+}
+
+impl WonderFateCounts {
+    fn record(&mut self, fate: WonderFate) {
+        match fate {
+            WonderFate::Completed => self.completed += 1,
+            WonderFate::DestroyedByInfiltrate => self.infiltrated += 1,
+            WonderFate::DestroyedByAntiquation => self.antiquated += 1,
+            WonderFate::DestroyedUnexplained => self.unexplained += 1,
+            WonderFate::StillInProgress => self.still_in_progress += 1,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.completed + self.infiltrated + self.antiquated + self.unexplained + self.still_in_progress
+    }
+
+    fn merge(&mut self, other: WonderFateCounts) {
+        self.completed += other.completed;
+        self.infiltrated += other.infiltrated;
+        self.antiquated += other.antiquated;
+        self.unexplained += other.unexplained;
+        self.still_in_progress += other.still_in_progress;
+    }
+}
 
 // ---------------------------------------------------------------------
 // Per-age snapshot bucket
@@ -153,6 +227,10 @@ struct Report {
     wonders_started_per_playergame: Vec<i32>,
     wonders_abandoned_per_playergame: Vec<i32>,
     wonder_completed_name_counts: HashMap<&'static str, u64>,
+    wonder_fate: WonderFateCounts,
+    /// Distinct wonders whose fate could not be resolved to exactly one
+    /// [`WonderFate`] (should stay 0; see `play_one`'s consistency check).
+    n_wonder_fate_mismatches: u64,
 
     // ---- government ----
     final_government: HashMap<&'static str, u64>,
@@ -187,6 +265,8 @@ impl Report {
         self.wonders_started_per_playergame.extend(other.wonders_started_per_playergame);
         self.wonders_abandoned_per_playergame.extend(other.wonders_abandoned_per_playergame);
         merge_map(&mut self.wonder_completed_name_counts, other.wonder_completed_name_counts);
+        self.wonder_fate.merge(other.wonder_fate);
+        self.n_wonder_fate_mismatches += other.n_wonder_fate_mismatches;
 
         merge_map(&mut self.final_government, other.final_government);
         self.gov_change_count_per_playergame.extend(other.gov_change_count_per_playergame);
@@ -218,6 +298,11 @@ struct PlayerTrack {
     first_develop: Option<(CardId, u16)>,
     first_wonder_round: Option<u16>,
     wonder_started: HashMap<CardId, ()>,
+    /// Fate of every distinct wonder that has already LEFT this player's
+    /// `wonder` slot (completed or destroyed). A `wonder_started` entry with
+    /// no matching key here is still in the slot -- resolved to
+    /// [`WonderFate::StillInProgress`] at end of game.
+    wonder_fate: HashMap<CardId, WonderFate>,
     gov_changes: u32,
     first_gov_change_round: Option<u16>,
     wars_declared: u32,
@@ -231,6 +316,7 @@ impl PlayerTrack {
             first_develop: None,
             first_wonder_round: None,
             wonder_started: HashMap::new(),
+            wonder_fate: HashMap::new(),
             gov_changes: 0,
             first_gov_change_round: None,
             wars_declared: 0,
@@ -271,8 +357,53 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // one that advances state.age_civil.
         let pre_snapshots: Vec<AgeSample> = (0..players).map(|i| sample_player(&state, i)).collect();
 
+        // pre-move wonder-fate inputs: who holds what wonder right now, how
+        // many each has completed so far, and whether `mv` is about to
+        // answer an open `Infiltrate` decision by picking `Keyword::Wonder`
+        // (`interact.rs`'s `ChoiceKind::Infiltrate` / `resolve_choice`).
+        // `Move::Choose { n }` is the generic answer to ANY open choice, so
+        // the only way to tell what it means is to read the choice it is
+        // answering off `state.pending` before the move consumes it.
+        let before_wonder: Vec<CardId> = (0..players).map(|i| state.players[i as usize].wonder).collect();
+        let before_completed_len: Vec<usize> =
+            (0..players).map(|i| state.players[i as usize].completed_wonders.len()).collect();
+        let pending_infiltrate_victim: Option<u8> = (|| {
+            let Move::Choose { n } = mv else { return None };
+            let Some(Pending::Choice(c)) = state.pending.top() else { return None };
+            let ChoiceKind::Infiltrate { victim, .. } = c.kind else { return None };
+            let Some(ChoiceOption::Word(Keyword::Wonder)) = c.options.get(n as usize) else { return None };
+            Some(victim)
+        })();
+
         game::step(&mut state, mv);
         moves_played += 1;
+
+        // ---- wonder fate: resolve whatever LEFT the slot this move ----
+        // Antiquation (`game::antiquate`) runs only on the move that
+        // advances `state.age_civil` (`game.rs`'s age-transition branch
+        // calls it exactly there), so an age change on this exact move is
+        // how a census loop -- which has no other hook into that private
+        // function -- can attribute a same-move clearing to it.
+        let age_changed_this_move = state.age_civil != pre_age;
+        for i in 0..players {
+            let before = before_wonder[i as usize];
+            let after = state.players[i as usize].wonder;
+            if before.is_none() || before == after {
+                continue;
+            }
+            let completed_this_move =
+                state.players[i as usize].completed_wonders.len() > before_completed_len[i as usize];
+            let fate = if completed_this_move {
+                WonderFate::Completed
+            } else if pending_infiltrate_victim == Some(i) {
+                WonderFate::DestroyedByInfiltrate
+            } else if age_changed_this_move {
+                WonderFate::DestroyedByAntiquation
+            } else {
+                WonderFate::DestroyedUnexplained
+            };
+            tracks[i as usize].wonder_fate.entry(before).or_insert(fate);
+        }
 
         // ---- openings ----
         if let Some(card) = taken_card {
@@ -348,14 +479,30 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         }
 
         let completed: Vec<CardId> = p.completed_wonders.as_slice().to_vec();
-        let started = &tracks[i as usize].wonder_started;
+        let started_count = tracks[i as usize].wonder_started.len();
         report.wonders_completed_per_playergame.push(completed.len() as i32);
-        report.wonders_started_per_playergame.push(started.len() as i32);
+        report.wonders_started_per_playergame.push(started_count as i32);
         report
             .wonders_abandoned_per_playergame
-            .push((started.len() as i32 - completed.len() as i32).max(0));
+            .push((started_count as i32 - completed.len() as i32).max(0));
         for c in &completed {
             *report.wonder_completed_name_counts.entry(c.name()).or_insert(0) += 1;
+        }
+
+        // ---- wonder fate: resolve whatever is still in the slot, then
+        // tally every distinct wonder this player-game's slot ever held
+        // into exactly one WonderFate bucket.
+        if !p.wonder.is_none() {
+            tracks[i as usize].wonder_fate.entry(p.wonder).or_insert(WonderFate::StillInProgress);
+        }
+        let wonder_started_keys: Vec<CardId> = tracks[i as usize].wonder_started.keys().copied().collect();
+        for card in &wonder_started_keys {
+            match tracks[i as usize].wonder_fate.get(card) {
+                Some(&fate) => report.wonder_fate.record(fate),
+                // Left the slot, or never resolved above, but has no
+                // recorded fate: the move loop's classification missed it.
+                None => report.n_wonder_fate_mismatches += 1,
+            }
         }
 
         *report.final_government.entry(p.government.name()).or_insert(0) += 1;
@@ -508,6 +655,22 @@ fn print_report(players: u8, r: &Report) {
     println!("\nWonders completed by name (most to least, top 16):");
     for (name, count) in top_n(&r.wonder_completed_name_counts, 16) {
         println!("- {name}: {count}");
+    }
+
+    println!("\nFate of every distinct wonder that ever occupied a `wonder` slot ({} total):", r.wonder_fate.total());
+    let f = &r.wonder_fate;
+    let pct = |n: u64| 100.0 * n as f64 / f.total().max(1) as f64;
+    println!("- Completed: {} ({:.1}%)", f.completed, pct(f.completed));
+    println!("- Destroyed by Infiltrate: {} ({:.1}%)", f.infiltrated, pct(f.infiltrated));
+    println!("- Destroyed by antiquation (\u{a7}12.2, age-end): {} ({:.1}%)", f.antiquated, pct(f.antiquated));
+    println!("- Destroyed, unexplained (needs investigation): {} ({:.1}%)", f.unexplained, pct(f.unexplained));
+    println!("- Still in progress at game end: {} ({:.1}%)", f.still_in_progress, pct(f.still_in_progress));
+    if r.n_wonder_fate_mismatches > 0 {
+        println!(
+            "WARNING  {} wonder(s) started but never resolved to a fate -- bucket totals above do NOT \
+             account for every wonder the census saw; the classification in play_one() has a gap",
+            r.n_wonder_fate_mismatches
+        );
     }
 
     println!("\n### Government\n");
