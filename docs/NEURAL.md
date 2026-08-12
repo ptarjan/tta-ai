@@ -247,3 +247,54 @@ judged on the whole legal set it will actually rank, not on the tail.
 0.6003 across 7, and early stopping never fired — N=7 is a compute cap, not
 a plateau. The cheapest available gain on the policy head today is simply
 training the plain objective longer.
+
+## Move ordering is a no-op because the node budget never binds (2026-08-12)
+
+The policy head was wired into the real search: `bots/neural/policy_order.rs`
+(`PolicyOrder::{load, from_net, order_moves}`) permutes a legal-move slice in
+place, descending by logit, inside `plan::beam`'s per-node candidate loop.
+The state half of each row is encoded once per node and reused across every
+candidate; the action half goes through the same `encode_action_into` the
+trainer uses, so search-time and training-time encoding cannot drift.
+`MoveList::as_mut_slice` lets the permutation happen in the existing stack
+array with no allocation. With the prior off, `pick` was proven
+byte-identical (chosen move and `Stats.nodes`) to the pre-integration
+baseline on four fixed real positions; that is pinned as a test.
+
+`bin/kindmatch.rs` gained `--policy-checkpoint`, `--a-policy`, `--b-policy`
+and `--max-nodes` (applied identically to both sides), so the prior can be
+switched on for exactly one seat of an otherwise identical matchup.
+
+**Head-to-head, 4000 nodes (the live setting).** plan vs plan, identical
+weights, width 2, 900 games, seat-paired deals, deal-clustered interval:
+
+| | A (policy-ordered) |
+|---|---|
+| win rate | 51.22% +/- 2.40 |
+| 95% CI | [48.82%, 53.62%] |
+| p | 0.3173 |
+
+A null. **The reason is structural, not a statement about the prior.**
+`plan::Stats::searches_capped` counts decisions whose search exhausted
+`max_nodes` before exhausting its candidates; `bin/budgetcheck.rs` reads it
+off real self-play. At 2p, 12 games, seed 7:
+
+| max_nodes | searches | capped | share |
+|---|---|---|---|
+| 4000 | 2596 | 0 | 0.00% |
+| 1200 | 2596 | 0 | 0.00% |
+| 400 | 2596 | 0 | 0.00% |
+| 60 | 2472 | 1392 | 56.31% |
+
+Move ordering can only change an outcome when the search runs out of budget
+before it reaches the good move. At every realistic setting the beam
+exhausts its candidate list with budget to spare, so the order it visits
+them in cannot change what it returns. **A perfect prior would also have
+measured 50%.** The 51.22% null was determined before the net was trained.
+
+The consequence: ordering is not where this head can pay for itself. To be
+worth its inference cost the prior has to change WHICH moves the search
+considers -- widen the beam, or admit candidates currently pruned before
+they are scored -- not the sequence in which it considers the ones it
+already sees. Only at an absurd 60 nodes does the cap bind, and that is a
+mechanism check, not a configuration anyone should run.
