@@ -57,6 +57,15 @@ pub struct PolicyOrder {
     /// [`Self::order_moves`] call, so its backing storage grows at most
     /// once per process (to the widest legal-move list actually seen).
     scored: Vec<(f64, Move)>,
+    /// `false` (the default from [`Self::load`]/[`Self::from_net`]): order
+    /// descending by logit, most-preferred-first, same as always. `true`
+    /// (only reachable via [`Self::set_invert`]): order ASCENDING,
+    /// deliberately worst-first -- a falsification probe, not a play mode.
+    /// If a starved search hands its budget to the candidates the net rates
+    /// LOWEST and that measurably loses, the ordering mechanism has a real
+    /// effect on outcomes even where a normal (descending) prior scores a
+    /// null; see `bin/kindmatch.rs`'s `--a-policy-invert` doc comment.
+    invert: bool,
 }
 
 impl PolicyOrder {
@@ -72,7 +81,7 @@ impl PolicyOrder {
     /// encoder).
     pub fn load(path: &std::path::Path) -> Result<PolicyOrder, String> {
         let (net, _meta) = policy_train::load_policy_checkpoint(path)?;
-        Ok(PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new() })
+        Ok(PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false })
     }
 
     /// Build a `PolicyOrder` from an already-in-memory net, skipping the
@@ -86,7 +95,16 @@ impl PolicyOrder {
     /// shaped for this module's `state ++ action` row).
     pub fn from_net(net: ValueNet) -> PolicyOrder {
         assert_eq!(net.in_dim, POLICY_IN_DIM, "PolicyOrder::from_net: net.in_dim does not match POLICY_IN_DIM");
-        PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new() }
+        PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false }
+    }
+
+    /// Flip [`Self::order_moves`] to ASCENDING-by-logit (worst-first) when
+    /// `invert` is `true`, or back to the normal descending order when
+    /// `false` -- see the [`Self::invert`] field doc comment for why this
+    /// exists. Takes effect on the next [`Self::order_moves`] call; does not
+    /// re-score anything itself.
+    pub fn set_invert(&mut self, invert: bool) {
+        self.invert = invert;
     }
 
     /// Reorder `moves` in place, most-preferred-by-the-net first. A pure
@@ -115,7 +133,11 @@ impl PolicyOrder {
             let logit = self.net.forward(&self.row);
             self.scored.push((logit, mv));
         }
-        self.scored.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("policy logit is never NaN"));
+        let invert = self.invert;
+        self.scored.sort_by(|a, b| {
+            let (lo, hi) = if invert { (a, b) } else { (b, a) };
+            lo.0.partial_cmp(&hi.0).expect("policy logit is never NaN")
+        });
 
         for (slot, &(_, mv)) in moves.iter_mut().zip(self.scored.iter()) {
             *slot = mv;
@@ -137,7 +159,7 @@ mod tests {
     #[test]
     fn order_moves_is_a_permutation_never_drops_or_adds_a_move() {
         let net = random_policy_net(8, 0);
-        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new() };
+        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false };
         for players in [2, 3, 4] {
             let state = G::new_game(players, 42);
             let moves = legal::legal_moves(&state);
@@ -164,7 +186,7 @@ mod tests {
     #[test]
     fn order_moves_leaves_a_single_candidate_untouched() {
         let net = random_policy_net(4, 0);
-        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new() };
+        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false };
         let state = G::new_game(2, 3);
         let mut moves = [Move::EndTurn];
         policy.order_moves(&state, 0, &mut moves);
@@ -187,7 +209,7 @@ mod tests {
     fn order_moves_matches_the_nets_own_independently_recomputed_score() {
         let net = random_policy_net(6, 11);
         let reference = net.clone();
-        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new() };
+        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false };
 
         let state = G::new_game(3, 5);
         let actor = state.decider();
@@ -209,6 +231,80 @@ mod tests {
             assert!(
                 pair[0] >= pair[1],
                 "order_moves output not sorted by the net's own score: {scores:?} for order {got:?}"
+            );
+        }
+    }
+
+    /// [`PolicyOrder::set_invert`]`(true)` flips the sort direction to
+    /// ASCENDING by the net's own score -- worst-first, the mirror image of
+    /// [`order_moves_matches_the_nets_own_independently_recomputed_score`]
+    /// above. Exists for `bin/kindmatch.rs`'s `--a-policy-invert`
+    /// falsification probe: if a deliberately worst-first order has no
+    /// effect on a starved search either, ordering provably cannot
+    /// influence the outcome at that budget.
+    #[test]
+    fn set_invert_true_sorts_ascending_by_the_nets_own_score() {
+        let net = random_policy_net(6, 11);
+        let reference = net.clone();
+        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false };
+        policy.set_invert(true);
+
+        let state = G::new_game(3, 5);
+        let actor = state.decider();
+        let moves = legal::legal_moves(&state);
+        assert!(moves.len() > 2, "test needs a decision with more than 2 legal moves to be meaningful");
+        let mut got = moves.as_slice().to_vec();
+        policy.order_moves(&state, actor, &mut got);
+
+        let state_enc = encode::encode(&state, actor);
+        let mut row = vec![0.0; POLICY_IN_DIM];
+        row[..encode::ENCODING_DIM].copy_from_slice(&state_enc);
+        let mut score = |mv: Move| -> f64 {
+            action::encode_action_into(actor, mv, &mut row[encode::ENCODING_DIM..]);
+            reference.forward(&row)
+        };
+
+        let scores: Vec<f64> = got.iter().map(|&mv| score(mv)).collect();
+        for pair in scores.windows(2) {
+            assert!(
+                pair[0] <= pair[1],
+                "inverted order_moves output not sorted ASCENDING by the net's own score: {scores:?} for order {got:?}"
+            );
+        }
+    }
+
+    /// `set_invert(true)` then `set_invert(false)` must return to the
+    /// ORDINARY descending order -- the flag is a live toggle on the
+    /// struct, not a one-way construction-time choice, so a caller flipping
+    /// it back must see today's default behaviour again, not a stuck state.
+    #[test]
+    fn set_invert_false_restores_the_ordinary_descending_order() {
+        let net = random_policy_net(6, 11);
+        let reference = net.clone();
+        let mut policy = PolicyOrder { net, row: vec![0.0; POLICY_IN_DIM], scored: Vec::new(), invert: false };
+        policy.set_invert(true);
+        policy.set_invert(false);
+
+        let state = G::new_game(3, 5);
+        let actor = state.decider();
+        let moves = legal::legal_moves(&state);
+        assert!(moves.len() > 2, "test needs a decision with more than 2 legal moves to be meaningful");
+        let mut got = moves.as_slice().to_vec();
+        policy.order_moves(&state, actor, &mut got);
+
+        let state_enc = encode::encode(&state, actor);
+        let mut row = vec![0.0; POLICY_IN_DIM];
+        row[..encode::ENCODING_DIM].copy_from_slice(&state_enc);
+        let mut score = |mv: Move| -> f64 {
+            action::encode_action_into(actor, mv, &mut row[encode::ENCODING_DIM..]);
+            reference.forward(&row)
+        };
+
+        let scores: Vec<f64> = got.iter().map(|&mv| score(mv)).collect();
+        for pair in scores.windows(2) {
+            assert!(
+                pair[0] >= pair[1],
+                "set_invert(false) after set_invert(true) did not restore descending order: {scores:?} for order {got:?}"
             );
         }
     }

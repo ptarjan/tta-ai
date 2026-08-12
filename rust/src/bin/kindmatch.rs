@@ -146,6 +146,14 @@ struct Args {
     policy_checkpoint: Option<String>,
     a_policy: bool,
     b_policy: bool,
+    /// Deliberately worst-first ordering on the `--a-policy` seat --
+    /// [`PolicyOrder::set_invert`]'s own doc comment. Only legal alongside
+    /// `--a-policy` ([`parse_args`] rejects it otherwise); there is no
+    /// `--b-policy-invert` because this flag exists for one falsification
+    /// probe (this file's module doc comment,
+    /// "`--policy-checkpoint`/`--a-policy`/`--b-policy`"), not as a general
+    /// per-side feature.
+    a_policy_invert: bool,
     /// See this file's module doc comment, "`--max-nodes`": applied to
     /// EVERY seat, never just one side.
     max_nodes: i64,
@@ -170,6 +178,7 @@ impl Default for Args {
             policy_checkpoint: None,
             a_policy: false,
             b_policy: false,
+            a_policy_invert: false,
             max_nodes: plan::PlanConfig::default().max_nodes,
             games: 60,
             players: 3,
@@ -195,6 +204,8 @@ usage: kindmatch --a KIND --b KIND [options]
                      and --policy-checkpoint)
   --b-policy        order --b's beam with the policy prior (needs --b plan
                      and --policy-checkpoint)
+  --a-policy-invert order --a's beam WORST-first instead (needs --a-policy;
+                     a falsification probe, see PolicyOrder::set_invert)
   --max-nodes N   plan::PlanConfig::max_nodes for EVERY seat, both sides
                      (default 4000)
   --games N       games; rounded down to a whole number of deals (default 60)
@@ -269,6 +280,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--policy-checkpoint" => a.policy_checkpoint = Some(value(flag)?),
             "--a-policy" => a.a_policy = true,
             "--b-policy" => a.b_policy = true,
+            "--a-policy-invert" => a.a_policy_invert = true,
             "--max-nodes" => a.max_nodes = parse_num(&value(flag)?, flag)?,
             "--games" => a.games = parse_num(&value(flag)?, flag)?,
             "--players" => a.players = parse_num::<u8>(&value(flag)?, flag)?,
@@ -304,6 +316,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.policy_checkpoint.is_some() && !a.a_policy && !a.b_policy {
         return Err("--policy-checkpoint given but neither --a-policy nor --b-policy was set".to_string());
+    }
+    if a.a_policy_invert && !a.a_policy {
+        return Err("--a-policy-invert is only legal alongside --a-policy".to_string());
     }
     if a.max_nodes <= 0 {
         return Err(format!("--max-nodes must be positive, got {}", a.max_nodes));
@@ -389,7 +404,14 @@ fn play_one(args: &Args, index: usize, policy_net: Option<&Arc<ValueNet>>) -> f6
         let net = policy_net
             .expect("parse_args guarantees --policy-checkpoint whenever --a-policy/--b-policy is set");
         let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
-        bots[i] = Bot::plan_with_policy(s.weights, PolicyOrder::from_net((**net).clone()), player_seed);
+        let mut order = PolicyOrder::from_net((**net).clone());
+        // `--a-policy-invert`: only ever set on the `--a` seat (`parse_args`
+        // ties it to `--a-policy`), so a `--b-policy` seat never sees it --
+        // `i == seat` is exactly "this is the `--a` side's seat this game".
+        if i == seat && args.a_policy_invert {
+            order.set_invert(true);
+        }
+        bots[i] = Bot::plan_with_policy(s.weights, order, player_seed);
     }
     // `--max-nodes`: every seat, unconditionally, whichever kind it ended up
     // as above -- see this file's module doc comment, "`--max-nodes`", for
