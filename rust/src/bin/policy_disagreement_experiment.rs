@@ -40,12 +40,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tta::bots::neural::dump::read_dump;
-use tta::bots::neural::net::ValueNet;
 use tta::bots::neural::policy_train::{
     disagreement_indices, held_out_report, phase_breakdown, random_policy_net, save_policy_checkpoint, split_by_game,
-    train_epoch, HeldOutReport, PolicyTrainer,
+    train_epoch, train_until_early_stop, HeldOutReport, PolicyTrainer,
 };
-use tta::bots::neural::train::AdamW;
 use tta::rng::PyRandom;
 
 #[derive(Clone, Debug)]
@@ -185,44 +183,20 @@ fn run(args: &Args) -> Result<(), String> {
     let mut order: Vec<usize> = (0..train.len()).collect();
     let mut rng = PyRandom::new(args.seed.into());
 
-    let mut best_top1 = f64::NEG_INFINITY;
-    let mut best_epoch = 0usize;
-    let mut best_net: Option<ValueNet> = None;
-    let mut best_report: Option<HeldOutReport> = None;
-    let mut snapshot_before_best: Option<(ValueNet, AdamW)> = None;
-    let mut patience_left = args.patience;
-
-    for epoch in 0..args.max_epochs {
-        let snapshot_before = trainer.snapshot();
-        let t0 = Instant::now();
-        let mean_loss = train_epoch(&mut trainer, &train, &mut order, &mut rng);
-        let report = held_out_report(&trainer.net, &held);
-        let top1 = report.top1_rate();
-        println!(
-            "epoch {epoch}: mean train loss {mean_loss:.4}  held-out top-1 {top1:.4}  [{:.1}s]",
-            t0.elapsed().as_secs_f64()
-        );
-        if top1 > best_top1 + args.eps {
-            best_top1 = top1;
-            best_epoch = epoch;
-            best_net = Some(trainer.net.clone());
-            best_report = Some(report);
-            snapshot_before_best = Some(snapshot_before);
-            patience_left = args.patience;
-        } else {
-            if patience_left == 0 {
-                println!("early stop: held-out top-1 has not improved by >= {} for {} epoch(s)", args.eps, args.patience);
-                break;
-            }
-            patience_left -= 1;
-        }
-    }
-
-    let control_net = best_net.ok_or_else(|| "no epoch ever improved held-out top-1".to_string())?;
-    let control_report = best_report.expect("best_report set alongside best_net");
-    let (snap_net, snap_adamw) = snapshot_before_best.expect("snapshot_before_best set alongside best_net");
+    // The shared prefix (this binary's own doc comment above): early
+    // stopping on held-out top-1 decides where it ends. Lives in
+    // `policy_train.rs` so `bin/policytrain.rs` measures/stops on the exact
+    // same code, not a second hand-rolled copy that could drift.
+    let outcome = train_until_early_stop(&mut trainer, &train, &held, &mut order, &mut rng, args.max_epochs, args.patience, args.eps)?;
+    let control_net = outcome.best_net;
+    let control_report = outcome.best_report;
+    let (snap_net, snap_adamw) = outcome.snapshot_before_best;
+    let best_epoch = outcome.best_epoch;
     let n_epochs = best_epoch + 1;
-    println!("\n=== shared epoch budget N = {n_epochs} (best epoch index {best_epoch}, held-out top-1 {best_top1:.4}) ===");
+    println!(
+        "\n=== shared epoch budget N = {n_epochs} (best epoch index {best_epoch}, held-out top-1 {:.4}) ===",
+        control_report.top1_rate()
+    );
 
     let control_phases = phase_breakdown(&control_net, &held);
     print_report("CONTROL", &control_report, control_phases);

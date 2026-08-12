@@ -51,6 +51,8 @@
 //! logit before ANY of them can be backpropagated), softmaxes, then
 //! backpropagates `probs[i] - 1{i==chosen}` through each candidate in turn.
 
+use std::time::Instant;
+
 use crate::moves::Move;
 use crate::rng::PyRandom;
 
@@ -280,6 +282,94 @@ pub fn train_epoch(trainer: &mut PolicyTrainer, records: &[DecisionRecord], orde
         total_loss += loss;
     }
     total_loss / order.len() as f64
+}
+
+/// Outcome of [`train_until_early_stop`]: the BEST epoch seen (by held-out
+/// top-1, never train loss -- see this module's own doc comment on why a
+/// fixed-epoch driver undertrains) together with the snapshot taken
+/// immediately BEFORE that epoch trained. `snapshot_before_best` exists for
+/// callers that branch a second run off the winning epoch (the
+/// disagreement-teacher experiment resumes Adam warm from it, never cold --
+/// see [`PolicyTrainer::from_state`]'s own doc comment); a caller that only
+/// wants a single best checkpoint can ignore it.
+pub struct EarlyStopOutcome {
+    /// Index of the epoch (0-based) whose held-out top-1 was best.
+    pub best_epoch: usize,
+    /// How many epochs actually ran before the loop stopped (by patience or
+    /// by hitting `max_epochs`) -- always `> best_epoch`, since stopping by
+    /// patience requires at least one non-improving epoch after the best.
+    pub epochs_run: usize,
+    pub best_net: ValueNet,
+    pub best_report: HeldOutReport,
+    pub snapshot_before_best: (ValueNet, AdamW),
+}
+
+/// Train `trainer` for up to `max_epochs` epochs, measuring held-out top-1
+/// after every epoch ([`held_out_report`]) and stopping once `patience`
+/// consecutive epochs fail to beat the best top-1 seen so far by more than
+/// `min_delta`. Prints one `epoch K: ...` line per epoch (the format
+/// `bin/policytrain.rs` and `bin/policy_disagreement_experiment.rs` both
+/// need to stay comparable) and, on an early stop, one more line naming why.
+///
+/// Returns the BEST epoch's net and report -- never the last epoch's. By
+/// construction the last epoch to run is either the best one itself (loop
+/// hit `max_epochs` still improving) or one of the `patience` epochs that
+/// already failed to beat it; saving that instead would checkpoint a net a
+/// caller already knows is worse than one sitting right there.
+///
+/// `order`/`rng` are caller-owned scratch, identical in role to
+/// [`train_epoch`]'s own parameters of the same name.
+///
+/// # Errors
+/// If `max_epochs == 0`, so no epoch ever ran to produce a best net.
+pub fn train_until_early_stop(
+    trainer: &mut PolicyTrainer,
+    train: &[DecisionRecord],
+    held: &[DecisionRecord],
+    order: &mut [usize],
+    rng: &mut PyRandom,
+    max_epochs: usize,
+    patience: usize,
+    min_delta: f64,
+) -> Result<EarlyStopOutcome, String> {
+    let mut best_top1 = f64::NEG_INFINITY;
+    let mut best_epoch = 0usize;
+    let mut best_net: Option<ValueNet> = None;
+    let mut best_report: Option<HeldOutReport> = None;
+    let mut snapshot_before_best: Option<(ValueNet, AdamW)> = None;
+    let mut patience_left = patience;
+    let mut epochs_run = 0usize;
+
+    for epoch in 0..max_epochs {
+        let snapshot_before = trainer.snapshot();
+        let t0 = Instant::now();
+        let mean_loss = train_epoch(trainer, train, order, rng);
+        let report = held_out_report(&trainer.net, held);
+        let top1 = report.top1_rate();
+        epochs_run = epoch + 1;
+        println!(
+            "epoch {epoch}: mean train loss {mean_loss:.4}  held-out top-1 {top1:.4}  [{:.1}s]",
+            t0.elapsed().as_secs_f64()
+        );
+        if top1 > best_top1 + min_delta {
+            best_top1 = top1;
+            best_epoch = epoch;
+            best_net = Some(trainer.net.clone());
+            best_report = Some(report);
+            snapshot_before_best = Some(snapshot_before);
+            patience_left = patience;
+        } else if patience_left == 0 {
+            println!("early stop: held-out top-1 has not improved by >= {min_delta} for {patience} epoch(s)");
+            break;
+        } else {
+            patience_left -= 1;
+        }
+    }
+
+    let best_net = best_net.ok_or_else(|| "train_until_early_stop: max_epochs is 0, no epoch ever ran".to_string())?;
+    let best_report = best_report.expect("best_report set alongside best_net");
+    let snapshot_before_best = snapshot_before_best.expect("snapshot_before_best set alongside best_net");
+    Ok(EarlyStopOutcome { best_epoch, epochs_run, best_net, best_report, snapshot_before_best })
 }
 
 /// Held-out agreement, reported alongside the base rate a uniform-random
@@ -897,6 +987,81 @@ mod tests {
         assert_eq!(
             continuous.net, resumed.net,
             "resuming from a snapshot must reproduce the same next step as training straight through -- otherwise a branch that resumes trains differently for reasons that have nothing to do with which decisions it saw"
+        );
+    }
+
+    /// [`train_until_early_stop`] must stop BEFORE `max_epochs` once
+    /// `patience` consecutive epochs fail to improve held-out top-1 -- the
+    /// entire point of adding it (`docs/NEURAL.md`'s negative result:
+    /// `bin/policytrain.rs`'s old fixed-`--epochs` driver had no way to know
+    /// it was still improving, or had stopped, at all). Learning rate 0
+    /// makes every epoch a no-op (see `train.rs`'s `adamw_update`: `param -=
+    /// lr * wd * param` then `param -= lr * mhat / ...`, both terms zero
+    /// when `lr == 0`), so held-out top-1 is EXACTLY equal every epoch --
+    /// deterministically "no improvement" from epoch 1 onward, with no
+    /// dependence on how well this particular tiny net happens to train.
+    #[test]
+    fn early_stopping_fires_before_max_epochs_once_patience_is_exhausted() {
+        let net = random_policy_net(6, 3);
+        let mut trainer = PolicyTrainer::new(net, 0.0, 0.0);
+        let train = vec![tiny_record(0, 0), tiny_record(1, 0)];
+        let held = vec![tiny_record(2, 0)];
+        let mut order: Vec<usize> = (0..train.len()).collect();
+        let mut rng = PyRandom::new(7);
+
+        let outcome = train_until_early_stop(&mut trainer, &train, &held, &mut order, &mut rng, 10, 2, 0.001).unwrap();
+
+        // epoch 0 is always "best" (any finite top-1 beats the initial
+        // -infinity); epochs 1, 2, 3 then each measure the SAME top-1 (lr=0
+        // froze the weights), consuming patience=2 worth of grace before the
+        // loop breaks at epoch 3 -- well short of the max_epochs=10 cap.
+        assert_eq!(outcome.best_epoch, 0, "with a frozen net, epoch 0 is the only epoch that can ever count as an improvement");
+        assert_eq!(outcome.epochs_run, 4, "patience=2 should exhaust after epochs 1-3 report no improvement over epoch 0");
+        assert!(outcome.epochs_run < 10, "early stopping must fire before the max_epochs cap, or this test proves nothing");
+    }
+
+    /// [`train_until_early_stop`] must hand back the net from the BEST
+    /// epoch, not whatever the trainer holds after the loop exits -- saving
+    /// the last epoch once patience is exhausted would checkpoint a net
+    /// already known to be worse (this change's entire reason for
+    /// existing). A single held-out decision with a clean feature gap
+    /// (`EndTurn` vs `PolPass`, repeated identically in `train`) reaches
+    /// top-1 = 1.0 -- the maximum possible with `n == 1` -- within a couple
+    /// of epochs and then CANNOT improve further, so every epoch after that
+    /// consumes patience while still mutating `trainer`'s live weights
+    /// (AdamW's residual gradient/decay never becomes exactly zero for a
+    /// softmax that has not saturated to +/-infinity). That gives a
+    /// deterministic mismatch between the returned `best_net` and
+    /// `trainer.net` after the call, without relying on the exact epoch
+    /// convergence happens to land on.
+    #[test]
+    fn train_until_early_stop_returns_the_best_epochs_net_not_the_last_ones() {
+        let net = random_policy_net(8, 42);
+        let mut trainer = PolicyTrainer::new(net, 0.2, 0.0);
+        // 30 identical copies of the same two-move decision, always choosing
+        // index 1 -- enough repeated gradient steps within ONE epoch to
+        // reliably drive the net's preference toward index 1.
+        let train: Vec<DecisionRecord> = (0..30u32).map(|g| DecisionRecord { chosen: 1, ..tiny_record(g, 0) }).collect();
+        let held = vec![DecisionRecord { chosen: 1, ..tiny_record(999, 0) }];
+        let mut order: Vec<usize> = (0..train.len()).collect();
+        let mut rng = PyRandom::new(11);
+
+        let outcome = train_until_early_stop(&mut trainer, &train, &held, &mut order, &mut rng, 8, 1, 0.001).unwrap();
+
+        assert_eq!(outcome.best_report.n, 1);
+        assert_eq!(outcome.best_report.top1, 1, "the trivially-separable decision must be learned well within 8 epochs");
+        assert!(
+            outcome.best_epoch < outcome.epochs_run - 1,
+            "at least one more epoch must have run after the best one (patience={}, epochs_run={}, best_epoch={}) -- \
+             otherwise this test cannot distinguish 'saved the best' from 'saved the last'",
+            1,
+            outcome.epochs_run,
+            outcome.best_epoch
+        );
+        assert_ne!(
+            outcome.best_net, trainer.net,
+            "the returned net must be the BEST epoch's weights, not the LAST epoch's -- trainer.net keeps mutating \
+             after the best epoch (patience epochs still train) so these must differ"
         );
     }
 }
