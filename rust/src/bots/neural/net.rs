@@ -276,6 +276,15 @@ pub(crate) fn push_f64_slice(out: &mut Vec<u8>, xs: &[f64]) {
     }
 }
 
+/// Append every element of `xs` as 4-byte little-endian `f32`s -- half
+/// [`push_f64_slice`]'s width, for formats (like [`super::dump`]'s policy
+/// dump, post storage-cost fix) that do not need `f64` precision on disk.
+pub(crate) fn push_f32_slice(out: &mut Vec<u8>, xs: &[f32]) {
+    for &x in xs {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+}
+
 /// A read cursor over binary-format bytes (checkpoints here, `train.rs`'s
 /// `RankData` shards there -- `pub(crate)` for exactly that reuse). Every
 /// accessor bounds-checks and returns `Err` on a short read instead of
@@ -310,6 +319,22 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn f64_vec(&mut self, n: usize) -> Result<Vec<f64>, String> {
         (0..n).map(|_| self.f64()).collect()
+    }
+
+    pub(crate) fn f32(&mut self) -> Result<f32, String> {
+        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    pub(crate) fn f32_vec(&mut self, n: usize) -> Result<Vec<f32>, String> {
+        (0..n).map(|_| self.f32()).collect()
+    }
+
+    pub(crate) fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+
+    pub(crate) fn u16(&mut self) -> Result<u16, String> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
     pub(crate) fn string(&mut self, n: usize) -> Result<String, String> {

@@ -26,7 +26,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tta::bots::greedy::{build_bots, BotKind, Seat};
-use tta::bots::neural::action::encode_action;
 use tta::bots::neural::dump::{DecisionRecord, DumpWriter};
 use tta::bots::neural::encode;
 use tta::bots::weighted::eval::load_weights;
@@ -107,6 +106,16 @@ fn champion_path(a: &Args) -> PathBuf {
     })
 }
 
+/// Combine `players` and `seed` into a `game_id` that cannot collide across
+/// separate `--players` runs sharing one output file (a corpus is normally
+/// assembled from three such runs, 2p/3p/4p) as long as no single run's
+/// `--seed` reaches eight digits -- see `dump.rs`'s top doc comment on why
+/// version 2 needs a `game_id` at all (the train/held-out split groups by
+/// game, and nothing else in a record identifies which game it came from).
+fn game_id(players: u8, seed: u64) -> u32 {
+    (players as u32) * 10_000_000 + (seed % 10_000_000) as u32
+}
+
 /// Play one game, recording every decision, and append the backfilled
 /// records to `writer`. Returns how many records this game produced.
 fn play_and_dump(
@@ -117,14 +126,20 @@ fn play_and_dump(
 ) -> Result<usize, String> {
     let seats = vec![Seat { kind: BotKind::Weighted, weights }; players as usize];
     let mut bots = build_bots(&seats, seed as i64);
+    let gid = game_id(players, seed);
 
     let mut pending: Vec<DecisionRecord> = Vec::new();
     let mut state = game::new_game(players, seed);
     let _outcome = game::play_game(&mut state, MOVE_CAP, |s, legal| {
         let actor = s.decider();
-        let state_vec = encode::encode(s, actor);
-        let legal_vecs: Vec<Vec<f64>> =
-            legal.as_slice().iter().map(|&mv| encode_action(actor, mv)).collect();
+        // Narrowed to f32 here, at the one place a state encoding meets
+        // this dump's on-disk width -- see `dump.rs`'s top doc comment on
+        // the storage-cost fix.
+        let state_vec: Vec<f32> = encode::encode(s, actor).into_iter().map(|x| x as f32).collect();
+        // The compact `Move`s themselves, not their dense `encode_action`
+        // expansion -- a trainer reading this dump calls `encode_action`
+        // itself, at train time, off the SAME encoder this build carries.
+        let legal_moves: Vec<tta::moves::Move> = legal.as_slice().to_vec();
 
         let mv = bots[actor as usize].pick(s);
         let chosen = legal
@@ -137,8 +152,9 @@ fn play_and_dump(
         pending.push(DecisionRecord {
             players: s.num_players,
             actor,
+            game_id: gid,
             state: state_vec,
-            legal: legal_vecs,
+            legal: legal_moves,
             chosen,
             result: 0.0, // backfilled below, once the game has actually ended
         });
@@ -148,7 +164,7 @@ fn play_and_dump(
     let winners = game::winners(&state);
     let share = 1.0 / winners.len() as f64;
     for rec in &mut pending {
-        rec.result = if winners.contains(&rec.actor) { share } else { 0.0 };
+        rec.result = if winners.contains(&rec.actor) { share as f32 } else { 0.0 };
     }
     let n = pending.len();
     for rec in &pending {

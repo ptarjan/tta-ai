@@ -72,8 +72,14 @@ pub type ActionId = Move;
 /// fails to compile rather than silently sharing slot 0 with `Take`.
 pub const NUM_MOVE_KINDS: usize = 37;
 
+/// `pub(crate)`: [`super::dump`]'s compact on-disk `Move` encoding tags each
+/// record's legal actions with this exact slot number (see that module's
+/// top doc comment on the storage-cost fix), so there is exactly ONE
+/// variant-to-tag mapping in the crate rather than a second copy that could
+/// silently drift from this one -- the same "two registries for one fact"
+/// concern this module's own top doc comment raises for [`ActionId`].
 #[inline]
-fn move_kind_slot(mv: &Move) -> usize {
+pub(crate) fn move_kind_slot(mv: &Move) -> usize {
     match mv {
         Move::Take { .. } => 0,
         Move::Build { .. } => 1,
@@ -123,22 +129,27 @@ fn move_kind_slot(mv: &Move) -> usize {
 /// variant onto one "all fields empty" arm keeps this readable while still
 /// forcing a compile error -- once, not nine times over -- the moment
 /// `moves.rs` grows a variant this match has not been told how to decode.
+/// `pub(crate)`, and every field the same, so [`super::dump`]'s compact
+/// `Move` codec can pull its four auxiliary bytes out of the SAME
+/// extraction [`encode_action`] itself uses (via [`decode_aux`]) rather than
+/// a second hand-written `match` on `Move` that could disagree with this
+/// one about which field a given variant carries.
 #[derive(Clone, Copy)]
-struct Aux {
+pub(crate) struct Aux {
     /// `Upgrade`/`BachTheater`'s `from` -- the trade-in half of a two-card
     /// move, which [`Move::card`] does not expose (it returns `to`).
-    secondary: CardId,
-    target: Option<PlayerIdx>,
-    side: Option<PactSide>,
-    churchill: Option<ChurchillChoice>,
+    pub(crate) secondary: CardId,
+    pub(crate) target: Option<PlayerIdx>,
+    pub(crate) side: Option<PactSide>,
+    pub(crate) churchill: Option<ChurchillChoice>,
     /// `Take`'s row slot.
-    slot: Option<u8>,
+    pub(crate) slot: Option<u8>,
     /// `WonderStep`'s stage count.
-    steps: Option<u8>,
+    pub(crate) steps: Option<u8>,
     /// `Bid`'s committed strength.
-    bid: Option<u8>,
+    pub(crate) bid: Option<u8>,
     /// `Choose`'s positional option index.
-    choose: Option<u8>,
+    pub(crate) choose: Option<u8>,
 }
 
 impl Aux {
@@ -155,7 +166,7 @@ impl Aux {
 }
 
 #[inline]
-fn decode_aux(mv: Move) -> Aux {
+pub(crate) fn decode_aux(mv: Move) -> Aux {
     match mv {
         Move::Take { slot } => Aux { slot: Some(slot), ..Aux::EMPTY },
         Move::Upgrade { from, .. } => Aux { secondary: from, ..Aux::EMPTY },
@@ -200,7 +211,7 @@ fn decode_aux(mv: Move) -> Aux {
 }
 
 #[inline]
-fn pact_side_slot(side: PactSide) -> usize {
+pub(crate) fn pact_side_slot(side: PactSide) -> usize {
     match side {
         PactSide::Unspecified => 0,
         PactSide::A => 1,
@@ -209,10 +220,34 @@ fn pact_side_slot(side: PactSide) -> usize {
 }
 
 #[inline]
-fn churchill_slot(choice: ChurchillChoice) -> usize {
+pub(crate) fn churchill_slot(choice: ChurchillChoice) -> usize {
     match choice {
         ChurchillChoice::Culture => 0,
         ChurchillChoice::Military => 1,
+    }
+}
+
+/// Inverse of [`pact_side_slot`] -- [`super::dump`]'s compact codec needs to
+/// go both ways, unlike [`encode_action`] which only ever writes the one-hot
+/// forward.
+#[inline]
+pub(crate) fn pact_side_from_slot(slot: u8) -> Result<PactSide, String> {
+    match slot {
+        0 => Ok(PactSide::Unspecified),
+        1 => Ok(PactSide::A),
+        2 => Ok(PactSide::B),
+        other => Err(format!("pact_side_from_slot: {other} out of range 0..=2")),
+    }
+}
+
+/// Inverse of [`churchill_slot`] -- see [`pact_side_from_slot`]'s doc
+/// comment for why the compact codec needs this direction too.
+#[inline]
+pub(crate) fn churchill_from_slot(slot: u8) -> Result<ChurchillChoice, String> {
+    match slot {
+        0 => Ok(ChurchillChoice::Culture),
+        1 => Ok(ChurchillChoice::Military),
+        other => Err(format!("churchill_from_slot: {other} out of range 0..=1")),
     }
 }
 
