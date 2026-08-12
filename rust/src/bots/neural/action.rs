@@ -430,12 +430,21 @@ mod tests {
     }
 
     /// A target CAN equal the actor (`CancelPact { owner }` may name a pact
-    /// the actor itself holds) -- offset 0 must be reachable, not folded
-    /// into the "no target" case `Move::EndTurn` etc. use.
+    /// the actor itself holds) -- offset 0 must set its own one-hot slot,
+    /// not be folded into the "no target at all" all-zero block every
+    /// non-targeted move (e.g. `EndTurn`) already uses. Checks the target
+    /// sub-slice directly rather than comparing whole vectors against a
+    /// different-kind move, which would pass on the KIND one-hot alone even
+    /// if the target block itself were wrongly zeroed.
     #[test]
-    fn a_target_equal_to_the_actor_is_distinguishable_from_no_target() {
-        let with_self_target = encode_action(1, Move::CancelPact { owner: 1 });
-        let no_target = encode_action(1, Move::EndTurn);
-        assert_ne!(with_self_target, no_target);
+    fn a_target_equal_to_the_actor_sets_the_self_offset_slot() {
+        let v = encode_action(1, Move::CancelPact { owner: 1 });
+        let target_start = NUM_MOVE_KINDS + 2 * CARD_VEC_DIM;
+        let target_block = &v[target_start..target_start + MAX_PLAYERS];
+        assert_eq!(
+            target_block,
+            &[1.0, 0.0, 0.0, 0.0],
+            "offset 0 (self) must be set, not treated as \"no target\""
+        );
     }
 }
