@@ -337,3 +337,31 @@ not that the prior is bad -- it predicts the champion's move ~60% of the
 time -- it is that this search has no ordering-shaped hole to fill. Any
 future use of the policy head must change the CANDIDATE SET (widen the beam,
 or admit moves currently pruned before scoring), not the visit order.
+
+### The policy head's actual ceiling on this corpus: 0.6074 (2026-08-12)
+
+The "more epochs" follow-up ran `policytrain --max-epochs 40 --patience 3
+--min-delta 0.001` on the same 97,994-decision corpus. Epochs 0-6 reproduced
+the earlier control arm EXACTLY (0.5698 -> 0.6003), confirming determinism.
+It then went past it and stopped on its own after 15 epochs, 8516s:
+
+| epoch | 6 | 7 | 8 | 9 | **10** | 11 | 12 | 13 | 14 |
+|---|---|---|---|---|---|---|---|---|---|
+| held-out top-1 | .6003 | .5996 | .6005 | .6029 | **.6074** | .6000 | .5928 | .5975 | .5948 |
+
+Train loss fell monotonically the whole way (1.0370 -> 0.9352) while held-out
+top-1 peaked at epoch 10 and decayed — the textbook shape, and the reason the
+gate is held-out top-1 and never train loss.
+
+Best checkpoint: **epoch 10, top-1 0.6074**, top-3 0.8574, legal>=4 0.5455,
+early/mid/late .676/.606/.540. Preserved at
+`experiments/policy_head_2026-08-12_top1_0.6074.ckpt`.
+
+This also exercised the best-epoch/patience split for real: `epoch_verdict()`
+keeps `is_new_best` a plain argmax while `min_delta` governs patience ALONE.
+Epoch 10 cleared the previous best by only 0.0045 — under a combined
+condition it would have been discarded and epoch 6's weaker net saved.
+
++0.0071 top-1 over the 7-epoch control is the total yield of training longer.
+Set against the move-ordering finding above, the head is now a well-measured
+~60% predictor with no application: the search has no ordering-shaped hole.
