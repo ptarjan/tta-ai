@@ -1,11 +1,5 @@
 # Heuristics for human players
 
-> **If you are looking for advice to use at the table, read
-> [`PLAYBOOK.md`](PLAYBOOK.md) instead.** It is short, and every number in it
-> comes from 1,011 human games rather than from a bot's weight vector. This
-> document remains the long reference: its `[rules]` and `[confirmed]`
-> material is durable, but its self-play-derived material is a snapshot of
-> champions that no longer exist — see the caveat below.
 
 > **CAVEAT 2026-07-30 (numbers re-verified 2026-08-06): this document describes
 > champions that no longer exist.**
