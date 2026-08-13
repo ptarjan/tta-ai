@@ -464,6 +464,16 @@ impl Console {
 /// left and deals three cards nobody can see, so every slot number we print
 /// is off by three and the cheap end of the row is filled with guesses.
 fn sync_to_my_turn(adv: &mut advisor::Advisor, input: &str) -> Result<Vec<String>, String> {
+    // Two passes, in the order `state_io::PatchTiming` documents. An `event`
+    // line names a card the engine is ABOUT to reveal and resolve during the
+    // advance below, so it lands first; everything else describes the table
+    // once the advance is over, so it lands last.
+    let (before, after) = state_io::split_by_timing(input);
+    let (mut msgs, errs) = state_io::patch_all(&mut adv.board, &before);
+    if !errs.is_empty() {
+        return Err(format!("bad update line(s):\n  {}", errs.join("\n  ")));
+    }
+
     let mut guard = 0;
     while !adv.my_turn() && !adv.state().game_over && guard < 40 {
         guard += 1;
@@ -473,10 +483,11 @@ fn sync_to_my_turn(adv: &mut advisor::Advisor, input: &str) -> Result<Vec<String
         return Err("opponents never finished handing the turn back to me (40-turn guard hit)".to_string());
     }
 
-    let (msgs, errs) = state_io::patch_all(&mut adv.board, input);
+    let (rest, errs) = state_io::patch_all(&mut adv.board, &after);
     if !errs.is_empty() {
         return Err(format!("bad update line(s):\n  {}", errs.join("\n  ")));
     }
+    msgs.extend(rest);
     Ok(msgs)
 }
 

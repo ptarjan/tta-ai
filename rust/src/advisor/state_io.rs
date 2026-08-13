@@ -1637,12 +1637,30 @@ fn apply_command(board: &mut Board, cmd: Command) -> Result<String, String> {
             Ok(format!("p{player} took {} from slot {slot}", name.name()))
         }
         Command::Event(names) => {
+            // Naming an event does NOT resolve it here. `events::
+            // reveal_current_event` pops `current_events` from the END and
+            // resolves whatever it finds, so all this verb has to do is make
+            // the engine's own reveal find the right card -- which is why
+            // `advisor::sync_to_my_turn` applies these lines BEFORE it
+            // advances the mirror. Resolving the effects here instead would
+            // fork a second copy of every event's rules away from
+            // `events::resolve_event`, and the mirror would then apply the
+            // named event on top of the guessed one it already resolved.
+            //
+            // Pushed in REVERSE so the first card named is the first one
+            // revealed: the human reports events in the order they happened.
             let n = names.len();
-            for name in names {
+            for name in names.into_iter().rev() {
+                // The named card is one of the face-down cards we were
+                // already counting, not an extra one, so identifying it must
+                // not grow the pile. Prefer spending an unknown sentinel;
+                // failing that, move the card from wherever we already
+                // believed it sat.
+                take_one_event_slot(&mut board.state.current_events, name);
                 board.state.current_events.push(name);
             }
-            let _ = n;
-            Ok("current event(s) noted".to_string())
+            crate::events::sync_current_events_age(&mut board.state);
+            Ok(format!("next {n} event(s) to resolve noted"))
         }
         Command::Age(age) => {
             board.state.age_civil = age;
@@ -1750,6 +1768,67 @@ fn apply_player_verb(board: &mut Board, idx: u8, verb: PlayerVerb) -> Result<Str
             }
         }
     }
+}
+
+/// Make `named` occupy exactly one slot of an event pile that already
+/// counted it: identifying a face-down card must never make the pile bigger.
+/// Spends an unknown sentinel by preference (the usual case -- we knew a card
+/// was there and not which), otherwise lifts the card out of wherever we
+/// already believed it sat. Neither is an error: a pile restored from a file
+/// legitimately holds nothing but sentinels.
+fn take_one_event_slot<const N: usize>(pile: &mut crate::state::CardList<N>, named: CardId) {
+    if pile.remove_first(CardId::NONE) {
+        return;
+    }
+    pile.remove_first(named);
+}
+
+/// When an update line has to be applied, relative to the mirror advancing
+/// through the turns the human did not play.
+///
+/// Two orders are needed and neither works for both. Most lines describe the
+/// table AFTER everyone moved, so applying them before the advance would let
+/// the engine's own sweep-and-refill run on top of the corrected row. But an
+/// event resolves DURING the advance, inside `apply::apply` -- name it
+/// afterwards and the engine has already revealed a card of its own choosing
+/// from its guessed pile and applied that card's effects to every player.
+/// That is not a reporting inconvenience: it is two civilisations drifting
+/// apart, one on the table and one in the mirror, from the first event on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PatchTiming {
+    /// Applied before the mirror advances -- it says what the engine is
+    /// about to do, so it has to land while that is still in the future.
+    BeforeAdvance,
+    /// Applied after the mirror advances -- it says what the table looks
+    /// like now, and must not be overwritten by the engine's own upkeep.
+    AfterAdvance,
+}
+
+/// When [`patch`] should be handed `line`. Keyed off the head word alone, so
+/// a line that will not parse is still routed somewhere and still reports its
+/// own parse error, rather than being silently dropped by the split.
+pub fn patch_timing(line: &str) -> PatchTiming {
+    let (word, _) = split_first(line.trim());
+    match word.to_ascii_lowercase().as_str() {
+        "event" => PatchTiming::BeforeAdvance,
+        _ => PatchTiming::AfterAdvance,
+    }
+}
+
+/// Split a block of update lines into the two passes [`PatchTiming`]
+/// describes, preserving the order of the lines within each pass.
+pub fn split_by_timing(text: &str) -> (String, String) {
+    let mut before = String::new();
+    let mut after = String::new();
+    for ln in text.lines() {
+        let dest = match patch_timing(ln) {
+            PatchTiming::BeforeAdvance => &mut before,
+            PatchTiming::AfterAdvance => &mut after,
+        };
+        dest.push_str(ln);
+        dest.push('\n');
+    }
+    (before, after)
 }
 
 /// Apply a whole block of update lines; returns `(confirmations, errors)`.
@@ -2060,6 +2139,59 @@ mod tests {
 
     fn patch_board() -> Board {
         new_board(3, 0, 11)
+    }
+
+    /// The defect a real game against the app found: naming the event that
+    /// resolved appended it to `current_events`, which grew a pile whose
+    /// size we were counting correctly, and -- because `events::
+    /// reveal_current_event` pops from the END -- reversed the order of two
+    /// events named in one line. The card the human names first is the one
+    /// the engine must reveal first, and identifying a face-down card must
+    /// spend the sentinel that was standing in for it rather than adding a
+    /// card to the game.
+    #[test]
+    fn naming_the_events_that_resolved_sets_the_reveal_order_without_growing_the_pile() {
+        let mut b = new_board(2, 0, 7);
+        let settlement = CardId::by_name("Development of Settlement").unwrap();
+        let civil_life = CardId::by_name("Development of Civil Life").unwrap();
+
+        b.state.current_events = unknown_events(3).unwrap();
+        let before = b.state.current_events.len();
+
+        patch(&mut b, "event Development of Settlement, Development of Civil Life").unwrap();
+
+        assert_eq!(
+            b.state.current_events.len(),
+            before,
+            "identifying two of the face-down cards must not add cards to the pile"
+        );
+        // Popped from the end, so the first card named must sit last.
+        assert_eq!(
+            crate::events::reveal_current_event(&mut b.state),
+            Some(settlement),
+            "the first event the human named must be the first one revealed"
+        );
+        assert_eq!(
+            crate::events::reveal_current_event(&mut b.state),
+            Some(civil_life),
+            "the second event named must be revealed second"
+        );
+    }
+
+    /// An event resolves DURING the mirror's advance, so its line has to be
+    /// applied before that advance; every other line describes the table
+    /// afterwards. `advisor::sync_to_my_turn` runs the two passes in that
+    /// order and this is the routing it depends on.
+    #[test]
+    fn only_event_lines_are_applied_before_the_mirror_advances() {
+        assert_eq!(patch_timing("event Development of Markets"), PatchTiming::BeforeAdvance);
+        assert_eq!(patch_timing("  EVENT Bountiful Harvest  "), PatchTiming::BeforeAdvance);
+        assert_eq!(patch_timing("row Patriotism (A), Julius Caesar"), PatchTiming::AfterAdvance);
+        assert_eq!(patch_timing("p0 f=3 r=2"), PatchTiming::AfterAdvance);
+
+        let (before, after) = split_by_timing("p0 f=3\nevent Development of Markets\nrow .\n");
+        assert_eq!(before, "event Development of Markets\n");
+        assert_eq!(after, "p0 f=3\nrow .\n");
     }
 
     #[test]

@@ -612,7 +612,17 @@ fn events_rng(state: &GameState) -> crate::rng::LazyRandom {
 /// Mirrors `engine/events.py::_sync_current_events_age`.
 pub(crate) fn sync_current_events_age(state: &mut GameState) {
     if let Some(&top) = state.current_events.as_slice().last() {
-        state.current_events_age = top.get().age;
+        // The pile can legitimately hold `CardId::NONE`. A position the
+        // advisor is mirroring knows how many cards are face down without
+        // knowing which, and an unknown card cannot be asked for its age --
+        // `CardId::get` indexes the card table, so a sentinel is an
+        // out-of-bounds panic. Keeping the age the pile was already showing
+        // is the honest answer: nothing was learned, so nothing changes.
+        // Third site to need this guard, after `bots::counting::event_pool`
+        // and `bots::weighted::events::my_seeds`.
+        if !top.is_none() {
+            state.current_events_age = top.get().age;
+        }
     }
 }
 
