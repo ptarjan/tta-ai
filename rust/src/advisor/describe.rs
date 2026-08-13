@@ -59,8 +59,22 @@ pub fn cost_note(state: &GameState, p: &crate::state::PlayerState, mv: Move) -> 
         }
         Move::Build { card } => {
             let c = costs::build_cost_net(state, p, card).unwrap_or(0);
-            let word = if costs::is_unit(card) { "military" } else { "civil" };
-            format!("{c} resources, 1 {word} action")
+            // Same question `apply::do_build` asks before it decides whether
+            // to call `costs::pay_ca` at all: is this a non-unit build with
+            // Development of Civil Life's one-shot discount still banked
+            // (`p.one_time_discount.build_resources`)? If so `do_build`
+            // charges NO civil action for it, so the note must say that too
+            // -- both sites go through `costs::build_civil_life_free`
+            // instead of each re-deriving the condition, so they cannot
+            // silently disagree the way they once did (docs/REPLAY.md
+            // Finding 1, 2026-08; see this module's test
+            // `a_civil_life_exempt_build_is_described_as_costing_no_civil_action`).
+            if costs::build_civil_life_free(p, card) {
+                format!("{c} resources, no civil action")
+            } else {
+                let word = if costs::is_unit(card) { "military" } else { "civil" };
+                format!("{c} resources, 1 {word} action")
+            }
         }
         Move::Barbarossa { card } => {
             let (food_disc, res_disc) = legal::barbarossa_discounts(p);
@@ -412,6 +426,36 @@ mod tests {
         let note2 =
             cost_note(&st, &st.players[idx as usize], Move::Develop { card: card("Irrigation") });
         assert!(note2.starts_with("3 science"), "{note2}");
+    }
+
+    /// `apply::do_build` skips `costs::pay_ca` for a non-unit build when
+    /// Development of Civil Life's one-shot discount is banked (`p.
+    /// one_time_discount.build_resources != 0`) -- see `costs::
+    /// build_civil_life_free`'s doc comment and docs/REPLAY.md Finding 1.
+    /// Before this test's fix, `cost_note` printed "1 civil action"
+    /// regardless, so a human reading the advisor's line for a free build
+    /// saw an action-budget number that did not match what actually got
+    /// spent at the table. Irrigation (a farm tech, non-unit) is the same
+    /// card `build_cost_for_production_card_gets_the_one_time_discount_but_
+    /// not_the_per_age_pool` in `apply.rs` uses to exercise this discount
+    /// field, so this test's cost math is already pinned down there.
+    #[test]
+    fn a_civil_life_exempt_build_is_described_as_costing_no_civil_action() {
+        let mut st = game::new_game(2, 1);
+        let idx = st.decider();
+        st.players[idx as usize].one_time_discount.build_resources = 1;
+
+        let note =
+            cost_note(&st, &st.players[idx as usize], Move::Build { card: card("Irrigation") });
+        assert_eq!(note, "3 resources, no civil action", "{note}");
+
+        // The control: with no discount banked, the same build prints the
+        // normal 1-civil-action note -- this is what would have masked the
+        // bug if the test only checked the exempt case.
+        st.players[idx as usize].one_time_discount.build_resources = 0;
+        let note2 =
+            cost_note(&st, &st.players[idx as usize], Move::Build { card: card("Irrigation") });
+        assert_eq!(note2, "4 resources, 1 civil action", "{note2}");
     }
 
     #[test]

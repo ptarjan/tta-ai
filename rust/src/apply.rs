@@ -687,8 +687,8 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     // `h_pop`'s (`costs::civil_life_ca_free`'s doc comment, `docs/REPLAY.md`
     // Finding 1) -- never true for a unit build, matching the discount
     // field's own scope (`URBAN_OR_PRODUCTION` only).
-    let civil_life_free = !costs::is_unit(id)
-        && costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.build_resources);
+    let civil_life_free =
+        costs::build_civil_life_free(&state.players[idx as usize], id);
     if !costs::is_unit(id) {
         // `build_cost_for` above already folded in Civil Life's one-shot
         // `build_resources` discount for every non-unit build (exactly the

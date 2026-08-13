@@ -152,6 +152,21 @@ pub fn civil_life_ca_free(discount_field: i16) -> bool {
     discount_field != 0
 }
 
+/// Whether a *build* of `id` is the Development-of-Civil-Life-exempt case
+/// [`civil_life_ca_free`] describes: never true for a unit (the discount
+/// field is `URBAN_OR_PRODUCTION`-scoped, see [`civil_life_ca_free`]'s doc
+/// comment), true otherwise iff `p.one_time_discount.build_resources` is
+/// still banked. The ONE place this question is asked -- [`crate::apply::
+/// do_build`] (which skips [`pay_ca`] on it) and `advisor::describe::
+/// cost_note`'s `Move::Build` arm (which must print the same answer it pays)
+/// both call this instead of re-deriving `!is_unit(id) && ...` by hand, so
+/// the two sites cannot silently drift apart the way the advisor's printed
+/// "1 civil action" once did (docs/REPLAY.md Finding 1, 2026-08).
+#[inline]
+pub fn build_civil_life_free(p: &PlayerState, id: CardId) -> bool {
+    !is_unit(id) && civil_life_ca_free(p.one_time_discount.build_resources)
+}
+
 /// Pay `n` civil actions, falling back to Hammurabi's MA-as-CA conversion
 /// once per turn if the civil-action pool alone is not enough. Mutates `p`.
 /// `state` is dropped for the same reason as [`spare_ca`].
