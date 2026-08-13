@@ -201,6 +201,14 @@ pub fn evaluate(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalConte
     if wp != 0.0 {
         total += wp * cards::wonder_potential(state, idx, w);
     }
+    // ... and the half of that same wonder's value still ahead of me, which is
+    // the ONLY term that is nonzero on the move that takes it (see
+    // `cards::wonder_promise`). Gated at 0.0 like every other block here, so a
+    // champion trained before it existed evaluates exactly as it did.
+    let wpr = w.get(WeightKey::WonderPromise);
+    if wpr != 0.0 {
+        total += wpr * cards::wonder_promise(state, idx, w);
+    }
     // The row / rival-hand terms, same shape and reason as `hand_potential`
     // above. Each is skipped entirely at scale 0.0 (the default), so a
     // champion trained before it existed evaluates exactly as it did.
@@ -601,7 +609,22 @@ pub const NET_NONNEG_PHASE: &[WeightKey] = &[];
 /// sits on: spending the resource hands the token back to the bank AND buys
 /// what it paid for, so a stocked resource is worth at least a free token
 /// whatever either is worth.
-pub const DOMINATES: &[(WeightKey, WeightKey)] = &[(WeightKey::ResourceStock, WeightKey::BlueFree)];
+///
+/// `wonder_potential >= wonder_promise` is the second entry, and it is what
+/// keeps PAYING a wonder stage rewarded. The two coordinates split a wonder's
+/// printed value by how much of it is paid for: `wonder_promise` scales
+/// `(1 - paid_fraction) * feasible`, `wonder_potential` scales
+/// `paid_fraction * collect_fraction`, so buying a stage moves value out of
+/// the first and into the second. If the promise side were priced HIGHER,
+/// that transfer would be a net loss and the evaluator would take wonders it
+/// then refuses to build -- the exact pathology `horizon::WonderOutlook::
+/// paid_fraction`'s own doc comment says booking the whole value up front
+/// causes. Repaired by raising `wonder_potential`, never by lowering the
+/// promise: same direction as the entry above.
+pub const DOMINATES: &[(WeightKey, WeightKey)] = &[
+    (WeightKey::ResourceStock, WeightKey::BlueFree),
+    (WeightKey::WonderPotential, WeightKey::WonderPromise),
+];
 
 /// Weights that scale a PRINTED BENEFIT on one card class and nothing else --
 /// none of them may be negative. Each is the ONLY per-card channel its class
@@ -714,7 +737,29 @@ pub const WONDER_DEBT_GATES: &[WeightKey] = &[
     WeightKey::WonderStagesLeft,
     WeightKey::WonderTurnsToFinish,
     WeightKey::WonderOverrun,
+    // `wonder_overrun` measured against the deadline the RULES impose
+    // (`horizon::rounds_to_antiquation`) instead of the end of the game. Same
+    // shape, same non-negative magnitude, larger the worse off the player is,
+    // and falling on exactly the move that pays a stage -- so it needs the
+    // identical gate, for the identical reason.
+    WeightKey::WonderAgeOverrun,
 ];
+
+/// `hand_perishable`'s gate -- never positive. The feature is a non-negative
+/// count of how much of the civil hand the next age boundary is about to
+/// discard (RULES_SPEC 12.2), so it is larger the more of the hand is about to
+/// be lost for nothing. A positive weight scores "more of my hand is about to
+/// evaporate" as an improvement, which no reading of the rules supports;
+/// holding the hand's SIZE and VALUE fixed (`hand_civil`, `hand_value`,
+/// `hand_potential` all price those separately), less remaining lifetime is
+/// never an upside. Repaired DOWN to 0.0, matching every other non-positive
+/// gate: the league may decide expiry does not matter, never that it helps.
+///
+/// Its own list rather than folded into [`LOSS_GATES`]: that gate's premise is
+/// "a penalty the rules IMPOSE" (corruption, discontent, uprising), and expiry
+/// is a deadline rather than a bill. Same constraint, different justification,
+/// and the justification is what a future reader has to check.
+pub const PERISHABLE_GATES: &[WeightKey] = &[WeightKey::HandPerishable];
 
 /// `cards::wonder_potential`'s own gate -- never negative. That function is
 /// the SOLE identity-aware channel that prices what completing the player's
@@ -745,7 +790,18 @@ pub const WONDER_DEBT_GATES: &[WeightKey] = &[
 /// from [`evaluate`]'s sum -- it can never invent a positive one -- so even a
 /// still-negative internal sum contributes exactly nothing at 0.0, never a
 /// wrong-signed price.
-pub const WONDER_VALUE_GATES: &[WeightKey] = &[WeightKey::WonderPotential];
+///
+/// [`WeightKey::WonderPromise`] is gated here alongside it and by the same
+/// argument: it scales the SAME `board_yields` swap diff, through the same
+/// gains-only path, times a `[0, 1]` share (`horizon::WonderOutlook::
+/// promise_share`). A negative price on it means "a wonder that would be worth
+/// more once finished is worse to reach for", which is the take-time version
+/// of the very bug [`WONDER_DEBT_GATES`] documents. `DOMINATES` additionally
+/// keeps it at or below `wonder_potential`; that ordering is about the
+/// TRANSFER between the two terms, this gate is about the sign of one of them,
+/// and neither implies the other.
+pub const WONDER_VALUE_GATES: &[WeightKey] =
+    &[WeightKey::WonderPotential, WeightKey::WonderPromise];
 
 /// Every "this weight may never be positive" gate, paired with the sentence
 /// [`dominance_repair`] logs when it fires.
@@ -765,6 +821,7 @@ pub const NON_POSITIVE_GATES: &[(&[WeightKey], &str)] = &[
     (SHORTFALL_GATES, "prices a marginal-need shortfall"),
     (LOSS_GATES, "prices a penalty the rules impose"),
     (WONDER_DEBT_GATES, "prices an unpaid wonder debt as an upside"),
+    (PERISHABLE_GATES, "prices a hand about to expire as an upside"),
 ];
 
 /// Every "this weight may never be negative" gate, paired with the sentence
@@ -821,20 +878,6 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
         }
     }
 
-    for &(hi, lo) in DOMINATES {
-        let a = out.get(hi);
-        let b = out.get(lo);
-        if b > a + 1e-12 {
-            viol.push(Violation {
-                weight: hi,
-                value: a,
-                default: hi.default_weight(),
-                rule: format!("{} >= {}", hi.name(), lo.name()),
-            });
-            out.set(hi, b);
-        }
-    }
-
     for &(keys, why) in NON_POSITIVE_GATES {
         for &k in keys {
             let v = out.get(k);
@@ -862,6 +905,29 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
                 });
                 out.set(k, 0.0);
             }
+        }
+    }
+
+    // ORDERINGS LAST, and deliberately so: a [`DOMINATES`] repair copies one
+    // weight's value onto another, so running it before the sign gates would
+    // propagate an illegally-signed operand into a second coordinate and then
+    // report the wrong rule for it (a champion with a negative
+    // `wonder_potential` and a `wonder_promise` at its 0.0 default would be
+    // logged as an ordering violation, when the thing actually wrong with it
+    // is the sign). Both dominant sides here are non-negative-gated or
+    // ungated, so raising one can never re-open a gate the loops above just
+    // closed -- which is what keeps this function idempotent in a single pass.
+    for &(hi, lo) in DOMINATES {
+        let a = out.get(hi);
+        let b = out.get(lo);
+        if b > a + 1e-12 {
+            viol.push(Violation {
+                weight: hi,
+                value: a,
+                default: hi.default_weight(),
+                rule: format!("{} >= {}", hi.name(), lo.name()),
+            });
+            out.set(hi, b);
         }
     }
 
@@ -1403,6 +1469,70 @@ mod tests {
         assert_eq!(once, twice);
     }
 
+    /// A climb that prices a wonder's PROMISE above its PAYOFF has, by
+    /// construction, made paying a stage a net loss: the two coordinates
+    /// split one wonder's value by how much of it is paid for, so buying a
+    /// stage moves value from the first term into the second. Repaired by
+    /// raising `wonder_potential` to meet it -- the same direction as the
+    /// resource pair below, and for the same reason (never discard what the
+    /// league measured).
+    #[test]
+    fn the_climb_may_not_price_a_wonders_promise_above_the_payoff_it_decays_into() {
+        let mut w = Weights::default();
+        w.set(WeightKey::WonderPotential, 0.2);
+        w.set(WeightKey::WonderPromise, 3.0);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::WonderPotential), 3.0);
+        assert_eq!(out.get(WeightKey::WonderPromise), 3.0);
+        assert!(
+            viol.iter().any(|v| v.weight == WeightKey::WonderPotential),
+            "the repair must be reported, got {viol:?}"
+        );
+        // ... and a vector that already respects the ordering is untouched.
+        let mut legal = Weights::default();
+        legal.set(WeightKey::WonderPotential, 3.0);
+        legal.set(WeightKey::WonderPromise, 0.2);
+        assert_eq!(dominance_repair(&legal), (legal, vec![]));
+    }
+
+    /// `hand_perishable` counts how much of the hand the next age boundary is
+    /// about to throw away, so a positive price on it scores "more of my hand
+    /// is about to evaporate" as an improvement. Repaired DOWN to zero, the
+    /// same direction and for the same reason as every other non-positive
+    /// gate. Driven through the [`NON_POSITIVE_GATES`] table itself so the
+    /// new list is checked as a member of it, not as a special case.
+    #[test]
+    fn a_hand_about_to_expire_may_not_be_priced_as_an_upside() {
+        assert!(
+            NON_POSITIVE_GATES.iter().any(|&(keys, _)| keys.as_ptr() == PERISHABLE_GATES.as_ptr()),
+            "PERISHABLE_GATES must be armed through NON_POSITIVE_GATES, which is what also arms \
+             bin/climb.rs's under-mutation guard"
+        );
+        let mut w = Weights::default();
+        w.set(WeightKey::HandPerishable, 1.5);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::HandPerishable), 0.0);
+        assert!(viol.iter().any(|v| v.weight == WeightKey::HandPerishable), "{viol:?}");
+        // A negative price -- "expiry costs me something" -- is the league's
+        // to find and must survive untouched.
+        let mut priced = Weights::default();
+        priced.set(WeightKey::HandPerishable, -1.5);
+        assert_eq!(dominance_repair(&priced).0.get(WeightKey::HandPerishable), -1.5);
+    }
+
+    /// `wonder_age_overrun` is an unpaid wonder debt like the four
+    /// [`WONDER_DEBT_GATES`] it joined, so it inherits the same gate: a
+    /// positive price makes paying a stage a loss, which is the exact bug
+    /// that produced a 2p champion completing 0 wonders in 400 player-games.
+    #[test]
+    fn a_wonder_past_its_age_deadline_may_not_be_priced_as_an_upside() {
+        let mut w = Weights::default();
+        w.set(WeightKey::WonderAgeOverrun, 4.0);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::WonderAgeOverrun), 0.0);
+        assert!(viol.iter().any(|v| v.weight == WeightKey::WonderAgeOverrun), "{viol:?}");
+    }
+
     /// `resource_stock < blue_free` is repaired by RAISING the dominant side
     /// -- the climbed side (`blue_free`) is what was measured and must not
     /// be thrown away.
@@ -1592,6 +1722,74 @@ mod tests {
                 k.name()
             );
         }
+    }
+
+    /// The same guarantee for the four coordinates added for the wonder
+    /// rank-deficiency (`wonder_promise`, `wonder_age_overrun`,
+    /// `take_cost_share`, `hand_perishable`), checked against EVERY frozen
+    /// gauntlet member rather than one of them -- the gauntlet is the ladder
+    /// a candidate is judged against (docs/RUST_LEAGUE.md), so a member whose
+    /// play changed the day a coordinate was added would silently move the
+    /// ruler along with the thing being measured.
+    ///
+    /// The load path is what makes this hold: [`parse_weights`] starts from
+    /// [`Weights::defaults`] and overwrites only the names the file actually
+    /// carries, so a key that did not exist when the file was written keeps
+    /// its default -- and every one of these four defaults to exactly 0.0, so
+    /// its contribution to [`evaluate`]'s dot product is `0.0 * feature`.
+    /// Seeding any of them nonzero would move every file below at once, which
+    /// is precisely what this test refuses.
+    #[test]
+    fn a_champion_file_saved_before_these_keys_existed_still_loads_with_them_at_zero() {
+        let new_keys = [
+            WeightKey::WonderPromise,
+            WeightKey::WonderAgeOverrun,
+            WeightKey::TakeCostShare,
+            WeightKey::HandPerishable,
+        ];
+        for &k in &new_keys {
+            assert_eq!(
+                k.default_weight(),
+                0.0,
+                "{} must default to 0.0: every champion file on disk predates it and would \
+                 silently inherit anything else written here",
+                k.name()
+            );
+        }
+
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../analysis/frozen/gauntlet");
+        let mut checked = 0usize;
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())) {
+            let path = entry.expect("a readable directory entry").path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let w = parse_weights(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for &k in &new_keys {
+                assert_eq!(
+                    w.get(k),
+                    0.0,
+                    "{}: {} must come back at 0.0 -- a file written before the key existed cannot \
+                     name it, so anything else here means the DEFAULT moved",
+                    path.display(),
+                    k.name()
+                );
+            }
+            // Not vacuous: the file really is narrower than the vector it is
+            // being loaded into, which is the whole situation under test.
+            for &k in &new_keys {
+                assert!(
+                    !text.contains(k.name()),
+                    "{}: names {}, so this file does NOT predate the key and cannot stand in for \
+                     one that does",
+                    path.display(),
+                    k.name()
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked >= 6, "expected the frozen gauntlet's six members, found {checked}");
     }
 
     /// Every champion on disk still carries the twelve retired names. They

@@ -1458,6 +1458,39 @@ mod tests {
         }
     }
 
+    /// The third direction, and the one the other two do not cover: a
+    /// rule-level ORDERING between two weights ([`eval::DOMINATES`]) has to
+    /// survive mutation too, not merely load. `wonder_potential >=
+    /// wonder_promise` is what keeps paying a wonder stage a net gain -- the
+    /// two coordinates split one wonder's value by how much of it is paid for,
+    /// so a climb that walks the promise above the payoff makes every
+    /// `Move::WonderStep` look like a loss, which is the same shape of bug
+    /// `no_mutant_ever_prices_a_rulebook_penalty_as_a_benefit` documents for
+    /// signs. Driven from a deliberately inverted start and table-driven over
+    /// `DOMINATES`, so a future pair arms this coverage with no new test.
+    #[test]
+    fn no_mutant_ever_walks_a_dominated_weight_above_the_one_that_dominates_it() {
+        let mut w = Weights::defaults();
+        for &(hi, lo) in eval::DOMINATES {
+            w.set(hi, -9.0);
+            w.set(lo, 9.0);
+        }
+        let mut s = Search::new(2029);
+        for gen in 0..300 {
+            w = mutate(&w, &mut s, 0.8, None).weights;
+            for &(hi, lo) in eval::DOMINATES {
+                assert!(
+                    w.get(hi) >= w.get(lo) - 1e-12,
+                    "generation {gen}: {} ({}) fell below {} ({})",
+                    hi.name(),
+                    w.get(hi),
+                    lo.name(),
+                    w.get(lo)
+                );
+            }
+        }
+    }
+
     /// The whole point of the anchor: a veto fires only when the drop is
     /// unambiguous, never on two intervals that still overlap.
     #[test]

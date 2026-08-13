@@ -340,6 +340,7 @@ mod tests {
         // doc comment on `evaluate`'s structure.
         (WeightKey::HandPotential, "eval::evaluate gated block (cards::hand_potential)"),
         (WeightKey::WonderPotential, "eval::evaluate gated block (cards::wonder_potential)"),
+        (WeightKey::WonderPromise, "eval::evaluate gated block (cards::wonder_promise)"),
         (WeightKey::HandMilPotential, "eval::evaluate gated block (cards::hand_mil_potential)"),
         (WeightKey::TacticGain, "eval::evaluate gated block (cards::tactic_terms)"),
         (WeightKey::TacticShort, "eval::evaluate gated block (cards::tactic_terms)"),

@@ -210,8 +210,9 @@ pub struct ExtractedDecision {
 /// zero coordinates -- `features()`'s own doc comment records that most of
 /// the ~139 slots are 0.0 on any given call (only the ones a specific board
 /// state actually triggers are set), so this roughly halves file size versus
-/// a dense CSV row for free, with no loss (a missing index reads back as
-/// 0.0, [`Features`]'s own documented default).
+/// a dense CSV row for free, with no loss: a missing index reads back as
+/// 0.0 ([`Features`]'s own documented default), and every index that IS
+/// written is written at full `f64` round-trip precision (see the body).
 /// The dense counterpart of [`features_to_sparse`] -- every coordinate, in
 /// [`WeightKey::ALL`] order, with no zero-skipping. `crate::bots::human::
 /// HumanBot` uses this at PLAY time, one candidate at a time, not the sparse
@@ -228,7 +229,15 @@ fn features_to_sparse(f: &Features) -> String {
     for (i, &k) in WeightKey::ALL.iter().enumerate() {
         let v = f.get(k);
         if v != 0.0 {
-            parts.push(format!("{i}:{v:.4}"));
+            // `{v}` (Rust's shortest-round-trip Display for `f64`), not a
+            // fixed `{v:.4}`. Four decimals silently truncated any coordinate
+            // that is a genuine ratio rather than a count -- `hand_perishable`
+            // and `take_cost_share` are both quotients, and a corpus row that
+            // does not read back what was written is a training set quietly
+            // disagreeing with the evaluator it was extracted from. This also
+            // SHRINKS the common case: an integer-valued coordinate prints as
+            // `3`, not `3.0000`.
+            parts.push(format!("{i}:{v}"));
         }
     }
     parts.join(",")

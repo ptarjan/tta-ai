@@ -55,6 +55,7 @@
 
 use crate::cards::{CardType, Special};
 use crate::combat;
+use crate::costs;
 use crate::economy;
 use crate::effects;
 use crate::state::GameState;
@@ -349,9 +350,11 @@ pub fn features(
     // this wonder am I" is exactly this codebase's defining bug class, so
     // there is one.
     let outlook = horizon::wonder_outlook(state, p, s.resources);
-    let (progress, remaining, stages_left, turns_to_finish, overrun) = match outlook {
-        Some(o) => (o.progress, o.remaining, o.stages_left, o.turns_to_finish, o.overrun),
-        None => (0, 0, 0.0, 0.0, 0.0),
+    let (progress, remaining, stages_left, turns_to_finish, overrun, age_overrun) = match outlook {
+        Some(o) => {
+            (o.progress, o.remaining, o.stages_left, o.turns_to_finish, o.overrun, o.age_overrun)
+        }
+        None => (0, 0, 0.0, 0.0, 0.0, 0.0),
     };
 
     let hand_value: f64 = p.hand_civil.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
@@ -526,6 +529,19 @@ pub fn features(
     // (docs/ANALYSIS_HISTORY.md, INFORMATION_AUDIT.md verdict) for why
     // conflating the two used to score paying 3 CA for a card as a GAIN.
     f.set(WeightKey::TakeCostPaid, f64::from(p.ca_spent_taking));
+    // The same spend as a SHARE of the whole allowance. A quotient is
+    // deliberately outside the linear span of the two coordinates it is built
+    // from (`take_cost_paid` above and the pool it is drawn from), which is
+    // the only way this vector can say that 3 actions out of 4 is a different
+    // decision from 3 out of 7 -- see `WeightKey::TakeCostShare`'s own doc
+    // comment. `costs::ca_total` is the government's printed allowance plus
+    // every effect on it, and is at least 1 for every legal government, so
+    // the guard is defensive rather than reachable.
+    let ca_total = costs::ca_total(state, p);
+    f.set(
+        WeightKey::TakeCostShare,
+        if ca_total > 0 { f64::from(p.ca_spent_taking) / f64::from(ca_total) } else { 0.0 },
+    );
 
     // --- military
     f.set(WeightKey::Strength, strength);
@@ -566,6 +582,14 @@ pub fn features(
     f.set(WeightKey::WonderStagesLeft, stages_left);
     f.set(WeightKey::WonderTurnsToFinish, turns_to_finish);
     f.set(WeightKey::WonderOverrun, overrun);
+    // The same shortfall against the deadline the RULES impose (RULES_SPEC
+    // 12.2, `game::antiquate`) rather than against the end of the game --
+    // for an Age A wonder taken in Age A the two differ by two whole ages,
+    // and 66.5% of every wonder started in the 200-game 2p census died to the
+    // one nothing in the vector could see. `wonder_overrun` above is left
+    // exactly as it was on purpose: correcting it in place would move every
+    // champion on disk.
+    f.set(WeightKey::WonderAgeOverrun, age_overrun);
     f.set(WeightKey::WonderStagesPerAction, f64::from(s.wonder_stages - 1));
     f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
 
@@ -589,6 +613,19 @@ pub fn features(
     // --- cards
     f.set(WeightKey::HandCivil, p.hand_civil.len() as f64);
     f.set(WeightKey::HandValue, hand_value);
+    // How much of that hand the next age boundary is about to throw away
+    // (RULES_SPEC 12.2 -- `game::antiquate` culls hands as well as the
+    // board). 0.0 per card for a fresh one, rising to 1.0 for one that is
+    // out of rounds. ONE clock for the whole hand: the expensive half of the
+    // answer depends on the position, not the card -- see
+    // `horizon::AntiquationClock`'s own doc comment.
+    let clock = horizon::AntiquationClock::at(state, horizon::live_count(state));
+    let mut hand_perishable = 0.0;
+    for &card in p.hand_civil.as_slice() {
+        let left = clock.rounds_until_antiquation(card.get().age);
+        hand_perishable += (1.0 - left / clock.rounds_left()).clamp(0.0, 1.0);
+    }
+    f.set(WeightKey::HandPerishable, hand_perishable);
     f.set(WeightKey::HandMilitary, p.hand_military.len() as f64 + g(GainFeature::HandMilitary));
     f.set(WeightKey::HandMilValue, hand_mil_value);
 
@@ -988,6 +1025,104 @@ mod tests {
         assert_eq!(
             at4, at3,
             "the 4th unused military action must add nothing -- RULES_SPEC 6.7 caps the draw at 3, got {at3} -> {at4}"
+        );
+    }
+
+    /// THE QUOTIENT'S WHOLE POINT (`WeightKey::TakeCostShare`): three civil
+    /// actions out of four is a different decision from three out of seven,
+    /// and `take_cost_paid`/`ca_left` cannot say so -- the first is identical
+    /// in both positions by construction, and no assignment of the two
+    /// weights can make an absolute spend depend on the size of the pool it
+    /// came out of. The share does say so, which is exactly why it is a
+    /// quotient and therefore outside their linear span.
+    ///
+    /// The government is the lever because `costs::ca_total` reads its
+    /// printed civil-action allowance: Despotism (the starting government)
+    /// against a later one, with the spend held fixed at 3 in both.
+    #[test]
+    fn taking_a_card_for_three_of_four_actions_reads_differently_from_three_of_seven() {
+        let reading_under = |government: &str| -> (f64, f64) {
+            let mut state = G::new_game(2, 61);
+            state.players[0].government =
+                crate::cards::CardId::by_name(government).unwrap_or_else(|| panic!("no such government: {government}"));
+            state.players[0].ca_spent_taking = 3;
+            let f = features(&state, 0, None, None, false);
+            (f.get(WeightKey::TakeCostPaid), f.get(WeightKey::TakeCostShare))
+        };
+        let (small_paid, small_share) = reading_under("Despotism");
+        let (big_paid, big_share) = reading_under("Constitutional Monarchy");
+        assert_eq!(
+            small_paid, big_paid,
+            "the fixture must hold the ABSOLUTE spend fixed, or it proves nothing about the share"
+        );
+        assert!(
+            small_share > big_share,
+            "3 actions out of a small allowance must read as a bigger share than 3 out of a large \
+             one: {small_share} vs {big_share}"
+        );
+    }
+
+    /// `hand_perishable` reads remaining useful LIFETIME, which nothing else
+    /// in the vector does: the same hand, held at the same size and value,
+    /// is worth less the closer the age boundary that will discard it
+    /// (RULES_SPEC 12.2). Built by holding the hand fixed and moving only the
+    /// deal -- an Age A hand at the start of Age A, versus the same cards
+    /// once the deal has reached Age I and that deck is nearly out.
+    #[test]
+    fn a_hand_the_next_age_boundary_is_about_to_discard_reads_as_perishable() {
+        let age_a_card = crate::cards::CardId::by_name("Bronze").expect("an Age A technology");
+        let hand_of_three = |age_civil: crate::cards::Age, deck: usize| -> f64 {
+            let mut state = G::new_game(2, 62);
+            state.age_civil = age_civil;
+            while state.civil_deck.len() > deck {
+                state.civil_deck.pop();
+            }
+            state.players[0].hand_civil = crate::state::CardList::new();
+            for _ in 0..3 {
+                state.players[0].hand_civil.push(age_a_card);
+            }
+            features(&state, 0, None, None, false).get(WeightKey::HandPerishable)
+        };
+        let fresh = hand_of_three(crate::cards::Age::A, 7);
+        let expiring = hand_of_three(crate::cards::Age::I, 4);
+        assert!(
+            expiring > fresh,
+            "an Age A hand with the Age I deck nearly out must be more perishable than the same \
+             hand at the deal: {fresh} -> {expiring}"
+        );
+        assert!(
+            expiring <= 3.0,
+            "the coordinate is a sum of per-card shares, so three cards cap it at 3.0, got {expiring}"
+        );
+    }
+
+    /// `wonder_age_overrun` is the coordinate `wonder_overrun` could not be:
+    /// it fires on a wonder that the GAME has plenty of time for but the age
+    /// boundary does not. Same fixture shape as
+    /// `horizon::tests::a_wonder_can_be_finishable_before_the_game_ends_and_
+    /// still_be_doomed_by_its_age`, asserted here on the feature vector the
+    /// evaluator actually reads, so a future edit that computes the outlook
+    /// correctly but forgets to write the coordinate still fails.
+    #[test]
+    fn wonder_age_overrun_fires_where_the_game_end_overrun_reads_exactly_zero() {
+        let mut state = G::new_game(2, 63);
+        state.age_civil = crate::cards::Age::I;
+        while state.civil_deck.len() > 8 {
+            state.civil_deck.pop();
+        }
+        state.players[0].wonder = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        state.players[0].wonder_steps = 0;
+        state.players[0].resources = 0;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::WonderOverrun),
+            0.0,
+            "the fixture must be comfortably finishable before the GAME ends, or it proves nothing"
+        );
+        assert!(
+            f.get(WeightKey::WonderAgeOverrun) > 0.0,
+            "an Age A wonder with the Age I deck nearly out is past its own deadline, got {}",
+            f.get(WeightKey::WonderAgeOverrun)
         );
     }
 }
