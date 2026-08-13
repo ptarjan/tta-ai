@@ -1423,6 +1423,41 @@ mod tests {
         }
     }
 
+    /// Mirror image of the test above, in the other direction: the climb may
+    /// not walk a benefit-shaped weight ([`eval::NON_NEGATIVE_GATES`])
+    /// negative either. Same past bug, same fix -- `dominance_repair` running
+    /// only in `load_weights` made a champion legal at startup and
+    /// unconstrained forever after, and this is what let the live 2p
+    /// champion price `wonder_potential` at -0.7206 despite its authored
+    /// default being 0.0. Drive the mutator hard from a deliberately illegal
+    /// start (every gated key pinned at -9.0, the mirror of the +9.0 start
+    /// above) and assert every mutant comes back legal, table-driven so a
+    /// future non-negative gate arms this coverage the moment it is added to
+    /// [`eval::NON_NEGATIVE_GATES`], with no separate test to remember.
+    #[test]
+    fn no_mutant_ever_prices_a_benefit_shaped_weight_as_a_downside() {
+        let mut w = Weights::defaults();
+        for &(keys, _) in eval::NON_NEGATIVE_GATES {
+            for &k in keys {
+                w.set(k, -9.0);
+            }
+        }
+        let mut s = Search::new(2028);
+        for gen in 0..300 {
+            w = mutate(&w, &mut s, 0.8, None).weights;
+            for &(keys, why) in eval::NON_NEGATIVE_GATES {
+                for &k in keys {
+                    assert!(
+                        w.get(k) >= -1e-12,
+                        "generation {gen}: {} walked to {}, which {why}",
+                        k.name(),
+                        w.get(k)
+                    );
+                }
+            }
+        }
+    }
+
     /// The whole point of the anchor: a veto fires only when the drop is
     /// unambiguous, never on two intervals that still overlap.
     #[test]

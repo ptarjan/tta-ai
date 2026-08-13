@@ -1,6 +1,6 @@
 //! `engine/bots/weighted.py` lines 4104-end: `evaluate` (the linear
 //! evaluation entry point), `WeightedBot` (the 1-ply bot built on it), and
-//! the dominance guard (`dominance_repair` and its three rule tables).
+//! the dominance guard (`dominance_repair` and its four rule tables).
 //!
 //! Everything `evaluate` needs is already ported: [`features::features`]
 //! (the raw vector), [`cards`] (the identity-aware `hand_potential`/
@@ -716,6 +716,37 @@ pub const WONDER_DEBT_GATES: &[WeightKey] = &[
     WeightKey::WonderOverrun,
 ];
 
+/// `cards::wonder_potential`'s own gate -- never negative. That function is
+/// the SOLE identity-aware channel that prices what completing the player's
+/// specific in-progress wonder would DO: it reads that wonder's own printed
+/// effects by name, its stage cost is excluded BY CONSTRUCTION
+/// (`gains_only_sum`/`gains_only_board_sum`, `cards.rs`, drop every Cost-kind
+/// triple before this function ever sees one), and its delayed-payoff
+/// discount ([`super::horizon::WonderOutlook::earned_share`]) is bounded in
+/// `[0, 1]` and rises monotonically as stages get paid -- it never falls.
+/// Every fact this function reads is therefore benefit-shaped, so a negative
+/// weight on it inverts the whole term into "a wonder that would be worth
+/// more once finished is worse" -- exactly the [`WONDER_DEBT_GATES`] bug one
+/// level up, and that gate's own doc comment names THIS function as the
+/// value correlation's rightful home. If the home itself were free to go
+/// negative, that citation would be hollow. Repaired down to 0.0, matching
+/// every other gate in this table: the rules never say a wonder's completion
+/// is a downside, they simply do not price it, and 0.0 is "unpriced".
+///
+/// The one honest caveat, so a future reader is not misled: `gains_only_sum`/
+/// `gains_only_board_sum` guarantee this function is gains-only in
+/// STRUCTURE -- no Cost-kind triple ever enters the sum -- but what it sums
+/// is itself a weighted combination of per-stat credits (`card_rate_credit`,
+/// `card_board_credit`, and everything each reads through) that the league
+/// climbs independently. So the function's raw return value is not PROVABLY
+/// non-negative in every position, only non-negative by construction on the
+/// printed-effect side. The gate is still sound regardless: repairing a
+/// negative [`WeightKey::WonderPotential`] to 0.0 only ever REMOVES this term
+/// from [`evaluate`]'s sum -- it can never invent a positive one -- so even a
+/// still-negative internal sum contributes exactly nothing at 0.0, never a
+/// wrong-signed price.
+pub const WONDER_VALUE_GATES: &[WeightKey] = &[WeightKey::WonderPotential];
+
 /// Every "this weight may never be positive" gate, paired with the sentence
 /// [`dominance_repair`] logs when it fires.
 ///
@@ -724,14 +755,31 @@ pub const WONDER_DEBT_GATES: &[WeightKey] = &[
 /// fourth copy, and a copy that gets forgotten is a gate that silently does
 /// not run. `bin/climb.rs`'s under-mutation guard iterates this same table,
 /// so adding a list here arms both the load-time repair and the mutation-time
-/// one at once. (The two NON-negative gates, [`BENEFIT_GATES`] and
-/// [`REDUNDANCY_NONNEG_GATES`], repair in the opposite direction and stay
-/// separate -- folding them in would need a sign field whose only job is to
-/// be read back out.)
+/// one at once. The mirror-image, opposite-direction gates
+/// ([`BENEFIT_GATES`], [`REDUNDANCY_NONNEG_GATES`], [`WONDER_VALUE_GATES`])
+/// live in [`NON_NEGATIVE_GATES`] below, not here -- one table with a sign
+/// field whose only job is to be read back out would be no simpler than two
+/// direction-typed tables read the same way, and would blur the fact that
+/// the repair direction is a property of the RULE, not a runtime choice.
 pub const NON_POSITIVE_GATES: &[(&[WeightKey], &str)] = &[
     (SHORTFALL_GATES, "prices a marginal-need shortfall"),
     (LOSS_GATES, "prices a penalty the rules impose"),
     (WONDER_DEBT_GATES, "prices an unpaid wonder debt as an upside"),
+];
+
+/// Every "this weight may never be negative" gate, paired with the sentence
+/// [`dominance_repair`] logs when it fires -- the mirror image of
+/// [`NON_POSITIVE_GATES`], same reason: one table rather than one hand-rolled
+/// loop per gate list, so a third gate ([`WONDER_VALUE_GATES`], added
+/// alongside [`BENEFIT_GATES`] and [`REDUNDANCY_NONNEG_GATES`]) means one new
+/// entry, not one new copy of the loop. `bin/climb.rs`'s under-mutation guard
+/// iterates this table too, exactly as it already does [`NON_POSITIVE_GATES`],
+/// so adding a list here arms both the load-time repair and the mutation-time
+/// one at once, in this direction as well.
+pub const NON_NEGATIVE_GATES: &[(&[WeightKey], &str)] = &[
+    (BENEFIT_GATES, "scales a printed benefit"),
+    (REDUNDANCY_NONNEG_GATES, "discounts a redundant card, never rewards one"),
+    (WONDER_VALUE_GATES, "prices the in-progress wonder's completion value"),
 ];
 
 /// One rule-level ordering `dominance_repair` had to fix -- Python's
@@ -787,19 +835,6 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
         }
     }
 
-    for &k in BENEFIT_GATES {
-        let v = out.get(k);
-        if v < -1e-12 {
-            viol.push(Violation {
-                weight: k,
-                value: v,
-                default: k.default_weight(),
-                rule: format!("{} >= 0 (scales a printed benefit)", k.name()),
-            });
-            out.set(k, 0.0);
-        }
-    }
-
     for &(keys, why) in NON_POSITIVE_GATES {
         for &k in keys {
             let v = out.get(k);
@@ -815,16 +850,18 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
         }
     }
 
-    for &k in REDUNDANCY_NONNEG_GATES {
-        let v = out.get(k);
-        if v < -1e-12 {
-            viol.push(Violation {
-                weight: k,
-                value: v,
-                default: k.default_weight(),
-                rule: format!("{} >= 0 (discounts a redundant card, never rewards one)", k.name()),
-            });
-            out.set(k, 0.0);
+    for &(keys, why) in NON_NEGATIVE_GATES {
+        for &k in keys {
+            let v = out.get(k);
+            if v < -1e-12 {
+                viol.push(Violation {
+                    weight: k,
+                    value: v,
+                    default: k.default_weight(),
+                    rule: format!("{} >= 0 ({why})", k.name()),
+                });
+                out.set(k, 0.0);
+            }
         }
     }
 
@@ -1295,6 +1332,50 @@ mod tests {
                 k.name(),
                 k.default_weight()
             );
+        }
+    }
+
+    /// The bug [`WONDER_VALUE_GATES`] closes, reproduced with the live 2p
+    /// champion's own number rather than a token `-1.0`: that arm priced
+    /// `wonder_potential` at **-0.7206**. `cards::wonder_potential` is
+    /// benefit-shaped by construction (costs excluded, discount factor in
+    /// `[0, 1]` and rising), so a negative weight scores "this specific
+    /// in-progress wonder would be worth MORE once finished" as WORSE --
+    /// the identical inversion [`WONDER_DEBT_GATES`] exists to prevent one
+    /// level up, now landed in the function that gate's own doc comment
+    /// names as the value correlation's rightful home.
+    #[test]
+    fn the_2p_champions_negative_wonder_potential_weight_is_repaired_away() {
+        let mut w = Weights::default();
+        w.set(WeightKey::WonderPotential, -0.7206);
+
+        let (out, viol) = dominance_repair(&w);
+
+        assert_eq!(out.get(WeightKey::WonderPotential), 0.0);
+        assert_eq!(viol.len(), 1, "exactly one violation, got {viol:?}");
+        assert!(
+            viol[0].rule.contains("completion value"),
+            "the log has to say WHY (the wonder's completion value), got {viol:?}"
+        );
+    }
+
+    /// A key only belongs in [`NON_NEGATIVE_GATES`] if its author already
+    /// treated it as an upside or left it unmeasured -- the mirror of
+    /// [`no_gated_wonder_debt_weight_is_authored_as_an_upside`] in the
+    /// opposite direction. A negative default would mean the crate itself
+    /// contradicts its own gate, which is a bug to fix at the source, not to
+    /// repair away on every load.
+    #[test]
+    fn no_gated_non_negative_weight_is_authored_as_a_downside() {
+        for &(keys, _) in NON_NEGATIVE_GATES {
+            for &k in keys {
+                assert!(
+                    k.default_weight() >= 0.0,
+                    "{} defaults to {}, contradicting its own gate",
+                    k.name(),
+                    k.default_weight()
+                );
+            }
         }
     }
 
