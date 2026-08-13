@@ -36,17 +36,35 @@ below runs against the frozen copy, never the live file.)
 
 ## 1. What Paul has to report, and nothing more
 
-Five observables, no more: this was measured (`docs/APP_HARNESS.md` §2 /
-§6) and everything else about the position is inert against the current
-evaluator. Do not ask for anything beyond these:
-
 1. **The card row** — all 13 slots, left to right, `.` for an empty slot.
    Contents, occupancy and slot order all matter (slot position is the
    civil-action cost); nothing else about the row does.
 2. Rival's **military strength**.
 3. Rival's **culture**.
+4. **Every military card Paul draws**, by name, as he draws it —
+   `p0 hand <civil cards> | <military cards>`, retyping the whole hand.
 
 (2) and (3) repeat once per rival — at 2p that's exactly one rival, `p1`.
+
+Items 1–3 are the *evaluation* inputs: they were measured
+(`docs/APP_HARNESS.md` §2 / §6) and everything else about the position is
+inert against the current evaluator. **Item 4 is a legality input and was
+missed by that measurement**, because a census of self-play never
+discovers it. The advisor plays Paul's civil cards itself, so it knows his
+civil hand exactly — but military cards are DRAWN at end of turn, and the
+mirror draws them at random from its own deck. Within two rounds of the
+first live game the bot recommended preparing an event card
+(`Rebellion`) that Paul did not hold. A recommendation naming a card the
+player cannot play is not a bad recommendation, it is not a
+recommendation at all, so this is not optional the way (2) and (3)
+degrade gracefully.
+
+What is still knowingly approximate, and is accepted: the rival's *hand*.
+The engine simulates the rival's turn with its own bot, so it takes
+different cards than the app's AI did. The `row` line repairs the table
+every exchange and `p1 leader` / `p1 wonder` / `p1 built+` repair what is
+public about their board, but nobody can see the rival's hand and the
+protocol does not pretend to.
 
 ## 2. The exact commands
 
@@ -70,6 +88,27 @@ printf 'row <13 cards>\np1 str=<N> c=<N>\n' | \
     --weights ~/tta_2p_frozen.json \
     --load ~/tta_state.json --save ~/tta_state.json
 ```
+
+**The row you report is the row as it stands in the app at the moment
+Paul is about to act** — after the rival's turn and after the
+start-of-turn replenish, i.e. exactly what he is looking at. `run_batch`
+hands the turn back first and applies the report second, so the position
+the bot scores is the reported one. (It used to patch first and then
+advance, which let the engine's own sweep-and-refill run on top: at 2p
+that discards the three leftmost cards, slides every survivor three slots
+left and deals three cards that are not on the table. Every slot number
+printed was off by three. Fixed in `1e83812`, with
+`the_reported_row_is_the_one_the_bot_scores_and_is_never_replenished_on_top_of`
+pinning it.)
+
+If Paul reports only the newly-dealt cards and what the rival took, the
+full row can be reconstructed rather than retyped: at 2p the replenish
+sweeps the **3 leftmost slots** (`docs/RULES_SPEC.md` §2, sweep 2p:3 /
+3p:2 / 4p:1), slides the survivors left in order, then deals into the
+right-hand gaps. Check the arithmetic every time — the number of new
+cards Paul reports must exactly equal the number of gaps the sweep and
+the takes opened. If it doesn't, the reconstruction is wrong; ask for the
+whole row instead of guessing.
 
 Read the printed move sequence to Paul; he plays exactly that, in order,
 in the app. Nothing else needs typing back — the state file already has
