@@ -530,6 +530,17 @@ fn join_names(cards: &[CardId]) -> String {
     cards.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
 }
 
+/// Like [`join_names`], but a list that may legitimately hold "a card is here
+/// and I do not know which" writes that slot as [`EMPTY`] rather than asking
+/// [`CardId::NONE`] for a name it does not have.
+fn join_card_names_or_empty(cards: &[CardId]) -> String {
+    cards
+        .iter()
+        .map(|&c| if c.is_none() { EMPTY } else { c.name() })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn fmt_hand_sorted(cards: &[CardId]) -> String {
     if cards.is_empty() {
         return EMPTY.to_string();
@@ -669,6 +680,15 @@ pub fn dumps(board: &Board) -> String {
     ));
     if !st.current_events.is_empty() {
         out.push(format!("curev {}", join_names(st.current_events.as_slice())));
+    }
+    // Events that have already resolved are PUBLIC -- everyone at the table
+    // watched them happen -- so they survive a save/load by name. The `past=`
+    // count on the `events` line above cannot carry that: it reloads as N
+    // sentinels, and `bots::counting::event_pool` indexes an array by past
+    // event id to work out which events are still unseen. A sentinel there is
+    // an out-of-bounds panic, which is how the live game found this.
+    if !st.past_events.is_empty() {
+        out.push(format!("pastev {}", join_card_names_or_empty(st.past_events.as_slice())));
     }
     if !st.available_tactics.is_empty() {
         out.push(format!("tactics {}", join_names(st.available_tactics.as_slice())));
@@ -916,6 +936,12 @@ fn load_line(board: &mut Board, ln: &str) -> Result<(), String> {
                 fill_cardlist(&resolve_names(&split_strict(rest), Pool::Military)?);
             Ok(())
         }
+        // Overrides the `past=` count on the preceding `events` line, which is
+        // only a fallback for a file written before past events were named.
+        "pastev" => {
+            board.state.past_events = fill_cardlist(&resolve_event_tokens(&split_strict(rest))?);
+            Ok(())
+        }
         "tactics" => {
             board.state.available_tactics =
                 fill_cardlist(&resolve_names(&split_strict(rest), Pool::Tactic)?);
@@ -931,6 +957,13 @@ fn load_line(board: &mut Board, ln: &str) -> Result<(), String> {
         }
         _ => Err(format!("don't understand line {ln:?}")),
     }
+}
+
+fn resolve_event_tokens(tokens: &[String]) -> Result<Vec<CardId>, String> {
+    tokens
+        .iter()
+        .map(|t| if t == EMPTY { Ok(CardId::NONE) } else { resolve_card(t, Pool::Military, &[]) })
+        .collect()
 }
 
 fn resolve_row_tokens(tokens: &[String]) -> Result<Vec<CardId>, String> {
@@ -1995,6 +2028,32 @@ mod tests {
         assert_eq!(q.wonder.name(), "Pyramids");
         assert_eq!(q.wonder_steps, 2);
         assert_eq!(q.completed_wonders.as_slice(), &[CardId::by_name("Colossus").unwrap()]);
+    }
+
+    /// The panic that sent this fix: a saved snapshot's `events ... past=N`
+    /// line reloads as N `CardId::NONE` sentinels, and
+    /// `bots::counting::event_pool` / `bots::weighted::events::my_seeds`
+    /// index arrays by past event id, which panics on a sentinel. Past
+    /// events are PUBLIC (everyone at the table watched them resolve), so
+    /// `dumps` writes them by name on a `pastev` line and `loads` must
+    /// recover the real ids, not the count-only sentinels.
+    #[test]
+    fn past_events_survive_a_save_and_reload_by_name_not_as_unknown_sentinels() {
+        let mut b = new_board(2, 0, 5);
+        let dev_settlement = CardId::by_name("Development of Settlement").unwrap();
+        let dev_science = CardId::by_name("Development of Science").unwrap();
+        b.state.past_events.push(dev_settlement);
+        b.state.past_events.push(dev_science);
+
+        let text = dumps(&b);
+        assert!(text.contains("pastev"), "dump should carry past events by name:\n{text}");
+
+        let b2 = loads(&text).unwrap();
+        assert_eq!(
+            b2.state.past_events.as_slice(),
+            &[dev_settlement, dev_science],
+            "reloaded past events must be the real ids, not CardId::NONE sentinels"
+        );
     }
 
     // --------------------------------------------------------------- patch

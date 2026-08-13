@@ -102,13 +102,28 @@ printed was off by three. Fixed in `1e83812`, with
 pinning it.)
 
 If Paul reports only the newly-dealt cards and what the rival took, the
-full row can be reconstructed rather than retyped: at 2p the replenish
-sweeps the **3 leftmost slots** (`docs/RULES_SPEC.md` §2, sweep 2p:3 /
-3p:2 / 4p:1), slides the survivors left in order, then deals into the
-right-hand gaps. Check the arithmetic every time — the number of new
-cards Paul reports must exactly equal the number of gaps the sweep and
-the takes opened. If it doesn't, the reconstruction is wrong; ask for the
-whole row instead of guessing.
+full row can be reconstructed rather than retyped — but the replenish
+happens at the **start of every player's turn**, not once per exchange:
+between two consecutive turns of the same player there are `num_players`
+sweeps, each discarding the 3 leftmost slots at 2p (`docs/RULES_SPEC.md`
+§2, sweep 2p:3 / 3p:2 / 4p:1). At 2p that's 2 sweeps × 3 = 6 cards swept
+between one of Paul's turns and his next, plus one more card for every
+card taken by anyone in between (Paul or the rival). The one exception is
+Age A: per `docs/RULES_SPEC.md` §1.10 the FIRST replenish of the whole
+game happens at the starting player's SECOND turn, so there is no sweep
+before that first replenish. Check the arithmetic every time — the number
+of new cards Paul reports must exactly equal the number of gaps the
+sweeps and the takes opened. If it doesn't, the reconstruction is wrong;
+ask for the whole row instead of guessing. (An earlier version of this
+paragraph said one sweep of 3 per exchange; that was wrong and was
+believed until a live game contradicted it.)
+
+**When an event resolves, ask Paul for his board scalars.** The advisor's
+mirror does not apply event effects, so it silently drifts from the app
+the moment an event card is evaluated. `Development of Settlement` gives
+every player a FREE population increase; our mirror missed that, and
+quoted a population cost of 2 food when the app charged 3. Repair it with
+`p0 yel=<yellow tokens left> fw=<unused workers>`.
 
 Read the printed move sequence to Paul; he plays exactly that, in order,
 in the app. Nothing else needs typing back — the state file already has

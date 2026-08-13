@@ -1454,6 +1454,20 @@ pub struct GameState {
 }
 
 impl GameState {
+    /// Did player `idx` place `card` face down in an event pile themselves?
+    ///
+    /// The one way to ask, because the event piles can hold [`CardId::NONE`]:
+    /// a position restored from a save file knows how many cards are face down
+    /// without knowing which, and indexing [`Self::seeded_by`] by that sentinel
+    /// is an out-of-bounds panic. An unknown card is trivially not one you
+    /// placed yourself, so the sentinel has exactly one right answer and this
+    /// is where it lives -- two separate readers each guessing it is how the
+    /// same crash turned up twice.
+    #[inline]
+    pub fn seeded_by_player(&self, card: CardId, idx: u8) -> bool {
+        !card.is_none() && self.seeded_by[card.0 as usize] == idx
+    }
+
     #[inline]
     pub fn me(&self) -> &PlayerState {
         &self.players[self.current as usize]

@@ -265,7 +265,7 @@ pub fn my_seeds(state: &GameState, idx: u8) -> Vec<CardId> {
         .iter()
         .chain(state.future_events.as_slice())
         .copied()
-        .filter(|&c| state.seeded_by[c.0 as usize] == idx)
+        .filter(|&c| state.seeded_by_player(c, idx))
         .collect()
 }
 

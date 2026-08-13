@@ -341,6 +341,13 @@ pub fn event_pool(state: &GameState, idx: u8) -> (Vec<(CardId, u16)>, f64) {
     let ages = live_ages(state);
     let mut known = [0u16; NUM_CARDS];
     for &id in state.past_events.as_slice() {
+        // A position restored from a file written before past events were saved
+        // by name knows only how many resolved, not which. Counting an unknown
+        // as "seen" would be indexing by a sentinel; leaving it out only makes
+        // us slightly more pessimistic about what is still in the deck.
+        if id.is_none() {
+            continue;
+        }
         known[id.0 as usize] += 1;
     }
     for &age in &ages {
@@ -354,7 +361,7 @@ pub fn event_pool(state: &GameState, idx: u8) -> (Vec<(CardId, u16)>, f64) {
     }
     let mut mine_in_pile: u32 = 0;
     for &id in state.current_events.as_slice().iter().chain(state.future_events.as_slice()) {
-        if state.seeded_by[id.0 as usize] == idx {
+        if state.seeded_by_player(id, idx) {
             known[id.0 as usize] += 1; // I put it there
             mine_in_pile += 1;
         }
