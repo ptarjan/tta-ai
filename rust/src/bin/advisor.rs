@@ -454,17 +454,16 @@ impl Console {
 /// Guarded at 40 iterations in both loops -- the same bound
 /// `Advisor::skip_opponent_turn` already uses -- so a bug that stops the
 /// decider ever advancing is a clean failure here instead of a hang.
-fn run_batch(adv: &mut advisor::Advisor, input: &str) -> Result<String, String> {
-    let (msgs, errs) = state_io::patch_all(&mut adv.board, input);
-    if !errs.is_empty() {
-        return Err(format!("bad update line(s):\n  {}", errs.join("\n  ")));
-    }
-
-    let mut out = String::new();
-    for m in &msgs {
-        out.push_str(&format!("ok: {m}\n"));
-    }
-
+/// Hand the turn back to us, then overwrite the mirror with what Paul reports.
+///
+/// The order matters and is the whole reason this is a named function. The
+/// update lines describe the table as it stands right now -- after the rival
+/// moved and after the start-of-turn replenish. Patching before the advance
+/// would let the engine's own sweep-and-refill run on top of the corrected
+/// row: at 2p that discards the three leftmost cards, slides every survivor
+/// left and deals three cards nobody can see, so every slot number we print
+/// is off by three and the cheap end of the row is filled with guesses.
+fn sync_to_my_turn(adv: &mut advisor::Advisor, input: &str) -> Result<Vec<String>, String> {
     let mut guard = 0;
     while !adv.my_turn() && !adv.state().game_over && guard < 40 {
         guard += 1;
@@ -472,6 +471,21 @@ fn run_batch(adv: &mut advisor::Advisor, input: &str) -> Result<String, String> 
     }
     if guard == 40 {
         return Err("opponents never finished handing the turn back to me (40-turn guard hit)".to_string());
+    }
+
+    let (msgs, errs) = state_io::patch_all(&mut adv.board, input);
+    if !errs.is_empty() {
+        return Err(format!("bad update line(s):\n  {}", errs.join("\n  ")));
+    }
+    Ok(msgs)
+}
+
+fn run_batch(adv: &mut advisor::Advisor, input: &str) -> Result<String, String> {
+    let msgs = sync_to_my_turn(adv, input)?;
+
+    let mut out = String::new();
+    for m in &msgs {
+        out.push_str(&format!("ok: {m}\n"));
     }
 
     let mut step = 0;
@@ -617,6 +631,37 @@ mod tests {
         // by the bot itself choosing to end it -- either way the mirror must
         // have handed the decider on to the other seat by the time we save.
         assert_ne!(adv.state().decider(), adv.board.me);
+    }
+
+    #[test]
+    fn the_reported_row_is_the_one_the_bot_scores_and_is_never_replenished_on_top_of() {
+        let all_bronze = "row Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze Bronze";
+        let mut adv = fresh_advisor(3);
+
+        // The first exchange ends our turn, so the second one has to hand the
+        // board back to us -- and that advance is where the start-of-turn
+        // replenish lives. Only the second exchange can expose the ordering.
+        run_batch(&mut adv, all_bronze).unwrap();
+        assert!(!adv.my_turn(), "the first exchange should have passed the board on");
+
+        // Stop at the sync rather than running the whole exchange: once the
+        // bot starts playing, ending our turn advances the mirror into the
+        // rival's start-of-turn replenish, which legitimately refills the row.
+        // The position we care about is the one the bot is about to score.
+        sync_to_my_turn(&mut adv, all_bronze).unwrap();
+
+        // Applying the report BEFORE the advance let the replenish run on top
+        // of it: at 2p that sweeps the three leftmost slots, slides every
+        // survivor left and deals three cards from the engine's own deck. The
+        // bot would then score -- and we would print slot numbers for -- a row
+        // that is not the one in front of Paul.
+        for (i, c) in adv.state().card_row.iter().enumerate() {
+            assert!(
+                c.get().name == "Bronze",
+                "slot {i} holds '{}', which was never reported",
+                c.get().name
+            );
+        }
     }
 
     #[test]
