@@ -370,7 +370,7 @@ pub fn pick_collecting(
     state: &GameState,
     moves: &[Move],
     bank: &mut Bank<GameState>,
-    mut policy: Option<&mut PolicyOrder>,
+    policy: Option<&mut PolicyOrder>,
 ) -> Move {
     // `beam` below already refuses to EXPAND a `Move::Resign` candidate (see
     // its own per-move `continue`), so in the ordinary case Resign never wins
@@ -413,8 +413,30 @@ pub fn pick_collecting(
         );
     }
 
-    // `(move, total, samples seen)` -- one collection of triples, not
-    // `totals`/`seen` kept in step by index (house style).
+    let totals = search_totals(cfg, stats, state, moves, me, w, &ctx, bank, policy);
+    best_from_totals(&totals).unwrap_or(moves[0])
+}
+
+/// The per-root-candidate accumulation [`pick_collecting`] uses to choose its
+/// one winner: `(move, summed terminal score, samples that reached it)`,
+/// averaged over `cfg.samples` determinizations of `state`. A collection of
+/// triples, not `totals`/`seen` kept in step by index (house style).
+///
+/// Factored out so [`rank`] can read the SAME numbers `pick_collecting`
+/// itself computes to choose a winner, rather than re-running the beam once
+/// per candidate to recover them -- re-running would multiply search cost by
+/// the branching factor for information this one search call already has.
+fn search_totals(
+    cfg: &PlanConfig,
+    stats: &mut Stats,
+    state: &GameState,
+    moves: &[Move],
+    me: u8,
+    w: &Weights,
+    ctx: &RivalContext,
+    bank: &mut Bank<GameState>,
+    mut policy: Option<&mut PolicyOrder>,
+) -> Vec<(Move, f64, u32)> {
     let mut totals: Vec<(Move, f64, u32)> = moves.iter().map(|&m| (m, 0.0, 0u32)).collect();
     let mut drng = plan_rng(state, me);
     for _ in 0..cfg.samples {
@@ -422,7 +444,7 @@ pub fn pick_collecting(
         if cfg.bot.determinize {
             determinize(&mut root, &mut drng);
         }
-        let best = beam(cfg, stats, &root, moves, me, w, &ctx, bank, policy.as_deref_mut());
+        let best = beam(cfg, stats, &root, moves, me, w, ctx, bank, policy.as_deref_mut());
         for (mv, v) in best {
             if let Some(entry) = totals.iter_mut().find(|(m, _, _)| *m == mv) {
                 entry.1 += v;
@@ -430,8 +452,15 @@ pub fn pick_collecting(
             }
         }
     }
+    totals
+}
+
+/// The single best `(avg score, move)` in `totals`, ignoring any root
+/// candidate no sample ever reached (`seen == 0`) -- `pick_collecting`'s own
+/// argmax loop, factored out so [`rank`] does not have to restate it.
+fn best_from_totals(totals: &[(Move, f64, u32)]) -> Option<Move> {
     let mut chosen: Option<(f64, Move)> = None;
-    for &(mv, total, seen) in &totals {
+    for &(mv, total, seen) in totals {
         if seen == 0 {
             continue;
         }
@@ -440,7 +469,78 @@ pub fn pick_collecting(
             chosen = Some((avg, mv));
         }
     }
-    chosen.map(|(_, m)| m).unwrap_or(moves[0])
+    chosen.map(|(_, m)| m)
+}
+
+/// [`pick_collecting`]'s search, but returning EVERY root candidate's
+/// averaged score, best first, instead of collapsing to one winner -- what a
+/// caller that wants to show a human several ranked options (not just a
+/// single verdict) needs. Runs the search exactly ONCE per call, same as
+/// [`pick_collecting`]: see [`search_totals`]'s own doc comment for why that
+/// matters.
+///
+/// A root candidate is absent from the result -- rather than padded with a
+/// guessed score -- whenever [`beam`] never actually recorded a terminal
+/// value for it into `best`. Two distinct ways that happens, both real and
+/// both common, not just an edge case: `cfg.max_nodes` can starve the ROOT
+/// ply itself before every candidate's turn in the loop, OR (far more often)
+/// a candidate's whole line can get pruned out of the frontier by `cfg.
+/// width` truncation, ply after ply, before any of its descendants ever
+/// reaches a terminal position (`t.game_over || t.current != me`) --
+/// `update_best` is only ever called from a terminal position, so a
+/// truncated-out line contributes nothing at all, no matter how generous
+/// `max_nodes` is. A caller that must never drop a legal move from view has
+/// to notice the gap and fall back to its own 1-ply score for it
+/// (`advisor::advisor::rank_moves_beam` does exactly this).
+///
+/// Outside the decider's own ordinary turn (`pending::not_my_turn`, mirroring
+/// [`pick_collecting`]'s identical branch) there is no multi-move "turn" to
+/// beam-search: every legal move is scored flat, one ply deep (draining the
+/// pending stack first when [`pending::wants_quiet`] says so), through the
+/// same [`pending::fallback_pick`] policy `pick_collecting` itself routes
+/// through -- so `counters` moves exactly as it would for [`pick`] at an
+/// identical decision.
+pub fn rank(
+    cfg: &PlanConfig,
+    stats: &mut Stats,
+    counters: &mut pending::Counters,
+    rng: &mut PyRandom,
+    state: &GameState,
+    moves: &[Move],
+    bank: &mut Bank<GameState>,
+    policy: Option<&mut PolicyOrder>,
+) -> Vec<(Move, f64)> {
+    let filtered = crate::bots::filter_resign(moves, false);
+    let moves: &[Move] = filtered.as_slice();
+    if moves.is_empty() {
+        return Vec::new();
+    }
+    if moves.len() == 1 {
+        return vec![(moves[0], 0.0)];
+    }
+    let me = state.decider();
+    let w = &cfg.weights;
+    let ctx = rivals::rival_context(state, me, None, None);
+
+    if pending::not_my_turn(state, me) {
+        let root = pending::prepare_root(&cfg.bot, state, counters, determinize, rng);
+        return pending::fallback_pick(
+            &cfg.bot,
+            state,
+            counters,
+            || one_ply_ranked(&root, moves, me, w, &ctx),
+            || one_ply_quiet_ranked(&root, moves, me, w, &ctx, cfg.war_lookahead, stats, bank),
+        );
+    }
+
+    let totals = search_totals(cfg, stats, state, moves, me, w, &ctx, bank, policy);
+    let mut ranked: Vec<(Move, f64)> = totals
+        .into_iter()
+        .filter(|&(_, _, seen)| seen > 0)
+        .map(|(mv, total, seen)| (mv, total / f64::from(seen)))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
 }
 
 /// One node in [`beam`]'s frontier: the running score, the state it reached,
@@ -620,16 +720,26 @@ fn score(t: &GameState, me: u8, w: &Weights, ctx: &RivalContext, war_lookahead: 
 /// evaluate`] -- no quiescence, no war lookahead. Mirrors `PlanBot._one_ply`
 /// (its journalled twin dropped; see this module's top doc comment).
 fn one_ply(state: &GameState, moves: &[Move], me: u8, w: &Weights, ctx: &RivalContext) -> Move {
-    let mut best: Option<(Move, f64)> = None;
-    for &mv in moves {
-        let mut t = state.clone();
-        apply::apply(&mut t, mv);
-        let v = eval::evaluate(&t, me, w, Some(ctx), None);
-        if best.is_none_or(|(_, bv)| v > bv) {
-            best = Some((mv, v));
-        }
-    }
-    best.map(|(m, _)| m).unwrap_or(moves[0])
+    one_ply_ranked(state, moves, me, w, ctx).first().map(|&(m, _)| m).unwrap_or(moves[0])
+}
+
+/// [`one_ply`], but returns every candidate's score, best first, instead of
+/// only the winner -- [`rank`]'s counterpart to [`one_ply`] at a non-ordinary
+/// -turn decision. A stable sort keeps [`one_ply`]'s own tie-break (first
+/// candidate seen wins a tie) exactly: `.first()` after a stable descending
+/// sort is the first-inserted maximum, identical to the strict `v > bv`
+/// running-best this replaces.
+fn one_ply_ranked(state: &GameState, moves: &[Move], me: u8, w: &Weights, ctx: &RivalContext) -> Vec<(Move, f64)> {
+    let mut ranked: Vec<(Move, f64)> = moves
+        .iter()
+        .map(|&mv| {
+            let mut t = state.clone();
+            apply::apply(&mut t, mv);
+            (mv, eval::evaluate(&t, me, w, Some(ctx), None))
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
 }
 
 /// `one_ply`, but drain the pending stack before scoring -- mirrors
@@ -650,18 +760,38 @@ fn one_ply_quiet(
     stats: &mut Stats,
     bank: &mut Bank<GameState>,
 ) -> Move {
-    let mut best: Option<(Move, f64)> = None;
+    one_ply_quiet_ranked(state, moves, me, w, ctx, war_lookahead, stats, bank)
+        .first()
+        .map(|&(m, _)| m)
+        .unwrap_or(moves[0])
+}
+
+/// [`one_ply_quiet`], but returns every candidate's score, best first --
+/// [`rank`]'s counterpart to [`one_ply_quiet`] at a non-ordinary-turn
+/// decision that wants the pending stack drained before scoring. See
+/// [`one_ply_ranked`]'s own doc comment for why `.first()` after a stable
+/// sort reproduces the original running-best tie-break exactly.
+fn one_ply_quiet_ranked(
+    state: &GameState,
+    moves: &[Move],
+    me: u8,
+    w: &Weights,
+    ctx: &RivalContext,
+    war_lookahead: bool,
+    stats: &mut Stats,
+    bank: &mut Bank<GameState>,
+) -> Vec<(Move, f64)> {
+    let mut ranked: Vec<(Move, f64)> = Vec::with_capacity(moves.len());
     for &mv in moves {
         let mut t = state.clone();
         apply::apply(&mut t, mv);
         quiesce(&mut t, w, Some(&ctx.root_row), Some((&ctx.civil_outlook, &ctx.event_pool)));
         let v = score(&t, me, w, ctx, war_lookahead, stats);
         bank.push(|| t.clone());
-        if best.is_none_or(|(_, bv)| v > bv) {
-            best = Some((mv, v));
-        }
+        ranked.push((mv, v));
     }
-    best.map(|(m, _)| m).unwrap_or(moves[0])
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
 }
 
 /// Drain `st.pending` with plain 1-ply picks for whoever decides, up to
@@ -926,6 +1056,108 @@ mod tests {
         let mut rng = PyRandom::new(1);
         let mv = pick(&cfg, &mut stats, &mut counters, &mut rng, &state, moves.as_slice());
         assert!(moves.as_slice().contains(&mv));
+    }
+
+    // ---------------------------------------------------------------- rank
+
+    /// [`rank`] must return only offered moves, each at most once, sorted
+    /// best-first -- the shape the advisor's beam mode needs to print a
+    /// ranked list, not just one winner. It must NOT be assumed to cover
+    /// every root candidate: [`rank`]'s own doc comment explains why a
+    /// truncated-out line can leave a real legal move absent even at a
+    /// generous node budget, so this test only pins the invariants that
+    /// always hold.
+    #[test]
+    fn rank_returns_a_sorted_duplicate_free_subset_of_the_offered_moves() {
+        let state = G::new_game(3, 5);
+        let moves = crate::legal::legal_moves(&state);
+        let cfg = PlanConfig { width: 4, max_plies: 3, max_nodes: 400, ..PlanConfig::default() };
+        let mut stats = Stats::default();
+        let mut counters = pending::Counters::default();
+        let mut rng = PyRandom::new(1);
+        let ranked =
+            rank(&cfg, &mut stats, &mut counters, &mut rng, &state, moves.as_slice(), &mut Bank::Off, None);
+        assert!(!ranked.is_empty());
+        assert!(ranked.len() <= moves.as_slice().len());
+        for &(mv, _) in &ranked {
+            assert!(moves.as_slice().contains(&mv));
+            assert_eq!(ranked.iter().filter(|&&(m, _)| m == mv).count(), 1, "{mv:?} appeared more than once");
+        }
+        for w in ranked.windows(2) {
+            assert!(w[0].1 >= w[1].1, "not sorted best-first: {:?}", ranked);
+        }
+    }
+
+    /// [`rank`]'s own winner (the first entry) must agree with what [`pick`]
+    /// returns on the identical (state, config, seed) -- two different views
+    /// of the SAME search, not two searches that can disagree.
+    #[test]
+    fn rank_agrees_with_pick_on_which_move_is_best() {
+        let state = G::new_game(3, 5);
+        let moves = crate::legal::legal_moves(&state);
+        let cfg = PlanConfig { width: 4, max_plies: 3, max_nodes: 400, ..PlanConfig::default() };
+
+        let mut stats_a = Stats::default();
+        let mut counters_a = pending::Counters::default();
+        let mut rng_a = PyRandom::new(1);
+        let picked = pick(&cfg, &mut stats_a, &mut counters_a, &mut rng_a, &state, moves.as_slice());
+
+        let mut stats_b = Stats::default();
+        let mut counters_b = pending::Counters::default();
+        let mut rng_b = PyRandom::new(1);
+        let ranked =
+            rank(&cfg, &mut stats_b, &mut counters_b, &mut rng_b, &state, moves.as_slice(), &mut Bank::Off, None);
+
+        assert_eq!(ranked[0].0, picked, "rank's top entry must match pick's own winner");
+    }
+
+    /// A single legal move short-circuits to a one-entry list scored `0.0`,
+    /// matching [`pick`]'s identical short-circuit (and untouched `Stats`,
+    /// since neither ever reaches the search).
+    #[test]
+    fn rank_with_a_single_move_returns_it_alone_at_zero() {
+        let state = G::new_game(2, 1);
+        let moves = crate::legal::legal_moves(&state);
+        let one = [moves.as_slice()[0]];
+        let cfg = PlanConfig::default();
+        let mut stats = Stats::default();
+        let mut counters = pending::Counters::default();
+        let mut rng = PyRandom::new(1);
+        let ranked = rank(&cfg, &mut stats, &mut counters, &mut rng, &state, &one, &mut Bank::Off, None);
+        assert_eq!(ranked, vec![(one[0], 0.0)]);
+        assert_eq!(stats, Stats::default());
+    }
+
+    /// At a non-ordinary-turn decision (a real pending `Defense`), [`rank`]
+    /// must still return every offered candidate and must route through the
+    /// shared [`pending`] policy exactly like [`pick`] does -- the ranking
+    /// counterpart of `pending_branch_routes_through_the_shared_policy`.
+    #[test]
+    fn rank_at_a_pending_decision_routes_through_the_shared_policy_and_ranks_everything() {
+        use crate::state::{Defense, Pending};
+        let mut state = G::new_game(3, 1);
+        state.current = 0;
+        state.players[1].hand_military.push(war_card("Phalanx"));
+        state.pending.push(Pending::Defense(Defense {
+            player: 1,
+            attacker: 0,
+            card: war_card("Aggression: Raid (I)"),
+            atk: 6,
+            dfn: 0,
+            spent: 0,
+            budget: 3,
+        }));
+        let moves = crate::legal::legal_moves(&state);
+        assert!(moves.as_slice().len() > 1, "need a real decision to exercise the branch");
+        let cfg = PlanConfig::default();
+        let mut stats = Stats::default();
+        let mut counters = pending::Counters::default();
+        let mut rng = PyRandom::new(1);
+        let ranked =
+            rank(&cfg, &mut stats, &mut counters, &mut rng, &state, moves.as_slice(), &mut Bank::Off, None);
+        assert_eq!(ranked.len(), moves.as_slice().len());
+        assert_eq!(counters.calls, 1, "fallback_pick must have been called exactly once");
+        assert_eq!(counters.roots, 1, "prepare_root must have been called exactly once");
     }
 
     // ------------------------------------------------ policy-guided ordering

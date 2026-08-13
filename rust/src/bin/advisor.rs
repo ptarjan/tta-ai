@@ -29,12 +29,14 @@
 //! always prints the snapshot; see `quitting_from_the_move_prompt_prints_the_recovery_snapshot`.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use tta::advisor::advisor::{self, Advisor, Candidate};
+use tta::advisor::advisor::{self, Advisor, Candidate, SearchConfig, SearchMode};
 use tta::advisor::state_io;
+use tta::bots::plan;
 use tta::game;
+use tta::human_policy;
 use tta::moves::Move;
 use tta::state::ROW_SIZE;
 
@@ -48,11 +50,20 @@ struct Args {
     weights: Option<PathBuf>,
     load: Option<PathBuf>,
     save: Option<PathBuf>,
+    search: SearchMode,
 }
 
 impl Default for Args {
     fn default() -> Args {
-        Args { players: 3, seat: 0, seed: 0, weights: None, load: None, save: None }
+        // `Human` -- see `advisor::SearchMode`'s own doc comment for the
+        // 2026-08-13 measurement this default is based on: it is the only
+        // configuration measured to beat the 1-ply baseline. Unlike
+        // `advisor::SearchConfig::default()` (which stays `Greedy`, so an
+        // existing LIBRARY caller sees no behaviour change), this is the
+        // CLI's own considered choice for a human sitting down at a fresh
+        // run, made explicitly here rather than by changing that library
+        // default.
+        Args { players: 3, seat: 0, seed: 0, weights: None, load: None, save: None, search: SearchMode::Human }
     }
 }
 
@@ -66,6 +77,16 @@ usage: advisor [options]
                    the live league's own output -- gitignored, so a fresh
                    clone falls back to the built-in defaults if that is
                    missing)
+  --search MODE   greedy | beam | human (default: human). greedy is the
+                   original 1-ply evaluator. beam is real multi-ply
+                   lookahead over every legal move -- measured WORSE than
+                   greedy (41.9% win rate vs. it, 2026-08-13 measurement),
+                   kept only for side-by-side comparison. human narrows the
+                   root candidates with a human-imitation move-ordering
+                   prior, then runs the same beam over the survivors --
+                   the one mode measured to beat greedy (68.3%). See
+                   `tta::advisor::advisor::SearchMode`'s doc comment for
+                   the full numbers.
   --load PATH     resume from a snapshot file instead of dealing fresh
   --save PATH     one-shot, non-interactive mode instead of the terminal
                    REPL: read update lines from stdin (same grammar as the
@@ -91,6 +112,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--seat" => a.seat = parse_num(&value(flag)?, flag)?,
             "--seed" => a.seed = parse_num(&value(flag)?, flag)?,
             "--weights" => a.weights = Some(PathBuf::from(value(flag)?)),
+            "--search" => a.search = parse_search_mode(&value(flag)?)?,
             "--load" => a.load = Some(PathBuf::from(value(flag)?)),
             "--save" => a.save = Some(PathBuf::from(value(flag)?)),
             "--help" | "-h" => {
@@ -107,6 +129,57 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
         return Err(format!("--seat must be 0..{}, got {}", a.players - 1, a.seat));
     }
     Ok(Some(a))
+}
+
+/// Parse `--search`'s value into a [`SearchMode`]. A plain string match with
+/// an error fallback for garbage input -- NOT the "no wildcard arm" rule
+/// (that applies to matching over `SearchMode`'s own variants in Rust code,
+/// e.g. [`rank_moves_search`](advisor::rank_moves_search)'s dispatch;
+/// parsing untrusted CLI text always needs a rejection path).
+fn parse_search_mode(s: &str) -> Result<SearchMode, String> {
+    match s {
+        "greedy" => Ok(SearchMode::Greedy),
+        "beam" => Ok(SearchMode::Beam),
+        "human" => Ok(SearchMode::Human),
+        other => Err(format!("--search: {other:?} is not one of greedy, beam, human")),
+    }
+}
+
+/// Build the [`SearchConfig`] `mode` asks for, plus a one-line description
+/// for the startup banner. `Human` reads `analysis/frozen/human_weights.json`
+/// (relative to the current directory, the same convention [`advisor::
+/// load_bot`]'s own doc comment documents for `--weights`) -- on any load
+/// failure this falls back to `Greedy` with a clear stderr note rather than
+/// refusing to start the whole session over one missing/malformed file,
+/// mirroring [`advisor::load_bot`]'s own fallback-not-crash convention for a
+/// bad `--weights` path.
+fn load_search(mode: SearchMode) -> (SearchConfig, String) {
+    match mode {
+        SearchMode::Greedy => {
+            (SearchConfig { mode: SearchMode::Greedy, ..SearchConfig::default() }, "greedy (1-ply)".to_string())
+        }
+        SearchMode::Beam => (
+            SearchConfig { mode: SearchMode::Beam, plan: plan::PlanConfig::default(), human_weights: Vec::new() },
+            "beam (multi-ply search over every legal move -- measured WORSE than greedy)".to_string(),
+        ),
+        SearchMode::Human => {
+            let path = Path::new("analysis/frozen/human_weights.json");
+            match human_policy::load_weights(path) {
+                Ok(w) => {
+                    let human_weights = human_policy::vector_from_weights(&w);
+                    let cfg = SearchConfig { mode: SearchMode::Human, plan: plan::PlanConfig::default(), human_weights };
+                    (cfg, format!("human (root shortlist from {} + beam)", path.display()))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "advisor: could not load {} ({e}) -- falling back to --search greedy",
+                        path.display()
+                    );
+                    (SearchConfig::default(), format!("greedy (human weights failed to load: {e})"))
+                }
+            }
+        }
+    }
 }
 
 fn parse_num<T: std::str::FromStr>(s: &str, flag: &str) -> Result<T, String> {
@@ -155,11 +228,17 @@ struct Console {
     /// The board text at the start of the human's current turn, so `undo`
     /// can roll back to it. Mirrors `Console._snapshot`.
     snapshot: Option<String>,
+    /// [`load_search`]'s one-line description of `adv.search`, printed in
+    /// the startup banner next to `bot_source` -- a human at a physical
+    /// table needs to see WHICH lookahead they are getting exactly as much
+    /// as which weight file, especially now that the default is not the
+    /// original 1-ply behaviour.
+    search_source: String,
 }
 
 impl Console {
-    fn new(adv: Advisor) -> Console {
-        Console { adv, snapshot: None }
+    fn new(adv: Advisor, search_source: String) -> Console {
+        Console { adv, snapshot: None, search_source }
     }
 
     fn ask(&self, prompt: &str) -> String {
@@ -180,6 +259,7 @@ impl Console {
     fn run(&mut self) {
         self.say(&banner());
         self.say(&format!("bot: {}", self.adv.bot_source));
+        self.say(&format!("search: {}", self.search_source));
         self.say(&state_io::render(&self.adv.board, BOARD_WIDTH));
 
         let outcome = loop {
@@ -568,6 +648,8 @@ fn main() -> ExitCode {
     };
     let (bot, source) = advisor::load_bot(board.state.num_players, args.weights.as_deref());
     let mut adv = Advisor::new(board, bot, source);
+    let (search, search_source) = load_search(args.search);
+    adv.search = search;
 
     if let Some(save_path) = &args.save {
         // Batch mode: `run_batch` sources the whole board from `--load` (a
@@ -581,6 +663,7 @@ fn main() -> ExitCode {
         }
         return match run_batch(&mut adv, &input) {
             Ok(report) => {
+                println!("search: {search_source}");
                 print!("{report}");
                 match std::fs::write(save_path, state_io::dumps(&adv.board)) {
                     Ok(()) => ExitCode::SUCCESS,
@@ -602,7 +685,7 @@ fn main() -> ExitCode {
         // human rather than trusting the engine's own (unseen) deal.
         adv.dealt_slots = (0..ROW_SIZE).collect();
     }
-    Console::new(adv).run();
+    Console::new(adv, search_source).run();
     ExitCode::SUCCESS
 }
 
