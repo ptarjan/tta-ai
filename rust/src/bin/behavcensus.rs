@@ -43,10 +43,11 @@ use std::time::Instant;
 use tta::bots::greedy::{build_bots, BotKind, Seat};
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
+use tta::cards::Special;
 use tta::effects;
 use tta::game::{self, MOVE_CAP};
 use tta::moves::Move;
-use tta::state::{ChoiceKind, ChoiceOption, Keyword, Pending};
+use tta::state::{ChoiceKind, Pending};
 use tta::{Age, CardId, CardType};
 
 // ---------------------------------------------------------------------
@@ -67,18 +68,29 @@ use tta::{Age, CardId, CardType};
 enum WonderFate {
     /// Paid off in full; moved to `completed_wonders` (`apply::do_wonder_step`).
     Completed,
-    /// A rival's `Infiltrate` aggression chose `Keyword::Wonder` against this
-    /// player (`interact.rs`'s `ChoiceKind::Infiltrate`, `Keyword::Wonder`
-    /// arm): the wonder is discarded and `wonder_steps` zeroed.
+    /// A rival's `Infiltrate` aggression (`Special::RemoveFromGame`) chose
+    /// this player's wonder over their leader, or they had no leader to
+    /// choose between (`interact.rs`'s `QueueItem::Infiltrate` handler /
+    /// `ChoiceKind::Infiltrate`): the wonder is discarded and `wonder_steps`
+    /// zeroed. Detected structurally by `infiltrate_candidate_victim`, not
+    /// by pattern-matching `Move::Choose` -- see its doc comment for why a
+    /// single `Move::Choose` match is structurally blind to the common,
+    /// auto-resolved, no-leader case.
     DestroyedByInfiltrate,
     /// Cleared at an age boundary because it was older than the age that
     /// just ended (`game::antiquate`; RULES_SPEC.md line 252/299: "an
     /// UNFINISHED wonder of an age older than the age that just ended is
     /// removed from play"). Legal per the base rulebook, §12.2.
     DestroyedByAntiquation,
-    /// Left the slot for neither reason above -- a code path this census
-    /// did not anticipate. Any non-zero count here means the bucket totals
-    /// below do not explain themselves and need more digging.
+    /// Left the slot for neither reason above. The engine has exactly three
+    /// sites that ever clear `.wonder` -- completion (`apply.rs`),
+    /// antiquation (`game::antiquate`), and Infiltrate (`interact.rs`'s
+    /// `QueueItem::Infiltrate` handler) -- and this census now recognizes
+    /// all three, including Infiltrate's auto-resolved shape (see
+    /// `infiltrate_candidate_victim`'s doc comment). A non-zero count here
+    /// is therefore NOT a classification gap: it means the engine cleared
+    /// `.wonder` from a fourth site the rulebook does not sanction, and is a
+    /// real bug to chase, not a census TODO.
     DestroyedUnexplained,
     /// Still occupying the slot when the game ended (unfinished, never
     /// destroyed).
@@ -325,6 +337,78 @@ impl PlayerTrack {
     }
 }
 
+/// The victim whose wonder `mv` MIGHT be about to clear via Infiltrate, if
+/// any -- structural, not a `Move::Choose` value sniff, because
+/// `combat::finish_aggression`'s single `Special::RemoveFromGame` gate
+/// (which enqueues `QueueItem::Infiltrate`) can resolve on three different
+/// move shapes depending on how much decision-making it needs along the
+/// way:
+///
+///   1. `Move::Aggression` itself, when the defender has no military
+///      actions or an empty hand to spend: `interact::start_defense`'s
+///      short-circuit calls `finish_aggression` inline, in the very step
+///      that declared the aggression, with no `Pending::Defense` ever
+///      created to read.
+///   2. `Move::Defend` / `Move::DefendDone`, when the defender DOES have
+///      cards to spend: `state.pending` carries `Pending::Defense { card,
+///      player, .. }` (`interact::start_defense` / `defense_move`) right up
+///      until the move that exhausts the defender's budget or hand, or that
+///      passes voluntarily, pops it and calls `finish_aggression` there.
+///   3. `Move::Choose`, only when the victim has BOTH a leader and a
+///      wonder: `QueueItem::Infiltrate`'s handler (interact.rs) then offers
+///      a genuine two-option decision, answered by a later move.
+///      `state.pending` carries `Pending::Choice(Choice { kind:
+///      ChoiceKind::Infiltrate { victim, .. }, .. })` up until that move.
+///      (A leaderless victim's one-option list auto-resolves inside
+///      whichever of cases 1/2 enqueued it -- `push_choice(..., auto:
+///      true)`'s `options.len() == 1` branch -- so no `Move::Choose` is
+///      emitted for that shape at all; this arm exists for the two-option
+///      shape only.)
+///
+/// Naming a victim here for a case that turns out NOT to resolve on this
+/// exact move (a `Pending::Defense` gets pushed instead of resolving inline
+/// in case 1; the attacker's answer lands on `Leader` rather than `Wonder`
+/// in case 3) is harmless: the caller only consults this when the victim's
+/// `.wonder` is already known to have changed on THIS move, and none of
+/// those non-resolving cases change it.
+fn infiltrate_candidate_victim(state: &tta::GameState, mv: Move) -> Option<u8> {
+    if let Move::Aggression { card, target } = mv {
+        if card.get().special.contains(&Special::RemoveFromGame) {
+            return Some(target);
+        }
+    }
+    match state.pending.top() {
+        Some(Pending::Defense(d)) if d.card.get().special.contains(&Special::RemoveFromGame) => Some(d.player),
+        Some(Pending::Choice(c)) => match c.kind {
+            ChoiceKind::Infiltrate { victim, .. } => Some(victim),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The fate of a single player's wonder that is KNOWN to have left the
+/// `wonder` slot on this move (caller already checked `before != after`).
+/// Pulled out of `play_one`'s move loop so the classification itself --
+/// order of precedence completed > infiltrated > antiquated > unexplained --
+/// is unit-testable without driving a real game.
+fn classify_wonder_change(
+    completed_this_move: bool,
+    pending_infiltrate_victim: Option<u8>,
+    victim: u8,
+    age_changed_this_move: bool,
+) -> WonderFate {
+    if completed_this_move {
+        WonderFate::Completed
+    } else if pending_infiltrate_victim == Some(victim) {
+        WonderFate::DestroyedByInfiltrate
+    } else if age_changed_this_move {
+        WonderFate::DestroyedByAntiquation
+    } else {
+        WonderFate::DestroyedUnexplained
+    }
+}
+
 fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     let seats: Vec<Seat> = (0..players).map(|_| Seat { kind: BotKind::Weighted, weights }).collect();
     let mut bots = build_bots(&seats, seed as i64);
@@ -358,22 +442,15 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         let pre_snapshots: Vec<AgeSample> = (0..players).map(|i| sample_player(&state, i)).collect();
 
         // pre-move wonder-fate inputs: who holds what wonder right now, how
-        // many each has completed so far, and whether `mv` is about to
-        // answer an open `Infiltrate` decision by picking `Keyword::Wonder`
-        // (`interact.rs`'s `ChoiceKind::Infiltrate` / `resolve_choice`).
-        // `Move::Choose { n }` is the generic answer to ANY open choice, so
-        // the only way to tell what it means is to read the choice it is
-        // answering off `state.pending` before the move consumes it.
+        // many each has completed so far, and whether `mv` might be about
+        // to clear some victim's wonder via Infiltrate -- see
+        // `infiltrate_candidate_victim`'s doc comment for why this has to
+        // be read off THREE different move shapes rather than just
+        // `Move::Choose`, and why over-naming a victim here is harmless.
         let before_wonder: Vec<CardId> = (0..players).map(|i| state.players[i as usize].wonder).collect();
         let before_completed_len: Vec<usize> =
             (0..players).map(|i| state.players[i as usize].completed_wonders.len()).collect();
-        let pending_infiltrate_victim: Option<u8> = (|| {
-            let Move::Choose { n } = mv else { return None };
-            let Some(Pending::Choice(c)) = state.pending.top() else { return None };
-            let ChoiceKind::Infiltrate { victim, .. } = c.kind else { return None };
-            let Some(ChoiceOption::Word(Keyword::Wonder)) = c.options.get(n as usize) else { return None };
-            Some(victim)
-        })();
+        let pending_infiltrate_victim: Option<u8> = infiltrate_candidate_victim(&state, mv);
 
         game::step(&mut state, mv);
         moves_played += 1;
@@ -393,15 +470,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             }
             let completed_this_move =
                 state.players[i as usize].completed_wonders.len() > before_completed_len[i as usize];
-            let fate = if completed_this_move {
-                WonderFate::Completed
-            } else if pending_infiltrate_victim == Some(i) {
-                WonderFate::DestroyedByInfiltrate
-            } else if age_changed_this_move {
-                WonderFate::DestroyedByAntiquation
-            } else {
-                WonderFate::DestroyedUnexplained
-            };
+            let fate = classify_wonder_change(completed_this_move, pending_infiltrate_victim, i, age_changed_this_move);
             tracks[i as usize].wonder_fate.entry(before).or_insert(fate);
         }
 
@@ -663,7 +732,12 @@ fn print_report(players: u8, r: &Report) {
     println!("- Completed: {} ({:.1}%)", f.completed, pct(f.completed));
     println!("- Destroyed by Infiltrate: {} ({:.1}%)", f.infiltrated, pct(f.infiltrated));
     println!("- Destroyed by antiquation (\u{a7}12.2, age-end): {} ({:.1}%)", f.antiquated, pct(f.antiquated));
-    println!("- Destroyed, unexplained (needs investigation): {} ({:.1}%)", f.unexplained, pct(f.unexplained));
+    println!(
+        "- Destroyed, unexplained (engine cleared `.wonder` from a fourth site the rulebook does not \
+         sanction -- a real bug, not a census gap; see WonderFate::DestroyedUnexplained's doc comment): {} ({:.1}%)",
+        f.unexplained,
+        pct(f.unexplained)
+    );
     println!("- Still in progress at game end: {} ({:.1}%)", f.still_in_progress, pct(f.still_in_progress));
     if r.n_wonder_fate_mismatches > 0 {
         println!(
@@ -885,6 +959,110 @@ mod tests {
         // Every game reaches at least Age I, so that boundary's bucket
         // (index 0, "end of Age A") must be non-empty.
         assert!(!report.age_samples[0].is_empty(), "should have crossed at least one age boundary");
+    }
+
+    #[test]
+    fn infiltrate_candidate_victim_flags_an_aggression_move_playing_a_remove_from_game_card() {
+        // Case 1 of infiltrate_candidate_victim's doc comment: when the
+        // defender has no military actions or an empty hand,
+        // `interact::start_defense` resolves `finish_aggression` INLINE,
+        // inside the very `Move::Aggression` step -- no `Pending::Defense`
+        // is ever pushed for a later move to read. A fresh game has empty
+        // `pending`, so this exercises exactly that no-decision-pending
+        // path.
+        let state = game::new_game(2, 1);
+        assert!(state.pending.is_empty(), "a freshly started game has no open decision");
+        let card = CardId::by_name("Aggression: Infiltrate").expect("card table has Aggression: Infiltrate");
+        let mv = Move::Aggression { card, target: 1 };
+        assert_eq!(infiltrate_candidate_victim(&state, mv), Some(1));
+    }
+
+    #[test]
+    fn infiltrate_candidate_victim_ignores_aggression_cards_that_do_not_remove_anything() {
+        // Not every Aggression card is Infiltrate-class (Special::
+        // RemoveFromGame); a Raid/Annex/Plunder card must not be misread as
+        // one, or every aggression against any player would get wrongly
+        // credited as a wonder-destroyer.
+        let state = game::new_game(2, 1);
+        let plunder = CardId::by_name("Aggression: Plunder (III)").expect("card table has a non-Infiltrate aggression");
+        let mv = Move::Aggression { card: plunder, target: 1 };
+        assert_eq!(infiltrate_candidate_victim(&state, mv), None);
+    }
+
+    #[test]
+    fn infiltrate_candidate_victim_reads_an_in_progress_defense_against_a_remove_from_game_card() {
+        // Case 2: when the defender DOES have military cards to spend,
+        // `interact::start_defense` pushes `Pending::Defense` and the
+        // decision spans one or more `Move::Defend` / `Move::DefendDone`
+        // moves before `interact::defense_move` pops it and calls
+        // `finish_aggression`. The victim (`Defense.player`, the DEFENDER)
+        // must be legible off `state.pending` for whichever of those moves
+        // turns out to be the one that resolves it -- this is what lets the
+        // census attribute the wonder clearing on THAT move rather than the
+        // earlier `Move::Aggression` that only started the sequence.
+        let mut state = game::new_game(2, 1);
+        let card = CardId::by_name("Aggression: Infiltrate").expect("card table has Aggression: Infiltrate");
+        state.pending.push(tta::state::Pending::Defense(tta::state::Defense {
+            player: 1,
+            attacker: 0,
+            card,
+            atk: 5,
+            dfn: 2,
+            spent: 0,
+            budget: 1,
+        }));
+        // The move itself is irrelevant to this function -- only the top of
+        // `state.pending` is read -- so `DefendDone` stands in for whichever
+        // of the two legal moves the bot actually picked.
+        assert_eq!(infiltrate_candidate_victim(&state, Move::DefendDone), Some(1));
+    }
+
+    #[test]
+    fn infiltrate_candidate_victim_reads_an_open_infiltrate_choice() {
+        // Case 3: a victim with BOTH a leader and a wonder gets a genuine
+        // two-option decision (interact.rs's QueueItem::Infiltrate
+        // handler), answered by a separate Move::Choose. The victim is
+        // named on the `ChoiceKind::Infiltrate` itself, so this must not
+        // require inspecting WHICH option index `n` was actually chosen --
+        // the caller only acts on this if the wonder slot changed on this
+        // exact move, which self-filters an answer of `Leader`.
+        let mut state = game::new_game(2, 1);
+        let mut opts = tta::state::OptionList::new();
+        opts.push(tta::state::ChoiceOption::Word(tta::state::Keyword::Leader));
+        opts.push(tta::state::ChoiceOption::Word(tta::state::Keyword::Wonder));
+        state.pending.push(tta::state::Pending::Choice(tta::state::Choice {
+            player: 0,
+            kind: ChoiceKind::Infiltrate { victim: 1, per: 3 },
+            options: opts,
+        }));
+        assert_eq!(infiltrate_candidate_victim(&state, Move::Choose { n: 1 }), Some(1));
+    }
+
+    #[test]
+    fn classify_wonder_change_prefers_infiltrate_over_unexplained_for_the_auto_resolved_case() {
+        // This is the regression test for the bug this change fixes: before
+        // the structural detector, a wonder that vanished on an Aggression
+        // move (not the age-change move, not a completion) with no matching
+        // Move::Choose fell all the way through to DestroyedUnexplained. It
+        // must now resolve to DestroyedByInfiltrate instead.
+        let fate = classify_wonder_change(
+            /* completed_this_move */ false,
+            /* pending_infiltrate_victim */ Some(1),
+            /* victim */ 1,
+            /* age_changed_this_move */ false,
+        );
+        assert_eq!(fate, WonderFate::DestroyedByInfiltrate);
+    }
+
+    #[test]
+    fn classify_wonder_change_falls_back_to_unexplained_only_when_nothing_else_accounts_for_the_clearing() {
+        // Completion, Infiltrate and antiquation are the engine's only three
+        // sites that clear `.wonder` (see WonderFate::DestroyedUnexplained's
+        // doc comment) -- if none of those three signals fired, the bucket
+        // genuinely means "the engine did something unsanctioned", which is
+        // exactly what this case exercises.
+        let fate = classify_wonder_change(false, None, 1, false);
+        assert_eq!(fate, WonderFate::DestroyedUnexplained);
     }
 
     #[test]
