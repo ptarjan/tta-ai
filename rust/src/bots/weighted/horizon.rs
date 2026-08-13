@@ -211,6 +211,121 @@ pub fn rounds_left(state: &GameState, n: usize) -> f64 {
     (cards / per_round + AGE_IV_ROUNDS).max(1.0)
 }
 
+/// The age at whose END a card of age `age` is culled from play, or `None`
+/// when the game itself ends first.
+///
+/// RULES_SPEC 12.2 / [`game::antiquate`]: at the end of age `ended`,
+/// everything with `age < ended` leaves play. A card of age `a` therefore
+/// SURVIVES the end of its own age (`a >= a`) and dies at the end of age
+/// `a + 1`. An Age III card's deadline would be the end of Age IV, which is
+/// the end of the game (RULES_SPEC 12.3) -- there is no antiquation deadline
+/// short of the game's own, which is what `None` means here.
+///
+/// A `match` over every [`Age`] with no wildcard arm, rather than `a + 1`
+/// arithmetic on the discriminant: a fifth age would then be a compile error
+/// here instead of an off-by-one that silently prices the wrong deadline.
+const fn antiquated_at_end_of(age: Age) -> Option<Age> {
+    match age {
+        Age::A => Some(Age::I),
+        Age::I => Some(Age::II),
+        Age::II => Some(Age::III),
+        Age::III | Age::IV => None,
+    }
+}
+
+/// The position-level facts every "when is a card of age `a` culled" question
+/// needs, read off the board ONCE.
+///
+/// THE HOLE THIS FILLS: [`rounds_left`] is the deadline for the GAME, and it
+/// was the only deadline the evaluator had. For an Age A wonder taken in Age A
+/// it overstates the real one by two whole ages -- the wonder is gone at the
+/// end of Age I whether or not the game is still running, resources sunk and
+/// lost (RULES_SPEC 12.2, [`crate::game`]'s `antiquate`). That is a rule, not
+/// a preference, and it appeared nowhere in the weight vector.
+///
+/// A struct rather than a free function called once per card because the
+/// caller that matters is a whole HAND: `features()` asks this question for
+/// every civil card it holds, on the evaluator's hot path, and this module's
+/// own top doc comment records [`supply`]/[`tail`] as the single hottest leaf
+/// in the search. Everything expensive ([`rounds_left`], [`take_rate`], and
+/// the deal rate they share) depends on the POSITION and not on the card, so
+/// it is computed once here and the per-card answer is arithmetic on the baked
+/// [`CIVIL_DECK_LEN`] table. Not a cache: nothing is remembered across calls,
+/// it is a value the caller holds for as long as it is asking.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AntiquationClock {
+    /// What is left of the age currently being dealt.
+    civil_deck: u32,
+    /// The age currently being dealt (`state.age_civil`).
+    age_civil: Age,
+    /// Cards dealt per round: `n * (sweep_count + take_rate)` -- the identical
+    /// denominator [`rounds_left`] divides by, not a second notion of it.
+    per_round: f64,
+    /// [`rounds_left`] at this position, the cap every answer is clamped to.
+    rounds_left: f64,
+    /// Live player count, this struct's [`CIVIL_DECK_LEN`] column.
+    n: usize,
+}
+
+impl AntiquationClock {
+    pub fn at(state: &GameState, n: usize) -> AntiquationClock {
+        debug_assert!((2..=4).contains(&n), "n must be a live player count 2..=4, got {n}");
+        AntiquationClock {
+            civil_deck: state.civil_deck.len() as u32,
+            age_civil: state.age_civil,
+            per_round: n as f64 * (game::sweep_count(n) as f64 + take_rate(state, n)),
+            rounds_left: rounds_left(state, n),
+            n,
+        }
+    }
+
+    /// [`rounds_left`] at the position this clock was built from -- carried so
+    /// a caller holding the clock never has to recompute (or re-derive) it.
+    pub fn rounds_left(&self) -> f64 {
+        self.rounds_left
+    }
+
+    /// Rounds until a card of age `age` is culled from play at an age
+    /// boundary ([`antiquated_at_end_of`]).
+    ///
+    /// Same arithmetic as [`rounds_left`], deliberately: the cards that still
+    /// have to be dealt before the boundary, over the identical deal rate,
+    /// read out of the identical baked [`CIVIL_DECK_LEN`] table. Nothing here
+    /// is fitted.
+    ///
+    /// Clamped to `[0, rounds_left]`: a deadline past the end of the game is
+    /// the end of the game, and a deadline already behind us (an age older
+    /// than the one being dealt -- reachable only defensively, since such a
+    /// card has already left play) is zero.
+    pub fn rounds_until_antiquation(&self, age: Age) -> f64 {
+        let Some(deadline) = antiquated_at_end_of(age) else {
+            // The game ends before any boundary could take this card.
+            return self.rounds_left;
+        };
+        if (deadline as u8) < (self.age_civil as u8) {
+            return 0.0;
+        }
+        // Cards still to be dealt before that boundary: what is left of the
+        // age being dealt now, plus every whole age's deck between it and the
+        // deadline age.
+        let from = self.age_civil as usize + 1;
+        let to = deadline as usize;
+        let future: u32 = match CIVIL_DECK_LEN.get(from..=to) {
+            Some(rows) => rows.iter().map(|row| row[self.n - 2]).sum(),
+            None => 0,
+        };
+        (f64::from(self.civil_deck + future) / self.per_round).clamp(0.0, self.rounds_left)
+    }
+}
+
+/// `rounds_to_antiquation`: one card's deadline at one position. The whole
+/// formula lives in [`AntiquationClock::rounds_until_antiquation`]; a caller
+/// asking about more than one card should build the clock once instead of
+/// calling this in a loop (see that struct's doc comment).
+pub fn rounds_to_antiquation(state: &GameState, age: Age, n: usize) -> f64 {
+    AntiquationClock::at(state, n).rounds_until_antiquation(age)
+}
+
 /// `lateness`: how far through the game we are, 0.0 at the deal, 1.0 when
 /// the civil supply is gone. EXACT -- no rate, no fit, no player-count table.
 ///
@@ -309,6 +424,18 @@ pub struct WonderOutlook {
     /// down by `c` AND the bank down by `c`, so the shortfall closes by
     /// `2c`), and rises when resource production rises.
     pub collect_rounds: f64,
+    /// [`rounds_to_antiquation`] for THIS wonder's age -- the rule-derived
+    /// deadline the stages actually have to be paid by (RULES_SPEC 12.2), as
+    /// opposed to [`WonderOutlook::rounds_left`], the deadline the game has.
+    /// Never above `rounds_left`.
+    pub rounds_to_antiquation: f64,
+    /// The part of [`WonderOutlook::turns_to_finish`] that falls past the
+    /// ANTIQUATION deadline rather than past the end of the game:
+    /// `max(0, turns_to_finish - rounds_to_antiquation)`. The sibling of
+    /// [`WonderOutlook::overrun`] with the horizon the rules actually impose
+    /// -- see [`rounds_to_antiquation`] for why the two differ by up to two
+    /// whole ages.
+    pub age_overrun: f64,
 }
 
 impl WonderOutlook {
@@ -362,6 +489,46 @@ impl WonderOutlook {
     pub fn earned_share(&self) -> f64 {
         self.paid_fraction() * self.collect_fraction()
     }
+
+    /// How much of the deadline the wonder would still be standing for if the
+    /// player keeps paying: `(rounds_to_antiquation - turns_to_finish) /
+    /// rounds_to_antiquation`, clamped to `[0, 1]`.
+    ///
+    /// [`WonderOutlook::collect_fraction`]'s sibling against the RULES'
+    /// deadline instead of the game's. `0.0` for a wonder that cannot be
+    /// finished before it is antiquated -- which is the single fact that most
+    /// distinguishes a wonder worth taking from one that is 6 sunk resources
+    /// (66.5% of every wonder started in the 200-game 2p census died this way).
+    /// Zero rather than a divide-by-zero when the deadline has already passed.
+    pub fn feasible_fraction(&self) -> f64 {
+        if self.rounds_to_antiquation <= 0.0 {
+            return 0.0;
+        }
+        ((self.rounds_to_antiquation - self.turns_to_finish) / self.rounds_to_antiquation)
+            .clamp(0.0, 1.0)
+    }
+
+    /// The share of a finished wonder's value that is still AHEAD of the
+    /// player -- unpaid, but reachable before the antiquation deadline:
+    /// `(1 - paid_fraction) * feasible_fraction`.
+    ///
+    /// The exact complement of [`WonderOutlook::earned_share`], and the reason
+    /// both exist: `earned_share` is `paid_fraction * collect_fraction`, so it
+    /// is identically `0.0` on the one move that TAKES a wonder from the row
+    /// (nothing is paid yet). Every identity-aware thing the evaluator knows
+    /// about a wonder is multiplied by that zero, which is why no assignment of
+    /// the weight vector could tell Pyramids from Hanging Gardens at take time
+    /// (`super::cards::tests::two_wonders_with_different_powers_score_
+    /// identically_at_the_moment_they_are_taken`). This factor is at its
+    /// MAXIMUM there and decays to zero as stages are paid, handing the value
+    /// across to `earned_share` over the same interval.
+    ///
+    /// Both factors are computed board facts and both are shares, so the
+    /// product is in `[0, 1]`: the evaluator can promise at most 100% of a
+    /// wonder and never a negative amount of it.
+    pub fn promise_share(&self) -> f64 {
+        (1.0 - self.paid_fraction()) * self.feasible_fraction()
+    }
 }
 
 /// [`WonderOutlook`] for `p`'s wonder under construction, or `None` when
@@ -376,23 +543,28 @@ pub fn wonder_outlook(state: &GameState, p: &PlayerState, resource_rate: i32) ->
     if p.wonder.is_none() {
         return None;
     }
-    let stages = p.wonder.get().stages;
+    let card = p.wonder.get();
+    let stages = card.stages;
     // Clamped defensively: `wonder_steps` never exceeds `stages.len()` in a
     // legal state, but nothing here should panic if it somehow did.
     let built = (p.wonder_steps as usize).min(stages.len());
     let progress: i32 = stages[..built].iter().map(|&st| i32::from(st)).sum();
     let remaining: i32 = stages[built..].iter().map(|&st| i32::from(st)).sum();
-    let rounds_left = rounds_left(state, live_count(state));
+    let n = live_count(state);
+    let rounds_left = rounds_left(state, n);
+    let rounds_to_antiquation = rounds_to_antiquation(state, card.age, n);
 
     let mut stages_left = 0.0;
     let mut turns_to_finish = 0.0;
     let mut overrun = 0.0;
+    let mut age_overrun = 0.0;
     if remaining > 0 {
         stages_left = (stages.len() - built) as f64;
         let owed = f64::from(remaining) - f64::from(p.resources);
         if owed > 0.0 {
             turns_to_finish = (owed / f64::from(resource_rate).max(1.0)).min(TURNS_CAP);
             overrun = (turns_to_finish - rounds_left).max(0.0);
+            age_overrun = (turns_to_finish - rounds_to_antiquation).max(0.0);
         }
     }
     Some(WonderOutlook {
@@ -403,6 +575,8 @@ pub fn wonder_outlook(state: &GameState, p: &PlayerState, resource_rate: i32) ->
         overrun,
         rounds_left,
         collect_rounds: (rounds_left - turns_to_finish).max(0.0),
+        rounds_to_antiquation,
+        age_overrun,
     })
 }
 
@@ -548,6 +722,206 @@ mod tests {
             before.collect_rounds,
             after.collect_rounds
         );
+    }
+
+    // ------------------------------------------------------- antiquation
+
+    /// [`antiquated_at_end_of`] must agree with the rule `game::antiquate`
+    /// actually implements, not with a remembered reading of it: at the end
+    /// of age `ended`, everything with `age < ended` leaves play. Derived
+    /// here by brute force (the FIRST ended-age that would cull a card of
+    /// each age) and compared against the table, so a future edit to
+    /// `antiquate`'s `cutoff` fails here rather than silently pricing the
+    /// wrong deadline.
+    ///
+    /// Confirmed RED by returning `Some(Age::II)` for `Age::A`: "Age A: dies
+    /// at the end of Some(I), table says Some(II)".
+    #[test]
+    fn a_card_survives_the_end_of_its_own_age_and_dies_at_the_end_of_the_next() {
+        let ages = [Age::A, Age::I, Age::II, Age::III, Age::IV];
+        for card_age in ages {
+            // The first age whose ENDING would cull this card, by
+            // `game::antiquate`'s own `card.age < cutoff` test.
+            let culled_by = ages.iter().copied().find(|&ended| (card_age as u8) < (ended as u8));
+            assert_eq!(
+                antiquated_at_end_of(card_age),
+                culled_by.filter(|&e| e != Age::IV || card_age != Age::III),
+                "{card_age:?}: dies at the end of {culled_by:?}, table says {:?}",
+                antiquated_at_end_of(card_age)
+            );
+        }
+    }
+
+    /// The deadline the whole change exists for: an Age A card taken in Age A
+    /// runs out of time STRICTLY BEFORE the game does, and by a wide margin --
+    /// the rest of the Age A deck plus the whole Age I deck, not the rest of
+    /// the game. An Age III card, by contrast, has no boundary short of the
+    /// game's own end, so its deadline IS `rounds_left`.
+    ///
+    /// Confirmed RED by having `rounds_until_antiquation` return
+    /// `self.rounds_left` unconditionally: "an Age A card must run out before
+    /// the game does: 12.7 vs 12.7".
+    #[test]
+    fn an_age_a_card_runs_out_of_time_long_before_the_game_does() {
+        for n in [2usize, 3, 4] {
+            let state = G::new_game(n as u8, 31);
+            let rl = rounds_left(&state, n);
+            let a = rounds_to_antiquation(&state, Age::A, n);
+            let one = rounds_to_antiquation(&state, Age::I, n);
+            let three = rounds_to_antiquation(&state, Age::III, n);
+            assert!(a < rl, "{n}p: an Age A card must run out before the game does: {a} vs {rl}");
+            assert!(a < one, "{n}p: Age A must run out before Age I: {a} vs {one}");
+            assert!(one < rl, "{n}p: an Age I card must run out before the game does: {one} vs {rl}");
+            assert_eq!(three, rl, "{n}p: an Age III card's only deadline is the game's own");
+        }
+    }
+
+    /// Every deadline is inside `[0, rounds_left]` whatever the position --
+    /// the property `wonder_promise`'s `feasible_fraction` divides by, swept
+    /// over every age the deal can be in rather than asserted at one point.
+    ///
+    /// The upper clamp is load-bearing only where the two estimates are
+    /// derived DIFFERENTLY, which is exactly once: `rounds_left` stops
+    /// counting cards and reads `state.final_round_end` outright the moment
+    /// Age IV begins, while the boundary estimate is always the undealt deck
+    /// over the deal rate. The `final_round_end` leg of this sweep is
+    /// therefore the one that can actually go out of range, and it is
+    /// included for that reason rather than for completeness.
+    #[test]
+    fn no_deadline_ever_falls_outside_the_rest_of_the_game() {
+        for age_civil in [Age::A, Age::I, Age::II, Age::III, Age::IV] {
+            for ends_this_round in [false, true] {
+                let mut state = G::new_game(2, 32);
+                state.age_civil = age_civil;
+                if ends_this_round {
+                    state.final_round_end = Some(state.round);
+                }
+                let n = live_count(&state);
+                let clock = AntiquationClock::at(&state, n);
+                for card_age in [Age::A, Age::I, Age::II, Age::III, Age::IV] {
+                    let d = clock.rounds_until_antiquation(card_age);
+                    assert!(
+                        (0.0..=clock.rounds_left()).contains(&d),
+                        "deal in {age_civil:?} (ends_this_round={ends_this_round}), card \
+                         {card_age:?}: {d} outside [0, {}]",
+                        clock.rounds_left()
+                    );
+                }
+            }
+        }
+    }
+
+    /// THE MISSING BOARD FACT, as a behaviour: a wonder can be comfortably
+    /// finishable before the GAME ends and still be doomed by the age
+    /// boundary. `wonder_overrun` (the old coordinate) reads exactly 0.0 in
+    /// that position while `wonder_age_overrun` fires -- which is what makes
+    /// the new key carry information no assignment of the old one could.
+    ///
+    /// The fixture is the ordinary, common shape of the bug: an AGE A wonder
+    /// still unfinished once the deal has moved on to Age I. It has until the
+    /// end of Age I -- what is left of the deck being dealt -- while the game
+    /// itself has two further ages to run.
+    #[test]
+    fn a_wonder_can_be_finishable_before_the_game_ends_and_still_be_doomed_by_its_age() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let state = age_i_state_with_a_short_deck(33);
+        let o = wonder_outlook(&state, &state.players[0], 1).expect("a wonder is in progress");
+        assert_eq!(state.players[0].wonder, pyramids);
+        assert_eq!(o.overrun, 0.0, "the OLD overrun must not fire here, got {}", o.overrun);
+        assert!(
+            o.age_overrun > 0.0,
+            "turns_to_finish {} exceeds the antiquation deadline {}, so age_overrun {} must fire",
+            o.turns_to_finish,
+            o.rounds_to_antiquation,
+            o.age_overrun
+        );
+        assert!(
+            o.turns_to_finish < o.rounds_left,
+            "the fixture must be finishable before the GAME ends or it proves nothing: {} vs {}",
+            o.turns_to_finish,
+            o.rounds_left
+        );
+    }
+
+    /// A wonder that cannot be finished before its own age boundary promises
+    /// nothing at all -- `feasible_fraction` is the factor that makes
+    /// `wonder_promise` refuse to reach for the 66.5% of wonders the census
+    /// found dying to antiquation, so it must reach exactly 0.0 and not merely
+    /// get small.
+    #[test]
+    fn a_wonder_that_cannot_beat_its_age_boundary_promises_nothing() {
+        let state = age_i_state_with_a_short_deck(34);
+        // 1 resource a turn against 6 owed is past the boundary this deck is
+        // about to reach.
+        let doomed = wonder_outlook(&state, &state.players[0], 1).expect("a wonder is in progress");
+        assert_eq!(doomed.feasible_fraction(), 0.0);
+        assert_eq!(doomed.promise_share(), 0.0);
+        // The same wonder with a real economy is reachable, and therefore
+        // promises the whole of itself while nothing is paid yet.
+        let rich = wonder_outlook(&state, &state.players[0], 9).expect("a wonder is in progress");
+        assert!(rich.promise_share() > 0.0, "got {}", rich.promise_share());
+        assert_eq!(rich.paid_fraction(), 0.0, "nothing is paid, so promise is at its maximum");
+    }
+
+    /// An AGE A wonder in play with the deal already into Age I and only a
+    /// handful of Age I cards left: the wonder's own deadline is what remains
+    /// of THIS deck (a round or two), while the game has two further ages to
+    /// run. The one position where the game-end horizon and the rules'
+    /// horizon disagree by an amount nothing can mistake for rounding.
+    fn age_i_state_with_a_short_deck(seed: u64) -> GameState {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let mut state = G::new_game(2, seed);
+        state.age_civil = Age::I;
+        while state.civil_deck.len() > 8 {
+            state.civil_deck.pop();
+        }
+        state.players[0].wonder = pyramids;
+        state.players[0].wonder_steps = 0;
+        state.players[0].resources = 0;
+        state
+    }
+
+    /// The hand-over property `eval::DOMINATES` relies on: paying a stage
+    /// moves a wonder's value OUT of `promise_share` and INTO `earned_share`,
+    /// monotonically, over the same interval. Neither share may ever leave
+    /// `[0, 1]` -- swept over every stage count and a range of incomes, the
+    /// same way `the_earned_share_of_a_wonder_is_always_between_none_of_it_
+    /// and_all_of_it` sweeps its own invariant.
+    ///
+    /// Confirmed RED by dropping the `(1.0 - paid_fraction())` factor from
+    /// `promise_share`: "paying a stage must lower the promise: 1 -> 1".
+    #[test]
+    fn paying_a_stage_moves_a_wonders_value_from_its_promise_to_its_payoff() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let stages = pyramids.get().stages.len() as u8;
+        let outlook_at = |steps: u8| {
+            let mut state = G::new_game(2, 35);
+            state.players[0].wonder = pyramids;
+            state.players[0].wonder_steps = steps;
+            state.players[0].resources = 0;
+            wonder_outlook(&state, &state.players[0], 6).expect("a wonder is in progress")
+        };
+        for steps in 0..stages {
+            let before = outlook_at(steps);
+            let after = outlook_at(steps + 1);
+            for o in [before, after] {
+                assert!((0.0..=1.0).contains(&o.promise_share()), "share {} out of [0, 1]", o.promise_share());
+            }
+            assert!(
+                after.promise_share() < before.promise_share(),
+                "paying stage {} must lower the promise: {} -> {}",
+                steps + 1,
+                before.promise_share(),
+                after.promise_share()
+            );
+            assert!(
+                after.earned_share() > before.earned_share(),
+                "paying stage {} must raise the payoff: {} -> {}",
+                steps + 1,
+                before.earned_share(),
+                after.earned_share()
+            );
+        }
     }
 
     /// `live_count` clamps to the 2-4 range even for a state with more seats

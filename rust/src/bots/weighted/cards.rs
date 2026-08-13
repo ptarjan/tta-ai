@@ -1900,6 +1900,72 @@ pub fn hand_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
 /// the "and you have it already, forever" assumption it was multiplied by
 /// changes.
 pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    wonder_value_scaled(state, idx, w, horizon::WonderOutlook::earned_share)
+}
+
+/// `wonder_promise`: what the wonder in progress is still WORTH REACHING for
+/// -- the same finished-wonder value [`wonder_potential`] prices, scaled by
+/// [`horizon::WonderOutlook::promise_share`] (the unpaid, still-feasible
+/// share) instead of by `earned_share` (the paid, still-collectable one).
+///
+/// ## The hole this fills
+///
+/// `earned_share` is `paid_fraction * collect_fraction`, and `paid_fraction`
+/// is exactly `0.0` for a wonder that was just taken off the row -- so
+/// [`wonder_potential`], the sole channel through which a wonder's IDENTITY
+/// reaches the evaluator, early-returns `0.0` on precisely the move that
+/// chooses which wonder to build. Everything left that can move is a function
+/// of the stage vector alone (`horizon::WonderOutlook`'s `remaining`/
+/// `stages_left`/`turns_to_finish`/`overrun`), so two wonders printing the
+/// same stages are interchangeable to every weight assignment that exists:
+/// Pyramids' +1 civil action for the rest of the game contributes nothing at
+/// all to the score of taking Pyramids. [`tests::two_wonders_with_different_
+/// powers_score_identically_at_the_moment_they_are_taken`] is that claim as a
+/// test; [`tests::pricing_wonder_promise_is_what_lets_the_evaluator_prefer_
+/// pyramids_over_hanging_gardens`] is this function closing it.
+///
+/// ## Why this is not a per-card weight
+///
+/// The only per-card input is `board_yields(id, baseline)` -- the wonder's own
+/// printed effect as a list of `(feature, delta)` triples -- summed through
+/// [`gains_only_board_sum`] using the same `w[civil_actions]`,
+/// `w[culture_rate]`, `w[science]` the rest of the evaluation uses. Pyramids
+/// outscores Hanging Gardens because `w[civil_actions] * 1` outscores a happy
+/// face, with no free parameter attached to either card, and the same handful
+/// of shared weights covers all 16 wonders including ones the league has never
+/// had a game of. A flat per-card weight cannot do that: it is fitted from
+/// that card's own games and is pure variance on a card seen twenty times.
+///
+/// ## Why it does not un-do the delayed payoff
+///
+/// [`wonder_potential`]'s doc comment above records what booking a wonder's
+/// whole value up front cost (taking one looks maximally good, and every
+/// stage that pays for it then looks worth nothing). That property is kept:
+/// `promise_share` DECAYS as stages are paid, by exactly the amount
+/// `earned_share` grows, so the two terms hand the value across between them
+/// -- and `eval::DOMINATES` pins `w[wonder_potential] >= w[wonder_promise]`,
+/// which is what makes that hand-over a net gain rather than a net loss on the
+/// move that pays. The other half of `promise_share`, `feasible_fraction`, is
+/// measured against `horizon::rounds_to_antiquation`, so a wonder that cannot
+/// be finished before the age boundary culls it promises exactly nothing.
+pub fn wonder_promise(state: &GameState, idx: u8, w: &Weights) -> f64 {
+    wonder_value_scaled(state, idx, w, horizon::WonderOutlook::promise_share)
+}
+
+/// The one computation [`wonder_potential`] and [`wonder_promise`] share:
+/// what the player's in-progress wonder would be worth FINISHED, times
+/// whichever `[0, 1]` share of it the caller is pricing.
+///
+/// Written once and taken as a function pointer rather than copied into both:
+/// two readings of "what is this specific wonder worth" that could drift apart
+/// is this codebase's defining bug class, and the two callers differ in
+/// nothing but the share.
+fn wonder_value_scaled(
+    state: &GameState,
+    idx: u8,
+    w: &Weights,
+    share: fn(&horizon::WonderOutlook) -> f64,
+) -> f64 {
     let p = &state.players[idx as usize];
     // Checked before anything is computed: this function is on the evaluator's
     // hot path and runs once per candidate move, but most players are not
@@ -1910,7 +1976,7 @@ pub fn wonder_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
     }
     let outlook = horizon::wonder_outlook(state, p, effects::state_stats(state, p).resources)
         .expect("p.wonder is not none, so there is an outlook");
-    let discount = outlook.earned_share();
+    let discount = share(&outlook);
     if discount == 0.0 {
         // Nothing to price, and (more usefully) nothing to pay `board_yields`'
         // own two `effects::compute` calls for.
@@ -2664,6 +2730,169 @@ mod tests {
         state.players[0].techs = crate::state::Tableau::new(); // no production at all
         state.final_round_end = Some(state.round);
         assert_eq!(wonder_potential(&state, 0, &Weights::default()), 0.0);
+    }
+
+    // ------------------------------------- the wonder rank-deficiency (T0)
+
+    /// Score the actual `Move::Take` that pulls `name` out of row slot 0,
+    /// exactly the way `WeightedBot::choose`/`rank_moves` score any candidate
+    /// (clone, `apply::apply`, `evaluate`).
+    ///
+    /// The row is built EMPTY except for the one slot under test, mirroring
+    /// `apply.rs`'s own `h_take_a_wonder_sets_wonder_in_progress_not_hand`
+    /// fixture. This is not just convenience: a first cut of this test placed
+    /// each wonder in `card_row[0]` of a live `new_game` deal WITHOUT removing
+    /// it from wherever the deal had already put it, and for one seed Hanging
+    /// Gardens was legitimately dealt to a second row slot too -- so that
+    /// draft had two "different" Hanging Gardens simultaneously visible, and
+    /// `row::row_last_copy` (which prices every OTHER visible row card by its
+    /// chance of never being seen again) priced that impossible duplicate and
+    /// produced a real but SPURIOUS 0.04-point gap that had nothing to do with
+    /// either wonder's power. With every other slot `CardId::NONE`, no such
+    /// duplicate can exist and `row_last_copy`/`row_pressure` are trivially
+    /// `0.0` for both wonders.
+    fn score_of_taking(name: &str, w: &Weights) -> f64 {
+        let card = CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"));
+        let mut state = crate::game::new_game(2, 50);
+        state.card_row = [CardId::NONE; crate::state::ROW_SIZE];
+        state.card_row[0] = card;
+        state.players[0].civil_actions = 5; // headroom over row_cost(0), same for both wonders
+        let idx = state.current;
+        let mut trial = state.clone();
+        crate::apply::apply(&mut trial, crate::moves::Move::Take { slot: 0 });
+        assert_eq!(trial.players[0].wonder, card, "take must have landed the wonder in play");
+        let ctx = rivals::rival_context(&trial, idx, None, None);
+        super::super::eval::evaluate(&trial, idx, w, Some(&ctx), None)
+    }
+
+    /// GATE TEST for the claim this whole batch is built on: at the moment a
+    /// wonder is taken from the row, the evaluator cannot see WHICH wonder it
+    /// is taking.
+    ///
+    /// Pyramids (stages `[3,2,1]`, `+1 civil action` for the rest of the game)
+    /// and Hanging Gardens (stages `[2,2,2]`, culture and happiness) are not a
+    /// random pair: their total stage cost is EQUAL (6) and their stage COUNT
+    /// is equal (3), so every `horizon::WonderOutlook` field that could tell
+    /// two wonders apart -- `remaining`, `stages_left`, `turns_to_finish`,
+    /// `overrun`, all of them functions of `stages[built..].sum()` and
+    /// `stages.len() - built`, never of stage ORDER -- is identical for both
+    /// at zero stages built. The pair is its own confound control: if they
+    /// differed here, stage cost could not be why.
+    ///
+    /// `wonder_potential`, the one term that reads a wonder's identity,
+    /// returns exactly `0.0` for both regardless of the weights, because
+    /// `earned_share` is `paid_fraction * collect_fraction` and
+    /// `paid_fraction` is `0 / 6` the instant either card is taken. The third
+    /// vector below prices `wonder_potential` at a large positive number for
+    /// exactly that reason: it shows the identity-aware channel is not merely
+    /// unpriced on these champions but structurally switched off, which is
+    /// what makes this a rank deficiency rather than a tuning problem.
+    #[test]
+    fn two_wonders_with_different_powers_score_identically_at_the_moment_they_are_taken() {
+        // A real, frozen, league-trained champion (the gauntlet ladder's own
+        // 2p member) rather than a machine-local snapshot, so this test runs
+        // anywhere the repo does.
+        let frozen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json");
+        let champion = super::super::eval::load_weights(&frozen).expect("the frozen 2p champion must load");
+        let mut identity_priced = Weights::defaults();
+        identity_priced.set(WeightKey::WonderPotential, 40.0);
+        identity_priced.set(WeightKey::CardBoardCredit, 1.0);
+
+        for (label, w) in [
+            ("Weights::defaults()", Weights::defaults()),
+            ("frozen 2p champion", champion),
+            ("wonder_potential priced at 40", identity_priced),
+        ] {
+            let pyramids = score_of_taking("Pyramids", &w);
+            let hanging = score_of_taking("Hanging Gardens", &w);
+            assert_eq!(
+                pyramids, hanging,
+                "{label}: Pyramids={pyramids} Hanging Gardens={hanging} -- expected bit-identical \
+                 scores, because no coordinate in this vector can read a freshly-taken wonder's \
+                 identity"
+            );
+        }
+    }
+
+    /// The other half of T0, and the reason [`wonder_promise`] exists: with
+    /// that one coordinate priced, the two wonders stop being interchangeable
+    /// -- and WHICH of them wins is decided entirely by the SHARED weights,
+    /// with no per-card parameter anywhere.
+    ///
+    /// That last clause is the part worth testing, and it is why this test
+    /// does not simply assert "Pyramids wins". Under `Weights::defaults()`
+    /// Hanging Gardens legitimately outscores Pyramids -- `culture_rate` is
+    /// seeded at 5.0 against `civil_actions`' 2.0, so the default vector
+    /// genuinely prefers the culture wonder, and a coordinate that overrode
+    /// that would be a per-card weight in disguise. What is asserted instead
+    /// is the mechanism: sweeping the ONE shared weight that prices Pyramids'
+    /// printed effect (`civil_actions`) moves the gap monotonically and
+    /// eventually flips the order, while nothing named after either card
+    /// exists to be tuned.
+    ///
+    /// `card_board_credit` is priced because that is the channel
+    /// `wonder_value_scaled` reads a wonder's printed effect through; the
+    /// asymmetry being measured is inside `board_yields`, not in any weight
+    /// this test sets.
+    #[test]
+    fn pricing_wonder_promise_is_what_lets_the_evaluator_tell_pyramids_from_hanging_gardens() {
+        let vector_with_civil_actions_at = |ca: f64| {
+            let mut w = Weights::defaults();
+            w.set(WeightKey::CardBoardCredit, 1.0);
+            w.set(WeightKey::WonderPromise, 4.0);
+            w.set(WeightKey::WonderPotential, 4.0); // eval::DOMINATES requires >=
+            w.set(WeightKey::CivilActions, ca);
+            w
+        };
+
+        let base = vector_with_civil_actions_at(WeightKey::CivilActions.default_weight());
+        let pyramids = score_of_taking("Pyramids", &base);
+        let hanging = score_of_taking("Hanging Gardens", &base);
+        assert_ne!(
+            pyramids, hanging,
+            "with wonder_promise priced, the two wonders must no longer be interchangeable"
+        );
+
+        // The gap is a strictly increasing function of the one shared weight
+        // that prices what Pyramids prints -- which is what "no per-card free
+        // parameter" means in practice.
+        let gap_at = |ca: f64| score_of_taking("Pyramids", &vector_with_civil_actions_at(ca))
+            - score_of_taking("Hanging Gardens", &vector_with_civil_actions_at(ca));
+        let mut previous = f64::NEG_INFINITY;
+        for ca in [0.0, 2.0, 6.0, 12.0, 24.0] {
+            let gap = gap_at(ca);
+            assert!(gap > previous, "civil_actions={ca}: gap {gap} did not rise from {previous}");
+            previous = gap;
+        }
+        assert!(
+            gap_at(24.0) > 0.0,
+            "once a civil action is priced richly enough, Pyramids must win outright: gap {}",
+            gap_at(24.0)
+        );
+    }
+
+    /// `wonder_promise` is at its maximum on the move that takes a wonder --
+    /// exactly where `wonder_potential` is structurally zero -- and falls as
+    /// stages are paid while `wonder_potential` rises. The two are complements
+    /// by construction; this pins that they really are read that way through
+    /// the card-valuation layer and not just in `horizon`'s own arithmetic.
+    #[test]
+    fn the_promise_of_a_wonder_is_greatest_before_any_of_it_is_paid_for() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::CardBoardCredit, 1.0);
+        let fresh = wonder_promise(&wonder_in_progress(0), 0, &w);
+        let part_built = wonder_promise(&wonder_in_progress(1), 0, &w);
+        assert!(fresh > 0.0, "a freshly-taken wonder must promise something, got {fresh}");
+        assert!(
+            part_built < fresh,
+            "paying a stage must move value out of the promise: {fresh} -> {part_built}"
+        );
+        assert_eq!(
+            wonder_potential(&wonder_in_progress(0), 0, &w),
+            0.0,
+            "and the term it hands over TO is the one that is zero at take time"
+        );
     }
 
     /// `rival_hand_potential` is 0.0 with no live rivals holding a civil

@@ -152,6 +152,44 @@ pub enum WeightKey {
     WonderOverrun,
     WonderStagesPerAction,
     WonderPotential,
+    /// The half of an unfinished wonder's value that is still AHEAD of the
+    /// player, priced by `cards::wonder_promise` through
+    /// [`horizon::WonderOutlook::promise_share`](super::horizon::WonderOutlook::promise_share).
+    ///
+    /// [`WonderPotential`](Self::WonderPotential) multiplies a wonder's
+    /// printed effects by `paid_fraction * collect_fraction`, and
+    /// `paid_fraction` is exactly `0.0` on the move that TAKES a wonder off
+    /// the row -- so the only identity-aware wonder channel the evaluator has
+    /// is switched off at precisely the moment it has to choose one. Two
+    /// wonders with the same stage multiset (Pyramids `[3,2,1]` and Hanging
+    /// Gardens `[2,2,2]`, both 6 resources over 3 stages) are therefore
+    /// interchangeable to every weight in this table, whatever the weights
+    /// are; `cards::tests::two_wonders_with_different_powers_score_
+    /// identically_at_the_moment_they_are_taken` is that claim as a test.
+    ///
+    /// This key closes it with NO per-card free parameter: what it scales is
+    /// the same `board_yields` swap diff `wonder_potential` scales, summed
+    /// through the same shared weights, so Pyramids beats Hanging Gardens by
+    /// `w[civil_actions] * 1` versus a happy face -- four numbers cover all
+    /// 16 wonders and generalise to one the league has never seen. Gated at
+    /// 0.0 so landing it moves no game until the league prices it, and
+    /// `eval::DOMINATES` keeps it at or below `wonder_potential` so that
+    /// PAYING a stage stays strictly rewarded (value moves out of this term
+    /// and into that one as `paid_fraction` rises).
+    WonderPromise,
+    /// `max(0, turns_to_finish - rounds_to_antiquation)` -- the part of the
+    /// wonder's outstanding cost that falls past the deadline THE RULES
+    /// impose (RULES_SPEC 12.2: an unfinished wonder older than the age that
+    /// just ended is removed from play) rather than past the end of the game.
+    ///
+    /// [`WonderOverrun`](Self::WonderOverrun) measures the same shortfall
+    /// against `horizon::rounds_left`, which for an Age A wonder taken in Age
+    /// A overstates the real deadline by two whole ages. 66.5% of every wonder
+    /// started in the 200-game 2p census died to the deadline this key is the
+    /// first coordinate to see. Added as a NEW key rather than as a correction
+    /// to `wonder_overrun` so that no champion on disk evaluates differently
+    /// the day this lands.
+    WonderAgeOverrun,
     Leader,
     HandLimit,
     ColonizeBonus,
@@ -214,6 +252,20 @@ pub enum WeightKey {
     HandMilitary,
     HandMilValue,
     HandMilPotential,
+    /// How much of the civil hand is about to expire:
+    /// `Σ_{c in hand_civil} clamp01(1 - rounds_to_antiquation(c) / rounds_left)`.
+    ///
+    /// `0.0` for a hand of fresh cards, and → 1.0 per card for one the next
+    /// age boundary is about to discard (RULES_SPEC 12.2, `game::antiquate`
+    /// culls hands as well as the board). [`HandCivil`](Self::HandCivil)
+    /// counts the cards and [`HandValue`](Self::HandValue)/
+    /// [`HandPotential`](Self::HandPotential) price them, but all three are
+    /// blind to remaining useful LIFETIME: an Age A card held into Age I is
+    /// worth what it is worth only if it gets played first. One coordinate
+    /// covers the whole hand and every card in it -- no per-card parameter,
+    /// because `rounds_to_antiquation` is arithmetic on the deck and is
+    /// identical for every card of the same age.
+    HandPerishable,
     RivalCulture,
     RivalMeanCulture,
     RivalCultureRate,
@@ -296,6 +348,41 @@ pub enum WeightKey {
     HappySurplus,
     CivilActionGap,
     CivilActionSurplus,
+    /// `ca_spent_taking / costs::ca_total` -- the share of this turn's WHOLE
+    /// civil-action allowance that reaching into the row consumed.
+    ///
+    /// [`TakeCostPaid`](Self::TakeCostPaid) (the numerator) and
+    /// [`CaLeft`](Self::CaLeft) already price the row's 1/2/3-action cost
+    /// bands, but only in absolute terms: on the live 2p champion the gap
+    /// between the cheapest and the dearest slot is worth 0.89 evaluation
+    /// points unconditionally, the same 0.89 to a player with 4 civil actions
+    /// as to one with 7. A QUOTIENT is deliberately not in the linear span of
+    /// its own numerator and denominator, which is the entire point of this
+    /// coordinate: it can say "3 of my 4" differs from "3 of my 7" where no
+    /// assignment of the two existing weights can. That threshold is one
+    /// experts state outright (`docs/EXPERT_STRATEGY.md:526`: "I don't use 3
+    /// civil actions until I have 5 or 6").
+    ///
+    /// A quotient rather than a second LEVEL, and the live 2p champion is why
+    /// that distinction is load-bearing rather than stylistic. It prices
+    /// `civil_actions` at -0.520 and `civil_action_surplus` at -1.324 -- an
+    /// unspent civil action reads as a PENALTY, so spending more of them
+    /// scores better. Confirmed by a swap test on a recorded position, not
+    /// inferred: with Pyramids in a 3-action slot and Hanging Gardens in a
+    /// 1-action slot it takes Pyramids and rates Hanging Gardens 13.6 worse,
+    /// and swapping the two cards between those slots flips the choice. It is
+    /// choosing a PRICE, not a card -- which it can only do because the two
+    /// wonders score bit-identically at take time, the zero row
+    /// [`WonderPromise`](Self::WonderPromise) closes. A second LEVEL would sit
+    /// inside the span of the coordinates that produced that behaviour and
+    /// could be absorbed by re-pricing them; a ratio cannot. Repairing the
+    /// SIGN is a pathology of a vector the climb produced rather than a gap in
+    /// this basis, and is deliberately not attempted here.
+    ///
+    /// Deliberately ungated in `eval`'s dominance tables, matching
+    /// `take_cost_paid`: spending actions on a card worth having is not a
+    /// rules-level loss, so its sign is the league's to find.
+    TakeCostShare,
     MilitaryActionGap,
     MilitaryActionSurplus,
     WorkerGap,
@@ -465,6 +552,14 @@ weight_key_table! {
     WonderOverrun => "wonder_overrun", 0.0;
     WonderStagesPerAction => "wonder_stages_per_action", 0.0;
     WonderPotential => "wonder_potential", 0.0;
+    // Both 0.0, and both have to be: a champion JSON written before these
+    // keys existed keeps its default for them (`eval::parse_weights` starts
+    // from `Weights::defaults()`), so any other seed would silently move
+    // every frozen gauntlet member and the anchor itself. See
+    // `tests::a_champion_file_saved_before_these_keys_existed_still_loads_
+    // with_them_at_zero`.
+    WonderPromise => "wonder_promise", 0.0;
+    WonderAgeOverrun => "wonder_age_overrun", 0.0;
     Leader => "leader", 1.5;
     HandLimit => "hand_limit", 0.0;
     ColonizeBonus => "colonize_bonus", 0.0;
@@ -531,6 +626,7 @@ weight_key_table! {
     HandMilitary => "hand_military", 0.3;
     HandMilValue => "hand_mil_value", 0.15;
     HandMilPotential => "hand_mil_potential", 0.0;
+    HandPerishable => "hand_perishable", 0.0;
     RivalCulture => "rival_culture", -0.35;
     RivalMeanCulture => "rival_mean_culture", -0.1;
     RivalCultureRate => "rival_culture_rate", -1.0;
@@ -571,6 +667,9 @@ weight_key_table! {
     HappySurplus => "happy_surplus", 0.0;
     CivilActionGap => "civil_action_gap", 0.0;
     CivilActionSurplus => "civil_action_surplus", 0.0;
+    // 0.0 for the same reason `wonder_promise`/`wonder_age_overrun` are --
+    // an old champion file inherits whatever is written here.
+    TakeCostShare => "take_cost_share", 0.0;
     MilitaryActionGap => "military_action_gap", 0.0;
     MilitaryActionSurplus => "military_action_surplus", 0.0;
     WorkerGap => "worker_gap", 0.0;
@@ -675,6 +774,10 @@ impl WeightKey {
             // with, the same axis `CivilActions`/`CaLeft` and
             // `MilitaryActions`/`MaLeft` already live in, not a new one.
             | CivilActionGap | CivilActionSurplus | MilitaryActionGap
+            // `TakeCostShare` is `TakeCostPaid` over the whole allowance, so
+            // it belongs beside it -- a group move that says "care more about
+            // what a row card costs me in actions" must reach both.
+            | TakeCostShare
             | MilitaryActionSurplus => {
                 WeightGroup::Actions
             }
@@ -684,6 +787,9 @@ impl WeightKey {
             | CardBoardWonder | CardBoardBonus => WeightGroup::Board,
 
             HandCivil | HandValue | HandValueEarly | HandValueLate | HandPotential
+            // `HandPerishable` is a property OF the hand (how much of it is
+            // about to expire), so it moves with the rest of the hand axis.
+            | HandPerishable
             | HandMilitary | HandMilValue | HandMilPotential | HandSwapExtra => {
                 WeightGroup::Cards
             }
@@ -752,6 +858,9 @@ impl WeightKey {
 
             Wonders | WonderProgress | WonderRemaining | WonderStagesLeft
             | WonderTurnsToFinish | WonderOverrun | WonderStagesPerAction | WonderPotential
+            // The two new wonder coordinates: the value still ahead of the
+            // player, and the deadline the rules impose on reaching it.
+            | WonderPromise | WonderAgeOverrun
             | Leader => WeightGroup::Wonders,
         }
     }
