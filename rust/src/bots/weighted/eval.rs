@@ -704,6 +704,42 @@ pub const LOSS_GATES: &[WeightKey] = &[
 /// an upside") even though both land on the same non-negative constraint.
 pub const REDUNDANCY_NONNEG_GATES: &[WeightKey] = &[WeightKey::TechRedundancyDiscount];
 
+/// Raw board STOCKS the rules only ever add effects for, never subtract
+/// them -- pricing a bigger stock as a penalty inverts a quantity the rules
+/// never punish.
+///
+/// `civil_actions`/`civil_action_surplus`: how many civil actions this
+/// player has available/unspent. Nothing in the rules costs you for
+/// holding a civil action you have not spent yet, so having more is never
+/// worse -- and the live 2p champion priced both negative
+/// (`civil_actions -0.520`, `civil_action_surplus -1.324`), which is
+/// exactly what makes overpaying for cards (spending down the surplus)
+/// look like an improvement.
+///
+/// `wonders`: the count of COMPLETED wonders. RULES_SPEC §9.2 -- "last
+/// stage covered -> ... effects begin" and "you may have any number of
+/// completed wonders" -- no completed wonder carries a negative permanent
+/// effect for its owner, so a lower count is never an improvement. (The
+/// §2.4 surcharge that makes taking the NEXT wonder cost 1 CA more per
+/// wonder already completed is a property of the take-a-wonder action,
+/// priced by the cards that trigger it; it says nothing about the value of
+/// wonders already banked.) The live 2p champion priced this key -1.20.
+///
+/// `card_board_wonder` and `science_rate` are deliberately NOT here.
+/// `card_board_wonder` is an internal valuation multiplier -- the per-type
+/// add-on `card_potential` folds into `card_board_credit` before scaling a
+/// COMPUTED swap-diff (`cards.rs`'s `credit_board = base +
+/// board_credit_key(id)...`), not a magnitude the rulebook describes, and
+/// its three siblings (`card_board_leader`/`_government`/`_action`,
+/// alongside `_bonus`) are deliberately left ungated in this same file --
+/// gating only the wonder one would be a carve-out with no rule behind it.
+/// `science_rate` has no RULES_SPEC citation establishing that more science
+/// production can never be a downside the way `civil_actions`' spare-action
+/// premise or `wonders`' "effects begin" are citable; guessing its sign is
+/// exactly what this table exists to refuse to do.
+pub const STOCK_NONNEG_GATES: &[WeightKey] =
+    &[WeightKey::CivilActions, WeightKey::CivilActionSurplus, WeightKey::Wonders];
+
 /// Weights that price WHAT AN UNFINISHED WONDER STILL OWES -- none of them
 /// may be positive. Every one is a non-negative magnitude that is larger the
 /// FURTHER the player is from finishing: `remaining` is the resources the
@@ -827,9 +863,10 @@ pub const NON_POSITIVE_GATES: &[(&[WeightKey], &str)] = &[
 /// Every "this weight may never be negative" gate, paired with the sentence
 /// [`dominance_repair`] logs when it fires -- the mirror image of
 /// [`NON_POSITIVE_GATES`], same reason: one table rather than one hand-rolled
-/// loop per gate list, so a third gate ([`WONDER_VALUE_GATES`], added
-/// alongside [`BENEFIT_GATES`] and [`REDUNDANCY_NONNEG_GATES`]) means one new
-/// entry, not one new copy of the loop. `bin/climb.rs`'s under-mutation guard
+/// loop per gate list, so a new gate ([`WONDER_VALUE_GATES`], then
+/// [`STOCK_NONNEG_GATES`], added alongside [`BENEFIT_GATES`] and
+/// [`REDUNDANCY_NONNEG_GATES`]) means one new entry, not one new copy of the
+/// loop. `bin/climb.rs`'s under-mutation guard
 /// iterates this table too, exactly as it already does [`NON_POSITIVE_GATES`],
 /// so adding a list here arms both the load-time repair and the mutation-time
 /// one at once, in this direction as well.
@@ -837,6 +874,7 @@ pub const NON_NEGATIVE_GATES: &[(&[WeightKey], &str)] = &[
     (BENEFIT_GATES, "scales a printed benefit"),
     (REDUNDANCY_NONNEG_GATES, "discounts a redundant card, never rewards one"),
     (WONDER_VALUE_GATES, "prices the in-progress wonder's completion value"),
+    (STOCK_NONNEG_GATES, "prices an available/completed stock the rules never subtract for"),
 ];
 
 /// One rule-level ordering `dominance_repair` had to fix -- Python's
@@ -1423,6 +1461,35 @@ mod tests {
             viol[0].rule.contains("completion value"),
             "the log has to say WHY (the wonder's completion value), got {viol:?}"
         );
+    }
+
+    /// The bug [`STOCK_NONNEG_GATES`] closes, reproduced with the live 2p
+    /// champion's own numbers: that arm priced `civil_actions` at **-0.520**,
+    /// `civil_action_surplus` at **-1.324**, and `wonders` at **-1.20**. None
+    /// of the three were in any gate table before this fix, so a vector
+    /// pricing unspent civil actions and completed wonders as PENALTIES was
+    /// fully legal and made the champion prefer to overpay for cards --
+    /// exactly the confound [`LOSS_GATES`]'s own doc comment warns about, one
+    /// gate list over.
+    #[test]
+    fn the_2p_champions_negative_civil_action_and_wonder_stock_weights_are_repaired_away() {
+        let mut w = Weights::default();
+        w.set(WeightKey::CivilActions, -0.520);
+        w.set(WeightKey::CivilActionSurplus, -1.324);
+        w.set(WeightKey::Wonders, -1.20);
+
+        let (out, viol) = dominance_repair(&w);
+
+        assert_eq!(out.get(WeightKey::CivilActions), 0.0);
+        assert_eq!(out.get(WeightKey::CivilActionSurplus), 0.0);
+        assert_eq!(out.get(WeightKey::Wonders), 0.0);
+        assert_eq!(viol.len(), 3, "exactly three violations, got {viol:?}");
+        for v in &viol {
+            assert!(
+                v.rule.contains("never subtract"),
+                "the log has to say WHY (a stock the rules never subtract for), got {v:?}"
+            );
+        }
     }
 
     /// A key only belongs in [`NON_NEGATIVE_GATES`] if its author already

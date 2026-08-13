@@ -363,25 +363,24 @@ struct Challenge {
     games: usize,
 }
 
-/// Play `mutant` against `champion` in growing batches, stopping as soon as
-/// the answer is not in doubt.
+/// Play `mutant` against `champion` in growing batches up to `max_games`,
+/// with exactly one early exit: abandon as soon as the running mean is
+/// BELOW the null and the screening batch is spent (stop paying for a
+/// loser). Everything else keeps buying games up to `max_games`.
 ///
-/// Two stopping rules, both from Python's `challenge`: break out early when
-/// the lower bound has cleared the null (a clear win, and more games only cost
-/// time), and abandon as soon as the running mean is BELOW the null and the
-/// screening batch is spent (stop paying for a loser). Everything in between
-/// keeps buying games up to `max_games`.
-///
-/// The early accept additionally needs [`Config::min_games`] behind it. A
-/// batch of four deals can hand back a lower bound well clear of the null on
-/// nothing but seat luck -- the first smoke run of this binary promoted a
-/// mutant on a 12-game 0.50 exactly that way -- and an accept is permanent
-/// where a rejection only costs one generation. So the cheap stopping rule is
-/// the one for LOSERS; winners have to be shown twice.
+/// There is deliberately no early ACCEPT. It used to re-test `lo > null`
+/// after every batch and break the moment that cleared -- up to
+/// `max_games / screen` looks per mutant -- which is optional stopping: it
+/// turned the nominal `accept_z` = 90% one-sided test into a ~75% one (a
+/// candidate exactly as good as the champion cleared the gate 25% of the
+/// time instead of 10%; `/private/tmp/gatediag/sim.py` reproduces the exact
+/// numbers). An accept is permanent where a rejection only costs one
+/// generation, so a winner now always plays out the full `max_games` and
+/// the decision is made once, at the end, on the whole sample -- the cheap
+/// stopping rule stays the one for LOSERS only.
 fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
     let players = cfg.players as usize;
     let null = 1.0 / players as f64;
-    let floor = cfg.accept_floor().min(cfg.max_games);
     let mut shares: Vec<Option<f64>> = Vec::new();
     let mut batch = cfg.screen;
 
@@ -404,10 +403,6 @@ fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
         shares.extend(duel.play().iter().map(|d| Some(d.share)));
 
         let est = stats::paired(&shares, players);
-        let lo = est.mean - cfg.accept_z * est.se;
-        if lo > null && shares.len() >= floor {
-            break; // a clear win, not a lucky one
-        }
         if est.mean < null && shares.len() >= cfg.screen {
             break; // stop paying for a loser
         }
@@ -660,10 +655,6 @@ struct Config {
     players: u8,
     /// Games in the first batch of a challenge, and in every batch after it.
     screen: usize,
-    /// Games a challenge must have played before an early accept is allowed.
-    /// Zero means twice the screening batch, which is Python's default and the
-    /// smallest floor that makes a promotion survive a second, disjoint batch.
-    min_games: usize,
     max_games: usize,
     anchor_games: usize,
     threads: usize,
@@ -731,7 +722,6 @@ impl Default for Args {
                 kind: BotKind::Weighted,
                 players: 3,
                 screen: 24,
-                min_games: 0,
                 max_games: 240,
                 anchor_games: 120,
                 threads: 1,
@@ -787,7 +777,6 @@ usage: climb --out PATH [options]
   --gens N           stop after N generations (default: only --hours stops it)
   --hours H          wall-clock budget (default 1)
   --screen N         games per challenge batch (default 24)
-  --min-games N      games before an early accept is allowed (default: 2x --screen)
   --max-games N      games a single challenge may spend (default 240)
   --anchor-games N   games per anchor measurement (default 120)
   --gauntlet PATH    frozen past opponent, reported on AND drawn into the
@@ -845,7 +834,6 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--gens" => a.gens = parse_num(&value(flag)?, flag)?,
             "--hours" => a.hours = parse_num(&value(flag)?, flag)?,
             "--screen" => a.cfg.screen = parse_num(&value(flag)?, flag)?,
-            "--min-games" => a.cfg.min_games = parse_num(&value(flag)?, flag)?,
             "--max-games" => a.cfg.max_games = parse_num(&value(flag)?, flag)?,
             "--anchor-games" => a.cfg.anchor_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet" => {
@@ -1305,15 +1293,6 @@ impl Config {
     fn null(&self) -> f64 {
         1.0 / self.players as f64
     }
-
-    /// See [`Config::min_games`].
-    fn accept_floor(&self) -> usize {
-        if self.min_games == 0 {
-            2 * self.screen
-        } else {
-            self.min_games
-        }
-    }
 }
 
 fn append(path: &Path, line: &str) -> Result<(), String> {
@@ -1570,14 +1549,36 @@ mod tests {
         assert!(r.lo <= c.null(), "an identical vector cleared the gate at lo={}", r.lo);
     }
 
-    /// A promotion is permanent where a rejection costs one generation, so an
-    /// early accept has to be shown over more than one screening batch.
+    /// The optional-stopping bug this fix closes: `challenge` used to re-test
+    /// `lo > null` after every batch and break the moment that cleared, which
+    /// is peeking, not a single look (see this function's own doc comment and
+    /// `/private/tmp/gatediag/sim.py`). Pit the tuned default vector against
+    /// an all-zero one -- a `WeightedBot` scores every candidate move 0.0
+    /// under all-zero weights, so it deterministically plays whatever
+    /// `legal_moves` lists first every turn (see `eval.rs`'s `WeightedBot::
+    /// choose`) -- a lopsided, deterministic mismatch whose lower bound
+    /// clears the null within the first couple of screening batches. Even so,
+    /// the challenge has to keep buying games all the way to `max_games`: a
+    /// clear win earns no early exit any more, only a clear loss does.
     #[test]
-    fn an_early_accept_needs_two_screening_batches_behind_it() {
-        let c = Config { screen: 24, min_games: 0, ..cfg() };
-        assert_eq!(c.accept_floor(), 48);
-        let explicit = Config { screen: 24, min_games: 96, ..cfg() };
-        assert_eq!(explicit.accept_floor(), 96);
+    fn a_clear_winner_still_plays_out_the_full_max_games() {
+        let mut c = cfg();
+        c.players = 2;
+        c.kind = BotKind::Weighted;
+        let mut all_zero = Weights::defaults();
+        for &k in WeightKey::ALL {
+            all_zero.set(k, 0.0);
+        }
+        c.champion = all_zero;
+        c.screen = 8;
+        c.max_games = 64;
+        c.threads = 4;
+        let mutant = Weights::defaults();
+
+        let r = challenge(&mutant, &c, 5150);
+
+        assert_eq!(r.games, c.max_games, "stopped early at lo={} instead of playing every game", r.lo);
+        assert!(r.lo > c.null(), "the matchup was not actually lopsided: lo={}", r.lo);
     }
 
     #[test]
