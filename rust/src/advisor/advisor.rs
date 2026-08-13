@@ -33,10 +33,13 @@ use std::path::Path;
 use crate::advisor::describe;
 use crate::advisor::state_io::{self, Board};
 use crate::apply;
+use crate::bots::human;
+use crate::bots::pending;
+use crate::bots::plan;
 use crate::bots::weighted::eval::{self, WeightedBot};
-use crate::bots::weighted::features;
-use crate::bots::weighted::rivals;
-use crate::bots::weighted::weights::WeightKey;
+use crate::bots::weighted::features::{self, Features};
+use crate::bots::weighted::rivals::{self, RivalContext};
+use crate::bots::weighted::weights::{WeightKey, Weights};
 use crate::cards::CardId;
 use crate::legal;
 use crate::moves::{ChurchillChoice, Move};
@@ -94,10 +97,117 @@ pub struct Candidate {
     pub reason: String,
 }
 
+// ------------------------------------------------------------ search mode
+
+/// Which lookahead the advisor uses to rank moves, selected by `bin/
+/// advisor.rs`'s `--search` flag. Exhaustive everywhere it is matched (see
+/// [`rank_moves_search`]): a new variant is a compile error at every match
+/// site until it is wired in, not a silent no-op.
+///
+/// ## Why `Human` is the default, not `Greedy` or `Beam`
+///
+/// Measured 2026-08-13, 2p, 240 games/config, seats rotated, null baseline
+/// 50%:
+///
+/// * [`Beam`](SearchMode::Beam) (plain beam search over every legal move,
+///   leaf-scored with the champion vector) vs. [`Greedy`](SearchMode::Greedy)
+///   with the SAME champion vector: the beam seat won **41.9%** -- it LOSES,
+///   p~=0.01. The champion vector was hill-climbed against a 1-ply
+///   evaluator and does not transfer to deeper search out of the box; depth
+///   alone is not the lever. Do not pick `Beam` on the assumption that more
+///   search must be better -- on this vector it is measurably worse than the
+///   1-ply baseline it is compared against.
+/// * [`Human`](SearchMode::Human) (a human-imitation move-ordering prior
+///   narrows the ROOT candidates, then the SAME beam ranks the survivors,
+///   still leaf-scored with the champion vector) vs. `Greedy`: **68.3%**,
+///   p~=1e-8 (consistent with 65.6% measured 2026-08-08). The win comes from
+///   narrowing WHICH root moves get considered at all, not from searching
+///   deeper over the full move set.
+///
+/// `Human` is therefore the one configuration measured to beat the champion
+/// baseline, and is the default a fresh advisor run picks. `Greedy` and
+/// `Beam` stay selectable so the three can be compared side by side (e.g.
+/// against a saved position from a real game), never removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMode {
+    /// The advisor's original behaviour: clone, apply exactly the ONE
+    /// candidate move, score with [`eval::evaluate`]. No lookahead past that
+    /// single ply -- see this module's top doc comment for the real-game
+    /// failure this leaves on the table (a wonder taken, and never built,
+    /// because "wonder acquired" scores well for exactly one turn).
+    Greedy,
+    /// [`plan::rank`]'s beam search over every legal move, leaf-scored with
+    /// the SAME gameplay vector `Greedy` uses -- see this enum's own doc
+    /// comment for why this is measured WORSE than `Greedy`, not better.
+    Beam,
+    /// `Beam`, but [`human::root_shortlist`] narrows the ROOT's legal moves
+    /// to the human-imitation model's most-plausible candidates before the
+    /// beam ever runs. Leaf scoring is STILL the gameplay vector, never the
+    /// human one -- see [`human::choose_with_search`]'s own doc comment: this
+    /// is a hybrid, not "play like a human".
+    Human,
+}
+
+/// [`SearchMode::Beam`]/[`SearchMode::Human`]'s shared configuration: the
+/// [`plan::PlanConfig`] template the search runs with (`weights` is
+/// overwritten from the advisor's own [`WeightedBot`] on every call -- see
+/// [`rank_moves_beam`] -- so there is exactly one gameplay vector in play,
+/// never a second one this struct could drift out of sync with) and, for
+/// `Human`, the root move-ordering prior vector
+/// ([`crate::human_policy::vector_from_weights`]'s own dense shape, loaded
+/// from `analysis/frozen/human_weights.json` by the CLI).
+#[derive(Clone, Debug)]
+pub struct SearchConfig {
+    pub mode: SearchMode,
+    pub plan: plan::PlanConfig,
+    /// Only read under `SearchMode::Human`; empty under `Greedy`/`Beam`,
+    /// where nothing ever looks at it.
+    pub human_weights: Vec<f64>,
+}
+
+impl Default for SearchConfig {
+    /// `Greedy`, matching [`rank_moves`]'s original, unconditional behaviour
+    /// -- an [`Advisor`] built with [`Advisor::new`] and never told
+    /// otherwise must recommend EXACTLY what it always has, so an existing
+    /// caller (a test, `bin/harness.rs`, `harness/play.rs`'s scripted
+    /// operator) sees no behaviour change just by this type existing. The
+    /// CLI's own default is `Human` (see [`SearchMode`]'s doc comment) --
+    /// that is `bin/advisor.rs`'s decision, made explicitly by constructing
+    /// its own `SearchConfig` rather than by changing what this trait
+    /// impl returns.
+    fn default() -> SearchConfig {
+        SearchConfig {
+            mode: SearchMode::Greedy,
+            plan: plan::PlanConfig::default(),
+            human_weights: Vec::new(),
+        }
+    }
+}
+
+/// The legal moves worth SCORING for a recommendation: resign dropped
+/// whenever a real alternative exists (mirrors Python's `[m for m in moves
+/// if m[0] != "resign"] or moves`), and `end_turn` dropped too unless the
+/// caller asked to see it (`include_end_turn`) or it is the only option.
+/// Shared by every [`SearchMode`] so `greedy`/`beam`/`human` rank the
+/// IDENTICAL candidate set and differ only in how each one is scored -- a
+/// side-by-side comparison across modes on one saved position would
+/// otherwise be comparing different questions, not just different answers.
+fn scoreable_candidates(moves: &[Move], include_end_turn: bool) -> Vec<Move> {
+    let non_resign: Vec<Move> = moves.iter().copied().filter(|m| !matches!(m, Move::Resign)).collect();
+    let base: &[Move] = if non_resign.is_empty() { moves } else { &non_resign };
+    if include_end_turn || base.len() <= 1 {
+        return base.to_vec();
+    }
+    let without_end: Vec<Move> = base.iter().copied().filter(|m| !matches!(m, Move::EndTurn)).collect();
+    if without_end.is_empty() { base.to_vec() } else { without_end }
+}
+
 /// Score every legal move with the bot's own evaluation and return the best
 /// `top`. Mirrors `rank_moves`; see this module's top doc comment for the
 /// three Python mechanisms (`rng`, `fastcopy`, per-candidate `try`/`except`)
-/// this does not carry.
+/// this does not carry. This is [`SearchMode::Greedy`]'s implementation,
+/// still reachable on its own (not just through [`rank_moves_search`]) for
+/// any caller that only ever wants the 1-ply baseline.
 pub fn rank_moves(board: &Board, bot: &WeightedBot, top: usize, include_end_turn: bool) -> Vec<Candidate> {
     let st = &board.state;
     let moves = legal::legal_moves(st);
@@ -105,13 +215,7 @@ pub fn rank_moves(board: &Board, bot: &WeightedBot, top: usize, include_end_turn
         return Vec::new();
     }
     let idx = st.decider();
-
-    // Resigning is (almost) never the right first suggestion at a physical
-    // table -- prefer the non-resign candidate set when one exists, exactly
-    // as Python's `[m for m in moves if m[0] != "resign"] or moves` does.
-    let non_resign: Vec<Move> =
-        moves.as_slice().iter().copied().filter(|m| !matches!(m, Move::Resign)).collect();
-    let candidates: &[Move] = if non_resign.is_empty() { moves.as_slice() } else { &non_resign };
+    let candidates = scoreable_candidates(moves.as_slice(), include_end_turn);
 
     // Computed once at the root and reused for every candidate -- the same
     // reuse `WeightedBot::choose` documents (an information-leak concern,
@@ -122,10 +226,7 @@ pub fn rank_moves(board: &Board, bot: &WeightedBot, top: usize, include_end_turn
     let end_bias = w.get(WeightKey::EndTurnBias);
 
     let mut scored: Vec<(f64, Move, features::Features)> = Vec::new();
-    for &mv in candidates {
-        if matches!(mv, Move::EndTurn) && !include_end_turn && candidates.len() > 1 {
-            continue;
-        }
+    for &mv in &candidates {
         let mut trial = st.clone();
         apply::apply(&mut trial, mv);
         let after = features::features(&trial, idx, Some(&ctx), None, false);
@@ -156,6 +257,205 @@ pub fn rank_moves(board: &Board, bot: &WeightedBot, top: usize, include_end_turn
             reason: describe::explain(&before, &after, w, 3),
         })
         .collect()
+}
+
+/// Every `candidates` move, immediate one-ply value (`weighted::eval::
+/// evaluate` on the state one apply away -- the `Move::EndTurn` bias
+/// included, matching [`rank_moves`]'s own treatment) plus the resulting
+/// [`Features`], which [`describe::explain`] needs for the "why" line.
+/// Shared by [`rank_moves_beam`]/[`rank_moves_human`]: both need this
+/// exact computation, once, either as the REASON text's source (always) or
+/// as the SCORE itself (only when the deeper search never reached that
+/// candidate -- see [`combine_with_search`]).
+fn one_ply_scored(
+    st: &GameState,
+    idx: u8,
+    ctx: &RivalContext,
+    w: &Weights,
+    candidates: &[Move],
+) -> Vec<(Move, f64, Features)> {
+    let end_bias = w.get(WeightKey::EndTurnBias);
+    candidates
+        .iter()
+        .map(|&mv| {
+            let mut trial = st.clone();
+            apply::apply(&mut trial, mv);
+            let after = features::features(&trial, idx, Some(ctx), None, false);
+            let mut val = eval::evaluate(&trial, idx, w, Some(ctx), Some(&after));
+            if matches!(mv, Move::EndTurn) {
+                val += end_bias;
+            }
+            (mv, val, after)
+        })
+        .collect()
+}
+
+/// Merge [`plan::rank`]'s deep scores onto [`one_ply_scored`]'s per-candidate
+/// rows, rank everything, and build the final [`Candidate`] list -- the
+/// shared tail of [`rank_moves_beam`] and [`rank_moves_human`].
+///
+/// `searched` may be missing entries [`plan::rank`] never reached (its own
+/// doc comment: a root candidate starved by `cfg.max_nodes` before its turn
+/// in the root ply is simply absent, not padded with a guess) -- such a
+/// candidate falls back to its OWN one-ply value from `one_ply` rather than
+/// being dropped from the list: a human choosing between recommendations
+/// must never have a legal option silently vanish just because the search
+/// budget ran out on it.
+fn combine_with_search(
+    st: &GameState,
+    board: &Board,
+    w: &Weights,
+    before: &Features,
+    one_ply: Vec<(Move, f64, Features)>,
+    searched: &[(Move, f64)],
+    top: usize,
+) -> Vec<Candidate> {
+    if one_ply.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(f64, Move, Features)> = one_ply
+        .into_iter()
+        .map(|(mv, fallback_val, after)| {
+            let val = searched.iter().find(|&&(m, _)| m == mv).map_or(fallback_val, |&(_, v)| v);
+            (val, mv, after)
+        })
+        .collect();
+    let base = scored.iter().map(|&(v, _, _)| v).fold(f64::MIN, f64::max);
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+        .into_iter()
+        .take(top)
+        .map(|(val, mv, after)| Candidate {
+            mv,
+            score: val - base,
+            text: describe::describe_move(st, mv, Some(board)),
+            reason: describe::explain(before, &after, w, 3),
+        })
+        .collect()
+}
+
+/// [`SearchMode::Beam`]: real lookahead over every legal candidate,
+/// leaf-scored with `bot`'s own gameplay vector -- `plan_cfg.weights` is
+/// overwritten from `bot.weights` unconditionally, so the beam and the 1-ply
+/// baseline always score with the identical vector (task requirement: leaf
+/// scoring stays the gameplay/champion vector). One [`plan::rank`] call
+/// prices every root candidate; see that function's own doc comment for why
+/// this is not one search per candidate.
+///
+/// `rng`/`stats`/`counters` are freshly built per call rather than carried on
+/// [`Advisor`]: the ordinary-turn branch of [`plan::rank`] seeds its own
+/// determinize rng from `state.seed`/`state.turn`/the decider
+/// ([`plan::plan_rng`], reused here so a real bot playing this exact
+/// position would determinize identically) and needs nothing from the
+/// caller, so an [`Advisor`] recommending moves stays free of the
+/// call-to-call mutable search state a full game-playing bot instance
+/// carries -- there is no game loop here for it to persist across.
+fn rank_moves_beam(
+    plan_cfg: &plan::PlanConfig,
+    board: &Board,
+    bot: &WeightedBot,
+    top: usize,
+    include_end_turn: bool,
+) -> Vec<Candidate> {
+    let st = &board.state;
+    let moves = legal::legal_moves(st);
+    if moves.is_empty() {
+        return Vec::new();
+    }
+    let idx = st.decider();
+    let candidates = scoreable_candidates(moves.as_slice(), include_end_turn);
+    let ctx = rivals::rival_context(st, idx, None, None);
+    let before = features::features(st, idx, Some(&ctx), None, false);
+    let w = bot.weights;
+
+    let one_ply = one_ply_scored(st, idx, &ctx, &w, &candidates);
+
+    let cfg = plan::PlanConfig { weights: w, ..*plan_cfg };
+    let mut stats = plan::Stats::default();
+    let mut counters = pending::Counters::default();
+    let mut rng = plan::plan_rng(st, idx);
+    let searched = plan::rank(
+        &cfg,
+        &mut stats,
+        &mut counters,
+        &mut rng,
+        st,
+        &candidates,
+        &mut plan::Bank::Off,
+        None,
+    );
+
+    combine_with_search(st, board, &w, &before, one_ply, &searched, top)
+}
+
+/// [`SearchMode::Human`]: [`human::root_shortlist`] narrows `candidates` to
+/// the human-imitation model's most-plausible root moves FIRST, then the
+/// rest is exactly [`rank_moves_beam`]'s own tail -- the same hybrid
+/// [`human::choose_with_search`] plays, adapted to rank every shortlisted
+/// survivor instead of returning only the winner. Only the shortlisted moves
+/// appear in the result: a move the human-imitation prior ranks outside the
+/// shortlist is never deep-searched, exactly as `choose_with_search` never
+/// considers it either.
+fn rank_moves_human(
+    plan_cfg: &plan::PlanConfig,
+    human_weights: &[f64],
+    board: &Board,
+    bot: &WeightedBot,
+    top: usize,
+    include_end_turn: bool,
+) -> Vec<Candidate> {
+    let st = &board.state;
+    let moves = legal::legal_moves(st);
+    if moves.is_empty() {
+        return Vec::new();
+    }
+    let idx = st.decider();
+    let full_candidates = scoreable_candidates(moves.as_slice(), include_end_turn);
+    let candidates = human::root_shortlist(human_weights, st, idx, &full_candidates);
+    let ctx = rivals::rival_context(st, idx, None, None);
+    let before = features::features(st, idx, Some(&ctx), None, false);
+    let w = bot.weights;
+
+    let one_ply = one_ply_scored(st, idx, &ctx, &w, &candidates);
+
+    let cfg = plan::PlanConfig { weights: w, ..*plan_cfg };
+    let mut stats = plan::Stats::default();
+    let mut counters = pending::Counters::default();
+    let mut rng = plan::plan_rng(st, idx);
+    let searched = plan::rank(
+        &cfg,
+        &mut stats,
+        &mut counters,
+        &mut rng,
+        st,
+        &candidates,
+        &mut plan::Bank::Off,
+        None,
+    );
+
+    combine_with_search(st, board, &w, &before, one_ply, &searched, top)
+}
+
+/// Dispatch on [`SearchMode`] -- the ONE place a caller that wants to honour
+/// an [`Advisor`]'s configured search mode should call, rather than
+/// [`rank_moves`] directly (which is always [`SearchMode::Greedy`], no
+/// matter what an [`Advisor`] is configured for). Exhaustive: no wildcard
+/// arm, so a new [`SearchMode`] variant is a compile error here until this
+/// match is updated.
+pub fn rank_moves_search(
+    search: &SearchConfig,
+    board: &Board,
+    bot: &WeightedBot,
+    top: usize,
+    include_end_turn: bool,
+) -> Vec<Candidate> {
+    match search.mode {
+        SearchMode::Greedy => rank_moves(board, bot, top, include_end_turn),
+        SearchMode::Beam => rank_moves_beam(&search.plan, board, bot, top, include_end_turn),
+        SearchMode::Human => {
+            rank_moves_human(&search.plan, &search.human_weights, board, bot, top, include_end_turn)
+        }
+    }
 }
 
 // ---------------------------------------------------- parsing human moves
@@ -477,11 +777,25 @@ pub struct Advisor {
     /// -- empty except in the window between a deal and [`Advisor::
     /// set_dealt`]/the console clearing it.
     pub dealt_slots: Vec<usize>,
+    /// Which [`SearchMode`] [`Advisor::recommend`] ranks with. Defaults to
+    /// [`SearchConfig::default`] (`Greedy`) so an existing caller of
+    /// [`Advisor::new`] sees no behaviour change; `bin/advisor.rs` overwrites
+    /// this field itself once it has parsed `--search` (default `Human`
+    /// there -- see [`SearchMode`]'s own doc comment for why the CLI's
+    /// default differs from this struct's).
+    pub search: SearchConfig,
 }
 
 impl Advisor {
     pub fn new(board: Board, bot: WeightedBot, bot_source: String) -> Advisor {
-        Advisor { board, bot, bot_source, log: Vec::new(), dealt_slots: Vec::new() }
+        Advisor {
+            board,
+            bot,
+            bot_source,
+            log: Vec::new(),
+            dealt_slots: Vec::new(),
+            search: SearchConfig::default(),
+        }
     }
 
     pub fn state(&self) -> &GameState {
@@ -493,7 +807,7 @@ impl Advisor {
     }
 
     pub fn recommend(&self, top: usize) -> Vec<Candidate> {
-        rank_moves(&self.board, &self.bot, top, true)
+        rank_moves_search(&self.search, &self.board, &self.bot, top, true)
     }
 
     /// Apply a move to the mirror. Returns `(ok, message)`; `false` means
@@ -624,6 +938,143 @@ mod tests {
         // engine's contract -- see `legal.rs`'s own tests for `resign`.)
         let _ = rank_moves(&board, &bot, 3, true); // must not panic either way
         board.state.game_over = false;
+    }
+
+    // ------------------------------------------------------ search modes
+
+    /// [`SearchConfig::default`] is `Greedy`, and an [`Advisor`] built with
+    /// [`Advisor::new`] (which never touches `search`) must therefore
+    /// recommend EXACTLY what bare [`rank_moves`] does -- an existing
+    /// caller (`bin/harness.rs`, `harness/play.rs`'s scripted operator, the
+    /// save/load round-trip tests below) must see no behaviour change from
+    /// this type existing at all.
+    #[test]
+    fn an_advisor_with_no_search_mode_set_recommends_exactly_what_bare_rank_moves_does() {
+        let board = state_io::new_board(3, 0, 5);
+        let bot = WeightedBot::new(Weights::defaults());
+        let adv = Advisor::new(board.clone(), bot, "test".to_string());
+        assert_eq!(adv.search.mode, SearchMode::Greedy);
+        let direct = rank_moves(&board, &adv.bot, 5, true);
+        let via_advisor = adv.recommend(5);
+        assert_eq!(direct.len(), via_advisor.len());
+        for (a, b) in direct.iter().zip(via_advisor.iter()) {
+            assert_eq!(a.mv, b.mv);
+            assert_eq!(a.score, b.score);
+        }
+    }
+
+    /// [`rank_moves_search`]'s `Beam` arm must never drop a legal,
+    /// SCOREABLE candidate from the result: [`combine_with_search`]'s
+    /// fallback-to-one-ply guarantee exists exactly to keep the candidate
+    /// SET identical to what `Greedy` offers, even though a beam-starved
+    /// move's score is a 1-ply value rather than a searched one. `top` here
+    /// is generous enough to cover a fresh game's whole candidate set (13
+    /// row cards + end_turn), so this also pins that count directly.
+    #[test]
+    fn beam_mode_never_drops_a_candidate_greedy_would_have_shown() {
+        let board = state_io::new_board(3, 0, 5);
+        let bot = WeightedBot::new(Weights::defaults());
+        let greedy = rank_moves(&board, &bot, 32, true);
+        let search = SearchConfig {
+            mode: SearchMode::Beam,
+            plan: plan::PlanConfig { width: 6, max_plies: 4, max_nodes: 1200, ..plan::PlanConfig::default() },
+            human_weights: Vec::new(),
+        };
+        let beam = rank_moves_search(&search, &board, &bot, 32, true);
+        assert_eq!(beam.len(), greedy.len(), "beam mode must offer the identical candidate set as greedy");
+        let mut greedy_moves: Vec<Move> = greedy.iter().map(|c| c.mv).collect();
+        let mut beam_moves: Vec<Move> = beam.iter().map(|c| c.mv).collect();
+        greedy_moves.sort_by_key(|m| format!("{m:?}"));
+        beam_moves.sort_by_key(|m| format!("{m:?}"));
+        assert_eq!(greedy_moves, beam_moves, "beam mode must offer exactly the same moves, just possibly reordered");
+    }
+
+    /// Real lookahead changes the RANKING, not just the numbers: on a fresh
+    /// game (several civil actions still unspent, so the search tree
+    /// extends well past one ply), beam mode must weigh at least one
+    /// candidate differently than 1-ply greedy does, or the whole point of
+    /// this task -- lookahead that actually changes what gets recommended
+    /// -- would not be true. Confirmed RED (this assertion fails) by
+    /// temporarily making `rank_moves_beam` call plain `rank_moves` instead
+    /// of running the beam -- see this task's commit message / report for
+    /// the failure text.
+    #[test]
+    fn beam_mode_ranks_at_least_one_candidate_differently_than_one_ply_greedy() {
+        let board = state_io::new_board(3, 0, 5);
+        let bot = WeightedBot::new(Weights::defaults());
+        let greedy = rank_moves(&board, &bot, 32, true);
+        let search = SearchConfig {
+            mode: SearchMode::Beam,
+            plan: plan::PlanConfig { width: 6, max_plies: 6, max_nodes: 2000, ..plan::PlanConfig::default() },
+            human_weights: Vec::new(),
+        };
+        let beam = rank_moves_search(&search, &board, &bot, 32, true);
+        let greedy_order: Vec<Move> = greedy.iter().map(|c| c.mv).collect();
+        let beam_order: Vec<Move> = beam.iter().map(|c| c.mv).collect();
+        assert_ne!(greedy_order, beam_order, "beam's lookahead must reorder at least one candidate vs. greedy");
+    }
+
+    /// `Human` mode narrows to [`human::root_shortlist`]'s survivors --
+    /// every recommended move must still be legal and among what `Greedy`
+    /// offers (never a move outside the shared candidate set), and on a
+    /// fresh game (13 row cards + end_turn, comfortably more than the
+    /// shortlist width) the narrowing must actually have happened.
+    ///
+    /// A fresh opening only ever offers 6 candidates (5 affordable takes +
+    /// end_turn -- not enough civil actions yet to reach anything else), so
+    /// this walks a real game forward on a fixed, deterministic move-cycling
+    /// policy until the position offers more than a shortlist holds, the
+    /// same technique [`human::root_shortlist`]'s own
+    /// `a_position_with_more_than_root_shortlist_legal_moves` test helper
+    /// uses.
+    #[test]
+    fn human_mode_only_recommends_moves_the_shortlist_kept() {
+        let mut board = state_io::new_board(3, 0, 0);
+        board.state = a_position_with_many_legal_moves();
+        let bot = WeightedBot::new(Weights::defaults());
+        let greedy = rank_moves(&board, &bot, 64, true);
+        assert!(greedy.len() > 8, "test needs a position with more than 8 candidates, got {}", greedy.len());
+        // An all-zero human vector is a legitimate (if untrained) weight
+        // vector -- `human_policy::vector_from_weights`'s own dimension is
+        // all this needs to be well-formed; the shortlist rule only needs a
+        // vector of the right shape, not a meaningful one, to prove the
+        // narrowing wiring itself works.
+        let human_weights = vec![0.0; crate::human_policy::feature_dim()];
+        let search = SearchConfig {
+            mode: SearchMode::Human,
+            plan: plan::PlanConfig { width: 6, max_plies: 4, max_nodes: 1200, ..plan::PlanConfig::default() },
+            human_weights,
+        };
+        let human = rank_moves_search(&search, &board, &bot, 64, true);
+        assert!(!human.is_empty());
+        assert!(human.len() < greedy.len(), "the shortlist must have narrowed the candidate set");
+        let greedy_moves: Vec<Move> = greedy.iter().map(|c| c.mv).collect();
+        for c in &human {
+            assert!(greedy_moves.contains(&c.mv), "{:?} is not among greedy's own candidate set", c.mv);
+        }
+    }
+
+    /// A real position (not just a fresh opening) with more legal moves than
+    /// one human-shortlist holds, reached by playing a real game forward a
+    /// bit on a fixed move-index-cycling policy -- deterministic (no RNG
+    /// choices of our own), matching [`human::root_shortlist`]'s own test
+    /// helper of the same shape.
+    fn a_position_with_many_legal_moves() -> GameState {
+        for seed in 0..30u64 {
+            let mut state = game::new_game(3, seed);
+            for step in 0..60u32 {
+                let moves = legal::legal_moves(&state);
+                if moves.as_slice().len() > 10 {
+                    return state;
+                }
+                if state.game_over {
+                    break;
+                }
+                let mv = moves.as_slice()[step as usize % moves.as_slice().len()];
+                apply::apply(&mut state, mv);
+            }
+        }
+        panic!("no position with more than 10 legal moves found in 30 simulated games");
     }
 
     // ----------------------------------------------------------- parse_move

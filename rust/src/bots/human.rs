@@ -115,7 +115,12 @@ const ROOT_SHORTLIST: usize = 8;
 /// its opinion is consulted directly -- everything downstream
 /// ([`plan::pick`]) scores with `weighted::eval::evaluate`, never this
 /// vector.
-fn root_shortlist(human_weights: &[f64], state: &GameState, idx: u8, moves: &[Move]) -> Vec<Move> {
+///
+/// `pub(crate)`: also the narrowing step [`crate::advisor::advisor::
+/// rank_moves_human`] reuses so the advisor's own `--search human` mode
+/// shortlists the SAME way this bot's `choose_with_search` does, rather than
+/// re-deriving the shortlist rule a second time.
+pub(crate) fn root_shortlist(human_weights: &[f64], state: &GameState, idx: u8, moves: &[Move]) -> Vec<Move> {
     if moves.len() <= ROOT_SHORTLIST {
         return moves.to_vec();
     }
