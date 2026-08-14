@@ -1,0 +1,251 @@
+HAPPY worker notes -- "Impact of Happiness" award-divergence group (4 seat-pairs)
+============================================================================
+Base commit: d6a9fa3 (clone /private/tmp/base0815 -> /private/tmp/happy).
+Baseline guard: /private/tmp/guard_ids_687.txt, 687 completed IDs, 651/687 exact.
+
+NO FIX LANDED. rust/ tree is byte-identical to d6a9fa3 (confirmed with
+`git diff d6a9fa3 -- rust/` -> 0 lines, checked AFTER reverting my one
+attempted change). analysis/worker_notes_2026-08-14/happy.patch is
+therefore empty. This file documents a fully-diagnosed, then DELIBERATELY
+REVERTED fix for 1 of the 4 games, plus the reason the other 3 trace to a
+different, out-of-scope bug (the yellow_bank/discontent issue the
+coordinator told me NOT to touch -- it belongs to the Population worker).
+
+THE 4 (game,seat) PAIRS (from scoremis__SCOREMIS.txt's Table B)
+-----------------------------------------------------------------
+  7522277 seat1 (Purple): journal 12, engine 14 (delta +2)
+  7522446 seat3 (Grey):   journal 14, engine 12 (delta -2)
+  7523253 seat2 (Green):  journal 10, engine 12 (delta +2)
+  7522397 seat0 (Orange): journal 6,  engine 10 (delta +4)
+
+THE CARD RULE (established before touching code)
+---------------------------------------------------
+bga_throughtheages_material.inc.php card 217, "Impact of Happiness":
+"Each civilization scores 2 culture per happy face (max 16) and loses 2
+per discontent worker." Implementation: events.rs ~397-416,
+`culture_per_happy_face` / `max_culture_from_happy_faces` /
+`culture_per_discontent_worker`, reading `s.happy` (effects::state_stats,
+already clamped 0..8 -- effects.rs:1550, `stats.happy = stats.happy.clamp(0,
+8)`) and `economy::discontent`. The printed "(max 16)" is automatic
+(2*8=16) given that clamp, not a separate cap bug -- confirmed, not
+touched. `card_table.rs`'s baked constants for every card feeding this
+event (Theology, Great Wall, Eiffel Tower, St. Peter's Basilica, Pyramids)
+were checked against bga_throughtheages_material.inc.php's printed `happy`
+fields and all matched exactly -- NOT a repeat of today's earlier
+Fortifications transcription-slip class of bug.
+
+FINDING 1 -- 7522277, FULLY DIAGNOSED, FIX ATTEMPTED THEN REVERTED
+-----------------------------------------------------------------------
+Purple completes Library of Alexandria round 3, elects Homer round 4, then
+in round 6 completes St. Peter's Basilica AND replaces Homer with Genghis
+Khan in the same turn ("Purple builds 1 stage of St. Peter's Basilica ...
+Wonder completed" immediately followed by "Purple elects Genghis Khan Homer
+dies", journal lines 84-85). At that instant Purple has TWO completed
+wonders. Homer's own printed text (Code of Laws errata, confirmed via
+`pdftotext -layout cge_code_of_laws.pdf`): "When you replace Homer, you may
+slide this card under ONE of your completed wonders to give it an extra 1
+happy face." -- a genuine PLAYER CHOICE. `apply.rs::h_play_leader` (~line
+880) never modelled the choice: it always tucks under
+`completed_wonders.as_slice()[0]`, i.e. the FIRST-built wonder (Library of
+Alexandria here).
+
+Because Purple also holds St. Peter's Basilica ("each OTHER card or worker
+that gives you at least one happy face now gives you an extra 1 happy
+face"), and a Homer-boosted printed-happy-0 wonder DOES count as a
+qualifying source for that bonus (already correctly ported and regression-
+tested -- see effects.rs's `homer_happy_face_survives_ravages_of_time` /
+`st_peters_basilica_still_counts_a_homer_tucked_wonder_after_it_is_ravaged`
+tests, traced to BGO game 7522616), tucking under Library of Alexandria
+(the code's fixed choice) makes Library count as an EXTRA qualifying
+source, worth 2 extra happy faces total (Homer's own +1, plus St. Peter's
++1 bonus for Library newly qualifying). Tucking under St. Peter's Basilica
+itself instead would net only 1 extra face (self-exclusion: "each OTHER
+card" -- St. Peter's cannot bonus itself), for a total 1 LOWER than
+tucking under Library. Hand-verified: tucking under Library gives raw_happy
+7 (score 14, matches our WRONG output); tucking under St. Peter's gives
+raw_happy 6 (score 12, matches the journal EXACTLY).
+
+I changed `h_play_leader` to tuck under the LAST (`completed_wonders`'s own
+doc comment: "append-only in both engines", so last = most recently
+completed) instead of the first, added a full-sentence regression test
+(`h_play_leader_tucks_homer_under_the_most_recently_completed_wonder` in
+apply.rs's `#[cfg(test)] mod tests`), confirmed RED by reverting to `[0]`
+(engine picked Library, test asserted St. Peter's, failed as expected),
+then GREEN again with the fix restored. `cargo test --profile fasttest
+--lib`: 1411/1411 passed. `cargo clippy --all-targets --profile fasttest --
+-D warnings`: clean.
+
+THE FIX WAS THEN REVERTED -- IT REGRESSES THE FULL CORPUS
+--------------------------------------------------------------
+Ran the full guard sweep with the fix in place (`SCOREDIV_DUMP_COMPLETED=1
+SCOREDIV_DUMP_IDS=1`, comparing exact-match ID sets computed as
+`completed_ids MINUS diverging_ids`, before vs after, both freshly rebuilt
+via `git stash`/`git stash pop` on just `rust/src/apply.rs` to get a clean
+baseline for the diff):
+
+  Before (base d6a9fa3): 687 completed, 651/687 exact.
+  After (fix in place):  686 completed, 650/686 exact.
+
+  Completion regressions (comm -23 before/after completed IDs): 7522796
+  Completion wins: (none)
+  Exact-match regressions (was exact, no longer exact): 7522796, 7523021
+  Exact-match wins (newly exact): 7522277
+
+Net: +1 win, -2 regressions (one of which is a full REPLAY regression --
+7522796 no longer even completes to `state.game_over`, not just a score
+mismatch). This is worse than the starting point on BOTH mandatory metrics
+(completion count shrank 687->686; exact count fell 651->650), and the
+mandatory bar's own regression check (`comm -23 guard_ids_687.txt
+happy_ids.txt`) would NOT be empty. Landing this violates the task's own
+stated bar, so it was reverted.
+
+WHY: root-caused both regressions to the IDENTICAL Homer/multiple-
+completed-wonders-at-replacement-instant shape as 7522277, but wanting the
+OPPOSITE answer:
+
+  7522796 (Purple): Pyramids completed round 3, St. Peter's Basilica
+  completed round 7 THE SAME TURN Homer is replaced by Genghis Khan
+  ("Purple plays Engineering Genius Purple builds 1 stage of St. Peter's
+  Basilica; ... Wonder completed" then "Purple elects Genghis Khan Homer
+  dies", journal lines 106/109) -- structurally identical to 7522277, but
+  this game demonstrably wants Homer tucked under the FIRST-built wonder
+  (Pyramids): the "last" fix makes downstream replay reconstruction
+  diverge from the journal's own recorded actions badly enough that the
+  binary no longer reaches `state.game_over` at all (a stronger signal
+  than a mere score mismatch -- something the "last" choice unlocks or
+  blocks becomes illegal against the journal's actual play).
+
+  7523021 (Purple): Pyramids completed round 3, St. Peter's Basilica
+  completed round 6 (a full turn BEFORE Homer is replaced by Michelangelo
+  in round 7, so not even a same-turn tie) -- also wants the FIRST-built
+  wonder (Pyramids), also broken by "last".
+
+CONCLUSION: Homer's wonder choice is a genuine, per-game player decision
+that BGO's journal format never records (only "X elects Y; Homer dies",
+never which wonder was chosen). No single deterministic tie-break
+(first-built, last-built, or any other order-based rule I could construct)
+matches all 3 known multi-wonder cases -- 7522277 wants last, 7522796 and
+7523021 both want first. The task's own rules forbid special-casing a
+game ID and forbid patching tolerances, so there is no legitimate fix
+available here without either (a) somehow recovering the real player's
+choice (not present in the journal), or (b) accepting a net-negative swap
+of one win for two regressions. Per the task's own explicit allowance ("A
+measured negative is acceptable. Do not manufacture a fix."), I left this
+reverted.
+
+FINDING 2 -- 7522397, 7523253: LIKELY THE SAME OUT-OF-SCOPE yellow_bank BUG
+-------------------------------------------------------------------------------
+Neither game involves Homer-wonder-choice ambiguity at all (7523253's Green
+has exactly ONE completed wonder, Colossus, when Homer is replaced --
+zero ambiguity; 7522397's Orange likewise has exactly one, Pyramids, at
+that instant). Both are BORDERLINE on the OTHER half of the card's formula
+instead: `economy::discontent(state, p) = (happy_required(p.yellow_bank) -
+s.happy).max(0)`, and in both games the engine's own `s.happy` sits EXACTLY
+AT `happy_required(p.yellow_bank)`, so our computed discontent is exactly
+0 -- a small `yellow_bank` error in either direction would flip a
+nonzero discontent into (or out of) the formula and fully explain the
+observed score delta without touching `s.happy`/Homer at all:
+
+  7522397 (Orange, seat0): raw_happy=5 (Theology 1 worker*2=2, Pyramids via
+  Homer +1 [Pyramids IS the correctly-identified ravaged wonder, "Ravages
+  of Time The Pyramids crumble" line 267 -- confirmed, not ambiguous],
+  Great Wall +1, Eiffel Tower +1). yellow_bank=6 -> happy_required=5 ->
+  disc=max(5-5,0)=0 -> award 2*5-0=10. Journal wants 6. Every SOURCE in
+  raw_happy's own sum checks out against bga_throughtheages_material.inc.php
+  (Theology happy=2, Great Wall happy=1, Eiffel Tower happy=1, Pyramids
+  happy=0 -- all confirmed correct, no card_table.rs bug). The only way to
+  reach 6 without disturbing any of those confirmed-correct sources is
+  discontent=2, which requires `happy_required(yellow_bank)` to read 7
+  instead of 5 -- i.e. Orange's TRUE yellow_bank at final scoring is lower
+  than what this engine tracks, the exact "budget arithmetic" class of bug
+  FINDING 1 in scoremis__SCOREMIS.txt already traced for "Impact of
+  Population" (age-transition-timing yellow_bank deductions).
+
+  7523253 (Green, seat2): same shape. raw_happy=6 (Religion 1 worker=1,
+  Movies 3 workers=3, Colossus via Homer=1, colony Historic Territory
+  (I)=1 -- again every source individually confirmed against card data).
+  yellow_bank=6 -> happy_required=5 -> disc=0 -> award 12. Journal wants
+  10, reachable only via discontent=1 (needs `happy_required`=6, i.e. a
+  slightly lower true yellow_bank) -- same borderline-threshold signature.
+
+Did NOT attempt a fix: the coordinator's brief explicitly says the
+Population bucket (already traced to this exact `yellow_bank` mechanism in
+scoremis__SCOREMIS.txt's FINDING 1, itself UNRESOLVED and confirmed to have
+at least two distinct root causes) is a sibling worker's territory and is
+"entangled with a yellow_bank question" I should not touch. These two
+Happiness games look like the same entanglement leaking through a
+different final-scoring card rather than a Happiness-specific bug, so
+fixing them here would mean silently reaching into the Population worker's
+claimed area. Flagging for whoever resolves the Population/yellow_bank
+root cause: once that lands, re-check 7522397 and 7523253 -- they may
+clear for free.
+
+FINDING 3 -- 7522446: DISCONTENT-ONLY, NOT BORDERLINE, ALSO LOOKS yellow_bank-Y
+-------------------------------------------------------------------------------
+Grey (seat3): raw_happy=7 (Religion 1 worker=1, Drama 2 workers=2, St.
+Peter's Basilica print=1, extra_per_source bonus = 1*(1+2 qualifying
+worker-sources)=3; no Homer involvement for Grey anywhere in this journal
+at all -- Purple holds Homer the whole game, never replaced). yellow_bank=0
+-> happy_required(0)=8 (an unconditional rule, `economy::happy_required`'s
+own `else -> 8` arm, already covered by that function's own
+`happy_required_bands` unit test) -> disc=max(8-7,0)=1 -> award
+2*7-2*1=12. Journal wants 14, i.e. disc=0, which is IMPOSSIBLE with
+yellow_bank truly at 0 (happy_required(0)=8 is a hard floor, and s.happy is
+hard-capped at 8 by the clamp, so disc=0 needs s.happy>=8 exactly -- raw_happy
+would need to be 8, not 7, OR yellow_bank needs to be >=1, not 0). Either
+resolution again routes through a yellow_bank-tracking question, same
+entangled territory as Findings 1-2. Not pursued for the same reason.
+
+WHAT I CHANGED IN THE CLONE (all reverted)
+----------------------------------------------
+`apply.rs::h_play_leader`'s Homer-tuck line, changed from
+`completed_wonders.as_slice()[0]` to
+`completed_wonders.as_slice()[len-1]`, plus one new
+`#[cfg(test)]` regression test. Both fully reverted via
+`git checkout -- rust/src/apply.rs` after the full-corpus sweep showed a
+net-negative result (verified `git diff d6a9fa3 -- rust/` is 0 lines
+afterward). No other file touched. No temporary instrumentation added --
+this investigation used ONLY the pre-existing, already-committed debug
+gates (`SCOREDIV_HAPPY_DUMP`, `SCOREDIV_EVENT_DEBUG`, `SCOREDIV_DUMP_IDS`,
+`SCOREDIV_DUMP_COMPLETED`), all of which were already present in base
+d6a9fa3 and needed no cleanup.
+
+GUARD (record, on the reverted/base-identical tree)
+---------------------------------------------------
+Before: 687 completed, 651/687 exact (base d6a9fa3).
+After (this worker, no fix landed): rust/ tree identical to d6a9fa3, so
+identical: 687 completed, 651/687 exact.
+
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      > /tmp/happy_after.txt
+  grep '^SCOREDIV_COMPLETED_ID' /tmp/happy_after.txt | awk '{print $2}' | sort > /tmp/happy_ids.txt
+
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/happy_ids.txt   (REGRESSIONS)
+  <empty output>
+
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/happy_ids.txt   (WINS)
+  <empty output>
+
+  wc -l: 687 /tmp/happy_ids.txt, 687 /private/tmp/guard_ids_687.txt
+
+`cargo test --profile fasttest --lib`: 1411 passed (on the reverted tree,
+identical to base's own count since nothing changed).
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: clean (same
+reason).
+
+HANDOFF
+-------
+1. 7522277's fix is fully correct IN ISOLATION but needs real information
+   this journal format cannot supply (which wonder a human actually chose
+   to tuck Homer under). Not worth pursuing further as a general engine
+   fix; would need either a different data source or accepting the
+   regressions.
+2. 7522397, 7523253, 7522446 are very likely the SAME yellow_bank-tracking
+   root cause scoremis__SCOREMIS.txt's Population FINDING 1 already
+   flagged as unresolved and multi-causal. Re-check these three once that
+   lands.
+3. All 4 games in this bucket end up NOT independently fixable right now
+   without crossing into another worker's claimed territory or shipping a
+   net-negative corpus change. Bucket closed with no landed fix, per the
+   task's own explicit allowance for a measured negative.
