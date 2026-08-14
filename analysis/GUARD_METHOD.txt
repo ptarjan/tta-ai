@@ -1,3 +1,19 @@
+=========================================================================
+CURRENT BASELINE  (supersedes every count and commit named further down)
+    updated 2026-08-14
+    base commit ....... 58e4cd9  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 644 of 1011
+    frozen id list .... /private/tmp/guard_ids.txt
+    committed copy .... analysis/guard_ids_644.txt
+Earlier sections of this file still name base 9f6104d and 509 games. That is
+history, not instruction. The METHOD below is unchanged and still correct;
+only the numbers moved.
+
+KNOWN ACCEPTED REGRESSIONS: 7522053 and 7522290 were dropped deliberately by
+commit 5f9df7b (Raid declinable bracket). They are NOT in the 644 list and
+must not be treated as new damage by a later worker.
+=========================================================================
+
 REPLAY-COMPLETION REGRESSION GUARD -- the cheap, correct method
 ================================================================
 
