@@ -1,0 +1,267 @@
+AFFORDABILITY BUILD BUCKET -- investigation notes, NO FIX LANDED
+Worker: afford (clone /private/tmp/afford, base commit d68eeb3)
+Date: 2026-08-14
+
+OUTCOME
+-------
+No functional change landed. `git diff d68eeb3 -- rust/` is EMPTY (confirmed:
+the clone's tree was never left dirty -- one temporary debug print was added
+to rust/src/apply.rs during investigation and reverted with `git checkout --`
+before this file was written; `git status --short` shows no tracked-file
+changes). This is a measured negative, not a stall: all 8 games in the
+bucket were hand-traced to their root cause, but every root cause found is
+either explicitly on the task's "do not re-open" list, or an independent
+re-confirmation of an already-flagged, already-investigated, genuinely
+unresolved systemic issue that a blind fix risks worsening.
+
+SCOPE -- re-derived and cross-validated against two same-day prior workers
+-------------------------------------------------------------------------
+Bucket "IllegalMove: Build" at base d68eeb3: 35 games total
+(`REPLAY_DUMP_BUCKET="IllegalMove: Build"`). Classified each by
+workers_free/resources at the failing Build's own try_apply-fail diagnostic:
+
+  7 games workers_free==0 (7523082 7521544 7523640 7522113 7523383 7523420
+    7522608) -- a different worker's job (see noworker__NOWORKER.txt).
+  ~20 games where OTHER, cheaper Build{} options remain legal (cost-short
+    for one specific expensive card) -- the resshort bucket, already
+    investigated in resshort__RESSHORT.txt (measured negative there too,
+    hit the SAME corruption/blue-token wall documented below).
+  8 games: free worker (workers_free>=1), resources 0-1, ZERO Build{} at
+    all in legal_moves -- THIS is my bucket, confirmed by inspecting each
+    game's own legal_moves list directly (not just the resources number):
+      7520999 (resources=0) 7521657 (1) 7521791 (1) 7522024 (1) 7522673 (1)
+      7523132 (1) 7523283 (1) 7523438 (0)
+  This exactly reproduces noworker__NOWORKER.txt's own STEP 5 handoff list
+  byte-for-byte (8 IDs, same set), confirming the bucket is stable across
+  the two sessions.
+
+  One extra candidate, 7522520 (resources=0 at its own Build{Air Forces}
+  failure), was checked and explicitly RULED OUT of this bucket: its
+  legal_moves still contains Build{Cannon}/Build{Riflemen}/Build{Warriors}
+  -- those are paid via the military-resource (mil_discount) path, not the
+  civil-resource path that is 0. It belongs to the resshort bucket instead.
+
+HAND-TRACE METHOD
+-----------------
+For each game: `REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 [REPLAY_DEBUG_TECHS=1]
+./target/difftest/replay index.tsv journals <id> > file 2>&1` (note: stdout
+redirect MUST come before 2>&1 or the DEBUG eprintln lines go to the
+terminal, not the file -- lost an early run to this). Located the FIRST
+round where the engine's own `end_turn totals: actor=N resources=...`
+diverges from the journal's own trailing "(now M)" running total (the
+existing `trailing_now_resources`/`end-turn resources drift` diagnostic,
+already in replay_common.rs, gated to skip discard-blocked false positives)
+-- per the task brief, the divergence round, not the eventual Build-failure
+round, is where the real bug lives.
+
+ROOT CAUSE #1 (3 of 8 games): phantom corruption charge, one band too high
+----------------------------------------------------------------------------
+Games 7522024 (round 10, Orange), 7521657 (round 16, Purple), 7521791
+(round 7, Green) all show the IDENTICAL shape: the engine's own
+`economy::end_of_turn` "pre-corruption" trace computes
+`blue_available(p) == 10` (`blue_total - blue_used`), landing in
+RULES_SPEC.md's own §6.2 table's "10-6 -> 2" band, and charges 2 corruption
+resources that the real BGO journal's own "(now N)" total proves were NEVER
+charged (no "CORRUPTION!" line, and the arithmetic only balances with
+corr=0). All three cases need `blue_available>=11` (one token less
+occupied, or one more in the bank) to reproduce the journal exactly -- an
+"off by exactly one occupied blue token" pattern, same direction every
+time.
+
+Ruled out as the cause, one at a time, each independently verified against
+`card_table.rs` / `docs/RULES_SPEC.md` before moving to the next (mirrors
+resshort's own methodology on a fourth, independent game):
+  - `blue_total`'s card-driven adjustments are correct: 7522024's Orange
+    has colonized "Vast Territory (I)" (`blue_tokens: -1` in card_table.rs,
+    confirmed against `sources/bga_throughtheages_material.inc.php`'s own
+    printed "-1 blue token" bonus text) -- 16-1=15, matches the trace.
+    7521657's Purple has colonized "Developed Territory (I)"
+    (`blue_tokens: 1`) -- 16+1=17, matches the trace. 7521791's Green has
+    no blue-token-affecting colony -- stays at the base 16, matches.
+  - `Denoms::of`'s food/mine denominations are individually correct against
+    each player's own `REPLAY_DEBUG_TECHS=1` tech dump (e.g. 7521657's
+    Purple: Agriculture(1)+Selective Breeding(3) -> food_denoms=[3,1];
+    Bronze(1)+Coal(3) -> mine_denoms=[3,1], both confirmed against
+    card_table.rs's own printed `production` values) -- no missing
+    denomination that would let `tokens_for`'s greedy algorithm represent
+    the same stock with fewer tokens.
+  - `tokens_for`'s greedy computation is itself minimal given the known
+    denominations (hand-verified: no combination of the confirmed
+    denominations represents the confirmed stock in fewer tokens than what
+    the trace shows).
+  - The corruption band boundary itself (`blue_available>=11 -> 0`,
+    `6..=10 -> 2`) is independently confirmed CORRECT elsewhere in the
+    corpus: resshort__RESSHORT.txt's own HAND-TRACE 1 (game 7523124, a
+    DIFFERENT game) found `blue_available=10 -> corr=2` matching a REAL
+    "CORRUPTION! Orange loses 2 resources" journal line at a different
+    checkpoint in that same game -- so this isn't a simple off-by-one in
+    the `corruption()` function's threshold; something about the
+    RECONSTRUCTED state at these specific checkpoints is one token
+    different from BGO's own bookkeeping, not the formula.
+  - Attempted one deeper lead on 7521791 specifically: traced whether
+    Green's farm-card WORKER count (not just denomination) could be wrong
+    (Agriculture shows a constant workers=2 across the ENTIRE game,
+    including round 1, and round 1's own production (2 food, 2 resources)
+    validates that 2-worker starting assignment is correct, not a
+    later-introduced tracking bug) -- this specific sub-lead did not pan
+    out further within budget; the round-6/round-7 food arithmetic did not
+    cleanly reconcile by hand either, which is a signal my own manual
+    reconstruction of the "X food - consumption: Y (now Z)" line format may
+    itself be an incomplete model of BGO's exact phrasing, not necessarily
+    a new engine bug -- NOT confirmed either way, flagged honestly as
+    inconclusive rather than claimed as a finding.
+
+THIS IS A RE-CONFIRMATION, NOT A NEW DISCOVERY: illegalbuild__ILLEGALBUILD.txt
+false start #3 and resshort__RESSHORT.txt's HAND-TRACE 1 both independently
+hit this exact "corruption/blue-token accounting disagrees with the journal
+at specific checkpoints, mechanism validates correct elsewhere in the same
+game" wall and explicitly recommended NOT shipping a blind fix, warning it
+is entangled with the CLOSED `gain_resources`/`gain_food` production-cap
+area (fixed at 613ff6c; task instructions say do not re-open it). This
+session's independent re-derivation across 3 MORE games (different players,
+different rounds, different blue_total values: 15, 16, 17) strengthens the
+case that this is a real, systemic, corpus-wide issue -- but I did not find
+the specific missing piece within budget, and forcing a change to
+`economy::corruption`/`blue_used`/`Denoms::of` without understanding the
+actual mechanism risks exactly the "manufactured, wrong-for-a-different-
+reason win" the task forbids and `convert_trade_food_shortfall`'s own doc
+comment warns against.
+
+ROOT CAUSE #2 (1 of 8 games, 7523132): strength-ranking disagreement,
+already on the "do not re-open" list
+----------------------------------------------------------------------------
+7523132 (round 17, Purple, "Purple builds Warrior") fails because Purple's
+`mil_discount` pool (the "extra resources for military units" granted by
+`Special::ResourcesForMilitaryUnitsPerStrongerCivilization`, i.e. the
+"Military Build-Up" action card: confirmed text via
+`sources/bga_throughtheages_material.inc.php`, "For each civilization
+stronger than you... 8 in a 2-player game") computed 0 instead of 8. Added
+a temporary debug print (`TMPDEBUG_MILBUILDUP`, reverted before this file
+was written -- confirmed via `git diff --stat` empty) to
+`apply.rs`'s handler and found: `mine=14 per=8 n=0`, with the ONE opponent
+(Orange) ALSO computed at exactly `strength=14` -- an exact tie, so the
+strict `>` comparison correctly yields n=0 by the code's own logic, yet the
+real BGO game credited Purple as if n=1 (Orange counted as "stronger").
+This is the exact same `effects::state_stats(...).strength` quantity the
+task's own "do not re-open" list already covers ("weakest/strongest
+civilization targeting (measured 98.8%/98.6% correct)"; "raw unit strength
+excluding tactic/wonder/leader bonuses (falsified)" -- resshort's own
+HAND-TRACE 2 falsified the obvious "strip to raw units" theory on a
+different game, 7522914, by direct measurement). Not re-chased further;
+flagging that this SAME quantity feeds a THIRD call site
+(`Special::ResourcesForMilitaryUnitsPerStrongerCivilization`, in addition
+to the two already documented: event `RankStat::Strength` targeting, and
+colonization force) in case a future, more complete fix to
+`state_stats(...).strength` itself is ever attempted.
+
+REMAINING GAMES (2 of 8): entangled with the above, not independently
+resolved
+----------------------------------------------------------------------------
+7522673 (round 18, Green, "Green builds Religion") and 7520999
+(Green/Purple science drift throughout) both show much LARGER, multi-round
+drift once the existing `discard_blocked` false-positive suppression on the
+resources-drift diagnostic is manually looked past (their actual round-N
+end-of-turn totals, read straight from the `end_turn totals: actor=N` debug
+line, mismatch the journal by 2-13 resources AND science at rounds that
+happen to also have a "Discard Phase N military cards must be discarded"
+line -- the diagnostic's own doc comment already documents this exact
+false-negative shape). These two games' drift is too compounded across
+many rounds to isolate a single root cause within budget; they may share
+root cause #1 above (corruption is exactly the kind of per-turn, silently-
+compounding effect that would produce this shape) or be a distinct,
+unidentified issue. NOT resolved.
+
+A general, corpus-wide observation, NOT chased further: the existing
+`end-turn science drift` diagnostic (REPLAY_DEBUG-gated, in
+replay_common.rs) fires on almost EVERY end-of-turn line for almost every
+player in every game examined this session, always negative, sometimes by
+large amounts (delta -1 to -12) -- but the SAME player's LATER post-
+production science value (read from `end_of_turn POST`, a few lines after
+the diagnostic's own printed line) consistently matches the journal exactly.
+This confirms the diagnostic's own documented caveat ("this fires BEFORE a
+deferred resume_end_turn... a discard-blocked turn reads as a false drift
+here") is the dominant explanation for nearly all of these science-drift
+firings, and it should NOT be read as evidence of a science-specific bug by
+a future worker without first checking the later POST value, exactly as its
+own doc comment already warns.
+
+HONEST SUMMARY
+---------------
+All 8 games in this bucket were individually hand-traced to a specific,
+named divergence point. 3 trace to the same corruption/blue-token phantom-
+charge shape (re-confirming, not discovering, an issue 2 prior workers
+already flagged as real and unresolved). 1 traces to the already-closed
+strength-ranking question. 2 are entangled with one or both of the above
+across multiple rounds. No fix was implemented because none of the leads
+resolved to a narrow, independently-verifiable root cause within budget --
+every attempted explanation for the corruption discrepancy (denominations,
+blue_total, band boundary, worker counts) checked out as individually
+correct against card data or other corpus examples, leaving the actual
+mechanism still unidentified.
+
+CONCRETE HANDOFF for whoever picks this up next
+-------------------------------------------------------------------------
+1. The corruption/blue-token phantom charge (root cause #1) is now
+   confirmed in at least 4 different games across 2 independent sessions
+   (this one's 3 + resshort's 1). It is the single highest-value target in
+   this whole "IllegalMove: Build" super-bucket. Suggest: build a small
+   standalone reproduction (a synthetic PlayerState at exactly
+   blue_total=16, one denom-1 farm with 2 workers, one denom-1 mine with 2
+   workers, food=3, resources=3, no wonder) and compare AGAINST THE
+   PYTHON REFERENCE ORACLE this codebase's own doc comments repeatedly
+   cite (`tokens_for_greedy_matches_python_oracle` in economy.rs implies
+   one exists) rather than against corpus games -- corpus hand-tracing has
+   now independently, twice, failed to find the mechanism by inspection
+   alone.
+2. Do not re-open `effects::state_stats(...).strength`,
+   `RankStat::Strength`, or the raw-unit-strength theory (root cause #2) --
+   already falsified by measurement twice (resshort's HAND-TRACE 2, this
+   session's 7523132).
+3. 7522673 and 7520999's deeper multi-round drift is unresolved and may be
+   downstream of root cause #1 -- re-check them FIRST if #1 ever gets
+   fixed, before spending fresh budget hand-tracing them independently.
+4. Re-run this bucket's own census fresh before trusting the 8-game list
+   above -- every prior worker's note in this Build super-bucket says the
+   same thing, and it has been true every single time so far.
+
+MEASUREMENT (verbatim, tree unchanged from d68eeb3)
+-------------------------------------------------------------------------
+cd /private/tmp/afford/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/afford_after.txt 2>&1
+
+Header lines (read directly, matches the stated baseline exactly):
+  "# replaystats: 1011 games sampled, 674 completed to state.game_over"
+  "674/674 completed games actually flipped state.game_over ... 632/674 of
+   those matched index.tsv exactly (sorted per-game score-list compare)."
+
+grep '^SCOREDIV_COMPLETED_ID' /tmp/afford_after.txt | awk '{print $2}' | sort \
+    > /tmp/afford_ids.txt
+comm -23 /private/tmp/guard_ids.txt /tmp/afford_ids.txt   (REGRESSIONS):
+<empty>
+comm -13 /private/tmp/guard_ids.txt /tmp/afford_ids.txt   (WINS):
+<empty>
+
+(Both empty as expected -- the tree is byte-identical to d68eeb3, so
+afford_ids.txt is identical to guard_ids.txt; confirmed via
+`diff /private/tmp/guard_ids.txt /tmp/afford_baseline_ids.txt` at the START
+of this session too, before any investigation.)
+
+cargo test --profile fasttest --lib: 1409 passed, 0 failed.
+cargo clippy --all-targets -- -D warnings: clean, no warnings.
+
+FILES
+-----
+Clone: /private/tmp/afford (deleted after this write-up, per the task's
+       cleanup instruction -- confirmed the patch below is empty first, and
+       confirmed there is no unlanded commit to lose: `git log --oneline
+       d68eeb3..HEAD` is empty, `git status --short` shows no tracked-file
+       changes).
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/afford.patch --
+       EMPTY FILE, correct output since nothing was landed this session.
+Temporary debug prints used during investigation (a `TMPDEBUG_MILBUILDUP`
+       eprintln in rust/src/apply.rs) were added, used, and reverted with
+       `git checkout --` before this file was written -- confirmed via
+       `git diff --stat` showing nothing.
