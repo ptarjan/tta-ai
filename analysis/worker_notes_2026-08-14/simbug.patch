@@ -1,0 +1,131 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 35bc36f..ff97ec4 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1915,7 +1915,42 @@ impl<'a> Replayer<'a> {
+         } else {
+             Vec::new()
+         };
++        // BUG (found chasing the 103-game `SimulatorBug`/`PrepareEvent`
++        // ledger bucket, simulator excess = journal excess + 1 in 81 of
++        // those 103 -- the classic unpaid-deficit shape): every OTHER
++        // caller that can grow a seat's `hand_military` for real routes
++        // through `Self::try_apply`, whose own post-`apply::apply` loop
++        // calls `Self::repay_military_hand_deficit` for every seat that
++        // just grew (see that function's own doc). This function calls
++        // `apply::apply` DIRECTLY -- the one remaining call site that
++        // does not -- because `events::reveal_current_event`, invoked
++        // synchronously inside THIS SAME `apply::apply` call via
++        // `apply::h_prepare_event`, can immediately resolve the newly
++        // revealed card's own effect, which for an `AllPlayers`/
++        // `StrongestPlayer`/etc. `drawMilitaryCards` block (Development of
++        // Politics, Politics of Strength, ...) pushes real cards straight
++        // into one or more players' `hand_military` -- INCLUDING the
++        // decider's own, e.g. right after THIS SAME preparation's "no
++        // disposable filler" branch just above recorded a fresh debt for
++        // them. Skipping the growth-check here means that draw can never
++        // repay any deficit -- not the decider's fresh one, and not any
++        // other seat's pre-existing one either, since an `AllPlayers`
++        // block draws for every seat in one call -- so the debt stays on
++        // the books forever while the drawn card(s) sit uncompensated in
++        // hand: a permanent phantom card, not the temporary window the
++        // deficit mechanism is supposed to guarantee. Snapshot every
++        // seat's `hand_military` length before this call and repay growth
++        // after it, mirroring `try_apply`'s own loop exactly.
++        let hand_military_len_before: [usize; MAX_PLAYERS] =
++            std::array::from_fn(|i| self.state.players[i].hand_military.len());
+         apply::apply(&mut self.state, mv);
++        for seat in 0..self.state.num_players {
++            let before = hand_military_len_before[seat as usize];
++            let after = self.state.players[seat as usize].hand_military.len();
++            if after > before {
++                self.repay_military_hand_deficit(seat, (after - before) as u32);
++            }
++        }
+ 
+         // `events::food_or_resources` just applied ITS OWN deterministic
+         // guess at the split (mirroring the Python reference bot's own
+@@ -10302,6 +10337,83 @@ mod tests {
+         assert_eq!(r.military_hand_deficit[0], 0, "the debt is now fully repaid");
+     }
+ 
++    /// FIX (chasing the 103-game `SimulatorBug`/`PrepareEvent` ledger
++    /// bucket, `analysis/worker_notes_2026-08-14/simbug__SIMBUG.txt`: 81 of
++    /// those 103 showed the reconstructed hand one card too MANY, the
++    /// classic unpaid-`military_hand_deficit` shape): unlike the sibling
++    /// test just above, where the later repaying draw arrives on a
++    /// SEPARATE, later `try_apply`-routed `Move` (an ordinary end-of-turn
++    /// draw), a revealed political card can ALSO draw cards immediately,
++    /// synchronously, inside `resolve_political_decision`'s OWN direct
++    /// `apply::apply` call -- `events::reveal_current_event` ->
++    /// `events::resolve_event` -> `apply_gains_block` -> `draw_military`,
++    /// reachable for an `AllPlayers`/`StrongestPlayer`/etc. `drawMilitary
++    /// Cards` block such as Development of Politics's "Each player draws 3
++    /// military cards." `resolve_political_decision` is the one remaining
++    /// call site that does not route through `Self::try_apply`'s own
++    /// growth-detection loop, so before this fix that immediate draw could
++    /// never repay a debt -- including a debt THIS SAME call just incurred
++    /// one line above (an empty hand at the top of this test, exactly
++    /// `preparing_an_event_with_no_disposable_filler_records_a_deficit_
++    /// that_a_later_draw_repays`'s own repro shape) -- leaving a permanent
++    /// phantom card sitting uncompensated in the freshly-drawn hand.
++    #[test]
++    fn preparing_an_event_that_immediately_reveals_a_card_drawing_military_cards_repays_its_own_fresh_deficit() {
++        let card_index = build_card_index();
++        let plan = crate::event_plan::solve(
++            &[(
++                5,
++                0,
++                "Orange plays event Orange scores 1 culture; Current event:; A / Development of Politics; \
++                 Each player draws 3 military cards.; Orange draws 3 military cards; Purple draws 3 military cards",
++            )],
++            &card_index,
++            2,
++        )
++        .expect("a one-preparation journal is consistent");
++        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.current_lineno = 10;
++        r.state.phase = Phase::Politics;
++        // §1.6: `new_game` leaves `military_deck` genuinely empty at Age A
++        // (the ten Age A military cards are ALL dealt straight into
++        // `current_events` at setup -- none are ever drawable) -- so
++        // `economy::draw_military` would silently return `None` for every
++        // draw at the game's real starting age, masking this test's own
++        // mechanism. Advance to Age I and seed a real drawable deck, the
++        // ordinary post-Age-A shape any actual "each player draws" event
++        // fires in.
++        r.state.age_military = crate::Age::I;
++        r.state.military_deck = crate::game::build_deck(crate::Age::I, false, 2);
++        // No fillers seeded for player 0 (Orange, the decider) -- the "no
++        // disposable filler" branch fires and records a fresh deficit of 1
++        // for them in this exact call, before the revealed card's own
++        // immediate effect ever runs.
++
++        r.resolve_political_decision(0).expect("player 0's own logged preparation, revealing a self-drawing event");
++
++        assert_eq!(
++            r.military_hand_deficit[0], 0,
++            "Development of Politics' own immediate 'each player draws 3' effect grows player 0's hand inside \
++             THIS SAME call -- it must repay the deficit this same call just incurred, not leave it owed"
++        );
++        assert_eq!(
++            r.state.players[0].hand_military.len(),
++            2,
++            "3 cards drawn, 1 immediately spent repaying the fresh deficit: net +2, not +3 (a permanent phantom \
++             card) and not +0 (a repay that fired twice)"
++        );
++        // Player 1 (Purple) is the OTHER `AllPlayers` recipient on the same
++        // line, with no deficit of their own -- confirms the growth-check
++        // this fix adds covers every seat the direct `apply::apply` call
++        // can grow, not just the decider, and that a zero-owed repay is a
++        // true no-op.
++        assert_eq!(
++            r.military_hand_deficit[1], 0,
++            "player 1 never owed anything -- their own repay call must be a no-op"
++        );
++        assert_eq!(r.state.players[1].hand_military.len(), 3, "player 1 just draws their full 3 cards, untouched");
++    }
++
+     /// FIX (traced on real game `7523376`, round 10-11): `repay_military_
+     /// hand_deficit` has no rule tying its debt to any particular card --
+     /// unlike `resolve_political_decision`'s own preparation cost

@@ -1,0 +1,236 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 35bc36f..eb95def 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -694,6 +694,23 @@ struct Replayer<'a> {
+     /// 86, and only reaches 86 a few lines later once Purple's own blocked
+     /// `EndTurn` (line 343) finally resolves and hands the turn to Orange.
+     pending_culture_corrections: Vec<(Color, i32, i32)>,
++    /// The resources twin of [`Replayer::pending_culture_corrections`] --
++    /// same BGO admin-correction line shape, same self-deferring retry, but
++    /// for `"GAME DATA UPDATED <Color> Bronze: <old> -> <new>"` clauses
++    /// (`parse_game_data_updated_resources`'s own doc for why the stat is
++    /// spelled "Bronze", not "resources"). `classify` filed the WHOLE line
++    /// as `Bookkeeping` (see its own comment: "an admin correction BGO
++    /// occasionally injects"), and until this field existed nothing ever
++    /// applied a `Bronze` clause either -- confirmed the direct cause of a
++    /// dominant `IllegalMove: WonderStep` sub-cluster (`docs/REPLAY.md`):
++    /// game `7521364` line 22 reads `"GAME DATA UPDATED Orange Bronze: 2 ->
++    /// 6"` one line before Orange's own `"builds 1 stage of Colossus ...
++    /// spends 3 resources"` (line 23), which this binary rejected as illegal
++    /// with `resources=2` -- exactly the un-applied correction's own `old`
++    /// value, one short of the stage's cost of 3. Same story for `7523085`
++    /// line 240 (`"Green Bronze: 4 -> 9"`, a +5 the reconstruction never
++    /// saw) against its own WonderStep failure five lines later.
++    pending_resource_corrections: Vec<(Color, i32, i32)>,
+     /// A structural "false skip" instrument -- see [`GameResult::
+     /// politics_false_skips`]'s own doc for the full mechanism this counts.
+     /// Incremented at most once per `plan.preparations` entry (tracked via
+@@ -917,6 +934,7 @@ impl<'a> Replayer<'a> {
+             culture_oracle_agreed: 0,
+             pending_culture_check: None,
+             pending_culture_corrections: Vec::new(),
++            pending_resource_corrections: Vec::new(),
+             politics_false_skips: 0,
+             false_skip_flagged_prep: None,
+             politics_false_skips_unrecovered: 0,
+@@ -2682,6 +2700,30 @@ impl<'a> Replayer<'a> {
+         self.pending_culture_corrections = still_pending;
+     }
+ 
++    /// The resources twin of [`Replayer::flush_pending_culture_corrections`]
++    /// -- same self-deferring retry, `p.resources` in place of `p.culture`.
++    /// See [`Replayer::pending_resource_corrections`]'s own doc for why this
++    /// exists at all.
++    fn flush_pending_resource_corrections(&mut self) {
++        if self.pending_resource_corrections.is_empty() {
++            return;
++        }
++        let still_pending: Vec<(Color, i32, i32)> = self
++            .pending_resource_corrections
++            .drain(..)
++            .filter(|&(color, old, new)| {
++                let p = &mut self.state.players[color.seat() as usize];
++                if p.resources as i32 == old {
++                    p.resources = new.max(0) as u16;
++                    false // applied -- drop from the pending list
++                } else {
++                    true // still doesn't match -- keep trying
++                }
++            })
++            .collect();
++        self.pending_resource_corrections = still_pending;
++    }
++
+     /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
+     /// -- `c` must be that pending's own snapshot, read by the caller just
+     /// before calling this (`resolve_intervening` and `resolve_discard`
+@@ -4860,10 +4902,14 @@ fn find_after<'a>(text: &'a str, needle: &str) -> Option<&'a str> {
+ /// BGO's `"GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 ->
+ /// 71"` line lands, and every later checkpoint is off by exactly the 6 this
+ /// binary never subtracted. Scoped to `culture` ONLY -- the same line shape
+-/// also corrects `science`/`Bronze` production track in other sampled
+-/// games, out of scope for the culture oracle this fixes and left exactly as
+-/// `Bookkeeping` as it was (no oracle currently reads either, so there is no
+-/// known-wrong instrument to correct there the way there is for culture).
++/// also corrects a `science`/`Bronze` clause in other sampled games;
++/// `Bronze` (BGO's own internal name for the player's RESOURCE stockpile --
++/// confirmed by the shape of every sampled `"<Color> Bronze: <old> -> <new>"`
++/// clause, always parallel to the `science`/`culture` clauses on the same
++/// line, never near-plausible as a literal card-name reading) now has its
++/// own twin parser, [`parse_game_data_updated_resources`], for exactly the
++/// same reason this one exists. `science` remains out of scope: no oracle
++/// or `IllegalMove` bucket traced to it yet.
+ ///
+ /// Returns one `(Color, old, new)` triple per `"<Color> culture: X -> Y"`
+ /// clause found, empty when the line is not this shape at all or carries no
+@@ -4898,6 +4944,31 @@ fn parse_game_data_updated_culture(text: &str) -> Vec<(Color, i32, i32)> {
+     out
+ }
+ 
++/// The resources twin of [`parse_game_data_updated_culture`] -- identical
++/// shape and identical conservative "return `old` too" contract, reading
++/// `"<Color> Bronze: <old> -> <new>"` clauses instead of `"culture: ..."`
++/// ones. `"Bronze"` here is BGO's own internal label for a player's
++/// RESOURCE stockpile, not the Bronze tech card: every sampled clause of
++/// this shape sits on a `"GAME DATA UPDATED"` line alongside `culture`/
++/// `science` clauses (`replay_common`'s own corpus scan, `2026-08-14`), the
++/// same "one stat correction per player, semicolon-joined" pattern, and the
++/// values move independently of whether the player has ever built/upgraded
++/// an actual Bronze mine that game.
++fn parse_game_data_updated_resources(text: &str) -> Vec<(Color, i32, i32)> {
++    let Some(after) = text.strip_prefix("GAME DATA UPDATED ") else {
++        return Vec::new();
++    };
++    let mut out = Vec::new();
++    for clause in after.split("; ") {
++        let Some((color, rest)) = actor_and_rest(clause) else { continue };
++        let Some(nums) = rest.strip_prefix("Bronze: ") else { continue };
++        let Some((old_str, new_str)) = nums.split_once(" -> ") else { continue };
++        let (Ok(old), Ok(new)) = (old_str.trim().parse::<i32>(), new_str.trim().parse::<i32>()) else { continue };
++        out.push((color, old, new));
++    }
++    out
++}
++
+ /// Pre-scans the whole journal once for every [`parse_infiltrate_line`]
+ /// match into a per-attacker FIFO, mirroring [`prescan_plunder_splits`] --
+ /// see `Replayer::infiltrates`'s doc and `resolve_intervening`'s
+@@ -6071,6 +6142,9 @@ pub fn replay_game(
+         // reconstruction's own live value to catch up -- see `Replayer::
+         // pending_culture_corrections`'s own doc.
+         r.flush_pending_culture_corrections();
++        // Same self-deferring flush, `Bronze`/resources side -- see
++        // `Replayer::pending_resource_corrections`'s own doc.
++        r.flush_pending_resource_corrections();
+         // BGO's own admin correction (`parse_game_data_updated_culture`'s
+         // own doc: rare, real, and previously silently dropped as
+         // `Bookkeeping`) -- apply every culture clause it carries directly
+@@ -6086,8 +6160,17 @@ pub fn replay_game(
+         // value can be answering different questions mid-deferred-cascade,
+         // and applying a mismatched delta there would corrupt a checkpoint
+         // that already agreed rather than fix one that didn't).
++        //
++        // `resource_corrections` is the identical treatment for the
++        // `Bronze` (resources) clause the same line can carry (`parse_
++        // game_data_updated_resources`'s own doc) -- checked on the SAME
++        // line, not an `else if`, because a real sampled line carries BOTH
++        // a `science`/`Bronze` clause together (`science: 2 -> 5; Bronze: 0
++        // -> 2`); either kind alone is enough to skip `classify` below,
++        // since this line is BGO bookkeeping either way, never a `Move`.
+         let culture_corrections = parse_game_data_updated_culture(line.text);
+-        if !culture_corrections.is_empty() {
++        let resource_corrections = parse_game_data_updated_resources(line.text);
++        if !culture_corrections.is_empty() || !resource_corrections.is_empty() {
+             for (color, old, new) in culture_corrections {
+                 let p = &mut r.state.players[color.seat() as usize];
+                 if p.culture as i32 == old {
+@@ -6096,6 +6179,14 @@ pub fn replay_game(
+                     r.pending_culture_corrections.push((color, old, new));
+                 }
+             }
++            for (color, old, new) in resource_corrections {
++                let p = &mut r.state.players[color.seat() as usize];
++                if p.resources as i32 == old {
++                    p.resources = new.max(0) as u16;
++                } else {
++                    r.pending_resource_corrections.push((color, old, new));
++                }
++            }
+             continue;
+         }
+         let outcome = classify(card_index, line.text);
+@@ -8668,11 +8759,72 @@ mod tests {
+         assert_eq!(
+             parse_game_data_updated_culture("GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"),
+             Vec::new(),
+-            "science/Bronze corrections are a different, out-of-scope oracle -- must not be misread as culture"
++            "science/Bronze corrections are this function's own business (Bronze has its own parser twin below; \
++             science stays out of scope) -- neither is a culture clause, so this must stay empty"
+         );
+         assert_eq!(parse_game_data_updated_culture("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
+     }
+ 
++    /// The resources twin of the test just above -- `parse_game_data_
++    /// updated_resources` must read every `Bronze` clause and ignore
++    /// `culture`/`science`, the mirror-image gap.
++    #[test]
++    fn parse_game_data_updated_resources_reads_every_bronze_clause_and_ignores_other_stats() {
++        assert_eq!(
++            parse_game_data_updated_resources("GAME DATA UPDATED Orange Bronze: 2 -> 6"),
++            vec![(Color::Orange, 2, 6)],
++        );
++        assert_eq!(
++            parse_game_data_updated_resources("GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"),
++            vec![(Color::Green, 0, 2)],
++        );
++        assert_eq!(
++            parse_game_data_updated_resources("GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 -> 71"),
++            Vec::new(),
++            "culture-only corrections are a different, out-of-scope oracle -- must not be misread as Bronze"
++        );
++        assert_eq!(parse_game_data_updated_resources("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
++    }
++
++    /// The actual bug this fixes (`IllegalMove: WonderStep` bucket, real
++    /// game `7521364` line 22-23): BGO's own admin correction ("Orange
++    /// Bronze: 2 -> 6") landed one line before Orange's own "builds 1 stage
++    /// of Colossus ... spends 3 resources" -- this reconstruction's live
++    /// resources (2) exactly matches the correction's stated `old`, so it
++    /// must apply immediately, not sit pending, turning the following
++    /// WonderStep from illegal (resources=2, cost=3) into legal (resources=6).
++    #[test]
++    fn flush_pending_resource_corrections_applies_the_bronze_clause_that_unblocks_a_wonder_step() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.players[0].resources = 2;
++        r.pending_resource_corrections.push((Color::Orange, 2, 6));
++
++        r.flush_pending_resource_corrections();
++        assert_eq!(r.state.players[0].resources, 6, "old (2) matches live (2): the correction must apply at once");
++        assert!(r.pending_resource_corrections.is_empty(), "consumed, not left pending forever");
++    }
++
++    /// Same self-deferring shape as `flush_pending_culture_corrections_
++    /// defers_until_the_live_value_matches_bgos_own_old_baseline` -- a
++    /// `Bronze` correction whose stated `old` does not (yet) match this
++    /// reconstruction's live resources must be queued, not guessed at.
++    #[test]
++    fn flush_pending_resource_corrections_defers_until_the_live_value_matches_bgos_own_old_baseline() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.players[0].resources = 9; // live resources not yet at BGO's stated baseline of 4
++        r.pending_resource_corrections.push((Color::Orange, 4, 9));
++
++        r.flush_pending_resource_corrections();
++        assert_eq!(r.state.players[0].resources, 9, "old (4) does not match live (9) -- must NOT guess and apply anyway");
++        assert_eq!(
++            r.pending_resource_corrections,
++            vec![(Color::Orange, 4, 9)],
++            "the correction must be put back, not dropped, while still unmatched"
++        );
++    }
++
+     /// The actual bug this fixes (`docs/REPLAY.md`'s "Culture oracle"
+     /// section, game `7523809` line 344): BGO's own admin correction
+     /// ("Orange culture: 86 -> 80") can land on a journal line BEFORE this

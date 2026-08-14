@@ -1,13 +1,15 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
     updated 2026-08-14
-    base commit ....... 8113a15  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 648 of 1011   (604 of those match index.tsv exactly)
-    The ID SET is unchanged from the 648 baseline -- three fixes landed on top
-    of 2bc2e4c (GAME DATA UPDATED culture corrections, Homer-under-a-ravaged-
-    wonder happy sources, non-Event deficit repay) and every one of them was
-    zero-regression AND zero-win. Only the exact-score count moved, 602 -> 604.
-    So guard_ids.txt does NOT need re-baselining for them.
+    base commit ....... 491c153  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 651 of 1011   (613 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_651.txt)
+    committed copy .... analysis/guard_ids_651.txt
+    Re-baselined from 648 to 651 only after every worker in the batch had
+    reported, per the live-state rule below. The three new IDs are 7522924,
+    7523116 (PrepareEvent deficit repay) and 7523085 (Bronze admin lines).
+    Also on this baseline: 40145 of 40337 culture checkpoints match (99.5%),
+    and 65 games still show some culture divergence, down from 75.
     frozen id list .... /private/tmp/guard_ids.txt
     committed copy .... analysis/guard_ids_648.txt
 Earlier sections of this file still name base 9f6104d and 509 games. That is
