@@ -3,8 +3,14 @@ REPLAY-COMPLETION REGRESSION GUARD -- the cheap, correct method
 
 WHY THIS FILE EXISTS
 --------------------
-Do NOT run a full 1011-game corpus sweep to check your fix. Several workers run
-at once on a 6-core machine and the redundant sweeps dominate the cost.
+To say what a fix must clear before it lands: every game that completed before
+your change still completes after it, judged as an ID SET.
+
+An earlier version of this file opened by telling you NOT to run the full
+1011-game sweep. That advice was wrong and is retracted -- it was written before
+anyone measured, and the sweep turns out to cost 8.7 seconds (see below). RUN
+THE FULL SWEEP. The subset index in STEP 2 is now only worth building if you
+want a bucket-focused readout, not as a way to save time.
 
 WHERE THE TIME ACTUALLY GOES (measured 2026-08-14, this box, warm target dir)
 -----------------------------------------------------------------------------
@@ -44,13 +50,32 @@ must be `replaystats` too.
 
 THE AUTHORITATIVE BASELINE (already generated, do not regenerate)
 -----------------------------------------------------------------
-    /private/tmp/guard_ids.txt     350 sorted IDs: every game that completes at
-                                   base c429281+churchill, per `replaystats`
-    /private/tmp/guard_index.tsv   index.tsv header + exactly those 350 rows
+    /private/tmp/guard_ids.txt     509 sorted IDs: every game that completes at
+                                   base 9f6104d (base0815), per `replaystats`.
+                                   Also kept under its own versioned name,
+                                   /private/tmp/guard_ids_509.txt -- see the
+                                   note below on why the versioned copy exists.
+    /private/tmp/guard_index.tsv   index.tsv header + exactly those 509 rows
     /private/tmp/full_baseline_0814.txt
                                    full raw `replay` dump -- use ONLY to enumerate
                                    your bucket's game IDs by grepping its
                                    stop-reason text, never as a guard
+
+THE GUARD LIST IS LIVE STATE -- DO NOT RE-BASELINE IT MID-BATCH
+----------------------------------------------------------------
+On 2026-08-14 the coordinator rewrote `guard_ids.txt` from 310 to 350 IDs after
+landing a fix, while three workers were mid-run using it as their baseline. One
+noticed the file had grown under it; the other two were silently comparing
+against a list that no longer described the commit they branched from. That does
+not cause false regressions (the old set is a subset), but it makes a worker's
+quoted numbers untraceable, and it breaks outright if a re-baseline ever SHRINKS
+the list.
+
+So: when a fix lands while workers are still running, write the new list to a
+NEW file (`guard_ids_<n>.txt`) and swap it into `guard_ids.txt` only once every
+running worker has reported. Bump the count and base commit in the section above
+at that same moment, never separately. The whole history of a session's
+baselines stays on disk under its versioned names.
 
 STEP 1 -- add the completed-ID dump to YOUR clone (one edit, ~30 seconds)
 -------------------------------------------------------------------------
@@ -76,7 +101,7 @@ and insert immediately after it:
 Commit that on its own. (It is already landed in the live tree, so it will merge
 cleanly; if your clone already has it, skip this step.)
 
-STEP 2 -- build your check index: the 350 guard games + your own bucket
+STEP 2 -- build your check index: the 509 guard games + your own bucket
 -----------------------------------------------------------------------
     cd <your clone>
     cp /private/tmp/guard_index.tsv /tmp/<name>_check.tsv

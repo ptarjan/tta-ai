@@ -1,0 +1,335 @@
+WONDERSTEP BUCKET (IllegalMove: WonderStep) -- worker notes, 2026-08-14
+Base commit: 13019ca ("Churchill military option + fasttest profile (350 complete, 316 exact)")
+Working clone: /private/tmp/wonderstep (deleted after this patch was emitted)
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wonderstep.patch
+Commit in clone: 254542b
+
+
+=== INITIAL BUCKET CENSUS (re-enumerated at base 13019ca, 38 games) ===
+
+DUMP 7522652 line 440: Orange builds 4 stages of First Space Flight ...
+DUMP 7523085 line 245: Green builds 2 stages of Great Wall ...
+DUMP 7523072 line 215: Orange builds 1 stage of Transcontinental Railroad ...
+DUMP 7523070 line 324: Green builds 1 stage of Transcontinental Railroad ...
+DUMP 7521364 line 23: Orange builds 1 stage of Colossus ...
+DUMP 7521849 line 163: Orange builds 1 stage of St. Peter's Basilica ...
+DUMP 7522509 line 277: Orange builds 1 stage of Fast Food Chains ...
+DUMP 7522512 line 733: Green builds 1 stage of Fast Food Chains ...
+DUMP 7523583 line 104: Orange builds 2 stages of Great Wall ...
+DUMP 7522199 line 618: Purple builds 3 stages of First Space Flight ...
+DUMP 7522235 line 211: Orange builds 1 stage of Great Wall ...
+DUMP 7522236 line 303: Orange builds 2 stages of Internet ...
+DUMP 7522272 line 340: Purple builds 3 stages of Fast Food Chains ...
+DUMP 7522824 line 458: Orange builds 3 stages of Internet ...
+DUMP 7522899 line 359: Orange builds 2 stages of Internet ...
+DUMP 7522936 line 420: Purple builds 1 stage of Transcontinental Railroad ...
+DUMP 7522943 line 300: Purple builds 2 stages of First Space Flight ...
+DUMP 7521762 line 339: Orange builds 2 stages of Internet ...
+DUMP 7521783 line 134: Purple builds 1 stage of Hanging Gardens ...
+DUMP 7521072 line 457: Orange builds 1 stage of Internet ...
+DUMP 7523363 line 380: Purple builds 1 stage of Kremlin ...
+DUMP 7521931 line 266: Purple builds 1 stage of Fast Food Chains ...
+DUMP 7521603 line 235: Purple builds 1 stage of Ocean Liner ...
+DUMP 7522455 line 204: Orange builds 1 stage of St. Peter's Basilica ...
+DUMP 7522470 line 238: Orange builds 1 stage of Eiffel Tower ...
+DUMP 7522448 line 528: Orange builds 1 stage of First Space Flight ...
+DUMP 7523537 line 230: Orange builds 1 stage of Kremlin ...
+DUMP 7522731 line 309: Purple builds 1 stage of First Space Flight ...
+DUMP 7522037 line 486: Purple builds 1 stage of Eiffel Tower ...
+DUMP 7523242 line 146: Green builds 1 stage of Taj Mahal ...
+DUMP 7522807 line 277: Orange builds 2 stages of Hollywood ...
+DUMP 7522795 line 351: Purple builds 1 stage of Fast Food Chains ...
+DUMP 7522756 line 133: Purple builds 1 stage of St. Peter's Basilica ...
+DUMP 7522762 line 317: Purple builds 1 stage of First Space Flight ...
+DUMP 7522543 line 429: Purple builds 1 stage of Kremlin ...
+DUMP 7521981 line 370: Purple builds 3 stages of First Space Flight ...
+DUMP 7521946 line 276: Green builds 1 stage of Ocean Liner ...
+DUMP 7521689 line 358: Orange builds 4 stages of First Space Flight ...
+
+Grouping by shape: mixed single-stage (~25) and multi-stage (~13, "builds N
+stages" with N in {2,3,4}) WonderStep refusals, spread across many
+different wonders (First Space Flight x7, Internet x5, Fast Food Chains
+x5, Transcontinental Railroad x3, Great Wall x3, St. Peter's Basilica x3,
+Kremlin x3, plus singles). No single wonder or stage-count dominates --
+the common thread turned out to be upstream (how the card entered the
+player's hand), not the wonder-build rule itself.
+
+
+=== ROOT CAUSE ===
+
+For 15 of the 38 games, the wonder (or another card whose absence later
+starved the player of civil actions/resources) was granted via the
+"International Agreement" event (Code of Laws p.12: "The strongest
+civilization may immediately take up to 5 civil actions in cards..."),
+NOT via a normal "<Color> takes <Card> in hand <Color> uses N civil
+action" row-take line. BGO logs this event's picks as:
+
+    International Agreement <Color> takes <Card> in hand[; <Color> takes
+    <Card> in hand]*
+
+i.e. the event's own card name leads the line (no leading player colour),
+and multiple picks are packed onto ONE journal line, semicolon-joined,
+with NO "uses N civil action" cost clause on any of them (they're paid
+from the event's own 5-CA-equivalent budget, not the player's civil-action
+pool -- interact.rs's ChoiceKind::TakeRow handler bills `budget`, not
+`p.civil_actions`).
+
+`corpus::classify()` had a late catch-all: "if a known card name leads the
+line, it's Bookkeeping" (built for trailing consequence lines like "Impact
+of X ..." and "Bill Gates scoring ..."). Since "International Agreement"
+is itself a card name (the event card), this catch-all silently swallowed
+the ENTIRE take line -- the card never entered `p.hand_civil`, and for a
+wonder specifically, `p.wonder` was never set at all (`apply::take_card`
+only sets it when the card is actually taken). Confirmed directly: 3 of
+the 38 games (7522543 Kremlin, 7521981 First Space Flight, 7522807
+Hollywood) failed with the engine's own debug print
+"wonder_stage_cost(...)=-1 wonder=none" -- i.e. the engine had NO wonder
+in progress at all when the human's journal showed them building a stage
+of one. The other 12 International-Agreement games in the bucket failed
+via a plain affordability shortfall a turn or more later (the dropped
+card was a tech/action card whose absence meant less CA/resources than
+the human actually had).
+
+This is the same general shape flagged in the task brief ("a leader whose
+effect BGO never prints a journal line for") but inverted: here BGO DOES
+print the line, but our classifier discarded it anyway.
+
+
+=== THE FIX (3 parts, all in rust/src/) ===
+
+1. corpus.rs `classify()`: added a case, checked BEFORE the generic
+   card-name-prefix Bookkeeping catch-all (same reason Christopher
+   Columbus's case sits just above it), recognizing
+   "International Agreement <Color> takes <Card> in hand" as
+   `ActionClass::TakeCard` for the FIRST pick. "<Color> declines
+   international agreement" and a bare "International Agreement" line
+   fall through unchanged to the existing catch-all (still Bookkeeping --
+   a genuine silent decline, matching this file's established "no journal
+   trace for a decline" precedent).
+
+2. replay_common.rs: a new no-leading-colour special case in the main
+   per-line loop (mirrors the existing Barbarossa/Alexander/Columbus
+   blocks), triggered when `class == ActionClass::TakeCard &&
+   line.text.starts_with("International Agreement ")`. It:
+   - resolves the actor from column 2 (`Line::color`), confirmed reliable
+     against every sampled example;
+   - walks the line's own remaining ";"-joined "<Color> takes <Card> in
+     hand" clauses to collect ALL picks on this one line (classify() only
+     ever resolves the first);
+   - re-resolves every pick through `best_age_sibling` (this was itself a
+     second bug hiding behind the first: cards with multiple age copies,
+     e.g. "Reserves", need the age-correct CardId or nothing downstream
+     matches -- this alone caused 2 of the fix's own regressions before
+     being added, see below);
+   - calls `resolve_intervening` ONCE (for the first pick only -- it
+     drains the QueueItem::TakeRow the event enqueued; every later pick's
+     own re-offer is already synchronous inside interact.rs's own
+     ChoiceKind::TakeRow handling, so calling it again per pick was a
+     second bug: with the pick not yet grounded anywhere, its own
+     matches_upcoming always read false and auto-declined the just-
+     reopened choice via Stop);
+   - grounds each pick against the OPEN TakeRow choice's own offered
+     `Slot` options (preferring an already-grounded identity match, else
+     the first ungrounded offered slot) rather than `ground_row_slot`'s
+     generic cost-matching (International Agreement picks carry no
+     "uses N civil action" clause to match a slot's normal take_cost
+     against -- feeding the observed-cost default of 0 into
+     `ground_row_slot` was a third bug: it demanded a slot whose ORDINARY
+     position price is exactly 0, true for at most one row slot).
+
+3. replay_common.rs `resolve_intervening`'s own pre-existing TakeRow
+   `matches_upcoming` check (used by the SAME file to decide whether to
+   auto-drain a stale TakeRow via Stop) required the taken card to
+   ALREADY be present in `card_row` by CardId identity. That's true for
+   nothing the row has never held before -- exactly a wonder taken via
+   International Agreement, which never appeared in the row under any
+   earlier "takes"/"builds" line. Extended the check to also match an
+   UNGROUNDED offered slot (trusting the journal's own stated take the
+   same forgiving way `ground_row_slot`'s "first ungrounded slot" branch
+   already does everywhere else in this file). This was found AFTER the
+   first regression-bar pass: two guard games (7522957 "Reserves",
+   7523114 "First Space Flight") regressed because this pre-existing gap
+   silently closed the TakeRow choice via Stop before my own new code
+   ever got a turn -- see the "false starts" section below.
+
+
+=== RED TEST QUOTES (both watched actually fail) ===
+
+Test 1 (corpus.rs `international_agreement_take_line_is_a_take_card_action_not_bookkeeping`),
+reverted by renaming the match prefix so the new branch never fires:
+
+    thread 'corpus::tests::international_agreement_take_line_is_a_take_card_action_not_bookkeeping' panicked at src/corpus.rs:1645:13:
+    expected an action, not bookkeeping
+
+Test 2 (replay_common.rs
+`resolve_intervening_defers_a_take_row_pending_for_a_card_never_before_grounded_in_the_row`),
+reverted by dropping the `|| !self.row_grounded[*slot as usize]` disjunct:
+
+    thread 'replay_common::tests::resolve_intervening_defers_a_take_row_pending_for_a_card_never_before_grounded_in_the_row' panicked at src/replay_common.rs:10419:9:
+    deferring must leave the pending untouched for apply_one to resolve: None
+
+Both restored immediately after, full fasttest suite reran green (0
+failures across the whole corpus/suite binaries), and
+`cargo clippy --all-targets --profile difftest -- -D warnings` is clean.
+
+
+=== REGRESSION BAR (final, verbatim) ===
+
+Before (base 13019ca): 350 completed, 316 exact.
+After this fix:
+
+    # replaystats: 1011 games sampled, 392 completed to state.game_over
+    392/392 completed games actually flipped state.game_over; 353/392 of
+    those matched index.tsv exactly (sorted per-game score-list compare).
+
+=== REGRESSIONS (must be empty) ===
+(empty -- confirmed twice, once mid-fix with 2 real regressions caught and
+root-caused per part 3 above, once final and clean)
+
+=== WINS ===
+7520718
+7521619
+7521665
+7521690
+7521762
+7521771
+7521805
+7521854
+7521981
+7521995
+7522022
+7522122
+7522167
+7522193
+7522199
+7522215
+7522385
+7522448
+7522470
+7522489
+7522510
+7522532
+7522543
+7522654
+7522689
+7522731
+7522748
+7522765
+7522776
+7522798
+7522799
+7522807
+7522834
+7522879
+7522899
+7522953
+7523045
+7523196
+7523214
+7523390
+7523429
+7523599
+
+(42 wins total, 0 regressions against /private/tmp/guard_ids.txt's 350 IDs.)
+
+
+=== FALSE STARTS WORTH KNOWING ABOUT (for anyone touching this area again) ===
+
+- First attempt routed each International Agreement pick through
+  `apply_one`'s existing generic `ActionClass::TakeCard` arm. That arm's
+  `ground_row_slot(actor, card, Some(observed_take_cost(raw_text)))` call
+  assumes every take line carries a real "uses N civil action" cost
+  clause; International Agreement's picks never do, so
+  `observed_take_cost` silently defaulted to 0, which then demanded a row
+  slot whose ORDINARY position price is exactly 0 -- wrong almost every
+  time. Symptom: "ParserGap: open TakeRow choice does not offer slot #",
+  14/1,011 games. Fixed by NOT routing through that arm at all for this
+  shape; ground against the open TakeRow choice's own offered Slot
+  options instead (part 2 above).
+- Second attempt called `resolve_intervening` once PER PICK (not once per
+  line). Since a pick isn't grounded until AFTER resolve_intervening
+  returns, its own `matches_upcoming` check always read false for pick
+  #2+, auto-declining the just-reopened TakeRow via Stop before it could
+  be used. Symptom: "ParserGap: International Agreement pick with no open
+  TakeRow choice", 36-42/1,011 games. Fixed by calling
+  `resolve_intervening` exactly once, for the first pick only.
+- Third: `best_age_sibling` needed to be applied to every pick's resolved
+  CardId, not just left as whatever `corpus::build_card_index` happened to
+  return (an arbitrary same-name sibling for the 9 card families BGO
+  never age-tags in text). Missing this caused the two genuine
+  regressions (7522957 "Reserves", 7523114 "First Space Flight" -- the
+  latter has no age siblings at all, so this alone wasn't its full fix,
+  see next point).
+- Fourth (the deepest one, part 3 above): even with the age-sibling and
+  per-line-not-per-pick fixes, 7523114 (First Space Flight, a wonder with
+  no age siblings) still regressed, because `resolve_intervening`'s
+  OWN pre-existing TakeRow `matches_upcoming` logic requires the picked
+  card to already sit somewhere in `card_row` by identity -- structurally
+  impossible for a card never seen in the row before. This is a real,
+  pre-existing gap in `resolve_intervening` that was simply never
+  exercised before this fix (nothing used to classify these lines as
+  TakeCard at all, so this code path was dead for this shape). Fixed by
+  widening the match to also accept an ungrounded offered slot.
+
+
+=== THE TAIL: WHAT IS LEFT (27 games, honestly not chased further) ===
+
+Re-enumerated after the fix landed:
+
+    7522652  7522632  7523085  7523072  7523070  7521364  7521849
+    7522509  7522512  7523583  7522235  7522236  7522272  7522936
+    7521783  7521072  7523363  7522455  7523537  7522037  7523242
+    7522350  7522795  7522756  7522762  7521946  7521689
+
+Two of these (7522632, 7522350) are NEW to the bucket -- they weren't in
+the original 38, they only reached a WonderStep refusal because this fix
+let them progress further into their own journals before hitting a
+(probably different) shortfall. This is expected long-tail behaviour, not
+a sign anything regressed (the regression bar stayed clean throughout).
+
+Looked briefly at three of the remaining games:
+- 7521364 has 8 "GAME DATA UPDATED <Player> <Resource>: A -> B" lines --
+  an admin correction BGO occasionally injects, currently classified as
+  pure Bookkeeping (corpus.rs, the literal-string check right next to
+  "Attacker's strength:"/"Operation successful"). These corrections
+  genuinely change a player's resource count, but nothing applies them --
+  the resource delta is simply dropped. This is a real, distinct gap
+  (only 2/27 remaining games have any GAME DATA UPDATED lines at all, so
+  it is NOT the dominant remaining cause, just worth flagging since it's
+  an easy grep away: `grep -c "GAME DATA UPDATED" journals/*.tsv`).
+- 7521849 shows persistent per-turn "science drift" (engine computes
+  science several points lower than the journal's own running total,
+  every single turn, well before the WonderStep refusal) -- looks like an
+  unrelated, pre-existing tracking bug (possibly Leonardo da Vinci's
+  leader ability, "gives 1 resource" on a discover, not fully tracked)
+  that starves the player of resources by the time they try to build.
+  Did not chase this further -- it's a different bucket's shape (a
+  silent-resource-gain leader ability, the exact pattern flagged in the
+  task brief for a DIFFERENT bucket already root-caused).
+- The remaining ~24 games were NOT individually triaged beyond confirming
+  none of them carry an International-Agreement take line before their
+  own WonderStep refusal (i.e. they are not instances of the same root
+  cause) and are a mix of small (1-2 resource) and larger affordability
+  shortfalls per `costs::wonder_stage_cost` vs `p.resources` at the point
+  of refusal -- most likely several more small distinct causes (production
+  tracking drift of the same general shape as 7521849, or something
+  wonder-cost-specific not yet identified). A fresh pass should group
+  these by which OTHER action class most recently preceded the refusal
+  (Reserves/Engineering Genius plays, tech discoveries, etc.) the same way
+  this pass grouped by International Agreement.
+
+
+=== FILES TOUCHED ===
+
+- rust/src/corpus.rs: classify() addition (~30 lines) + 2 new tests.
+- rust/src/replay_common.rs: new International Agreement multi-pick
+  special case in the main per-line loop (~90 lines) + the
+  `matches_upcoming` widening in resolve_intervening's TakeRow arm
+  (~30 lines including comment) + 1 new test.
+- rust/src/events.rs: touched only for temporary debug instrumentation
+  while diagnosing the 2 regressions; reverted before the final commit --
+  no net change (confirmed: `git diff` shows only corpus.rs and
+  replay_common.rs changed).
+
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wonderstep.patch
+(git diff 13019ca..HEAD in the now-deleted clone, 347 lines).
