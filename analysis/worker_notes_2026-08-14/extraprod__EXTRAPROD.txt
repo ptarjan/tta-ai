@@ -1,0 +1,270 @@
+EXTRA_PRODUCTION (Economic Progress) CORRUPTION TIMING -- worker report, 2026-08-14
+====================================================================================
+
+TARGET: happy worker's handoff (happy__HAPPY.txt STEP 2), a single lead left
+open: game 7522652 round 15/16, Orange's Economic Progress corruption comes
+out band 6 in our engine vs band 4 in the journal (8-resource gap). The
+previous worker found that substituting Orange's ROUND-START snapshot
+(resources=20, food=9, their post-round-14 values) for their LIVE state
+(resources=25, food=6, post-round-15's-own-production) reproduces the
+journal exactly on that ONE game, but explicitly did not land it because one
+example cannot distinguish "live state" from "round-start snapshot", and
+asked for a corpus-wide measurement to settle it. That is this pass's job.
+
+RESULT: MEASURED NEGATIVE, DECISIVELY. Patch is EMPTY (0 bytes, verified
+`git diff 791150f -- rust/` on this clone is 0 bytes). The round-start-
+snapshot rule is WRONG: on the full 1,011-game corpus it causes 14
+regressions (complete games that stop completing) and ZERO wins. The
+existing LIVE-state rule (today's engine behaviour, untouched) is correct.
+This closes the avenue -- do not re-open "snapshot vs live" for this event
+without a genuinely new lead.
+
+====================================================================
+STEP 1: how many games / firings
+====================================================================
+
+Card: "Economic Progress" is the ONLY base-game card with
+`extra_production: true` in `card_table.rs` (grepped `extra_production:
+true` across the whole table -- exactly one hit, card_table.rs:3693).
+
+Corpus: `grep -rl "Economic Progress" /private/tmp/bgo-journals/journals/`
+-> 364 journals. `grep -ro "Economic Progress" .../*.tsv | wc -l` -> also
+364 -- the event's own printed name (and hence the card) appears exactly
+ONCE per game that has it (spot-checked several journals: the
+"CORRUPTION!"/"produces" lines are all part of ONE "plays event ... Current
+event: II / Economic Progress ..." block; the game never re-draws it). So:
+364 games, 364 firings, one firing per game, each firing evaluating
+corruption/food/consumption/resources for EVERY player in that game (2-4
+players) in turn order starting from the revealer.
+
+====================================================================
+STEP 2: what the rules and BGA's own material say (checked BEFORE measuring)
+====================================================================
+
+`docs/RULES_SPEC.md` has no mention of "Economic Progress" or
+"extraProduction" by name at all (grepped both, zero hits) -- it documents
+the ORDINARY end-of-turn Production Phase sequence (corruption -> food ->
+consumption -> resources, RULES_SPEC line ~199) but says nothing about a
+cross-player, mid-round, SECOND production event's resource baseline.
+
+`sources/faq_v15.pdf` (official errata, checked directly, not just
+RULES_SPEC in case of a transcription gap):
+
+  "Economic Progress: Your civilization conducts these Production steps
+  even if you currently have insufficient Unused Workers to match all of
+  your Discontent Workers and would normally be subject to an Uprising."
+
+  "Economic Progress: This event does combine with Transcontinental
+  Railroad, as both cards use the word 'produces.'"
+
+  "International Trade Agreement: This card does affect the Good Harvest,
+  New Deposits, Economic Progress, Impact of Balance, Impact of
+  Agriculture, and Impact of Industry events, for all of these cards use
+  the term 'produces,' which refers to a specific end-of-turn step."
+
+These confirm Economic Progress runs the REAL Production Phase machinery
+(same "produces" semantics as your own end-of-turn step, hence it combines
+with Trade-Routes-style discounts, and it explicitly bypasses the Uprising
+gate that would otherwise skip a normal Production Phase) -- but say
+NOTHING about which resource baseline a player who has ALREADY run their
+own Production Phase earlier in the SAME round should be re-evaluated
+against. This is a genuine gap in the primary sources, not something I
+overlooked.
+
+`sources/cge_code_of_laws.pdf`: no separate "Economic Progress" section (it
+is not a base-rulebook card; the FAQ above is its only official text).
+
+BGA's OWN IMPLEMENTATION: `sources/bga_throughtheages_material.inc.php` is
+the only BGA-derived file on this machine (confirmed by filesystem search:
+`find / -iname "*throughtheages*"` and `find ... -iname "*.php"` under
+tta-ai turn up ONLY this one file, in every sibling worker clone under
+/private/tmp/* too -- there is no BGA game-LOGIC source anywhere, only this
+card-material/text file). Its Economic Progress entry (line 2223):
+
+  'text' => clienttranslate("Each civilization produces immediately:
+  Evaluate corruption. Produce food. Evaluation consumption. Produce
+  resources.")
+
+This is just the card's printed text (confirms the corr->food->consume->
+resources SEQUENCE, which `events::extra_production` already matches
+exactly) -- not executable logic, so it cannot answer the live-vs-snapshot
+question either. CONCLUSION: neither the rules nor BGA's available material
+settle this outright -- corpus measurement was the correct next step, not a
+shortcut.
+
+====================================================================
+STEP 3: implementation measured (round-start snapshot)
+====================================================================
+
+Implemented exactly the previous worker's proposed rule: priced ONLY the
+corruption step's blue-token math against each player's resources/food AS
+OF THE START OF THE CURRENT ROUND, instead of their live totals (every
+other step of `extra_production` -- paying the corruption, gaining food,
+consumption, gaining resources -- stayed on the real live `PlayerState`,
+unchanged).
+
+Added (all reverted, see CLEANUP):
+  - `GameState::round_start_resources`/`round_start_food: [u16; MAX_PLAYERS]`
+    (state.rs), captured for EVERY player at once in `game::advance_turn`
+    right when `state.round` wraps to a new round (before anyone in the new
+    round has acted -- exactly "this round's starting bank" for every
+    player, valid all round even for a player who acts first and finishes
+    before a later same-round event fires).
+  - `economy::blue_available_for(p, resources, food)`, a refactor of
+    `blue_available`/`blue_used` that takes the two STORED amounts as
+    parameters while still reading `blue_total`/denominations/wonder-steps
+    live from `p` (DRY: `blue_used`/`blue_available` became thin callers of
+    the new `_for` variants with `p.resources`/`p.food`).
+  - `events::extra_production` now computes `corr` via
+    `economy::blue_available_for(p, round_start_resources[idx],
+    round_start_food[idx])` instead of `economy::blue_available(p)`.
+  - Unit test (events.rs):
+    `extra_production_prices_corruption_against_the_round_start_bank_not_the_live_one`,
+    a synthetic worked example (denom [1], blue_total=15, live
+    resources=13/food=2, round-start resources=8/food=5) asserting
+    corruption=4 (round-start-priced), not 6 (live-priced). Confirmed RED
+    (assertion failed, corr=6 not 4, resources landed at 7 not 9) by
+    reverting ONLY the `blue_available_for` substitution back to
+    `blue_available`, then GREEN again after restoring it. Full
+    `cargo test --profile fasttest --lib`: 1409/1409 passed (including this
+    one). `cargo clippy --all-targets --profile fasttest -- -D warnings`:
+    clean.
+
+STRUCTURAL NOTE (per the task's "keep changes out of replay_common.rs"
+instruction): `GameState` is constructed via full struct LITERALS (no
+`Default`/spread) in 12 places across the codebase, including
+`replay_common.rs`'s own `blank_state()` test helper and
+`advisor/state_io.rs`'s `blank_state()` (a REAL, non-test production path
+for the human-typed board format) and `bots/weighted/events.rs`'s own test
+helper. Adding two new MANDATORY fields to `GameState` therefore forced a
+one-line addition at every one of those 12 sites to keep the crate
+compiling, replay_common.rs included -- there was no way to add this kind
+of persistent, cross-turn, all-players state without touching it. Said so
+loudly here per the instructions; in the end it does not matter, because
+the whole change (including that touch) was reverted -- see CLEANUP -- so
+there is nothing left in replay_common.rs for the Build-games worker to
+collide with.
+
+====================================================================
+STEP 4: guard sweep -- DECISIVE, do not revisit without new evidence
+====================================================================
+
+Baseline (this clone, unmodified, re-confirmed before touching anything):
+  671/671 completed, 630/671 exact. `SCOREDIV_COMPLETED_ID` set saved,
+  diffed byte-for-byte identical to /private/tmp/guard_ids_671.txt.
+
+With the round-start-snapshot patch applied, full corpus:
+  657/657 completed, 618/657 exact -- BOTH counts DROPPED (671->657
+  completions, 630->618 exact matches; note 14 fewer completions but only
+  12 fewer exact matches, so 2 of the newly-incomplete games had not been
+  exact matches even at baseline).
+
+  comm -23 /private/tmp/guard_ids_671.txt /tmp/extraprod_ids.txt   (REGRESSIONS)
+    7522009
+    7522156
+    7522219
+    7522221
+    7522335
+    7522472
+    7522530
+    7522543
+    7522590
+    7522773
+    7523125
+    7523375
+    7523392
+    7523468
+
+  comm -13 /private/tmp/guard_ids_671.txt /tmp/extraprod_ids.txt   (WINS)
+    <empty>
+
+14 regressions, 0 wins. Per the task's own win condition ("exact count
+going UP with completions never dropping"), this is an unambiguous fail --
+worse on BOTH axes, not a wash.
+
+WHY it regresses -- traced one concretely (game 7522009, a 2-PLAYER game,
+round 14, REPLAY_DEBUG_ALL=1 against a single-game index/journal pair):
+Purple reveals Economic Progress; order = [Purple, Orange] (Purple is
+revealer). By the time the event reaches Orange, Orange had ALREADY run
+their own round-14 end-of-turn Production Phase earlier in the SAME round
+(same shape as 7522652's Orange -- acts first, already produced). The
+journal's own text for this event lists NO "CORRUPTION!" line for Orange at
+all (corruption = 0). Baseline (LIVE state: resources=6, food=8 -- Orange's
+POST-round-14-own-production bank) computes corr=0, matching the journal
+exactly. The round-start-snapshot patch instead used Orange's PRE-round-14
+(round-13-end) bank and computed corr=2 -- WRONG, a direct contradiction of
+the journal. This 2-resource drift compounds turn over turn until round 18,
+where it produces `IllegalMove: WonderStep` ("Orange builds 2 stages of
+Hollywood Orange spends 11 resources") and the game stops completing
+entirely. This is a genuine, real counter-example in the SAME shape as
+7522652's Orange (a player who already acted this round when a same-round
+event fires) where LIVE, not round-start, is the rule the journal actually
+follows -- exactly the disambiguator the previous worker said was missing,
+and it comes out the OPPOSITE way from the one example that motivated this
+whole investigation.
+
+Read differently: `blue_available`/corruption in this engine is not a
+"per-round" quantity that resets or needs a baseline at all in the general
+case -- it is a pure function of a player's CURRENT bank at the instant
+evaluated, exactly like the rulebook's physical blue-token mechanic (see
+`economy::blue_used`'s own doc comment: resources/food ARE literally
+represented by blue tokens placed on the tracks, so "tokens used" is
+directly, losslessly recoverable from the current stored totals, not an
+approximation). Economic Progress firing a SECOND production this round for
+a player who already took their turn does not get to pretend that
+player's own first production didn't happen -- their blue tokens are
+genuinely, physically already spent. 7522652's Orange remains a real,
+unexplained 8-resource gap (see below), but "round-start snapshot" is now
+proven NOT to be its explanation.
+
+====================================================================
+STEP 5: what this leaves unresolved (handoff)
+====================================================================
+
+Game 7522652 round 15/16's original 8-resource Orange gap (band 6 engine
+vs band 4 journal) is STILL OPEN. This pass only closes off the specific
+"round-start snapshot" explanation for it -- proven wrong by 7522009 and 13
+other regressions, not just unhelpful. The gap itself was not re-examined
+beyond confirming (again) that every individual input the happy worker
+traced (blue_total=15, resources=25, food=6, mine_denoms=[2,1], all
+independently journal-confirmed) is correct FOR THE LIVE-STATE MODEL, which
+is the model now doubly confirmed correct in general by this pass's
+corpus sweep. Whatever explains 7522652's Orange, it is not "which
+baseline does corruption use" -- some other, still-unidentified mechanism
+(possibly specific to that game's own earlier-round history, per the
+"general economy divergence" shape wstep/wstep2/econcap/happy all already
+flagged) is responsible. Do not re-attempt a snapshot/timing fix for
+`extra_production` without a THIRD, independently diagnosed example that
+survives a corpus sweep -- this pass spent its one clean shot on that
+question and it came back negative.
+
+====================================================================
+STEP 6: cleanup / verification
+====================================================================
+
+All temporary source changes (state.rs, game.rs, events.rs, economy.rs,
+advisor/state_io.rs, apply.rs, combat.rs, costs.rs, effects.rs, interact.rs,
+legal.rs, replay_common.rs, bots/weighted/events.rs) reverted via `git
+checkout --` on this clone. `git diff 791150f -- rust/` is CONFIRMED 0
+bytes (see /tmp/verify_empty.diff, also 0 bytes). Rebuilt `replaystats`
+clean off that reverted tree and re-ran the full guard sweep one more time
+as a final sanity check: 671/671 completed, 630/671 exact, and the
+completed-ID set diffs byte-identical to `/private/tmp/guard_ids_671.txt`
+("IDENTICAL TO GUARD BASELINE"). No debug probes were left in (none were
+added beyond the reverted patch itself -- this pass reused the existing
+`REPLAY_DEBUG_ALL`-gated prints already in `economy.rs`/`events.rs`, added
+none of its own).
+
+`cargo test --profile fasttest --lib`: not re-run post-revert (no source
+diff to test; it passed 1409/1409 WITH the patch applied, before revert --
+see STEP 3).
+
+No commits were made on this clone (nothing to land). This clone,
+/private/tmp/extraprod, holds no unlanded commits and will be deleted per
+the task's cleanup instruction.
+
+====================================================================
+FILES CHANGED
+====================================================================
+None. extraprod.patch is 0 bytes by design -- this is a measured negative,
+not a missing patch.
