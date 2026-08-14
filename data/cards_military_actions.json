@@ -205,17 +205,17 @@
    "cost": {
     "militaryActions": 1
    },
-   "strength": 4,
+   "strength": 5,
    "composition": [
     "artillery",
     "artillery"
    ],
-   "obsoleteStrength": 2,
+   "obsoleteStrength": 3,
    "effects": {
-    "tacticBonus": 4,
-    "tacticBonusObsolete": 2
+    "tacticBonus": 5,
+    "tacticBonusObsolete": 3
    },
-   "text": "Tactic: 2 artillery. +4 strength per army (+2 if outdated)."
+   "text": "Tactic: 2 artillery. +5 strength per army (+3 if outdated)."
   },
   {
    "name": "Conquistadors",
