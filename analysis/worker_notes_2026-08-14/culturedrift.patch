@@ -1,0 +1,70 @@
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index ae8227b..0e24074 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1071,7 +1071,24 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
+                 if p.flipped_wonders.contains(w) {
+                     continue;
+                 }
+-                happy += w.get().effects.happy as i32;
++                // Michelangelo's printed text counts "1 culture per HAPPY
++                // FACE" on a temple/theater/wonder -- a happy face is a
++                // specific printed icon, and a card with a printed UNHAPPY
++                // face (negative `effects.happy`, e.g. Kremlin's -1) has
++                // zero happy faces of its own, not a negative count. FAQ
++                // v1.5 p.9 confirms this count is its own thing, exempt
++                // from the whole-civilization 0..8 happiness clamp -- so it
++                // is not "net happiness" being summed here, it is a face
++                // count, and faces cannot be negative. Traced to BGO game
++                // 7521066 (Purple: Michelangelo leader + Kremlin, round
++                // 12): this arm let Kremlin's unhappy face cancel a happy
++                // face elsewhere in the sum, undercounting Michelangelo's
++                // culture by 1 * `v`. `happy_source_count` and
++                // `temple_theater_wonder_happy_source_count` already gate
++                // on `effects.happy > 0` for the same reason; this sum must
++                // clamp each wonder's contribution the same way instead of
++                // adding the raw (possibly negative) printed value.
++                happy += w.get().effects.happy.max(0) as i32;
+                 if p.homer_wonder == w {
+                     happy += 1;
+                 }
+@@ -2063,6 +2080,39 @@ mod tests {
+         );
+     }
+ 
++    /// Regression for BGO game 7521066 round 12: Purple holds Michelangelo
++    /// and just completed Kremlin, whose printed effects are a genuine
++    /// UNHAPPY face (`effects.happy == -1`), not the absence of one.
++    /// Michelangelo's printed text is "1 culture per happy face from
++    /// temples, theaters and wonders" -- an unhappy face is not a happy
++    /// face, so it must contribute zero to this count, not a negative
++    /// count that cancels a happy face elsewhere. FAQ v1.5 p.9 already
++    /// establishes this per-source count is its own thing (exempt from the
++    /// whole-civilization 0..8 happiness clamp), reinforcing that it is a
++    /// face count, not a net-happiness sum. Before the fix this arm summed
++    /// Kremlin's raw -1 into `happy`, undercounting by 1 culture whenever a
++    /// staffed Temple/Theater elsewhere supplied the happy face Kremlin's
++    /// unhappy face wrongly cancelled.
++    #[test]
++    fn michelangelo_does_not_let_a_wonders_unhappy_face_cancel_a_temples_happy_face() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Michelangelo");
++        p.techs.insert(card("Religion"), TechSlot { workers: 1, stored: 0 }); // 1 happy face
++        p.completed_wonders.push(card("Kremlin")); // effects.happy == -1, an UNHAPPY face
++        let state = one_player_state(2, p);
++        let s = compute(&state, &state.players[0]);
++        // Religion's 1 happy face + Kremlin's 0 happy faces (its unhappy
++        // face does not subtract) = 1 face -> 1 culture via Michelangelo,
++        // plus Religion's own printed +1 culture and Kremlin's own printed
++        // +2 culture: 1 + 2 + 1 = 4.
++        assert_eq!(
++            s.culture,
++            4,
++            "Religion's own +1, Kremlin's own +2, and 1 * Michelangelo's culture-per-happy (Religion's 1 happy \
++             face; Kremlin's unhappy face must not subtract)"
++        );
++    }
++
+     // ------------------------------------------------------ army strength
+ 
+     #[test]
