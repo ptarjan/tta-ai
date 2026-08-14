@@ -1,0 +1,229 @@
+PLUNDER SPLIT bucket -- session 2026-08-14, branch `plunder` off 3fc32b5.
+
+BUCKET: StuckPending "PlunderSplit choice open for player # but no journal-observed Plunder
+resolution left to resolve it with". 75 games (grep-confirmed via /tmp/plunder_bucket_ids.txt,
+python-parsed from /tmp/plunder_full_before.txt -- 75 unique IDs, matches the 75 bucket-line count).
+
+BASELINE (this session's own before-sweep, full corpus, all 1011 games):
+    completed = 290  (/tmp/plunder_completed_before.txt)
+    stopped   = 721  (/tmp/plunder_stopped_before.txt)
+
+========================================================================
+ROOT CAUSE
+========================================================================
+Game 7523357, journal line 503-506:
+    503: "Purple plays Plunder against Grey Your rival loses a total of up to 7 resource
+         and/or food (your choice). You gain that many resource and food.; ; Purple uses
+         1 military action"
+    504: "concedes defeat"   (Grey, bookkeeping, unrelated)
+    505: "Purple produces 7 resources; Grey spends 7 resources"   <- the real PlunderSplit
+         resolution, parses cleanly via `parse_plunder_split_line` into (Purple, food=0,
+         resources=7)
+    506: "Purple increases population Purple spends 4 food"  <- replay STOPS here,
+         StuckPending("PlunderSplit choice open for player 1 ...")
+
+`ActionClass::PlayAggression`'s handler (`replay_common.rs::apply_one`, ~line 6834) resolved
+"Plunder" from the raw journal text to a `CardId` via `corpus::build_card_index`'s bare-name
+lookup -- WITHOUT any age-family correction. Added a temp debug print and confirmed:
+
+    TMPDEBUG PlayAggression raw_card=Aggression: Plunder (I) age_civil=III age_military=III
+        hand_military=["Loss of Sovereignty", "Impact of Population", "Impact of Agriculture"]
+    TMPDEBUG offer_plunder_split attacker=1 defender=3 printed=3 defender_resources=7
+        defender_food=9
+
+Plunder prints "up to N resource and/or food" once per age (3/5/7 for I/II/III,
+`TakeFromOpponentBlock.food_and_or_resources` in `card_table.rs`). The journal's OWN text at
+line 503 says "up to 7" (the Age III copy) and `state.age_military` was already III at that
+point -- but `build_card_index`'s arbitrary same-name pick resolved to the Age I copy (value 3)
+instead, because nothing corrected it. `combat::finish_aggression` then called
+`interact::offer_plunder_split(state, attacker, defender, 3)` (not 7), which capped the
+`PlunderSplit` choice's options at total=3 (`{0/3, 1/2, 2/1, 3/0}`) -- none of which can ever
+match the journal's real (food=0, resources=7) resolution. The `plunder_splits` FIFO entry for
+this attacker sits there forever, unconsumable, and the replay deadlocks on the very next line
+that reaches `resolve_intervening` with this pending still open (506).
+
+This has NOTHING to do with the `PlunderSplit`/split-choice machinery itself, which is correct
+-- `parse_plunder_split_line`, `prescan_plunder_splits`, and the FIFO-drain-and-validate consumer
+in `resolve_intervening` all worked exactly as designed. The bug is purely in resolving WHICH
+`CardId` "Plunder" refers to before the effect even fires -- the choice was offered against the
+wrong card's printed number.
+
+Precedent: `ActionClass::TakeCard` (same file, ~line 6288) already has this exact class of bug
+fixed for the NINE same-name civil-row-and-friends families, via
+`best_age_sibling(card, r.state.age_civil)`. Aggression cards are a military-deck family with
+the identical "same bare name, one copy per age, no age tag in the journal text" shape --
+`best_age_sibling`'s own doc comment describes exactly this pattern. `PlayAggression` had no
+equivalent correction at all.
+
+HAND-VERIFIED A SECOND AND THIRD GAME (both from the 75-ID bucket) before writing the fix -- see
+below (this file's "SECOND/THIRD GAME" section) -- both hit the exact same missing-correction
+mechanism, on Raid and Plunder respectively, confirming this is not a one-off.
+
+========================================================================
+THE FIX
+========================================================================
+File: rust/src/replay_common.rs, `apply_one`'s `ActionClass::PlayAggression` arm (~line 6834).
+
+Before:
+    ActionClass::PlayAggression => {
+        let card = card.ok_or_else(|| MismatchKind::ParserGap("aggression with no resolved card".into()))?;
+        let target = color_after(rest, " against ")...;
+        r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
+        resolve_aggression_defense(r, next_text)
+    }
+
+After: inserted `let card = best_age_sibling(card, r.state.age_military);` immediately after the
+`card.ok_or_else(...)?` line, before `target` is parsed -- mirroring `TakeCard`'s own correction
+line-for-line, but bounded on `age_military` (the military deck's own current age) instead of
+`age_civil`, since Aggression cards are drawn from and played out of the military deck.
+`best_age_sibling` was already imported in this file (used by `TakeCard`) -- no new import
+needed.
+
+Scope decision: did NOT touch `DeclareWar`/`PlayTactic`/`ProposePact` (the other
+`consume_named_military_card` call sites) even though they share the same missing-correction
+shape in principle -- out of scope for the PlunderSplit bucket, and touching them multiplies the
+regression surface for a fix this session did not verify against those families' own card data.
+Left as a candidate for a future session (see PICKUP PLAN below).
+
+========================================================================
+RED TEST (fix reverted, exact failure text)
+========================================================================
+Test added in `replay_common.rs`'s `#[cfg(test)] mod tests`:
+
+    fn play_aggression_resolves_the_journal_observed_age_not_an_arbitrary_same_name_sibling()
+
+Reverting the fix (deleting the inserted `best_age_sibling` line) and running
+`cargo test --profile difftest play_aggression_resolves_the_journal_observed_age` gives:
+
+    thread 'replay_common::tests::play_aggression_resolves_the_journal_observed_age_not_an_arbitrary_same_name_sibling' panicked at src/replay_common.rs:10621:9:
+    assertion `left == right` failed: Age III's printed take (7 of 20), not Age I's wrong one (3 of 20 -> 17)
+      left: 17
+     right: 13
+
+Re-adding the single `let card = best_age_sibling(card, r.state.age_military);` line makes it pass
+(GREEN, confirmed).
+
+NOTE ON PROCESS: this session was steered mid-task by the coordinator (running alongside 3 other
+workers on a shared 6-core box) to STOP running independent full 1011-game corpus sweeps, since
+they were the dominant shared cost. A before-baseline sweep (290 completed / 721 stopped, saved to
+/tmp/plunder_completed_before.txt / /tmp/plunder_stopped_before.txt) had ALREADY been run by this
+session before the steer landed -- that data is kept above for reference but is NOT what gates the
+regression check below. Per the coordinator's corrected `GUARD_METHOD.txt` (their central,
+authoritative baseline, `replaystats`-based, 290 IDs in /private/tmp/guard_ids.txt), the actual
+landing bar is the `comm` check in the next section, run against the 290-guard-plus-bucket check
+index, NOT a full-corpus `replay` sweep.
+
+========================================================================
+STATUS: NOT LANDED -- fix causes real, structural corpus regressions
+========================================================================
+Per `replaystats` (the `SCOREDIV_DUMP_COMPLETED`-instrumented guard, `/private/tmp/
+GUARD_METHOD.txt`), against MY clone's own TRUE baseline (base commit `3fc32b5`, this session's
+own `/tmp/plunder_check.tsv` = the 290 games that complete at `3fc32b5` + this bucket's 75 IDs,
+366 rows total -- NOT the coordinator's later-regenerated `guard_ids.txt`, which reflects TWO
+OTHER fixes landed on a newer base my clone never had; comparing against that file directly
+produces spurious "regressions" that are really just fixes my clone is missing, not damage my
+change did):
+
+    completed after fix: 308 / 366  (290 baseline + 26 wins - 8 regressions, net +18)
+
+    REGRESSIONS (comm -23 old290 completed_after) -- MUST be empty to land, IS NOT:
+        7521906
+        7521914
+        7522054
+        7522107
+        7522526
+        7523015
+        7523404
+        7523486
+
+    WINS (comm -13 old290 completed_after) -- 26 games, all from the 75-game bucket:
+        7521576 7521842 7521921 7521939 7522046 7522133 7522195 7522212 7522225 7522459
+        7522500 7522502 7522557 7522629 7522666 7522697 7522715 7522844 7522888 7522996
+        7523151 7523208 7523253 7523350 7523623 7523661
+
+DO NOT LAND AS-IS: the hard rule is regressions must be EMPTY, and it is not.
+
+------------------------------------------------------------------------
+WHY: a real card-identity / DiscardSolver collateral-damage mechanism
+------------------------------------------------------------------------
+Tried THREE scopes this session, in order, each rebuilt+re-verified against the SAME 366-row
+check index:
+
+1. `best_age_sibling(card, r.state.age_military)`, applied to EVERY `ActionClass::
+   PlayAggression` card (Plunder, Raid, Enslave, Spy, Annex, Infiltrate, ...) -- 21 regressions.
+2. Same scope (every Aggression card), bound changed to `r.state.age_civil` (provably identical
+   to `parse_age(line.age)` on every trustworthy line, so guaranteed consistent with an identical
+   correction added to `prescan_future_military_needs`) -- STILL 21 regressions, the EXACT SAME
+   21 IDs. Ruling out: this is not an age_civil-vs-age_military drift bug; the two bounds were
+   never the actual cause.
+3. Narrowed to ONLY `card.get().base_name == "Aggression: Plunder"` (both in `apply_one`'s
+   `PlayAggression` arm and in `prescan_future_military_needs`, matching gates) -- 8 regressions
+   remain (down from 21, i.e. real progress, but not zero).
+
+Root mechanism (confirmed via `REPLAY_DEBUG` trace diff on game `7521683`, one of the 21/8
+regressions): `apply_one`'s corrected `card` is fed straight into `Replayer::
+consume_named_military_card` -> `ground_for_consumption`, which does:
+    if hand.contains(card) { return; }
+    let victim = hand.iter().find(|id| !needed_later.contains(id));  // first match, ORDER-sensitive
+    hand.remove_first(victim); hand.push(card);
+`hand_military` here is largely SIMULATED filler `CardId`s (BGO never reveals a hidden hand's
+true contents), and `needed_later` comes from `discard_solver::DiscardSolver`'s own
+`FutureNeed`-driven protection set. Changing WHICH exact `CardId` a `"plays <Aggression>"` line
+resolves to (even when `prescan_future_military_needs` is kept perfectly consistent with it, as
+in attempt 2 above) still changes what `ground_for_consumption` treats as already-in-hand vs.
+needing a swap-in, which can flip which SIMULATED card an EARLIER, entirely unrelated hand-limit
+discard picks as its victim (`ground_for_consumption`'s victim search is a first-match over
+insertion order, not a stable identity-independent choice). That earlier discard drift then
+compounds forward through the turn-by-turn simulated hand until a real divergence surfaces (in
+`7521683`: `StuckPending: decider 0 != expected actor 1` at journal line 242, many lines after
+the actual Aggression play at line 212 -- confirmed BOTH scopes 1 and 2 diverge from baseline at
+the EXACT SAME line, ruling out the age-bound choice as the variable that matters).
+
+This is a genuine, deeper structural coupling between "correcting a played card's identity" and
+"the discard solver's simulated-hand bookkeeping" that this session did not have budget to fix
+properly. It is NOT specific to Plunder or to this bucket -- any correction to `apply_one`'s
+card resolution for a card class the discard solver also tracks via `FutureNeed` risks the same
+class of collateral regression.
+
+------------------------------------------------------------------------
+WHAT SURVIVES FROM THIS SESSION (still valuable)
+------------------------------------------------------------------------
+- The ROOT CAUSE diagnosis for the `PlunderSplit` bucket is SOLID and RE-USABLE: `card` is
+  resolved age-blind in `apply_one`'s `ActionClass::PlayAggression` arm (`replay_common.rs`,
+  search that arm), with no `best_age_sibling` correction (unlike `TakeCard`'s, which has always
+  had one). Confirmed on game 7523357 (journal line 503/505/506) via `REPLAY_DEBUG`: the engine
+  resolved "plays Plunder" to the Age I copy (`food_and_or_resources: 3`) when the journal's own
+  text said "up to 7" (Age III) and the game was already at age III -- so `interact::
+  offer_plunder_split` opened a `PlunderSplit` choice capped at total=3, which can never match
+  the journal's real "Purple produces 7 resources; Grey spends 7 resources" resolution line.
+- A RED/GREEN unit test, `play_aggression_resolves_the_journal_observed_age_not_an_arbitrary_
+  same_name_sibling` (in `replay_common.rs`'s test module, ~line 10600), proves the mechanism in
+  isolation. RED (fix reverted): `assertion left == right failed: ... left: 17, right: 13`. GREEN
+  (fix present): passes. `cargo test --profile difftest`: 1356 lib tests pass, 0 failures.
+  `cargo clippy --lib --bins -- -D warnings`: clean (the `--all-targets` failure in `tests/suite/
+  common/mod.rs` is PRE-EXISTING at base `3fc32b5`, confirmed by stashing this session's diff and
+  re-running clippy -- unrelated to this bucket, not touched).
+- The fix code itself (`best_age_sibling` on Plunder plays, in both `apply_one` and
+  `prescan_future_military_needs`, gated identically) is in `plunder.patch`, in case a future
+  session wants to pursue the `ground_for_consumption`/`DiscardSolver` fix below and re-enable it.
+
+========================================================================
+PICKUP PLAN
+========================================================================
+1. Fix `ground_for_consumption`'s victim search (`replay_common.rs`) to be insensitive to WHICH
+   exact `CardId` is being grounded in -- e.g. protect by `base_name` family rather than exact
+   `CardId` in `needed_later`, or make the substitution order-stable regardless of the target
+   `card`'s own identity. Once that coupling is broken, re-enable this session's Plunder fix (or
+   generalize it back to all Aggression cards, which is the more complete fix -- Raid has the
+   identical age-blind bug, confirmed on game 7521683 line 212: "Raid (I)" resolved when the
+   journal's own age column already said III) and re-run the SAME guard check.
+2. Re-verify against the CURRENT `guard_ids.txt`/`guard_index.tsv` once your own clone's base
+   commit matches whatever the coordinator's authoritative baseline is at the time -- this
+   session's clone was pinned to `3fc32b5` throughout and the guard files were regenerated to a
+   newer base (`ed3ccc9` and later) mid-session; the 290-vs-366 check.tsv this file describes is
+   the ONLY apples-to-apples comparison available from within this clone.
+3. The other 8 remaining bucket games not yet re-verified individually as sharing the exact same
+   root cause (only 3 were hand-verified in depth: 7523357, 7523192, 7523018) -- if the
+   DiscardSolver coupling gets fixed and the corrected set of wins changes, re-check each
+   remaining `PlunderSplit`-classified game individually before assuming they all share this one
+   cause.
