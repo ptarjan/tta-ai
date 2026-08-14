@@ -1,0 +1,214 @@
+RESOURCES DRIFT vs the "IllegalMove: Build" RES bucket (50 games) -- investigation
+notes, NO FIX LANDED
+Worker: resdrift, clone /private/tmp/resdrift, base commit 58e4cd9 (same base
+drift__DRIFT.txt used)
+Date: 2026-08-14
+
+OUTCOME: (c) -- no fix. Named next suspect below (a population/yellow_bank
+cross-validation oracle that does not exist yet). `git diff 58e4cd9` in the
+clone is IDENTICAL, byte-for-byte modulo git's a/b vs c/w diff-prefix
+convention (confirmed with `diff`), to the pre-supplied
+`analysis/worker_notes_2026-08-14/drift.patch` -- i.e. every line in
+`resdrift.patch` is the DRIFT_AUDIT measurement instrumentation that pass
+already delivered, not a fix of mine. I added one small temporary dump
+(`DRIFT_DUMP_RESOURCE_IDS=1`, to print every game id in the "resources"
+first-divergence bucket) to do the intersection in step 1 below, then
+reverted it once I had the id list, specifically so this patch would not
+mix throwaway scaffolding into the deliverable. Guard re-run (below):
+0 regressions, 0 wins, exactly as expected for a no-op diff.
+
+===========================================================================
+1. THE OVERLAP -- SMALL, AND WEAKER THAN IT LOOKS
+===========================================================================
+131 "resources"-first-divergence games (`drift__DRIFT.txt` section 3) vs the
+50 "RES" (resources-short) games from `buildbucket__BUILDBUCKET.txt`'s own
+triage of the 85 `IllegalMove: Build` games:
+
+    OVERLAP = 11 / 50 (22%)
+
+    7521377, 7521763, 7521791, 7522024, 7522890, 7522946, 7522962, 7522977,
+    7523091, 7523438, 7523608
+
+Loudly: this is a SMALL overlap. 39 of the 50 RES-bucket games (78%) never
+show up in the resources-first-divergence 131 at all -- including the
+buildbucket session's OWN hand-traced example, 7522648, confirmed absent.
+This matches buildbucket's own finding: for most of the 50, resources match
+the journal at every PRIOR End-Turn checkpoint and the shortfall appears
+WITHIN the single failing turn, after the last checkpoint the existing
+oracle can see (it only fires at "End turn" lines: `replay_common.rs:5993`,
+guarded by `discard_blocked` -- see `drift__DRIFT.txt`'s own "false start"
+section). An illegal Build stops the replay mid-turn, before that turn's own
+End-Turn line is ever reached, so the oracle structurally cannot catch a
+same-turn miscount. Do not read the 131 as the source of the 50's problem;
+the 131 measures a DIFFERENT, coarser-grained symptom (checkpoint-to-
+checkpoint drift) than the 50's (mid-turn drift). CONCLUSION FOR THE NEXT
+WORKER: the 39-game majority is not covered by this oracle at all and needs
+either a same-turn ledger check or per-action instrumentation, not another
+look at this 131 list.
+
+Even the 11-game overlap is weaker evidence than the headline number
+suggests -- see section 3, `maybe_record_drift` records the game's FIRST
+divergence of ANY player, not the specific player who later fails the
+Build, so several of these 11 pairings may be coincidental (the oracle's
+"resources" tag firing on a bystander whose drift has nothing to do with
+the actor who runs out of resources rounds later).
+
+===========================================================================
+2. DELTA DISTRIBUTION
+===========================================================================
+Full 131 (reproduces `drift__DRIFT.txt` exactly, confirms the frozen
+instrumentation is stable):
+| games | delta |
+|---|---|
+| 78 | +2 |
+| 25 | +1 |
+| 15 | -1 |
+| 11 | -2 |
+|  2 | -4 |
+Skewed heavily positive (our reconstruction usually has MORE resources than
+the journal), which on its face is the WRONG direction to explain a
+resource-SHORTFALL Build failure (you'd want reconstructed < journal, i.e.
+negative delta, for us to think we're poorer than the human really was).
+
+Restricted to the 11-game overlap, the picture is much more mixed and does
+NOT skew positive the way the full 131 does:
+| games | delta | ids |
+|---|---|---|
+| 5 | -2 | 7521377, 7521791, 7522024, 7523438, 7523608 |
+| 3 | +2 | 7522890, 7522962, 7522977 |
+| 2 | +1 | 7522946, 7523091 |
+| 1 | -1 | 7521763 |
+6 negative (the shortfall-explaining direction) vs 5 positive (the WRONG
+direction for this bucket) -- roughly even, not a clean signal. Round/age:
+mostly age II (8/11), rounds 6-17, no sharp peak.
+
+===========================================================================
+3. HAND TRACE -- two games, same underlying mechanism, one important caveat
+===========================================================================
+
+--- 7521791 (delta -2, round 8, line 197, actor Green) ---
+Failing Build: line 227 (round 9) -- Green tries to Build Religion (cost 3),
+reconstruction has `resources=1` (`DEBUG try_apply fail` dump). Journal-
+implied resources at that point = 1 (our value) + 2 (the round-8 drift, if
+it persisted uncorrected) = 3 -- EXACTLY the build cost. This is the one
+game where the -2 drift cleanly, arithmetically explains the later Build
+failure.
+
+Traced the -2 to its source with `REPLAY_DEBUG_ALL=1 ./target/difftest/
+replay ... 7521791`:
+  - `economy.rs:676` (`end_of_turn`, step 3b corruption): at Green's round-8
+    End Turn, `corr = corruption(blue_available(p))`. Reconstruction:
+    `blue_total=16, blue_used=6 -> blue_available=10 -> corr=2`
+    (`economy.rs:106-116`, band 6-10 -> corruption 2). The journal's own
+    round-8 End Turn line for Green has NO "CORRUPTION!" clause at all (cf.
+    Purple's own round-8 line one turn earlier: "CORRUPTION! Purple loses 2
+    resources", printed explicitly when it applies) -- the human's real
+    corruption was 0 this turn, i.e. their true `blue_available` was >= 11.
+  - `blue_used(p)` (`economy.rs:430`) sums blue tokens covering CURRENT
+    stock: `food_tokens(p.food) + mine_tokens(p.resources) + wonder_steps`.
+    At this checkpoint reconstruction has `p.food=3`; hand-traced backward
+    (`REPLAY_DEBUG_ALL`, journal line 166 "Green increases population Green
+    spends 4 food") and found the true food entering the corruption step
+    should be 2 LOWER than what we hold, tracing to a single IncreasePopulation
+    action at round 7 (journal line 166): the reconstruction pays only 2
+    food for that action (`economy.rs::pop_food_cost`, `pop_cost_base(13)=3`
+    minus Moses's `PopIncreaseFoodDiscount(1)` = 2), but the journal states
+    the human paid 4.
+  - VERIFIED our formula is rules-correct on its own terms: `pop_cost_base`
+    (`economy.rs:47-62`) matches `docs/RULES_SPEC.md` section 6.1's table
+    exactly (18-17:2, 16-13:3, 12-9:4, 8-5:5, 4-1:7); Moses's
+    `PopIncreaseFoodDiscount(1)` (`card_table.rs:1622`) matches the VASSAL
+    module's own card text ("increase their population for 1 Food less",
+    `sources/vassal_NewTTA_2.49_buildFile.xml`). Hand-counted every one of
+    Green's PRIOR "increases population" actions (round 3, round 4 x2,
+    round 5 x2 -- 5 total) against a from-scratch yellow-bank simulation
+    (start 18, -1 token/action, Moses discount -1 food) and every one of
+    those five costs matches the journal EXACTLY (1,1,2,2,2). The sixth
+    action (round 7, line 166) is where it breaks: our formula, fed our own
+    `p.yellow_bank=13`, computes cost 2; the journal says 4, which under the
+    SAME formula implies the human's true yellow_bank was in the 8-5 band
+    (base 5, minus Moses's 1 = 4) -- i.e. TRUE population was already several
+    tokens ahead of what this binary's own population/yellow_bank tracking
+    believes, despite the first five actions agreeing exactly. Ruled out:
+    wrong band table (matches RULES_SPEC verbatim), wrong Moses value
+    (matches source data verbatim), a missed 6th "increases population" line
+    for Green between rounds 5 and 7 (grepped the full journal range,
+    lines 108-166, for every "population"/"immigrant" mention -- none).
+  - CONCLUSION: this is NOT a resources bug, a corruption-formula bug, or a
+    pop-cost-formula bug -- all three are independently confirmed
+    rules-correct. It is a POPULATION (`p.yellow_bank`) tracking divergence
+    that already existed by round 7, invisible because nothing
+    cross-validates population against the journal (see `drift__DRIFT.txt`'s
+    own exclusion list: population was excluded from that pass's oracle set
+    as "not independently comparable" -- true for a bare population COUNT,
+    but every "increases population" line's stated food cost, and every
+    End-Turn line's stated consumption, is ITSELF an independent, exact
+    read of the true yellow-bank band, unexploited by any existing check).
+    The 2-resource corruption overcharge two rounds later is a downstream
+    symptom of that earlier, currently-invisible drift, not a local bug to
+    patch at the corruption site.
+
+--- 7522890 (delta +2 as globally recorded, but see below) ---
+Globally-recorded first "resources" divergence: actor Grey (seat 3), round 6,
+"CORRUPTION! Grey loses 2 resources" in the journal but reconstruction pays
+NO corruption that turn (opposite-direction bug: reconstruction thinks
+`blue_available>=11` when the journal says otherwise) -- again a corruption-
+band boundary miss, not investigated further since Grey is not even the
+player who fails to Build. The player who actually fails ("IllegalMove:
+Build { card: Knights }", actor Green/seat 2) has its OWN, LATER, separately-
+guarded `end-turn resources drift` print (`REPLAY_DEBUG=1`): "actor=2 journal
+says (now 8), this binary computes 7 (delta -1)" -- the shortfall-explaining
+direction, occurring well before the failing Build. IMPORTANT METHODOLOGICAL
+CAVEAT for whoever resumes this: `maybe_record_drift`'s "first-wins, never
+overwritten" convention (`replay_common.rs:2449`) records the first
+divergence of ANY actor in the game, not the first divergence of the SPECIFIC
+actor who later fails the Build. In a 3-4 player game, a bystander's drift
+(here, Grey's) can win the race and get tagged into the corpus-wide 131/50
+tables, burying the failing actor's own, more relevant drift (here, Green's)
+one line down. This means the already-weak 11/50 overlap in section 1 is
+itself an OVERESTIMATE of how many of the 50 have a truly relevant resources
+divergence recorded against them, and an UNDERESTIMATE of how many of the
+other 39 might have one recorded against the RIGHT actor if the oracle were
+per-actor instead of per-game. Left unquantified this pass (would need
+rerunning the oracle keyed by (game, actor) instead of by game alone).
+
+===========================================================================
+NEXT SUSPECT (concrete, not investigated further this pass)
+===========================================================================
+Build a population/yellow_bank cross-validation oracle, structurally
+identical in spirit to the existing discard-phase hand-size oracle
+(`check_discard_phase_oracle`, `replay_common.rs:2369`): every
+"Green increases population Green spends N food" line already reveals the
+TRUE yellow_bank band via `pop_cost_base`'s own (verified-correct) inverse
+table, and every End-Turn line's own consumption number
+(`economy.rs::consumption`, same table family) does too, on literally every
+turn (46,990 End-Turn checkpoints corpus-wide, the same universe
+`drift__DRIFT.txt` counted for science/resources/culture). Cross-checking
+reconstructed `p.yellow_bank` against either would catch population drift
+AT THE ROUND IT HAPPENS instead of several rounds later as an
+unattributable corruption-band swing. This is the shared-cause candidate
+worth chasing next, in the same spirit `drift__DRIFT.txt` found for
+hand_military_excess -- NOT another pass over the resources/corruption code,
+which is confirmed rules-correct at every site this session touched.
+
+===========================================================================
+GUARD (unchanged, since no fix landed)
+===========================================================================
+Before: 644/1011 (`/private/tmp/guard_ids.txt`)
+After:  644/1011 (`/tmp/rd2_ids.txt`, this session's own re-run)
+REGRESSIONS: (empty)
+WINS: (empty)
+
+===========================================================================
+FILES
+===========================================================================
+Clone: /private/tmp/resdrift -- DELETED after this file and the patch were
+       written and verified (patch verified byte-identical, modulo diff
+       prefix convention, to the already-delivered drift.patch; I changed
+       nothing of my own net of the revert described above, so deletion is
+       safe per the task's own "or if you changed nothing" clause).
+Patch: analysis/worker_notes_2026-08-14/resdrift.patch -- 350 lines, but
+       EVERY line is the pre-supplied DRIFT_AUDIT instrumentation
+       (`drift.patch`), not a fix. Could not usefully exclude it since it IS
+       this session's whole working tree relative to base commit 58e4cd9 --
+       flagged here per the task's own "if that is awkward, say so" clause.
