@@ -1,5 +1,13 @@
-SCORE-DIVERGENCE INVESTIGATION -- IN PROGRESS (written early per instructions; keep reading past
-"CURRENT STATUS" for the latest state -- this file is being updated as work continues)
+SCORE-DIVERGENCE INVESTIGATION -- SESSION ENDED, HANDED OFF (see REMAINING.txt for pickup plan)
+Committed at /private/tmp/scorediv, commit e93f079 ("Add a final-scoring award oracle to
+replaystats; measurement tooling only") on top of base0814 (e373f259...).
+FINAL ANSWER TO "is this a systematic missing component or many per-game bugs": REFUTED that it's
+one systematic missing component. Full-corpus baseline is 261/289 exact matches (90.3%), mean
+delta -0.54 with small (|delta|<=16) values on both sides of zero -- the opposite signature of a
+missing/mis-timed term (which would show near-0% exact matches and a large one-sided mean, as an
+EARLIER, now-superseded session's data did -- see the note on that below). The 28 remaining
+divergences trace to at least 4 DISTINCT small causes (Homer/Ravages-of-Time interaction, Impact
+of Population, Impact of Architecture, Impact of Competition), not one shared term.
 
 ============================================================================
 SETUP
@@ -161,14 +169,78 @@ NEW PERMANENT TOOLING ADDED (not yet committed -- see hunk list below once lande
    dated artifacts, see header of each for the exact command/commit/date/corpus-size).
 
 ============================================================================
-CURRENT STATUS / WHERE THE SESSION WAS INTERRUPTED
+UPDATE: Homer/Ravages root cause CONFIRMED, fix ATTEMPTED, REVERTED (regression)
 ============================================================================
-The machine's disk backing Claude's own tool-output tmp dir (/Users/pt/.claude/tmp, NOT
-/private/tmp/scorediv) filled up (ENOSPC), and every Bash tool call started failing immediately
-(even `echo hi`), blocking cargo/git entirely. This happened right after the final-event award
-oracle's first successful corpus run (numbers above are real, captured before the outage) and
-before any of the 4 root-caused-but-unfixed formula bugs could be patched, tested, or committed.
-Read/Write/Edit tools still work; this file and REMAINING.txt are being kept current by hand
-through the outage per instructions. Retrying Bash periodically without sleep-looping.
+After the disk-space outage cleared, root-caused the Impact-of-Happiness divergence precisely:
+`effects::compute`'s wonder loop (rust/src/effects.rs, the `for &w in p.completed_wonders...`
+loop around line 1385) `continue`s past a FLIPPED (Ravages-of-Time'd) wonder BEFORE checking
+`if p.homer_wonder == w { stats.happy += 1; }` -- so Homer's own leader ability (hosted on that
+wonder, granting +1 happiness) gets silently voided when the wonder is later ravaged, even though
+Ravages of Time's own text ("these wonders lose THEIR effects") only voids the WONDER's own
+printed effects, not a leader's ability merely hosted there. Separately, `effects::happy_source_
+count` (St. Peter's Basilica's own "extra happy per happy source" doubling bonus) counts a
+Homer-boosted wonder as a qualifying "happy source" via `card.effects.happy > 0 || p.homer_wonder
+== w` -- double-crediting Homer's already-direct +1 into St. Peter's multiplier too.
+
+Hand-verified BOTH fixes' arithmetic against 4 real games bit-for-bit (7522625, 7522277, 7522906,
+7522722 -- the last being the Impact-of-Population divergence, which is downstream of the SAME
+`s.happy` bug via `economy::discontent`), and a 6-game spot-check after applying both fixes showed
+4/6 newly EXACT (7522625, 7522277, 7522906, 7522722), confirming the root cause precisely.
+
+HOWEVER: a full-corpus re-measurement (bash experiments/measure_replaystats.sh) after applying
+both fixes showed this is NOT a safe, isolated change:
+  - n_completed DROPPED from 289 to 287 (2 games that used to replay to completion no longer do
+    -- WORSE than a score divergence, since `effects::compute` is read throughout ordinary play
+    (uprising checks, legal-move stats), not just at final scoring, so changing it can change
+    which moves the replayer considers legal partway through a game with a flipped Homer wonder).
+  - The diverging-ID set gained 3 NEW entries not present in the BEFORE set: 7522221, 7523162,
+    7523562 -- a violation of the strict-subset discipline (SCOREDIV_DIVERGING_ID after minus
+    SCOREDIV_DIVERGING_ID before must be empty; it was not).
+  - 5 games left the diverging set as intended (7522625, 7522277, 7522906, 7522722, and 7521790).
+
+Per this task's own explicit rule ("a fix that improves the mean while breaking a previously-
+correct game is a regression and must be reverted"), and the even stronger case of 2 games
+regressing from COMPLETING to not completing at all, BOTH edits were REVERTED in full (rust/src/
+effects.rs is back to its base0814 original on both the wonder-loop and `happy_source_count`
+hunks -- verify with `git diff HEAD~1 -- rust/src/effects.rs`, which should show ONLY a pure-
+addition diagnostic dump block, no logic changes). The commit landed (e93f079) contains ONLY the
+oracle/tooling additions, which are read-only and carry no regression risk (`cargo test
+--profile difftest --lib`: 1353 passed, 0 failed, confirming this).
+
+The 2 newly-non-completing game IDs from the attempted fix were NOT identified before the
+coordinator's wrap-up instruction arrived (would have required a second full corpus run with an
+"all completed IDs" dump, which was not built) -- see REMAINING.txt's top item for exactly how to
+find them without redoing the investigation.
+
+WHY THIS MATTERS FOR THE NEXT PASS: the root cause is very likely correct (the arithmetic matches
+4 real games exactly, card-text-grounded), but `effects::compute` is a shared, hot-path function
+read by ordinary gameplay legality, not scoring-only -- so a fix there needs the SAME subset-
+discipline check applied to REPLAY COMPLETION (not just score-exactness) before it can ship. See
+REMAINING.txt for the precise, minimal next step (most likely: the fix is right for FINAL SCORING
+specifically, but something about how a flipped-Homer-wonder's happiness feeds into IN-PLAY
+`economy::uprising`/legal-move reconstruction for those 2 games conflicts with an existing
+replayer approximation elsewhere -- find and reconcile, or scope the happiness fix to only the
+`finish_game`-time read if it turns out the mid-game reading was already deliberately different
+for a documented reason).
+
+============================================================================
+DELIVERABLE CHECKLIST STATUS
+============================================================================
+- Measured counts: DONE (261/289 exact BEFORE, full corpus, both before this session's fix
+  attempt and after its revert -- the shipped commit's numbers are IDENTICAL to the BEFORE
+  numbers in this file, since the only fix attempted was reverted).
+- Ranked cause list with file:line + RULES_SPEC citations: DONE (4 causes ranked above).
+- What was fixed: NOTHING SHIPPED IN THE ENGINE -- the one fix found was reverted per the
+  strict-subset regression it caused; only the measurement oracle/tooling shipped.
+- Before/after exact-match count AND diverging-ID sets proving subset: N/A, no engine fix shipped.
+- RED confirmation text per test: N/A, no test added for an unshipped fix.
+- Final `cargo test --profile difftest --lib` counts: 1353 passed, 0 failed, 0 ignored (confirmed
+  AFTER the revert, on the exact tree that was committed).
+- Exact changed-file + hunk list for landing: see the commit itself, e93f079, `git show --stat
+  e93f079`. Files: rust/src/replay_common.rs, rust/src/bin/replaystats.rs, rust/src/effects.rs
+  (diagnostic-only addition, no logic change), rust/src/events.rs (diagnostic-only), rust/src/
+  game.rs (diagnostic-only), experiments/measure_replaystats.sh (new),
+  analysis/replaystats_2026-08-13.txt (new), analysis/score_divergence_2026-08-13.txt (new),
+  SCOREDIV.txt (new), REMAINING.txt (new).
 
 See REMAINING.txt for the exact pickup plan, file:line pointers, and what is already ruled out.

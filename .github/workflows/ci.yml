@@ -1,0 +1,43 @@
+name: CI
+
+# Mechanical enforcement for the Rust engine (rust/): the project bans
+# wildcard `_ =>` arms over an enum (see rust/Cargo.toml's [lints.clippy] --
+# `wildcard_enum_match_arm` and its two siblings are `deny`d there) so that
+# adding a new enum variant is a COMPILE ERROR everywhere it must be
+# accounted for, instead of a silently-swallowed no-op. Until this workflow
+# existed that rule was enforced only by convention in prompts, and a
+# violation shipped anyway (rust/src/bots/weighted/cards.rs's card_yields).
+# This is the mechanical backstop: nothing runs clippy or the test suite
+# automatically without it.
+#
+# Deliberately minimal: no secrets, no deploy step, no network fetch beyond
+# the standard toolchain action below (dtolnay/rust-toolchain, pinned to a
+# commit-addressable ref-less `stable` channel the same way `rustup` on the
+# dev boxes tracks stable).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Cargo commands run from rust/, never the repo root -- this crate's
+        # own convention (see rust/Cargo.toml's doc comment on [workspace]):
+        # `cargo test`/`cargo clippy` invoked here builds and tests only the
+        # `tta` package, not `trainer`'s candle/GPU dependency tree.
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: cargo clippy (all targets, warnings deny)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test

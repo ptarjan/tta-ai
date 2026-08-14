@@ -1,0 +1,132 @@
+REMAINING WORK -- replay-completion recovery, /private/tmp/replayfin (this session's commit, if
+landed, on top of base0814 / 6b643ad). Read REPLAYFIN.txt first for the full narrative and the
+verified fix's exact details; this file is the pickup plan. Assume the reader has NONE of this
+session's live context.
+
+============================================================================
+HOW TO REPRODUCE THE BASELINE FROM SCRATCH
+============================================================================
+    cp -Rc /private/tmp/scorediv /private/tmp/<yourname>   # or whatever warm template exists now
+    cd /private/tmp/<yourname>
+    export PATH=$HOME/.cargo/bin:$PATH
+    bash experiments/measure_replaystats.sh    # ~2 min, writes analysis/replaystats_<date>.txt
+Corpus measurement command underneath (if you need the raw report without the wrapper script):
+    cd rust && SCOREDIV_DUMP_IDS=1 cargo run --profile difftest --bin replaystats -- \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+Full per-game completed/stopped ID sets (NOT what measure_replaystats.sh dumps -- that only dumps
+SCORE-diverging IDs; for the replay-COMPLETION subset check you need this instead):
+    cd rust && ./target/difftest/replay ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+        $(tail -n +2 ../sources/bgo/index.tsv | cut -f1) > /tmp/full.txt 2>&1
+    grep -E "^[0-9]+ \[" /tmp/full.txt | grep " STOPPED" | awk '{print $1}' | sort > stopped.txt
+    grep -E "^[0-9]+ \[" /tmp/full.txt | grep " COMPLETE" | awk '{print $1}' | sort > completed.txt
+Run this ONCE before touching anything, ONCE after, `comm -13`/`comm -23` the two completed.txt
+files and the two stopped.txt files exactly as REPLAYFIN.txt's own "BEFORE/AFTER" section shows --
+that comparison IS the subset-discipline proof, not `measure_replaystats.sh`'s own score-only ID
+dump.
+
+============================================================================
+IF THIS SESSION'S FIX WAS NOT YET COMMITTED
+============================================================================
+Check `cd /private/tmp/replayfin 2>/dev/null && git log -1 --stat` -- if that directory is gone
+and there is no commit for it, the fix needs reapplying from REPLAYFIN.txt's "WHAT WAS FIXED"
+section (it is fully specified there: the exact old/new formula, file, function, and both tests'
+exact bodies are described in enough detail to retype without redoing the investigation). It was
+ALREADY VERIFIED SAFE by a full-corpus subset check before the session ended (net +1 completed,
+zero regressions, zero new failure modes) -- re-verify with the same before/after `replay` sweep
+above rather than trusting this note blindly, but treat re-deriving the ROOT CAUSE as unnecessary
+work; the mechanism is confirmed correct against real game 7521765's exact numbers.
+
+============================================================================
+RANKED SUB-CAUSES STILL OPEN, BY ESTIMATED GAMES COST
+============================================================================
+
+1. StuckPending (235 games, 32.5% of all failures) -- LARGER than the remaining IllegalMove
+   sub-causes below, UNTOUCHED this session. Its own sub-buckets (from analysis/replaystats_2026-
+   08-13.txt's "Stop-reason histogram"):
+     101 "decider # != expected actor #, phase Actions, no pending" (7523354 line 251)
+      74 "PlunderSplit choice open ... no journal-observed Plunder resolution" (7523357 line 506)
+      39 "auction decider # owes a real bid/pass decision ... not a forced pass" (7523791 line 200)
+       6 "FoodOrResSplit choice open ... no journal-observed produces line" (7522651 line 258)
+     + several count<=4 tails (DestroyOwn, Raid, WarTech, LosePop, GainBlock stuck-pending kinds)
+   NEXT STEP: the 101-count "decider != expected actor" bucket is the single largest sub-cause in
+   the WHOLE corpus (bigger than IllegalMove:Build was) -- start here, not with the smaller
+   IllegalMove buckets below. `rust/src/replay_common.rs`'s `resolve_intervening` (search that
+   name) is almost certainly where this fires; read its own doc comment first, then dump every
+   instance with `REPLAY_DUMP_BUCKET="decider" ./target/difftest/replaystats ...` (stderr) the
+   same way this session dumped IllegalMove:Build (see REPLAYFIN.txt item 1's method note on why
+   per-game `xargs -P4` runs, not one batched process, are required to keep stdout/stderr
+   orderable if you need `REPLAY_DEBUG=1` detail alongside the dump).
+
+2. IllegalMove: Build, sub-cause "workers_free > 0 AND resources >= build_cost_for(...) --
+   some OTHER gate" (14 games, smallest of the 3 Build sub-causes, NOT investigated this session).
+   Candidates per legal.rs's own build loop (~line 453): `have_ca`/`have_ma` both zero, `urban_
+   limit` exceeded for an urban card, or the attempted card is not actually in `names` (i.e. this
+   binary's own tableau reconstruction disagrees with the journal about what is developed at that
+   point -- would be a DIFFERENT, more serious bug than a cost formula). Game IDs from this
+   session's own run (still on disk if `/tmp/build_per_game/*.err` survives; regenerate via the
+   per-game `REPLAY_DEBUG=1 ./target/difftest/replay ... <id>` loop otherwise): 7521606, 7521777,
+   7521971, 7522315, 7522349, 7522392, 7522426, 7522520, 7522668, 7522968, 7523145, 7523167,
+   7523175, 7523193. START with 7521606 (Knights) or 7522520 (Warriors, small/cheap card, easiest
+   to hand-verify) -- print `civil_actions`/`military_actions`/tableau at the `DEBUG try_apply
+   fail` line (`REPLAY_DEBUG=1`) and check against the journal's own preceding lines by hand,
+   same method as REPLAYFIN.txt's game-7521765 trace.
+
+3. IllegalMove: Build, sub-cause "resources < raw build_cost_for(...)" (61 of the original 62 --
+   ONE of the 62, game 7521765, was root-caused and fixed this session via the Trade-Routes food
+   conversion bug; the other 61 are UNVERIFIED whether they share that same root cause or are
+   distinct). NEXT STEP, cheap: re-run the exact per-game `REPLAY_DEBUG=1 ./target/difftest/replay`
+   sweep this session used (see REPLAYFIN.txt item, "Method" paragraph) on the CURRENT (fixed)
+   tree -- since the fix already shipped, however many of those 61 it also silently fixed will no
+   longer appear in the `IllegalMove: Build` bucket at all (they will have progressed further, per
+   the "1 newly completed, 720 still stopped somewhere" subset result) -- re-measure `bash
+   experiments/measure_replaystats.sh` on a FRESH clone with the fix already landed, re-run the
+   histogram breakdown method from REPLAYFIN.txt, and see how many of the 61 remain. Do NOT assume
+   they are all the same bug; hand-verify at least 2-3 the same way this session verified 7521765
+   before writing a second fix.
+
+4. The OTHER 16 IllegalMove sub-buckets by move kind (Develop 58, PolPass 55, WonderStep 46,
+   PlayAction 41, Upgrade 34, Take 26, Aggression 23, Revolution 19, Pop 14, War 8, PlayLeader 8,
+   Barbarossa 6, Bid 3, PlayTactic 3, CopyTactic 2, Destroy 1) -- UNTOUCHED this session beyond the
+   top-level count. Each needs its OWN "which legality check rejected it" breakdown the same way
+   Build got one; do not assume any of them share Build's root cause (Develop/Upgrade/PlayAction
+   are science/CA-gated, not resource-gated the same way, for instance -- Upgrade DOES share
+   `convert_trade_food_shortfall` as a call site, so re-measure it specifically after the fix
+   lands; it may have already dropped some).
+
+5. UnrecoverableHiddenInfo (22 games) and ParserGap (15 games) -- small buckets, not started.
+   Several UnrecoverableHiddenInfo instances are EXPLICITLY documented as already-known, accepted
+   gaps in the code's own doc comments (unpaired client-side undo, unmodeled build-cost discount
+   sources, the `colonize_approximated` force-ceiling contradiction that 7521765 itself now hits)
+   -- read `MismatchKind::UnrecoverableHiddenInfo`'s own doc in `rust/src/replay_common.rs` before
+   assuming any of these 22 are fixable; several may be genuine BGO client-side information this
+   binary cannot recover from the journal at all, in which case the task's own instruction applies
+   ("if you genuinely cannot determine the correct rule, leave the game failing and document it").
+
+6. EventPlanInfeasible: 0 games this baseline -- not a live bucket right now, do not spend time
+   on it unless a future fix (e.g. to StuckPending's event-resolution paths) starts producing
+   instances of it.
+
+============================================================================
+RULED OUT THIS SESSION (do not re-investigate)
+============================================================================
+- `workers_free==0` as THE explanation for the whole `IllegalMove: Build` bucket -- FALSE. Only
+  27/103 Build failures actually have `workers_free==0` at the moment of rejection; the other
+  76 are resource- or other-gate-limited with workers available. Do not re-derive this split; see
+  REPLAYFIN.txt's sub-cause table.
+- A "whole round's resource production silently skipped" systemic engine bug -- FALSE, was a
+  DIAGNOSTIC ARTIFACT of an incorrectly-timed drift check (compared state before a deferred
+  discard-blocked `economy::end_of_turn` had actually run its production steps). The underlying
+  `trailing_now_science` check this session's `trailing_now_resources` was modeled on has the
+  EXACT SAME undocumented flaw and always has -- its own doc comment even warns about it in
+  passing ("a discard-blocked turn reads as a false 'drift' here"). Any FUTURE diagnostic built
+  the same way (comparing `r.state.players[actor].<stat>` against a journal's trailing "(now M)"
+  clause right at End Turn dispatch) MUST gate on `!matches!(r.state.pending.top(), Some(Pending::
+  Choice(c)) if c.kind == ChoiceKind::DiscardMilitary)` first, exactly like the pre-existing
+  culture-oracle's `pending_culture_check`/`flush_pending_culture_check` machinery already does --
+  do not add a THIRD copy of this same bug for some other stat.
+- 7521765 is NOT a workers_free bug and NOT fully fixed -- the Build{Warriors} failure at round 5
+  was fixed (Trade Routes food-conversion bug, now shipped), but the game still does not complete;
+  it now stops at round 10 on the pre-existing `colonize_approximated` force-ceiling gap (a
+  DIFFERENT, already-documented limitation, not investigated further this session -- see item 5
+  above and `rust/src/replay_common.rs`'s own `colonize_approximated` doc comment for where to
+  pick that up if it turns out to affect many games, which was not measured this session).
