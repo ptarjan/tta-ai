@@ -6,6 +6,22 @@ WHY THIS FILE EXISTS
 Do NOT run a full 1011-game corpus sweep to check your fix. Several workers run
 at once on a 6-core machine and the redundant sweeps dominate the cost.
 
+WHERE THE TIME ACTUALLY GOES (measured 2026-08-14, this box, warm target dir)
+-----------------------------------------------------------------------------
+    replaystats over all 1011 journals ................  8.7s
+    cargo test --lib --test suite: RUNNING the tests ..  4.1s (1359 + 10 tests)
+    cargo test --lib --test suite: COMPILING, after
+        touching ONE central src file ................  2m26s
+    the same, plus all 30 bin test harnesses .........  +5.5s
+
+Read those numbers before optimising anything. The corpus replay is nearly free
+and the test suite is nearly free; the entire edit-test cycle is the `tta`
+library crate's own compile, because `[profile.difftest]` inherits
+`opt-level = 3` from release. The 30 binary test harnesses -- the obvious
+suspect -- cost 3.6% of the cycle and are not worth touching. If you catch
+yourself avoiding a measurement to save time, you are almost certainly avoiding
+the wrong thing: run the corpus, and batch your COMPILES instead.
+
 Also do NOT use the `replay` binary's per-game COMPLETE/STOPPED verdict as your
 regression guard. It is NOT equivalent to `replaystats`: the two binaries do not
 resolve hidden information the same way, and they disagree on 68 games (`replay`
@@ -17,9 +33,9 @@ must be `replaystats` too.
 
 THE AUTHORITATIVE BASELINE (already generated, do not regenerate)
 -----------------------------------------------------------------
-    /private/tmp/guard_ids.txt     290 sorted IDs: every game that completes at
-                                   base 3fc32b5, per `replaystats`
-    /private/tmp/guard_index.tsv   index.tsv header + exactly those 290 rows
+    /private/tmp/guard_ids.txt     310 sorted IDs: every game that completes at
+                                   base ed3ccc9, per `replaystats`
+    /private/tmp/guard_index.tsv   index.tsv header + exactly those 310 rows
     /private/tmp/full_baseline_0814.txt
                                    full raw `replay` dump -- use ONLY to enumerate
                                    your bucket's game IDs by grepping its

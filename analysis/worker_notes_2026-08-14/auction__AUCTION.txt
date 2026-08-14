@@ -1,0 +1,292 @@
+AUCTION -- colony-auction StuckPending bucket, /private/tmp/auction (branch `auction`
+on top of base commit 3fc32b5), 2026-08-14 session.
+
+============================================================================
+BUCKET
+============================================================================
+StuckPending sub-bucket: "auction decider # owes a real bid/pass decision (#
+legal moves) but the upcoming line (Pass) is neither, and more than BidPass is
+legally available -- not a forced pass". 41 games at baseline (enumerated by
+grepping `/private/tmp/full_baseline_0814.txt` for "auction decider", listed
+in full at the bottom of this file).
+
+============================================================================
+ROOT CAUSE
+============================================================================
+`rust/src/interact.rs::start_auction` (colonization auction, RULES_SPEC
+11.1/11.2) filtered the auction's `active` bidder list down to players whose
+own `max_force(...) > 0` BEFORE the auction ever opened. RULES_SPEC 11.1 says
+the auction is "open to all players", and the real BGO journals confirm two
+DIFFERENT observed behaviours the old filter conflated into one wrong rule:
+
+  1. Game 7523791, journal line 200: Green colonizes a Vast Territory the
+     round before (line 175, sacrificing 3 Warriors), which drops Green's own
+     `max_force` to exactly 0 by the time the NEXT territory ("Developed
+     Territory") is revealed by Green themself at line 199. The journal's
+     very next line is a real, explicit "Green passes" (line 200) -- BGO
+     still asked the zero-force REVEALER for a real bid/pass decision, ahead
+     of Grey/Orange/Purple's own bids (lines 201-205). Confirmed via a
+     temporary `eprintln!` in `start_auction`: `max_force=0` for player 2
+     (Green) at that exact call. Old code excluded Green from `active`
+     entirely, so the computed first decider was Grey (index 3) instead of
+     Green (index 2) -- exactly the `decider 3 owes a real bid/pass decision`
+     StuckPending this bucket's example message shows.
+
+  2. Games 7521683 (journal lines 230-233) and 7523256 (journal lines
+     235-238): a NON-revealer with `max_force == 0` at the moment a territory
+     is revealed is NEVER asked at all -- the revealer's own bid wins
+     immediately with no intervening "X passes" logged for the zero-force
+     player. Confirmed the same way (temporary `eprintln!`): in both games,
+     `player=0, max_force=0` appears in `start_auction`'s per-player dump for
+     an auction whose revealer is player 1, and the journal shows Purple
+     (the revealer) bidding and winning outright with zero lines from the
+     zero-force player anywhere near it.
+
+So the real BGO rule the fix now encodes: EVERY non-resigned player is a
+potential bidder (open to all), EXCEPT a non-revealer whose own `max_force`
+is 0 is skipped over and never asked; the REVEALER is always asked, even at
+`max_force == 0`, as long as at least one player anywhere can actually bid.
+If literally nobody (revealer included) can ever bid, no auction opens at all
+-- unchanged from before, still pinned by the pre-existing
+`an_auction_nobody_can_enter_is_not_started` test.
+
+I found this by first trying the SIMPLER hypothesis (always include everyone,
+full stop) -- that fixed 7523791 but broke 2 previously-completing games
+(7521683, 7523256) on the first full-corpus check, which is what surfaced the
+revealer/non-revealer distinction. Recording this because a from-scratch
+re-derivation should NOT stop at the first game that looks fixed; the
+regression check is what caught the incomplete theory.
+
+============================================================================
+WHAT WAS CHANGED
+============================================================================
+File: rust/src/interact.rs, function `start_auction` (~line 1313-1345).
+
+Old:
+    pub fn start_auction(state: &mut GameState, card: CardId, revealer: u8) -> bool {
+        let (order, n) = order_from(state, revealer);
+        let mut active = [0u8; MAX_PLAYERS];
+        let mut k = 0;
+        for &i in &order[..n] {
+            if max_force(state, &state.players[i as usize]) > 0 {
+                active[k] = i;
+                k += 1;
+            }
+        }
+        if k == 0 {
+            state.past_events.push(card);
+            return false;
+        }
+        state.pending.push(Pending::Auction(crate::state::Auction::new(card, &active[..k])));
+        true
+    }
+
+New (same shape, two changes: the "anybody at all" check is now separate
+from the per-player inclusion test, and the inclusion test OR's in
+`i == revealer`):
+    pub fn start_auction(state: &mut GameState, card: CardId, revealer: u8) -> bool {
+        let (order, n) = order_from(state, revealer);
+        let any_bidder = order[..n].iter().any(|&i| max_force(state, &state.players[i as usize]) > 0);
+        if !any_bidder {
+            state.past_events.push(card);
+            return false;
+        }
+        let mut active = [0u8; MAX_PLAYERS];
+        let mut k = 0;
+        for &i in &order[..n] {
+            if i == revealer || max_force(state, &state.players[i as usize]) > 0 {
+                active[k] = i;
+                k += 1;
+            }
+        }
+        state.pending.push(Pending::Auction(crate::state::Auction::new(card, &active[..k])));
+        true
+    }
+
+Also added, incidentally: `rust/tests/suite/common/mod.rs`'s `blocked_on`
+had a pre-existing `_ => None` wildcard match arm over `Move` (present at
+base 3fc32b5, NOT introduced by this session) that fails
+`cargo clippy --all-targets -- -D warnings`'s `wildcard_enum_match_arm` lint,
+unrelated to the auction bug. Fixed it the same way every other exhaustive
+`Move` match in this codebase is written (spelled out every variant, one
+extra `None`-mapped arm block) so the required clippy gate can pass at all;
+this is a one-line-conceptually, mechanical change with no behavior change
+(every variant besides `Resign` already mapped to `None` via the wildcard;
+now they do so explicitly).
+
+Also added: `rust/src/bin/replaystats.rs` got a `SCOREDIV_DUMP_COMPLETED`
+env-gated dump of completed game IDs (`println!("SCOREDIV_COMPLETED_ID {}",
+meta.id)`), per the coordinator's centrally-specified regression-guard
+method (`/private/tmp/GUARD_METHOD.txt`) -- this is shared infrastructure
+other bucket workers also need, not auction-specific logic.
+
+============================================================================
+TESTS ADDED (rust/src/interact.rs, #[cfg(test)] mod tests)
+============================================================================
+1. `a_zero_force_player_still_gets_a_real_turn_in_the_auction` -- 3-player
+   state, revealer (player 0) has 0 force, players 1 and 2 have force.
+   Asserts `start_auction` returns true, `decider()==0` first, the only
+   legal move is `BidPass`, and passing moves the turn to player 1.
+   RED (against a REVERT to the pre-fix filter-by-max_force-only code):
+       thread '...' panicked at src/interact.rs:2405:9:
+       assertion `left == right` failed: the zero-force revealer is still first in turn order, not skipped
+         left: 1
+        right: 0
+   Confirmed by literally reverting `start_auction` to the original body,
+   rerunning `cargo test --lib a_zero_force_player_still_gets_a_real_turn...`,
+   quoting the failure above, then restoring the fix (diffed byte-identical
+   after restore).
+
+2. `a_zero_force_non_revealer_is_skipped_entirely` -- 3-player state,
+   revealer (player 0) has force, player 1 has 0 force, player 2 has force.
+   Asserts the revealer goes first, and after their bid the decider jumps
+   straight to player 2 (player 1 never gets a turn at all).
+   RED (against the SIMPLER "always include everyone" version, i.e. the
+   fix's first, incomplete draft that broke 7521683/7523256):
+       thread '...' panicked at src/interact.rs:2432:9:
+       assertion `left == right` failed: player 1 (zero force) is skipped over entirely, straight to player 2
+         left: 1
+        right: 2
+   Confirmed by temporarily replacing `start_auction` with the
+   "any_bidder gate + push everyone in `order[..n]` unconditionally" draft,
+   rerunning `cargo test --lib a_zero_force_non_revealer_is_skipped_entirely`,
+   quoting the failure above, then restoring the final two-part fix (diffed
+   byte-identical after restore).
+
+Both existing pinned tests (`an_auction_nobody_can_enter_is_not_started`,
+`an_auction_where_everybody_passes_files_the_territory`,
+`an_auction_ends_when_one_bidder_is_left_holding_the_high_bid`,
+`one_player_can_win_every_colonization_auction_in_the_game`) still pass
+unchanged -- none of their setups have a mixed force>0/force==0 player list,
+so the refined rule is a strict generalization for them.
+
+============================================================================
+HAND-VERIFIED GAMES (root cause confirmed on 3, not just the example)
+============================================================================
+- 7523791 (the bucket's own example, line 200): fixed. Progressed from
+  action 159 (old StuckPending) to action 360 before hitting an unrelated
+  IllegalMove:Develop failure later in the game -- a different bucket
+  entirely, out of scope here.
+- 7520999: was in this bucket at baseline. After the fix, progresses to
+  line 472 (age IV round 17) before an unrelated IllegalMove:Build failure.
+- 7521449: was in this bucket at baseline. After the fix, progresses to
+  line 604 (age III round 16) before an unrelated IllegalMove:Upgrade
+  failure.
+All three show the SAME root cause (a zero-force player wrongly excluded or
+wrongly force-checked at auction start) resolving cleanly, then hitting
+independent, later, unrelated bugs -- consistent with "recovering a subset,
+not all 41 to full completion" being expected up front.
+
+============================================================================
+REGRESSION-GUARD METHOD USED (per coordinator's later correction,
+/private/tmp/GUARD_METHOD.txt -- NOT my own initial full-1011 sweep)
+============================================================================
+IMPORTANT CORRECTION TO MY OWN EARLIER METHOD: I initially ran my own full
+1011-game `replay`-binary before/after sweep (290 completed at baseline,
+matching the task prompt's stated expectation). The coordinator later
+steered me off full sweeps entirely (redundant across 4 concurrent workers
+on one 6-core box) and then further corrected that `replay`'s own
+COMPLETE/STOPPED verdict is NOT the same signal as `replaystats`'s (they
+disagree on 68 games corpus-wide) and must not be used as the guard. The
+authoritative baseline is `replaystats`-based:
+`/private/tmp/guard_ids.txt` (290 IDs, `replaystats` at base 3fc32b5) and
+`/private/tmp/guard_index.tsv` (its matching 290-row index.tsv slice).
+
+Final check, run exactly once, per GUARD_METHOD.txt:
+  1. Added the `SCOREDIV_DUMP_COMPLETED` gate to replaystats.rs (above).
+  2. Built a check index: `/private/tmp/guard_index.tsv`'s 290 rows PLUS
+     this bucket's 41 rows from `sources/bgo/index.tsv` (332 rows total incl.
+     header).
+  3. `SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+     /tmp/auction_check.tsv /private/tmp/bgo-journals/journals` ->
+     `/tmp/auction_completed_after.txt` (308 completed IDs out of the 332
+     checked).
+  4. `comm -23 /private/tmp/guard_ids.txt /tmp/auction_completed_after.txt`
+     (REGRESSIONS -- must be empty): EMPTY. Verbatim output:
+         (nothing)
+  5. `comm -13 /private/tmp/guard_ids.txt /tmp/auction_completed_after.txt`
+     (WINS -- this bucket's newly-completing games): 18 IDs. Verbatim output:
+         7521704
+         7521724
+         7521951
+         7522034
+         7522051
+         7522218
+         7522536
+         7522586
+         7522634
+         7522744
+         7522753
+         7522786
+         7522864
+         7522886
+         7522920
+         7523010
+         7523436
+         7523573
+
+RESULT: zero regressions against the 290-game authoritative guard, 18 of
+this bucket's 41 games newly complete under `replaystats`.
+
+(Earlier, discarded signal -- kept here only for the record, NOT the basis
+for landing: my own full-1011 `replay`-binary sweep, before the coordinator's
+correction, found 290->306 completed [+18 net], with 2 apparent regressions
+under `replay`'s OWN completion semantics -- 7521683 and 7523256 -- which is
+exactly what led me to the revealer/non-revealer distinction above. Once the
+two-part fix landed, a `replay`-binary rerun ALSO showed those 2 back to
+COMPLETE with the same 18 wins. Both signals now agree; the `replaystats`
+based check above is the one that actually governs whether this lands.)
+
+============================================================================
+CLIPPY / TESTS
+============================================================================
+`cargo clippy --all-targets -- -D warnings` on this branch: exit 0 (one
+pre-existing, unrelated wildcard-match warning in
+`tests/suite/common/mod.rs::blocked_on` was ALSO present at pristine base
+3fc32b5 with none of my interact.rs changes applied -- confirmed via
+`git stash`/rebuild/`git stash pop` -- and fixed alongside, see above).
+
+`cargo test --profile difftest`: 0 failures across every binary and the
+integration suite. Headline count: `running 1357 tests ... test result: ok.
+1357 passed; 0 failed` for the main `src/lib.rs` unit tests (includes both
+new auction tests), plus every other binary's own test module and the
+`tests/suite/main.rs` integration binary (10 passed, 1 ignored bench) all
+green.
+
+============================================================================
+PICKUP PLAN -- WHAT'S LEFT
+============================================================================
+23 of the 41 bucket games are STILL not recovered by this fix (41 - 18
+wins = 23). Two ways to find out why, cheaply, without a new full sweep:
+  1. Re-grep a fresh `full_baseline`-style dump (this branch's own build)
+     for "auction decider" to see which of the original 41 IDs still show
+     THIS exact StuckPending message vs. now show something else entirely
+     (meaning they got past the auction but hit a different, later,
+     unrelated bug -- like 7523791/7520999/7521449 above).
+  2. For any of the 41 that STILL show "auction decider ... owes a real
+     bid/pass decision" after this fix, the two-case model above (revealer
+     always in, non-revealer force-gated) is incomplete -- there is a THIRD
+     shape not yet seen in this session's 3 hand-verified games. Dump
+     `start_auction`'s per-player `max_force` (same temporary `eprintln!`
+     trick used this session, or make it a permanent `REPLAY_DEBUG`-gated
+     print if it turns out to be reusable) for whichever ID(s) remain, and
+     hand-read the journal around that exact reveal line the same way
+     7521683/7523256 were read here (grep the journal for "Territory",
+     "passes", "bids" a few dozen lines around the reveal).
+  3. The mid-auction forced-pass fallback in `replay_common.rs` (~line
+     1626-1646, `if legal.as_slice() == [Move::BidPass] { auto-apply }`) is
+     UNCHANGED this session and still the only place that handles a bidder
+     whose ceiling gets outbid mid-auction (real game 7523347, per that
+     code's own doc comment) -- if any of the 23 remaining games in this
+     bucket hit THAT shape instead of the start-of-auction shape fixed here,
+     they need a different fix entirely, not a variant of this one.
+
+============================================================================
+FULL 41-GAME BUCKET (baseline enumeration, from grepping
+/tmp/auction_full_before.txt for "owes a real bid/pass decision")
+============================================================================
+7520999 7521449 7521603 7521704 7521724 7521751 7521757 7521828 7521951
+7521958 7521992 7522034 7522051 7522146 7522218 7522243 7522372 7522505
+7522532 7522536 7522582 7522586 7522595 7522634 7522728 7522744 7522753
+7522786 7522864 7522886 7522920 7523010 7523021 7523047 7523125 7523258
+7523374 7523390 7523436 7523573 7523791

@@ -1,0 +1,52 @@
+diff --git c/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 4c36e54..efdc96f 100644
+--- c/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -348,6 +348,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             if std::env::var("REPLAY_DEBUG").is_ok() {
+                 eprintln!("DEBUG completed: {}", meta.id);
+             }
++            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
++            // above also turns on the engine's whole per-action trace, which is
++            // far too much output to sit through merely to learn which games
++            // finished. This list is the input to the replay-completion
++            // regression guard: a fix may only be landed if every ID printed
++            // here before the change is still printed after it.
++            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
++                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
++            }
+             if let Some(engine) = &result.engine_scores {
+                 n_score_checked += 1;
+                 let mut a = engine.clone();
+diff --git c/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index 1d96ea8..04a3c98 100644
+--- c/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -1805,6 +1805,13 @@ impl<'a> Replayer<'a> {
+             // this player's hand_military genuinely GROWS (a real draw),
+             // which retroactively supplies the missing victim instead of
+             // letting the drawn card inflate the hand on top of the debt.
++            if crate::debugflags::replay_debug_all() {
++                eprintln!(
++                    "DEBUG military_hand_deficit incurred: decider={decider} lineno={} new_deficit={}",
++                    prep.lineno,
++                    self.military_hand_deficit[decider as usize] + 1
++                );
++            }
+             self.military_hand_deficit[decider as usize] += 1;
+         }
+         self.state.players[decider as usize].hand_military.push(prep.card);
+@@ -2283,6 +2290,13 @@ impl<'a> Replayer<'a> {
+         for _ in 0..owed {
+             let hand = &mut self.state.players[actor as usize].hand_military;
+             let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id)) else {
++                if crate::debugflags::replay_debug_all() {
++                    eprintln!(
++                        "DEBUG military_hand_deficit repay STALLED: actor={actor} lineno={} still_owed={}",
++                        self.current_lineno,
++                        self.military_hand_deficit[actor as usize]
++                    );
++                }
+                 break;
+             };
+             hand.remove_first(victim);

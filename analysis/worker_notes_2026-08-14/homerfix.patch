@@ -1,0 +1,114 @@
+diff --git a/rust/src/bin/replaystats.rs b/rust/src/bin/replaystats.rs
+index 4c36e54..253c9eb 100644
+--- a/rust/src/bin/replaystats.rs
++++ b/rust/src/bin/replaystats.rs
+@@ -348,6 +348,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             if std::env::var("REPLAY_DEBUG").is_ok() {
+                 eprintln!("DEBUG completed: {}", meta.id);
+             }
++            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
++                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
++            }
+             if let Some(engine) = &result.engine_scores {
+                 n_score_checked += 1;
+                 let mut a = engine.clone();
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index 636ebc4..ae8227b 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1383,6 +1383,17 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
+ 
+     // --- phase 2: wonders.
+     for &w in p.completed_wonders.as_slice() {
++        // Homer, tucked under a completed wonder on leader replacement,
++        // grants that wonder a live +1 happy face that is NOT one of "its"
++        // (the wonder's own printed) effects -- official errata (Code of
++        // Laws, "Homer"): "If the wonder is flipped face down because of
++        // Ravages of Time, Homer's happy face is not flipped over. The
++        // ruins of the wonder continue to produce that happy face." So this
++        // check must run regardless of flip status, before the early
++        // `continue` below that only voids the wonder's OWN printed effects.
++        if p.homer_wonder == w {
++            stats.happy += 1;
++        }
+         if p.flipped_wonders.contains(w) {
+             // Ravages of Time: effects gone, ruins produce culture instead.
+             stats.culture += 2;
+@@ -1393,9 +1404,6 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
+         for &sp in card.special {
+             apply_special(&mut stats, p, sp);
+         }
+-        if p.homer_wonder == w {
+-            stats.happy += 1;
+-        }
+     }
+ 
+     // --- phase 2: leader.
+@@ -2289,6 +2297,54 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn homer_happy_face_survives_ravages_of_time() {
++        // Official errata (Code of Laws, "Homer"): "If the wonder is flipped
++        // face down because of Ravages of Time, Homer's happy face is not
++        // flipped over. The ruins of the wonder continue to produce that
++        // happy face." So a Ravaged Homer-hosted wonder must still grant the
++        // live +1 happy face, on top of the ruin's own +2 culture -- the
++        // wonder's OWN printed effects are the only thing Ravages voids.
++        let mut p = blank_player(0, card("Despotism"));
++        p.completed_wonders.push(card("Colossus"));
++        p.homer_wonder = card("Colossus");
++        p.flipped_wonders.push(card("Colossus"));
++        let state = two_player_state(p, blank_player(1, card("Despotism")));
++
++        let s = compute(&state, &state.players[0]);
++        assert_eq!(s.happy, 1, "Homer's happy face must survive the wonder being flipped by Ravages of Time");
++        assert_eq!(s.culture, 2, "the ruin still produces its own +2 culture, same as any other flipped wonder");
++    }
++
++    #[test]
++    fn st_peters_basilica_does_not_double_count_a_homer_boosted_wonder() {
++        // Official errata (Code of Laws, "Homer"): "St. Peter's Basilica adds
++        // a happy face to that wonder, but not two extra faces if the wonder
++        // already had one." A Homer-hosted wonder with ITS OWN printed happy
++        // face (Great Wall: +1 happy) plus Homer's live +1 face is still only
++        // ONE qualifying "source" for St. Peter's per-source bonus -- one
++        // extra face for the wonder, not one extra for each of its two happy
++        // faces.
++        let mut p = blank_player(0, card("Despotism"));
++        p.completed_wonders.push(card("Great Wall"));
++        p.completed_wonders.push(card("St. Peter's Basilica"));
++        p.homer_wonder = card("Great Wall");
++        let state = two_player_state(p, blank_player(1, card("Despotism")));
++
++        let s = compute(&state, &state.players[0]);
++        // Great Wall: printed +1 happy, plus Homer's live +1 = 2. St.
++        // Peter's own flat +1. St. Peter's per-source bonus: ONE extra face
++        // for Great Wall (a single qualifying source despite carrying two
++        // happy faces) = +1. Total 2 + 1 + 1 = 4. If St. Peter's instead
++        // double-counted Great Wall's two happy faces as two sources, this
++        // would total 5 -- the distinguishing number a double-counting bug
++        // could not pass by accident.
++        assert_eq!(
++            s.happy, 4,
++            "Great Wall's printed +1 and Homer's +1, St. Peter's own flat +1, and a single +1 bonus for Great Wall as one source"
++        );
++    }
++
+     // ------------------------------------------------------------- purity
+ 
+     /// `state_stats` is a pure function of `(state, player)` -- it must
+diff --git a/rust/tests/suite/common/mod.rs b/rust/tests/suite/common/mod.rs
+index a7bce58..35f316f 100644
+--- a/rust/tests/suite/common/mod.rs
++++ b/rust/tests/suite/common/mod.rs
+@@ -130,7 +130,7 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
+         // it on purpose.
+         Move::Resign => Some("would end the game early; tested separately"),
+ 
+-        _ => None,
++        Move::Take { .. } | Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass => None,
+     }
+ }
+ 

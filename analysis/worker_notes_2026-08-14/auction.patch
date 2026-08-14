@@ -1,0 +1,211 @@
+diff --git i/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 4c36e54..efdc96f 100644
+--- i/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -348,6 +348,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             if std::env::var("REPLAY_DEBUG").is_ok() {
+                 eprintln!("DEBUG completed: {}", meta.id);
+             }
++            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
++            // above also turns on the engine's whole per-action trace, which is
++            // far too much output to sit through merely to learn which games
++            // finished. This list is the input to the replay-completion
++            // regression guard: a fix may only be landed if every ID printed
++            // here before the change is still printed after it.
++            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
++                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
++            }
+             if let Some(engine) = &result.engine_scores {
+                 n_score_checked += 1;
+                 let mut a = engine.clone();
+diff --git i/rust/src/interact.rs w/rust/src/interact.rs
+index 81a1169..d83f999 100644
+--- i/rust/src/interact.rs
++++ w/rust/src/interact.rs
+@@ -1312,22 +1312,59 @@ pub fn max_force(state: &GameState, p: &PlayerState) -> i32 {
+ 
+ /// A territory card revealed as the current event is auctioned (§11.1).
+ ///
+-/// Returns `false` and files the card as a past event when nobody can bid,
+-/// matching Python's early return.
++/// RULES_SPEC 11.1: the auction is "open to all players" -- every
++/// non-resigned player gets a real bid/pass turn in clockwise order from the
++/// revealer, INCLUDING one whose own `max_force` is currently 0. Such a
++/// player has no legal `Bid` (`pending_moves`'s `Move::Bid` range is already
++/// empty when `ceiling <= bid`), but they are not silently dropped from the
++/// turn order the way an excluded-from-`active` player would be -- BGO logs
++/// their own explicit `Pass` before moving on, confirmed against real game
++/// `7523791` (Green's own colonization the round before drops their unit
++/// count to a computed `max_force` of exactly 0 for the very next
++/// territory reveal, yet the journal's line 200 still shows a real `"Green
++/// passes"` as the auction's FIRST move, before Grey/Orange/Purple ever
++/// bid). The previous version of this function filtered `active` down to
++/// `max_force(...) > 0` players before the auction ever started, which
++/// skipped Green's turn entirely and made Grey (not Green) the computed
++/// first decider -- a `decider != expected_actor` mismatch the replayer
++/// cannot resolve as a forced pass, because Grey legitimately has several
++/// real bids available.
++///
++/// Returns `false` and files the card as a past event WITHOUT opening a
++/// decision only when NO player anywhere can ever bid -- that early return
++/// is a distinct case from "this one player can't bid", pinned by
++/// `an_auction_nobody_can_enter_is_not_started`.
+ pub fn start_auction(state: &mut GameState, card: CardId, revealer: u8) -> bool {
+     let (order, n) = order_from(state, revealer);
++    // If NOBODY anywhere can ever bid, no auction opens at all -- pinned by
++    // `an_auction_nobody_can_enter_is_not_started`, unchanged from before.
++    let any_bidder = order[..n].iter().any(|&i| max_force(state, &state.players[i as usize]) > 0);
++    if !any_bidder {
++        state.past_events.push(card);
++        return false;
++    }
+     let mut active = [0u8; MAX_PLAYERS];
+     let mut k = 0;
+     for &i in &order[..n] {
+-        if max_force(state, &state.players[i as usize]) > 0 {
++        // The revealer is unconditionally entered even at `max_force == 0`
++        // as long as SOMEBODY can bid -- they are already mid-interaction
++        // from revealing the event, and BGO asks them for a real bid/pass
++        // regardless (real game `7523791`, journal line 200: Green's own
++        // colonization the round before drops Green's `max_force` to 0,
++        // yet Green still logs a real `"Green passes"` as the auction's
++        // first move, ahead of the other three players' bids). A
++        // NON-revealer with `max_force == 0` is instead skipped over
++        // entirely, never asked at all -- BGO's own auction loop only
++        // force-checks entrants OTHER than the one who triggered it (real
++        // games `7521683` and `7523256`: in both, a zero-force
++        // non-revealer never appears in the journal around that auction at
++        // all, and the revealer's own bid wins immediately with nobody
++        // else's move logged in between).
++        if i == revealer || max_force(state, &state.players[i as usize]) > 0 {
+             active[k] = i;
+             k += 1;
+         }
+     }
+-    if k == 0 {
+-        state.past_events.push(card);
+-        return false;
+-    }
+     state.pending.push(Pending::Auction(crate::state::Auction::new(card, &active[..k])));
+     true
+ }
+@@ -2362,6 +2399,67 @@ mod tests {
+         assert_eq!(state.players[0].techs.workers(warriors), 0);
+     }
+ 
++    /// RULES_SPEC 11.1: the auction is "open to all players", so a player
++    /// with zero `max_force` (no units to sacrifice at all) is still owed a
++    /// real turn in the clockwise order -- their only legal move is
++    /// `BidPass`, but they are not skipped over the way `start_auction`
++    /// used to skip any player failing its own `max_force(...) > 0` filter.
++    /// Pinned against real game `7523791`: Green's own colonization the
++    /// round before leaves Green's computed `max_force` at exactly 0 for
++    /// the very next territory reveal, yet journal line 200 still shows a
++    /// real `"Green passes"` as that auction's FIRST move, ahead of
++    /// Grey/Orange/Purple's bids -- proving BGO asked Green, it did not
++    /// silently route around them.
++    #[test]
++    fn a_zero_force_player_still_gets_a_real_turn_in_the_auction() {
++        let mut state = blank_state(3);
++        let warriors = card("Warriors");
++        // Players 1 and 2 have force; player 0 (the revealer) has none.
++        state.players[1].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
++        state.players[2].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
++        let terr = card("Developed Territory (I)");
++        assert!(start_auction(&mut state, terr, 0), "players 1 and 2 can still bid");
++        assert_eq!(
++            state.decider(),
++            0,
++            "the zero-force revealer is still first in turn order, not skipped"
++        );
++        assert_eq!(
++            pending_moves(&state).as_slice(),
++            &[Move::BidPass],
++            "a zero-force player's only legal move is to pass, but the auction still owes them one"
++        );
++        apply_pending(&mut state, Move::BidPass);
++        assert_eq!(state.decider(), 1, "after passing, the turn moves to the next real bidder");
++    }
++
++    /// The zero-force exemption above is REVEALER-only: a non-revealer with
++    /// no units to sacrifice is skipped over entirely, never asked at all.
++    /// Pinned against real games `7521683` and `7523256`: in both, a
++    /// zero-force non-revealer never appears in the journal around the
++    /// auction, and the revealer's own bid wins immediately with nobody
++    /// else's move logged in between -- so unlike the revealer, a
++    /// non-revealer at 0 force must stay OUT of the active list, or the
++    /// replayer would wait forever for a `Pass` BGO never logs.
++    #[test]
++    fn a_zero_force_non_revealer_is_skipped_entirely() {
++        let mut state = blank_state(3);
++        let warriors = card("Warriors");
++        // Player 0 (the revealer) has force; player 1 has none and must be
++        // skipped; player 2 has force and stays in the turn order.
++        state.players[0].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
++        state.players[2].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
++        let terr = card("Developed Territory (I)");
++        assert!(start_auction(&mut state, terr, 0));
++        assert_eq!(state.decider(), 0, "the revealer (who has force) goes first, as usual");
++        apply_pending(&mut state, Move::Bid { n: 1 });
++        assert_eq!(
++            state.decider(),
++            2,
++            "player 1 (zero force) is skipped over entirely, straight to player 2"
++        );
++    }
++
+     /// Nobody with a unit means no auction at all -- the territory is filed
+     /// as a past event instead of hanging on a decision with no bidders.
+     #[test]
+diff --git i/rust/tests/suite/common/mod.rs w/rust/tests/suite/common/mod.rs
+index a7bce58..509f68e 100644
+--- i/rust/tests/suite/common/mod.rs
++++ w/rust/tests/suite/common/mod.rs
+@@ -130,7 +130,46 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
+         // it on purpose.
+         Move::Resign => Some("would end the game early; tested separately"),
+ 
+-        _ => None,
++        // Every other variant is fully ported and unblocked -- listed
++        // individually, not behind a wildcard, so a future `Move` variant
++        // fails this match at compile time instead of silently inheriting
++        // "unblocked" without anyone deciding that on purpose.
++        Move::Take { .. }
++        | Move::Build { .. }
++        | Move::Develop { .. }
++        | Move::Upgrade { .. }
++        | Move::WonderStep { .. }
++        | Move::Pop
++        | Move::PopFree
++        | Move::Revolution { .. }
++        | Move::PlayLeader { .. }
++        | Move::PlayAction { .. }
++        | Move::Destroy { .. }
++        | Move::PlayTactic { .. }
++        | Move::CopyTactic { .. }
++        | Move::Aggression { .. }
++        | Move::War { .. }
++        | Move::OfferPact { .. }
++        | Move::CancelPact { .. }
++        | Move::PrepareEvent { .. }
++        | Move::RemoveLeaderYellow
++        | Move::ColumbusColonize { .. }
++        | Move::Barbarossa { .. }
++        | Move::BachTheater { .. }
++        | Move::TradeFoodAsResource
++        | Move::TradeResourceAsFood
++        | Move::Bid { .. }
++        | Move::BidPass
++        | Move::Defend { .. }
++        | Move::DefendDone
++        | Move::SendUnit { .. }
++        | Move::SendBonus { .. }
++        | Move::SendDiscard { .. }
++        | Move::SendDone
++        | Move::Choose { .. }
++        | Move::Churchill { .. }
++        | Move::EndTurn
++        | Move::PolPass => None,
+     }
+ }
+ 
