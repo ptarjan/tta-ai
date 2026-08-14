@@ -1,0 +1,238 @@
+NAPOLEON BONAPARTE / War-over-Culture (-6,+6) BUG -- WORKER NOTES
+===================================================================
+Clone: /private/tmp/napoleon (branched from d6a9fa3), deleted at end of task.
+Outcome: NO FIX LANDED. Root cause found and confirmed with high confidence,
+but it lives in delicate, heavily-tested replayer sequencing code
+(rust/src/replay_common.rs's civil-age-catchup machinery), not in the
+combat/effects code the lead pointed at. Patching it safely was outside this
+worker's remaining budget -- see "WHY NO FIX" below.
+analysis/worker_notes_2026-08-14/napoleon.patch is an EMPTY file (correct,
+per instructions, for a no-fix outcome).
+
+THE LEAD'S HYPOTHESIS WAS WRONG (and disproved cleanly)
+---------------------------------------------------------
+The prior worker (scoremis__SCOREMIS.txt) found 5 games with a clean
+(-6,+6) score delta, all sharing: winning attacker of a "War over Culture"
+holds leader Napoleon Bonaparte (Special::StrengthPerUnitType(2), effects.rs
+~1160), and hypothesized the leader's own +2-per-type bonus is either
+double-counted or miscounted (category vs card).
+
+I instrumented `effects::compute`'s StrengthPerUnitType arm and
+`combat::resolve_war_outcome` (temporary env-gated eprintln!, fully reverted
+-- `git diff d6a9fa3 -- rust/` is 0 lines) and hand-verified, term by term
+(government/techs/wonders/leader/colonies/pacts/army), the FULL strength
+breakdown for all 6 relevant war resolutions (5 flagged games + a 6th war in
+one of them):
+
+  7523045 (Purple, Culture): engine 47, journal 41 (excl-Napoleon=41, exact)
+  7522509 (Orange, Culture): engine 41, journal 35 (excl-Napoleon=35, exact)
+  7523473 (Orange, Culture): engine 30, journal 24 (excl-Napoleon=24, exact)
+  7523127 (Purple, Culture): engine 71, journal 65 (excl-Napoleon=65, exact)
+  7522590 war1 (Purple, TERRITORY): engine 39, journal 39 -- EXACT WITH
+      Napoleon's +6 INCLUDED (types = infantry/cavalry/air, contribution 6)
+  7522590 war2 (Purple, Culture): engine 46, journal 40 (excl-Napoleon=40,
+      exact) -- SAME leader, SAME 3 types present (infantry/cavalry/air,
+      unchanged from war1!) as the war that just matched WITH Napoleon
+      included.
+
+That last pair is the disproof: two wars in the SAME game, SAME player,
+IDENTICAL type-set present (only unit head-counts changed between them,
+verified against the journal's own build/destroy lines), one needs
+Napoleon's bonus included to match, the other needs it excluded. No
+property of `Special::StrengthPerUnitType` itself (category-vs-card,
+fresh-vs-obsolete, double-counting) can produce that split for the SAME
+input. `Special::StrengthPerUnitType`'s current implementation
+(effects.rs:1160-1177, "distinct unit CATEGORY present, any worker>0,
+not per-worker") is correct per BGA's own printed text ("The four types
+are infantry, cavalry, artillery and airforce" --
+bga_throughtheages_material.inc.php line ~2655) and I could not find a
+single case where it disagreed with ground truth once the REAL variable
+was controlled for (see below). Also checked the whole corpus (not just
+the flagged 5): 167 (game, war) pairs across 661 Napoleon-elected games
+have a Napoleon-holding attacker winning a War over Culture; the large
+majority of those games are ALREADY exact-match under the current,
+unmodified engine (e.g. 7521763's first war: engine 76 == journal 76,
+WITH a full +8 four-type Napoleon bonus included; 7521459's two wars:
+42==42 and 51==51, both WITH a full +6 three-type bonus included). So
+"War over Culture excludes Napoleon" is also false as a blanket rule --
+ruled out explicitly with real data, not just reasoned away.
+
+THE REAL DISCRIMINATOR: AGE TRANSITION BETWEEN DECLARE AND RESOLVE
+---------------------------------------------------------------------
+Checked declare-age vs resolve-age (journal's own `Line::age` column) for
+every war above:
+
+  7523045      declare III -> resolve IV   (broken: needs Napoleon excluded)
+  7522509      declare III -> resolve IV   (broken)
+  7523473      declare III -> resolve IV   (broken)
+  7523127      declare III -> resolve IV   (broken)
+  7522590 war1 declare III -> resolve III  (CORRECT: Napoleon included)
+  7522590 war2 declare III -> resolve IV   (broken)
+  7521763 war1 declare III -> resolve III  (CORRECT, spot-checked)
+  7521459 war1 declare III -> resolve III  (CORRECT, spot-checked)
+  7521459 war2 declare III -> resolve III  (CORRECT, spot-checked)
+
+7/7 clean split: every war that resolves in a DIFFERENT age than it was
+declared in is broken; every war that resolves in the SAME age is correct.
+Napoleon Bonaparte is an Age II leader (card_table.rs ~1822,
+`age: Age::II`). `game::antiquate` (game.rs:597-630) discards a player's
+leader when `leader.get().age as u8 < ended as u8` where `ended` is the
+age that just finished -- i.e. an Age II leader is legitimately discarded
+the moment Age III ends (transitioning III->IV), matching CoL §12.2 (only
+technologies/wonders/colonies/tactics/declared-wars survive antiquation;
+leaders and pacts do not). So in the 5 broken games, Napoleon Bonaparte
+really was gone from Purple's/Orange's civilization by the time their War
+over Culture resolved in Age IV -- BGA's own "Attacker's strength" number
+correctly has NO Napoleon bonus. `game::start_turn`'s own doc comment
+(game.rs:772-773) already anticipates exactly this: "Replenishing first
+matters -- it is what can end an age, and an age change can antiquate a
+card out of the very tableau the war is about to be scored against."
+
+CONFIRMED DIRECTLY: added a temporary eprintln! of `state.age_civil` at
+the top of `combat::resolve_war_outcome` (reverted) and re-ran game
+7523045: at the exact instant `resolve_war_outcome` computes the
+attacker's strength, `state.age_civil == III`, even though the journal
+tags that same resolution line "IV 17". So THIS REPLAYER's reconstructed
+age genuinely lags the real BGA game's age at the moment the war
+resolves -- `antiquate` never got a chance to discard Napoleon before
+`state_stats` read his still-present leader special.
+
+WHY: `combat::resolve_war_outcome` fires SYNCHRONOUSLY inside
+`game::advance_turn` -> `game::start_turn`, itself triggered as a side
+effect of applying the DEFENDER's own last "End turn" journal line for
+the OLD age (via the normal `Move::EndTurn` dispatch, not journal-driven).
+`game::replenish`'s own natural, deck-empty-triggered `advance_age` is
+what SHOULD flip `state.age_civil` to IV before `resolve_war_outcome`
+runs, exactly like the real BGA deck did -- but this reconstruction's own
+`civil_deck` is well-documented (module doc on
+`game::force_civil_age_at_least`, `replay_common.rs`'s
+`catch_up_civil_age`) to lag the true deck's depletion by up to several
+turns, because civil ROW slots are grounded card-by-card from observed
+"takes ... in hand" lines rather than drawn through `civil_deck`
+sequentially. The corrective mechanism, `replay_common::catch_up_civil_age`
+(called once per journal line, forcing `state.age_civil` UP TO that
+line's own stated age) is DELIBERATELY gated off "WinWar" confirmation
+lines -- see `is_trustworthy_age_line`/`is_pure_confirmation_line` and the
+existing test
+`is_trustworthy_age_line_call_site_gate_ignores_a_winwar_confirmation_but_still_advances_on_the_next_real_decision`
+(replay_common.rs ~8728), which explicitly asserts "a WinWar confirmation
+line must not force the age" (to avoid double-firing CoL §12.2.4's
+"-2 yellow_bank" deduction off an untrustworthy line -- a DIFFERENT,
+already-fixed bug this same machinery guards against). So by the time the
+loop reaches the WinWar line and would normally catch the age up, the war
+has ALREADY resolved (synchronously, one line earlier) using the stale
+age -- and the catch-up that finally happens on the FOLLOWING real
+decision line is too late to matter for this war.
+
+WHY NO FIX LANDED
+--------------------
+The true fix needs the reconstruction's `state.age_civil` to be correct
+BEFORE the synchronous `advance_turn` cascade that resolves a pending war,
+specifically when that cascade is itself triggered by processing an
+EARLIER (still-old-age-tagged) journal line -- i.e. it needs work at or
+before the defender's own preceding "End turn" line, not at the WinWar
+line itself. `replay_common.rs`'s age-catchup logic is dense, already
+carries a long history of narrowly-scoped fixes for adjacent symptoms
+(HandFull, IllegalMove:Pop, food-consumption-off-by-one at age boundaries,
+premature §12.2.4 deductions -- see the module's own doc comments and the
+~10 existing tests pinning `catch_up_civil_age`'s exact gating), and a
+naive "also catch up before resolving a pending war" change risks
+reintroducing the yellow_bank-double-deduction bug the WinWar exclusion
+test guards against, or the mid-turn-consumption bug the
+`pending`/`queue`-emptiness guard exists for. Getting this right needs
+either (a) a way to catch up `state.age_civil` for ANTIQUATION purposes
+specifically (leader/wonder discard) without re-running the §12.2.4
+yellow-bank deduction a second time, decoupling the two effects
+`advance_age` currently bundles, or (b) forcing the age-catchup to happen
+one line earlier than it currently does specifically when the NEXT line
+is a WinWar confirmation tagged a later age than the current line. Both
+are real, scoped, plausible fixes -- but each touches exactly the
+kind of extremely delicate, thoroughly-tested sequencing code the task
+brief warns against destabilizing without full corpus validation, and I
+did not have the remaining budget to implement + prove either one safe
+across all 687 completed games (only 5 of which are even affected by this
+exact symptom; a wrong version could easily cost more elsewhere via the
+yellow-bank or consumption-timing regressions the existing tests guard
+against). Per the task's own allowance ("A measured negative is
+acceptable. Do not manufacture a fix on well-tested combat code"), I am
+reporting this as a confirmed-but-unfixed root cause rather than risking a
+speculative patch to `replay_common.rs`.
+
+SECOND-MISMATCH CHECK (per the task's "other find worth reporting" ask)
+---------------------------------------------------------------------------
+No second card_table.rs-vs-BGA-data transcription slip found. Cross-checked
+every card_table.rs entry touched during this investigation against
+bga_throughtheages_material.inc.php: Napoleon Bonaparte (StrengthPerUnitType
+2, matches "+2 strength for each different type"), Napoleonic Army tactic
+(artybon=7 -> effects.strength=7, artybonplus=4 -> obsolete_strength=4,
+matches), Fortifications (already fixed by a sibling worker, 5/3, confirmed
+still correct in this base), Military Theory (strength=5 flat, matches),
+Strategy (strength=3 flat, matches), Transcontinental Railroad
+(strength=4, DoubleBestMine, matches), Strategic Territory (I)/(II)
+(strength 2/4, matches), Theocracy (production.strength=1, matches). All
+consistent -- no further transcription-slip candidates found.
+
+GUARD (mandatory bar, quoted verbatim)
+------------------------------------------
+Build:
+  cd /private/tmp/napoleon/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  -> "Finished `difftest` profile [optimized] target(s) in ..." (clean)
+
+Sweep (SCOREDIV_DUMP_COMPLETED=1), header line quoted verbatim:
+  "687/687 completed games actually flipped state.game_over (the other 0
+  reached the journal's own \"End of game\" marker but hit a mismatch
+  afterward, so `game::scores` was never computed for them); 651/687 of
+  those matched index.tsv exactly (sorted per-game score-list compare)."
+
+  Identical to the documented baseline (687 completed / 651 exact) --
+  expected, since no code changed.
+
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/nap_ids.txt   (REGRESSIONS)
+  <empty>
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/nap_ids.txt   (WINS)
+  <empty>
+  wc -l: 687 /tmp/nap_ids.txt, 687 /private/tmp/guard_ids_687.txt
+
+cargo test --profile fasttest --lib:
+  "test result: ok. 1410 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
+  out; finished in 15.38s"
+
+cargo clippy --all-targets --profile fasttest -- -D warnings:
+  "Finished `fasttest` profile [unoptimized] target(s) in 36.70s" (clean,
+  no warnings)
+
+WHAT I CHANGED IN THE CLONE
+-------------------------------
+Nothing landed. I added, used, and fully reverted temporary env-gated
+eprintln! instrumentation in effects.rs (`compute`'s per-phase strength
+checkpoints and the StrengthPerUnitType arm) and combat.rs
+(`resolve_war_outcome`'s attacker/defender breakdown and `state.age_civil`
+dump). `git diff d6a9fa3 -- rust/` is 0 lines (verified after each revert,
+and again just before writing these notes). `napoleon.patch` is therefore
+an empty file, as instructed for a no-fix outcome.
+
+HANDOFF -- next steps, in priority order
+--------------------------------------------
+1. The fix belongs in `replay_common.rs`'s civil-age-catchup sequencing,
+   NOT in effects.rs/combat.rs. Do not re-open `Special::StrengthPerUnitType`
+   -- it is correct and well-verified above (both the "3 types, included"
+   and "4 types, included" and "3 types, excluded-because-antiquated" cases
+   all check out against real BGA numbers once age-transition is accounted
+   for).
+2. A plausible narrow fix: split `game::advance_age`'s antiquation
+   (leader/wonder/pact discard, hand culling) from its §12.2.4 yellow-bank
+   deduction, and let `replay_common.rs` trigger JUST the antiquation half
+   early (as soon as a WinWar confirmation line's own age is read, before
+   the war's synchronous resolution already ran) while still deferring the
+   yellow-bank deduction to the existing trustworthy-line gate. This needs
+   proving against the FULL 687-game corpus (not just these 5) plus the
+   existing catch_up_civil_age test suite (~10 tests in replay_common.rs
+   around line 8600-8770), since several of those tests exist precisely
+   because an earlier, cruder version of this exact area caused other
+   regressions.
+3. Only 5 of 687 completed games are affected by this exact symptom, so a
+   correct fix should move at most a handful of the 36 remaining unexplained
+   mismatches (5 of the 42 in the lead's original set), not the whole
+   bucket -- do not expect this alone to close the exact-match gap
+   substantially.
