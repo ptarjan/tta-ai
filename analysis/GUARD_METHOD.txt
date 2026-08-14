@@ -1,11 +1,27 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-14
-    base commit ....... 791150f  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 671 of 1011   (630 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_671.txt)
-    committed copy .... analysis/guard_ids_671.txt
-    Two commits sit between 491c153 (651/613) and this baseline:
+    updated 2026-08-14 (second update this day)
+    base commit ....... d68eeb3  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 674 of 1011   (632 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_674.txt)
+    committed copy .... analysis/guard_ids_674.txt
+      d68eeb3  Immigration ("all civilizations with the most happy faces gain
+               1 population") must affect every tied civilization even when
+               the tie is at ZERO. `events::apply_tied_targets` is shared with
+               "most discontent workers", where the `if top <= 0 { return }`
+               gate IS correct, and both were gated. A `require_positive`
+               parameter now separates them. 671->674, 630->632, wins
+               7521849 7522756 7523355. 7521849 was separately on the backlog
+               as an `uprising()` false trigger blamed on multi-turn drift.
+    THREE RULES QUESTIONS ARE NOW CLOSED BY MEASUREMENT -- do not re-open them:
+      - WEAKEST-civilization targeting: current tactic-inclusive strength
+        agrees 320/324 (98.8%) vs 244/324 for a no-tactic alternative.
+      - STRONGEST-civilization targeting: 935/948 (98.6%) vs 778/948 (82.1%).
+        Tie-break "favour the revealing player" 132/135 (97.8%).
+      - Economic Progress corruption timing: evaluating against a ROUND-START
+        snapshot instead of live state costs 14 completions and wins 0. Live
+        state, which the engine already does, is correct.
+    Two earlier commits sit between 491c153 (651/613) and 791150f:
       613ff6c  production phase moves one blue token per WORKER on a farm/mine
                card (Code of Laws p.6), not one per unit of VALUE. Corrects an
                every-turn rule the bot plays; ZERO corpus wins, zero regressions.
@@ -14,12 +30,26 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
                Trade-Routes-converted food parsed as a FREE build, and Raid
                II/III's NESTED casualty brackets were resolved by blind FIFO,
                permanently undercounting workers_free. 651->671, 613->630.
-    The 20 new IDs are 7520722 7521365 7521378 7521449 7521738 7521763 7521782
-    7521787 7521847 7522357 7522509 7522512 7522513 7522518 7522733 7522815
-    7522890 7523070 7523427 7523456.
+    The 20 IDs 791150f added are 7520722 7521365 7521378 7521449 7521738
+    7521763 7521782 7521787 7521847 7522357 7522509 7522512 7522513 7522518
+    7522733 7522815 7522890 7523070 7523427 7523456.
     The culture-checkpoint figures below the 651 baseline (40145/40337, 65
-    diverging games) are STALE -- 20 more games now run to the end. Re-derive
+    diverging games) are STALE -- 23 more games now run to the end. Re-derive
     them before quoting them.
+
+    A BUCKET DEFINITION TRAP, found the hard way (noworker__NOWORKER.txt):
+    "no legal Build at all" is NOT the same as "workers_free == 0". Of 15
+    games with that signature, only 7 truly lack a worker; the other 8 have a
+    free worker but 0-1 resources, so every option is unaffordable. Identical
+    symptom, opposite cause. Split the bucket on `workers_free` before
+    assigning it, or two workers will chase each other.
+
+    TO ISOLATE ONE GAME, build a one-row index (header + that row) and run
+    replaystats on it. This WORKS -- it is the supported workflow. Grepping a
+    full-sweep dump for a game ID finds almost nothing because those sections
+    are histograms naming ONE example game per bucket; that is what made an
+    earlier worker report a nonexistent "cannot isolate" tooling quirk. See
+    isoquirk__ISOQUIRK.txt.
 Earlier sections of this file still name base 9f6104d and 509 games. That is
 history, not instruction. The METHOD below is unchanged and still correct;
 only the numbers moved.
