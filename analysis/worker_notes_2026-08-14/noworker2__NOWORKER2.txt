@@ -1,0 +1,302 @@
+TARGET: the 3 remaining true workers_free==0 games handed off by
+noworker__NOWORKER.txt: 7521544, 7522608, 7523640. Worked in a warm clone at
+/private/tmp/noworker2, base commit d68eeb3 (includes the Immigration-tied-
+at-zero-happy-faces fix already landed).
+
+RESULT: NO FIX LANDED this pass. noworker2.patch is EMPTY (git diff d68eeb3
+-- rust/ produces zero lines). All temporary debug instrumentation added
+during tracing was reverted before writing this file (confirmed: `git diff
+d68eeb3 -- rust/` in the clone is empty, `git status --short` shows only
+pre-existing untracked clone artifacts unrelated to this pass).
+
+This is a measured triple negative: one game traces cleanly to the already-
+documented, already-ruled-unfixable weakest-strength-tie anomaly family
+(same shape as 7523420/7522113); the other two were traced exhaustively
+(every population grant and worker-consuming action, round by round, for
+the entire game) with no locatable single-line bug, despite finding and
+ruling out several plausible-looking leads along the way. See STEP 4 for one
+independently-real bug found in passing (Crime Wave's blue-token loss) that
+does NOT explain either shortfall and was deliberately NOT fixed this pass.
+
+============================================================
+STEP 0: confirmed shape at d68eeb3
+============================================================
+cd /private/tmp/noworker2/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replay
+REPLAY_DEBUG=1 ./target/difftest/replay <one-row index> journals <id>
+  -> grep "try_apply fail"
+
+  7521544  workers_free=0 resources=10  <- confirmed TRUE workers_free==0
+  7522608  workers_free=0 resources=4   <- confirmed TRUE workers_free==0
+  7523640  workers_free=0 resources=8   <- confirmed TRUE workers_free==0
+
+All three have real money on hand (not the affordability-shape sibling
+bucket) -- confirmed genuinely in scope for this task.
+
+============================================================
+STEP 1: 7521544 -- traces to the already-documented weakest-strength-tie
+anomaly (Barbarians, not WeakestPlayer -- same underlying cause)
+============================================================
+Method: REPLAY_DEBUG_ALL=1 full trace, walked every APPLY_ONE ENTRY's own
+printed `workers_free` for Purple (idx=1) from round 1. Round-by-round
+checkpoints (from the `uprising check: idx=1 ... workers_free=N` line,
+printed once per round at end-of-turn):
+  r1..r11: 1,1,2,2,2,3,2,1,1,1,0
+
+Every drop through round 10 is fully explained by an ordinary worker-
+consuming action (BuildBuilding/BuildUnit; confirmed `do_upgrade` and
+`do_wonder_step` never touch `workers_free` at all -- upgrades move a
+worker lo->hi net zero, wonder stages need no worker, both by reading
+`apply.rs::do_upgrade`/`do_wonder_step` directly, not by inference).
+
+Round 11's drop (1->0) has NO corresponding consuming action anywhere in
+Purple's own round-11 turn -- it already shows `workers_free=0` on the
+very FIRST entry of that turn (before Purple has done anything). Traced
+backward through the other 3 players' end-of-round-10 turns and found it:
+Green plays "Barbarians" ("If the civilization with the most culture points
+is one of the two weakest civilizations it loses 1 population."), journal
+text explicitly says "No effect" for this exact play. Added a temporary
+debug print (reverted) inside `events::conditional_target` (Barbarians'
+handler) and confirmed the engine's own resolution:
+  `TMPDEBUG_CONDTARGET q=1 among=2 weakest=[1, 0, 2, 3] cutoff=2 contains=true`
+  `TMPDEBUG_CONDTARGET ENQUEUE LosePop player=1 n=1`
+i.e. our engine computes Purple (idx=1) as BOTH the highest-culture player
+(confirmed against `end_turn totals` culture=25, strictly highest of the 4)
+AND tied-for-weakest by Strength (values [11,11,11,12], Purple/Orange/Green
+tied at 11) -- so the condition fires and Purple loses a population token,
+exactly reproducing the workers_free==0 shape. The REAL BGO game says this
+had "No effect", meaning the true game's Strength/Culture ranking at this
+point differed from what our engine computes -- either a small drift in our
+Strength accumulation, or a genuine tie BGA breaks differently than we do.
+
+This is the SAME shape weakest__WEAKEST.txt and noworker__NOWORKER.txt's
+STEP 3 already found and ruled unfixable for 7523420/7522113/7523082 (98.8%
+corpus agreement, arithmetic verified correct against the FAQ, no
+identifiable code bug -- a genuine unexplained anomaly), just reached via
+`conditional_target` (Barbarians) instead of `apply_single_target`
+(WeakestPlayer) -- both read the SAME underlying `rank_players(..., Strength,
+...)` computation. Per the task's explicit instruction not to re-chase this
+family: NOT RE-FIXED. This is the 4th-5th confirmed instance of the same
+anomaly (5th if 7523082 is included), all sharing one root cause worth
+noting for whoever eventually gets new data (a real BGA game-logic source)
+to resolve it: our Strength computation, while individually verified
+rules-correct component by component, disagrees with BGA's own tie
+resolution in this one specific class of situation often enough (now 4-5
+independent corpus instances across two different event cards) that it is
+probably NOT random noise -- it smells like a small, systematic difference
+in how BGA computes or rounds Strength for tie purposes that this project's
+`sources/` cannot currently pin down (no BGA game-logic source on this
+machine, per the task's own standing note).
+
+============================================================
+STEP 2: 7522608 -- exhaustive trace, no bug found (genuine negative)
+============================================================
+3-player game, Purple = idx=1. Checkpoints r1..r13:
+  1,0,1,1,1,1,1,1,0,0,0,0,1
+Failure: round 14, "Purple builds Drama" (BuildBuilding), workers_free=0,
+immediately preceded in the SAME round by a successful "Purple builds
+Knights" (BuildUnit) that legitimately consumed Purple's only free worker.
+
+Walked EVERY actor=1 Build/BuildUnit/BuildWonderStage/UpgradeProduction/
+IncreasePopulation/Colonize/Destroy entry for the whole game (rounds 1-14)
+against the printed `workers_free` value on that entry (already present on
+every APPLY_ONE ENTRY line, confirmed this is the value immediately BEFORE
+that action applies). Every single transition is internally consistent:
+9 successful worker-consuming actions (BuildBuilding x5, BuildUnit x2, one
+counted once for a Bach-adjacent build -- see below) exactly balanced
+against 1 starting free worker + 8 population-growth grants (7 ordinary
+IncreasePopulation + 1 via Frugality's "increases population" clause),
+net = 0 heading into round 14's second build attempt. No unexplained gap
+anywhere in the ledger.
+
+Leads chased and RULED OUT:
+- do_upgrade's worker bookkeeping: added a temporary debug print (reverted)
+  showing lo/hi worker counts before/after every upgrade in this game;
+  every one is net zero on the combined pair, confirming `do_upgrade` is not
+  the source (matches its own code: only moves a worker between two tech
+  slots, never touches `workers_free`).
+- `blue_tokens`/`yellow_tokens` gained from colonizing "Developed Territory
+  (II)" via Columbus (ColumbusColonize): both `yellow_bank` and `blue_total`
+  jump +2 simultaneously without touching `workers_free`. Verified CORRECT
+  against RULES_SPEC.md line 185 (§6.5): "cards with +yellow/+blue symbols
+  add tokens from the box to the BANK when played" -- i.e. these tokens
+  expand future growth capacity, they are not immediately-placed free
+  workers. Not a bug.
+- J.S. Bach's "upgrade any urban building to a theater" ability
+  (`Move::BachTheater`, which would reuse an existing worker instead of
+  needing a fresh one, and was offered as a legal alternative at the exact
+  failure point): checked `corpus.rs`'s classifier and confirmed it only
+  ever emits `ActionClass::BachTheater` for BGO's own distinctive
+  "Johannes Sebastian Bachupgrades <from> to <to>" no-space text quirk. The
+  failing journal line reads "Purple builds Drama Purple spends 4
+  resources" -- ordinary build phrasing, not Bach's quirk text -- so the
+  classifier is correctly NOT treating this as a BachTheater conversion.
+  This was NOT a parser misclassification.
+- No war/aggression/combat involving Purple anywhere in the game (checked
+  directly -- zero DeclareWar/PlayAggression/WinWar entries for any actor),
+  so no casualty-return-to-pool mechanism is in play either.
+- No unimplemented population-granting event text found anywhere in the
+  journal for Purple (`grep`ped every PlayEvent raw_text in the whole game
+  for "immigra|settlement|refugee|population" -- only ordinary
+  IncreasePopulation lines, already counted above, and other players' own
+  unrelated growth).
+
+CONCLUSION: the ledger is fully self-consistent by our own rules, but our
+own rules apparently under-produce workers relative to the real game by
+exactly 1 by round 14. Could not identify the missing grant (or spurious
+consume) within this pass's budget. Genuine negative -- see HANDOFF.
+
+============================================================
+STEP 3: 7523640 -- exhaustive trace, no bug found (genuine negative)
+============================================================
+2-player game, Purple = idx=1. Checkpoints r1..r16:
+  1,0,1,0,1,1,1,1,1,0,0,0,0,0,0,0
+Failure: round 17 (not 16 -- round 16's checkpoint carries unchanged into
+17), "Purple builds Cannon" (BuildUnit), workers_free=0.
+
+Same method as STEP 2: walked every worker-affecting actor=1 entry for the
+whole game. Every checkpoint transition through round 10 is fully explained
+(Bronze/Philosophy/Religion builds, Pyramids/Kremlin wonder stages
+correctly NOT consuming, Colonize's sacrifice correctly NOT touching
+workers_free -- reconfirms noworker.txt's STEP 5 finding). From round 10
+onward workers_free sits at 0 for 7 straight rounds: the only two
+IncreasePopulation attempts in that whole span (round ~13, round ~16) each
+grant a worker that is immediately consumed by a build in the SAME round
+(Organized Religion, Bronze respectively) -- net zero across the whole
+7-round span, fully self-consistent, no gap.
+
+ONE GENUINE BUG FOUND IN PASSING, DOES NOT EXPLAIN THIS GAME'S SHORTFALL:
+Round 13, Orange plays "Crime Wave" ("The two weakest civilizations lose 3
+culture and return 1 blue token to the box.; Purple loses 3 culture and 1
+blue token"). Confirmed via the added debug print that this fires through
+`events::apply_gains_block`'s bare `blueTokens` key handling
+(`events.rs`, the block starting "// blueTokens (events.py:91-93)"):
+`p.blue_total = (p.blue_total as i32 + sign * eff.blue_tokens as i32)...`
+-- this ONLY decrements the abstract `blue_total` counter. It does NOT
+remove a worker from any tableau card, and does NOT touch `workers_free` or
+`yellow_bank` at all. Observed directly: `TMPDEBUG_P1` (workers_free,
+yellow_bank, blue_total) goes from `(0, 8, 16)` to `(0, 8, 15)` across this
+event -- yellow_bank UNCHANGED.
+
+This looks wrong against RULES_SPEC.md line 185 (§6.5) and FAQ p.15's
+"Lose 1 population" rule ("unused worker -> yellow bank; if none, a worker
+off a card, owner's choice") -- Crime Wave's card text differs subtly
+("return 1 blue token to the BOX", not "to the yellow bank"), which is
+consistent with yellow_bank staying unchanged (permanent removal, not a
+returned-to-bank grant), BUT the token still has to come from SOMEWHERE
+physical: either an unused worker (decrementing `workers_free`) or a
+worker on a specific card (decrementing that card's `.workers` and
+requiring a player/engine choice of which card), per the same "owner's
+choice" mechanism `Special::DecreasePopulation`/`QueueItem::LosePop`
+already implements correctly for Barbarians. `apply_gains_block`'s generic
+`blueTokens` key is a DIFFERENT, much weaker code path (a bare counter
+decrement) that was apparently written for cards where "blue tokens" means
+capacity/scoring bookkeeping, not this card's actual "you lose a placed
+population token" effect.
+
+In THIS specific firing, Purple had `workers_free=0` already, so BOTH the
+current behavior and a corrected LosePop-based behavior would need to take
+the token off a card either way -- meaning this specific instance is a
+wash for `workers_free` bookkeeping and does NOT explain 7523640's round-17
+shortfall (confirmed: `workers_free` truly does not change across this
+event in the trace either way). Left UNFIXED this pass: (a) it doesn't
+explain either of this pass's two negatives, so fixing it blind is scope
+creep without a corpus win to point at; (b) properly routing it through
+`QueueItem::LosePop` would, in SOME other game where Crime Wave fires while
+the target actually HAS a free worker, correctly DECREASE `workers_free`
+compared to today's no-op-on-workers_free behavior -- the opposite
+direction from what either of this pass's shortfalls needs, and an
+unverified behavior change that could easily regress a currently-passing
+game that happens to depend on today's (wrong but happens to net out)
+no-op. Flagged for a future pass with dedicated budget to trace it properly
+and add a corpus-measured RED/GREEN fix -- see HANDOFF.
+
+============================================================
+STEP 4: explicitly NOT chased further this pass
+============================================================
+- Whether 7522608/7523640's missing +1 share a COMMON root cause (both
+  show the identical "self-consistent ledger, off by exactly 1 by the time
+  two same-round builds are needed" shape). Budget ran out before finding
+  either one's actual origin, so it isn't possible to say whether they're
+  the same bug or two different ones. Worth checking together if a future
+  pass finds either one.
+- Whether `economy::pop_food_cost`/the population-growth cost FORMULA is
+  slightly too expensive (which would silently prevent MORE frequent real
+  IncreasePopulation actions from being affordable/legal, without ever
+  showing up as an internal inconsistency in a pure ledger walk, since a
+  human player who could not afford an extra growth simply wouldn't attempt
+  one and the journal would never mention it either way). Not checked this
+  pass -- would need an independent formula re-derivation against
+  `docs/RULES_SPEC.md`/`sources/cge_code_of_laws.pdf`, not a trace.
+- The Crime Wave `blueTokens`-key routing bug (STEP 3) -- flagged, not
+  fixed. See HANDOFF.
+
+============================================================
+CONCRETE HANDOFF for whoever picks this up next
+============================================================
+1. 7521544: closed. Same weakest-strength-tie anomaly family as
+   7523420/7522113/7523082. Do not re-chase without new data (a real BGA
+   game-logic source). If one becomes available, ALL FOUR-FIVE corpus
+   instances should be re-examined together -- the repeated pattern across
+   independent cards (WeakestPlayer AND Barbarians' conditional_target,
+   both reading the same `rank_players(..., Strength, ...)`) suggests a
+   single systematic Strength-computation or tie-break difference from
+   BGA's own resolution, not four-five unrelated coincidences.
+2. 7522608 and 7523640: both still open. Re-run this task's own STEP 2/3
+   ledger-walk method (no new instrumentation needed -- `workers_free` is
+   on every APPLY_ONE ENTRY line already) but push further: for each
+   IncreasePopulation the journal DOES show, verify the exact food cost
+   charged matches `economy::pop_food_cost`'s formula re-derived
+   independently from RULES_SPEC/Code of Laws, rather than just trusting
+   that "the action succeeded so the cost must have been right" (this pass
+   only checked worker COUNTS, not resource costs, at each step). If costs
+   check out, the next thing worth instrumenting is total food INCOME per
+   round vs `economy::end_of_turn`'s corruption/production formulas --
+   an income-side undercount would silently starve population growth the
+   same way without ever showing up as a workers_free ledger
+   inconsistency.
+3. Crime Wave's `blueTokens` bug (STEP 3): route it through the same
+   `QueueItem::LosePop` mechanism `Special::DecreasePopulation` already
+   uses (take from an unused worker first, else from a card, per FAQ
+   p.15), instead of `apply_gains_block`'s bare counter decrement. Needs:
+   (a) confirming this is really the ONLY card using the bare `blueTokens`
+   key for an actual population loss (vs. a genuine capacity/bookkeeping
+   symbol elsewhere) -- census all cards printing a nonzero `blue_tokens`
+   in a `Special::Lose`/negative-sign context; (b) a RED-then-GREEN test on
+   a constructed 2p state (both players at 0 discontent, one with a free
+   worker, confirm the free worker is the one taken); (c) the full guard
+   sweep, since this WILL change behavior for every game where any
+   negative-`blueTokens` card fires while the target has a free worker.
+
+============================================================
+MEASUREMENT
+============================================================
+No fix landed -- `noworker2.patch` is empty by design (confirmed via
+`git diff d68eeb3 -- rust/` in the clone, zero lines, after reverting all
+temporary debug instrumentation used during tracing). Guard sweep not run
+this pass since there is nothing to guard (an empty patch cannot regress or
+win anything) -- before/after completed+exact counts are therefore
+identical to the baseline: 674 completed / 632 exact (`/private/tmp/
+guard_ids.txt`, 674 lines).
+
+comm -23/-13 not run: with an empty patch the tree is byte-identical to the
+674-ID/632-exact baseline (`/private/tmp/guard_ids.txt`), so a sweep could
+only reproduce that same baseline exactly -- REGRESSIONS and WINS are both
+trivially empty by construction, not measured.
+
+`cargo test --profile fasttest --lib` / `cargo clippy --all-targets -- -D
+warnings`: not re-run this pass (no source change to validate against --
+the tree is byte-identical to d68eeb3's `rust/` at handoff time).
+
+============================================================
+FILES CHANGED
+============================================================
+None. `git diff d68eeb3 -- rust/` in /private/tmp/noworker2 is empty.
+Temporary debug instrumentation used during tracing (a `workers_free`/
+`yellow_bank`/`blue_total` tuple added to the existing `APPLY_ONE ENTRY`
+eprintln in `replay_common.rs`; a before/after worker-count print in
+`apply.rs::do_upgrade`; a target/enqueue print in
+`events.rs::conditional_target`) was added, used, and reverted via `git
+checkout -- rust/src/apply.rs rust/src/events.rs rust/src/replay_common.rs`
+before this file was written -- confirmed by `git diff --stat d68eeb3 --
+rust/` producing no output.
