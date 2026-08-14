@@ -1,0 +1,258 @@
+BUCKET: IllegalMove: PolPass
+Worker: polpass
+Clone: /private/tmp/polpass (base commit 13019ca, "Churchill military option + fasttest profile
+(350 complete, 316 exact)")
+
+============================================================
+1. ENUMERATION (re-run fresh, do not trust the old 58-game count)
+============================================================
+
+    cd /private/tmp/polpass/rust
+    PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+    REPLAY_DUMP_BUCKET='IllegalMove: PolPass' ./target/difftest/replaystats \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals > /tmp/pp_bucket.txt 2>&1
+    grep -c '^DUMP ' /tmp/pp_bucket.txt
+
+At the current baseline (350 completing / 316 exact) this bucket held 65 games, not 58 -- the
+baseline moved (Churchill fix landed, 310->350 completing) and the bucket moved with it. All 65
+DUMP lines have the identical journal shape "<Color> passes Political Phase" (one outlier reads
+"<Color> passes" with no "Political Phase" suffix -- see the tail below).
+
+Age breakdown of the offending journal line (column 3 of the .tsv):
+    57 x Age IV
+     7 x Age III
+     1 x Age II
+
+Per-game REPLAY_DEBUG trace at the failing PolPass showed exactly two shapes:
+    63 games: phase=Actions pending_top=None   (state had ALREADY left Politics)
+     2 games: phase=Politics pending_top=Some(Choice(Choice{ ... WarTech ... }))  (a stale
+              pending decision, NOT a phase problem)
+
+Of the 63 "phase=Actions" games, cross-checking the whole journal file for the literal string
+"declines international agreement" split them further:
+     9 games: the failing player's OWN turn is preceded by an "International Agreement" event
+              where SOME player (not necessarily the failing one) declined it
+    54 games: no International Agreement event anywhere near the failure -- plain Age
+              III/IV politics with nothing else in hand
+
+============================================================
+2. ROOT CAUSE #1 (54 games): over-eager auto_skip_politics
+============================================================
+
+`game::start_turn` used to call `auto_skip_politics(state)` (game.rs, right after opening
+`Phase::Politics` for the new turn). That function read `legal::legal_moves(state)`, and if it
+had exactly ONE option, set `politics_done = true` and jumped straight to `Phase::Actions`
+*without ever consuming a real `Move::PolPass`*. Outside Age IV this basically never fires
+(PolPass + Resign = 2 options, per `legal::politics_moves`'s own §5.11 comment: "not in Age IV").
+In Age IV, where Resign is not offered, an empty military hand (or nothing usable in it) means
+legal_moves().len() == 1 and this DOES fire.
+
+RULES_SPEC.md §5.0 (not in the settled/do-not-relitigate list): "In the Politics Phase you may
+perform AT MOST ONE political action (or skip)." Skipping is the player's own move, not a
+condition under which the phase can silently fail to exist. BGO's own journals prove this
+empirically: 54 different real human games logged an explicit "<Color> passes Political Phase"
+at EXACTLY the turn `auto_skip_politics` had already closed -- the client always presents the
+choice and logs the click, even when Pass is the human's only sane option.
+
+FIX: removed `auto_skip_politics` entirely (both its direct call and the deferred
+`QueueItem::AutoSkipPolitics` path used after a War-over-Technology spoils decision). The
+Politics Phase now always opens (`state.phase = Phase::Politics; peek_top_event(state, idx);`)
+and waits for whatever move the caller submits. For self-play/bots this changes NOTHING about
+game state -- the bot's only legal move in that situation is still `PolPass`, it just now has to
+submit it explicitly instead of having the engine submit it on its behalf. Removed the now-dead
+`QueueItem::AutoSkipPolitics` variant (state.rs) and its match arm (interact.rs) since nothing
+constructs it anymore.
+
+Files touched: rust/src/game.rs, rust/src/state.rs, rust/src/interact.rs (doc-comment + match-arm
+cleanup only in the latter two).
+
+============================================================
+3. ROOT CAUSE #2 (9 games): International Agreement's skip_next_politics
+============================================================
+
+International Agreement (CoL p.12): "The strongest civilization may immediately take civil
+cards up to N civil actions BY GIVING UP its next chance to take a political action." The
+engine's `events.rs` handler for `optional_take_cards_with_civil_actions` used to set
+`state.players[idx].skip_next_politics = true` unconditionally the instant the event revealed --
+before the player had made any choice at all. `game::start_turn` reads `skip_next_politics` and,
+if set, skips straight to `Phase::Actions` on that player's own next turn (this is a SEPARATE
+mechanism from auto_skip_politics -- fires even when several other real political options
+exist).
+
+The bug: a player who fully DECLINED the offer (picked `Word(Stop)` in the `TakeRow` choice
+without ever taking a single card) still had their next Politics Phase forfeited. The rule text
+ties the forfeit to USING the privilege ("by giving up..." describes the cost of taking cards
+this way, not a tax on merely being offered the choice). Confirmed against real journals: 9
+games show "<Color> declines international agreement" immediately followed, next turn, by that
+same player's own perfectly legal "<Color> passes Political Phase" -- illegal against this
+engine because skip_next_politics had already forced them into Phase::Actions.
+
+FIX: moved the `skip_next_politics = true` write out of `events.rs` (reveal time) and into
+`interact.rs`'s `ChoiceKind::TakeRow` handler, in the `ChoiceOption::Slot` arm -- i.e. it is now
+set the first (and only) time the player actually takes a card. Declining via `Stop` without
+ever taking anything leaves it false, as it always should have.
+
+Files touched: rust/src/events.rs, rust/src/interact.rs.
+
+Note on discovery process: my first pass mis-attributed one game (7522582) to this bug because
+its journal file happens to also contain a later, unrelated "declines international agreement"
+line -- the string search was game-wide, not causally scoped to the actual first failure. Its
+REAL first failure (line 316, "Purple passes" with no "Political Phase" suffix) turned out to be
+an unrelated auction-echo issue -- see the tail below. Caught this by re-running the bucket after
+the fix and finding 7522582 still present; do not trust a whole-file grep as proof of causation,
+always re-verify against the post-fix bucket.
+
+============================================================
+4. RED TEST FAILURES (quoted, watched fail by hand-reverting each fix)
+============================================================
+
+Test 1 -- rust/src/game.rs
+`game::tests::start_turn_leaves_the_politics_phase_open_in_age_iv_even_when_passing_is_the_only_option`
+Reverted by re-inserting the old auto-skip body inline. Failure:
+
+    thread 'game::tests::start_turn_leaves_the_politics_phase_open_in_age_iv_even_when_passing_is_the_only_option' panicked at src/game.rs:1651:9:
+    assertion `left == right` failed: the Politics Phase must stay open, not be silently skipped
+      left: Actions
+     right: Politics
+
+Test 2 -- rust/src/interact.rs
+`interact::tests::resolve_choice_take_row_slot_taking_a_card_does_forfeit_the_next_politics_phase`
+Reverted by deleting the `skip_next_politics = true` line from the TakeRow Slot arm. Failure:
+
+    thread 'interact::tests::resolve_choice_take_row_slot_taking_a_card_does_forfeit_the_next_politics_phase' panicked at src/interact.rs:2720:9:
+    taking a card must forfeit the next Politics Phase
+
+(Its companion test, `..._stop_without_ever_taking_a_card_does_not_forfeit...`, was already
+GREEN before the fix too, since it only asserts the absence of a forfeit and nothing used to set
+it from the interact.rs side -- the events.rs removal is what makes IT meaningful; both tests
+together pin the exact behavior.)
+
+Both fixes rebuilt clean afterward and the full `cargo test --profile fasttest --lib` (1367
+tests) and `cargo clippy --all-targets --profile difftest -- -D warnings` passed with zero
+failures/warnings.
+
+============================================================
+5. REGRESSION GUARD (verbatim)
+============================================================
+
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals > /tmp/pp_after.txt 2>&1
+    grep '^SCOREDIV_COMPLETED_ID' /tmp/pp_after.txt | awk '{print $2}' | sort > /tmp/pp_ids.txt
+    comm -23 /private/tmp/guard_ids.txt /tmp/pp_ids.txt   # REGRESSIONS
+    comm -13 /private/tmp/guard_ids.txt /tmp/pp_ids.txt   # WINS
+
+REGRESSIONS (must be empty) -- empty, confirmed:
+(no output)
+
+WINS (60 games):
+7521386
+7521436
+7521695
+7521773
+7521776
+7521883
+7521934
+7521987
+7521990
+7521998
+7522008
+7522126
+7522188
+7522239
+7522265
+7522275
+7522334
+7522363
+7522402
+7522421
+7522440
+7522467
+7522473
+7522476
+7522486
+7522580
+7522597
+7522609
+7522621
+7522650
+7522705
+7522728
+7522740
+7522789
+7522796
+7522800
+7522823
+7522829
+7522891
+7522958
+7522966
+7522981
+7522992
+7523065
+7523137
+7523195
+7523220
+7523225
+7523258
+7523270
+7523271
+7523285
+7523375
+7523440
+7523462
+7523473
+7523491
+7523553
+7523592
+7523625
+
+BEFORE: "350 completed to state.game_over ... 316/350 of those matched index.tsv exactly"
+AFTER:  "1011 games sampled, 410 completed to state.game_over ... 410/410 completed games
+         actually flipped state.game_over ... 370/410 of those matched index.tsv exactly"
+
+350 -> 410 completing (+60), 316 -> 370 exact matches, 0 regressions.
+
+============================================================
+6. HONEST REMAINING TAIL (3 games, NOT fixed, do not claim otherwise)
+============================================================
+
+Bucket after both fixes: 65 -> 3 games.
+
+    DUMP 7523633 line 235: Orange passes Political Phase
+    DUMP 7522941 line 168: Purple passes Political Phase
+    DUMP 7522582 line 316: Purple passes
+
+(a) 7523633 and 7522941 (2 games): the engine trace shows `phase=Politics
+    pending_top=Some(Choice(Choice{ kind: WarTech{ victim, budget }, ... }))` at the moment of
+    failure -- a War-over-Technology spoils choice (§5.7/§5.8) is still open when the journal's
+    own next line is the player's PolPass. In 7522941 the journal shows exactly two "takes
+    spoils of war" lines (science, then a stolen tech) before the pass, so the human clearly
+    considered the spoils resolved; our reconstruction still has an unclosed WarTech pending
+    with no observed "science"/further-steal line to drive it shut, and legal.rs correctly
+    refuses PolPass while any pending choice sits open. This looks like a real WarTech
+    resolution/closing gap (possibly in how `interact.rs`'s WarTech offer decides it has nothing
+    left to offer, or a budget-tracking drift), not something to force through the replayer. Not
+    investigated further -- flagging honestly rather than guessing at a fix under budget
+    pressure.
+
+(b) 7522582 (1 game): the offending line is "Purple passes" with NO "Political Phase" suffix,
+    logged the turn after an auction ("Vast Territory is abandoned. Orange is out of bid (no
+    unit)" then "Purple passes" on the very next line). `replay_common.rs`'s `ActionClass::Pass`
+    handler already special-cases this shape -- it tries `Move::BidPass` when
+    `state.pending.top()` is an `Auction`, else falls back to `Move::PolPass` -- but by this
+    journal line the auction has already resolved (pending is empty), so it falls through to
+    PolPass and fails because (as in the fixed cases) the state is correctly already past
+    Politics for other reasons. This reads as a BGO client echo/confirmation line for an already
+    -settled auction decline, misclassified by the replayer's own text-based `ActionClass::Pass`
+    parsing rather than an engine rule bug -- flagged, not touched, since fixing it would mean
+    editing replay-side move classification under uncertainty about what the line actually means,
+    and it is exactly the kind of "make the replayer tolerate an ambiguous line" the brief warns
+    against without being sure of the underlying cause first.
+
+============================================================
+7. FILES
+============================================================
+
+Patch:  /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/polpass.patch
+         (git diff 13019ca..HEAD inside /private/tmp/polpass, rust/src/{game,state,interact,events}.rs)
+Clone:  /private/tmp/polpass -- DELETED after the patch was written out.

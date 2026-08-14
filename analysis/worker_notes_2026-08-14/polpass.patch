@@ -1,0 +1,250 @@
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index 96872d4..c70d027 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -1355,7 +1355,19 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
+         }
+     }
+     if block.optional_take_cards_with_civil_actions != 0 {
+-        state.players[idx as usize].skip_next_politics = true;
++        // International Agreement (CoL p.12): "The strongest civilization
++        // MAY immediately take civil cards up to N civil actions BY GIVING
++        // UP its next chance to take a political action" -- the forfeit is
++        // the cost of USING the privilege, not a tax on merely being
++        // offered it. This used to set `skip_next_politics` right here,
++        // unconditionally, so a player who fully declined (took zero cards)
++        // still lost their own next Politics Phase -- contradicted by real
++        // BGO journals logging that player's own subsequent, perfectly
++        // legal "<Color> passes Political Phase": the `IllegalMove: PolPass`
++        // bucket's 9-game "declines international agreement" subgroup
++        // (`docs/REPLAY.md`, 2026-08-14). `interact.rs`'s `ChoiceKind::
++        // TakeRow` handler now sets `skip_next_politics` itself, the first
++        // (and only) time a `Slot` is actually chosen -- never on `Stop`.
+         interact::enqueue(
+             state,
+             QueueItem::TakeRow { player: idx, budget: block.optional_take_cards_with_civil_actions },
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index c3ef4b2..bbe1dc9 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -809,42 +809,30 @@ fn start_turn(state: &mut GameState, rng: &mut LazyRandom) {
+         // completeness flag that is always true for the compiled-in base game
+         // -- the same non-field `legal.rs::politics_moves` and
+         // `economy::end_of_turn` both document.
++        //
++        // There USED to be an `auto_skip_politics` call here that silently
++        // jumped straight to `Phase::Actions`, without ever consuming a
++        // `Move::PolPass`, whenever `legal::legal_moves` had exactly one
++        // option (only ever true in Age IV, where `Resign` is not offered --
++        // `legal::politics_moves`'s own §5.11 comment). RULES_SPEC.md §5.0:
++        // "In the Politics Phase you may perform AT MOST ONE political
++        // action (OR SKIP)" -- skipping is the player's own move, not a
++        // phase that can fail to exist. BGO's own journals confirm this: the
++        // `IllegalMove: PolPass` bucket (`docs/REPLAY.md`'s 2026-08-14 note)
++        // was 54 real human games logging an explicit "<Color> passes
++        // Political Phase" at EXACTLY the turn this shortcut had already
++        // silently closed -- proof the phase is never actually skipped
++        // client-side, only ever explicitly passed. Removed; the phase now
++        // always opens and waits for whatever `Move::PolPass` the caller
++        // (bot or replay) submits, which is legal.rs's own only option
++        // anyway, so self-play's behaviour is unchanged bit-for-bit.
+         state.phase = Phase::Politics;
+         peek_top_event(state, idx);
+-        if state.pending.is_empty() {
+-            auto_skip_politics(state);
+-        } else {
+-            // `resolve_war` above can leave a War over Technology's spoils
+-            // decision outstanding (§5.7), and stealing a blue technology can
+-            // hand the CURRENT player military actions -- Warfare +1,
+-            // Strategy +2, Military Theory +3 -- which is exactly what
+-            // `auto_skip_politics` reads to decide whether passing is the
+-            // only political option. Answering that before the spoils are
+-            // taken would deny the victor a politics phase it is owed, so the
+-            // test is deferred behind the decision. Nothing else can be
+-            // pending here: measured across the Python fingerprint's 33
+-            // games, `state.pending` was empty on all 3737 arrivals.
+-            state.queue.push_back(QueueItem::AutoSkipPolitics { player: idx });
+-        }
+     } else {
+         state.phase = Phase::Actions;
+     }
+ }
+ 
+-/// Pass immediately when passing is the only political option.
+-///
+-/// Note that this practically never fires in the base game: `PolPass` and
+-/// `Resign` are both unconditional outside Age IV, so the list is two long.
+-/// It is ported anyway because it is the only thing that skips the phase
+-/// without spending the player's political action, and because in Age IV
+-/// (where `Resign` is not offered) it does fire.
+-pub fn auto_skip_politics(state: &mut GameState) {
+-    if legal::legal_moves(state).len() == 1 {
+-        state.me_mut().politics_done = true;
+-        state.phase = Phase::Actions;
+-    }
+-}
+-
+ /// End-of-Turn sequence, then hand the turn to the next player (§6.6).
+ ///
+ pub fn end_turn(state: &mut GameState) {
+@@ -1632,6 +1620,39 @@ mod tests {
+         assert_eq!(s.turn, 4);
+     }
+ 
++    /// Age IV, empty military hand: `legal::legal_moves` returns exactly one
++    /// move (`Move::PolPass` -- `Resign` is not offered in Age IV,
++    /// `legal::politics_moves`'s own §5.11 comment). This USED to be exactly
++    /// when the deleted `auto_skip_politics` fired, jumping straight to
++    /// `Phase::Actions` without ever letting a real `Move::PolPass` land --
++    /// which is what made 54 real BGO games' own logged "<Color> passes
++    /// Political Phase" illegal against this engine (`docs/REPLAY.md`,
++    /// 2026-08-14, the `IllegalMove: PolPass` bucket). RULES_SPEC.md §5.0:
++    /// the Politics Phase always lets the player "perform AT MOST ONE
++    /// political action (OR SKIP)" -- skipping is the player's own move, so
++    /// the phase must stay open and wait for it, never vanish underneath
++    /// them.
++    #[test]
++    fn start_turn_leaves_the_politics_phase_open_in_age_iv_even_when_passing_is_the_only_option() {
++        let mut s = new_game(2, 7);
++        s.age_civil = Age::IV;
++        s.age_military = Age::IV;
++        s.round = 2;
++        s.civil_deck = CardList::new();
++        s.military_deck = CardList::new();
++        s.players[0].hand_military = CardList::new();
++        let mut rng = LazyRandom::new(1);
++        start_turn(&mut s, &mut rng);
++        assert_eq!(s.phase, Phase::Politics, "the Politics Phase must stay open, not be silently skipped");
++        let moves = legal::legal_moves(&s);
++        assert_eq!(moves.as_slice().len(), 1, "passing must be the only legal move here");
++        assert_eq!(moves.as_slice()[0], Move::PolPass);
++        assert!(
++            !s.players[0].politics_done,
++            "politics_done must not be set until an actual PolPass move lands"
++        );
++    }
++
+     /// The game must end when the round counter passes the deadline §12.3
+     /// set, even though nothing else is exhausted.
+     #[test]
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index d83f999..daaf071 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -40,9 +40,13 @@
+ //!
+ //! The auction, the colonization force, the defense decision, all fifteen
+ //! choice resolvers and all fifteen deferred sub-effects are ported; the
+-//! three that hand back to the turn loop ([`QueueItem::EndOfTurn`],
+-//! [`QueueItem::AutoSkipPolitics`] and `finish_take_row`'s `deal_row`) call
+-//! `game.rs` for real.
++//! two that hand back to the turn loop ([`QueueItem::EndOfTurn`] and
++//! `finish_take_row`'s `deal_row`) call `game.rs` for real. (A third,
++//! `_q_auto_skip_politics`, USED to have a [`QueueItem`] variant here too --
++//! removed 2026-08-14, `game::start_turn`'s own doc comment has the reason:
++//! it was closing real humans' Politics Phase before their own logged
++//! `Move::PolPass` could land, an `IllegalMove: PolPass` bug on 54 BGO
++//! games, not a faithful port of anything BGO's client actually does.)
+ //!
+ //! One thing used to be blocked one step PAST this module: `combat::
+ //! finish_aggression`'s success branch needed `events::apply_gains` and the
+@@ -540,6 +544,16 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+                 ChoiceOption::Slot(slot) => {
+                     let cost = costs::take_cost(state, &state.players[p as usize], slot as usize);
+                     crate::apply::take_card(state, p, slot as usize);
++                    // CoL p.12: the forfeit of the player's next political
++                    // action is the cost of actually USING this privilege --
++                    // taking a card here is the only place that happens, so
++                    // this is the only place that pays for it (`events.rs`'s
++                    // own doc comment on `optional_take_cards_with_civil_
++                    // actions` has the full citation and the real-game
++                    // evidence for why this moved off the reveal-time
++                    // handler). Idempotent: setting it again on a second or
++                    // third card taken this same session is a no-op.
++                    state.players[p as usize].skip_next_politics = true;
+                     offer_take_row(state, p, budget - cost as i16);
+                 }
+                 other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
+@@ -1059,18 +1073,6 @@ fn run_item(state: &mut GameState, item: QueueItem) {
+         // rather than an action, so the continuation rides the deferred queue
+         // like any other sub-effect and the turn advances from there.
+         QueueItem::EndOfTurn { player } => crate::game::resume_end_turn(state, player),
+-        // Resume the start-of-turn "is passing the only political option?"
+-        // test once a War over Technology's spoils have been answered: the
+-        // spoils can hand the current player military actions (Warfare +1,
+-        // Strategy +2, Military Theory +3), which is exactly what that test
+-        // reads. See `game::start_turn` for why it has to wait.
+-        QueueItem::AutoSkipPolitics { player } => {
+-            if state.phase == crate::state::Phase::Politics
+-                && !state.players[player as usize].politics_done
+-            {
+-                crate::game::auto_skip_politics(state);
+-            }
+-        }
+         QueueItem::Raid { player, victim, max_age, no_loot } => {
+             let max_lv = max_age as u8;
+             let mut buf = [CardId::NONE; MAX_TABLEAU];
+@@ -2690,4 +2692,41 @@ mod tests {
+         assert_eq!(state.players[0].resources, 2, "capped by the 2 free blue tokens, not the chosen 5");
+         assert_eq!(state.players[0].food, 0);
+     }
++
++    /// International Agreement (CoL p.12): declining the whole privilege
++    /// (never choosing a `Slot`, going straight to `Word(Stop)`) must NOT
++    /// cost the player their next Politics Phase -- the forfeit is the
++    /// price of USING the privilege, not of merely being offered it. This
++    /// is the direct fix for the `IllegalMove: PolPass` bucket's 9-game
++    /// "declines international agreement" subgroup (`docs/REPLAY.md`,
++    /// 2026-08-14): those humans' own logged, perfectly legal "<Color>
++    /// passes Political Phase" the following turn was illegal against this
++    /// engine because `events.rs` used to set `skip_next_politics`
++    /// unconditionally the moment the event revealed, even for a player who
++    /// went on to take zero cards.
++    #[test]
++    fn resolve_choice_take_row_stop_without_ever_taking_a_card_does_not_forfeit_the_next_politics_phase() {
++        let mut state = blank_state(2);
++        let mut options = OptionList::new();
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
++        resolve_choice(&mut state, &choice, 0);
++        assert!(!state.players[0].skip_next_politics, "a full decline must not forfeit the next Politics Phase");
++    }
++
++    /// Companion: taking even one card off the row DOES forfeit the
++    /// player's next political action -- the card's own text ("...by
++    /// giving up its next chance to take a political action"), unaffected
++    /// by the fix above.
++    #[test]
++    fn resolve_choice_take_row_slot_taking_a_card_does_forfeit_the_next_politics_phase() {
++        let mut state = blank_state(2);
++        state.card_row[2] = card("Iron");
++        let mut options = OptionList::new();
++        options.push(ChoiceOption::Slot(2));
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
++        resolve_choice(&mut state, &choice, 0);
++        assert!(state.players[0].skip_next_politics, "taking a card must forfeit the next Politics Phase");
++    }
+ }
+diff --git a/rust/src/state.rs b/rust/src/state.rs
+index f3af631..bd86caa 100644
+--- a/rust/src/state.rs
++++ b/rust/src/state.rs
+@@ -1252,9 +1252,6 @@ pub enum QueueItem {
+     DiscardMilitary { player: u8, n: u8 },
+     /// `_q_end_of_turn`: resume §6.6 after the discard decision.
+     EndOfTurn { player: u8 },
+-    /// `_q_auto_skip_politics`: resume the start-of-turn "is passing the only
+-    /// political option?" test after a War over Technology's spoils.
+-    AutoSkipPolitics { player: u8 },
+     /// `_q_raid`: destroy one of `victim`'s urban buildings, up to `max_age`.
+     Raid { player: u8, victim: u8, max_age: Age, no_loot: bool },
+     /// `_q_annex`.
+@@ -1292,7 +1289,6 @@ impl QueueItem {
+             | FlipWonder { player, .. }
+             | DiscardMilitary { player, .. }
+             | EndOfTurn { player }
+-            | AutoSkipPolitics { player }
+             | Raid { player, .. }
+             | Annex { player, .. }
+             | Infiltrate { player, .. }
