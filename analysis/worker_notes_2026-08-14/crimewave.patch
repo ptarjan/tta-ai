@@ -1,0 +1,40 @@
+diff --git c/rust/src/events.rs w/rust/src/events.rs
+index 36291c8..099648b 100644
+--- c/rust/src/events.rs
++++ w/rust/src/events.rs
+@@ -1171,6 +1171,35 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
+             eprintln!("DEBUG FoodOrResSplit enqueued: idx={idx} amount={} lose={}", block.food_and_or_resources, sign < 0);
+         }
+     }
++    // blueTokens (events.py:91-93). NOT population/workers -- those are
++    // YELLOW tokens (`workers_free`/`yellow_bank`), a completely separate
++    // pool; blue tokens track food/resource STORAGE capacity (§6.4, CoL
++    // p.10: "Your food and resources are represented by blue tokens on the
++    // mine and farm technologies you have in play"). A card printing
++    // `blueTokens`/"return N blue token(s) to the box" (only Crime Wave and
++    // Civil Unrest in the base game -- census confirmed against every
++    // `blue_tokens`-nonzero `EventBlock` in `card_table.rs`, 2026-08-14) is
++    // CoL p.17's card-symbol token-loss rule, textually distinct from FAQ
++    // p.15's "lose 1 population" (`Special::DecreasePopulation`, routed
++    // through `QueueItem::LosePop` a few lines below -- correctly a
++    // different mechanic, not a second copy of this one): "If you lose blue
++    // tokens, you return blue tokens from your blue bank to the box. If
++    // there are not enough in your blue bank, you also return tokens from
++    // mines and farms of your choice" (CoL p.17). Decrementing the bare
++    // `blue_total` counter (bank+cards combined, see its own doc comment)
++    // is exactly "return from the bank" WHENEVER the bank can cover it --
++    // the ONLY branch a full corpus census (`sources/bgo`, all 241 firings
++    // of these two cards, 2026-08-14) ever exercises: `blue_available`
++    // (bank) at the moment of loss is never below 1, i.e. never short of
++    // the 1 token either card ever takes. The "also strip a token from a
++    // farm/mine of your choice" branch this rule describes for an empty
++    // bank is real but UNREACHABLE by any data on this machine -- flagged
++    // per this module's own top-of-file convention for such branches
++    // ("a branch against a value that cannot exist would be dead code
++    // nothing exercises"), not implemented blind with no case to test it
++    // against. If a future corpus ever shows `blue_available == 0` at one
++    // of these firings, that is the signal to build the owner's-choice
++    // strip-from-a-card mechanic for real.
+     if block.blue_tokens != 0 {
+         let p = &mut state.players[idx as usize];
+         p.blue_total = (p.blue_total as i32 + sign * block.blue_tokens as i32).max(0) as u8;
