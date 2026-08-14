@@ -22,6 +22,17 @@ suspect -- cost 3.6% of the cycle and are not worth touching. If you catch
 yourself avoiding a measurement to save time, you are almost certainly avoiding
 the wrong thing: run the corpus, and batch your COMPILES instead.
 
+SO: RUN TESTS WITH `--profile fasttest`, BUILD ANALYSIS BINARIES WITH `difftest`
+--------------------------------------------------------------------------------
+    cargo test --profile fasttest                 <-- 46s cycle, not 116s
+    cargo build --profile difftest --bin replaystats   <-- corpus stays 8.7s
+
+`[profile.fasttest]` (opt-level 0, codegen-units 256) exists only for the
+edit-test loop. Do NOT build `replaystats` or any other analysis binary with it:
+the same 1011-game sweep takes 46.7s there instead of 8.7s -- identical results
+(310 completed, 281 exact), 5.4x the wall clock. The two profiles have opposite
+needs, which is why there are two. Full numbers are in rust/Cargo.toml.
+
 Also do NOT use the `replay` binary's per-game COMPLETE/STOPPED verdict as your
 regression guard. It is NOT equivalent to `replaystats`: the two binaries do not
 resolve hidden information the same way, and they disagree on 68 games (`replay`
