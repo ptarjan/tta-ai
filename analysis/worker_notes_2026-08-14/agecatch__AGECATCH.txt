@@ -1,0 +1,184 @@
+AGE CATCH-UP WORKER (narrower PlayEvent predicate) -- 2026-08-14
+==================================================================
+
+DID NOT WORK. agecatch.patch is EMPTY (git diff 628c0dd HEAD has zero
+lines) because the fix was reverted after it regressed real game 7523021
+in the full sweep -- the exact same failure the previous scorediv worker
+hit with the blanket "trust every PlayEvent line" version, at the exact
+same line, for a reason explained below. Documented in full so nobody
+re-tries this specific predicate.
+
+Before/after exact-match count: 532 -> 531 (regressed by one; also
+532 -> 531 completed-game count, since 7523021 stopped completing at all).
+Regression check (`comm -23 /tmp/tu_ids.txt /tmp/ac_ids.txt`) WITH the fix
+applied: NOT empty --
+
+  7523021
+
+-- confirmed on the final, fully-reverted tree that this is gone again
+(comm output empty, 582/582 completed, 532/582 exact, matching the
+documented baseline exactly).
+
+/private/tmp/agecatch DELETED at the end of this pass: the patch is empty
+and the tree is confirmed byte-identical to 628c0dd (`git diff 628c0dd HEAD`
+zero lines both for `src/replay_common.rs` and overall), so there is
+nothing there worth preserving.
+
+
+THE PREDICATE ACTUALLY IMPLEMENTED
+====================================
+Per the previous worker's own "WHAT'S NEEDED" note (scorediv__SCOREDIV.txt,
+end of DEEP-DIVE 1): trust a `PlayEvent` line's own age tag for
+`catch_up_civil_age` ONLY when BOTH:
+
+  1. the line's own actor (via `corpus::actor_and_rest`, then
+     `Color::seat()`) equals `state.current` at the moment the line is
+     reached in the replay loop, AND
+  2. `state.pending`/`state.queue` are both empty.
+
+Implemented at `replay_common.rs`'s single `catch_up_civil_age` call site
+(~line 5521-5523 at 628c0dd, inside `replay_game`'s main loop), leaving
+`is_trustworthy_age_line` itself (and its OTHER call site,
+`last_real_decision_line_for_age`, the backward check) completely
+untouched -- i.e. this predicate is intentionally scoped narrower than
+even the task description's phrasing suggests: it does NOT change
+`is_trustworthy_age_line`'s answer for `PlayEvent` in general (still
+`false`, matching every other confirmation class), it only adds a SEPARATE
+OR-condition at the one call site that actually needs the exception:
+
+    let outcome = classify(card_index, line.text);
+    let is_current_actors_own_play_event =
+        matches!(&outcome, LineOutcome::Action(Classified { class: ActionClass::PlayEvent, .. }))
+            && actor_and_rest(line.text).is_some_and(|(actor, _)| actor.seat() == r.state.current);
+    if is_trustworthy_age_line(outcome) || is_current_actors_own_play_event {
+        catch_up_civil_age(&mut r.state, line.age);
+    }
+
+Condition 2 (pending/queue empty) is NOT re-implemented here -- it is
+already `catch_up_civil_age`'s own unconditional internal guard (line
+5236: `if state.pending.is_empty() && state.queue.is_empty() { ... }`), so
+adding it again at the call site would be redundant; the OR-condition only
+needed to add condition 1.
+
+This is deliberately narrower than blanket-trusting `PlayEvent`
+(`is_trustworthy_age_line`'s own doc explicitly documents the class as
+"BGO logs the confirmation BEFORE the real action that causes it" --
+generally untrustworthy) and deliberately does NOT touch
+`last_real_decision_line_for_age` (the "hidden twin" backward check,
+`is_trustworthy_age_line`'s own doc insists both call sites get an
+IDENTICAL answer to avoid a silently-diverging exception list) -- because
+that function is a static one-time prescan over the whole journal BEFORE
+any replay happens, with no `GameState` and therefore no notion of
+`state.current` at a given line index at all. There is no way to express
+"actor == state.current" there without actually replaying, so extending
+the SAME predicate to both sites, as the doc's own invariant asks for, is
+not mechanically possible for this specific carve-out. This is flagged
+here as a real, unresolved tension with that doc's stated design, not
+silently ignored -- but since the whole predicate turned out not to work
+anyway, it was moot in the end.
+
+A pinning test was written, verified RED (temporarily reverting just the
+new OR-condition back to pre-fix `if is_trustworthy_age_line(outcome)`,
+which made the test's second assertion fail with
+`left: III, right: IV`), then GREEN again, then REMOVED along with the
+production change when the full sweep regressed -- consistent with this
+task's own "fix the engine, not the comparison" framing: a test pinning
+behaviour that regresses the corpus is not a fix worth keeping.
+
+
+WHY IT REGRESSES 7523021, TRACED
+===================================
+Game `7523021`'s journal, lines 233-241 (already Age III per the journal's
+own age column since line 217 -- no II->III transition is visible in this
+window):
+
+  233  Purple  III 14  No Discard Phase                  (Purple's turn ends)
+  234  Orange  III 15  Orange plays event ... II/Iconoclasm; ...
+  235  Orange  III 15  Orange discovers Justice System ...
+  236  Orange  III 15  Orange takes Computers in hand ...
+  237  Orange  III 15  Orange takes Movies in hand ...
+  238  Orange  III 15  Orange builds Printing Press ...
+  239  Orange  III 15  Discard Phase 1 military card must be discarded
+  240  Orange  III 15  End turn Orange scores: ...
+  241  Orange  III 15  Orange discards 1 card    <-- StuckPending fires here
+
+Line 234 ("Orange plays event ... Iconoclasm") is a `PlayEvent` line whose
+own actor (Orange) IS `state.current` at that point in the replay: Purple's
+turn had just fully closed at line 233 ("No Discard Phase", a Bookkeeping
+trailer with nothing outstanding), so the turn had already legitimately
+passed to Orange before line 234 is even reached. `state.pending`/
+`state.queue` are both empty too (nothing is mid-resolution). This means
+BOTH of the new predicate's conditions are satisfied -- it is
+indistinguishable, for this exact line, from the blanket "trust every
+PlayEvent line" version the previous worker already tried and reverted.
+Forcing the age catch-up here (rather than deferring it to whatever line
+first triggers it under the OLD rule) is what desyncs some later
+hand-limit/antiquation timing enough that by line 241 `decider() !=
+expected_actor()` with nothing pending -- the identical `StuckPending:
+decider # != expected actor #, phase Actions, no pending` failure, at the
+identical line, confirmed by isolating just this one game
+(`/tmp/one_ac.tsv`, single-game `replaystats` run) and reading its own
+Stop-reason histogram entry directly:
+
+  | 1 | 15.0 | StuckPending: decider # != expected actor #, phase Actions,
+    no pending | 7523021 line 241: Orange discards 1 card |
+
+So the "acting player is `state.current`" half of the specified predicate
+does not actually discriminate between 7523021's bad case and 7523162's
+good case: both are the CURRENT player's own live `PlayEvent` line, with
+nothing pending. Whatever the real difference between the two games is
+(if any exists that keeps this safe), it is not "was this a same-timestamp
+collision with a different player's still-open turn" -- 7523021's line 234
+is not that shape at all; Purple's turn had genuinely, fully closed one
+line earlier. The regression is therefore NOT the "hidden twin" collision
+hazard `is_trustworthy_age_line`'s doc warns about (that hazard is about
+BGO's EXPORT ordering being unreliable across players at the same
+timestamp); it is a plain "forcing this specific age-catch-up strictly
+earlier than the old, deferred point changes downstream turn-timing state
+in a way this reconstruction's hand-limit/antiquation logic depends on,
+for reasons not further traced here" -- out of scope to chase per this
+task's own "if the predicate does not work, say so and stop" instruction.
+
+
+VERBATIM COMMAND OUTPUT (with the fix applied, before revert)
+=================================================================
+$ comm -23 /tmp/tu_ids.txt /tmp/ac_ids.txt
+7523021
+
+$ head -3 /tmp/ac_after.txt   (SCOREDIV_DUMP_COMPLETED id list head, not the
+                                 summary -- summary line pulled separately:)
+| 581/581 completed games actually flipped state.game_over (the other 0
+  reached the journal's own "End of game" marker but hit a mismatch
+  afterward, so `game::scores` was never computed for them); 531/581 of
+  those matched index.tsv exactly (sorted per-game score-list compare).
+
+Isolated single-game run (`/tmp/one_ac.tsv`, just 7523021):
+  # replaystats: 1 games sampled, 0 completed to state.game_over
+  ...
+  | 1 | 15.0 | StuckPending: decider # != expected actor #, phase Actions,
+    no pending | 7523021 line 241: Orange discards 1 card |
+
+After reverting (`git checkout -- src/replay_common.rs`, confirmed
+`git diff 628c0dd HEAD -- src/replay_common.rs` is 0 lines):
+  582/582 completed games actually flipped state.game_over; 532/582 of
+  those matched index.tsv exactly (sorted per-game score-list compare).
+  comm -23 /tmp/tu_ids.txt /tmp/ac_baseline_ids.txt  ->  (empty)
+
+
+POINTERS
+=========
+`rust/src/replay_common.rs` fn `catch_up_civil_age` (~line 5235),
+`is_trustworthy_age_line` (~line 5319, untouched), its call site (~line
+5521-5523 at 628c0dd -- where the new OR-condition was added and then
+reverted), `last_real_decision_line_for_age` (~line 5334, untouched,
+structurally can't share this predicate -- see above); `rust/src/corpus.rs`
+`Color::seat` (~line 291), `actor_and_rest` (~line 641), `classify` (~line
+664), `Classified`/`LineOutcome` (~line 587/628, neither derives Copy/
+Clone, so `outcome` must be computed once and matched by reference, not
+passed to `is_trustworthy_age_line` twice).
+
+Real game `7523021` (regression, this pass and the previous one, line 234
+"Orange plays event ... Iconoclasm" then line 241 "Orange discards 1
+card"); real game `7523162` ("Impact of Population" off-by-one-worker,
+still unfixed, `scorediv__SCOREDIV.txt`'s DEEP-DIVE 1 for the full original
+trace).
