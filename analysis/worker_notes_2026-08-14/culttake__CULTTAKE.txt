@@ -1,0 +1,131 @@
+CULTTAKE -- culture-accounting bug hunt, TakeCard bucket of the culture oracle
+Branch base0814 @ 2bc2e4c, worked in /private/tmp/culttake (now deleted), fix
+committed as 6f7464a on top of 2bc2e4c. Patch: culttake.patch (233 lines).
+
+THE ASK
+replaystats' culture oracle cross-checks reconstructed state.players[_].culture
+against the journal's own "(now N)" running total at every "End turn" line,
+bucketed by the ActionClass immediately preceding the first divergence per
+game. Named lead: 29 games bucketed under "preceding TakeCard", dominant
+example 7523809 line 353 (Orange): journal says (now 89), this binary
+computed 95 (delta +6).
+
+STEP 1 -- RULED OUT THE TIMING-ARTIFACT HYPOTHESIS FIRST, AS INSTRUCTED
+Hand-traced 7523809 with REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 before writing any
+code. This is NOT a checkpoint-timing artifact of the kind that already
+fooled two earlier passes on this same oracle (docs/REPLAY.md's "LANDED,
+dominant cause found and fixed" and "second-order artifact" sections, both
+about reading state.players[_].culture at the wrong INSTANT relative to a
+deferred discard/production/war cascade -- both already fixed on this
+branch). The checkpoint at line 353 is read at the right instant; the value
+itself is short by exactly 6, matching a real, distinct mechanism (below).
+
+STEP 2 -- ROOT CAUSE, CONFIRMED BY TRACE
+The journal's line 344 (between the checkpoint that first diverges, 353, and
+several lines earlier) reads:
+  "GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 -> 71"
+This is BGO's own admin correction -- a human/support intervention that
+rewrites a player's stat mid-game with no player-facing action of its own
+in the journal. `classify` (corpus.rs) has always filed every "GAME DATA
+UPDATED" line as LineOutcome::Bookkeeping, a deliberate, documented no-op.
+That silently drops real ground-truth corrections when the corrected stat
+is culture (it also covers science/Bronze corrections in a few other sampled
+games -- left untouched, out of scope, no oracle currently reads either so
+there is no known-wrong instrument to fix there the way there is for
+culture).
+
+Traced Orange's own live culture arriving at exactly 86 a few lines after
+line 344 (54 [round-17 end] + 10 [Popularization of Science, immediate] +
+22 [War-over-Culture win, deferred -- see below] = 86), matching BGO's own
+stated "old" value bit for bit. Never applying the -6 leaves this
+reconstruction 6 high at every later checkpoint for Orange in this game,
+including line 353 -- the ENTIRE +6 delta at the named example is this one
+missing correction.
+
+Scope check: of 1,011 sampled journals, only 6 contain any "GAME DATA
+UPDATED" line at all, and only 2 (7523809, 7523360) contain a culture
+clause. This mechanism does NOT explain the other ~27 games in the TakeCard
+bucket (bucket names are the symptom location, not necessarily a shared
+cause -- docs/REPLAY.md's own standing warning, re-confirmed here). It is a
+small, precisely-scoped, but definite and now-fixed engine gap.
+
+STEP 3 -- FIRST FIX ATTEMPT REGRESSED A DIFFERENT CHECKPOINT IN THE SAME GAME
+Applying the parsed delta the instant line 344 is read (naive fix) DID move
+line 353 to an exact match, but turned a PREVIOUSLY AGREEING checkpoint
+(Purple's own end-of-turn, line 343: journal "(now 87)") into a NEW
+divergence (this binary then computed 93). Traced why: Orange's live culture
+at line 344 is actually 64, not 86 -- Orange's War-over-Culture win (+22,
+line 342 "Orange wins War over Culture") is itself DEFERRED on our side
+until game::start_turn's own cascade fires, which in turn only runs once
+Purple's own blocked end-of-turn (line 343, stuck on a discard pending)
+finishes resolving -- and that resolution happens lazily, driven by
+resolve_intervening when the NEXT real action line (345) is dispatched,
+which is AFTER line 344. This is the exact "deferred cascade" shape
+docs/REPLAY.md's "second-order artifact" section already documents for this
+same oracle's checkpoint-reading code (state.last_end_of_turn_culture) --
+here it bit the NEW admin-correction code instead. BGO's own stated "old"
+(86, its real-time, non-deferred internal total) and this reconstruction's
+live value (64, still missing the not-yet-cascaded war win) were answering
+two different questions at that exact journal position.
+
+STEP 4 -- FIX, LANDED
+parse_game_data_updated_culture (replay_common.rs) parses every
+"<Color> culture: X -> Y" clause on a "GAME DATA UPDATED" line (a single
+line can correct more than one player -- 7523809's own line 344 corrects
+both Orange and Purple at once) into (Color, old, new) triples -- returns
+old, not a pre-computed delta, specifically so the caller can verify it
+before trusting it.
+
+The main replay loop applies a clause immediately only when its stated
+`old` matches this reconstruction's OWN live value for that player right
+now; otherwise it is queued onto a new Replayer::pending_culture_corrections
+list and retried on every subsequent line
+(flush_pending_culture_corrections, called unconditionally at the top of
+the main dispatch loop, mirroring the existing self-deferring
+flush_pending_culture_check) until the live value catches up. Conservative
+by construction: a clause whose baseline never lines up with our own
+reconstruction is never guessed at or forced, only ever applied once
+verified.
+
+VERIFICATION
+- Unit tests in replay_common.rs's own #[cfg(test)] mod:
+  * parse_game_data_updated_culture_reads_every_culture_clause_and_ignores_other_stats
+    (pure parsing, incl. the science/Bronze-ignore case)
+  * flush_pending_culture_corrections_defers_until_the_live_value_matches_bgos_own_old_baseline
+    (reproduces 7523809's own numbers: live=64 vs old=86 defers; live=86
+    matches and applies -6 -> 80)
+  Confirmed RED by temporarily forcing the guard's `if p.culture as i32 ==
+  old` to `if true` (i.e. reverting to the naive "always apply" behaviour):
+  failed with "left: 80, right: 64" (the deferred correction fired against
+  the wrong baseline, exactly the STEP 3 regression). Restored, confirmed
+  GREEN.
+- `cargo test --profile fasttest --lib`: 1393 passed (1391 baseline + 2 new),
+  0 failed.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- Corpus guard (SCOREDIV_DUMP_COMPLETED=1 replaystats against
+  sources/bgo/index.tsv / /private/tmp/bgo-journals/journals):
+    completed games:            648/648 -> 648/648 (unchanged)
+    exact-score-match games:    602/648 -> 603/648        (+1, bonus)
+    culture-oracle checkpoints: 40042/40240 -> 40047/40240 (99.5% -> 99.5%, +5 matches)
+    TakeCard bucket (culture oracle, first divergence): 29 games -> 27 games
+    games w/ >=1 culture divergence:                    75 -> 73
+  Frozen 648-game completion guard (/private/tmp/guard_ids.txt): zero
+  regressions (comm -23 empty), zero new completions (comm -13 empty) --
+  expected, since this is a score-correctness fix inside already-completing
+  games, not a completion fix. Traced both affected games (7523809,
+  7523360) individually post-fix with REPLAY_DEBUG=1: zero "end-turn
+  culture drift" lines for either, i.e. the culture oracle now agrees with
+  the journal at every checkpoint in both games, not just the named one.
+
+WHAT REMAINS (NOT CHASED THIS PASS, PER THE TASK'S SCOPE)
+The other ~27 games in the TakeCard bucket, and every other bucket
+(Discard 8, BuildWonderStage 8, BuildBuilding 5, BuildUnit 5, UpgradeProduction
+4, PlayTactic 3, UpgradeUnit 3, WinWar 3, EndTurn 3, ElectLeader 2,
+DevelopTechnology 1, IncreasePopulation 1 -- post-fix counts), are NOT
+explained by this mechanism (only 2 of 1,011 journals carry a culture-bearing
+"GAME DATA UPDATED" line at all) and were deliberately not chased here, per
+this task's own instruction to prefer one confirmed mechanism over guessing
+at several, and per docs/REPLAY.md's own repeated warning that a bucket name
+is the symptom location, not the cause -- whoever picks up the remaining 27
+should trace a fresh named example with REPLAY_DEBUG_ALL before touching any
+code, exactly as this pass did.

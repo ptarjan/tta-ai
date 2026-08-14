@@ -1,17 +1,27 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
     updated 2026-08-14
-    base commit ....... c6b97e5  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 649 of 1011   (603 of those match index.tsv exactly)
+    base commit ....... 8113a15  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 648 of 1011   (604 of those match index.tsv exactly)
+    The ID SET is unchanged from the 648 baseline -- three fixes landed on top
+    of 2bc2e4c (GAME DATA UPDATED culture corrections, Homer-under-a-ravaged-
+    wonder happy sources, non-Event deficit repay) and every one of them was
+    zero-regression AND zero-win. Only the exact-score count moved, 602 -> 604.
+    So guard_ids.txt does NOT need re-baselining for them.
     frozen id list .... /private/tmp/guard_ids.txt
-    committed copy .... analysis/guard_ids_649.txt
+    committed copy .... analysis/guard_ids_648.txt
 Earlier sections of this file still name base 9f6104d and 509 games. That is
 history, not instruction. The METHOD below is unchanged and still correct;
 only the numbers moved.
 
-KNOWN ACCEPTED REGRESSIONS: 7522053 and 7522290 were dropped deliberately by
-commit 5f9df7b (Raid declinable bracket). They are NOT in the 644 list and
-must not be treated as new damage by a later worker.
+KNOWN ACCEPTED REGRESSIONS -- these are NOT in the frozen list and must not be
+treated as fresh damage by a later worker:
+  7522053, 7522290  dropped by 5f9df7b (Raid declinable bracket)
+  7523376           dropped by 2bc2e4c (auction-hand deficit). It was only
+                    completing because of a phantom military card; removing it
+                    exposes the pre-existing ~100-game
+                    `StuckPending("decider N != expected actor M")` bucket.
+                    Fixing THAT bucket should hand this game back.
 =========================================================================
 
 REPLAY-COMPLETION REGRESSION GUARD -- the cheap, correct method

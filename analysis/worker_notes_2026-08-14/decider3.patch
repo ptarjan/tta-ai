@@ -1,0 +1,84 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index b57eaf6..c53d2dd 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2473,7 +2473,30 @@ impl<'a> Replayer<'a> {
+         let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+         for _ in 0..owed {
+             let hand = &mut self.state.players[actor as usize].hand_military;
+-            let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id.get().base_name)) else {
++            // Prefer a victim that is NOT `CardType::Event`/`Territory`
++            // (the "harp symbol" cards RULES_SPEC 5.2 reserves specifically
++            // for paying a future `Move::PrepareEvent`'s own cost) over one
++            // that is, falling back to an Event/Territory card only when it
++            // is the sole unprotected option left. This debt has no rule
++            // tying it to any particular card type -- it exists purely to
++            // correct an earlier accounting shortfall (`ground_for_
++            // consumption`/`ground_auction_winner_hand`'s own no-filler
++            // case) -- so spending it on a harp-symbol card is never
++            // required, and doing so anyway can strand a LATER, real
++            // preparation with nothing rule-legal left to pay with even
++            // though this reconstruction's hand still (mis)counts enough
++            // cards overall. Confirmed on game `7523376`: the round-10
++            // repay firing before round-11's own "International Agreement"
++            // preparation grounding picks the SAME `CardId::Event` card
++            // (`"Ravages of Time"`) the preparation would have needed,
++            // forcing the preparation to fall back to an ineligible
++            // Aggression card instead and drift the hand permanently short.
++            let victim = hand
++                .as_slice()
++                .iter()
++                .find(|id| !needed_later.contains(id.get().base_name) && !matches!(id.get().kind, CardType::Event | CardType::Territory))
++                .or_else(|| hand.as_slice().iter().find(|id| !needed_later.contains(id.get().base_name)));
++            let Some(&victim) = victim else {
+                 break;
+             };
+             hand.remove_first(victim);
+@@ -10092,6 +10115,47 @@ mod tests {
+         assert_eq!(r.military_hand_deficit[0], 0, "the debt is now fully repaid");
+     }
+ 
++    /// FIX (traced on real game `7523376`, round 10-11): `repay_military_
++    /// hand_deficit` has no rule tying its debt to any particular card --
++    /// unlike `resolve_political_decision`'s own preparation cost
++    /// (RULES_SPEC 5.2: "choose a green military card with the harp symbol
++    /// (event or territory) from hand"), which DOES. When both an
++    /// Event/Territory card and a non-Event/Territory card are equally
++    /// unprotected, spending the debt on the harp-symbol card first can
++    /// strand a LATER, real preparation with no rule-legal card left even
++    /// though this reconstruction's hand still counts enough cards overall
++    /// -- confirmed on `7523376`: a repay firing right before that game's
++    /// own "International Agreement" preparation picks the same `Event`
++    /// card the preparation needed, forcing the preparation to fall back to
++    /// an Aggression card instead. Repay must prefer the non-harp card.
++    #[test]
++    fn repaying_a_military_hand_deficit_prefers_a_non_harp_symbol_victim_over_an_event_or_territory_card() {
++        let card_index = build_card_index();
++        let plan = crate::event_plan::solve(&[], &card_index, 2).expect("an empty journal is trivially consistent");
++        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.military_hand_deficit[0] = 1;
++        // A hand with exactly one card of each kind, neither played by name
++        // later (`needed_later` empty here) -- both are equally eligible by
++        // the OLD rule ("any unprotected card"), only the non-harp one
++        // should be eligible by the fix's own preference.
++        let harp = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Event).expect("an Event card exists");
++        let non_harp = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::War).expect("a War card exists");
++        r.state.players[0].hand_military.push(harp);
++        r.state.players[0].hand_military.push(non_harp);
++
++        r.repay_military_hand_deficit(0, 1);
++
++        assert!(
++            r.state.players[0].hand_military.contains(harp),
++            "the Event card must survive -- it is the harp-symbol card a future preparation might still need"
++        );
++        assert!(
++            !r.state.players[0].hand_military.contains(non_harp),
++            "the non-harp card is the one repay should have spent instead"
++        );
++        assert_eq!(r.military_hand_deficit[0], 0, "the debt is still fully repaid either way");
++    }
++
+     /// FIX (`docs/REPLAY.md`'s "Final scores" section, the mechanism traced
+     /// on real games `7522166`/`7522625`): `game::auto_skip_politics` can
+     /// close a player's Politics phase (`phase = Actions`, `politics_done =

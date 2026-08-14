@@ -1,0 +1,132 @@
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index 6d69462..dce4be7 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -467,9 +467,6 @@ fn happy_source_count(p: &PlayerState) -> i32 {
+         }
+     }
+     for &w in p.completed_wonders.as_slice() {
+-        if p.flipped_wonders.contains(w) {
+-            continue;
+-        }
+         let card = w.get();
+         // St. Peter's Basilica's own printed text: "Each OTHER card or
+         // worker that gives you at least one happy face now gives you an
+@@ -488,7 +485,24 @@ fn happy_source_count(p: &PlayerState) -> i32 {
+         // card print happy. Without this, a player holding both St. Peter's
+         // Basilica and a Homer-boosted wonder had that wonder's live happy
+         // face silently excluded from St. Peter's own count.
+-        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
++        //
++        // Ravages of Time flips a wonder face down and voids its OWN
++        // printed effects (`compute`'s wonders loop: `continue`s before
++        // `add_flat` on a flipped wonder) -- but Homer's tucked happy face
++        // is explicitly exempted from that (Code of Laws errata, quoted on
++        // `compute`'s own wonders loop: "If the wonder is flipped face down
++        // because of Ravages of Time, Homer's happy face is not flipped
++        // over. The ruins of the wonder continue to produce that happy
++        // face."). So a flipped wonder can still be a qualifying "source"
++        // here via Homer even though its own printed happy cannot -- this
++        // used to `continue` past EVERY flipped wonder regardless, silently
++        // dropping a live Homer face from St. Peter's own count. Traced to
++        // BGO game 7522616 (Green: Homer tucked under Pyramids, Pyramids
++        // later ravaged, round 12): this undercounted by 1, cascading into
++        // an overcounted discontent worker and a 2-culture Impact of
++        // Population shortfall.
++        let printed_happy_alive = !p.flipped_wonders.contains(w) && card.effects.happy > 0;
++        let gives_happy_now = printed_happy_alive || p.homer_wonder == w;
+         if gives_happy_now && !grants_this_bonus_itself {
+             n += 1;
+         }
+@@ -522,13 +536,15 @@ fn temple_theater_wonder_happy_source_count(p: &PlayerState) -> i32 {
+         }
+     }
+     for &w in p.completed_wonders.as_slice() {
+-        if p.flipped_wonders.contains(w) {
+-            continue;
+-        }
+         let card = w.get();
+         let grants_this_bonus_itself =
+             card.special.iter().any(|sp| matches!(sp, Special::ExtraHappyPerHappySource(_)));
+-        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
++        // See `happy_source_count`'s matching comment: Homer's tucked happy
++        // face survives a Ravages of Time flip (CoL errata), so it must
++        // still count here even though the wonder's own printed happy does
++        // not once flipped.
++        let printed_happy_alive = !p.flipped_wonders.contains(w) && card.effects.happy > 0;
++        let gives_happy_now = printed_happy_alive || p.homer_wonder == w;
+         if gives_happy_now && !grants_this_bonus_itself {
+             n += 1;
+         }
+@@ -1068,9 +1084,6 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
+         CulturePerHappyFromTemplesTheatersWonders(v) => {
+             let mut happy = happy_from(&p.techs, |k| matches!(k, CardType::Temple | CardType::Theater));
+             for &w in p.completed_wonders.as_slice() {
+-                if p.flipped_wonders.contains(w) {
+-                    continue;
+-                }
+                 // Michelangelo's printed text counts "1 culture per HAPPY
+                 // FACE" on a temple/theater/wonder -- a happy face is a
+                 // specific printed icon, and a card with a printed UNHAPPY
+@@ -1088,7 +1101,18 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
+                 // on `effects.happy > 0` for the same reason; this sum must
+                 // clamp each wonder's contribution the same way instead of
+                 // adding the raw (possibly negative) printed value.
+-                happy += w.get().effects.happy.max(0) as i32;
++                //
++                // Ravages of Time voids a flipped wonder's OWN printed happy,
++                // but not Homer's tucked happy face (CoL errata quoted on
++                // `compute`'s wonders loop and on `happy_source_count`) -- so
++                // the printed-happy term is gated on NOT flipped, while
++                // Homer's `+1` still applies regardless, same split as those
++                // two functions. This used to `continue` past a flipped
++                // wonder entirely, dropping a live Homer face same as the
++                // `happy_source_count` bug traced to BGO game 7522616.
++                if !p.flipped_wonders.contains(w) {
++                    happy += w.get().effects.happy.max(0) as i32;
++                }
+                 if p.homer_wonder == w {
+                     happy += 1;
+                 }
+@@ -2367,6 +2391,41 @@ mod tests {
+         assert_eq!(s.culture, 2, "the ruin still produces its own +2 culture, same as any other flipped wonder");
+     }
+ 
++    #[test]
++    fn st_peters_basilica_still_counts_a_homer_tucked_wonder_after_it_is_ravaged() {
++        // Combines the two fixes above: a wonder that is BOTH Homer's home
++        // AND later flipped by Ravages of Time (BGO game 7522616, Green:
++        // Homer tucked under Pyramids in round 4, Pyramids ravaged in round
++        // 17) still "gives you at least one happy face" per the CoL Homer
++        // errata, so it must still count as a qualifying source for St.
++        // Peter's Basilica's own `ExtraHappyPerHappySource` bonus --
++        // `happy_source_count` used to `continue` past EVERY flipped wonder
++        // unconditionally, before ever checking `p.homer_wonder == w`.
++        let mut p = blank_player(0, card("Despotism"));
++        p.completed_wonders.push(card("Colossus"));
++        p.completed_wonders.push(card("St. Peter's Basilica"));
++        p.homer_wonder = card("Colossus");
++        p.flipped_wonders.push(card("Colossus"));
++        let state = two_player_state(p, blank_player(1, card("Despotism")));
++
++        let s = compute(&state, &state.players[0]);
++        // Colossus via Homer (survives the flip): +1. St. Peter's own flat:
++        // +1. St. Peter's bonus (1 OTHER live source -- Colossus, via
++        // Homer): +1. Total 3. Before this fix, `happy_source_count`
++        // skipped Colossus outright because it was flipped, so the bonus
++        // paid 0 and this totalled 2 -- the distinguishing number a
++        // same-total fix could not pass by accident.
++        assert_eq!(
++            s.happy, 3,
++            "Colossus's live Homer happy face survives the flip, St. Peter's own flat +1, and +1 bonus \
++             for Colossus still counting as a source despite being ravaged"
++        );
++        assert_eq!(
++            s.culture, 4,
++            "the ruin's own +2 culture plus St. Peter's Basilica's own flat +2 culture"
++        );
++    }
++
+     #[test]
+     fn st_peters_basilica_does_not_double_count_a_homer_boosted_wonder() {
+         // Official errata (Code of Laws, "Homer"): "St. Peter's Basilica adds

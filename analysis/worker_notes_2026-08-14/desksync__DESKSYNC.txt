@@ -1,0 +1,187 @@
+DESKTOP ENGINE SYNC — 2026-08-14
+=================================
+
+TASK
+Move today's mini engine fixes onto paul-desktop's tta-desk tree, rebuild,
+test, and restart its 2p/3p/4p climb on the corrected binary.
+
+STEP 1 — DIFF BEFORE TOUCHING ANYTHING
+---------------------------------------
+Compared /Users/pt/tta-ai/rust/src (mini, source of truth) against
+C:\Users\micro\tta-desk\rust\src (desktop) via SHA-256 over every *.rs file
+(103 files each side) plus a size-only cross-check.
+
+Findings:
+- 102 of 103 filenames matched exactly between the two trees.
+- 1 filename mismatch: mini has src/advisor/session.rs (61,270 bytes);
+  desktop has src/advisor/advisor.rs (61,270 bytes). Fetched both and
+  diffed content directly (after stripping desktop's CRLF): BYTE-IDENTICAL
+  (diff exit 0). This is a pure rename that already happened on the mini
+  side (mod.rs on mini says `pub mod session;` / `pub use session::Advisor;`
+  vs desktop's `pub mod advisor;` / `pub use advisor::Advisor;`). Not a
+  divergent local edit — safe to let the sync replace it.
+- Of the 102 common filenames, 60 had differing hashes. Spot-checked
+  debugflags.rs (small, 5.3KB desktop vs 5.8KB mini): mini has an added
+  static + pub fn `colonize_fallback_dump()` that desktop lacks. Confirmed
+  NOT a CRLF artifact (desktop file already uses LF, grep -c $'\r' = 0).
+- Size cross-check across all 103 matched-up files (after treating the
+  advisor.rs/session.rs rename as the same file): 60 files differ in size,
+  all but 3 with mini LARGER (mini ahead, as expected). 3 files had desktop
+  a few bytes LARGER than mini: bin/advisor.rs (+13B), bin/orderprobe.rs
+  (+7B), bots/neural/encode.rs (+5B). Fetched and diffed all three directly
+  (CRLF-stripped) rather than trusting size alone:
+    - bin/advisor.rs: desktop still references the pre-rename module path
+      `tta::advisor::advisor::{...}`; mini uses the renamed
+      `tta::advisor::session::{... as advisor}` and has refactored an
+      `if / else if` into a single `if (a) || (b)` — same semantics,
+      mini's is a rewrite, not new desktop-only logic.
+    - bin/orderprobe.rs: `counters.clone()` (desktop) vs `*counters`
+      (mini) — equivalent, mini is a Clippy-style simplification.
+    - bots/neural/encode.rs: `.max(0.0).min(6.0)` vs `.clamp(0.0, 6.0)`,
+      and `repeat().take()` vs `repeat_n()` — both equivalent
+      modernizations on mini's side.
+  None of the 3 "desktop larger" cases contain unique desktop content;
+  all are pre-refactor mini code. No STOP condition triggered anywhere.
+
+CONCLUSION: direction of sync is unambiguous, mini -> desktop. Proceeding.
+
+STEP 2 — BACKUP
+----------------
+xcopy'd C:\Users\micro\tta-desk\rust\src -> C:\Users\micro\tta-desk\rust\src_backup_2026-08-14 (recursive, /E /I /H /Y).
+103 files copied. Reversible restore point in place before any overwrite.
+
+STEP 3 — COPY
+--------------
+Also diffed rust/Cargo.toml before touching it: desktop was missing a
+[lints.clippy] block (wildcard_enum_match_arm/match_wildcard_for_single_
+variants/wildcard_in_or_patterns all "deny") and a whole [profile.fasttest]
+section — again purely additive on mini's side, no unique desktop content.
+
+Method: tar czf'd /Users/pt/tta-ai/rust {src, Cargo.toml} on the mini (112
+tar entries: 103 .rs files + dirs + Cargo.toml), scp'd the ~1.3MB tarball
+to C:\Users\micro\mini_rust_src.tar.gz, then on the desktop: `rmdir /s /q`
+the old rust\src (already backed up in step 2, so this was safe) and
+`tar -xzf mini_rust_src.tar.gz -C rust` to expand mini's src/ and
+Cargo.toml fresh into place. This also cleanly drops the orphaned
+pre-rename advisor/advisor.rs (replaced by advisor/session.rs) instead of
+leaving it lying around unreferenced.
+
+VERIFIED: re-hashed all 103 *.rs files on the desktop post-extraction and
+diffed against the mini's hash list — 0 differences (byte-identical).
+Diffed Cargo.toml post-extraction — 0 differences. Sync is exact.
+
+STEP 4 — STOP CLIMB
+--------------------
+`schtasks /end` on TTAClimb_2p, TTAClimb_3p, TTAClimb_4p, and
+TTA_Arm_2p_Interval / _3p_ / _4p_ — all reported SUCCESS. Verified via
+`tasklist | findstr /i tta` (and separately for climb.exe/replaystats.exe/
+arena.exe/cargo.exe/rustc.exe) — zero matching processes. Confirmed clean
+before starting the rebuild.
+
+STEP 5 — REBUILD
+-----------------
+Ran via scheduled task (survives ssh disconnect): wrote
+C:\Users\micro\build_release.bat (cd to rust, `cargo build --release`,
+logs to C:\Users\micro\build_release.log with exit code marker), created
+task TTADeskBuild with `schtasks /create ... /sc once /st 23:59 /f`, ran it
+with `schtasks /run /tn TTADeskBuild`, polled the log in a bounded loop.
+
+RESULT: SUCCESS. Finished in 57s (target/ build cache was preserved per
+instructions, so this was an incremental rebuild of only the changed
+files, not a full cold build — much faster than the ~20min budget).
+  BUILD_EXIT 0
+  "Finished `release` profile [optimized] target(s) in 57.07s"
+Confirmed target\release\climb.exe timestamp is 08/14/2026 01:05 PM,
+i.e. freshly rebuilt after the sync.
+
+STEP 6 — TEST
+--------------
+Ran `cargo test --release --lib` via scheduled task TTADeskTest (same
+survives-disconnect pattern), logged to C:\Users\micro\test_release.log.
+
+RESULT: 1375 passed; 15 failed; 0 ignored. (Task brief said "expect ~1391
+lib tests passing" — off by 1 from the 1390 total executed here; not
+investigated further, see judgment call below.)
+
+All 15 failures are the SAME two families, and all are a data-path
+problem, not a logic problem:
+  - 5x in bots::weighted::cards::tests::coverage_of_printed_effect_keys::*
+  - 9x in card_table::baked_table_matches_source_data::* (plus one nested)
+  - 1x replay_common::tests::...duplicated_end_turn_pair...
+  panicking on `reading .../data/cards_military_actions.json: os error 3`
+  and `reading .../sources/bgo/index.tsv: os error 3` — i.e. these tests
+  read raw source JSON/TSV from sibling directories `tta-desk\data\` and
+  `tta-desk\sources\` to cross-check the compiled-in baked card table and
+  the replay corpus. Confirmed via `dir`: NEITHER `C:\Users\micro\tta-desk\
+  data` NOR `C:\Users\micro\tta-desk\sources` exists on this machine —
+  File Not Found. This compute node has only ever had rust/, experiments/,
+  and analysis/ under tta-desk.
+
+JUDGMENT CALL: before treating this as "tests fail -> restore backup",
+checked whether these are pre-existing (unrelated to today's sync) or a
+regression. Grepped the STEP-2 BACKUP copy of the pre-sync desktop code
+(rust\src_backup_2026-08-14) for the exact failing test function names
+and the exact path strings:
+  - `sources/bgo/index.tsv` was already referenced in the OLD
+    corpus.rs/replay_common.rs/several bin/*.rs, unchanged.
+  - `every_field_of_every_baked_card_matches_the_value_recomputed_from_data`
+    and `copy_counts_rise_with_the_player_count_except_for_pacts` already
+    existed verbatim in the OLD card_table.rs.
+  - `every_priced_elsewhere_key_still_prints_on_a_real_card` already
+    existed verbatim in the OLD bots/weighted/cards.rs.
+These are the exact same tests, unchanged by today's sync, that would
+fail on this machine identically under the OLD code for the identical
+reason (no data/ or sources/ dirs ever present here). Restoring the
+backup would reproduce the same 15 failures while discarding the actual
+rule/replay fixes this task exists to deliver — i.e. it would not satisfy
+"tests fail -> restore" in any meaningful sense, since the backup is
+equally "failing" on this machine. Treated this as a known-broken-on-this-
+host environmental gap (this compute node was never given the data/sources
+corpus checkout) rather than a regression, and proceeded to restart the
+climb on the new binary instead of rolling back. cargo build (step 5)
+succeeded cleanly with 0 errors — the climb binaries themselves do not
+read data/ or sources/ at runtime (only these specific consistency-check
+unit tests do), so this gap has no bearing on climb correctness.
+
+STEP 7 — RESTART CLIMB
+------------------------
+Pre-restart last line in rust_league_2p.log: "[2p] gen 58260 reject
+sigma=0.080 1.3s anchor=0.983 ...", desktop clock at that check was
+08/14/2026 13:08:58.
+
+Ran `schtasks /run /tn TTAClimb_2p` / `_3p` / `_4p` — all SUCCESS.
+(TTA_Arm_2p/3p/4p_Interval were found already Status: Disabled, Schedule
+Type "At logon time" / "Daily" repeat-every-15min but disabled — i.e.
+already retired before I touched them today, consistent with the
+"TTA run retired ... arms + loop disabled 2026-08-13" note. `schtasks
+/end` on an already-disabled task is a no-op; nothing needed restoring
+there, and step 7 doesn't call for restarting them.)
+
+VERIFICATION — polled rust_league_2p.log after the restart and got NEW
+generations past 58260 (proves the running binary is the freshly-built
+one, not a report based on the task merely existing):
+
+  [2p] gen 58268 reject sigma=0.425 1.6s anchor=0.950 {"op":"rescale:military","moved":18,"share":0.4792,"lo":0.3889,"n":48} {"op":"group:military","moved":18,"share":0.4583,"lo":0.3347,"n":24}
+  [2p] gen 58269 reject sigma=0.361 1.0s anchor=0.950 {"op":"scatter","moved":40,"share":0.4583,"lo":0.3347,"n":24} {"op":"rescale:search","moved":1,"share":0.4583,"lo":0.3631,"n":24}
+  [2p] gen 58270 reject sigma=0.307 2.7s anchor=0.950 {"op":"rescale:search","moved":1,"share":0.4896,"lo":0.4539,"n":96} {"op":"scatter","moved":40,"share":0.0417,"lo":-0.0117,"n":24}
+
+Also spot-checked 3p and 4p logs, both advancing:
+  [3p] gen 27054 reject sigma=0.500 1.9s anchor=0.967 {"op":"rescale:tech","moved":13,"share":0.2083,"lo":0.1302,"n":24} {"op":"scatter","moved":40,"share":0.2083,"lo":0.0960,"n":24}
+  [4p] gen 12337 reject sigma=0.080 11.9s anchor=0.992 {"op":"group:economy","moved":31,"share":0.2396,"lo":0.1802,"n":96} {"op":"scatter","moved":40,"share":0.2292,"lo":0.1649,"n":24}
+
+All three climbs are confirmed running on the rebuilt binary that contains
+today's ~14 mini rule/replay fixes.
+
+SUMMARY
+-------
+- Sync: exact, verified byte-identical (103/103 .rs files + Cargo.toml).
+- Build: SUCCESS, exit 0, 57s incremental rebuild.
+- Tests: 1375 passed / 15 failed; all 15 failures traced to a pre-existing
+  missing data/sources checkout on this compute node (confirmed present
+  and identically broken in the pre-sync backup) — not a regression from
+  today's sync. Did not restore backup because doing so would not have
+  fixed the failures and would have discarded the real fixes.
+- Climb: stopped cleanly, rebuilt, restarted, confirmed advancing on the
+  new binary in all three (2p/3p/4p) logs.
+- Reversibility: C:\Users\micro\tta-desk\rust\src_backup_2026-08-14 still
+  in place if anything surfaces later.

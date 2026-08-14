@@ -1,0 +1,279 @@
+DECIDER3 -- "decider # != expected actor #, phase Actions, no pending"
+Session 2026-08-14, clone /private/tmp/decider3, base commit 2bc2e4c (branch base0814).
+============================================================================
+
+BOTTOM LINE
+-----------
+NO BUCKET-REDUCING FIX LANDED. Bucket is 99 games at this base (was ~100/102/
+122 at earlier bases per the two prior sessions -- natural corpus/fix drift,
+not a discrepancy). I got a full, deterministic, card-by-card mechanism for
+exactly how one game (7523376) falls into this bucket, using the task's own
+"fresh clue" (that game was pushed INTO the bucket by today's earlier
+`2bc2e4c` commit). One small, genuinely-correct, RULES_SPEC-grounded
+engine fix DID land (committed `94ab54a`), tested RED-then-GREEN, zero
+regressions on the full corpus -- but it is provably a no-op for completion
+counts (648/648 both before and after, byte-identical ID sets) and does NOT
+fix 7523376 itself, whose failure has a second, independent cause I could
+not close within budget. Read "WHAT I RULED OUT" before repeating any of
+this session's own avenues, and "THE UNRESOLVED SECOND CAUSE" before trying
+to finish 7523376 specifically.
+
+WHAT THE TWO PRIOR SESSIONS ALREADY RULED OUT (map of where the bug is NOT)
+----------------------------------------------------------------------------
+From `decider__DECIDER.txt` (branch `decider`, base 3fc32b5, 102-game bucket):
+  - `military_hand_deficit`'s PrepareEvent incur/repay path: NOT exercised
+    at all in their 4 hand-traced games (before today's ground_auction_
+    winner_hand fix existed) -- exonerated for those 4 games specifically.
+  - `ground_for_consumption`'s victim-swap-then-consume arithmetic: hand-
+    verified card-by-card, always nets to -1 correctly; wrong direction to
+    explain an undercount anyway.
+  - Root-caused ~76% of their bucket to a `HandLedgerVerdict::SimulatorBug`
+    signature (journal excess 1, simulator excess 0) but did not chase any
+    single game back to a first-divergence origin.
+  - Flagged (not fixed) a real, separate bug: wrong Aggression card
+    age-sibling resolution (bare "Raid" always resolving to Raid (I)).
+
+From `stuckdecider__STUCKDECIDER.txt` (branch `stuckdecider`, base 9f6104d,
+122-game bucket):
+  - Implemented and fully diagnosed the Aggression age-sibling fix flagged
+    above (`resolve_aggression_age`) -- this looks to have LANDED upstream
+    of my base (5f9df7b "Raid: declinable up to N bracket + age-sibling
+    resolution (609 -> 644 complete)" is already in my base0814 branch's
+    history) -- do not re-attempt this, it is done.
+  - That session's OWN new fix caused 3 regressions they did not close
+    (7521946, 7522072, 7522647, root-caused to a "missing +1 military
+    action source" after an Upgrade move) -- not directly relevant to
+    THIS session (my base already has the age-sibling fix merged and those
+    specific IDs were not in my regression list), but if a future session
+    sees `IllegalMove { Upgrade }` shapes in this bucket, that thread is
+    the place to pick back up, NOT this file.
+  - Found and correctly diagnosed a "SimulatorBug ledger ... ANTIQUATION"
+    red herring: `prescan_military_hand_ledger` (a journal-text-only
+    diagnostic, never consulted by real replay) does not model SS12.2
+    antiquation, so `SimulatorBug`'s own label ("simulator is wrong") is
+    frequently BACKWARDS -- the ledger is the one missing a rule. Confirmed
+    independently this session: `ground_auction_winner_hand`'s "no filler"
+    branch is a THIRD, real, distinct source of legitimate deficits beyond
+    what either prior session evaluated (it did not exist as a call site
+    until today's `2bc2e4c`).
+
+THIS SESSION'S OWN RULED-OUT AVENUE (do not repeat)
+-----------------------------------------------------
+Tried restricting `resolve_political_decision`'s PrepareEvent-cost eviction
+to ONLY `CardType::Event`/`Territory` victims (RULES_SPEC 5.2's own "harp
+symbol" requirement), falling to the existing deficit branch otherwise.
+Rationale looked solid (a PrepareEvent's own paid-away card is rule-
+restricted to event/territory cards, the pre-existing code picks ANY
+military card with no type check at all) -- but measured on the full
+1011-game corpus: 509/1011 completed (vs 648 baseline), 139 regressions,
+3 wins. FAR too aggressive -- reverted immediately, not part of the landed
+patch. The corpus evidently relies on this eviction being allowed to pick
+ANY unprotected card in the overwhelming majority of cases; a strict type
+restriction starves far more preparations of a legal victim than it fixes.
+Do not re-attempt a hard type restriction here. (The landed fix instead
+only REORDERS the *repay*-side search to prefer non-harp cards -- see
+below -- which is a much narrower, provably zero-regression change.)
+
+THE MECHANISM ON GAME 7523376 (fully traced, deterministic)
+----------------------------------------------------------------
+Setup: `cp -Rc` a second clone, `git checkout 2bc2e4c^` (=`c6b97e5`, the
+"before" state the task's own commit message refers to), built `replay`
+--profile difftest --bin replay in both clones, ran with `REPLAY_DEBUG_ALL=1`
+on the single game (`/tmp/one_index.tsv` = header + the 7523376 row) in
+each, confirmed BYTE-IDENTICAL, run-to-run-deterministic output for both
+(3x each, not the HashMap-iteration nondeterminism a much earlier session
+flagged as a risk for `chosen>0` games -- this game has `chosen=17-19` and
+was fully deterministic both ways every time I reran it). Diffed the two
+full traces: identical for the first 838 debug lines, first divergence at
+round 11's end-of-turn discard check for Orange (idx=0):
+    before (c6b97e5): hand_military_len=3 hand=["Aggression: Plunder (I)",
+        "Aggression: Infiltrate", "Aggression: Raid (II)"]
+    after  (2bc2e4c):  hand_military_len=2 hand=["Aggression: Plunder (I)",
+        "Aggression: Raid (II)"]                      (missing Infiltrate)
+
+Added temporary `REPLAY_DEBUG_ALL`-gated eprintln!s (stripped before
+committing -- none are in the landed patch) at all four sites that touch
+`military_hand_deficit`, plus one in `economy::draw_military_step` printing
+each drawn card's name, and reran. Full reconstructed sequence:
+
+  1. Round 9, journal lineno 142 (SAME line: Orange's own "Cold War"
+     preparation AND the Historic Territory auction both resolve here).
+     Orange's true hand at this instant, per this reconstruction, is
+     `["Aggression: Plunder (I)", "Fighting Band", "Politics of Strength"]`
+     (Plunder is `needed_later`-protected -- it really is played by name at
+     round 14, journal line 255, "Orange plays Plunder against Purple" --
+     confirmed, this protection is correct). Two independent anonymous-
+     filler-eviction call sites fire back to back against this same
+     3-card hand, of which only 2 cards (`Fighting Band`, `Politics of
+     Strength`) are actually spendable:
+       a. `resolve_political_decision`'s PrepareEvent grounding (for "Cold
+          War", pre-existing code, unchanged by any commit today) evicts
+          ONE of the two spendable cards as the "already-held" filler for
+          the preparation.
+       b. `ground_auction_winner_hand` (this task's own fresh code) needs
+          TWO bonus-card fillers for "1 Colonization card +1; 1
+          Colonization card +1" (Historic Territory's sacrifice). The
+          FIRST of its two pushes evicts the other spendable card. The
+          SECOND push finds nothing left (Plunder is protected, the other
+          two are gone) -- `military_hand_deficit[0] += 1`. This is the
+          ONLY deficit incurred anywhere in Orange's hand for this whole
+          game (confirmed by instrumenting every incur site and grepping
+          the entire trace -- exactly one hit).
+     End state, round 9: hand = `["Aggression: Plunder (I)"]` (1 card),
+     deficit owed = 1. IDENTICAL in both before/after runs (the "before"
+     code silently washes step (b)'s second push to net zero instead of
+     recording the debt, but since NEITHER real card differs in identity
+     or count at this checkpoint, before/after are byte-identical through
+     round 9 -- the debt is purely latent bookkeeping until it is repaid).
+
+  2. Round 10, journal lineno 177 ("End turn Orange ... draws 3 military
+     cards"): draws `Ravages of Time` (CardType::Event), `Aggression:
+     Infiltrate`, `Aggression: Raid (II)`, in that order.
+       - AFTER (2bc2e4c, unpatched): `repay_military_hand_deficit(0, 3)`
+         fires (this is new: the debt from step 1 now exists to be repaid).
+         Its victim search is "first unprotected card in hand order" --
+         `Ravages of Time` is first, gets evicted immediately. Hand:
+         `[Plunder, Infiltrate, Raid(II)]` (3 cards).
+       - BEFORE (c6b97e5): no debt was ever recorded, so no repay fires.
+         Hand: `[Plunder, Ravages, Infiltrate, Raid(II)]` (4 cards).
+
+  3. Round 11, journal lineno 188 (Orange's own "International Agreement"
+     preparation, revealing "Pestilence"): `resolve_political_decision`'s
+     SAME PrepareEvent-cost eviction as step 1a fires again, same
+     unrestricted "first unprotected card in hand order" search:
+       - AFTER: hand is `[Plunder, Infiltrate, Raid(II)]` (Ravages already
+         gone, from step 2's repay) -- evicts `Infiltrate` (an Aggression
+         card -- RULES_SPEC 5.2 requires an event/territory "harp symbol"
+         card here; this is already a rules-illegal substitution the
+         pre-existing eviction code allows because it has no type filter
+         at all, not something today's commits introduced). Hand:
+         `[Plunder, Raid(II)]` (2 cards) -- matches the observed
+         divergence exactly.
+       - BEFORE: hand is `[Plunder, Ravages, Infiltrate, Raid(II)]` --
+         evicts `Ravages of Time` (an Event card -- happens to be BOTH
+         first-in-order AND rule-legal here, coincidentally). Hand:
+         `[Plunder, Infiltrate, Raid(II)]` (3 cards) -- matches.
+
+  4. This 1-card gap (2 vs 3) then rides unnoticed through rounds 11-13
+     (hand never crosses the discard limit either way -- confirmed no
+     further `discard_excess_military` divergence for Orange until round
+     14) and finally manifests at round 14's end-of-turn: the "before"
+     hand (with its extra card) genuinely exceeds the discard limit and
+     opens a real `Discard` pending, matching the journal's own "Orange
+     discards 1 card" at line 265. The "after" hand (one card short)
+     computes zero excess, opens nothing, hands the turn straight to
+     Purple's PolPass -- `StuckPending("decider 1 != expected actor 0,
+     phase Actions, no pending")`, the exact bucket shape.
+
+WHY I DID NOT LAND A FIX THAT CLOSES 7523376 ITSELF
+-------------------------------------------------------
+I tested the hypothesis "if step 2's repay had preferred a non-Event/
+Territory victim (`Infiltrate` or `Raid(II)`) over `Ravages of Time`, step
+3's preparation-cost eviction would then have found `Ravages of Time`
+still available (the rule-correct, type-matching choice) and the whole
+before/after trajectory would re-converge." This is TRUE for card IDENTITY
+(confirmed: with the landed fix, step 2 evicts `Infiltrate` instead of
+`Ravages`) but FALSE for card COUNT: step 3's eviction still has to remove
+ONE card regardless of which type it prefers, because by round 11 there is
+still exactly one genuine debt (from round 9) PLUS one genuine new cost
+(International Agreement's own preparation) needing to be paid, i.e. TWO
+total real-card losses between round 9 and round 11 in "after" vs only ONE
+in "before" (before never pays back round 9's debt at all). Reassigning
+WHICH card gets evicted cannot fix a COUNT mismatch -- confirmed by
+rerunning 7523376 with the landed fix: identical stop line, identical
+error, `discards=18 solved=1` (byte-identical to the unpatched `2bc2e4c`
+run) both times I checked.
+
+The real open question, which I could not resolve within budget, is
+whether the round-9 deficit is a GENUINE debt (in which case "after"'s
+2-card round-11 hand is the historically correct one, and it's actually
+"before" that's silently 1-too-many for the rest of the game, coincidentally
+never crossing a discard limit or otherwise becoming visible before the
+game completes) or a FALSE POSITIVE (in which case Orange's TRUE hand at
+round 9 held a 3rd real spendable card this reconstruction's OWN, entirely
+separate, upstream draw/discard tracking from rounds 2-8 already fails to
+credit it with -- unrelated to anything in today's commits -- and
+`ground_auction_winner_hand`'s "no filler" detection is correctly reporting
+a shortfall in an already-wrong model, not creating one). The strongest
+evidence available points to the latter: "before" (WITHOUT ever paying the
+round-9 debt) reconstructs the ENTIRE REST OF THIS GAME through round 18
+with an exact final-score match (`engine=[141,175] index=[175,141]
+match=true`), and the corpus-wide "Discard-phase hand-size oracle" cross-
+check (26 checkpoints game-wide, 24/26 exact) shows only ONE mismatch for
+this game and it is for PURPLE at round 11, not Orange, and is IDENTICAL in
+both before/after (pre-existing, unrelated). I could not, within budget,
+trace Orange's hand all the way back to round 1 by hand to find whether an
+earlier draw/discard is undercounted; that is the concrete next step for
+whoever picks this up (see below).
+
+NEXT STEPS FOR A FUTURE SESSION
+----------------------------------
+1. Hand-trace Orange's `hand_military` in game 7523376 from round 1 through
+   round 9 (small: only ~4 real draws + 1 discard-phase event happen in
+   that span per this session's traces) against the journal, to determine
+   whether the 3-card pre-round-9 hand (`Plunder`, `Fighting Band`,
+   `Politics of Strength`) is genuinely complete, or short by one real card
+   the true player held. If short, the bug is an EARLIER, unrelated
+   draw/discard tracking gap, not anything in `ground_auction_winner_hand`
+   or today's commits -- and 7523376 would need a completely different fix
+   than anything explored this session.
+2. If round 1-9 tracking is confirmed complete (i.e. the round-9 deficit
+   really is genuine), then the bug is that TWO real, independent 1-card
+   costs (a preparation's own cost, and a repaid earlier auction-sacrifice
+   debt) can land on the SAME or adjacent turns and there is no way,
+   without look-ahead into the preparation queue, for the repay call to
+   know a nearby preparation is about to also need a card. This may not be
+   cleanly fixable without giving `repay_military_hand_deficit` visibility
+   into `self.preparations`'s own queue (peek the next claimable
+   preparation for `actor` and skip repaying THIS turn if one is pending) --
+   untried, higher risk, would need its own regression sweep.
+3. Corpus-wide: rerun `REPLAY_DUMP_BUCKET='phase Actions, no pending'`
+   against a bucket-only index (all 99 games) and check what fraction show
+   this SAME "two anonymous-filler-eviction sites collide near a debt
+   repay" shape vs a genuinely different cause -- this session only
+   confirmed the mechanism on the one repro game the task pointed at, and
+   did not have budget to check how representative it is of the other 98.
+
+MECHANISM LANDED AS A FIX (small, zero-regression, does not close the bucket)
+---------------------------------------------------------------------------------
+`repay_military_hand_deficit` (replay_common.rs) now prefers a NON-
+Event/Territory victim over an Event/Territory one when both are equally
+unprotected, falling back to Event/Territory only if that is the sole
+option -- mirroring RULES_SPEC 5.2's restriction on what
+`resolve_political_decision`'s own preparation-cost eviction is allowed to
+spend, so a repay never pre-empts a nearby real preparation's only
+rule-legal card. This is directionally correct and provably safe (see
+"WHY I DID NOT LAND A FIX THAT CLOSES 7523376 ITSELF" above for why it does
+NOT, by itself, fix the count divergence) but is included because it is a
+genuine, tested, zero-risk improvement in rules fidelity, not because it
+moves the bucket.
+
+VERIFICATION
+---------------
+- New unit test `repaying_a_military_hand_deficit_prefers_a_non_harp_
+  symbol_victim_over_an_event_or_territory_card` (replay_common.rs):
+  confirmed RED (reverted the behavioural hunk to the old unconditional
+  `.find`, test failed) then GREEN (restored, test passed).
+- `cargo test --profile fasttest --lib`: 1392 passed (1391 baseline + 1
+  new), 0 failed.
+- `cargo clippy --all-targets -- -D warnings`: clean, no warnings.
+- Guard corpus (`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+  /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals`,
+  1011 games): 648/1011 completed BOTH before this session's patch (base
+  2bc2e4c) and after -- byte-identical completed-ID sets (`comm -23`/
+  `comm -13` against `/private/tmp/guard_ids.txt` both empty). Zero
+  regressions, zero wins.
+- Decider bucket size: 99 games, UNCHANGED by this session's patch (same
+  reasoning: identical completed-ID set implies identical stop-reason for
+  every non-completed game too). Task quoted "roughly 100" at an earlier
+  base; 99 here reflects ordinary corpus/fix drift since, not a discrepancy
+  introduced this session.
+
+CLONE STATUS
+---------------
+`/private/tmp/decider3` holds one committed, landed-quality commit
+(`94ab54a`, "Prefer a non-harp-symbol card when repaying a military-hand
+deficit") on top of base `2bc2e4c`. Patch exported to
+`analysis/worker_notes_2026-08-14/decider3.patch`. Clone deleted after this
+write-up per task instructions (the commit is preserved in the patch file;
+nothing unlanded is left behind).

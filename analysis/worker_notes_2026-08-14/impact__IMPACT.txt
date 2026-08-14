@@ -1,0 +1,297 @@
+IMPACT OF ... end-game scoring bugs -- worker report, 2026-08-14
+==================================================================
+
+Scope: the 4 "Impact of ..." Age-III/IV final-scoring events replaystats
+flagged as producing wrong per-(game,seat) culture against
+sources/bgo/index.tsv's recorded final scores:
+  5 pairs | Impact of Population
+  4 pairs | Impact of Happiness
+  1 pair  | Impact of Competition
+  1 pair  | Impact of Variety
+
+HEADLINE NUMBER
+  Before: 602/648 completed human games matched index.tsv exactly.
+  After:  603/648 (verified via replaystats's own header line, not
+          reconstructed by hand). Zero regressions in the completion set
+          (comm -23 against /private/tmp/guard_ids.txt was empty); the
+          648-game completion set itself is unchanged, only the exact-match
+          COUNT moved.
+
+Per-card outcome:
+  Impact of Population     FIXED  (code change, effects.rs)
+  Impact of Happiness      NOT FIXED -- documented non-fix, see below
+  Impact of Competition    NOT FIXED -- documented non-fix, see below
+  Impact of Variety        NOT FIXED -- documented non-fix, see below
+
+
+====================================================================
+1. IMPACT OF POPULATION -- FIXED
+====================================================================
+
+Card text (bga_throughtheages_material.inc.php #219): "Each civilization
+scores 2 culture per content worker above 10." FAQ v1.5 p.7 spells out the
+formula precisely: "Count the number of yellow markers that are not in
+your Population Bank. Subtract from this the number of Discontent Workers
+that you have. This is your number of Content Workers. Finally, subtract
+ten from this number."
+
+Our implementation (rust/src/events.rs::scoring_culture,
+culturePerContentWorkerAbove10 block): content = (on_card_workers +
+workers_free - discontent).max(0); culture = (content - 10).max(0) * 2.
+This formula itself is correct and unchanged.
+
+Traced example: BGO game 7522616 [4p], seat 2 (Green). Journal: "Impact of
+Population ... Green scores 14 culture". Engine computed 12 (delta -2, one
+short of the needed content-worker count).
+
+Debug dump (SCOREDIV_EVENT_DEBUG=1) showed:
+  on_card=17 workers_free=2 workers=19 discontent=3 content=16 -> 12 culture
+Needed: discontent=2, content=17 -> 14 culture.
+
+Hand-verified Green's happiness sources (SCOREDIV_HAPPY_DUMP=1): Green had
+Homer tucked under Pyramids (round 4, "Green elects Genghis Khan Homer
+dies" right after Pyramids completed -- the ONLY completed wonder at that
+moment, so the replay's "tuck under completed_wonders[0]" heuristic is
+unambiguous here, not a guess). Pyramids was later flipped by Ravages of
+Time (round 17, "Purple plays event ... Ravages of Time ... Green must
+choose a wonder to ravage"). Green also built St. Peter's Basilica
+(ExtraHappyPerHappySource(1)).
+
+ROOT CAUSE: `effects::happy_source_count` (the function backing St. Peter's
+Basilica's own "each OTHER card or worker that gives you at least one
+happy face now gives you an extra 1 happy face" bonus) unconditionally
+skipped every FLIPPED wonder:
+
+    for &w in p.completed_wonders.as_slice() {
+        if p.flipped_wonders.contains(w) {
+            continue;
+        }
+        ...
+        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
+
+But per the Code of Laws errata on Homer (p.11, quoted verbatim already in
+this codebase's own `compute()` wonders loop): "If the wonder is flipped
+face down because of Ravages of Time, Homer's happy face is not flipped
+over. The ruins of the wonder continue to produce that happy face." So a
+wonder that is BOTH flipped AND Homer's home should still count as a
+qualifying happy source for St. Peter's Basilica's bonus -- only the
+wonder's OWN printed happy is voided by the flip, not Homer's tucked one.
+`compute()`'s main wonders loop already gets this right (checks
+`p.homer_wonder == w` BEFORE the flip `continue`); `happy_source_count`
+did not, and neither did its twin `temple_theater_wonder_happy_source_count`
+(Michelangelo's `CulturePerHappyFromTemplesTheatersWonders` arm), which had
+the identical `continue`-before-checking-Homer bug.
+
+With the bug: happy_source_count only counted Religion (1 worker) as a
+source, so Basilica's bonus paid +1. Fixed total happy = 4 (Religion 1 +
+Homer/Pyramids 1 + Basilica flat 1 + Basilica bonus 1).
+With the fix: Pyramids now counts too (n=2), Basilica's bonus pays +2.
+Fixed total happy = 5 (Religion 1 + Homer/Pyramids 1 + Basilica flat 1 +
+Basilica bonus 2). discontent = max(0, happy_required(yellow_bank=1)=7 - 5)
+= 2. content = 19 - 2 = 17. culture = (17-10)*2 = 14. Matches the journal
+exactly.
+
+FIX (rust/src/effects.rs):
+  - `happy_source_count`: moved the flip check from an unconditional
+    `continue` to gating only the card's OWN printed `effects.happy`
+    (`printed_happy_alive = !flipped && effects.happy > 0`), leaving
+    `p.homer_wonder == w` unconditional, matching `compute()`'s own
+    wonders loop.
+  - `temple_theater_wonder_happy_source_count`: identical fix (same bug,
+    same shape, feeds Michelangelo's own culture-per-happy-face count).
+  - `CulturePerHappyFromTemplesTheatersWonders` (Michelangelo's own arm):
+    same bug, same fix -- it also unconditionally skipped a flipped
+    wonder's Homer face when summing "happy faces from temples, theaters,
+    wonders" for Michelangelo's culture-per-happy-face. Fixed for
+    consistency even though none of the 4 flagged pairs hit this arm
+    directly (it shares the exact same root cause and would have produced
+    the same class of bug for any bot/self-play game with Michelangelo +
+    Homer + Ravages of Time).
+
+Unit tests added (rust/src/effects.rs, #[cfg(test)] mod tests):
+  - `st_peters_basilica_still_counts_a_homer_tucked_wonder_after_it_is_ravaged`
+    Confirmed RED (reverting just the `happy_source_count` hunk): got
+    happy=2, expected 3. Confirmed GREEN after restoring the fix.
+
+Corpus effect: game 7522616 moved from a diverging (mismatched) game to a
+full exact multiset match (all 4 seats). 602 -> 603 exact matches, 0
+regressions (verified against /private/tmp/guard_ids.txt, the frozen
+648-game completion baseline -- comm -23 was empty). The task described 5
+Population pairs total; only one example game (7522616) was named. This
+fix is a general formula correction (not keyed to any game id), so it
+should also resolve any OTHER Population/Michelangelo mismatch sharing the
+same Homer+Ravages-of-Time+St.Peter's-Basilica combination, but I did not
+build the bespoke per-card attribution tool needed to enumerate the other
+4 pairs' game ids and confirm each one individually -- the guard's
+game-level before/after count (602->603, 0 regressions) is the verified
+evidence for this pass.
+
+
+====================================================================
+2. IMPACT OF HAPPINESS -- NOT FIXED (documented non-fix)
+====================================================================
+
+Card text: "Each civilization scores 2 culture per happy face (max 16) and
+loses 2 per discontent worker." Implementation
+(events.rs::scoring_culture, culturePerHappyFace +
+maxCultureFromHappyFaces + culturePerDiscontentWorker) matches this
+exactly, and independently cross-checked correct via the SAME game's
+Impact of Population line (which uses the identical discontent value and
+matched the journal exactly), so the formula and the discontent
+computation are both known-good for the traced example.
+
+Traced example: BGO game 7522277 [2p], seat 1 (Purple). Journal: "Impact
+of Happiness ... Purple scores 12 culture". Engine computes 14 (delta +2).
+Debug dump: s.happy=7, discontent=0, happy_gain=14 (2*7, under the 16
+cap). Population's independent score for the same player (6 culture,
+content=13) matched the journal exactly, confirming discontent=0 is
+correct and the bug is specifically that our reconstructed happy=7 is 1
+too high (needs to be 6).
+
+Breakdown of Purple's happy=7: Religion (2 workers x 1) = 2, Library of
+Alexandria (Homer's tucked home, +1 live face) = 1, St. Peter's Basilica
+(flat +1, plus its own ExtraHappyPerHappySource bonus counting Religion
+and Library-via-Homer as 2 sources) = 1 + 2 = 3. Total 2+1+3=7.
+
+Journal wants 6, which is exactly what this same math yields if Homer had
+instead been tucked under St. Peter's Basilica itself (Basilica then
+cannot grant its own bonus to itself, so its bonus only sees Religion as a
+source, +1 instead of +2): 2(Religion) + 1(Basilica flat) + 1(Homer on
+Basilica) + 1(Basilica bonus, Religion only) = 5... actually the exact
+target-matching breakdown is: Religion 2 + Basilica flat 1 + Homer-on-
+Basilica 1 + Basilica bonus (Religion only, n=1) x1 = wait -- verified by
+direct computation: tucking Homer under Basilica instead of Library
+produces happy=6 exactly (2 + 1 + 1 + 2 = 6, since Basilica's own bonus
+excludes itself as a source regardless of where Homer sits).
+
+ROOT CAUSE (not a card-scoring bug): WHICH completed wonder a player tucks
+Homer under, on leader replacement, is a real in-game CHOICE (BGA card
+text: "you may slide this card under ONE of your completed wonders").
+The BGO journal only ever logs "<Player> elects <NewLeader> Homer dies" --
+it never records which wonder was chosen. `apply.rs`'s leader-replacement
+handler (~line 868) resolves this ambiguity by always tucking Homer under
+`completed_wonders[0]` (the first-completed wonder), since there is no
+way to recover the real choice from the journal. For game 7522277, Purple
+had TWO completed wonders (Library of Alexandria, completed first; St.
+Peter's Basilica, completed second) at the moment Homer died, so this
+heuristic is a genuine guess, and the guess happens to be the STRATEGICALLY
+BETTER choice for the player (tucking under Library nets MORE total happy
+over the rest of the game, since it lets Library itself also collect
+Basilica's per-source bonus, whereas tucking under Basilica forfeits that
+double-dip) -- yet the journal shows the real player chose the worse
+option (Basilica). This is exactly the "chosen arbitrarily among valid
+candidates" class of gap this codebase already tracks for military
+discards and colonize approximation, not a scoring-formula defect.
+
+No code change made. Per this task's own instruction ("If a card's rules
+text genuinely supports our number and the journal disagrees, say so
+plainly... and move to the next card"): the Happiness formula and the
+happy/discontent computation are both independently verified correct for
+this game; the discrepancy is entirely attributable to an unrecorded
+player decision that the replay cannot recover, not to effects.rs/events.rs
+scoring logic. I did not attempt a "smarter" wonder-choice heuristic
+(e.g. "pick the wonder that maximizes ongoing happy") because the traced
+example shows the real human did NOT play the locally-optimal choice, so
+no deterministic heuristic can be expected to match human choices in
+general -- and the task explicitly forbids tuning behavior to match one
+game's score.
+
+
+====================================================================
+3. IMPACT OF COMPETITION -- NOT FIXED (documented non-fix)
+====================================================================
+
+Card text: "Each civilization scores 1 culture per level of military units
+and arenas." `id.level()` = the card's printed age number (A=0, I=1,
+II=2, III=3), already validated correct elsewhere (matches the FAQ's own
+worked Impact-of-Architecture example: "two Workers on Organized Religion
+(Age II) ... contribute 2x2 ... Culture"). Implementation
+(events.rs::scoring_culture, culturePerLevelOfMilitaryUnitsAndArenas):
+sum over units/arenas of level * workers. This matches the card text
+exactly and is unchanged.
+
+Traced example: BGO game 7522866 [4p], seat 0 (Orange). Journal: "Impact
+of Competition ... Orange scores 7 culture". Engine computes 6 (delta -1).
+
+Hand-traced Orange's final board via SCOREDIV_COMPETITION_DEBUG (temporary
+instrumentation, reverted -- not part of the shipped diff): Knights
+(level 1, 3 workers) = 3, Professional Sports/Arena (level 3, 1 worker) =
+3. Total 6. Warriors and Swordsmen both showed 0 workers.
+
+Hand-tracing Orange's full Infantry-chain history in the journal (builds
+at I-7, II-8, II-9, plus one Warrior->Swordsmen upgrade, minus sacrifices
+at the II-8 colonization [1 Swordsmen] and the III-13 colonization [1
+Knights + 2 Swordsmen]) gives a net Swordsmen worker count of 1, not 0.
+1 missing worker x level 1 = exactly the missing 1 culture point.
+
+ROOT CAUSE (not a card-scoring bug): this game's own completion output
+already self-flags "(colonize approximated)" -- the replay engine could
+not exactly reconstruct which unit cards absorbed which colonization
+sacrifice. `replay_common.rs::ground_army_unit_for_consumption`'s own doc
+comment explicitly names THIS SAME GAME (7522866) as the one a prior
+worker traced when testing a more aggressive grounding fix: "a
+grant-without-a-victim variant was tried and measured
+(colofix__COLOFIX.txt) -- it fixed one more fallback fire but net
+REGRESSED the corpus by inflating a player's worker count past what an
+unrelated, otherwise correctly-reconstructed later
+`ChoiceKind::LosePop` destroy-choice (game 7522866) expected, permanently
+stalling that replay." I.e. this exact army-reconstruction gap for this
+exact game was already investigated and deliberately left as-is because
+the alternative made a DIFFERENT part of the same replay worse.
+
+No code change made -- re-fighting an already-adjudicated
+replay-approximation tradeoff to chase a single card's score in one
+already-known-approximate game is exactly what this task's "do not
+special-case a game id" instruction rules out.
+
+
+====================================================================
+4. IMPACT OF VARIETY -- NOT FIXED (same root cause as Competition)
+====================================================================
+
+Card text: "Each civilization scores 2 culture for each type of unit,
+each type of urban building, and each special (blue) technology." FAQ
+v1.5 p.7 confirms this is counted by CATEGORY (Infantry/Cavalry/
+Artillery/Air, Farm/Mine/Lab/Temple/Library/Arena/Theater), not by
+individual card/level, and requires the category to have at least one
+STAFFED card ("Having zero Warriors and three Swordsmen ... gains you two
+Culture, for having at least one Military Unit of the Infantry type").
+Implementation (events.rs::scoring_culture,
+culturePerDistinctTypeOfUnitUrbanBuildingAndSpecialTech): a bitmask over
+`CardType`, gated on `slot.workers > 0`, plus a flat count of special
+techs. This matches the card text and FAQ example exactly and is
+unchanged.
+
+Traced example: same game, same seat (7522866, Orange). Journal: "Impact
+of Variety ... Orange scores 16 culture". Engine computes 14 (delta -2 =
+exactly one missing TYPE worth 2 culture).
+
+SCOREDIV_VARIETY_DEBUG (temporary instrumentation, reverted) showed
+Orange's Cavalry bit set (Knights, 3 workers) but Infantry bit UNSET
+(Warriors 0 workers, Swordsmen 0 workers). Per the same hand-trace as
+Impact of Competition above, Swordsmen should have 1 surviving worker
+after the colonization sacrifices, not 0 -- which would flip the Infantry
+bit on and add exactly the missing 2 culture.
+
+ROOT CAUSE: identical to Impact of Competition above -- the same missing
+Swordsmen worker from the same already-documented, already-adjudicated
+colonize-approximation gap in this same game (7522866). No code change
+made, for the same reason.
+
+
+====================================================================
+FILES CHANGED
+====================================================================
+  rust/src/effects.rs
+    - happy_source_count: flip check now only voids the wonder's own
+      printed happy, not Homer's tucked face.
+    - temple_theater_wonder_happy_source_count: identical fix.
+    - CulturePerHappyFromTemplesTheatersWonders (Michelangelo arm):
+      identical fix, for consistency (same bug, not one of the 4 flagged
+      pairs but the same latent defect).
+    - New test: st_peters_basilica_still_counts_a_homer_tucked_wonder_after_it_is_ravaged
+      (confirmed RED before the fix, GREEN after).
+
+No changes to events.rs, game.rs, or card_table.rs -- the Population fix
+lives entirely in the shared happy-computation helpers in effects.rs; the
+other three cards' formulas were verified correct as printed.
