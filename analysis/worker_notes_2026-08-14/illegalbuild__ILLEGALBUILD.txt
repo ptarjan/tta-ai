@@ -1,0 +1,388 @@
+ILLEGALMOVE: BUILD -- investigation and fix notes
+Worker: illegalbuild (clone /private/tmp/illegalbuild, base commit 9f6104d)
+Date: 2026-08-14
+
+SCOPE
+-----
+Bucket "IllegalMove: Build" -- 92 games at base commit 9f6104d
+(REPLAY_DUMP_BUCKET='IllegalMove: Build'). A prior worker on this same base
+(see analysis/worker_notes_2026-08-14/builddev__BUILDDEV.txt, clone
+/private/tmp/builddev, base ed3ccc9) had already fixed Winston Churchill's
+silent military choice (landed as commit 13019ca "Churchill military option"
+-- already present in my base, confirmed via `git log --oneline | grep -i
+churchill`) and left a HEAD START pointer: a targeted debug print already
+committed at rust/src/apply.rs's `h_play_action`
+`Special::ResourcesForMilitaryUnitsPerStrongerCivilization` site (the
+Wave-of-Nationalism/Military-Build-Up "n=0 when it should be >=1" lead on
+game 7523818).
+
+
+HEAD START LEAD -- CONFIRMED A DEAD END FOR THIS SESSION
+----------------------------------------------------------
+Re-ran game 7523818 with REPLAY_DEBUG=1. Did NOT find the `mine=16, n=0`
+symptom the previous worker's notes described -- by this base commit the
+Churchill fix already lets the replay progress much further into this exact
+game, and the actual "IllegalMove: Build" stop for 7523818 in THIS corpus
+snapshot is a different line (Air Forces, round 16-ish, resources short by 8
+after an end-turn drift -- see "res_short" below). Did not re-chase the
+original `mine`/`n` computation by hand; noted as superseded, not
+re-investigated. If picked up again, re-derive fresh against the CURRENT
+tree rather than trusting the old `mine=16, n=0` numbers -- they no longer
+reproduce.
+
+
+BUCKET CENSUS (measured this session, before any fix)
+--------------------------------------------------------
+92 games. Dumped full REPLAY_DEBUG=1 detail for all 92
+(`./target/difftest/replay ... $(cat build_ids.txt)`), extracted each game's
+own trailing "DEBUG try_apply fail: mv=Build{...}" + "DEBUG cost detail:
+build_cost_for(...)" pair, and classified against `legal.rs`'s own build-loop
+gates (workers_free>0, then unit-vs-non-unit have_ma/have_ca, then
+resources>=net cost):
+
+    workers_free == 0                                        31 games
+    unit build, military_actions == 0 ("no_ma")               11 games
+    non-unit build, civil_actions == 0 ("no_ca")                7 games
+    resources < net build cost ("res_short")                  41 games
+    unresolved (workers/actions/resources all look sufficient
+      by this accounting, still rejected)                       2 games
+                                                              -------
+                                                                 92
+
+(`workers_free==0` as "the whole bucket's cause" was already correctly ruled
+out by an EARLIER 2026-08-13 session, analysis/worker_notes_2026-08-13/
+replayfin__REMAINING.txt -- this session's 31/92 split is consistent with
+that finding, not a re-derivation of it.)
+
+
+ROOT CAUSE FOUND AND FIXED
+-----------------------------
+`h_play_leader` (rust/src/apply.rs), the leader-REPLACEMENT path.
+
+A leader carrying a flat `civil_actions`/`military_actions` bonus (e.g. Joan
+of Arc: +1 MA; the doc comment on `on_leave_play` already named "Julius
+Caesar, Napoleon, ..." as other carriers) who is replaced MID-TURN, after
+some of that bonus has already been spent, was having the ALREADY-SPENT
+portion clawed back out of the remaining pool a second time, not just the
+unclaimed portion. Mechanism: `h_play_leader` called the generic
+`on_leave_play(old)`, which does a PLAIN decrement of
+`p.civil_actions`/`p.military_actions` by the old leader's flat bonus,
+clamped at 0 -- with no memory of how much of that bonus had already been
+spent this turn.
+
+Traced end-to-end on BGO human game 7522520, round 11 (added a temporary
+REPLAY_DEBUG_ALL trace of every applied move's civil_actions/
+military_actions -- this is the technique to reuse if re-tracing):
+  - Grey is Theocracy (3 printed MA, confirmed against
+    sources/bga_throughtheages_material.inc.php's own Theocracy row:
+    'CA' => 4, 'MA' => 3) with leader Joan of Arc (+1 MA per
+    data/cards_wonders_leaders.json), so 4 MA total this turn.
+  - `Grey adopts existing tactics I / Medieval Army` = `Move::CopyTactic`
+    (confirmed 2 MA against sources/ubg_subsequent-rounds.txt's own
+    "Copying A Tactic" section: "Pay 2 military actions ... Note: Copying a
+    tactic costs you 2 military actions, even if it is one you originally
+    played.") -- MA 4 -> 2 remaining. This matched the engine's own applied
+    trace exactly: `DEBUG applied mv=CopyTactic{...} -> military_actions=2`.
+  - `Grey takes Isaac Newton in hand` (1 CA) then `Grey elects Isaac Newton
+    Joan of Arc dies` = `Move::PlayLeader`. THE BUG: the applied-move trace
+    showed `military_actions` drop from 2 to 1 on this move alone --
+    PlayLeader should touch CIVIL actions only (RULES_SPEC item 7: "Play a
+    leader -- 1 CA"), never military.
+  - `Grey builds Knights` (1 MA) -> military_actions 1 -> 0. `Grey builds
+    Warriors` then needed 1 more MA and had 0: rejected as illegal, even
+    though the human demonstrably built both units in the real game.
+  - The true total spent this turn was CopyTactic(2) + Knights(1) +
+    Warriors(1) = 4, exactly the ORIGINAL total (3 Theocracy + 1 Joan)
+    before she left play -- i.e. the correct rule is that Joan's bonus,
+    once already reflected in this turn's pool, stays spendable for the
+    REST of the turn even after she is replaced. Only a NEWLY GAINED bonus
+    (the replacement's OWN effect, or any other card entering play
+    mid-turn) should retroactively top up the live counter -- which
+    `on_enter_play`'s existing, correct `+=` logic already does; there was
+    no symmetric "already spent doesn't get clawed back" protection on the
+    LEAVING side.
+  - This is exactly the shape `set_government` (same file) ALREADY handles
+    correctly for the analogous revolution case, via `carry_over_action_
+    pool(old_total, new_total, spent, old_remaining)`: when the total goes
+    DOWN, the decrease is absorbed against what's ALREADY BEEN SPENT first
+    (`old_remaining - max(decrease - spent, 0)`), so a decrease that is
+    smaller than what was already spent leaves the remaining pool
+    untouched. `h_play_leader` had its own bespoke, and for MA entirely
+    missing, logic instead of reusing this existing, tested, correct
+    formula.
+
+THE FIX
+-------
+File: rust/src/apply.rs, function `h_play_leader`. Snapshots `old_total_c`/
+`old_total_m`/`spent_c`/`spent_m`/`old_remaining_c`/`old_remaining_m` (the
+same shape `set_government` reads) BEFORE the old leader leaves play, lets
+`on_leave_play`/`on_enter_play` run as before (their own CA/MA arithmetic in
+between is now dead work, harmless since it gets overwritten), then
+overwrites BOTH `p.civil_actions` and `p.military_actions` via
+`carry_over_action_pool(old_total, new_total, spent, old_remaining)`,
+folding the existing "+1 CA refund for replacing a leader" (RULES_SPEC item
+7's separate clause) in as a final `.min(carried_c + 1)` step so the
+previously-passing CA refund tests are unaffected.
+
+Commit (in the clone, on top of 9f6104d): 4e29a4c "Fix leader replacement to
+carry over already-spent action pool, not claw it back".
+
+
+TEST ADDED (rust/src/apply.rs, #[cfg(test)] mod tests, inside `apply.rs`)
+----------------------------------------------------------------------------
+`replacing_a_leader_with_a_flat_military_action_bonus_mid_turn_does_not_claw_back_actions_already_spent_from_it`
+-- builds the exact game-7522520 shape (Theocracy + Joan of Arc, 2 MA
+already spent of a 4 MA total, replace with Isaac Newton who has no MA
+bonus) and asserts `military_actions` stays 2, not 1.
+
+RED CONFIRMATION (quoted verbatim)
+Reverted just the final `military_actions` assignment to a no-op (leaving
+the naive `on_leave_play` decrement from earlier in the same function as
+the only thing touching it -- i.e. exactly the pre-fix behaviour), kept the
+test, rebuilt, ran
+`cargo test --profile fasttest --lib -- replacing_a_leader_with_a_flat_military_action_bonus`:
+
+    running 1 test
+    test apply::tests::replacing_a_leader_with_a_flat_military_action_bonus_mid_turn_does_not_claw_back_actions_already_spent_from_it ... FAILED
+
+    thread '...' panicked at src/apply.rs:2372:9:
+    assertion `left == right` failed
+      left: 1
+     right: 2
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1380 filtered out
+
+Restored the real fix; reran the same filter GREEN, then the full
+`cargo test --profile fasttest --lib`: 1381 passed, 0 failed. Full
+`cargo test --profile fasttest` (all targets) also clean. `cargo clippy
+--all-targets --profile difftest -- -D warnings` clean (no wildcard `_ =>`
+arms added).
+
+
+REGRESSION BAR (verbatim)
+----------------------------
+    cd /private/tmp/illegalbuild/rust
+    PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals > /tmp/illegalbuild_after.txt 2>&1
+    grep '^SCOREDIV_COMPLETED_ID' /tmp/illegalbuild_after.txt | awk '{print $2}' | sort \
+        > /tmp/illegalbuild_ids.txt
+    comm -23 /private/tmp/guard_ids.txt /tmp/illegalbuild_ids.txt   # REGRESSIONS
+    comm -13 /private/tmp/guard_ids.txt /tmp/illegalbuild_ids.txt   # WINS
+
+guard_ids.txt: 509 IDs (frozen). illegalbuild_ids.txt (after fix): 553 IDs.
+
+=== REGRESSIONS (MUST BE EMPTY) ===
+(empty)
+
+=== WINS ===
+7521302
+7521344
+7521565
+7521606
+7521710
+7521712
+7521777
+7522023
+7522043
+7522048
+7522077
+7522081
+7522087
+7522091
+7522261
+7522290
+7522291
+7522308
+7522405
+7522426
+7522446
+7522501
+7522661
+7522684
+7522687
+7522887
+7522968
+7522978
+7523011
+7523095
+7523128
+7523145
+7523160
+7523167
+7523370
+7523376
+7523441
+7523474
+7523487
+7523512
+7523524
+7523582
+7523624
+7523671
+(44 games)
+
+Zero regressions. 44 new SCOREDIV_COMPLETED games -- broader than just the
+Build bucket, since `h_play_leader` is foundational (every move class that
+spends civil or military actions is downstream of it), so games that were
+failing elsewhere (Develop, Upgrade, PlayTactic, ...) on the SAME underlying
+bug also newly complete.
+
+Build-bucket-specific effect (REPLAY_DUMP_BUCKET='IllegalMove: Build'):
+92 -> 89 games. Smaller than the 44 corpus-wide wins because most of THIS
+bucket's fixed games progressed further and either completed outside this
+bucket's stop point entirely, or hit a SECOND, independent Build failure
+later in the same game (see game 7522520 below) and so remain counted here.
+The "no_ma" sub-cause (unit build rejected for military_actions==0) that
+this bug directly produced went from 11 -> 0 games -- full clearance of that
+specific sub-cause. Confirmed via the same categorization script re-run
+post-fix (`/tmp/build_fail_lines_final.txt`):
+
+    workers_free == 0        31 games (unchanged set, same 31 IDs -- see below)
+    no_ma                      0 games (was 11 -- FULLY CLEARED)
+    no_ca                      7 games (unchanged set, same 7 IDs -- NOT this bug)
+    res_short                 48 games (was 41 -- absorbs games that got past
+                                          their old MA-gate and now fail later
+                                          on a resource shortfall instead)
+    unresolved                 3 games (was 2)
+
+
+FALSE STARTS (in order, so a fresh worker doesn't re-walk them)
+--------------------------------------------------------------------
+1. Assumed "Sacrificed Units" during Colonize returns the sacrificed unit's
+   worker to `workers_free`, and that this explained the 31-game
+   `workers_free==0` sub-cause (game 7523355 has a colonize with a
+   sacrificed Warrior right before its Build failure). WRONG: read
+   `interact.rs::colonize_step`'s own comment first -- "§11.4: the token
+   goes to the YELLOW BANK, not to free workers" -- already correctly
+   implemented. Colonize sacrifice is a dead end for `workers_free==0`.
+
+2. Assumed "GAME DATA UPDATED Orange Bronze: 0 -> 2" (game 7521932 only,
+   the ONLY game in the whole corpus with this phrase -- confirmed via
+   `grep -l "GAME DATA UPDATED" journals/*.tsv`) was a parser gap silently
+   dropping a real worker/resource event. It is NOT unparsed -- `corpus.rs`
+   deliberately classifies it as `Bookkeeping` ("an admin correction BGO
+   occasionally injects"). This game's title contains "Packs de ressources"
+   (a tournament house-rule variant name); most likely a non-standard rule
+   this corpus's model was never meant to cover. Left alone -- 1 game, not
+   worth chasing further; flagged as an accepted gap, not re-investigated
+   beyond this.
+
+3. Added a `trailing_now_resources` REPLAY_DEBUG diagnostic (mirroring the
+   pre-existing `trailing_now_science` one) to check whether the `res_short`
+   sub-cause (41 games) was ONE systemic under-production bug. First pass
+   (828 drift hits across 41 games, every one strongly negative) looked like
+   a slam dunk -- but this was almost entirely the SAME diagnostic artifact
+   analysis/worker_notes_2026-08-13/replayfin__REMAINING.txt already warned
+   about for the science check: comparing state right at the "End turn"
+   dispatch point is a FALSE positive whenever that turn is discard-blocked
+   (`economy::end_of_turn` returns before running production). Gated the
+   check on `!matches!(r.state.pending.top(), Some(Pending::Choice(c)) if
+   c.kind == ChoiceKind::DiscardMilitary)` (same pattern the culture-oracle
+   checkpoint already uses) and the count dropped from 828 to 28. The
+   remaining real drift is SMALL (1-3 resources per game, occasionally +2)
+   and does not look like one shared cause -- some correlate with
+   "CORRUPTION!" journal lines (§6.2), suggesting a `corruption`/
+   `blue_available` accounting edge case, but this was NOT confirmed or
+   fixed this session. The diagnostic itself (properly gated) is left in
+   the tree as it mirrors an accepted existing pattern and may help whoever
+   picks up `res_short` next -- see `trailing_now_resources`'s doc comment.
+
+4. Manually reconstructed game 7522635's Raid ("Grey plays Raid against
+   Orange ... Raid produces 7 resources") end to end suspecting a
+   Raid-resolution resource-crediting bug. Confirmed `parse_raid_casualties_
+   line`/the surrounding Raid resolution machinery already exists and looks
+   correct on inspection; did not find a bug there. Not conclusively ruled
+   out (did not write a targeted test), just not where the shortfall in
+   that particular game traced to on a first pass -- if picked up again,
+   don't re-assume Raid is broken without re-checking against this game's
+   exact numbers first.
+
+5. Considered whether BGO's "Build" journal lines omitting "uses N military
+   action" text (unlike some OTHER action types, which do print it) meant
+   the engine had a parser gap not charging the MA cost at all. FALSE --
+   verified corpus-wide (`grep -c "builds .* military action"
+   journals/*.tsv` = 0 across 10,438 unit-build lines) that BGO simply never
+   prints the action-type suffix for self-evident actions like Build/
+   Upgrade/Take/Develop (it always costs exactly 1, so BGO doesn't bother);
+   the engine's own `Move::Build` handler already deducts the MA/CA
+   internally regardless of what BGO prints. Not a lead.
+
+
+HONEST LIST OF WHAT WAS DIAGNOSED BUT NOT FIXED
+----------------------------------------------------
+1. `workers_free == 0` sub-cause -- 31 games, UNCHANGED by this session's
+   fix (same 31 IDs before and after): 7520707, 7521243, 7521378, 7521544,
+   7521739, 7521775, 7521782, 7521833, 7521837, 7521917, 7521943, 7522074,
+   7522113, 7522242, 7522358, 7522513, 7522729, 7522818, 7523025, 7523082,
+   7523127, 7523159, 7523198, 7523338, 7523355, 7523383, 7523420, 7523456,
+   7523515, 7523520, 7523568. NOT investigated beyond ruling out colonize
+   sacrifice (false start #1 above). Root cause unknown -- either
+   `workers_free` really is legitimately 0 in these games (i.e. the human's
+   Build move needed some OTHER path this engine doesn't model, e.g. a
+   free-build source), or `workers_free` itself has a tracking bug
+   somewhere upstream (population increases, disbands, wonder effects).
+   START with game 7523355 (Religion build, round 13, J. S. Bach) or
+   7522520 -- wait, 7522520 is now FIXED for its original failure and
+   re-fails LATER in the same game at line 582 (`Green builds Cannon`) on a
+   `res_short` gate, not `workers_free` -- a genuinely useful re-trace
+   target since this session's fix already got it further than before.
+
+2. `no_ca` sub-cause -- 7 games, UNCHANGED by this session's fix (not the
+   same bug): 7522349, 7522392, 7522668, 7523047, 7523175, 7523468,
+   7523647. Spot-checked 7522349 (Journalism build, round 11, leader
+   Leonardo Da Vinci): no leader replacement this turn at all -- instead a
+   PEACEFUL REVOLUTION via `Develop{Constitutional Monarchy}` (BGO: "Purple
+   discovers Constitutional Monarchy using Breakthrough"), which DOES
+   already route through the correctly-carrying-over `set_government`/
+   `carry_over_action_pool` path (unlike the leader-swap bug just fixed) --
+   so this is a DIFFERENT, not-yet-found cause. Worth checking whether
+   Breakthrough's own "pay no civil/military action for the ordered action"
+   text (RULES_SPEC item 11) is being applied correctly when the ordered
+   action IS a peaceful revolution, since Breakthrough is the card in play
+   on this exact turn.
+
+3. `res_short` sub-cause -- 48 games post-fix (was 41 pre-fix; the pool
+   changed membership as fixed games progressed further before failing
+   again). The `trailing_now_resources` diagnostic (see false start #3)
+   shows ~28 real (non-discard-blocked-turn-artifact) small drifts of 1-3
+   resources scattered across different games, several coinciding with
+   "CORRUPTION!" journal lines. NOT root-caused. Candidate next step:
+   compare `economy::corruption`/`blue_available` against a hand-reconstructed
+   ledger for one CORRUPTION-tagged game (e.g. 7522733 or 7522962 --
+   7522962 is the one +2 outlier where THIS binary computes MORE than the
+   journal, opposite sign from every other case, which may be the fastest
+   one to hand-verify since a sign flip usually means a double-application
+   or an inverted condition rather than a missing grant).
+
+4. 3 fully "unresolved" games where workers/actions/resources all look
+   sufficient by this session's own accounting yet the Build was still
+   rejected: 7521832 (Organized Religion), 7521971 (Scientific Method),
+   7523193 (Theology). NOT investigated at all beyond the categorization
+   pass -- the mismatch must be in some OTHER legality gate this session's
+   script did not model (`legal.rs`'s `urban_limit` check for urban
+   buildings, or the attempted card not actually being in this binary's own
+   `names` / tableau reconstruction, which `analysis/worker_notes_2026-08-13/
+   replayfin__REMAINING.txt` already flagged as the more serious of the two
+   possibilities for this exact "workers_free>0, everything else looks fine"
+   shape). Start with `REPLAY_DEBUG_ALL=1 ./target/difftest/replay ... <id>`
+   and diff the printed `tableau=[...]` against the journal's own build/
+   develop history for that player up to that point.
+
+5. Head-start lead (Wave of Nationalism / Military Build-Up "n=0 when it
+   should be >=1" on game 7523818) -- superseded, not re-derived; see top of
+   this file. If it's still a live bug on the CURRENT tree, it would show up
+   under whatever bucket 7523818 stops in now (not this session's own
+   "IllegalMove: Build" line for that game any more, confirmed above it now
+   fails on a `res_short` gate at a different, later line).
+
+
+FILES
+-----
+Clone:   /private/tmp/illegalbuild (deleted after this write-up, per the
+         task's cleanup instruction -- patch confirmed non-empty first).
+Patch:   /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/illegalbuild.patch
+         (git diff 9f6104d HEAD -- rust/src/apply.rs rust/src/replay_common.rs,
+         99 insertions / 4 deletions across the two files)
+Commit in clone: 4e29a4c "Fix leader replacement to carry over already-spent
+         action pool, not claw it back"
