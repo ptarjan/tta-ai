@@ -1,0 +1,126 @@
+diff --git c/rust/src/events.rs w/rust/src/events.rs
+index 7a57a73..36291c8 100644
+--- c/rust/src/events.rs
++++ w/rust/src/events.rs
+@@ -755,6 +755,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
+         state,
+         &order,
+         RankStat::Happy,
++        false, // §5.3: "all tied civs affected, no tie-break" -- a 0-happy tie still counts
+         event_block(card, |sp| match sp {
+             Special::PlayersWithMostHappyFaces(b) => Some(b),
+             Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
+@@ -764,6 +765,7 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
+         state,
+         &order,
+         RankStat::Discontent,
++        true, // 0 discontent workers means nobody genuinely "has" one
+         event_block(card, |sp| match sp {
+             Special::PlayersWithMostDiscontentWorkers(b) => Some(b),
+             Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
+@@ -933,6 +935,26 @@ fn apply_single_target(
+             "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
+             order.iter().map(|&q| rank_stat_value(state, q, stat)).collect::<Vec<_>>()
+         );
++        if matches!(stat, RankStat::Strength) {
++            for &q in order {
++                let p = &state.players[q as usize];
++                let tech_sum: i32 =
++                    p.techs.iter().map(|(t, s)| t.get().effects.strength as i32 * s.workers as i32).sum();
++                eprintln!(
++                    "TMPDEBUG_STRENGTH idx={q} strength_extra={} army_strength={} tech_sum={} sum_of_parts={} state_stats.strength={} leader={} government={} completed_wonders={:?} colonies={:?} pacts_len={}",
++                    p.strength_extra,
++                    effects::army_strength(p),
++                    tech_sum,
++                    tech_sum + p.strength_extra as i32 + effects::army_strength(p),
++                    effects::state_stats(state, p).strength,
++                    if p.leader.is_none() { "none" } else { p.leader.get().name },
++                    p.government.get().name,
++                    p.completed_wonders.as_slice().iter().map(|w| w.get().name).collect::<Vec<_>>(),
++                    p.colonies.as_slice().iter().map(|c| c.get().name).collect::<Vec<_>>(),
++                    p.pacts.len(),
++                );
++            }
++        }
+     }
+     if let Some(&q) = ranked.first() {
+         apply_player_block(state, q, &block);
+@@ -941,19 +963,33 @@ fn apply_single_target(
+ 
+ /// The two TIED targeting keys (`playersWithMostHappyFaces`/
+ /// `playersWithMostDiscontentWorkers`, §5.3's `all_tied` pair): every player
+-/// tied for the best `stat` gets `block`, but only when that best value is
+-/// ABOVE ZERO -- "the players with the most discontent workers" targets
+-/// nobody when nobody has one. Targets are collected BEFORE `block` is
+-/// applied to any of them (mirrors Python's own comment: the block can move
++/// tied for the best `stat` gets `block`.
++///
++/// `require_positive` gates the DISCONTENT case only -- "the players with the
++/// most discontent workers" targets nobody when nobody has one (0 discontent
++/// workers means nobody genuinely "has" one). It must NOT apply to the HAPPY
++/// case (`RankStat::Happy`, Immigration's "all civilizations with the most
++/// happy faces gain 1 population"): §5.3 states plainly, with no positivity
++/// clause, "'All civilizations' with most/least: all tied civs affected, no
++/// tie-break" -- a 0-happy tie is still a tie for "the most happy faces".
++/// ENGINE BUG, found chasing the `IllegalMove: Build` bucket's workers_free
++/// undercounts: this gate used to apply unconditionally to BOTH keys, so
++/// Immigration silently granted nobody a population token whenever every
++/// player sat at 0 happy faces. Game 7523355 (round 11) is a corpus-confirmed
++/// instance: engine computed `values=[0, 0]` for Orange/Purple and skipped
++/// the grant entirely, while the journal shows BOTH players' own lines
++/// ("Orange receives a new immigrant; Purple receives a new immigrant") --
++/// the real game granted it. Targets are collected BEFORE `block` is applied
++/// to any of them (mirrors Python's own comment: the block can move
+ /// population, which moves discontent, so re-ranking mid-loop would be
+ /// wrong).
+-fn apply_tied_targets(state: &mut GameState, order: &[u8], stat: RankStat, block: EventBlock) {
++fn apply_tied_targets(state: &mut GameState, order: &[u8], stat: RankStat, require_positive: bool, block: EventBlock) {
+     let ranked = rank_players(state, order, stat, true);
+     let top = match ranked.first() {
+         Some(&q) => rank_stat_value(state, q, stat),
+         None => 0,
+     };
+-    if top <= 0 {
++    if require_positive && top <= 0 {
+         return;
+     }
+     let targets: Vec<u8> =
+@@ -1924,6 +1960,38 @@ mod tests {
+         assert_eq!(state.queue.pop_front(), Some(QueueItem::LosePop { player: 1, n: 1 }));
+     }
+ 
++    /// ENGINE BUG regression (found chasing the `IllegalMove: Build` bucket's
++    /// missing-worker games, corpus game 7523355 round 11): `apply_tied_
++    /// targets`'s "skip when the tied stat is 0" gate is only correct for
++    /// `PlayersWithMostDiscontentWorkers` (0 discontent workers means nobody
++    /// genuinely "has" one) -- it must NOT gate `PlayersWithMostHappyFaces`
++    /// (Immigration's "all civilizations with the most happy faces gain 1
++    /// population"). §5.3: "'All civilizations' with most/least: all tied
++    /// civs affected, no tie-break" -- a 0-happy tie is still a tie. Before
++    /// the fix, two players both sitting at 0 happy faces (the common case
++    /// early in a game) made Immigration silently grant NOBODY a worker,
++    /// even though the journal shows both players' own "receives a new
++    /// immigrant" line.
++    #[test]
++    fn immigration_grants_population_to_both_players_tied_at_zero_happy_faces() {
++        let mut p0 = blank_player(0, card("Despotism"));
++        p0.yellow_bank = 5;
++        let mut p1 = blank_player(1, card("Despotism"));
++        p1.yellow_bank = 5;
++        let mut state = multi_player_state(2, &[p0, p1], &[]);
++
++        resolve_event(&mut state, card("Immigration"), 0);
++
++        assert_eq!(
++            state.players[0].workers_free, 1,
++            "seat 0 is tied for the most (zero) happy faces and must still be granted a worker"
++        );
++        assert_eq!(
++            state.players[1].workers_free, 1,
++            "seat 1 is tied for the most (zero) happy faces and must still be granted a worker"
++        );
++    }
++
+     /// ENGINE BUG regression (sibling of the two Barbarians regressions
+     /// above -- same bug shape, found sweeping for other uncovered
+     /// "weakest" selectors after `d9e52c6`): Uncertain Borders' "the
