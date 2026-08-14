@@ -1,0 +1,200 @@
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index b00ed7f..e70af2f 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -1816,6 +1816,39 @@ mod tests {
+         assert_eq!(state.players[0].science, 1);
+     }
+ 
++    /// CoL p.12 / `docs/RULES_SPEC.md` line ~383 (RESOLVED): "if the current
++    /// player takes cards [via International Agreement], action cards taken
++    /// may be used the same turn" -- the one documented exception to the
++    /// normal rule that a card cannot be played in the same Action Phase it
++    /// was taken in [RB p.14, CoL p.6]. Before this fix, `take_card`
++    /// unconditionally recorded every taken Action card into
++    /// `taken_this_turn`, so `legal::action_moves`'s `held > taken` gate
++    /// blocked it even when it was taken via International Agreement's
++    /// `TakeRow` choice -- found replaying real BGO games (`IllegalMove:
++    /// PlayAction` bucket, e.g. games 7522274, 7523579, 7522824). Uses
++    /// "Cultural Heritage" (an immediate-gain-only Action card, no ordered
++    /// action) so `legal::action_card_playable` reads true unconditionally
++    /// and the test isolates the `taken_this_turn` bookkeeping specifically.
++    #[test]
++    fn a_card_taken_via_international_agreement_can_still_be_played_the_same_turn() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.civil_actions = 4;
++        let mut state = one_player_state(p);
++        let heritage = card("Cultural Heritage (A)");
++        state.card_row[6] = heritage;
++
++        take_card_from_international_agreement(&mut state, 0, 6);
++
++        assert!(state.players[0].hand_civil.contains(heritage));
++        let legal = legal::legal_moves(&state);
++        assert!(
++            legal.as_slice().contains(&Move::PlayAction { card: heritage }),
++            "an action card taken via International Agreement must be immediately \
++             playable the same turn, not blocked as if it were an ordinary Take: {:?}",
++            legal.as_slice()
++        );
++    }
++
+     // --------------------------------------------------------------- pop
+ 
+     #[test]
+@@ -2979,6 +3012,37 @@ mod tests {
+         assert_eq!(state.players[0].civil_actions, 7);
+     }
+ 
++    /// This pass's fix 3 (`legal::breakthrough_robespierre_ma_fundable`'s own
++    /// doc comment has the full citation): when civil was already exhausted,
++    /// `h_play_action` lets Robespierre fund Breakthrough's own RB p.15 "1
++    /// CA" with a MILITARY action instead, and sets `p.breakthrough_ma_funded`.
++    /// The sibling test just above (`h_revolution_via_breakthrough_does_not_
++    /// charge_robespierres_civil_pool_for_breakthroughs_own_ca`) proves the
++    /// PRE-EXISTING `via_ordered_action && robespierre` correction is right
++    /// when Breakthrough's 1 CA DID come out of civil -- but here it never
++    /// did, so that correction must be SKIPPED here, or it wrongly credits a
++    /// civil action the player never spent, one-upping the new government's
++    /// real total (7, not 8).
++    #[test]
++    fn h_revolution_does_not_double_credit_a_civil_action_when_breakthrough_paid_its_own_cost_with_a_military_action() {
++        let mut p = blank_player(0, card("Constitutional Monarchy")); // civil_actions 6, military_actions 4
++        p.leader = card("Maximilien Robespierre");
++        p.science = 20;
++        p.civil_actions = 6; // untouched -- Breakthrough's own play cost came out of MILITARY this time
++        p.military_actions = 4 - 1; // the 1 MA h_play_action spent funding Breakthrough
++        p.breakthrough_ma_funded = true; // set by h_play_action's new branch
++        p.hand_civil.push(card("Democracy")); // civilActions 7
++        let mut state = one_player_state(p);
++        h_revolution(&mut state, 0, card("Democracy"), true);
++        assert_eq!(state.players[0].government, card("Democracy"));
++        assert_eq!(state.players[0].military_actions, 0, "Robespierre: military pays for/empties on a revolution");
++        assert_eq!(
++            state.players[0].civil_actions, 7,
++            "nothing was ever spent from civil this turn -- the new government's full total (7), \
++             not 8 (which would mean crediting back a civil action that was never taken)"
++        );
++    }
++
+     /// Same scenario, but the revolution is declared BARE (not via
+     /// Breakthrough): `via_ordered_action=false` must leave `spent` alone --
+     /// this is the precondition-enforced case (RB p.15: a bare revolution
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index b937578..e3db03a 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -2011,6 +2011,36 @@ mod tests {
+             .any(|m| matches!(m, Move::BachTheater { .. })));
+     }
+ 
++    /// RB p.24: J. S. Bach's cross-kind theater-upgrade privilege is a
++    /// single once-per-turn ability, fundable EITHER bare (his own 1 CA,
++    /// the `action_moves` arm the two tests above exercise, `discount: 0`)
++    /// OR by a yellow action card's discount ("Efficient Upgrade"/"Urban
++    /// Growth") -- real BGO journals print both the same way ("Johannes
++    /// Sebastian Bach upgrades X to Y[ using <Card>]"). Before this fix,
++    /// `free_action_moves`'s `BuildOrUpgradeUrbanBuilding`/
++    /// `UpgradeFarmMineOrUrbanBuilding` arm never called `bach_moves` at
++    /// all, so a Bach player whose ONLY affordable upgrade was this
++    /// cross-kind one saw an EMPTY move list from THIS function and the
++    /// whole action card rejected as unplayable (`IllegalMove: PlayAction`,
++    /// games 7521377, 7521798, 7523221, 7521653, 7523392).
++    #[test]
++    fn free_action_moves_offers_a_cross_kind_bach_theater_upgrade_for_an_action_cards_discount() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("J. S. Bach");
++        // Same same-level temple/theater pair the bare-use test above uses.
++        p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
++        p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
++        p.resources = 10;
++        let state = one_player_state(p);
++        let out = free_action_moves(&state, &state.players[0], FreeActionKind::BuildOrUpgradeUrbanBuilding, 0, false);
++        assert!(
++            out.as_slice().contains(&Move::BachTheater { from: card("Theology"), to: card("Drama") }),
++            "an action card's own ordered urban-upgrade must also offer Bach's cross-kind \
++             theater upgrade, not just a bare same-kind Upgrade: {:?}",
++            out.as_slice()
++        );
++    }
++
+     #[test]
+     fn destroy_move_needs_a_worker_present_and_the_matching_action_pool() {
+         let mut p = blank_player(0, card("Despotism"));
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 6973046..b64391b 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -11389,6 +11389,72 @@ mod tests {
+         assert!(!p.hand_civil.contains(idea_ii), "the corrected card was then played (removed), not left in hand");
+     }
+ 
++    /// This pass's fix 2 (`ActionClass::PlayActionCard`'s `FreeActionKind::
++    /// IncreasePopulation` arm, right before `r.try_apply(Move::PlayAction
++    /// { card }, true)`): mirrors the synthesis the ordinary `ActionClass::
++    /// IncreasePopulation` arm already makes (its own doc comment, a few
++    /// hundred lines above) for THIS "plays Frugality" line. A live Trade
++    /// Routes Agreement side-B grant (§5.9, "Civilization B can use 1
++    /// resource as 1 food during its turn") lets Frugality's ordered Pop be
++    /// paid PART in converted resources, and BGO glues that as a second
++    /// "<Color> spends M resource" clause onto the SAME line, with no
++    /// preceding `Move::TradeResourceAsFood` anywhere in the journal.
++    /// Before this fix this arm never tried the conversion at all: with
++    /// `p.food` short of `pop_cost` by exactly the pact's grant, `Move::Pop`
++    /// was never in `free_action_moves`, `legal::action_card_playable` read
++    /// false, and `Move::PlayAction { card: Frugality }` was never even
++    /// offered as legal -- an `IllegalMove: PlayAction` for a line the human
++    /// actually played. Found chasing that bucket (games 7522213, 7522672).
++    #[test]
++    fn a_frugality_play_line_short_on_food_converts_the_shortfall_via_a_live_trade_routes_agreement_grant() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
++        let frugality_a = CardId::by_name("Frugality (A)").expect("in the table");
++        {
++            let p = &mut r.state.players[0];
++            p.civil_actions = 1;
++            p.yellow_bank = 5; // pop_cost_base(5) == 5
++            p.food = 4; // short by 1 -- exactly the pact's own grant magnitude
++            p.resources = 1;
++            p.blue_total = 20; // room for both the conversion's +1 food and Frugality's own +1 food gain
++            p.hand_civil = CardList::new();
++            p.hand_civil.push(frugality_a);
++            // Trade Routes Agreement, side B: player 0 may use 1 resource as
++            // 1 food this turn (`give_trade_routes_side_a`'s own doc comment
++            // a little below has the sibling side-A helper for the Build/
++            // Upgrade/WonderStep path; `a`/`b` are the real party-to-block
++            // mapping, not "owner is A" -- `state.rs`'s own doc on `Pact`).
++            p.pacts.push(crate::state::Pact {
++                card: CardId::by_name("Trade Routes Agreement").expect("Trade Routes Agreement is a known card"),
++                owner: 0,
++                partner: 1,
++                a: 1,
++                b: 0,
++            });
++        }
++
++        let raw = "Orange plays Frugality Orange increases population Orange spends 4 food; Orange spends 1 resource Orange produces 1 food";
++        let out = apply_one(
++            &mut r,
++            0,
++            ActionClass::PlayActionCard,
++            Some(frugality_a),
++            "plays Frugality Orange increases population Orange spends 4 food; Orange spends 1 resource Orange produces 1 food",
++            raw,
++            None,
++        );
++
++        assert!(out.is_ok(), "{out:?}");
++        let p = &r.state.players[0];
++        assert_eq!(p.resources, 0, "the shortfall resource was converted, not left unspent");
++        assert_eq!(p.trade_resource_as_food_used_this_turn, 1, "via a real Move::TradeResourceAsFood, not a silent discount");
++        assert!(!p.hand_civil.contains(frugality_a), "Frugality was actually played");
++        assert_eq!(p.food, 1, "5 (post-conversion) - 5 (pop cost) + 1 (Frugality's own gainFood)");
++        assert_eq!(p.yellow_bank, 4, "the population actually increased (one cheap token spent from the bank)");
++    }
++
+     /// REGRESSION (found by replaying real BGO games `7522669`/`7523025`):
+     /// pins the other failure mode `is_pure_confirmation_line` avoids for
+     /// `Colonize`. Unlike `WinAuction`, nothing is left pending here at all

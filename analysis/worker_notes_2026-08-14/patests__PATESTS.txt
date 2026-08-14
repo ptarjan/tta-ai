@@ -1,0 +1,164 @@
+Unit tests for the 4 PlayAction-pass fixes -- worker notes, 2026-08-14
+=======================================================================
+
+TASK: the worker who landed f7f121f (IA same-turn play, Frugality+Trade
+Routes, Robespierre/Breakthrough, Bach cross-kind theater) ran out of
+budget before writing unit tests for any of the four fixes. This pass
+writes exactly one test per fix, each confirmed RED by hand-reverting
+the fix's own behavioural hunk, running the test, recording the real
+failure, and restoring the fix. No engine behaviour was changed --
+tests only.
+
+Workspace: /private/tmp/patests, cloned from /private/tmp/base0815 at
+f7f121f. My commit on top is a1c927a ("Add unit tests for the 4 fixes
+in PlayAction pass (f7f121f)"), tests only, 3 files touched
+(rust/src/apply.rs, rust/src/legal.rs, rust/src/replay_common.rs).
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/patests.patch
+(git diff f7f121f HEAD, scoped to rust/src by construction -- no other
+tracked files changed).
+
+Baseline: 1383 lib tests passing at f7f121f (confirmed before writing
+anything). After: 1387 (1383 + 4 new tests), 0 failed.
+
+Method used to confirm RED, per test: edited the exact line(s) that
+constitute the fix back to (or to behave like) the pre-fix code by
+hand, ran `cargo test --profile fasttest --lib <test name>`, recorded
+the failure below verbatim, then restored the fix and reran to confirm
+green again before moving to the next test. Never used `git stash` or
+`git checkout <old commit>` for this -- editing in place was enough to
+isolate each hunk individually, and safer against cross-fix
+interference since three of the four fixes touch code near each other.
+
+
+FIX 1 -- International Agreement same-turn play
+-------------------------------------------------
+Test: apply::tests::a_card_taken_via_international_agreement_can_still_be_played_the_same_turn
+File: rust/src/apply.rs
+
+Reverted by changing (temporarily):
+    pub(crate) fn take_card_from_international_agreement(state: &mut GameState, idx: u8, slot: usize) {
+        take_card_impl(state, idx, slot, false);
+    }
+to pass `true` instead of `false` (reproducing the pre-fix behaviour:
+every taken Action card recorded into taken_this_turn regardless of
+the IA path).
+
+Verbatim failure:
+    thread 'apply::tests::a_card_taken_via_international_agreement_can_still_be_played_the_same_turn' panicked at src/apply.rs:1844:9:
+    an action card taken via International Agreement must be immediately playable the same turn, not blocked as if it were an ordinary Take: [EndTurn]
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1386 filtered out
+
+Restored (`false`), reran: ok. 1 passed; 0 failed.
+
+
+FIX 2 -- Frugality + Trade Routes Agreement (replayer synthesis)
+-------------------------------------------------------------------
+Test: replay_common::tests::a_frugality_play_line_short_on_food_converts_the_shortfall_via_a_live_trade_routes_agreement_grant
+File: rust/src/replay_common.rs
+
+Reverted by temporarily gating the whole synthesis block with `if
+false && kind == Some(legal::FreeActionKind::IncreasePopulation) {`
+(the block this fix added, immediately before `r.try_apply(Move::
+PlayAction { card }, true)?` in the `ActionClass::PlayActionCard`
+handler) -- i.e. simulating "this arm never tries the conversion at
+all", exactly the pre-fix state.
+
+Verbatim failure:
+    thread 'replay_common::tests::a_frugality_play_line_short_on_food_converts_the_shortfall_via_a_live_trade_routes_agreement_grant' panicked at src/replay_common.rs:11449:9:
+    Err(IllegalMove { attempted: "PlayAction { card: Frugality (A) }", legal_moves: "[EndTurn, Take { slot: 0 }, Take { slot: 1 }, Take { slot: 2 }, Take { slot: 3 }, Take { slot: 4 }, TradeResourceAsFood, Destroy { card: Agriculture }, Destroy { card: Bronze }, Destroy { card: Philosophy }]" })
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1386 filtered out
+
+This is exactly the real-world symptom the fix's own commit message
+names: an `IllegalMove: PlayAction` for a Frugality line the human
+actually played, because without the food-shortfall conversion
+`Move::Pop` was never affordable and `Move::PlayAction { card:
+Frugality }` was never legal in the first place -- the failure is at
+the point the whole move gets rejected, not at some later assertion.
+
+Restored (removed `if false &&`), reran: ok. 1 passed; 0 failed.
+
+
+FIX 3 -- Robespierre funding a Breakthrough revolution with military
+-------------------------------------------------------------------------
+Test: apply::tests::h_revolution_does_not_double_credit_a_civil_action_when_breakthrough_paid_its_own_cost_with_a_military_action
+File: rust/src/apply.rs
+
+Reverted by changing (temporarily), in `h_revolution`:
+    let breakthrough_civil_spent = via_ordered_action && !state.players[idx as usize].breakthrough_ma_funded;
+to:
+    let breakthrough_civil_spent = via_ordered_action;
+(the pre-fix expression -- no `breakthrough_ma_funded` check at all).
+
+Verbatim failure:
+    thread 'apply::tests::h_revolution_does_not_double_credit_a_civil_action_when_breakthrough_paid_its_own_cost_with_a_military_action' panicked at src/apply.rs:3039:9:
+    assertion `left == right` failed: nothing was ever spent from civil this turn -- the new government's full total (7), not 8 (which would mean crediting back a civil action that was never taken)
+      left: 8
+     right: 7
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1386 filtered out
+
+Exactly the bug the fix's doc comment predicts: without the flag, the
+carry-over correction fires even though Breakthrough's own 1 CA was
+paid from MILITARY (not civil) this scenario, crediting back a civil
+action never spent -- civil_actions comes out 8 instead of the correct
+7 (Democracy's full civilActions total).
+
+Restored, reran: ok. 1 passed; 0 failed.
+
+
+FIX 4 -- J. S. Bach cross-kind theater upgrade via an action card's discount
+--------------------------------------------------------------------------------
+Test: legal::tests::free_action_moves_offers_a_cross_kind_bach_theater_upgrade_for_an_action_cards_discount
+File: rust/src/legal.rs
+
+Reverted by temporarily gating the new call site with `if false &&`:
+    if false && matches!(kind, BuildOrUpgradeUrbanBuilding | UpgradeFarmMineOrUrbanBuilding) && leader_is(p, "J. S. Bach") && !p.bach_upgrade_used {
+        bach_moves(state, p, names, p.resources as i32, discount, &s, &mut out);
+    }
+(simulating free_action_moves never calling bach_moves at all, the
+pre-fix state -- Move::BachTheater was unreachable from this call
+site).
+
+Verbatim failure:
+    thread 'legal::tests::free_action_moves_offers_a_cross_kind_bach_theater_upgrade_for_an_action_cards_discount' panicked at src/legal.rs:2036:9:
+    an action card's own ordered urban-upgrade must also offer Bach's cross-kind theater upgrade, not just a bare same-kind Upgrade: []
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1386 filtered out
+
+Restored, reran: ok. 1 passed; 0 failed.
+
+
+ALL FOUR FIXES: got a confirmed-red test. None were skipped or
+adjusted to pass -- each red failure matched the bug shape described
+in the original worker's triage table (playaction__PLAYACTION.txt)
+exactly: fix 1's IA card silently excluded from PlayAction's legal
+list, fix 2's whole-move IllegalMove:PlayAction rejection, fix 3's
+off-by-one civil-action carry-over, fix 4's empty free_action_moves
+list.
+
+
+FINAL VERIFICATION
+-------------------
+`cargo test --profile fasttest` (whole workspace, all crates/binaries,
+not just --lib):
+    test result: ok. 1387 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.72s
+    (plus every other test binary in the workspace: all "ok", 0 failed,
+    one ignored test elsewhere, unrelated to this pass)
+
+`cargo clippy --all-targets --profile difftest -- -D warnings`:
+    Checking tta v0.1.0 (/private/tmp/patests/rust)
+    Finished `difftest` profile [optimized] target(s) in 31.87s
+(clean -- no warnings, no wildcard `_ =>` match arms added; every new
+match/filter in the tests either reuses an existing exhaustive
+enumeration via `matches!` or has no `match` at all)
+
+
+CLEANUP
+-------
+/private/tmp/patests is NOT deleted -- the patch and this note capture
+everything in it (nothing untracked or additional was created besides
+the 3 modified .rs files, now committed as a1c927a), but the harness's
+own workspace-cleanliness instruction only calls for deletion "if the
+patch captures everything"; leaving it in place costs nothing and
+gives a fallback if the patch needs re-verifying against a fresh
+checkout. The pre-existing untracked scratch files in that directory
+(GUARD_METHOD.txt, champ_backup/, census_now.md, etc.) predate this
+pass -- inherited from base0815, not mine, not touched.
