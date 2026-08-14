@@ -1,0 +1,198 @@
+YELLOWBANK worker notes -- age-transition "-2 yellow token" timing experiment
+============================================================================
+Base commit: c772970 (clone /private/tmp/base0815 -> /private/tmp/yellowbank).
+Baseline guard: /private/tmp/guard_ids_687.txt, 687 completed IDs, 651/687 exact.
+
+NO FIX LANDED. NO VARIANT WAS BUILT. rust/ tree is byte-identical to c772970
+(confirmed with `git diff -- rust/` -> 0 lines; `git diff --stat -- rust/` ->
+empty). analysis/worker_notes_2026-08-14/yellowbank.patch is therefore an
+empty file -- correct per the task's own instructions for "all variants
+lose" / "avenue closed by measurement" outcomes, except here the avenue was
+closed by PRIMARY-SOURCE DOCUMENTATION before any variant needed building,
+per the task's own explicit instruction: "if the rulebook settles it
+outright, say so and stop."
+
+WHY I STOPPED BEFORE BUILDING ANYTHING
+---------------------------------------
+The task's hypothesis was that BGA's own age-transition "-2 yellow tokens"
+deduction fires at a different MOMENT than our engine's, and offered four
+candidate moments to test empirically:
+  (a) at the end of the age (what we do now)
+  (b) at the start of the next age
+  (c) when the last card of the age leaves the card row
+  (d) after that round's production rather than before it
+
+Both the Code of Laws PDF and the FAQ pin this moment unambiguously, and
+independently of each other:
+
+  CGE Code of Laws (cge_code_of_laws.pdf, p.3, "End of an Age" box, extracted
+  verbatim via pdftotext -layout):
+    "Replenishing the card row sometimes triggers the end of an age: ...
+     Each player loses 2 yellow tokens. Shuffle the civil deck for the age
+     that has begun ... When the new age begins ... discard antiquated
+     cards in hand ... remove these antiquated cards from play ... and lose
+     2 yellow tokens."
+  This places the -2 deduction as PART OF the card-row replenish step
+  itself, which RULES_SPEC.md's own turn-structure section (5.0, sourced
+  from CoL p.3) places in the Start-of-Turn Sequence: "replenish card row ->
+  resolve a war -> make exclusive tactics available -> Politics Phase ->
+  Action Phase -> End-of-Turn Sequence [discard excess military -> uprising
+  check -> Production Phase -> military draw -> reset actions]." Production
+  is the SECOND-TO-LAST step of the End-of-Turn Sequence, several phases
+  after the replenish that can trigger the age end. This directly REFUTES
+  candidate (d): the deduction is BEFORE that round's production, not after
+  -- there is no rules reading under which it could be after.
+
+  FAQ v15 (faq_v15.pdf, p.11, worked example for the International
+  Agreement edge case): "the player whose turn it is replenishes the Card
+  Row but does not sweep any cards from the first slots. If this event
+  triggers the end of an Age, proceed as if the Age had ended at the start
+  of this [turn]." This independently confirms the age-end (and its token
+  loss) is anchored to the replenish instant itself, immediately, not
+  deferred to any later point in that turn or the next.
+
+Candidate (c) ("when the last card of the age leaves the card row") is also
+refuted by the CoL text itself: the trigger is the last card of the OLD
+age's deck being DEALT INTO an empty row slot, not a card being removed
+from the row. RULES_SPEC.md 2.2 already states this precisely: "an age
+(I, II, III) ends when the LAST CARD OF THE CURRENT CIVIL DECK IS DEALT TO
+THE CARD ROW (can happen mid-replenish on any player's turn)."
+
+That leaves (a) and (b) as the only rules-consistent readings, and they are
+not actually two different candidates: "end of the age" and "start of the
+next age" are the SAME instant under CoL's own text -- the age ends and the
+next age begins in the same replenish step, with no intervening game action
+of any kind (CoL p.3's own bullet list runs straight from "lose 2 yellow
+tokens" to "shuffle the civil deck for the age that has begun" with no step
+between).
+
+CODE CHECK -- our live-game engine already implements exactly this moment
+---------------------------------------------------------------------------
+Before concluding, I read the actual live-game trigger (not just its
+comments) in rust/src/game.rs:
+
+  fn deal(state: &mut GameState, rng: &mut LazyRandom) {   // ~line 524
+      for i in 0..ROW_SIZE {
+          if !state.card_row[i].is_none() { continue; }
+          let Some(card) = state.civil_deck.pop() else { break };
+          state.card_row[i] = card;
+          if state.civil_deck.is_empty() {
+              advance_age(state, rng);       // <-- fires HERE, mid-loop
+              ...
+          }
+      }
+  }
+
+with its own doc comment already stating: "§2.2: the age ends the MOMENT
+its last card is dealt, not when the row next needs one -- so the deck can
+advance mid-deal and the remaining slots come out of the new age." And
+`advance_age`'s -2 deduction (game.rs ~line 549-562, "§12.2.4: two unborn
+population are removed from every supply at every age change after the
+first") runs unconditionally and immediately inside that same call, before
+`deal` returns, i.e. strictly before that turn's Politics Phase, Action
+Phase, or Production Phase can run. This is candidate (a)/(b) exactly, with
+no code path anywhere that could reach (c) or (d). There is no live-game
+"moment" bug to fix -- the four candidates were already correctly resolved
+in favor of (a)/(b) by whoever wrote this code, and print backs them up.
+
+WHERE THE REAL BUG ACTUALLY LIVES (out of scope for this experiment)
+------------------------------------------------------------------------
+scoremis__SCOREMIS.txt's Finding 1 traced game 7523087's missing 1 worker
+to the -2 deduction firing on journal line 447 ("Orange elects Charles
+Chaplin") instead of line 446 (Orange's own age-IV-tagged
+IncreasePopulation two lines earlier). That is NOT a live-game rule-moment
+bug -- both the live-game `deal`/`advance_age` pair above are only ever
+invoked during REPLAY through a completely different code path,
+`replay_common.rs::catch_up_civil_age`, which has to INFER when the true
+BGA age transition happened purely from journal text (the journal never
+states "civil deck emptied here"), because the replayer does not always
+reconstruct BGA's own deck contents card-for-card. That inference is gated
+by `is_trustworthy_age_line` (replay_common.rs ~5859), whose own doc
+comment documents FOUR previously-fixed, independently-diagnosed false-
+trigger shapes (games 7522064, 7522652, 7523079, and the general
+`EndTurn`/`Discard`/pure-confirmation-line export-ordering-artifact
+pattern) -- i.e. this is already a heavily-hardened, iteratively-patched
+heuristic, not the "which of 4 rule readings is correct" question this
+experiment was scoped to. SCOREMIS's own trace names a FIFTH shape
+(deferred by `state.pending`/`state.queue` not being empty, left over from
+an intervening Crime Wave event resolution) and explicitly declined to
+guess a fix for it without stronger verification. I concur with that
+caution: fixing `is_trustworthy_age_line`/`catch_up_civil_age` is a
+different, narrower, code-archaeology task (find the journal-line
+classification that BGO actually exports at this exact instant) with its
+own risk of the same "internally consistent, still wrong" trap the
+corruption/blue-token sibling hit today -- it needs its own dedicated
+worker, not a bolt-on to this one.
+
+REQUIRED VARIANT TABLE (per task instructions, even though no variant was
+run -- documenting why each was rejected outright rather than measured)
+---------------------------------------------------------------------------
+  Variant                                          | Rulebook verdict                                  | Built/swept?
+  --------------------------------------------------|----------------------------------------------------|-------------
+  (a) at the end of the age (current behavior)      | CONFIRMED CORRECT -- CoL p.3 "End of an Age" box, | NO -- already
+                                                      | FAQ p.11 "proceed as if the Age had ended at the  | live engine
+                                                      | start of this [turn]"                             | behavior
+  (b) at the start of the next age                  | SAME INSTANT AS (a) -- CoL p.3 runs "lose 2 yellow| NO -- not a
+                                                      | tokens" straight into "shuffle the civil deck for | distinct
+                                                      | the age that has begun" with no intervening step  | candidate
+  (c) when the last card of the age leaves the row  | REFUTED -- CoL/RULES_SPEC 2.2: trigger is the last| NO -- rules-
+                                                      | card being DEALT TO an empty row slot, not a card | inconsistent
+                                                      | leaving the row                                   |
+  (d) after that round's production, not before it  | REFUTED -- replenish (where the deduction fires)  | NO -- rules-
+                                                      | is the FIRST step of Start-of-Turn Sequence;      | inconsistent
+                                                      | Production is near the END of End-of-Turn         |
+                                                      | Sequence, several phases later, same turn or a    |
+                                                      | later one (CoL p.3/6, RULES_SPEC 5.0/9)           |
+
+No sweep was run for any of the four rows: each was settled by primary
+source before a build was warranted, so none can post a completed/exact/
+regressions/wins row (there is nothing to measure -- (a)/(b) is already
+what HEAD does, (c)/(d) are not legal rules readings to even try).
+
+CONCLUSION -- avenue closed by documentation, not by a failed sweep
+------------------------------------------------------------------------
+The "wrong moment" hypothesis for the yellow_bank -2 deduction is CLOSED.
+Both primary sources (CGE Code of Laws p.3, FAQ v15 p.11) agree with each
+other and with our own live-game code on a single, unambiguous instant:
+immediately when the last civil-deck card of the ending age is dealt to
+the card row, before any Politics/Action/Production phase of that turn.
+Our `game::deal`/`game::advance_age` already implement exactly that. The
+observed journal mismatches (SCOREMIS's 7523087 "22 vs 20 culture", and by
+extension HAPPY's 7522397/7523253/7522446 borderline-discontent cases,
+which HAPPY's own notes already flagged as likely sharing this root cause)
+are NOT explained by any alternate reading of WHEN the rule fires -- they
+are explained by our REPLAY layer occasionally mis-inferring WHICH journal
+line corresponds to that already-correctly-understood instant, a distinct,
+narrower, already-partially-hardened problem (`is_trustworthy_age_line` /
+`catch_up_civil_age` in replay_common.rs) that is out of scope for a
+"moment of the rule" experiment and should go to a worker scoped
+specifically to replay journal-line classification, not game-rules
+interpretation.
+
+WHAT I CHANGED IN THE CLONE
+----------------------------
+Nothing. No trace instrumentation added or removed (none was needed -- the
+question was settled by reading rust/src/game.rs's existing `deal`/
+`advance_age` alongside two PDFs, no runtime experiment was informative).
+`git diff -- rust/` is 0 lines. No cargo build, no cargo test, no cargo
+clippy, and no sweep were run, since HEAD was never modified -- there is
+nothing to guard-check that the baseline guard (687 completed, 651/687
+exact) doesn't already cover trivially (identical binary).
+
+HANDOFF
+-------
+1. The real next step for the yellow_bank corpus (SCOREMIS's 4 Population
+   pairs, HAPPY's 3 borderline-discontent pairs) is a REPLAY journal-line-
+   classification fix in `is_trustworthy_age_line`/`catch_up_civil_age`
+   (replay_common.rs ~5775-5865), specifically the `state.pending`/
+   `state.queue`-non-empty deferral SCOREMIS traced for 7523087's line
+   446->447 gap after an intervening Crime Wave event. This is a "find the
+   5th exclusion shape" task in the same family as the four already fixed
+   there, NOT a "which of 4 rule-moments" task -- treat it as its own
+   dedicated investigation with its own budget, per SCOREMIS's own
+   declined-to-guess caution.
+2. SCOREMIS's SECOND yellow_bank mechanism (game 7522899, Orange short 1
+   worker with NO failed-grant trace anywhere) remains completely
+   unexplained and is confirmed architecturally different from 7523087's
+   deferred-trigger shape -- do not assume a replay-line-classification fix
+   alone would clear it.
