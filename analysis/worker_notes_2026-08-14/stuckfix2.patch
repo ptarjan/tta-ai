@@ -1,0 +1,206 @@
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index daaf071..58c0401 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -445,6 +445,14 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+             }
+         }
+         ChoiceKind::Raid { victim, loot } => {
++            // Attacker picks the urban building to destroy, or declines this
++            // bracket outright (`Keyword::Stop` -- see `QueueItem::Raid`'s own
++            // doc on why "up to N" needs a real decline option; Terrorism's
++            // mandatory destroy never offers `Stop`, so this arm never sees it
++            // for that case).
++            if matches!(opt, ChoiceOption::Word(Keyword::Stop)) {
++                return;
++            }
+             // Attacker picks the urban building to destroy.
+             let ChoiceOption::Card(id) = opt else { wrong_option(&choice.kind, opt) };
+             let ok = match state.players[victim as usize].techs.get_mut(id) {
+@@ -1084,7 +1092,27 @@ fn run_item(state: &mut GameState, item: QueueItem) {
+                 }
+             }
+             buf[..n].sort_unstable_by_key(|id| id.name());
+-            let opts = card_options(&buf[..n]);
++            let mut opts = card_options(&buf[..n]);
++            // A real Raid card's printed text is "destroy UP TO N urban
++            // buildings" (RULES_SPEC.md line 82/98) -- `combat::
++            // finish_aggression` enqueues one of these per printed age
++            // bracket (Raid II/III carry two), and each bracket is
++            // independently optional, not just the card as a whole: a human
++            // attacker can destroy fewer than the max even with an eligible
++            // target still standing. Terrorism's identical-shaped forced
++            // destruction (`events.rs`'s `destroy_one_urban_building_of_
++            // each_opponent`) is NOT optional and carries no loot -- `no_loot`
++            // is already the one field that tells the two apart at this call
++            // site, so it doubles as "is this bracket declinable" here. Without
++            // this, `push_choice`'s own `auto`+`len()==1` path (below) would
++            // force-destroy a lone remaining candidate the moment only one is
++            // left, which is exactly wrong for an "up to" choice -- confirmed
++            // on human game `7522647` (Orange's starting `Philosophy`, force-
++            // destroyed by Raid II's second bracket with no journal record of
++            // it; `analysis/worker_notes_2026-08-14/stuckfix__STUCKFIX.txt`).
++            if !no_loot {
++                opts.push(ChoiceOption::Word(Keyword::Stop));
++            }
+             push_choice(state, player, ChoiceKind::Raid { victim, loot: !no_loot }, opts, true);
+         }
+         QueueItem::Annex { player, victim } => {
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 7c9f247..2874f0c 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1469,31 +1469,55 @@ impl<'a> Replayer<'a> {
+                     // `VecDeque<CardId>` prescan (`prescan_raid_destroys`)
+                     // feeds this exactly like `PlunderSplit`'s FIFO: popped
+                     // in journal order, validated against the live choice's
+-                    // own options and skipped (not trusted by position)
+-                    // past any entry that belongs to an EARLIER single-
+-                    // candidate Raid this same or another player's turn
+-                    // already auto-resolved with no `Pending` at all (same
+-                    // risk `PlunderSplit`/`Infiltrate` already confirmed
+-                    // real -- `push_choice`'s own auto-resolve-if-len-1
+-                    // rule, `docs/REPLAY.md`'s six-pending-kind pass).
++                    // own options.
++                    //
++                    // A real Raid card's bracket is "up to N", genuinely
++                    // declinable per bracket (`interact.rs`'s `QueueItem::
++                    // Raid` doc), and now carries an explicit `Keyword::Stop`
++                    // option for exactly that -- Terrorism (mandatory, no
++                    // loot) never gets one. So: if the queue's front entry
++                    // names a card that's actually among THIS choice's own
++                    // options, that is unambiguously this bracket's answer,
++                    // pop and take it; otherwise, if `Stop` is offered, the
++                    // human declined this bracket -- take `Stop` and leave
++                    // the queue untouched (its front entry, if any, belongs
++                    // to a LATER Raid/Terrorism event). Only when `Stop`
++                    // is NOT offered (Terrorism) does a front-entry mismatch
++                    // fall back to the older "belongs to an earlier single-
++                    // option Raid/Terrorism this same game already auto-
++                    // resolved silently" skip-and-keep-looking (the risk
++                    // `PlunderSplit`/`Infiltrate` already confirmed real --
++                    // `push_choice`'s own auto-resolve-if-len-1 rule,
++                    // `docs/REPLAY.md`'s six-pending-kind pass).
+                     ChoiceKind::Raid { .. } => {
++                        let stop_idx =
++                            c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)));
+                         let n = loop {
+-                            let Some(&card) = self.raid_destroys.front() else {
++                            if let Some(&card) = self.raid_destroys.front() {
++                                if let Some(idx) = c
++                                    .options
++                                    .as_slice()
++                                    .iter()
++                                    .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                                {
++                                    self.raid_destroys.pop_front();
++                                    break idx;
++                                }
++                            }
++                            if let Some(idx) = stop_idx {
++                                break idx;
++                            }
++                            if self.raid_destroys.front().is_none() {
+                                 return Err(MismatchKind::StuckPending(format!(
+                                     "Raid choice open for player {decider} but no journal-observed \
+                                      Raid/Terrorism destroy line left to resolve it with"
+                                 )));
+-                            };
+-                            if let Some(idx) =
+-                                c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+-                            {
+-                                self.raid_destroys.pop_front();
+-                                break idx;
+                             }
+-                            // Belongs to an earlier, single-option Raid this
+-                            // same game already auto-resolved silently (see
+-                            // this arm's own doc) -- not this choice's
+-                            // answer, skip past it and keep looking.
++                            // Terrorism, no `Stop` offered: belongs to an
++                            // earlier, single-option Raid/Terrorism this same
++                            // game already auto-resolved silently (see this
++                            // arm's own doc) -- not this choice's answer,
++                            // skip past it and keep looking.
+                             self.raid_destroys.pop_front();
+                         };
+                         apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+@@ -3621,6 +3645,71 @@ fn resolve_plunder_age(card: CardId, raw_text: &str) -> CardId {
+         .unwrap_or(card)
+ }
+ 
++/// Resolves `card` (a "plays <Aggression>" line's `corpus::build_card_index`
++/// arbitrary same-name pick -- `best_age_sibling`'s own doc comment) to the
++/// age-sibling whose OWN printed `military_action_cost` matches the
++/// journal's own trailing `"uses N military action"` clause
++/// ([`civil_and_military_uses`]) -- the same "read the exact printed number
++/// off THIS line instead of guessing" approach [`resolve_plunder_age`] just
++/// above already uses for Plunder's own "up to N" cap, generalized to every
++/// OTHER Aggression card whose age-siblings differ in cost (confirmed:
++/// Raid 1/2/3 MA, `card_table.rs`).
++///
++/// A no-op (returns `card` unchanged) when:
++/// - `card`'s family is Plunder -- [`resolve_plunder_age`]'s own job; all
++///   three of Plunder's age-siblings tie at 1 MA (`analysis/worker_notes_
++///   2026-08-14/decider__DECIDER.txt`), so cost alone cannot disambiguate
++///   them and this function must not fight that one's own correction;
++/// - the line carries no `"uses N military action"` clause, or the number
++///   does not parse;
++/// - zero or more than one sibling shares that exact cost (a genuine tie,
++///   or evidence this card's family does not vary by MA cost at all) --
++///   never worse than the pre-correction guess in either case.
++///
++/// Root-caused on game `7523354` line 233: BGO's own printed text is Raid's
++/// Age II wording ("...2 urban buildings: one of Age II or older and one of
++/// Age I or older...", 2 MA) but the bare-name lookup resolved to
++/// `"Aggression: Raid (I)"` (1 MA) -- under-deducting `military_actions` by
++/// 1 for the rest of the turn, which cascades into a wrong end-of-turn draw
++/// count and, several rounds later, masks a real discard requirement the
++/// journal states and this binary's own reconstruction does not (`analysis/
++/// worker_notes_2026-08-14/decider__DECIDER.txt`'s STEP 1). Measured
++/// corpus-wide: this shape (`SimulatorBug`-tagged discard-oracle divergence)
++/// covers roughly 75% of the `StuckPending: decider != expected actor,
++/// phase Actions, no pending` bucket.
++///
++/// Correctly resolving Raid II/III (2/3 MA, 2 age brackets each instead of
++/// the old code's wrong 1 MA/1 bracket) used to newly expose a SEPARATE,
++/// pre-existing bug: `combat::finish_aggression` enqueues one
++/// `QueueItem::Raid` per element of `Special::DestroyUrbanBuildings`'s age
++/// list, and each bracket's "destroy UP TO N" (RULES_SPEC.md line 82/98) is
++/// genuinely declinable -- but `interact.rs`'s `QueueItem::Raid` handling
++/// used to hand that choice to `push_choice` with no way to decline, so its
++/// own `auto`+`len()==1` path force-destroyed a lone leftover candidate the
++/// instant the FIRST bracket left exactly one standing. Confirmed on human
++/// game `7522647` (Orange's own starting `Philosophy`, force-destroyed by
++/// Raid II's second bracket with no journal record of it) and the
++/// structurally identical Raid-II lines in `7522290` and `7522053`. Fixed at
++/// the source, not here: `interact.rs`'s `QueueItem::Raid` now appends a
++/// `Keyword::Stop` option to a real Raid card's bracket (never to
++/// Terrorism's mandatory, no-loot destroy, which is not "up to" anything),
++/// and this file's own `ChoiceKind::Raid` handler in `resolve_intervening`
++/// picks `Stop` whenever the journal's `raid_destroys` queue has nothing for
++/// THIS bracket -- see that handler's own doc for the full mechanism.
++fn resolve_aggression_age(card: CardId, raw_text: &str) -> CardId {
++    if card.get().base_name == "Aggression: Plunder" {
++        return card;
++    }
++    let Some(wanted_ma) = civil_and_military_uses(raw_text).1 else {
++        return card;
++    };
++    let matches: Vec<CardId> = family_siblings(card).into_iter().filter(|&id| id.get().military_action_cost as i32 == wanted_ma).collect();
++    match matches.as_slice() {
++        [only] => *only,
++        [] | [_, ..] => card,
++    }
++}
++
+ /// Resolves which age-sibling of `named` (`corpus::build_card_index`'s
+ /// necessarily arbitrary same-name pick -- see `best_age_sibling`'s doc
+ /// comment) actually produced `wanted`'s observed cost on THIS journal line,
+@@ -7242,6 +7331,7 @@ fn apply_one(
+             // `analysis/worker_notes_2026-08-14/discardsolve__
+             // DISCARDSOLVE.txt`.
+             let card = resolve_plunder_age(card, raw_text);
++            let card = resolve_aggression_age(card, raw_text);
+             let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
+             r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
+             resolve_aggression_defense(r, next_text)
