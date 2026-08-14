@@ -1,0 +1,1640 @@
+From b4e3db1dd65d5d982539923603fea0927de0465b Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 07:55:09 -0600
+Subject: [PATCH 1/6] Michelangelo unhappy-face fix (395 complete, 364 exact)
+
+---
+ rust/src/effects.rs | 52 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 51 insertions(+), 1 deletion(-)
+
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index ae8227b..0e24074 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1071,7 +1071,24 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
+                 if p.flipped_wonders.contains(w) {
+                     continue;
+                 }
+-                happy += w.get().effects.happy as i32;
++                // Michelangelo's printed text counts "1 culture per HAPPY
++                // FACE" on a temple/theater/wonder -- a happy face is a
++                // specific printed icon, and a card with a printed UNHAPPY
++                // face (negative `effects.happy`, e.g. Kremlin's -1) has
++                // zero happy faces of its own, not a negative count. FAQ
++                // v1.5 p.9 confirms this count is its own thing, exempt
++                // from the whole-civilization 0..8 happiness clamp -- so it
++                // is not "net happiness" being summed here, it is a face
++                // count, and faces cannot be negative. Traced to BGO game
++                // 7521066 (Purple: Michelangelo leader + Kremlin, round
++                // 12): this arm let Kremlin's unhappy face cancel a happy
++                // face elsewhere in the sum, undercounting Michelangelo's
++                // culture by 1 * `v`. `happy_source_count` and
++                // `temple_theater_wonder_happy_source_count` already gate
++                // on `effects.happy > 0` for the same reason; this sum must
++                // clamp each wonder's contribution the same way instead of
++                // adding the raw (possibly negative) printed value.
++                happy += w.get().effects.happy.max(0) as i32;
+                 if p.homer_wonder == w {
+                     happy += 1;
+                 }
+@@ -2063,6 +2080,39 @@ mod tests {
+         );
+     }
+ 
++    /// Regression for BGO game 7521066 round 12: Purple holds Michelangelo
++    /// and just completed Kremlin, whose printed effects are a genuine
++    /// UNHAPPY face (`effects.happy == -1`), not the absence of one.
++    /// Michelangelo's printed text is "1 culture per happy face from
++    /// temples, theaters and wonders" -- an unhappy face is not a happy
++    /// face, so it must contribute zero to this count, not a negative
++    /// count that cancels a happy face elsewhere. FAQ v1.5 p.9 already
++    /// establishes this per-source count is its own thing (exempt from the
++    /// whole-civilization 0..8 happiness clamp), reinforcing that it is a
++    /// face count, not a net-happiness sum. Before the fix this arm summed
++    /// Kremlin's raw -1 into `happy`, undercounting by 1 culture whenever a
++    /// staffed Temple/Theater elsewhere supplied the happy face Kremlin's
++    /// unhappy face wrongly cancelled.
++    #[test]
++    fn michelangelo_does_not_let_a_wonders_unhappy_face_cancel_a_temples_happy_face() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Michelangelo");
++        p.techs.insert(card("Religion"), TechSlot { workers: 1, stored: 0 }); // 1 happy face
++        p.completed_wonders.push(card("Kremlin")); // effects.happy == -1, an UNHAPPY face
++        let state = one_player_state(2, p);
++        let s = compute(&state, &state.players[0]);
++        // Religion's 1 happy face + Kremlin's 0 happy faces (its unhappy
++        // face does not subtract) = 1 face -> 1 culture via Michelangelo,
++        // plus Religion's own printed +1 culture and Kremlin's own printed
++        // +2 culture: 1 + 2 + 1 = 4.
++        assert_eq!(
++            s.culture,
++            4,
++            "Religion's own +1, Kremlin's own +2, and 1 * Michelangelo's culture-per-happy (Religion's 1 happy \
++             face; Kremlin's unhappy face must not subtract)"
++        );
++    }
++
+     // ------------------------------------------------------ army strength
+ 
+     #[test]
+-- 
+2.55.0
+
+
+From 326a7336586d877b949b7f08091e3e240e59e5da Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 08:00:38 -0600
+Subject: [PATCH 2/6] PolPass fixes (459 complete, 421 exact)
+
+---
+ rust/src/events.rs   | 14 +++++++-
+ rust/src/game.rs     | 79 ++++++++++++++++++++++++++++----------------
+ rust/src/interact.rs | 69 +++++++++++++++++++++++++++++---------
+ rust/src/state.rs    |  4 ---
+ 4 files changed, 117 insertions(+), 49 deletions(-)
+
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index 96872d4..c70d027 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -1355,7 +1355,19 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
+         }
+     }
+     if block.optional_take_cards_with_civil_actions != 0 {
+-        state.players[idx as usize].skip_next_politics = true;
++        // International Agreement (CoL p.12): "The strongest civilization
++        // MAY immediately take civil cards up to N civil actions BY GIVING
++        // UP its next chance to take a political action" -- the forfeit is
++        // the cost of USING the privilege, not a tax on merely being
++        // offered it. This used to set `skip_next_politics` right here,
++        // unconditionally, so a player who fully declined (took zero cards)
++        // still lost their own next Politics Phase -- contradicted by real
++        // BGO journals logging that player's own subsequent, perfectly
++        // legal "<Color> passes Political Phase": the `IllegalMove: PolPass`
++        // bucket's 9-game "declines international agreement" subgroup
++        // (`docs/REPLAY.md`, 2026-08-14). `interact.rs`'s `ChoiceKind::
++        // TakeRow` handler now sets `skip_next_politics` itself, the first
++        // (and only) time a `Slot` is actually chosen -- never on `Stop`.
+         interact::enqueue(
+             state,
+             QueueItem::TakeRow { player: idx, budget: block.optional_take_cards_with_civil_actions },
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index c3ef4b2..bbe1dc9 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -809,42 +809,30 @@ fn start_turn(state: &mut GameState, rng: &mut LazyRandom) {
+         // completeness flag that is always true for the compiled-in base game
+         // -- the same non-field `legal.rs::politics_moves` and
+         // `economy::end_of_turn` both document.
++        //
++        // There USED to be an `auto_skip_politics` call here that silently
++        // jumped straight to `Phase::Actions`, without ever consuming a
++        // `Move::PolPass`, whenever `legal::legal_moves` had exactly one
++        // option (only ever true in Age IV, where `Resign` is not offered --
++        // `legal::politics_moves`'s own §5.11 comment). RULES_SPEC.md §5.0:
++        // "In the Politics Phase you may perform AT MOST ONE political
++        // action (OR SKIP)" -- skipping is the player's own move, not a
++        // phase that can fail to exist. BGO's own journals confirm this: the
++        // `IllegalMove: PolPass` bucket (`docs/REPLAY.md`'s 2026-08-14 note)
++        // was 54 real human games logging an explicit "<Color> passes
++        // Political Phase" at EXACTLY the turn this shortcut had already
++        // silently closed -- proof the phase is never actually skipped
++        // client-side, only ever explicitly passed. Removed; the phase now
++        // always opens and waits for whatever `Move::PolPass` the caller
++        // (bot or replay) submits, which is legal.rs's own only option
++        // anyway, so self-play's behaviour is unchanged bit-for-bit.
+         state.phase = Phase::Politics;
+         peek_top_event(state, idx);
+-        if state.pending.is_empty() {
+-            auto_skip_politics(state);
+-        } else {
+-            // `resolve_war` above can leave a War over Technology's spoils
+-            // decision outstanding (§5.7), and stealing a blue technology can
+-            // hand the CURRENT player military actions -- Warfare +1,
+-            // Strategy +2, Military Theory +3 -- which is exactly what
+-            // `auto_skip_politics` reads to decide whether passing is the
+-            // only political option. Answering that before the spoils are
+-            // taken would deny the victor a politics phase it is owed, so the
+-            // test is deferred behind the decision. Nothing else can be
+-            // pending here: measured across the Python fingerprint's 33
+-            // games, `state.pending` was empty on all 3737 arrivals.
+-            state.queue.push_back(QueueItem::AutoSkipPolitics { player: idx });
+-        }
+     } else {
+         state.phase = Phase::Actions;
+     }
+ }
+ 
+-/// Pass immediately when passing is the only political option.
+-///
+-/// Note that this practically never fires in the base game: `PolPass` and
+-/// `Resign` are both unconditional outside Age IV, so the list is two long.
+-/// It is ported anyway because it is the only thing that skips the phase
+-/// without spending the player's political action, and because in Age IV
+-/// (where `Resign` is not offered) it does fire.
+-pub fn auto_skip_politics(state: &mut GameState) {
+-    if legal::legal_moves(state).len() == 1 {
+-        state.me_mut().politics_done = true;
+-        state.phase = Phase::Actions;
+-    }
+-}
+-
+ /// End-of-Turn sequence, then hand the turn to the next player (§6.6).
+ ///
+ pub fn end_turn(state: &mut GameState) {
+@@ -1632,6 +1620,39 @@ mod tests {
+         assert_eq!(s.turn, 4);
+     }
+ 
++    /// Age IV, empty military hand: `legal::legal_moves` returns exactly one
++    /// move (`Move::PolPass` -- `Resign` is not offered in Age IV,
++    /// `legal::politics_moves`'s own §5.11 comment). This USED to be exactly
++    /// when the deleted `auto_skip_politics` fired, jumping straight to
++    /// `Phase::Actions` without ever letting a real `Move::PolPass` land --
++    /// which is what made 54 real BGO games' own logged "<Color> passes
++    /// Political Phase" illegal against this engine (`docs/REPLAY.md`,
++    /// 2026-08-14, the `IllegalMove: PolPass` bucket). RULES_SPEC.md §5.0:
++    /// the Politics Phase always lets the player "perform AT MOST ONE
++    /// political action (OR SKIP)" -- skipping is the player's own move, so
++    /// the phase must stay open and wait for it, never vanish underneath
++    /// them.
++    #[test]
++    fn start_turn_leaves_the_politics_phase_open_in_age_iv_even_when_passing_is_the_only_option() {
++        let mut s = new_game(2, 7);
++        s.age_civil = Age::IV;
++        s.age_military = Age::IV;
++        s.round = 2;
++        s.civil_deck = CardList::new();
++        s.military_deck = CardList::new();
++        s.players[0].hand_military = CardList::new();
++        let mut rng = LazyRandom::new(1);
++        start_turn(&mut s, &mut rng);
++        assert_eq!(s.phase, Phase::Politics, "the Politics Phase must stay open, not be silently skipped");
++        let moves = legal::legal_moves(&s);
++        assert_eq!(moves.as_slice().len(), 1, "passing must be the only legal move here");
++        assert_eq!(moves.as_slice()[0], Move::PolPass);
++        assert!(
++            !s.players[0].politics_done,
++            "politics_done must not be set until an actual PolPass move lands"
++        );
++    }
++
+     /// The game must end when the round counter passes the deadline §12.3
+     /// set, even though nothing else is exhausted.
+     #[test]
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index d83f999..daaf071 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -40,9 +40,13 @@
+ //!
+ //! The auction, the colonization force, the defense decision, all fifteen
+ //! choice resolvers and all fifteen deferred sub-effects are ported; the
+-//! three that hand back to the turn loop ([`QueueItem::EndOfTurn`],
+-//! [`QueueItem::AutoSkipPolitics`] and `finish_take_row`'s `deal_row`) call
+-//! `game.rs` for real.
++//! two that hand back to the turn loop ([`QueueItem::EndOfTurn`] and
++//! `finish_take_row`'s `deal_row`) call `game.rs` for real. (A third,
++//! `_q_auto_skip_politics`, USED to have a [`QueueItem`] variant here too --
++//! removed 2026-08-14, `game::start_turn`'s own doc comment has the reason:
++//! it was closing real humans' Politics Phase before their own logged
++//! `Move::PolPass` could land, an `IllegalMove: PolPass` bug on 54 BGO
++//! games, not a faithful port of anything BGO's client actually does.)
+ //!
+ //! One thing used to be blocked one step PAST this module: `combat::
+ //! finish_aggression`'s success branch needed `events::apply_gains` and the
+@@ -540,6 +544,16 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+                 ChoiceOption::Slot(slot) => {
+                     let cost = costs::take_cost(state, &state.players[p as usize], slot as usize);
+                     crate::apply::take_card(state, p, slot as usize);
++                    // CoL p.12: the forfeit of the player's next political
++                    // action is the cost of actually USING this privilege --
++                    // taking a card here is the only place that happens, so
++                    // this is the only place that pays for it (`events.rs`'s
++                    // own doc comment on `optional_take_cards_with_civil_
++                    // actions` has the full citation and the real-game
++                    // evidence for why this moved off the reveal-time
++                    // handler). Idempotent: setting it again on a second or
++                    // third card taken this same session is a no-op.
++                    state.players[p as usize].skip_next_politics = true;
+                     offer_take_row(state, p, budget - cost as i16);
+                 }
+                 other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
+@@ -1059,18 +1073,6 @@ fn run_item(state: &mut GameState, item: QueueItem) {
+         // rather than an action, so the continuation rides the deferred queue
+         // like any other sub-effect and the turn advances from there.
+         QueueItem::EndOfTurn { player } => crate::game::resume_end_turn(state, player),
+-        // Resume the start-of-turn "is passing the only political option?"
+-        // test once a War over Technology's spoils have been answered: the
+-        // spoils can hand the current player military actions (Warfare +1,
+-        // Strategy +2, Military Theory +3), which is exactly what that test
+-        // reads. See `game::start_turn` for why it has to wait.
+-        QueueItem::AutoSkipPolitics { player } => {
+-            if state.phase == crate::state::Phase::Politics
+-                && !state.players[player as usize].politics_done
+-            {
+-                crate::game::auto_skip_politics(state);
+-            }
+-        }
+         QueueItem::Raid { player, victim, max_age, no_loot } => {
+             let max_lv = max_age as u8;
+             let mut buf = [CardId::NONE; MAX_TABLEAU];
+@@ -2690,4 +2692,41 @@ mod tests {
+         assert_eq!(state.players[0].resources, 2, "capped by the 2 free blue tokens, not the chosen 5");
+         assert_eq!(state.players[0].food, 0);
+     }
++
++    /// International Agreement (CoL p.12): declining the whole privilege
++    /// (never choosing a `Slot`, going straight to `Word(Stop)`) must NOT
++    /// cost the player their next Politics Phase -- the forfeit is the
++    /// price of USING the privilege, not of merely being offered it. This
++    /// is the direct fix for the `IllegalMove: PolPass` bucket's 9-game
++    /// "declines international agreement" subgroup (`docs/REPLAY.md`,
++    /// 2026-08-14): those humans' own logged, perfectly legal "<Color>
++    /// passes Political Phase" the following turn was illegal against this
++    /// engine because `events.rs` used to set `skip_next_politics`
++    /// unconditionally the moment the event revealed, even for a player who
++    /// went on to take zero cards.
++    #[test]
++    fn resolve_choice_take_row_stop_without_ever_taking_a_card_does_not_forfeit_the_next_politics_phase() {
++        let mut state = blank_state(2);
++        let mut options = OptionList::new();
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
++        resolve_choice(&mut state, &choice, 0);
++        assert!(!state.players[0].skip_next_politics, "a full decline must not forfeit the next Politics Phase");
++    }
++
++    /// Companion: taking even one card off the row DOES forfeit the
++    /// player's next political action -- the card's own text ("...by
++    /// giving up its next chance to take a political action"), unaffected
++    /// by the fix above.
++    #[test]
++    fn resolve_choice_take_row_slot_taking_a_card_does_forfeit_the_next_politics_phase() {
++        let mut state = blank_state(2);
++        state.card_row[2] = card("Iron");
++        let mut options = OptionList::new();
++        options.push(ChoiceOption::Slot(2));
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
++        resolve_choice(&mut state, &choice, 0);
++        assert!(state.players[0].skip_next_politics, "taking a card must forfeit the next Politics Phase");
++    }
+ }
+diff --git a/rust/src/state.rs b/rust/src/state.rs
+index f3af631..bd86caa 100644
+--- a/rust/src/state.rs
++++ b/rust/src/state.rs
+@@ -1252,9 +1252,6 @@ pub enum QueueItem {
+     DiscardMilitary { player: u8, n: u8 },
+     /// `_q_end_of_turn`: resume §6.6 after the discard decision.
+     EndOfTurn { player: u8 },
+-    /// `_q_auto_skip_politics`: resume the start-of-turn "is passing the only
+-    /// political option?" test after a War over Technology's spoils.
+-    AutoSkipPolitics { player: u8 },
+     /// `_q_raid`: destroy one of `victim`'s urban buildings, up to `max_age`.
+     Raid { player: u8, victim: u8, max_age: Age, no_loot: bool },
+     /// `_q_annex`.
+@@ -1292,7 +1289,6 @@ impl QueueItem {
+             | FlipWonder { player, .. }
+             | DiscardMilitary { player, .. }
+             | EndOfTurn { player }
+-            | AutoSkipPolitics { player }
+             | Raid { player, .. }
+             | Annex { player, .. }
+             | Infiltrate { player, .. }
+-- 
+2.55.0
+
+
+From 9f6104d5557b6b595a468383077f21de3bf77e87 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 08:30:37 -0600
+Subject: [PATCH 3/6] International Agreement lines were dropped whole: 459 ->
+ 509 complete, 421 -> 468 exact
+
+`corpus::classify()` had a catch-all treating any line led by a known CARD
+NAME as bookkeeping. "International Agreement" is itself a card name, so
+`International Agreement Purple takes Kremlin in hand; ...` was discarded
+entirely -- the taken card, often a wonder, never entered the hand, and the
+later build spend then looked illegal. 15 of the 38 IllegalMove: WonderStep
+games traced straight to it.
+
+Three parts:
+  * corpus.rs classifies those lines as TakeCard.
+  * replay_common.rs walks every `;`-joined pick on the line, applying
+    best_age_sibling and calling resolve_intervening once per LINE, grounding
+    each pick against the open TakeRow choice own offered slots (these picks
+    carry no "uses N civil action" clause, so the generic cost matcher does
+    not apply).
+  * resolve_intervening TakeRow matching required the card already be present
+    in the row by identity -- impossible for a card never seen there before.
+    Widened to accept an ungrounded offered slot. Found by two genuine
+    regressions the guard bar caught (7522957, 7523114), root-caused before
+    landing rather than tolerated.
+
+Guard, full 1011-game sweep against the 459 baseline: ZERO regressions,
+50 wins. 509 completed, 468 exact.
+
+Still open, flagged not fixed: `GAME DATA UPDATED` admin-correction lines are
+still dropped as bookkeeping (2 games).
+---
+ rust/src/corpus.rs        |  71 ++++++++++++
+ rust/src/replay_common.rs | 233 +++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 300 insertions(+), 4 deletions(-)
+
+diff --git a/rust/src/corpus.rs b/rust/src/corpus.rs
+index a48fb6f..627d8a6 100644
+--- a/rust/src/corpus.rs
++++ b/rust/src/corpus.rs
+@@ -753,6 +753,41 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
+         });
+         return LineOutcome::Action(Classified { class: ActionClass::ColumbusColonize, card });
+     }
++    // International Agreement (Code of Laws p.12): "The strongest
++    // civilization may immediately take up to 5 civil actions in cards...".
++    // BGO logs the FIRST pick right on the event's own name --
++    // "International Agreement <Color> takes <Card> in hand" -- with any
++    // FURTHER picks the same civilization makes tacked onto the SAME line
++    // as additional ";"-joined "<Color> takes <Card> in hand" clauses
++    // (`replay_common::replay_game`'s own dedicated branch walks those,
++    // mirroring how it already walks Barbarossa/Alexander/Columbus's other
++    // "no leading colour" shapes). Checked before this function's generic
++    // "a known card name leads the line" `Bookkeeping` catch-all below for
++    // the same reason Columbus is, just above: "International Agreement"
++    // is itself a card name and would otherwise be silently swallowed
++    // there, discarding whatever card it hands the taker -- found chasing
++    // the `IllegalMove: WonderStep` bucket (game `7522543`: Kremlin arrives
++    // this way, and BGO never logs any OTHER line naming it in Purple's
++    // hand before the build this bucket refused). A bare "International
++    // Agreement" line, or one ending "declines international agreement",
++    // is a genuine decline with no state of its own -- falls through to
++    // the generic catch-all below, `Bookkeeping` either way.
++    if let Some(after) = text.strip_prefix("International Agreement ") {
++        for color in [Color::Orange, Color::Purple, Color::Green, Color::Grey] {
++            let Some(take_rest) =
++                after.strip_prefix(color.as_str()).and_then(|r| r.strip_prefix(' ')).and_then(|r| r.strip_prefix("takes "))
++            else {
++                continue;
++            };
++            return match take_rest.find(" in hand") {
++                Some(card_end) => match longest_known_card_prefix(index, &take_rest[..card_end]) {
++                    Some((id, _)) => LineOutcome::Action(Classified { class: ActionClass::TakeCard, card: Some(id) }),
++                    None => LineOutcome::Unclassified,
++                },
++                None => LineOutcome::Unclassified,
++            };
++        }
++    }
+     // J. S. Bach's leader ability (a free tech upgrade each round) is the
+     // one line BGO prints with NO space at all between the leader's name
+     // and the verb -- "Johannes Sebastian Bachupgrades Religion to Opera
+@@ -1594,6 +1629,42 @@ mod tests {
+         assert_eq!(c.card, index.get("Vast Territory (II)").copied());
+     }
+ 
++    #[test]
++    fn international_agreement_take_line_is_a_take_card_action_not_bookkeeping() {
++        // Regression: "International Agreement" is itself a known card
++        // name, so this line used to match the generic "known card name
++        // leads the line" `Bookkeeping` catch-all and get silently dropped
++        // -- the SAME shape as Columbus above -- discarding whatever card
++        // it hands the taker. Chasing the `IllegalMove: WonderStep` bucket:
++        // game `7522543`'s Kremlin arrives this way, with no other journal
++        // line ever naming it in Purple's hand before the build this bucket
++        // refused.
++        let index = idx();
++        let line = "International Agreement Purple takes Kremlin in hand; Purple takes Efficient Upgrade in hand";
++        let LineOutcome::Action(c) = classify(&index, line) else {
++            panic!("expected an action, not bookkeeping");
++        };
++        assert_eq!(c.class, ActionClass::TakeCard);
++        assert_eq!(c.card, index.get("Kremlin").copied());
++    }
++
++    #[test]
++    fn international_agreement_decline_line_is_bookkeeping() {
++        // "<Color> declines international agreement" and a bare
++        // "International Agreement" line (nobody eligible, or the whole
++        // offer silently declined) carry no state of their own -- the
++        // `Pending::Choice(TakeRow)` the event's own resolution already
++        // opened drains itself via `resolve_intervening`'s own decider-
++        // mismatch/no-upcoming-match fallback, the same "no journal trace
++        // for a silent decline" precedent as `FreeBuild`.
++        let index = idx();
++        assert!(matches!(
++            classify(&index, "International Agreement Orange declines international agreement"),
++            LineOutcome::Bookkeeping
++        ));
++        assert!(matches!(classify(&index, "International Agreement"), LineOutcome::Bookkeeping));
++    }
++
+     #[test]
+     fn barbarossa_enlist_line_is_a_barbarossa_action_not_bookkeeping() {
+         // Regression: this line used to be treated as flavour text and
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 479f11a..ce21541 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1276,10 +1276,42 @@ impl<'a> Replayer<'a> {
+                         let matches_upcoming = c.player == expected_actor
+                             && upcoming.0 == ActionClass::TakeCard
+                             && upcoming.1.is_some_and(|want| {
+-                                c.options
+-                                    .as_slice()
+-                                    .iter()
+-                                    .any(|o| matches!(o, ChoiceOption::Slot(slot) if self.state.card_row[*slot as usize] == want))
++                                c.options.as_slice().iter().any(|o| match o {
++                                    // Either this slot is ALREADY grounded to
++                                    // `want` by identity (the coincidence
++                                    // check `ground_row_slot`'s own first
++                                    // branch trusts for the same reason), OR
++                                    // it is still ungrounded -- i.e. still
++                                    // holding `new_game`'s fictional filler,
++                                    // free to be forced into `want` the same
++                                    // "believe the journal" way every OTHER
++                                    // take on this file ultimately resolves
++                                    // ambiguity (`ground_row_slot`'s own doc:
++                                    // "placing the card in whichever slot
++                                    // happens to be cheapest anyway... is the
++                                    // honest report", just applied one level
++                                    // up here). Required for a card this
++                                    // binary has never grounded ANYWHERE yet
++                                    // -- routinely true for a WONDER taken
++                                    // via International Agreement, which
++                                    // `card_row` never held before this exact
++                                    // pick (no earlier "takes"/"builds" line
++                                    // to have grounded it against) -- without
++                                    // this, `matches_upcoming` was always
++                                    // false for such a card, silently
++                                    // auto-declining the whole choice via
++                                    // `Stop` before `apply_one`'s own
++                                    // `TakeCard` arm (which DOES know how to
++                                    // ground an ungrounded slot) ever ran.
++                                    // Corpus-confirmed regression: games
++                                    // `7522957`/`7523114` (`Reserves`/`First
++                                    // Space Flight`), caught by this bucket's
++                                    // own regression bar.
++                                    ChoiceOption::Slot(slot) => {
++                                        self.state.card_row[*slot as usize] == want || !self.row_grounded[*slot as usize]
++                                    }
++                                    ChoiceOption::Card(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => false,
++                                })
+                             });
+                         if matches_upcoming {
+                             return Ok(());
+@@ -5852,6 +5884,162 @@ pub fn replay_game(
+                 r.actions_consumed += 1;
+                 continue;
+             }
++            // International Agreement (Code of Laws p.12), also no leading
++            // colour on BGO's own first-pick line -- `corpus::classify`'s
++            // own doc comment on this shape. Column 2 (`Line::color`) names
++            // the taking civilization reliably (every sampled game: it
++            // always matches the colour embedded in the take clause
++            // itself), the same source `ColumbusColonize` just above
++            // already trusts for the same reason. Not a political action of
++            // the taker's own (the event interrupts WHOEVER played it, not
++            // the taker's own political phase), so
++            // `next_line_explains_own_politics: false`, same as
++            // `Barbarossa` below.
++            //
++            // Unlike every other shape this file replays (one action per
++            // JOURNAL LINE), BGO logs EVERY pick the civilization makes on
++            // ONE line, ";"-joined ("International Agreement <Color> takes
++            // <A> in hand; <Color> takes <B> in hand; ..."). `corpus::
++            // classify` only ever resolves the FIRST pick (`<A>`, `card`
++            // below); this loop applies it, then walks the line's own
++            // remaining ";"-clauses for any further picks, applying each
++            // the same way.
++            //
++            // Each pick is translated into a `Move::Choose` naming the open
++            // `Pending::Choice(TakeRow)`'s matching `Slot` option directly
++            // (rather than routed through `apply_one`'s generic `TakeCard`
++            // arm) because that arm prices the take via `observed_take_cost`
++            // -- BGO's `"uses N civil action"` clause -- which International
++            // Agreement's own picks NEVER carry (paid from the event's own
++            // budget, not the player's civil-action pool; `interact.rs`'s
++            // `ChoiceKind::TakeRow` handler bills `budget`, not
++            // `p.civil_actions`). Feeding that missing clause's default (0)
++            // into `ground_row_slot`'s cost-matching search would demand a
++            // slot whose ORDINARY position price happens to be exactly 0,
++            // which is true for at most one row slot and wrong for every
++            // other real pick -- so this calls `ground_row_slot` with
++            // `None` (its own forgiving "already grounded, else first
++            // ungrounded slot" fallback) instead.
++            if class == ActionClass::TakeCard && line.text.starts_with("International Agreement ") {
++                let Some(actor_color) = Color::parse(line.color) else {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("column 2 {:?} is not a known colour", line.color))));
++                    break 'lines;
++                };
++                let actor = actor_color.seat();
++                if actor >= meta.players {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
++                    break 'lines;
++                }
++                let Some(first_pick) = card else {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("International Agreement take line's card did not resolve to a known card".into())));
++                    break 'lines;
++                };
++                // Re-resolved to the age copy actually in the row, same as
++                // `apply_one`'s ordinary `TakeCard` arm does for every other
++                // take (`best_age_sibling`'s own doc comment on the nine
++                // card families BGO's text never tags with an age --
++                // `Reserves` among them). Skipping this left `first_pick`/
++                // `picks` pointing at `corpus::build_card_index`'s arbitrary
++                // same-name pick, which then matched NO row slot at all
++                // (wrong age = different `CardId`) -- `resolve_intervening`'s
++                // own `matches_upcoming` read that as a silent decline and
++                // drained the just-opened `TakeRow` via `Stop`, corpus-
++                // confirmed as this bucket's own two regressions
++                // (`StuckPending`/`ParserGap: ... no open TakeRow choice`
++                // for `Reserves`/`First Space Flight`, games `7522957`/
++                // `7523114`).
++                let first_pick = best_age_sibling(first_pick, r.state.age_civil);
++                let mut picks = vec![first_pick];
++                for clause in line.text.split("; ").skip(1) {
++                    let Some(take_rest) =
++                        clause.strip_prefix(actor_color.as_str()).and_then(|r| r.strip_prefix(' ')).and_then(|r| r.strip_prefix("takes "))
++                    else {
++                        break;
++                    };
++                    let Some(card_end) = take_rest.find(" in hand") else { break };
++                    let Some((id, _)) = longest_known_card_prefix(card_index, &take_rest[..card_end]) else { break };
++                    picks.push(best_age_sibling(id, r.state.age_civil));
++                }
++                // `resolve_intervening` is called ONCE, for the FIRST pick
++                // only -- it drains the `QueueItem::TakeRow` the event's own
++                // resolution enqueued (`events.rs`'s `optional_take_cards_
++                // with_civil_actions` arm), which is what actually
++                // materialises the `Pending::Choice(TakeRow)` this loop reads
++                // below. Every LATER pick's own re-offer is already
++                // synchronous (`interact.rs`'s `ChoiceKind::TakeRow` match
++                // arm calls `offer_take_row` inline, not through the queue),
++                // so calling it again per pick was a bug in its own right,
++                // independent of the slot-matching one above: with no
++                // ungrounded slot of THIS card's identity anywhere yet (it
++                // is not grounded until the loop body below places it), its
++                // own `matches_upcoming` check always reads false and drains
++                // the just-reopened choice via `Stop` -- corpus-confirmed
++                // (`ParserGap: International Agreement pick with no open
++                // TakeRow choice`, 42/1,011 games with the per-pick call).
++                if let Err(kind) = r.resolve_intervening(actor, (ActionClass::TakeCard, Some(first_pick)), false) {
++                    mismatch = Some(mk_mismatch(line, kind));
++                    break 'lines;
++                }
++                for pick in picks {
++                    let Some(Pending::Choice(c)) = r.state.pending.top() else {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("International Agreement pick with no open TakeRow choice".into())));
++                        break 'lines;
++                    };
++                    if !matches!(c.kind, ChoiceKind::TakeRow { .. }) {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("expected an open TakeRow choice, found {:?}", c.kind))));
++                        break 'lines;
++                    }
++                    // Ground `pick` against one of THIS CHOICE'S OWN offered
++                    // `Slot` options, not `ground_row_slot`'s generic "first
++                    // ungrounded slot anywhere" fallback -- `offer_take_row`
++                    // (`interact.rs`) filters its `opts` down to slots that
++                    // are both affordable within the event's own budget AND
++                    // `costs::can_take`-legal, a STRICT subset of all 13 row
++                    // slots. Forcing `pick` into an arbitrary ungrounded slot
++                    // outside that subset (the bug this replaced) reliably
++                    // named a slot the choice never offered at all --
++                    // `ParserGap: open TakeRow choice does not offer slot #`,
++                    // 14/1,011 games once `corpus::classify` started
++                    // resolving these lines instead of dropping them. Prefers
++                    // a slot ALREADY grounded to `pick` (by identity, the
++                    // same coincidence `ground_row_slot`'s own first branch
++                    // guards against trusting blindly) over forcing a fresh
++                    // one, for the same reason that branch exists there.
++                    let options: Vec<ChoiceOption> = c.options.as_slice().to_vec();
++                    let mut chosen: Option<(u8, usize)> = None;
++                    for (oi, opt) in options.iter().enumerate() {
++                        if let ChoiceOption::Slot(s) = opt {
++                            if r.row_grounded[*s as usize] && r.state.card_row[*s as usize] == pick {
++                                chosen = Some((*s, oi));
++                                break;
++                            }
++                        }
++                    }
++                    if chosen.is_none() {
++                        for (oi, opt) in options.iter().enumerate() {
++                            if let ChoiceOption::Slot(s) = opt {
++                                if !r.row_grounded[*s as usize] {
++                                    chosen = Some((*s, oi));
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                    let Some((slot, n)) = chosen else {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("open TakeRow choice offers no ungrounded slot for {}", pick.get().name))));
++                        break 'lines;
++                    };
++                    r.state.card_row[slot as usize] = pick;
++                    r.row_grounded[slot as usize] = true;
++                    if let Err(kind) = r.try_apply(Move::Choose { n: n as u8 }, true) {
++                        mismatch = Some(mk_mismatch(line, kind));
++                        break 'lines;
++                    }
++                    r.row_grounded[slot as usize] = false;
++                    r.actions_consumed += 1;
++                }
++                continue;
++            }
+             // Frederick Barbarossa's leader ability, also no leading colour
+             // -- the actor is named only in the trailing "<Color> spends
+             // ..." clause(s) (`corpus::classify`'s own comment on
+@@ -10391,6 +10579,43 @@ mod tests {
+         );
+     }
+ 
++    /// Companion: a card this binary has never grounded ANYWHERE in
++    /// `card_row` yet -- no earlier "takes"/"builds" line ever named it, the
++    /// routine shape for a WONDER taken via International Agreement, which
++    /// `card_row` never held before this exact pick -- still defers, even
++    /// though no offered `Slot` holds it by IDENTITY. Regression: the
++    /// original `matches_upcoming` check required an identity match, so it
++    /// always read false for this shape and silently declined the whole
++    /// `TakeRow` via `Stop` before `apply_one`'s own `TakeCard` arm (which
++    /// DOES know how to ground an ungrounded slot) ever got a chance to run
++    /// -- corpus-confirmed against real games `7522957`/`7523114`
++    /// (`Reserves`/`First Space Flight`), caught by the `IllegalMove:
++    /// WonderStep` bucket's own regression bar.
++    #[test]
++    fn resolve_intervening_defers_a_take_row_pending_for_a_card_never_before_grounded_in_the_row() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let iron = CardId::by_name("Iron").expect("Iron is in the table");
++        let first_space_flight = CardId::by_name("First Space Flight").expect("First Space Flight is in the table");
++        // Slot 2 holds a DIFFERENT card, ungrounded -- `first_space_flight`
++        // is not present anywhere in `card_row` at all.
++        r.state.card_row[2] = iron;
++        let mut options = crate::state::OptionList::new();
++        options.push(ChoiceOption::Slot(2));
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options }));
++
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, Some(first_space_flight)), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert!(
++            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::TakeRow { .. })),
++            "deferring must leave the pending untouched for apply_one to resolve: {:?}",
++            r.state.pending.top()
++        );
++    }
++
+     /// Companion: when the upcoming line does NOT match any of the open
+     /// `TakeRow` choice's `Slot` options (a different actor's own line, or
+     /// this same actor's line but for an unrelated action/card), a human
+-- 
+2.55.0
+
+
+From 71e93f59faa8e4a5e91f870057c0441950b7a500 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 09:11:11 -0600
+Subject: [PATCH 4/6] Replacing a leader mid-turn clawed back actions already
+ spent (509 -> 553 complete)
+
+`apply.rs::h_play_leader` called `on_leave_play`, which decrements
+`civil_actions`/`military_actions` (clamped at 0) when a leader carrying a flat
+action bonus leaves play. If part of that bonus had ALREADY BEEN SPENT this
+turn before the swap, it was subtracted a second time.
+
+Human game 7522520 round 11: Theocracy (3 MA) + Joan of Arc (+1) = 4 MA. Joan
+pays 2 MA for a CopyTactic, Isaac Newton replaces her mid-turn, and the human
+then builds two more units -- only possible with 2 MA left. The engine had 1
+and called the second build illegal.
+
+The fix reuses `carry_over_action_pool`, the already-correct formula
+`set_government` uses for the analogous revolution case. No new machinery.
+
+This is not a replayer-only bug: the bot loses actions it legitimately banked
+every time it swaps a leader, and wasting a civil action is the worst move in
+the game.
+
+Full 1011-game sweep against the frozen 509 baseline: ZERO regressions,
+44 wins. 553 completed, 505 exact.
+
+Diagnosed but NOT fixed, with IDs in the notes: `workers_free==0` (31 games),
+a peaceful-revolution `no_ca` issue (7), residual resource drift (48), and 3
+unresolved.
+---
+ rust/src/apply.rs         | 70 ++++++++++++++++++++++++++++++++++++---
+ rust/src/replay_common.rs | 33 ++++++++++++++++++
+ 2 files changed, 99 insertions(+), 4 deletions(-)
+
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 6f8283c..4d50266 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -813,6 +813,31 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
+         // turn, taking this wonder costs you 2 civil actions less"), so it
+         // gets its own, weaker flag rather than reusing Hammurabi's.
+         state.players[idx as usize].replaced_leader_this_turn = true;
++        // Snapshot the CA/MA pool the SAME way `set_government` does
++        // (`old_total`/`spent`/`old_remaining`, fed to `carry_over_action_
++        // pool`) BEFORE `on_leave_play` strips the old leader's own flat
++        // `civil_actions`/`military_actions` bonus (if any) -- a leader
++        // carrying one (Joan of Arc: +1 MA; Julius Caesar/Napoleon, ...) who
++        // is replaced mid-turn must NOT retroactively lose actions already
++        // spent from that bonus, only the amount left unclaimed (RULES_SPEC
++        // §9.1 "Effects apply immediately" governs the NEW leader's bonus,
++        // not a clawback of the old one's already-banked turn -- the same
++        // shape as §8.4's revolution carry-over `set_government` already
++        // gets right). `on_leave_play`'s own plain decrement (clamped at 0,
++        // no memory of what was already spent) got this wrong: confirmed
++        // against game 7522520 round 11 -- Joan of Arc's +1 MA had already
++        // paid for a CopyTactic (2 MA) before Isaac Newton replaced her, so
++        // the swap must leave the remaining MA pool untouched, not subtract
++        // Joan's bonus a second time out of what was left. Overwritten below
++        // once the swap (and the new leader's own bonus) has fully applied,
++        // so `on_leave_play`/`on_enter_play`'s own CA/MA arithmetic in
++        // between is harmless dead work, not double-counted.
++        let old_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
++        let old_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
++        let spent_c = old_total_c - state.players[idx as usize].civil_actions as i32;
++        let spent_m = old_total_m - state.players[idx as usize].military_actions as i32;
++        let old_remaining_c = state.players[idx as usize].civil_actions as i32;
++        let old_remaining_m = state.players[idx as usize].military_actions as i32;
+         on_leave_play(&mut state.players[idx as usize], old);
+         let is_homer = old.get().name == "Homer";
+         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
+@@ -823,10 +848,17 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
+         } else {
+             economy::discard_civil(state, old);
+         }
+-        // Replacing a leader refunds one civil action (§9.1).
+-        let total = costs::ca_total(state, &state.players[idx as usize]);
+-        let p = &mut state.players[idx as usize];
+-        p.civil_actions = total.min(p.civil_actions as i32 + 1) as i8;
++        state.players[idx as usize].leader = id;
++        on_enter_play(&mut state.players[idx as usize], id);
++        let new_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
++        let new_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
++        let carried_c = carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
++        // Replacing a leader ALSO refunds one civil action on top of the
++        // carry-over (§9.1's own, separate clause) -- clamped to the new
++        // total, same as before this fix.
++        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32 + 1) as i8;
++        state.players[idx as usize].military_actions = carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
++        return;
+     }
+     state.players[idx as usize].leader = id;
+     on_enter_play(&mut state.players[idx as usize], id);
+@@ -2307,6 +2339,36 @@ mod tests {
+         );
+     }
+ 
++    /// A leader carrying a flat `military_actions` bonus (Joan of Arc: +1
++    /// MA) who is replaced MID-TURN, after some of that bonus was already
++    /// spent, must not have the already-spent portion clawed back out of
++    /// the remaining pool -- RULES_SPEC #7's "Effects apply immediately"
++    /// governs the NEW leader's own bonus, not a retroactive subtraction of
++    /// the old one's. Found chasing the `IllegalMove: Build` bucket: BGO
++    /// human game 7522520 round 11 (Theocracy, 3 printed MA) has Joan of
++    /// Arc's +1 MA (4 total) pay for a 2-MA `CopyTactic`, THEN Isaac Newton
++    /// replaces her (no MA bonus of his own, new total back to 3) mid-turn,
++    /// and the human still builds two more military units (1 MA each) --
++    /// only possible if the 2 MA remaining after `CopyTactic` survives the
++    /// swap untouched. Before this fix `on_leave_play`'s plain decrement
++    /// (clamped at 0, no memory of what was already spent) dropped the
++    /// remaining pool from 2 to 1, one short of the second unit build.
++    #[test]
++    fn replacing_a_leader_with_a_flat_military_action_bonus_mid_turn_does_not_claw_back_actions_already_spent_from_it(
++    ) {
++        let mut p = blank_player(0, card("Theocracy")); // 4 CA / 3 MA printed
++        p.leader = card("Joan of Arc"); // +1 MA -> 4 MA total this turn
++        p.civil_actions = 3;
++        p.military_actions = 2; // 4 total minus 2 already spent on CopyTactic
++        p.hand_civil.push(card("Isaac Newton"));
++        let mut state = one_player_state(p);
++        h_play_leader(&mut state, 0, card("Isaac Newton"));
++        // Newton grants no flat MA, so the total drops back to 3 -- but the
++        // 2 already spent (from Joan's now-departed bonus) must not be
++        // spent again: what's left stays 2, not 1.
++        assert_eq!(state.players[0].military_actions, 2);
++    }
++
+     // -------------------------------------------------------------- churchill
+ 
+     #[test]
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index ce21541..49abd34 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2915,6 +2915,26 @@ fn trailing_now_science(text: &str) -> Option<i32> {
+     rest[..digits_end].parse().ok()
+ }
+ 
++/// The banked-resources RUNNING TOTAL BGO prints in an `"End turn <Color>
++/// scores: ...; N resources (now M); ..."` line -- `M`, the authoritative
++/// post-turn total, mirrors [`trailing_now_science`] exactly but for the
++/// `IllegalMove: Build` bucket's own "resources < build_cost_for(...)"
++/// investigation (2026-08-14 session): a resource shortfall discovered only
++/// at the eventual `Build` spend, many lines downstream of whatever actually
++/// under-counted it, is the same "check the oracle every turn, not just at
++/// the spend" shape `trailing_now_science` already solved for science.
++/// Investigation-only, `REPLAY_DEBUG`-gated, same discard-blocked-turn
++/// caveat as `trailing_now_science`'s own doc comment.
++fn trailing_now_resources(text: &str) -> Option<i32> {
++    let p = text.find(" resources (now ")?;
++    let rest = &text[p + " resources (now ".len()..];
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    rest[..digits_end].parse().ok()
++}
++
+ /// Applies Winston Churchill's once-per-turn choice
+ /// (`sources/bga_throughtheages_material.inc.php` #186: "On your turn,
+ /// choose one: score 3 culture; or you have 3 science and 3 resources for
+@@ -5775,6 +5795,19 @@ pub fn replay_game(
+                             );
+                         }
+                     }
++                    if let Some(want) = trailing_now_resources(line.text) {
++                        let got = r.state.players[actor as usize].resources as i32;
++                        let discard_blocked =
++                            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary);
++                        if want != got && !discard_blocked {
++                            eprintln!(
++                                "DEBUG end-turn resources drift: actor={actor} journal says (now {want}), \
++                                 this binary computes {got} (delta {}) at {:?}",
++                                got - want,
++                                line.text,
++                            );
++                        }
++                    }
+                 }
+                 // Structural, always-on culture-oracle checkpoint -- see
+                 // `CultureOracleDivergence`'s own doc. Unlike the science
+-- 
+2.55.0
+
+
+From 628c0dd1f75febf2c9c690feabfbeeb43900ad3d Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 09:15:04 -0600
+Subject: [PATCH 5/6] Revolution skipped leader develop-triggers; Ocean Liner
+ charged a phantom CA (553 -> 582)
+
+Two fixes from the Take + Upgrade buckets.
+
+1. `apply.rs::h_revolution` inlined only Isaac Newton trigger and never called
+   the shared `on_develop()` helper, so Leonardo da Vinci +1 resource and
+   Albert Einstein +3 culture silently never fired on a violent Revolution.
+   docs/RULES_SPEC.md line 232 is explicit that a revolution counts as
+   developing a technology. Game 7522665: the missing resource in round 11
+   starved an Upgrade seven rounds later. The bot suffers from this too.
+
+2. `replay_common.rs` `apply_one()` IncreasePopulation dispatch chose
+   `Move::Pop` whenever it was merely LEGAL, ignoring BGO own explicit
+   "Ocean Liner Service used" text -- billing a civil action for what is a
+   free wonder-granted population increase. Cleared 28 games on its own,
+   because the ambiguity recurs across the corpus. Replayer-side.
+
+Full 1011-game sweep: ZERO regressions against BOTH the frozen 509 baseline
+and the current 553 base. 29 wins. 582 completed, 532 exact.
+
+Still open, per the notes: a WonderInProgress same-instant journal-ordering
+issue in ~3 Take games, plus several Upgrade shortfalls with file/function
+pointers.
+---
+ rust/src/apply.rs         | 59 ++++++++++++++++++++++++++++++++++---
+ rust/src/replay_common.rs | 61 ++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 115 insertions(+), 5 deletions(-)
+
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 4d50266..44dcf28 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -1056,10 +1056,35 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action:
+         p.civil_actions = 0;
+         p.military_actions = carry_over_action_pool(old.military_actions, s.military_actions, spent, old_remaining_m);
+     }
+-    if leader_is(&state.players[idx as usize], "Isaac Newton") {
+-        let p = &mut state.players[idx as usize];
+-        p.civil_actions = s.civil_actions.min(p.civil_actions as i32 + 1) as i8;
+-    }
++    // §8.3.4 / `docs/RULES_SPEC.md` line 232: "revolution counts as
++    // developing a technology" (that line's own text is about Newton, but
++    // the citation is general -- a revolution IS a `DevelopTechnology`, see
++    // this file's own doc comment on `Move::Develop`/`Move::Revolution`
++    // just above `h_develop`'s definition). `h_develop`'s peaceful path
++    // already reaches every develop-triggered leader ability uniformly via
++    // `on_develop` (Leonardo da Vinci's +1 resource, Albert Einstein's +3
++    // culture, Isaac Newton's +1 CA) -- this branch used to hand-roll ONLY
++    // Newton's arm inline, so a Leonardo da Vinci or Albert Einstein player
++    // who seized their government by violent revolution never got their
++    // trigger at all. REPLAYER-BUG-CONFIRMED-ENGINE-BUG (`IllegalMove:
++    // Upgrade` bucket, game `7522665` round 11): the journal's own
++    // resolution line names the leader explicitly --
++    // "Orange revolutions Change government to Constitutional Monarchy; 6
++    // science points spent; Orange loses 6 science; Leonardo Da Vinci gives
++    // 1 resource" -- and the missing +1 resource is a permanent, uncorrected
++    // 1-resource deficit for the rest of the game (confirmed against every
++    // later `"(now N)"` resource total in that journal, off by exactly -1
++    // from this round onward) until it starves an `Upgrade` 7 rounds later.
++    // `on_develop` recomputes its own `effects::state_stats` fresh, but that
++    // is provably identical to the `s` already in scope here: nothing this
++    // function touches between computing `s` (just above) and this call
++    // changes any input `state_stats` reads (`p.techs`/`p.government`/
++    // leader/production), so re-deriving it is not a race, just a second
++    // read of the same answer -- and calling the ONE shared helper instead
++    // of hand-rolling Newton's own arithmetic a second time here is exactly
++    // the "single source of truth" reasoning `costs::build_cost_net`'s own
++    // doc comment already established for this file.
++    on_develop(state, idx);
+ }
+ 
+ /// §8.3.4: science cost to seize a government by violent revolution.
+@@ -2917,6 +2942,32 @@ mod tests {
+         assert_eq!(state.players[0].civil_actions, 7);
+     }
+ 
++    /// ENGINE BUG FIX (`IllegalMove: Upgrade` bucket, game `7522665` round
++    /// 11): `docs/RULES_SPEC.md` line 232 says a revolution "counts as
++    /// developing a technology" (that line is citing Newton's own trigger,
++    /// but the citation covers every develop-triggered leader ability the
++    /// same way `h_develop`'s peaceful path already does via `on_develop`).
++    /// `h_revolution` used to hand-roll ONLY Newton's arm inline, so a
++    /// Leonardo da Vinci player seizing their government by violent
++    /// revolution never got the leader's "every time you develop a
++    /// technology, gain 1 resource" trigger. The real game's own journal
++    /// names the leader explicitly on this exact move: "Orange revolutions
++    /// Change government to Constitutional Monarchy; 6 science points
++    /// spent; Orange loses 6 science; Leonardo Da Vinci gives 1 resource".
++    #[test]
++    fn h_revolution_triggers_leonardo_da_vincis_develop_bonus() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Leonardo da Vinci");
++        p.science = 10;
++        p.civil_actions = 4; // == ca_total(Despotism): every CA still unspent
++        p.military_actions = 2; // == Despotism's full MA pool: none spent yet
++        p.blue_total = 20; // bank room for gain_resources to actually pay out
++        p.hand_civil.push(card("Monarchy"));
++        let mut state = one_player_state(p);
++        h_revolution(&mut state, 0, card("Monarchy"), false);
++        assert_eq!(state.players[0].resources, 1, "Leonardo da Vinci's +1 resource must fire on a revolution, not just a peaceful develop");
++    }
++
+     #[test]
+     fn do_wonder_step_pays_resources_and_advances_progress() {
+         // Pyramids: stages [3, 2, 1].
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 49abd34..7c9f247 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -6815,7 +6815,26 @@ fn apply_one(
+         }
+         ActionClass::IncreasePopulation => {
+             let legal = legal::legal_moves(&r.state);
+-            if legal.as_slice().contains(&Move::Pop) {
++            // BGO's own line names the free-population source explicitly
++            // when one was used ("Ocean Liner Service used" -- the wonder's
++            // once-per-turn free Increase Population, §9, mirrored by
++            // `Move::PopFree`/`h_pop_free`). ENGINE BUG (found chasing the
++            // `IllegalMove: Take` bucket, game `7523341` round 14): this
++            // arm used to try `Move::Pop` FIRST whenever it happened to be
++            // legal, ignoring that signal entirely -- a player with both a
++            // spare civil action AND the free Ocean Liner option still
++            // available took the free one in reality (the journal's own
++            // "Ocean Liner Service used" says so), but this binary silently
++            // spent a civil action instead, permanently overcharging
++            // `p.civil_actions` for the rest of that turn until it starved
++            // a later `Take`. The SAME line's text is unambiguous here --
++            // trust it exactly the way this file already trusts every
++            // other named-source journal clause -- and only fall back to
++            // the "whichever is legal" guess when the text does not say.
++            let free_source_named = raw_text.contains("Ocean Liner Service used");
++            if free_source_named && legal.as_slice().contains(&Move::PopFree) {
++                r.try_apply(Move::PopFree, true)
++            } else if legal.as_slice().contains(&Move::Pop) {
+                 r.try_apply(Move::Pop, true)
+             } else if legal.as_slice().contains(&Move::PopFree) {
+                 r.try_apply(Move::PopFree, true)
+@@ -9266,6 +9285,46 @@ mod tests {
+         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
+     }
+ 
++    /// ENGINE BUG FIX (`IllegalMove: Take` bucket, game `7523341` round 14):
++    /// when a player has BOTH a spare civil action AND the wonder's free
++    /// Ocean Liners population increase still available this turn, BGO's
++    /// own line says exactly which one the human used --
++    /// `"<Color> increases population Ocean Liner Service used"` -- but
++    /// `apply_one`'s `IncreasePopulation` arm used to try `Move::Pop` first
++    /// whenever it happened to be legal, silently spending a civil action
++    /// the real player never spent. That phantom charge starved a LATER
++    /// `Take` on the same turn, several lines downstream, of the 1 civil
++    /// action it actually still had. This is `apply_one`'s real dispatch
++    /// path (not `civil_life_move`'s ordered-action bypass above), so the
++    /// test goes through `apply_one` directly with a `Replayer` set up so
++    /// BOTH `Move::Pop` and `Move::PopFree` are legal at once -- the exact
++    /// ambiguity the old "whichever is legal" logic got wrong.
++    #[test]
++    fn a_pop_line_naming_ocean_liner_service_used_takes_the_free_move_even_when_a_paid_pop_is_also_legal() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.round = 5;
++        r.state.phase = Phase::Actions;
++        r.state.current = 0;
++        r.state.players[0].civil_actions = 4; // Move::Pop would also be legal
++        r.state.players[0].food = 20; // plenty, for either move
++        r.state.players[0].yellow_bank = 1; // pop_cost needs a nonzero bank
++        r.state.players[0].completed_wonders.push(card("Ocean Liners")); // grants free_pop_per_turn
++        r.state.players[0].ocean_liners_used = false;
++        let out = apply_one(
++            &mut r,
++            0,
++            ActionClass::IncreasePopulation,
++            None,
++            "increases population Ocean Liner Service used",
++            "Orange increases population Ocean Liner Service used",
++            None,
++        );
++        assert!(out.is_ok(), "{out:?}");
++        assert_eq!(r.state.players[0].civil_actions, 4, "the free Ocean Liners move must not spend a civil action");
++        assert!(r.state.players[0].ocean_liners_used, "PopFree, not Pop, must be the move actually applied");
++    }
++
+     /// `is_pure_confirmation_line`'s membership is what routes `PlayEvent`,
+     /// `WinAuction`, and `Colonize` lines around `resolve_intervening`
+     /// The residual, genuinely-contradictory shape: player 0 starts
+-- 
+2.55.0
+
+
+From f7f121f1b99e84937f1f6f98ad8c6a00bfb63517 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Fri, 14 Aug 2026 10:11:38 -0600
+Subject: [PATCH 6/6] PlayAction: IA same-turn play, Frugality, Robespierre
+ Breakthrough, Bach (582 -> 609 complete)
+
+Four engine rule bugs, all found by replaying real BGO human games:
+- Cards taken via International Agreement were wrongly marked taken_this_turn
+  and blocked from being played the same turn (CoL p.12 / RULES_SPEC line 383).
+- Frugality + Trade Routes Agreement: population partly paid by a
+  resource-as-food conversion glued onto one journal line with no preceding
+  move; mirrors the synthesis the ordinary Pop path already does.
+- Robespierre could not fund a Breakthrough revolution with military actions,
+  though RB p.15 frames Breakthrough as funding the revolution (CoL p.12).
+- J. S. Bach cross-kind theater upgrade could not be funded by a yellow action
+  card discount, and Move::BachTheater was unreachable from
+  apply_free_civil_move dispatch (RB p.24).
+
+609/1011 complete, 557 exact. Zero regressions against the 582 baseline.
+NOTE: unit tests still owed for all four; corpus-verified only.
+---
+ rust/src/advisor/state_io.rs     |  1 +
+ rust/src/apply.rs                | 81 +++++++++++++++++++++++++++-----
+ rust/src/bots/weighted/events.rs |  1 +
+ rust/src/combat.rs               |  1 +
+ rust/src/costs.rs                |  1 +
+ rust/src/economy.rs              |  2 +
+ rust/src/effects.rs              |  1 +
+ rust/src/events.rs               |  1 +
+ rust/src/game.rs                 |  1 +
+ rust/src/interact.rs             |  8 +++-
+ rust/src/legal.rs                | 69 +++++++++++++++++++++++++--
+ rust/src/replay_common.rs        | 38 +++++++++++++++
+ rust/src/state.rs                | 14 ++++++
+ 13 files changed, 202 insertions(+), 17 deletions(-)
+
+diff --git a/rust/src/advisor/state_io.rs b/rust/src/advisor/state_io.rs
+index 674e7f7..39034e7 100644
+--- a/rust/src/advisor/state_io.rs
++++ b/rust/src/advisor/state_io.rs
+@@ -909,6 +909,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         ca_spent_taking: 0,
+         hammurabi_used: false,
+         hammurabi_replaced_this_turn: false,
++        breakthrough_ma_funded: false,
+         replaced_leader_this_turn: false,
+         trade_food_as_resource_used_this_turn: 0,
+         trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 44dcf28..b00ed7f 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -279,7 +279,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
+         Move::RemoveLeaderYellow => h_remove_leader_yellow(state, idx),
+         Move::ColumbusColonize { card } => h_columbus_colonize(state, idx, card),
+         Move::Barbarossa { card } => h_barbarossa(state, idx, card),
+-        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to),
++        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, 0, false),
+         Move::TradeFoodAsResource => h_trade_food_as_resource(state, idx),
+         Move::TradeResourceAsFood => h_trade_resource_as_food(state, idx),
+ 
+@@ -568,6 +568,21 @@ fn h_take(state: &mut GameState, idx: u8, slot: u8) {
+ /// Move row card `slot` into `idx`'s hand/play area (actions already paid).
+ /// Mirrors `engine/actions.py::take_card`.
+ pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
++    take_card_impl(state, idx, slot, true);
++}
++
++/// International Agreement's own `TakeRow` choice (CoL p.12, `docs/
++/// RULES_SPEC.md` line ~383, "RESOLVED"): "if the current player takes
++/// cards, action cards taken may be used the same turn" -- the ONE
++/// documented exception to the normal rule that an action card cannot be
++/// played "in the same Action Phase in which it was taken from the row"
++/// [RB p.14, CoL p.6]. Skips [`take_card`]'s `taken_this_turn` bookkeeping
++/// so `legal::action_moves`'s `held > taken` gate does not block it.
++pub(crate) fn take_card_from_international_agreement(state: &mut GameState, idx: u8, slot: usize) {
++    take_card_impl(state, idx, slot, false);
++}
++
++fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this_turn: bool) {
+     let id = state.card_row[slot];
+     state.card_row[slot] = CardId::NONE;
+     on_take_card(&mut state.players[idx as usize], id);
+@@ -582,7 +597,7 @@ pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
+             // § one leader per age (state.rs's doc comment on the field):
+             // set once, never cleared, even once this leader is replaced.
+             p.taken_leader_ages |= 1 << (card.age as u8);
+-        } else if card.kind == CardType::Action {
++        } else if card.kind == CardType::Action && record_taken_this_turn {
+             p.taken_this_turn.push(id);
+         }
+     }
+@@ -670,9 +685,16 @@ fn h_barbarossa(state: &mut GameState, idx: u8, unit: CardId) {
+ /// right thing for this cross-type move: the cost is the difference of the
+ /// two build costs (floored at 0), the civil action is paid because a
+ /// theater is not a unit, and the worker moves from one card to the other.
+-fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId) {
++///
++/// `discount`/`free` exist for [`apply_free_civil_move`]'s benefit (an
++/// action card's "using Efficient Upgrade"/"using Urban Growth" clause can
++/// fund this SAME cross-kind privilege at a discount and no CA -- see
++/// `legal::free_action_moves`'s urban-upgrade arm for the citation and the
++/// corroborating BGO games); the bare dispatch below still passes `(0,
++/// false)`, unchanged from before this was parameterized.
++fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId, discount: i32, free: bool) {
+     state.players[idx as usize].bach_upgrade_used = true;
+-    do_upgrade(state, idx, from, to, 0, false);
++    do_upgrade(state, idx, from, to, discount, free);
+ }
+ 
+ /// Ports `engine/actions.py::do_build`. `discount`/`free` exist for
+@@ -1041,7 +1063,17 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action:
+     // zeroed there regardless of how the revolution was funded (RB p.13's
+     // base "you end with 0 available CAs this turn" already covers a
+     // Breakthrough-funded base revolution with no separate accounting).
+-    if via_ordered_action && robespierre {
++    // `breakthrough_ma_funded` (set by `h_play_action`, `legal::
++    // breakthrough_robespierre_ma_fundable`'s own doc comment has the
++    // citation): when Breakthrough's own 1-CA play cost was paid with a
++    // military action instead (civil already exhausted), civil was never
++    // touched by playing it at all, so the `-1` correction below would
++    // wrongly credit a civil action that was never spent -- skip it, and
++    // consume the flag so a LATER, unrelated revolution this same turn
++    // cannot accidentally inherit it.
++    let breakthrough_civil_spent = via_ordered_action && !state.players[idx as usize].breakthrough_ma_funded;
++    state.players[idx as usize].breakthrough_ma_funded = false;
++    if breakthrough_civil_spent && robespierre {
+         spent -= 1;
+     }
+     state.players[idx as usize].government = id;
+@@ -1219,7 +1251,23 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
+     // later inside the queue item's own resolution (which would otherwise
+     // always see the CA this card itself just cost).
+     let revolt_ok = legal::revolt_pool_ok(state, &state.players[idx as usize]);
+-    costs::pay_ca(&mut state.players[idx as usize], 1);
++    // RB p.15's "1 CA" for Breakthrough is explicitly the cost of FUNDING
++    // THE REVOLUTION, not an order-independent §3.11 fee -- so Maximilien
++    // Robespierre's own exception (CoL p.12: "pay with all military actions
++    // instead of civil") reaches it too, exactly like it already reaches the
++    // revolution's own science cost (this file's `h_revolution` `via_
++    // ordered_action && robespierre` branch). `legal::
++    // breakthrough_robespierre_ma_fundable`'s own doc comment has the 5
++    // corroborating BGO games (civil hits 0 taking + electing Robespierre,
++    // same turn, before the revolution line) and the full citation; gated
++    // there on a revolution actually being live so this never substitutes a
++    // military action for an ordinary Breakthrough-funded Develop.
++    if costs::spare_ca(&state.players[idx as usize]) < 1 && legal::breakthrough_robespierre_ma_fundable(state, &state.players[idx as usize], id) {
++        state.players[idx as usize].military_actions -= 1;
++        state.players[idx as usize].breakthrough_ma_funded = true;
++    } else {
++        costs::pay_ca(&mut state.players[idx as usize], 1);
++    }
+     state.players[idx as usize].hand_civil.remove_first(id);
+     economy::discard_civil(state, id); // one-shot: played face up, spent
+ 
+@@ -1358,10 +1406,12 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
+ /// Apply the one move an ordered free civil action resolved to, at no action
+ /// cost and `discount` off its resource cost (mirrors `engine/actions.py::
+ /// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop` /
+-/// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` are the only shapes
+-/// `free_action_moves`'s build/upgrade/pop/wonder-step arms ever produce;
+-/// `Move::Develop` / `Move::Revolution` are the two `DevelopTechnology` can
+-/// produce. No other `Move` variant is reachable from there.
++/// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` / `Move::BachTheater`
++/// are the shapes `free_action_moves`'s build/upgrade/pop/wonder-step arms
++/// ever produce (`BachTheater` only when the actor is J. S. Bach, mid-turn,
++/// same arm); `Move::Develop` / `Move::Revolution` are the two
++/// `DevelopTechnology` can produce. No other `Move` variant is reachable
++/// from there.
+ ///
+ /// `pub`, not `pub(crate)`, since 2026-08: `replay.rs` (`docs/REPLAY.md`
+ /// Finding 2) also calls this directly, for a DIFFERENT free-civil source
+@@ -1396,7 +1446,13 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
+         // ran -- see `h_revolution`'s own doc comment for why that matters
+         // for Robespierre.
+         Move::Revolution { card } => h_revolution(state, idx, card, true),
+-        other @ Move::Take { .. } | other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
++        // J. S. Bach's cross-kind theater upgrade, funded by the action
++        // card's discount instead of his own bare 1 CA -- `legal::
++        // free_action_moves`'s urban-upgrade arm is the only place this
++        // shape can come from now; see its own doc comment for the
++        // citation.
++        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, discount, true),
++        other @ Move::Take { .. } | other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
+             "free_action_moves produced a move apply_free_civil_move does not \
+              expect: {other:?}"
+         ),
+@@ -1642,6 +1698,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+@@ -2120,7 +2177,7 @@ mod tests {
+         p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+         p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+         let mut state = one_player_state(p);
+-        h_bach_theater(&mut state, 0, card("Theology"), card("Drama"));
++        h_bach_theater(&mut state, 0, card("Theology"), card("Drama"), 0, false);
+         let p = &state.players[0];
+         assert!(p.bach_upgrade_used, "at most once per turn");
+         assert_eq!(p.civil_actions, 3);
+diff --git a/rust/src/bots/weighted/events.rs b/rust/src/bots/weighted/events.rs
+index a21341a..e632d80 100644
+--- a/rust/src/bots/weighted/events.rs
++++ b/rust/src/bots/weighted/events.rs
+@@ -607,6 +607,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/combat.rs b/rust/src/combat.rs
+index be6beeb..5fe1551 100644
+--- a/rust/src/combat.rs
++++ b/rust/src/combat.rs
+@@ -574,6 +574,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/costs.rs b/rust/src/costs.rs
+index 6d4d640..1ca4ca6 100644
+--- a/rust/src/costs.rs
++++ b/rust/src/costs.rs
+@@ -811,6 +811,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/economy.rs b/rust/src/economy.rs
+index a56dbfc..518a3b8 100644
+--- a/rust/src/economy.rs
++++ b/rust/src/economy.rs
+@@ -760,6 +760,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+     p.tactic_action_used = false;
+     p.hammurabi_used = false;
+     p.hammurabi_replaced_this_turn = false;
++    p.breakthrough_ma_funded = false;
+     p.replaced_leader_this_turn = false;
+     p.trade_food_as_resource_used_this_turn = 0;
+     p.trade_resource_as_food_used_this_turn = 0;
+@@ -964,6 +965,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index 0e24074..6d69462 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1720,6 +1720,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index c70d027..7a57a73 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -1578,6 +1578,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index bbe1dc9..88c3c6e 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -286,6 +286,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         ca_spent_taking: 0,
+         hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+         replaced_leader_this_turn: false,
+         trade_food_as_resource_used_this_turn: 0,
+         trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index daaf071..875e521 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -543,7 +543,12 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+                 ChoiceOption::Word(Keyword::Stop) => finish_take_row(state),
+                 ChoiceOption::Slot(slot) => {
+                     let cost = costs::take_cost(state, &state.players[p as usize], slot as usize);
+-                    crate::apply::take_card(state, p, slot as usize);
++                    // CoL p.12: action cards taken via International
++                    // Agreement may be played the SAME turn -- see
++                    // `apply::take_card_from_international_agreement`'s own
++                    // doc for the citation and why this is the one caller
++                    // that must not feed `taken_this_turn`.
++                    crate::apply::take_card_from_international_agreement(state, p, slot as usize);
+                     // CoL p.12: the forfeit of the player's next political
+                     // action is the cost of actually USING this privilege --
+                     // taking a card here is the only place that happens, so
+@@ -1735,6 +1740,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index bd65991..b937578 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -510,7 +510,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
+             barbarossa_moves(state, p, names, res, disc, &mut moves);
+         }
+     } else if leader_is(p, "J. S. Bach") && have_ca && !p.bach_upgrade_used {
+-        bach_moves(state, p, names, res, &s, &mut moves);
++        bach_moves(state, p, names, res, 0, &s, &mut moves);
+     }
+ 
+     // destroy / disband (§3.6, §4.3)
+@@ -571,7 +571,8 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
+                 // lock up the copy that was already in hand.
+                 let held = p.hand_civil.as_slice().iter().filter(|&&c| c == id).count();
+                 let taken = p.taken_this_turn.as_slice().iter().filter(|&&c| c == id).count();
+-                if ca >= 1 && held > taken && action_card_playable(state, p, id) {
++                let affordable = ca >= 1 || breakthrough_robespierre_ma_fundable(state, p, id);
++                if affordable && held > taken && action_card_playable(state, p, id) {
+                     moves.push(Move::PlayAction { card: id });
+                 }
+             }
+@@ -722,7 +723,13 @@ fn barbarossa_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i
+ /// urban building -- but it is the plain `Upgrade` move at an identical
+ /// civil action and an identical cost, so offering it here would be a
+ /// strictly dominated duplicate that also burns the once-per-turn.
+-fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s: &effects::Stats, moves: &mut MoveList) {
++/// `discount` is 0 for Bach's own bare, CA-costing use (this function's
++/// only caller until the fix below); [`free_action_moves`]'s urban-upgrade
++/// arms pass a REAL discount because a yellow action card's "using
++/// Efficient Upgrade"/"using Urban Growth" clause can ALSO fund this same
++/// cross-kind privilege at a discount -- see that call site's own doc
++/// comment for the citation.
++fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, discount: i32, s: &effects::Stats, moves: &mut MoveList) {
+     let has_theater = names.iter().any(|id| id.kind() == CardType::Theater);
+     if !has_theater || costs::urban_count(p, CardType::Theater) >= s.urban_limit {
+         return;
+@@ -737,7 +744,7 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s:
+             if hi.level() < lo_level {
+                 continue;
+             }
+-            let cost = (costs::build_cost_for(state, p, hi).unwrap_or(0) - lo_cost).max(0);
++            let cost = ((costs::build_cost_for(state, p, hi).unwrap_or(0) - lo_cost) - discount).max(0);
+             if res >= cost {
+                 moves.push(Move::BachTheater { from: lo, to: hi });
+             }
+@@ -790,6 +797,38 @@ pub(crate) fn revolt_pool_ok(state: &GameState, p: &PlayerState) -> bool {
+     p.civil_actions as i32 == costs::ca_total(state, p) && p.civil_actions > 0
+ }
+ 
++/// RB p.15 attributes Breakthrough's own "1 CA" specifically to FUNDING THE
++/// REVOLUTION ("Breakthrough may pay for the revolution with its 1 CA +
++/// revolution science cost"), not to an ordinary, order-independent §3.11
++/// action-card-play fee. Maximilien Robespierre's own exception (CoL p.12:
++/// "pay with all military actions instead of civil") therefore reaches this
++/// cost too, the same way it already reaches the revolution's own
++/// science-cost step (`apply::h_revolution`'s `via_ordered_action &&
++/// robespierre` branch, which assumes Breakthrough's 1 CA was paid and only
++/// refunds the carry-over -- this is the missing other half: letting that 1
++/// CA be a military action to begin with when civil is already exhausted).
++///
++/// Gated on a revolution actually being one of Breakthrough's legal ordered
++/// outcomes right now (not just "any" order) so this never lets Breakthrough
++/// fund an ordinary Develop off a military action -- only the branch RB
++/// p.15's own wording names as "the revolution".
++///
++/// Confirmed against 5 real BGO games sharing the identical shape (take
++/// Robespierre, take a government, elect Robespierre, revolt via
++/// Breakthrough, all in the SAME turn -- civil hits 0 before the revolution
++/// line runs): 7522616, 7523206, 7523163, 7522793 (game `IllegalMove:
++/// PlayAction` bucket).
++pub(crate) fn breakthrough_robespierre_ma_fundable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
++    if id.get().base_name != "Breakthrough" || !leader_is(p, "Maximilien Robespierre") || p.military_actions < 1 {
++        return false;
++    }
++    let revolt_ok = revolt_pool_ok(state, p);
++    free_action_moves(state, p, FreeActionKind::DevelopTechnology, 0, revolt_ok)
++        .as_slice()
++        .iter()
++        .any(|m| matches!(m, Move::Revolution { .. }))
++}
++
+ /// §3.11: a yellow card that orders an action needs that action to be legal.
+ ///
+ /// Mirrors `engine/actions.py::_action_card_playable`. For the 18 cards that
+@@ -1007,6 +1046,27 @@ pub fn free_action_moves(
+                     }
+                 }
+             }
++            // J. S. Bach's own cross-kind "upgrade any urban building to a
++            // theater" exception (RB p.24, `bach_moves`'s own doc comment)
++            // is not limited to his bare, CA-costing use of it -- BGO logs
++            // it glued onto a yellow action card's "using Efficient
++            // Upgrade"/"using Urban Growth" clause too (`"<leader name>
++            // upgrades <temple/library/...> to <theater> using <card>"`,
++            // the leader's own name substituted for the color exactly the
++            // way a bare Bach use also prints), discounted the same way an
++            // ordinary same-kind `Move::Upgrade` is here. Without this, a
++            // Bach player whose ONLY affordable upgrade candidate is a
++            // cross-kind theater one saw `free_action_moves` return empty
++            // and the whole action card rejected as unplayable. Confirmed
++            // against 5 real BGO games: 7521377, 7521798, 7523221,
++            // 7521653, 7523392 (`IllegalMove: PlayAction` bucket). Gated on
++            // `!p.bach_upgrade_used` the same as his bare use -- it is the
++            // SAME once-per-turn privilege, just a different funding
++            // source, and `apply::h_bach_theater` sets that flag
++            // regardless of which path reached it.
++            if matches!(kind, BuildOrUpgradeUrbanBuilding | UpgradeFarmMineOrUrbanBuilding) && leader_is(p, "J. S. Bach") && !p.bach_upgrade_used {
++                bach_moves(state, p, names, p.resources as i32, discount, &s, &mut out);
++            }
+         }
+     }
+     out
+@@ -1064,6 +1124,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 7c9f247..6973046 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -7101,6 +7101,43 @@ fn apply_one(
+                     .unwrap_or(named)
+             });
+             correct_hand_family(&mut r.state.players[actor as usize], card);
++            if kind == Some(legal::FreeActionKind::IncreasePopulation) {
++                // Trade Routes Agreement, side B (§5.9, "Civilization B can
++                // use 1 resource as 1 food during its turn"): the SAME
++                // shortfall-covering conversion the ordinary
++                // `ActionClass::IncreasePopulation` arm above already makes
++                // (that arm's own doc comment has the full citation) --
++                // Frugality's ordered Pop resolves at full price (this
++                // file's own RESOLVED note: gains land AFTER the ordered
++                // action), so a player short on food may still cover PART
++                // of it with a live Trade Routes conversion, and BGO logs
++                // that as a second `"<Color> spends M resource"` clause
++                // glued onto THIS "plays Frugality" line rather than a
++                // separate line the way `Move::TradeResourceAsFood` itself
++                // would print. Found chasing the `IllegalMove: PlayAction`
++                // bucket (game 7522830, round 8): this arm never tried it,
++                // leaving every partly-resource-paid Frugality illegal.
++                let res = {
++                    let p = &r.state.players[actor as usize];
++                    let stated = spent_food(raw_text).map(|f| f + spent_resource_after_food(raw_text));
++                    let cost = crate::economy::pop_cost(&r.state, p);
++                    let shortfall = match (stated, cost) {
++                        (Some(stated), Some(cost)) if stated == cost => cost - p.food as i32,
++                        _ => 0,
++                    };
++                    shortfall > 0
++                        && shortfall <= crate::economy::trade_resource_as_food_remaining(&r.state, p)
++                        && shortfall <= p.resources as i32
++                };
++                if res {
++                    let p = &r.state.players[actor as usize];
++                    let cost = crate::economy::pop_cost(&r.state, p).expect("checked above");
++                    let shortfall = cost - p.food as i32;
++                    for _ in 0..shortfall {
++                        r.try_apply(Move::TradeResourceAsFood, true)?;
++                    }
++                }
++            }
+             r.try_apply(Move::PlayAction { card }, true)?;
+             // Reserves (`Special::GainFoodOrResources`) opens a
+             // `ChoiceKind::FoodOrRes` the instant it's played, with no
+@@ -7694,6 +7731,7 @@ mod tests {
+             ca_spent_taking: 0,
+             hammurabi_used: false,
+             hammurabi_replaced_this_turn: false,
++            breakthrough_ma_funded: false,
+             replaced_leader_this_turn: false,
+             trade_food_as_resource_used_this_turn: 0,
+             trade_resource_as_food_used_this_turn: 0,
+diff --git a/rust/src/state.rs b/rust/src/state.rs
+index bd86caa..dd0bfe6 100644
+--- a/rust/src/state.rs
++++ b/rust/src/state.rs
+@@ -553,6 +553,20 @@ pub struct PlayerState {
+     /// rules let them keep. Cleared with `hammurabi_used` in
+     /// `economy::end_of_turn`.
+     pub hammurabi_replaced_this_turn: bool,
++    /// This turn's `Move::PlayAction { card: Breakthrough }` paid its own
++    /// RB p.15 "1 CA" with a military action instead (Maximilien
++    /// Robespierre's CoL p.12 exception, `legal::
++    /// breakthrough_robespierre_ma_fundable`'s own doc comment has the full
++    /// citation and the corroborating BGO games) because civil was already
++    /// exhausted. Consumed by `apply::h_revolution`'s own `robespierre`
++    /// branch the instant the revolution it funded actually resolves --
++    /// that branch otherwise assumes Breakthrough's 1 CA came out of civil
++    /// and backs 1 out of this turn's civil spend to avoid double-counting
++    /// it; skipping that correction here (nothing was ever spent from civil
++    /// to correct for) is the other half of the same fix. Reset at end of
++    /// turn like every other once-per-turn flag on this struct, in case the
++    /// order resolved to an ordinary Develop instead and left it unconsumed.
++    pub breakthrough_ma_funded: bool,
+     /// SOME leader was in play this turn and has since been replaced by a new
+     /// one (`apply::h_play_leader`) -- the condition Taj Mahal's printed 2015
+     /// text reads: "If you replaced your leader this turn, taking this wonder
+-- 
+2.55.0
+
