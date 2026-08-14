@@ -1,0 +1,477 @@
+LINTGATE.txt -- making "no wildcard `_ =>` enum match arms" mechanical
+========================================================================
+
+Paul's question was: "how can the project ban something but yet have it?
+shouldn't we have a linter or something?" He was right -- the rule was
+enforced only by convention in prompts. This is the mechanical fix.
+
+Working tree: /private/tmp/lintgate (copy of base0814, clippy installed via
+`rustup component add clippy` -- it was not actually present for this
+toolchain at task start, contrary to the setup note; installing it was a
+one-time, no-secrets, standard-toolchain action).
+
+
+1. THE GATE: rust/Cargo.toml now has
+------------------------------------
+
+    [lints.clippy]
+    wildcard_enum_match_arm = "deny"
+    match_wildcard_for_single_variants = "deny"
+    wildcard_in_or_patterns = "deny"
+
+This makes `cargo build` / `cargo clippy` / `cargo test` FAIL on any `_ =>`
+(or bare-binding, e.g. `other =>`) arm over an enum, crate-wide, with no
+flags needed -- the deny lives in the manifest, not the CI invocation.
+
+PROOF THE GATE BITES (before any cleanup): running clippy against the
+as-found tree failed immediately on the exact bug Paul found, plus 99 other
+sites. Exact text (one representative error; the `help: try:` line lists
+every one of the Special enum's other ~90 variants and is truncated here):
+
+    error: wildcard match will also match any future added variants
+       --> src/bots/weighted/cards.rs:405:13
+        |
+    405 |             _ => {}
+        |             ^ help: try: `Special::A(_) | Special::AllPlayers(_) |
+          Special::B(_) | ... [90 variants] ... | Special::WonderTakeNoExtraCivilActions`
+        |
+        = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#wildcard_enum_match_arm
+        = note: requested on the command line with `-D clippy::wildcard-enum-match-arm`
+
+    error: could not compile `tta` (lib) due to 100 previous errors
+
+I additionally did the exact literal exercise the task asked for (introduce
+a FRESH deliberate wildcard, watch it fail, remove it), to be unambiguous
+that this isn't just the pre-existing bug talking:
+
+    fn __lintgate_demo_deliberate_wildcard(k: YieldKind) -> i32 {
+        match k {
+            YieldKind::Gain => 1,
+            _ => 0,
+        }
+    }
+
+    $ cargo clippy --lib --profile difftest
+    error: wildcard match will also match any future added variants
+       --> src/bots/weighted/cards.rs:198:9
+        |
+    198 |         _ => 0,
+        |         ^ help: try: `YieldKind::Cost | YieldKind::Rate | YieldKind::Unit | YieldKind::Territory | YieldKind::Bonus`
+        |
+        = note: requested on the command line with `-D clippy::wildcard-enum-match-arm`
+    $ echo $?
+    101
+
+Removed immediately after confirming the failure. Not in the final diff.
+
+
+2. MEASURED: the violation count
+---------------------------------
+
+Scoped clippy run (`-D clippy::wildcard_enum_match_arm -D
+clippy::match_wildcard_for_single_variants -D clippy::wildcard_in_or_patterns`,
+every other lint group `-A`'d off so the count isn't polluted by unrelated
+style debt -- see section 6 for that debt's own count):
+
+  `--lib` only:            100 violations, 24 files
+  `--all-targets` (bins,
+  tests/, #[cfg(test)]
+  modules inside src/*.rs
+  -- invisible to --lib
+  alone):                  +23 more, discovered iteratively because each
+                            target only compiles far enough to report once
+                            the ones before it in the dependency graph are
+                            fixed (lib must compile before bins/tests do)
+
+  TOTAL: 123 wildcard-family violations across 26 files.
+
+File-by-file (violations fixed, not files touched -- a file can have more
+than one):
+
+    src/events.rs                 15
+    src/bots/book.rs               10
+    src/replay_common.rs           10
+    src/interact.rs                 9
+    src/apply.rs                    6 (+1 discovered in its own #[cfg(test)])
+    src/bots/weighted/cards.rs      6 (+2 discovered in its own #[cfg(test)])
+    src/effects.rs                  6
+    src/bots/board_yields.rs        5
+    src/fixtures.rs                 5
+    src/bin/behavcensus.rs          5
+    src/legal.rs                    4 (+1 guard-pattern arm found only after
+                                        fixing its neighbour -- see below)
+    src/bots/weighted/rivals.rs     4
+    src/bots/weighted/weights.rs    3
+    src/bin/botcensus.rs            3
+    src/card_table.rs               2 (in its own #[cfg(test)])
+    src/bots/weighted/features.rs   2
+    src/bots/weighted/row.rs        2
+    src/combat.rs                   2
+    src/opening_force.rs            2
+    src/bin/humanopenings.rs        2
+    src/advisor/describe.rs         1
+    src/bots/variants/mod.rs        1
+    src/bots/weighted/eval.rs       1
+    src/bots/weighted/events.rs     1
+    src/cards.rs                    1
+    src/costs.rs                    1
+    src/economy.rs                  1
+    src/harness/mirror.rs           1
+    src/human_policy.rs             1
+    src/bin/corpuscensus.rs         1
+    src/bin/kindmatch.rs            1
+    src/bots/greedy.rs              1
+    src/bots/neural/spec.rs         1
+    tests/suite/common/mod.rs       1
+
+Methodology note (compute over inference): I did not hand-transcribe these.
+I ran `cargo clippy --message-format=json`, parsed each diagnostic's
+`children[].spans[].suggested_replacement` (clippy's own compiler-verified
+enumeration of "every other variant of this exact enum"), and applied it as
+a byte-exact substring replacement at the diagnostic's own `byte_start`/
+`byte_end`. This is compiler-derived text, not my paraphrase -- it is
+behaviour-preserving by construction: the arm that used to say "match
+anything else, do X" now says "match these N named things, do X", with X
+unchanged. I verified this with `git diff --stat` (only match-arm lines
+changed) and the full test suite (below).
+
+`cargo clippy --fix` was tried first and does NOT apply this suggestion
+automatically (it printed the identical text as a warning, touched zero
+files) -- the applicability isn't machine-safe by clippy's own stable-Rust
+policy, which is why the JSON-diagnostic approach above was necessary.
+
+
+3. THE REAL BUG THE GATE EXPOSED
+----------------------------------
+
+The task's framing said "two event cards price to literally nothing." I
+checked directly rather than trust that number: I added a temporary test
+(`card_yields` over every `CardType::Event` card, removed before commit)
+and it is not two -- it is ALL 55 Event cards in the base game. Every one of
+them returns an EMPTY `Vec<CardYield>` from `card_yields`, because:
+
+  - Event cards print zero `science_cost`/`resource_cost` and zero
+    `CardEffects` fields -- their entire behaviour lives in `special`.
+  - Every EventBlock-carrying `Special` variant (`Gain`, `Lose`,
+    `AllPlayers`, `PlayerWithLeastCulture`, `PlayerWithMostCulture`,
+    `PlayersWithMostDiscontentWorkers`, `PlayersWithMostHappyFaces`,
+    `StrongestPlayer(s)`, `WeakestPlayer(s)`, `Condition`, `FinalScoring`,
+    `LastRoundSubstitute`, `TakeFromOpponent`) fell through the old
+    `_ => {}` and got zero treatment.
+
+Severity, checked rather than assumed: this matters LESS than "all 55" makes
+it sound in the live bot. `card_potential_core`'s `CardType::Event` branch
+prefers `event_prepare_value` (`level * culture_rate`, which never touches
+`special` either -- a deliberate, separate heuristic) whenever
+`w[EventBoardCredit] != 0.0`, and this file's own comments record that as
+true on every trained champion sampled. So the empty-`card_yields` path is
+live only off-board (`state: None`) or wherever `EventBoardCredit` actually
+sits at 0.0 -- which does happen (`wonder_value_scaled`'s own `card_yields`
+fallback is one such caller; any off-board analysis/test caller is another).
+
+I did NOT invent pricing for these variants -- `card_yields` has no
+`GameState` and can't resolve "weakest/strongest/all players" targeting;
+that's `docs/RULES_SPEC.md`'s event-targeting territory, a real feature, not
+a one-line fix. Instead I enumerated the arm explicitly and left a dated
+comment at rust/src/bots/weighted/cards.rs:402-430 recording exactly this
+finding (which variants, why they're unhandled, and the severity nuance
+above) so the next person who touches that match sees it instead of
+re-swallowing it behind a wildcard.
+
+
+4. THE FOUR #[allow]s -- and why they exist
+---------------------------------------------
+
+Fixing the wildcards mechanically (section 2) caused ONE real test failure:
+`registry.rs::every_weight_key_is_named_by_production_source_outside_its_own_declaration`.
+That test ratchets seven "phase-suffixed" `WeightKey` variants (e.g.
+`CultureRateTrailing`) as reachable ONLY via `.early()`/`.late()`/
+`.trailing()` indirection, and asserts NO literal `WeightKey::<name>` text
+exists for them anywhere in production source -- if one appears, the test
+assumes a real new direct reader showed up and demands the exception be
+removed. Enumerating a wildcard match over `WeightKey` necessarily writes
+every variant's name literally, including those seven -- so full
+enumeration on these THREE match sites doesn't just look ugly, it actively
+trips a second, independently-justified structural gate with a false
+signal (nobody actually started reading those keys directly; it's a
+fallback that returns "none of the above").
+
+This is exactly the case the task's own instructions anticipated for
+option (c): full enumeration is unreasonable here for a provable reason,
+not a style preference. I reverted these 3 sites to `_ =>` and added a
+narrowly-scoped, commented `#[allow(clippy::wildcard_enum_match_arm)]`
+directly on each function:
+
+  - rust/src/advisor/describe.rs:300 `feature_word()` -- this one ALREADY
+    had a pre-existing doc comment (written before this task, by whoever
+    wrote the function) explaining exactly why a wildcard is deliberate
+    here ("exhaustiveness is not the safety property here, a readable label
+    for literally every key is"). I added the `#[allow]` attribute itself
+    (the doc comment alone doesn't suppress the lint) plus a note tying it
+    to the registry.rs conflict.
+
+  - rust/src/bots/weighted/cards.rs:635 `restricted_to_feature()` -- only
+    two `WeightKey` variants reroute here; the rest fall to `None`.
+
+  - rust/src/bots/weighted/rivals.rs:856 `trailing_fraction()` -- one
+    `#[allow]` covers BOTH of the function's two internal `match key {...}`
+    blocks (they're the same STANDING_KEYS-gated fallback, duplicated for
+    "mine" and "best-of-rivals").
+
+Each allow's comment explains the specific conflict and cites the exact
+registry.rs test/list it would otherwise trip. No other allow was added
+anywhere -- the remaining 119 of the 123 violations were fixed by full
+explicit enumeration (option a/b), not suppressed.
+
+Gotcha worth recording: my first draft of the rivals.rs comment ITSELF
+tripped the same registry.rs test, because that test does a raw substring
+scan over file text including comments, and my comment literally contained
+the string `WeightKey::CultureRateTrailing` as an example. Rephrased to
+break up the literal token. A reminder that "structural" checks built on
+`fs::read_to_string` + `.matches()` don't distinguish code from prose.
+
+
+5. CI WORKFLOW ADDED
+----------------------
+
+.github/workflows/ci.yml (new file), triggers on push and pull_request:
+
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        defaults:
+          run:
+            working-directory: rust
+        steps:
+          - uses: actions/checkout@v4
+          - uses: dtolnay/rust-toolchain@stable
+            with:
+              components: clippy
+          - run: cargo clippy --all-targets -- -D warnings
+          - run: cargo test
+
+Minimal by design: no secrets, no deploy step, the only network fetch is the
+standard toolchain-install action (dtolnay/rust-toolchain, the common
+replacement for the deprecated actions-rs toolchain action).
+
+HONEST RESIDUAL GAP #1 -- this workflow will be RED on day one, and not
+because of anything in this task. `cargo clippy --all-targets -- -D
+warnings` promotes EVERY clippy lint clippy emits by default (not just the
+wildcard family) to a hard error. I measured the crate's pre-existing,
+UNRELATED clippy debt with our new [lints.clippy] section temporarily
+removed, so this count is not inflated by anything in this diff:
+
+    72 pre-existing, unrelated clippy findings, e.g.:
+      16x doc list item without indentation
+       7x function has too many arguments (8/7)
+       4x very complex type (needs a `type` alias)
+       4x this block may be rewritten with the `?` operator
+       9x loop variable used only to index a parallel collection
+       3x clamp-like pattern without clamp()
+       3x this `impl` can be derived
+       ... (26 more categories, 1-3 each)
+
+None of these are wildcard-match violations -- that family is fully clean
+(verified: `cargo clippy --all-targets -- -D warnings` with ONLY the three
+wildcard lints active passes with zero errors). Fixing these 72 is a
+separate, real body of work (each is a judgment call, several touch
+loop-index patterns that could be genuine parallel-collection bugs -- see
+item 6 below) and out of scope here: this task's mandate was the wildcard
+rule specifically, and blind-fixing 72 unrelated lints in files another
+worker is actively editing (per the concurrency note) is how two people's
+diffs collide. Recommend either (a) a follow-up task to burn down the 72,
+after which `-D warnings` goes green honestly, or (b) scoping this
+workflow's clippy invocation to the three wildcard lints explicitly
+(`-D clippy::wildcard_enum_match_arm -D clippy::match_wildcard_for_single_variants
+-D clippy::wildcard_in_or_patterns`, no blanket `-D warnings`) so it's green
+today and still enforces exactly what this task was about. I implemented
+the literal instruction (blanket `-D warnings`) rather than silently
+picking (b), because softening the gate without saying so would be the
+same kind of unreviewed judgment call this whole task exists to eliminate.
+
+HONEST RESIDUAL GAP #2 -- CI only guards COMMITTED code on push/PR. The
+task setup notes the machine that actually runs the training league runs
+from an UNTRACKED working tree. That means: a champion trained today, right
+now, on that box, is running against WHATEVER is in that tree, lint-clean
+or not, gated or not -- this workflow has zero effect on it until/unless
+that tree's changes are committed and pushed. The mechanical gate this task
+built protects the repo's history and anyone who clones fresh; it does not
+retroactively protect runs already in flight, and won't protect the next
+run either unless someone commits first.
+
+
+6. OTHER RULES: MECHANIZABLE OR NOT (ranked, not implemented)
+-----------------------------------------------------------------
+
+1. EXHAUSTIVE MATCH, NO WILDCARD -- DONE (this task).
+
+2. NO PARALLEL COLLECTIONS KEPT IN STEP BY INDEX.
+   Cheapest win available, and evidence it's a live bug class, not
+   hypothetical: clippy's `needless_range_loop` already fired 9 TIMES in
+   section 5's unrelated-debt count above, every one of them phrased as
+   "the loop variable `i`/`j`/`k` is [only] used to index `X`" -- which is
+   the exact "two collections marching in lockstep by hand" shape this rule
+   bans. `clippy::needless_range_loop` is already a stock lint (in the
+   default `clippy::all` -W group, not even a nursery/pedantic opt-in) --
+   `deny`ing it in [lints.clippy] would catch the CLASSIC case (an
+   explicit numeric `for i in 0..n` walking two arrays by index) for free
+   from tomorrow, using something already fired 9 times unprompted. It does
+   NOT catch the general "two independently-`push`ed Vecs that must stay
+   the same length" case (no shared index variable to flag) -- that needs a
+   real type (a `Vec<(A, B)>` or a struct-of-two-fields, not two `Vec<A>`/
+   `Vec<B>`) enforced by review/`model_it_properly`, not a lint. Cost:
+   near-zero (one more line in the [lints.clippy] table already added by
+   this task) for the mechanical half; the general half isn't
+   lint-shaped at all.
+
+3. `Result<_, String>` ERRORS.
+   `clippy::result_large_err` / `-A` etc. don't check the ERROR TYPE
+   specifically. There's no stock clippy lint for "every fallible fn's Err
+   must be exactly String" (as opposed to "any error type", which is what
+   `?`-ergonomics lints care about). A CUSTOM lint would need either (a) a
+   `clippy-dylint`/rustc driver plugin (real engineering, a new build
+   dependency contradicting DESIGN.md's zero-dependency stance for this
+   exact reason), or (b) a cheap structural test in the same style as
+   registry.rs's own scanner: walk `syn`-parsed (or even just regex-free,
+   brace-counted) `fn` signatures in production source, assert every
+   `-> Result<_, X>` has `X == String`. (b) is a half-day of work, follows
+   the project's own established pattern (registry.rs already does exactly
+   this shape of source-scan test), and needs no new runtime dependency
+   (the scan runs at TEST time only, same `#[cfg(test)]` boundary
+   registry.rs already uses). Medium cost, clearly worth it.
+
+4. TESTS INSIDE `src/*.rs` `#[cfg(test)] mod` BLOCKS, FULL-SENTENCE NAMES.
+   The "inside src/*.rs, in a #[cfg(test)] mod" half is trivially checkable
+   the same source-scan way: assert no `#[test]` appears in any file under
+   `tests/` EXCEPT the one integration-test crate root, or conversely that
+   every `#[test]` found is inside a module gated by `#[cfg(test)]`
+   (syn or a brace-scan can answer "is this test fn lexically nested inside
+   a #[cfg(test)] mod" cheaply). The "full-sentence name" half is fuzzier --
+   "full sentence" isn't a syntax property, it's a prose-quality judgment
+   (this file's own test names, e.g.
+   `eiffel_tower_culture_is_priced_as_culture_rate`, read as sentences by
+   convention/snake_case, not by any checkable rule). A lint could
+   mechanically enforce a WEAKER proxy (test fn name has >= N words / >=
+   K characters / contains at least one verb-shaped snake_case segment from
+   a small whitelist) but that's a heuristic, not a guarantee, and a bad
+   one could still slip through ("card_yields_test_1" is 4 words and still
+   not a sentence). Low cost for the structural half (reuse registry.rs's
+   scanner pattern again), NOT mechanizable for the prose half -- leave
+   that to review.
+
+5. NO PROCESS-GLOBAL MUTABLE STATE, NO LAZILY-POPULATED GLOBAL CACHES.
+   `clippy::missing_const_for_fn` and friends don't target this. The
+   closest stock lint is nothing at all for "no `static mut`/`OnceLock`/
+   `lazy_static`" as a BLANKET ban -- Rust's `static mut` is itself
+   `deny`-by-default at the LANGUAGE level now (`static_mut_refs`, edition
+   2024) which helps but doesn't cover `OnceLock`/`OnceCell`/atomics used
+   AS a cache, which are all safe-Rust idioms clippy has no opinion on
+   banning. A structural test scanning production source for the literal
+   tokens `OnceLock`, `OnceCell`, `lazy_static!`, `static mut`, and
+   `thread_local!` (again, registry.rs's own text-scan pattern -- and
+   per this task's own item-4 discovery, remember it can't distinguish
+   comments from code, so it needs an explicit exclusion or a real
+   token-level scan, not `str::contains`) is cheap to write and would have
+   caught exactly this class. Genuine engine code that legitimately needs
+   one-time init (RNG seeding, a printed-data table) already goes through
+   `card_table.rs`'s baked-const pattern per DESIGN.md rule 2 -- so the
+   scan's exception list should be short and reviewed, same shape as this
+   task's `#[allow]`s. Low-medium cost, worth it.
+
+Ranked by (mechanizability x value x cost):
+    1. Parallel-collection-by-index: cheapest, already firing, do it next.
+    2. No global mutable state/caches: cheap structural scan, clear win.
+    3. Result<_, String>: half-day structural scan, clear win.
+    4. Tests-in-src-cfg-test (structural half only): cheap, bundle with #2/#3.
+    5. Full-sentence test names: NOT mechanizable beyond a weak heuristic;
+       leave to review.
+
+
+7. FINAL VERIFICATION
+------------------------
+
+  cargo clippy --all-targets --profile difftest  \
+    -A clippy::all -A clippy::pedantic -A clippy::nursery -A clippy::style \
+    -A clippy::complexity -A clippy::perf -A clippy::suspicious \
+    -D clippy::wildcard_enum_match_arm -D clippy::match_wildcard_for_single_variants \
+    -D clippy::wildcard_in_or_patterns
+  -> 0 errors (100% of the 123 found violations resolved: 119 by explicit
+     enumeration, 4 by reviewed #[allow] -- see section 4)
+
+  cargo test --profile difftest --lib
+  -> test result: ok. 1353 passed; 0 failed; 0 ignored
+
+  cargo test --profile difftest   (whole workspace: lib + every bin's own
+  tests + tests/suite integration binary + doctests)
+  -> 1546 passed; 0 failed; 1 ignored (a #[bench]-shaped ignored test,
+     pre-existing, unrelated)
+
+  grep -rn "<<<<<<<" src/ Cargo.toml  -> no matches (clean before commit)
+
+
+8. CHANGED-FILE + HUNK LIST FOR LANDING
+-------------------------------------------
+
+Commit by pathspec, NOT `git add -A` (other workers' scratch files/other
+worktree state sit alongside this one). Exact paths for the commit:
+
+    rust/Cargo.toml                        (+16, [lints.clippy] section)
+    rust/src/advisor/describe.rs           (+11 -0: comment + #[allow], no code change)
+    rust/src/apply.rs                      (6 wildcard arms enumerated, +1 test-only)
+    rust/src/bin/behavcensus.rs            (5 wildcard arms enumerated)
+    rust/src/bin/botcensus.rs              (3 wildcard arms enumerated)
+    rust/src/bin/corpuscensus.rs           (1 wildcard arm enumerated)
+    rust/src/bin/humanopenings.rs          (2 wildcard arms enumerated)
+    rust/src/bin/kindmatch.rs              (1 wildcard arm enumerated)
+    rust/src/bots/board_yields.rs          (5 wildcard arms enumerated)
+    rust/src/bots/book.rs                  (10 wildcard arms enumerated)
+    rust/src/bots/greedy.rs                (1 wildcard arm enumerated)
+    rust/src/bots/neural/spec.rs           (1 wildcard arm enumerated)
+    rust/src/bots/variants/mod.rs          (1 wildcard arm enumerated)
+    rust/src/bots/weighted/cards.rs        (6 wildcard arms enumerated, +2 test-only,
+                                             + the bug-finding comment (section 3),
+                                             + 1 #[allow] (section 4))
+    rust/src/bots/weighted/eval.rs         (1 wildcard arm enumerated)
+    rust/src/bots/weighted/events.rs       (1 wildcard arm enumerated)
+    rust/src/bots/weighted/features.rs     (2 wildcard arms enumerated)
+    rust/src/bots/weighted/rivals.rs       (4 wildcard arms enumerated,
+                                             + 1 #[allow] covering 2 of them, reverted
+                                             to `_ =>` -- see section 4)
+    rust/src/bots/weighted/row.rs          (2 wildcard arms enumerated)
+    rust/src/bots/weighted/weights.rs      (3 wildcard arms enumerated)
+    rust/src/card_table.rs                 (2 wildcard arms enumerated, test-only)
+    rust/src/cards.rs                      (1 wildcard arm enumerated)
+    rust/src/combat.rs                     (2 wildcard arms enumerated)
+    rust/src/costs.rs                      (1 wildcard arm enumerated)
+    rust/src/economy.rs                    (1 wildcard arm enumerated)
+    rust/src/effects.rs                    (6 wildcard arms enumerated)
+    rust/src/events.rs                     (15 wildcard arms enumerated)
+    rust/src/fixtures.rs                   (5 wildcard arms enumerated)
+    rust/src/harness/mirror.rs             (1 wildcard arm enumerated)
+    rust/src/human_policy.rs               (1 wildcard arm enumerated)
+    rust/src/interact.rs                   (9 wildcard arms enumerated)
+    rust/src/legal.rs                      (5 wildcard arms enumerated, incl. a
+                                             guard-pattern arm `k if ... =>` only
+                                             visible after fixing its neighbour)
+    rust/src/opening_force.rs              (2 wildcard arms enumerated)
+    rust/src/replay_common.rs              (10 wildcard arms enumerated)
+    rust/tests/suite/common/mod.rs         (1 wildcard arm enumerated)
+    .github/workflows/ci.yml               (new file, section 5)
+
+35 files changed, 210 insertions(+), 119 deletions(-), 1 new file.
+
+Every non-Cargo.toml, non-ci.yml, non-cards.rs-comment hunk is EXACTLY one
+of: (a) a wildcard/binding pattern replaced by clippy's own compiler-derived
+explicit enumeration of the remaining variants (behaviour-preserving by
+construction), or (b) one of the 4 documented #[allow]s. Nothing else was
+reformatted, reordered, or touched -- verified via `git diff --stat` showing
+only the expected line counts per file, no unrelated churn.
+
+Suggested commit split (both by pathspec, never -A):
+  1. rust/Cargo.toml + all rust/src/**, rust/tests/** changes above
+     ("Deny wildcard enum match arms; fix all 123 crate-wide violations")
+  2. .github/workflows/ci.yml
+     ("Add CI: clippy -D warnings + cargo test on push/PR")
+(Or as one commit -- both are clean either way; splitting only matters if
+Paul wants to bisect the CI-workflow addition separately from the code
+fixes.)

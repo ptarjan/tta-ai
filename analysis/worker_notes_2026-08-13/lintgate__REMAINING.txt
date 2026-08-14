@@ -1,0 +1,175 @@
+REMAINING WORK -- score-divergence investigation, /private/tmp/scorediv (commit e93f079 on top of
+base0814). Read SCOREDIV.txt first for the full narrative; this file is the action list.
+
+============================================================================
+TOP PRIORITY / HIGHEST-VALUE NEXT ACTION
+============================================================================
+Land the Homer/Ravages-of-Time happiness fix -- it is very likely CORRECT (arithmetic confirmed
+bit-for-bit against 4 real games) but was REVERTED because it regressed 2 games from completing
+at all and added 3 new score divergences on a full-corpus run. The fix itself is NOT currently in
+the tree (rust/src/effects.rs is back to base0814 original except for a harmless, inert diagnostic
+dump block). To redo it:
+
+1. Re-apply BOTH edits (both are needed together, confirmed against 4 games):
+   a) rust/src/effects.rs, `compute()`'s wonder loop (search `for &w in p.completed_wonders`,
+      the one WITHOUT `SCOREDIV_HAPPY_DUMP` nearby, around line 1385): move the
+      `if p.homer_wonder == w { stats.happy += 1; }` check to run BEFORE the
+      `if p.flipped_wonders.contains(w) { ...; continue; }` check, so Homer's bonus survives a
+      Ravage. (Currently: flip-check first with an early `continue` that skips the homer check
+      entirely when flipped.)
+   b) rust/src/effects.rs, `happy_source_count()` (search `gives_happy_now`, around line 491):
+      change `let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;` to just
+      `card.effects.happy > 0` (drop the `|| p.homer_wonder == w` arm) -- a Homer-boosted wonder
+      should NOT ALSO count toward St. Peter's Basilica's own doubling bonus, since Homer's +1 is
+      already credited directly by (a) and RULES_SPEC/card-text is about a card's OWN printed
+      happy production, not a hosted leader ability.
+2. Rebuild: `cd rust && cargo build --profile difftest --bin replay --bin replaystats`
+3. FIRST, spot-check the 6 games already confirmed (before chasing the regression):
+   `./target/difftest/replay ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      7522625 7522277 7522906 7522722 7523528 7521815`
+   Expect 7522625, 7522277, 7522906, 7522722 to show `match=true` (7523528 stays broken --
+   colonize_approximated, a known unrelated limitation; 7521815 stays broken -- untouched by this
+   fix, different cause).
+4. THEN find the 2 regressed-from-completing games BEFORE declaring victory. This was not done
+   last session (ran out of budget) -- do it FIRST this time, cheaply, with a targeted binary diff
+   rather than eyeballing:
+     a. Add a one-line env-gated dump to rust/src/bin/replaystats.rs right where `if result.
+        completed { ... }` already runs (search for that exact text, ~line 320-345): print
+        `SCOREDIV_COMPLETED_ID {}", meta.id` when e.g. `SCOREDIV_DUMP_COMPLETED=1` is set.
+     b. With the CURRENT (unfixed, base0814-original) tree: run replaystats with that var set,
+        save the completed-ID list sorted (`sort > /tmp/completed_before.txt`) -- 289 lines
+        expected.
+     c. Apply the fix (step 1 above), rebuild, rerun the same dump, save
+        `/tmp/completed_after.txt` (expect 287 lines).
+     d. `comm -23 /tmp/completed_before.txt /tmp/completed_after.txt` gives the 2 IDs that
+        stopped completing. Use `replay` on just those 2 IDs (with and without the fix, i.e. two
+        rebuilds) to see exactly which mismatch/stop-reason appears post-fix
+        (`./target/difftest/replay ... <id>` prints the stop reason directly).
+5. Diagnose those 2 games: `effects::compute` (hence `stats.happy`) is read by `economy::
+   uprising` (production-phase skip check) and possibly by move-legality checks elsewhere mid-
+   game, not just at final scoring. The most likely failure mode: one of these 2 games has a
+   Homer-boosted wonder that gets Ravaged MID-GAME (not at game end), and the fix changes that
+   player's happiness/uprising status for some turn BETWEEN the ravage and game end, which now
+   disagrees with what the journal's own moves imply is legal -- check with `REPLAY_DEBUG=1` env
+   var (already supported broadly in this codebase, search `debugflags::replay_debug_all`) around
+   the relevant turn, or a targeted `SCOREDIV`-style probe on `economy::uprising`'s inputs for
+   that seat across turns following the ravage.
+6. Two ways to resolve once diagnosed:
+   - If the mid-game reading turning out different was ALREADY a deliberate, documented gap (i.e.
+     the replayer already has a KNOWN approximation for uprising/legality reconstruction that this
+     fix merely exposes rather than causes), that's a "known real instance" per this task's own
+     hard rules -- document it plainly in SCOREDIV.txt with evidence and ship the final-scoring
+     fix anyway if it can be scoped narrowly (e.g., only affecting `evaluate_final_events`'s own
+     call to `scoring_culture`, not general `state_stats`/`compute` reads mid-game -- would need a
+     structural change, e.g. threading a "final scoring" flag through, or duplicating just the
+     Homer/flip logic into a scoring-only helper rather than changing shared `compute()`).
+   - If it's a genuine NEW bug the fix introduces (e.g. an off-by-one turn-order issue in when
+     Homer's bonus should start/stop applying), fix that too, re-run steps 3-4, confirm BOTH the
+     score-divergence-ID set AND the completed-ID set stay a strict superset/subset as required
+     (no completed game may become non-completing; no previously-exact-scoring game may become
+     non-exact).
+7. Add tests IN effects.rs `#[cfg(test)] mod tests`, full-sentence names, confirming:
+   - Homer's bonus survives a Ravage (construct a tiny GameState with a flipped, homer-hosted
+     wonder, assert `effects::compute(...).happy` includes the +1).
+   - St. Peter's Basilica does not double-count a Homer-boosted wonder (construct a state with
+     both, assert the bonus only scales with genuine card-printed happy sources).
+   CONFIRM RED by reverting each fix individually and re-running `cargo test --profile difftest
+   --lib <test_name>`, quote the exact failure text in SCOREDIV.txt.
+8. Re-run `bash experiments/measure_replaystats.sh`, diff against analysis/replaystats_2026-08-
+   13.txt / analysis/score_divergence_2026-08-13.txt (the BEFORE baseline, already committed) --
+   confirm n_score_exact strictly increases AND the new diverging-ID set is a subset of the old
+   28: {7522625, 7523081, 7521815, 7522277, 7522838, 7522822, 7522906, 7522075, 7521790, 7521789,
+   7523367, 7521882, 7521899, 7522417, 7523528, 7522722, 7522974, 7523172, 7522009, 7523233,
+   7523256, 7522768, 7522813, 7522590, 7521985, 7521666, 7523149, 7523102}. Expected removals if
+   fully clean: 7522625, 7522277, 7522906, 7522722, 7521790 (5 games) -- ALSO confirm n_completed
+   stays at 289 (not 287) this time.
+9. Commit by pathspec (`git -c commit.gpgsign=false commit -F <msgfile> -- <paths>`, never
+   `git add -A`; grep for `<<<<<<<` first), naming the exact fixed game IDs in the message.
+
+============================================================================
+CAUSE 2 (1 pair after the above lands, was 2 -- 7523528 seat 0, delta -8)
+============================================================================
+This game has `colonize_approximated: true` in its replay result (printed by `bin/replay.rs`
+itself: "(colonize approximated)"). This is a KNOWN, already-documented, pre-existing replayer
+limitation (search `colonize_approximated` in rust/src/replay_common.rs for its own doc) --
+territory/colonization reconstruction is approximated for this game, which plausibly explains a
+4-worker miscount feeding Impact of Population's `content` calculation. NOT CONFIRMED as
+unfixable, but LOW PRIORITY: only 1 game, and the mechanism (colonize approximation) is a
+separate, already-tracked gap, not a new scoring bug. If pursued, start by reading `colonize_
+approximated`'s own doc comment and cross-referencing this specific game's territory/colony
+history against the journal by hand.
+
+============================================================================
+CAUSE 3 (1 pair, small, delta +1): Impact of Architecture, events.rs:380-387
+============================================================================
+NOT investigated at all this session. Game 7521666 seat 3 (Grey): journal says 5, engine computes
+6. Formula: `culture_per_level_of_urban_buildings * id.level() * slot.workers`, summed over every
+`id.kind().is_urban()` tech. Debug-probe approach (same pattern as the reverted Happiness fix --
+add a temporary env-gated eprintln! inside this loop printing each urban building's name/level/
+workers for seat 3 in this game) would find it quickly. Low priority (1 game, small delta) --
+only chase after Cause 1 lands and this game is re-measured (it might already be explained by
+something else once other fixes land; re-check with `REPLAY_DUMP_BUCKET="Impact of Architecture"
+./target/difftest/replaystats ...` first to see if it's still in the divergence set at all).
+
+============================================================================
+CAUSE 4 (1 pair, delta +3): Impact of Competition, events.rs:337-344
+============================================================================
+Confirmed via game 7522075 seat 1 (Purple): journal says 3, engine computes 6. NOT investigated
+further this session. Formula: `culture_per_level_of_military_units_and_arenas * id.level() *
+slot.workers`, summed over `id.kind().is_unit() || id.kind() == CardType::Arena`. Same debug-probe
+approach as Cause 3. Low priority (1 game).
+
+============================================================================
+NOT YET TOUCHED: the 24 "culture_drifted_in_play=true" diverging games
+============================================================================
+24 of the 28 baseline-diverging games have their FIRST divergence from the journal's own "(now M)"
+running culture total somewhere DURING play, before final scoring even starts
+(`culture_oracle_divergence` is `Some` for these, see `replaystats`'s own "## Culture oracle"
+section, analysis/replaystats_2026-08-13.txt). This is a separate, larger, likely multi-cause
+investigation, entirely unexplored this session. replaystats' own "Culture oracle" table already
+ranks corpus-wide divergences (78/1011 games, not just the 24 score-diverging ones) by the
+ActionClass immediately preceding the first divergence -- that table is the starting point, not a
+new measurement. Given this task's scope boundary (games that COMPLETE but score wrong, not games
+that fail to replay at all), this is in-scope but materially bigger than causes 1-4; only start
+here once causes 1-4 are exhausted.
+
+============================================================================
+NEW TOOLING TO USE (already committed, e93f079)
+============================================================================
+- `bash experiments/measure_replaystats.sh` from the repo root: one command, regenerates
+  analysis/replaystats_<date>.txt (full report) and analysis/score_divergence_<date>.txt
+  (diverging-ID list with per-game diagnostics: engine vs index scores, whether culture drifted
+  DURING play or only at final scoring, which final-event cards applied). Do NOT re-derive this
+  by hand -- that is exactly the waste this script exists to avoid.
+- New "## Final-scoring award oracle" section in replaystats' own output: ranks WHICH "Impact of
+  ..." card's formula disagrees with the journal, corpus-wide, by (game,seat)-pair count. This is
+  the tool that found causes 1-4 above; use `REPLAY_DUMP_BUCKET="Impact of X"
+  ./target/difftest/replaystats ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals`
+  (stderr) to dump EVERY instance of a given card's divergence, not just the first example.
+- `SCOREDIV_EVENT_DEBUG=1 ./target/difftest/replay ... <game_id>` (env-gated, inert by default):
+  prints every final-scoring card's per-player award as computed, plus (in effects.rs) a detailed
+  happy-face source breakdown when combined with `SCOREDIV_HAPPY_DUMP=1`. Both left in the tree,
+  harmless, for the next pass to reuse rather than rebuild.
+
+============================================================================
+RULED OUT (don't re-investigate)
+============================================================================
+- The "grounding happens after finish_game already fired off the fictional event pile" ordering
+  concern (games where BGO's own journal logs the true final "End turn" line BEFORE its "End of
+  game" marker: 7522822, 7522906, 7521790, 7521789, 7522768, 7522813, 7523149, 7523102) is NOT a
+  bug. The existing `if r.state.game_over { if !completed {...} }` recovery block in
+  replay_common.rs (~line 5355-5410) correctly undoes the wrong award and redoes it against the
+  grounded pile -- hand-verified end-to-end on game 7522906. Do not "fix" this again.
+- n_completed - n_score_checked gap: measured at 0/289 on this corpus (every completed game does
+  flip state.game_over). Not a real phenomenon here, nothing to diagnose.
+- The Impact-of-Happiness/Impact-of-Population divergence's ROOT CAUSE (Homer+Ravages+St Peter's
+  interaction in effects.rs) is CONFIRMED correct by hand arithmetic against 4 real games -- do
+  not re-derive this from scratch. The problem is exclusively that `effects::compute` is a
+  shared/hot-path function whose change has knock-on effects mid-game that were not yet reconciled
+  -- see the TOP PRIORITY section above for exactly how to find and fix that, not a new
+  investigation into whether the happiness math itself is right (it is).
+- An EARLIER, now-superseded session (recovered transcript, /Users/pt/tta-ai/analysis/recovered_
+  2026-08-13/agent_6d619809.txt, dated 2026-08-07/08) saw near-0% exact-match rates and mean
+  deltas of -3 to -10 on smaller samples (14-150 completed games). That is STALE data from before
+  whatever fixed the systematic issue it was seeing -- the current base0814 tree measures 90.3%
+  exact (261/289) on the full corpus. Do not treat that old transcript as a live lead.
