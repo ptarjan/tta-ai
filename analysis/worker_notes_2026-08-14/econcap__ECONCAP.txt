@@ -1,0 +1,293 @@
+TARGET: economy::gain_resources/gain_food's production-step cap is VALUE
+(denomination) based; Code of Laws p.6's "Resource/Food Production" is
+WORKER-COUNT based. Core engine rule, every turn, every game.
+
+Baseline: 651 completed / 613 exact (guard_ids.txt, 651 lines).
+Clone: /private/tmp/econcap (cp -Rc of /private/tmp/base0815, base commit
+491c153, branch base0814).
+
+============================================================
+STEP 0: prior leads read first (as instructed)
+============================================================
+
+- analysis/worker_notes_2026-08-14/wstep__WSTEP.txt: found this exact lead
+  hand-tracing game 7521689 (Bill Gates), traced the cap to CoL p.6, and
+  explicitly left it open because it was out of scope for a WonderStep-bucket
+  pass. It warned that even a FULL UNCAP left 2 units unexplained in that
+  game -- confirmed independently below (see STEP 2).
+- docs/RULES_SPEC.md 6.6c/6.6e already state the worker-count rule correctly
+  in prose ("1 blue token from bank onto each farm card per worker on it,
+  highest-level first if bank runs short" / the mine twin) -- the prose was
+  already right, only economy.rs's implementation was wrong.
+
+============================================================
+STEP 1: the rule, quoted from the primary source
+============================================================
+
+sources/cge_code_of_laws.pdf, p.6, "Production Phase" / "Resource
+Production" (2015 base game, End-of-Turn Sequence, printed on the player
+board):
+
+  "Resource Production
+   - For each worker on your mine [pick] technology cards, move one blue
+     token from the blue bank to that card.
+     - If there are not enough tokens, move all that you can to the mine
+       technology cards, beginning with those of the highest level."
+
+"Food Production" (same page, step c, immediately above) is the identical
+rule for farm cards: "For each worker on your farm [pick] technology cards,
+move one blue token from the blue bank to that card... beginning with those
+of the highest level."
+
+This is WORKER-COUNT-based: the number of NEW tokens the bank supplies this
+step equals the number of producing workers (capped by whatever the bank
+actually has, prioritizing the highest-level cards when short). It is a
+DIFFERENT rule from CoL p.11's general "gain N food/resources" (RULES_SPEC
+6.4, "Blue-token economics"): "move tokens from bank to cards, total exactly
+the amount (if the bank lacks tokens, gain the nearest lower achievable
+value)". That p.11 rule IS value/denomination-based (minimal-token "making
+change"), and is what card effects, tactics, colonies, and leader/wonder
+flat bonuses use when they say "gain N food/resources" outside the
+end-of-turn Production Phase.
+
+The two rules coincide only when every producing card is denomination 1
+(one un-upgraded token = one unit of value either way). They diverge the
+moment a card is upgraded past level 1 with several workers on it, or when
+producing cards of different levels compete for a short bank -- see STEP 2.
+
+============================================================
+STEP 2: the mechanism as coded, and where it was wrong
+============================================================
+
+rust/src/economy.rs, `end_of_turn` steps 3c/3e (before this patch) called:
+
+    gain_food(p, s.food as u16);       // 3c
+    gain_resources(p, s.resources as u16);  // 3e
+
+`gain_food`/`gain_resources` are the CORRECT implementation of CoL p.11's
+general rule: they search for the largest amount reachable via `tokens_for`
+(a greedy MINIMAL-representation over the player's owned farm/mine
+denominations), capped by `blue_available`. Using this SAME function for the
+Production Phase step conflates "how much value can this scalar total grow
+to, given the bank" with "how many workers can this turn actually place a
+token", which are different questions whenever a producing card's level > 1.
+
+Confirmed by direct comparison (both models computed side-by-side against
+the real corpus, via a temporary instrumented build -- not the shipped
+patch): 9 of 1011 games hit a real numeric DIVERGENCE between the two models
+during the Production Phase (`ECONCAP_PROBE` instrumentation, since removed;
+not in the patch). Two were hand-traced in full:
+
+--- Game 7521689 (Bill Gates), the game wstep found: NO-OP for this fix ---
+
+Orange's mine tableau never leaves level 1 (only Bronze, denomination 1, is
+ever staffed) for the entire game. `mine_denoms=[1]` throughout every
+end_of_turn dump (REPLAY_DEBUG_ALL=1 REPLAY_DEBUG_TECHS=1). At
+denomination 1, the value-based and worker-count-based models are
+IDENTICAL by construction (one token == one unit of value either way), so
+this patch changes NOTHING for this player's mine production. All of this
+player's non-trivial resource income comes from Bill Gates'
+`ResourcesPerLabEqualToLevel` special (labs, not mine technology cards --
+CoL p.6's literal text is "workers on your mine technology cards", so this
+bonus is correctly left on the general CoL-p.11 "gain" path, unchanged by
+this patch, since a lab is not a mine). The residual gap wstep found (full
+uncap still 2 short) is therefore a DIFFERENT, still-unidentified bug --
+this patch does not touch it and does not claim to. Re-ran the replay after
+the fix landed: game 7521689's failure point and legal-move list at line 358
+(round 18, WonderStep on First Space Flight) are BYTE-IDENTICAL to before
+the fix (diffed the two REPLAY_DEBUG_ALL traces).
+
+--- Game 7522146, round 18, idx=2 (Green): fix is correct but ALSO a no-op,
+    for a different reason -- the bank was already fully drained ---
+
+pre-corruption: resources=39, blue_total=16, blue_used=16 (blue_available=0)
+-> corr=6 (band 0). Pays down to resources=33. Food production (denom-3
+Selective Breeding, 2 workers) then consumes the only 2 tokens freed by
+paying corruption -- and does so IDENTICALLY under both models here (2
+workers, denom 3, exactly matches the value-based greedy answer too: no
+divergence on the food side of this specific turn). By the time resource
+production (mine: Iron level 2 x3 workers, Coal level 3 x1 worker) runs,
+blue_available is back to 0 (16 total, 11 mine tokens + 5 food tokens).
+Under BOTH models, free=0 means gain=0. Confirmed: diffed the full
+REPLAY_DEBUG_ALL trace before/after the fix for this game -- byte-identical
+except for one extra `DEBUG blue_used` line per production step (an
+incidental side effect of the new code calling `blue_available` once more
+than the old single-call `gain_resources` did; no value changed anywhere in
+the trace).
+
+--- Game 7521775, round 15, idx=1 (Purple): the fix DOES change the number
+    -- this is the real, verified divergence ---
+
+pre-corruption: resources=29, food=4, blue_total=17, mine=Iron(level 2, 3
+workers)+base-1, farm=Selective Breeding(level 3, 2 workers)+base-1.
+blue_used = tokens_for(29,[2,1])=15 + tokens_for(4,[3,1])=2 = 17 ->
+blue_available=0 -> corr=corruption(0)=6. Pay 6: resources=23.
+Food production: recomputed blue_used with resources=23 is now
+tokens_for(23,[2,1])=12 + tokens_for(4,[3,1])=2 = 14, so blue_available=3.
+farm_full = 2*3 = 6 = s.food exactly (no bonus food this turn). The
+worker-count model grants the full 6 (2 workers, 2 tokens spent -- matches
+the value-based model too here, both reach food=10, no divergence on food
+this specific turn). Food consumption (yellow_bank=9 -> need 2): food
+10 -> 8.
+Resource production: blue_used is now tokens_for(23,[2,1])=12 +
+tokens_for(8,[3,1])=4 = 16, so blue_available=1. mine_full = 3*2 = 6 =
+s.resources exactly (no bonus resources this turn either -- Iron is the
+only resource source).
+  OLD (value-based) model: gain(cur=23, n=6, free=1, denoms=[2,1]) searches
+  downward and finds want=3 is reachable (tokens_for(26,[2,1])=13,
+  tokens_for(23,[2,1])=12, marginal cost 1 <= free 1) -- grants 3. This
+  reasons about the SCALAR total (23->26 costs only 1 more token in the
+  minimal representation) with no notion of "which worker's token actually
+  moves".
+  NEW (worker-count) model: `worker_capped_production(Mine, free=1)` -- 3
+  workers on the level-2 Iron card, only 1 free token, so only 1 worker's
+  token moves, worth 2. Grants 2.
+  DIFFERENT RESULT: 3 (old, wrong) vs. 2 (new, CoL-p.6-correct). This exact
+  scenario is now `economy.rs`'s
+  `end_of_turn_resource_production_caps_by_worker_count_not_the_minimal_token_representation`
+  unit test (confirmed RED by reverting the two `end_of_turn` call sites
+  back to plain `gain_food`/`gain_resources`, then GREEN restored).
+
+This proves the fix is REAL (changes real games' internal numbers), not a
+no-op dressed up as a fix, even though none of the 9 divergent games happen
+to sit at a completion/illegal-move boundary in the current 1011-game
+corpus (see STEP 4).
+
+============================================================
+STEP 3: the fix
+============================================================
+
+File: rust/src/economy.rs only.
+
+1. `production_denom(kind, prod) -> i16`: extracted from `Denoms::of`'s
+   inline match (a farm's denomination is its printed `food`, a mine's is
+   its `resources`, 0 otherwise) so `Denoms::of` and the new function below
+   share one exhaustive match over `CardType` -- clippy denies `_ =>`
+   wildcards, and a second copy of this match would be a second place to
+   forget a new card type.
+2. `worker_capped_production(techs, kind, free) -> u16`: the actual CoL p.6
+   model. Builds (denomination, summed worker count) pairs for every
+   Farm/Mine-kind card WITH workers, sorted by denomination descending
+   ("beginning with those of the highest level"), then greedily hands out
+   at most `free` tokens, one per worker, to the highest-level card(s)
+   first. Returns the resulting value. A worker with no free token gets
+   none; a card with more workers than remaining free tokens gets partial
+   coverage; a level's workers pool if (hypothetically) two cards printed
+   the same level, though the base game never has two simultaneous
+   farm/mine cards at one level.
+3. `end_of_turn` steps 3c/3e: each now computes `full` (worker_capped
+   production with `free=u16::MAX`, i.e. the farm/mine cards' own uncapped
+   worker production) and `got` (the same call with the REAL
+   `blue_available(p)`), adds `got` directly to `p.food`/`p.resources`, then
+   routes whatever `s.food`/`s.resources` carries BEYOND `full` (leader/
+   wonder/government/special flat bonuses -- Bill Gates'
+   `ResourcesPerLabEqualToLevel`, `DoubleBestMine`, etc. -- none of which are
+   literally "a worker on a farm/mine technology card") through the
+   UNCHANGED `gain_food`/`gain_resources` (CoL p.11's general rule),
+   spending whatever tokens the farm/mine-card production above didn't use.
+   `gain_food`/`gain_resources` themselves are UNTOUCHED and still used
+   as-is by every other caller (apply.rs, events.rs, interact.rs -- card
+   effects, tactics, colonies, government/leader/wonder flat gains), which
+   is correct: CoL p.11's "gain N food/resources" really is value-based.
+
+Unit tests added (economy.rs's existing `#[cfg(test)] mod tests`):
+  - worker_capped_production_is_bounded_by_worker_count_not_by_free_tokens
+  - worker_capped_production_services_the_highest_level_card_first_when_short
+  - end_of_turn_resource_production_caps_by_worker_count_not_the_minimal_token_representation
+    (the exact 7521775 scenario above: resources 29 -> 25, not the
+    old model's 26)
+
+Confirmed RED: reverted both `end_of_turn` call sites to plain
+`gain_food(p, s.food as u16)` / `gain_resources(p, s.resources as u16)`
+(saved the fixed file first, restored after) and reran
+`cargo test --profile fasttest --lib economy::` -- the integration test
+failed exactly as expected (left=26 old-model actual, right=25 expected);
+the two direct `worker_capped_production` tests stayed green since they
+exercise the function directly, not the (reverted) call sites -- correctly
+showing the FUNCTION was never broken, only its wiring. Restored the fix,
+reran -- all 3 new tests green, 60/60 in the `economy::` module.
+
+============================================================
+STEP 4: measurement
+============================================================
+
+cargo test --profile fasttest --lib: 1405 passed (1402 baseline + 3 new), 0
+failed.
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean, no
+warnings.
+
+Corpus sweep (full 1,011-game corpus):
+  Before: 651 completed / 613 exact
+  After:  651 completed / 613 exact  (identical numbers; the completed-ID
+          set is byte-identical too, `diff /tmp/econcap_ids_final.txt
+          /private/tmp/guard_ids.txt` reports no differences)
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/econcap_ids_final.txt   (REGRESSIONS)
+    <empty>
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/econcap_ids_final.txt   (WINS)
+    <empty>
+
+No regression, no win, in this corpus. This is a genuine, verified-correct
+rules fix (STEP 2 proves it changes real internal numbers) that happens not
+to cross any completion/illegal-move boundary in the current 1,011-game
+sample -- the affected games' resource deltas are small (1-3 units, per the
+9-game divergence scan) and none of the 9 divergent games' failure points
+(where they fail at all) sit adjacent to a Production-Phase-sourced
+resource/food shortfall. This is consistent with -- not contradictory to --
+the wstep worker's finding that 7521689 (a WonderStep-bucket game) needed a
+much larger, still-unidentified correction to fully reconcile.
+
+============================================================
+RULED OUT
+============================================================
+
+- Removing the cap entirely ("uncap"): explicitly ruled out per the task
+  brief and confirmed independently -- blue tokens are a finite, tracked
+  pool (16-17 total per player in the traced games) that legitimately bounds
+  production; CoL p.6's own text says "if not enough tokens, move all you
+  can", i.e. a hard cap is correct, just the WRONG kind of cap was coded.
+- Extending the worker-count rule to leader/wonder/government/special flat
+  bonuses (Bill Gates' lab bonus, DoubleBestMine, etc.): NOT done. CoL p.6's
+  text is specifically "a worker on your mine/farm technology card"; a lab
+  is not a mine card, and DoubleBestMine's bonus is not tied to any
+  particular worker at all (it is a flat re-add of the best mine's own
+  printed value, unscaled by workers). Both stay on the pre-existing CoL
+  p.11 "gain" path, unchanged by this patch. This IS the open question
+  wstep flagged ("if it even applies to a leader-ability bonus... itself
+  unverified") -- still unverified, deliberately left alone rather than
+  guessed at, since BGA's own PHP game-logic source is not present in
+  sources/ (only card TEXT, in bga_throughtheages_material.inc.php) to
+  cross-check against, and getting this wrong risks a corpus-wide
+  regression in a hot path every game runs through every turn.
+- Rewriting `blue_used`/`blue_available`'s underlying "minimal-token
+  representation" model (economy.rs's own long-standing documented
+  simplification: token counts are DERIVED from the scalar food/resources
+  total via `tokens_for`, not tracked as physical per-card placements): NOT
+  done, and NOT this bug. That simplification is a foundational,
+  pre-existing architecture choice (state.rs has no per-card token-slot
+  field) used consistently for corruption, `pay_resources`, and both the old
+  and new production models alike; redesigning it into genuine per-card
+  token placement is a much larger project than this single-rule fix and
+  was never in scope here.
+
+============================================================
+HANDOFF for whoever picks up the residual 7521689 gap next
+============================================================
+
+This patch does not touch, and does not explain, the residual discrepancy
+wstep found in game 7521689 (2 units short even after a full uncap of the
+OLD model). Confirmed above that this patch is provably a no-op for that
+specific game (mine tableau never leaves denomination 1 the entire game).
+The next lead is still the one wstep and docs/REPLAY.md's "Seventeenth pass"
+both already pointed at: whether `blue_total`'s starting value (16 or 17
+depending on player count) is the right constant, and whether some effect
+should be adding to it that currently is not modelled. That is a genuinely
+separate investigation from this one and deserves its own dedicated pass.
+
+============================================================
+FILES CHANGED
+============================================================
+rust/src/economy.rs only (see econcap.patch, git diff against 491c153).
+No RULES_SPEC.md changes needed (6.6c/6.6e already state the rule
+correctly in prose; only the Rust implementation was wrong).

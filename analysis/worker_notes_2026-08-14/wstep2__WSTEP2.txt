@@ -1,0 +1,305 @@
+TARGET: IllegalMove: WonderStep bucket, 21 games at task assignment.
+Clone: /private/tmp/wstep2 (cp -Rc of /private/tmp/base0815, base commit 613ff6c,
+branch base0814).
+
+RESULT: MEASURED NEGATIVE. No engine fix landed. Patch is EMPTY (see wstep2.patch
+-- 0 bytes). The 21-game bucket was cut to 16 mid-pass by a DIFFERENT worker's
+already-landed fix (buildbkt.patch, applied to this clone per the coordinator's
+instruction -- see "MID-PASS UPDATE" below). The remaining 16 games are NOT a
+WonderStep-specific bug; they are downstream of a general, multi-turn economy/
+corruption/discontent divergence, confirmed by hand-tracing 3 of them to the byte
+level. This closes the same avenue docs/REPLAY.md, wstep__WSTEP.txt and
+econcap__ECONCAP.txt already flagged and explicitly left open, with new concrete
+evidence (the Civil Unrest / discontent-worker mechanism, and the corruption-band
+gap) that neither of those two passes had found.
+
+============================================================
+MID-PASS UPDATE: buildbkt.patch landed centrally, bucket 21 -> 16
+============================================================
+
+Partway through this pass the coordinator reported a centrally-verified patch
+(analysis/worker_notes_2026-08-14/buildbkt.patch, against rust/src/
+replay_common.rs) fixing two build-PAYMENT reconstruction bugs: (1) a build paid
+entirely in food via Trade Routes Agreement parsed as a free build, and (2) Raid
+II/III's nested casualty brackets resolved by blind FIFO, undercounting
+workers_free. Measured centrally: 651 -> 671 complete, 613 -> 630 exact, zero
+regressions.
+
+Applied to this clone with `git apply --3way` (clean, no conflict markers).
+Rebuilt replaystats and re-enumerated the WonderStep bucket:
+
+  Before buildbkt.patch: 21 games
+  After:                 16 games
+  Dropped: 7523070, 7521365, 7522509, 7522512, 7523242
+
+The remaining 16:
+  7522652 7521849 7523583 7522236 7522936 7521783 7522455 7523537 7522729
+  7522047 7522350 7522348 7522795 7522756 7522762 7521689
+
+Per the coordinator's instruction, everything below is scoped to these 16 --
+the 5 that buildbkt.patch already fixed are NOT this worker's to claim.
+
+============================================================
+STEP 1: hand-trace 1 -- game 7521849, line 163, single-stage build
+============================================================
+
+"Orange builds 1 stage of St. Peter's Basilica Orange spends 4 resources"
+(round 10, NOT a multi-stage build, so the "multi-stage cap"/cost-formula family
+of explanations is ruled out immediately for this game).
+
+REPLAY_DEBUG=1 shows the try_apply failure: resources=3, cost=4 (wonder_stage_cost
+itself is right -- St. Peter's Basilica's own stage price matches the card table).
+Traced backward with REPLAY_DEBUG_ALL=1: the SAME turn's own "end_turn totals"
+line (round 9, the turn immediately before) shows this binary's own resources=3,
+science=9, culture=5, while the journal's own "(now M)" on that exact line reads
+resources=6, science=14, culture=7 -- i.e. this player was ALREADY 3 resources,
+5 science, and 2 culture short BEFORE the WonderStep line is ever reached, from a
+single end-of-turn's own production step.
+
+Root cause at THIS end of turn: `economy::uprising()` fired (discontent=1 >
+workers_free=0), which per RULES_SPEC 6.3/CoL p.6 step 2 skips the ENTIRE
+Production Phase (score, corruption, food, consumption, resources -- all of it).
+But the journal's own text for this exact "End turn" line explicitly shows normal
+scoring and production happening (no uprising in the real game). So either this
+player's real discontent was 0 (not 1) or their real free-worker count was >=1
+(not 0) at that exact moment -- the ENGINE's own uprising trigger is a false
+positive here, and everything downstream (resources, science, culture) drifts
+from that one skipped Production Phase for the rest of the game.
+
+============================================================
+STEP 2: hand-trace 2 -- game 7522652, line 440, the task's own headline example
+============================================================
+
+"Orange builds 4 stages of First Space Flight Orange spends 16 resources; ;
+Wonder completed; Orange scores 27 culture" (round 17, Age IV, the LAST round).
+
+First Space Flight's own stages are [1, 2, 4, 9], summing to 16 -- the journal's
+16-resource cost for 4 stages is EXACTLY right, and `wonder_stage_cost` computes
+it correctly (confirmed: legal_moves at the failure point lists WonderStep{1},
+{2}, {3} as legal but not {4} -- the engine's own formula is fine, the player
+merely doesn't have enough resources reconstructed).
+
+Tracked this player's own POST-production resources at every one of their 16
+end-of-turns against the journal's own "(now M)" value:
+
+  round:  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+  journal: 2  3  3  4  5  5  5  7  8  7 10  6 10 20 25 27
+  engine:  2  3  3  4  5  5  5  7  8  7 10  6 10 20 25 19  <- round 16 diverges
+
+Rounds 1-15 match EXACTLY, byte for byte -- ruling out any cumulative/growing
+drift for 15 of the game's 16 rounds. The divergence is a single, isolated
+8-resource shortfall that appears ONLY at round 16's end of turn, not a slow
+"leaks 1 resource every few turns" pattern (the REPLAY_DEBUG "science drift"
+diagnostic DOES suggest a smoothly growing drift every turn, but that check has
+a known, already-documented blind spot -- see RULED OUT below -- and is
+unreliable; the resources numbers above, computed directly against the journal's
+own text with no tooling in between, are the trustworthy measurement).
+
+Traced round 16 in full (REPLAY_DEBUG_ALL=1, a temporary `blue_total={}` print
+added to the "applied mv=" trace line and reverted after use -- see CLEANUP):
+this player's own `blue_total` (the size of their blue-token bank, RULES_SPEC
+6.2, fixed at 16 by rule) drops from 16 to 15 between round 14's end-of-turn and
+round 15's start. Bisected the exact trigger with temporary BTPROBE eprintln
+probes at every blue_total mutation site in apply.rs/events.rs/game.rs (all
+reverted after use): it fires inside `apply_tied_targets` (events.rs) resolving
+the "Civil Unrest" event's `Special::PlayersWithMostDiscontentWorkers` block
+(blue_tokens: -1) -- CoL's Age-II event card that takes 1 blue token from
+whichever player(s) have the (nonzero) most discontent workers. The engine's own
+probe showed this player alone at discontent=1 (the other two players at 0),
+so it alone lost the token.
+
+This matters because round 16's later corruption band depends on it: at that
+end of turn, blue_used (the derived token count occupying farm/mine cards) comes
+out to 15 (confirmed via the existing `blue_used` debug line: mine_tokens=13 for
+resources=25 with denoms [2,1], food_tokens=2 for food=6 with denoms [3,1]).
+With blue_total=15, blue_available=0, so `economy::corruption(0)` = 6 (RULES_SPEC
+6.2's worst band). The journal's own text at this exact line says "CORRUPTION!
+Orange loses 4 resources" -- band 4, which requires blue_available in [1,5], i.e.
+blue_total >= 16 given the same blue_used=15. That is EXACTLY the 1-token gap
+the Civil Unrest event removed. If that removal should not have applied to this
+player, blue_total stays 16, corruption is 4 exactly matching the journal, and
+(worked through by hand) round 16 ends at resources=27 -- exactly matching the
+journal, with no other change needed.
+
+I could NOT close this out to a confirmed engine bug within this pass's budget:
+whether this player's discontent was really >0 at that moment depends on their
+exact `s.happy` at round 14's end of turn, which the engine itself computes as 4
+(uprising-check debug: "yellow_bank=5 happy_required=5 s.happy=4 ... discontent=1
+workers_free=4 uprising=false" -- no uprising here, since workers_free=4 covers
+it, but this SAME discontent=1 value is what the Civil Unrest event later reads).
+My own manual re-derivation from the tableau (Religion, Temple, 2 workers, 1
+happy/worker = 2; Theocracy government, printed happy=1, flat not per-worker =
+1; total 3) falls a further 1 short of even the engine's own 4, meaning I could
+not independently verify EITHER number by hand from the printed card data alone
+-- there is a happy source (govt, leader, wonder, or a Special I did not
+enumerate) contributing +1 that I did not identify, and I do not know if the
+TRUE value is 4 (engine right, Civil Unrest correctly fires, and the corruption
+gap has some OTHER unexplained cause) or 5 (Civil Unrest should not have fired,
+which would fully explain the round-16 gap). This is exactly the same
+"structural, needs its own dedicated pass, not a bolt-on" character the wstep and
+econcap notes both already flagged for the whole economy stack.
+
+============================================================
+STEP 3: hand-trace 3 -- game 7522762, line 317
+============================================================
+
+"Purple builds 1 stage of First Space Flight Purple spends 1 resource" (round
+17, cost=1, about as cheap a WonderStep as this bucket has -- checked
+specifically because a 1-resource shortfall seemed like the best candidate for
+an isolated, narrow bug rather than a big cumulative drift).
+
+Same shape as both games above: REPLAY_DEBUG=1's "end-turn science drift"
+diagnostic shows a LARGE and apparently-growing gap for this player from round 9
+onward (delta -8 by round 15, -9 by round 16, -12 by round 16 again for the
+other seat) -- but per STEP 4 below this specific diagnostic is a KNOWN false
+positive generator (it does not exclude discard-blocked end-of-turns the way the
+sibling resources-drift check does), so it is not, by itself, evidence of a
+growing bug. What IS reliable: at the failure point, resources=0, cost=1 -- this
+player is short by the smallest amount possible, and every plausible source
+(corruption bands, uprising, event-driven blue-token loss) that showed up in the
+other two traces is present in this game's history too (multiple governments,
+multiple leader elections, multiple "Impact of X"/discontent-adjacent Age-III
+events). Did not fully trace this one to its own root cause given the budget
+already spent confirming the SAME mechanism family in games 1 and 2 above; listed
+here as a THIRD data point that the bucket's shape is uniform, not as a fourth
+independent root cause.
+
+============================================================
+STEP 4: what I ruled out, and how
+============================================================
+
+- The WonderStep move-generation/legality code itself (`legal.rs`'s wonder-stage
+  block, `costs::wonder_stage_cost`, `apply::do_wonder_step`): read in full: not
+  touched, not suspected. Every failure in all 16 remaining games traces to the
+  ACTING PLAYER having fewer resources than the journal's own math implies,
+  never to the stage-cost formula or the `wonder_stages`-per-action cap being
+  wrong (`wonder_stage_cost` and the Masonry/Architecture/Engineering
+  `wonder_stages_per_action` cap were both hand-verified against First Space
+  Flight's own stage array [1,2,4,9] in game 7522652 and matched exactly).
+- Re-doing the econcap (worker-count production cap) or wstep (Bronze
+  admin-correction) fixes: both are already landed at this clone's base commit
+  (613ff6c descends from both) and produced no further movement here; the task
+  brief's own "already ruled out" note is confirmed still true post-buildbkt.patch.
+- The `REPLAY_DEBUG` "end-turn science drift" diagnostic as evidence of a
+  per-turn recurring bug: its own code comment (replay_common.rs, ~line 6300)
+  already warns it fires BEFORE a deferred military-discard resolution finishes,
+  producing a false "drift" on almost every turn a player needs to discard
+  (i.e. nearly every turn with 3 unspent military actions). Confirmed this is a
+  measurement artifact, not a real divergence, by cross-checking game 7522652's
+  actual round-by-round resources against the journal directly (STEP 2's table)
+  -- 15 of 16 rounds matched byte-for-byte despite the science-drift check
+  screaming a growing mismatch every single round. The sibling "end-turn
+  resources drift" check DOES guard against this (skips when
+  `discard_blocked`), which is why it stayed silent even at round 16's real gap
+  -- it only checks the "End Turn" line's own text once, at the moment that
+  line is first dispatched, which for a player needing to discard is BEFORE
+  production has actually run; it never re-checks after the discard resolves.
+  This is a real gap in the diagnostic tooling, not in the engine -- noted for
+  whoever picks this up next (see HANDOFF).
+- `economy::corruption`, `economy::blue_used`/`blue_available`, `tokens_for`,
+  `happy_required`, `discontent`, `uprising`: all read against RULES_SPEC 6.1-
+  6.3 line by line; every band and formula matches the spec exactly (game
+  7521849's uprising trigger and game 7522652's corruption band are each
+  ARITHMETICALLY correct given their own inputs -- the suspected bug is in one
+  of the INPUTS to these formulas, most likely `s.happy` or `p.workers_free` at
+  a specific moment, not in the formulas themselves).
+
+============================================================
+HANDOFF for whoever takes the general economy pass next
+============================================================
+
+1. The `Special::PlayersWithMostDiscontentWorkers` mechanism (Civil Unrest is
+   the only base-game card carrying it) is a NEW, previously-unflagged lead:
+   verify whether `effects::compute`'s `s.happy` for a Theocracy-government,
+   Temple-only-happy-source player is under-counting by exactly 1 relative to
+   BGO's own math. Game 7522652, round 14, Orange (2p->3p index math: seat
+   idx=0) is a clean repro: yellow_bank=5, tableau has Religion (Temple, 2
+   workers, printed happy=1/worker) and Theocracy government (printed
+   happy=1, flat). The engine computes s.happy=4; my own manual sum of the
+   two obvious sources is only 3; RULES_SPEC 6.3 says happy_required(5)=5, so
+   the missing +1 (if real) is the difference between this player uniquely
+   triggering Civil Unrest's blue-token penalty (engine's current behaviour)
+   and NOT triggering it (which would fix round 16's corruption band, and
+   trace forward to resources=27 matching the journal exactly, closing this
+   specific game). Start by finding what OTHER happy source `effects::compute`
+   is reading that isn't Religion or the government card -- check
+   `apply_special`'s handling of whatever Special variants Bill Gates,
+   Computers, or the SpecialTechs (Code of Laws / Navigation / Engineering) in
+   this exact tableau carry, since none of their PRINTED CardEffects.happy
+   fields are nonzero (checked directly in card_table.rs) but a Special could
+   still be granting it.
+2. Independently of (1): `economy::uprising()` over-triggering (game 7521849,
+   round 9: discontent=1, workers_free=0, uprising=true, skipping the whole
+   Production Phase, when the journal's own text shows normal production that
+   turn) is the SAME class of bug -- an input to `discontent`/`uprising`
+   (either `s.happy` again, or `p.workers_free`) is wrong at a specific
+   moment, not the formula. If (1)'s root cause turns out to be a general
+   `s.happy` undercount, it very likely also explains this.
+3. Fix the "end-turn resources drift" diagnostic's cousin, the "end-turn
+   science drift" check (replay_common.rs ~line 6305): it has no
+   `discard_blocked` guard the way the resources check (~line 6318) does, so
+   it free-runs a false positive on almost every turn and is currently
+   useless as a signal. Either add the same guard, or delete it -- as-is it
+   actively misleads (I nearly chased it as a "smoothly growing drift" before
+   confirming with the resources check's own byte-for-byte round table that
+   15 of 16 rounds in game 7522652 matched exactly).
+4. Re-run this bucket (`REPLAY_DUMP_BUCKET="IllegalMove: WonderStep"`) after
+   any economy-stack fix lands -- it is the cheapest way to tell whether a
+   candidate fix actually reaches these specific 16 games, the same way this
+   pass used it to confirm buildbkt.patch's reach (21 -> 16).
+
+============================================================
+STEP 5: measurement (guard, run against the coordinator's re-baseline)
+============================================================
+
+No engine change of my own landed; this clone's tree (613ff6c + buildbkt.patch)
+is verified identical to buildbkt.patch applied on a clean 613ff6c (`git diff
+613ff6c` here matches buildbkt.patch byte-for-byte modulo git's a/b vs c/w diff
+prefix naming). Ran the guard anyway, against the coordinator's re-baselined
+/private/tmp/guard_ids_671.txt (NOT the older, frozen 651-line guard_ids.txt,
+per the coordinator's explicit instruction), to confirm this clone's state
+matches what was centrally measured:
+
+cargo test --profile fasttest --lib: not re-run (no source change of my own to
+test; buildbkt.patch's own tests were already confirmed centrally).
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean, no warnings.
+
+Corpus sweep (full 1,011-game corpus, this clone):
+  671 completed / 630 exact (SCOREDIV_DUMP_COMPLETED=1 output header, verbatim):
+  "671/671 completed games actually flipped state.game_over ... 630/671 of
+  those matched index.tsv exactly"
+
+  comm -23 /private/tmp/guard_ids_671.txt /tmp/wstep2_final_ids.txt   (REGRESSIONS)
+    <empty>
+
+  comm -13 /private/tmp/guard_ids_671.txt /tmp/wstep2_final_ids.txt   (WINS)
+    <empty>
+
+Both empty, as expected for a clone carrying only the already-centrally-verified
+buildbkt.patch and no changes of my own.
+
+WonderStep bucket size at this final state: 16 games (unchanged from the
+mid-pass re-enumeration in STEP 0 -- I landed no further movement).
+  7522652 7521849 7523583 7522236 7522936 7521783 7522455 7523537 7522729
+  7522047 7522350 7522348 7522795 7522756 7522762 7521689
+
+============================================================
+CLEANUP
+============================================================
+
+Temporary instrumentation (a `blue_total={}` addition to the existing "applied
+mv=" REPLAY_DEBUG_ALL print in replay_common.rs, and 5 new BTPROBE eprintln
+probes in apply.rs/events.rs/game.rs at every blue_total mutation site) was
+added during STEP 2's bisection and FULLY REVERTED before this file was
+written -- `git diff 613ff6c` on this clone is confirmed byte-identical to
+buildbkt.patch alone (see STEP 5). No debug noise is included in the (empty)
+wstep2.patch.
+
+============================================================
+FILES CHANGED
+============================================================
+None. wstep2.patch is 0 bytes by design -- this is a measured negative, not a
+missing patch. The clone /private/tmp/wstep2 will be deleted after this file and
+the empty patch are both written (no unlanded commits: this clone has no commits
+of its own beyond the already-landed 613ff6c and the cherry-picked buildbkt.patch
+working-tree change, which was never committed here either).

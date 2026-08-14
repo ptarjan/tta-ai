@@ -1,0 +1,282 @@
+TARGET: IllegalMove: Build bucket, human-replay corpus (BGO), rust engine at
+/Users/pt/tta-ai (worked in a warm clone at /private/tmp/buildbkt, base
+commit 491c153 on branch base0814).
+
+Baseline (this session's own fresh sweep, NOT trusted from any prior
+census): 651 completed / 613 exact (matches guard_ids.txt, 651 lines).
+
+============================================================
+STEP 1: fresh census of the Build bucket (49 games at baseline)
+============================================================
+
+cd /private/tmp/buildbkt/rust
+SCOREDIV_DUMP_COMPLETED=1 REPLAY_DUMP_BUCKET="IllegalMove: Build" \
+    ./target/difftest/replaystats /Users/pt/tta-ai/sources/bgo/index.tsv \
+    /private/tmp/bgo-journals/journals > /tmp/out.txt 2>/tmp/dump.txt
+
+49 distinct games. Ran REPLAY_DEBUG=1 ./target/difftest/replay against all
+49 and read each `try_apply fail`'s own `resources=`/`workers_free=`/
+`build_cost_for(...)` fields (the existing diagnostic, nothing new built
+for this step) to classify EVERY game before writing any code:
+
+| sub-shape | count | signature |
+|---|---|---|
+| `workers_free == 0` at the moment of the Build | 14 | `p.workers_free` is genuinely 0 in this binary's own reconstruction; the build's own cost is affordable or irrelevant (gate never reached) |
+| resource-short (`resources < build_cost_for(card)`) | 35 | build's own cost formula matches the journal exactly; this binary's own `p.resources` is short, usually by 1-3 |
+| urban-limit (RULES_SPEC.md §7.5) blocked | 0 | see STEP 4 below -- every urban-type candidate in this bucket already fails on cost first, so the urban cap is never even reached |
+
+This does NOT match the task brief's inherited estimate of "~30 / ~50 / 3"
+-- several fixes landed earlier today already shrank the bucket from a
+much larger prior size down to 49 before this pass started (confirmed by
+reading `docs/REPLAY.md`'s own running history, and by the "Churchill
+military choice never applied" / "`WeakestPlayers` loss-gate" fixes
+already present in this base commit's own doc comments). Re-deriving
+was the right call.
+
+============================================================
+STEP 2: hand-traced 2-3 representative games per sub-shape BEFORE coding
+============================================================
+
+Resource-short, game `7522518` round 4 (Orange, 2p): journal line 81
+"Orange builds 1 stage of Pyramids Orange spends 1 food; ; Wonder
+completed" -- Orange has an ACCEPTED Trade Routes Agreement (side A,
+"once per round A can use 1 food instead of 1 resource", journal lines
+64-65). `resources=2 cost=Some(3)` at the eventual Philosophy-build
+failure three lines later, exactly 1 short -- and Orange's resources were
+provably untouched between round 3's end ("3 resources (now 3)") and the
+failure by every OTHER line in between. Root cause: this Trade-Routes
+conversion never fired for the Pyramids wonder step, so `do_wonder_step`
+debited a resource Orange never actually spent. See STEP 3.1.
+
+Workers_free==0, game `7522513` round 14 (Green, 3p): journal line 379
+"Green builds Warrior Green spends 2 resources" (`workers_free=0` in this
+binary's own reconstruction). Traced Green's own worker economy turn by
+turn from game start (`REPLAY_DEBUG_ALL=1`, a temporary `TMPDEBUG`
+eprintln! added to `do_build`/the Raid choice handler, both reverted
+before landing) and found the deficit already existed at round 13: a Raid
+II ("Orange plays Raid against Green ... one of age II or older and one
+of age I or older") whose own resolution line reads "Raid casualties 1
+Alchemy; 1 Organized Religion" -- BOTH of Green's buildings were destroyed
+in the real game (2 free workers), but this binary's own reconstruction
+only ever destroyed Alchemy (1 free worker). Root cause: a bracket-
+assignment bug in the Raid-choice consumer, not a workers_free bug per se.
+See STEP 3.2.
+
+Third trace (a `workers_free==0` game with NO Raid anywhere in its
+journal, `7521782`) hand-confirmed a DIFFERENT root cause before
+generalizing: turned out to ALSO trace to the same all-food Trade-Routes
+mechanism (its own earlier wonder-step-via-food line silently failed to
+convert, which happens to ALSO manifest as `workers_free==0` further
+downstream once the reconstruction's resources fall permanently behind
+and other builds get skipped) -- confirmed by REPLAY_DEBUG once STEP 3.1
+landed: `7521782` cleared from the bucket entirely (see wins list).
+
+============================================================
+STEP 3: the two confirmed, fully-proven mechanisms fixed this pass
+============================================================
+
+3.1 -- ENGINE/REPLAYER BUG: an all-food Trade-Routes-Agreement payment on
+a Build/Upgrade/WonderStep line was silently NOT converted, so the
+reconstruction charged the (untouched) resource pool instead.
+
+File: rust/src/replay_common.rs only.
+
+`total_paid_for_build(text)` correctly reads ONLY the resource-shaped
+clauses ("spends N resources" / "loses N military resource") -- it MUST
+keep doing exactly that, because its other caller
+(`resolve_named_card_by_effect`) solves for a resource DISCOUNT and would
+be fed a wrong number if food were folded in. But every downstream caller
+that wants "how much did this whole line pay" was composing that with
+`.map(|base| base + spent_food_after_resource(text))`, which stays `None`
+whenever the ENTIRE payment was food (no resource clause at all) --
+indistinguishable from `total_paid_for_build`'s OWN `None` case, a
+genuinely free build/upgrade/wonder-stage (its own doc-tested example:
+`total_paid_for_build("Purple builds 1 stage of Pyramids")` == `None`).
+`convert_trade_food_shortfall`'s gate then silently no-opped, and the
+caller's own `Move::Build`/`Move::WonderStep`/`Move::Upgrade` charged the
+move's true cost straight out of `p.resources` -- resources the real
+player never touched, permanently missing from the reconstruction for the
+rest of the game. This is the corpus's dominant "resources short by 1"
+Build-bucket signature.
+
+Fix: a new `stated_build_payment(text)` (right above
+`convert_trade_food_shortfall`) that tells the three shapes apart --
+resource-only, ALL-food (still a real payment, `Some(food)`), and
+genuinely free (still `None`) -- used both by `convert_trade_food_
+shortfall`'s own gate and by the ordinary Build arm's separate cost-
+mismatch pre-check (same bug, same fix, one function).
+
+Tests (RED confirmed by reverting `stated_build_payment` to the old bare
+`.map()` composition, then restored):
+  - `stated_build_payment_tells_all_food_apart_from_genuinely_free`
+  - `convert_trade_food_shortfall_covers_a_build_paid_entirely_in_food`
+
+3.2 -- ENGINE/REPLAYER BUG: Raid II/III's two-or-three eligibility
+brackets resolved by blind FIFO order instead of respecting their NESTED
+(not independent) eligibility.
+
+File: rust/src/replay_common.rs only (`resolve_intervening`'s
+`ChoiceKind::Raid` arm).
+
+`interact.rs`'s `QueueItem::Raid` gates each bracket's own candidate list
+on `id.level() <= max_lv` -- RULES_SPEC.md §5.5's "destroy up to a level
+0-1 AND a level 0-2 building" (Raid II) / three brackets for Raid III.
+This is a NESTED constraint: a low-level casualty is legal for EITHER
+bracket, a high-level one ONLY for the wide one. The journal's own
+`"Raid casualties ..."` summary line lists casualties by name, not by
+which bracket picked which (confirmed: game `7522513`'s "1 Alchemy; 1
+Organized Religion" is plain alphabetical order, and Organized Religion,
+level II, is not even a legal option for the level-0-1 bracket at all --
+it could only ever have been the wide bracket's pick). The old consumer
+took whichever FIFO entry was at the FRONT if it matched the CURRENT
+bracket's options, with no lookahead -- for this game it handed the wide
+bracket "Alchemy" (FIFO front, journal-alphabetical), stranding
+"Organized Religion" with no home once the narrow bracket opened next
+(not among its options), silently declining it (`Stop`) and leaving
+Green one destroyed-building's worth of `workers_free` short for the rest
+of the game.
+
+Fix: among the CONTIGUOUS run of FIFO entries that match the CURRENT
+bracket's own options (a non-match ends the run -- the same boundary the
+existing "discard leading orphans" cleanup already trusted, preserved
+unchanged), prefer the HIGHEST-level one (fewest alternative homes),
+leaving lower-level/more-flexible entries in the FIFO for whichever
+bracket opens next. Existing orphan-cleanup and single-entry tests
+unaffected (verified both still pass unmodified).
+
+Test (RED confirmed by reverting the arm to the old front-only loop, then
+restored):
+  - `resolve_intervening_prefers_the_highest_level_raid_casualty_for_a_wide_bracket_leaving_a_lower_level_one_for_the_narrow_bracket_that_opens_next`
+
+============================================================
+STEP 4: urban-limit (RULES_SPEC.md §7.5) -- settled, not a live bug
+============================================================
+
+RULES_SPEC.md §7.5, quoted: "government card's lower-right number = max
+buildings of EACH urban type (e.g. Despotism 2, so max 2 labs AND 2
+temples...). Applies to builds only, not to already-built stock after a
+government change (no forced destruction; but no new builds of a type
+at/over limit). Farms, mines, military units unlimited [RB p.10, CoL
+p.9; FAQ p.15]." `legal.rs`'s existing `costs::urban_count(p, kind) >=
+s.urban_limit` gate already implements exactly this reading, and nothing
+in this pass's tracing surfaced a disagreement with it.
+
+Checked directly: for every one of the 35 (now 28) resource-short Build-
+bucket games, `resources < build_cost_for(card)` was independently true
+using the engine's OWN `build_cost_for` -- meaning the urban-count check
+in `legal.rs` (which only runs AFTER the resource/CA check passes) is
+NEVER EVEN REACHED for any of them. Zero games in the current bucket are
+actually gated by the urban limit. The "3 urban-limit games worth
+settling on its own" this task's brief inherited either (a) already
+cleared via an earlier pass's fix (the base commit already contains
+several such fixes per its own doc comments), or (b) never existed in
+this exact bucket shape and were miscounted upstream. Declining to touch
+`legal.rs`'s urban-count gate: it already matches the spec text and has
+no live repro in this corpus today.
+
+============================================================
+STEP 5: explicitly RULED OUT -- the econcap/wstep overlap check
+============================================================
+
+Per this task's own governing instruction: checked whether the resource-
+shortfall sub-bucket traces to `economy::gain_resources`/`gain_food`'s
+VALUE-vs-WORKER-COUNT production-cap question another worker (`wstep`)
+flagged as a live, separately-owned lead. Traced 3 concrete resource-
+short games end to end (`7522518`, `7522513`-adjacent, `7520999`) -- NONE
+of them showed a production-capping deficit at all (`blue_used`/
+`blue_available` traces showed full requested production landing every
+time near the failure); all three (and the dominant bucket signature
+generally) traced instead to the Trade-Routes food-conversion gap (3.1)
+or the Raid-bracket mechanism (3.2), both entirely inside
+`replay_common.rs`.
+
+Mid-pass, the coordinator relayed that a separate worker's `economy.rs`
+patch (production phase now moves one blue token per worker, highest
+level first, per CoL p.6) has ALREADY LANDED and was centrally verified
+at 651/613 -- byte-identical completed-game-ID set to this pass's own
+baseline (zero wins, zero regressions from that patch alone). This
+independently confirms the token-cap mechanism is NOT what explains this
+bucket's resource shortfalls: if it were, that patch would have moved
+some of these same games, and it moved none. No edits were made to
+`rust/src/economy.rs` in this pass (confirmed: `git diff --stat` against
+491c153 for `economy.rs`/`apply.rs`/`interact.rs` is empty; only
+`replay_common.rs` changed).
+
+============================================================
+MEASUREMENT (verbatim)
+============================================================
+
+Baseline: 651 completed / 613 exact.
+
+After fix 3.1 (Trade-Routes all-food conversion) alone:
+  659 completed / 620 exact.
+  comm -23 guard_ids.txt ids.txt (REGRESSIONS): <empty>
+  comm -13 guard_ids.txt ids.txt (WINS): 7520722 7521365 7521763 7522357
+    7522512 7522518 7522890 7523070   (8 games)
+
+After fix 3.2 (Raid bracket eligibility) on top of 3.1 -- FINAL, landed:
+  671 completed / 630 exact.
+  comm -23 guard_ids.txt ids.txt (REGRESSIONS): <empty>
+  comm -13 guard_ids.txt ids.txt (WINS): 7520722 7521365 7521378 7521449
+    7521738 7521763 7521782 7521787 7521847 7522357 7522509 7522512
+    7522513 7522518 7522733 7522815 7522890 7523070 7523427 7523456
+    (20 games)
+
+`IllegalMove: Build` bucket size: 49 -> 46 (after 3.1) -> 36 (after 3.2,
+final).
+
+cargo test --profile fasttest --lib: 1402 -> 1405 passed, 0 failed (3 new
+tests, all confirmed RED-then-GREEN by reverting each fix in isolation).
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean.
+
+============================================================
+Remaining census after both fixes (36 games, not chased further)
+============================================================
+
+workers_free == 0: 8 games (7521544 7522113 7522608 7523082 7523355
+7523383 7523420 7523640) -- not individually re-traced this pass; the
+Raid-bracket mechanism (3.2) is a strong prior for at least some of
+these (Raid/Terrorism/Barbarossa-adjacent "destroy own building" shapes
+sharing the same FIFO-consumption family) but this was NOT confirmed
+per-game -- an honest "plausible, not proven" lead, not claimed as fixed.
+
+resource-short: 28 games -- all independently confirmed `resources <
+build_cost_for(card)` using the engine's own cost formula (so the cost
+itself is right; only this binary's own resource total is short). NOT
+traced to a single further mechanism this pass -- the food-conversion
+fix (3.1) was scoped to Build/Upgrade/WonderStage lines that pay in food
+via Trade Routes; other resource-drift causes (corruption-formula edge
+cases, other synthesized-move gaps) are plausible siblings, unconfirmed.
+
+============================================================
+CONCRETE HANDOFF for whoever picks this bucket up next
+============================================================
+
+1. Re-run the STEP 1 census command against the CURRENT tree first --
+   both fixes landed here are corpus-wide mechanisms (Trade Routes and
+   Raid brackets are not Build-specific), so this bucket's own shape has
+   likely shifted again once other buckets (Upgrade/WonderStep/Develop)
+   get their own fresh passes; some of the same two mechanisms almost
+   certainly explain resource-short games in THOSE buckets too, unmeasured
+   here (scope discipline: this pass stayed inside "IllegalMove: Build").
+2. The 8 remaining `workers_free==0` games: `REPLAY_DEBUG_ALL=1` +
+   grepping for "Raid casualties"/"Terrorists destroy"/"disbands"/
+   "destroys" in each game's own journal is the fastest way to check
+   whether 3.2's mechanism (or a sibling FIFO-ordering gap in Infiltrate/
+   LosePop/TakeRow, which share the same "scan-and-validate" family) is
+   still under-crediting a free worker somewhere upstream.
+3. The 28 resource-short games: pick 2-3, trace with `REPLAY_DEBUG_ALL=1`
+   comparing this binary's own `end_of_turn POST`/`pre-corruption` prints
+   against the journal's own `"(now N)"` running totals turn by turn
+   (the established, proven-reliable oracle this whole investigation uses)
+   BEFORE guessing a mechanism -- do not assume it is the same Trade-
+   Routes or Raid-bracket shape without checking; both are now fixed and a
+   fresh trace may reveal a third, different cause.
+
+============================================================
+FILES CHANGED
+============================================================
+rust/src/replay_common.rs only (buildbkt.patch, git diff against 491c153).
+No changes to rust/src/economy.rs, apply.rs, interact.rs, legal.rs, or
+docs/RULES_SPEC.md (existing §7.5 citation already covers the urban-limit
+question this task raised; no correction needed).

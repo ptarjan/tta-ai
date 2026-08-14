@@ -1,17 +1,25 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
     updated 2026-08-14
-    base commit ....... 491c153  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 651 of 1011   (613 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_651.txt)
-    committed copy .... analysis/guard_ids_651.txt
-    Re-baselined from 648 to 651 only after every worker in the batch had
-    reported, per the live-state rule below. The three new IDs are 7522924,
-    7523116 (PrepareEvent deficit repay) and 7523085 (Bronze admin lines).
-    Also on this baseline: 40145 of 40337 culture checkpoints match (99.5%),
-    and 65 games still show some culture divergence, down from 75.
-    frozen id list .... /private/tmp/guard_ids.txt
-    committed copy .... analysis/guard_ids_648.txt
+    base commit ....... 791150f  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 671 of 1011   (630 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_671.txt)
+    committed copy .... analysis/guard_ids_671.txt
+    Two commits sit between 491c153 (651/613) and this baseline:
+      613ff6c  production phase moves one blue token per WORKER on a farm/mine
+               card (Code of Laws p.6), not one per unit of VALUE. Corrects an
+               every-turn rule the bot plays; ZERO corpus wins, zero regressions.
+               Do not re-open economy::gain_resources/gain_food for this.
+      791150f  two build-PAYMENT reconstruction bugs: a build paid entirely in
+               Trade-Routes-converted food parsed as a FREE build, and Raid
+               II/III's NESTED casualty brackets were resolved by blind FIFO,
+               permanently undercounting workers_free. 651->671, 613->630.
+    The 20 new IDs are 7520722 7521365 7521378 7521449 7521738 7521763 7521782
+    7521787 7521847 7522357 7522509 7522512 7522513 7522518 7522733 7522815
+    7522890 7523070 7523427 7523456.
+    The culture-checkpoint figures below the 651 baseline (40145/40337, 65
+    diverging games) are STALE -- 20 more games now run to the end. Re-derive
+    them before quoting them.
 Earlier sections of this file still name base 9f6104d and 509 games. That is
 history, not instruction. The METHOD below is unchanged and still correct;
 only the numbers moved.

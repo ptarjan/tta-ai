@@ -1,0 +1,382 @@
+CULTREM -- culture-checkpoint oracle, remaining BuildWonderStage over-count
+bucket (investigated, both named leads NEGATIVE as originally framed; one
+new, better-scoped lead handed off with hard numbers) and War-over-Culture
+spoils bucket (one genuine, measured strength-computation discrepancy found,
+NOT yet proven to be the full cause).
+
+Branch base0814 @ 613ff6c, worked in /private/tmp/cultrem (deleted after this
+note + patch were emitted). This session's clone was re-based mid-flight:
+the coordinator landed buildbkt.patch (Trade-Routes-food build-payment
+parsing + Raid II/III nested casualty brackets) centrally partway through
+this pass; I applied it (git apply, then committed as b3d6e4b) and
+RE-MEASURED before judging anything further, per instruction. patch file
+emitted (cultrem.patch) is EMPTY: no functional change of my own landed.
+My own commits: none beyond b3d6e4b ("Apply buildbkt.patch..."), which is
+NOT this worker's own fix -- it is included so the clone's HEAD matches what
+this note's numbers were measured against. If you are applying patches in
+order: 613ff6c -> buildbkt.patch -> (this patch, empty, no-op).
+
+===========================================================================
+BASELINE (re-measured after buildbkt.patch, per coordinator instruction)
+===========================================================================
+  completed games:              671/671
+  exact-score-match games:      630/671
+  culture-oracle checkpoints:   40465/40657 (99.5%)
+  games w/ >=1 culture divergence: 64/1011
+  BuildWonderStage bucket: 5 games, unchanged membership from the task's own
+    framing: 7522536, 7522212, 7521072, 7522426, 7522315 (confirmed via
+    REPLAY_DUMP_BUCKET=BuildWonderStage, which lists every game id in a
+    bucket, not just the histogram's single example).
+
+Guard (comm against /private/tmp/guard_ids_671.txt, the buildbkt-updated
+frozen list -- NOT guard_ids.txt, which is still frozen at 651 for another
+worker):
+  comm -23 /private/tmp/guard_ids_671.txt /tmp/cultrem_ids.txt   (REGRESSIONS):
+    <empty>
+  comm -13 /private/tmp/guard_ids_671.txt /tmp/cultrem_ids.txt   (WINS):
+    <empty>
+Both empty, exactly as expected for a pass that lands no functional change:
+671 completed games before and after, 630/671 exact matches before and
+after. `cargo test --profile fasttest --lib`: 1408 passed, 0 failed.
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: not run
+this pass (no source changed from HEAD -- clippy was already clean on
+613ff6c+buildbkt per the coordinator's own central verification of that
+patch; nothing here would change its verdict).
+
+===========================================================================
+LEAD (a) -- BuildWonderStage, 5 games, all POSITIVE deltas -- INVESTIGATED,
+NOT ONE SHARED MECHANISM. One sub-lead CONFIRMED DEAD (already fixed by
+existing code). Two games' TRUE final scores already match index.tsv (the
+checkpoint divergence there is a diagnostic-only artifact, not a scoring
+bug). Two games have REAL final-score mismatches from a DIFFERENT,
+not-yet-pinned cause. One game could not even be isolated for single-game
+measurement.
+===========================================================================
+
+STEP 0 -- ENUMERATED THE BUCKET PRECISELY
+`REPLAY_DUMP_BUCKET=BuildWonderStage ./target/difftest/replaystats ...`
+(this env var already exists in replaystats.rs, filters the same bucket key
+the histogram groups by, and prints one DUMP line per game, not just the
+table's single example) gives the exact 5 games and their checkpoint deltas:
+  7522536 line 337 (Purple): journal (now 251), computed 255 (delta +4)
+  7522212 line 379 (Orange): journal (now 164), computed 166 (delta +2)
+  7521072 line 506 (Orange): journal (now 114), computed 118 (delta +4)
+  7522426 line 324 (Orange): journal (now 149), computed 157 (delta +8)
+  7522315 line 220 (Purple): journal (now 27), computed 31 (delta +4)
+These are the SAME 5 game ids the task named from an earlier worker's pass
+(7522536, 7522212, 7521072, 7522426, 7522315) -- the buildbkt.patch that
+landed mid-session did not move this bucket's membership at all (checked by
+re-running the dump before and after applying it).
+
+STEP 1 -- THE TASK'S OWN HYPOTHESIS (a): checked whether the divergence line
+is actually at the game's own final-scoring boundary (only then would a
+"wrong final-event pile" theory even be in play):
+  7522536: divergences at journal line 337 of 339 total lines -- 2 lines
+    from EOF, immediately after the "End of game" marker (line 332) and the
+    four final "Impact of ..." scoring lines (333-336). Genuinely at the
+    terminal boundary.
+  7522212: line 379 of 398 -- the "End of game" marker is at line 390, i.e.
+    THIS divergence happens 11 lines BEFORE final scoring even starts. Not
+    a terminal-boundary case.
+  7521072: line 506 of 539 -- "End of game" at 533. Same shape: divergence
+    well before final scoring.
+  7522426: line 324 of 343 -- "End of game" at 337. Same shape.
+  7522315: line 220 of 368 -- "End of game" at 366. Same shape, and by a
+    wide margin (148 lines before the game even ends).
+So only 1 of 5 (7522536) is even a candidate for an endgame-scoring-pile
+bug. The other 4 diverge mid-game, ruling out any final-event-pile
+mechanism for them outright (`pending_final_events`/`evaluate_final_events`
+only ever run once, at the literal end of the game -- they cannot affect an
+earlier checkpoint's value).
+
+STEP 2 -- HAND-TRACED 7522536 END-TO-END WITH REPLAY_DEBUG_ALL=1 AND
+SCOREDIV_EVENT_DEBUG=1 -- THE "WRONG FINAL-EVENT SET" MECHANISM SUSPECTED BY
+AN EARLIER PASS OF THIS SAME TASK IS ALREADY FIXED IN THIS CODEBASE.
+`replay_common.rs::parse_real_final_events` / `ground_final_events` already
+exist and already do exactly what a naive first read of this bug would
+propose: they read the journal's own "End of game Check the journal to get
+the final impacts effects :; Impact of Strength; Impact of Progress; Impact
+of Population; Impact of Colonies" line (BGO's own ground truth for which
+cards are still pending) and OVERWRITE `current_events`/`future_events`
+with exactly those cards before `finish_game` runs. Confirmed this actually
+fires for 7522536 (`SCOREDIV_EVENT_DEBUG=1`):
+  SCOREDIV_GROUND lineno=332 game_over_already=false real_cards=["Impact of
+  Strength", "Impact of Progress", "Impact of Population", "Impact of
+  Colonies"]
+  SCOREDIV_EVENT card=Impact of Strength player=1 amount=10   (rank bonus)
+  SCOREDIV_EVENT card=Impact of Progress player=1 amount=10
+  SCOREDIV_EVENT card=Impact of Population player=1 amount=4
+  SCOREDIV_EVENT card=Impact of Colonies player=1 amount=6
+Every one of these matches the journal's own per-card, per-player stated
+award EXACTLY (Colonies "Purple scores 6", Population "Purple scores 4",
+Progress "Purple scores 10", Strength "Purple scores 10"). My FIRST-PASS
+trace of this game (done before I had rebuilt against buildbkt.patch,
+against a STALE binary) wrongly concluded the piles were still wrong,
+because I only ever saw `current_events=` printed by `PrepareEvent
+applied`'s own debug line, which stops being printed once `ground_final_
+events` silently (no debug output at all) overwrites the piles at "End of
+game" -- I mistook "nothing printed it again" for "it never changed." This
+was a real methodological error on my part, corrected once I added
+temporary instrumentation directly into `finish_game`'s own scoring loop
+(now reverted, see below) and saw every award land correctly.
+
+STEP 3 -- SO WHERE DOES 7522536's +4 ACTUALLY COME FROM? IT DOES NOT: THE
+GAME'S TRUE FINAL SCORE ALREADY MATCHES index.tsv EXACTLY.
+Ran replaystats against a single-game index.tsv for 7522536 in isolation:
+  1/1 completed games actually flipped state.game_over ... 1/1 of those
+  matched index.tsv exactly (sorted per-game score-list compare).
+Traced Purple's own culture with REPLAY_DEBUG_ALL=1 through the very last
+turn: `economy::end_of_turn`'s own production+corruption+famine step
+finishes at 255 ("DEBUG end_of_turn POST: ... culture=255", exactly the
+figure the culture-oracle checkpoint compares); `game::finish_game`
+(`events::evaluate_final_events` + Bill Gates' end-of-game bonus) then runs
+AFTER that, inside the SAME `apply::apply(Move::EndTurn)` call, adding the
+verified-correct +30 final-scoring total to reach 285 -- which is exactly
+Purple's own stated final score on the journal's own WINNER line ("2nd is
+PLAYER as Purple (285 pts)").
+ROOT CAUSE OF THE CHECKPOINT MISMATCH (not a scoring bug):
+`game::resume_end_turn` snapshots `state.last_end_of_turn_culture[idx]`
+(the value the culture-oracle checkpoint reads) BEFORE `advance_turn`,
+specifically so a NEXT player's war resolution can't corrupt it (see that
+function's own doc comment, already correct for that case). But on the
+LAST turn of the game, `advance_turn` is also what triggers `finish_game` --
+so on this ONE turn only, the snapshot is taken BEFORE the +30 final-
+scoring cascade, while BGO's own journal "(now 251)" printed on the SAME
+line is ALSO an intermediate, pre-cascade figure by BGO's own internal
+logging (BGO's four "Impact of ..." lines print their own per-card amounts
+separately, but the running "(now N)" tracker on the ordinary End Turn line
+apparently is not re-synced against them before BGO prints it -- confirmed
+by hand-summing the journal's OWN stated amounts: 178 (last agreeing
+checkpoint) + 18 (Impact of Government, mid-round) + 13 (Impact of Science
++ its own prepare score) + 30 (Internet wonder) + 30 (the four end-game
+Impact-of awards) = 269, twenty points short of BGO's own displayed 251 in
+the OTHER direction if famine's stated "-4" is also subtracted -- i.e. even
+BGO's own "(now 251)" does not reconcile against its OWN per-line amounts
+by simple addition; it is not usable as ground truth for the terminal
+checkpoint of a game, on EITHER side).
+CONCLUSION: the +4 at 7522536's checkpoint is a DIAGNOSTIC ARTIFACT of
+comparing at a moment neither this engine's own snapshot NOR BGO's own
+displayed running total is a reliable final figure for -- not an engine
+scoring bug. The actual score (which IS what the guard measures) is already
+correct. Per the task's own rule ("FIX THE ENGINE, NOT THE REPLAYER'S
+TOLERANCE"), and given the true score already matches, there is nothing to
+fix in the SCORING here; "fixing" the checkpoint timing (re-snapshotting
+after `finish_game`) would only make the reported number diverge FURTHER
+from BGO's own pre-cascade "(now 251)" (285 vs 251, a 34-point gap, worse
+than the current 4-point one) -- so this checkpoint is not even worth
+"fixing" as a diagnostic; it is inherently unreliable for the very last
+turn of ANY completed game and should be treated that way by whoever next
+tunes this oracle's own bucket-cause histogram (a real, scoped, low-risk
+follow-up: skip the culture-oracle comparison specifically on the terminal
+`EndTurn` of a completed game, since `finish_game`'s cascade always lands
+after the snapshot there by construction -- NOT the same thing as loosening
+tolerance on an ordinary checkpoint, which stays a hard equality check).
+NOT IMPLEMENTED THIS PASS: out of scope creep from the task's own two named
+leads, and not needed to move the guard's own win condition (this game
+already exact-matches).
+
+STEP 4 -- THE OTHER 4 GAMES: TWO ALREADY EXACT-MATCH (SAME ARTIFACT CLASS
+AS 7522536, NOT CHASED FURTHER), TWO HAVE REAL SCORE BUGS.
+Ran replaystats per-game in isolation for all 4:
+  7522212: 0/1 matched index.tsv exactly. delta distribution: [0, 2] (one
+    seat exact, the other +2 over). REAL BUG.
+  7521072: 1/1 matched index.tsv exactly. Same "checkpoint precedes a later
+    reconciling event" shape as 7522536 is the likely explanation (not
+    hand-traced end-to-end this pass, given budget -- flagged, not
+    confirmed) -- NOT a scoring bug by the guard's own measure.
+  7522426: 0/1 matched index.tsv exactly. delta distribution: [-9, 3] (one
+    seat under by 9, the other over by 3 -- NOT a clean mirrored transfer,
+    unlike a spoils-style bug). REAL BUG, mechanism not identified.
+  7522315: 0/0 -- this game does not even flip `state.game_over` when
+    sampled ALONE (single-game index.tsv). It clearly does complete in the
+    FULL 1011-game corpus run (it is in the 64-game culture-divergence
+    list), so this "0/0" is some sample-size-dependent artifact of
+    replaystats itself (RNG seed derivation, or a shared-state assumption
+    that breaks with n=1) -- NOT investigated further, flagged for whoever
+    next needs single-game isolation on this title: `replaystats <idx>
+    <journals> [sample_size]` may need `sample_size` set explicitly, or a
+    different selection mechanism, for THIS one id specifically.
+
+STEP 5 -- HAND-TRACED 7522212's REAL BUG (the +2 one) TO A SPECIFIC,
+NOT-YET-ROOT-CAUSED SYMPTOM: A PHANTOM WORKER.
+The mismatched seat is Orange, off by exactly +2 -- and +2 is exactly what
+one extra content-worker is worth on "Impact of Population"
+(`culturePerContentWorkerAbove10: 2`). Confirmed with `SCOREDIV_EVENT_
+DEBUG=1` (existing instrumentation, `events.rs`'s `SCOREDIV_POPULATION`
+line): `on_card=17 workers_free=2 workers=19 discontent=0 content=19`,
+giving `(19-10)*2=18` culture -- but the journal's OWN "Impact of
+Population ... Orange scores 16 culture" line (a MID-GAME resolution: this
+card was revealed and scored immediately at journal line 371, as part of a
+"plays event" compound line, not one of the four still-pending cards named
+on the "End of game" summary) states 16, needing content=18, one fewer
+worker than this reconstruction's 19.
+Tried to independently verify Orange's true total population from the
+journal's own record of every "Orange increases population"/"Orange gets N
+population" line (12 explicit increases + 1 colonization bonus = 13 grants)
+against `p.yellow_bank` (should fall by exactly the grant count from its
+starting value, 18): the SCOREDIV_POPULATION dump shows `yellow_bank=4` at
+this exact point, i.e. 14 grants by that reading -- ALREADY inconsistent
+with my own 13-grant hand count by 1, and BOTH readings are inconsistent
+with `workers=19` (on_card+workers_free) by a further, unreconciled amount,
+because `yellow_bank` does not obviously net against on-card+free workers
+1:1 without also knowing how many of the six PRE-STAFFED starting cards
+(Warriors/Agriculture/Bronze/Philosophy/Religion/Despotism, each seeded
+with one worker per Code of Laws p.2's own setup text) are still staffed,
+still IN this player's tableau, or were destroyed/upgraded away with their
+worker correctly carried forward -- and I ran out of budget before pinning
+which of those three accounts for the extra worker. RULED OUT as the cause:
+a text-parsing double-application of the "Increase population by 1" clause
+printed on the CURRENT-EVENT REVEAL line for Inhabited Territory (journal
+line 129, revealed well before this Impact-of-Population resolution) --
+checked with REPLAY_DEBUG_ALL=1 that `resolve_event` returns EARLY for
+Territory cards (before applying any effect block) and that the actual
+population grant only ever fires once, from the SEPARATE `Colonize`
+action's own win-bonus handling (journal line 132/555 in the debug trace),
+not from the reveal line at all -- so this specific double-count shape,
+while structurally plausible on paper, does not occur in this codebase.
+HANDOFF: whoever picks this up next should dump Orange's FULL `p.techs`
+worker-by-worker list (temporary instrumentation, same shape as this pass's
+now-reverted `SCOREDIV_POPULATION_TECH` addition to `events.rs`'s
+`scoring_culture`) at the SAME checkpoint and reconcile it card-by-card
+against the journal's own build/upgrade/destroy history for Orange up to
+that point (Religion 3, Knights 2, Iron 4, Swordsmen 2, Selective Breeding
+2, Cannon 2, Computers 2 = 17 on-card, +2 workers_free = 19 total) --
+"Iron workers=4" is the most suspicious single entry (Iron is a base-game
+Age I mine; 4 simultaneous workers on one card is unusually high and worth
+checking against whether Orange actually holds TWO physical Iron copies
+merged onto one `CardId` bucket, which would be a real modelling gap if
+`p.techs` cannot distinguish two same-named copies).
+
+STEP 6 -- 7522426's REAL BUG (the [-9, +3] one): NOT HAND-TRACED THIS PASS.
+The asymmetric, non-mirrored delta ([-9, +3] rather than a matched
+transfer like [-9, +9]) rules out a simple spoils/transfer-style bug
+(which would always move the SAME amount off one seat and onto the other)
+-- this is some OTHER, distinct final-scoring discrepancy. Flagged, not
+chased, given budget: whoever picks this up should run the same
+per-game isolation + delta-distribution read this pass used for 7522212,
+then the same SCOREDIV_EVENT_DEBUG/SCOREDIV_POPULATION-style targeted
+instrumentation once the culprit "Impact of ..." card (if any) is
+identified from `## Final-scoring award oracle`'s per-card table -- NOTE
+that oracle only checks cards STILL PENDING at actual game end
+(`pending_final_events`), and this bucket's own STEP 5 finding shows it is
+BLIND to mid-game "Impact of ..." resolutions (`apply_final_scoring_block_
+live`, called from `events::resolve_event` during ordinary play) -- a
+mid-game Impact-of-card miscalculation, like 7522212's, would never be
+caught by that oracle and must be hand-traced the way STEP 5 did.
+
+===========================================================================
+LEAD (b) -- War-over-Culture SPOILS, 2 of 7 remaining Discard-bucket games
+(7522009 delta +9, 7523127 delta +6) -- ONE GENUINE STRENGTH-COMPUTATION
+DISCREPANCY FOUND AND MEASURED. DOES NOT CLEANLY EXPLAIN THE FULL OBSERVED
+DELTA. NOT LANDED.
+===========================================================================
+
+RULE (quoted, RULES_SPEC.md line 144, itself sourced from the base-game
+military card table): "War over Culture (III, 3 MA, 6 copies) | 5 +
+advantage culture points (capped at what the victim has; victim cannot go
+negative)". This engine's own `combat.rs::apply_war_spoils`, "War over
+Culture" arm, implements exactly this: `take = (5 + advantage).min(loser_
+culture)`. The FORMULA is confirmed correct against the rules oracle --
+this is not what I chased.
+
+STEP 1 -- CONFIRMED (again) THE DISCARD BUCKET HAS NO SINGLE SHARED CAUSE.
+`REPLAY_DUMP_BUCKET=Discard` lists the current 9 Discard-bucket culture
+divergences: 7521751 (-4, the already-documented, ruled-out journal defect
+from an earlier pass -- Eiffel Tower declared complete after 1/3 stages),
+7523167 (+3), 7523264 (+4), 7523236 (-5), 7522776 (+3), 7521985 (-5),
+7521660 (+3), 7523127 (+6), 7522009 (+9). Mixed signs, as the earlier
+worker's own note already established -- not chased as a bucket, only the
+2 named War-over-Culture games were hand-traced, per the task's own scope.
+
+STEP 2 -- HAND-TRACED 7522009's War over Culture RESOLUTION.
+Journal (line 306): "Purple wins War over Culture Attacker's strength: 37;
+Defender's strength: 28" -- no printed spoils amount (BGO never prints the
+transferred culture directly for this card, unlike some others; it must be
+inferred from before/after running totals, which is exactly what makes this
+bucket hard). Journal-implied advantage = 37-28 = 9, so journal-implied
+take = 5+9 = 14 (assuming Orange, the loser, has at least 14 culture, which
+it does).
+Added temporary instrumentation directly to `combat.rs::resolve_war_
+outcome` (the function that computes `a`/`d`/`advantage`, immediately
+before it constructs `WarOutcome` -- reverted after this measurement, zero
+net diff to the clone): confirmed RED/GREEN cycle not applicable here since
+nothing was changed, only measured. Output (`SCOREDIV_WAR_DEBUG=1`):
+  SCOREDIV_WAR attacker=1 target=0 a=37 d=26 victor=1 loser=0 advantage=11
+  loser_culture_before=55
+This engine's own `a` (attacker/Purple strength, 37) EXACTLY matches BGO's
+own printed "Attacker's strength: 37". This engine's own `d` (defender/
+Orange strength, 26) does NOT match BGO's own printed "Defender's strength:
+28" -- a genuine 2-point gap, giving this engine's own computed advantage
+(11) 2 points higher than the journal's own implied advantage (9), and this
+engine's own computed take ((5+11).min(55)=16) 2 points higher than the
+journal's own implied take (14).
+A 2-point spoils-formula gap is REAL and MEASURED, but does NOT explain the
+observed +9 checkpoint delta by itself (a clean formula-only bug of this
+shape would show up as a matched +2/-2 pair at the winner/loser
+checkpoints, not the +9/-9 pair the earlier worker's own note already
+confirmed recurs stably for this game). Checked 7523127 the same way:
+  SCOREDIV_WAR attacker=1 target=0 a=71 d=53 victor=1 loser=0 advantage=18
+  loser_culture_before=66
+This game's observed checkpoint delta is +6, smaller than 7522009's +9,
+with no obvious printed BGO strength line to compare `d=53` against in this
+game's own journal at the equivalent point (not located this pass, given
+budget) -- so this second data point neither confirms nor refutes the same
+mechanism.
+NOT IDENTIFIED: WHERE the 2-point (7522009) defender-strength gap itself
+comes from. One plausible, NOT confirmed candidate noticed in passing while
+reading 7522009's journal: Orange plays "Fortifications" (a defensive
+tactic, journal line 302, timestamped BEFORE the war resolves at line 306)
+between the war's DECLARATION (line 280) and its RESOLUTION (line 306) --
+if Fortifications grants a permanent strength bonus this reconstruction's
+`effects::state_stats` does not yet apply (or applies with an off-by-one
+timing gap relative to when `resolve_war_outcome` reads it), that would
+show up as exactly this kind of "our own `d` is a few points short of
+BGO's own displayed number" gap. NOT VERIFIED THIS PASS -- ran out of
+budget confirming Fortifications' own printed effect and whether `state_
+stats` reads it at all.
+CONCLUSION, PER THE EARLIER WORKER'S OWN HEDGE (re-confirmed, not
+resolved): "the discrepancy may originate earlier ... rather than in the
+spoils formula itself" -- this pass's own measurement (a=37 agrees, d=26
+vs 28 disagrees) is consistent with that hedge (the SPOILS FORMULA itself,
+applied to whatever `advantage` it is handed, is correct; the STRENGTH
+COMPUTATION feeding it is what does not yet agree with BGO), but the
+magnitude does not close the case: 2 points of strength gap cannot by
+itself explain a 9-point checkpoint delta, so there is very likely a
+SECOND thing wrong here too, not found this pass.
+
+===========================================================================
+WHAT REMAINS / HANDOFF
+===========================================================================
+- 7522212's phantom +1 content-worker (STEP 5 above): the cleanest, most
+  concretely-diagnosed remaining lead in the BuildWonderStage bucket, with
+  a REAL exact-match impact (630->631 if fixed generally, not game-ID-
+  keyed). Next step named above: full `p.techs` worker-by-worker dump,
+  cross-checked against Orange's own build/upgrade/destroy journal history
+  card by card, focusing on "Iron workers=4" as the likeliest single
+  suspect entry.
+- 7522426's [-9, +3] final-score mismatch: not diagnosed at all this pass,
+  flagged with the exact method (per-game isolation + delta distribution +
+  SCOREDIV_EVENT_DEBUG) to pick it up cold.
+- 7522315: could not even be isolated for single-game measurement (0/0);
+  flagged as a `replaystats` tooling quirk worth a look before hand-tracing
+  it, separate from the scoring investigation itself.
+- The terminal-EndTurn culture-checkpoint artifact (7522536, likely also
+  7521072): a real, scoped, LOW-RISK follow-up if the culture-oracle's own
+  signal-to-noise is worth improving -- skip the comparison specifically on
+  a completed game's own terminal `EndTurn` line, since `finish_game`'s
+  final-scoring cascade provably lands after `last_end_of_turn_culture`'s
+  own snapshot on that one turn by construction, for every game, not just
+  this one. NOT the same thing as "loosening tolerance": every OTHER
+  checkpoint stays a hard equality check; this is recognizing one specific,
+  provably-unreliable-by-construction checkpoint shape.
+- War over Culture's 2-point defender-strength gap in 7522009 (d=26 engine
+  vs 28 journal): confirmed real, not yet root-caused. Fortifications
+  tactic timing is the concrete next thing to check (does `effects::
+  state_stats` include its bonus at all, and if so, is it applied before
+  or after `resolve_war_outcome` reads `d` relative to when BGO's own
+  server would have applied it).
+
+No code landed this pass. Every negative above is a MEASURED one (isolated
+per-game replaystats runs, SCOREDIV_* instrumentation added and then
+reverted with a clean `git diff` before finishing, guard re-run to confirm
+zero regressions from the revert itself).

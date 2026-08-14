@@ -1,0 +1,261 @@
+SIMBUG2 -- SimulatorBug/Draw (54 games) and SimulatorBug/Discard (56 games)
+ledger buckets
+Session 2026-08-14, clone /private/tmp/simbug2, base commit 491c153 (branch
+base0814, on top of simbug's own landed PrepareEvent/repay-hook fix
+(22e4370) and today's Bill Gates wiring / Bronze admin-correction commits).
+============================================================================
+
+BOTTOM LINE
+-----------
+NO FIX LANDED. Working tree is byte-identical to base 491c153 (`git diff`
+against it is empty -- confirmed, see `simbug2.patch`, intentionally empty).
+Found and hand-proved a real, precisely-named mechanism that explains a
+concrete repro (game `7522640`, round 4): `apply_one`'s `ActionClass::
+Discard` arm never cross-validates its own reconstructed discard count
+against the journal's directly-observed `"<Color> discards M cards"` line --
+it just drains however many `Pending::Choice(DiscardMilitary)` this binary's
+OWN `hand_len - limit` formula decided to open, and returns `Ok(())`
+unconditionally even when that is FEWER than the journal's own true M.
+Implemented and MEASURED a fix for this exact gap (force the shortfall off
+`hand_military` directly, journal-count as ground truth) -- and confirmed by
+direct corpus measurement that it is UNSOUND as a general fix: it regresses
+the corpus catastrophically (651 -> 0 completed with the unrestricted
+version, 651 -> 196 completed even with an `engine_discarded > 0` guard
+narrowing it to only the closest analogue of the repro's own shape). Reverted
+both attempts; the working tree is clean. This is a genuine, evidenced
+negative -- not a "ran out of budget," a "measured and ruled out."
+
+BUCKET SIGNATURES
+------------------
+Enumerated via `REPLAY_DUMP_BUCKET='SimulatorBug'` against
+`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+/Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals`
+(1011-game corpus), filtered to `last event: Some((Discard` / `Some((Draw`.
+Bucket sizes at this base match the task's own stated counts exactly:
+Discard 56, Draw 54 (PrepareEvent 100, ConsumingPlay 50, ColonizeConsume 9,
+DefenseConsume 4, ColumbusConsume 3 -- unchanged, not this session's target).
+
+`simulator excess - journal excess`, per row:
+  Discard (56 rows): +1 x48, -1 x7, +2 x1
+  Draw    (54 rows): +1 x37, -1 x15, +2 x1, -3 x1
+
+Both buckets are DOMINATED (86% Discard, 69% Draw) by the same "+1"
+unpaid-deficit/phantom-card shape `simbug__SIMBUG.txt` already root-caused
+for 81/103 of the PrepareEvent bucket -- consistent with the task's own
+framing that these are likely siblings of that same shape, not evidence
+that the ALREADY-FIXED mechanism recurs verbatim (see next section).
+
+MECHANISM 1 RULED OUT: the missing-`try_apply`-repay-hook shape does NOT
+recur here
+-----------------------------------------------------------------------
+`simbug__SIMBUG.txt`'s own HANDOFF suggested a targeted sweep: `grep -n
+'apply::apply(&mut self.state' rust/src/replay_common.rs`, checking whether
+any OTHER function besides the now-fixed `resolve_political_decision` still
+calls `apply::apply` directly (bypassing `try_apply`'s automatic post-apply
+`repay_military_hand_deficit` loop). Did this sweep: every remaining direct
+`apply::apply(&mut self.state, ...)` call site was read in full --
+`resolve_intervening`'s twelve `Move::Choose`/`Move::BidPass` call sites
+(GainBlock, PlunderSplit, FoodOrResSplit, Infiltrate, FreeBuild, TakeRow,
+LosePop, Raid, LoseColony, FlipWonder, PactOffer auto-refuse, auction
+auto-pass), `drain_colonize`/`approximate_colonize`'s `SendUnit`/
+`SendBonus`/`SendDiscard`/`SendDone` moves, and `resolve_one_discard_choice`'s
+own `Move::Choose` for `DiscardMilitary`. NONE of these can grow
+`hand_military` -- they resolve pendings about population loss, colony
+sacrifice, wonder flips, take-row civil cards, army units, or (for
+`DiscardMilitary`) only ever SHRINK the hand. `resolve_political_decision`
+(now fixed) remains the only call site that was ever capable of growing
+`hand_military` while bypassing the repay hook. Confirmed structurally, not
+just by absence of a repro: this sweep is exhaustive over every direct
+`apply::apply` call site in the file.
+
+MECHANISM 2, HAND-TRACED AND PROVED ON A REPRO, BUT UNSAFE TO FIX GENERALLY:
+an unvalidated discard shortfall
+-----------------------------------------------------------------------
+Repro: game `7522640` (4p), `SimulatorBug`/`Draw` row at journal line 158
+(round 6, Orange): journal excess 1, this binary's own excess 2, ledger
+excess 1 (last ledger event `Draw` at line 119). Traced with
+`REPLAY_DEBUG_ALL=1 ./target/difftest/replay ... 7522640` (game completes
+end-to-end with an exact score match, so this is a clean single-cause
+repro, not a proximity artifact -- ruled out FIRST per the task's own
+checkpoint-timing warning: the divergence is a real, permanent
+`hand_military` COUNT gap that survives from round 4 to round 6 unchanged,
+not a value merely "behind" a deferred cascade).
+
+Added temporary `SIMBUG2_LEDGER_DEBUG`-gated `eprintln!`s (stripped before
+reverting, none landed) at `check_discard_phase_oracle` and `bump_ledger` to
+print the ledger's own per-line running total for Orange. First real
+divergence between this binary's own `hand_military` and the ledger's
+independent text-only running count opens at journal line 82, round 4:
+  - Journal: `"Discard Phase 1 military card must be discarded"` (line 80)
+    but the REAL resolution is `"Orange discards 2 cards"` (line 82) --
+    announced (1) != actual (2), so `prescan_discard_phase_oracle` drops
+    this round from its own trusted oracle entirely (by design -- see that
+    function's own doc) and no checkpoint comparison ever fires for round 4
+    itself.
+  - This binary's own `hand_military` was 4 cards at that point (limit 3,
+    its OWN computed excess = 1) -- `resolve_discard`/`ChoiceKind::
+    DiscardMilitary` only ever opens as many `Pending::Choice`s as THIS
+    binary's own excess formula decided when the pending first opened, so
+    only 1 card was ever removed, landing this binary's own hand at 3.
+  - The journal's own resolution line is a hard, server-confirmed fact:
+    the real player discarded 2, not 1. `apply_one`'s `ActionClass::
+    Discard` arm (`r.resolve_discard(actor); Ok(())`) never looks at that
+    line's own count at all -- it can never notice or correct the shortfall.
+  - This 1-card gap then rides silently (both sides read 3 cards, for
+    different reasons) through round 5 (a `PrepareEvent`-shaped -1 fires
+    identically on both this binary's own eviction/deficit logic and the
+    ledger's parallel text-only accounting) until round 6's own checkpoint,
+    where the ledger's independent running total (4, correctly crediting
+    the missing round-4 discard) finally disagrees with this binary's own
+    reconstructed hand (5) by exactly the persisted 1-card gap.
+
+THE FIX ATTEMPTED, AND WHY IT IS UNSOUND (measured, not guessed)
+-----------------------------------------------------------------------
+Implemented `Replayer::force_additional_discards(actor, n)` (mirroring
+`repay_military_hand_deficit`'s own protected-victim search: never a card
+`DiscardSolver::needed_after` proves is played by name later, non-Event/
+Territory preferred first), called from `apply_one`'s `ActionClass::Discard`
+arm whenever `parse_discard_count_line(raw_text)`'s own observed count
+exceeds how many cards `resolve_discard` actually removed. Unit-tested
+compile-clean, `cargo clippy` clean.
+
+Measured on the full 1011-game corpus (`SCOREDIV_DUMP_COMPLETED=1
+./target/difftest/replaystats /Users/pt/tta-ai/sources/bgo/index.tsv
+/private/tmp/bgo-journals/journals`):
+
+  Unrestricted (force the shortfall whenever engine_discarded < journal_n):
+    0/1011 completed (vs 651/1011 baseline).
+    comm -23 (regressions): 456 games listed (7520707, 7520718, 7521066, ...
+      -- effectively the entire completed baseline set minus a handful).
+    comm -13 (wins): empty.
+    Reverted immediately -- catastrophic.
+
+  Narrowed (only fire when engine_discarded > 0, i.e. the engine's own
+  pending DID open and drain SOMETHING, just short of the journal's full
+  count -- the closest analogue to the 7522640 repro's own shape, excluding
+  the "engine thinks zero discard was ever needed" case):
+    196/1011 completed (vs 651/1011 baseline), 185/196 exact score match.
+    comm -23 (regressions): 456 games.
+    comm -13 (wins): 1 game.
+    Still catastrophic -- reverted.
+
+Root cause of the regression, hand-traced on the narrowed variant's own
+counter-example (game `7523818`, round 8, Orange): this binary's own
+`hand_military` was EXACTLY at the limit (3 cards, limit 3, excess 0) --
+`interact::discard_excess_military` correctly opened NO pending at all, by
+this binary's own (apparently accurate) reconstruction. The journal's own
+announcement AND resolution AGREE with each other (`"Discard Phase 1
+military card must be discarded"` then `"Orange discards 1 card"`, a
+TRUSTED `discard_phase_oracle` entry, not a mismatched one like 7522640's
+round 4) -- yet this binary's own excess was still 0. This is the MIRROR
+IMAGE of the 7522640 shape: here this binary's hand is already SHORT one
+card from some earlier, untraced upstream gap (a missing draw or gain, nine
+rounds back), not carrying a phantom EXCESS card. Forcing an extra discard
+in this case removes a real card that was never surplus, actively
+DEEPENING the shortfall and corrupting downstream legality (the game stops
+two lines later: `StuckPending("decider 1 != expected actor 0, phase
+Actions, no pending")`).
+
+The deciding fact: "this binary's own reconstructed discard count is
+smaller than the journal's own observed count" is STRUCTURALLY AMBIGUOUS
+between two opposite root causes -- (a) this binary is carrying a phantom
+EXCESS card and should discard more (the 7522640 shape), or (b) this binary
+is already SHORT a card from an unrelated earlier gap and the journal's
+discard is confirming a debt that was never phantom to begin with (the
+7523818 shape) -- and no purely LOCAL, per-line signal available at the
+`Discard` dispatch site (hand contents, this round's own before/after
+delta, whether the announcement was itself trusted) reliably distinguishes
+them: shape (b) outnumbers shape (a) by roughly 456:1 in the corpus, going
+by the regression-to-win ratio of the narrowed attempt.
+
+RULED OUT
+---------
+- Checkpoint-TIMING artifact for the 7522640 repro: ruled out first, per
+  the task's own named risk -- the game completes end-to-end with an exact
+  score match, and the 1-card gap is a real, permanent `hand_military`
+  COUNT divergence that survives unchanged from round 4 through round 6,
+  not a value merely "behind" a deferred cascade.
+- The missing-`try_apply`-repay-hook mechanism recurring at a NEW call
+  site: ruled out by an exhaustive read of every remaining direct
+  `apply::apply` call site in `replay_common.rs` (see MECHANISM 1 above) --
+  none can grow `hand_military`.
+- "Force the discard shortfall, unconditionally": measured, 0/1011
+  completed. Catastrophic, reverted.
+- "Force the discard shortfall, but only when the engine's own pending
+  already drained something (`engine_discarded > 0`)": measured, 196/1011
+  completed, 456 regressions to 1 win. Still catastrophic, reverted.
+- Did NOT attempt restricting the fix to ONLY rounds where
+  `prescan_discard_phase_oracle` itself dropped the entry (announced !=
+  actual, like 7522640's round 4, excluding 7523818's round 8 which WAS a
+  trusted, agreeing entry) -- plausible as a narrower, safer guard in
+  principle, but given the regression:win ratio already measured (456:1)
+  even under the closest analogue guard, and that this would still not
+  address the STRUCTURAL ambiguity (an untrusted announcement can ALSO
+  reflect this binary being short, not carrying an excess -- nothing rules
+  that out for the 7522640 case itself; see HANDOFF below), did not spend
+  further budget chasing a guard with no principled reason to expect a
+  better ratio than the one already measured.
+
+HANDOFF
+-------
+1. The dominant failure mode discovered here (this binary's own
+   `hand_military` already SHORT a card from an untraced EARLIER gap,
+   which then legitimately fails to trigger a discard pending the real
+   player's own bigger hand required) is the SAME open question
+   `decider3__DECIDER3.txt` already flagged and could not close within its
+   own budget for game `7523376`'s round-9 deficit ("is this deficit
+   genuine, or a symptom of an earlier rounds-1-to-9 tracking gap").
+   `7523818`'s round-8 shortfall (traced this session) is a SECOND,
+   independent instance of the identical open question. A fix for either
+   the Draw or Discard bucket's dominant "+1" shape most likely needs to
+   chase THIS thread -- an earlier, untraced draw/gain undercount -- rather
+   than anything at the discard-resolution call site itself.
+2. Even the 7522640 repro (this session's own "safe-looking" case) is NOT
+   independently confirmed to be a genuine phantom-excess case rather than
+   ALSO an earlier-shortfall case that merely happens to not manifest until
+   round 4's discard -- this session did not hand-trace Orange's hand back
+   to round 1 for `7522640` to rule that out (the same caution
+   `decider3__DECIDER3.txt`'s own NEXT STEPS #1 already recommended for its
+   own repro). Given the corpus-wide measurement already shows the
+   opposite shape dominates by ~456:1, this was not pursued further, but a
+   future session chasing this bucket should not assume 7522640's round 4
+   is safe ground without first closing that question.
+3. A structurally different approach -- rather than reacting locally at
+   the `Discard` dispatch site -- would need to distinguish "phantom
+   excess" from "earlier shortfall" using INFORMATION FROM EARLIER IN THE
+   GAME (e.g. a full ledger-vs-simulator cross-check at every draw/gain
+   checkpoint, not just the existing discard-phase oracle's own coarse
+   per-round excess), which is a materially larger undertaking than this
+   session's budget allowed and was not attempted.
+
+MEASUREMENT
+-----------
+Guard corpus command (`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/
+replaystats /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-
+journals/journals`, 1011 games sampled), FINAL state (working tree clean,
+byte-identical to base `491c153`):
+
+  651/1011 completed, 613/651 exact score match, 37924/39388 (96.3%)
+  hand-excess checkpoints matched -- IDENTICAL to the base commit's own
+  numbers (no code change to measure a delta against).
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/simbug2_final_ids.txt (REGRESSIONS):
+    (empty)
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/simbug2_final_ids.txt (WINS):
+    (empty)
+
+`cargo test --profile fasttest --lib`: 1402 passed, 0 failed (baseline
+count, unchanged -- no new test landed since no fix landed).
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: clean.
+
+`simbug2.patch` is intentionally EMPTY (`git diff 491c153` on the clone
+produces zero output) -- both fix attempts were fully reverted before this
+write-up; nothing is left staged or committed in the clone.
+
+CLONE STATUS
+------------
+`/private/tmp/simbug2` has NO new commits beyond base `491c153` -- working
+tree verified clean (`git diff --stat` empty) before this write-up. Deleted
+after this write-up and the (empty) patch were both written, per task
+instructions.
